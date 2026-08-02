@@ -58,8 +58,6 @@ export function SessionsSection({ settingsData, setStatus, mergeSettingsData }) 
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         saveTimerRef.current = setTimeout(async () => {
             if (!mountedRef.current) return;
-            const active = document.activeElement;
-            if (active && active.closest?.('.settings-number-stepper')) return;
             try {
                 const response = await fetch('/agent/settings/general', {
                     method: 'POST',
@@ -68,17 +66,21 @@ export function SessionsSection({ settingsData, setStatus, mergeSettingsData }) 
                 });
                 const payload = await response.json().catch(() => ({}));
                 if (!mountedRef.current) return;
-                if (!response.ok || !payload?.ok || !payload?.settings) return;
+                if (!response.ok || !payload?.ok || !payload?.settings) {
+                    throw new Error(payload?.error || `Failed to save session settings (${response.status})`);
+                }
                 savedSnapshotRef.current = currentSnapshot;
                 mergeSettingsData?.(payload.settings);
+                setStatus?.(null);
                 setAppliedHint(true);
                 setTimeout(() => { if (mountedRef.current) setAppliedHint(false); }, 4000);
             } catch (error) {
                 console.warn('[settings/sessions] Failed to persist session settings.', error);
+                if (mountedRef.current) setStatus?.(String(error?.message || error), 'error');
             }
         }, 800);
         return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
-    }, [currentSnapshot, mergeSettingsData]);
+    }, [currentSnapshot, mergeSettingsData, setStatus]);
 
     return html`
         <div class="settings-section">
