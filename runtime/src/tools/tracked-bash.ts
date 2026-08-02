@@ -26,6 +26,7 @@ import { buildInjectedShellEnv, resolveKeychainPlaceholders } from "../secure/ke
 
 import { killProcessTree, registerProcess, unregisterProcess } from "../utils/process-tracker.js";
 import { shouldDetachChildProcess } from "../utils/process-spawn.js";
+import { createLogger, debugSuppressedError } from "../utils/logger.js";
 
 export interface ShellConfig {
   shell: string;
@@ -50,6 +51,7 @@ const CMD_ARGS = ["/c"];
 export const TRACKED_BASH_OUTPUT_LIMIT_BYTES = 256 * 1024;
 export const TRACKED_BASH_OUTPUT_TRUNCATION_NOTICE = "\n[output truncated]\n";
 const TRACKED_BASH_POST_EXIT_STDIO_IDLE_GRACE_MS = 150;
+const log = createLogger("tools.tracked-bash");
 const BASH_SPOOL_TEMP_ERROR_PREFIX = "Bash output spool temp directory is unavailable";
 const BASH_SPOOL_PROBE_PREFIX = ".piclaw-bash-spool-probe";
 
@@ -93,8 +95,8 @@ function ensureBashSpoolTempDirWritable(): void {
     if (fd !== undefined) closeSync(fd);
     try {
       rmSync(probePath, { force: true });
-    } catch {
-      // Best-effort cleanup: a failed probe file delete should not block tool execution.
+    } catch (error) {
+      debugSuppressedError(log, "Failed to remove Bash spool probe file", error, { probePath });
     }
   }
 }
