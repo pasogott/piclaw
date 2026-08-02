@@ -83,6 +83,40 @@ describe("workspace-search extension", () => {
     expect(result.content[0].text).toContain(".pi/skills/demo/SKILL.md");
   });
 
+  test("handles dotted, metric, hyphenated, and path identifiers plus scoped LIKE fallback", async () => {
+    const notesDir = path.join(ws.workspace, "notes");
+    const skillsDir = path.join(ws.workspace, ".pi", "skills", "demo");
+    await fs.mkdir(notesDir, { recursive: true });
+    await fs.mkdir(skillsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(notesDir, "infra.md"),
+      [
+        "Host sigma.local sends graphite through telegraf.",
+        "Metric hosts.orangepi6plus.cpu.usage_idle stayed high.",
+        "Package pi-side-agents referenced workspace/tmp/files.",
+      ].join("\n"),
+    );
+    await fs.writeFile(path.join(skillsDir, "SKILL.md"), "Skill notes also mention sigma.local but should not match notes-only fallback scope.");
+
+    const tool = await getSearchTool();
+    await executeWithContext(tool, { query: "sigma.local", refresh: true, scope: "notes" });
+
+    for (const query of [
+      "sigma.local",
+      "sigma.local sigma telegraf graphite",
+      "hosts.orangepi6plus.cpu.usage_idle",
+      "pi-side-agents",
+      "workspace/tmp/files",
+      "sigma.local AND",
+    ]) {
+      const result = await executeWithContext(tool, { query, scope: "notes" });
+      expect(result.details.count).toBe(1);
+      expect(result.details.results[0].path).toBe("notes/infra.md");
+      expect(result.content[0].text).toContain("notes/infra.md");
+      expect(result.content[0].text).not.toContain(".pi/skills/demo/SKILL.md");
+    }
+  });
+
   test("search_workspace does not block on indexing by default", async () => {
     await seedWorkspace();
     const workspaceSearchMod = await import("../../src/workspace-search.js") as typeof import("../../src/workspace-search.js");

@@ -15,7 +15,7 @@ import {
 import { getChatJid } from "../core/chat-context.js";
 import { stripInternalTags } from "../router.js";
 import { createUuid } from "../utils/ids.js";
-import { prepareFtsQuery } from "../utils/fts-query.js";
+import { extractFtsFallbackTerms, isFtsOperatorQuery, prepareFtsQuery } from "../utils/fts-query.js";
 import { getSearchMatchMode } from "../core/config.js";
 
 const MessagesSchema = Type.Object({
@@ -592,10 +592,13 @@ function runSearch(
     return db.prepare(sql).all(...params, limit, offset) as MessageRow[];
   }
 
+  const operatorQuery = isFtsOperatorQuery(trimmed);
+
   try {
     const conditions: string[] = ["messages_fts MATCH ?"];
     const params: (string | number)[] = [];
-    const ftsQuery = prepareFtsQuery(trimmed, getSearchMatchMode()) ?? trimmed;
+    const ftsQuery = prepareFtsQuery(trimmed, getSearchMatchMode());
+    if (!ftsQuery) return [];
     params.push(ftsQuery);
 
     if (chatJid) {
@@ -619,10 +622,7 @@ function runSearch(
       WHERE ${conditions.join(" AND ")} ORDER BY messages.rowid DESC LIMIT ? OFFSET ?`;
     return db.prepare(sql).all(...params, limit, offset) as MessageRow[];
   } catch {
-    const terms = trimmed
-      .split(/\s+/)
-      .filter(Boolean)
-      .map((term) => `%${term}%`);
+    const terms = extractFtsFallbackTerms(trimmed, { dropFtsKeywords: operatorQuery }).map((term) => `%${term}%`);
     if (terms.length === 0) return [];
 
     const clauses = terms.map(() => "content LIKE ? COLLATE NOCASE");

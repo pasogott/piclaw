@@ -121,6 +121,24 @@ describe("messages tool extension", () => {
     expect(result.details.results[0].content).toContain("sunny");
   });
 
+  test("search handles punctuation-heavy identifiers and invalid operator fallback", async () => {
+    insertMessage("Investigated sigma.local via telegraf and graphite with metric hosts.orangepi6plus.cpu.usage_idle inside pi-side-agents under workspace/tmp/files");
+
+    const { tool } = await getTool();
+
+    for (const query of [
+      "sigma.local",
+      "hosts.orangepi6plus.cpu.usage_idle",
+      "pi-side-agents",
+      "workspace/tmp/files",
+      "sigma.local AND",
+    ]) {
+      const result = await runWithContext(tool, { action: "search", query });
+      expect(result.details.count).toBe(1);
+      expect(result.details.results[0].content).toContain("sigma.local");
+    }
+  });
+
   test("search/get include persisted content_blocks payloads", async () => {
     insertMessage("Message with blocks", { content_blocks: [{ type: "adaptive_card", card_id: "ticket" }] });
 
