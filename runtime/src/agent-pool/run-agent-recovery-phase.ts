@@ -20,6 +20,7 @@ import {
 } from "./automatic-recovery.js";
 import {
   buildFreshContextUsageUpdateEvent,
+  getAutoCompactionTokenStatusForSession,
   getCompactionContextReport,
   isCompactionCancellationError,
   noteCompactionFailure,
@@ -86,6 +87,10 @@ export interface RunAgentRecoveryPhaseOptions {
     count: number;
     cap: number | undefined;
   };
+  rotateAfterInsufficientCompaction?: (reason: string) => Promise<
+    | { ok: true; session: AgentSession; sessionCtrl: SessionWithToolControl | null }
+    | { ok: false; errorMessage: string }
+  >;
 }
 
 function emitAgentSessionEvent(onEvent: RunAgentOptions["onEvent"], event: Record<string, unknown>): void {
@@ -200,6 +205,7 @@ export function shouldDisableToolsForRecoveryAttempt(
   snapshot: RecoveryAttemptSnapshot,
   config: AutomaticRecoveryConfig,
 ): boolean {
+  if (decision.classifier === "context_pressure") return Boolean(snapshot.hadToolActivity);
   if (decision.classifier !== "transient") return false;
   return !config.transientRecoveryToolsEnabled || Boolean(snapshot.hasUnresolvedToolExecution);
 }
@@ -246,13 +252,9 @@ function isAbortFailureText(errorText: string): boolean {
 function findToolBudgetDiagnostic(diagnostics: AgentRecoveryDiagnosticEntry[]): AgentRecoveryDiagnosticEntry | null {
   for (let index = diagnostics.length - 1; index >= 0; index -= 1) {
     const entry = diagnostics[index];
-    const toolExecutionCeilingReached = entry.sawCompactionIntent
-      && Number.isFinite(entry.toolExecutionCount)
-      && (entry.toolExecutionCount ?? 0) > 0;
     if (entry.toolUseBudgetExceeded
       || entry.classifier === "tool_history_pressure"
-      || /tool(?:-| )use budget exceeded/i.test(entry.error)
-      || toolExecutionCeilingReached) {
+      || /tool(?:-| )use budget exceeded/i.test(entry.error)) {
       return entry;
     }
   }
@@ -318,7 +320,7 @@ async function runRecoveryCompaction(
   chatJid: string,
   runOptions: RunAgentOptions,
   options: Pick<RunAgentRecoveryPhaseOptions, "onInfo" | "onWarn">,
-): Promise<{ ok: true } | { ok: false; errorMessage: string }> {
+): Promise<{ ok: true; stillOverThreshold: boolean } | { ok: false; errorMessage: string }> {
   options.onInfo?.("Compacting before automatic recovery retry", {
     operation: "run_agent.recovery_compact",
     chatJid,
@@ -368,7 +370,7 @@ async function runRecoveryCompaction(
         aborted: false,
         willRetry: true,
       } as unknown as AgentSessionEvent);
-      return { ok: true };
+      return { ok: true, stillOverThreshold: false };
     }
     emitAgentSessionEvent(runOptions.onEvent, {
       type: "compaction_end",
@@ -403,15 +405,14 @@ async function runRecoveryCompaction(
     source: "compaction_recovery",
   });
   if (usageEvent) emitAgentSessionEvent(runOptions.onEvent, usageEvent);
-  return { ok: true };
+  const tokenStatus = getAutoCompactionTokenStatusForSession(session, chatJid);
+  return { ok: true, stillOverThreshold: Boolean(tokenStatus?.tokenStatus.tokenLimitReached) };
 }
 
 export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOptions): Promise<AgentOutput> {
   const {
     prompt,
     chatJid,
-    session,
-    sessionCtrl,
     timeoutMs,
     startTime,
     modelLabel,
@@ -419,6 +420,8 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     runOptions,
   } = options;
 
+  let activeSession = options.session;
+  let activeSessionCtrl = options.sessionCtrl;
   let attemptPrompt = prompt;
   let recoveryContinuationWithoutTools = false;
   let turnToolExecutionCount = 0;
@@ -511,12 +514,19 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       ? (timeoutMs > 0 ? Math.min(timeoutMs, remainingRecoveryBudgetMs) : remainingRecoveryBudgetMs)
       : timeoutMs;
     let recoverySavedToolNames: string[] | null = null;
-    const canControlTools = sessionCtrl
-      && typeof sessionCtrl.getActiveToolNames === "function"
-      && typeof sessionCtrl.setActiveToolsByName === "function";
-    if (recoveryContinuationWithoutTools && canControlTools) {
-      recoverySavedToolNames = sessionCtrl.getActiveToolNames!();
-      sessionCtrl.setActiveToolsByName!([]);
+    const toolControl = activeSessionCtrl;
+    const canControlTools = toolControl !== null
+      && typeof toolControl.getActiveToolNames === "function"
+      && typeof toolControl.setActiveToolsByName === "function";
+    if (recoveryContinuationWithoutTools && !canControlTools) {
+      const duration = Date.now() - startTime;
+      const error = "Automatic recovery requires a tools-disabled continuation, but the active session cannot control tools safely. Ask me to continue in a fresh turn.";
+      writeAgentLog(options.logsDir, chatJid, duration, false, null, error);
+      return { status: "error", result: null, error };
+    }
+    if (recoveryContinuationWithoutTools && canControlTools && toolControl) {
+      recoverySavedToolNames = toolControl.getActiveToolNames!();
+      toolControl.setActiveToolsByName!([]);
     }
     const finalizationReserveMs = recoveryAttemptsUsed > 0 && !recoveryContinuationWithoutTools
       ? getRecoveryFinalizationReserveMs(attemptTimeoutMs)
@@ -526,8 +536,8 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       attempt = await options.runPromptAttempt(attemptPrompt, attemptTimeoutMs, turnToolExecutionCount, finalizationReserveMs);
       turnToolExecutionCount = attempt.toolExecutionCount;
     } finally {
-      if (recoverySavedToolNames && sessionCtrl && typeof sessionCtrl.setActiveToolsByName === "function") {
-        sessionCtrl.setActiveToolsByName(recoverySavedToolNames);
+      if (recoverySavedToolNames && activeSessionCtrl && typeof activeSessionCtrl.setActiveToolsByName === "function") {
+        activeSessionCtrl.setActiveToolsByName(recoverySavedToolNames);
       }
     }
 
@@ -754,7 +764,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
 
     if (effectiveDecision.strategy === "compact_then_retry") {
       pauseRecoveryBudget();
-      const compactionResult = await runRecoveryCompaction(session, chatJid, runOptions, options);
+      const compactionResult = await runRecoveryCompaction(activeSession, chatJid, runOptions, options);
       heartbeatTrackedPhase(chatJid, "preprompt_compaction", {
         eventType: "recovery_compaction",
         attempt: recoveryAttemptsUsed,
@@ -832,6 +842,27 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
             ),
           };
         }
+      } else if (compactionResult.stillOverThreshold) {
+        const reason = "Recovery compaction completed but the session remains above the context threshold.";
+        if (!options.rotateAfterInsufficientCompaction) {
+          const duration = Date.now() - startTime;
+          writeAgentLog(options.logsDir, chatJid, duration, false, null, reason);
+          return { status: "error", result: null, error: `${reason} Refusing to retry in the same session.` };
+        }
+        const rotation = await options.rotateAfterInsufficientCompaction(reason);
+        if (!rotation.ok) {
+          const duration = Date.now() - startTime;
+          const error = `${reason} Emergency rotation failed: ${rotation.errorMessage}`;
+          writeAgentLog(options.logsDir, chatJid, duration, false, null, error);
+          return { status: "error", result: null, error };
+        }
+        activeSession = rotation.session;
+        activeSessionCtrl = rotation.sessionCtrl;
+        options.onWarn?.("Emergency-rotated session after insufficient recovery compaction", {
+          operation: "run_agent.recovery_compaction_emergency_rotate",
+          chatJid,
+          reason,
+        });
       }
       startRecoveryBudget();
     }
