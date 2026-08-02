@@ -386,6 +386,15 @@ describe("smart-compaction output validation", () => {
     )).toMatchObject({ ok: false, code: "invalid_file_sections" });
   });
 
+  it("normalizes Key Decisions to the chunk Decisions heading", () => {
+    const chunkSummary = `## Chunk Range\n- 1-4\n\n## Goals / User Intent\n- Preserve state\n\n## Constraints & Preferences\n- Keep paths exact\n\n## Key Decisions\n- Use deterministic facts\n\n## Files / Commands / Tool Outcomes\n- Wrote a.ts\n\n## Progress\n- Done: reproduced\n- In progress: validate\n- Blocked: none\n\n## Open Questions / Next Steps\n- Continue\n\n## Key Continuity Facts\n- a.ts was written`;
+    expect(validateCompactionSummaryResponse(
+      { content: [{ type: "text", text: chunkSummary }], stopReason: "stop" },
+      "chunk",
+      20_000,
+    )).toMatchObject({ ok: true, text: expect.stringContaining("## Decisions") });
+  });
+
   it("normalizes common chunk progress heading aliases", () => {
     const chunkSummary = `## Chunk Range\n- 1-4\n\n## Goals / User Intent\n- Preserve state\n\n## Constraints & Preferences\n- Keep paths exact\n\n## Decisions\n- Use deterministic facts\n\n## Files / Commands / Tool Outcomes\n- Wrote a.ts\n\n## Progress\n### Completed\n- reproduced\n### Current\n- validate\n### Blockers\n- none\n\n## Open Questions / Next Steps\n- Continue\n\n## Key Continuity Facts\n- a.ts was written`;
     expect(validateCompactionSummaryResponse(

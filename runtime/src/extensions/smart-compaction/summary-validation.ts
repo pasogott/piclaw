@@ -178,6 +178,10 @@ function discardModelFileBlocks(rawText: string): string {
   return text.replace(/\n{3,}/g, "\n\n").trim();
 }
 
+function normalizeChunkHeadingAliases(text: string): string {
+  return text.replace(/^##\s+Key Decisions\s*$/gmi, "## Decisions");
+}
+
 function normalizeChunkProgressLabels(text: string): string {
   const progressMatch = /^##\s+Progress\s*$([\s\S]*?)(?=^##\s+|(?![\s\S]))/gmi.exec(text);
   if (!progressMatch) return text;
@@ -254,7 +258,9 @@ export function validateCompactionSummaryResponse(
     ? { ok: true as const, text: discardModelFileBlocks(rawText) }
     : normalizeModelFileBlocks(rawText, schema, stopReason);
   if (!normalizedFiles.ok) return normalizedFiles;
-  const text = schema === "chunk" ? normalizeChunkProgressLabels(normalizedFiles.text) : normalizedFiles.text;
+  const text = schema === "chunk"
+    ? normalizeChunkProgressLabels(normalizeChunkHeadingAliases(normalizedFiles.text))
+    : normalizedFiles.text;
   if (options.modelFileBlocks === "discard" && text.length > maxChars) {
     return failure("too_large", `summary was ${text.length} characters; maximum is ${maxChars}`, stopReason);
   }

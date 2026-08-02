@@ -993,6 +993,27 @@ export async function runAgentPrompt(
       onWarn: options.onWarn,
       clearAttachments: options.clearAttachments,
       toolCallCap: toolCallCapRef,
+      rotateAfterInsufficientCompaction: async (reason) => {
+        const rotation = await rotateSession(session, runtime, {
+          reason: "automatic",
+          skipCompaction: true,
+          emergencyReason: reason,
+          chatJid,
+        });
+        if (rotation.status !== "success") return { ok: false, errorMessage: rotation.message };
+        clearCompactionFailureBackoff(chatJid);
+        resetCompactionSuccessCount(chatJid);
+        session = runtime.session;
+        sessionCtrl = session as unknown as SessionWithToolControl;
+        noteCompactionSuccess(session, chatJid, "rotation", {
+          ...options,
+          countSuccess: false,
+          clearBackoff: false,
+        });
+        modelLabel = session.model ? `${session.model.provider}/${session.model.id}` : null;
+        updateSessionModel(chatJid, modelLabel, session.thinkingLevel ?? null);
+        return { ok: true, session, sessionCtrl };
+      },
       runPromptAttempt: async (attemptPrompt, attemptTimeoutMs, turnToolExecutionCount, finalizationReserveMs = 0) => await runPromptAttempt(
         attemptPrompt,
         chatJid,

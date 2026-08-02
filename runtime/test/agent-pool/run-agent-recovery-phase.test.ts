@@ -291,7 +291,7 @@ describe("runAgentRecoveryPhase", () => {
             toolExecutionCount: 2,
           });
         }
-        expect(activeTools).toEqual(["read", "bash"]);
+        expect(activeTools).toEqual([]);
         return attempt({
           output: output("success", undefined, "recovered"),
           snapshot: {
@@ -313,12 +313,105 @@ describe("runAgentRecoveryPhase", () => {
     expect(calls[1]?.toolExecutionCountAtStart).toBe(2);
     expect(calls[1]?.timeoutMs).toBeGreaterThanOrEqual(20);
     expect(calls[1]?.timeoutMs).toBeLessThanOrEqual(25);
-    expect(activeToolSets).toEqual([]);
+    expect(activeToolSets).toEqual([[], ["read", "bash"]]);
     expect(events).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "compaction_start", trigger: "recovery" }),
       expect.objectContaining({ type: "compaction_end", trigger: "recovery", willRetry: true }),
       expect.objectContaining({ type: "recovery_end", outcome: "recovered" }),
     ]));
+  });
+
+  test("refuses context-pressure recovery when tools cannot be disabled safely", async () => {
+    let calls = 0;
+    const result = await runAgentRecoveryPhase({
+      prompt: "original prompt",
+      chatJid: "web:test-recovery-phase",
+      session: { compact: async () => ({}) } as any,
+      sessionCtrl: null,
+      timeoutMs: 0,
+      startTime: Date.now(),
+      modelLabel: "test/model",
+      recoveryConfig: recoveryConfig(),
+      runOptions: {},
+      logsDir: "/tmp/nonexistent-piclaw-test-logs",
+      clearAttachments: () => {},
+      runPromptAttempt: async () => {
+        calls += 1;
+        return attempt({
+          output: output("error", "context length exceeded"),
+          snapshot: {
+            hadToolActivity: true,
+            hadPartialOutput: false,
+            hadCompletedTurnOutput: false,
+            hadTerminalTurnOutput: false,
+            sawCompactionIntent: true,
+            toolExecutionCount: 1,
+          },
+          promptWasPersisted: true,
+          toolExecutionCount: 1,
+        });
+      },
+    });
+    expect(calls).toBe(1);
+    expect(result.error).toContain("cannot control tools safely");
+    expect(result.toolBudgetExceeded).toBeUndefined();
+  });
+
+  test("rotates when recovery compaction remains over threshold", async () => {
+    let calls = 0;
+    let rotations = 0;
+    const oldSession = {
+      compact: async () => ({ tokensBefore: 300_000, estimatedTokensAfter: 300_000 }),
+      model: { contextWindow: 128_000 },
+      getContextUsage: () => ({ tokens: 300_000 }),
+      sessionManager: { getLeafId: () => "leaf", getEntries: () => [], buildSessionContext: () => ({ messages: [] }) },
+    } as any;
+    const newSession = {} as any;
+    let activeTools = ["read"];
+    const sessionCtrl: SessionWithToolControl = {
+      getActiveToolNames: () => [...activeTools],
+      setActiveToolsByName: (names) => { activeTools = [...names]; },
+    };
+    const result = await runAgentRecoveryPhase({
+      prompt: "original prompt",
+      chatJid: "web:test-recovery-compact",
+      session: oldSession,
+      sessionCtrl,
+      timeoutMs: 0,
+      startTime: Date.now(),
+      modelLabel: "test/model",
+      recoveryConfig: recoveryConfig(),
+      runOptions: {},
+      logsDir: "/tmp/nonexistent-piclaw-test-logs",
+      clearAttachments: () => {},
+      rotateAfterInsufficientCompaction: async () => {
+        rotations += 1;
+        return { ok: true, session: newSession, sessionCtrl };
+      },
+      runPromptAttempt: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return attempt({
+            output: output("error", "context length exceeded"),
+            snapshot: {
+              hadToolActivity: true,
+              hadPartialOutput: false,
+              hadCompletedTurnOutput: false,
+              hadTerminalTurnOutput: false,
+              sawCompactionIntent: true,
+              toolExecutionCount: 1,
+            },
+            promptWasPersisted: true,
+            toolExecutionCount: 1,
+          });
+        }
+        expect(activeTools).toEqual([]);
+        return attempt({ output: output("success", undefined, "rotated") });
+      },
+    });
+    expect(result.result).toBe("rotated");
+    expect(rotations).toBe(1);
+    expect(calls).toBe(2);
   });
 
   test("buildRecoveryDiagnosticEntry preserves serializable budget fields", () => {
