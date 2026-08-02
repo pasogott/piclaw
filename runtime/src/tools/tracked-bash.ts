@@ -16,13 +16,17 @@
  *     pi-coding-agent's createBashTool() factory.
  */
 
+import { randomBytes } from "crypto";
 import { spawn } from "child_process";
-import { existsSync } from "fs";
-import type { BashOperations } from "@earendil-works/pi-coding-agent";
+import { closeSync, existsSync, mkdirSync, openSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type BashOperations } from "@earendil-works/pi-coding-agent";
 import { buildInjectedShellEnv, resolveKeychainPlaceholders } from "../secure/keychain.js";
 
 import { killProcessTree, registerProcess, unregisterProcess } from "../utils/process-tracker.js";
 import { shouldDetachChildProcess } from "../utils/process-spawn.js";
+import { createLogger, debugSuppressedError } from "../utils/logger.js";
 
 export interface ShellConfig {
   shell: string;
@@ -47,6 +51,81 @@ const CMD_ARGS = ["/c"];
 export const TRACKED_BASH_OUTPUT_LIMIT_BYTES = 256 * 1024;
 export const TRACKED_BASH_OUTPUT_TRUNCATION_NOTICE = "\n[output truncated]\n";
 const TRACKED_BASH_POST_EXIT_STDIO_IDLE_GRACE_MS = 150;
+const log = createLogger("tools.tracked-bash");
+const BASH_SPOOL_TEMP_ERROR_PREFIX = "Bash output spool temp directory is unavailable";
+const BASH_SPOOL_PROBE_PREFIX = ".piclaw-bash-spool-probe";
+
+interface BashSpoolCompatibilityState {
+  totalBytes: number;
+  completedLines: number;
+  hasOpenLine: boolean;
+  prepared: boolean;
+}
+
+function createBashSpoolCompatibilityState(): BashSpoolCompatibilityState {
+  return {
+    totalBytes: 0,
+    completedLines: 0,
+    hasOpenLine: false,
+    prepared: false,
+  };
+}
+
+function createBashSpoolTempDirError(tempDir: string, error: unknown): Error {
+  const code = typeof error === "object" && error && "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
+  const codeText = typeof code === "string" && code ? ` (${code})` : "";
+  return new Error(`${BASH_SPOOL_TEMP_ERROR_PREFIX}: ${tempDir}${codeText}. Recreate the directory or restore write access, then retry.`);
+}
+
+function ensureBashSpoolTempDirWritable(): void {
+  const tempDir = tmpdir();
+  try {
+    mkdirSync(tempDir, { recursive: true });
+  } catch (error) {
+    throw createBashSpoolTempDirError(tempDir, error);
+  }
+
+  const probePath = join(tempDir, `${BASH_SPOOL_PROBE_PREFIX}-${process.pid}-${Date.now()}-${randomBytes(4).toString("hex")}`);
+  let fd: number | undefined;
+  try {
+    fd = openSync(probePath, "w", 0o600);
+  } catch (error) {
+    throw createBashSpoolTempDirError(tempDir, error);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    try {
+      rmSync(probePath, { force: true });
+    } catch (error) {
+      debugSuppressedError(log, "Failed to remove Bash spool probe file", error, { probePath });
+    }
+  }
+}
+
+function prepareBashSpoolTempDirForChunk(state: BashSpoolCompatibilityState, chunk: Buffer): void {
+  if (state.prepared || chunk.length === 0) return;
+
+  state.totalBytes += chunk.length;
+  let newlineCount = 0;
+  let lastNewline = -1;
+  for (let i = 0; i < chunk.length; i += 1) {
+    if (chunk[i] !== 0x0a) continue;
+    newlineCount += 1;
+    lastNewline = i;
+  }
+
+  if (newlineCount === 0) {
+    state.hasOpenLine = true;
+  } else {
+    state.completedLines += newlineCount;
+    state.hasOpenLine = lastNewline < chunk.length - 1;
+  }
+
+  const totalLines = state.completedLines + (state.hasOpenLine ? 1 : 0);
+  if (state.totalBytes <= DEFAULT_MAX_BYTES && totalLines <= DEFAULT_MAX_LINES) return;
+
+  ensureBashSpoolTempDirWritable();
+  state.prepared = true;
+}
 
 function pushUniqueShell(candidates: ShellConfig[], candidate: ShellConfig): void {
   if (!candidate.shell.trim()) return;
@@ -141,6 +220,7 @@ function createTrackedShellOperations(resolveCandidates: () => ShellConfig[]): B
           let attemptedShells: string[] = [];
           let emittedBytes = 0;
           let outputTruncated = false;
+          const spoolCompatibility = createBashSpoolCompatibilityState();
 
           let timeoutHandle: NodeJS.Timeout | undefined;
           const onAbort = () => {
@@ -282,6 +362,17 @@ function createTrackedShellOperations(resolveCandidates: () => ShellConfig[]): B
             };
 
             function onData(chunk: Buffer) {
+              if (settled) return;
+              try {
+                prepareBashSpoolTempDirForChunk(spoolCompatibility, chunk);
+              } catch (error) {
+                cleanupSpawnedListeners();
+                if (spawned.pid) unregisterProcess(spawned.pid);
+                if (spawned.pid) killProcessTree(spawned.pid);
+                settleError(error as Error);
+                return;
+              }
+
               emitChunk(chunk.toString("utf8"));
               if (exited && !settled) armPostExitIdleTimer();
             }

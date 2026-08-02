@@ -6,6 +6,12 @@
  */
 
 import { expect, test } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { createBashTool } from "@earendil-works/pi-coding-agent";
+
 import { getTestWorkspace, setEnv } from "../helpers.js";
 import { initDatabase } from "../../src/db.js";
 import { deleteKeychainEntry, setKeychainEntry } from "../../src/secure/keychain.js";
@@ -16,6 +22,12 @@ import {
   TRACKED_BASH_OUTPUT_TRUNCATION_NOTICE,
 } from "../../src/tools/tracked-bash.js";
 import { buildSubprocessExecutionHint, shouldDetachChildProcess } from "../../src/utils/process-spawn.js";
+
+function extractToolText(content: Array<{ type: string; text?: string }>): string {
+  return content
+    .map((item) => (item.type === "text" ? item.text ?? "" : ""))
+    .join("");
+}
 
 test("tracked bash executes commands and captures output", async () => {
   const ws = getTestWorkspace();
@@ -269,6 +281,52 @@ test("tracked bash caps streamed output and appends a truncation marker", async 
   expect(Buffer.byteLength(output, "utf8")).toBeLessThanOrEqual(
     TRACKED_BASH_OUTPUT_LIMIT_BYTES + Buffer.byteLength(TRACKED_BASH_OUTPUT_TRUNCATION_NOTICE, "utf8")
   );
+});
+
+test.skipIf(process.platform === "win32")("tracked bash recreates TMPDIR before Earendil bash output spooling", async () => {
+  const ws = getTestWorkspace();
+  const tempBase = mkdtempSync(join(tmpdir(), "piclaw-bash-spool-recreate-"));
+  const spoolDir = join(tempBase, "tmp");
+  mkdirSync(spoolDir, { recursive: true });
+  const restore = setEnv({ TMPDIR: spoolDir, TMP: spoolDir, TEMP: spoolDir });
+
+  try {
+    const tool = createBashTool(ws.workspace, { operations: createTrackedBashOperations() });
+    rmSync(spoolDir, { recursive: true, force: true });
+
+    const result = await tool.execute("bash-spool-recreate", { command: "seq 1 2505", timeout: 5 });
+    const details = result.details as { fullOutputPath?: string } | undefined;
+    const fullOutputPath = details?.fullOutputPath;
+
+    expect(existsSync(spoolDir)).toBe(true);
+    expect(fullOutputPath).toBeTruthy();
+    expect(fullOutputPath?.startsWith(spoolDir)).toBe(true);
+    expect(fullOutputPath && existsSync(fullOutputPath)).toBe(true);
+    expect(extractToolText(result.content as Array<{ type: string; text?: string }>)).toContain("Full output:");
+    expect(readFileSync(fullOutputPath!, "utf8")).toContain("2505");
+  } finally {
+    restore();
+    rmSync(tempBase, { recursive: true, force: true });
+  }
+});
+
+test.skipIf(process.platform === "win32")("tracked bash turns unwritable spool temp directories into bounded tool errors", async () => {
+  const ws = getTestWorkspace();
+  const tempBase = mkdtempSync(join(tmpdir(), "piclaw-bash-spool-eacces-"));
+  const spoolDir = join(tempBase, "tmp");
+  mkdirSync(spoolDir, { recursive: true });
+  chmodSync(spoolDir, 0o555);
+  const restore = setEnv({ TMPDIR: spoolDir, TMP: spoolDir, TEMP: spoolDir });
+
+  try {
+    const tool = createBashTool(ws.workspace, { operations: createTrackedBashOperations() });
+    await expect(tool.execute("bash-spool-eacces", { command: "seq 1 2505", timeout: 5 }))
+      .rejects.toThrow(`Bash output spool temp directory is unavailable: ${spoolDir}`);
+  } finally {
+    restore();
+    chmodSync(spoolDir, 0o755);
+    rmSync(tempBase, { recursive: true, force: true });
+  }
 });
 
 test.skipIf(process.platform === "win32")("tracked bash drains output written after the shell exits", async () => {
