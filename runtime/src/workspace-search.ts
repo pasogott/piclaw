@@ -8,7 +8,7 @@
 
 import { getDb } from "./db.js";
 import { getSearchMatchMode } from "./core/config.js";
-import { prepareFtsQuery } from "./utils/fts-query.js";
+import { extractFtsFallbackTerms, isFtsOperatorQuery, prepareFtsQuery } from "./utils/fts-query.js";
 import { createLogger, debugSuppressedError } from "./utils/logger.js";
 import {
   getWorkspaceIndexStatus,
@@ -137,6 +137,7 @@ export async function searchWorkspace(params: WorkspaceSearchParams): Promise<Wo
     }
   }
 
+  const operatorQuery = isFtsOperatorQuery(query);
   const ftsQuery = prepareFtsQuery(query, getSearchMatchMode());
   if (!ftsQuery) {
     return { rows: [], limit, offset, error: "Query is empty after sanitization." };
@@ -159,14 +160,14 @@ export async function searchWorkspace(params: WorkspaceSearchParams): Promise<Wo
     // FTS query failed even after sanitization — fall back to LIKE.
     try {
       const prefix = scope === "notes" ? "notes/%" : scope === "skills" ? ".pi/skills/%" : null;
-      const terms = query.split(/\s+/).filter(Boolean).map((t) => `%${t}%`);
+      const terms = extractFtsFallbackTerms(query, { dropFtsKeywords: operatorQuery }).map((term) => `%${term}%`);
       if (terms.length === 0) return { rows: [], limit, offset, error: "No searchable terms." };
 
-      const likeClauses = terms.map(() => "content LIKE ? COLLATE NOCASE").join(" AND ");
-      const conditions = prefix ? `${likeClauses} AND path LIKE ?` : likeClauses;
+      const likeClauses = terms.map(() => "workspace_fts.content LIKE ? COLLATE NOCASE").join(" AND ");
+      const conditions = prefix ? `${likeClauses} AND workspace_files.path LIKE ?` : likeClauses;
       const params_arr = prefix ? [...terms, prefix] : terms;
 
-      const sql = `SELECT path, size_bytes, mtime_ms, substr(content, 1, 200) as snippet FROM workspace_files JOIN workspace_fts ON workspace_fts.path = workspace_files.path WHERE ${conditions} LIMIT ? OFFSET ?`;
+      const sql = `SELECT workspace_files.path AS path, workspace_files.size_bytes AS size_bytes, workspace_files.mtime_ms AS mtime_ms, substr(workspace_fts.content, 1, 200) as snippet FROM workspace_files JOIN workspace_fts ON workspace_fts.path = workspace_files.path WHERE ${conditions} LIMIT ? OFFSET ?`;
       const rows = db.prepare(sql).all(...params_arr, limit, offset) as WorkspaceSearchRow[];
       return { rows, limit, offset };
     } catch {

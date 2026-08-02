@@ -42,6 +42,26 @@ test("save and search tool output", async () => {
   expect(empty.length).toBe(0);
 });
 
+test("searchToolOutput handles dotted, metric, hyphenated, and path identifiers", async () => {
+  const ws = getTestWorkspace();
+  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
+
+  const db = await import("../../src/db.js");
+  db.initDatabase();
+
+  const toolOutput = await import("../../src/tool-output.js");
+  const saved = toolOutput.saveToolOutput([
+    "Host sigma.local sends graphite through telegraf.",
+    "Metric hosts.orangepi6plus.cpu.usage_idle stayed high under pi-side-agents.",
+    "Path referenced: workspace/tmp/files.",
+  ].join("\n"), { source: "test" });
+
+  expect(toolOutput.searchToolOutput(saved.id, "sigma.local sigma telegraf graphite", 5).length).toBeGreaterThan(0);
+  expect(toolOutput.searchToolOutput(saved.id, "hosts.orangepi6plus.cpu.usage_idle", 5).length).toBeGreaterThan(0);
+  expect(toolOutput.searchToolOutput(saved.id, "pi-side-agents", 5).length).toBeGreaterThan(0);
+  expect(toolOutput.searchToolOutput(saved.id, "workspace/tmp/files", 5).length).toBeGreaterThan(0);
+});
+
 test("saveToolOutput uses createdAt for deterministic date-sharded paths", async () => {
   const ws = getTestWorkspace();
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
