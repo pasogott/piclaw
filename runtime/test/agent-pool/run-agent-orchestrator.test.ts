@@ -2886,17 +2886,14 @@ test("runAgentPrompt auto-compacts and retries when tool activity produced no te
     });
 
     expect(result.status).toBe("error");
-    expect(result.error).toContain("maximum context length exceeded");
-    expect(session.promptCalls).toBe(3);
-    expect(session.promptTexts).toEqual([
-      "hello",
-      RECOVERY_CONTINUATION_PROMPT,
-      RECOVERY_CONTINUATION_PROMPT,
-    ]);
-    expect(session.compactCalls).toBe(2);
-    expect(result.recovery).toMatchObject({
-      exhausted: true,
-      attemptsUsed: 2,
+    expect(result.error).toContain("cannot control tools safely");
+    expect(result.error).not.toContain("Tool-use budget exceeded");
+    expect(session.promptCalls).toBe(1);
+    expect(session.promptTexts).toEqual(["hello"]);
+    expect(session.compactCalls).toBe(1);
+    expect(result.recovery).toBeUndefined();
+    expect(result).not.toMatchObject({
+      toolBudgetExceeded: true,
     });
   } finally {
     restoreEnv();
