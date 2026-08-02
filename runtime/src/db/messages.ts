@@ -34,6 +34,7 @@ import {
   deleteThinkingContentByMessageRowIds,
 } from "./thinking-cleanup.js";
 import { getSearchMatchMode } from "../core/config.js";
+import { extractFtsFallbackTerms, isFtsOperatorQuery, prepareFtsQuery } from "../utils/fts-query.js";
 
 /**
  * Internal representation of a raw row from the `messages` table.
@@ -612,13 +613,9 @@ function searchMessagesInternal(chatJids: string[] | null, query: string, limit:
   }
 
   const rawQuery = query.trim();
-  const hasOperators = /(?:\bAND\b|\bOR\b|\bNOT\b|\bNEAR\b|["():*])/i.test(rawQuery);
-  const terms = rawQuery
-    .split(/\s+/)
-    .map((term) => term.replace(/^["']+|["']+$/g, ""))
-    .filter(Boolean);
-  const joiner = getSearchMatchMode() === "or" ? " OR " : " AND ";
-  const ftsQuery = !hasOperators && terms.length > 1 ? terms.join(joiner) : rawQuery;
+  const operatorQuery = isFtsOperatorQuery(rawQuery);
+  const ftsQuery = prepareFtsQuery(rawQuery, getSearchMatchMode());
+  if (!ftsQuery) return [];
 
   try {
     const rows = db
@@ -633,7 +630,7 @@ function searchMessagesInternal(chatJids: string[] | null, query: string, limit:
       .all(...chatParams, ftsQuery, limit, offset) as StoredMessageRow[];
     return rows.map((row) => buildInteraction(row, getMediaIdsForMessage(row.rowid)));
   } catch {
-    const fallbackTerms = terms.length > 0 ? terms : rawQuery ? [rawQuery] : [];
+    const fallbackTerms = extractFtsFallbackTerms(rawQuery, { dropFtsKeywords: operatorQuery });
     if (fallbackTerms.length === 0) return [];
     const clauses = fallbackTerms.map(() => "content LIKE ? COLLATE NOCASE").join(" AND ");
     const sql = `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE ${chatClause}${clauses} ORDER BY rowid DESC LIMIT ? OFFSET ?`;

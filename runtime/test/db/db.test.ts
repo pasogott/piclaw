@@ -733,6 +733,25 @@ test("search and hashtag filters return matching messages", () => {
   expect(results.length).toBe(2);
 });
 
+test("search handles punctuation-heavy identifiers and invalid operator fallback", () => {
+  const chatJid = `test:${Date.now()}-search-identifiers`;
+  db.storeChatMetadata(chatJid, new Date().toISOString(), "Test");
+
+  db.storeMessage(
+    makeMessage(
+      chatJid,
+      "Investigated sigma.local via telegraf and graphite with metric hosts.orangepi6plus.cpu.usage_idle inside pi-side-agents under workspace/tmp/files",
+      "2024-02-01T00:03:00.000Z",
+    ),
+  );
+
+  expect(db.searchMessages(chatJid, "sigma.local", 10, 0)).toHaveLength(1);
+  expect(db.searchMessages(chatJid, "hosts.orangepi6plus.cpu.usage_idle", 10, 0)).toHaveLength(1);
+  expect(db.searchMessages(chatJid, "pi-side-agents", 10, 0)).toHaveLength(1);
+  expect(db.searchMessages(chatJid, "workspace/tmp/files", 10, 0)).toHaveLength(1);
+  expect(db.searchMessages(chatJid, "sigma.local AND", 10, 0)).toHaveLength(1);
+});
+
 test("searchMessagesAcrossChats can search across branch families or all chats", () => {
   const rootChatJid = `web:test-search-root-${Date.now()}`;
   const branchChatJid = `${rootChatJid}:branch:1`;

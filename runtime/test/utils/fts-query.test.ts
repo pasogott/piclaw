@@ -2,7 +2,12 @@
  * test/utils/fts-query.test.ts – Tests for FTS query sanitization.
  */
 import { expect, test, describe } from "bun:test";
-import { sanitizeFtsQuery, isFtsOperatorQuery, prepareFtsQuery } from "../../src/utils/fts-query.js";
+import {
+  extractFtsFallbackTerms,
+  sanitizeFtsQuery,
+  isFtsOperatorQuery,
+  prepareFtsQuery,
+} from "../../src/utils/fts-query.js";
 
 describe("isFtsOperatorQuery", () => {
   test("detects AND/OR/NOT keywords", () => {
@@ -25,10 +30,16 @@ describe("isFtsOperatorQuery", () => {
     expect(isFtsOperatorQuery("content:hello")).toBe(true);
   });
 
+  test("does not treat URLs as column-prefix operators", () => {
+    expect(isFtsOperatorQuery("https://sigma.local/path")).toBe(false);
+  });
+
   test("returns false for plain text", () => {
     expect(isFtsOperatorQuery("hello")).toBe(false);
     expect(isFtsOperatorQuery("hello world")).toBe(false);
+    expect(isFtsOperatorQuery("sigma.local")).toBe(false);
     expect(isFtsOperatorQuery("pi-side-agents")).toBe(false);
+    expect(isFtsOperatorQuery("workspace/tmp/files")).toBe(false);
     expect(isFtsOperatorQuery("some random query text")).toBe(false);
   });
 });
@@ -69,15 +80,11 @@ describe("sanitizeFtsQuery", () => {
     expect(sanitizeFtsQuery('"()*')).toBe(null);
   });
 
-  test("handles hyphenated identifiers (like pi-side-agents)", () => {
-    // hyphens inside tokens are fine; only leading hyphens are stripped
-    const result = sanitizeFtsQuery("pi-side-agents");
-    expect(result).toBe("pi-side-agents");
-  });
-
-  test("handles slash-separated paths", () => {
-    const result = sanitizeFtsQuery("workspace/tmp/files");
-    expect(result).toBe("workspace/tmp/files");
+  test("quotes punctuation-heavy identifiers", () => {
+    expect(sanitizeFtsQuery("sigma.local")).toBe('"sigma.local"');
+    expect(sanitizeFtsQuery("hosts.orangepi6plus.cpu.usage_idle")).toBe('"hosts.orangepi6plus.cpu.usage_idle"');
+    expect(sanitizeFtsQuery("pi-side-agents")).toBe('"pi-side-agents"');
+    expect(sanitizeFtsQuery("workspace/tmp/files")).toBe('"workspace/tmp/files"');
   });
 
   test("collapses multiple spaces", () => {
@@ -87,11 +94,30 @@ describe("sanitizeFtsQuery", () => {
   test("AND mode joins with implicit AND (space)", () => {
     expect(sanitizeFtsQuery("hello world", "and")).toBe("hello world");
     expect(sanitizeFtsQuery("foo and bar", "and")).toBe('foo "and" bar');
+    expect(sanitizeFtsQuery("sigma.local graphite", "and")).toBe('"sigma.local" graphite');
   });
 
   test("OR mode is default", () => {
     expect(sanitizeFtsQuery("hello world")).toBe("hello OR world");
     expect(sanitizeFtsQuery("hello world", "or")).toBe("hello OR world");
+  });
+});
+
+describe("extractFtsFallbackTerms", () => {
+  test("preserves dotted, hyphenated, and slash-separated identifiers", () => {
+    expect(extractFtsFallbackTerms('sigma.local "pi-side-agents" workspace/tmp/files')).toEqual([
+      "sigma.local",
+      "pi-side-agents",
+      "workspace/tmp/files",
+    ]);
+  });
+
+  test("can drop explicit FTS keywords for LIKE fallback", () => {
+    expect(extractFtsFallbackTerms("sigma.local AND graphite", { dropFtsKeywords: true })).toEqual([
+      "sigma.local",
+      "graphite",
+    ]);
+    expect(extractFtsFallbackTerms("NEAR(foo bar)", { dropFtsKeywords: true })).toEqual(["foo", "bar"]);
   });
 });
 
@@ -114,32 +140,32 @@ describe("prepareFtsQuery", () => {
     expect(prepareFtsQuery("hello world", "and")).toBe("hello world");
   });
 
-  test("sanitizes queries with problematic chars", () => {
-    const result = prepareFtsQuery("pi-side-agents worktree");
-    expect(result).toBe("pi-side-agents OR worktree");
+  test("quotes punctuation-heavy identifiers inside plain natural-language queries", () => {
+    expect(prepareFtsQuery("sigma.local sigma telegraf graphite")).toBe('"sigma.local" OR sigma OR telegraf OR graphite');
+    expect(prepareFtsQuery("sigma.local sigma telegraf graphite", "and")).toBe('"sigma.local" sigma telegraf graphite');
+    expect(prepareFtsQuery("hosts.orangepi6plus.cpu.usage_idle")).toBe('"hosts.orangepi6plus.cpu.usage_idle"');
+    expect(prepareFtsQuery("workspace/tmp/files")).toBe('"workspace/tmp/files"');
   });
 
   test("handles the real-world failures we hit today", () => {
-    // These caused actual errors in search_tool_output during this session:
-
     // "no such column: side" — hyphenated token parsed as column ref
-    expect(prepareFtsQuery("pi-side-agents")).toBe("pi-side-agents");
+    expect(prepareFtsQuery("pi-side-agents")).toBe('"pi-side-agents"');
 
     // "fts5: syntax error near '/'" — slash in query
-    expect(prepareFtsQuery("/agents")).toBe("/agents");
+    expect(prepareFtsQuery("/agents")).toBe('"/agents"');
 
     // "no such column: capable" — compound term parsed as column
-    expect(prepareFtsQuery("service-capable cross-client workbench")).toBe("service-capable OR cross-client OR workbench");
+    expect(prepareFtsQuery("service-capable cross-client workbench")).toBe('"service-capable" OR "cross-client" OR workbench');
 
     // "no such column: commit" — hyphenated compound
-    expect(prepareFtsQuery("auto-commit dashboard widget")).toBe("auto-commit OR dashboard OR widget");
+    expect(prepareFtsQuery("auto-commit dashboard widget")).toBe('"auto-commit" OR dashboard OR widget');
 
     // "no such column: packages" — plain word treated as column
-    expect(prepareFtsQuery("pi-packages install")).toBe("pi-packages OR install");
+    expect(prepareFtsQuery("pi-packages install")).toBe('"pi-packages" OR install');
   });
 
   test("respects AND mode for real-world queries", () => {
-    expect(prepareFtsQuery("service-capable cross-client workbench", "and")).toBe("service-capable cross-client workbench");
-    expect(prepareFtsQuery("auto-commit dashboard widget", "and")).toBe("auto-commit dashboard widget");
+    expect(prepareFtsQuery("service-capable cross-client workbench", "and")).toBe('"service-capable" "cross-client" workbench');
+    expect(prepareFtsQuery("auto-commit dashboard widget", "and")).toBe('"auto-commit" dashboard widget');
   });
 });
