@@ -73,8 +73,6 @@ export function WorkspaceSection({ settingsData, setStatus, mergeSettingsData })
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         saveTimerRef.current = setTimeout(async () => {
             if (!mountedRef.current) return;
-            const active = document.activeElement;
-            if (active && active.closest?.('.settings-number-stepper')) return;
             try {
                 const payload = await saveWorkspaceSettings(JSON.parse(currentServerSnapshot));
                 if (!mountedRef.current || !payload?.ok || !payload?.settings) return;
