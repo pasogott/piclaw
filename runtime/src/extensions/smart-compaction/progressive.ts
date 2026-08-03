@@ -9,6 +9,9 @@ import type { Message, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import type { FileOperations } from "@earendil-works/pi-coding-agent";
 import { streamComplete, type CompactionStreamFn } from "./stream-complete.js";
 import {
+  DEFAULT_HIGH_CONTEXT_PROGRESSIVE_MAX_CHUNKS,
+  DEFAULT_HIGH_CONTEXT_PROGRESSIVE_TARGET_CHUNKS,
+  HIGH_CONTEXT_PROGRESSIVE_TARGET_MIN_CONTEXT,
   MAX_PROGRESSIVE_CHUNKS,
   PROGRESSIVE_COMPACTION_CONCURRENCY,
   PROGRESSIVE_TIME_BUDGET_FRACTION,
@@ -445,6 +448,50 @@ async function mergeProgressiveSummaries(input: {
   );
 }
 
+function maybeAdaptProgressiveChunks(input: {
+  chunks: ProgressiveCompactionChunk[];
+  sourceUnits?: CompactionSourceUnit[];
+  llmMessages: Message[];
+  humanUserIndexes: Set<number>;
+  budget: ProgressiveCompactionBudget;
+}): ProgressiveCompactionChunk[] {
+  if (input.budget.contextWindow < HIGH_CONTEXT_PROGRESSIVE_TARGET_MIN_CONTEXT) return input.chunks;
+  if (input.chunks.length <= DEFAULT_HIGH_CONTEXT_PROGRESSIVE_TARGET_CHUNKS) return input.chunks;
+
+  const totalChars = input.chunks.reduce((total, chunk) => total + Math.max(0, chunk.estimatedChars || chunk.text.length), 0);
+  // Add packing slack: source units are indivisible unless individually
+  // oversized, so total/target alone can still leave many half-full chunks.
+  const targetBudgetChars = Math.ceil((totalChars / DEFAULT_HIGH_CONTEXT_PROGRESSIVE_TARGET_CHUNKS) * 1.25);
+  const adaptiveBudgetChars = Math.min(input.budget.promptBudgetChars, Math.max(input.budget.chunkBudgetChars, targetBudgetChars));
+  if (adaptiveBudgetChars <= input.budget.chunkBudgetChars) return input.chunks;
+
+  const adaptedChunks = input.sourceUnits
+    ? buildProgressiveCompactionChunksFromSourceUnits(input.sourceUnits, adaptiveBudgetChars)
+    : buildProgressiveCompactionChunks(input.llmMessages, adaptiveBudgetChars, input.humanUserIndexes);
+  if (adaptedChunks.length >= input.chunks.length) return input.chunks;
+
+  log.debug("Adaptive progressive chunk preflight selected larger chunk budget", {
+    operation: "smart_compaction.progressive.adaptive_chunk_budget",
+    contextWindow: input.budget.contextWindow,
+    originalChunkCount: input.chunks.length,
+    adaptedChunkCount: adaptedChunks.length,
+    originalChunkBudgetChars: input.budget.chunkBudgetChars,
+    adaptiveBudgetChars,
+    targetChunkCount: DEFAULT_HIGH_CONTEXT_PROGRESSIVE_TARGET_CHUNKS,
+    maxChunkCount: DEFAULT_HIGH_CONTEXT_PROGRESSIVE_MAX_CHUNKS,
+  });
+  return adaptedChunks;
+}
+
+function assertProgressiveChunkCountFeasible(chunks: ProgressiveCompactionChunk[], budget: ProgressiveCompactionBudget): void {
+  if (budget.contextWindow < HIGH_CONTEXT_PROGRESSIVE_TARGET_MIN_CONTEXT) return;
+  if (chunks.length <= DEFAULT_HIGH_CONTEXT_PROGRESSIVE_MAX_CHUNKS) return;
+  const batches = Math.ceil(chunks.length / PROGRESSIVE_COMPACTION_CONCURRENCY);
+  throw new Error(
+    `Progressive compaction would require ${chunks.length} chunks (${batches} model-call batches) even after adaptive chunk sizing; refusing a likely timeout-prone compaction. Reduce source size, increase compaction timeout, or raise the progressive prompt budget.`,
+  );
+}
+
 export async function runProgressiveCompaction(input: {
   llmMessages: Message[];
   sourceUnits?: CompactionSourceUnit[];
@@ -477,32 +524,45 @@ export async function runProgressiveCompaction(input: {
 }): Promise<ProgressiveCompactionResult> {
   let modelCallCount = 0;
   const onModelRequest = () => { modelCallCount += 1; };
-  let chunks = input.sourceUnits
-    ? buildProgressiveCompactionChunksFromSourceUnits(input.sourceUnits, input.budget.chunkBudgetChars)
-    : buildProgressiveCompactionChunks(
-        input.llmMessages,
-        input.budget.chunkBudgetChars,
-        input.humanUserIndexes,
-      );
-
   // The previous summary is discarded and replaced by this compaction, so it
   // is source-bearing just like the raw message stream. Put it through the
   // same deterministic chunk path instead of copying an arbitrarily large
   // summary only into the final merge prompt, where it could overflow after
   // every message chunk had already succeeded.
   const previousSummary = input.previousSummary?.trim();
-  if (previousSummary) {
-    const previousSummaryChunks = buildProgressiveCompactionChunksFromSourceUnits([{
-      id: "continuity-previous-summary",
-      groupId: "continuity:previous-summary",
-      renderedText: `## Previous Compaction Summary Source\n${previousSummary}`,
-      sourceIndexes: [],
-      sourceEntryIds: [],
-      segmentIndex: 1,
-      segmentCount: 1,
-    }], input.budget.chunkBudgetChars);
-    chunks = [...previousSummaryChunks, ...chunks].map((chunk, index) => ({ ...chunk, index: index + 1 }));
+  const previousSummaryUnit: CompactionSourceUnit | null = previousSummary ? {
+    id: "continuity-previous-summary",
+    groupId: "continuity:previous-summary",
+    renderedText: `## Previous Compaction Summary Source\n${previousSummary}`,
+    sourceIndexes: [],
+    sourceEntryIds: [],
+    segmentIndex: 1,
+    segmentCount: 1,
+  } : null;
+  const sourceUnitsWithContinuity = input.sourceUnits
+    ? [...(previousSummaryUnit ? [previousSummaryUnit] : []), ...input.sourceUnits]
+    : undefined;
+  let chunks = sourceUnitsWithContinuity
+    ? buildProgressiveCompactionChunksFromSourceUnits(sourceUnitsWithContinuity, input.budget.chunkBudgetChars)
+    : buildProgressiveCompactionChunks(
+        input.llmMessages,
+        input.budget.chunkBudgetChars,
+        input.humanUserIndexes,
+      );
+  if (previousSummaryUnit && !sourceUnitsWithContinuity) {
+    const previousSummaryChunks = buildProgressiveCompactionChunksFromSourceUnits([previousSummaryUnit], input.budget.chunkBudgetChars);
+    chunks = [...previousSummaryChunks, ...chunks];
   }
+
+  const canAdaptChunks = !previousSummaryUnit || !!sourceUnitsWithContinuity;
+  chunks = (canAdaptChunks ? maybeAdaptProgressiveChunks({
+    chunks,
+    sourceUnits: sourceUnitsWithContinuity,
+    llmMessages: input.llmMessages,
+    humanUserIndexes: input.humanUserIndexes,
+    budget: input.budget,
+  }) : chunks).map((chunk, index) => ({ ...chunk, index: index + 1 }));
+  assertProgressiveChunkCountFeasible(chunks, input.budget);
 
   // Optional operational guard only. Never enlarge chunks to satisfy it: doing
   // so can recreate oversized provider prompts and defeats incremental mode.

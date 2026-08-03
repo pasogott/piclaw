@@ -87,12 +87,19 @@ function formatReductionPercent(value: number | null): string | null {
   return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)}%` : null;
 }
 
+function formatCompactionPercentChange(value: number | null): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return value < 0
+    ? `${Math.abs(value).toFixed(1)}% increase`
+    : `${value.toFixed(1)}% reduction`;
+}
+
 function formatCompactionTokenDelta(report: CompactionContextReport): string {
   const source = report.estimatedTokensAfterSource === "upstream" ? "upstream" : "Piclaw";
-  const reduction = formatReductionPercent(report.reductionPercent);
+  const change = formatCompactionPercentChange(report.reductionPercent);
   return [
     `${formatCompactNumber(report.estimatedTokensAfter)} (${source} estimate)`,
-    reduction ? `${reduction} reduction` : null,
+    change,
   ].filter(Boolean).join(" · ");
 }
 
@@ -164,6 +171,9 @@ function buildCompactReport(
   details: PiclawCompactionResultDetails | null,
 ): string {
   const reduction = formatReductionPercent(contextReport.reductionPercent);
+  const increase = typeof contextReport.reductionPercent === "number" && Number.isFinite(contextReport.reductionPercent) && contextReport.reductionPercent < 0
+    ? `${Math.abs(contextReport.reductionPercent).toFixed(1)}% increase`
+    : null;
   const path = formatCompactionPath(details);
   const readableCheckpoint = details?.kind === "piclaw.remote_compaction"
     ? extractRemoteCompactionReadableCheckpoint(details)
@@ -182,7 +192,7 @@ function buildCompactReport(
     `Tokens before: ${formatCompactNumber(tokensBefore)}`,
     `Estimated tokens after: ${formatCompactNumber(contextReport.estimatedTokensAfter)} (${contextReport.estimatedTokensAfterSource})`,
     `Safety-adjusted tokens after: ${formatCompactNumber(contextReport.safetyAdjustedTokensAfter)}`,
-    reduction ? `Estimated reduction: ${reduction}` : null,
+    increase ? `Estimated change: ${increase}` : reduction ? `Estimated reduction: ${reduction}` : null,
     `First kept entry: ${firstKeptEntryId ?? "unknown"}`,
     `Method: ${path.method}`,
     `Execution: ${path.execution}`,
