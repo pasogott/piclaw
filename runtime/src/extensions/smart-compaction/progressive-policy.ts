@@ -6,7 +6,7 @@ import { getProgressiveCompactionConfig } from "../../core/config.js";
 import { getCompactionRequestOverheadTokens, getEffectiveContextWindow } from "../../utils/context-window-budget.js";
 import {
   BUDGET_SAFETY_MARGIN,
-  MAX_PROMPT_CHARS,
+  MAX_PROGRESSIVE_PROMPT_CHARS,
   PROGRESSIVE_CHUNK_FRACTION,
   PROGRESSIVE_INPUT_CONTEXT_FRACTION,
   parsePositiveEnvInt,
@@ -74,7 +74,7 @@ export function getProgressiveCompactionBudget(model: unknown): ProgressiveCompa
   const effectiveWindow = getEffectiveContextWindow(contextWindow, getCompactionRequestOverheadTokens());
   const envBudget = parsePositiveEnvInt("PICLAW_PROGRESSIVE_COMPACTION_PROMPT_CHARS");
   const computedPromptBudget = Math.floor(effectiveWindow * 4 * PROGRESSIVE_INPUT_CONTEXT_FRACTION);
-  const safePromptBudget = Math.min(MAX_PROMPT_CHARS, Math.max(2_000, computedPromptBudget));
+  const safePromptBudget = Math.min(MAX_PROGRESSIVE_PROMPT_CHARS, Math.max(2_000, computedPromptBudget));
   // The environment value may tighten operational chunk sizes, but it must not
   // override the model-derived safety ceiling and recreate provider overflow.
   const rawPromptBudget = envBudget == null ? safePromptBudget : Math.min(envBudget, safePromptBudget);

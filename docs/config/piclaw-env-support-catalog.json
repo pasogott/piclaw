@@ -1919,6 +1919,25 @@
       "supportedPersistence": []
     },
     {
+      "name": "PICLAW_PROGRESSIVE_COMPACTION_MAX_PROMPT_CHARS",
+      "owner": "tools",
+      "type": "integer",
+      "default": 240000,
+      "bounds": "implementation-only tuning; positive integer chars; default 240000",
+      "allowedValues": [],
+      "secret": false,
+      "persistence": [],
+      "precedence": [],
+      "status": "internal",
+      "compatibilityAliasFor": null,
+      "deprecation": null,
+      "removalVersion": null,
+      "bootstrapAllowed": false,
+      "source": "runtime implementation tuning retained outside public config",
+      "migrationDisposition": "internal-runtime-tuning",
+      "supportedPersistence": []
+    },
+    {
       "name": "PICLAW_PROGRESSIVE_COMPACTION_PROMPT_CHARS",
       "owner": "tools",
       "type": "string",

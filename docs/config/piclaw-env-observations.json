@@ -51,7 +51,7 @@
   },
   "current": {
     "production": {
-      "referencedNames": 172,
+      "referencedNames": 173,
       "directReaderNames": 7,
       "directReaderOccurrences": 14,
       "helperReaderNames": 10,
@@ -60,7 +60,7 @@
       "semanticReaderOccurrences": 24
     },
     "runtimeSrc": {
-      "referencedNames": 170,
+      "referencedNames": 171,
       "directReaderNames": 7,
       "directReaderOccurrences": 14,
       "helperReaderNames": 10,
@@ -3307,6 +3307,31 @@
           "files": [
             "runtime/src/extensions/smart-compaction/config.ts",
             "runtime/src/extensions/smart-compaction/progressive.ts"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
+      "name": "PICLAW_PROGRESSIVE_COMPACTION_MAX_PROMPT_CHARS",
+      "scopes": {
+        "production": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "runtime/src/extensions/smart-compaction/config.ts"
+          ],
+          "readerFiles": []
+        },
+        "runtimeSrc": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "runtime/src/extensions/smart-compaction/config.ts"
           ],
           "readerFiles": []
         }

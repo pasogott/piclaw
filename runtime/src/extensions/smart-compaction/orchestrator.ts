@@ -756,6 +756,12 @@ export function createSmartCompactionExtension(options: { streamFn?: CompactionS
                 `Progressive compaction stopped early (${progressiveResult.partialReason ?? "time budget exhausted"}) and the safe partial boundary still exceeds context: estimated ${partialFit.estimatedTotal}t > ${contextWindow}t`,
               );
             }
+            if (Number.isFinite(tokensBefore) && partialFit.estimatedTotal >= tokensBefore) {
+              return cancelCompactionWithReason(
+                ctx,
+                `Progressive compaction stopped early (${progressiveResult.partialReason ?? "time budget exhausted"}) but the safe partial checkpoint would not reduce context: estimated ${partialFit.estimatedTotal}t >= ${tokensBefore}t before compaction`,
+              );
+            }
             finalFirstKeptEntryId = partialFirstKeptEntryId;
             estimatedTotal = partialFit.estimatedTotal;
             margin = partialFit.margin;

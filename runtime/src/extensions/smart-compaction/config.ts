@@ -65,6 +65,24 @@ export function getConfiguredCompactionReasoningEffort(phase: CompactionReasonin
 /** Default cap on progressive prompt chars; an explicit operator env override may raise it. */
 export const MAX_PROMPT_CHARS = 60_000;
 
+/**
+ * Upper bound for progressive compaction input prompts.
+ *
+ * Keep the legacy 60k MAX_PROMPT_CHARS for output-validation callers, but let
+ * high-context models use larger progressive chunks by default. Otherwise a
+ * 1M-token model is split into ~100 tiny chunks, making timeout partials likely
+ * to retain nearly the whole tail verbatim and grow the context.
+ */
+export const MAX_PROGRESSIVE_PROMPT_CHARS = parsePositiveEnvInt("PICLAW_PROGRESSIVE_COMPACTION_MAX_PROMPT_CHARS") ?? 240_000;
+
+/**
+ * Target chunk count for high-context progressive compaction preflight.
+ * 0 disables the target; by default only very large-context models use it.
+ */
+export const DEFAULT_HIGH_CONTEXT_PROGRESSIVE_TARGET_CHUNKS = 16;
+export const DEFAULT_HIGH_CONTEXT_PROGRESSIVE_MAX_CHUNKS = 24;
+export const HIGH_CONTEXT_PROGRESSIVE_TARGET_MIN_CONTEXT = 512_000;
+
 /** Per-tool-result truncation limit when serializing. */
 export const TOOL_RESULT_MAX_CHARS = 1_500;
 

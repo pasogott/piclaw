@@ -2274,7 +2274,15 @@ describe("smart-compaction", () => {
 
       expect(small.promptBudgetChars).toBeLessThan(large.promptBudgetChars);
       expect(small.chunkBudgetChars).toBeLessThanOrEqual(small.promptBudgetChars);
-      expect(large.promptBudgetChars).toBeLessThanOrEqual(60_000);
+      expect(large.promptBudgetChars).toBeLessThan(128_000 * 4 * 0.42 * 0.86);
+    });
+
+    it("uses larger default progressive chunks on 1M-token models", () => {
+      const budget = getProgressiveCompactionBudget({ contextWindow: 1_050_000 });
+
+      expect(budget.promptBudgetChars).toBeGreaterThan(60_000);
+      expect(budget.promptBudgetChars).toBeLessThanOrEqual(240_000 * 0.85);
+      expect(budget.chunkBudgetChars).toBeGreaterThan(100_000);
     });
 
     it("caps an oversized prompt-budget override at the model-derived safety ceiling", () => {
@@ -2306,9 +2314,10 @@ describe("smart-compaction", () => {
 
     it("applies safety margin to prompt budgets", () => {
       const budget = getProgressiveCompactionBudget({ contextWindow: 128_000 });
-      // Without safety margin, 128k * 4 * 0.42 = 215,040 chars, capped at 60k
-      // With 0.85 margin, should be <= 60k * 0.85 = 51k
-      expect(budget.promptBudgetChars).toBeLessThanOrEqual(51_000);
+      // Without safety margin, 128k * 4 * 0.42 = 215,040 chars.
+      // With the 240k progressive cap and 0.85 margin, the model-derived
+      // ceiling applies and should remain below ~183k.
+      expect(budget.promptBudgetChars).toBeLessThanOrEqual(183_000);
     });
 
     it("computes compaction sizing limits from the compaction model", () => {
@@ -2343,14 +2352,16 @@ describe("smart-compaction", () => {
     });
 
     it("routes selective sampling gaps through progressive coverage without losing a middle constraint", async () => {
+      const previousPromptChars = process.env.PICLAW_PROGRESSIVE_COMPACTION_PROMPT_CHARS;
+      process.env.PICLAW_PROGRESSIVE_COMPACTION_PROMPT_CHARS = "3000";
       const messages = Array.from({ length: 30 }, (_, index) => userMsg(
         `${index === 10 ? "MIDDLE_CONTINUITY_CONSTRAINT: never deploy from this session. " : ""}Message ${index}: ${"x".repeat(1_250)}`,
       ));
       const chunkPrompts: string[] = [];
       (completeSimple as any).mockImplementation(async (_model: any, context: any) => {
         const prompt = context.messages[0].content[0].text as string;
-        if (prompt.includes("deterministic chunk")) {
-          chunkPrompts.push(prompt);
+        if (prompt.includes("deterministic chunk") || prompt.includes("smaller intermediate summary")) {
+          if (prompt.includes("deterministic chunk")) chunkPrompts.push(prompt);
           return {
             content: [{ type: "text", text: "## Chunk Range\n- covered\n\n## Goals / User Intent\n- preserve continuity\n\n## Constraints & Preferences\n- preserve exact constraints\n\n## Decisions\n- none\n\n## Files / Commands / Tool Outcomes\n- none\n\n## Progress\n- Done: chunk read\n- In progress: merge\n- Blocked: none\n\n## Open Questions / Next Steps\n- merge\n\n## Key Continuity Facts\n- source represented" }],
             stopReason: "stop",
@@ -2362,22 +2373,27 @@ describe("smart-compaction", () => {
         };
       });
 
-      const result = await handler!(
-        {
-          preparation: makePreparation(messages.length, {
-            messagesToSummarize: messages,
-            tokensBefore: 1_000,
-            settings: { enabled: true, reserveTokens: 4_096, keepRecentTokens: 1_000 },
-          }),
-          branchEntries: [],
-          signal: new AbortController().signal,
-        },
-        makeCtx(),
-      );
+      try {
+        const result = await handler!(
+          {
+            preparation: makePreparation(messages.length, {
+              messagesToSummarize: messages,
+              tokensBefore: 100_000,
+              settings: { enabled: true, reserveTokens: 4_096, keepRecentTokens: 1_000 },
+            }),
+            branchEntries: [],
+            signal: new AbortController().signal,
+          },
+          makeCtx(),
+        );
 
-      expect(chunkPrompts.length).toBeGreaterThan(1);
-      expect(chunkPrompts.join("\n")).toContain("MIDDLE_CONTINUITY_CONSTRAINT");
-      expect(result.compaction.summary).toContain("never deploy from this session");
+        expect(chunkPrompts.length).toBeGreaterThan(1);
+        expect(chunkPrompts.join("\n")).toContain("MIDDLE_CONTINUITY_CONSTRAINT");
+        expect(result.compaction.summary).toContain("never deploy from this session");
+      } finally {
+        if (previousPromptChars === undefined) delete process.env.PICLAW_PROGRESSIVE_COMPACTION_PROMPT_CHARS;
+        else process.env.PICLAW_PROGRESSIVE_COMPACTION_PROMPT_CHARS = previousPromptChars;
+      }
     });
 
     it("chunks a large previous summary as source instead of overflowing the final merge", async () => {
@@ -3290,6 +3306,142 @@ describe("smart-compaction", () => {
         if (previousPromptChars === undefined) delete process.env.PICLAW_PROGRESSIVE_COMPACTION_PROMPT_CHARS;
         else process.env.PICLAW_PROGRESSIVE_COMPACTION_PROMPT_CHARS = previousPromptChars;
       }
+    });
+
+    it("cancels a partial progressive checkpoint that would grow the context", async () => {
+      const previousPromptChars = process.env.PICLAW_PROGRESSIVE_COMPACTION_PROMPT_CHARS;
+      process.env.PICLAW_PROGRESSIVE_COMPACTION_PROMPT_CHARS = "4000";
+      const messages: any[] = [];
+      for (let i = 0; i < 30; i++) {
+        messages.push(userMsg(`Growth-risk fact ${i}: ${"x".repeat(700)}`));
+        messages.push(_assistantTextMsg(`Acknowledged growth-risk fact ${i}.`));
+      }
+      const branchEntries = messages.map((message, index) => ({ id: `growth-entry-${index}`, type: "message", message }));
+
+      let now = 1_000;
+      const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+      (completeSimple as any).mockImplementation(async (_model: any, context: any) => {
+        const prompt = context.messages[0].content[0].text as string;
+        now += 50_000;
+        const range = prompt.match(/Message index range: ([0-9-]+)/)?.[1] ?? "unknown";
+        return {
+          content: [{ type: "text", text: `## Chunk Range\n- ${range}\n\n## Goals / User Intent\n- Preserve growth-risk chunk ${range}\n\n## Constraints & Preferences\n- Do not accept negative compression\n\n## Decisions\n- Partial checkpoints must reduce context\n\n## Files / Commands / Tool Outcomes\n- none\n\n## Progress\n- Done: chunk summarized\n- In progress: retain tail\n- Blocked: time budget\n\n## Open Questions / Next Steps\n- resume\n\n## Key Continuity Facts\n- Growth-risk fact in ${range}` }],
+          stopReason: "stop",
+        };
+      });
+
+      try {
+        const ctx = makeCtx({ model: { provider: "test", id: "partial-growth", contextWindow: 128_000, reasoning: false } });
+        const result = await handler!(
+          {
+            preparation: makePreparation(messages.length, {
+              messagesToSummarize: messages,
+              tokensBefore: 2_000,
+              firstKeptEntryId: "growth-entry-59",
+              settings: { enabled: true, reserveTokens: 8192, keepRecentTokens: 1000 },
+            }),
+            branchEntries,
+            signal: new AbortController().signal,
+          },
+          ctx,
+        );
+
+        expect(result).toEqual({ cancel: true });
+        expect(consumeCompactionCancellationReason(ctx, Number.POSITIVE_INFINITY))
+          .toContain("would not reduce context");
+      } finally {
+        dateSpy.mockRestore();
+        if (previousPromptChars === undefined) delete process.env.PICLAW_PROGRESSIVE_COMPACTION_PROMPT_CHARS;
+        else process.env.PICLAW_PROGRESSIVE_COMPACTION_PROMPT_CHARS = previousPromptChars;
+      }
+    });
+
+    it("adapts high-context progressive chunks toward a bounded model-call count", async () => {
+      const sourceUnits = Array.from({ length: 40 }, (_, index) => ({
+        id: `adaptive-unit-${index}`,
+        groupId: `adaptive-group-${index}`,
+        renderedText: `ADAPTIVE_SOURCE_${index} ${"s".repeat(1_900)}`,
+        sourceIndexes: [index],
+        sourceEntryIds: [`entry-${index}`],
+        segmentIndex: 1,
+        segmentCount: 1,
+      }));
+      const chunkPrompts: string[] = [];
+      (completeSimple as any).mockImplementation(async (_model: any, context: any) => {
+        const prompt = context.messages[0].content[0].text as string;
+        if (prompt.includes("deterministic chunk")) {
+          chunkPrompts.push(prompt);
+          return {
+            content: [{ type: "text", text: "## Chunk Range\n- adaptive\n\n## Goals / User Intent\n- Preserve adaptive chunk source\n\n## Constraints & Preferences\n- Bound chunk call count\n\n## Decisions\n- Use adaptive chunk budget\n\n## Files / Commands / Tool Outcomes\n- none\n\n## Progress\n- Done: chunk summarized\n- In progress: final merge\n- Blocked: none\n\n## Open Questions / Next Steps\n- Continue\n\n## Key Continuity Facts\n- ADAPTIVE_SOURCE" }],
+            stopReason: "stop",
+          };
+        }
+        return {
+          content: [{ type: "text", text: "## Goal\nPreserve adaptive source\n\n## Current Active Topic\n- adaptive progressive compaction\n\n## Historical / Background Context\n- all adaptive chunks merged\n\n## Constraints & Preferences\n- bounded chunk count\n\n## Progress\n### Done\n- [x] adaptive chunks summarized\n### In Progress\n- [ ] continue\n### Blocked\n- none\n\n## Key Decisions\n- **Chunk preflight**: adaptive budget reduced model calls\n\n## Next Steps\n1. continue\n\n## Critical Context\n- ADAPTIVE_SOURCE" }],
+          stopReason: "stop",
+        };
+      });
+
+      const result = await runProgressiveCompaction({
+        llmMessages: [],
+        sourceUnits,
+        humanUserIndexes: new Set<number>(),
+        model: { provider: "test", id: "adaptive-high-context", contextWindow: 1_050_000, reasoning: false },
+        auth: {},
+        settings: { reserveTokens: 8_192 },
+        fileOps: { read: new Set<string>(), written: new Set<string>(), edited: new Set<string>() },
+        budget: {
+          contextWindow: 1_050_000,
+          promptBudgetChars: 20_000,
+          chunkBudgetChars: 1_000,
+          mergeBudgetChars: 20_000,
+          forceProgressive: true,
+        },
+        abortSignal: new AbortController().signal,
+        ctx: { ui: { setStatus: vi.fn() } },
+        streamFn: compactionStreamFn,
+        timeoutMs: 300_000,
+        startedAt: Date.now(),
+      });
+
+      expect(result.complete).toBe(true);
+      expect(chunkPrompts.length).toBeGreaterThan(1);
+      expect(chunkPrompts.length).toBeLessThanOrEqual(16);
+    });
+
+    it("fails high-context progressive compaction early when adaptive sizing still leaves dozens of chunks", async () => {
+      const sourceUnits = Array.from({ length: 100 }, (_, index) => ({
+        id: `infeasible-unit-${index}`,
+        groupId: `infeasible-group-${index}`,
+        renderedText: `INFEASIBLE_SOURCE_${index} ${"s".repeat(9_500)}`,
+        sourceIndexes: [index],
+        sourceEntryIds: [`entry-${index}`],
+        segmentIndex: 1,
+        segmentCount: 1,
+      }));
+
+      await expect(runProgressiveCompaction({
+        llmMessages: [],
+        sourceUnits,
+        humanUserIndexes: new Set<number>(),
+        model: { provider: "test", id: "infeasible-high-context", contextWindow: 1_050_000, reasoning: false },
+        auth: {},
+        settings: { reserveTokens: 8_192 },
+        fileOps: { read: new Set<string>(), written: new Set<string>(), edited: new Set<string>() },
+        budget: {
+          contextWindow: 1_050_000,
+          promptBudgetChars: 20_000,
+          chunkBudgetChars: 1_000,
+          mergeBudgetChars: 20_000,
+          forceProgressive: true,
+        },
+        abortSignal: new AbortController().signal,
+        ctx: { ui: { setStatus: vi.fn() } },
+        streamFn: compactionStreamFn,
+        timeoutMs: 300_000,
+        startedAt: Date.now(),
+      })).rejects.toThrow(/would require .* chunks .* likely timeout-prone/);
+      expect(completeSimple).not.toHaveBeenCalled();
     });
 
     it("returns a bounded deterministic checkpoint when the final progressive merge fails", async () => {
