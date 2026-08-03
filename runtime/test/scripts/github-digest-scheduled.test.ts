@@ -16,7 +16,7 @@ function writeExecutable(path: string, content: string): void {
   chmodSync(path, 0o755);
 }
 
-function runScheduledDigest(postExitCode = 0) {
+function runScheduledDigest(postExitCode = 0, totals = { total_items: 1, repos_with_star_changes: 0 }) {
   const root = mkdtempSync(join(tmpdir(), "piclaw-github-digest-test-"));
   tempDirs.push(root);
   const binDir = join(root, "bin");
@@ -40,7 +40,7 @@ done
 for path in "$output_json" "$output_markdown" "$history_yaml"; do
   [[ "$path" == "$TEST_ROOT"/* ]] || { echo "unsafe test output path: $path" >&2; exit 44; }
 done
-printf '%s\n' '{"totals":{"total_items":1,"repos_with_star_changes":0}}' > "$output_json"
+printf '%s\n' "$DIGEST_TOTALS" > "$output_json"
 printf '%s\n' '# Clean digest' > "$output_markdown"
 printf '%s\n' 'version: 1' > "$history_yaml"
 `);
@@ -69,6 +69,7 @@ exit "${postExitCode}"
       PICLAW_GITHUB_COLLATE_OUTPUT_DIR: outputDir,
       PICLAW_POST_ARGS: postArgsPath,
       TEST_ROOT: root,
+      DIGEST_TOTALS: JSON.stringify({ totals }),
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -88,9 +89,26 @@ test("scheduled GitHub digest suppresses only successful post compatibility warn
   const result = runScheduledDigest();
 
   expect(result.exitCode, result.stderr).toBe(0);
-  expect(result.stdout).toBe("[github-digest] Report posted to web:test.\n");
+  expect(result.stdout).toBe("");
   expect(result.stderr).not.toContain("domain_config.compat_env");
   expect(result.stderr).toContain("[piclaw-cli] preserved diagnostic");
+  expect(result.postArgs).toContain("--post web:test # Clean digest");
+});
+
+test("scheduled GitHub digest is silent and does not post when there is no qualifying content", () => {
+  const result = runScheduledDigest(0, { total_items: 0, repos_with_star_changes: 0 });
+
+  expect(result.exitCode, result.stderr).toBe(0);
+  expect(result.stdout).toBe("");
+  expect(result.stderr).toBe("");
+  expect(result.postArgs).toBe("");
+});
+
+test("scheduled GitHub digest posts when stars changed even with no open items", () => {
+  const result = runScheduledDigest(0, { total_items: 0, repos_with_star_changes: 1 });
+
+  expect(result.exitCode, result.stderr).toBe(0);
+  expect(result.stdout).toBe("");
   expect(result.postArgs).toContain("--post web:test # Clean digest");
 });
 
