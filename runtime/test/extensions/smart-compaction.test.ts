@@ -2485,7 +2485,7 @@ describe("smart-compaction", () => {
       expect(joined.match(/deployment completed/g)).toHaveLength(1);
     });
 
-    it("gives Selective progressive exact source provenance and rolls split groups back atomically", async () => {
+    it("gives Selective progressive exact source provenance without splitting atomic groups", async () => {
       const previousMethod = process.env.PICLAW_SMART_COMPACTION_METHOD;
       const previousPromptChars = process.env.PICLAW_PROGRESSIVE_COMPACTION_PROMPT_CHARS;
       const previousTimeout = process.env.PICLAW_COMPACTION_TIMEOUT_MS;
@@ -2548,7 +2548,7 @@ describe("smart-compaction", () => {
           makeCtx({ model: { provider: "test", id: "selective-atomic", contextWindow: 128_000, reasoning: false } }),
         );
 
-        expect(result.compaction.firstKeptEntryId).toBe("source-entry-2");
+        expect(result.compaction.firstKeptEntryId).toBe("source-entry-4");
         expect(result.compaction.summary).toContain("remaining messages are retained verbatim");
         const prompts = (completeSimple as any).mock.calls.map((call: any[]) => call[1].messages[0].content[0].text as string);
         expect(prompts.some((prompt: string) => prompt.includes("### group-0001 [source=0]"))).toBe(true);
@@ -2569,9 +2569,9 @@ describe("smart-compaction", () => {
           sourceEntryIds: ["source-entry-3"],
         });
 
-        // The unit's first entry ID belongs to source index 3, not the exact
-        // unsummarized start at index 2. Never advance the retained boundary
-        // to that later ID; cancel when the exact source event has no mapping.
+        // The complete tool group now stays in one chunk. Even when its first
+        // source entry ID is sparse, the next unsummarized group starts at the
+        // later user message and retains its exact entry boundary.
         now = 1_000;
         const sparseCtx = makeCtx({ model: { provider: "test", id: "selective-atomic-sparse", contextWindow: 128_000, reasoning: false } });
         const sparseResult = await handler!(
@@ -2588,9 +2588,9 @@ describe("smart-compaction", () => {
           },
           sparseCtx,
         );
-        expect(sparseResult).toEqual({ cancel: true });
-        expect(consumeCompactionCancellationReason(sparseCtx, Number.POSITIVE_INFINITY))
-          .toContain("could not identify the first unsummarized entry");
+        expect(sparseResult.compaction.firstKeptEntryId).toBe("source-entry-4");
+        expect(sparseResult.compaction.summary).toContain("remaining messages are retained verbatim");
+        expect(consumeCompactionCancellationReason(sparseCtx, Number.POSITIVE_INFINITY)).toBeNull();
       } finally {
         dateSpy.mockRestore();
         if (previousMethod === undefined) delete process.env.PICLAW_SMART_COMPACTION_METHOD;
@@ -2625,8 +2625,9 @@ describe("smart-compaction", () => {
       expect(serialized).toContain("FINAL_BATCH_FAILURE");
       expect(serialized).not.toContain("outcomes omitted");
       const chunks = buildProgressiveCompactionChunks(messages, 4_000);
-      expect(chunks.length).toBeGreaterThan(1);
-      expect(chunks.map((chunk) => chunk.text).join("")).toContain("FINAL_BATCH_FAILURE");
+      expect(chunks).toHaveLength(1);
+      expect(chunks[0]?.groupIds).toHaveLength(1);
+      expect(chunks[0]?.text).toContain("FINAL_BATCH_FAILURE");
     });
 
     it.each(["length", "toolUse", "aborted", "error"])("rejects a chunk stopped with %s before it can be merged", async (stopReason) => {

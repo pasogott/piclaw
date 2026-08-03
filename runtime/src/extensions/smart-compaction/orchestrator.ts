@@ -37,6 +37,7 @@ import {
 } from "./remote-compaction.js";
 import { buildPipelinedAuditTelemetry, buildPipelinedPrompt } from "./pipelined.js";
 import { assemblePipelineEvents, buildCanonicalPipelineSourceUnits } from "./pipeline-events.js";
+import { createProgressiveCheckpointStore } from "./progressive-checkpoint.js";
 import { createSmartCompactionResultDetails, type SmartCompactionRemoteOutcome } from "./result-details.js";
 import { sanitizeContextPruneCompactionMessages } from "../context-prune/pruner.js";
 import {
@@ -692,6 +693,7 @@ export function createSmartCompactionExtension(options: { streamFn?: CompactionS
             onPayload: previousRemoteState?.kind === "valid"
               ? (payload) => prependRemoteCompactionPayload(payload, previousRemoteState.details)
               : undefined,
+            checkpointStore: createProgressiveCheckpointStore(compactionMetadata.chatJid),
             onProgress: (_generatedChars, progress) => {
               setThrottledProgressMessage(
                 statusMessage(compactionMetadata, formatProgressiveProgressMessage(progress).replace(/^Smart compaction:\s*/, "")),

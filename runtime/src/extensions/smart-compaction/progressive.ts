@@ -41,6 +41,7 @@ import {
   type ProgressiveCompactionResult,
 } from "./progressive-policy.js";
 import type { CompactionSourceUnit } from "./source.js";
+import { buildProgressiveCheckpointFingerprint, type ProgressiveCheckpointStore } from "./progressive-checkpoint.js";
 
 export {
   buildProgressiveCompactionChunks,
@@ -521,6 +522,8 @@ export async function runProgressiveCompaction(input: {
   onProgress?: (generatedChars: number, progress?: ProgressiveCompactionProgress) => void;
   /** Rehydrate provider-native state only for its dedicated continuity chunk. */
   onPayload?: SimpleStreamOptions["onPayload"];
+  /** Optional durable validated-chunk checkpoint store. */
+  checkpointStore?: ProgressiveCheckpointStore;
 }): Promise<ProgressiveCompactionResult> {
   let modelCallCount = 0;
   const onModelRequest = () => { modelCallCount += 1; };
@@ -571,6 +574,13 @@ export async function runProgressiveCompaction(input: {
       `Progressive compaction would require ${chunks.length} chunks (configured max ${MAX_PROGRESSIVE_CHUNKS}); increase PICLAW_PROGRESSIVE_COMPACTION_MAX_CHUNKS or leave it unset for count-unbounded incremental compaction`,
     );
   }
+  const checkpointFingerprint = buildProgressiveCheckpointFingerprint({
+    chunks,
+    model: input.model,
+    budget: input.budget,
+    reserveTokens: input.settings.reserveTokens,
+    customInstructions: input.customInstructions,
+  });
   const maxTokens = getCompactionOutputTokenTarget(input.settings.reserveTokens);
   let lastProgressUiAt = 0;
   const chunkCompletionPercent = (processedChunks: number) => 30 + Math.round((Math.max(0, Math.min(chunks.length, processedChunks)) / Math.max(1, chunks.length)) * 40);
@@ -589,7 +599,15 @@ export async function runProgressiveCompaction(input: {
     28,
   );
 
-  const chunkSummaries: string[] = [];
+  const chunkSummaries: string[] = input.checkpointStore?.load(checkpointFingerprint, chunks) ?? [];
+  if (chunkSummaries.length > 0) {
+    modelCallCount = 0;
+    log.info("Resuming validated progressive chunk checkpoints", {
+      operation: "smart_compaction.progressive.checkpoint_resume",
+      completedChunkCount: chunkSummaries.length,
+      totalChunkCount: chunks.length,
+    });
+  }
   const summarizeChunkWithHiddenCapRecovery = async (
     chunk: ProgressiveCompactionChunk,
     text = chunk.text,
@@ -761,7 +779,7 @@ export async function runProgressiveCompaction(input: {
     );
   };
 
-  for (let offset = 0; offset < chunks.length;) {
+  for (let offset = chunkSummaries.length; offset < chunks.length;) {
     checkPiclawCompactionBudget("smart_compaction.progressive.chunk_batch");
     await maybeYieldPiclawCompaction("smart_compaction.progressive.chunk_batch");
     const firstChunk = chunks[offset]!;
@@ -789,9 +807,21 @@ export async function runProgressiveCompaction(input: {
     else input.abortSignal.addEventListener("abort", abortBatch, { once: true });
     let batchSummaries: string[];
     try {
-      batchSummaries = await Promise.all(batch.map(async (chunk) =>
+      const settled = await Promise.allSettled(batch.map(async (chunk) =>
         await summarizeChunkWithHiddenCapRecovery(chunk, chunk.text, 0, "", batchAbortController.signal),
       ));
+      const failedIndex = settled.findIndex((result) => result.status === "rejected");
+      if (failedIndex >= 0) {
+        // Preserve only the contiguous validated prefix before the first failed
+        // chunk. Later concurrent successes cannot leap over a failed group.
+        for (let index = 0; index < failedIndex; index += 1) {
+          const result = settled[index];
+          if (result?.status === "fulfilled") chunkSummaries.push(result.value);
+        }
+        if (failedIndex > 0) input.checkpointStore?.save(checkpointFingerprint, chunks, chunkSummaries);
+        throw (settled[failedIndex] as PromiseRejectedResult).reason;
+      }
+      batchSummaries = settled.map((result) => (result as PromiseFulfilledResult<string>).value);
     } catch (error) {
       abortBatch();
       if (input.abortSignal.aborted) throw error;
@@ -809,6 +839,7 @@ export async function runProgressiveCompaction(input: {
       input.abortSignal.removeEventListener("abort", abortBatch);
     }
     chunkSummaries.push(...batchSummaries);
+    input.checkpointStore?.save(checkpointFingerprint, chunks, chunkSummaries);
     offset += batch.length;
     setProgressMessage(
       `Smart compaction: summarized ${formatProgressCount(chunkSummaries.length, chunks.length)} chunks…`,
@@ -849,6 +880,7 @@ export async function runProgressiveCompaction(input: {
         fileOps: input.fileOps,
       },
     });
+    input.checkpointStore?.clear();
     return {
       summary,
       complete: true,
