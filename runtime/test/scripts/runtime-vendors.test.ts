@@ -4,11 +4,14 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+const repoRoot = join(import.meta.dir, "../../..");
+const runtimeRoot = join(repoRoot, "runtime");
+
 function buildVendor(manifest: string, outFile: string, metaFile: string) {
   return Bun.spawnSync(
     [
       "bun",
-      "/workspace/piclaw/runtime/scripts/build-vendored-dependency.ts",
+      join(runtimeRoot, "scripts/build-vendored-dependency.ts"),
       "--manifest",
       manifest,
       "--outfile",
@@ -17,7 +20,7 @@ function buildVendor(manifest: string, outFile: string, metaFile: string) {
       metaFile,
     ],
     {
-      cwd: "/workspace/piclaw/runtime",
+      cwd: runtimeRoot,
       stdout: "pipe",
       stderr: "pipe",
     },

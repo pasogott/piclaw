@@ -9,6 +9,9 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+const repoRoot = join(import.meta.dir, "../../..");
+const runtimeRoot = join(repoRoot, "runtime");
+
 function buildVendorScript(scriptPath: string, outFile: string, metaFile: string, extraArgs: string[] = []) {
   return Bun.spawnSync(
     [
@@ -21,7 +24,7 @@ function buildVendorScript(scriptPath: string, outFile: string, metaFile: string
       metaFile,
     ],
     {
-      cwd: "/workspace/piclaw/runtime",
+      cwd: runtimeRoot,
       stdout: "pipe",
       stderr: "pipe",
     },
@@ -44,7 +47,7 @@ function expectDeterministicVendorOutput(outFile: string, metaFile: string) {
   };
 
   const installed = JSON.parse(
-    readFileSync("/workspace/piclaw/node_modules/beautiful-mermaid/package.json", "utf8"),
+    readFileSync(join(repoRoot, "node_modules/beautiful-mermaid/package.json"), "utf8"),
   ) as { version: string };
 
   expect(meta.manifest_id).toBe("beautiful-mermaid");
@@ -64,7 +67,7 @@ test("generic vendored dependency build script writes mermaid bundle + metadata 
   mkdirSync(base, { recursive: true });
 
   const proc = buildVendorScript(
-    "/workspace/piclaw/runtime/scripts/build-vendored-dependency.ts",
+    join(runtimeRoot, "scripts/build-vendored-dependency.ts"),
     outFile,
     metaFile,
     ["--manifest", "vendor-manifests/beautiful-mermaid.json"],
@@ -85,7 +88,7 @@ test("legacy mermaid build wrapper delegates to the manifest-driven workflow", (
   mkdirSync(base, { recursive: true });
 
   const proc = buildVendorScript(
-    "/workspace/piclaw/runtime/scripts/build-beautiful-mermaid-vendor.ts",
+    join(runtimeRoot, "scripts/build-beautiful-mermaid-vendor.ts"),
     outFile,
     metaFile,
   );

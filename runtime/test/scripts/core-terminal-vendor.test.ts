@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-const repoRoot = "/workspace/piclaw";
+const repoRoot = join(import.meta.dir, "../../..");
 const vendorDir = join(repoRoot, "runtime/web/static/common/js/vendor");
 const xtermDir = join(vendorDir, "xterm");
 

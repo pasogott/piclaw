@@ -1,11 +1,15 @@
 import { expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const repoRoot = join(import.meta.dir, "../../..");
+const runtimeRoot = join(repoRoot, "runtime");
 
 function buildKatexAssets() {
   return Bun.spawnSync(
-    ["bun", "/workspace/piclaw/runtime/scripts/vendor-katex-css-fonts.ts"],
+    ["bun", join(runtimeRoot, "scripts/vendor-katex-css-fonts.ts")],
     {
-      cwd: "/workspace/piclaw/runtime",
+      cwd: runtimeRoot,
       stdout: "pipe",
       stderr: "pipe",
     },
@@ -18,10 +22,10 @@ test("katex asset workflow vendors rewritten CSS + woff2 fonts with provenance m
     throw new Error(`${proc.stdout.toString()}\n${proc.stderr.toString()}`.trim());
   }
 
-  const cssFile = "/workspace/piclaw/runtime/web/src/styles/katex.bundle.css";
-  const metaFile = "/workspace/piclaw/runtime/web/src/styles/katex.bundle.meta.json";
-  const mainFontFile = "/workspace/piclaw/runtime/web/static/common/fonts/KaTeX_Main-Regular.woff2";
-  const sizeFontFile = "/workspace/piclaw/runtime/web/static/common/fonts/KaTeX_Size4-Regular.woff2";
+  const cssFile = join(runtimeRoot, "web/src/styles/katex.bundle.css");
+  const metaFile = join(runtimeRoot, "web/src/styles/katex.bundle.meta.json");
+  const mainFontFile = join(runtimeRoot, "web/static/common/fonts/KaTeX_Main-Regular.woff2");
+  const sizeFontFile = join(runtimeRoot, "web/static/common/fonts/KaTeX_Size4-Regular.woff2");
 
   expect(existsSync(cssFile)).toBe(true);
   expect(existsSync(metaFile)).toBe(true);
@@ -38,7 +42,7 @@ test("katex asset workflow vendors rewritten CSS + woff2 fonts with provenance m
     font_count: number;
   };
   const katexPackage = JSON.parse(
-    readFileSync("/workspace/piclaw/node_modules/katex/package.json", "utf8"),
+    readFileSync(join(repoRoot, "node_modules/katex/package.json"), "utf8"),
   ) as { version: string };
 
   expect(meta.manifest_id).toBe("katex-css-fonts");
