@@ -89,7 +89,8 @@ total_items="$(jq -r '.totals.total_items // 0' "$LATEST_JSON")"
 star_changes="$(jq -r '.totals.repos_with_star_changes // 0' "$LATEST_JSON")"
 
 if [[ "$total_items" == "0" && "$star_changes" == "0" ]]; then
-  printf '%s\n' "[github-digest] No qualifying open activity or star changes; nothing posted."
+  # Scheduled shell stdout is persisted to the target chat. A successful
+  # empty digest must therefore be completely silent.
   exit 0
 fi
 
@@ -111,4 +112,5 @@ else
   exit "$post_status"
 fi
 
-printf '%s\n' "[github-digest] Report posted to $TARGET_CHAT_JID."
+# Successful posting is also silent: the digest was already posted by the CLI,
+# and emitting a status line would create a second scheduled-task message.
