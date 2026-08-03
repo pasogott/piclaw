@@ -10,6 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
+const repoRoot = join(import.meta.dir, "../../..");
+
 test("generic vendored dependency build script writes codemirror bundle + metadata deterministically", () => {
   const base = join(tmpdir(), `piclaw-codemirror-vendor-${Date.now()}`);
   const outFile = join(base, "codemirror.js");
@@ -19,7 +21,7 @@ test("generic vendored dependency build script writes codemirror bundle + metada
   const proc = Bun.spawnSync(
     [
       "bun",
-      "/workspace/piclaw/runtime/scripts/build-vendored-dependency.ts",
+      join(repoRoot, "runtime/scripts/build-vendored-dependency.ts"),
       "--manifest",
       "vendor-manifests/codemirror-editor.json",
       "--outfile",
@@ -28,7 +30,7 @@ test("generic vendored dependency build script writes codemirror bundle + metada
       metaFile,
     ],
     {
-      cwd: "/workspace/piclaw/runtime",
+      cwd: join(repoRoot, "runtime"),
       stdout: "pipe",
       stderr: "pipe",
     },
@@ -53,7 +55,7 @@ test("generic vendored dependency build script writes codemirror bundle + metada
   };
 
   const installed = JSON.parse(
-    readFileSync("/workspace/piclaw/node_modules/codemirror/package.json", "utf8"),
+    readFileSync(join(repoRoot, "node_modules/codemirror/package.json"), "utf8"),
   ) as { version: string };
 
   expect(meta.manifest_id).toBe("codemirror-editor");
@@ -69,15 +71,15 @@ test("generic vendored dependency build script writes codemirror bundle + metada
 });
 
 test("codemirror package overrides pin the singleton command/state/view/language set", () => {
-  const pkg = JSON.parse(readFileSync("/workspace/piclaw/package.json", "utf8")) as {
+  const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as {
     overrides?: Record<string, string>;
   };
 
   expect(pkg.overrides).toMatchObject({
-    "@codemirror/commands": "6.10.3",
-    "@codemirror/state": "6.6.0",
-    "@codemirror/view": "6.43.0",
-    "@codemirror/language": "6.12.3",
+    "@codemirror/commands": "6.10.4",
+    "@codemirror/state": "6.7.1",
+    "@codemirror/view": "6.43.7",
+    "@codemirror/language": "6.12.4",
   });
 });
 
@@ -90,7 +92,7 @@ test("codemirror vendor bundle keeps EditorState compatible with exported minima
   const proc = Bun.spawnSync(
     [
       "bun",
-      "/workspace/piclaw/runtime/scripts/build-vendored-dependency.ts",
+      join(repoRoot, "runtime/scripts/build-vendored-dependency.ts"),
       "--manifest",
       "vendor-manifests/codemirror-editor.json",
       "--outfile",
@@ -99,7 +101,7 @@ test("codemirror vendor bundle keeps EditorState compatible with exported minima
       metaFile,
     ],
     {
-      cwd: "/workspace/piclaw/runtime",
+      cwd: join(repoRoot, "runtime"),
       stdout: "pipe",
       stderr: "pipe",
     },

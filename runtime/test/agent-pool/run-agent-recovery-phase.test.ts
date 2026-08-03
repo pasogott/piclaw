@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import "../helpers.js";
 
@@ -10,12 +10,17 @@ import {
 } from "../../src/agent-pool/run-agent-recovery-phase.js";
 import { RECOVERY_CONTINUATION_PROMPT } from "../../src/agent-pool/context-pressure-retry.js";
 import type { AgentOutput } from "../../src/agent-pool/contracts.js";
+import { initDatabase } from "../../src/db.js";
 import { endTrackedPhase } from "../../src/runtime/progress-watchdog.js";
 
 const TEST_CHAT_JIDS = [
   "web:test-recovery-phase",
   "web:test-recovery-compact",
 ];
+
+beforeEach(() => {
+  initDatabase();
+});
 
 afterEach(() => {
   for (const chatJid of TEST_CHAT_JIDS) endTrackedPhase(chatJid);
