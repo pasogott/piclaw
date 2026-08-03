@@ -135,11 +135,12 @@ export function buildProgressiveCompactionChunksFromSourceUnits(
   budgetChars: number,
 ): ProgressiveCompactionChunk[] {
   const chunks: ProgressiveCompactionChunk[] = [];
-  let pending: CompactionSourceUnit[] = [];
+  let pendingGroups: CompactionSourceUnit[][] = [];
   let pendingChars = 0;
 
   const flush = () => {
-    if (pending.length === 0) return;
+    if (pendingGroups.length === 0) return;
+    const pending = pendingGroups.flat();
     const sourceIndexes = [...new Set(pending.flatMap((unit) => unit.sourceIndexes))].sort((a, b) => a - b);
     const text = pending.map((unit) => unit.renderedText).join("\n");
     chunks.push({
@@ -150,39 +151,45 @@ export function buildProgressiveCompactionChunksFromSourceUnits(
       estimatedChars: text.length,
       sourceIndexes,
       sourceEntryIds: [...new Set(pending.flatMap((unit) => unit.sourceEntryIds))],
-      groupIds: [...new Set(pending.map((unit) => unit.groupId))],
+      groupIds: pendingGroups.map((group) => group[0]!.groupId),
     });
-    pending = [];
+    pendingGroups = [];
     pendingChars = 0;
   };
 
+  const groups: CompactionSourceUnit[][] = [];
+  const closedGroupIds = new Set<string>();
   for (const unit of units) {
-    checkPiclawCompactionBudget("smart_compaction.progressive.build_unit_chunks.unit");
-    if (unit.renderedText.length > budgetChars) {
-      flush();
-      const segmentBudget = Math.max(1, budgetChars - 80);
-      const segmentCount = Math.ceil(unit.renderedText.length / segmentBudget);
-      for (let segmentIndex = 0; segmentIndex < segmentCount; segmentIndex += 1) {
-        const segment = unit.renderedText.slice(segmentIndex * segmentBudget, (segmentIndex + 1) * segmentBudget);
-        const label = `[${unit.groupId} segment ${segmentIndex + 1}/${segmentCount}]\n`;
-        const text = `${label}${segment}`;
-        chunks.push({
-          index: chunks.length + 1,
-          startMessageIndex: unit.sourceIndexes[0] ?? 0,
-          endMessageIndex: unit.sourceIndexes.at(-1) ?? unit.sourceIndexes[0] ?? 0,
-          text,
-          estimatedChars: text.length,
-          sourceIndexes: [...unit.sourceIndexes],
-          sourceEntryIds: [...unit.sourceEntryIds],
-          groupIds: [unit.groupId],
-        });
-      }
+    const previous = groups.at(-1);
+    if (previous?.[0]?.groupId === unit.groupId) {
+      previous.push(unit);
       continue;
     }
-    const nextChars = unit.renderedText.length + (pending.length > 0 ? 1 : 0);
-    if (pending.length > 0 && pendingChars + nextChars > budgetChars) flush();
-    pending.push(unit);
-    pendingChars += unit.renderedText.length + (pending.length > 1 ? 1 : 0);
+    if (closedGroupIds.has(unit.groupId)) {
+      throw new Error(`Progressive source group is non-contiguous: ${unit.groupId}`);
+    }
+    if (previous?.[0]?.groupId) closedGroupIds.add(previous[0].groupId);
+    groups.push([unit]);
+  }
+
+  for (const group of groups) {
+    checkPiclawCompactionBudget("smart_compaction.progressive.build_unit_chunks.group");
+    const groupText = group.map((unit) => unit.renderedText).join("\n");
+    const nextChars = groupText.length + (pendingGroups.length > 0 ? 1 : 0);
+    if (pendingGroups.length > 0 && pendingChars + nextChars > budgetChars) flush();
+
+    // Atomic groups never overlap chunks. An oversized group gets one dedicated
+    // chunk and relies on hidden-cap prompt splitting inside that model call.
+    if (groupText.length > budgetChars) {
+      flush();
+      pendingGroups = [group];
+      pendingChars = groupText.length;
+      flush();
+      continue;
+    }
+
+    pendingGroups.push(group);
+    pendingChars += groupText.length + (pendingGroups.length > 1 ? 1 : 0);
   }
   flush();
   return chunks;
@@ -220,23 +227,16 @@ export function buildProgressiveCompactionChunks(
   for (const line of sourceLines) {
     checkPiclawCompactionBudget("smart_compaction.progressive.build_chunks.line");
     const groupId = `message:${line.startMessageIndex}-${line.endMessageIndex}`;
-    const segments = line.text.length > budgetChars
-      ? Array.from({ length: Math.ceil(line.text.length / budgetChars) }, (_, index) => line.text.slice(index * budgetChars, (index + 1) * budgetChars))
-      : [line.text];
-    for (const segment of segments) {
-      checkPiclawCompactionBudget("smart_compaction.progressive.build_chunks.segment");
-      const nextChars = segment.length + (current.length > 0 ? 1 : 0);
-      if (current.length > 0 && chars + nextChars > budgetChars) {
-        flush();
-        startMessageIndex = line.startMessageIndex;
-      } else if (current.length === 0) {
-        startMessageIndex = line.startMessageIndex;
-      }
-      current.push(segment);
-      currentGroupIds.add(groupId);
-      chars += nextChars;
-      endMessageIndex = line.endMessageIndex;
-    }
+    const nextChars = line.text.length + (current.length > 0 ? 1 : 0);
+    if (current.length > 0 && chars + nextChars > budgetChars) flush();
+    if (current.length === 0) startMessageIndex = line.startMessageIndex;
+    current.push(line.text);
+    currentGroupIds.add(groupId);
+    chars += line.text.length + (current.length > 1 ? 1 : 0);
+    endMessageIndex = line.endMessageIndex;
+    // One oversized message/tool batch remains one atomic chunk. Provider-cap
+    // recovery splits only the prompt within that chunk and returns one summary.
+    if (line.text.length > budgetChars) flush();
   }
   flush();
   return chunks;

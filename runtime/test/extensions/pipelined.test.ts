@@ -563,7 +563,7 @@ describe("Pipelined source planning", () => {
     expect(prompt.text.match(/<trusted_operator_compaction_instructions>/g)).toHaveLength(1);
   });
 
-  it("segments an oversized logical group without omitting its tail or losing provenance", () => {
+  it("keeps an oversized logical group atomic without omitting its tail or provenance", () => {
     const units = [{
       id: "representation-group-0001",
       groupId: "group-0001",
@@ -575,13 +575,12 @@ describe("Pipelined source planning", () => {
     }];
     const chunks = buildProgressiveCompactionChunksFromSourceUnits(units, 700);
 
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.estimatedChars <= 700)).toBe(true);
-    expect(chunks.every((chunk) => chunk.sourceIndexes?.join(",") === "4,5")).toBe(true);
-    expect(chunks.every((chunk) => chunk.sourceEntryIds?.join(",") === "entry-4,entry-5")).toBe(true);
-    expect(chunks.every((chunk) => chunk.groupIds?.join(",") === "group-0001")).toBe(true);
-    expect(new Set(chunks.flatMap((chunk) => chunk.groupIds ?? []))).toEqual(new Set(["group-0001"]));
-    expect(chunks.map((chunk) => chunk.text).join("\n")).toContain("HEAD_");
-    expect(chunks.map((chunk) => chunk.text).join("\n")).toContain("_TAIL");
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.estimatedChars).toBeGreaterThan(700);
+    expect(chunks[0]?.sourceIndexes?.join(",")).toBe("4,5");
+    expect(chunks[0]?.sourceEntryIds?.join(",")).toBe("entry-4,entry-5");
+    expect(chunks[0]?.groupIds).toEqual(["group-0001"]);
+    expect(chunks[0]?.text).toContain("HEAD_");
+    expect(chunks[0]?.text).toContain("_TAIL");
   });
 });
