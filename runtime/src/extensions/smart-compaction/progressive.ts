@@ -13,8 +13,14 @@ import {
   DEFAULT_HIGH_CONTEXT_PROGRESSIVE_TARGET_CHUNKS,
   HIGH_CONTEXT_PROGRESSIVE_TARGET_MIN_CONTEXT,
   MAX_PROGRESSIVE_CHUNKS,
+  MAX_PROGRESSIVE_CHUNK_OUTPUT_TOKENS,
   PROGRESSIVE_COMPACTION_CONCURRENCY,
-  PROGRESSIVE_TIME_BUDGET_FRACTION,
+  PROGRESSIVE_FINAL_SETTLEMENT_RESERVE_MS,
+  PROGRESSIVE_INITIAL_BATCH_ESTIMATE_MS,
+  PROGRESSIVE_MERGE_RESERVE_MS,
+  PROGRESSIVE_MIN_BATCH_ESTIMATE_MS,
+  PROGRESSIVE_MIN_MERGE_RESERVE_MS,
+  PROGRESSIVE_OBSERVED_BATCH_SAFETY_MULTIPLIER,
   SMART_COMPACTION_PROGRESS_INTERVAL_MS,
   type CompactionReasoningEffort,
 } from "./config.js";
@@ -303,7 +309,7 @@ async function mergeProgressiveSummaries(input: {
     }
     if (input.timeoutMs && input.startedAt) {
       const elapsed = Date.now() - input.startedAt;
-      if (elapsed > input.timeoutMs * PROGRESSIVE_TIME_BUDGET_FRACTION) {
+      if (elapsed > getProgressiveMergeDeadlineMs(input.timeoutMs)) {
         throw new Error(
           `Progressive compaction time budget exhausted during merge pass ${pass} (${Math.round(elapsed / 1000)}s of ${Math.round(input.timeoutMs / 1000)}s)`,
         );
@@ -401,7 +407,7 @@ async function mergeProgressiveSummaries(input: {
 
   if (input.timeoutMs && input.startedAt) {
     const elapsed = Date.now() - input.startedAt;
-    if (elapsed > input.timeoutMs * PROGRESSIVE_TIME_BUDGET_FRACTION) {
+    if (elapsed > getProgressiveMergeDeadlineMs(input.timeoutMs)) {
       throw new Error(
         `Progressive compaction time budget exhausted before final merge (${Math.round(elapsed / 1000)}s of ${Math.round(input.timeoutMs / 1000)}s)`,
       );
@@ -463,12 +469,22 @@ function maybeAdaptProgressiveChunks(input: {
   // Add packing slack: source units are indivisible unless individually
   // oversized, so total/target alone can still leave many half-full chunks.
   const targetBudgetChars = Math.ceil((totalChars / DEFAULT_HIGH_CONTEXT_PROGRESSIVE_TARGET_CHUNKS) * 1.25);
-  const adaptiveBudgetChars = Math.min(input.budget.promptBudgetChars, Math.max(input.budget.chunkBudgetChars, targetBudgetChars));
+  let adaptiveBudgetChars = Math.min(input.budget.promptBudgetChars, Math.max(input.budget.chunkBudgetChars, targetBudgetChars));
   if (adaptiveBudgetChars <= input.budget.chunkBudgetChars) return input.chunks;
 
-  const adaptedChunks = input.sourceUnits
-    ? buildProgressiveCompactionChunksFromSourceUnits(input.sourceUnits, adaptiveBudgetChars)
-    : buildProgressiveCompactionChunks(input.llmMessages, adaptiveBudgetChars, input.humanUserIndexes);
+  let adaptedChunks = input.chunks;
+  while (adaptiveBudgetChars > input.budget.chunkBudgetChars) {
+    const candidate = input.sourceUnits
+      ? buildProgressiveCompactionChunksFromSourceUnits(input.sourceUnits, adaptiveBudgetChars)
+      : buildProgressiveCompactionChunks(input.llmMessages, adaptiveBudgetChars, input.humanUserIndexes);
+    if (candidate.length < adaptedChunks.length) adaptedChunks = candidate;
+    if (adaptedChunks.length <= DEFAULT_HIGH_CONTEXT_PROGRESSIVE_TARGET_CHUNKS
+      || adaptiveBudgetChars >= input.budget.promptBudgetChars) break;
+    adaptiveBudgetChars = Math.min(
+      input.budget.promptBudgetChars,
+      Math.max(adaptiveBudgetChars + 1, Math.ceil(adaptiveBudgetChars * 1.20)),
+    );
+  }
   if (adaptedChunks.length >= input.chunks.length) return input.chunks;
 
   log.debug("Adaptive progressive chunk preflight selected larger chunk budget", {
@@ -484,13 +500,69 @@ function maybeAdaptProgressiveChunks(input: {
   return adaptedChunks;
 }
 
-function assertProgressiveChunkCountFeasible(chunks: ProgressiveCompactionChunk[], budget: ProgressiveCompactionBudget): void {
-  if (budget.contextWindow < HIGH_CONTEXT_PROGRESSIVE_TARGET_MIN_CONTEXT) return;
-  if (chunks.length <= DEFAULT_HIGH_CONTEXT_PROGRESSIVE_MAX_CHUNKS) return;
-  const batches = Math.ceil(chunks.length / PROGRESSIVE_COMPACTION_CONCURRENCY);
-  throw new Error(
-    `Progressive compaction would require ${chunks.length} chunks (${batches} model-call batches) even after adaptive chunk sizing; refusing a likely timeout-prone compaction. Reduce source size, increase compaction timeout, or raise the progressive prompt budget.`,
+function getProgressiveMergeReserveMs(timeoutMs: number): number {
+  return Math.min(
+    PROGRESSIVE_MERGE_RESERVE_MS,
+    Math.max(PROGRESSIVE_MIN_MERGE_RESERVE_MS, Math.floor(timeoutMs * 0.20)),
   );
+}
+
+function getProgressiveChunkBudgetMs(timeoutMs: number): number {
+  return Math.max(0, timeoutMs - getProgressiveMergeReserveMs(timeoutMs));
+}
+
+function getProgressiveMergeDeadlineMs(timeoutMs: number): number {
+  return Math.max(0, timeoutMs - PROGRESSIVE_FINAL_SETTLEMENT_RESERVE_MS);
+}
+
+function assertProgressiveChunkCountFeasible(
+  chunks: ProgressiveCompactionChunk[],
+  budget: ProgressiveCompactionBudget,
+  timeoutMs?: number,
+  completedChunkCount = 0,
+): void {
+  if (budget.contextWindow >= HIGH_CONTEXT_PROGRESSIVE_TARGET_MIN_CONTEXT
+    && chunks.length > DEFAULT_HIGH_CONTEXT_PROGRESSIVE_MAX_CHUNKS) {
+    const batches = Math.ceil(chunks.length / PROGRESSIVE_COMPACTION_CONCURRENCY);
+    throw new Error(
+      `Progressive compaction would require ${chunks.length} chunks (${batches} model-call batches) even after adaptive chunk sizing; refusing a likely timeout-prone compaction. Reduce source size, increase compaction timeout, or raise the progressive prompt budget.`,
+    );
+  }
+  if (budget.contextWindow < HIGH_CONTEXT_PROGRESSIVE_TARGET_MIN_CONTEXT || !timeoutMs || timeoutMs <= 0) return;
+  const remainingChunks = Math.max(0, chunks.length - completedChunkCount);
+  const remainingBatches = Math.ceil(remainingChunks / PROGRESSIVE_COMPACTION_CONCURRENCY);
+  const mergeReserveMs = getProgressiveMergeReserveMs(timeoutMs);
+  const executionBudgetMs = timeoutMs;
+  const estimatedMs = remainingBatches * PROGRESSIVE_INITIAL_BATCH_ESTIMATE_MS + mergeReserveMs;
+  if (estimatedMs < executionBudgetMs) return;
+  throw new Error(
+    `Progressive compaction time preflight estimates ${Math.round(estimatedMs / 1000)}s for ${remainingChunks} remaining chunks (${remainingBatches} model-call batches, including ${Math.round(mergeReserveMs / 1000)}s merge reserve), exceeding the ${Math.round(executionBudgetMs / 1000)}s execution budget. Refusing a likely timeout-prone compaction before model calls.`,
+  );
+}
+
+function estimateRemainingProgressiveMs(input: {
+  chunks: ProgressiveCompactionChunk[];
+  completedChunkCount: number;
+  observedBatchDurationsMs: number[];
+  timeoutMs: number;
+}): { estimatedMs: number; remainingBatches: number; batchEstimateMs: number; mergeReserveMs: number; executionBudgetMs: number } {
+  const remainingChunks = Math.max(0, input.chunks.length - input.completedChunkCount);
+  const remainingBatches = Math.ceil(remainingChunks / PROGRESSIVE_COMPACTION_CONCURRENCY);
+  const observedAverage = input.observedBatchDurationsMs.length > 0
+    ? input.observedBatchDurationsMs.reduce((total, value) => total + value, 0) / input.observedBatchDurationsMs.length
+    : PROGRESSIVE_INITIAL_BATCH_ESTIMATE_MS;
+  const batchEstimateMs = Math.max(
+    PROGRESSIVE_MIN_BATCH_ESTIMATE_MS,
+    Math.ceil(observedAverage * PROGRESSIVE_OBSERVED_BATCH_SAFETY_MULTIPLIER),
+  );
+  const mergeReserveMs = getProgressiveMergeReserveMs(input.timeoutMs);
+  return {
+    estimatedMs: remainingBatches * batchEstimateMs + mergeReserveMs,
+    remainingBatches,
+    batchEstimateMs,
+    mergeReserveMs,
+    executionBudgetMs: input.timeoutMs,
+  };
 }
 
 export async function runProgressiveCompaction(input: {
@@ -565,7 +637,6 @@ export async function runProgressiveCompaction(input: {
     humanUserIndexes: input.humanUserIndexes,
     budget: input.budget,
   }) : chunks).map((chunk, index) => ({ ...chunk, index: index + 1 }));
-  assertProgressiveChunkCountFeasible(chunks, input.budget);
 
   // Optional operational guard only. Never enlarge chunks to satisfy it: doing
   // so can recreate oversized provider prompts and defeats incremental mode.
@@ -582,6 +653,15 @@ export async function runProgressiveCompaction(input: {
     customInstructions: input.customInstructions,
   });
   const maxTokens = getCompactionOutputTokenTarget(input.settings.reserveTokens);
+  const chunkMaxTokens = input.budget.contextWindow >= HIGH_CONTEXT_PROGRESSIVE_TARGET_MIN_CONTEXT
+    ? Math.max(
+        512,
+        Math.min(
+          MAX_PROGRESSIVE_CHUNK_OUTPUT_TOKENS,
+          Math.floor(maxTokens / Math.max(1, chunks.length)),
+        ),
+      )
+    : maxTokens;
   let lastProgressUiAt = 0;
   const chunkCompletionPercent = (processedChunks: number) => 30 + Math.round((Math.max(0, Math.min(chunks.length, processedChunks)) / Math.max(1, chunks.length)) * 40);
   const setProgressMessage = (message: string, phase: string, force = false, tokens: number | null = null, completionPercent = estimateSmartCompactionCompletionPercent(phase)) => {
@@ -600,6 +680,12 @@ export async function runProgressiveCompaction(input: {
   );
 
   const chunkSummaries: string[] = input.checkpointStore?.load(checkpointFingerprint, chunks) ?? [];
+  assertProgressiveChunkCountFeasible(
+    chunks,
+    input.budget,
+    input.timeoutMs,
+    chunkSummaries.length,
+  );
   if (chunkSummaries.length > 0) {
     modelCallCount = 0;
     log.info("Resuming validated progressive chunk checkpoints", {
@@ -630,7 +716,7 @@ export async function runProgressiveCompaction(input: {
         input.auth,
         chunkPrompt,
         "chunk",
-        maxTokens,
+        chunkMaxTokens,
         signal,
         input.streamFn,
         input.onProgress ? (generatedChars) => input.onProgress?.(generatedChars, { phase: "progressive_chunk", chunkIndex: chunk.index, totalChunks: chunks.length }) : undefined,
@@ -779,18 +865,20 @@ export async function runProgressiveCompaction(input: {
     );
   };
 
+  const observedBatchDurationsMs: number[] = [];
   for (let offset = chunkSummaries.length; offset < chunks.length;) {
     checkPiclawCompactionBudget("smart_compaction.progressive.chunk_batch");
     await maybeYieldPiclawCompaction("smart_compaction.progressive.chunk_batch");
     const firstChunk = chunks[offset]!;
     if (input.timeoutMs && input.startedAt) {
       const elapsed = Date.now() - input.startedAt;
-      if (elapsed > input.timeoutMs * PROGRESSIVE_TIME_BUDGET_FRACTION) {
+      if (elapsed > getProgressiveChunkBudgetMs(input.timeoutMs)) {
         return buildTimeBudgetPartial(chunkSummaries.length, elapsed);
       }
     }
 
     const batch = chunks.slice(offset, offset + PROGRESSIVE_COMPACTION_CONCURRENCY);
+    const batchStartedAt = Date.now();
     const lastChunk = batch.at(-1)!;
     const batchLabel = formatProgressRange(firstChunk.index, lastChunk.index, chunks.length);
     setProgressMessage(
@@ -841,6 +929,7 @@ export async function runProgressiveCompaction(input: {
     chunkSummaries.push(...batchSummaries);
     input.checkpointStore?.save(checkpointFingerprint, chunks, chunkSummaries);
     offset += batch.length;
+    observedBatchDurationsMs.push(Math.max(0, Date.now() - batchStartedAt));
     setProgressMessage(
       `Smart compaction: summarized ${formatProgressCount(chunkSummaries.length, chunks.length)} chunks…`,
       `progressive_chunks_summarized_${chunkSummaries.length}`,
@@ -848,6 +937,37 @@ export async function runProgressiveCompaction(input: {
       null,
       chunkCompletionPercent(chunkSummaries.length),
     );
+
+    if (input.budget.contextWindow >= HIGH_CONTEXT_PROGRESSIVE_TARGET_MIN_CONTEXT
+      && offset < chunks.length
+      && input.timeoutMs
+      && input.startedAt) {
+      const elapsed = Date.now() - input.startedAt;
+      const projection = estimateRemainingProgressiveMs({
+        chunks,
+        completedChunkCount: chunkSummaries.length,
+        observedBatchDurationsMs,
+        timeoutMs: input.timeoutMs,
+      });
+      if (elapsed + projection.estimatedMs >= projection.executionBudgetMs) {
+        log.info("Progressive compaction stopping before the remaining chunk batches exceed its time budget", {
+          operation: "smart_compaction.progressive.time_projection_stop",
+          completedChunkCount: chunkSummaries.length,
+          totalChunkCount: chunks.length,
+          elapsedMs: elapsed,
+          remainingBatches: projection.remainingBatches,
+          observedBatchEstimateMs: projection.batchEstimateMs,
+          mergeReserveMs: projection.mergeReserveMs,
+          projectedTotalMs: elapsed + projection.estimatedMs,
+          executionBudgetMs: projection.executionBudgetMs,
+        });
+        return buildTimeBudgetPartial(
+          chunkSummaries.length,
+          elapsed,
+          `time feasibility projection exceeded after ${formatProgressCount(chunkSummaries.length, chunks.length)} chunks: projected ${Math.round((elapsed + projection.estimatedMs) / 1000)}s including ${Math.round(projection.mergeReserveMs / 1000)}s merge reserve > ${Math.round(projection.executionBudgetMs / 1000)}s execution budget`,
+        );
+      }
+    }
   }
 
   if (chunkSummaries.length === 0) {
