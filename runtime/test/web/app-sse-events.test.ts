@@ -425,6 +425,29 @@ test('handleAppSseEvent refreshes compaction status metadata even when title sta
   });
 });
 
+test('handleAppSseEvent applies a chat-scoped provider usage refresh without resetting model state', () => {
+  const state = createDeps();
+  const modelPayloads: unknown[] = [];
+  state.deps.applyModelState = (payload) => modelPayloads.push(payload);
+
+  handleAppSseEvent('model_changed', {
+    chat_jid: 'chat:alpha',
+    current: 'zai/glm-4',
+    provider_usage: { provider: 'zai', plan: 'pro' },
+  }, state.deps);
+  handleAppSseEvent('model_changed', {
+    chat_jid: 'chat:beta',
+    current: 'zai/glm-4',
+    provider_usage: { provider: 'zai', plan: 'enterprise' },
+  }, state.deps);
+
+  expect(modelPayloads).toEqual([{
+    chat_jid: 'chat:alpha',
+    current: 'zai/glm-4',
+    provider_usage: { provider: 'zai', plan: 'pro' },
+  }]);
+});
+
 test('handleAppSseEvent preserves cached context usage when model context refresh fails', async () => {
   const state = createDeps();
   const updates: any[] = [];

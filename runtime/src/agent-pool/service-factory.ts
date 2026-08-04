@@ -94,6 +94,7 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
   });
 
   let sessionManager: AgentSessionManager;
+  let branchManager: AgentBranchManager;
   const runtimeFacade = new AgentRuntimeFacade({
     pool: options.pool,
     getOrCreateRuntime: (chatJid) => sessionManager.getOrCreate(chatJid),
@@ -103,10 +104,11 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     authPath: options.authStorage.authPath,
     clearAttachments: (chatJid) => attachments.clear(chatJid),
     refreshRuntime: (chatJid, runtime) => sessionManager.refreshRuntime(chatJid, runtime),
+    listKnownChats: () => branchManager.listKnownChats(),
     onWarn: options.onWarn,
     onError: options.onError,
   });
-  const branchManager = new AgentBranchManager({
+  branchManager = new AgentBranchManager({
     pool: options.pool,
     sidePool: options.sidePool,
     activeForkBaseLeafByChat: options.activeForkBaseLeafByChat,
