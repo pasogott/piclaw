@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
-import { clearProviderUsageCache } from "../../src/agent-pool/provider-usage.js";
+import { clearProviderUsageCache, peekProviderUsage } from "../../src/agent-pool/provider-usage.js";
 import { AgentRuntimeFacade } from "../../src/agent-pool/runtime-facade.js";
 import { SESSIONS_DIR } from "../../src/core/config.js";
 import { sanitiseJid } from "../../src/agent-pool/session.js";
@@ -119,6 +119,71 @@ test("AgentRuntimeFacade reports available models and context usage", async () =
     contextWindow: 100,
     percent: 10,
   });
+});
+
+test("AgentRuntimeFacade publishes one refreshed usage payload per matching known chat", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let fetchCalls = 0;
+  const fetchMock = async () => {
+    fetchCalls += 1;
+    await gate;
+    return new Response(JSON.stringify({
+      data: {
+        level: "enterprise",
+        limits: [
+          { type: "TOKENS_LIMIT", percentage: 4, nextResetTime: Date.now() + 60_000 },
+        ],
+      },
+    }));
+  };
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = fetchMock as typeof fetch;
+  const refreshes: unknown[] = [];
+
+  try {
+    const fixture = createFacade({
+      modelRuntime: {
+        authPath: "/tmp/auth.json",
+        getProviders: () => [],
+        getRegisteredProviderIds: () => [],
+        getError: () => undefined,
+        getAuth: async () => ({ auth: { apiKey: "test-key" } }),
+      } as any,
+      listKnownChats: () => [
+        { chat_jid: "web:zai", model: "zai/glm-4" },
+        { chat_jid: "web:other", model: "openai/gpt-5" },
+      ],
+      onProviderUsageRefresh: (event) => refreshes.push(event),
+    });
+    const session = {
+      model: { provider: "zai", id: "glm-4", reasoning: false },
+      thinkingLevel: "off",
+      getContextUsage: () => null,
+      modelRegistry: { getAvailable: () => [{ provider: "zai", id: "glm-4", reasoning: false }] },
+    };
+    fixture.pool.set("web:zai", { runtime: createRuntime(session), lastUsed: Date.now() });
+
+    const available = await fixture.facade.getAvailableModels("web:zai");
+    await fixture.facade.getAvailableModels("web:zai");
+    expect(available.provider_usage).toBeNull();
+    expect(peekProviderUsage("zai")).toBeNull();
+    await Promise.resolve();
+    expect(fetchCalls).toBe(1);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(refreshes).toHaveLength(1);
+    expect(refreshes[0]).toMatchObject({
+      chat_jid: "web:zai",
+      current: "zai/glm-4",
+      provider_usage: { provider: "zai", plan: "enterprise" },
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
 });
 
 test("AgentRuntimeFacade reports display labels for legacy max thinking metadata", async () => {

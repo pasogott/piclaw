@@ -17,7 +17,7 @@ import { SESSIONS_DIR } from "../core/config.js";
 import { detectChannel } from "../router.js";
 import { executeSlashCommand } from "./slash-command.js";
 import { promptWithContextPressureRetry } from "./context-pressure-retry.js";
-import { peekProviderUsage, warmProviderUsage } from "./provider-usage.js";
+import { peekProviderUsage, warmProviderUsage, type ProviderUsageSnapshot } from "./provider-usage.js";
 import { resolveModelLabel } from "../utils/model-utils.js";
 import { resolveModelScope } from "../utils/scoped-models.js";
 import { createLogger } from "../utils/logger.js";
@@ -584,6 +584,12 @@ export interface AvailableModelsResult {
 }
 
 /** Dependencies required by AgentRuntimeFacade. */
+export interface ProviderUsageRefreshEvent {
+  chat_jid: string;
+  current: string | null;
+  provider_usage: ProviderUsageSnapshot;
+}
+
 export interface AgentRuntimeFacadeOptions {
   pool: Map<string, PoolEntry>;
   getOrCreateRuntime: (chatJid: string) => Promise<AgentSessionRuntime>;
@@ -593,6 +599,8 @@ export interface AgentRuntimeFacadeOptions {
   authPath: string;
   clearAttachments: (chatJid: string) => void;
   refreshRuntime: (chatJid: string, runtime: AgentSessionRuntime) => Promise<void>;
+  listKnownChats?: () => Array<{ chat_jid: string; model: string | null }>;
+  onProviderUsageRefresh?: (event: ProviderUsageRefreshEvent) => void;
   onWarn?: (message: string, details: Record<string, unknown>) => void;
   onError?: (message: string, details: Record<string, unknown>) => void;
   applyControlCommandFn?: typeof applyControlCommand;
@@ -603,7 +611,16 @@ export interface AgentRuntimeFacadeOptions {
  * Provides session-runtime helpers that do not belong in the core prompt loop.
  */
 export class AgentRuntimeFacade {
-  constructor(private readonly options: AgentRuntimeFacadeOptions) {}
+  private readonly providerUsageRefreshInFlight = new Map<string, Promise<void>>();
+  private providerUsageRefreshListener: ((event: ProviderUsageRefreshEvent) => void) | undefined;
+
+  constructor(private readonly options: AgentRuntimeFacadeOptions) {
+    this.providerUsageRefreshListener = options.onProviderUsageRefresh;
+  }
+
+  setProviderUsageRefreshListener(listener: ((event: ProviderUsageRefreshEvent) => void) | undefined): void {
+    this.providerUsageRefreshListener = listener;
+  }
 
   async applyControlCommand(chatJid: string, command: AgentControlCommand): Promise<AgentControlResult> {
     const runtime = await this.options.getOrCreateRuntime(chatJid);
@@ -670,8 +687,8 @@ export class AgentRuntimeFacade {
         ? (peekProviderUsage(currentModelOption.provider, { allowStale: true }) ?? null)
         : null;
     const activeProvider = session?.model?.provider ?? currentModelOption?.provider ?? null;
-    if (activeProvider) {
-      void warmProviderUsage(this.options.modelRuntime, activeProvider, this.options.authPath);
+    if (activeProvider && !peekProviderUsage(activeProvider)) {
+      this.warmProviderUsage(activeProvider);
     }
     const thinkingLevelLabel = thinkingLevel && currentModelDescriptor
       ? formatThinkingLevelForDisplay(thinkingLevel, currentModelDescriptor)
@@ -700,6 +717,27 @@ export class AgentRuntimeFacade {
       enabled_model_patterns: scopedModels.patterns,
       provider_diagnostics: buildProviderCompositionDiagnostics(this.options.modelRuntime, available),
     };
+  }
+
+  private warmProviderUsage(providerId: string): void {
+    if (this.providerUsageRefreshInFlight.has(providerId)) return;
+    const refresh = warmProviderUsage(this.options.modelRuntime, providerId, this.options.authPath)
+      .then((usage) => {
+        if (usage) this.publishProviderUsageRefresh(providerId, usage);
+      })
+      .finally(() => this.providerUsageRefreshInFlight.delete(providerId));
+    this.providerUsageRefreshInFlight.set(providerId, refresh);
+  }
+
+  private publishProviderUsageRefresh(providerId: string, usage: ProviderUsageSnapshot): void {
+    for (const chat of this.options.listKnownChats?.() ?? []) {
+      if (chat.model?.split("/", 1)[0] !== providerId) continue;
+      this.providerUsageRefreshListener?.({
+        chat_jid: chat.chat_jid,
+        current: chat.model,
+        provider_usage: usage,
+      });
+    }
   }
 
   getContextUsageForChat(chatJid: string): {

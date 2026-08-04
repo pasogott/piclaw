@@ -50,7 +50,7 @@ import { runSidePrompt as runSidePromptInternal } from "./agent-pool/side-prompt
 import { runAgentPrompt } from "./agent-pool/run-agent-orchestrator.js";
 import { clearCompactionFailureBackoff, resetCompactionSuccessCount } from "./agent-pool/compaction.js";
 import { rotateSession, type SessionRotationResult } from "./session-rotation.js";
-import { type AvailableModelsResult } from "./agent-pool/runtime-facade.js";
+import { type AgentRuntimeFacade, type AvailableModelsResult } from "./agent-pool/runtime-facade.js";
 import { createAgentPoolServices, type AgentPoolServices } from "./agent-pool/service-factory.js";
 import { type AgentSessionManagerInstrumentationSnapshot, type PoolEntry } from "./agent-pool/session-manager.js";
 import type { PiclawCredentialStore } from "./agent-pool/credential-store.js";
@@ -357,6 +357,12 @@ export class AgentPool {
   /** Return available model labels and current model for a chat session. */
   async getAvailableModels(chatJid: string): Promise<AvailableModelsResult> {
     return this.runtimeFacade.getAvailableModels(chatJid);
+  }
+
+  setProviderUsageRefreshListener(
+    listener: Parameters<AgentRuntimeFacade["setProviderUsageRefreshListener"]>[0],
+  ): void {
+    this.runtimeFacade.setProviderUsageRefreshListener(listener);
   }
 
   /** Return the current context token usage for a chat session, or null if unknown. */

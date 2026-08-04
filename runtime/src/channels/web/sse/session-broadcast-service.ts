@@ -11,6 +11,7 @@
 import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 
 import type { AgentPool } from "../../../agent-pool.js";
+import type { ProviderUsageRefreshEvent } from "../../../agent-pool/runtime-facade.js";
 import { bindWebUiSessionBinder } from "../agent/agent-pool-binder.js";
 import { SseHub } from "./sse-hub.js";
 import { UiBridge, type UiBridgeChannel } from "../theming/ui-bridge.js";
@@ -41,6 +42,7 @@ export class WebSessionBroadcastService implements UiBridgeChannel {
     this.uiBridge = opts.uiBridge ?? new UiBridge(this);
     const bindSessionBinder = opts.bindSessionBinder ?? bindWebUiSessionBinder;
     bindSessionBinder(agentPool, (runtime, chatJid) => this.uiBridge.bindSession(runtime, chatJid));
+    agentPool.setProviderUsageRefreshListener?.((event: ProviderUsageRefreshEvent) => this.broadcastEvent("model_changed", event));
   }
 
   handleSse(req: Request): Response {
