@@ -385,7 +385,7 @@ async function sanitizePersistedSessionFileBeforeLoad(sessionDir: string): Promi
  */
 const TRIM_MIN_BYTES = 512 * 1024;
 
-function trimPreCompactionEntries(sessionDir: string): void {
+export function trimPreCompactionEntries(sessionDir: string): void {
   const latestFile = getLatestSessionFile(sessionDir);
   if (!latestFile) return;
 
@@ -437,8 +437,79 @@ function trimPreCompactionEntries(sessionDir: string): void {
   }
   if (keptIdx <= 1) return; // nothing meaningful to trim (0 = header)
 
-  // Build trimmed content: header + entries from keptIdx onward
-  const trimmedLines = [lines[0], ...lines.slice(keptIdx)];
+  // Carry the active branch's effective model/thinking settings across the
+  // destructive boundary. Earendil restores thinking only from surviving
+  // thinking_level_change entries; without this, a cold hydration falls back
+  // to the instance default and appends that fallback (typically "low") as a
+  // real branch change.
+  const parsedEntries = lines.map((line) => {
+    try { return JSON.parse(line) as any; } catch { return null; }
+  });
+  const entriesById = new Map<string, any>();
+  for (const entry of parsedEntries) {
+    if (entry && typeof entry.id === "string") entriesById.set(entry.id, entry);
+  }
+  let effectiveModel: { provider: string; modelId: string; timestamp?: string } | null = null;
+  let effectiveThinking: { thinkingLevel: string; timestamp?: string } | null = null;
+  let ancestorId = typeof parsedEntries[keptIdx]?.parentId === "string" ? parsedEntries[keptIdx].parentId : null;
+  const visited = new Set<string>();
+  while (ancestorId && !visited.has(ancestorId) && (!effectiveModel || !effectiveThinking)) {
+    visited.add(ancestorId);
+    const ancestor = entriesById.get(ancestorId);
+    if (!ancestor) break;
+    if (!effectiveThinking && ancestor.type === "thinking_level_change" && typeof ancestor.thinkingLevel === "string") {
+      effectiveThinking = { thinkingLevel: ancestor.thinkingLevel, timestamp: ancestor.timestamp };
+    }
+    if (!effectiveModel && ancestor.type === "model_change" && typeof ancestor.provider === "string" && typeof ancestor.modelId === "string") {
+      effectiveModel = { provider: ancestor.provider, modelId: ancestor.modelId, timestamp: ancestor.timestamp };
+    } else if (!effectiveModel && ancestor.type === "message" && ancestor.message?.role === "assistant"
+      && typeof ancestor.message.provider === "string" && typeof ancestor.message.model === "string") {
+      effectiveModel = { provider: ancestor.message.provider, modelId: ancestor.message.model, timestamp: ancestor.timestamp };
+    }
+    ancestorId = typeof ancestor.parentId === "string" ? ancestor.parentId : null;
+  }
+
+  const usedIds = new Set(entriesById.keys());
+  const makeCarriedId = (kind: string): string => {
+    let suffix = 0;
+    let id = `trim-${kind}`;
+    while (usedIds.has(id)) id = `trim-${kind}-${++suffix}`;
+    usedIds.add(id);
+    return id;
+  };
+  const carriedEntries: any[] = [];
+  let carriedParentId: string | null = null;
+  if (effectiveModel) {
+    const id = makeCarriedId("model");
+    carriedEntries.push({
+      type: "model_change",
+      id,
+      parentId: carriedParentId,
+      timestamp: effectiveModel.timestamp ?? new Date().toISOString(),
+      provider: effectiveModel.provider,
+      modelId: effectiveModel.modelId,
+    });
+    carriedParentId = id;
+  }
+  if (effectiveThinking) {
+    const id = makeCarriedId("thinking");
+    carriedEntries.push({
+      type: "thinking_level_change",
+      id,
+      parentId: carriedParentId,
+      timestamp: effectiveThinking.timestamp ?? new Date().toISOString(),
+      thinkingLevel: effectiveThinking.thinkingLevel,
+    });
+    carriedParentId = id;
+  }
+
+  const retainedEntries = parsedEntries.slice(keptIdx);
+  const firstRetained = retainedEntries[0];
+  if (carriedParentId && firstRetained && typeof firstRetained === "object") {
+    retainedEntries[0] = { ...firstRetained, parentId: carriedParentId };
+  }
+  const retainedLines = retainedEntries.map((entry, index) => entry ? JSON.stringify(entry) : lines[keptIdx + index]);
+  const trimmedLines = [lines[0], ...carriedEntries.map((entry) => JSON.stringify(entry)), ...retainedLines];
   const trimmedContent = trimmedLines.join("\n") + "\n";
 
   // Only proceed if we actually save meaningful space (>25%)
@@ -471,6 +542,8 @@ function trimPreCompactionEntries(sessionDir: string): void {
       originalBytes: content.length,
       trimmedBytes: trimmedContent.length,
       savedPercent: Math.round((1 - trimmedContent.length / content.length) * 100),
+      carriedModel: effectiveModel ? `${effectiveModel.provider}/${effectiveModel.modelId}` : null,
+      carriedThinkingLevel: effectiveThinking?.thinkingLevel ?? null,
     });
   } catch (err) {
     // Clean up temp file; original latestFile is still intact (we copied,

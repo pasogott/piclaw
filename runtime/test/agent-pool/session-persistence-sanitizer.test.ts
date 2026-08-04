@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager, SettingsManager, getAgentDir } from "@earendil-works/pi-coding-agent";
 import "../helpers.js";
-import { createSessionInDir } from "../../src/agent-pool/session.ts";
+import { createSessionInDir, trimPreCompactionEntries } from "../../src/agent-pool/session.ts";
 import { createRealTestModelServices } from "../model-services-fixture.js";
 
 function makeAssistantMessage(text = "ready") {
@@ -83,6 +83,61 @@ describe("session persistence sanitizer", () => {
       expect(toolResult.content.some((block: any) => block?.type === "text" && String(block.text || "").includes("Persisted tool result sanitized"))).toBe(true);
 
       await runtime.dispose();
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("pre-compaction trimming carries model and high thinking state across cold hydration", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "piclaw-session-trim-thinking-"));
+    const sessionDir = join(tempRoot, "session");
+    const workspaceDir = process.env.PICLAW_WORKSPACE || "/workspace";
+
+    try {
+      const seed = SessionManager.create(workspaceDir, sessionDir);
+      seed.appendModelChange("openai-codex", "gpt-5.6-sol");
+      seed.appendThinkingLevelChange("high");
+      for (let index = 0; index < 8; index += 1) {
+        seed.appendMessage({
+          role: "user",
+          content: [{ type: "text", text: `discarded-${index}-${"x".repeat(90_000)}` }],
+          timestamp: Date.now(),
+        } as any);
+      }
+      const firstKeptEntryId = seed.appendMessage({
+        role: "user",
+        content: [{ type: "text", text: "retained user request" }],
+        timestamp: Date.now(),
+      } as any);
+      seed.appendMessage({
+        ...makeAssistantMessage("retained answer"),
+        provider: "openai-codex",
+        model: "gpt-5.6-sol",
+      } as any);
+      seed.appendCompaction("## Goal\nPreserve retained work", firstKeptEntryId, 200_000);
+
+      const sessionFile = seed.getSessionFile();
+      expect(sessionFile).toBeTruthy();
+      expect(statSync(sessionFile!).size).toBeGreaterThan(512 * 1024);
+
+      trimPreCompactionEntries(sessionDir);
+
+      const trimmedText = readFileSync(sessionFile!, "utf8");
+      const entries = trimmedText.trim().split("\n").map((line) => JSON.parse(line));
+      const carriedModel = entries.find((entry) => entry.id === "trim-model");
+      const carriedThinking = entries.find((entry) => entry.id === "trim-thinking");
+      const resumed = SessionManager.continueRecent(workspaceDir, sessionDir).buildSessionContext();
+
+      expect(carriedModel).toMatchObject({
+        type: "model_change",
+        provider: "openai-codex",
+        modelId: "gpt-5.6-sol",
+      });
+      expect(carriedThinking).toMatchObject({ type: "thinking_level_change", thinkingLevel: "high" });
+      expect(resumed.model).toEqual({ provider: "openai-codex", modelId: "gpt-5.6-sol" });
+      expect(resumed.thinkingLevel).toBe("high");
+      expect(resumed.messages.some((message: any) => JSON.stringify(message.content ?? "").includes("retained user request"))).toBe(true);
+      expect(trimmedText).not.toContain("discarded-0-");
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
