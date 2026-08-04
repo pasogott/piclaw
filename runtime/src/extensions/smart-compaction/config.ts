@@ -73,15 +73,24 @@ export const MAX_PROMPT_CHARS = 60_000;
  * 1M-token model is split into ~100 tiny chunks, making timeout partials likely
  * to retain nearly the whole tail verbatim and grow the context.
  */
-export const MAX_PROGRESSIVE_PROMPT_CHARS = parsePositiveEnvInt("PICLAW_PROGRESSIVE_COMPACTION_MAX_PROMPT_CHARS") ?? 240_000;
+export const MAX_PROGRESSIVE_PROMPT_CHARS = parsePositiveEnvInt("PICLAW_PROGRESSIVE_COMPACTION_MAX_PROMPT_CHARS") ?? 320_000;
 
 /**
  * Target chunk count for high-context progressive compaction preflight.
  * 0 disables the target; by default only very large-context models use it.
  */
-export const DEFAULT_HIGH_CONTEXT_PROGRESSIVE_TARGET_CHUNKS = 16;
+export const DEFAULT_HIGH_CONTEXT_PROGRESSIVE_TARGET_CHUNKS = 12;
 export const DEFAULT_HIGH_CONTEXT_PROGRESSIVE_MAX_CHUNKS = 24;
 export const HIGH_CONTEXT_PROGRESSIVE_TARGET_MIN_CONTEXT = 512_000;
+
+/** Conservative latency assumptions for high-context feasibility preflight. */
+export const PROGRESSIVE_INITIAL_BATCH_ESTIMATE_MS = 30_000;
+export const PROGRESSIVE_MIN_BATCH_ESTIMATE_MS = 5_000;
+export const PROGRESSIVE_MERGE_RESERVE_MS = 60_000;
+export const PROGRESSIVE_MIN_MERGE_RESERVE_MS = 10_000;
+export const PROGRESSIVE_FINAL_SETTLEMENT_RESERVE_MS = 10_000;
+export const PROGRESSIVE_OBSERVED_BATCH_SAFETY_MULTIPLIER = 1.10;
+export const MAX_PROGRESSIVE_CHUNK_OUTPUT_TOKENS = 2_048;
 
 /** Per-tool-result truncation limit when serializing. */
 export const TOOL_RESULT_MAX_CHARS = 1_500;

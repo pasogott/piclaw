@@ -1,6 +1,6 @@
 # Provider/model pricing reference
 
-_Reference tag: 2026-07-25_
+_Reference tag: 2026-08-03_
 
 This file records the sources and assumptions behind the token chart's **estimated API-equivalent** costs. The executable source of truth is `provider-model-pricing-reference.ts`.
 
@@ -10,7 +10,7 @@ This file records the sources and assumptions behind the token chart's **estimat
 2. The live OpenRouter `/api/v1/models` response for OpenRouter-specific routes.
 3. Explicitly labeled estimator fallbacks only when a provider does not publish a meter needed by local telemetry.
 
-Primary sources checked on 2026-07-14 and refreshed for Opus 5 / Kimi K3 on 2026-07-25:
+Primary sources checked on 2026-07-14, refreshed for Opus 5 / Kimi K3 on 2026-07-25, and route/plan details re-verified on 2026-08-03:
 
 - [OpenAI API pricing](https://developers.openai.com/api/docs/pricing)
 - [Anthropic API pricing](https://docs.anthropic.com/en/docs/about-claude/pricing)
@@ -44,21 +44,21 @@ Checked 2026-07-14. Subscription allowances and PAYG token prices are not interc
 
 | Product | Current individual tiers | Included allowance / reset | After included allowance |
 | --- | --- | --- | --- |
-| OpenAI Codex | Free $0; Go $8; Plus $20; Pro 5x $100; Pro 20x $200 per month | Variable local-message allowance shared in a 5-hour window, with additional weekly limits. For GPT-5.5, OpenAI currently estimates 15–80 messages on Plus, 75–400 on Pro 5x, and 300–1,600 on Pro 20x per 5 hours. | Eligible Plus/Pro users can opt to buy ChatGPT credits; Codex's current token credit card maps to standard API rates. API-key usage is separately billed PAYG. |
+| OpenAI Codex | Free $0; Go $8; Plus $20; Pro $100 (5x); Pro $200 (20x) per month | Model-specific usage allowance shared in a 5-hour window, with additional weekly limits. The active Codex usage dashboard is authoritative; static message counts are not stable enough to use as a monthly-capacity estimate. | Eligible Plus/Pro users can buy additional ChatGPT credits after reaching included limits; Codex's token credit card maps to standard API rates. API-key usage is separately billed PAYG. |
 | Claude | Pro $20; Max 5x $100; Max 20x $200 per month | Max provides 5x/20x Pro session usage; five-hour session and separate weekly limits apply. Anthropic does not publish a fixed monthly token or dollar allowance. | Optional usage credits continue at standard API rates; otherwise usage pauses until reset. API Console usage remains separate from the subscription. |
 | GitHub Copilot | Pro $10; Pro+ $39; Max $100 per month | Current primary table lists $15/$70/$200 in total monthly GitHub AI Credits respectively (base plus variable flex allotment); 1 GitHub AI Credit = $0.01. | Optional paid usage requires a dollar budget; otherwise wait for the monthly reset or use a cheaper model. GitHub's interaction-credit accounting is not the same as raw API-token costing. |
 | Z.AI GLM Coding Plan | List prices: Lite $18; Pro $72; Max $160 per month. The subscribe page displayed promotional $12.60/$50.40/$112 prices when checked. | About 80/400/1,600 prompts per 5 hours and 400/2,000/8,000 per week. GLM-5.2 is charged 2x off-peak or 3x peak against plan quota. | Published plan documentation describes quota resets, not automatic PAYG overage; native API PAYG is a separate route. |
 
-Sources: [Codex pricing](https://developers.openai.com/codex/pricing), [OpenAI Pro tiers](https://help.openai.com/en/articles/9793128-about-chatgpt-pro-plans), [Claude Max](https://support.claude.com/en/articles/11049741-what-is-the-max-plan), [Claude usage credits](https://support.claude.com/en/articles/12429409-manage-usage-credits-for-paid-claude-plans), [GitHub Copilot plans](https://github.com/features/copilot/plans), [Z.AI Coding Plan](https://docs.z.ai/devpack/overview), and [Z.AI subscribe](https://z.ai/subscribe).
+Sources: [Codex pricing](https://developers.openai.com/codex/pricing), [OpenAI Pro tiers](https://help.openai.com/en/articles/9793128-about-chatgpt-pro-tiers), [Claude Max](https://support.claude.com/en/articles/11049741-what-is-the-max-plan), [Claude usage credits](https://support.claude.com/en/articles/12429409-manage-usage-credits-for-paid-claude-plans), [GitHub Copilot plans](https://github.com/features/copilot/plans), [Z.AI Coding Plan](https://docs.z.ai/devpack/overview), and [Z.AI subscribe](https://z.ai/subscribe).
 
 ## Reference rows (USD per 1M tokens)
 
 | Model key / route | Input | Output | Cache read | Cache write | Provenance / note |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `claude-opus-5` | $5.00 | $25.00 | $0.50 | $6.25 | Anthropic standard; same base rates as Opus 4.8; 1h write is $10, not modeled in the single cache-write field |
-| `claude-opus-5-fast` | $10.00 | $50.00 | $1.00 | $12.50 | Anthropic Fast mode research preview; 1h write is $20, not modeled in the single cache-write field |
-| `anthropic/claude-opus-5` on OpenRouter | $5.00 | $25.00 | $0.50 | $6.25 | Live OpenRouter route; 1h cache-write route field is $10 |
-| `anthropic/claude-opus-5-fast` on OpenRouter | $10.00 | $50.00 | $1.00 | $12.50 | Live OpenRouter route; 1h cache-write route field is $20 |
+| `claude-opus-5` | $5.00 | $25.00 | $0.50 | $6.25 | Anthropic standard, verified 2026-08-03; same base rates as Opus 4.8; 1h write is $10, not modeled in the single cache-write field |
+| `claude-opus-5-fast` | $10.00 | $50.00 | $1.00 | $12.50 | Anthropic Fast mode research preview, verified 2026-08-03; 1h write is $20, not modeled in the single cache-write field |
+| `anthropic/claude-opus-5` on OpenRouter | $5.00 | $25.00 | $0.50 | $6.25 | Live route, verified 2026-08-03; 1h cache-write route field is $10 |
+| `anthropic/claude-opus-5-fast` on OpenRouter | $10.00 | $50.00 | $1.00 | $12.50 | Live route, verified 2026-08-03; 1h cache-write route field is $20 |
 | `claude-opus-4.5` | $5.00 | $25.00 | $0.50 | $6.25 | Anthropic standard; 5m write |
 | `claude-opus-4.6` | $5.00 | $25.00 | $0.50 | $6.25 | Anthropic standard; 5m write |
 | `claude-opus-4.6-1m` | $5.00 | $25.00 | $0.50 | $6.25 | Standard row; long-context premium not modeled |
@@ -89,8 +89,8 @@ Sources: [Codex pricing](https://developers.openai.com/codex/pricing), [OpenAI P
 | `minimax/minimax-m2` on OpenRouter | $0.255 | $1.02 | $0.00 | $0.255† | Live OpenRouter route |
 | `minimax/minimax-m2.1` on OpenRouter | $0.30 | $1.20 | $0.03 | $0.30† | Live OpenRouter route |
 | `minimax/minimax-m1` on OpenRouter | $0.40 | $2.20 | $0.00 | $0.40† | Live OpenRouter historical row |
-| `kimi-k3` | $3.00 | $15.00 | $0.30 | $3.00† | Moonshot/Kimi first-party; published as cache-miss input, cache-hit input, and output; no separate cache-write tariff |
-| `moonshotai/kimi-k3` on OpenRouter | $3.00 | $15.00 | $0.30 | $3.00† | Live OpenRouter route; cache write is ordinary routed input fallback |
+| `kimi-k3` | $3.00 | $15.00 | $0.30 | $3.00† | Moonshot/Kimi first-party, verified 2026-08-03; published as cache-miss input, cache-hit input, and output; no separate cache-write tariff |
+| `moonshotai/kimi-k3` on OpenRouter | $3.00 | $15.00 | $0.30 | $3.00† | Live OpenRouter route, verified 2026-08-03; cache write is ordinary routed input fallback |
 | Fireworks `kimi-k2p6-{fast,turbo}` | $2.00 | $8.00 | $0.30 | $2.00† | PAYG; Fire Pass coverage not assumed |
 | `moonshotai/kimi-k2.6` on OpenRouter | $0.66 | $3.41 | $0.15 | $0.66† | Live OpenRouter route |
 | `kimi-k2.6` / `kimi-k2p6` | $0.95 | $4.00 | $0.16 | $0.95† | Moonshot/Fireworks standard |

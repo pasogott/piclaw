@@ -24,7 +24,7 @@ interface ProviderModelPricingRule extends ProviderModelPricingReference {
 
 // Tag this reference snapshot with the commit date that introduced it so future
 // updates can track pricing provenance without guessing.
-export const PROVIDER_MODEL_PRICING_REFERENCE_TAG = "2026-07-25";
+export const PROVIDER_MODEL_PRICING_REFERENCE_TAG = "2026-08-03";
 
 const ANTHROPIC_PRICING_SOURCE = "https://docs.anthropic.com/en/docs/about-claude/pricing";
 const OPENAI_PRICING_SOURCE = "https://developers.openai.com/api/docs/pricing";
@@ -37,7 +37,7 @@ const PRICING_RULES: ProviderModelPricingRule[] = [
     models: ["anthropic/claude-opus-5"],
     providers: ["openrouter"],
     canonicalModel: "Claude Opus 5 (OpenRouter)",
-    basis: `Live OpenRouter API pricing (${OPENROUTER_MODELS_SOURCE}), accessed 2026-07-25`,
+    basis: `Live OpenRouter API pricing (${OPENROUTER_MODELS_SOURCE}), verified 2026-08-03`,
     inputPerMTok: 5,
     outputPerMTok: 25,
     cacheReadPerMTok: 0.5,
@@ -49,7 +49,7 @@ const PRICING_RULES: ProviderModelPricingRule[] = [
     models: ["anthropic/claude-opus-5-fast"],
     providers: ["openrouter"],
     canonicalModel: "Claude Opus 5 Fast (OpenRouter)",
-    basis: `Live OpenRouter API pricing (${OPENROUTER_MODELS_SOURCE}), accessed 2026-07-25`,
+    basis: `Live OpenRouter API pricing (${OPENROUTER_MODELS_SOURCE}), verified 2026-08-03`,
     inputPerMTok: 10,
     outputPerMTok: 50,
     cacheReadPerMTok: 1,
@@ -60,7 +60,7 @@ const PRICING_RULES: ProviderModelPricingRule[] = [
     id: "claude-opus-5",
     models: ["claude-opus-5"],
     canonicalModel: "Claude Opus 5",
-    basis: `Anthropic standard API pricing (${ANTHROPIC_PRICING_SOURCE}), accessed 2026-07-25`,
+    basis: `Anthropic standard API pricing (${ANTHROPIC_PRICING_SOURCE}), verified 2026-08-03`,
     inputPerMTok: 5,
     outputPerMTok: 25,
     cacheReadPerMTok: 0.5,
@@ -71,7 +71,7 @@ const PRICING_RULES: ProviderModelPricingRule[] = [
     id: "claude-opus-5-fast",
     models: ["claude-opus-5-fast"],
     canonicalModel: "Claude Opus 5 Fast",
-    basis: `Anthropic Fast mode pricing (${ANTHROPIC_PRICING_SOURCE}), accessed 2026-07-25`,
+    basis: `Anthropic Fast mode pricing (${ANTHROPIC_PRICING_SOURCE}), verified 2026-08-03`,
     inputPerMTok: 10,
     outputPerMTok: 50,
     cacheReadPerMTok: 1,
@@ -395,7 +395,7 @@ const PRICING_RULES: ProviderModelPricingRule[] = [
     models: ["moonshotai/kimi-k3"],
     providers: ["openrouter"],
     canonicalModel: "Kimi K3 (OpenRouter)",
-    basis: `Live OpenRouter API pricing (${OPENROUTER_MODELS_SOURCE}), accessed 2026-07-25`,
+    basis: `Live OpenRouter API pricing (${OPENROUTER_MODELS_SOURCE}), verified 2026-08-03`,
     inputPerMTok: 3,
     outputPerMTok: 15,
     cacheReadPerMTok: 0.3,
@@ -406,7 +406,7 @@ const PRICING_RULES: ProviderModelPricingRule[] = [
     id: "kimi-k3",
     models: ["kimi-k3"],
     canonicalModel: "Kimi K3",
-    basis: `Moonshot/Kimi first-party pricing (${KIMI_K3_PRICING_SOURCE}), accessed 2026-07-25`,
+    basis: `Moonshot/Kimi first-party pricing (${KIMI_K3_PRICING_SOURCE}), verified 2026-08-03`,
     inputPerMTok: 3,
     outputPerMTok: 15,
     cacheReadPerMTok: 0.3,

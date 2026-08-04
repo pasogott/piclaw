@@ -2281,7 +2281,7 @@ describe("smart-compaction", () => {
       const budget = getProgressiveCompactionBudget({ contextWindow: 1_050_000 });
 
       expect(budget.promptBudgetChars).toBeGreaterThan(60_000);
-      expect(budget.promptBudgetChars).toBeLessThanOrEqual(240_000 * 0.85);
+      expect(budget.promptBudgetChars).toBeLessThanOrEqual(320_000 * 0.85);
       expect(budget.chunkBudgetChars).toBeGreaterThan(100_000);
     });
 
@@ -3407,7 +3407,75 @@ describe("smart-compaction", () => {
 
       expect(result.complete).toBe(true);
       expect(chunkPrompts.length).toBeGreaterThan(1);
-      expect(chunkPrompts.length).toBeLessThanOrEqual(16);
+      expect(chunkPrompts.length).toBeLessThanOrEqual(12);
+    });
+
+    it("completes an initially 18-chunk slow compaction inside a 300s budget", async () => {
+      const sourceUnits = Array.from({ length: 36 }, (_, index) => ({
+        id: `slow-unit-${index}`,
+        groupId: `slow-group-${index}`,
+        renderedText: `SLOW_SOURCE_${index} ${"s".repeat(49_000)}`,
+        sourceIndexes: [index],
+        sourceEntryIds: [`entry-${index}`],
+        segmentIndex: 1,
+        segmentCount: 1,
+      }));
+      let now = 1;
+      let chunkCalls = 0;
+      let finalCalls = 0;
+      const chunkMaxTokens: number[] = [];
+      const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+      (completeSimple as any).mockImplementation(async (_model: any, context: any, options: any) => {
+        const prompt = context.messages[0].content[0].text as string;
+        if (prompt.includes("deterministic chunk")) {
+          chunkCalls += 1;
+          chunkMaxTokens.push(options.maxTokens);
+          if (chunkCalls % 3 === 0) now += 30_000;
+          return {
+            content: [{ type: "text", text: "## Chunk Range\n- slow\n\n## Goals / User Intent\n- Preserve slow source\n\n## Constraints & Preferences\n- Finish inside timeout\n\n## Decisions\n- Adapt initial chunk plan\n\n## Files / Commands / Tool Outcomes\n- none\n\n## Progress\n- Done: chunk summarized\n- In progress: final merge\n- Blocked: none\n\n## Open Questions / Next Steps\n- Continue\n\n## Key Continuity Facts\n- SLOW_SOURCE" }],
+            stopReason: "stop",
+          };
+        }
+        finalCalls += 1;
+        now += 50_000;
+        return {
+          content: [{ type: "text", text: "## Goal\nPreserve slow source\n\n## Current Active Topic\n- time-feasible compaction\n\n## Historical / Background Context\n- initial 18-chunk plan adapted\n\n## Constraints & Preferences\n- complete within 300 seconds\n\n## Progress\n### Done\n- [x] all chunks summarized and merged\n### In Progress\n- [ ] continue\n### Blocked\n- none\n\n## Key Decisions\n- **Feasibility**: reserve time for one direct final merge\n\n## Next Steps\n1. continue\n\n## Critical Context\n- SLOW_SOURCE" }],
+          stopReason: "stop",
+        };
+      });
+
+      try {
+        const result = await runProgressiveCompaction({
+          llmMessages: [],
+          sourceUnits,
+          humanUserIndexes: new Set<number>(),
+          model: { provider: "test", id: "slow-high-context", contextWindow: 1_050_000, reasoning: false },
+          auth: {},
+          settings: { reserveTokens: 8_192 },
+          fileOps: { read: new Set<string>(), written: new Set<string>(), edited: new Set<string>() },
+          budget: {
+            contextWindow: 1_050_000,
+            promptBudgetChars: 272_000,
+            chunkBudgetChars: 100_000,
+            mergeBudgetChars: 272_000,
+            forceProgressive: true,
+          },
+          abortSignal: new AbortController().signal,
+          ctx: { ui: { setStatus: vi.fn() } },
+          streamFn: compactionStreamFn,
+          timeoutMs: 300_000,
+          startedAt: 1,
+        });
+
+        expect(result.complete).toBe(true);
+        expect(result.totalChunkCount).toBeLessThanOrEqual(12);
+        expect(chunkCalls).toBe(result.totalChunkCount);
+        expect(finalCalls).toBe(1);
+        expect(chunkMaxTokens.every((value) => value <= Math.floor(8_192 / result.totalChunkCount))).toBe(true);
+        expect(now).toBeLessThan(300_000);
+      } finally {
+        dateSpy.mockRestore();
+      }
     });
 
     it("fails high-context progressive compaction early when adaptive sizing still leaves dozens of chunks", async () => {
