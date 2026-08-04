@@ -6,6 +6,23 @@ const LEGACY_EFFORT_DISPLAY = { off: 'off', minimal: 'minimal', low: 'low', medi
 const DEFAULT_DISPLAY = { off: 'off', minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' };
 function isEffortProvider(p) { return typeof p === 'string' && p.toLowerCase() === 'anthropic'; }
 
+export function resolveModelsSettingsChatJid(runtimeWindow: ((Window & typeof globalThis) & { __piclawCurrentChatJid?: string }) | null = typeof window !== 'undefined' ? window : null) {
+    const globalValue = typeof runtimeWindow?.__piclawCurrentChatJid === 'string'
+        ? runtimeWindow.__piclawCurrentChatJid.trim()
+        : '';
+    if (globalValue) return globalValue;
+    try {
+        const raw = new URL(runtimeWindow?.location?.href || 'http://localhost/').searchParams.get('chat_jid');
+        return raw && raw.trim() ? raw.trim() : 'web:default';
+    } catch {
+        return 'web:default';
+    }
+}
+
+export async function sendModelsSettingsCommand(content, chatJid, sender = sendAgentMessage) {
+    return sender('default', content, null, [], null, chatJid);
+}
+
 function ThinkingSlider({ thinkingLevel, supportsThinking, provider, availableLevels, onSetLevel, disabled }) {
     const { t } = useTranslation();
     const levels = (availableLevels && availableLevels.length > 1) ? availableLevels : ['off', 'minimal', 'low', 'medium', 'high'];
@@ -28,6 +45,7 @@ function ThinkingSlider({ thinkingLevel, supportsThinking, provider, availableLe
 
 export function ModelsSection({ filter = '' }) {
     const { t } = useTranslation();
+    const chatJid = resolveModelsSettingsChatJid();
     const [models, setModels] = useState(null);
     const [switching, setSwitching] = useState(false);
     const [thinkingLevel, setThinkingLevel] = useState('off');
@@ -38,7 +56,7 @@ export function ModelsSection({ filter = '' }) {
     const [thinkingBusy, setThinkingBusy] = useState(false);
 
     const loadModels = useCallback(async () => {
-        const data = await getAgentModels();
+        const data = await getAgentModels(chatJid);
         setModels(data);
         if (data.thinking_level_label || data.thinking_level) {
             setThinkingLevel(data.thinking_level_label || data.thinking_level);
@@ -52,7 +70,7 @@ export function ModelsSection({ filter = '' }) {
             setAvailableLevels(displayLevels);
         }
         return data;
-    }, []);
+    }, [chatJid]);
     useEffect(() => {
         loadModels().catch((error) => {
             console.warn('[settings/models] Failed to load models.', error);
@@ -62,10 +80,10 @@ export function ModelsSection({ filter = '' }) {
 
     const switchModel = useCallback(async (label) => {
         if (switching) return; setSwitching(true);
-        try { await sendAgentMessage('default', `/model ${label}`, null, []); await loadModels(); }
+        try { await sendModelsSettingsCommand(`/model ${label}`, chatJid); await loadModels(); }
         catch (e) { console.error('Failed to switch model:', e); }
         finally { setSwitching(false); }
-    }, [switching, loadModels]);
+    }, [switching, loadModels, chatJid]);
 
     const setScopedModels = useCallback(async (enabled) => {
         if (scopedBusy) return;
@@ -93,7 +111,7 @@ export function ModelsSection({ filter = '' }) {
     const setLevel = useCallback(async (level) => {
         if (thinkingBusy) return; setThinkingBusy(true); setThinkingLevel(level);
         try {
-            const resp = await sendAgentMessage('default', `/thinking ${level}`, null, []);
+            const resp = await sendModelsSettingsCommand(`/thinking ${level}`, chatJid);
             if (resp?.command?.thinking_level_label || resp?.command?.thinking_level) {
                 setThinkingLevel(resp.command.thinking_level_label || resp.command.thinking_level);
             }
@@ -107,7 +125,7 @@ export function ModelsSection({ filter = '' }) {
             });
         }
         finally { setThinkingBusy(false); }
-    }, [thinkingBusy, loadModels]);
+    }, [thinkingBusy, loadModels, chatJid]);
 
     if (!models) return html`<div class="settings-loading">${t('settings.models.loading')}</div>`;
     const options = models.model_options || [];
