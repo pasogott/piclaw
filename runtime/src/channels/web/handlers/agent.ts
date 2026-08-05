@@ -15,6 +15,8 @@ import {
 } from "../../../core/config.js";
 import { parseControlCommand } from "../../../agent-control/index.js";
 import { isSlashCommandInvocation } from "../../../agent-pool/slash-command.js";
+import { RECOVERY_CONTINUATION_PROMPT } from "../../../agent-pool/context-pressure-retry.js";
+import { getExtensionKvStore } from "../../../extension-kv-registry.js";
 import {
   normalizeAgentMessagePayload,
   parseAgentMessageRequest,
@@ -62,6 +64,18 @@ import { formatProviderError } from "./provider-error-format.js";
 import { endTrackedPhase } from "../../../runtime/progress-watchdog.js";
 
 const log = createLogger("web.handlers.agent");
+const TOOL_BUDGET_CONTINUATION_EXTENSION_ID = "piclaw.tool-budget-continuation";
+
+function reserveToolBudgetContinuation(chatJid: string, threadKey: string): boolean {
+  const kv = getExtensionKvStore();
+  const key = `continued:${threadKey}`;
+  if (kv.get(TOOL_BUDGET_CONTINUATION_EXTENSION_ID, key, "chat", chatJid)) return false;
+  kv.set(TOOL_BUDGET_CONTINUATION_EXTENSION_ID, key, {
+    count: 1,
+    createdAt: new Date().toISOString(),
+  }, "chat", chatJid);
+  return true;
+}
 
 export type BrowserObservabilityContext = {
   userId?: string;
@@ -1774,6 +1788,30 @@ export async function processChat(
       abortCause: output.abortCause,
       abortOperation: output.abortOperation,
     };
+    if (output.toolBudgetExceeded && !output.recovery?.exhausted) {
+      const continuationThreadKey = String(resolvedThreadRootId ?? lastMessage.id);
+      if (reserveToolBudgetContinuation(chatJid, continuationThreadKey)) {
+        const queuedAt = new Date().toISOString();
+        const queuedRowId = channel.enqueueQueuedFollowupItem(chatJid, 0, RECOVERY_CONTINUATION_PROMPT, null, queuedAt, {
+          source: "auto-tool-budget-continuation",
+        });
+        channel.broadcastEvent("agent_followup_queued", {
+          chat_jid: chatJid,
+          thread_id: null,
+          row_id: queuedRowId,
+          content: RECOVERY_CONTINUATION_PROMPT,
+          timestamp: queuedAt,
+          source: "auto-tool-budget-continuation",
+        });
+        log.info("Queued one bounded continuation after a healthy tool-budget stop", {
+          operation: "process_chat.tool_budget_auto_continue",
+          chatJid,
+          threadKey: continuationThreadKey,
+          queuedRowId,
+        });
+      }
+    }
+
     const fallbackPublished = errorText.toLowerCase().includes("timed out")
       ? publishDraftFallback("timeout", errorText, { markerOptions })
       : rateLimited
