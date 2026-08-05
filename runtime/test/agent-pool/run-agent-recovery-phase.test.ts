@@ -366,6 +366,59 @@ describe("runAgentRecoveryPhase", () => {
     expect(result.toolBudgetExceeded).toBeUndefined();
   });
 
+  test("emergency-rotates and continues when recovery compaction fails", async () => {
+    let calls = 0;
+    let rotations = 0;
+    const oldSession = { compact: async () => { throw new Error("Progressive compaction output invalid (stop_reason): completion stop reason was length; expected stop"); } } as any;
+    const newSession = {} as any;
+    let activeTools = ["read"];
+    const sessionCtrl: SessionWithToolControl = {
+      getActiveToolNames: () => [...activeTools],
+      setActiveToolsByName: (names) => { activeTools = [...names]; },
+    };
+    const result = await runAgentRecoveryPhase({
+      prompt: "original prompt",
+      chatJid: "web:test-recovery-compact",
+      session: oldSession,
+      sessionCtrl,
+      timeoutMs: 0,
+      startTime: Date.now(),
+      modelLabel: "test/model",
+      recoveryConfig: recoveryConfig(),
+      runOptions: {},
+      logsDir: "/tmp/nonexistent-piclaw-test-logs",
+      clearAttachments: () => {},
+      rotateAfterCompactionFailure: async () => {
+        rotations += 1;
+        return { ok: true, session: newSession, sessionCtrl };
+      },
+      runPromptAttempt: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return attempt({
+            output: output("error", "context length exceeded"),
+            snapshot: {
+              hadToolActivity: true,
+              hadPartialOutput: false,
+              hadCompletedTurnOutput: false,
+              hadTerminalTurnOutput: false,
+              sawCompactionIntent: true,
+              toolExecutionCount: 1,
+            },
+            promptWasPersisted: true,
+            toolExecutionCount: 1,
+          });
+        }
+        expect(activeTools).toEqual([]);
+        return attempt({ output: output("success", undefined, "rotated after compaction failure") });
+      },
+    });
+
+    expect(result.result).toBe("rotated after compaction failure");
+    expect(rotations).toBe(1);
+    expect(calls).toBe(2);
+  });
+
   test("rotates when recovery compaction remains over threshold", async () => {
     let calls = 0;
     let rotations = 0;
