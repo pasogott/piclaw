@@ -349,6 +349,17 @@ function getUsageInputTokens(usage: unknown): number | null {
   return null;
 }
 
+function getInitialProviderResponseGraceMs(chatJid: string): number | null {
+  if (!chatJid.startsWith("dream:")) return null;
+  const timeoutMs = getProgressWatchdogTimeoutMs();
+  if (timeoutMs <= 0) return null;
+  // Dream is an out-of-band maintenance pass with no interactive latency
+  // contract. Give a slow initial provider response one bounded extra window;
+  // once the first provider event arrives, normal streaming/tool thresholds
+  // immediately resume.
+  return Math.max(timeoutMs, Math.min(900_000, timeoutMs * 3));
+}
+
 function getRunObservabilityDetails(
   runOptions: RunAgentOptions,
   extras: { sessionLeafId?: string | null } = {},
@@ -462,7 +473,7 @@ async function runPromptAttempt(
 
   const wrappedOnEvent = (event: AgentSessionEvent) => {
     if (event.type === "message_update") {
-      heartbeatTrackedPhase(chatJid, "streaming", { eventType: event.type });
+      heartbeatTrackedPhase(chatJid, "streaming", { eventType: event.type, providerEventObserved: true, model: modelLabel });
     } else if (
       event.type === "tool_execution_start"
       || event.type === "tool_execution_update"
@@ -546,6 +557,13 @@ async function runPromptAttempt(
     }
     if (event.type === "message_update") {
       const messageEvent = (event as { assistantMessageEvent?: { type?: string; delta?: string } }).assistantMessageEvent;
+      if (messageEvent?.type === "text_start" || messageEvent?.type === "thinking_start") {
+        heartbeatTrackedPhase(chatJid, "streaming", {
+          eventType: messageEvent.type,
+          providerEventObserved: true,
+          model: modelLabel,
+        });
+      }
       if ((messageEvent?.type === "text_start" || messageEvent?.type === "thinking_start") && !activeModelResponse) {
         modelResponseSequence += 1;
         activeModelResponse = { sequence: modelResponseSequence, startedAt: Date.now() };
@@ -838,8 +856,11 @@ export async function runAgentPrompt(
     session = await maybeAutoRotateSession(session, runtime, chatJid, options);
     modelLabel = session.model ? `${session.model.provider}/${session.model.id}` : null;
     updateSessionModel(chatJid, modelLabel, session.thinkingLevel ?? null);
+    const initialProviderResponseGraceMs = getInitialProviderResponseGraceMs(chatJid);
     beginTrackedPhase(chatJid, runOptions.skipPrePromptCompaction ? "prompt" : "preprompt_compaction", {
       source: "run_agent",
+      model: modelLabel,
+      ...(initialProviderResponseGraceMs ? { initialProviderResponseGraceMs, providerEventObserved: false } : {}),
     });
     if (!runOptions.skipPrePromptCompaction) {
       let prePromptCompactionFailure: string | null = null;
