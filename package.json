@@ -1,6 +1,6 @@
 {
   "name": "piclaw",
-  "version": "2.12.9",
+  "version": "2.12.10",
   "description": "Personal pi coding agent assistant. Lightweight nanoclaw-style orchestrator using Bun and pi.",
   "type": "module",
   "license": "MIT",
