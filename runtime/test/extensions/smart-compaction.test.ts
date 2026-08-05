@@ -2753,7 +2753,8 @@ describe("smart-compaction", () => {
     it("retries one truncated final merge and persists only the valid repaired checkpoint", async () => {
       const longMessages = Array.from({ length: 24 }, (_, i) => userMsg(`Final merge fact ${i}: ${"x".repeat(3_000)}`));
       let finalCalls = 0;
-      (completeSimple as any).mockImplementation(async (_model: any, context: any) => {
+      const finalMaxTokens: number[] = [];
+      (completeSimple as any).mockImplementation(async (_model: any, context: any, options: any) => {
         const prompt = context.messages[0].content[0].text as string;
         if (prompt.includes("deterministic chunk") || prompt.includes("smaller intermediate summary")) {
           const range = prompt.match(/Message index range: ([0-9-]+)/)?.[1] ?? "merged";
@@ -2763,6 +2764,7 @@ describe("smart-compaction", () => {
           };
         }
         finalCalls += 1;
+        finalMaxTokens.push(options.maxTokens);
         if (finalCalls === 1) {
           return { content: [{ type: "text", text: "## Goal\nTruncated final" }], stopReason: "length" };
         }
@@ -2792,7 +2794,9 @@ describe("smart-compaction", () => {
         .map((call: any[]) => call[1].messages[0].content[0].text as string)
         .filter((prompt: string) => prompt.includes("final continuity state"));
       expect(finalPrompts).toHaveLength(2);
+      expect(finalMaxTokens).toEqual([8192, 4096]);
       expect(finalPrompts.at(-1)).toContain("Output Repair Requirement");
+      expect(finalPrompts.at(-1)).toContain("within 4096 output tokens");
       expect(finalPrompts[1].lastIndexOf("## Output Repair Requirement"))
         .toBeLessThan(finalPrompts[1].lastIndexOf("## Critical Context"));
       expect(finalPrompts[1]).toContain("fact 0-");
