@@ -174,6 +174,8 @@ function buildTurnOutcomeMarker(options: {
   toolStepsUsed?: number;
   toolStepsBudget?: number;
   nextAction?: string;
+  abortCause?: string;
+  abortOperation?: string;
 }): Record<string, unknown> {
   return {
     type: "turn_outcome_marker",
@@ -189,6 +191,8 @@ function buildTurnOutcomeMarker(options: {
     tool_steps_used: Number.isFinite(options.toolStepsUsed) ? options.toolStepsUsed : undefined,
     tool_steps_budget: Number.isFinite(options.toolStepsBudget) ? options.toolStepsBudget : undefined,
     next_action: readTrimmedString(options.nextAction) || undefined,
+    abort_cause: readTrimmedString(options.abortCause) || undefined,
+    abort_operation: readTrimmedString(options.abortOperation) || undefined,
   };
 }
 
@@ -212,6 +216,8 @@ function buildErrorOutcomeMarker(
     toolStepsUsed?: number;
     toolStepsBudget?: number;
     nextAction?: string;
+    abortCause?: string;
+    abortOperation?: string;
   } = {},
 ): Record<string, unknown> {
   if (isToolBudgetExceededError(errorText)) {
@@ -228,6 +234,8 @@ function buildErrorOutcomeMarker(
       toolStepsUsed: options.toolStepsUsed,
       toolStepsBudget: options.toolStepsBudget,
       nextAction: options.nextAction || "Ask me to continue; I will resume from the latest known partial state instead of replaying the whole turn.",
+      abortCause: options.abortCause,
+      abortOperation: options.abortOperation,
     });
   }
 
@@ -306,6 +314,8 @@ function buildErrorOutcomeMarker(
       draftRecovered: options.draftRecovered,
       attemptsUsed: options.attemptsUsed,
       classifier: options.classifier,
+      abortCause: options.abortCause,
+      abortOperation: options.abortOperation,
     });
   }
 
@@ -1761,6 +1771,8 @@ export async function processChat(
       toolStepsUsed: output.toolStepsUsed,
       toolStepsBudget: output.toolStepsBudget,
       nextAction: output.nextAction,
+      abortCause: output.abortCause,
+      abortOperation: output.abortOperation,
     };
     const fallbackPublished = errorText.toLowerCase().includes("timed out")
       ? publishDraftFallback("timeout", errorText, { markerOptions })
