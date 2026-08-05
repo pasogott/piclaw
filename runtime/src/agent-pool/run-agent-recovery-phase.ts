@@ -836,11 +836,12 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     if (attempt.promptWasPersisted || attempt.snapshot.hadToolActivity) {
       attemptPrompt = RECOVERY_CONTINUATION_PROMPT;
     }
-    recoveryContinuationWithoutTools = shouldDisableToolsForRecoveryAttempt(
-      effectiveDecision,
-      attempt.snapshot,
-      recoveryConfig,
-    );
+    recoveryContinuationWithoutTools = effectiveDecision.strategy === "finalize"
+      || shouldDisableToolsForRecoveryAttempt(
+        effectiveDecision,
+        attempt.snapshot,
+        recoveryConfig,
+      );
 
     if (effectiveDecision.strategy === "compact_then_retry") {
       pauseRecoveryBudget();

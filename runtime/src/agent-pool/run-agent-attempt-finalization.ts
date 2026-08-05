@@ -226,6 +226,15 @@ export function finalizePromptAttemptOutput(input: PromptAttemptFinalizationInpu
       hasUnresolvedToolExecution: input.hasUnresolvedToolExecution,
       hadToolFailure: input.hadToolFailure,
       sawTerminalSideEffectToolActivity: input.sawTerminalSideEffectToolActivity,
+      needsToolFreeFinalization: input.hadToolActivity
+        && input.sawAssistantToolCallMessage
+        && input.lastAssistantState?.stopReason === "stop"
+        && !input.lastAssistantState?.hadTextContent
+        && !input.hasUnresolvedToolExecution
+        && !input.hadToolFailure
+        && !input.toolUseBudgetExceeded
+        && typeof (input.session as unknown as { getActiveToolNames?: unknown }).getActiveToolNames === "function"
+        && typeof (input.session as unknown as { setActiveToolsByName?: unknown }).setActiveToolsByName === "function",
       toolUseBudgetExceeded: input.toolUseBudgetExceeded,
       assistantToolUseMessageCount: input.assistantToolUseMessageCount,
       toolExecutionCount: input.toolExecutionCount,

@@ -3864,7 +3864,7 @@ test("runAgentPrompt continues with tools after a resolved side-effecting tool",
         }
         return;
       }
-      expect(this.activeTools).toEqual(["bash", "write"]);
+      expect(this.activeTools).toEqual([]);
       for (const listener of this.listeners) {
         listener({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Wrote /tmp/x successfully." } });
         listener({ type: "message_end", message: createAssistantMessage("Wrote /tmp/x successfully.") });
@@ -4092,7 +4092,7 @@ test("runAgentPrompt restores an accidentally empty active-tool set before an or
   ]));
 });
 
-test("runAgentPrompt continues after a committed tool-use lead-in when closing prose is missing", async () => {
+test("runAgentPrompt requests one tools-disabled closing reply after resolved tool work", async () => {
   const restoreEnv = setEnv({
     PICLAW_TURN_AUTO_RECOVERY_ENABLED: "1",
     PICLAW_TURN_TRANSIENT_RECOVERY_TOOLS_ENABLED: "1",
@@ -4129,7 +4129,7 @@ test("runAgentPrompt continues after a committed tool-use lead-in when closing p
       this.promptCalls += 1;
       this.promptTexts.push(text);
       if (this.promptCalls > 1) {
-        expect(this.activeTools).toEqual(["bash", "read"]);
+        expect(this.activeTools).toEqual([]);
         for (const listener of this.listeners) {
           listener({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Tests passed. The requested work is complete." } });
           listener({
@@ -4208,7 +4208,7 @@ test("runAgentPrompt continues after a committed tool-use lead-in when closing p
     expect(result.result).toBe("Tests passed. The requested work is complete.");
     expect(session.promptCalls).toBe(2);
     expect(session.promptTexts).toEqual(["run tests", RECOVERY_CONTINUATION_PROMPT]);
-    expect(session.toolSets).toEqual([]);
+    expect(session.toolSets).toEqual([[], ["bash", "read"]]);
     expect(completedTurns).toEqual([
       { text: "I will run the tests now.", followedByToolUse: true },
     ]);
