@@ -514,6 +514,8 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       ? (timeoutMs > 0 ? Math.min(timeoutMs, remainingRecoveryBudgetMs) : remainingRecoveryBudgetMs)
       : timeoutMs;
     let recoverySavedToolNames: string[] | null = null;
+    let recoveryOriginalSetActiveToolsByName: ((names: string[]) => void) | null = null;
+    let recoveryToolReactivationAttempts = 0;
     const toolControl = activeSessionCtrl;
     const canControlTools = toolControl !== null
       && typeof toolControl.getActiveToolNames === "function"
@@ -526,7 +528,27 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     }
     if (recoveryContinuationWithoutTools && canControlTools && toolControl) {
       recoverySavedToolNames = toolControl.getActiveToolNames!();
-      toolControl.setActiveToolsByName!([]);
+      recoveryOriginalSetActiveToolsByName = toolControl.setActiveToolsByName!.bind(toolControl);
+      recoveryOriginalSetActiveToolsByName([]);
+      // Keep the continuation tools-disabled for the entire attempt. Extension
+      // before_agent_start hooks (notably delegate auto-activation) run inside
+      // session.prompt() and may call setActiveToolsByName after the initial
+      // clear. Without this ceiling they can re-enable long-running tools and
+      // consume the whole automatic-recovery budget.
+      toolControl.setActiveToolsByName = (names: string[]) => {
+        recoveryOriginalSetActiveToolsByName?.([]);
+        if (names.length > 0) {
+          recoveryToolReactivationAttempts += 1;
+          if (recoveryToolReactivationAttempts === 1) {
+            options.onWarn?.("Blocked tool reactivation during tools-disabled recovery continuation", {
+              operation: "run_agent.recovery_tool_reelevation_blocked",
+              chatJid,
+              requestedTools: names,
+              recoveryAttempt: recoveryAttemptsUsed,
+            });
+          }
+        }
+      };
     }
     const finalizationReserveMs = recoveryAttemptsUsed > 0 && !recoveryContinuationWithoutTools
       ? getRecoveryFinalizationReserveMs(attemptTimeoutMs)
@@ -536,8 +558,11 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       attempt = await options.runPromptAttempt(attemptPrompt, attemptTimeoutMs, turnToolExecutionCount, finalizationReserveMs);
       turnToolExecutionCount = attempt.toolExecutionCount;
     } finally {
-      if (recoverySavedToolNames && activeSessionCtrl && typeof activeSessionCtrl.setActiveToolsByName === "function") {
-        activeSessionCtrl.setActiveToolsByName(recoverySavedToolNames);
+      if (recoveryOriginalSetActiveToolsByName && activeSessionCtrl) {
+        activeSessionCtrl.setActiveToolsByName = recoveryOriginalSetActiveToolsByName;
+      }
+      if (recoverySavedToolNames && recoveryOriginalSetActiveToolsByName) {
+        recoveryOriginalSetActiveToolsByName(recoverySavedToolNames);
       }
     }
 

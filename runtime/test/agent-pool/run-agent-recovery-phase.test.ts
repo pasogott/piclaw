@@ -297,6 +297,10 @@ describe("runAgentRecoveryPhase", () => {
           });
         }
         expect(activeTools).toEqual([]);
+        // Simulate an extension before_agent_start hook trying to auto-activate
+        // a tool after recovery already disabled the tool set.
+        sessionCtrl.setActiveToolsByName?.(["delegate"]);
+        expect(activeTools).toEqual([]);
         return attempt({
           output: output("success", undefined, "recovered"),
           snapshot: {
@@ -318,7 +322,7 @@ describe("runAgentRecoveryPhase", () => {
     expect(calls[1]?.toolExecutionCountAtStart).toBe(2);
     expect(calls[1]?.timeoutMs).toBeGreaterThanOrEqual(20);
     expect(calls[1]?.timeoutMs).toBeLessThanOrEqual(25);
-    expect(activeToolSets).toEqual([[], ["read", "bash"]]);
+    expect(activeToolSets).toEqual([[], [], ["read", "bash"]]);
     expect(events).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "compaction_start", trigger: "recovery" }),
       expect.objectContaining({ type: "compaction_end", trigger: "recovery", willRetry: true }),
