@@ -54,6 +54,7 @@ import {
 import type { AgentTurnCoordinator } from "./turn-coordinator.js";
 import type { AgentOutput, RetrySettingsProvider, RunAgentOptions } from "./contracts.js";
 import { isPendingShutdown } from "../runtime/shutdown-registry.js";
+import { getAgentAbortCause, recordAgentAbortCause } from "./abort-provenance.js";
 import {
   beginTrackedPhase,
   heartbeatTrackedPhase,
@@ -662,6 +663,7 @@ async function runPromptAttempt(
           // been streamed and captured by onTurnComplete, so the agent's
           // response will be persisted to the DB by finalizeSuccessfulRun.
           if (isPendingShutdown()) {
+            recordAgentAbortCause(chatJid, "service_shutdown", "run_agent.pending_shutdown_abort");
             void session.abort().catch((err) => {
               options.onWarn?.("Failed to abort session after exit_process (deferred to message_end)", {
                 operation: "run_agent.pending_shutdown_abort",
@@ -700,6 +702,7 @@ async function runPromptAttempt(
   let unresolvedToolExecutionCount: number;
   const unregisterProgressAborter = registerProgressWatchdogAborter(chatJid, async (stall) => {
     staleProgressInterrupted = true;
+    recordAgentAbortCause(chatJid, "stale_progress_watchdog", "run_agent.stale_progress_abort");
     options.onWarn?.("Stale-progress watchdog aborting stalled agent run", {
       operation: "run_agent.stale_progress_abort",
       chatJid,
@@ -1078,7 +1081,7 @@ export async function runAgentPrompt(
     options.clearAttachments(chatJid);
     const duration = Date.now() - startTime;
     const errorMsg = err instanceof Error ? err.message : String(err);
-    writeAgentLog(options.logsDir, chatJid, duration, false, null, errorMsg, null);
+    writeAgentLog(options.logsDir, chatJid, duration, false, null, errorMsg, null, getAgentAbortCause(chatJid));
     options.onError?.("Agent run failed", {
       operation: "run_agent",
       chatJid,
