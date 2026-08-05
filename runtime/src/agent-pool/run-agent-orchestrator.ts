@@ -54,6 +54,7 @@ import {
 import type { AgentTurnCoordinator } from "./turn-coordinator.js";
 import type { AgentOutput, RetrySettingsProvider, RunAgentOptions } from "./contracts.js";
 import { getDefaultActiveToolNames } from "../extensions/tool-activation.js";
+import { logToolStateTransition } from "./tool-state-transitions.js";
 import { isPendingShutdown } from "../runtime/shutdown-registry.js";
 import { getAgentAbortCause, recordAgentAbortCause } from "./abort-provenance.js";
 import {
@@ -873,6 +874,15 @@ export async function runAgentPrompt(
       && ordinaryToolControl.getActiveToolNames().length === 0) {
       const defaults = getDefaultActiveToolNames();
       ordinaryToolControl.setActiveToolsByName(defaults);
+      logToolStateTransition({
+        chatJid,
+        turnId: runOptions.turnId,
+        phase: "ordinary_turn",
+        cause: "restore_leaked_empty_set",
+        previous: [],
+        next: defaults,
+        restored: true,
+      });
       options.onWarn?.("Restored default tools after an empty active-tool set leaked into an ordinary turn", {
         operation: "run_agent.restore_empty_tool_set",
         chatJid,
@@ -995,7 +1005,16 @@ export async function runAgentPrompt(
 
         if (originalSetActiveToolsByName) {
           // Apply ceiling to the initial active set.
-          originalSetActiveToolsByName(savedToolNames.filter(ceilingFilter));
+          const ceilingTools = savedToolNames.filter(ceilingFilter);
+          originalSetActiveToolsByName(ceilingTools);
+          logToolStateTransition({
+            chatJid,
+            turnId: runOptions.turnId,
+            phase: "attempt",
+            cause: "tool_ceiling_apply",
+            previous: savedToolNames,
+            next: ceilingTools,
+          });
           // Patch to block the LLM from re-escalating via activate_tools.
           sessionCtrl.setActiveToolsByName = (names: string[]) => {
             originalSetActiveToolsByName!(names.filter(ceilingFilter));
@@ -1121,6 +1140,15 @@ export async function runAgentPrompt(
     if (sessionCtrl && savedToolNames !== null && originalSetActiveToolsByName) {
       sessionCtrl.setActiveToolsByName = originalSetActiveToolsByName;
       originalSetActiveToolsByName(savedToolNames);
+      logToolStateTransition({
+        chatJid,
+        turnId: runOptions.turnId,
+        phase: "attempt",
+        cause: "tool_ceiling_restore",
+        previous: [],
+        next: savedToolNames,
+        restored: true,
+      });
     }
     try {
       await clearLiveSshConfig(chatJid);

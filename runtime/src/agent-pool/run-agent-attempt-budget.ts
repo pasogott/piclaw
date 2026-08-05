@@ -1,6 +1,7 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
 import type { RunAgentOptions } from "./contracts.js";
+import { logToolStateTransition } from "./tool-state-transitions.js";
 
 export interface AttemptToolBudgetState {
   toolUseBudgetExceeded: boolean;
@@ -59,6 +60,14 @@ export function createAttemptToolBudgetController(options: {
     if (typeof toolControl.getActiveToolNames === "function" && typeof toolControl.setActiveToolsByName === "function") {
       softStopSavedToolNames = toolControl.getActiveToolNames();
       toolControl.setActiveToolsByName([]);
+      logToolStateTransition({
+        chatJid: options.chatJid,
+        turnId: options.runOptions.turnId,
+        phase: "attempt",
+        cause: "tool_budget_soft_stop",
+        previous: softStopSavedToolNames,
+        next: [],
+      });
       options.onWarn?.("Tool-use budget soft threshold reached; disabling tools to force terminal reply", {
         operation: "run_agent.tool_use_budget_soft_stop",
         chatJid: options.chatJid,
@@ -130,6 +139,15 @@ export function createAttemptToolBudgetController(options: {
       const toolControl = options.session as unknown as { setActiveToolsByName?: (toolNames: string[]) => void };
       if (typeof toolControl.setActiveToolsByName === "function") {
         toolControl.setActiveToolsByName(softStopSavedToolNames);
+        logToolStateTransition({
+          chatJid: options.chatJid,
+          turnId: options.runOptions.turnId,
+          phase: "attempt",
+          cause: "tool_budget_restore",
+          previous: [],
+          next: softStopSavedToolNames,
+          restored: true,
+        });
       }
       softStopSavedToolNames = null;
     },
@@ -143,6 +161,14 @@ export function createAttemptToolBudgetController(options: {
       if (typeof toolControl.getActiveToolNames === "function" && typeof toolControl.setActiveToolsByName === "function") {
         softStopSavedToolNames = softStopSavedToolNames ?? toolControl.getActiveToolNames();
         toolControl.setActiveToolsByName([]);
+        logToolStateTransition({
+          chatJid: options.chatJid,
+          turnId: options.runOptions.turnId,
+          phase: "attempt",
+          cause: "recovery_finalization_reserve",
+          previous: softStopSavedToolNames,
+          next: [],
+        });
       }
       return true;
     },

@@ -34,6 +34,7 @@ import { getRecoveryPolicyConfig } from "../core/config.js";
 import { writeAgentLog } from "./logging.js";
 import { heartbeatTrackedPhase } from "../runtime/progress-watchdog.js";
 import { isRotationFallbackCompactionError } from "../session-rotation.js";
+import { logToolStateTransition } from "./tool-state-transitions.js";
 
 const MAX_RECOVERY_LOOP_GUARD_CHATS = 512;
 const MIN_RECOVERY_FINALIZATION_RESERVE_MS = 5_000;
@@ -251,6 +252,11 @@ export function buildRecoveryDiagnosticEntry(
 
 function isAbortFailureText(errorText: string): boolean {
   return /\b(?:aborterror|aborted|operation was aborted|request was aborted)\b/i.test(errorText);
+}
+
+function isToolUnavailableRecoveryText(text: string | null): boolean {
+  if (!text?.trim()) return false;
+  return /(?:unable|cannot|can[’']?t).{0,120}(?:access|use).{0,80}(?:execution )?tools|(?:execution )?tools.{0,80}(?:unavailable|not (?:currently )?available|disabled)/is.test(text);
 }
 
 function findToolBudgetDiagnostic(diagnostics: AgentRecoveryDiagnosticEntry[]): AgentRecoveryDiagnosticEntry | null {
@@ -534,6 +540,14 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       recoverySavedToolNames = toolControl.getActiveToolNames!();
       recoveryOriginalSetActiveToolsByName = toolControl.setActiveToolsByName!.bind(toolControl);
       recoveryOriginalSetActiveToolsByName([]);
+      logToolStateTransition({
+        chatJid,
+        turnId: runOptions.turnId,
+        phase: "recovery",
+        cause: "recovery_tools_disabled",
+        previous: recoverySavedToolNames,
+        next: [],
+      });
       // Keep the continuation tools-disabled for the entire attempt. Extension
       // before_agent_start hooks (notably delegate auto-activation) run inside
       // session.prompt() and may call setActiveToolsByName after the initial
@@ -567,6 +581,15 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       }
       if (recoverySavedToolNames && recoveryOriginalSetActiveToolsByName) {
         recoveryOriginalSetActiveToolsByName(recoverySavedToolNames);
+        logToolStateTransition({
+          chatJid,
+          turnId: runOptions.turnId,
+          phase: "recovery",
+          cause: "recovery_tools_restore",
+          previous: [],
+          next: recoverySavedToolNames,
+          restored: true,
+        });
       }
     }
 
@@ -597,6 +620,34 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     if (attempt.output.status === "success") {
       const duration = Date.now() - startTime;
       const finalText = typeof attempt.output.result === "string" ? attempt.output.result : null;
+      if (recoveryAttemptsUsed > 0 && recoveryContinuationWithoutTools && isToolUnavailableRecoveryText(finalText)) {
+        const error = "Tools-disabled recovery could not advance the task. Continue in a normal turn with the restored tool baseline.";
+        lastClassifier = "tool_activity";
+        const recovery = buildRecoveryMetadata(
+          recoveryAttemptsUsed,
+          duration,
+          false,
+          true,
+          lastClassifier,
+          strategyHistory,
+          recoveryDiagnostics,
+        );
+        writeAgentLog(options.logsDir, chatJid, duration, false, finalText, error, recovery);
+        emitAgentSessionEvent(runOptions.onEvent, {
+          type: "recovery_end",
+          outcome: "exhausted",
+          attemptsUsed: recoveryAttemptsUsed,
+          classifier: lastClassifier,
+          errorMessage: error,
+        });
+        return {
+          status: "error",
+          result: null,
+          error,
+          nextAction: "Continue the task in the next ordinary turn; completed work remains persisted.",
+          recovery,
+        };
+      }
       const recoveryMeta = recoveryAttemptsUsed > 0
         ? buildRecoveryMetadata(recoveryAttemptsUsed, duration, true, false, lastClassifier, strategyHistory, recoveryDiagnostics)
         : null;

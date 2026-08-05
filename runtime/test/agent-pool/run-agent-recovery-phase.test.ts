@@ -138,6 +138,58 @@ describe("runAgentRecoveryPhase", () => {
     ]));
   });
 
+  test("does not report a tool-unavailable protected continuation as recovered", async () => {
+    let activeTools = ["read", "bash"];
+    const sessionCtrl: SessionWithToolControl = {
+      getActiveToolNames: () => [...activeTools],
+      setActiveToolsByName: (names) => { activeTools = [...names]; },
+    };
+    let calls = 0;
+
+    const result = await runAgentRecoveryPhase({
+      prompt: "continue goal",
+      chatJid: "web:test-recovery-phase",
+      session: {} as any,
+      sessionCtrl,
+      timeoutMs: 0,
+      startTime: Date.now(),
+      modelLabel: "test/model",
+      recoveryConfig: recoveryConfig({ transientRecoveryToolsEnabled: false }),
+      runOptions: {},
+      logsDir: "/tmp/nonexistent-piclaw-test-logs",
+      clearAttachments: () => {},
+      runPromptAttempt: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return attempt({
+            output: output("error", "503 temporarily unavailable"),
+            snapshot: {
+              hadToolActivity: true,
+              hadPartialOutput: false,
+              hadCompletedTurnOutput: false,
+              hadTerminalTurnOutput: false,
+              sawCompactionIntent: false,
+              canDisableToolsForRecovery: true,
+              hasUnresolvedToolExecution: false,
+            },
+            promptWasPersisted: true,
+          });
+        }
+        expect(activeTools).toEqual([]);
+        return attempt({
+          output: output("success", undefined, "I’m unable to access the execution tools in this recovery turn, so I can’t advance the task."),
+        });
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "error",
+      recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
+    });
+    expect(result.error).toContain("could not advance the task");
+    expect(activeTools).toEqual(["read", "bash"]);
+  });
+
   test("disables and restores tools when transient recovery tools are opted out", async () => {
     let activeTools = ["read", "bash"];
     const activeToolSets: string[][] = [];
