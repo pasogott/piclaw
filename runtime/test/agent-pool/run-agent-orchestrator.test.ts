@@ -4045,6 +4045,53 @@ test("runAgentPrompt does not let a terminal side-effect tool mask an earlier to
   }
 });
 
+test("runAgentPrompt restores an accidentally empty active-tool set before an ordinary turn", async () => {
+  class StubSession {
+    private listeners: Array<(event: any) => void> = [];
+    private activeTools: string[] = [];
+    sessionManager = { getLeafId: () => "leaf-restored-tools" };
+    isStreaming = false;
+    isCompacting = false;
+    isRetrying = false;
+    getActiveToolNames() { return [...this.activeTools]; }
+    setActiveToolsByName(names: string[]) { this.activeTools = [...names]; }
+    subscribe(listener: (event: any) => void) {
+      this.listeners.push(listener);
+      return () => { this.listeners = this.listeners.filter((entry) => entry !== listener); };
+    }
+    async prompt() {
+      expect(this.activeTools).toContain("read");
+      expect(this.activeTools).toContain("activate_tools");
+      for (const listener of this.listeners) {
+        listener({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Tools were restored." } });
+        listener({ type: "message_end", message: createAssistantMessage("Tools were restored.") });
+      }
+    }
+    async abort() {}
+  }
+
+  const session = new StubSession();
+  const warnings: Array<{ message: string; details: Record<string, unknown> }> = [];
+  const result = await runAgentPrompt("continue ordinary work", "web:default", { timeoutMs: 0 }, {
+    getOrCreateRuntime: async () => createRuntime(session, { maxRetries: 2, baseDelayMs: 1, maxDelayMs: 60000 }) as any,
+    turnCoordinator: new AgentTurnCoordinator({ takeAttachments: () => [], touchSession: () => {}, recordMessageUsage: () => {} }),
+    clearAttachments: () => {},
+    takeAttachments: () => [],
+    logsDir: createTestLogsDir(),
+    setActiveForkBaseLeaf: () => {},
+    clearActiveForkBaseLeaf: () => {},
+    onWarn: (message, details) => warnings.push({ message, details }),
+  });
+
+  expect(result).toMatchObject({ status: "success", result: "Tools were restored." });
+  expect(warnings).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      message: "Restored default tools after an empty active-tool set leaked into an ordinary turn",
+      details: expect.objectContaining({ operation: "run_agent.restore_empty_tool_set" }),
+    }),
+  ]));
+});
+
 test("runAgentPrompt continues after a committed tool-use lead-in when closing prose is missing", async () => {
   const restoreEnv = setEnv({
     PICLAW_TURN_AUTO_RECOVERY_ENABLED: "1",

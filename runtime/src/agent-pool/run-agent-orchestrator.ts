@@ -53,6 +53,7 @@ import {
 } from "./run-agent-recovery-phase.js";
 import type { AgentTurnCoordinator } from "./turn-coordinator.js";
 import type { AgentOutput, RetrySettingsProvider, RunAgentOptions } from "./contracts.js";
+import { getDefaultActiveToolNames } from "../extensions/tool-activation.js";
 import { isPendingShutdown } from "../runtime/shutdown-registry.js";
 import { getAgentAbortCause, recordAgentAbortCause } from "./abort-provenance.js";
 import {
@@ -857,6 +858,28 @@ export async function runAgentPrompt(
     const runtime = await options.getOrCreateRuntime(chatJid);
     let session = runtime.session;
     session = await maybeAutoRotateSession(session, runtime, chatJid, options);
+    // Protected recovery/finalization attempts deliberately clear tools. An
+    // ordinary subsequent turn must never inherit that empty set: it is not a
+    // user-selectable steady state and otherwise makes the agent appear broken
+    // until a human discovers reset_active_tools. Do not override explicit
+    // per-run ceilings (Dream and other restricted runners own those scopes).
+    const ordinaryToolControl = session as unknown as {
+      getActiveToolNames?: () => string[];
+      setActiveToolsByName?: (names: string[]) => void;
+    };
+    if (!runOptions.toolCeilingFilter
+      && typeof ordinaryToolControl.getActiveToolNames === "function"
+      && typeof ordinaryToolControl.setActiveToolsByName === "function"
+      && ordinaryToolControl.getActiveToolNames().length === 0) {
+      const defaults = getDefaultActiveToolNames();
+      ordinaryToolControl.setActiveToolsByName(defaults);
+      options.onWarn?.("Restored default tools after an empty active-tool set leaked into an ordinary turn", {
+        operation: "run_agent.restore_empty_tool_set",
+        chatJid,
+        restoredTools: defaults,
+        ...getRunObservabilityDetails(runOptions),
+      });
+    }
     modelLabel = session.model ? `${session.model.provider}/${session.model.id}` : null;
     updateSessionModel(chatJid, modelLabel, session.thinkingLevel ?? null);
     const initialProviderResponseGraceMs = getInitialProviderResponseGraceMs(chatJid);
