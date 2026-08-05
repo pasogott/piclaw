@@ -572,7 +572,9 @@ async function runPromptAttempt(
         const toolCallId = (event as { toolCallId?: unknown }).toolCallId;
         const { wasBlockedByBudget } = toolBudget.consumeToolExecutionEnd(toolCallId, (event as { isError?: unknown }).isError);
         if (!wasBlockedByBudget) toolExecutionCount += 1;
-        if (!wasBlockedByBudget && toolExecutionCount >= toolUseMessageBudget) toolBudget.state.toolUseBudgetExceeded = true;
+        if (!wasBlockedByBudget && toolExecutionCount >= toolUseMessageBudget) {
+          toolBudget.enforceCompletedExecutionBudget();
+        }
         // Accumulate tool-result content size for mid-turn context projection.
         attemptContext.addToolResultContent((event as { result?: unknown }).result);
       }
@@ -653,18 +655,7 @@ async function runPromptAttempt(
           if (toolExecutionCount >= toolUseMessageBudget || toolBudget.state.reservedToolExecutionCount >= toolUseMessageBudget) {
             toolBudget.requestToolBudgetSoftStop(toolCallBlocks, assistantToolUseMessageCount);
           }
-          if (!toolBudget.state.toolUseBudgetExceeded && toolExecutionCount > toolUseMessageBudget) {
-            toolBudget.state.toolUseBudgetExceeded = true;
-            void session.abort().catch((err) => {
-              options.onWarn?.("Failed to abort tool-loop budget overflow", {
-                operation: "run_agent.tool_use_budget_abort",
-                chatJid,
-                assistantToolUseMessageCount,
-                toolUseMessageBudget,
-                err,
-              });
-            });
-          }
+
         }
       }
     }

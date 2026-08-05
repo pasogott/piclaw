@@ -17,6 +17,7 @@ export interface AttemptToolBudgetController {
   restoreToolBudgetSoftStop(): void;
   applyFinalizationReserve(): boolean;
   requestToolBudgetSoftStop(toolCallBlocks: Array<Record<string, unknown>>, assistantToolUseMessageCount: number): void;
+  enforceCompletedExecutionBudget(): void;
   consumeToolExecutionEnd(toolCallId: unknown, isError: unknown): { wasBlockedByBudget: boolean };
 }
 
@@ -154,6 +155,13 @@ export function createAttemptToolBudgetController(options: {
         else pendingSoftStopAnonymousToolCallCount += 1;
       }
       maybeApplyPendingToolBudgetSoftStop(assistantToolUseMessageCount);
+    },
+    enforceCompletedExecutionBudget() {
+      state.toolUseBudgetExceeded = true;
+      // Executions already admitted by beforeToolCall may be a legitimate
+      // parallel batch. Let them settle, but prevent every new execution now
+      // instead of waiting for an arbitrary count of assistant tool messages.
+      applyToolBudgetSoftStop(options.toolUseMessageBudget);
     },
     consumeToolExecutionEnd(toolCallId, isError) {
       const normalizedToolCallId = typeof toolCallId === "string" ? toolCallId : null;
