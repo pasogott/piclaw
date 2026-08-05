@@ -47,10 +47,12 @@ export function writeAgentLog(
   try {
     const createdAt = new Date();
     const ts = formatLogTimestampForFilename(createdAt);
+    const plannedInterruption = abortProvenance?.cause === "service_shutdown";
     const content = [
       `Chat: ${chatJid}`,
       `Duration: ${duration}ms`,
       `TimedOut: ${timedOut}`,
+      plannedInterruption ? "Outcome: interrupted" : error ? "Outcome: error" : "Outcome: success",
       abortProvenance ? `AbortCause: ${abortProvenance.cause}` : null,
       abortProvenance ? `AbortOperation: ${abortProvenance.operation}` : null,
       error ? `Error: ${error}` : null,
