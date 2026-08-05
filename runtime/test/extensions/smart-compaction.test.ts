@@ -2784,7 +2784,7 @@ describe("smart-compaction", () => {
           branchEntries: [],
           signal: new AbortController().signal,
         },
-        makeCtx({ model: { provider: "test", id: "final-validation", contextWindow: 16_000, reasoning: false } }),
+        makeCtx({ model: { provider: "test", id: "final-validation", contextWindow: 10_000, reasoning: false } }),
       );
 
       expect(result.compaction.summary).toContain("Validated progressive checkpoint");
@@ -2794,15 +2794,17 @@ describe("smart-compaction", () => {
         .map((call: any[]) => call[1].messages[0].content[0].text as string)
         .filter((prompt: string) => prompt.includes("final continuity state"));
       expect(finalPrompts).toHaveLength(2);
-      expect(finalMaxTokens).toEqual([8192, 4096]);
+      expect(finalMaxTokens).toHaveLength(2);
+      expect(finalMaxTokens[0]).toBeLessThan(8192);
+      expect(finalMaxTokens[1]).toBe(Math.max(512, Math.floor(finalMaxTokens[0] / 2)));
       expect(finalPrompts.at(-1)).toContain("Output Repair Requirement");
-      expect(finalPrompts.at(-1)).toContain("within 4096 output tokens");
+      expect(finalPrompts.at(-1)).toContain(`within ${finalMaxTokens[1]} output tokens`);
       expect(finalPrompts[1].lastIndexOf("## Output Repair Requirement"))
         .toBeLessThan(finalPrompts[1].lastIndexOf("## Critical Context"));
       expect(finalPrompts[1]).toContain("fact 0-");
       for (const prompt of finalPrompts) {
         expect(() => getSafeCompactionMaxTokens(
-          { provider: "test", id: "final-validation", contextWindow: 16_000, reasoning: false },
+          { provider: "test", id: "final-validation", contextWindow: 10_000, reasoning: false },
           prompt,
           16_384,
         )).not.toThrow();

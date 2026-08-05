@@ -12,6 +12,7 @@ import { getAttachmentRegistry } from "../../src/agent-pool/attachments.js";
 import { setCompactionSettlementGraceForTests } from "../../src/agent-pool/compaction.js";
 import { AgentTurnCoordinator } from "../../src/agent-pool/turn-coordinator.js";
 import { createToolExecutionWatchdogHeartbeatController, runAgentPrompt } from "../../src/agent-pool/run-agent-orchestrator.js";
+import { getAgentAbortCause, recordAgentAbortCause, resetAgentAbortProvenanceForTests } from "../../src/agent-pool/abort-provenance.js";
 import { getRecoveryFinalizationReserveMs } from "../../src/agent-pool/run-agent-recovery-phase.js";
 import { RECOVERY_CONTINUATION_PROMPT } from "../../src/agent-pool/context-pressure-retry.js";
 import { getSshConfig, initDatabase, setChatAutoCompactionWindow, upsertSshConfig } from "../../src/db.js";
@@ -78,12 +79,51 @@ function createTestLogsDir(): string {
 
 afterEach(() => {
   resetProgressWatchdogForTests();
+  resetAgentAbortProvenanceForTests();
   setSshConnectionResolverForTests(null);
   while (tempLogsDirs.length > 0) {
     const logsDir = tempLogsDirs.pop();
     if (!logsDir) continue;
     rmSync(logsDir, { recursive: true, force: true });
   }
+});
+
+test("runAgentPrompt clears stale abort provenance before starting a new turn", async () => {
+  const chatJid = "web:stale-abort-provenance";
+  recordAgentAbortCause(chatJid, "user_command", "agent_control.abort");
+
+  const result = await runAgentPrompt("test", chatJid, { timeoutMs: 0, skipPrePromptCompaction: true }, {
+    getOrCreateRuntime: async () => { throw new Error("runtime unavailable"); },
+    turnCoordinator: new AgentTurnCoordinator({ takeAttachments: () => [], touchSession: () => {}, recordMessageUsage: () => {} }),
+    clearAttachments: () => {},
+    takeAttachments: () => [],
+    logsDir: createTestLogsDir(),
+    setActiveForkBaseLeaf: () => {},
+    clearActiveForkBaseLeaf: () => {},
+  });
+
+  expect(result).toMatchObject({ status: "error", error: "runtime unavailable" });
+  expect(getAgentAbortCause(chatJid)).toBeNull();
+});
+
+test("runAgentPrompt consumes abort provenance on exceptional orchestration exit", async () => {
+  const chatJid = "web:exceptional-abort-provenance";
+
+  const result = await runAgentPrompt("test", chatJid, { timeoutMs: 0, skipPrePromptCompaction: true }, {
+    getOrCreateRuntime: async () => {
+      recordAgentAbortCause(chatJid, "service_shutdown", "test.runtime_creation");
+      throw new Error("runtime creation interrupted");
+    },
+    turnCoordinator: new AgentTurnCoordinator({ takeAttachments: () => [], touchSession: () => {}, recordMessageUsage: () => {} }),
+    clearAttachments: () => {},
+    takeAttachments: () => [],
+    logsDir: createTestLogsDir(),
+    setActiveForkBaseLeaf: () => {},
+    clearActiveForkBaseLeaf: () => {},
+  });
+
+  expect(result).toMatchObject({ status: "error", error: "runtime creation interrupted" });
+  expect(getAgentAbortCause(chatJid)).toBeNull();
 });
 
 test("runAgentPrompt aborts and returns an interrupted result when active progress goes stale", async () => {
