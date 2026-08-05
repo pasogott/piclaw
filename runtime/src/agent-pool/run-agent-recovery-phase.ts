@@ -91,6 +91,10 @@ export interface RunAgentRecoveryPhaseOptions {
     | { ok: true; session: AgentSession; sessionCtrl: SessionWithToolControl | null }
     | { ok: false; errorMessage: string }
   >;
+  rotateAfterCompactionFailure?: (reason: string) => Promise<
+    | { ok: true; session: AgentSession; sessionCtrl: SessionWithToolControl | null }
+    | { ok: false; errorMessage: string }
+  >;
 }
 
 function emitAgentSessionEvent(onEvent: RunAgentOptions["onEvent"], event: Record<string, unknown>): void {
@@ -814,13 +818,31 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
         });
         lastClassifier = compactDecision.classifier;
         if (!compactDecision.recover || compactDecision.strategy !== "retry") {
+          const rotationReason = `Recovery compaction failed: ${compactionResult.errorMessage}`;
+          const rotation = await options.rotateAfterCompactionFailure?.(rotationReason);
+          if (rotation?.ok) {
+            activeSession = rotation.session;
+            activeSessionCtrl = rotation.sessionCtrl;
+            recoveryContinuationWithoutTools = true;
+            options.onWarn?.("Emergency-rotated session after recovery compaction failure", {
+              operation: "run_agent.recovery_compaction_failure_emergency_rotate",
+              chatJid,
+              reason: rotationReason,
+            });
+            startRecoveryBudget();
+            options.clearAttachments(chatJid);
+            continue;
+          }
+          const terminalError = rotation && !rotation.ok
+            ? `${rotationReason} Emergency rotation failed: ${rotation.errorMessage}`
+            : compactionResult.errorMessage;
           recoveryDiagnostics.push(buildRecoveryDiagnosticEntry(
             "compaction_failure",
             recoveryAttemptsUsed,
             compactDecision.classifier,
             compactDecision.strategy,
             compactDecision.reason,
-            compactionResult.errorMessage,
+            terminalError,
             Date.now() - startTime,
             {
               hadToolActivity: false,
@@ -844,18 +866,18 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
             strategyHistory,
             recoveryDiagnostics,
           );
-          writeAgentLog(options.logsDir, chatJid, duration, false, null, compactionResult.errorMessage, recoveryMeta);
+          writeAgentLog(options.logsDir, chatJid, duration, false, null, terminalError, recoveryMeta);
           emitAgentSessionEvent(runOptions.onEvent, {
             type: "recovery_end",
             outcome: "exhausted",
             attemptsUsed: recoveryAttemptsUsed,
             classifier: compactDecision.classifier,
-            errorMessage: compactionResult.errorMessage,
+            errorMessage: terminalError,
           });
           return {
             status: "error",
             result: null,
-            error: compactionResult.errorMessage,
+            error: terminalError,
             recovery: buildRecoveryMetadata(
               recoveryAttemptsUsed,
               duration,
