@@ -56,7 +56,7 @@ import type { AgentOutput, RetrySettingsProvider, RunAgentOptions } from "./cont
 import { getDefaultActiveToolNames } from "../extensions/tool-activation.js";
 import { logToolStateTransition } from "./tool-state-transitions.js";
 import { isPendingShutdown } from "../runtime/shutdown-registry.js";
-import { getAgentAbortCause, recordAgentAbortCause } from "./abort-provenance.js";
+import { clearAgentAbortCause, consumeAgentAbortCause, recordAgentAbortCause } from "./abort-provenance.js";
 import {
   beginTrackedPhase,
   heartbeatTrackedPhase,
@@ -835,6 +835,9 @@ export async function runAgentPrompt(
   options: RunAgentOrchestratorOptions,
 ): Promise<AgentOutput> {
   const startTime = Date.now();
+  // Abort provenance belongs to one active turn. Commands issued while no
+  // prompt is running, or an earlier exceptional exit, must not label this run.
+  clearAgentAbortCause(chatJid);
   options.clearAttachments(chatJid);
   updateSessionStreaming(chatJid, true);
   let modelLabel: string | null = null;
@@ -1123,7 +1126,7 @@ export async function runAgentPrompt(
     options.clearAttachments(chatJid);
     const duration = Date.now() - startTime;
     const errorMsg = err instanceof Error ? err.message : String(err);
-    writeAgentLog(options.logsDir, chatJid, duration, false, null, errorMsg, null, getAgentAbortCause(chatJid));
+    writeAgentLog(options.logsDir, chatJid, duration, false, null, errorMsg, null, consumeAgentAbortCause(chatJid));
     options.onError?.("Agent run failed", {
       operation: "run_agent",
       chatJid,
