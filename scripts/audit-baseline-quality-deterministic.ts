@@ -180,6 +180,7 @@ const groupDefinitions: GroupDefinition[] = [
         "agent-pool-binder.test.ts",
         "agents-service.test.ts",
         "message-processing-storage-service.test.ts",
+        "message-store-atomic-followup.test.ts",
         "adaptive-card-side-prompt-service.test.ts",
         "agent-control-plane-service.test.ts",
         "agent-message-entry-service.test.ts",
