@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import {
   beginTrackedPhase,
@@ -16,6 +16,10 @@ import {
 let restoreTimeoutOverride: (() => void) | null = null;
 let restoreTerminationHook: (() => void) | null = null;
 let restoreSnapshotPublisher: (() => void) | null = null;
+
+beforeEach(() => {
+  resetProgressWatchdogForTests();
+});
 
 afterEach(() => {
   restoreSnapshotPublisher?.();
