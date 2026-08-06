@@ -34,12 +34,33 @@ function makeLiveModel(id: string, overrides: Record<string, unknown> = {}) {
   };
 }
 
-function createStore(initial?: ModelsStoreEntry) {
-  let value = initial;
+function createRefreshHarness(initial?: ModelsStoreEntry) {
+  let value = initial ? structuredClone(initial) : undefined;
+  let acceptedPublicationLimit = Number.POSITIVE_INFINITY;
+  let acceptedPublicationCount = 0;
+  const publications: Array<{ persist?: ModelsStoreEntry | null; hasUpdate: boolean }> = [];
   return {
-    read: async () => value,
-    write: async (next: ModelsStoreEntry) => { value = next; },
-    delete: async () => { value = undefined; },
+    context(overrides: Record<string, unknown> = {}) {
+      return {
+        stored: value ? structuredClone(value) : undefined,
+        allowNetwork: false,
+        signal: new AbortController().signal,
+        publish: async (publication: { persist?: ModelsStoreEntry | null; update?: () => void }) => {
+          publications.push({ persist: publication.persist, hasUpdate: typeof publication.update === "function" });
+          if (acceptedPublicationCount >= acceptedPublicationLimit) return false;
+          acceptedPublicationCount += 1;
+          if (publication.persist === null) value = undefined;
+          else if (publication.persist !== undefined) value = structuredClone(publication.persist);
+          publication.update?.();
+          return true;
+        },
+        ...overrides,
+      };
+    },
+    read: async () => value ? structuredClone(value) : undefined,
+    rejectPublications() { acceptedPublicationLimit = 0; },
+    rejectPublicationsAfter(acceptedCount: number) { acceptedPublicationLimit = Math.max(0, acceptedCount); },
+    publications,
   };
 }
 
@@ -133,12 +154,25 @@ describe("github-copilot dynamic models overlay", () => {
     const baseline = [makeModel({ id: "gpt-5.5" })];
     const runtime = { getModels: () => baseline, getProvider: () => ({ id: "github-copilot", name: "GitHub Copilot", auth: { oauth: {} }, getModels: () => baseline, stream: () => { throw new Error("unused"); }, streamSimple: () => { throw new Error("unused"); } }) } as any;
     const overlay = createGitHubCopilotDynamicModelsProvider(runtime)!;
-    const store = createStore({ models: [makeModel({ id: "cached-unknown", name: "Cached Unknown" })], checkedAt: Date.now() });
+    const harness = createRefreshHarness({ models: [makeModel({ id: "cached-unknown", name: "Cached Unknown" })], checkedAt: Date.now() });
     let fetchCalls = 0;
     setGitHubCopilotDynamicModelsFetchForTests((async () => { fetchCalls += 1; throw new Error("network forbidden"); }) as any);
-    await overlay.refreshModels!({ credential: oauth("token"), store, allowNetwork: false } as any);
+    await overlay.refreshModels!(harness.context({ credential: oauth("token"), allowNetwork: false }) as any);
     expect(fetchCalls).toBe(0);
     expect(overlay.getModels().map((model) => model.id)).toEqual(["cached-unknown"]);
+  });
+
+  test("rejected cached publication does not mutate the in-memory catalog", async () => {
+    const baseline = [makeModel({ id: "gpt-5.5" })];
+    const runtime = { getModels: () => baseline, getProvider: () => ({ id: "github-copilot", name: "GitHub Copilot", auth: { oauth: {} }, getModels: () => baseline, stream: () => { throw new Error("unused"); }, streamSimple: () => { throw new Error("unused"); } }) } as any;
+    const overlay = createGitHubCopilotDynamicModelsProvider(runtime)!;
+    const harness = createRefreshHarness({ models: [makeModel({ id: "stale-cached", name: "Stale Cached" })], checkedAt: Date.now() });
+    harness.rejectPublications();
+
+    await overlay.refreshModels!(harness.context({ credential: oauth("token"), allowNetwork: false }) as any);
+
+    expect(overlay.getModels().map((model) => model.id)).toEqual(["gpt-5.5"]);
+    expect(harness.publications).toEqual([{ persist: undefined, hasUpdate: true }]);
   });
 
   test("network refresh avoids the wrapped remote catalog and uses live model templates", async () => {
@@ -160,7 +194,8 @@ describe("github-copilot dynamic models overlay", () => {
     const overlay = createGitHubCopilotDynamicModelsProvider(runtime)!;
     setGitHubCopilotDynamicModelsFetchForTests((async () => new Response(JSON.stringify({ data: [makeLiveModel("gpt-5.6")] }), { status: 200 })) as any);
 
-    await overlay.refreshModels!({ credential: oauth("token"), store: createStore(), allowNetwork: true } as any);
+    const harness = createRefreshHarness();
+    await overlay.refreshModels!(harness.context({ credential: oauth("token"), allowNetwork: true }) as any);
 
     expect(baseRefreshCalls).toBe(0);
     expect(overlay.getModels().map((model) => model.id)).toEqual(["gpt-5.6"]);
@@ -175,21 +210,21 @@ describe("github-copilot dynamic models overlay", () => {
       calls.push({ url: String(url), auth: new Headers(init?.headers).get("Authorization") });
       return new Response(JSON.stringify({ data: [makeLiveModel("gpt-5.6")] }), { status: 200 });
     }) as any);
-    const store = createStore({ models: baseline, checkedAt: 123, lastModified: 456, etag: '"catalog"' });
-    await overlay.refreshModels!({
+    const harness = createRefreshHarness({ models: baseline, checkedAt: 123, lastModified: 456, etag: '"catalog"' });
+    await overlay.refreshModels!(harness.context({
       credential: oauth("tid=x;proxy-ep=proxy.business.githubcopilot.com;exp=1"),
-      store, allowNetwork: true,
-    } as any);
+      allowNetwork: true,
+    }) as any);
     expect(calls).toEqual([{ url: "https://api.business.githubcopilot.com/models", auth: "Bearer tid=x;proxy-ep=proxy.business.githubcopilot.com;exp=1" }]);
     expect(overlay.getModels().map((model) => model.id)).toEqual(["gpt-5.6"]);
-    expect(await store.read()).toMatchObject({
+    expect(await harness.read()).toMatchObject({
       lastModified: 456,
       etag: '"catalog"',
       models: [{ id: "gpt-5.6" }],
     });
     // checkedAt must advance on a successful live refresh, otherwise the cached
     // catalog is permanently treated as freshly validated.
-    expect((await store.read())!.checkedAt).toBeGreaterThan(123);
+    expect((await harness.read())!.checkedAt).toBeGreaterThan(123);
   });
 
   test("concurrent network refreshes coalesce", async () => {
@@ -203,13 +238,47 @@ describe("github-copilot dynamic models overlay", () => {
       await blocker;
       return new Response(JSON.stringify({ data: [makeLiveModel("gpt-5.6")] }), { status: 200 });
     }) as any);
-    const context = { credential: oauth("token"), store: createStore(), allowNetwork: true } as any;
+    const harness = createRefreshHarness();
+    const context = harness.context({ credential: oauth("token"), allowNetwork: true }) as any;
     const first = overlay.refreshModels!(context);
     const second = overlay.refreshModels!(context);
     for (let attempt = 0; attempt < 20 && calls === 0; attempt += 1) await Bun.sleep(1);
     expect(calls).toBe(1);
     release();
     expect(await first).toEqual(await second);
+  });
+
+  test("a rejected stale network publication cannot overwrite a newer generation", async () => {
+    const runtime = { getModels: () => [makeModel()], getProvider: () => ({ id: "github-copilot", name: "GitHub Copilot", auth: { oauth: {} }, getModels: () => [makeModel()], stream: () => { throw new Error("unused"); }, streamSimple: () => { throw new Error("unused"); } }) } as any;
+    const overlay = createGitHubCopilotDynamicModelsProvider(runtime)!;
+    let releaseOld!: () => void;
+    const oldGate = new Promise<void>((resolve) => { releaseOld = resolve; });
+    let call = 0;
+    setGitHubCopilotDynamicModelsFetchForTests((async () => {
+      call += 1;
+      if (call === 1) {
+        await oldGate;
+        return new Response(JSON.stringify({ data: [makeLiveModel("old-generation")] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ data: [makeLiveModel("new-generation")] }), { status: 200 });
+    }) as any);
+    const oldHarness = createRefreshHarness();
+    oldHarness.rejectPublicationsAfter(1);
+    const newHarness = createRefreshHarness();
+    const oldController = new AbortController();
+    const newController = new AbortController();
+
+    const oldRefresh = overlay.refreshModels!(oldHarness.context({ credential: oauth("token"), allowNetwork: true, force: true, signal: oldController.signal }) as any);
+    for (let attempt = 0; attempt < 20 && call === 0; attempt += 1) await Bun.sleep(1);
+    const newRefresh = overlay.refreshModels!(newHarness.context({ credential: oauth("token"), allowNetwork: true, force: true, signal: newController.signal }) as any);
+    await newRefresh;
+    releaseOld();
+    await oldRefresh;
+
+    expect(call).toBe(2);
+    expect(overlay.getModels().map((model) => model.id)).toEqual(["new-generation"]);
+    expect((await newHarness.read())?.models.map((model) => model.id)).toEqual(["new-generation"]);
+    expect(await oldHarness.read()).toBeUndefined();
   });
 
   test("sequential refreshes use the fresh live catalog unless forced", async () => {
@@ -220,14 +289,13 @@ describe("github-copilot dynamic models overlay", () => {
       calls += 1;
       return new Response(JSON.stringify({ data: [makeLiveModel("gpt-5.6")] }), { status: 200 });
     }) as any);
-    const store = createStore();
-    const context = { credential: oauth("token"), store, allowNetwork: true } as any;
+    const harness = createRefreshHarness();
 
-    await overlay.refreshModels!(context);
-    await overlay.refreshModels!(context);
+    await overlay.refreshModels!(harness.context({ credential: oauth("token"), allowNetwork: true }) as any);
+    await overlay.refreshModels!(harness.context({ credential: oauth("token"), allowNetwork: true }) as any);
     expect(calls).toBe(1);
 
-    await overlay.refreshModels!({ ...context, force: true });
+    await overlay.refreshModels!(harness.context({ credential: oauth("token"), allowNetwork: true, force: true }) as any);
     expect(calls).toBe(2);
   });
 
@@ -239,7 +307,8 @@ describe("github-copilot dynamic models overlay", () => {
       url = String(input);
       return new Response(JSON.stringify({ data: [] }), { status: 200 });
     }) as any);
-    await overlay.refreshModels!({ credential: oauth("opaque", { enterpriseUrl: "ghe.example.com" }), store: createStore(), allowNetwork: true } as any);
+    const harness = createRefreshHarness();
+    await overlay.refreshModels!(harness.context({ credential: oauth("opaque", { enterpriseUrl: "ghe.example.com" }), allowNetwork: true }) as any);
     expect(url).toBe("https://copilot-api.ghe.example.com/models");
   });
 
@@ -247,11 +316,12 @@ describe("github-copilot dynamic models overlay", () => {
     const runtime = { getModels: () => [makeModel()], getProvider: () => ({ id: "github-copilot", name: "GitHub Copilot", auth: { oauth: {} }, getModels: () => [makeModel()], stream: () => { throw new Error("unused"); }, streamSimple: () => { throw new Error("unused"); } }) } as any;
     const overlay = createGitHubCopilotDynamicModelsProvider(runtime)!;
     setGitHubCopilotDynamicModelsFetchForTests((async () => { throw new Error("catalog unavailable"); }) as any);
-    await overlay.refreshModels!({ credential: oauth("token"), store: createStore(), allowNetwork: true } as any);
+    const harness = createRefreshHarness();
+    await overlay.refreshModels!(harness.context({ credential: oauth("token"), allowNetwork: true }) as any);
     expect(overlay.getModels().map((model) => model.id)).toEqual(["gpt-5.5"]);
     const controller = new AbortController();
     controller.abort();
-    await overlay.refreshModels!({ credential: oauth("token"), store: createStore(), allowNetwork: true, signal: controller.signal } as any);
+    await overlay.refreshModels!(harness.context({ credential: oauth("token"), allowNetwork: true, signal: controller.signal }) as any);
     expect(overlay.getModels().map((model) => model.id)).toEqual(["gpt-5.5"]);
   });
 
@@ -294,13 +364,13 @@ describe("github-copilot dynamic models overlay", () => {
     const baseline = [makeModel({ id: "gpt-5.5" })];
     const runtime = { getModels: () => baseline, getProvider: () => ({ id: "github-copilot", name: "GitHub Copilot", auth: { oauth: {} }, getModels: () => baseline, stream: () => { throw new Error("unused"); }, streamSimple: () => { throw new Error("unused"); } }) } as any;
     const overlay = createGitHubCopilotDynamicModelsProvider(runtime)!;
-    const store = createStore();
+    const harness = createRefreshHarness();
     setGitHubCopilotDynamicModelsFetchForTests((async () => new Response(JSON.stringify({ data: [makeLiveModel("gpt-5.6-sol")] }), { status: 200 })) as any);
 
-    await overlay.refreshModels!({ credential: oauth("tid=x;proxy-ep=proxy.enterprise.githubcopilot.com;exp=1"), store, allowNetwork: true } as any);
+    await overlay.refreshModels!(harness.context({ credential: oauth("tid=x;proxy-ep=proxy.enterprise.githubcopilot.com;exp=1"), allowNetwork: true }) as any);
 
     const imported = overlay.getModels().find((model) => model.id === "gpt-5.6-sol");
-    const cached = (await store.read())?.models.find((model) => model.id === "gpt-5.6-sol");
+    const cached = (await harness.read())?.models.find((model) => model.id === "gpt-5.6-sol");
     expect(imported?.baseUrl).toBe("https://api.individual.githubcopilot.com");
     expect(cached?.baseUrl).toBe("https://api.individual.githubcopilot.com");
   });
@@ -357,11 +427,11 @@ describe("github-copilot dynamic models overlay", () => {
 
     // Offline: only the cached catalog is known, so upstream availability wins and
     // the unavailable cache-only model must not be selectable.
-    await overlay.refreshModels!({
+    const offlineHarness = createRefreshHarness({ models: [fable, opus], checkedAt: Date.now() });
+    await overlay.refreshModels!(offlineHarness.context({
       credential: oauth("token", { availableModelIds: ["claude-opus-4.8"] }),
-      store: createStore({ models: [fable, opus], checkedAt: Date.now() }),
       allowNetwork: false,
-    } as any);
+    }) as any);
 
     expect(overlay.filterModels?.(overlay.getModels(), { availableModelIds: ["claude-opus-4.8"] } as any).map((model) => model.id))
       .toEqual(["claude-opus-4.8"]);
@@ -372,12 +442,12 @@ describe("github-copilot dynamic models overlay", () => {
       JSON.stringify({ data: [makeLiveModel("claude-opus-4.8"), makeLiveModel("claude-opus-5")] }),
       { status: 200 },
     )) as any);
-    await overlay.refreshModels!({
+    const liveHarness = createRefreshHarness({ models: [fable, opus], checkedAt: Date.now() });
+    await overlay.refreshModels!(liveHarness.context({
       credential: oauth("token", { availableModelIds: ["claude-opus-4.8"] }),
-      store: createStore({ models: [fable, opus], checkedAt: Date.now() }),
       allowNetwork: true,
       force: true,
-    } as any);
+    }) as any);
 
     const visible = overlay.filterModels?.(overlay.getModels(), { availableModelIds: ["claude-opus-4.8"] } as any)
       .map((model) => model.id).sort();

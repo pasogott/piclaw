@@ -19,7 +19,7 @@ describe("model auth helper", () => {
     expect(auth).toEqual({
       ok: true,
       apiKey: "runtime-key",
-      headers: { "X-Test": "1" },
+      headers: { "X-Test": "1", "X-Delete": null },
       env: { TEST_BASE_URL: "https://example.test" },
       baseUrl: "https://credential.example.test/v1",
     });

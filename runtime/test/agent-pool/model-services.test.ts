@@ -74,6 +74,20 @@ describe("runtime model services", () => {
     });
   });
 
+  test("compat registry propagates aborted refresh state and provider errors", async () => {
+    tempAgentDir();
+    const providerError = new Error("catalog unavailable");
+    const runtime = {
+      refresh: async () => ({ aborted: true, errors: new Map([["github-copilot", providerError]]) }),
+    } as unknown as ModelRuntime;
+    const registry = new PiclawModelRegistry(runtime);
+
+    const result = await registry.refresh({ providers: ["github-copilot"], signal: AbortSignal.abort() });
+
+    expect(result.aborted).toBe(true);
+    expect(result.errors.get("github-copilot")).toBe(providerError);
+  });
+
   test("compat registry coalesces concurrent config reloads", async () => {
     tempAgentDir();
     let refreshCalls = 0;

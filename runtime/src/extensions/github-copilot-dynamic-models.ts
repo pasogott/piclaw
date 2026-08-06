@@ -384,9 +384,8 @@ function copilotBaseUrl(credential: OAuthCredential): string {
   return DEFAULT_BASE_URL;
 }
 
-async function storedProviderModels(context: RefreshModelsContext): Promise<Model<Api>[]> {
-  const entry = await context.store.read();
-  return [...(entry?.models ?? [])].filter((model) => model.provider === PROVIDER && model.id);
+function storedProviderModels(context: RefreshModelsContext): Model<Api>[] {
+  return [...(context.stored?.models ?? [])].filter((model) => model.provider === PROVIDER && model.id);
 }
 
 function toStoredModel(model: ProviderModelConfig): Model<Api> {
@@ -413,18 +412,21 @@ export function createGitHubCopilotDynamicModelsProvider(
   // so stale entries can never re-enter the selectable set.
   let liveModelIds: ReadonlySet<string> = new Set<string>();
   let lastNetworkRefreshAt = 0;
-  let networkInFlight: Promise<void> | null = null;
+  const networkInFlightBySignal = new WeakMap<AbortSignal, Promise<void>>();
 
   const publishLastGood = (models: ProviderModelConfig[]): void => {
     lastGood = models;
   };
 
-  const readStoredAndMerge = async (context: RefreshModelsContext): Promise<Model<Api>[]> => {
-    const cached = await storedProviderModels(context);
+  const restoreStoredAndMerge = async (context: RefreshModelsContext): Promise<{ accepted: boolean; cached: Model<Api>[] }> => {
+    const cached = storedProviderModels(context);
     const source = cached.length > 0 ? cached : [...base.getModels()];
     const merged = mergeGitHubCopilotDynamicModels(source, []);
-    if (merged.length > 0) publishLastGood(merged);
-    return cached;
+    if (merged.length === 0) return { accepted: true, cached };
+    const accepted = await context.publish({
+      update: () => publishLastGood(merged),
+    });
+    return { accepted, cached };
   };
 
   return {
@@ -446,12 +448,18 @@ export function createGitHubCopilotDynamicModelsProvider(
       return models.filter((model) => allowed.has(model.id) || liveModelIds.has(model.id));
     },
     refreshModels: async (context) => {
-      const cached = await readStoredAndMerge(context);
-      if (!context.allowNetwork || context.signal?.aborted) return;
+      const restored = await restoreStoredAndMerge(context);
+      if (!restored.accepted || !context.allowNetwork || context.signal.aborted) return;
       if (!context.force && lastNetworkRefreshAt > 0 && Date.now() - lastNetworkRefreshAt < REFRESH_TTL_MS) return;
       const credential = copilotCredential(context.credential);
       if (!credential) return;
-      networkInFlight ??= (async () => {
+
+      const existing = networkInFlightBySignal.get(context.signal);
+      if (existing) {
+        await existing;
+        return;
+      }
+      const refresh = (async () => {
         try {
           // Copilot's account-scoped endpoint is authoritative. Do not invoke
           // the wrapped pi.dev catalog refresher here: it shares this provider
@@ -462,37 +470,44 @@ export function createGitHubCopilotDynamicModelsProvider(
             apiKey: credential.access,
             signal: context.signal,
           });
-          if (context.signal?.aborted) return;
-          const templates = [...base.getModels(), ...cached];
+          if (context.signal.aborted) return;
+          const templates = [...base.getModels(), ...restored.cached];
           const merged = mergeGitHubCopilotDynamicModels(templates, live, { includeExisting: false });
-          publishLastGood(merged);
-          liveModelIds = new Set(merged.map((model) => model.id));
-          const stored = await context.store.read();
-          await context.store.write({
-            ...stored,
-            models: lastGood.map(toStoredModel),
-            checkedAt: Date.now(),
+          const published = await context.publish({
+            persist: {
+              ...context.stored,
+              models: merged.map(toStoredModel),
+              checkedAt: Date.now(),
+            },
+            update: () => {
+              publishLastGood(merged);
+              liveModelIds = new Set(merged.map((model) => model.id));
+              lastNetworkRefreshAt = Date.now();
+            },
           });
-          lastNetworkRefreshAt = Date.now();
+          if (!published) return;
           log.info("Refreshed GitHub Copilot dynamic native provider", {
             operation: "github_copilot_dynamic_models.refresh",
             liveCount: live.length,
             registeredCount: lastGood.length,
           });
-          return;
         } catch (error) {
-          if (!context.signal?.aborted) {
+          if (!context.signal.aborted) {
             log.warn("GitHub Copilot dynamic model refresh failed; keeping last-good catalog", {
               operation: "github_copilot_dynamic_models.refresh_failed",
               error: error instanceof Error ? error.message : String(error),
             });
           }
-          return;
-        } finally {
-          networkInFlight = null;
         }
       })();
-      await networkInFlight;
+      networkInFlightBySignal.set(context.signal, refresh);
+      try {
+        await refresh;
+      } finally {
+        if (networkInFlightBySignal.get(context.signal) === refresh) {
+          networkInFlightBySignal.delete(context.signal);
+        }
+      }
     },
   };
 }

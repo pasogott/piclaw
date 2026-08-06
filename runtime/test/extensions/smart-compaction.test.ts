@@ -739,7 +739,7 @@ describe("smart-compaction", () => {
       }, makeCtx({
         model: codexModel,
         modelRegistry: {
-          getApiKeyAndHeaders: vi.fn().mockResolvedValue({ ok: true, headers: { Authorization: `Bearer ${oauthToken}` } }),
+          getApiKeyAndHeaders: vi.fn().mockResolvedValue({ ok: true, headers: { Authorization: `Bearer ${oauthToken}`, "X-Delete": null } }),
           getAll: vi.fn().mockReturnValue([]),
         },
       }));
@@ -747,6 +747,7 @@ describe("smart-compaction", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const headers = (fetchMock.mock.calls[0]?.[1] as RequestInit).headers as Record<string, string>;
       expect(headers["chatgpt-account-id"]).toBe(accountId);
+      expect(headers).not.toHaveProperty("X-Delete");
       expect(result.compaction.details).toMatchObject({ kind: "piclaw.remote_compaction", provider: "openai-codex" });
     } finally {
       globalThis.fetch = originalFetch;

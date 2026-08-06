@@ -11,7 +11,7 @@
  */
 
 import { streamSimple } from "@earendil-works/pi-ai/compat";
-import type { AssistantMessage, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ProviderHeaders, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { normalizeLlmContext } from "../../agent-pool/llm-context-normalizer.js";
 import { SMART_COMPACTION_PROGRESS_INTERVAL_MS } from "./config.js";
 
@@ -38,7 +38,7 @@ export interface StreamCompleteOptions {
   maxTokens: number;
   signal: AbortSignal;
   apiKey?: string;
-  headers?: Record<string, string>;
+  headers?: ProviderHeaders;
   env?: SimpleStreamOptions["env"];
   reasoning?: "minimal" | "low" | "medium" | "high";
   /** Optional provider-payload transform (used to rehydrate native compaction state). */
