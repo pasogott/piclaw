@@ -15,7 +15,10 @@ import {
 } from "../../../core/config.js";
 import { parseControlCommand } from "../../../agent-control/index.js";
 import { isSlashCommandInvocation } from "../../../agent-pool/slash-command.js";
-import { RECOVERY_CONTINUATION_PROMPT } from "../../../agent-pool/context-pressure-retry.js";
+import {
+  RECOVERY_CONTINUATION_PROMPT,
+  TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT,
+} from "../../../agent-pool/context-pressure-retry.js";
 import { getExtensionKvStore } from "../../../extension-kv-registry.js";
 import {
   normalizeAgentMessagePayload,
@@ -66,24 +69,27 @@ import { endTrackedPhase } from "../../../runtime/progress-watchdog.js";
 const log = createLogger("web.handlers.agent");
 const TOOL_BUDGET_CONTINUATION_EXTENSION_ID = "piclaw.tool-budget-continuation";
 
-function reserveToolBudgetContinuation(chatJid: string, threadKey: string): boolean {
+function reserveContinuation(extensionId: string, chatJid: string, threadKey: string): boolean {
   const kv = getExtensionKvStore();
   const key = `continued:${threadKey}`;
-  if (kv.get(TOOL_BUDGET_CONTINUATION_EXTENSION_ID, key, "chat", chatJid)) return false;
-  kv.set(TOOL_BUDGET_CONTINUATION_EXTENSION_ID, key, {
+  if (kv.get(extensionId, key, "chat", chatJid)) return false;
+  kv.set(extensionId, key, {
     count: 1,
     createdAt: new Date().toISOString(),
   }, "chat", chatJid);
   return true;
 }
 
+function releaseContinuation(extensionId: string, chatJid: string, threadKey: string): void {
+  getExtensionKvStore().delete(extensionId, `continued:${threadKey}`, "chat", chatJid);
+}
+
+function reserveToolBudgetContinuation(chatJid: string, threadKey: string): boolean {
+  return reserveContinuation(TOOL_BUDGET_CONTINUATION_EXTENSION_ID, chatJid, threadKey);
+}
+
 function releaseToolBudgetContinuation(chatJid: string, threadKey: string): void {
-  getExtensionKvStore().delete(
-    TOOL_BUDGET_CONTINUATION_EXTENSION_ID,
-    `continued:${threadKey}`,
-    "chat",
-    chatJid,
-  );
+  releaseContinuation(TOOL_BUDGET_CONTINUATION_EXTENSION_ID, chatJid, threadKey);
 }
 
 export type BrowserObservabilityContext = {
@@ -1538,6 +1544,7 @@ export async function processChat(
   });
   if (preflight === "deferred") return;
 
+  let shouldRemoveStaleProtectedContinuation = false;
   const persistTerminalOutcome = (
     text: string,
     marker: Record<string, unknown> | null,
@@ -1552,8 +1559,11 @@ export async function processChat(
       attachments: [],
       channelName,
       threadId: resolvedThreadRootId,
-      skipPlaceholder: turnCount === 0,
+      skipPlaceholder: shouldRemoveStaleProtectedContinuation || turnCount === 0,
       isTerminalAgentReply: true,
+      removeProtectedContinuationForSourceMessageId: shouldRemoveStaleProtectedContinuation
+        ? String(lastMessage.id || "").trim() || null
+        : null,
       extraContentBlocks: [
         streamRuntime.buildAgentTimingBlock(options.usage),
         ...(marker ? [marker] : []),
@@ -1676,6 +1686,7 @@ export async function processChat(
     ...(browserObservability?.clientId ? { clientId: browserObservability.clientId } : {}),
     skipPrePromptCompaction: true,
     scheduleIdleAutoCompaction: true,
+    deferToolEnabledContinuation: true,
     onEvent: trackedStreamingHandler,
     onTurnDiscard: () => {
       clearCommittedDraft();
@@ -1720,6 +1731,14 @@ export async function processChat(
   });
 
   streamState.lastRecoveryMeta = output.recovery || null;
+
+  // A prior process may have persisted protected handoff intent before
+  // crashing. Successful replay removes that source-tagged intent in the same
+  // SQLite UPDATE that clears inflight state (see finalizeSuccessfulRun), so
+  // neither delete-before-commit nor commit-before-delete can lose or duplicate
+  // the continuation.
+  const removeStaleProtectedContinuation = !output.requiresToolEnabledContinuation;
+  shouldRemoveStaleProtectedContinuation = removeStaleProtectedContinuation;
 
   if (output.status === "tool_complete") {
     // Provider stopped cleanly after tool use with no closing text reply.
@@ -1797,10 +1816,11 @@ export async function processChat(
       abortCause: output.abortCause,
       abortOperation: output.abortOperation,
     };
+    const resolveContinuationThreadId = (): number | null => resolvedThreadRootId
+      ?? getMessageRowIdById(chatJid, lastMessage.id ?? "");
     const queueToolBudgetContinuation = (): void => {
       if (!output.toolBudgetExceeded || output.recovery?.exhausted) return;
-      const continuationThreadId = resolvedThreadRootId
-        ?? getMessageRowIdById(chatJid, lastMessage.id ?? "");
+      const continuationThreadId = resolveContinuationThreadId();
       if (!continuationThreadId) {
         log.warn("Could not resolve thread lineage for bounded tool-budget continuation", {
           operation: "process_chat.tool_budget_auto_continue_missing_lineage",
@@ -1846,7 +1866,86 @@ export async function processChat(
         });
       }
     };
-
+    const queueProtectedRecoveryContinuation = (): { required: boolean; rowId: number | null; failed: boolean; created: boolean } => {
+      if (!output.requiresToolEnabledContinuation) return { required: false, rowId: null, failed: false, created: false };
+      // The generated ordinary continuation is the one bounded handoff. If it
+      // also fails, persist that terminal result instead of creating a chain.
+      if (String(lastMessage.content || "").trim() === TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT) {
+        return { required: false, rowId: null, failed: false, created: false };
+      }
+      const continuationThreadId = resolveContinuationThreadId();
+      if (!continuationThreadId) {
+        log.warn("Could not resolve thread lineage for protected-recovery continuation", {
+          operation: "process_chat.protected_recovery_auto_continue_missing_lineage",
+          chatJid,
+          messageId: lastMessage.id ?? null,
+        });
+        return { required: true, rowId: null, failed: true, created: false };
+      }
+      const sourceMessageId = String(lastMessage.id || "").trim();
+      const sourceRowId = getMessageRowIdById(chatJid, sourceMessageId) ?? continuationThreadId;
+      const existing = channel.getQueuedFollowupItems(chatJid).find((item) => (
+        item.source === "auto-protected-recovery-continuation"
+        && item.queuedBy?.sourceMessageId === sourceMessageId
+      ));
+      if (existing) return { required: true, rowId: existing.rowId, failed: false, created: false };
+      try {
+        const queuedAt = new Date().toISOString();
+        const queuedRowId = channel.enqueueQueuedFollowupItem(
+          chatJid,
+          0,
+          TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT,
+          continuationThreadId,
+          queuedAt,
+          {
+            source: "auto-protected-recovery-continuation",
+            queuedBy: { source: "runtime", sourceMessageId },
+          },
+        );
+        channel.broadcastEvent("agent_followup_queued", {
+          chat_jid: chatJid,
+          thread_id: continuationThreadId,
+          row_id: queuedRowId,
+          content: TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT,
+          timestamp: queuedAt,
+          source: "auto-protected-recovery-continuation",
+        });
+        log.info("Queued one ordinary continuation after protected recovery", {
+          operation: "process_chat.protected_recovery_auto_continue",
+          chatJid,
+          sourceMessageId,
+          sourceRowId,
+          threadId: continuationThreadId,
+          queuedRowId,
+        });
+        return { required: true, rowId: queuedRowId, failed: false, created: true };
+      } catch (error) {
+        log.warn("Failed to queue ordinary continuation after protected recovery", {
+          operation: "process_chat.protected_recovery_auto_continue_failed",
+          chatJid,
+          sourceMessageId,
+          sourceRowId,
+          threadId: continuationThreadId,
+          err: error,
+        });
+        return { required: true, rowId: null, failed: true, created: false };
+      }
+    };
+    // Persist the handoff intent before terminal/cursor finalization. A crash
+    // after this point leaves a durable, source-tagged item that replay detects
+    // instead of losing or duplicating the ordinary continuation.
+    const protectedContinuation = queueProtectedRecoveryContinuation();
+    if (protectedContinuation.failed) {
+      rollbackInflightRun(chatJid, prevCursor);
+      trackedEmitter.status(buildRetryStatusPayload({
+        threadId,
+        agentId,
+        turnId,
+        title: "Could not persist tool-enabled continuation — retrying",
+        detail: "The protected recovery handoff was not committed; the source turn remains pending.",
+      }));
+      throw new Error("Protected recovery handoff persistence failed; retry the source turn.");
+    }
     const fallbackPublished = errorText.toLowerCase().includes("timed out")
       ? publishDraftFallback("timeout", errorText, { markerOptions })
       : rateLimited
@@ -1854,8 +1953,8 @@ export async function processChat(
         : publishDraftFallback("error", errorText, { markerOptions });
 
     if (fallbackPublished) {
-      // Reserve/enqueue only after the terminal outcome is durable. A failed
-      // terminal write must not consume this lineage's sole continuation.
+      // Tool-budget reservations remain after terminal persistence. Protected
+      // handoff intent was already persisted above for crash safety.
       queueToolBudgetContinuation();
       await finalizeSuccessfulRun();
       return;
@@ -1872,6 +1971,10 @@ export async function processChat(
       queueToolBudgetContinuation();
       await finalizeSuccessfulRun();
     } else {
+      // Retain the durable handoff intent on terminal persistence failure.
+      // rollbackChatRunWithError makes the source retryable; replay dedupes by
+      // sourceMessageId and normal successful terminal persistence removes the
+      // stale intent atomically with the terminal row insert.
       rollbackChatRunWithError(chatJid, {
         prevTs: prevCursor,
         failedTs: lastMessage.timestamp,
@@ -1909,8 +2012,11 @@ export async function processChat(
         attachments: finalAttachments as AttachmentInfo[],
         channelName,
         threadId: resolvedThreadRootId,
-        skipPlaceholder: turnCount === 0,
+        skipPlaceholder: shouldRemoveStaleProtectedContinuation || turnCount === 0,
         isTerminalAgentReply: true,
+        removeProtectedContinuationForSourceMessageId: shouldRemoveStaleProtectedContinuation
+          ? String(lastMessage.id || "").trim() || null
+          : null,
         extraContentBlocks: [
           streamRuntime.buildAgentTimingBlock(output.usage),
           ...(buildRecoveryMarkerBlocks(output.recovery) ?? []),

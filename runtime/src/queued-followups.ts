@@ -11,6 +11,7 @@ export interface QueuedFollowupSourceMetadata {
   userId?: string;
   sessionId?: string;
   clientId?: string;
+  sourceMessageId?: string;
 }
 
 export interface QueuedFollowupItem {
@@ -58,6 +59,7 @@ export function normalizeQueuedFollowupSourceMetadata(value: unknown): QueuedFol
     ...(trimOptionalString(record.userId) ? { userId: trimOptionalString(record.userId) } : {}),
     ...(trimOptionalString(record.sessionId) ? { sessionId: trimOptionalString(record.sessionId) } : {}),
     ...(trimOptionalString(record.clientId) ? { clientId: trimOptionalString(record.clientId) } : {}),
+    ...(trimOptionalString(record.sourceMessageId) ? { sourceMessageId: trimOptionalString(record.sourceMessageId) } : {}),
   };
   return Object.keys(queuedBy).length > 0 ? queuedBy : undefined;
 }

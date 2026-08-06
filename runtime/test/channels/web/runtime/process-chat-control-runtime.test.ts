@@ -278,12 +278,23 @@ describe("process chat control runtime", () => {
       resumeChat: (chatJid, threadRootId) => {
         resumeCalls.push({ chatJid, threadRootId });
       },
+      peekQueuedFollowupItem: () => queued[0] ?? null,
       consumeQueuedFollowupItem: () => queued.shift() ?? null,
       prependQueuedFollowupItem: (chatJid, item) => {
         expect(chatJid).toBe("web:test");
         queued.unshift(item);
       },
+      replaceQueuedFollowupItem: (chatJid, item) => {
+        expect(chatJid).toBe("web:test");
+        const index = queued.findIndex((entry) => entry.rowId === item.rowId);
+        if (index < 0) return false;
+        queued[index] = item;
+        return true;
+      },
       storeMessage: (_chatJid, content, _isBot, _mediaIds, options) => {
+        const queuedIndex = queued.findIndex((item) => item.rowId === options?.consumeDeferredFollowupRowId);
+        if (queuedIndex < 0) return null;
+        queued.splice(queuedIndex, 1);
         const row: InteractionRow = {
           id: nextRowId,
           timestamp: `2024-01-01T00:00:0${nextRowId - 100}.000Z`,

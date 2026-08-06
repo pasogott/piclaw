@@ -18,7 +18,7 @@ describe("queued follow-up projections", () => {
       linkPreviews: [{ href: "https://example.test" }],
       screenHint: "  mobile  ",
       source: "  queued  ",
-      queuedBy: { source: " web ", userId: " user ", sessionId: " session ", clientId: " client " },
+      queuedBy: { source: " web ", userId: " user ", sessionId: " session ", clientId: " client ", sourceMessageId: " msg-123 " },
     };
 
     expect(projectQueuedFollowupItem(input)).toEqual({
@@ -31,7 +31,7 @@ describe("queued follow-up projections", () => {
       linkPreviews: [{ href: "https://example.test" }],
       screenHint: "mobile",
       source: "queued",
-      queuedBy: { source: "web", userId: "user", sessionId: "session", clientId: "client" },
+      queuedBy: { source: "web", userId: "user", sessionId: "session", clientId: "client", sourceMessageId: "msg-123" },
     });
     expect(projectPersistedQueuedFollowupItem(input)).toMatchObject({ materializeRetries: 0 });
   });

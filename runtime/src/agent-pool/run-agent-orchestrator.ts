@@ -55,6 +55,7 @@ import type { AgentTurnCoordinator } from "./turn-coordinator.js";
 import type { AgentOutput, RetrySettingsProvider, RunAgentOptions } from "./contracts.js";
 import { getDefaultActiveToolNames } from "../extensions/tool-activation.js";
 import { logToolStateTransition } from "./tool-state-transitions.js";
+import { createRunToolCeilingController, type SessionWithToolControl } from "./run-tool-ceiling.js";
 import { isPendingShutdown } from "../runtime/shutdown-registry.js";
 import { clearAgentAbortCause, consumeAgentAbortCause, recordAgentAbortCause } from "./abort-provenance.js";
 import {
@@ -846,13 +847,12 @@ export async function runAgentPrompt(
   // can run in finally regardless of how the try exits.
   const toolCallCapRef = { exceeded: false, count: 0, cap: undefined as number | undefined };
   let toolCallUnsub: (() => void) | undefined;
-  type SessionWithToolControl = {
-    setActiveToolsByName?: (toolNames: string[]) => void;
-    getActiveToolNames?: () => string[];
-  };
   let sessionCtrl: SessionWithToolControl | null = null;
-  let savedToolNames: string[] | null = null;
-  let originalSetActiveToolsByName: ((names: string[]) => void) | null = null;
+  const toolCeiling = createRunToolCeilingController({
+    chatJid,
+    runOptions,
+    onWarn: options.onWarn,
+  });
 
   try {
     if (runOptions.scheduleIdleAutoCompaction) {
@@ -994,42 +994,11 @@ export async function runAgentPrompt(
       });
     }
 
-    // Tool ceiling enforcement – clamp active tools and prevent LLM self-escalation.
+    // Tool ceiling enforcement is owner-bound. Recovery can replace the
+    // active session, so a saved setter must never be restored onto another
+    // session object.
     sessionCtrl = session as unknown as SessionWithToolControl;
-
-    if (runOptions.toolCeilingFilter) {
-      const ceilingFilter = runOptions.toolCeilingFilter;
-      if (typeof sessionCtrl.getActiveToolNames === "function") {
-        savedToolNames = sessionCtrl.getActiveToolNames();
-        originalSetActiveToolsByName =
-          typeof sessionCtrl.setActiveToolsByName === "function"
-            ? sessionCtrl.setActiveToolsByName.bind(session)
-            : null;
-
-        if (originalSetActiveToolsByName) {
-          // Apply ceiling to the initial active set.
-          const ceilingTools = savedToolNames.filter(ceilingFilter);
-          originalSetActiveToolsByName(ceilingTools);
-          logToolStateTransition({
-            chatJid,
-            turnId: runOptions.turnId,
-            phase: "attempt",
-            cause: "tool_ceiling_apply",
-            previous: savedToolNames,
-            next: ceilingTools,
-          });
-          // Patch to block the LLM from re-escalating via activate_tools.
-          sessionCtrl.setActiveToolsByName = (names: string[]) => {
-            originalSetActiveToolsByName!(names.filter(ceilingFilter));
-          };
-        }
-      } else {
-        options.onWarn?.("Tool ceiling requested but session lacks getActiveToolNames; ceiling not enforced", {
-          operation: "run_agent.tool_ceiling",
-          chatJid,
-        });
-      }
-    }
+    toolCeiling.apply(sessionCtrl);
 
     const channel = detectChannel(chatJid);
     const retrySettings = ((runtime.services?.settingsManager as RetrySettingsProvider | undefined)?.getRetrySettings?.()) || undefined;
@@ -1065,6 +1034,7 @@ export async function runAgentPrompt(
         resetCompactionSuccessCount(chatJid);
         session = runtime.session;
         sessionCtrl = session as unknown as SessionWithToolControl;
+        toolCeiling.apply(sessionCtrl);
         noteCompactionSuccess(session, chatJid, "rotation", {
           ...options,
           countSuccess: false,
@@ -1086,6 +1056,7 @@ export async function runAgentPrompt(
         resetCompactionSuccessCount(chatJid);
         session = runtime.session;
         sessionCtrl = session as unknown as SessionWithToolControl;
+        toolCeiling.apply(sessionCtrl);
         noteCompactionSuccess(session, chatJid, "rotation", {
           ...options,
           countSuccess: false,
@@ -1140,19 +1111,7 @@ export async function runAgentPrompt(
     endTrackedPhase(chatJid);
     updateSessionStreaming(chatJid, false);
     toolCallUnsub?.();
-    if (sessionCtrl && savedToolNames !== null && originalSetActiveToolsByName) {
-      sessionCtrl.setActiveToolsByName = originalSetActiveToolsByName;
-      originalSetActiveToolsByName(savedToolNames);
-      logToolStateTransition({
-        chatJid,
-        turnId: runOptions.turnId,
-        phase: "attempt",
-        cause: "tool_ceiling_restore",
-        previous: [],
-        next: savedToolNames,
-        restored: true,
-      });
-    }
+    toolCeiling.release();
     try {
       await clearLiveSshConfig(chatJid);
       deleteSshConfig(chatJid);

@@ -572,6 +572,23 @@ export function beginChatRun(
   `).run(chatJid, newCursorTs, inflight.prevTs, inflight.messageId, inflight.startedAt);
 }
 
+/** Remove one source-tagged protected-recovery continuation. */
+export function removeProtectedRecoveryContinuationForSourceMessageId(
+  chatJid: string,
+  sourceMessageId: string,
+): boolean {
+  const normalizedSourceMessageId = sourceMessageId.trim();
+  if (!normalizedSourceMessageId) return false;
+  const queued = getDeferredQueuedFollowups(chatJid);
+  const filtered = queued.filter((item) => !(
+    item.source === "auto-protected-recovery-continuation"
+    && item.queuedBy?.sourceMessageId === normalizedSourceMessageId
+  ));
+  if (filtered.length === queued.length) return false;
+  setDeferredQueuedFollowups(chatJid, filtered);
+  return true;
+}
+
 /**
  * Mark a run as successfully completed.
  *

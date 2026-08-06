@@ -43,12 +43,20 @@ describe("WebChannel runtime/follow-up facade delegation", () => {
         calls.push(`enqueue:${chatJid}:${rowId}:${queuedContent}:${threadId ?? "null"}:${queuedAt ?? ""}:${extras?.mediaIds?.join(",") ?? ""}`);
         return 44;
       },
+      peekQueuedFollowupItem: (chatJid: string) => {
+        calls.push(`peek-item:${chatJid}`);
+        return queuedItem;
+      },
       consumeQueuedFollowupItem: (chatJid: string) => {
         calls.push(`consume-item:${chatJid}`);
         return queuedItem;
       },
       prependQueuedFollowupItem: (chatJid: string, item: typeof queuedItem) => {
         calls.push(`prepend:${chatJid}:${item.rowId}`);
+      },
+      replaceQueuedFollowupItem: (chatJid: string, item: typeof queuedItem) => {
+        calls.push(`replace-item:${chatJid}:${item.rowId}`);
+        return true;
       },
       consumeQueuedFollowupPlaceholder: (chatJid: string) => {
         calls.push(`consume-placeholder:${chatJid}`);
@@ -137,8 +145,10 @@ describe("WebChannel runtime/follow-up facade delegation", () => {
     await fixture.channel.postDashboardWidget("web:test", { threadId: 8, widgetId: "widget-facade" });
     expect(fixture.channel.queueFollowupPlaceholder("web:test", "queued", 7, "later")).toBe(placeholder);
     expect(fixture.channel.enqueueQueuedFollowupItem("web:test", 0, "queued", 6, "2026-03-28T00:00:00.000Z", { mediaIds: [1, 2] })).toBe(44);
+    expect(fixture.channel.peekQueuedFollowupItem("web:test")).toBe(queuedItem);
     expect(fixture.channel.consumeQueuedFollowupItem("web:test")).toBe(queuedItem);
     fixture.channel.prependQueuedFollowupItem("web:test", queuedItem);
+    expect(fixture.channel.replaceQueuedFollowupItem("web:test", queuedItem)).toBe(true);
     expect(fixture.channel.consumeQueuedFollowupPlaceholder("web:test")).toBe(45);
     expect(fixture.channel.getQueuedFollowupCount("web:test")).toBe(2);
     expect(fixture.channel.getQueuedFollowupItems("web:test")).toEqual([queuedItem]);
@@ -166,8 +176,10 @@ describe("WebChannel runtime/follow-up facade delegation", () => {
       "widget:web:test:8:widget-facade",
       "queue:web:test:queued:7:later",
       "enqueue:web:test:0:queued:6:2026-03-28T00:00:00.000Z:1,2",
+      "peek-item:web:test",
       "consume-item:web:test",
       "prepend:web:test:31",
+      "replace-item:web:test:31",
       "consume-placeholder:web:test",
       "count:web:test",
       "items:web:test",

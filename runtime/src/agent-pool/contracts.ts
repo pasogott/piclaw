@@ -54,6 +54,8 @@ export interface AgentOutput {
   toolStepsUsed?: number;
   toolStepsBudget?: number;
   nextAction?: string;
+  /** A protected recovery ran without tools and must hand off to one ordinary tool-enabled turn. */
+  requiresToolEnabledContinuation?: boolean;
   abortCause?: AgentAbortCause;
   abortOperation?: string;
 }
@@ -131,6 +133,12 @@ export interface RunAgentOptions {
    * LLM-driven self-escalation beyond the ceiling.
    */
   toolCeilingFilter?: (toolName: string) => boolean;
+  /**
+   * Let the caller durably persist a protected-recovery continuation instead
+   * of running it inline. Web uses this to order queue intent before terminal
+   * message and cursor finalization.
+   */
+  deferToolEnabledContinuation?: boolean;
 }
 
 export interface RetrySettingsProvider {

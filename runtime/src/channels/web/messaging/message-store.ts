@@ -16,6 +16,9 @@ import {
   getDb,
   getMediaInfoById,
   getMessageByRowId,
+  getDeferredQueuedFollowups,
+  removeProtectedRecoveryContinuationForSourceMessageId,
+  setDeferredQueuedFollowups,
   storeChatMetadata,
   storeMessage,
 } from "../../../db.js";
@@ -33,6 +36,12 @@ export interface StoreWebMessageOptions {
   screenHint?: string | null;
   isTerminalAgentReply?: boolean;
   isSteeringMessage?: boolean;
+  /** Remove stale protected intent atomically with this terminal row insert. */
+  removeProtectedContinuationForSourceMessageId?: string | null;
+  /** Atomically remove this deferred queue row with the user-message insert. */
+  consumeDeferredFollowupRowId?: number | null;
+  /** Fault-injection seam used to prove transaction rollback before consume. */
+  beforeDeferredFollowupConsume?: () => void;
 }
 
 /** Resolved parameters for storeWebMessage (after defaults applied). */
@@ -114,20 +123,46 @@ export function storeWebMessage(
     is_steering_message: options.isSteeringMessage,
   };
 
-  const rowId = storeMessage(msg);
-  if (rowId <= 0) return null;
+  let rowId = 0;
+  try {
+    getDb().transaction(() => {
+      rowId = storeMessage(msg);
+      if (rowId <= 0) throw new Error("Failed to persist web message row");
 
-  if (allMediaIds.length > 0) {
-    attachMediaToMessage(rowId, allMediaIds);
+      if (allMediaIds.length > 0) {
+        attachMediaToMessage(rowId, allMediaIds);
+      }
+
+      // Ensure user messages are threaded to themselves when no explicit threadId
+      // is provided. This creates a consistent thread root for replies.
+      if (!params.isBot && (options.threadId === null || options.threadId === undefined)) {
+        getDb().prepare("UPDATE messages SET thread_id = ? WHERE rowid = ?").run(rowId, rowId);
+      }
+
+      const sourceMessageId = typeof options.removeProtectedContinuationForSourceMessageId === "string"
+        ? options.removeProtectedContinuationForSourceMessageId.trim()
+        : "";
+      if (params.isBot && options.isTerminalAgentReply && sourceMessageId) {
+        removeProtectedRecoveryContinuationForSourceMessageId(params.chatJid, sourceMessageId);
+      }
+
+      const consumeDeferredRowId = typeof options.consumeDeferredFollowupRowId === "number"
+        ? options.consumeDeferredFollowupRowId
+        : null;
+      if (!params.isBot && consumeDeferredRowId !== null && Number.isFinite(consumeDeferredRowId)) {
+        options.beforeDeferredFollowupConsume?.();
+        const queued = getDeferredQueuedFollowups(params.chatJid);
+        const index = queued.findIndex((item) => item.rowId === consumeDeferredRowId);
+        if (index < 0) throw new Error("Deferred follow-up intent disappeared before materialization");
+        queued.splice(index, 1);
+        setDeferredQueuedFollowups(params.chatJid, queued);
+      }
+
+      storeChatMetadata(params.chatJid, msg.timestamp, getChatBranchByChatJid(params.chatJid)?.agent_name || undefined);
+    }).immediate();
+  } catch {
+    return null;
   }
-
-  // Ensure user messages are threaded to themselves when no explicit threadId
-  // is provided. This creates a consistent thread root for replies.
-  if (!params.isBot && (options.threadId === null || options.threadId === undefined)) {
-    getDb().prepare("UPDATE messages SET thread_id = ? WHERE rowid = ?").run(rowId, rowId);
-  }
-
-  storeChatMetadata(params.chatJid, msg.timestamp, getChatBranchByChatJid(params.chatJid)?.agent_name || undefined);
 
   const interaction = getMessageByRowId(params.chatJid, rowId);
   if (interaction) {

@@ -4261,7 +4261,7 @@ test("runAgentPrompt requests one tools-disabled closing reply after resolved to
   }
 });
 
-test("runAgentPrompt disables tools by default during transient recovery", async () => {
+test("runAgentPrompt hands a default tools-disabled transient recovery back to an ordinary turn", async () => {
   initDatabase();
   const restoreEnv = setEnv({
     PICLAW_TURN_AUTO_RECOVERY_ENABLED: "1",
@@ -4348,14 +4348,17 @@ test("runAgentPrompt disables tools by default during transient recovery", async
       clearActiveForkBaseLeaf: () => {},
     });
 
-    expect(result.status).toBe("success");
-    expect(result.result).toBe("The log query failed, but the investigation found the recovery bug.");
-    expect(result.recovery).toEqual(expect.objectContaining({
-      attemptsUsed: 1,
-      recovered: true,
-      lastClassifier: "transient",
-      strategyHistory: ["retry"],
-    }));
+    expect(result).toMatchObject({
+      status: "error",
+      requiresToolEnabledContinuation: true,
+      recovery: {
+        attemptsUsed: 1,
+        recovered: false,
+        exhausted: true,
+        lastClassifier: "tool_activity",
+        strategyHistory: ["retry"],
+      },
+    });
     expect(session.promptTexts).toEqual(["inspect logs", RECOVERY_CONTINUATION_PROMPT]);
     expect(session.toolSets).toContainEqual([]);
     expect(session.toolSets.at(-1)).toEqual(["bash", "read"]);
@@ -4535,7 +4538,7 @@ test("runAgentPrompt clamps a recovery attempt to the remaining short timeout bu
   }
 });
 
-test("runAgentPrompt keeps tools disabled across repeated opted-out continuation attempts", async () => {
+test("runAgentPrompt hands off after repeated opted-out continuation attempts", async () => {
   initDatabase();
   const restoreEnv = setEnv({
     PICLAW_TURN_AUTO_RECOVERY_ENABLED: "1",
@@ -4592,9 +4595,11 @@ test("runAgentPrompt keeps tools disabled across repeated opted-out continuation
       clearActiveForkBaseLeaf: () => {},
     });
 
-    expect(result.status).toBe("success");
-    expect(result.result).toBe("Final continuation response.");
-    expect(result.recovery).toEqual(expect.objectContaining({ attemptsUsed: 2, recovered: true }));
+    expect(result).toMatchObject({
+      status: "error",
+      requiresToolEnabledContinuation: true,
+      recovery: { attemptsUsed: 2, recovered: false, exhausted: true, lastClassifier: "tool_activity" },
+    });
     expect(session.promptTexts).toEqual(["do work", RECOVERY_CONTINUATION_PROMPT, RECOVERY_CONTINUATION_PROMPT]);
     expect(session.getActiveToolNames()).toEqual(["bash", "read"]);
   } finally {

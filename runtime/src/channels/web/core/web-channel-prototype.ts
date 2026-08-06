@@ -180,6 +180,13 @@ export function installWebChannelPrototype(
         extras?: { mediaIds?: number[]; contentBlocks?: unknown[]; linkPreviews?: unknown[]; screenHint?: string; source?: string; queuedBy?: QueuedFollowupItem["queuedBy"] },
       ): number => service.enqueueQueuedFollowupItem(chatJid, rowId, queuedContent, threadId, queuedAt, extras)),
     },
+    peekQueuedFollowupItem: {
+      configurable: true,
+      writable: true,
+      value: withRuntimePublicSurface(
+        (service, chatJid: string): QueuedFollowupItem | null => service.peekQueuedFollowupItem(chatJid),
+      ),
+    },
     consumeQueuedFollowupItem: {
       configurable: true,
       writable: true,
@@ -193,6 +200,12 @@ export function installWebChannelPrototype(
       value: withRuntimePublicSurface((service, chatJid: string, item: QueuedFollowupItem): void => {
         service.prependQueuedFollowupItem(chatJid, item);
       }),
+    },
+    replaceQueuedFollowupItem: {
+      configurable: true,
+      writable: true,
+      value: withRuntimePublicSurface((service, chatJid: string, item: QueuedFollowupItem): boolean =>
+        service.replaceQueuedFollowupItem(chatJid, item)),
     },
     consumeQueuedFollowupPlaceholder: {
       configurable: true,
@@ -713,6 +726,8 @@ export function installWebChannelPrototype(
           screenHint?: string | null;
           isTerminalAgentReply?: boolean;
           isSteeringMessage?: boolean;
+          removeProtectedContinuationForSourceMessageId?: string | null;
+          consumeDeferredFollowupRowId?: number | null;
         } = {},
       ): InteractionRow | null => service.storeMessage(chatJid, content, isBot, mediaIds, options)),
     },

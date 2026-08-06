@@ -226,6 +226,31 @@ test("AgentSessionManager recreates cached main and side sessions", async () => 
   expect(disposed).toBe(2);
 });
 
+test("AgentSessionManager does not copy a transient empty tool set into a side session", async () => {
+  const appliedToolSets: string[][] = [];
+  const sideSession = {
+    model: { provider: "test", id: "main-model" },
+    setThinkingLevel: () => {},
+    setActiveToolsByName: (names: string[]) => appliedToolSets.push([...names]),
+  };
+  const sideRuntime = createRuntime(sideSession);
+  sideRuntime.newSession = async () => ({ cancelled: false });
+
+  const fixture = createManager();
+  await fixture.manager.syncSideSessionFromMain({
+    sessionManager: {
+      buildSessionContext: () => ({ model: { provider: "test", id: "main-model" }, messages: [] }),
+    },
+    model: { provider: "test", id: "main-model" },
+    thinkingLevel: "high",
+    getActiveToolNames: () => [],
+  } as any, sideRuntime);
+
+  expect(appliedToolSets).toHaveLength(1);
+  expect(appliedToolSets[0]).toContain("read");
+  expect(appliedToolSets[0]).toContain("activate_tools");
+});
+
 test("AgentSessionManager disposes a cached side runtime when reseeding it is cancelled", async () => {
   let disposed = 0;
   let setModelCalls = 0;

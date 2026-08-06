@@ -70,6 +70,8 @@ export interface WebChannelLike
       screenHint?: string | null;
       isTerminalAgentReply?: boolean;
       isSteeringMessage?: boolean;
+      removeProtectedContinuationForSourceMessageId?: string | null;
+      consumeDeferredFollowupRowId?: number | null;
     }
   ): InteractionRow | null;
 
@@ -104,8 +106,10 @@ export interface WebChannelLike
   getQueuedFollowupCount(chatJid: string): number;
   getQueuedFollowupItems(chatJid: string): QueuedFollowupItem[];
   removeQueuedFollowupItem(chatJid: string, rowId: number): QueuedFollowupItem | null;
+  peekQueuedFollowupItem(chatJid: string): QueuedFollowupItem | null;
   consumeQueuedFollowupItem(chatJid: string): QueuedFollowupItem | null;
   prependQueuedFollowupItem(chatJid: string, item: QueuedFollowupItem): void;
+  replaceQueuedFollowupItem(chatJid: string, item: QueuedFollowupItem): boolean;
   consumeQueuedFollowupPlaceholder(chatJid: string): number | null;
   replaceQueuedFollowupPlaceholder(
     chatJid: string,

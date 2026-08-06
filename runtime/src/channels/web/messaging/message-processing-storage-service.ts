@@ -24,6 +24,8 @@ export interface WebChannelStoreMessageOptions {
   screenHint?: string | null;
   isTerminalAgentReply?: boolean;
   isSteeringMessage?: boolean;
+  removeProtectedContinuationForSourceMessageId?: string | null;
+  consumeDeferredFollowupRowId?: number | null;
 }
 
 export interface WebMessageProcessingStorageChannel extends WebChannelLike, LinkPreviewChannel {}
@@ -94,6 +96,8 @@ export class WebMessageProcessingStorageService {
         screenHint: options.screenHint,
         isTerminalAgentReply: options.isTerminalAgentReply,
         isSteeringMessage: options.isSteeringMessage,
+        removeProtectedContinuationForSourceMessageId: options.removeProtectedContinuationForSourceMessageId,
+        consumeDeferredFollowupRowId: options.consumeDeferredFollowupRowId,
       },
     );
     recordTimelineInteraction(interaction);
