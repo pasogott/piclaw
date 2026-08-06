@@ -54,6 +54,8 @@ describe("WebMessageProcessingStorageService", () => {
         threadId?: number | null;
         isTerminalAgentReply?: boolean;
         isSteeringMessage?: boolean;
+        removeProtectedContinuationForSourceMessageId?: string | null;
+        consumeDeferredFollowupRowId?: number | null;
       };
     }> = [];
     let assistantName = "Pi";
@@ -94,6 +96,8 @@ describe("WebMessageProcessingStorageService", () => {
       threadId: 42,
       isTerminalAgentReply: true,
       isSteeringMessage: true,
+      removeProtectedContinuationForSourceMessageId: "source-1",
+      consumeDeferredFollowupRowId: -1,
     });
 
     assistantName = "Pi Prime";
@@ -119,6 +123,8 @@ describe("WebMessageProcessingStorageService", () => {
           threadId: 42,
           isTerminalAgentReply: true,
           isSteeringMessage: true,
+          removeProtectedContinuationForSourceMessageId: "source-1",
+          consumeDeferredFollowupRowId: -1,
         },
       },
       {
@@ -137,6 +143,8 @@ describe("WebMessageProcessingStorageService", () => {
           threadId: null,
           isTerminalAgentReply: undefined,
           isSteeringMessage: undefined,
+          removeProtectedContinuationForSourceMessageId: undefined,
+          consumeDeferredFollowupRowId: undefined,
         },
       },
     ]);

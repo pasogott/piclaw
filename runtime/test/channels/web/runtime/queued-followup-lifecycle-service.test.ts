@@ -181,6 +181,17 @@ describe("queued follow-up lifecycle service", () => {
     ]);
   });
 
+  test("replaces retry metadata in one persisted queue mutation", async () => {
+    const { service } = await createServiceFixture();
+    const rowId = service.enqueueQueuedFollowupItem("web:default", 0, "retry me", 10, "2024-01-01T00:00:00.000Z");
+    const original = service.getQueuedFollowupItems("web:default")[0]!;
+
+    expect(service.replaceQueuedFollowupItem("web:default", { ...original, materializeRetries: 1 })).toBe(true);
+    expect(service.getQueuedFollowupItems("web:default")).toEqual([
+      expect.objectContaining({ rowId, materializeRetries: 1 }),
+    ]);
+  });
+
   test("rejects reordering that moves ordinary work ahead of protected continuations", async () => {
     const { service } = await createServiceFixture();
 

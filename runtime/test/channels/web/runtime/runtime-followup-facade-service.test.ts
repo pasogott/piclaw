@@ -48,12 +48,20 @@ describe("WebChannel runtime/follow-up facade service", () => {
         calls.push(`enqueue:${chatJid}:${rowId}:${queuedContent}:${threadId ?? "null"}:${queuedAt ?? ""}:${extras?.mediaIds?.join(",") ?? ""}`);
         return 99;
       },
+      peekQueuedFollowupItem: (chatJid: string) => {
+        calls.push(`peek-item:${chatJid}`);
+        return queuedItem;
+      },
       consumeQueuedFollowupItem: (chatJid: string) => {
         calls.push(`consume-item:${chatJid}`);
         return queuedItem;
       },
       prependQueuedFollowupItem: (chatJid: string, item: typeof queuedItem) => {
         calls.push(`prepend:${chatJid}:${item.rowId}`);
+      },
+      replaceQueuedFollowupItem: (chatJid: string, item: typeof queuedItem) => {
+        calls.push(`replace-item:${chatJid}:${item.rowId}`);
+        return true;
       },
       consumeQueuedFollowupPlaceholder: (chatJid: string) => {
         calls.push(`consume-placeholder:${chatJid}`);
@@ -139,8 +147,10 @@ describe("WebChannel runtime/follow-up facade service", () => {
     await service.postDashboardWidget("web:test", { threadId: 8, widgetId: "widget-runtime" });
     expect(service.queueFollowupPlaceholder("web:test", "queued", 7, "later")).toBe(placeholder);
     expect(service.enqueueQueuedFollowupItem("web:test", 0, "queued", 6, "2026-03-28T00:00:00.000Z", { mediaIds: [1, 2] })).toBe(99);
+    expect(service.peekQueuedFollowupItem("web:test")).toBe(queuedItem);
     expect(service.consumeQueuedFollowupItem("web:test")).toBe(queuedItem);
     service.prependQueuedFollowupItem("web:test", queuedItem);
+    expect(service.replaceQueuedFollowupItem("web:test", queuedItem)).toBe(true);
     expect(service.consumeQueuedFollowupPlaceholder("web:test")).toBe(77);
     expect(service.getQueuedFollowupCount("web:test")).toBe(3);
     expect(service.getQueuedFollowupItems("web:test")).toEqual([queuedItem]);
@@ -178,8 +188,10 @@ describe("WebChannel runtime/follow-up facade service", () => {
       "widget:web:test:8:widget-runtime",
       "placeholder:web:test:queued:7:later",
       "enqueue:web:test:0:queued:6:2026-03-28T00:00:00.000Z:1,2",
+      "peek-item:web:test",
       "consume-item:web:test",
       "prepend:web:test:41",
+      "replace-item:web:test:41",
       "consume-placeholder:web:test",
       "count:web:test",
       "items:web:test",

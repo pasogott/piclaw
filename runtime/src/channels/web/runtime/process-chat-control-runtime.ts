@@ -101,8 +101,10 @@ export interface DeferredControlCommandRuntime {
 }
 
 export interface QueuedFollowupMaterializationRuntime extends DeferredControlCommandRuntime {
+  peekQueuedFollowupItem(chatJid: string): QueuedFollowupItem | null;
   consumeQueuedFollowupItem(chatJid: string): QueuedFollowupItem | null;
   prependQueuedFollowupItem(chatJid: string, item: QueuedFollowupItem): void;
+  replaceQueuedFollowupItem(chatJid: string, item: QueuedFollowupItem): boolean;
   storeMessage: WebChannelLike["storeMessage"];
 }
 
@@ -378,6 +380,7 @@ function materializeQueuedFollowup(
       linkPreviews: Array.isArray(item.linkPreviews) ? item.linkPreviews : undefined,
       threadId: item.threadId ?? undefined,
       screenHint: item.screenHint,
+      consumeDeferredFollowupRowId: item.rowId,
     },
   );
 }
@@ -396,7 +399,7 @@ export async function materializeDeferredFollowups(
   let consumedAny = false;
 
   while (true) {
-    const nextQueued = channel.consumeQueuedFollowupItem(chatJid);
+    const nextQueued = channel.peekQueuedFollowupItem(chatJid);
     if (!nextQueued) {
       return consumedAny ? { status: "drained" } : { status: "none" };
     }
@@ -406,6 +409,10 @@ export async function materializeDeferredFollowups(
 
     if (!queuedInteraction) {
       if (retries >= maxMaterializeRetries) {
+        const consumed = channel.consumeQueuedFollowupItem(chatJid);
+        if (!consumed || consumed.rowId !== nextQueued.rowId) {
+          throw new Error("Deferred follow-up queue changed before terminal materialization drop");
+        }
         log.error("Dropping queued follow-up after repeated materialize failures", {
           operation: "process_chat.materialize_followup_drop",
           chatJid,
@@ -419,7 +426,9 @@ export async function materializeDeferredFollowups(
       }
 
       const withRetry = { ...nextQueued, materializeRetries: retries + 1 };
-      channel.prependQueuedFollowupItem(chatJid, withRetry);
+      if (!channel.replaceQueuedFollowupItem(chatJid, withRetry)) {
+        throw new Error("Deferred follow-up queue changed during failed materialization");
+      }
       log.warn("Failed to materialize queued follow-up", {
         operation: "process_chat.materialize_followup_retry",
         chatJid,

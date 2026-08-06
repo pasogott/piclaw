@@ -22,8 +22,10 @@ type RuntimeFollowupMessageWriteService = Pick<
 type RuntimeFollowupQueuedLifecycle = Pick<
   QueuedFollowupLifecycleService,
   | "enqueueQueuedFollowupItem"
+  | "peekQueuedFollowupItem"
   | "consumeQueuedFollowupItem"
   | "prependQueuedFollowupItem"
+  | "replaceQueuedFollowupItem"
   | "consumeQueuedFollowupPlaceholder"
   | "getQueuedFollowupCount"
   | "getQueuedFollowupItems"
@@ -101,12 +103,20 @@ export class WebChannelRuntimeFollowupFacadeService {
     );
   }
 
+  peekQueuedFollowupItem(chatJid: string): QueuedFollowupItem | null {
+    return this.deps.getQueuedFollowupLifecycle().peekQueuedFollowupItem(chatJid);
+  }
+
   consumeQueuedFollowupItem(chatJid: string): QueuedFollowupItem | null {
     return this.deps.getQueuedFollowupLifecycle().consumeQueuedFollowupItem(chatJid);
   }
 
   prependQueuedFollowupItem(chatJid: string, item: QueuedFollowupItem): void {
     this.deps.getQueuedFollowupLifecycle().prependQueuedFollowupItem(chatJid, item);
+  }
+
+  replaceQueuedFollowupItem(chatJid: string, item: QueuedFollowupItem): boolean {
+    return this.deps.getQueuedFollowupLifecycle().replaceQueuedFollowupItem(chatJid, item);
   }
 
   consumeQueuedFollowupPlaceholder(chatJid: string): number | null {

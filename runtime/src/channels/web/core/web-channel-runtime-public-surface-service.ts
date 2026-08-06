@@ -12,8 +12,10 @@ type WebChannelRuntimePublicSurfaceFollowupFacade = Pick<
   | "postDashboardWidget"
   | "queueFollowupPlaceholder"
   | "enqueueQueuedFollowupItem"
+  | "peekQueuedFollowupItem"
   | "consumeQueuedFollowupItem"
   | "prependQueuedFollowupItem"
+  | "replaceQueuedFollowupItem"
   | "consumeQueuedFollowupPlaceholder"
   | "getQueuedFollowupCount"
   | "getQueuedFollowupItems"
@@ -446,12 +448,20 @@ export class WebChannelRuntimePublicSurfaceService {
     );
   }
 
+  peekQueuedFollowupItem(chatJid: string): QueuedFollowupItem | null {
+    return this.channel.runtimeFollowupFacade.peekQueuedFollowupItem(chatJid);
+  }
+
   consumeQueuedFollowupItem(chatJid: string): QueuedFollowupItem | null {
     return this.channel.runtimeFollowupFacade.consumeQueuedFollowupItem(chatJid);
   }
 
   prependQueuedFollowupItem(chatJid: string, item: QueuedFollowupItem): void {
     this.channel.runtimeFollowupFacade.prependQueuedFollowupItem(chatJid, item);
+  }
+
+  replaceQueuedFollowupItem(chatJid: string, item: QueuedFollowupItem): boolean {
+    return this.channel.runtimeFollowupFacade.replaceQueuedFollowupItem(chatJid, item);
   }
 
   consumeQueuedFollowupPlaceholder(chatJid: string): number | null {
@@ -595,6 +605,7 @@ export class WebChannelRuntimePublicSurfaceService {
       isTerminalAgentReply?: boolean;
       isSteeringMessage?: boolean;
       removeProtectedContinuationForSourceMessageId?: string | null;
+      consumeDeferredFollowupRowId?: number | null;
     } = {},
   ): InteractionRow | null {
     return this.channel.messageProcessingStorageService.storeMessage(chatJid, content, isBot, mediaIds, options);

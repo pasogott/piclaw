@@ -16,7 +16,9 @@ import {
   getDb,
   getMediaInfoById,
   getMessageByRowId,
+  getDeferredQueuedFollowups,
   removeProtectedRecoveryContinuationForSourceMessageId,
+  setDeferredQueuedFollowups,
   storeChatMetadata,
   storeMessage,
 } from "../../../db.js";
@@ -36,6 +38,10 @@ export interface StoreWebMessageOptions {
   isSteeringMessage?: boolean;
   /** Remove stale protected intent atomically with this terminal row insert. */
   removeProtectedContinuationForSourceMessageId?: string | null;
+  /** Atomically remove this deferred queue row with the user-message insert. */
+  consumeDeferredFollowupRowId?: number | null;
+  /** Fault-injection seam used to prove transaction rollback before consume. */
+  beforeDeferredFollowupConsume?: () => void;
 }
 
 /** Resolved parameters for storeWebMessage (after defaults applied). */
@@ -138,6 +144,18 @@ export function storeWebMessage(
         : "";
       if (params.isBot && options.isTerminalAgentReply && sourceMessageId) {
         removeProtectedRecoveryContinuationForSourceMessageId(params.chatJid, sourceMessageId);
+      }
+
+      const consumeDeferredRowId = typeof options.consumeDeferredFollowupRowId === "number"
+        ? options.consumeDeferredFollowupRowId
+        : null;
+      if (!params.isBot && consumeDeferredRowId !== null && Number.isFinite(consumeDeferredRowId)) {
+        options.beforeDeferredFollowupConsume?.();
+        const queued = getDeferredQueuedFollowups(params.chatJid);
+        const index = queued.findIndex((item) => item.rowId === consumeDeferredRowId);
+        if (index < 0) throw new Error("Deferred follow-up intent disappeared before materialization");
+        queued.splice(index, 1);
+        setDeferredQueuedFollowups(params.chatJid, queued);
       }
 
       storeChatMetadata(params.chatJid, msg.timestamp, getChatBranchByChatJid(params.chatJid)?.agent_name || undefined);

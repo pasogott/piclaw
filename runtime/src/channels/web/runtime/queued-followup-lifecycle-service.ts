@@ -101,6 +101,11 @@ export class QueuedFollowupLifecycleService {
     return resolvedRowId;
   }
 
+  peekQueuedFollowupItem(chatJid: string): QueuedFollowupItem | null {
+    const next = this.getDeferredQueuedFollowupItems(chatJid)[0] ?? null;
+    return next ? cloneQueuedFollowupItem(next) : null;
+  }
+
   consumeQueuedFollowupItem(chatJid: string): QueuedFollowupItem | null {
     const queued = this.getDeferredQueuedFollowupItems(chatJid);
     const next = queued.shift() ?? null;
@@ -112,6 +117,15 @@ export class QueuedFollowupLifecycleService {
     const queued = this.getDeferredQueuedFollowupItems(chatJid);
     queued.unshift(cloneQueuedFollowupItem(item));
     this.setDeferredQueuedFollowupItems(chatJid, queued);
+  }
+
+  replaceQueuedFollowupItem(chatJid: string, item: QueuedFollowupItem): boolean {
+    const queued = this.getDeferredQueuedFollowupItems(chatJid);
+    const index = queued.findIndex((entry) => entry.rowId === item.rowId);
+    if (index < 0) return false;
+    queued[index] = cloneQueuedFollowupItem(item);
+    this.setDeferredQueuedFollowupItems(chatJid, queued);
+    return true;
   }
 
   getQueuedFollowupCount(chatJid: string): number {

@@ -236,12 +236,20 @@ describe("web channel runtime public surface service", () => {
           calls.push(`enqueue:${chatJid}:${rowId}:${queuedContent}:${threadId ?? "null"}:${queuedAt ?? ""}`);
           return 41;
         },
+        peekQueuedFollowupItem: (chatJid) => {
+          calls.push(`peek-item:${chatJid}`);
+          return queuedItem;
+        },
         consumeQueuedFollowupItem: (chatJid) => {
           calls.push(`consume-item:${chatJid}`);
           return queuedItem;
         },
         prependQueuedFollowupItem: (chatJid, item) => {
           calls.push(`prepend:${chatJid}:${item.rowId}`);
+        },
+        replaceQueuedFollowupItem: (chatJid, item) => {
+          calls.push(`replace-item:${chatJid}:${item.rowId}`);
+          return true;
         },
         consumeQueuedFollowupPlaceholder: (chatJid) => {
           calls.push(`consume-placeholder:${chatJid}`);
@@ -353,8 +361,10 @@ describe("web channel runtime public surface service", () => {
     await service.postDashboardWidget("web:test", { threadId: 8, widgetId: "widget-runtime" });
     expect(service.queueFollowupPlaceholder("web:test", "queued", 7, "later")).toBe(placeholder);
     expect(service.enqueueQueuedFollowupItem("web:test", 11, "queued", 6, "2026-03-28T00:00:00.000Z")).toBe(41);
+    expect(service.peekQueuedFollowupItem("web:test")).toBe(queuedItem);
     expect(service.consumeQueuedFollowupItem("web:test")).toBe(queuedItem);
     service.prependQueuedFollowupItem("web:test", queuedItem);
+    expect(service.replaceQueuedFollowupItem("web:test", queuedItem)).toBe(true);
     expect(service.consumeQueuedFollowupPlaceholder("web:test")).toBe(42);
     expect(service.getQueuedFollowupCount("web:test")).toBe(2);
     expect(service.getQueuedFollowupItems("web:test")).toEqual([queuedItem]);
@@ -397,8 +407,10 @@ describe("web channel runtime public surface service", () => {
       "widget:web:test:8:widget-runtime",
       "queue:web:test:queued:7:later",
       "enqueue:web:test:11:queued:6:2026-03-28T00:00:00.000Z",
+      "peek-item:web:test",
       "consume-item:web:test",
       "prepend:web:test:3",
+      "replace-item:web:test:3",
       "consume-placeholder:web:test",
       "count:web:test",
       "items:web:test",

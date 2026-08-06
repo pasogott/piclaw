@@ -24,11 +24,11 @@ describe("process chat finalization runtime", () => {
       const channel: any = {
         agentPool: { getContextUsageForChat: async () => ({ tokens: 10, contextWindow: 100, percent: 10 }) },
         consumePendingSteering: () => [], saveState: () => calls.push("save"), setContextUsage: () => calls.push("context"),
-        resumeChat: () => calls.push("resume"), consumeQueuedFollowupItem: () => { calls.push("consume-queue"); return null; },
-        prependQueuedFollowupItem() {}, storeMessage() { return null; }, broadcastEvent() {}, sendMessage: async () => {}, updateAgentStatus() {}, retryFailedOnModelSwitch: () => false,
+        resumeChat: () => calls.push("resume"), peekQueuedFollowupItem: () => { calls.push("peek-queue"); return null; }, consumeQueuedFollowupItem: () => { calls.push("consume-queue"); return null; },
+        prependQueuedFollowupItem() {}, replaceQueuedFollowupItem: () => false, storeMessage() { return null; }, broadcastEvent() {}, sendMessage: async () => {}, updateAgentStatus() {}, retryFailedOnModelSwitch: () => false,
       };
       await finalizeSuccessfulProcessChatRun({ channel, emitter: emitter(statuses) as any, chatJid, agentId: "default", turnId: "turn-1", threadId: 1, prevCursor: getChatCursor(chatJid), recovery: null });
-      expect(calls).toEqual(["save", "context", "consume-queue"]);
+      expect(calls).toEqual(["save", "context", "peek-queue"]);
       expect(statuses).toEqual([expect.objectContaining({ type: "done", context_usage: { tokens: 10, contextWindow: 100, percent: 10 } })]);
     });
   });
