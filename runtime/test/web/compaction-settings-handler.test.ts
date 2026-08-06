@@ -314,33 +314,38 @@ test('getCompactionSettingsData exposes active backoffs and tracked phases and r
       lastErrorMessage: 'Expired suppression',
     });
 
-    const watchdog = await importFresh<typeof import('../../src/runtime/progress-watchdog.js')>('../src/runtime/progress-watchdog.js');
-    watchdog.beginTrackedPhase('web:test-1', 'prompt', { source: 'test' });
-
-    const handler = await importFresh<typeof import('../../src/channels/web/handlers/compaction-settings.js')>(
-      '../src/channels/web/handlers/compaction-settings.js',
-    );
-
-    const beforeReset = handler.getCompactionSettingsData();
-    expect(typeof beforeReset.toolResultCompactionEnabled).toBe('boolean');
-    expect(beforeReset.toolResultCompactionTools).toEqual(
-      expect.arrayContaining(['bash', 'powershell', 'exec_batch']),
-    );
-    expect(typeof beforeReset.toolResultSemanticSummaryEnabled).toBe('boolean');
-    expect(typeof beforeReset.toolResultSemanticSummaryMaxInputChars).toBe('number');
-    expect(typeof beforeReset.toolResultSemanticSummaryMaxTokens).toBe('number');
-    expect(typeof beforeReset.toolResultSemanticSummaryTimeoutSec).toBe('number');
-    expect(beforeReset.compactionBackoffs).toEqual([
-      expect.objectContaining({ chatJid: 'web:test-1', failureCount: 2, lastErrorMessage: 'Compaction timed out' }),
-    ]);
-    expect(beforeReset.progressWatchdogPhases).toEqual([
-      expect.objectContaining({ chatJid: 'web:test-1', phase: 'prompt' }),
-    ]);
-
-    const afterReset = handler.resetCompactionBackoff('web:test-1');
-    expect(afterReset.compactionBackoffs).toEqual([]);
-
-    watchdog.endTrackedPhase('web:test-1');
+    // Use the canonical singleton imported by the handler. Fresh-importing a
+    // second watchdog module can reset the wrong process-global instance.
+    const watchdog = await import('../../src/runtime/progress-watchdog.js');
     watchdog.resetProgressWatchdogForTests();
+    watchdog.beginTrackedPhase('web:test-compaction-settings', 'prompt', { source: 'test' });
+
+    try {
+      const handler = await importFresh<typeof import('../../src/channels/web/handlers/compaction-settings.js')>(
+        '../src/channels/web/handlers/compaction-settings.js',
+      );
+
+      const beforeReset = handler.getCompactionSettingsData();
+      expect(typeof beforeReset.toolResultCompactionEnabled).toBe('boolean');
+      expect(beforeReset.toolResultCompactionTools).toEqual(
+        expect.arrayContaining(['bash', 'powershell', 'exec_batch']),
+      );
+      expect(typeof beforeReset.toolResultSemanticSummaryEnabled).toBe('boolean');
+      expect(typeof beforeReset.toolResultSemanticSummaryMaxInputChars).toBe('number');
+      expect(typeof beforeReset.toolResultSemanticSummaryMaxTokens).toBe('number');
+      expect(typeof beforeReset.toolResultSemanticSummaryTimeoutSec).toBe('number');
+      expect(beforeReset.compactionBackoffs).toEqual([
+        expect.objectContaining({ chatJid: 'web:test-1', failureCount: 2, lastErrorMessage: 'Compaction timed out' }),
+      ]);
+      expect(beforeReset.progressWatchdogPhases).toEqual([
+        expect.objectContaining({ chatJid: 'web:test-compaction-settings', phase: 'prompt' }),
+      ]);
+
+      const afterReset = handler.resetCompactionBackoff('web:test-1');
+      expect(afterReset.compactionBackoffs).toEqual([]);
+    } finally {
+      watchdog.endTrackedPhase('web:test-compaction-settings');
+      watchdog.resetProgressWatchdogForTests();
+    }
   });
 });

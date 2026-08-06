@@ -2528,12 +2528,12 @@ test("processChat releases the tool-budget continuation reservation when queue p
   const db = await import("../../../src/db.js");
   db.initDatabase();
   db.getDb().exec("DELETE FROM message_media; DELETE FROM messages; DELETE FROM chats; DELETE FROM chat_cursors;");
-  db.storeChatMetadata("web:default", new Date().toISOString(), "Web");
+  db.storeChatMetadata("web:test-tool-budget-reservation-release", new Date().toISOString(), "Web");
 
   const rootMessageId = `msg-${Math.random()}`;
   const rootRowId = db.storeMessage({
     id: rootMessageId,
-    chat_jid: "web:default",
+    chat_jid: "web:test-tool-budget-reservation-release",
     sender: "user",
     sender_name: "User",
     content: "first tool-budget turn",
@@ -2564,13 +2564,13 @@ test("processChat releases the tool-budget continuation reservation when queue p
 
   const originalEnqueue = web.enqueueQueuedFollowupItem.bind(web);
   web.enqueueQueuedFollowupItem = () => { throw new Error("simulated queue persistence failure"); };
-  await web.processChat("web:default", "default");
-  expect(web.getQueuedFollowupItems("web:default")).toHaveLength(0);
+  await web.processChat("web:test-tool-budget-reservation-release", "default");
+  expect(web.getQueuedFollowupItems("web:test-tool-budget-reservation-release")).toHaveLength(0);
 
   web.enqueueQueuedFollowupItem = originalEnqueue;
   db.storeMessage({
     id: `msg-${Math.random()}`,
-    chat_jid: "web:default",
+    chat_jid: "web:test-tool-budget-reservation-release",
     sender: "user",
     sender_name: "User",
     content: "second tool-budget turn",
@@ -2579,14 +2579,14 @@ test("processChat releases the tool-budget continuation reservation when queue p
     is_bot_message: false,
     thread_id: rootRowId,
   });
-  await web.processChat("web:default", "default");
+  await web.processChat("web:test-tool-budget-reservation-release", "default");
 
-  expect(web.getQueuedFollowupItems("web:default")).toHaveLength(0);
+  expect(web.getQueuedFollowupItems("web:test-tool-budget-reservation-release")).toHaveLength(0);
   expect(db.getDb().prepare(`
     SELECT content, thread_id
     FROM messages
     WHERE chat_jid = ? AND is_bot_message = 0 AND content LIKE ?
-  `).get("web:default", "%Continue the most recent user request%") as any).toMatchObject({
+  `).get("web:test-tool-budget-reservation-release", "%Continue the most recent user request%") as any).toMatchObject({
     content: expect.stringContaining("Continue the most recent user request"),
     thread_id: rootRowId,
   });
@@ -2600,11 +2600,11 @@ test("processChat queues at most one automatic tool-budget continuation per thre
   const db = await import("../../../src/db.js");
   db.initDatabase();
   db.getDb().exec("DELETE FROM message_media; DELETE FROM messages; DELETE FROM chats; DELETE FROM chat_cursors;");
-  db.storeChatMetadata("web:default", new Date().toISOString(), "Web");
+  db.storeChatMetadata("web:test-tool-budget-lineage-once", new Date().toISOString(), "Web");
 
   const rootRowId = db.storeMessage({
     id: `msg-${Math.random()}`,
-    chat_jid: "web:default",
+    chat_jid: "web:test-tool-budget-lineage-once",
     sender: "user",
     sender_name: "User",
     content: "first tool-budget turn",
@@ -2633,18 +2633,18 @@ test("processChat queues at most one automatic tool-budget continuation per thre
     },
   });
 
-  await web.processChat("web:default", "default");
+  await web.processChat("web:test-tool-budget-lineage-once", "default");
   const firstContinuation = db.getDb().prepare(`
     SELECT rowid, content, timestamp, thread_id
     FROM messages
     WHERE chat_jid = ? AND is_bot_message = 0 AND content LIKE ?
-  `).get("web:default", "%Continue the most recent user request%") as any;
+  `).get("web:test-tool-budget-lineage-once", "%Continue the most recent user request%") as any;
   expect(firstContinuation).toMatchObject({ thread_id: rootRowId });
-  db.setChatCursor("web:default", firstContinuation.timestamp);
+  db.setChatCursor("web:test-tool-budget-lineage-once", firstContinuation.timestamp);
 
   db.storeMessage({
     id: `msg-${Math.random()}`,
-    chat_jid: "web:default",
+    chat_jid: "web:test-tool-budget-lineage-once",
     sender: "user",
     sender_name: "User",
     content: "second tool-budget turn",
@@ -2653,14 +2653,14 @@ test("processChat queues at most one automatic tool-budget continuation per thre
     is_bot_message: false,
     thread_id: rootRowId,
   });
-  await web.processChat("web:default", "default");
+  await web.processChat("web:test-tool-budget-lineage-once", "default");
 
-  expect(web.getQueuedFollowupItems("web:default")).toHaveLength(0);
+  expect(web.getQueuedFollowupItems("web:test-tool-budget-lineage-once")).toHaveLength(0);
   expect(db.getDb().prepare(`
     SELECT COUNT(*) AS count
     FROM messages
     WHERE chat_jid = ? AND is_bot_message = 0 AND content LIKE ?
-  `).get("web:default", "%Continue the most recent user request%") as any).toMatchObject({ count: 1 });
+  `).get("web:test-tool-budget-lineage-once", "%Continue the most recent user request%") as any).toMatchObject({ count: 1 });
 });
 
 test("processChat durably hands protected recovery to one ordinary tool-enabled continuation", async () => {
