@@ -21,6 +21,7 @@ import { getChatBranchByChatJid } from "../db.js";
 import { createDefaultSession, createSessionInDir, ensureNamedSessionDir, ensureSessionDir, lightweightPrewarmSession } from "./session.js";
 import { forcePersistSessionFile, seedRotatedSession } from "../session-rotation.js";
 import { getSessionPersistencePort } from "./session-persistence.js";
+import { getDefaultActiveToolNames } from "../extensions/tool-activation.js";
 
 /** Cached session entry stored for each chat JID. */
 export interface PoolEntry {
@@ -325,7 +326,11 @@ export class AgentSessionManager {
     }
 
     try {
-      sideSession.setActiveToolsByName(mainSession.getActiveToolNames());
+      const mainToolNames = mainSession.getActiveToolNames();
+      // Empty is a transient protected-recovery/finalisation state, not a
+      // durable user selection. Never copy that suppression into a side
+      // session where it can outlive the owning turn.
+      sideSession.setActiveToolsByName(mainToolNames.length > 0 ? mainToolNames : getDefaultActiveToolNames());
     } catch (err) {
       this.options.onWarn?.("Failed to sync side-session tool selection", {
         operation: "sync_side_session_from_main.tools",

@@ -70,6 +70,7 @@ export interface WebChannelLike
       screenHint?: string | null;
       isTerminalAgentReply?: boolean;
       isSteeringMessage?: boolean;
+      removeProtectedContinuationForSourceMessageId?: string | null;
     }
   ): InteractionRow | null;
 

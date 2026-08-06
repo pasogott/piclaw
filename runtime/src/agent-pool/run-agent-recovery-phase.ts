@@ -254,11 +254,6 @@ function isAbortFailureText(errorText: string): boolean {
   return /\b(?:aborterror|aborted|operation was aborted|request was aborted)\b/i.test(errorText);
 }
 
-function isToolUnavailableRecoveryText(text: string | null): boolean {
-  if (!text?.trim()) return false;
-  return /(?:unable|cannot|can[’']?t).{0,120}(?:access|use).{0,80}(?:execution )?tools|(?:execution )?tools.{0,80}(?:unavailable|not (?:currently )?available|disabled)|\b(?:i(?:[’']m| am)|we(?:[’']re| are))\s+(?:currently\s+)?blocked\s+from\s+(?:further\s+)?(?:tool execution|using (?:the )?(?:execution )?tools)\b/is.test(text);
-}
-
 function findToolBudgetDiagnostic(diagnostics: AgentRecoveryDiagnosticEntry[]): AgentRecoveryDiagnosticEntry | null {
   for (let index = diagnostics.length - 1; index >= 0; index -= 1) {
     const entry = diagnostics[index];
@@ -434,6 +429,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
   let activeSessionCtrl = options.sessionCtrl;
   let attemptPrompt = prompt;
   let recoveryContinuationWithoutTools = false;
+  let lastAttemptWasGenericProtected = false;
   let turnToolExecutionCount = 0;
   let recoveryAttemptsUsed = 0;
   let lastClassifier: RecoveryClassifier | null = null;
@@ -470,6 +466,35 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     recoveryBudgetAccumulatedMs += Math.max(0, Date.now() - recoveryBudgetStartedAt);
     recoveryBudgetStartedAt = null;
   };
+  const buildProtectedHandoff = (duration: number, detail: string, finalText: string | null = null): AgentOutput => {
+    const error = `Protected recovery cannot authoritatively complete tool-dependent work: ${detail}`;
+    lastClassifier = "tool_activity";
+    const recovery = buildRecoveryMetadata(
+      recoveryAttemptsUsed,
+      duration,
+      false,
+      true,
+      lastClassifier,
+      strategyHistory,
+      recoveryDiagnostics,
+    );
+    writeAgentLog(options.logsDir, chatJid, duration, false, finalText, error, recovery);
+    emitAgentSessionEvent(runOptions.onEvent, {
+      type: "recovery_end",
+      outcome: "handoff",
+      attemptsUsed: recoveryAttemptsUsed,
+      classifier: lastClassifier,
+      errorMessage: error,
+    });
+    return {
+      status: "error",
+      result: null,
+      error,
+      nextAction: "Continue automatically in one ordinary turn with the restored tool baseline.",
+      requiresToolEnabledContinuation: true,
+      recovery,
+    };
+  };
 
   while (true) {
     // Yield to the event loop on every iteration. Prevents synchronous-
@@ -479,6 +504,9 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
 
     if (recoveryAttemptsUsed > 0 && getRecoveryBudgetElapsedMs() >= recoveryConfig.totalBudgetMs) {
       const duration = Date.now() - startTime;
+      if (lastAttemptWasGenericProtected) {
+        return buildProtectedHandoff(duration, lastRecoveryErrorText || "the recovery budget was exhausted");
+      }
       const error = lastRecoveryErrorText || "Automatic recovery budget exhausted before the next attempt could start.";
       lastClassifier = "budget_exhausted";
       const recovery = buildRecoveryMetadata(
@@ -571,6 +599,10 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     const finalizationReserveMs = recoveryAttemptsUsed > 0 && !recoveryContinuationWithoutTools
       ? getRecoveryFinalizationReserveMs(attemptTimeoutMs)
       : 0;
+    const currentAttemptWasGenericProtected = recoveryContinuationWithoutTools
+      && recoveryAttemptsUsed > 0
+      && strategyHistory.at(-1) !== "finalize";
+    lastAttemptWasGenericProtected = currentAttemptWasGenericProtected;
     let attempt: PromptAttemptResult;
     try {
       attempt = await options.runPromptAttempt(attemptPrompt, attemptTimeoutMs, turnToolExecutionCount, finalizationReserveMs);
@@ -620,33 +652,12 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     if (attempt.output.status === "success") {
       const duration = Date.now() - startTime;
       const finalText = typeof attempt.output.result === "string" ? attempt.output.result : null;
-      if (recoveryAttemptsUsed > 0 && recoveryContinuationWithoutTools && isToolUnavailableRecoveryText(finalText)) {
-        const error = "Tools-disabled recovery could not advance the task. Continue in a normal turn with the restored tool baseline.";
-        lastClassifier = "tool_activity";
-        const recovery = buildRecoveryMetadata(
-          recoveryAttemptsUsed,
-          duration,
-          false,
-          true,
-          lastClassifier,
-          strategyHistory,
-          recoveryDiagnostics,
-        );
-        writeAgentLog(options.logsDir, chatJid, duration, false, finalText, error, recovery);
-        emitAgentSessionEvent(runOptions.onEvent, {
-          type: "recovery_end",
-          outcome: "exhausted",
-          attemptsUsed: recoveryAttemptsUsed,
-          classifier: lastClassifier,
-          errorMessage: error,
-        });
-        return {
-          status: "error",
-          result: null,
-          error,
-          nextAction: "Continue the task in the next ordinary turn; completed work remains persisted.",
-          recovery,
-        };
+      // A generic retry with tools disabled can summarize or explain the
+      // interruption, but it cannot prove that tool-dependent work completed.
+      // Only the dedicated finalize strategy starts from a structurally
+      // complete tool outcome and may accept a tools-disabled closing reply.
+      if (currentAttemptWasGenericProtected) {
+        return buildProtectedHandoff(duration, "the terminal attempt ran without execution tools", finalText);
       }
       const recoveryMeta = recoveryAttemptsUsed > 0
         ? buildRecoveryMetadata(recoveryAttemptsUsed, duration, true, false, lastClassifier, strategyHistory, recoveryDiagnostics)
@@ -685,6 +696,9 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
 
     if (attempt.output.status === "tool_complete") {
       const duration = Date.now() - startTime;
+      if (currentAttemptWasGenericProtected) {
+        return buildProtectedHandoff(duration, "the terminal attempt reported tool completion while execution tools were suppressed");
+      }
       writeAgentLog(options.logsDir, chatJid, duration, false, null, null, null);
       options.onInfo?.("Agent run completed via terminal tool", {
         operation: "run_agent.tool_complete",
@@ -757,6 +771,9 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
 
     if (!effectiveDecision.recover || !effectiveDecision.strategy) {
       const duration = Date.now() - startTime;
+      if (currentAttemptWasGenericProtected) {
+        return buildProtectedHandoff(duration, errorText);
+      }
       const toolBudgetDiagnostic = recoveryAttemptsUsed > 0 ? findToolBudgetDiagnostic(recoveryDiagnostics) : null;
       const terminalBudgetFailure = toolBudgetDiagnostic
         && (/Prompt completed without emitting an assistant reply before finalization/i.test(errorText) || isAbortFailureText(errorText))
@@ -842,6 +859,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
         attempt.snapshot,
         recoveryConfig,
       );
+
 
     if (effectiveDecision.strategy === "compact_then_retry") {
       pauseRecoveryBudget();

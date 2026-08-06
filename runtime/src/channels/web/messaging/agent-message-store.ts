@@ -104,6 +104,8 @@ export function storeAgentTurn(
     skipPlaceholder?: boolean;
     /** True only for the terminal persisted assistant message of a run. */
     isTerminalAgentReply?: boolean;
+    /** Atomically remove stale protected handoff intent with terminal insert. */
+    removeProtectedContinuationForSourceMessageId?: string | null;
     extraContentBlocks?: Array<Record<string, unknown>>;
     dispatchWebPushNotification?: (interaction: ReturnType<WebChannelLike["storeMessage"]>) => Promise<unknown>;
     /** Fires after the row is persisted but BEFORE any SSE broadcast or web
@@ -173,6 +175,7 @@ export function storeAgentTurn(
     contentBlocks: mergedContentBlocks.length > 0 ? mergedContentBlocks : undefined,
     threadId: resolvedThreadId,
     isTerminalAgentReply: params.isTerminalAgentReply,
+    removeProtectedContinuationForSourceMessageId: params.removeProtectedContinuationForSourceMessageId,
   });
   if (interaction) {
     const resolvedRowId = typeof interaction.id === "number" ? interaction.id : null;

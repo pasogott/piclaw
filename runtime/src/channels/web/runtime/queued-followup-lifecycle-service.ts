@@ -77,13 +77,26 @@ export class QueuedFollowupLifecycleService {
   ): number {
     const resolvedRowId = Number.isFinite(rowId) && rowId !== 0 ? rowId : this.allocateDeferredQueuedRowId(chatJid);
     const queued = this.getDeferredQueuedFollowupItems(chatJid);
-    queued.push(projectQueuedFollowupItem({
+    const item = projectQueuedFollowupItem({
       rowId: resolvedRowId,
       queuedContent,
       threadId,
       queuedAt: queuedAt ?? new Date().toISOString(),
       ...extras,
-    }));
+    });
+    // Protected recovery is unfinished work from the active source turn. It
+    // must run before follow-ups queued later while that source was inflight;
+    // otherwise “continue the source request” would execute against newer
+    // conversational state. Preserve FIFO ordering among protected intents.
+    if (item.source === "auto-protected-recovery-continuation") {
+      let protectedTail = -1;
+      for (let index = 0; index < queued.length; index += 1) {
+        if (queued[index]?.source === item.source) protectedTail = index;
+      }
+      queued.splice(protectedTail + 1, 0, item);
+    } else {
+      queued.push(item);
+    }
     this.setDeferredQueuedFollowupItems(chatJid, queued);
     return resolvedRowId;
   }
@@ -183,7 +196,9 @@ export class QueuedFollowupLifecycleService {
   }
 
   private setDeferredQueuedFollowupItems(chatJid: string, items: QueuedFollowupItem[]): void {
-    setDeferredQueuedFollowups(chatJid, items.map((item) => toDeferredQueuedFollowupRecord(item)));
+    const protectedItems = items.filter((item) => item.source === "auto-protected-recovery-continuation");
+    const ordinaryItems = items.filter((item) => item.source !== "auto-protected-recovery-continuation");
+    setDeferredQueuedFollowups(chatJid, [...protectedItems, ...ordinaryItems].map((item) => toDeferredQueuedFollowupRecord(item)));
   }
 
   reorderQueuedFollowupItems(chatJid: string, fromIndex: number, toIndex: number): boolean {
@@ -191,6 +206,14 @@ export class QueuedFollowupLifecycleService {
     if (fromIndex < 0 || toIndex < 0 || fromIndex >= queued.length || toIndex >= queued.length || fromIndex === toIndex) return false;
     const [moved] = queued.splice(fromIndex, 1);
     queued.splice(toIndex, 0, moved);
+    const protectedCount = queued.filter((item) => item.source === "auto-protected-recovery-continuation").length;
+    const normalized = [
+      ...queued.filter((item) => item.source === "auto-protected-recovery-continuation"),
+      ...queued.filter((item) => item.source !== "auto-protected-recovery-continuation"),
+    ];
+    if (normalized.some((item, index) => item.rowId !== queued[index]?.rowId)) return false;
+    if (moved?.source === "auto-protected-recovery-continuation" && toIndex >= protectedCount) return false;
+    if (moved?.source !== "auto-protected-recovery-continuation" && toIndex < protectedCount) return false;
     this.setDeferredQueuedFollowupItems(chatJid, queued);
     return true;
   }

@@ -48,6 +48,7 @@ import {
 } from "./agent-pool/contracts.js";
 import { runSidePrompt as runSidePromptInternal } from "./agent-pool/side-prompt-runner.js";
 import { runAgentPrompt } from "./agent-pool/run-agent-orchestrator.js";
+import { runWithProtectedRecoveryHandoff } from "./agent-pool/protected-recovery-handoff.js";
 import { clearCompactionFailureBackoff, resetCompactionSuccessCount } from "./agent-pool/compaction.js";
 import { rotateSession, type SessionRotationResult } from "./session-rotation.js";
 import { type AgentRuntimeFacade, type AvailableModelsResult } from "./agent-pool/runtime-facade.js";
@@ -285,7 +286,8 @@ export class AgentPool {
     // returns but before AgentSession flips isStreaming at prompt start.
     const releaseEvictionProtection = this.sessionManager.acquireEvictionProtection(chatJid);
     try {
-      const output = await runAgentPrompt(prompt, chatJid, options, {
+      const observedOutputs: AgentOutput[] = [];
+      const runPrompt = (nextPrompt: string, nextOptions: RunAgentOptions) => runAgentPrompt(nextPrompt, chatJid, nextOptions, {
         getOrCreateRuntime: (nextChatJid) => this.getOrCreateRuntime(nextChatJid),
         turnCoordinator: this.turnCoordinator,
         clearAttachments: (nextChatJid) => this.attachments.clear(nextChatJid),
@@ -300,13 +302,21 @@ export class AgentPool {
         onError: (message, details) => log.error(message, details),
       });
 
-      const recovery = output.recovery;
-      if (recovery) {
-        this.recoveryStats.attemptsTotal += Math.max(0, recovery.attemptsUsed || 0);
-        if (recovery.recovered) this.recoveryStats.recoveredRuns += 1;
-        if (recovery.exhausted) this.recoveryStats.exhaustedRuns += 1;
+      const output = await runWithProtectedRecoveryHandoff(prompt, options, runPrompt, (observed) => {
+        observedOutputs.push(observed);
+      });
+      const recoveries = observedOutputs.map((observed) => observed.recovery).filter(Boolean);
+      this.recoveryStats.attemptsTotal += recoveries.reduce(
+        (sum, recovery) => sum + Math.max(0, recovery?.attemptsUsed || 0),
+        0,
+      );
+      const handedOff = observedOutputs.some((observed) => observed.requiresToolEnabledContinuation);
+      if ((output.status !== "error" && observedOutputs.some((observed) => observed.recovery?.recovered)) || handedOff) {
+        this.recoveryStats.recoveredRuns += 1;
       }
-
+      if (!handedOff && output.status === "error" && output.recovery?.exhausted) {
+        this.recoveryStats.exhaustedRuns += 1;
+      }
       return output;
     } finally {
       releaseEvictionProtection();

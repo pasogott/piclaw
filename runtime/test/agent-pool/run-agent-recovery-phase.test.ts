@@ -16,6 +16,7 @@ import { endTrackedPhase } from "../../src/runtime/progress-watchdog.js";
 const TEST_CHAT_JIDS = [
   "web:test-recovery-phase",
   "web:test-recovery-compact",
+  "web:test-recovery-compact:insufficient",
 ];
 
 beforeEach(() => {
@@ -139,10 +140,10 @@ describe("runAgentRecoveryPhase", () => {
   });
 
   test.each([
-    ["unable-access", "I’m unable to access the execution tools in this recovery turn, so I can’t advance the task."],
+    ["claims-success", "All requested work is complete."],
     ["production-blocked", "I’m blocked from further tool execution in this recovered turn, so I cannot safely inspect or edit the continuation ledger yet."],
-    ["blocked-using", "We are blocked from using the tools, so this task cannot continue."],
-  ])("does not report a tool-unavailable protected continuation as recovered: %s", async (caseId, protectedReply) => {
+    ["unrelated-prose", "The moon is made of green cheese."],
+  ])("hands off every generic tools-disabled recovery regardless of prose: %s", async (caseId, protectedReply) => {
     let activeTools = ["read", "bash"];
     const sessionCtrl: SessionWithToolControl = {
       getActiveToolNames: () => [...activeTools],
@@ -188,13 +189,14 @@ describe("runAgentRecoveryPhase", () => {
 
     expect(result).toMatchObject({
       status: "error",
+      requiresToolEnabledContinuation: true,
       recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
     });
-    expect(result.error).toContain("could not advance the task");
+    expect(result.nextAction).toContain("ordinary turn");
     expect(activeTools).toEqual(["read", "bash"]);
   });
 
-  test("disables and restores tools when transient recovery tools are opted out", async () => {
+  test("hands off after a tools-disabled transient recovery and restores tools", async () => {
     let activeTools = ["read", "bash"];
     const activeToolSets: string[][] = [];
     const sessionCtrl: SessionWithToolControl = {
@@ -240,12 +242,16 @@ describe("runAgentRecoveryPhase", () => {
       },
     });
 
-    expect(result.status).toBe("success");
+    expect(result).toMatchObject({
+      status: "error",
+      requiresToolEnabledContinuation: true,
+      recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
+    });
     expect(activeToolSets).toEqual([[], ["read", "bash"]]);
     expect(activeTools).toEqual(["read", "bash"]);
   });
 
-  test("disables and restores tools for an unresolved transient tool execution", async () => {
+  test("hands off after an unresolved transient tool execution and restores tools",  async () => {
     let activeTools = ["read", "bash"];
     const activeToolSets: string[][] = [];
     const sessionCtrl: SessionWithToolControl = {
@@ -291,12 +297,16 @@ describe("runAgentRecoveryPhase", () => {
       },
     });
 
-    expect(result.status).toBe("success");
+    expect(result).toMatchObject({
+      status: "error",
+      requiresToolEnabledContinuation: true,
+      recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
+    });
     expect(activeToolSets).toEqual([[], ["read", "bash"]]);
     expect(activeTools).toEqual(["read", "bash"]);
   });
 
-  test("runs recovery compaction outside the initial elapsed budget before retrying", async () => {
+  test("runs recovery compaction outside the initial elapsed budget before handing off",  async () => {
     let compactCalls = 0;
     const calls: Array<{ prompt: string; timeoutMs: number; toolExecutionCountAtStart: number }> = [];
     const events: unknown[] = [];
@@ -372,7 +382,11 @@ describe("runAgentRecoveryPhase", () => {
       },
     });
 
-    expect(result.status).toBe("success");
+    expect(result).toMatchObject({
+      status: "error",
+      requiresToolEnabledContinuation: true,
+      recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
+    });
     expect(compactCalls).toBe(1);
     expect(calls[1]?.prompt).toBe(RECOVERY_CONTINUATION_PROMPT);
     expect(calls[1]?.toolExecutionCountAtStart).toBe(2);
@@ -382,7 +396,7 @@ describe("runAgentRecoveryPhase", () => {
     expect(events).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "compaction_start", trigger: "recovery" }),
       expect.objectContaining({ type: "compaction_end", trigger: "recovery", willRetry: true }),
-      expect.objectContaining({ type: "recovery_end", outcome: "recovered" }),
+      expect.objectContaining({ type: "recovery_end", outcome: "handoff" }),
     ]));
   });
 
@@ -470,7 +484,11 @@ describe("runAgentRecoveryPhase", () => {
       },
     });
 
-    expect(result.result).toBe("rotated after compaction failure");
+    expect(result).toMatchObject({
+      status: "error",
+      requiresToolEnabledContinuation: true,
+      recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
+    });
     expect(rotations).toBe(1);
     expect(calls).toBe(2);
   });
@@ -492,7 +510,7 @@ describe("runAgentRecoveryPhase", () => {
     };
     const result = await runAgentRecoveryPhase({
       prompt: "original prompt",
-      chatJid: "web:test-recovery-compact",
+      chatJid: "web:test-recovery-compact:insufficient",
       session: oldSession,
       sessionCtrl,
       timeoutMs: 0,
@@ -527,7 +545,11 @@ describe("runAgentRecoveryPhase", () => {
         return attempt({ output: output("success", undefined, "rotated") });
       },
     });
-    expect(result.result).toBe("rotated");
+    expect(result).toMatchObject({
+      status: "error",
+      requiresToolEnabledContinuation: true,
+      recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
+    });
     expect(rotations).toBe(1);
     expect(calls).toBe(2);
   });

@@ -713,6 +713,7 @@ export function installWebChannelPrototype(
           screenHint?: string | null;
           isTerminalAgentReply?: boolean;
           isSteeringMessage?: boolean;
+          removeProtectedContinuationForSourceMessageId?: string | null;
         } = {},
       ): InteractionRow | null => service.storeMessage(chatJid, content, isBot, mediaIds, options)),
     },

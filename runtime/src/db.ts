@@ -111,6 +111,7 @@ export {
   promoteChatPreflightToInflight,
   beginChatRun,
   endChatRun,
+  removeProtectedRecoveryContinuationForSourceMessageId,
   endChatRunWithError,
   rollbackChatRunWithError,
   getFailedRun,

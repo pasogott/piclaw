@@ -98,6 +98,7 @@ export interface WebChannelConstructorFactoryChannel {
       threadId?: number;
       isTerminalAgentReply?: boolean;
       isSteeringMessage?: boolean;
+      removeProtectedContinuationForSourceMessageId?: string | null;
     },
   ): ReturnType<WebChannelLike["storeMessage"]>;
 }

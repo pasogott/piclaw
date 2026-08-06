@@ -2663,6 +2663,304 @@ test("processChat queues at most one automatic tool-budget continuation per thre
   `).get("web:default", "%Continue the most recent user request%") as any).toMatchObject({ count: 1 });
 });
 
+test("processChat durably hands protected recovery to one ordinary tool-enabled continuation", async () => {
+  const ws = createTempWorkspace("piclaw-web-channel-");
+  cleanupWorkspace = ws.cleanup;
+  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
+
+  const db = await import("../../../src/db.js");
+  const { TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT } = await import("../../../src/agent-pool/context-pressure-retry.js");
+  db.initDatabase();
+  db.getDb().exec("DELETE FROM message_media; DELETE FROM messages; DELETE FROM chats; DELETE FROM chat_cursors;");
+  db.storeChatMetadata("web:default", new Date().toISOString(), "Web");
+
+  const rootMessageId = `msg-${Math.random()}`;
+  const rootRowId = db.storeMessage({
+    id: rootMessageId,
+    chat_jid: "web:default",
+    sender: "user",
+    sender_name: "User",
+    content: "finish the release",
+    timestamp: new Date().toISOString(),
+    is_from_me: false,
+    is_bot_message: false,
+  });
+  db.getDb().prepare("UPDATE messages SET thread_id = ? WHERE rowid = ?").run(rootRowId, rootRowId);
+
+  const prompts: string[] = [];
+  const webMod = await import("../../../src/channels/web.js");
+  const web = new (webMod.WebChannel as any)({
+    queue: { enqueue: () => {} },
+    agentPool: {
+      setSessionBinder: () => {},
+      runAgent: async (prompt: string) => {
+        prompts.push(prompt);
+        if (prompts.length === 1) {
+          return {
+            status: "error",
+            error: "Protected recovery completed without execution tools; continuing once in an ordinary tool-enabled turn.",
+            result: null,
+            attachments: [],
+            requiresToolEnabledContinuation: true,
+            nextAction: "Continue automatically in one ordinary turn with the restored tool baseline.",
+            recovery: { attemptsUsed: 1, totalElapsedMs: 1000, recovered: false, exhausted: true, lastClassifier: "tool_activity", strategyHistory: ["retry"], diagnostics: [] },
+          };
+        }
+        return { status: "success", result: "Release completed with tools.", attachments: [] };
+      },
+      getContextUsageForChat: async () => null,
+    },
+  });
+
+  await web.processChat("web:default", "default");
+  const continuation = db.getDb().prepare(`
+    SELECT content, thread_id
+    FROM messages
+    WHERE chat_jid = ? AND is_bot_message = 0 AND content = ?
+  `).get("web:default", TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT) as any;
+  expect(continuation).toMatchObject({ content: TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT, thread_id: rootRowId });
+  await web.processChat("web:default", "default", rootRowId);
+
+  expect(prompts[1]).toContain(TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT);
+  const timeline = db.getTimeline("web:default", 20);
+  expect(timeline.filter((item: any) => item.data.type === "agent_response").some((item: any) => String(item.data.content).includes("Release completed with tools"))).toBe(true);
+  expect(web.getQueuedFollowupItems("web:default")).toHaveLength(0);
+});
+
+test("processChat keeps the source pending when protected-recovery handoff persistence fails", async () => {
+  const ws = createTempWorkspace("piclaw-web-channel-");
+  cleanupWorkspace = ws.cleanup;
+  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
+
+  const db = await import("../../../src/db.js");
+  db.initDatabase();
+  db.getDb().exec("DELETE FROM message_media; DELETE FROM messages; DELETE FROM chats; DELETE FROM chat_cursors;");
+  db.storeChatMetadata("web:default", new Date().toISOString(), "Web");
+  const sourceTimestamp = new Date().toISOString();
+  db.storeMessage({
+    id: `msg-${Math.random()}`,
+    chat_jid: "web:default",
+    sender: "user",
+    sender_name: "User",
+    content: "finish with protected recovery",
+    timestamp: sourceTimestamp,
+    is_from_me: false,
+    is_bot_message: false,
+  });
+
+  const webMod = await import("../../../src/channels/web.js");
+  const web = new (webMod.WebChannel as any)({
+    queue: { enqueue: () => {} },
+    agentPool: {
+      setSessionBinder: () => {},
+      runAgent: async () => ({
+        status: "error",
+        error: "Protected recovery needs an ordinary turn.",
+        result: null,
+        attachments: [],
+        requiresToolEnabledContinuation: true,
+        recovery: { attemptsUsed: 1, totalElapsedMs: 1000, recovered: false, exhausted: true, lastClassifier: "tool_activity", strategyHistory: ["retry"], diagnostics: [] },
+      }),
+      getContextUsageForChat: async () => null,
+    },
+  });
+  web.enqueueQueuedFollowupItem = () => { throw new Error("simulated durable queue failure"); };
+
+  await expect(web.processChat("web:default", "default")).rejects.toThrow("handoff persistence failed");
+  expect(db.getChatCursor("web:default")).toBe("");
+  expect(db.getMessagesSince("web:default", "", "Smith").some((message: any) => message.timestamp === sourceTimestamp)).toBe(true);
+  expect(web.getQueuedFollowupItems("web:default")).toHaveLength(0);
+});
+
+test("processChat retains protected-recovery handoff intent when terminal persistence fails", async () => {
+  const ws = createTempWorkspace("piclaw-web-channel-");
+  cleanupWorkspace = ws.cleanup;
+  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
+
+  const db = await import("../../../src/db.js");
+  db.initDatabase();
+  db.getDb().exec("DELETE FROM message_media; DELETE FROM messages; DELETE FROM chats; DELETE FROM chat_cursors;");
+  db.storeChatMetadata("web:default", new Date().toISOString(), "Web");
+  db.storeMessage({
+    id: `msg-${Math.random()}`,
+    chat_jid: "web:default",
+    sender: "user",
+    sender_name: "User",
+    content: "finish with protected recovery",
+    timestamp: new Date().toISOString(),
+    is_from_me: false,
+    is_bot_message: false,
+  });
+
+  const webMod = await import("../../../src/channels/web.js");
+  const web = new (webMod.WebChannel as any)({
+    queue: { enqueue: () => {} },
+    agentPool: {
+      setSessionBinder: () => {},
+      runAgent: async () => ({
+        status: "error",
+        error: "Protected recovery needs an ordinary turn.",
+        result: null,
+        attachments: [],
+        requiresToolEnabledContinuation: true,
+        recovery: { attemptsUsed: 1, totalElapsedMs: 1000, recovered: false, exhausted: true, lastClassifier: "tool_activity", strategyHistory: ["retry"], diagnostics: [] },
+      }),
+      getContextUsageForChat: async () => null,
+    },
+  });
+  const originalStoreMessage = web.storeMessage.bind(web);
+  web.storeMessage = (chatJid: string, content: string, isBot: boolean, mediaIds: number[], options?: any) => {
+    if (isBot) return null;
+    return originalStoreMessage(chatJid, content, isBot, mediaIds, options);
+  };
+
+  await web.processChat("web:default", "default");
+  expect(web.getQueuedFollowupItems("web:default")).toEqual([
+    expect.objectContaining({ source: "auto-protected-recovery-continuation" }),
+  ]);
+  expect(db.getFailedRun("web:default")).toBeTruthy();
+});
+
+test("processChat preserves a replayed protected-recovery handoff when terminal persistence fails", async () => {
+  const ws = createTempWorkspace("piclaw-web-channel-");
+  cleanupWorkspace = ws.cleanup;
+  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
+
+  const db = await import("../../../src/db.js");
+  const { TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT } = await import("../../../src/agent-pool/context-pressure-retry.js");
+  db.initDatabase();
+  db.getDb().exec("DELETE FROM message_media; DELETE FROM messages; DELETE FROM chats; DELETE FROM chat_cursors;");
+  db.storeChatMetadata("web:default", new Date().toISOString(), "Web");
+  const sourceMessageId = `msg-${Math.random()}`;
+  const sourceRowId = db.storeMessage({
+    id: sourceMessageId,
+    chat_jid: "web:default",
+    sender: "user",
+    sender_name: "User",
+    content: "finish with protected recovery",
+    timestamp: new Date().toISOString(),
+    is_from_me: false,
+    is_bot_message: false,
+  });
+
+  const webMod = await import("../../../src/channels/web.js");
+  const web = new (webMod.WebChannel as any)({
+    queue: { enqueue: () => {} },
+    agentPool: {
+      setSessionBinder: () => {},
+      runAgent: async () => ({
+        status: "error",
+        error: "Protected recovery needs an ordinary turn.",
+        result: null,
+        attachments: [],
+        requiresToolEnabledContinuation: true,
+        recovery: { attemptsUsed: 1, totalElapsedMs: 1000, recovered: false, exhausted: true, lastClassifier: "tool_activity", strategyHistory: ["retry"], diagnostics: [] },
+      }),
+      getContextUsageForChat: async () => null,
+    },
+  });
+  web.enqueueQueuedFollowupItem("web:default", 0, TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT, sourceRowId, new Date().toISOString(), {
+    source: "auto-protected-recovery-continuation",
+    queuedBy: { source: "runtime", sourceMessageId },
+  });
+  const originalStoreMessage = web.storeMessage.bind(web);
+  web.storeMessage = (chatJid: string, content: string, isBot: boolean, mediaIds: number[], options?: any) => {
+    if (isBot) return null;
+    return originalStoreMessage(chatJid, content, isBot, mediaIds, options);
+  };
+
+  await web.processChat("web:default", "default");
+  expect(web.getQueuedFollowupItems("web:default")).toEqual([
+    expect.objectContaining({ source: "auto-protected-recovery-continuation", queuedBy: expect.objectContaining({ sourceMessageId }) }),
+  ]);
+});
+
+test("processChat removes stale protected intent atomically with replay terminal persistence", async () => {
+  const ws = createTempWorkspace("piclaw-web-channel-");
+  cleanupWorkspace = ws.cleanup;
+  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
+
+  const db = await import("../../../src/db.js");
+  const { TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT } = await import("../../../src/agent-pool/context-pressure-retry.js");
+  db.initDatabase();
+  db.getDb().exec("DELETE FROM message_media; DELETE FROM messages; DELETE FROM chats; DELETE FROM chat_cursors;");
+  db.storeChatMetadata("web:default", new Date().toISOString(), "Web");
+  const sourceMessageId = `msg-${Math.random()}`;
+  const sourceRowId = db.storeMessage({
+    id: sourceMessageId,
+    chat_jid: "web:default",
+    sender: "user",
+    sender_name: "User",
+    content: "finish with protected recovery",
+    timestamp: new Date().toISOString(),
+    is_from_me: false,
+    is_bot_message: false,
+  });
+
+  const webMod = await import("../../../src/channels/web.js");
+  const web = new (webMod.WebChannel as any)({
+    queue: { enqueue: () => {} },
+    agentPool: {
+      setSessionBinder: () => {},
+      runAgent: async () => ({ status: "success", result: "finished on replay", attachments: [] }),
+      getContextUsageForChat: async () => null,
+    },
+  });
+  web.enqueueQueuedFollowupItem("web:default", 0, TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT, sourceRowId, new Date().toISOString(), {
+    source: "auto-protected-recovery-continuation",
+    queuedBy: { source: "runtime", sourceMessageId },
+  });
+
+  await web.processChat("web:default", "default");
+
+  expect(web.getQueuedFollowupItems("web:default")).toHaveLength(0);
+  expect(db.getDb().prepare(`SELECT COUNT(*) AS count FROM messages WHERE chat_jid = ? AND is_bot_message = 0 AND content = ?`).get("web:default", TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT) as any).toMatchObject({ count: 0 });
+  expect(db.getDb().prepare(`SELECT COUNT(*) AS count FROM messages WHERE chat_jid = ? AND is_bot_message = 1 AND content = ?`).get("web:default", "finished on replay") as any).toMatchObject({ count: 1 });
+});
+
+test("processChat does not chain protected-recovery continuations", async () => {
+  const ws = createTempWorkspace("piclaw-web-channel-");
+  cleanupWorkspace = ws.cleanup;
+  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
+
+  const db = await import("../../../src/db.js");
+  const { TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT } = await import("../../../src/agent-pool/context-pressure-retry.js");
+  db.initDatabase();
+  db.getDb().exec("DELETE FROM message_media; DELETE FROM messages; DELETE FROM chats; DELETE FROM chat_cursors;");
+  db.storeChatMetadata("web:default", new Date().toISOString(), "Web");
+  db.storeMessage({
+    id: `msg-${Math.random()}`,
+    chat_jid: "web:default",
+    sender: "user",
+    sender_name: "User",
+    content: TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT,
+    timestamp: new Date().toISOString(),
+    is_from_me: false,
+    is_bot_message: false,
+  });
+
+  const webMod = await import("../../../src/channels/web.js");
+  const web = new (webMod.WebChannel as any)({
+    queue: { enqueue: () => {} },
+    agentPool: {
+      setSessionBinder: () => {},
+      runAgent: async () => ({
+        status: "error",
+        error: "Ordinary continuation also failed.",
+        result: null,
+        attachments: [],
+        requiresToolEnabledContinuation: true,
+        recovery: { attemptsUsed: 1, totalElapsedMs: 1000, recovered: false, exhausted: true, lastClassifier: "tool_activity", strategyHistory: ["retry"], diagnostics: [] },
+      }),
+      getContextUsageForChat: async () => null,
+    },
+  });
+
+  await web.processChat("web:default", "default");
+  expect(db.getDb().prepare(`SELECT COUNT(*) AS count FROM messages WHERE chat_jid = ? AND is_bot_message = 0 AND content = ?`).get("web:default", TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT) as any).toMatchObject({ count: 1 });
+  expect(web.getQueuedFollowupItems("web:default")).toHaveLength(0);
+});
+
 test("processChat persists orphan Responses output errors with visible session-repair guidance", async () => {
   const ws = createTempWorkspace("piclaw-web-channel-");
   cleanupWorkspace = ws.cleanup;

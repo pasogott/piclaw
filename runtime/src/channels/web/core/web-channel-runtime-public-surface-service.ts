@@ -594,6 +594,7 @@ export class WebChannelRuntimePublicSurfaceService {
       screenHint?: string | null;
       isTerminalAgentReply?: boolean;
       isSteeringMessage?: boolean;
+      removeProtectedContinuationForSourceMessageId?: string | null;
     } = {},
   ): InteractionRow | null {
     return this.channel.messageProcessingStorageService.storeMessage(chatJid, content, isBot, mediaIds, options);

@@ -128,6 +128,40 @@ describe("deferred queued follow-ups", () => {
     }]);
   });
 
+  test("removes only the matching source-tagged protected continuation", () => {
+    const chatJid = jid("deferred-replay-cleanup");
+    db.setDeferredQueuedFollowups(chatJid, [
+      {
+        rowId: -1,
+        queuedContent: "stale protected",
+        threadId: null,
+        queuedAt: "2024-03-10T00:00:00.000Z",
+        source: "auto-protected-recovery-continuation",
+        queuedBy: { source: "runtime", sourceMessageId: "source-replay" },
+      },
+      {
+        rowId: -2,
+        queuedContent: "other protected",
+        threadId: null,
+        queuedAt: "2024-03-10T00:00:01.000Z",
+        source: "auto-protected-recovery-continuation",
+        queuedBy: { source: "runtime", sourceMessageId: "other-source" },
+      },
+      {
+        rowId: -3,
+        queuedContent: "user follow-up",
+        threadId: null,
+        queuedAt: "2024-03-10T00:00:02.000Z",
+      },
+    ]);
+
+    expect(db.removeProtectedRecoveryContinuationForSourceMessageId(chatJid, "source-replay")).toBe(true);
+    expect(db.getDeferredQueuedFollowups(chatJid).map((item) => item.queuedContent)).toEqual([
+      "other protected",
+      "user follow-up",
+    ]);
+  });
+
   test("survives begin/end run state transitions", () => {
     const chatJid = jid("deferred-survives-run");
     db.setDeferredQueuedFollowups(chatJid, [{
@@ -727,6 +761,27 @@ describe("idempotency", () => {
 
   test("rollbackInflightRun is safe to call when there is no row", () => {
     expect(() => db.rollbackInflightRun(jid("rollback-missing"), "")).not.toThrow();
+  });
+
+  test("clearInflightMarker retains protected handoff for no-output interruption", () => {
+    const chatJid = jid("clear-inflight-retain-protected-handoff");
+    db.setDeferredQueuedFollowups(chatJid, [{
+      rowId: -1,
+      queuedContent: "protected survives",
+      threadId: null,
+      queuedAt: "2025-01-01T00:00:00.000Z",
+      source: "auto-protected-recovery-continuation",
+      queuedBy: { source: "runtime", sourceMessageId: "source-none" },
+    }]);
+    db.beginChatRun(chatJid, "2025-01-01T01:00:00.000Z", {
+      prevTs: "2025-01-01T00:00:00.000Z",
+      messageId: "source-none",
+      startedAt: "2025-01-01T01:00:00.001Z",
+    });
+
+    db.clearInflightMarker(chatJid);
+
+    expect(db.getDeferredQueuedFollowups(chatJid).map((item) => item.queuedContent)).toEqual(["protected survives"]);
   });
 
   test("clearInflightMarker clears inflight without rolling back cursor", () => {

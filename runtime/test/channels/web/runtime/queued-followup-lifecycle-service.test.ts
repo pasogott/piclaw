@@ -159,6 +159,44 @@ describe("queued follow-up lifecycle service", () => {
     expect((service.getQueuedFollowupItems("web:default")[0].contentBlocks?.[0] as any).nested.value).toBe(1);
   });
 
+  test("prioritizes protected source continuations ahead of later queued follow-ups", async () => {
+    const { service } = await createServiceFixture();
+
+    service.enqueueQueuedFollowupItem("web:default", 0, "user follow-up", 10, "2024-01-01T00:00:02.000Z", {
+      source: "user-queued",
+    });
+    service.enqueueQueuedFollowupItem("web:default", 0, "protected first", 10, "2024-01-01T00:00:03.000Z", {
+      source: "auto-protected-recovery-continuation",
+      queuedBy: { source: "runtime", sourceMessageId: "source-1" },
+    });
+    service.enqueueQueuedFollowupItem("web:default", 0, "protected second", 20, "2024-01-01T00:00:04.000Z", {
+      source: "auto-protected-recovery-continuation",
+      queuedBy: { source: "runtime", sourceMessageId: "source-2" },
+    });
+
+    expect(service.getQueuedFollowupItems("web:default").map((item) => item.queuedContent)).toEqual([
+      "protected first",
+      "protected second",
+      "user follow-up",
+    ]);
+  });
+
+  test("rejects reordering that moves ordinary work ahead of protected continuations", async () => {
+    const { service } = await createServiceFixture();
+
+    service.enqueueQueuedFollowupItem("web:default", 0, "protected", 10, "2024-01-01T00:00:00.000Z", {
+      source: "auto-protected-recovery-continuation",
+      queuedBy: { source: "runtime", sourceMessageId: "source-1" },
+    });
+    service.enqueueQueuedFollowupItem("web:default", 0, "ordinary", 10, "2024-01-01T00:00:01.000Z");
+
+    expect(service.reorderQueuedFollowupItems("web:default", 1, 0)).toBe(false);
+    expect(service.getQueuedFollowupItems("web:default").map((item) => item.queuedContent)).toEqual([
+      "protected",
+      "ordinary",
+    ]);
+  });
+
   test("removes deferred queued follow-ups without touching active-session placeholder cleanup", async () => {
     const { db, service } = await createServiceFixture();
 

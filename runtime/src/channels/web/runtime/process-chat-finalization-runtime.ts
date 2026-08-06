@@ -38,6 +38,8 @@ export interface ProcessChatFinalizationRuntime {
 /** Finalise a successfully persisted terminal outcome, then resume persisted/queued work. */
 export async function finalizeSuccessfulProcessChatRun(options: ProcessChatFinalizationRuntime): Promise<void> {
   const { channel, chatJid } = options;
+  // Stale protected intent was removed atomically with terminal persistence.
+  // This update only clears inflight/failed run state.
   endChatRun(chatJid);
   const cursorAfterEnd = getChatCursor(chatJid);
   const pendingSteerTimestamps = channel.consumePendingSteering(chatJid);
