@@ -256,7 +256,7 @@ function isAbortFailureText(errorText: string): boolean {
 
 function isToolUnavailableRecoveryText(text: string | null): boolean {
   if (!text?.trim()) return false;
-  return /(?:unable|cannot|can[’']?t).{0,120}(?:access|use).{0,80}(?:execution )?tools|(?:execution )?tools.{0,80}(?:unavailable|not (?:currently )?available|disabled)/is.test(text);
+  return /(?:unable|cannot|can[’']?t).{0,120}(?:access|use).{0,80}(?:execution )?tools|(?:execution )?tools.{0,80}(?:unavailable|not (?:currently )?available|disabled)|\b(?:i(?:[’']m| am)|we(?:[’']re| are))\s+(?:currently\s+)?blocked\s+from\s+(?:further\s+)?(?:tool execution|using (?:the )?(?:execution )?tools)\b/is.test(text);
 }
 
 function findToolBudgetDiagnostic(diagnostics: AgentRecoveryDiagnosticEntry[]): AgentRecoveryDiagnosticEntry | null {
