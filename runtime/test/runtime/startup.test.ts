@@ -369,6 +369,7 @@ export {};
   test("runWebStartupRecoveryBootstrap exposes startup phases and clears them when ready", async () => {
     const events: Array<{ kind: string; chatJid?: string; status?: Record<string, unknown> }> = [];
 
+    let resumePending: (() => void) | null = null;
     runWebStartupRecoveryBootstrap({
       updateAgentStatus: (chatJid, status) => {
         events.push({ kind: "status", chatJid, status });
@@ -381,6 +382,8 @@ export {};
       },
     }, () => {
       events.push({ kind: "handoff" });
+    }, (resume) => {
+      resumePending = resume;
     });
 
     expect(events).toHaveLength(5);
@@ -417,7 +420,9 @@ export {};
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events).toHaveLength(5);
+    expect(resumePending).toBeFunction();
+    (resumePending as () => void)();
     expect(events[5]).toEqual({ kind: "resume" });
   });
 
