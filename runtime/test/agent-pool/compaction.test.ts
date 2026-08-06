@@ -2,6 +2,7 @@ import { beforeEach, expect, test } from "bun:test";
 
 import "../helpers.js";
 import {
+  cancelScheduledIdleAutoCompaction,
   computeAutoCompactionTokenStatus,
   estimateContextTokensFromSession,
   finalizeRecoveryCompactionOutcome,
@@ -681,6 +682,8 @@ test("idle auto-compaction delay env preserves zero and rejects malformed suffix
     await Bun.sleep(25);
     expect(malformedDelayFired).toBe(false);
   } finally {
+    cancelScheduledIdleAutoCompaction("web:idle-zero-delay");
+    cancelScheduledIdleAutoCompaction("web:idle-malformed-delay");
     if (previousDelay === undefined) delete process.env.PICLAW_IDLE_AUTO_COMPACTION_DELAY_MS;
     else process.env.PICLAW_IDLE_AUTO_COMPACTION_DELAY_MS = previousDelay;
   }

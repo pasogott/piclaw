@@ -180,14 +180,21 @@ async function completeCompactionPrompt(
     // one repair attempt materially different instead of repeating the same
     // truncation under an advisory-only "be concise" instruction.
     const firstAttemptMaxTokens = Number((err as { validationMaxTokens?: unknown })?.validationMaxTokens);
-    const repairMaxTokens = (err as { validationCode?: string })?.validationCode === "stop_reason"
-      && /stop reason was length/i.test(repairReason)
-      ? Math.max(
-        MIN_COMPACTION_OUTPUT_TOKENS,
-        Math.floor((Number.isFinite(firstAttemptMaxTokens) && firstAttemptMaxTokens > 0 ? firstAttemptMaxTokens : maxTokens) * 0.5),
-      )
+    const lengthStopped = (err as { validationCode?: string })?.validationCode === "stop_reason"
+      && /stop reason was length/i.test(repairReason);
+    const initialOutputCeiling = Number.isFinite(firstAttemptMaxTokens) && firstAttemptMaxTokens > 0
+      ? firstAttemptMaxTokens
       : maxTokens;
-    const repairInstruction = buildCompactionRepairInstruction(schema, repairReason, repairMaxTokens);
+    const repairTargetTokens = lengthStopped
+      ? Math.max(MIN_COMPACTION_OUTPUT_TOKENS, Math.floor(initialOutputCeiling * 0.5))
+      : maxTokens;
+    // The target tells the model to produce a materially shorter answer. Keep
+    // the provider ceiling at the original safe allowance so mandatory schema
+    // headings can still settle if the model slightly exceeds that target.
+    // Halving both values turns a previous truncation into a stricter hard cap
+    // and can make the single repair attempt predictably truncate again.
+    const repairOutputCeiling = lengthStopped ? initialOutputCeiling : maxTokens;
+    const repairInstruction = buildCompactionRepairInstruction(schema, repairReason, repairTargetTokens);
     const appendRepairInstruction = (sourcePrompt: string): string => {
       const marker = schema === "final"
         ? "\nOutput this exact final format:"
@@ -202,14 +209,16 @@ async function completeCompactionPrompt(
     // could claim coverage for omitted history. Retry only when the complete
     // original prompt plus the bounded repair instruction still fits.
     const repairedPrompt = appendRepairInstruction(promptText);
-    if (!hasSafeCompactionOutputRoom(model, repairedPrompt, repairMaxTokens)) throw err;
+    if (!hasSafeCompactionOutputRoom(model, repairedPrompt, repairOutputCeiling)) throw err;
     log.debug("Progressive compaction retrying rejected output once", {
       operation: "smart_compaction.progressive_output_retry",
       schema,
       retryCount: 1,
       promptWasTrimmed: false,
+      repairTargetTokens,
+      repairOutputCeiling,
     });
-    return await runOnce(repairedPrompt, 1, repairMaxTokens);
+    return await runOnce(repairedPrompt, 1, repairOutputCeiling);
   }
 }
 
@@ -745,20 +754,37 @@ export async function runProgressiveCompaction(input: {
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const inputOverflow = isCompactionInputOverflow(message);
+      const repeatedOutputLengthStop = (error as { validationCode?: unknown; validationRetryCount?: unknown })?.validationCode === "stop_reason"
+        // completeCompactionPrompt performs exactly one bounded repair attempt.
+        // Split only after that repair also reaches the provider output limit.
+        && Number((error as { validationRetryCount?: unknown }).validationRetryCount) === 1
+        && /stop reason was length/i.test(message);
       if (
-        !isCompactionInputOverflow(message)
+        (!inputOverflow && !repeatedOutputLengthStop)
         || depth >= MAX_HIDDEN_CAP_SPLIT_DEPTH
         || text.length < MIN_HIDDEN_CAP_SEGMENT_CHARS * 2
       ) throw error;
 
-      // A provider/gateway can enforce a lower input cap than its advertised
-      // model context. Bisect the complete source text and submit two changed,
-      // smaller prompts; never retry the rejected prompt unchanged or trim it.
+      // A provider/gateway can enforce a lower input cap than advertised, or a
+      // dense source chunk can require more summary output than one bounded
+      // response. Bisect the complete source text and submit two changed,
+      // smaller prompts; never trim source facts or retry the rejected prompt
+      // unchanged after its one bounded repair attempt.
       const midpoint = findSafeHiddenCapSplitIndex(text);
       const boundary = "\n[provider-limit split boundary: preserve adjacent partial token/path/error exactly]\n";
       const left = await summarizeChunkWithHiddenCapRecovery(chunk, `${text.slice(0, midpoint)}${boundary}`, depth + 1, `${chunk.index} split ${depth + 1}a`, signal);
       const right = await summarizeChunkWithHiddenCapRecovery(chunk, `${boundary}${text.slice(midpoint)}`, depth + 1, `${chunk.index} split ${depth + 1}b`, signal);
       const indentHeadings = (summary: string) => summary.replace(/^## /gm, "### ");
+      log.debug("Progressive chunk exceeded a provider input/output limit; bisecting complete source text", {
+        operation: "smart_compaction.progressive_chunk_provider_limit_bisect",
+        chunkIndex: chunk.index,
+        depth: depth + 1,
+        cause: repeatedOutputLengthStop ? "output_length" : "input_context",
+        originalChars: text.length,
+        leftChars: midpoint,
+        rightChars: text.length - midpoint,
+      });
       return [
         "## Chunk Range",
         `- ${chunk.startMessageIndex}-${chunk.endMessageIndex} (provider-limit split)`,

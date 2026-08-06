@@ -429,6 +429,17 @@ test("agent control queue, compact, and abort commands", async () => {
   expect(compactReport).toContain("## Summary");
   expect(compactReport).toContain("Summary");
 
+  session.compactError = new Error("Progressive compaction output invalid (stop_reason): completion stop reason was length; expected stop (provider-native pre-pass: disabled — Provider-native compaction is disabled)");
+  const compactLength = await applyControlCommand(runtime as any, registry, { type: "compact", raw: "/compact" });
+  expect(compactLength.status).toBe("error");
+  expect(compactLength.message).toContain("provider output limit after one bounded repair attempt");
+  expect(compactLength.message).toContain("rejected summary was not persisted");
+  expect(compactLength.message).toContain("no compaction cut was committed");
+  expect(compactLength.message).toContain("no source-bearing history was discarded by compaction");
+  expect(compactLength.message).toContain("Retry /compact once");
+  db.clearChatCompactionBackoff("web:default");
+  db.clearChatCompactionBackoff("control:/compact");
+
   session.compactError = new Error("400 messages.2.content.0: unexpected `tool_use_id` found in `tool_result` blocks: toolu_test. Each `tool_result` block must have a corresponding `tool_use` block in the previous message.");
   const compactCorruption = await applyControlCommand(runtime as any, registry, { type: "compact", raw: "/compact" });
   expect(compactCorruption.status).toBe("error");

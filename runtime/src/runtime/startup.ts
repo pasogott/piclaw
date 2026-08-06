@@ -496,6 +496,7 @@ function registerSessionControlHandler(agentPool: AgentPool, web: WebChannel): v
 export function runWebStartupRecoveryBootstrap(
   web: StartupRecoveryWebChannel,
   recoverRestartHandoffs?: () => void,
+  scheduleResumePending: (resume: () => void) => void = (resume) => { setTimeout(resume, 0); },
 ): void {
   const startedAt = new Date().toISOString();
   web.updateAgentStatus(STARTUP_STATUS_CHAT_JID, buildStartupAgentStatus({
@@ -515,7 +516,7 @@ export function runWebStartupRecoveryBootstrap(
     // Defer the pending-resume scan so the HTTP server can bind and start
     // accepting connections before heavy chat processing begins. Queue
     // dedupe keeps this safe when IPC-driven resume_pending runs too.
-    setTimeout(() => web.resumePendingChats(), 0);
+    scheduleResumePending(() => web.resumePendingChats());
   } finally {
     web.updateAgentStatus(STARTUP_STATUS_CHAT_JID, {
       type: "done",
