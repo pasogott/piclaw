@@ -91,7 +91,7 @@ The mechanisms are compatible behind the session persistence port. The schemas a
 
 A production migration needs separate approval and must meet every gate:
 
-1. Keep `@earendil-works/pi-agent-core`, `pi-ai` and `pi-coding-agent` pinned at `0.83.0`.
+1. Keep `@earendil-works/pi-agent-core`, `pi-ai` and `pi-coding-agent` on the same exact reviewed version. The former `0.83.0` pin was superseded by the reviewed `0.84.0` upgrade; a storage migration must not change these dependencies independently.
 2. Run importer `--dry-run` and retain the source inventory and malformed-file report.
 3. Use a dedicated target such as `/workspace/.piclaw/store/sessions.db`; refuse unrelated tables.
 4. Take and verify a `VACUUM INTO` backup before writing an existing target.

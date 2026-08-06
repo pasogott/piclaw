@@ -43,7 +43,7 @@ describe("streamComplete", () => {
       maxTokens: 128,
       signal: new AbortController().signal,
       apiKey: "key",
-      headers: { "x-test": "1" },
+      headers: { "x-test": "1", authorization: null },
       streamFn: async (model, context, options) => {
         calls.push({ model, context, options });
         return stream;
@@ -67,7 +67,7 @@ describe("streamComplete", () => {
     expect(calls[0].options).toMatchObject({
       maxTokens: 128,
       apiKey: "key",
-      headers: { "x-test": "1" },
+      headers: { "x-test": "1", authorization: null },
     });
   });
 

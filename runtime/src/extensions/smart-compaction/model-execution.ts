@@ -1,4 +1,5 @@
 /** Single-pass provider execution, lossless repair retry, and terminal validation. */
+import type { ProviderHeaders } from "@earendil-works/pi-ai";
 import { createLogger } from "../../utils/logger.js";
 import { estimateCompactionPromptTokens } from "./context.js";
 import { isCompactionInputOverflow } from "./boundary-policy.js";
@@ -17,7 +18,7 @@ export type CompactionModelExecutionResult =
 
 export async function runCompactionModelExecution(input: {
   model: any;
-  auth: { apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> };
+  auth: { apiKey?: string; headers?: ProviderHeaders; env?: Record<string, string> };
   promptText: string;
   requestedMaxTokens: number;
   abortSignal: AbortSignal;

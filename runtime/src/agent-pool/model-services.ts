@@ -5,20 +5,21 @@ import {
   ModelRuntime,
   type CreateModelRuntimeOptions,
 } from "@earendil-works/pi-coding-agent";
+import type { ModelsRefreshOptions, ModelsRefreshResult } from "@earendil-works/pi-ai";
 
 import { getPiclawAgentDir } from "../core/agent-dir.js";
 import { FileCredentialStore, type PiclawCredentialStore } from "./credential-store.js";
 
 export class PiclawModelRegistry extends ModelRegistry {
-  private refreshInFlight: Promise<void> | null = null;
+  private refreshInFlight: Promise<ModelsRefreshResult> | null = null;
 
   constructor(readonly modelRuntime: ModelRuntime) {
     super(modelRuntime);
   }
 
-  override refresh(): Promise<void> {
+  override refresh(options: ModelsRefreshOptions = {}): Promise<ModelsRefreshResult> {
     if (this.refreshInFlight) return this.refreshInFlight;
-    const refresh = this.modelRuntime.refresh({ allowNetwork: false }).then(() => undefined);
+    const refresh = this.modelRuntime.refresh({ ...options, allowNetwork: false });
     const tracked = refresh.finally(() => {
       if (this.refreshInFlight === tracked) this.refreshInFlight = null;
     });

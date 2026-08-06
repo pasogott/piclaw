@@ -1,7 +1,7 @@
 /** Provider-native remote compaction with opaque, persisted canonical-context replay. */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { convertResponsesMessages, convertResponsesTools } from "@earendil-works/pi-ai/api/openai-responses-shared";
-import type { Api, Model, Tool } from "@earendil-works/pi-ai";
+import type { Api, Model, ProviderHeaders, Tool } from "@earendil-works/pi-ai";
 import { convertToLlm, type FileOperations, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { ModelRequestAuth } from "../../utils/model-auth.js";
 import { createLogger } from "../../utils/logger.js";
@@ -143,14 +143,14 @@ export function resolveRemoteCompactionCapability(model: Model<Api> | undefined)
   return { ok: true, capability };
 }
 
-function authorizationBearerToken(headers: Record<string, string> | undefined): string | null {
+function authorizationBearerToken(headers: ProviderHeaders | undefined): string | null {
   const authorization = Object.entries(headers ?? {}).find(([name]) => name.toLowerCase() === "authorization")?.[1];
   if (typeof authorization !== "string") return null;
   const match = authorization.trim().match(/^Bearer\s+(.+)$/i);
   return match?.[1]?.trim() || null;
 }
 
-function hasAuthorizationHeader(headers: Record<string, string> | undefined): boolean {
+function hasAuthorizationHeader(headers: ProviderHeaders | undefined): boolean {
   return authorizationBearerToken(headers) !== null;
 }
 
@@ -451,7 +451,9 @@ export async function attemptRemoteCompaction(options: {
 
   const headers: Record<string, string> = {
     "content-type": "application/json",
-    ...(options.auth.headers ?? {}),
+    ...Object.fromEntries(
+      Object.entries(options.auth.headers ?? {}).filter((entry): entry is [string, string] => entry[1] !== null),
+    ),
   };
   if (!hasAuthorizationHeader(headers) && options.auth.apiKey) headers.authorization = `Bearer ${options.auth.apiKey}`;
   if (capability.capability.auth === "codex-oauth") {

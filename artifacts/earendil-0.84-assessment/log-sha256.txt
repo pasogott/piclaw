@@ -1,0 +1,7 @@
+# Evidence log SHA-256
+2fa7bfdcc57f05d5005aa5204f05c02b52241a0c6d18144475c0cc7b4dc97c2a  /workspace/.tmp/earendil-084-ci-fast.log
+5b2414337e585363a75453dc8a83c0e75b639c1a725ddd99ad421315da60b0f0  /workspace/.tmp/earendil-084-provider-suite.log
+7acb6943425ba55449d6666d222e07da459656b50b818b1eccbf0611db2138c7  /workspace/.tmp/earendil-084-affected-suite.log
+255200a1eaf99ff8624dd4b5b6d37e6a5af351ca83d66769c7fba4ffea2e50e1  /workspace/.tmp/earendil-084-contract-freeze.log
+fe6351a7b25b07ab17de5edfc73af3b24ec2bf6dbf526b6387c431ae13e0e412  /workspace/.tmp/e2e-provider-independent.log
+57631d71bb2520e4d7f84915f85c3e31c8595c18ebf93ae0f2ac4570df0e4bee  /workspace/.tmp/e2e-compaction-copilot.log

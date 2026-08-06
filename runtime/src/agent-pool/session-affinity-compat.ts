@@ -120,8 +120,9 @@ export function installLegacySessionAffinityCompatibility(
       : null;
     if (originalRefresh) {
       mutable.refresh = (async (...args: Parameters<ModelRegistry["refresh"]>) => {
-        await originalRefresh(...args);
+        const result = await originalRefresh(...args);
         apply();
+        return result;
       }) as ModelRegistry["refresh"];
     }
   }

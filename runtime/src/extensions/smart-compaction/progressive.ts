@@ -5,7 +5,7 @@
  * ../smart-compaction.ts.
  */
 
-import type { Message, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { Message, ProviderHeaders, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import type { FileOperations } from "@earendil-works/pi-coding-agent";
 import { streamComplete, type CompactionStreamFn } from "./stream-complete.js";
 import {
@@ -89,7 +89,7 @@ function hasSafeCompactionOutputRoom(model: any, promptText: string, maxTokens: 
 
 async function completeCompactionPrompt(
   model: any,
-  auth: { apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> },
+  auth: { apiKey?: string; headers?: ProviderHeaders; env?: Record<string, string> },
   promptText: string,
   schema: CompactionSummarySchema,
   maxTokens: number,
@@ -292,7 +292,7 @@ function buildSafeMergeBatches(
 async function mergeProgressiveSummaries(input: {
   summaries: string[];
   model: any;
-  auth: { apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> };
+  auth: { apiKey?: string; headers?: ProviderHeaders; env?: Record<string, string> };
   budget: ProgressiveCompactionBudget;
   maxTokens: number;
   abortSignal: AbortSignal;
@@ -600,7 +600,7 @@ export async function runProgressiveCompaction(input: {
   sourceIndexesByLlmIndex?: number[];
   sourceEntryIdsByLlmIndex?: Array<string | undefined>;
   model: any;
-  auth: { apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> };
+  auth: { apiKey?: string; headers?: ProviderHeaders; env?: Record<string, string> };
   settings: { reserveTokens: number };
   previousSummary?: string;
   keptMessagesSummary?: string;
