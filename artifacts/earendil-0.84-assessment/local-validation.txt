@@ -1,0 +1,38 @@
+# Earendil 0.84 local validation transcript
+
+Assessment head: da08de8b1489ab88ca7388e618680e31bbe2086f (code) + 880cc0093 (assessment document)
+Date: 2026-08-06
+
+## Canonical ci-fast
+6306:3 tests skipped:
+6311: 3825 pass
+6313: 0 fail
+6315:Ran 3828 tests across 575 files. [152.65s]
+6360: 23 pass
+6361: 0 fail
+6363:Ran 23 tests across 1 file. [1.59s]
+6482: 9 pass
+6483: 0 fail
+6485:Ran 9 tests across 2 files. [4.79s]
+
+## Provider/model suite
+388: 267 pass
+389: 0 fail
+391:Ran 267 tests across 29 files. [7.14s]
+
+## Affected suite
+501:3 tests skipped:
+506: 347 pass
+508: 0 fail
+510:Ran 350 tests across 14 files. [49.38s]
+
+## Contract suite
+60: 35 pass
+61: 0 fail
+63:Ran 35 tests across 5 files. [12.39s]
+
+## Static checks
+typecheck: passed
+lint: passed
+stale-dist: passed
+pack-hygiene: passed (1004 files)

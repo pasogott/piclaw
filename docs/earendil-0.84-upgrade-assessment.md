@@ -38,6 +38,8 @@ Piclaw now:
 
 ## Compatibility evidence
 
+Evidence summaries are committed under [`artifacts/earendil-0.84-assessment/`](../artifacts/earendil-0.84-assessment/README.md). Full transient logs were retained during review; their SHA-256 hashes are recorded without committing private or oversized logs.
+
 Local validation on Earendil 0.84:
 
 - typecheck: passed
@@ -77,6 +79,8 @@ The Earendil packages declare Node >=22.19. Piclaw's supported runtime and relea
 A clean `bun install -g piclaw-2.12.12.tgz` triggers a Bun 1.3.14 dependency-loop error that resolves the package repository URL back to Piclaw. The tarball contains no self-dependency. Portable production staging and installation pass. This is baseline packaging debt and is not caused by Earendil 0.84.
 
 ## Disposable microVM evidence
+
+Testing completed on 6 August 2026. Machine-readable results are in [`microvm-canary.json`](../artifacts/earendil-0.84-assessment/microvm-canary.json).
 
 Target: `piclaw-test`, VM 900 on node `radxax4`.
 
@@ -143,3 +147,19 @@ After exact-head CI and review, deploy a portable canary with:
 5. a tested symlink rollback to the prior release.
 
 Production deployment requires explicit approval and an active-session check before restart.
+
+## Pre-production gates
+
+The release owner must record these results before requesting production deployment:
+
+1. `PR CI`: exact-head canonical CI passes with no active test failures.
+2. `SQLite`: `PRAGMA integrity_check` returns `ok`; message/chat/cursor counts remain stable across restart.
+3. `Model catalogue`: background refresh reports no provider errors and returns at least the expected configured-provider models.
+4. `Copilot stream`: a bounded side prompt returns `EAR84_OK`, `status=success`, and `stopReason=stop`.
+5. `Recovery/tools`: protected handoff, owner-bound restoration, rotation and compaction suites pass on the final commit.
+6. `Restart`: PID changes, HTTP returns 200, and database integrity/counts remain stable.
+7. `Rollback`: switching the release symlink to 0.83 and back to 0.84 returns HTTP 200 with the same database integrity/counts.
+8. `Resources`: canary RSS remains below 200 MB after startup and does not grow continuously during the observation window.
+9. `Approval`: an independent reviewer approves the exact commit; the operator confirms no other active sessions before restart.
+
+The production operator owns deployment and rollback. The agent must check active sessions immediately before installation/restart and must not restart when another session is active.

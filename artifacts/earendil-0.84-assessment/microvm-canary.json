@@ -1,0 +1,132 @@
+{
+  "generatedAt": "2026-08-06T16:40:00Z",
+  "target": {
+    "name": "piclaw-test",
+    "vmid": 900,
+    "node": "radxax4",
+    "address": "192.168.1.78",
+    "memoryBytes": 4294967296
+  },
+  "baseline": {
+    "piclawVersion": "2.12.11",
+    "earendilVersion": "0.83.0",
+    "releasePath": "/opt/piclaw/releases/piclaw-2.12.11-linux-x64-baseline",
+    "httpStatus": 200,
+    "database": {
+      "integrity": "ok",
+      "messages": 823,
+      "chats": 28,
+      "cursors": 25
+    }
+  },
+  "upgrade": {
+    "assessmentCommit": "da08de8b1489ab88ca7388e618680e31bbe2086f",
+    "piclawVersion": "2.12.12",
+    "earendilVersion": "0.84.0",
+    "releasePath": "/opt/piclaw/releases/piclaw-2.12.12-linux-x64",
+    "httpStatus": 200,
+    "databaseAfterInstall": {
+      "integrity": "ok",
+      "messages": 823,
+      "chats": 28,
+      "cursors": 25
+    },
+    "backgroundModelRefreshProviderErrors": [],
+    "availableModelCount": 31,
+    "boundedSidePrompt": {
+      "model": "github-copilot/gpt-5.6-sol",
+      "status": "success",
+      "result": "EAR84_OK",
+      "stopReason": "stop",
+      "inputTokens": 3,
+      "outputTokens": 7
+    }
+  },
+  "restart": {
+    "beforePid": 13932,
+    "afterPid": 14097,
+    "httpStatus": 200,
+    "databaseBefore": {
+      "integrity": "ok",
+      "messages": 875,
+      "chats": 29,
+      "cursors": 25
+    },
+    "databaseAfter": {
+      "integrity": "ok",
+      "messages": 875,
+      "chats": 29,
+      "cursors": 25
+    }
+  },
+  "rollback": {
+    "to083": {
+      "httpStatus": 200,
+      "piclawVersion": "2.12.11",
+      "earendilVersion": "0.83.0",
+      "database": {
+        "integrity": "ok",
+        "messages": 875,
+        "chats": 29,
+        "cursors": 25
+      }
+    },
+    "restore084": {
+      "httpStatus": 200,
+      "piclawVersion": "2.12.12",
+      "earendilVersion": "0.84.0",
+      "database": {
+        "integrity": "ok",
+        "messages": 875,
+        "chats": 29,
+        "cursors": 25
+      }
+    }
+  },
+  "resourcesFreshStart": {
+    "earendil083": {
+      "releaseApparentBytes": 552546499,
+      "releaseDiskKiB": 656540,
+      "serviceMemoryBytes": 118071296
+    },
+    "earendil084": {
+      "releaseApparentBytes": 561940259,
+      "releaseDiskKiB": 666832,
+      "serviceMemoryBytes": 149811200
+    }
+  },
+  "browser": {
+    "compactionModelSlice": {
+      "passed": 6,
+      "flaky": 1,
+      "failed": 2,
+      "failureCause": "beforeEach/afterEach queue cleanup timeout while an external provider retry was active",
+      "functionalChecksPassed": [
+        "/compact indicator/update",
+        "click-to-compact",
+        "model selector",
+        "model switching",
+        "post-compaction model controls"
+      ]
+    },
+    "providerIndependentDesktopSlice": {
+      "passed": 34,
+      "skipped": 15,
+      "failed": 1,
+      "failureCause": "existing safe-area width assertion expected >1024px while configured chat surface was 900px"
+    }
+  },
+  "knownBaselineIssues": [
+    "Operator run-abort endpoint invokes /abort through the coding-agent slash-command path and returns Unknown command",
+    "Clean Bun 1.3.14 global tarball install resolves the package repository URL back to Piclaw and reports a dependency loop; portable installation passes",
+    "Three pre-prompt compaction tests remain skipped from the 0.83 baseline"
+  ],
+  "finalCanary": {
+    "releasePath": "/opt/piclaw/releases/piclaw-2.12.12-linux-x64",
+    "earendilVersion": "0.84.0",
+    "httpStatus": 200,
+    "queueCount": 0,
+    "inflightCount": 0,
+    "preflightCount": 0
+  }
+}

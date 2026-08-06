@@ -1,0 +1,9 @@
+# Build artefact checksums
+8a6e901dcbb8932386d3b83093947083f2a07fd94fe1b45f0f336d4c326e3e12  artifacts/release/piclaw-2.12.12-linux-x64.run
+14bcd7bf76e9a1583b206016aaa07c7d2663e7d72b0c38b85df3e512ad64664c  artifacts/release/piclaw-2.12.12-linux-x64-baseline.run
+1075f2208fb119fb2ffd987e668ac01ef2224daca4a6afaf3c85f1b4b528ad25  /workspace/.piclaw/tmp/piclaw-pack/piclaw-2.12.12.tgz
+
+# Sizes
+187593580 artifacts/release/piclaw-2.12.12-linux-x64.run
+187507161 artifacts/release/piclaw-2.12.12-linux-x64-baseline.run
+29646672 /workspace/.piclaw/tmp/piclaw-pack/piclaw-2.12.12.tgz

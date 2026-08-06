@@ -1,0 +1,11 @@
+# Browser E2E summaries
+
+## Compaction/model slice
+168:  2 failed
+171:  1 flaky
+173:  6 passed (10.9m)
+
+## Provider-independent desktop slice
+125:  1 failed
+127:  15 skipped
+128:  34 passed (1.7m)
