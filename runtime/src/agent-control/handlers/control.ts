@@ -253,6 +253,9 @@ function isSessionCorruptionError(message: string | null | undefined): boolean {
 }
 
 function formatCompactFailureMessage(message: string): string {
+  if (/Progressive compaction output invalid \(stop_reason\): completion stop reason was length/i.test(message)) {
+    return "Compaction could not finish the continuity summary within the provider output limit after one bounded repair attempt. The rejected summary was not persisted, no compaction cut was committed, and no source-bearing history was discarded by compaction. Retry /compact once. If it repeats, use /session-rotate and report the compaction failure.";
+  }
   if (!isSessionCorruptionError(message)) return message;
   return `⚠️ API error — the session may be corrupted:\n\n\`${message.slice(0, 500)}\`\n\nPiClaw prunes orphaned agent tool results, corrupt image blocks, and orphan OpenAI Responses outputs before the repaired context is sent. Run \`/compact\`; if the rewritten session still fails, use \`/new-session\` to start fresh.`;
 }

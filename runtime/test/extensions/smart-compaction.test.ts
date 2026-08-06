@@ -2665,6 +2665,53 @@ describe("smart-compaction", () => {
       if (stopReason === "length") expect(prompts.some((prompt: string) => prompt.includes("Output Repair Requirement"))).toBe(true);
     });
 
+    it("bisects a source chunk after its concise output-length repair also truncates", async () => {
+      const longMessages = [
+        userMsg(`LENGTH_SPLIT_FACT ${"x".repeat(9_000)}`),
+        ...Array.from({ length: 23 }, (_, i) => userMsg(`Other split fact ${i}: ${"y".repeat(3_000)}`)),
+      ];
+      const prompts: string[] = [];
+      let originalChunkCalls = 0;
+      const validChunk = (label: string) => `## Chunk Range\n- ${label}\n\n## Goals / User Intent\n- Preserve output-length split facts\n\n## Constraints & Preferences\n- preserve all source\n\n## Decisions\n- bisect after bounded repair\n\n## Files / Commands / Tool Outcomes\n- none\n\n## Progress\n- Done: source segment summarized\n- In progress: merge\n- Blocked: none\n\n## Open Questions / Next Steps\n- merge ordered segments\n\n## Key Continuity Facts\n- ${label}`;
+      (completeSimple as any).mockImplementation(async (_model: any, context: any) => {
+        const prompt = context.messages[0].content[0].text as string;
+        prompts.push(prompt);
+        if (prompt.includes("deterministic chunk")) {
+          const isOriginalDenseChunk = prompt.includes("LENGTH_SPLIT_FACT") && !prompt.includes("split 1a") && !prompt.includes("split 1b");
+          if (isOriginalDenseChunk) {
+            originalChunkCalls += 1;
+            return { content: [{ type: "text", text: "## Chunk Range\n- truncated" }], stopReason: "length" };
+          }
+          return { content: [{ type: "text", text: validChunk(prompt.includes("split 1a") ? "split-a" : prompt.includes("split 1b") ? "split-b" : "other") }], stopReason: "stop" };
+        }
+        if (prompt.includes("smaller intermediate summary")) {
+          return { content: [{ type: "text", text: validChunk("merged") }], stopReason: "stop" };
+        }
+        return {
+          content: [{ type: "text", text: "## Goal\nPreserve length-split facts\n\n## Current Active Topic\n- progressive chunk recovery\n\n## Historical / Background Context\n- dense chunk was split after two length stops\n\n## Constraints & Preferences\n- preserve source\n\n## Progress\n### Done\n- [x] split summaries merged\n### In Progress\n- [ ] continue\n### Blocked\n- none\n\n## Key Decisions\n- **Output recovery**: bisect complete source\n\n## Next Steps\n1. continue\n\n## Critical Context\n- LENGTH_SPLIT_FACT remains represented" }],
+          stopReason: "stop",
+        };
+      });
+
+      const result = await handler!(
+        {
+          preparation: makePreparation(longMessages.length, {
+            messagesToSummarize: longMessages,
+            tokensBefore: 90_000,
+            settings: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 1_000 },
+          }),
+          branchEntries: [],
+          signal: new AbortController().signal,
+        },
+        makeCtx({ model: { provider: "test", id: "chunk-length-bisect", contextWindow: 16_000, reasoning: false } }),
+      );
+
+      expect(originalChunkCalls).toBe(2);
+      expect(prompts.some((prompt) => prompt.includes("split 1a"))).toBe(true);
+      expect(prompts.some((prompt) => prompt.includes("split 1b"))).toBe(true);
+      expect(result.compaction.summary).toContain("LENGTH_SPLIT_FACT");
+    });
+
     it("does not retry an unchanged progressive prompt after provider input overflow", async () => {
       const previousPromptChars = process.env.PICLAW_PROGRESSIVE_COMPACTION_PROMPT_CHARS;
       process.env.PICLAW_PROGRESSIVE_COMPACTION_PROMPT_CHARS = "3000";
@@ -2796,9 +2843,16 @@ describe("smart-compaction", () => {
       expect(finalPrompts).toHaveLength(2);
       expect(finalMaxTokens).toHaveLength(2);
       expect(finalMaxTokens[0]).toBeLessThan(8192);
-      expect(finalMaxTokens[1]).toBe(Math.max(512, Math.floor(finalMaxTokens[0] / 2)));
+      const repairTargetTokens = Math.max(512, Math.floor(finalMaxTokens[0] / 2));
+      const repairedSafeOutput = getSafeCompactionMaxTokens(
+        { provider: "test", id: "final-validation", contextWindow: 10_000, reasoning: false },
+        finalPrompts[1],
+        finalMaxTokens[0],
+      ).maxTokens;
+      expect(finalMaxTokens[1]).toBe(repairedSafeOutput);
+      expect(finalMaxTokens[1]).toBeGreaterThan(repairTargetTokens);
       expect(finalPrompts.at(-1)).toContain("Output Repair Requirement");
-      expect(finalPrompts.at(-1)).toContain(`within ${finalMaxTokens[1]} output tokens`);
+      expect(finalPrompts.at(-1)).toContain(`within ${repairTargetTokens} output tokens`);
       expect(finalPrompts[1].lastIndexOf("## Output Repair Requirement"))
         .toBeLessThan(finalPrompts[1].lastIndexOf("## Critical Context"));
       expect(finalPrompts[1]).toContain("fact 0-");
