@@ -138,7 +138,11 @@ describe("runAgentRecoveryPhase", () => {
     ]));
   });
 
-  test("does not report a tool-unavailable protected continuation as recovered", async () => {
+  test.each([
+    ["unable-access", "I’m unable to access the execution tools in this recovery turn, so I can’t advance the task."],
+    ["production-blocked", "I’m blocked from further tool execution in this recovered turn, so I cannot safely inspect or edit the continuation ledger yet."],
+    ["blocked-using", "We are blocked from using the tools, so this task cannot continue."],
+  ])("does not report a tool-unavailable protected continuation as recovered: %s", async (caseId, protectedReply) => {
     let activeTools = ["read", "bash"];
     const sessionCtrl: SessionWithToolControl = {
       getActiveToolNames: () => [...activeTools],
@@ -148,7 +152,7 @@ describe("runAgentRecoveryPhase", () => {
 
     const result = await runAgentRecoveryPhase({
       prompt: "continue goal",
-      chatJid: "web:test-recovery-phase",
+      chatJid: `web:test-recovery-phase:${caseId}`,
       session: {} as any,
       sessionCtrl,
       timeoutMs: 0,
@@ -177,7 +181,7 @@ describe("runAgentRecoveryPhase", () => {
         }
         expect(activeTools).toEqual([]);
         return attempt({
-          output: output("success", undefined, "I’m unable to access the execution tools in this recovery turn, so I can’t advance the task."),
+          output: output("success", undefined, protectedReply),
         });
       },
     });
