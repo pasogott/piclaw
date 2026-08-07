@@ -92,11 +92,10 @@ function FileAttachment({ mediaId, onPreview }) {
     `;
 }
 
-const LEGACY_PROTECTED_RECOVERY_PROMPT = 'Continue the most recent user request in this ordinary tool-enabled turn. Resume from persisted progress, do not replay completed side effects, and finish the task or report a concrete blocker.';
 const PROTECTED_RECOVERY_CONTROL_INTENT = 'protected_recovery_continuation';
 const PROTECTED_RECOVERY_CONTROL_LABEL = 'Recovery resumed with execution tools';
 
-export function getProtectedRecoveryControlIntent(content, contentBlocks) {
+export function getProtectedRecoveryControlIntent(contentBlocks) {
     const block = Array.isArray(contentBlocks)
         ? contentBlocks.find((candidate) => (
             candidate
@@ -110,15 +109,6 @@ export function getProtectedRecoveryControlIntent(content, contentBlocks) {
             label: PROTECTED_RECOVERY_CONTROL_LABEL,
             sourceMessageId: typeof block.source_message_id === 'string' ? block.source_message_id : '',
             sourceRowId: Number.isFinite(Number(block.source_row_id)) ? Number(block.source_row_id) : null,
-            legacy: false,
-        };
-    }
-    if (typeof content === 'string' && content.trim() === LEGACY_PROTECTED_RECOVERY_PROMPT) {
-        return {
-            label: PROTECTED_RECOVERY_CONTROL_LABEL,
-            sourceMessageId: '',
-            sourceRowId: null,
-            legacy: true,
         };
     }
     return null;
@@ -1304,7 +1294,7 @@ export function Post({ post, onClick, onHashtagClick, onMessageRef, onScrollToMe
     const blocks = data.content_blocks || [];
     const mediaIds = data.media_ids || [];
     const peerMessageMeta = getPeerMessageMeta(blocks);
-    const protectedRecoveryControl = getProtectedRecoveryControlIntent(data.content, blocks);
+    const protectedRecoveryControl = getProtectedRecoveryControlIntent(blocks);
     const selfContinuationMeta = getSelfContinuationMeta(blocks);
     const restartHandoffMeta = getRestartHandoffMeta(blocks);
     const isAgent = data.type === 'agent_response';
@@ -1764,7 +1754,6 @@ export function Post({ post, onClick, onHashtagClick, onMessageRef, onScrollToMe
         const lineage = protectedRecoveryControl.sourceMessageId
             ? ` Source message: ${protectedRecoveryControl.sourceMessageId}.`
             : '';
-        const legacy = protectedRecoveryControl.legacy ? ' Legacy recovery record.' : '';
         return html`
             <div
                 id=${`post-${post.id}`}
@@ -1775,7 +1764,7 @@ export function Post({ post, onClick, onHashtagClick, onMessageRef, onScrollToMe
                 <span
                     class="post-control-intent-pill"
                     role="status"
-                    title=${`${protectedRecoveryControl.label}.${lineage}${legacy}`}
+                    title=${`${protectedRecoveryControl.label}.${lineage}`}
                 >
                     <span class="post-control-intent-icon" aria-hidden="true">↻</span>
                     ${protectedRecoveryControl.label}
