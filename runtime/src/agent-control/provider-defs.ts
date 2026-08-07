@@ -68,6 +68,7 @@ const API_KEY_HINTS: Record<string, string> = {
   openrouter: "sk-or-...",
   "qwen-token-plan": "sk-sp-...",
   "qwen-token-plan-cn": "sk-sp-...",
+  "qwen-token-plan-individual": "sk-sp-...",
   radius: "...",
   together: "...",
   "vercel-ai-gateway": "...",
@@ -109,6 +110,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   openrouter: "OpenRouter",
   "qwen-token-plan": "Qwen Token Plan",
   "qwen-token-plan-cn": "Qwen Token Plan CN",
+  "qwen-token-plan-individual": "Qwen Token Plan Individual",
   radius: "Radius",
   together: "Together",
   "vercel-ai-gateway": "Vercel AI Gateway",
@@ -126,6 +128,7 @@ const EXTERNAL_AUTH_NOTES: Record<string, string> = {
   "google-vertex": "Configure Google Application Default Credentials plus GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION outside this login flow.",
   "qwen-token-plan": "Qwen subscription token-plan provider. Use QWEN_TOKEN_PLAN_API_KEY or save the token-plan key here.",
   "qwen-token-plan-cn": "Qwen China token-plan provider. Use QWEN_TOKEN_PLAN_CN_API_KEY or save the China token-plan key here.",
+  "qwen-token-plan-individual": "Qwen Individual subscription provider. Use QWEN_TOKEN_PLAN_API_KEY or save the Individual token-plan key here.",
   radius: "Radius supports OAuth subscription login and API-key gateways.",
   xiaomi: "Uses API billing credentials. Set XIAOMI_API_KEY or save an API key here; token-plan credentials use the regional xiaomi-token-plan-* providers.",
   "xiaomi-token-plan-cn": "Regional token-plan provider. Use XIAOMI_TOKEN_PLAN_CN_API_KEY or save the regional token-plan key here.",
@@ -182,6 +185,7 @@ export const PROVIDER_DEFS: ProviderDef[] = [
   { id: "vercel-ai-gateway", name: "Vercel AI Gateway", hasOAuth: false, hasApiKey: true, apiKeyHint: API_KEY_HINTS["vercel-ai-gateway"] },
   { id: "qwen-token-plan", name: "Qwen Token Plan", hasOAuth: false, hasApiKey: true, apiKeyHint: API_KEY_HINTS["qwen-token-plan"], authNote: EXTERNAL_AUTH_NOTES["qwen-token-plan"] },
   { id: "qwen-token-plan-cn", name: "Qwen Token Plan CN", hasOAuth: false, hasApiKey: true, apiKeyHint: API_KEY_HINTS["qwen-token-plan-cn"], authNote: EXTERNAL_AUTH_NOTES["qwen-token-plan-cn"] },
+  { id: "qwen-token-plan-individual", name: "Qwen Token Plan Individual", hasOAuth: false, hasApiKey: true, apiKeyHint: API_KEY_HINTS["qwen-token-plan-individual"], authNote: EXTERNAL_AUTH_NOTES["qwen-token-plan-individual"] },
   { id: "radius", name: "Radius", hasOAuth: true, hasApiKey: true, apiKeyHint: API_KEY_HINTS.radius, authNote: EXTERNAL_AUTH_NOTES.radius },
   { id: "together", name: "Together", hasOAuth: false, hasApiKey: true, apiKeyHint: API_KEY_HINTS.together },
   { id: "zai", name: "ZAI", hasOAuth: false, hasApiKey: true, apiKeyHint: API_KEY_HINTS.zai },
@@ -272,7 +276,7 @@ export function getProviderDisplayName(providerId: string, registry?: ModelRegis
   if (!id) return "Provider";
   try {
     const registryName = registry?.getProviderDisplayName?.(id);
-    if (registryName) return registryName;
+    if (registryName && registryName !== id) return registryName;
   } catch (e) {
     // Fall back to local names when running against older pi versions.
     void e;
