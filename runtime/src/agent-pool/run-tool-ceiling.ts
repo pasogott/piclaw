@@ -1,4 +1,5 @@
 import type { RunAgentOptions } from "./contracts.js";
+import { rememberActiveToolSubset } from "./active-tool-subset-memory.js";
 import { logToolStateTransition } from "./tool-state-transitions.js";
 
 export interface SessionWithToolControl {
@@ -64,6 +65,7 @@ export function createRunToolCeilingController(options: {
       }
       owner = nextOwner;
       savedToolNames = nextOwner.getActiveToolNames();
+      rememberActiveToolSubset(nextOwner, savedToolNames);
       originalSetActiveToolsByName = nextOwner.setActiveToolsByName;
       const ceilingTools = savedToolNames.filter(ceilingFilter);
       originalSetActiveToolsByName.call(nextOwner, ceilingTools);

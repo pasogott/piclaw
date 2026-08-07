@@ -4141,6 +4141,66 @@ test("runAgentPrompt restores an accidentally empty active-tool set before an or
   ]));
 });
 
+test("runAgentPrompt restores the remembered custom active-tool subset before an ordinary turn", async () => {
+  initDatabase();
+  class StubSession {
+    private listeners: Array<(event: any) => void> = [];
+    activeTools = ["read", "mcp"];
+    expectedTools = ["read", "mcp"];
+    sessionManager = { getLeafId: () => "leaf-remembered-tools" };
+    isStreaming = false;
+    isCompacting = false;
+    isRetrying = false;
+    getActiveToolNames() { return [...this.activeTools]; }
+    setActiveToolsByName(names: string[]) { this.activeTools = [...names]; }
+    subscribe(listener: (event: any) => void) {
+      this.listeners.push(listener);
+      return () => { this.listeners = this.listeners.filter((entry) => entry !== listener); };
+    }
+    async prompt() {
+      expect(this.activeTools).toEqual(this.expectedTools);
+      for (const listener of this.listeners) {
+        listener({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Exact tools restored." } });
+        listener({ type: "message_end", message: createAssistantMessage("Exact tools restored.") });
+      }
+    }
+    async abort() {}
+  }
+
+  const session = new StubSession();
+  const warnings: Array<{ message: string; details: Record<string, unknown> }> = [];
+  const orchestratorOptions = {
+    getOrCreateRuntime: async () => createRuntime(session, { maxRetries: 2, baseDelayMs: 1, maxDelayMs: 60000 }) as any,
+    turnCoordinator: new AgentTurnCoordinator({ takeAttachments: () => [], touchSession: () => {}, recordMessageUsage: () => {} }),
+    clearAttachments: () => {},
+    takeAttachments: () => [],
+    logsDir: createTestLogsDir(),
+    setActiveForkBaseLeaf: () => {},
+    clearActiveForkBaseLeaf: () => {},
+    onWarn: (message: string, details: Record<string, unknown>) => warnings.push({ message, details }),
+  };
+
+  const first = await runAgentPrompt("remember this subset", "web:default", { timeoutMs: 0 }, orchestratorOptions);
+  expect(first).toMatchObject({ status: "success", result: "Exact tools restored." });
+
+  session.activeTools = [];
+  const second = await runAgentPrompt("continue with the same subset", "web:default", { timeoutMs: 0 }, orchestratorOptions);
+
+  expect(second).toMatchObject({ status: "success", result: "Exact tools restored." });
+  expect(session.activeTools).toEqual(["read", "mcp"]);
+  expect(session.activeTools).not.toContain("activate_tools");
+  expect(warnings).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      message: "Restored the previous active-tool subset after an empty set leaked into an ordinary turn",
+      details: expect.objectContaining({
+        operation: "run_agent.restore_empty_tool_set",
+        restorationSource: "remembered_subset",
+        restoredTools: ["read", "mcp"],
+      }),
+    }),
+  ]));
+});
+
 test("runAgentPrompt requests one tools-disabled closing reply after resolved tool work", async () => {
   const restoreEnv = setEnv({
     PICLAW_TURN_AUTO_RECOVERY_ENABLED: "1",

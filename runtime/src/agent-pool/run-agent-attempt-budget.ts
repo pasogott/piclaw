@@ -1,6 +1,7 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
 import type { RunAgentOptions } from "./contracts.js";
+import { rememberActiveToolSubset } from "./active-tool-subset-memory.js";
 import { logToolStateTransition } from "./tool-state-transitions.js";
 
 export interface AttemptToolBudgetState {
@@ -59,6 +60,7 @@ export function createAttemptToolBudgetController(options: {
     };
     if (typeof toolControl.getActiveToolNames === "function" && typeof toolControl.setActiveToolsByName === "function") {
       softStopSavedToolNames = toolControl.getActiveToolNames();
+      rememberActiveToolSubset(options.session, softStopSavedToolNames);
       toolControl.setActiveToolsByName([]);
       logToolStateTransition({
         chatJid: options.chatJid,
@@ -160,6 +162,7 @@ export function createAttemptToolBudgetController(options: {
       };
       if (typeof toolControl.getActiveToolNames === "function" && typeof toolControl.setActiveToolsByName === "function") {
         softStopSavedToolNames = softStopSavedToolNames ?? toolControl.getActiveToolNames();
+        rememberActiveToolSubset(options.session, softStopSavedToolNames);
         toolControl.setActiveToolsByName([]);
         logToolStateTransition({
           chatJid: options.chatJid,

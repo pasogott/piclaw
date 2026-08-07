@@ -54,6 +54,7 @@ import {
 import type { AgentTurnCoordinator } from "./turn-coordinator.js";
 import type { AgentOutput, RetrySettingsProvider, RunAgentOptions } from "./contracts.js";
 import { getDefaultActiveToolNames } from "../extensions/tool-activation.js";
+import { getRememberedActiveToolSubset, rememberActiveToolSubset } from "./active-tool-subset-memory.js";
 import { logToolStateTransition } from "./tool-state-transitions.js";
 import { createRunToolCeilingController, type SessionWithToolControl } from "./run-tool-ceiling.js";
 import { isPendingShutdown } from "../runtime/shutdown-registry.js";
@@ -929,25 +930,38 @@ export async function runAgentPrompt(
     };
     if (!runOptions.toolCeilingFilter
       && typeof ordinaryToolControl.getActiveToolNames === "function"
-      && typeof ordinaryToolControl.setActiveToolsByName === "function"
-      && ordinaryToolControl.getActiveToolNames().length === 0) {
-      const defaults = getDefaultActiveToolNames();
-      ordinaryToolControl.setActiveToolsByName(defaults);
-      logToolStateTransition({
-        chatJid,
-        turnId: runOptions.turnId,
-        phase: "ordinary_turn",
-        cause: "restore_leaked_empty_set",
-        previous: [],
-        next: defaults,
-        restored: true,
-      });
-      options.onWarn?.("Restored default tools after an empty active-tool set leaked into an ordinary turn", {
-        operation: "run_agent.restore_empty_tool_set",
-        chatJid,
-        restoredTools: defaults,
-        ...getRunObservabilityDetails(runOptions),
-      });
+      && typeof ordinaryToolControl.setActiveToolsByName === "function") {
+      const activeToolNames = ordinaryToolControl.getActiveToolNames();
+      if (activeToolNames.length > 0) {
+        rememberActiveToolSubset(session, activeToolNames);
+      } else {
+        const rememberedToolNames = getRememberedActiveToolSubset(session);
+        const restoredToolNames = rememberedToolNames ?? getDefaultActiveToolNames();
+        ordinaryToolControl.setActiveToolsByName(restoredToolNames);
+        rememberActiveToolSubset(session, restoredToolNames);
+        logToolStateTransition({
+          chatJid,
+          turnId: runOptions.turnId,
+          phase: "ordinary_turn",
+          cause: "restore_leaked_empty_set",
+          previous: [],
+          next: restoredToolNames,
+          restored: true,
+        });
+        const restorationSource = rememberedToolNames ? "remembered_subset" : "defaults";
+        options.onWarn?.(
+          rememberedToolNames
+            ? "Restored the previous active-tool subset after an empty set leaked into an ordinary turn"
+            : "Restored default tools after an empty active-tool set leaked into an ordinary turn",
+          {
+            operation: "run_agent.restore_empty_tool_set",
+            chatJid,
+            restorationSource,
+            restoredTools: restoredToolNames,
+            ...getRunObservabilityDetails(runOptions),
+          },
+        );
+      }
     }
     modelLabel = session.model ? `${session.model.provider}/${session.model.id}` : null;
     updateSessionModel(chatJid, modelLabel, session.thinkingLevel ?? null);

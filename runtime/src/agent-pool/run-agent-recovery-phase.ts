@@ -34,6 +34,7 @@ import { getRecoveryPolicyConfig } from "../core/config.js";
 import { writeAgentLog } from "./logging.js";
 import { heartbeatTrackedPhase } from "../runtime/progress-watchdog.js";
 import { isRotationFallbackCompactionError } from "../session-rotation.js";
+import { rememberActiveToolSubset } from "./active-tool-subset-memory.js";
 import { logToolStateTransition } from "./tool-state-transitions.js";
 
 const MAX_RECOVERY_LOOP_GUARD_CHATS = 512;
@@ -562,6 +563,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     }
     if (recoveryContinuationWithoutTools && canControlTools && toolControl) {
       recoverySavedToolNames = toolControl.getActiveToolNames!();
+      rememberActiveToolSubset(activeSession, recoverySavedToolNames);
       recoveryOriginalSetActiveToolsByName = toolControl.setActiveToolsByName!.bind(toolControl);
       recoveryOriginalSetActiveToolsByName([]);
       logToolStateTransition({
