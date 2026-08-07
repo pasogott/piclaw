@@ -215,7 +215,7 @@ async function renderPostWithBlocks(contentBlocks: any[], options: { content?: s
   return host;
 }
 
-test('Post renders a typed protected-recovery control intent as a compact system pill', async () => {
+test('Post keeps a typed protected-recovery control intent invisible', async () => {
   const host = await renderPostWithBlocks([{
     type: 'control_intent',
     intent: 'protected_recovery_continuation',
@@ -229,11 +229,27 @@ test('Post renders a typed protected-recovery control intent as a compact system
     content: 'Recovery resumed with execution tools',
   });
 
-  const pill = findByClass(host, 'post-control-intent-pill');
-  expect(pill).toBeTruthy();
-  expect(flattenText(pill)).toContain('↻Recovery resumed with execution tools');
-  expect(findByClass(host, 'post-author')).toBeNull();
-  expect(findByClass(host, 'post-control-intent')?.getAttribute('data-source-message-id')).toBe('source-123');
+  expect(findByClass(host, 'post-control-intent')).toBeNull();
+  expect(findByClass(host, 'post-control-intent-pill')).toBeNull();
+  expect(flattenText(host)).toBe('');
+});
+
+test('Post hides an empty successful protected-recovery placeholder', async () => {
+  const host = await renderPostWithBlocks([{
+    type: 'turn_outcome_marker',
+    kind: 'recovery',
+    label: 'recovery',
+    title: 'Recovery resumed with execution tools',
+    detail: 'Continuing in an ordinary turn with execution tools restored.',
+    severity: 'info',
+  }], {
+    type: 'agent_response',
+    content: '',
+  });
+
+  expect(findByClass(host, 'post-outcome-pill')).toBeNull();
+  expect(findByClass(host, 'post-outcome-chip')).toBeNull();
+  expect(flattenText(host)).toBe('');
 });
 
 test('protected recovery requires typed control intent instead of interpreting user prose', async () => {

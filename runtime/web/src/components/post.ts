@@ -1750,28 +1750,15 @@ export function Post({ post, onClick, onHashtagClick, onMessageRef, onScrollToMe
         }
     }, [cardBlocksKey, post.id]);
 
-    if (protectedRecoveryControl) {
-        const lineage = protectedRecoveryControl.sourceMessageId
-            ? ` Source message: ${protectedRecoveryControl.sourceMessageId}.`
-            : '';
-        return html`
-            <div
-                id=${`post-${post.id}`}
-                class=${`post post-control-intent${isThreadReply ? ' thread-reply' : ''}${isRemoving ? ' removing' : ''}`}
-                onClick=${onClick}
-                data-source-message-id=${protectedRecoveryControl.sourceMessageId || ''}
-            >
-                <span
-                    class="post-control-intent-pill"
-                    role="status"
-                    title=${`${protectedRecoveryControl.label}.${lineage}`}
-                >
-                    <span class="post-control-intent-icon" aria-hidden="true">↻</span>
-                    ${protectedRecoveryControl.label}
-                </span>
-            </div>
-        `;
-    }
+    const silentRecoveryPlaceholder = Boolean(
+        isAgent
+        && outcomeMarker?.kind === 'recovery'
+        && !shouldRenderContent
+        && mediaIds.length === 0
+        && directCardBlocks.length === 0
+        && submissionBlocks.length === 0
+    );
+    if (protectedRecoveryControl || silentRecoveryPlaceholder) return null;
 
     return html`
         <div id=${`post-${post.id}`} class="post ${isAgent ? 'agent-post' : ''} ${isSelfContinuation ? 'self-continuation-post' : ''} ${isThreadReply ? 'thread-reply' : ''} ${isThreadPrev ? 'thread-prev' : ''} ${isThreadNext ? 'thread-next' : ''} ${isRemoving ? 'removing' : ''}" onClick=${onClick}>

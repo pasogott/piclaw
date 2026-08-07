@@ -20,7 +20,10 @@ export const RECOVERY_CONTINUATION_PROMPT = [
   "Do not restart completed tool work or treat this continuation as a new task.",
 ].join(" ");
 
-export const TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT = "Resume the interrupted turn from persisted state without replaying completed work.";
+export const TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT = [
+  "Resume the interrupted turn from persisted state without replaying completed work.",
+  "If recovery succeeds, do not mention recovery; continue the task and report only task-relevant output.",
+].join(" ");
 
 export function getSessionLeafId(session: AgentSession): string | null {
   const value = (session.sessionManager as { getLeafId?: () => unknown } | undefined)?.getLeafId?.();
