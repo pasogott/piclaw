@@ -2578,6 +2578,7 @@
           "helperReaders": 0,
           "semanticReaders": 0,
           "files": [
+            "docs/assessments/v2.13-rss-static-analysis.md",
             "docs/configuration.md"
           ],
           "readerFiles": []

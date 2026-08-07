@@ -32,6 +32,9 @@ describe("prompt attempt tool budget", () => {
       block: true,
       reason: "Automatic recovery is in its finalization window. Return a terminal assistant reply without calling more tools.",
     });
+    // Earendil 0.84.1 lets blocked pre-tool hooks terminate a batch. Budget
+    // blocks must omit that hint so the model still produces a terminal reply.
+    expect(blocked.terminate).toBeUndefined();
     expect(controller.applyFinalizationReserve()).toBe(false);
 
     controller.restoreToolBudgetGuard();
@@ -64,10 +67,12 @@ describe("prompt attempt tool budget", () => {
 
     expect(controller.state.toolUseBudgetExceeded).toBe(true);
     expect(activeTools).toEqual([]);
-    await expect(session.agent.beforeToolCall({ toolCall: { id: "call-c", name: "bash" }, args: {} })).resolves.toEqual({
+    const blocked = await session.agent.beforeToolCall({ toolCall: { id: "call-c", name: "bash" }, args: {} });
+    expect(blocked).toEqual({
       block: true,
       reason: "Per-turn tool execution budget exhausted (2/2). Ask the user to continue before calling more tools.",
     });
+    expect(blocked.terminate).toBeUndefined();
 
     controller.restoreToolBudgetGuard();
     controller.restoreToolBudgetSoftStop();

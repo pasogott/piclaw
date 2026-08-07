@@ -44,6 +44,7 @@ describe("provider defs", () => {
     expect(ids).toContain("nvidia");
     expect(ids).toContain("qwen-token-plan");
     expect(ids).toContain("qwen-token-plan-cn");
+    expect(ids).toContain("qwen-token-plan-individual");
     expect(ids).toContain("radius");
     expect(ids).toContain("together");
     expect(ids).toContain("xiaomi");
@@ -63,6 +64,13 @@ describe("provider defs", () => {
     });
     expect(defs.find((entry) => entry.id === "qwen-token-plan-cn")).toMatchObject({
       name: "Qwen Token Plan CN", hasApiKey: true, apiKeyHint: "sk-sp-...",
+    });
+    expect(defs.find((entry) => entry.id === "qwen-token-plan-individual")).toMatchObject({
+      name: "Qwen Token Plan Individual",
+      hasOAuth: false,
+      hasApiKey: true,
+      apiKeyHint: "sk-sp-...",
+      authNote: expect.stringContaining("QWEN_TOKEN_PLAN_API_KEY"),
     });
     expect(defs.find((entry) => entry.id === "radius")).toMatchObject({
       name: "Radius", hasOAuth: true, hasApiKey: true,
@@ -90,6 +98,8 @@ describe("provider defs", () => {
       const { modelRegistry, credentialStore } = await createRealTestModelServices(workspace.base);
       const defs = getProviderDefs(modelRegistry, credentialStore);
       expect(defs.some((entry) => entry.id === "amazon-bedrock")).toBe(true);
+      expect(defs.some((entry) => entry.id === "qwen-token-plan-individual")).toBe(true);
+      expect(getProviderDisplayName("qwen-token-plan-individual", modelRegistry)).toBe("Qwen Token Plan Individual");
       expect(getProviderDisplayName("cloudflare-ai-gateway", modelRegistry)).toBe("Cloudflare AI Gateway");
     } finally {
       workspace.cleanup();

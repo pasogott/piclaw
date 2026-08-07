@@ -21,7 +21,7 @@
  *   - agent-control handlers call methods on AgentPool for session/model ops.
  */
 
-import { mkdirSync } from "fs";
+import { mkdirSync, statSync } from "fs";
 import { join } from "path";
 import {
   type AgentSession,
@@ -84,7 +84,7 @@ import { registerExtensionKvStore } from "./extension-kv-registry.js";
 import { setSshToolHandlers } from "./extensions/ssh.js";
 import { applyLiveSshConfig, clearLiveSshConfig, hasLiveChatSshConnection, hasLiveChatSshSession, resolveSshCoreConfigFromChatConfig } from "./extensions/ssh-core.js";
 import { getKeychainEntry } from "./secure/keychain.js";
-import { addLogSink, createLogger, removeLogSink } from "./utils/logger.js";
+import { addLogSink, createLogger, debugSuppressedError, removeLogSink } from "./utils/logger.js";
 import { startAgentLogCleanup } from "./agent-pool/logging.js";
 
 const log = createLogger("agent-pool");
@@ -120,13 +120,56 @@ interface RuntimeInteropBridge {
   getKeychainEntry?: typeof getKeychainEntry;
 }
 
+export interface AgentPoolSessionResourceInstrumentationSnapshot {
+  sessionEntries: number;
+  activeMessages: number;
+  persistedSessionBytes: number;
+  loadedSkills: number;
+  loadedExtensions: number;
+  registeredTools: number;
+}
+
 export interface AgentPoolMemoryInstrumentationSnapshot {
   cachedMainSessions: number;
   cachedSideSessions: number;
   activeForkBaseLeaves: number;
   activeChats: number;
+  sessionResources?: AgentPoolSessionResourceInstrumentationSnapshot;
   sessionManager: AgentSessionManagerInstrumentationSnapshot;
   recovery: AgentPoolRecoveryInstrumentationSnapshot;
+}
+
+function collectSessionResourceInstrumentation(
+  entries: Iterable<PoolEntry>,
+): AgentPoolSessionResourceInstrumentationSnapshot {
+  const snapshot: AgentPoolSessionResourceInstrumentationSnapshot = {
+    sessionEntries: 0,
+    activeMessages: 0,
+    persistedSessionBytes: 0,
+    loadedSkills: 0,
+    loadedExtensions: 0,
+    registeredTools: 0,
+  };
+  const collect = (metric: keyof AgentPoolSessionResourceInstrumentationSnapshot, read: () => number): void => {
+    try {
+      snapshot[metric] += read();
+    } catch (error) {
+      debugSuppressedError(log, "Failed to collect best-effort session resource metric", error, {
+        operation: "agent_pool.memory_instrumentation.metric_failed",
+        metric,
+      });
+    }
+  };
+  for (const entry of entries) {
+    const session = entry.runtime.session;
+    collect("sessionEntries", () => session.sessionManager.getEntries().length);
+    collect("activeMessages", () => session.state.messages.length);
+    collect("persistedSessionBytes", () => session.sessionFile ? statSync(session.sessionFile).size : 0);
+    collect("loadedSkills", () => session.resourceLoader.getSkills().skills.length);
+    collect("loadedExtensions", () => session.resourceLoader.getExtensions().extensions.length);
+    collect("registeredTools", () => session.extensionRunner.getAllRegisteredTools().length);
+  }
+  return snapshot;
 }
 
 
@@ -587,11 +630,16 @@ export class AgentPool {
   }
 
   getMemoryInstrumentationSnapshot(): AgentPoolMemoryInstrumentationSnapshot {
+    const sessionResources = collectSessionResourceInstrumentation([
+      ...this.pool.values(),
+      ...this.sidePool.values(),
+    ]);
     return {
       cachedMainSessions: this.pool.size,
       cachedSideSessions: this.sidePool.size,
       activeForkBaseLeaves: this.activeForkBaseLeafByChat.size,
       activeChats: this.branchManager.listActiveChats().length,
+      sessionResources,
       sessionManager: this.sessionManager.getInstrumentationSnapshot(),
       recovery: { ...this.recoveryStats },
     };

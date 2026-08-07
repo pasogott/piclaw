@@ -6,7 +6,7 @@
  */
 
 import { expect, test, afterEach } from "bun:test";
-import { readdirSync, readFileSync } from "fs";
+import { readdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -167,6 +167,45 @@ test("agent pool aggregates recovery counters into memory instrumentation", asyn
     attemptsTotal: 1,
     recoveredRuns: 1,
     exhaustedRuns: 0,
+  });
+
+  await pool.shutdown();
+});
+
+test("agent pool aggregates content-free session resource counts", async () => {
+  const ws = getTestWorkspace();
+  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
+
+  const { AgentPool } = await importFresh<typeof import("../src/agent-pool.js")>("../src/agent-pool.js");
+  const pool = new AgentPool({
+    ...createAgentPoolModelOptions(),
+    createSession: async () => { throw new Error("unused"); },
+  });
+  const sessionFile = join(ws.data, "instrumentation-session.jsonl");
+  writeFileSync(sessionFile, "1234567890");
+  const makeSession = (entries: number, messages: number, skills: number, extensions: number, tools: number) => ({
+    sessionFile,
+    sessionManager: { getEntries: () => Array.from({ length: entries }, () => ({})) },
+    state: { messages: Array.from({ length: messages }, () => ({})) },
+    resourceLoader: {
+      getSkills: () => ({ skills: Array.from({ length: skills }, () => ({})) }),
+      getExtensions: () => ({ extensions: Array.from({ length: extensions }, () => ({})) }),
+    },
+    extensionRunner: { getAllRegisteredTools: () => Array.from({ length: tools }, () => ({})) },
+  });
+  (pool as any).pool.set("web:memory-instrumentation-main", { runtime: createRuntime(makeSession(2, 3, 4, 5, 6)), lastUsed: Date.now() });
+  (pool as any).sidePool.set("web:memory-instrumentation-side", { runtime: createRuntime(makeSession(7, 8, 9, 10, 11)), lastUsed: Date.now() });
+  // This unit test targets only resident resource aggregation; avoid registering
+  // synthetic chat IDs through the branch-manager activity query.
+  (pool as any).branchManager.listActiveChats = () => [];
+
+  expect(pool.getMemoryInstrumentationSnapshot().sessionResources).toEqual({
+    sessionEntries: 9,
+    activeMessages: 11,
+    persistedSessionBytes: 20,
+    loadedSkills: 13,
+    loadedExtensions: 15,
+    registeredTools: 17,
   });
 
   await pool.shutdown();
