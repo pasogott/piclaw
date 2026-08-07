@@ -239,6 +239,8 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
   const previewMaxCharsPerLine = options.previewMaxCharsPerLine ?? 160;
 
   let thoughtBuffer = "";
+  let thoughtSegmentBuffer = "";
+  let thoughtSegmentPrefix = "";
   let thoughtStartedAt = 0;
   let draftBuffer = "";
   let thoughtHasDelta = false;
@@ -394,20 +396,37 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
     if (event.type === "message_update") {
       const messageEvent = event.assistantMessageEvent;
       if (messageEvent.type === "thinking_start") {
-        thoughtBuffer = "";
+        thoughtSegmentBuffer = "";
+        thoughtSegmentPrefix = thoughtBuffer ? "\n\n" : "";
         thoughtStartedAt = Date.now();
         thoughtHasDelta = false;
-        thoughtDeltaActive = false;
-        if (options.includeThoughtFull?.()) {
+        const now = new Date().toISOString();
+        options.emitter.status({
+          ...base,
+          type: "thinking",
+          title: "Thinking...",
+          phase: "thinking",
+          started_at: now,
+          last_event_at: now,
+        });
+        if (options.includeThoughtFull?.() && !thoughtDeltaActive) {
           thoughtDeltaActive = true;
           options.emitter.thoughtDelta({
             ...base,
-            delta: "",
+            delta: thoughtBuffer,
             reset: true,
           });
         }
       }
       if (messageEvent.type === "thinking_delta") {
+        const shouldSendDelta = Boolean(options.includeThoughtFull?.());
+        if (!thoughtHasDelta && thoughtSegmentPrefix) {
+          thoughtBuffer += thoughtSegmentPrefix;
+          if (shouldSendDelta && thoughtDeltaActive) {
+            options.emitter.thoughtDelta({ ...base, delta: thoughtSegmentPrefix });
+          }
+        }
+        thoughtSegmentBuffer += messageEvent.delta;
         thoughtBuffer += messageEvent.delta;
         thoughtHasDelta = true;
         const { preview, totalLines } = buildPreview(
@@ -421,7 +440,6 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
           text: preview,
           total_lines: totalLines,
         });
-        const shouldSendDelta = Boolean(options.includeThoughtFull?.());
         if (shouldSendDelta && !thoughtDeltaActive) {
           thoughtDeltaActive = true;
           options.emitter.thoughtDelta({
@@ -439,7 +457,10 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
         }
       }
       if (messageEvent.type === "thinking_end") {
-        thoughtBuffer = messageEvent.content || thoughtBuffer;
+        const completedThought = messageEvent.content || thoughtSegmentBuffer;
+        if (!thoughtHasDelta && completedThought) {
+          thoughtBuffer += `${thoughtSegmentPrefix}${completedThought}`;
+        }
         const { preview, totalLines } = buildPreview(
           thoughtBuffer,
           thoughtPreviewLines,
@@ -447,20 +468,28 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
         );
         options.onThoughtBuffer?.(thoughtBuffer, totalLines);
         const thinkingDurationMs = thoughtStartedAt > 0 ? Date.now() - thoughtStartedAt : 0;
-        options.onThinkingComplete?.(thoughtBuffer, totalLines, thinkingDurationMs);
+        const completedThoughtLines = completedThought ? completedThought.split("\n").length : 0;
+        options.onThinkingComplete?.(completedThought, completedThoughtLines, thinkingDurationMs);
         options.emitter.thought({
           ...base,
           text: preview,
           total_lines: totalLines,
         });
         const shouldSendDelta = Boolean(options.includeThoughtFull?.());
-        if (shouldSendDelta && !thoughtHasDelta) {
-          thoughtDeltaActive = true;
-          options.emitter.thoughtDelta({
-            ...base,
-            delta: thoughtBuffer,
-            reset: true,
-          });
+        if (shouldSendDelta && !thoughtHasDelta && completedThought) {
+          if (!thoughtDeltaActive) {
+            thoughtDeltaActive = true;
+            options.emitter.thoughtDelta({
+              ...base,
+              delta: thoughtBuffer,
+              reset: true,
+            });
+          } else {
+            options.emitter.thoughtDelta({
+              ...base,
+              delta: `${thoughtSegmentPrefix}${completedThought}`,
+            });
+          }
         } else if (!shouldSendDelta) {
           thoughtDeltaActive = false;
         }
@@ -537,6 +566,15 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
       if (messageEvent.type === "text_start") {
         draftBuffer = "";
         draftDeltaActive = false;
+        const now = new Date().toISOString();
+        options.emitter.status({
+          ...base,
+          type: "thinking",
+          title: "Writing response...",
+          phase: "drafting",
+          started_at: now,
+          last_event_at: now,
+        });
         options.onDraftBuffer?.(draftBuffer, 0);
         options.emitter.draft({
           ...base,
@@ -713,8 +751,8 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
       } else {
         options.emitter.status({
           ...base,
-          type: "thinking",
-          title: event.isError ? "Reviewing failed tool result..." : "Continuing after tools...",
+          type: "waiting",
+          title: event.isError ? "Reviewing failed tool result..." : "Waiting for model...",
           phase: "post_tool_model",
           started_at: lastEventAt,
           last_event_at: lastEventAt,

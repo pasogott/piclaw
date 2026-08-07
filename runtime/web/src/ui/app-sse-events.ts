@@ -404,7 +404,10 @@ export function handleAppSseEvent(
         clearSilence: true,
         atMs: parseStatusLastEventAt(data) ?? Date.now(),
       });
-      if (data.type === 'thinking') {
+      // Only the turn-opening status owns preview reset. Intra-turn model
+      // phases (post-tool waiting, fresh reasoning, and drafting) must preserve
+      // the accumulated panes until their typed preview events update them.
+      if (data.type === 'thinking' && !data.phase) {
         draftBufferRef.current = '';
         thoughtBufferRef.current = '';
         setAgentDraft({ text: '', totalLines: 0 });

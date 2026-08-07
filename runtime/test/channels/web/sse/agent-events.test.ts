@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createStreamingEventHandler } from "../../../../src/channels/web/sse/agent-events.js";
 
-function makeHandler(formatThinkingLevel?: (level: string) => string) {
+function makeHandler(formatThinkingLevel?: (level: string) => string, includeThoughtFull = false) {
   const statuses: Record<string, unknown>[] = [];
   const emitter = {
     status: vi.fn((payload: Record<string, unknown>) => statuses.push(payload)),
@@ -23,6 +23,7 @@ function makeHandler(formatThinkingLevel?: (level: string) => string) {
     threadId: "thread-1",
     turnId: "turn-1",
     formatThinkingLevel,
+    includeThoughtFull: () => includeThoughtFull,
   });
   return { handler, statuses, emitter };
 }
@@ -79,12 +80,38 @@ describe("web SSE tool execution events", () => {
       last_completed_tool: expect.objectContaining({ tool_call_id: "tool-1", status: "completed" }),
     });
     expect(statuses[5]).toMatchObject({
-      type: "thinking",
+      type: "waiting",
       phase: "post_tool_model",
-      title: "Continuing after tools...",
+      title: "Waiting for model...",
       active_tool_count: 0,
       last_completed_tool: expect.objectContaining({ tool_call_id: "tool-2", status: "completed" }),
     });
+  });
+
+  it("preserves cumulative thought and advances the post-tool phase on model output", () => {
+    const { handler, statuses, emitter } = makeHandler(undefined, true);
+
+    handler({ type: "message_update", assistantMessageEvent: { type: "thinking_start" } } as any);
+    handler({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "before tool" } } as any);
+    handler({ type: "message_update", assistantMessageEvent: { type: "thinking_end", content: "before tool" } } as any);
+    handler({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: { path: "README.md" } } as any);
+    handler({ type: "tool_execution_end", toolCallId: "tool-1", toolName: "read", isError: false } as any);
+
+    expect(statuses.at(-1)).toMatchObject({ type: "waiting", phase: "post_tool_model", title: "Waiting for model..." });
+
+    handler({ type: "message_update", assistantMessageEvent: { type: "thinking_start" } } as any);
+    handler({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "after tool" } } as any);
+    handler({ type: "message_update", assistantMessageEvent: { type: "thinking_end", content: "after tool" } } as any);
+
+    expect(statuses.at(-1)).toMatchObject({ type: "thinking", phase: "thinking", title: "Thinking..." });
+    expect(emitter.thought).toHaveBeenLastCalledWith(expect.objectContaining({
+      text: "before tool\n\nafter tool",
+      total_lines: 3,
+    }));
+    const thoughtDeltaPayloads = emitter.thoughtDelta.mock.calls.map(([payload]) => payload);
+    expect(thoughtDeltaPayloads.filter((payload) => payload.reset === true)).toHaveLength(1);
+    expect(thoughtDeltaPayloads.map((payload) => payload.delta).join(""))
+      .toBe("before tool\n\nafter tool");
   });
 });
 

@@ -152,6 +152,36 @@ test('handleAppSseEvent routes status-panel widget events and clears finished pe
   expect(Array.from(state.getPendingPanelActions())).toEqual(['autoresearch:stop']);
 });
 
+test('handleAppSseEvent preserves preview panes during post-tool model phases', () => {
+  const state = createDeps();
+
+  handleAppSseEvent('agent_thought', {
+    chat_jid: 'chat:alpha',
+    text: 'reasoning before the tool',
+    total_lines: 1,
+  }, state.deps);
+  handleAppSseEvent('agent_draft', {
+    chat_jid: 'chat:alpha',
+    text: 'commentary before the tool',
+    total_lines: 1,
+    kind: 'draft',
+    mode: 'replace',
+  }, state.deps);
+
+  handleAppSseEvent('agent_status', {
+    chat_jid: 'chat:alpha',
+    type: 'thinking',
+    phase: 'post_tool_model',
+    title: 'Continuing after tools...',
+  }, state.deps);
+
+  expect(state.getAgentThoughtState()).toMatchObject({ text: 'reasoning before the tool', totalLines: 1 });
+  expect(state.getAgentDraftState()).toMatchObject({ text: 'commentary before the tool', totalLines: 1 });
+  expect(state.deps.thoughtBufferRef.current).toBe('reasoning before the tool');
+  expect(state.deps.draftBufferRef.current).toBe('commentary before the tool');
+  expect(state.getAgentStatusState()).toMatchObject({ phase: 'post_tool_model' });
+});
+
 test('handleAppSseEvent tracks extension working messages and indicators for the active chat', () => {
   const state = createDeps();
 
