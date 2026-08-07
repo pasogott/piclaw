@@ -1912,10 +1912,11 @@ test("web channel defers /steer without active stream into queue-state", async (
       setSessionBinder: () => {},
       runAgent: async () => ({ status: "success", result: "ok" }),
       getContextUsageForChat: async () => null,
+      isActive: () => true,
       applyControlCommand: async (_chatJid, command) => ({
-        status: command?.type === "steer" ? "success" : "error",
-        message: command?.type === "steer" ? "Queued as a follow-up (one-at-a-time)." : "Unsupported command.",
-        queued_followup: command?.type === "steer" ? true : undefined,
+        status: "error",
+        message: command?.type === "steer" ? "opaque changed SDK diagnostic" : "Unsupported command.",
+        retry_as_followup: command?.type === "steer" ? true : undefined,
       }),
     },
   });
@@ -2670,6 +2671,7 @@ test("processChat durably hands protected recovery to one ordinary tool-enabled 
 
   const db = await import("../../../src/db.js");
   const { TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT } = await import("../../../src/agent-pool/context-pressure-retry.js");
+  const { PROTECTED_RECOVERY_CONTROL_LABEL } = await import("../../../src/agent-pool/protected-recovery-control-intent.js");
   db.initDatabase();
   db.getDb().exec("DELETE FROM message_media; DELETE FROM messages; DELETE FROM chats; DELETE FROM chat_cursors;");
   db.storeChatMetadata("web:default", new Date().toISOString(), "Web");
@@ -2714,11 +2716,21 @@ test("processChat durably hands protected recovery to one ordinary tool-enabled 
 
   await web.processChat("web:default", "default");
   const continuation = db.getDb().prepare(`
-    SELECT content, thread_id
+    SELECT content, content_blocks, thread_id
     FROM messages
     WHERE chat_jid = ? AND is_bot_message = 0 AND content = ?
-  `).get("web:default", TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT) as any;
-  expect(continuation).toMatchObject({ content: TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT, thread_id: rootRowId });
+  `).get("web:default", PROTECTED_RECOVERY_CONTROL_LABEL) as any;
+  expect(continuation).toMatchObject({ content: PROTECTED_RECOVERY_CONTROL_LABEL, thread_id: rootRowId });
+  expect(JSON.parse(continuation.content_blocks)).toEqual([
+    expect.objectContaining({
+      type: "control_intent",
+      intent: "protected_recovery_continuation",
+      source_message_id: rootMessageId,
+      source_row_id: rootRowId,
+      thread_id: rootRowId,
+    }),
+  ]);
+  expect(db.getDb().prepare(`SELECT COUNT(*) AS count FROM messages WHERE chat_jid = ? AND content = ?`).get("web:default", TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT) as any).toMatchObject({ count: 0 });
   await web.processChat("web:default", "default", rootRowId);
 
   expect(prompts[1]).toContain(TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT);
@@ -3126,7 +3138,7 @@ test("processChat includes the last action summary in visible failure fallbacks"
       runAgent: async (_prompt: string, _chatJid: string, options: any) => {
         options.onEvent?.({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "bash", args: { command: "echo hi" } });
         options.onEvent?.({ type: "tool_execution_update", toolCallId: "tool-1", toolName: "bash", args: { command: "echo hi" } });
-        return { status: "error", error: "Prompt completed without emitting an assistant reply before finalization (session delta: 0 appended entries).", result: null, attachments: [] };
+        return { status: "error", failureCategory: "no_terminal_output", error: "Arbitrary diagnostic prose.", result: null, attachments: [] };
       },
       getContextUsageForChat: async () => null,
     },
@@ -3139,7 +3151,7 @@ test("processChat includes the last action summary in visible failure fallbacks"
   expect(String(last.data.content || "")).toBe("");
   expect(last.data.content_blocks).toContainEqual(expect.objectContaining({
     type: "turn_outcome_marker",
-    kind: "error",
+    kind: "blank_final",
     tool_action_summary: expect.stringContaining("bash"),
   }));
 });

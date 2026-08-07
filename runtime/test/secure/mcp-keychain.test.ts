@@ -32,7 +32,8 @@ const resolveEntry = async (name: string) => ({
 });
 
 describe("MCP keychain credential hydration", () => {
-  test("hydrates a named environment variable without changing config", async () => {
+  test("hydrates workspace config without changing the process working directory", async () => {
+    const originalCwd = process.cwd();
     const root = workspace({
       mcpServers: {
         memento: {
@@ -44,6 +45,11 @@ describe("MCP keychain credential hydration", () => {
     });
     touched.add("PICLAW_MCP_MEMENTO_TOKEN");
     const entries = await hydrateMcpKeychainCredentials(root, resolveEntry);
+    expect(process.cwd()).toBe(originalCwd);
+    expect(getPreparedMcpConfig().mcpServers.memento).toMatchObject({
+      url: "http://example.test/mcp",
+      bearerTokenEnv: "PICLAW_MCP_MEMENTO_TOKEN",
+    });
     expect(process.env.PICLAW_MCP_MEMENTO_TOKEN).toBe("secret-value");
     expect(entries).toEqual([
       {

@@ -11,7 +11,11 @@ import { ensureSessionDir } from "../../src/agent-pool/session.js";
 import { getAttachmentRegistry } from "../../src/agent-pool/attachments.js";
 import { setCompactionSettlementGraceForTests } from "../../src/agent-pool/compaction.js";
 import { AgentTurnCoordinator } from "../../src/agent-pool/turn-coordinator.js";
-import { createToolExecutionWatchdogHeartbeatController, runAgentPrompt } from "../../src/agent-pool/run-agent-orchestrator.js";
+import {
+  createToolExecutionWatchdogHeartbeatController,
+  getToolExecutionWatchdogHeartbeatIntervalMs,
+  runAgentPrompt,
+} from "../../src/agent-pool/run-agent-orchestrator.js";
 import { getAgentAbortCause, recordAgentAbortCause, resetAgentAbortProvenanceForTests } from "../../src/agent-pool/abort-provenance.js";
 import { getRecoveryFinalizationReserveMs } from "../../src/agent-pool/run-agent-recovery-phase.js";
 import { RECOVERY_CONTINUATION_PROMPT } from "../../src/agent-pool/context-pressure-retry.js";
@@ -298,6 +302,10 @@ test("progress watchdog does not abort active runs that keep heartbeating", asyn
   } finally {
     restoreWatchdogTimeout();
   }
+});
+
+test("tool-execution status heartbeat remains enabled when watchdog escalation is disabled", () => {
+  expect(getToolExecutionWatchdogHeartbeatIntervalMs(0)).toBe(15_000);
 });
 
 test("tool-execution watchdog heartbeat controller keeps pulsing while tools remain active", async () => {
@@ -4086,6 +4094,7 @@ test("runAgentPrompt does not let a terminal side-effect tool mask an earlier to
 });
 
 test("runAgentPrompt restores an accidentally empty active-tool set before an ordinary turn", async () => {
+  initDatabase();
   class StubSession {
     private listeners: Array<(event: any) => void> = [];
     private activeTools: string[] = [];

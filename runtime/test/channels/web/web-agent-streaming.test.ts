@@ -7,6 +7,7 @@
 
 import { describe, test, expect } from "bun:test";
 import { AgentQueue } from "../../../src/queue.js";
+import { buildAgentStatusPhaseKey } from "../../../src/channels/web/handlers/agent.js";
 import { waitFor } from "../../helpers.js";
 import { createWebChannelTestFixture } from "./helpers/web-channel-fixture.js";
 
@@ -21,6 +22,32 @@ function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => voi
   });
   return { promise, resolve };
 }
+
+test("agent status phase identity ignores presentation text", () => {
+  expect(buildAgentStatusPhaseKey({
+    type: "intent",
+    intent_key: "recovery",
+    classifier: "timeout",
+    title: "First recovery title",
+  })).toBe(buildAgentStatusPhaseKey({
+    type: "intent",
+    intent_key: "recovery",
+    classifier: "network",
+    title: "Completely different presentation",
+  }));
+
+  expect(buildAgentStatusPhaseKey({
+    type: "tool_status",
+    tool_call_id: "tool-1",
+    tool_name: "bash",
+    title: "bash: first command",
+  })).toBe(buildAgentStatusPhaseKey({
+    type: "tool_status",
+    tool_call_id: "tool-1",
+    tool_name: "bash",
+    title: "renamed tool presentation",
+  }));
+});
 
 describe("web agent streaming", () => {
   test("processChat broadcasts streaming events and stores turns", async () => {
@@ -107,8 +134,8 @@ describe("web agent streaming", () => {
       expect(eventTypes).toContain("agent_status");
       expect(eventTypes).toContain("agent_thought");
       expect(eventTypes).toContain("agent_draft");
-      expect(eventTypes).not.toContain("agent_draft_delta");
-      expect(eventTypes).not.toContain("agent_thought_delta");
+      expect(eventTypes).toContain("agent_draft_delta");
+      expect(eventTypes).toContain("agent_thought_delta");
       expect(eventTypes).toContain("agent_response");
       expect(eventTypes).toContain("model_changed");
 
@@ -346,7 +373,12 @@ describe("web agent streaming", () => {
           assistantMessageEvent: { type: "text_delta", delta: commentary },
         }));
         options.onTurnDiscard?.({ reason: "commentary_only" });
-        return { status: "error", result: null, error: "Temporary provider error; try again." };
+        return {
+          status: "error",
+          result: null,
+          error: "Temporary provider error; try again.",
+          failureCategory: "provider",
+        };
       },
       getContextUsageForChat: async () => null,
     } as any;
@@ -369,7 +401,8 @@ describe("web agent streaming", () => {
       const outcomeBlocks = timeline.flatMap((row) => row.data?.content_blocks || []);
       expect(outcomeBlocks).toContainEqual(expect.objectContaining({
         type: "turn_outcome_marker",
-        kind: "error",
+        kind: "provider",
+        failure_category: "provider",
         draft_recovered: false,
       }));
       expect(events.some((event) => event.type === "agent_draft" && event.data?.text === "")).toBe(true);

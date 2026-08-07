@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 
 import {
-  decideAutomaticRecovery,
+  classifyOpaqueAgentFailure,
+  decideAutomaticRecovery as decideTypedAutomaticRecovery,
   DEFAULT_AUTOMATIC_RECOVERY_CONFIG,
   getAutomaticRecoveryConfig,
   isContextPressureFailure,
@@ -9,7 +10,24 @@ import {
   isNonRecoverableFailure,
   isProviderAuthConfigFailure,
   isTransientFailure,
+  type RecoveryDecisionInput,
 } from "../../src/agent-pool/automatic-recovery.js";
+
+type OpaqueRecoveryDecisionInput = Omit<RecoveryDecisionInput, "failureCategory"> & {
+  errorText: string | null | undefined;
+  failureCategory?: RecoveryDecisionInput["failureCategory"];
+};
+
+// Most policy tests start from an opaque provider/legacy error. Classify that
+// error explicitly at this test boundary; the policy function itself accepts
+// only authoritative typed state.
+function decideAutomaticRecovery(input: OpaqueRecoveryDecisionInput) {
+  const { errorText, failureCategory, ...policyInput } = input;
+  return decideTypedAutomaticRecovery({
+    ...policyInput,
+    failureCategory: failureCategory ?? classifyOpaqueAgentFailure(errorText),
+  });
+}
 
 test("keeps turn auto-recovery enabled while disabling transient tools by default", () => {
   const previousAutoRecovery = process.env.PICLAW_TURN_AUTO_RECOVERY_ENABLED;
@@ -194,6 +212,37 @@ test("classifies output-length stops as terminal length_stop without confusing c
   expect(decision.recover).toBe(false);
   expect(decision.classifier).toBe("length_stop");
   expect(decision.strategy).toBeNull();
+});
+
+test("structured failure category overrides misleading diagnostic prose", () => {
+  const authDecision = decideAutomaticRecovery({
+    config: DEFAULT_AUTOMATIC_RECOVERY_CONFIG,
+    errorText: "timed out after maximum context length; please retry",
+    failureCategory: "auth_config",
+    recoveryAttemptsUsed: 0,
+    elapsedMs: 1000,
+    snapshot: {
+      hadToolActivity: false,
+      hadPartialOutput: false,
+      canDisableToolsForRecovery: true,
+    },
+  });
+  expect(authDecision).toMatchObject({ recover: false, classifier: "auth_config", strategy: null });
+
+  const providerDecision = decideAutomaticRecovery({
+    config: DEFAULT_AUTOMATIC_RECOVERY_CONFIG,
+    errorText: "maximum context length exceeded",
+    failureCategory: "provider",
+    recoveryAttemptsUsed: 0,
+    elapsedMs: 1000,
+    snapshot: {
+      hadToolActivity: false,
+      hadPartialOutput: false,
+      canDisableToolsForRecovery: true,
+    },
+  });
+  expect(providerDecision.strategy).toBe("retry");
+  expect(providerDecision.classifier).toBe("unknown");
 });
 
 test("retries unknown failures without compaction when there is no context pressure", () => {

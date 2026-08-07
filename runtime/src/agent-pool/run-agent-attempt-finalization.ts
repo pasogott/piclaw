@@ -5,8 +5,8 @@ import {
   inspectBlankTurnSessionDelta,
   isBlankTurnSessionDelta,
 } from "./blank-turn-detection.js";
-import { isLengthStopFailure, type RecoveryAttemptSnapshot } from "./automatic-recovery.js";
-import type { AgentOutput, RunAgentOptions } from "./contracts.js";
+import { classifyOpaqueAgentFailure, type RecoveryAttemptSnapshot } from "./automatic-recovery.js";
+import type { AgentFailureCategory, AgentOutput, RunAgentOptions } from "./contracts.js";
 import { consumeAgentAbortCause } from "./abort-provenance.js";
 import { getAutoCompactionTokenStatusForSession } from "./compaction.js";
 import { debugSuppressedError, type StructuredLogger } from "../utils/logger.js";
@@ -90,17 +90,29 @@ export function finalizePromptAttemptOutput(input: PromptAttemptFinalizationInpu
   );
 
   const abortProvenance = consumeAgentAbortCause(input.chatJid);
+  const abortFailureCategory = (cause: NonNullable<AgentOutput["abortCause"]>): AgentFailureCategory => {
+    if (cause === "context_pressure") return "context_pressure";
+    if (cause === "prompt_timeout") return "timeout";
+    if (cause === "stale_progress_watchdog") return "stalled_work";
+    if (cause === "tool_budget") return "tool_budget";
+    return "aborted";
+  };
   const withAbortProvenance = (output: AgentOutput): AgentOutput => abortProvenance
-    ? { ...output, abortCause: abortProvenance.cause, abortOperation: abortProvenance.operation }
+    ? {
+      ...output,
+      failureCategory: abortFailureCategory(abortProvenance.cause),
+      abortCause: abortProvenance.cause,
+      abortOperation: abortProvenance.operation,
+    }
     : output;
 
   let output: AgentOutput;
   if (input.staleProgressAbortFailed) {
-    output = { status: "error", result: null, error: `Stale-progress watchdog detected no progress and failed to abort the run: ${input.staleProgressAbortFailed}` };
+    output = { status: "error", result: null, failureCategory: "stalled_work", error: `Stale-progress watchdog detected no progress and failed to abort the run: ${input.staleProgressAbortFailed}` };
   } else if (input.staleProgressInterrupted) {
-    output = { status: "error", result: null, error: `Stale-progress watchdog interrupted the run after no progress for ${input.formatTimeoutDuration(input.getProgressWatchdogTimeoutMs())}.` };
+    output = { status: "error", result: null, failureCategory: "stalled_work", error: `Stale-progress watchdog interrupted the run after no progress for ${input.formatTimeoutDuration(input.getProgressWatchdogTimeoutMs())}.` };
   } else if (input.timedOut) {
-    output = { status: "error", result: null, error: `Timed out after ${input.formatTimeoutDuration(input.timeoutMs)}` };
+    output = { status: "error", result: null, failureCategory: "timeout", error: `Timed out after ${input.formatTimeoutDuration(input.timeoutMs)}` };
   } else if (input.toolUseBudgetExceeded && !input.finalText && input.finalAttachments.length === 0) {
     const reportedToolSteps = input.toolExecutionCount > 0 ? input.toolExecutionCount : input.assistantToolUseMessageCount;
     const reportedToolBudget = input.toolUseMessageBudget;
@@ -108,27 +120,31 @@ export function finalizePromptAttemptOutput(input: PromptAttemptFinalizationInpu
       status: "error",
       result: null,
       error: `Tool-use budget exceeded before finalization (${reportedToolSteps}/${reportedToolBudget} tool steps). Ask me to continue; I will resume from the latest known partial state instead of replaying the whole turn.`,
+      failureCategory: "tool_budget",
       toolBudgetExceeded: true,
       toolStepsUsed: reportedToolSteps,
       toolStepsBudget: reportedToolBudget,
       nextAction: "Ask me to continue; I will resume from the latest known partial state instead of replaying the whole turn.",
     };
   } else if (input.promptThrownError) {
-    output = { status: "error", result: null, error: input.promptThrownError };
+    output = { status: "error", result: null, failureCategory: classifyOpaqueAgentFailure(input.promptThrownError), error: input.promptThrownError };
   } else if (input.turnError) {
-    output = { status: "error", result: null, error: input.turnError.errorMessage };
+    output = { status: "error", result: null, failureCategory: classifyOpaqueAgentFailure(input.turnError.errorMessage), error: input.turnError.errorMessage };
   } else if (input.lastAssistantState?.stopReason === "pending") {
     const rawDetail = input.lastAssistantState.rawStopReason
       ? ` (provider reason: ${input.lastAssistantState.rawStopReason})`
       : "";
-    output = { status: "error", result: null, error: `Provider response remained pending and did not reach a terminal stop${rawDetail}.` };
+    output = { status: "error", result: null, failureCategory: "provider", error: `Provider response remained pending and did not reach a terminal stop${rawDetail}.` };
+  } else if (input.lastAssistantState?.stopReason === "aborted") {
+    output = { status: "error", result: null, failureCategory: "aborted", error: input.lastAssistantState.errorMessage || "Provider response was aborted." };
   } else if (input.latentStateError) {
-    output = { status: "error", result: null, error: input.latentStateError };
-  } else if (input.lastAssistantState?.stopReason === "length" || isLengthStopFailure(input.lastAssistantState?.errorMessage)) {
+    output = { status: "error", result: null, failureCategory: classifyOpaqueAgentFailure(input.latentStateError), error: input.latentStateError };
+  } else if (input.lastAssistantState?.stopReason === "length") {
     output = {
       status: "error",
       result: null,
       error: buildLengthStopError(input.finalText),
+      failureCategory: "output_limit",
       ...(input.finalUsage ? { usage: input.finalUsage as AgentOutput["usage"] } : {}),
     };
   } else {
@@ -181,7 +197,9 @@ export function finalizePromptAttemptOutput(input: PromptAttemptFinalizationInpu
         && input.hadToolFailureAfterSoftStop
         && input.toolUseSoftStopApplied
         && !isBlankTurnSessionDelta(blankTurnDelta)
-        && detail.includes("provider stopped after tool use");
+        && input.sawAssistantToolCallMessage
+        && input.lastAssistantState?.stopReason === "stop"
+        && !input.lastAssistantState.hadTextContent;
       const isToolOnlyCompletion = isTerminalSideEffectCompletion || isDraftBackedSoftStopCompletion;
       output = isToolOnlyCompletion
         ? {
@@ -192,6 +210,7 @@ export function finalizePromptAttemptOutput(input: PromptAttemptFinalizationInpu
         : {
           status: "error",
           result: null,
+          failureCategory: "no_terminal_output",
           error: `Prompt completed without emitting an assistant reply before finalization (${detail}).`,
         };
 
@@ -238,6 +257,7 @@ export function finalizePromptAttemptOutput(input: PromptAttemptFinalizationInpu
       toolUseBudgetExceeded: input.toolUseBudgetExceeded,
       assistantToolUseMessageCount: input.assistantToolUseMessageCount,
       toolExecutionCount: input.toolExecutionCount,
+      toolUseMessageBudget: input.toolUseMessageBudget,
     },
   };
 }

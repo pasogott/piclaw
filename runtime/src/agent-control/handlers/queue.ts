@@ -83,7 +83,11 @@ export async function handleSteer(session: AgentSession, command: SteerCommand):
     await session.prompt(steerText, { streamingBehavior: "steer" });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return { status: "error", message };
+    return {
+      status: "error",
+      message,
+      ...(!session.isStreaming ? { retry_as_followup: true } : {}),
+    };
   }
 
   return {

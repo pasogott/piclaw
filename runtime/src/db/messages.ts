@@ -693,7 +693,7 @@ export function getMessagesSince(
 ): NewMessage[] {
   const db = getDb();
   const sql = `
-    SELECT id, chat_jid, sender, sender_name, content, screen_hint, timestamp, thread_id
+    SELECT id, chat_jid, sender, sender_name, content, screen_hint, content_blocks, timestamp, thread_id
     FROM messages
     WHERE chat_jid = ? AND timestamp > ?
       AND is_bot_message = 0 AND content NOT LIKE ?
@@ -701,5 +701,9 @@ export function getMessagesSince(
       AND COALESCE(is_steering_message, 0) = 0
     ORDER BY timestamp
   `;
-  return db.prepare(sql).all(chatJid, sinceTimestamp, `${botPrefix}:%`) as NewMessage[];
+  const rows = db.prepare(sql).all(chatJid, sinceTimestamp, `${botPrefix}:%`) as Array<Omit<NewMessage, "content_blocks"> & { content_blocks?: string | null }>;
+  return rows.map((row) => ({
+    ...row,
+    content_blocks: parseJsonArray(row.content_blocks),
+  }));
 }

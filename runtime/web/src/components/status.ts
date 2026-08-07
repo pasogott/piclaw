@@ -199,6 +199,10 @@ export function resolveAgentStatusContent(status, options = {}) {
     } else {
         content = title || statusText || 'Thinking...';
     }
+    const activeToolCount = Number(status?.active_tool_count ?? status?.activeToolCount);
+    if (isToolIntentPayload(status) && Number.isFinite(activeToolCount) && activeToolCount > 1) {
+        content = `${content} · ${activeToolCount} tools active`;
+    }
     if (!isLastActivity) return content;
     if (content && content !== 'Thinking...') {
         return `Recent activity: ${content}`;
@@ -577,6 +581,9 @@ export function AgentStatus({ status, draft, plan, thought, pendingRequest, inte
 
     const content = resolveAgentStatusContent(status, { isLastActivity });
     const statusActivityAgeLabel = resolveStatusActivityAgeLabel(status, nowMs);
+    const toolElapsedLabel = isToolIntentPayload(status)
+        ? getStatusElapsedLabel(status, nowMs)
+        : null;
 
     const toolRepoRepoPath = toolRepoContext?.repoPath || '';
     const toolRepoBranch = toolRepoContext?.branch || '';
@@ -1041,14 +1048,14 @@ export function AgentStatus({ status, draft, plan, thought, pendingRequest, inte
                 panelKey: 'tool-output',
             })}
             ${showCorePanels && status && status?.type !== 'intent' && html`
-                <div class=${`agent-status${isLastActivity ? ' agent-status-last-activity' : ''}${status?.type === 'error' ? ' agent-status-error' : ''}${toolRepoLabel || statusHints.length > 0 || statusActivityAgeLabel ? ' agent-status-multiline' : ''}`} aria-live="polite" style=${turnColor ? `--turn-color: ${turnColor};` : ''}>
+                <div class=${`agent-status${isLastActivity ? ' agent-status-last-activity' : ''}${status?.type === 'error' ? ' agent-status-error' : ''}${toolRepoLabel || statusHints.length > 0 || statusActivityAgeLabel || toolElapsedLabel ? ' agent-status-multiline' : ''}`} aria-live="polite" style=${turnColor ? `--turn-color: ${turnColor};` : ''}>
                     ${turnColor && showRunningStatusDot && html`<span class=${dotClass} aria-hidden="true"></span>`}
                     ${status?.type === 'error'
                         ? html`<span class="agent-status-error-icon" aria-hidden="true">⚠</span>`
                         : (runningIndicatorMode === 'spinner' && html`<div class="agent-status-spinner"></div>`)}
                     <div class="agent-status-copy">
                         <span class="agent-status-text">${renderToolArgumentInText(content, status)}</span>
-                        ${(toolRepoLabel || orderedStatusHints.length > 0 || statusActivityAgeLabel) && html`
+                        ${(toolRepoLabel || orderedStatusHints.length > 0 || statusActivityAgeLabel || toolElapsedLabel) && html`
                             <span class="agent-status-meta-row">
                                 ${leadingStatusHints.map((hint) => html`
                                     <span key=${hint.key} class="agent-status-hint-row" title=${hint.title || hint.label}>
@@ -1072,6 +1079,12 @@ export function AgentStatus({ status, draft, plan, thought, pendingRequest, inte
                                         <span class="agent-status-hint-label">${hint.label}</span>
                                     </span>
                                 `)}
+                                ${toolElapsedLabel && html`
+                                    <span class="agent-status-hint-row agent-status-elapsed-row" title=${`Running for ${toolElapsedLabel}`}>
+                                        <span class="agent-status-hint-icon">${CLOCK_ICON_SVG}</span>
+                                        <span class="agent-status-hint-label">${toolElapsedLabel}</span>
+                                    </span>
+                                `}
                                 ${statusActivityAgeLabel && html`
                                     <span class="agent-status-hint-row agent-status-activity-row" title=${`${isLastActivity ? 'Recent activity' : 'Last event'} ${statusActivityAgeLabel}`}>
                                         <span class="agent-status-hint-icon">${CLOCK_ICON_SVG}</span>

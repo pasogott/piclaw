@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 
 import "../../../helpers.js";
 import { beginChatRun, getDb, getInflightRuns, initDatabase } from "../../../../src/db.js";
-import { WebAgentControlPlaneService } from "../../../../src/channels/web/agent/agent-control-plane-service.js";
+import {
+  buildStalledWorkDiagnostic,
+  WebAgentControlPlaneService,
+} from "../../../../src/channels/web/agent/agent-control-plane-service.js";
 import type { QueuedFollowupLifecycleService } from "../../../../src/channels/web/runtime/queued-followup-lifecycle-service.js";
 
 function jsonResponse(payload: unknown, status = 200): Response {
@@ -39,6 +42,43 @@ function createService(overrides: Partial<ConstructorParameters<typeof WebAgentC
     ...overrides,
   });
 }
+
+describe("buildStalledWorkDiagnostic", () => {
+  const progress = {
+    chatJid: "web:tool-run",
+    phase: "tool_execution" as const,
+    startedAt: Date.parse("2026-08-07T12:00:00.000Z"),
+    lastProgressAt: Date.parse("2026-08-07T12:00:20.000Z"),
+  };
+
+  test("uses progress age rather than treating every tool-execution phase as stale", () => {
+    expect(buildStalledWorkDiagnostic(progress, {
+      nowMs: Date.parse("2026-08-07T12:00:50.000Z"),
+      thresholdMs: 60_000,
+    })).toEqual({
+      detected: false,
+      phase: "tool_execution",
+      age_ms: 30_000,
+      threshold_ms: 60_000,
+      started_at: "2026-08-07T12:00:00.000Z",
+      last_progress_at: "2026-08-07T12:00:20.000Z",
+    });
+  });
+
+  test("reports stalled work only after the configured threshold", () => {
+    expect(buildStalledWorkDiagnostic(progress, {
+      nowMs: Date.parse("2026-08-07T12:01:20.000Z"),
+      thresholdMs: 60_000,
+    })).toMatchObject({ detected: true, age_ms: 60_000, threshold_ms: 60_000 });
+  });
+
+  test("keeps age diagnostics without claiming a stall when detection is disabled", () => {
+    expect(buildStalledWorkDiagnostic(progress, {
+      nowMs: Date.parse("2026-08-07T12:10:20.000Z"),
+      thresholdMs: 0,
+    })).toMatchObject({ detected: false, age_ms: 600_000, threshold_ms: null });
+  });
+});
 
 describe("WebAgentControlPlaneService", () => {
   test("persists provider-ready OOBE completion at the instance level", async () => {

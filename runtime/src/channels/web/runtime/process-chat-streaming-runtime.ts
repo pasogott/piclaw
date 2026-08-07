@@ -91,8 +91,11 @@ export async function createProcessChatStreamingRuntime(options: {
     emitter: trackedEmitter, agentId, threadId, turnId,
     formatThinkingLevel: (level) => liveThinkingLevelLabels.get(level) ?? level,
     thoughtPreviewLines: 8, draftPreviewLines: 8, previewMaxCharsPerLine: 160,
-    includeThoughtFull: () => channel.isPanelExpanded(turnId, "thought"),
-    includeDraftFull: () => channel.isPanelExpanded(turnId, "draft"),
+    // Full preview capture is runtime state, not a presentation preference.
+    // Always emit deltas so collapsing a panel cannot create gaps that later
+    // expansion or reconnect is unable to recover.
+    includeThoughtFull: () => true,
+    includeDraftFull: () => true,
     onThoughtBuffer: (text, lines) => channel.updateThoughtBuffer(turnId, text, lines),
     onThinkingComplete: (text, _softLines, durationMs) => {
       const realLines = text ? text.split("\n").length : 0;
@@ -126,7 +129,7 @@ export async function createProcessChatStreamingRuntime(options: {
   const clearCommittedDraft = () => {
     channel.updateDraftBuffer(turnId, "", 0);
     trackedEmitter.draft({ thread_id: threadId, agent_id: agentId, turn_id: turnId, text: "", total_lines: 0, kind: "draft", mode: "replace" });
-    if (channel.isPanelExpanded(turnId, "draft")) trackedEmitter.draftDelta({ thread_id: threadId, agent_id: agentId, turn_id: turnId, delta: "", reset: true });
+    trackedEmitter.draftDelta({ thread_id: threadId, agent_id: agentId, turn_id: turnId, delta: "", reset: true });
   };
   trackedEmitter.status({ thread_id: threadId, agent_id: agentId, type: "thinking", title: "Thinking...", turn_id: turnId });
   const runtimeConfig = getAgentRuntimeConfig();

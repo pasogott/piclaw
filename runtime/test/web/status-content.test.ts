@@ -13,6 +13,11 @@ test('resolveAgentStatusContent omits redundant streaming-output suffixes when o
   expect(resolveAgentStatusContent({ type: 'tool_status', title: 'read: /workspace/file.txt', status: 'Streaming output...' })).toBe('read: /workspace/file.txt');
 });
 
+test('resolveAgentStatusContent reports concurrent active tools without hiding the primary tool', () => {
+  expect(resolveAgentStatusContent({ type: 'tool_call', title: 'bash', active_tool_count: 3 })).toBe('Running: bash · 3 tools active');
+  expect(resolveAgentStatusContent({ type: 'tool_status', title: 'read', status: 'Working...', active_tool_count: 2 })).toBe('read: Working... · 2 tools active');
+});
+
 test('resolveAgentStatusContent remains auditable when tool status title is missing', () => {
   expect(resolveAgentStatusContent({ type: 'tool_call', tool_name: 'bash', tool_args: { command: 'echo hi' } })).toBe('Running: bash: echo hi');
   expect(resolveAgentStatusContent({ type: 'tool_status', status: 'Working...', tool_name: 'read', tool_args: { path: '/workspace/AGENTS.md' } })).toBe('read: /workspace/AGENTS.md: Working...');

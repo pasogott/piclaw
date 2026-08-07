@@ -159,8 +159,24 @@ type ToolExecutionWatchdogEvent = {
   toolName?: unknown;
 };
 
-function getToolExecutionWatchdogHeartbeatIntervalMs(timeoutMs = getProgressWatchdogTimeoutMs()): number {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return 0;
+export type ToolExecutionHeartbeatEvent = {
+  type: "tool_execution_heartbeat";
+  emittedAt: string;
+  activeToolCount: number;
+  activeToolNames: string[];
+  activeTools: Array<{
+    toolCallId: string;
+    toolName: string | null;
+    startedAt: string;
+    lastEventAt: string;
+  }>;
+};
+
+export function getToolExecutionWatchdogHeartbeatIntervalMs(timeoutMs = getProgressWatchdogTimeoutMs()): number {
+  // Tool liveness is also user-facing status telemetry. Keep it alive even
+  // when watchdog escalation is disabled so quiet buffered commands do not
+  // appear hung and reconnect status remains fresh.
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return MAX_TOOL_EXECUTION_WATCHDOG_HEARTBEAT_MS;
   return Math.max(
     MIN_TOOL_EXECUTION_WATCHDOG_HEARTBEAT_MS,
     Math.min(MAX_TOOL_EXECUTION_WATCHDOG_HEARTBEAT_MS, Math.floor(timeoutMs / 3)),
@@ -171,6 +187,7 @@ export function createToolExecutionWatchdogHeartbeatController(
   chatJid: string,
   options: {
     heartbeat?: (chatJid: string, phase: "tool_execution", metadata?: Record<string, unknown>) => void;
+    onHeartbeat?: (event: ToolExecutionHeartbeatEvent) => void;
     getIntervalMs?: () => number;
   } = {},
 ): {
@@ -180,7 +197,11 @@ export function createToolExecutionWatchdogHeartbeatController(
 } {
   const heartbeat = options.heartbeat ?? heartbeatTrackedPhase;
   const getIntervalMs = options.getIntervalMs ?? (() => getToolExecutionWatchdogHeartbeatIntervalMs());
-  const activeTools = new Map<string, string | null>();
+  const activeTools = new Map<string, {
+    toolName: string | null;
+    startedAt: string;
+    lastEventAt: string;
+  }>();
   let timer: ReturnType<typeof setInterval> | null = null;
   let anonymousToolCounter = 0;
 
@@ -192,13 +213,29 @@ export function createToolExecutionWatchdogHeartbeatController(
 
   const publishHeartbeat = () => {
     if (activeTools.size === 0) return;
+    const emittedAt = new Date().toISOString();
     const toolNames = Array.from(new Set(
-      Array.from(activeTools.values()).filter((value): value is string => typeof value === "string" && value.trim().length > 0),
+      Array.from(activeTools.values())
+        .map((value) => value.toolName)
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0),
     )).slice(0, 3);
+    const activeToolSnapshots = Array.from(activeTools.entries()).map(([toolCallId, state]) => ({
+      toolCallId,
+      toolName: state.toolName,
+      startedAt: state.startedAt,
+      lastEventAt: state.lastEventAt,
+    }));
     heartbeat(chatJid, "tool_execution", {
       eventType: "tool_execution_watchdog_heartbeat",
       activeToolCount: activeTools.size,
       activeToolNames: toolNames,
+    });
+    options.onHeartbeat?.({
+      type: "tool_execution_heartbeat",
+      emittedAt,
+      activeToolCount: activeTools.size,
+      activeToolNames: toolNames,
+      activeTools: activeToolSnapshots,
     });
   };
 
@@ -225,7 +262,7 @@ export function createToolExecutionWatchdogHeartbeatController(
     }
     const targetName = typeof event.toolName === "string" && event.toolName.trim() ? event.toolName : null;
     for (const [key, activeName] of activeTools) {
-      if (targetName === null || activeName === targetName) {
+      if (targetName === null || activeName.toolName === targetName) {
         activeTools.delete(key);
         return;
       }
@@ -235,9 +272,22 @@ export function createToolExecutionWatchdogHeartbeatController(
   return {
     handleEvent(event: ToolExecutionWatchdogEvent) {
       if (event.type === "tool_execution_start") {
+        const now = new Date().toISOString();
         const toolName = typeof event.toolName === "string" && event.toolName.trim() ? event.toolName : null;
-        activeTools.set(resolveToolKey(event), toolName);
+        activeTools.set(resolveToolKey(event), { toolName, startedAt: now, lastEventAt: now });
         ensureTimer();
+        return;
+      }
+      if (event.type === "tool_execution_update") {
+        const key = typeof event.toolCallId === "string" && event.toolCallId.trim() ? event.toolCallId : null;
+        const current = key ? activeTools.get(key) : null;
+        if (key && current) {
+          activeTools.set(key, {
+            ...current,
+            toolName: typeof event.toolName === "string" && event.toolName.trim() ? event.toolName : current.toolName,
+            lastEventAt: new Date().toISOString(),
+          });
+        }
         return;
       }
       if (event.type === "tool_execution_end") {
@@ -449,7 +499,9 @@ async function runPromptAttempt(
     : undefined;
 
   const tracker = options.turnCoordinator.createTracker(chatJid, onTurnComplete, runOptions.onTurnDiscard);
-  const toolExecutionWatchdogHeartbeat = createToolExecutionWatchdogHeartbeatController(chatJid);
+  const toolExecutionWatchdogHeartbeat = createToolExecutionWatchdogHeartbeatController(chatJid, {
+    onHeartbeat: (event) => runOptions.onEvent?.(event as unknown as AgentSessionEvent),
+  });
   const isRetrySafeToolName = (toolName: unknown): boolean => typeof toolName === "string" && [
     "read",
     "read_attachment",
@@ -493,7 +545,11 @@ async function runPromptAttempt(
       });
     }
 
-    if (event.type === "tool_execution_start" || event.type === "tool_execution_end") {
+    if (
+      event.type === "tool_execution_start"
+      || event.type === "tool_execution_update"
+      || event.type === "tool_execution_end"
+    ) {
       toolExecutionWatchdogHeartbeat.handleEvent(event as ToolExecutionWatchdogEvent);
     }
 

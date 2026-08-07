@@ -63,7 +63,7 @@ removeLogSink(mySink);  // stop
 | `run_agent.prompt_resolved` | info | `chatJid`, `turnId`, `promptDurationMs`, `sessionIsStreaming` | `session.prompt()` resolves |
 | `run_agent.complete` | info | `chatJid`, `turnId`, `model`, `durationMs`, `outputChars`, `recoveryAttemptsUsed` | Turn finishes successfully |
 | `run_agent` | error | `chatJid`, `turnId`, `model`, `durationMs`, `errorMessage` | Turn fails fatally |
-| `run_agent.attempt_failed` | warn | `chatJid`, `turnId`, `errorText`, `classifier`, `recoveryStrategy` | Recovery attempt fails |
+| `run_agent.attempt_failed` | warn | `chatJid`, `turnId`, `errorText`, `failureCategory`, `classifier`, `recoveryStrategy` | Recovery attempt fails |
 | `run_agent.no_terminal_reply` | warn | `chatJid`, `turnId`, `detail`, `hadToolActivity`, `blankTurnDelta` | Provider stopped without a reply |
 | `run_agent.blank_turn_delta` | warn | `chatJid`, `turnId`, `detail`, `blankTurnDelta` | Session delta contains only user messages |
 | `run_agent.recovery_compact` | info | `chatJid`, `turnId` | Compaction triggered during recovery |
@@ -92,6 +92,54 @@ removeLogSink(mySink);  // stop
 | `process_chat.finalize_successful_run` | info | `chatJid`, cursor state | Turn persisted and finalized |
 | `process_chat.no_output_recovery_stalled` | warn | `chatJid`, `title`, `recovery` | Turn ended without output during recovery |
 | `process_chat.no_output_blank_failed` | warn | `chatJid`, `hadDraft`, `recovery` | Turn produced no output at all |
+
+### Active-turn status and preview lifecycle
+
+The web control plane keeps the current turn recoverable through `/agent/status`. Its status payload and SSE stream use this lifecycle:
+
+1. A turn starts in `thinking`. Thought and draft buffers are captured in full even when their panels are collapsed.
+2. `tool_execution_start` creates an `active_tools` entry and changes the visible phase to `tool_execution`.
+3. `tool_execution_update` advances `last_progress_at` and may add a bounded output preview. A 15-second `tool_execution_heartbeat` advances `heartbeat_at` while any tool remains active, including when watchdog escalation is disabled.
+4. `tool_execution_end` records `last_completed_tool` and removes that call from `active_tools`. The phase remains `tool_execution` while another concurrent tool is active. The final tool end changes the phase to `post_tool_model` immediately.
+5. A successful or failed terminal event clears current-turn previews and active-tool state.
+
+Each active-tool snapshot includes `tool_call_id`, `tool_name`, `started_at`, `last_progress_at`, `heartbeat_at`, `status` and any bounded output preview. `active_tool_count` reports concurrent work. Heartbeats mean that the runtime still owns the tool call; they do not claim that a buffered command emitted new output.
+
+`stalled_work` compares `lastProgressAt` with the configured progress-watchdog timeout. It reports `stalled: true` only after that age crosses the threshold. A `tool_execution` phase alone is not evidence of a stall.
+
+After reconnect or chat activation, the client fetches `/agent/status` for the selected chat. Thought or draft events that arrive during that fetch mark the snapshot dirty. The client fetches another snapshot and repeats until one completes without a racing preview event. Turn and chat identifiers still gate every delta, so another turn or chat cannot overwrite the selected preview.
+
+Provider event streams differ. Some providers emit no reasoning text, so the UI retains the `thinking` phase without inventing a Thoughts panel. Text emitted before a tool call is kept as the draft preview. Commands and remote tools may buffer output until completion; elapsed time and `heartbeat_at` remain the reliable liveness fields in that case.
+
+Relevant SSE events are `agent_status`, `agent_thought`, `agent_thought_delta`, `agent_draft`, `agent_draft_delta`, `agent_done` and `agent_error`.
+
+#### Event order and terminal authority
+
+| Phase | Runtime evidence | Web state |
+|---|---|---|
+| Prompt accepted | `run_agent.prompt`; stable `turnId` and session leaf | `thinking` |
+| Provider stream starts | `message_start`, then thinking or text deltas when supplied | `thinking`; thought and draft buffers update independently |
+| Model requests a tool | assistant `message_end` with `stopReason: "toolUse"`; completed text is marked `followedByToolUse` | pre-tool text stays a draft or intermediate turn |
+| Tool runs | `tool_execution_start`, zero or more updates and heartbeats, then `tool_execution_end` | `tool_execution`; active-tool snapshot remains recoverable |
+| Model resumes | final tool end, followed by the next provider segment | `post_tool_model`, then `thinking` or drafting updates |
+| Attempt ends | provider `stopReason`, resolved tool state, turn snapshots and local timeout or abort provenance | recovery policy selects a typed classifier and strategy |
+| Recovery runs | `recovery_start` and `recovery_end`; any temporary tool ceiling is restored after the attempt | `recovery` intent with classifier and `failure_category` |
+| Turn commits | `AgentOutput.status`, terminal turn persistence and cursor update | terminal post, then `agent_done` or `agent_error`; previews and active tools clear |
+
+`AgentOutput.status`, `AgentOutput.failureCategory`, provider stop state, resolved tool events, attempt strategy and turn lineage decide the outcome. Assistant `result` text cannot change success, recovery strategy, tool authority or continuation state. Text completed before tool dispatch has `followedByToolUse: true` and cannot close the turn.
+
+Protected recovery uses a `control_intent` block with intent `protected_recovery_continuation`. Its type, schema version and source/thread lineage grant authority; its label is presentation-only. `RunAgentOptions.protectedRecoveryContinuation` marks the generated ordinary continuation as one-shot. Matching the continuation prompt text or label does not grant control authority. A generic tools-disabled retry may request this handoff, but only the ordinary tool-enabled continuation or a structurally eligible `finalize` attempt may close tool-dependent work.
+
+Terminal failures use these `failureCategory` values: `rate_limit`, `auth_config`, `network`, `aborted`, `timeout`, `tool_budget`, `context_pressure`, `output_limit`, `provider`, `no_terminal_output`, `stalled_work`, `session_corruption`, `non_recoverable`, `already_processing`, `provider_unavailable` and `unknown`. Recovery diagnostics retain the category, classifier, strategy, tool counts and context-pressure snapshot. Status and outcome-marker code consume those fields instead of reparsing titles, details or assistant output.
+
+#### Provider and transport limits
+
+- The provider SDK supplies `stopReason` and `errorMessage`, but it does not expose a common structured error code for every provider. At each untyped provider/SDK or injected-legacy ingress, `classifyOpaqueAgentFailure()` converts the opaque error into an enum. Recovery policy, loop suppression, persistence and status code then consume the enum without reparsing diagnostics. This compatibility classifier never reads assistant result text.
+- Some providers omit reasoning deltas. The UI keeps the turn in `thinking` without creating synthetic thought text.
+- Some command and remote-tool transports buffer output until completion. `started_at`, elapsed time and `heartbeat_at` show runtime ownership; they cannot prove that the remote process produced new output.
+- A process crash can interrupt a tool before its terminal event. Recovered status reports the unresolved execution; the runtime does not infer completion from the last assistant message.
+- Reconnect recovery returns the latest active-turn snapshot and repeats the fetch when deltas race it. It does not replay an unlimited history of prior preview deltas.
+- Provider `pending` and `deferred` responses are not terminal success. A later provider event or explicit deferred fetch must supply a terminal stop.
 
 ### Session lifecycle
 

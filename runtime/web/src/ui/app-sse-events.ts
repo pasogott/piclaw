@@ -57,6 +57,13 @@ interface RefBox<T> {
   current: T;
 }
 
+// Preview SSE events can race the reconnect status snapshot. While a snapshot
+// is pending, record that newer preview state exists and refetch until one
+// snapshot completes without an intervening preview event. This avoids both
+// dropped deltas and duplicate replay when the first snapshot already included
+// an event that was in flight.
+const dirtyPreviewResyncRefs = new WeakSet<object>();
+
 export interface HandleAppSseEventDependencies {
   currentChatJid: string;
   updateAgentProfile: (payload: any) => void;
@@ -264,6 +271,7 @@ export function handleAppSseEvent(
     const resyncGeneration = previewResyncGenerationRef.current + 1;
     previewResyncGenerationRef.current = resyncGeneration;
     previewResyncPendingRef.current = true;
+    dirtyPreviewResyncRefs.delete(previewResyncPendingRef);
     draftBufferRef.current = '';
     thoughtBufferRef.current = '';
     setAgentStatus(null);
@@ -282,48 +290,56 @@ export function handleAppSseEvent(
     }
 
     const targetChatJid = currentChatJid;
-    getAgentStatus(targetChatJid)
-      .then((response) => {
-        if (activeChatJidRef.current !== targetChatJid) return;
-        if (!response?.data) return;
+    const applyStatusSnapshot = (response) => {
+      if (activeChatJidRef.current !== targetChatJid) return;
+      if (!response?.data) return;
 
-        const payload = response.data;
-        if (payload.type === 'done' || payload.type === 'error') {
-          // A terminal event may have landed while SSE was disconnected. The
-          // connected handler already refreshes timeline/model state; refresh
-          // context explicitly so session rotation completion is fully applied.
-          void refreshContextUsage();
-          return;
-        }
-        if (response.status !== 'active') return;
-        const activeTurn = readAgentTurnId(payload);
-        if (activeTurn) setActiveTurn(activeTurn);
-        setAgentStatus(payload);
-        noteAgentActivity({
-          clearSilence: true,
-          atMs: parseStatusLastEventAt(payload) ?? Date.now(),
-        });
-        showLastActivity(payload);
+      const payload = response.data;
+      if (payload.type === 'done' || payload.type === 'error') {
+        // A terminal event may have landed while SSE was disconnected. The
+        // connected handler already refreshes timeline/model state; refresh
+        // context explicitly so session rotation completion is fully applied.
+        void refreshContextUsage();
+        return;
+      }
+      if (response.status !== 'active') return;
+      const activeTurn = readAgentTurnId(payload);
+      if (activeTurn) setActiveTurn(activeTurn);
+      setAgentStatus(payload);
+      noteAgentActivity({
+        clearSilence: true,
+        atMs: parseStatusLastEventAt(payload) ?? Date.now(),
+      });
+      showLastActivity(payload);
 
-        const thoughtRestore = resolveAgentPreviewRestoreState(response.thought);
-        if (thoughtRestore) {
-          thoughtBufferRef.current = thoughtRestore.text;
-          setAgentThought(thoughtRestore);
-        }
-        const draftRestore = resolveAgentPreviewRestoreState(response.draft);
-        if (draftRestore) {
-          draftBufferRef.current = draftRestore.text;
-          setAgentDraft(draftRestore);
-        }
-      })
-      .catch((error) => {
+      const thoughtRestore = resolveAgentPreviewRestoreState(response.thought);
+      if (thoughtRestore) {
+        thoughtBufferRef.current = thoughtRestore.text;
+        setAgentThought(thoughtRestore);
+      }
+      const draftRestore = resolveAgentPreviewRestoreState(response.draft);
+      if (draftRestore) {
+        draftBufferRef.current = draftRestore.text;
+        setAgentDraft(draftRestore);
+      }
+    };
+    void (async () => {
+      try {
+        do {
+          dirtyPreviewResyncRefs.delete(previewResyncPendingRef);
+          const response = await getAgentStatus(targetChatJid);
+          if (previewResyncGenerationRef.current !== resyncGeneration) return;
+          applyStatusSnapshot(response);
+        } while (dirtyPreviewResyncRefs.has(previewResyncPendingRef));
+      } catch (error) {
         console.warn('Failed to fetch agent status:', error);
-      })
-      .finally(() => {
+      } finally {
         if (previewResyncGenerationRef.current === resyncGeneration) {
           previewResyncPendingRef.current = false;
+          dirtyPreviewResyncRefs.delete(previewResyncPendingRef);
         }
-      });
+      }
+    })();
 
     if (isMainTimelineView(viewStateRef.current)) {
       void refreshTimeline();
@@ -447,7 +463,10 @@ export function handleAppSseEvent(
 
   if (eventType === 'agent_draft_delta') {
     if (!isCurrentChatEvent) return;
-    if (previewResyncPendingRef.current) return;
+    if (previewResyncPendingRef.current) {
+      dirtyPreviewResyncRefs.add(previewResyncPendingRef);
+      return;
+    }
     if (shouldIgnoreMismatchedTurn(turnId, currentTurnIdRef.current)) {
       return;
     }
@@ -471,7 +490,10 @@ export function handleAppSseEvent(
 
   if (eventType === 'agent_draft') {
     if (!isCurrentChatEvent) return;
-    if (previewResyncPendingRef.current) return;
+    if (previewResyncPendingRef.current) {
+      dirtyPreviewResyncRefs.add(previewResyncPendingRef);
+      return;
+    }
     if (shouldIgnoreMismatchedTurn(turnId, currentTurnIdRef.current)) {
       return;
     }
@@ -493,7 +515,10 @@ export function handleAppSseEvent(
 
   if (eventType === 'agent_thought_delta') {
     if (!isCurrentChatEvent) return;
-    if (previewResyncPendingRef.current) return;
+    if (previewResyncPendingRef.current) {
+      dirtyPreviewResyncRefs.add(previewResyncPendingRef);
+      return;
+    }
     if (shouldIgnoreMismatchedTurn(turnId, currentTurnIdRef.current)) {
       return;
     }
@@ -513,7 +538,10 @@ export function handleAppSseEvent(
 
   if (eventType === 'agent_thought') {
     if (!isCurrentChatEvent) return;
-    if (previewResyncPendingRef.current) return;
+    if (previewResyncPendingRef.current) {
+      dirtyPreviewResyncRefs.add(previewResyncPendingRef);
+      return;
+    }
     if (shouldIgnoreMismatchedTurn(turnId, currentTurnIdRef.current)) {
       return;
     }

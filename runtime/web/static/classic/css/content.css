@@ -376,6 +376,34 @@
     border: 1px solid color-mix(in srgb, var(--accent-color) 32%, transparent);
 }
 
+.post-control-intent {
+    justify-content: center;
+    min-height: 24px;
+    padding: 2px 0;
+}
+
+.post-control-intent-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: min(100%, 420px);
+    padding: 3px 9px;
+    border: 1px solid color-mix(in srgb, var(--text-secondary) 22%, transparent);
+    border-radius: 999px;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--surface-color, transparent) 82%, transparent);
+    font-size: var(--font-size-xs);
+    font-weight: 500;
+    line-height: 1.35;
+    text-align: center;
+    opacity: 0.78;
+}
+
+.post-control-intent-icon {
+    font-size: 13px;
+    line-height: 1;
+}
+
 .post-recovery-chip {
     display: inline-flex;
     align-items: center;

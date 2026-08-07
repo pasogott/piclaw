@@ -57,10 +57,6 @@ function readTrimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function isAuthFailureText(value: string): boolean {
-  return /no api key(?: found| for provider)?|token refresh failed\s*:\s*401|authentication failed|credentials may have expired|re-authenticate|unauthorized|\b401\b|\b403\b|invalid.*api.*key|api.*key.*invalid|token.*expired|oauth.*expired|refresh.*token|provider login required|auth.*expired|missing provider credential|missing provider config/i.test(value);
-}
-
 function computeCacheHitRate(record: TokenUsageCounterSummary | null | undefined): number | null {
   if (!record) return null;
   const input = Number(record.input_tokens) || 0;
@@ -140,10 +136,8 @@ function deriveAgentState(status: Record<string, unknown>): string {
   if (classifier === "recovery_suppressed") return "recovery_suppressed";
   if (classifier === "auth_config" || classifier === "provider_auth") return "blocked_auth";
 
-  const title = readTrimmedString(status.title);
-  const detail = readTrimmedString(status.detail);
-  const errorText = `${title} ${detail}`.trim();
-  if (errorText && isAuthFailureText(errorText)) return "blocked_auth";
+  const failureCategory = readTrimmedString(status.failure_category ?? status.failureCategory);
+  if (failureCategory === "auth_config") return "blocked_auth";
 
   return "active";
 }
@@ -165,7 +159,9 @@ export function handleAgentStatusRequest(req: Request, ctx: AgentStatusContext):
         status.classifier
           ?? status.recovery_classifier
           ?? status.recoveryClassifier
-          ?? status.failure_classifier,
+          ?? status.failure_classifier
+          ?? status.failure_category
+          ?? status.failureCategory,
       ) || null;
       return ctx.json({
         status: "idle",
@@ -201,7 +197,9 @@ export function handleAgentStatusRequest(req: Request, ctx: AgentStatusContext):
       status.classifier
       ?? status.recovery_classifier
       ?? status.recoveryClassifier
-      ?? status.failure_classifier,
+      ?? status.failure_classifier
+      ?? status.failure_category
+      ?? status.failureCategory,
     ) || null;
 
     return ctx.json({

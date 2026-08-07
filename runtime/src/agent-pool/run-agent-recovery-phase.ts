@@ -9,9 +9,9 @@
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 import {
+  classifyOpaqueAgentFailure,
   decideAutomaticRecovery,
   getAutomaticRecoveryDelayMs,
-  isContextPressureFailure,
   type AutomaticRecoveryConfig,
   type RecoveryAttemptSnapshot,
   type RecoveryClassifier,
@@ -29,7 +29,7 @@ import {
 } from "./compaction.js";
 import { buildPiclawCompactionEventFields, type PiclawCompactionTriggerMetadata } from "./compaction-trigger-context.js";
 import { RECOVERY_CONTINUATION_PROMPT } from "./context-pressure-retry.js";
-import type { AgentOutput, AgentRecoveryDiagnosticEntry, AgentRecoveryMetadata, RunAgentOptions } from "./contracts.js";
+import type { AgentFailureCategory, AgentOutput, AgentRecoveryDiagnosticEntry, AgentRecoveryMetadata, RunAgentOptions } from "./contracts.js";
 import { getRecoveryPolicyConfig } from "../core/config.js";
 import { writeAgentLog } from "./logging.js";
 import { heartbeatTrackedPhase } from "../runtime/progress-watchdog.js";
@@ -159,20 +159,12 @@ function pruneRecoveryFailureMap(now: number, windowMs: number): void {
   }
 }
 
-function normalizeRecoveryErrorSignature(errorText: string): string {
-  return errorText
-    .replace(/\b\d{2,}\b/g, "#")
-    .replace(/0x[0-9a-f]+/gi, "0x#")
-    .replace(/[a-f0-9]{16,}/gi, "#")
-    .slice(0, 500);
-}
-
 export function shouldSuppressRecoveryLoop(options: {
   chatJid: string;
   modelLabel: string | null;
+  failureCategory: AgentFailureCategory;
   classifier: RecoveryClassifier;
   strategy: RecoveryStrategy;
-  errorText: string;
   now?: number;
 }): { suppress: boolean; attemptsInWindow: number; windowMs: number } {
   const recoveryPolicy = getRecoveryPolicyConfig();
@@ -186,9 +178,9 @@ export function shouldSuppressRecoveryLoop(options: {
 
   const signature = [
     options.modelLabel ?? "unknown-model",
+    options.failureCategory,
     options.classifier,
     options.strategy,
-    normalizeRecoveryErrorSignature(options.errorText),
   ].join("|");
 
   const current = recentRecoveryFailuresByChat.get(options.chatJid) ?? [];
@@ -224,6 +216,7 @@ export function buildRecoveryDiagnosticEntry(
   error: string,
   elapsedMs: number,
   snapshot: RecoveryAttemptSnapshot,
+  failureCategory?: AgentFailureCategory,
 ): AgentRecoveryDiagnosticEntry {
   return {
     phase,
@@ -247,11 +240,11 @@ export function buildRecoveryDiagnosticEntry(
     toolExecutionCount: Number.isFinite(snapshot.toolExecutionCount)
       ? snapshot.toolExecutionCount
       : undefined,
+    toolUseMessageBudget: Number.isFinite(snapshot.toolUseMessageBudget)
+      ? snapshot.toolUseMessageBudget
+      : undefined,
+    failureCategory,
   };
-}
-
-function isAbortFailureText(errorText: string): boolean {
-  return /\b(?:aborterror|aborted|operation was aborted|request was aborted)\b/i.test(errorText);
 }
 
 function findToolBudgetDiagnostic(diagnostics: AgentRecoveryDiagnosticEntry[]): AgentRecoveryDiagnosticEntry | null {
@@ -259,7 +252,7 @@ function findToolBudgetDiagnostic(diagnostics: AgentRecoveryDiagnosticEntry[]): 
     const entry = diagnostics[index];
     if (entry.toolUseBudgetExceeded
       || entry.classifier === "tool_history_pressure"
-      || /tool(?:-| )use budget exceeded/i.test(entry.error)) {
+      || entry.failureCategory === "tool_budget") {
       return entry;
     }
   }
@@ -270,7 +263,6 @@ function buildToolBudgetRecoveryTerminalError(
   budgetDiagnostic: AgentRecoveryDiagnosticEntry,
   retryErrorText: string,
 ): { error: string; toolStepsUsed?: number; toolStepsBudget?: number; nextAction: string } {
-  const parsed = /\((\d+)\/(\d+) tool steps\)/i.exec(budgetDiagnostic.error);
   const assistantToolUseCount = Number.isFinite(budgetDiagnostic.assistantToolUseMessageCount)
     ? budgetDiagnostic.assistantToolUseMessageCount
     : undefined;
@@ -281,8 +273,10 @@ function buildToolBudgetRecoveryTerminalError(
     ? assistantToolUseCount
     : Number.isFinite(toolExecutionCount) && (toolExecutionCount ?? 0) > 0
       ? toolExecutionCount
-      : parsed ? Number(parsed[1]) : undefined;
-  const toolStepsBudget = parsed ? Number(parsed[2]) : undefined;
+      : undefined;
+  const toolStepsBudget = Number.isFinite(budgetDiagnostic.toolUseMessageBudget)
+    ? budgetDiagnostic.toolUseMessageBudget
+    : undefined;
   const budgetDetail = Number.isFinite(toolStepsUsed) && Number.isFinite(toolStepsBudget)
     ? `Tool-use budget exceeded before finalization (${toolStepsUsed}/${toolStepsBudget} tool steps).`
     : Number.isFinite(toolStepsUsed)
@@ -449,13 +443,13 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       ? 0
       : Math.max(0, Date.now() - startTime);
   };
-  const getRecoveryDecisionElapsedMs = (errorText: string, snapshot: RecoveryAttemptSnapshot) => {
+  const getRecoveryDecisionElapsedMs = (failureCategory: AgentFailureCategory | undefined, snapshot: RecoveryAttemptSnapshot) => {
     // #778: context-pressure compact_then_retry has two bounded phases:
     // recovery compaction is bounded by the compaction timeout; the
     // continuation prompt receives a fresh recovery budget after compaction.
     // Therefore the initial prompt duration must not exhaust the recovery
     // decision before compaction can run.
-    if (recoveryAttemptsUsed === 0 && (isContextPressureFailure(errorText) || snapshot.sawCompactionIntent)) return 0;
+    if (recoveryAttemptsUsed === 0 && (failureCategory === "context_pressure" || snapshot.sawCompactionIntent)) return 0;
     return getRecoveryBudgetElapsedMs();
   };
   const startRecoveryBudget = () => {
@@ -490,6 +484,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       status: "error",
       result: null,
       error,
+      failureCategory: "no_terminal_output",
       nextAction: "Continue automatically in one ordinary turn with the restored tool baseline.",
       requiresToolEnabledContinuation: true,
       recovery,
@@ -526,7 +521,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
         classifier: lastClassifier,
         errorMessage: error,
       });
-      return { status: "error" as const, result: null, error, recovery };
+      return { status: "error" as const, result: null, error, failureCategory: "timeout", recovery };
     }
 
     // The configured turn timeout bounds the initial attempt. Once that
@@ -542,6 +537,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
         return {
           status: "error" as const,
           result: null,
+          failureCategory: "timeout",
           error: `Agent run timed out after ${Math.round(loopElapsedMs / 1000)}s`,
         };
       }
@@ -562,7 +558,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       const duration = Date.now() - startTime;
       const error = "Automatic recovery requires a tools-disabled continuation, but the active session cannot control tools safely. Ask me to continue in a fresh turn.";
       writeAgentLog(options.logsDir, chatJid, duration, false, null, error);
-      return { status: "error", result: null, error };
+      return { status: "error", result: null, failureCategory: "provider", error };
     }
     if (recoveryContinuationWithoutTools && canControlTools && toolControl) {
       recoverySavedToolNames = toolControl.getActiveToolNames!();
@@ -642,6 +638,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
         status: "error",
         result: null,
         error,
+        failureCategory: "tool_budget",
         toolBudgetExceeded: true,
         toolStepsUsed: used,
         toolStepsBudget: cap,
@@ -712,15 +709,20 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     }
 
     const errorText = attempt.output.error || "Agent error";
+    // Runtime attempts normally carry a typed category from finalization. The
+    // fallback is only for injected/legacy attempt implementations that expose
+    // an opaque error string at this compatibility boundary.
+    const failureCategory = attempt.output.failureCategory ?? classifyOpaqueAgentFailure(errorText);
+    attempt.output.failureCategory = failureCategory;
     lastRecoveryErrorText = errorText;
     allowPostTimeoutRecoveryWindow = recoveryAttemptsUsed === 0
       && attempt.snapshot.hadToolActivity
       && attempt.timedOut;
     const decision = decideAutomaticRecovery({
       config: recoveryConfig,
-      errorText,
+      failureCategory,
       recoveryAttemptsUsed,
-      elapsedMs: getRecoveryDecisionElapsedMs(errorText, attempt.snapshot),
+      elapsedMs: getRecoveryDecisionElapsedMs(failureCategory, attempt.snapshot),
       snapshot: attempt.snapshot,
     });
 
@@ -729,9 +731,9 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       const guard = shouldSuppressRecoveryLoop({
         chatJid,
         modelLabel,
+        failureCategory,
         classifier: decision.classifier,
         strategy: decision.strategy,
-        errorText,
       });
       if (guard.suppress) {
         effectiveDecision = {
@@ -749,6 +751,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       operation: "run_agent.attempt_failed",
       chatJid,
       errorText,
+      failureCategory: attempt.output.failureCategory ?? "unknown",
       classifier: effectiveDecision.classifier,
       recoveryAttemptsUsed,
       recoveryStrategy: effectiveDecision.strategy,
@@ -767,6 +770,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       errorText,
       Date.now() - startTime,
       attempt.snapshot,
+      attempt.output.failureCategory,
     ));
 
     if (!effectiveDecision.recover || !effectiveDecision.strategy) {
@@ -776,7 +780,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       }
       const toolBudgetDiagnostic = recoveryAttemptsUsed > 0 ? findToolBudgetDiagnostic(recoveryDiagnostics) : null;
       const terminalBudgetFailure = toolBudgetDiagnostic
-        && (/Prompt completed without emitting an assistant reply before finalization/i.test(errorText) || isAbortFailureText(errorText))
+        && (attempt.output.failureCategory === "no_terminal_output" || attempt.output.failureCategory === "aborted")
         ? buildToolBudgetRecoveryTerminalError(toolBudgetDiagnostic, errorText)
         : null;
       const finalErrorText = terminalBudgetFailure?.error ?? errorText;
@@ -799,6 +803,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       }
       if (terminalBudgetFailure) {
         attempt.output.error = finalErrorText;
+        attempt.output.failureCategory = "tool_budget";
         attempt.output.toolBudgetExceeded = true;
         attempt.output.toolStepsUsed = terminalBudgetFailure.toolStepsUsed;
         attempt.output.toolStepsBudget = terminalBudgetFailure.toolStepsBudget;
@@ -819,6 +824,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     emitAgentSessionEvent(runOptions.onEvent, {
       type: "recovery_start",
       classifier: effectiveDecision.classifier,
+      failureCategory: attempt.output.failureCategory,
       strategy: effectiveDecision.strategy,
       attempt: recoveryAttemptsUsed,
       maxAttempts: recoveryConfig.maxAttempts,
@@ -869,9 +875,10 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
         attempt: recoveryAttemptsUsed,
       });
       if (!compactionResult.ok) {
+        const compactionFailureCategory = classifyOpaqueAgentFailure(compactionResult.errorMessage);
         const compactDecision = decideAutomaticRecovery({
           config: recoveryConfig,
-          errorText: compactionResult.errorMessage,
+          failureCategory: compactionFailureCategory,
           recoveryAttemptsUsed,
           elapsedMs: getRecoveryBudgetElapsedMs(),
           snapshot: {
@@ -884,6 +891,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
             toolUseBudgetExceeded: attempt.snapshot.toolUseBudgetExceeded,
             assistantToolUseMessageCount: attempt.snapshot.assistantToolUseMessageCount,
             toolExecutionCount: attempt.snapshot.toolExecutionCount,
+            toolUseMessageBudget: attempt.snapshot.toolUseMessageBudget,
           },
         });
         lastClassifier = compactDecision.classifier;
@@ -924,7 +932,9 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
               toolUseBudgetExceeded: attempt.snapshot.toolUseBudgetExceeded,
               assistantToolUseMessageCount: attempt.snapshot.assistantToolUseMessageCount,
               toolExecutionCount: attempt.snapshot.toolExecutionCount,
+              toolUseMessageBudget: attempt.snapshot.toolUseMessageBudget,
             },
+            compactionFailureCategory,
           ));
           const duration = Date.now() - startTime;
           const recoveryMeta = buildRecoveryMetadata(
@@ -971,7 +981,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
           const duration = Date.now() - startTime;
           const error = `${reason} Emergency rotation failed: ${rotation.errorMessage}`;
           writeAgentLog(options.logsDir, chatJid, duration, false, null, error);
-          return { status: "error", result: null, error };
+          return { status: "error", result: null, failureCategory: "provider", error };
         }
         activeSession = rotation.session;
         activeSessionCtrl = rotation.sessionCtrl;

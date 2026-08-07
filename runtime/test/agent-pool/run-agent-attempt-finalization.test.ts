@@ -67,7 +67,7 @@ describe("prompt attempt finalization", () => {
   });
   test("classifies timer expiry before blank-turn fallback", () => {
     const { output, snapshot } = finalizePromptAttemptOutput(baseInput({ timedOut: true, timeoutMs: 2500 }));
-    expect(output).toEqual({ status: "error", result: null, error: "Timed out after 2500ms" });
+    expect(output).toEqual({ status: "error", result: null, failureCategory: "timeout", error: "Timed out after 2500ms" });
     expect(snapshot.hadToolActivity).toBe(false);
     expect(snapshot.hasUnresolvedToolExecution).toBe(false);
     expect(snapshot.sawThinkingOnlyStop).toBe(false);
@@ -88,6 +88,25 @@ describe("prompt attempt finalization", () => {
     expect(output.status).toBe("error");
     expect(output.error).toContain("remained pending");
     expect(output.error).toContain("in_progress");
+  });
+
+  test("does not reinterpret authoritative final prose as a failure", () => {
+    const { output } = finalizePromptAttemptOutput(baseInput({
+      finalText: "No API provider registered; timed out; tool-use budget exceeded; maximum context length.",
+      hadPartialOutput: true,
+      hadCompletedTurnOutput: true,
+      hadTerminalTurnOutput: true,
+      lastAssistantState: {
+        stopReason: "stop",
+        hadTextContent: true,
+        hadThinkingContent: false,
+        hadToolCallContent: false,
+      },
+    }));
+
+    expect(output).toMatchObject({ status: "success" });
+    expect(output.result).toContain("tool-use budget exceeded");
+    expect(output.failureCategory).toBeUndefined();
   });
 
   test("does not let a terminal side-effect hide earlier failed tools", () => {
