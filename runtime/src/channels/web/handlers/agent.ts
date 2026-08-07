@@ -17,8 +17,12 @@ import { parseControlCommand } from "../../../agent-control/index.js";
 import { isSlashCommandInvocation } from "../../../agent-pool/slash-command.js";
 import {
   RECOVERY_CONTINUATION_PROMPT,
-  TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT,
 } from "../../../agent-pool/context-pressure-retry.js";
+import {
+  PROTECTED_RECOVERY_CONTROL_LABEL,
+  buildProtectedRecoveryControlIntentBlock,
+  resolveProtectedRecoveryPrompt,
+} from "../../../agent-pool/protected-recovery-control-intent.js";
 import { getExtensionKvStore } from "../../../extension-kv-registry.js";
 import {
   normalizeAgentMessagePayload,
@@ -61,6 +65,8 @@ import "../../../extensions/generic-tool-status-hints.js";
 import { createUuid } from "../../../utils/ids.js";
 import { createLogger, debugSuppressedError } from "../../../utils/logger.js";
 import type { AttachmentInfo } from "../../../agent-pool/attachments.js";
+import type { AgentFailureCategory } from "../../../agent-pool/contracts.js";
+import { classifyOpaqueAgentFailure } from "../../../agent-pool/automatic-recovery.js";
 import { cancelScheduledIdleAutoCompaction } from "../../../agent-pool/compaction.js";
 import { DEFAULT_BASE_RETRY_MS, getRetryAtIso } from "../../../queue/retry-policy.js";
 import { formatProviderError } from "./provider-error-format.js";
@@ -137,36 +143,6 @@ function enqueueProcessChatAfterCompaction(
   }, `compaction-resume:${chatJid}:${messageId}`, `chat:${chatJid}`);
 }
 
-function isRateLimitError(errorText: string | null | undefined): boolean {
-  if (!errorText) return false;
-  return /\b429\b|rate[ -]?limit|too many requests|retry-after/i.test(errorText);
-}
-
-function isAuthError(errorText: string | null | undefined): boolean {
-  if (!errorText) return false;
-  return /authentication failed|credentials may have expired|no api key(?: found| for provider)?|token refresh failed\s*:\s*401|re-authenticate|unauthorized|\b401\b|\b403\b|invalid.*api.*key|api.*key.*invalid|token.*expired|oauth.*expired|refresh.*token/i.test(errorText);
-}
-
-function isModelConfigError(errorText: string | null | undefined): boolean {
-  if (!errorText) return false;
-  return /no model selected|select a model|use \/model|use \/login/i.test(errorText);
-}
-
-function isSessionCorruptionError(errorText: string | null | undefined): boolean {
-  if (!errorText) return false;
-  return /invalid_request_error|\b400\b.*(?:image|media_type|content|base64|tool_use_id|tool_result|tool_use)|media_type|image.*source|unexpected [`'\"]?tool_use_id[`'\"]?|tool_result.*corresponding.*tool_use/i.test(errorText);
-}
-
-function isQuotaError(errorText: string | null | undefined): boolean {
-  if (!errorText) return false;
-  return /quota|usage.*limit|out of.*usage|billing|insufficient.*funds|exceeded.*limit|credit/i.test(errorText);
-}
-
-function isNetworkError(errorText: string | null | undefined): boolean {
-  if (!errorText) return false;
-  return /\bENOTFOUND\b|\bECONNREFUSED\b|\bETIMEDOUT\b|\bECONNRESET\b|getaddrinfo|dns.*failed|network.*error|connection.*(?:error|refused|lost|ended|closed)|websocket.*(?:closed|ended|1006)|fetch failed|socket hang up/i.test(errorText);
-}
-
 function describeNetworkError(errorText: string): string {
   if (/ENOTFOUND|getaddrinfo|dns/i.test(errorText)) {
     const hostMatch = errorText.match(/ENOTFOUND\s+(\S+)|getaddrinfo.*?\s+(\S+?)(?:\s|$|:)/i);
@@ -199,6 +175,7 @@ function buildTurnOutcomeMarker(options: {
   draftRecovered?: boolean;
   attemptsUsed?: number;
   classifier?: string | null;
+  failureCategory?: AgentFailureCategory;
   toolBudgetExceeded?: boolean;
   toolStepsUsed?: number;
   toolStepsBudget?: number;
@@ -216,6 +193,7 @@ function buildTurnOutcomeMarker(options: {
     draft_recovered: Boolean(options.draftRecovered),
     attempts_used: Number.isFinite(options.attemptsUsed) ? options.attemptsUsed : undefined,
     classifier: options.classifier ?? null,
+    failure_category: options.failureCategory,
     tool_budget_exceeded: options.toolBudgetExceeded ? true : undefined,
     tool_steps_used: Number.isFinite(options.toolStepsUsed) ? options.toolStepsUsed : undefined,
     tool_steps_budget: Number.isFinite(options.toolStepsBudget) ? options.toolStepsBudget : undefined,
@@ -225,18 +203,10 @@ function buildTurnOutcomeMarker(options: {
   };
 }
 
-function isToolBudgetExceededError(text: string): boolean {
-  return /tool.use budget exceeded/i.test(text);
-}
-
-function isAbortError(errorText: string | null | undefined): boolean {
-  if (!errorText) return false;
-  return /\b(?:aborterror|aborted|operation was aborted|request was aborted)\b/i.test(errorText);
-}
-
 function buildErrorOutcomeMarker(
   errorText: string,
   options: {
+    failureCategory?: AgentFailureCategory;
     draftRecovered?: boolean;
     attemptsUsed?: number;
     classifier?: string | null;
@@ -249,17 +219,25 @@ function buildErrorOutcomeMarker(
     abortOperation?: string;
   } = {},
 ): Record<string, unknown> {
-  if (isToolBudgetExceededError(errorText)) {
+  const category = options.failureCategory ?? "unknown";
+  const detail = errorText.slice(0, 500);
+  const providerError = formatProviderError(errorText);
+  const common = {
+    detail,
+    draftRecovered: options.draftRecovered,
+    attemptsUsed: options.attemptsUsed,
+    classifier: options.classifier,
+    failureCategory: category,
+  };
+
+  if (category === "tool_budget" || options.toolBudgetExceeded) {
     return buildTurnOutcomeMarker({
+      ...common,
       kind: "tool_budget",
       label: "tool budget",
       title: "Tool-use budget exceeded",
-      detail: errorText.slice(0, 500),
       severity: "warning",
-      draftRecovered: options.draftRecovered,
-      attemptsUsed: options.attemptsUsed,
-      classifier: options.classifier,
-      toolBudgetExceeded: options.toolBudgetExceeded ?? true,
+      toolBudgetExceeded: true,
       toolStepsUsed: options.toolStepsUsed,
       toolStepsBudget: options.toolStepsBudget,
       nextAction: options.nextAction || "Ask me to continue; I will resume from the latest known partial state instead of replaying the whole turn.",
@@ -268,108 +246,65 @@ function buildErrorOutcomeMarker(
     });
   }
 
-  const providerError = formatProviderError(errorText);
-  if (providerError) {
-    return buildTurnOutcomeMarker({
-      kind: providerError.category === "network"
-        ? "network"
-        : providerError.category === "session_corruption"
-          ? "context"
-          : "provider",
-      label: providerError.label,
-      title: providerError.title,
-      detail: providerError.detail,
-      severity: providerError.severity,
-      draftRecovered: options.draftRecovered,
-      attemptsUsed: options.attemptsUsed,
-      classifier: options.classifier,
-    });
+  if (category === "rate_limit") {
+    return buildTurnOutcomeMarker({ ...common, kind: "provider", label: "rate limit", title: "Provider retry budget exhausted", severity: "warning" });
   }
-
-  if (isRateLimitError(errorText)) {
+  if (category === "auth_config") {
     return buildTurnOutcomeMarker({
-      kind: "provider",
-      label: "rate limit",
-      title: "Provider retry budget exhausted",
-      detail: errorText.slice(0, 500),
-      severity: "warning",
-      draftRecovered: options.draftRecovered,
-      attemptsUsed: options.attemptsUsed,
-      classifier: options.classifier,
-    });
-  }
-
-  if (isAuthError(errorText) || isQuotaError(errorText) || isModelConfigError(errorText)) {
-    const authGuidance = isAuthError(errorText)
-      ? "Sign in with /login or configure provider credentials, then retry."
-      : null;
-    const baseDetail = errorText.slice(0, 500);
-    return buildTurnOutcomeMarker({
+      ...common,
       kind: "provider",
       label: "provider",
-      title: isAuthError(errorText)
-        ? "Provider authentication/configuration required"
-        : isQuotaError(errorText)
-          ? "Provider quota exceeded"
-          : "Model configuration error",
-      detail: [baseDetail, authGuidance].filter(Boolean).join(" — "),
+      title: "Provider authentication/configuration required",
+      detail: `${detail} — Sign in with /login or configure provider credentials, then retry.`,
       severity: options.severity ?? "error",
-      draftRecovered: options.draftRecovered,
-      attemptsUsed: options.attemptsUsed,
-      classifier: options.classifier,
     });
   }
-
-  if (isNetworkError(errorText)) {
-    return buildTurnOutcomeMarker({
-      kind: "network",
-      label: "network",
-      title: describeNetworkError(errorText),
-      detail: errorText.slice(0, 500),
-      severity: options.severity ?? "error",
-      draftRecovered: options.draftRecovered,
-      attemptsUsed: options.attemptsUsed,
-      classifier: options.classifier,
-    });
+  if (category === "network") {
+    return buildTurnOutcomeMarker({ ...common, kind: "network", label: "network", title: describeNetworkError(errorText), severity: options.severity ?? "error" });
   }
-
-  if (isAbortError(errorText)) {
+  if (category === "aborted") {
     return buildTurnOutcomeMarker({
+      ...common,
       kind: "abort",
       label: "aborted",
       title: "Turn aborted",
-      detail: errorText.slice(0, 500),
       severity: options.severity ?? "warning",
-      draftRecovered: options.draftRecovered,
-      attemptsUsed: options.attemptsUsed,
-      classifier: options.classifier,
       abortCause: options.abortCause,
       abortOperation: options.abortOperation,
     });
   }
-
-  if (isSessionCorruptionError(errorText)) {
+  if (category === "session_corruption" || category === "context_pressure") {
     return buildTurnOutcomeMarker({
+      ...common,
       kind: "context",
-      label: "context",
-      title: "Session context needs repair",
-      detail: errorText.slice(0, 500),
-      severity: options.severity ?? "error",
-      draftRecovered: options.draftRecovered,
-      attemptsUsed: options.attemptsUsed,
-      classifier: options.classifier,
+      label: providerError?.label ?? "context",
+      title: providerError?.title ?? "Session context needs repair",
+      detail: providerError?.detail ?? detail,
+      severity: providerError?.severity ?? options.severity ?? "error",
     });
   }
+  if (category === "timeout") {
+    return buildTurnOutcomeMarker({ ...common, kind: "timeout", label: "timeout", title: "Timed out", severity: options.severity ?? "warning" });
+  }
+  if (category === "output_limit") {
+    return buildTurnOutcomeMarker({ ...common, kind: "provider", label: "output limit", title: "Provider output limit reached", severity: options.severity ?? "warning" });
+  }
+  if (category === "no_terminal_output") {
+    return buildTurnOutcomeMarker({ ...common, kind: "blank_final", label: "no reply", title: "No final reply produced", severity: options.severity ?? "warning" });
+  }
+  if (category === "stalled_work") {
+    return buildTurnOutcomeMarker({ ...common, kind: "timeout", label: "stalled work", title: "Stalled work interrupted", severity: options.severity ?? "warning" });
+  }
 
+  // Provider-specific extraction is presentation-only: it may improve wording,
+  // but cannot alter persistence, retry, continuation, or success authority.
   return buildTurnOutcomeMarker({
-    kind: "error",
-    label: "error",
-    title: "Turn failed",
-    detail: errorText.slice(0, 500),
-    severity: options.severity ?? "warning",
-    draftRecovered: options.draftRecovered,
-    attemptsUsed: options.attemptsUsed,
-    classifier: options.classifier,
+    ...common,
+    kind: category === "provider" || category === "provider_unavailable" ? "provider" : "error",
+    label: providerError?.label ?? (category === "provider" ? "provider" : "error"),
+    title: providerError?.title ?? "Turn failed",
+    detail: providerError?.detail ?? detail,
+    severity: providerError?.severity ?? options.severity ?? "warning",
   });
 }
 
@@ -435,6 +370,7 @@ function buildFailureVisibleText(options: {
   actionSummary?: string;
   attemptsUsed?: number;
   classifier?: string;
+  nextAction?: string;
   inlineDiagnostic?: boolean;
   showDiagnosticWithoutDraft?: boolean;
 }): string {
@@ -442,9 +378,7 @@ function buildFailureVisibleText(options: {
   const title = readTrimmedString(options.title) || "Turn failed";
   const detail = readTrimmedString(options.detail);
   const actionSummary = readTrimmedString(options.actionSummary);
-  const nextAction = /tool-use budget exceeded/i.test(`${title} ${detail}`)
-    ? "Ask me to continue; I will resume from the latest known partial state."
-    : null;
+  const nextAction = readTrimmedString(options.nextAction) || null;
   const diagnostic = [
     `⚠️ ${title}`,
     actionSummary || null,
@@ -482,23 +416,29 @@ function buildRetryStatusPayload(base: {
   };
 }
 
-function buildAgentStatusPhaseKey(payload: Record<string, unknown>): string {
+export function buildAgentStatusPhaseKey(payload: Record<string, unknown>): string {
   const type = typeof payload.type === "string" ? payload.type : "unknown";
-  const title = typeof payload.title === "string" ? payload.title.trim() : "";
   const intentKey = typeof payload.intent_key === "string"
     ? payload.intent_key.trim()
     : (typeof payload.intentKey === "string" ? payload.intentKey.trim() : "");
+  const classifier = typeof payload.classifier === "string" ? payload.classifier.trim() : "";
+  const toolCallId = typeof payload.tool_call_id === "string"
+    ? payload.tool_call_id.trim()
+    : (typeof payload.toolCallId === "string" ? payload.toolCallId.trim() : "");
   const toolName = typeof payload.tool_name === "string"
     ? payload.tool_name.trim()
     : (typeof payload.toolName === "string" ? payload.toolName.trim() : "");
+  const phase = typeof payload.phase === "string"
+    ? payload.phase.trim()
+    : (typeof payload.state === "string" ? payload.state.trim() : "");
 
-  if ((type === "tool_call" || type === "tool_status") && toolName) {
-    return `tool:${toolName}:${title}`;
+  if (type === "tool_call" || type === "tool_status") {
+    return `tool:${toolCallId || toolName || "unknown"}`;
   }
-  if (type === "intent" && intentKey) {
-    return `intent:${intentKey}:${title}`;
+  if (type === "intent") {
+    return `intent:${intentKey || classifier || "generic"}`;
   }
-  return `${type}:${title}`;
+  return `${type}:${phase}`;
 }
 
 function withAgentStatusProgressMetadata(
@@ -1243,11 +1183,11 @@ export async function handleAgentMessage(
         }
       } else if (isSteerCommand && (result as { queued_followup?: boolean }).queued_followup) {
         return queueDeferredFollowup(((command as { message?: string }).message || content).trim(), { source: "web.steer_command", browserContext: browserObservability });
-      } else if (isSteerCommand && result.status === "error" && result.message === "No active response to steer. Please send a message first.") {
-        const queueResponse = await queueFollowupMessage();
-        if (queueResponse) {
-          return queueResponse;
-        }
+      } else if (isSteerCommand && result.status === "error" && result.retry_as_followup) {
+        return queueDeferredFollowup(
+          ((command as { message?: string }).message || content).trim(),
+          { source: "web.steer_retry", browserContext: browserObservability },
+        );
       } else {
         const sendOptions: Record<string, unknown> = { threadId: interaction.id };
         if (result.mediaIds?.length) {
@@ -1519,7 +1459,11 @@ export async function processChat(
   }
 
   const channelName = detectChannel(chatJid);
-  const prompt = formatMessages([currentMessage], channelName, chatJid);
+  const protectedRecoveryPrompt = resolveProtectedRecoveryPrompt(currentMessage);
+  const promptMessage = protectedRecoveryPrompt
+    ? { ...currentMessage, content: protectedRecoveryPrompt }
+    : currentMessage;
+  const prompt = formatMessages([promptMessage], channelName, chatJid);
   const lastMessage = currentMessage;
   const runStartedAt = new Date().toISOString();
   const threadId = lastMessage.timestamp;
@@ -1602,6 +1546,7 @@ export async function processChat(
       actionSummary: lastAction?.summary,
       attemptsUsed: Number.isFinite(marker?.attempts_used) ? (marker?.attempts_used as number) : undefined,
       classifier: markerClassifier,
+      nextAction: readTrimmedString(marker?.next_action),
       inlineDiagnostic,
       showDiagnosticWithoutDraft,
     });
@@ -1615,6 +1560,7 @@ export async function processChat(
     options: {
       requireDraft?: boolean;
       markerOptions?: {
+        failureCategory?: AgentFailureCategory;
         toolBudgetExceeded?: boolean;
         toolStepsUsed?: number;
         toolStepsBudget?: number;
@@ -1687,6 +1633,7 @@ export async function processChat(
     skipPrePromptCompaction: true,
     scheduleIdleAutoCompaction: true,
     deferToolEnabledContinuation: true,
+    protectedRecoveryContinuation: Boolean(protectedRecoveryPrompt),
     onEvent: trackedStreamingHandler,
     onTurnDiscard: () => {
       clearCommittedDraft();
@@ -1775,7 +1722,11 @@ export async function processChat(
   }
 
   if (output.status === "error") {
-    if (output.error && output.error.includes("already processing")) {
+    // Compatibility boundary for injected/legacy AgentPool implementations.
+    // Normal runtime outputs already carry this enum from attempt finalization.
+    output.failureCategory ??= classifyOpaqueAgentFailure(output.error);
+    if (output.toolBudgetExceeded) output.failureCategory = "tool_budget";
+    if (output.failureCategory === "already_processing") {
       // A concurrent run is already handling this chat. Roll back the cursor
       // we advanced so this message stays pending, then throw so the queue
       // retries after backoff.
@@ -1786,10 +1737,10 @@ export async function processChat(
         turnId,
         title: "Queued — waiting for current response",
       }));
-      throw new Error(output.error);
+      throw new Error(output.error || "Agent run is already processing");
     }
 
-    if (output.error && output.error.includes("No API provider registered for api:")) {
+    if (output.failureCategory === "provider_unavailable") {
       // Extension/provider registration races can happen right after restart.
       // Keep the message pending and let the queue retry automatically.
       rollbackInflightRun(chatJid, prevCursor);
@@ -1800,15 +1751,16 @@ export async function processChat(
         title: "Model provider is initializing — retrying shortly",
         detail: output.error,
       }));
-      throw new Error(output.error);
+      throw new Error(output.error || "No API provider is registered");
     }
 
     const errorText = output.error || "Agent error";
     const providerError = formatProviderError(errorText);
-    const rateLimited = providerError?.category === "rate_limit" || isRateLimitError(errorText);
-    const networkFailed = providerError?.category === "network" || isNetworkError(errorText);
-    const networkDetail = providerError?.title || (networkFailed ? describeNetworkError(errorText) : null);
+    const rateLimited = output.failureCategory === "rate_limit";
+    const networkFailed = output.failureCategory === "network";
+    const networkDetail = networkFailed ? describeNetworkError(errorText) : null;
     const markerOptions = {
+      failureCategory: output.failureCategory,
       toolBudgetExceeded: output.toolBudgetExceeded,
       toolStepsUsed: output.toolStepsUsed,
       toolStepsBudget: output.toolStepsBudget,
@@ -1870,7 +1822,7 @@ export async function processChat(
       if (!output.requiresToolEnabledContinuation) return { required: false, rowId: null, failed: false, created: false };
       // The generated ordinary continuation is the one bounded handoff. If it
       // also fails, persist that terminal result instead of creating a chain.
-      if (String(lastMessage.content || "").trim() === TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT) {
+      if (protectedRecoveryPrompt) {
         return { required: false, rowId: null, failed: false, created: false };
       }
       const continuationThreadId = resolveContinuationThreadId();
@@ -1891,13 +1843,19 @@ export async function processChat(
       if (existing) return { required: true, rowId: existing.rowId, failed: false, created: false };
       try {
         const queuedAt = new Date().toISOString();
+        const controlIntent = buildProtectedRecoveryControlIntentBlock({
+          sourceMessageId,
+          sourceRowId,
+          threadId: continuationThreadId,
+        });
         const queuedRowId = channel.enqueueQueuedFollowupItem(
           chatJid,
           0,
-          TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT,
+          PROTECTED_RECOVERY_CONTROL_LABEL,
           continuationThreadId,
           queuedAt,
           {
+            contentBlocks: [controlIntent],
             source: "auto-protected-recovery-continuation",
             queuedBy: { source: "runtime", sourceMessageId },
           },
@@ -1906,7 +1864,8 @@ export async function processChat(
           chat_jid: chatJid,
           thread_id: continuationThreadId,
           row_id: queuedRowId,
-          content: TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT,
+          content: PROTECTED_RECOVERY_CONTROL_LABEL,
+          content_blocks: [controlIntent],
           timestamp: queuedAt,
           source: "auto-protected-recovery-continuation",
         });
@@ -1946,7 +1905,7 @@ export async function processChat(
       }));
       throw new Error("Protected recovery handoff persistence failed; retry the source turn.");
     }
-    const fallbackPublished = errorText.toLowerCase().includes("timed out")
+    const fallbackPublished = output.failureCategory === "timeout" || output.failureCategory === "stalled_work"
       ? publishDraftFallback("timeout", errorText, { markerOptions })
       : rateLimited
         ? publishDraftFallback("rate-limit", errorText, { markerOptions })
@@ -1988,6 +1947,9 @@ export async function processChat(
       thread_id: threadId,
       agent_id: agentId,
       type: "error",
+      state: output.failureCategory === "auth_config" ? "blocked_auth" : "failed",
+      classifier: output.recovery?.lastClassifier ?? output.failureCategory ?? "unknown",
+      failure_category: output.failureCategory ?? "unknown",
       title: providerError?.title || (rateLimited ? "AI provider rate limit" : networkFailed ? networkDetail! : errorText),
       detail: providerError?.detail || (rateLimited ? errorText : networkFailed ? errorText : undefined),
       turn_id: turnId,

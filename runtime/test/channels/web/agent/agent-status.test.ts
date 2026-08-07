@@ -128,20 +128,47 @@ describe("web agent status helpers", () => {
     expect(body.draft).toEqual({ text: "draft text", totalLines: 1 });
   });
 
-  test("handleAgentStatusRequest classifies auth failures as blocked_auth", async () => {
+  test("handleAgentStatusRequest preserves recoverable active-tool timing and heartbeat state", async () => {
+    const activeToolStatus = {
+      type: "tool_status",
+      turn_id: "turn-tools",
+      tool_call_id: "tool-1",
+      tool_name: "bash",
+      started_at: "2026-08-07T12:00:00.000Z",
+      last_progress_at: "2026-08-07T12:00:05.000Z",
+      heartbeat_at: "2026-08-07T12:00:20.000Z",
+      active_tool_count: 2,
+      active_tools: [
+        { tool_call_id: "tool-1", tool_name: "bash", started_at: "2026-08-07T12:00:00.000Z", last_event_at: "2026-08-07T12:00:05.000Z" },
+        { tool_call_id: "tool-2", tool_name: "read", started_at: "2026-08-07T12:00:02.000Z", last_event_at: "2026-08-07T12:00:02.000Z" },
+      ],
+    };
+    const body = await handleAgentStatusRequest(
+      new Request("https://example.com/agent/status?chat_jid=web:tools"),
+      createContext({ getAgentStatus: () => activeToolStatus }),
+    ).json();
+
+    expect(body).toMatchObject({
+      status: "active",
+      data: activeToolStatus,
+    });
+  });
+
+  test("handleAgentStatusRequest uses structured auth failure state without parsing prose", async () => {
     const req = new Request("https://example.com/agent/status?chat_jid=web:auth");
     const res = handleAgentStatusRequest(req, createContext({
       getAgentStatus: () => ({
         type: "error",
-        title: "No API key for provider: openai-codex",
-        detail: "Token refresh failed: 401",
+        title: "Opaque terminal failure",
+        detail: "Arbitrary diagnostic prose",
+        failure_category: "auth_config",
       }),
     }));
 
     const body = await res.json();
     expect(body.status).toBe("idle");
     expect(body.state).toBe("blocked_auth");
-    expect(body.classifier).toBeNull();
+    expect(body.classifier).toBe("auth_config");
   });
 
   test("handleAgentStatusRequest exposes recovery_suppressed classifier state", async () => {

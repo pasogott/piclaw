@@ -13,6 +13,7 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { WebChannelLike } from "../core/web-channel-contracts.js";
 import { buildPreview, createToolTitleTracker, type AgentProfileBuilder } from "../agent/agent-utils.js";
 import { formatProviderError, sanitizeProviderErrorDetail } from "../handlers/provider-error-format.js";
+import { classifyOpaqueAgentFailure } from "../../../agent-pool/automatic-recovery.js";
 
 /** Interface for broadcasting agent events to SSE clients. */
 export interface AgentEventEmitter {
@@ -244,19 +245,62 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
   let thoughtDeltaActive = false;
   let draftDeltaActive = false;
   const { remember, lookup, forget } = createToolTitleTracker();
+  type ActiveToolStatus = {
+    toolCallId: string;
+    toolName: string;
+    title: string;
+    args: unknown;
+    startedAt: string;
+    lastProgressAt: string;
+    heartbeatAt: string;
+    status: string;
+    output: Record<string, unknown>;
+  };
   const toolExecutionContext = new Map<string, { toolName: string; args: unknown }>();
   const toolStartedAt = new Map<string, string>();
+  const activeToolStatuses = new Map<string, ActiveToolStatus>();
   const widgetStreams = new Map<number, { toolCallId: string | null; widgetId: string | null }>();
+
+  const toActiveToolSnapshot = (state: ActiveToolStatus): Record<string, unknown> => ({
+    tool_call_id: state.toolCallId,
+    tool_name: state.toolName,
+    title: state.title,
+    tool_args: state.args,
+    status: state.status,
+    started_at: state.startedAt,
+    last_progress_at: state.lastProgressAt,
+    heartbeat_at: state.heartbeatAt,
+    ...state.output,
+  });
+
+  const emitActiveToolStatus = (
+    state: ActiveToolStatus,
+    extra: Record<string, unknown> = {},
+  ) => {
+    const activeTools = Array.from(activeToolStatuses.values()).map(toActiveToolSnapshot);
+    options.emitter.status({
+      ...base,
+      type: state.output.output_preview ? "tool_status" : "tool_call",
+      title: state.title,
+      status: state.status,
+      tool_call_id: state.toolCallId,
+      tool_name: state.toolName,
+      tool_args: state.args,
+      started_at: state.startedAt,
+      last_event_at: state.heartbeatAt || state.lastProgressAt,
+      last_progress_at: state.lastProgressAt,
+      heartbeat_at: state.heartbeatAt,
+      active_tool_count: activeTools.length,
+      active_tools: activeTools,
+      ...state.output,
+      ...extra,
+    });
+  };
 
   const base = {
     thread_id: options.threadId,
     agent_id: options.agentId,
     turn_id: options.turnId,
-  };
-
-  const isRateLimitError = (message?: string): boolean => {
-    if (!message) return false;
-    return /429|rate.?limit|too many requests|requests per minute|tokens per minute|rpm|tpm/i.test(message);
   };
 
   const describeRateLimit = (message?: string): string => {
@@ -267,11 +311,6 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
     if (hasTpm) return "Rate limited (TPM)";
     if (hasRpm) return "Rate limited (RPM)";
     return "Rate limited (HTTP 429)";
-  };
-
-  const isNetworkError = (message?: string): boolean => {
-    if (!message) return false;
-    return /\bENOTFOUND\b|\bECONNREFUSED\b|\bETIMEDOUT\b|\bECONNRESET\b|getaddrinfo|dns.*failed|fetch failed|socket hang up|connection.*(?:refused|lost|ended|closed)|websocket.*(?:closed|ended|1006)/i.test(message);
   };
 
   const describeNetworkError = (message?: string): string => {
@@ -488,8 +527,11 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
           ...base,
           type: "tool_call",
           title,
+          tool_call_id: messageEvent.toolCall.id,
           tool_name: messageEvent.toolCall.name,
           tool_args: messageEvent.toolCall.arguments,
+          active_tool_count: activeToolStatuses.size,
+          active_tools: Array.from(activeToolStatuses.values()).map(toActiveToolSnapshot),
         });
       }
       if (messageEvent.type === "text_start") {
@@ -549,17 +591,21 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
     if (event.type === "tool_execution_start") {
       const startedAt = new Date().toISOString();
       const title = remember(event.toolCallId, event.toolName, event.args);
+      const state: ActiveToolStatus = {
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        title,
+        args: event.args,
+        startedAt,
+        lastProgressAt: startedAt,
+        heartbeatAt: startedAt,
+        status: "Working...",
+        output: {},
+      };
       toolStartedAt.set(event.toolCallId, startedAt);
       toolExecutionContext.set(event.toolCallId, { toolName: event.toolName, args: event.args });
-      options.emitter.status({
-        ...base,
-        type: "tool_call",
-        title,
-        tool_name: event.toolName,
-        tool_args: event.args,
-        started_at: startedAt,
-        last_event_at: startedAt,
-      });
+      activeToolStatuses.set(event.toolCallId, state);
+      emitActiveToolStatus(state);
     }
 
     if (event.type === "tool_execution_update") {
@@ -569,24 +615,59 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
       toolStartedAt.set(event.toolCallId, startedAt);
       toolExecutionContext.set(event.toolCallId, { toolName: event.toolName, args: event.args });
       const outputPreview = buildToolOutputStatusPreview((event as { partialResult?: unknown }).partialResult);
-      options.emitter.status({
-        ...base,
-        type: "tool_status",
+      const state: ActiveToolStatus = {
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
         title,
+        args: event.args,
+        startedAt,
+        lastProgressAt: lastEventAt,
+        heartbeatAt: lastEventAt,
         status: Object.keys(outputPreview).length > 0 ? "Streaming output..." : "Working...",
-        tool_name: event.toolName,
-        tool_args: event.args,
-        started_at: startedAt,
-        last_event_at: lastEventAt,
-        ...outputPreview,
-      });
+        output: outputPreview,
+      };
+      activeToolStatuses.set(event.toolCallId, state);
+      emitActiveToolStatus(state);
+    }
+
+    if (eventType === "tool_execution_heartbeat") {
+      const heartbeatEvent = event as unknown as {
+        emittedAt?: unknown;
+        activeTools?: Array<{ toolCallId?: unknown; toolName?: unknown; startedAt?: unknown; lastEventAt?: unknown }>;
+      };
+      const heartbeatAt = readWidgetString(heartbeatEvent.emittedAt) || new Date().toISOString();
+      for (const snapshot of heartbeatEvent.activeTools || []) {
+        const toolCallId = readWidgetString(snapshot.toolCallId);
+        if (!toolCallId) continue;
+        const existing = activeToolStatuses.get(toolCallId);
+        if (existing) {
+          activeToolStatuses.set(toolCallId, { ...existing, heartbeatAt });
+          continue;
+        }
+        const toolName = readWidgetString(snapshot.toolName) || "tool";
+        const startedAt = readWidgetString(snapshot.startedAt) || heartbeatAt;
+        activeToolStatuses.set(toolCallId, {
+          toolCallId,
+          toolName,
+          title: toolName,
+          args: null,
+          startedAt,
+          lastProgressAt: readWidgetString(snapshot.lastEventAt) || startedAt,
+          heartbeatAt,
+          status: "Working...",
+          output: {},
+        });
+      }
+      const primary = Array.from(activeToolStatuses.values())[0];
+      if (primary) emitActiveToolStatus(primary, { watchdog_heartbeat: true });
     }
 
     if (event.type === "tool_execution_end") {
       const lastEventAt = new Date().toISOString();
       const toolContext = toolExecutionContext.get(event.toolCallId) || null;
-      const title = lookup(event.toolCallId, event.toolName, toolContext?.args);
-      const startedAt = toolStartedAt.get(event.toolCallId) || lastEventAt;
+      const activeTool = activeToolStatuses.get(event.toolCallId) || null;
+      const title = activeTool?.title || lookup(event.toolCallId, event.toolName, toolContext?.args);
+      const startedAt = activeTool?.startedAt || toolStartedAt.get(event.toolCallId) || lastEventAt;
       if (event.toolName === "show_widget" && event.isError) {
         let matchedState: { toolCallId: string | null; widgetId: string | null } | null = null;
         for (const [contentIndex, state] of widgetStreams.entries()) {
@@ -608,24 +689,45 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
           artifact: { kind: "html" },
         });
       }
-      forget(event.toolCallId);
-      options.emitter.status({
-        ...base,
-        type: "tool_status",
-        title,
-        status: event.isError ? "Failed" : "Done",
+      const reportedDurationMs = (event as unknown as { durationMs?: unknown }).durationMs;
+      const completedTool = {
+        tool_call_id: event.toolCallId,
         tool_name: toolContext?.toolName || event.toolName,
+        title,
         tool_args: toolContext?.args,
         started_at: startedAt,
-        last_event_at: lastEventAt,
-      });
+        completed_at: lastEventAt,
+        duration_ms: typeof reportedDurationMs === "number"
+          ? reportedDurationMs
+          : Math.max(0, Date.parse(lastEventAt) - Date.parse(startedAt)),
+        status: event.isError ? "failed" : "completed",
+        is_error: Boolean(event.isError),
+      };
+      forget(event.toolCallId);
+      activeToolStatuses.delete(event.toolCallId);
       toolExecutionContext.delete(event.toolCallId);
       toolStartedAt.delete(event.toolCallId);
+      const remainingTool = Array.from(activeToolStatuses.values())[0];
+      if (remainingTool) {
+        emitActiveToolStatus(remainingTool, { last_completed_tool: completedTool });
+      } else {
+        options.emitter.status({
+          ...base,
+          type: "thinking",
+          title: event.isError ? "Reviewing failed tool result..." : "Continuing after tools...",
+          phase: "post_tool_model",
+          started_at: lastEventAt,
+          last_event_at: lastEventAt,
+          active_tool_count: 0,
+          active_tools: [],
+          last_completed_tool: completedTool,
+        });
+      }
     }
 
     if (event.type === "message_end") {
       const message = event.message as { role?: string; stopReason?: string; errorMessage?: string };
-      if (message?.role === "assistant" && message.stopReason === "error" && isRateLimitError(message.errorMessage)) {
+      if (message?.role === "assistant" && message.stopReason === "error" && classifyOpaqueAgentFailure(message.errorMessage) === "rate_limit") {
         pendingRateLimit = { message: message.errorMessage || "429" };
         scheduleRateLimitIntent();
       }
@@ -638,7 +740,8 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
       const e = event as { attempt?: number; maxAttempts?: number; delayMs?: number; errorMessage?: string };
       const delaySec = e.delayMs ? Math.round(e.delayMs / 1000) : "?";
       const errorMessage = e.errorMessage || "";
-      const isRateLimit = isRateLimitError(errorMessage);
+      const failureCategory = classifyOpaqueAgentFailure(errorMessage);
+      const isRateLimit = failureCategory === "rate_limit";
       if (isRateLimit) {
         pendingRateLimit = null;
         if (pendingRateLimitTimer) {
@@ -647,7 +750,7 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
         }
       }
       const providerError = formatProviderError(errorMessage);
-      const isNetwork = providerError?.category === "network" || isNetworkError(errorMessage);
+      const isNetwork = failureCategory === "network";
       const retrySuffix = `retrying (attempt ${e.attempt ?? "?"}/${e.maxAttempts ?? "?"}, ${delaySec}s delay)`;
       const title = isRateLimit
         ? `${rateLimitTitle(errorMessage)} — ${retrySuffix}`
@@ -662,6 +765,8 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
         type: "intent",
         title,
         detail: appendModelContext(detail || undefined),
+        classifier: failureCategory,
+        failure_category: failureCategory,
       });
     }
 
@@ -670,11 +775,12 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
       if (!e.success) {
         const finalError = e.finalError || "Request failed after retries";
         const providerError = formatProviderError(finalError);
-        const title = isRateLimitError(finalError)
+        const failureCategory = classifyOpaqueAgentFailure(finalError);
+        const title = failureCategory === "rate_limit"
           ? `${rateLimitTitle(finalError)} — retry budget exhausted`
           : providerError
             ? `${providerError.title} — retry budget exhausted`
-            : isNetworkError(finalError)
+            : failureCategory === "network"
               ? `${describeNetworkError(finalError)} — retry budget exhausted`
               : sanitizeProviderErrorDetail(finalError) || finalError;
         options.emitter.status({
@@ -682,6 +788,9 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
           type: "error",
           title,
           detail: appendModelContext(providerError?.detail || undefined),
+          state: failureCategory === "auth_config" ? "blocked_auth" : "failed",
+          classifier: failureCategory,
+          failure_category: failureCategory,
         });
       }
     }
@@ -850,7 +959,7 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
     }
 
     if (customEventType === "recovery_start") {
-      const e = event as { strategy?: string; attempt?: number; maxAttempts?: number; delayMs?: number; reason?: string; errorMessage?: string };
+      const e = event as { strategy?: string; attempt?: number; maxAttempts?: number; delayMs?: number; reason?: string; errorMessage?: string; classifier?: string; failureCategory?: string };
       const strategy = e.strategy === "compact_then_retry"
         ? "Compacting context and continuing"
         : "Recovering interrupted response";
@@ -866,6 +975,8 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
         type: "intent",
         title: strategy,
         detail,
+        classifier: e.classifier ?? null,
+        failure_category: e.failureCategory ?? null,
         intent_key: "recovery",
         started_at: new Date().toISOString(),
       });

@@ -89,6 +89,21 @@ test.describe('US-12: Thoughts Panel Scroll Behaviour', () => {
     expect(state!.moreButtonText).toContain('more lines');
   });
 
+  test('collapsed panel keeps receiving streamed content without expansion', async ({ authedPage: page }) => {
+    await mountThoughtPanelFixture(page, 12);
+    const panel = page.locator('.agent-thinking[data-panel-key="thought"]');
+
+    await page.evaluate(() => {
+      const body = document.querySelector('.agent-thinking[data-panel-key="thought"] .agent-thinking-body');
+      const line = document.createElement('div');
+      line.textContent = 'Reasoning step 13: streamed while collapsed';
+      body?.append(line);
+    });
+
+    await expect(panel).toHaveAttribute('data-expanded', 'false');
+    await expect(panel.locator('.agent-thinking-body')).toContainText('streamed while collapsed');
+  });
+
   test('clicking "more lines" enables scrolling', async ({ authedPage: page }) => {
     await mountThoughtPanelFixture(page, 80);
     const panel = page.locator('.agent-thinking[data-panel-key="thought"]');

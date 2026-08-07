@@ -26,9 +26,43 @@ import {
   getAddonStatusPanelPayload,
   runAddonStatusPanelAction,
 } from "../../../addons/runtime-contributions.js";
-import { getTrackedPhasesSnapshot } from "../../../runtime/progress-watchdog.js";
+import {
+  getProgressWatchdogTimeoutMs,
+  getTrackedPhasesSnapshot,
+  type ProgressWatchdogEntry,
+} from "../../../runtime/progress-watchdog.js";
 
 const log = createLogger("web");
+
+export interface StalledWorkDiagnostic {
+  detected: boolean;
+  phase: ProgressWatchdogEntry["phase"];
+  age_ms: number;
+  threshold_ms: number | null;
+  started_at: string;
+  last_progress_at: string;
+}
+
+export function buildStalledWorkDiagnostic(
+  progress: ProgressWatchdogEntry | null | undefined,
+  options: { nowMs?: number; thresholdMs?: number } = {},
+): StalledWorkDiagnostic | null {
+  if (!progress) return null;
+  const nowMs = Number.isFinite(options.nowMs) ? Number(options.nowMs) : Date.now();
+  const configuredThresholdMs = options.thresholdMs ?? getProgressWatchdogTimeoutMs();
+  const thresholdMs = Number.isFinite(configuredThresholdMs) && configuredThresholdMs > 0
+    ? Math.floor(configuredThresholdMs)
+    : null;
+  const ageMs = Math.max(0, nowMs - progress.lastProgressAt);
+  return {
+    detected: thresholdMs !== null && ageMs >= thresholdMs,
+    phase: progress.phase,
+    age_ms: ageMs,
+    threshold_ms: thresholdMs,
+    started_at: new Date(progress.startedAt).toISOString(),
+    last_progress_at: new Date(progress.lastProgressAt).toISOString(),
+  };
+}
 
 interface AgentQueueLike {
   enqueue(task: () => unknown, key: string, laneKey?: string): unknown;
@@ -423,7 +457,7 @@ export class WebAgentControlPlaneService {
           preflight,
           progress,
           queue_count: queued.length,
-          stale_child_tools: Boolean((active as { is_active?: unknown } | null)?.is_active && progress?.phase === "tool_execution"),
+          stalled_work: buildStalledWorkDiagnostic(progress),
         };
       });
 

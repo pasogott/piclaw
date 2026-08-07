@@ -12,6 +12,24 @@ import type { AttachmentInfo } from "./attachments.js";
 import type { AgentAbortCause } from "./abort-provenance.js";
 import type { PiclawCredentialStore } from "./credential-store.js";
 
+export type AgentFailureCategory =
+  | "rate_limit"
+  | "auth_config"
+  | "network"
+  | "aborted"
+  | "timeout"
+  | "tool_budget"
+  | "context_pressure"
+  | "output_limit"
+  | "provider"
+  | "no_terminal_output"
+  | "stalled_work"
+  | "session_corruption"
+  | "non_recoverable"
+  | "already_processing"
+  | "provider_unavailable"
+  | "unknown";
+
 export interface AgentRecoveryDiagnosticEntry {
   phase: "attempt_failure" | "compaction_failure";
   attempt: number;
@@ -30,6 +48,8 @@ export interface AgentRecoveryDiagnosticEntry {
   toolUseBudgetExceeded?: boolean;
   assistantToolUseMessageCount?: number;
   toolExecutionCount?: number;
+  toolUseMessageBudget?: number;
+  failureCategory?: AgentFailureCategory;
 }
 
 export interface AgentRecoveryMetadata {
@@ -47,6 +67,8 @@ export interface AgentOutput {
   status: "success" | "error" | "tool_complete";
   result: string | null;
   error?: string;
+  /** Structured terminal cause. Runtime decisions must not reclassify `result` prose. */
+  failureCategory?: AgentFailureCategory;
   attachments?: AttachmentInfo[];
   usage?: Usage;
   recovery?: AgentRecoveryMetadata;
@@ -139,6 +161,8 @@ export interface RunAgentOptions {
    * message and cursor finalization.
    */
   deferToolEnabledContinuation?: boolean;
+  /** This run is the typed, one-shot ordinary continuation after protected recovery. */
+  protectedRecoveryContinuation?: boolean;
 }
 
 export interface RetrySettingsProvider {

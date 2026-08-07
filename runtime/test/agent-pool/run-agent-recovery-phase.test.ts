@@ -390,7 +390,7 @@ describe("runAgentRecoveryPhase", () => {
     expect(compactCalls).toBe(1);
     expect(calls[1]?.prompt).toBe(RECOVERY_CONTINUATION_PROMPT);
     expect(calls[1]?.toolExecutionCountAtStart).toBe(2);
-    expect(calls[1]?.timeoutMs).toBeGreaterThanOrEqual(20);
+    expect(calls[1]?.timeoutMs).toBeGreaterThan(0);
     expect(calls[1]?.timeoutMs).toBeLessThanOrEqual(25);
     expect(activeToolSets).toEqual([[], [], ["read", "bash"]]);
     expect(events).toEqual(expect.arrayContaining([

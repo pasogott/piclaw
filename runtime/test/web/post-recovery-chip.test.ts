@@ -157,7 +157,7 @@ afterEach(() => {
   (globalThis as any).Element = originalElement;
 });
 
-async function renderPostWithBlocks(contentBlocks: any[]) {
+async function renderPostWithBlocks(contentBlocks: any[], options: { content?: string; type?: string } = {}) {
   const fakeDocument = new FakeDocument();
   (globalThis as any).document = fakeDocument;
   (globalThis as any).window = {
@@ -186,8 +186,8 @@ async function renderPostWithBlocks(contentBlocks: any[]) {
       timestamp: '2026-04-21T12:00:00.000Z',
       chat_jid: 'web:default',
       data: {
-        type: 'agent_response',
-        content: '',
+        type: options.type || 'agent_response',
+        content: options.content || '',
         content_blocks: contentBlocks,
         media_ids: [],
       },
@@ -214,6 +214,40 @@ async function renderPostWithBlocks(contentBlocks: any[]) {
 
   return host;
 }
+
+test('Post renders a typed protected-recovery control intent as a compact system pill', async () => {
+  const host = await renderPostWithBlocks([{
+    type: 'control_intent',
+    intent: 'protected_recovery_continuation',
+    schema_version: 1,
+    label: 'Recovery resumed with execution tools',
+    source_message_id: 'source-123',
+    source_row_id: 41,
+    thread_id: 41,
+  }], {
+    type: 'user_message',
+    content: 'Recovery resumed with execution tools',
+  });
+
+  const pill = findByClass(host, 'post-control-intent-pill');
+  expect(pill).toBeTruthy();
+  expect(flattenText(pill)).toContain('↻Recovery resumed with execution tools');
+  expect(findByClass(host, 'post-author')).toBeNull();
+  expect(findByClass(host, 'post-control-intent')?.getAttribute('data-source-message-id')).toBe('source-123');
+});
+
+test('Post recognizes legacy raw protected-recovery prompts without rendering them as user text', async () => {
+  const rawPrompt = 'Continue the most recent user request in this ordinary tool-enabled turn. Resume from persisted progress, do not replay completed side effects, and finish the task or report a concrete blocker.';
+  const host = await renderPostWithBlocks([], {
+    type: 'user_message',
+    content: rawPrompt,
+  });
+
+  const pill = findByClass(host, 'post-control-intent-pill');
+  expect(pill).toBeTruthy();
+  expect(flattenText(host)).not.toContain(rawPrompt);
+  expect(findByClass(host, 'post-author')).toBeNull();
+});
 
 test('Post renders a visible recovery chip with the recovery tooltip', async () => {
   const host = await renderPostWithBlocks([{

@@ -4,7 +4,7 @@
 
 import { getRecoveryPolicyConfig } from "../core/config.js";
 import { isOrphanFunctionCallOutputError } from "../utils/provider-payload-errors.js";
-import type { AgentRecoveryMetadata } from "./contracts.js";
+import type { AgentFailureCategory, AgentRecoveryMetadata } from "./contracts.js";
 
 export interface RetryBackoffSettings {
   enabled: boolean;
@@ -64,6 +64,7 @@ export interface RecoveryAttemptSnapshot {
   toolUseBudgetExceeded?: boolean;
   assistantToolUseMessageCount?: number;
   toolExecutionCount?: number;
+  toolUseMessageBudget?: number;
 }
 
 export interface RecoveryDecision {
@@ -162,9 +163,32 @@ export function isNonRecoverableFailure(errorText: string | null | undefined): b
     || /request was aborted|\baborted\b|no model selected|select a model|use \/model|use \/login|model not found|deployment.*not found|policy|safety|blocked by policy|invalid_request_error|malformed|schema|unsupported model|capability mismatch|permission denied|missing required file|file not found/i.test(errorText);
 }
 
+/**
+ * Classify opaque provider/runtime errors once, at the boundary where only a
+ * string is available. Downstream recovery and UI code consume the resulting
+ * enum and never reinterpret assistant result prose.
+ */
+export function classifyOpaqueAgentFailure(errorText: string | null | undefined): AgentFailureCategory {
+  const value = String(errorText || "").trim();
+  if (!value) return "unknown";
+  if (/stale-progress watchdog/i.test(value)) return "stalled_work";
+  if (isOrphanFunctionCallOutputError(value)) return "session_corruption";
+  if (isProviderAuthConfigFailure(value)) return "auth_config";
+  if (isContextPressureFailure(value)) return "context_pressure";
+  if (isLengthStopFailure(value)) return "output_limit";
+  if (/rate limit|too many requests|\b429\b/i.test(value)) return "rate_limit";
+  if (/request was aborted|\baborterror\b|\baborted\b/i.test(value)) return "aborted";
+  if (/timed out|timeout/i.test(value)) return "timeout";
+  if (/connection (?:error|ended|closed|lost)|websocket.*(?:closed|ended|1006)|fetch failed|socket hang up|econnreset|econnrefused|etimedout|enotfound|eai_again|getaddrinfo|dns lookup|502|503|504|temporary|temporarily unavailable|overloaded|server error/i.test(value)) return "network";
+  if (/already processing/i.test(value)) return "already_processing";
+  if (/no api provider/i.test(value)) return "provider_unavailable";
+  if (isNonRecoverableFailure(value)) return "non_recoverable";
+  return "provider";
+}
+
 export interface RecoveryDecisionInput {
   config: AutomaticRecoveryConfig;
-  errorText: string | null | undefined;
+  failureCategory: AgentFailureCategory;
   recoveryAttemptsUsed: number;
   elapsedMs: number;
   snapshot: RecoveryAttemptSnapshot;
@@ -192,11 +216,16 @@ export function formatRecoverySummary(recovery: AgentRecoveryMetadata | null | u
 }
 
 export function decideAutomaticRecovery(input: RecoveryDecisionInput): RecoveryDecision {
-  const errorText = String(input.errorText || "").trim();
-  const toolHistoryPressure = Boolean(input.snapshot.toolUseBudgetExceeded)
-    || /tool(?:-| )use budget exceeded|tool history pressure|too many tool (?:steps|calls)/i.test(errorText);
+  const failureCategory = input.failureCategory;
+  const toolHistoryPressure = Boolean(input.snapshot.toolUseBudgetExceeded);
+  const transientFailure = failureCategory === "rate_limit"
+    || failureCategory === "network"
+    || failureCategory === "timeout";
+  const nonRecoverableFailure = failureCategory === "aborted"
+    || failureCategory === "session_corruption"
+    || failureCategory === "non_recoverable";
 
-  if (/stale-progress watchdog/i.test(errorText)) {
+  if (failureCategory === "stalled_work") {
     return {
       recover: false,
       classifier: "stale_progress_watchdog",
@@ -205,7 +234,7 @@ export function decideAutomaticRecovery(input: RecoveryDecisionInput): RecoveryD
     };
   }
 
-  if (isOrphanFunctionCallOutputError(errorText)) {
+  if (failureCategory === "session_corruption") {
     return {
       recover: false,
       classifier: "session_corruption",
@@ -223,7 +252,7 @@ export function decideAutomaticRecovery(input: RecoveryDecisionInput): RecoveryD
     };
   }
 
-  if (isLengthStopFailure(errorText)) {
+  if (failureCategory === "output_limit") {
     return {
       recover: false,
       classifier: "length_stop",
@@ -232,7 +261,7 @@ export function decideAutomaticRecovery(input: RecoveryDecisionInput): RecoveryD
     };
   }
 
-  if (isProviderAuthConfigFailure(errorText)) {
+  if (failureCategory === "auth_config") {
     return {
       recover: false,
       classifier: "auth_config",
@@ -242,7 +271,7 @@ export function decideAutomaticRecovery(input: RecoveryDecisionInput): RecoveryD
   }
 
   if (input.snapshot.compactionErrorMessage) {
-    if (isTransientFailure(errorText)) {
+    if (transientFailure) {
       return {
         recover: true,
         classifier: "compaction_failure",
@@ -254,7 +283,7 @@ export function decideAutomaticRecovery(input: RecoveryDecisionInput): RecoveryD
       recover: false,
       classifier: "compaction_failure",
       strategy: null,
-      reason: isContextPressureFailure(errorText) || input.snapshot.sawCompactionIntent
+      reason: failureCategory === "context_pressure" || input.snapshot.sawCompactionIntent
         ? "Compaction itself exceeded the context window; refusing to compact-and-retry again. Start a shorter branch or compact with a larger model."
         : "Compaction failed; refusing automatic retry to avoid re-entering the same failed compaction path.",
     };
@@ -297,7 +326,7 @@ export function decideAutomaticRecovery(input: RecoveryDecisionInput): RecoveryD
         reason: "A terminal side-effect tool completed after another tool failed; preserve the mixed outcome instead of converting it to recovery success.",
       };
     }
-    if (isContextPressureFailure(errorText) || input.snapshot.sawCompactionIntent) {
+    if (failureCategory === "context_pressure" || input.snapshot.sawCompactionIntent) {
       return {
         recover: true,
         classifier: "context_pressure",
@@ -313,7 +342,7 @@ export function decideAutomaticRecovery(input: RecoveryDecisionInput): RecoveryD
         reason: "Turn exceeded the tool-history budget before finalization without context pressure; wait for an explicit continue instead of compacting.",
       };
     }
-    if (isNonRecoverableFailure(errorText)) {
+    if (nonRecoverableFailure) {
       return {
         recover: false,
         classifier: "non_recoverable",
@@ -321,7 +350,7 @@ export function decideAutomaticRecovery(input: RecoveryDecisionInput): RecoveryD
         reason: "Failure classified as non-recoverable.",
       };
     }
-    const transientCandidate = isTransientFailure(errorText)
+    const transientCandidate = transientFailure
       || Boolean(input.snapshot.hadPartialOutput)
       || Boolean(input.snapshot.sawAssistantToolCall);
     if (transientCandidate) {
@@ -406,7 +435,7 @@ export function decideAutomaticRecovery(input: RecoveryDecisionInput): RecoveryD
   // classification. Tool-count exhaustion alone is terminal, but a turn that
   // independently crossed the model-aware threshold is recoverable by
   // compaction even when it reached the tool ceiling at the same time.
-  if (isContextPressureFailure(errorText) || input.snapshot.sawCompactionIntent) {
+  if (failureCategory === "context_pressure" || input.snapshot.sawCompactionIntent) {
     return {
       recover: true,
       classifier: "context_pressure",
@@ -424,7 +453,7 @@ export function decideAutomaticRecovery(input: RecoveryDecisionInput): RecoveryD
     };
   }
 
-  if (isNonRecoverableFailure(errorText)) {
+  if (nonRecoverableFailure) {
     return {
       recover: false,
       classifier: "non_recoverable",
@@ -433,7 +462,7 @@ export function decideAutomaticRecovery(input: RecoveryDecisionInput): RecoveryD
     };
   }
 
-  if (isTransientFailure(errorText) || input.snapshot.hadPartialOutput || !errorText) {
+  if (transientFailure || input.snapshot.hadPartialOutput || failureCategory === "unknown") {
     if (!input.config.enabled || !input.config.transientRecoveryEnabled) {
       return {
         recover: false,

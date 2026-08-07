@@ -2,6 +2,11 @@ import { expect, test } from "bun:test";
 
 import { TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT } from "../../src/agent-pool/context-pressure-retry.js";
 import { runWithProtectedRecoveryHandoff } from "../../src/agent-pool/protected-recovery-handoff.js";
+import {
+  buildProtectedRecoveryControlIntentBlock,
+  isProtectedRecoveryControlMessage,
+  resolveProtectedRecoveryPrompt,
+} from "../../src/agent-pool/protected-recovery-control-intent.js";
 import type { AgentOutput } from "../../src/agent-pool/contracts.js";
 
 const protectedOutput = (): AgentOutput => ({
@@ -68,18 +73,25 @@ test("initial turns flush normally when no handoff is required", async () => {
   expect(delivered).toEqual(["normal result"]);
 });
 
-test("web can defer protected recovery to its durable continuation queue", async () => {
+test("web defers protected recovery without publishing its tool-free terminal prose", async () => {
   const prompts: string[] = [];
+  const delivered: string[] = [];
   const final = await runWithProtectedRecoveryHandoff(
     "finish the task",
-    { deferToolEnabledContinuation: true },
-    async (prompt) => {
+    {
+      deferToolEnabledContinuation: true,
+      onTurnComplete: (turn) => delivered.push(turn.text),
+    },
+    async (prompt, options) => {
       prompts.push(prompt);
+      options.onTurnComplete?.({ text: "committed tool progress", attachments: [], followedByToolUse: true });
+      options.onTurnComplete?.({ text: "tools are unavailable in this recovered turn", attachments: [] });
       return protectedOutput();
     },
   );
 
   expect(prompts).toEqual(["finish the task"]);
+  expect(delivered).toEqual(["committed tool progress"]);
   expect(final.requiresToolEnabledContinuation).toBe(true);
 });
 
@@ -98,11 +110,11 @@ test("the generated ordinary continuation cannot chain another continuation", as
   expect(final.requiresToolEnabledContinuation).toBeUndefined();
 });
 
-test("an already-generated continuation is never handed off again", async () => {
+test("a typed already-generated continuation is never handed off again", async () => {
   let calls = 0;
   const final = await runWithProtectedRecoveryHandoff(
     TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT,
-    {},
+    { protectedRecoveryContinuation: true },
     async () => {
       calls += 1;
       return protectedOutput();
@@ -111,4 +123,41 @@ test("an already-generated continuation is never handed off again", async () => 
 
   expect(calls).toBe(1);
   expect(final.requiresToolEnabledContinuation).toBe(true);
+});
+
+test("protected recovery control authority requires the complete typed block", () => {
+  const block = buildProtectedRecoveryControlIntentBlock({
+    sourceMessageId: "source-message",
+    sourceRowId: 41,
+    threadId: 41,
+  });
+
+  expect(isProtectedRecoveryControlMessage({ content_blocks: [block] })).toBe(true);
+  expect(resolveProtectedRecoveryPrompt({ content_blocks: [block] })).toBe(TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT);
+  expect(isProtectedRecoveryControlMessage({
+    content_blocks: [{ ...block, label: "Presentation text may change" }],
+  })).toBe(true);
+  expect(isProtectedRecoveryControlMessage({
+    content_blocks: [{ type: "control_intent", intent: "protected_recovery_continuation" }],
+  })).toBe(false);
+  expect(isProtectedRecoveryControlMessage({
+    content_blocks: [{ ...block, schema_version: 2 }],
+  })).toBe(false);
+});
+
+test("matching continuation prose does not acquire one-shot control authority", async () => {
+  const prompts: string[] = [];
+  await runWithProtectedRecoveryHandoff(
+    TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT,
+    {},
+    async (prompt) => {
+      prompts.push(prompt);
+      return prompts.length === 1 ? protectedOutput() : { status: "success", result: "done" };
+    },
+  );
+
+  expect(prompts).toEqual([
+    TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT,
+    TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT,
+  ]);
 });

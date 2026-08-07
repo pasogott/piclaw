@@ -266,6 +266,27 @@ test("applyControlCommand sends immediate steering when stream active", async ()
   expect(session.promptCalls[0].opts.streamingBehavior).toBe("steer");
 });
 
+test("applyControlCommand marks a structurally ended steer for follow-up retry", async () => {
+  const session = new StubSession();
+  const runtime = createRuntime(session);
+  session.isStreaming = true;
+  session.prompt = async (text: string, opts: { streamingBehavior: string }) => {
+    session.promptCalls.push({ text, opts });
+    session.isStreaming = false;
+    throw new Error("opaque SDK diagnostic whose wording is not authoritative");
+  };
+
+  const result = await applyControlCommand(runtime as any, registry, {
+    type: "steer",
+    message: "focus on pricing",
+    raw: "/steer focus on pricing",
+  } as any);
+
+  expect(result.status).toBe("error");
+  expect(result.retry_as_followup).toBe(true);
+  expect(result.message).toBe("opaque SDK diagnostic whose wording is not authoritative");
+});
+
 test("applyControlCommand falls back to follow-up when steering with no active response", async () => {
   const session = new StubSession();
   const runtime = createRuntime(session);

@@ -267,6 +267,8 @@ export interface AgentControlResult {
   refresh_runtime?: boolean;
   queued_followup?: boolean;
   queued_steer?: boolean;
+  /** A steer lost its active stream race and should be retried as a normal follow-up. */
+  retry_as_followup?: boolean;
   model_label?: string | null;
   thinking_level?: string | null;
   thinking_level_label?: string | null;

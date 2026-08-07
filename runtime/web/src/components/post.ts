@@ -92,6 +92,38 @@ function FileAttachment({ mediaId, onPreview }) {
     `;
 }
 
+const LEGACY_PROTECTED_RECOVERY_PROMPT = 'Continue the most recent user request in this ordinary tool-enabled turn. Resume from persisted progress, do not replay completed side effects, and finish the task or report a concrete blocker.';
+const PROTECTED_RECOVERY_CONTROL_INTENT = 'protected_recovery_continuation';
+const PROTECTED_RECOVERY_CONTROL_LABEL = 'Recovery resumed with execution tools';
+
+export function getProtectedRecoveryControlIntent(content, contentBlocks) {
+    const block = Array.isArray(contentBlocks)
+        ? contentBlocks.find((candidate) => (
+            candidate
+            && typeof candidate === 'object'
+            && candidate.type === 'control_intent'
+            && candidate.intent === PROTECTED_RECOVERY_CONTROL_INTENT
+        ))
+        : null;
+    if (block) {
+        return {
+            label: PROTECTED_RECOVERY_CONTROL_LABEL,
+            sourceMessageId: typeof block.source_message_id === 'string' ? block.source_message_id : '',
+            sourceRowId: Number.isFinite(Number(block.source_row_id)) ? Number(block.source_row_id) : null,
+            legacy: false,
+        };
+    }
+    if (typeof content === 'string' && content.trim() === LEGACY_PROTECTED_RECOVERY_PROMPT) {
+        return {
+            label: PROTECTED_RECOVERY_CONTROL_LABEL,
+            sourceMessageId: '',
+            sourceRowId: null,
+            legacy: true,
+        };
+    }
+    return null;
+}
+
 export function extractRecoveryMarkerBlocks(contentBlocks) {
     if (!Array.isArray(contentBlocks)) return [];
     return contentBlocks.filter((block) => block && typeof block === 'object' && block.type === 'recovery_marker' && block.recovered);
@@ -1272,6 +1304,7 @@ export function Post({ post, onClick, onHashtagClick, onMessageRef, onScrollToMe
     const blocks = data.content_blocks || [];
     const mediaIds = data.media_ids || [];
     const peerMessageMeta = getPeerMessageMeta(blocks);
+    const protectedRecoveryControl = getProtectedRecoveryControlIntent(data.content, blocks);
     const selfContinuationMeta = getSelfContinuationMeta(blocks);
     const restartHandoffMeta = getRestartHandoffMeta(blocks);
     const isAgent = data.type === 'agent_response';
@@ -1318,7 +1351,9 @@ export function Post({ post, onClick, onHashtagClick, onMessageRef, onScrollToMe
     const showPeerAgentTag = Boolean(peerMessageMeta?.sourceAgentName && isPeerAgentMessage);
 
     // Keep original message text even when link previews are available.
-    let displayContent = getDisplayContent(data.content, data.link_previews);
+    let displayContent = protectedRecoveryControl
+        ? ''
+        : getDisplayContent(data.content, data.link_previews);
     displayContent = getPeerMessageDisplayContent(displayContent, blocks);
     if (restartHandoffMeta?.phase === 'notice' && restartHandoffMeta.reason) {
         displayContent = t('post.restartNotice', { reason: restartHandoffMeta.reason });
@@ -1724,6 +1759,30 @@ export function Post({ post, onClick, onHashtagClick, onMessageRef, onScrollToMe
             });
         }
     }, [cardBlocksKey, post.id]);
+
+    if (protectedRecoveryControl) {
+        const lineage = protectedRecoveryControl.sourceMessageId
+            ? ` Source message: ${protectedRecoveryControl.sourceMessageId}.`
+            : '';
+        const legacy = protectedRecoveryControl.legacy ? ' Legacy recovery record.' : '';
+        return html`
+            <div
+                id=${`post-${post.id}`}
+                class=${`post post-control-intent${isThreadReply ? ' thread-reply' : ''}${isRemoving ? ' removing' : ''}`}
+                onClick=${onClick}
+                data-source-message-id=${protectedRecoveryControl.sourceMessageId || ''}
+            >
+                <span
+                    class="post-control-intent-pill"
+                    role="status"
+                    title=${`${protectedRecoveryControl.label}.${lineage}${legacy}`}
+                >
+                    <span class="post-control-intent-icon" aria-hidden="true">↻</span>
+                    ${protectedRecoveryControl.label}
+                </span>
+            </div>
+        `;
+    }
 
     return html`
         <div id=${`post-${post.id}`} class="post ${isAgent ? 'agent-post' : ''} ${isSelfContinuation ? 'self-continuation-post' : ''} ${isThreadReply ? 'thread-reply' : ''} ${isThreadPrev ? 'thread-prev' : ''} ${isThreadNext ? 'thread-next' : ''} ${isRemoving ? 'removing' : ''}" onClick=${onClick}>

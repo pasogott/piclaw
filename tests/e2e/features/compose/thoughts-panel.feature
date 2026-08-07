@@ -14,6 +14,12 @@ Feature: Thoughts panel expand and scroll
     And the thoughts panel body should have overflow-y hidden
     And the thoughts panel body max-height should be clamped
 
+  Scenario: Collapsed thoughts continue receiving streamed content
+    Given the thoughts panel is collapsed
+    When more thinking output arrives
+    Then the new thought content should be present
+    And the panel data-expanded attribute should remain "false"
+
   Scenario: Clicking "more lines" expands and enables scrolling
     Given the thoughts panel shows "N more lines"
     When I click the "more lines" button

@@ -27,6 +27,67 @@ function makeHandler(formatThinkingLevel?: (level: string) => string) {
   return { handler, statuses, emitter };
 }
 
+describe("web SSE tool execution events", () => {
+  it("retains concurrent active-tool state, refreshes heartbeats, and exits tool execution on the final end", () => {
+    const { handler, statuses } = makeHandler();
+
+    handler({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "bash", args: { command: "sleep 10" } } as any);
+    handler({ type: "tool_execution_start", toolCallId: "tool-2", toolName: "read", args: { path: "README.md" } } as any);
+    handler({
+      type: "tool_execution_heartbeat",
+      emittedAt: "2026-08-07T12:00:10.000Z",
+      activeToolCount: 2,
+      activeToolNames: ["bash", "read"],
+      activeTools: [
+        { toolCallId: "tool-1", toolName: "bash", startedAt: "2026-08-07T12:00:00.000Z", lastEventAt: "2026-08-07T12:00:00.000Z" },
+        { toolCallId: "tool-2", toolName: "read", startedAt: "2026-08-07T12:00:01.000Z", lastEventAt: "2026-08-07T12:00:01.000Z" },
+      ],
+    } as any);
+    handler({
+      type: "tool_execution_update",
+      toolCallId: "tool-2",
+      toolName: "read",
+      args: { path: "README.md" },
+      partialResult: { content: [{ type: "text", text: "latest output" }] },
+    } as any);
+    handler({ type: "tool_execution_end", toolCallId: "tool-1", toolName: "bash", isError: false, durationMs: 10000 } as any);
+    handler({ type: "tool_execution_end", toolCallId: "tool-2", toolName: "read", isError: false, durationMs: 11000 } as any);
+
+    expect(statuses[1]).toMatchObject({
+      type: "tool_call",
+      active_tool_count: 2,
+      active_tools: [
+        expect.objectContaining({ tool_call_id: "tool-1", tool_name: "bash" }),
+        expect.objectContaining({ tool_call_id: "tool-2", tool_name: "read" }),
+      ],
+    });
+    expect(statuses[2]).toMatchObject({
+      watchdog_heartbeat: true,
+      last_event_at: "2026-08-07T12:00:10.000Z",
+      active_tool_count: 2,
+    });
+    expect(statuses[3]).toMatchObject({
+      type: "tool_status",
+      tool_call_id: "tool-2",
+      output_preview: "latest output",
+      active_tool_count: 2,
+    });
+    expect(statuses[4]).toMatchObject({
+      type: "tool_status",
+      tool_call_id: "tool-2",
+      active_tool_count: 1,
+      last_completed_tool: expect.objectContaining({ tool_call_id: "tool-1", status: "completed" }),
+    });
+    expect(statuses[5]).toMatchObject({
+      type: "thinking",
+      phase: "post_tool_model",
+      title: "Continuing after tools...",
+      active_tool_count: 0,
+      last_completed_tool: expect.objectContaining({ tool_call_id: "tool-2", status: "completed" }),
+    });
+  });
+});
+
 describe("web SSE thinking level events", () => {
   it("reports legacy raw levels with their display labels", () => {
     const { handler, emitter } = makeHandler((level) => level === "xhigh" ? "max" : level);

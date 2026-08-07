@@ -31,8 +31,7 @@ export async function runWithProtectedRecoveryHandoff(
   const bufferedTurns: TurnOutput[] = [];
   const originalOnTurnComplete = options.onTurnComplete;
   const shouldBufferInitialTurns = Boolean(originalOnTurnComplete)
-    && !options.deferToolEnabledContinuation
-    && prompt.trim() !== TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT;
+    && !options.protectedRecoveryContinuation;
   const initialOptions = shouldBufferInitialTurns
     ? { ...options, onTurnComplete: (turn: TurnOutput) => bufferedTurns.push(turn) }
     : options;
@@ -41,8 +40,7 @@ export async function runWithProtectedRecoveryHandoff(
 
   if (
     !initial.requiresToolEnabledContinuation
-    || options.deferToolEnabledContinuation
-    || prompt.trim() === TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT
+    || options.protectedRecoveryContinuation
   ) {
     for (const turn of bufferedTurns) originalOnTurnComplete?.(turn);
     return initial;
@@ -50,11 +48,17 @@ export async function runWithProtectedRecoveryHandoff(
 
   // Preserve committed pre-tool progress from the protected run, but suppress
   // its terminal prose: only the ordinary continuation may authoritatively
-  // close tool-dependent work.
+  // close tool-dependent work. This applies equally when web defers the
+  // handoff; otherwise the intentionally tool-free recovery attempt leaks a
+  // misleading "tools unavailable" assistant turn before tools are restored.
   for (const turn of bufferedTurns) {
     if (turn.followedByToolUse) originalOnTurnComplete?.(turn);
   }
-  const continuation = await run(TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT, { ...options });
+  if (options.deferToolEnabledContinuation) return initial;
+  const continuation = await run(TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT, {
+    ...options,
+    protectedRecoveryContinuation: true,
+  });
   onOutput?.(continuation);
   // The one-shot handoff has been spent. Preserve the continuation outcome,
   // but never expose a flag that a caller could accidentally chain again.
