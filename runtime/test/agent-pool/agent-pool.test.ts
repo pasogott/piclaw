@@ -1212,7 +1212,7 @@ test("agent pool can run a tool-capable side prompt through a separate side sess
     dispose() {}
   }
 
-  const seen: any = { model: null, thinking: null, tools: null, prompt: null, seeded: false };
+  const seen: any = { model: null, thinking: null, persistedThinking: null, tools: null, prompt: null, seeded: false };
   class SideSession {
     model = undefined;
     isStreaming = false;
@@ -1232,6 +1232,7 @@ test("agent pool can run a tool-capable side prompt through a separate side sess
         await options.setup({
           appendSessionInfo: () => {},
           appendModelChange: () => {},
+          appendThinkingLevelChange: (level: string) => { seen.persistedThinking = level; },
           appendCompaction: () => {},
           appendCustomMessageEntry: () => {},
           appendMessage: () => {},
@@ -1284,6 +1285,7 @@ test("agent pool can run a tool-capable side prompt through a separate side sess
   expect(seen).toEqual({
     model: "openai/gpt-test",
     thinking: "high",
+    persistedThinking: "high",
     tools: ["read", "bash"],
     prompt: "Use tools if needed.\n\nInspect workspace",
     seeded: true,
