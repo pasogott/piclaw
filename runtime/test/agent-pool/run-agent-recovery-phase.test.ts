@@ -139,11 +139,7 @@ describe("runAgentRecoveryPhase", () => {
     ]));
   });
 
-  test.each([
-    ["claims-success", "All requested work is complete."],
-    ["production-blocked", "I’m blocked from further tool execution in this recovered turn, so I cannot safely inspect or edit the continuation ledger yet."],
-    ["unrelated-prose", "The moon is made of green cheese."],
-  ])("hands off every generic tools-disabled recovery regardless of prose: %s", async (caseId, protectedReply) => {
+  test("hands off a generic tools-disabled recovery without making a disposable provider call", async () => {
     let activeTools = ["read", "bash"];
     const sessionCtrl: SessionWithToolControl = {
       getActiveToolNames: () => [...activeTools],
@@ -153,7 +149,7 @@ describe("runAgentRecoveryPhase", () => {
 
     const result = await runAgentRecoveryPhase({
       prompt: "continue goal",
-      chatJid: `web:test-recovery-phase:${caseId}`,
+      chatJid: "web:test-recovery-phase:skip-provider",
       session: {} as any,
       sessionCtrl,
       timeoutMs: 0,
@@ -165,24 +161,19 @@ describe("runAgentRecoveryPhase", () => {
       clearAttachments: () => {},
       runPromptAttempt: async () => {
         calls += 1;
-        if (calls === 1) {
-          return attempt({
-            output: output("error", "503 temporarily unavailable"),
-            snapshot: {
-              hadToolActivity: true,
-              hadPartialOutput: false,
-              hadCompletedTurnOutput: false,
-              hadTerminalTurnOutput: false,
-              sawCompactionIntent: false,
-              canDisableToolsForRecovery: true,
-              hasUnresolvedToolExecution: false,
-            },
-            promptWasPersisted: true,
-          });
-        }
-        expect(activeTools).toEqual([]);
+        if (calls > 1) throw new Error("generic tools-disabled recovery must not invoke the provider");
         return attempt({
-          output: output("success", undefined, protectedReply),
+          output: output("error", "503 temporarily unavailable"),
+          snapshot: {
+            hadToolActivity: true,
+            hadPartialOutput: false,
+            hadCompletedTurnOutput: false,
+            hadTerminalTurnOutput: false,
+            sawCompactionIntent: false,
+            canDisableToolsForRecovery: true,
+            hasUnresolvedToolExecution: false,
+          },
+          promptWasPersisted: true,
         });
       },
     });
@@ -193,10 +184,11 @@ describe("runAgentRecoveryPhase", () => {
       recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
     });
     expect(result.nextAction).toContain("ordinary turn");
+    expect(calls).toBe(1);
     expect(activeTools).toEqual(["read", "bash"]);
   });
 
-  test("hands off after a tools-disabled transient recovery and restores tools", async () => {
+  test("skips a tools-disabled transient provider attempt and preserves tools", async () => {
     let activeTools = ["read", "bash"];
     const activeToolSets: string[][] = [];
     const sessionCtrl: SessionWithToolControl = {
@@ -237,8 +229,7 @@ describe("runAgentRecoveryPhase", () => {
             promptWasPersisted: true,
           });
         }
-        expect(activeTools).toEqual([]);
-        return attempt({ output: output("success", undefined, "done") });
+        throw new Error("generic tools-disabled recovery must not invoke the provider");
       },
     });
 
@@ -247,11 +238,12 @@ describe("runAgentRecoveryPhase", () => {
       requiresToolEnabledContinuation: true,
       recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
     });
-    expect(activeToolSets).toEqual([[], ["read", "bash"]]);
+    expect(calls).toBe(1);
+    expect(activeToolSets).toEqual([]);
     expect(activeTools).toEqual(["read", "bash"]);
   });
 
-  test("hands off after an unresolved transient tool execution and restores tools",  async () => {
+  test("skips a tools-disabled retry after unresolved tool execution and preserves tools",  async () => {
     let activeTools = ["read", "bash"];
     const activeToolSets: string[][] = [];
     const sessionCtrl: SessionWithToolControl = {
@@ -292,8 +284,7 @@ describe("runAgentRecoveryPhase", () => {
             promptWasPersisted: true,
           });
         }
-        expect(activeTools).toEqual([]);
-        return attempt({ output: output("success", undefined, "done") });
+        throw new Error("generic tools-disabled recovery must not invoke the provider");
       },
     });
 
@@ -302,11 +293,12 @@ describe("runAgentRecoveryPhase", () => {
       requiresToolEnabledContinuation: true,
       recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
     });
-    expect(activeToolSets).toEqual([[], ["read", "bash"]]);
+    expect(calls).toBe(1);
+    expect(activeToolSets).toEqual([]);
     expect(activeTools).toEqual(["read", "bash"]);
   });
 
-  test("runs recovery compaction outside the initial elapsed budget before handing off",  async () => {
+  test("runs recovery compaction before handing off without a disposable provider call",  async () => {
     let compactCalls = 0;
     const calls: Array<{ prompt: string; timeoutMs: number; toolExecutionCountAtStart: number }> = [];
     const events: unknown[] = [];
@@ -362,23 +354,7 @@ describe("runAgentRecoveryPhase", () => {
             toolExecutionCount: 2,
           });
         }
-        expect(activeTools).toEqual([]);
-        // Simulate an extension before_agent_start hook trying to auto-activate
-        // a tool after recovery already disabled the tool set.
-        sessionCtrl.setActiveToolsByName?.(["delegate"]);
-        expect(activeTools).toEqual([]);
-        return attempt({
-          output: output("success", undefined, "recovered"),
-          snapshot: {
-            hadToolActivity: false,
-            hadPartialOutput: false,
-            hadCompletedTurnOutput: true,
-            hadTerminalTurnOutput: true,
-            sawCompactionIntent: false,
-          },
-          promptWasPersisted: true,
-          toolExecutionCount: toolExecutionCountAtStart,
-        });
+        throw new Error("post-compaction tools-disabled recovery must not invoke the provider");
       },
     });
 
@@ -388,11 +364,8 @@ describe("runAgentRecoveryPhase", () => {
       recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
     });
     expect(compactCalls).toBe(1);
-    expect(calls[1]?.prompt).toBe(RECOVERY_CONTINUATION_PROMPT);
-    expect(calls[1]?.toolExecutionCountAtStart).toBe(2);
-    expect(calls[1]?.timeoutMs).toBeGreaterThan(0);
-    expect(calls[1]?.timeoutMs).toBeLessThanOrEqual(25);
-    expect(activeToolSets).toEqual([[], [], ["read", "bash"]]);
+    expect(calls).toEqual([{ prompt: "original prompt", timeoutMs: 0, toolExecutionCountAtStart: 0 }]);
+    expect(activeToolSets).toEqual([]);
     expect(events).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "compaction_start", trigger: "recovery" }),
       expect.objectContaining({ type: "compaction_end", trigger: "recovery", willRetry: true }),
@@ -400,7 +373,7 @@ describe("runAgentRecoveryPhase", () => {
     ]));
   });
 
-  test("refuses context-pressure recovery when tools cannot be disabled safely", async () => {
+  test("hands off context-pressure recovery without requiring tool suppression support", async () => {
     let calls = 0;
     const result = await runAgentRecoveryPhase({
       prompt: "original prompt",
@@ -432,7 +405,11 @@ describe("runAgentRecoveryPhase", () => {
       },
     });
     expect(calls).toBe(1);
-    expect(result.error).toContain("cannot control tools safely");
+    expect(result).toMatchObject({
+      status: "error",
+      requiresToolEnabledContinuation: true,
+      recovery: { attemptsUsed: 1, lastClassifier: "tool_activity" },
+    });
     expect(result.toolBudgetExceeded).toBeUndefined();
   });
 
@@ -490,7 +467,7 @@ describe("runAgentRecoveryPhase", () => {
       recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
     });
     expect(rotations).toBe(1);
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
   });
 
   test("rotates when recovery compaction remains over threshold", async () => {
@@ -551,7 +528,7 @@ describe("runAgentRecoveryPhase", () => {
       recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
     });
     expect(rotations).toBe(1);
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
   });
 
   test("buildRecoveryDiagnosticEntry preserves serializable budget fields", () => {

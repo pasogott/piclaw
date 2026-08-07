@@ -498,6 +498,24 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     // path never reaches an await that actually suspends.
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+    // Generic tools-disabled retries cannot authoritatively complete work and
+    // their output is intentionally discarded by the protected handoff. Do
+    // not spend a provider call producing prose that cannot be committed.
+    const pendingGenericProtectedHandoff = recoveryContinuationWithoutTools
+      && recoveryAttemptsUsed > 0
+      && strategyHistory.at(-1) !== "finalize";
+    if (pendingGenericProtectedHandoff) {
+      const duration = Date.now() - startTime;
+      options.onInfo?.("Skipped unauthoritative tools-disabled recovery provider attempt", {
+        operation: "run_agent.recovery_provider_attempt_skipped",
+        chatJid,
+        recoveryAttempt: recoveryAttemptsUsed,
+        recoveryStrategy: strategyHistory.at(-1),
+        ...getRunObservabilityDetails(runOptions),
+      });
+      return buildProtectedHandoff(duration, "the runtime skipped an unauthoritative tools-disabled provider attempt");
+    }
+
     if (recoveryAttemptsUsed > 0 && getRecoveryBudgetElapsedMs() >= recoveryConfig.totalBudgetMs) {
       const duration = Date.now() - startTime;
       if (lastAttemptWasGenericProtected) {
@@ -527,8 +545,8 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
 
     // The configured turn timeout bounds the initial attempt. Once that
     // attempt fails after tool activity, automatic recovery gets its own
-    // smaller total budget; otherwise a timeout failure can never start
-    // its safe tools-disabled continuation.
+    // smaller total budget; otherwise a timeout failure can never reach its
+    // bounded continuation decision.
     if (timeoutMs > 0 && recoveryAttemptsUsed === 0) {
       const loopElapsedMs = Date.now() - startTime;
       if (loopElapsedMs > timeoutMs) {
@@ -843,6 +861,27 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       && recoveryBudgetAccumulatedMs === 0
       && (timeoutMs <= 0 || allowPostTimeoutRecoveryWindow)) {
       startRecoveryBudget();
+    }
+
+    const nextAttemptWouldBeGenericProtected = effectiveDecision.strategy !== "finalize"
+      && shouldDisableToolsForRecoveryAttempt(
+        effectiveDecision,
+        attempt.snapshot,
+        recoveryConfig,
+      );
+    // A regular retry needs no compaction or rotation before its ordinary
+    // continuation. Hand it off immediately instead of waiting and then
+    // making a disposable tools-disabled provider request.
+    if (nextAttemptWouldBeGenericProtected && effectiveDecision.strategy !== "compact_then_retry") {
+      const duration = Date.now() - startTime;
+      options.onInfo?.("Skipped unauthoritative tools-disabled recovery provider attempt", {
+        operation: "run_agent.recovery_provider_attempt_skipped",
+        chatJid,
+        recoveryAttempt: recoveryAttemptsUsed,
+        recoveryStrategy: effectiveDecision.strategy,
+        ...getRunObservabilityDetails(runOptions),
+      });
+      return buildProtectedHandoff(duration, "the runtime skipped an unauthoritative tools-disabled provider attempt");
     }
 
     if (retryDelayMs > 0) {

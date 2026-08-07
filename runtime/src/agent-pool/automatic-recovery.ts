@@ -364,20 +364,12 @@ export function decideAutomaticRecovery(input: RecoveryDecisionInput): RecoveryD
       }
       const mustDisableTools = !input.config.transientRecoveryToolsEnabled
         || Boolean(input.snapshot.hasUnresolvedToolExecution);
-      if (mustDisableTools && !input.snapshot.canDisableToolsForRecovery) {
-        return {
-          recover: false,
-          classifier: "tool_activity",
-          strategy: null,
-          reason: "Transient recovery requires tools to be disabled, but this session cannot control its active tool set.",
-        };
-      }
       return {
         recover: true,
         classifier: "transient",
         strategy: "retry",
         reason: mustDisableTools
-          ? "Transient failure after tool activity; continuing with tools disabled by recovery policy."
+          ? "Transient failure after tool activity requires one ordinary tool-enabled continuation."
           : "Transient failure after resolved tool work; continuing from the persisted tool results with tools available.",
       };
     }
@@ -469,14 +461,6 @@ export function decideAutomaticRecovery(input: RecoveryDecisionInput): RecoveryD
         classifier: "disabled",
         strategy: null,
         reason: "Transient automatic recovery is disabled.",
-      };
-    }
-    if (!input.config.transientRecoveryToolsEnabled && !input.snapshot.canDisableToolsForRecovery) {
-      return {
-        recover: false,
-        classifier: "disabled",
-        strategy: null,
-        reason: "Transient recovery tools are disabled, but this session cannot control its active tool set.",
       };
     }
     return {

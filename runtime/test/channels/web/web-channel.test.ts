@@ -2453,6 +2453,7 @@ test("processChat appends visible diagnostic text to recovered tool-budget draft
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
 
   const db = await import("../../../src/db.js");
+  const { RECOVERY_CONTINUATION_PROMPT } = await import("../../../src/agent-pool/context-pressure-retry.js");
   db.initDatabase();
   db.getDb().exec("DELETE FROM message_media; DELETE FROM messages; DELETE FROM chats; DELETE FROM chat_cursors; DELETE FROM chat_cursors;");
   db.storeChatMetadata("web:default", new Date().toISOString(), "Web");
@@ -2514,9 +2515,9 @@ test("processChat appends visible diagnostic text to recovered tool-budget draft
   expect(db.getDb().prepare(`
     SELECT content, thread_id
     FROM messages
-    WHERE chat_jid = ? AND is_bot_message = 0 AND content LIKE ?
-  `).get("web:default", "%Continue the most recent user request%") as any).toMatchObject({
-    content: expect.stringContaining("Continue the most recent user request"),
+    WHERE chat_jid = ? AND is_bot_message = 0 AND content = ?
+  `).get("web:default", RECOVERY_CONTINUATION_PROMPT) as any).toMatchObject({
+    content: RECOVERY_CONTINUATION_PROMPT,
     thread_id: db.getMessageRowIdById("web:default", toolBudgetUserMessageId),
   });
 });
@@ -2527,6 +2528,7 @@ test("processChat releases the tool-budget continuation reservation when queue p
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
 
   const db = await import("../../../src/db.js");
+  const { RECOVERY_CONTINUATION_PROMPT } = await import("../../../src/agent-pool/context-pressure-retry.js");
   db.initDatabase();
   db.getDb().exec("DELETE FROM message_media; DELETE FROM messages; DELETE FROM chats; DELETE FROM chat_cursors;");
   db.storeChatMetadata("web:test-tool-budget-reservation-release", new Date().toISOString(), "Web");
@@ -2586,9 +2588,9 @@ test("processChat releases the tool-budget continuation reservation when queue p
   expect(db.getDb().prepare(`
     SELECT content, thread_id
     FROM messages
-    WHERE chat_jid = ? AND is_bot_message = 0 AND content LIKE ?
-  `).get("web:test-tool-budget-reservation-release", "%Continue the most recent user request%") as any).toMatchObject({
-    content: expect.stringContaining("Continue the most recent user request"),
+    WHERE chat_jid = ? AND is_bot_message = 0 AND content = ?
+  `).get("web:test-tool-budget-reservation-release", RECOVERY_CONTINUATION_PROMPT) as any).toMatchObject({
+    content: RECOVERY_CONTINUATION_PROMPT,
     thread_id: rootRowId,
   });
 });
@@ -2599,6 +2601,7 @@ test("processChat queues at most one automatic tool-budget continuation per thre
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
 
   const db = await import("../../../src/db.js");
+  const { RECOVERY_CONTINUATION_PROMPT } = await import("../../../src/agent-pool/context-pressure-retry.js");
   db.initDatabase();
   db.getDb().exec("DELETE FROM message_media; DELETE FROM messages; DELETE FROM chats; DELETE FROM chat_cursors;");
   db.storeChatMetadata("web:test-tool-budget-lineage-once", new Date().toISOString(), "Web");
@@ -2638,8 +2641,8 @@ test("processChat queues at most one automatic tool-budget continuation per thre
   const firstContinuation = db.getDb().prepare(`
     SELECT rowid, content, timestamp, thread_id
     FROM messages
-    WHERE chat_jid = ? AND is_bot_message = 0 AND content LIKE ?
-  `).get("web:test-tool-budget-lineage-once", "%Continue the most recent user request%") as any;
+    WHERE chat_jid = ? AND is_bot_message = 0 AND content = ?
+  `).get("web:test-tool-budget-lineage-once", RECOVERY_CONTINUATION_PROMPT) as any;
   expect(firstContinuation).toMatchObject({ thread_id: rootRowId });
   db.setChatCursor("web:test-tool-budget-lineage-once", firstContinuation.timestamp);
 
@@ -2660,8 +2663,8 @@ test("processChat queues at most one automatic tool-budget continuation per thre
   expect(db.getDb().prepare(`
     SELECT COUNT(*) AS count
     FROM messages
-    WHERE chat_jid = ? AND is_bot_message = 0 AND content LIKE ?
-  `).get("web:test-tool-budget-lineage-once", "%Continue the most recent user request%") as any).toMatchObject({ count: 1 });
+    WHERE chat_jid = ? AND is_bot_message = 0 AND content = ?
+  `).get("web:test-tool-budget-lineage-once", RECOVERY_CONTINUATION_PROMPT) as any).toMatchObject({ count: 1 });
 });
 
 test("processChat durably hands protected recovery to one ordinary tool-enabled continuation", async () => {

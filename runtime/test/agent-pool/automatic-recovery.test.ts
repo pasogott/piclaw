@@ -359,6 +359,27 @@ test("uses a continuation retry after resolved non-terminal tool activity times 
   expect(decision.strategy).toBe("retry");
 });
 
+test("allows protected handoff decisions without tool-suppression support", () => {
+  for (const hadToolActivity of [false, true]) {
+    const decision = decideAutomaticRecovery({
+      config: DEFAULT_AUTOMATIC_RECOVERY_CONFIG,
+      errorText: "503 temporarily unavailable",
+      recoveryAttemptsUsed: 0,
+      elapsedMs: 1000,
+      snapshot: {
+        hadToolActivity,
+        hadPartialOutput: hadToolActivity,
+        hadTerminalTurnOutput: false,
+        sawAssistantToolCall: hadToolActivity,
+        canDisableToolsForRecovery: false,
+        hasUnresolvedToolExecution: hadToolActivity,
+      },
+    });
+
+    expect(decision).toMatchObject({ recover: true, classifier: "transient", strategy: "retry" });
+  }
+});
+
 test("suppresses all transient classifiers when transient recovery is disabled", () => {
   const decision = decideAutomaticRecovery({
     config: { ...DEFAULT_AUTOMATIC_RECOVERY_CONFIG, transientRecoveryEnabled: false },

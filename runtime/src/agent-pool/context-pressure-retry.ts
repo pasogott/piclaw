@@ -15,15 +15,9 @@ import { finalizeRecoveryCompactionOutcome, runCompactionWithTimeout } from "./c
 
 export type DirectPromptOptions = { streamingBehavior?: "steer" | "followUp" };
 
-export const RECOVERY_CONTINUATION_PROMPT = [
-  "Continue the most recent user request after recovery.",
-  "Do not restart completed tool work or treat this continuation as a new task.",
-].join(" ");
-
-export const TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT = [
-  "Resume the interrupted turn from persisted state without replaying completed work.",
-  "If recovery succeeds, do not mention recovery; continue the task and report only task-relevant output.",
-].join(" ");
+export const TASK_CONTINUATION_PROMPT = "Continue the current task from persisted state without repeating completed work.";
+export const RECOVERY_CONTINUATION_PROMPT = TASK_CONTINUATION_PROMPT;
+export const TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT = TASK_CONTINUATION_PROMPT;
 
 export function getSessionLeafId(session: AgentSession): string | null {
   const value = (session.sessionManager as { getLeafId?: () => unknown } | undefined)?.getLeafId?.();

@@ -1960,7 +1960,7 @@ test("runAgentPrompt compacts and retries after thrown OpenAI context-window 400
   }
 });
 
-test("runAgentPrompt does not auto-recover generic failures after tool activity", async () => {
+test("runAgentPrompt hands off unresolved generic failures without a provider retry", async () => {
   const restoreEnv = setEnv({
     PICLAW_TURN_AUTO_RECOVERY_ENABLED: "1",
     PICLAW_TURN_AUTO_RECOVERY_MAX_ATTEMPTS: "2",
@@ -2045,12 +2045,15 @@ test("runAgentPrompt does not auto-recover generic failures after tool activity"
       clearActiveForkBaseLeaf: () => {},
     });
 
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("Timed out after 30s");
+    expect(result).toMatchObject({
+      status: "error",
+      requiresToolEnabledContinuation: true,
+      recovery: { attemptsUsed: 1, lastClassifier: "tool_activity" },
+    });
     expect(result.recovery?.diagnostics[0]?.hasUnresolvedToolExecution).toBe(true);
     expect(session.promptCalls).toBe(1);
     expect(session.compactCalls).toBe(0);
-    expect(events).toEqual([]);
+    expect(events).toEqual(["recovery_start", "recovery_end"]);
   } finally {
     restoreEnv();
   }
@@ -2933,13 +2936,15 @@ test("runAgentPrompt auto-compacts and retries when tool activity produced no te
       clearActiveForkBaseLeaf: () => {},
     });
 
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("cannot control tools safely");
+    expect(result).toMatchObject({
+      status: "error",
+      requiresToolEnabledContinuation: true,
+      recovery: { attemptsUsed: 1, lastClassifier: "tool_activity" },
+    });
     expect(result.error).not.toContain("Tool-use budget exceeded");
     expect(session.promptCalls).toBe(1);
     expect(session.promptTexts).toEqual(["hello"]);
     expect(session.compactCalls).toBe(1);
-    expect(result.recovery).toBeUndefined();
     expect(result).not.toMatchObject({
       toolBudgetExceeded: true,
     });
@@ -4330,7 +4335,7 @@ test("runAgentPrompt requests one tools-disabled closing reply after resolved to
   }
 });
 
-test("runAgentPrompt hands a default tools-disabled transient recovery back to an ordinary turn", async () => {
+test("runAgentPrompt hands off a default tools-disabled transient recovery without a provider retry", async () => {
   initDatabase();
   const restoreEnv = setEnv({
     PICLAW_TURN_AUTO_RECOVERY_ENABLED: "1",
@@ -4428,15 +4433,15 @@ test("runAgentPrompt hands a default tools-disabled transient recovery back to a
         strategyHistory: ["retry"],
       },
     });
-    expect(session.promptTexts).toEqual(["inspect logs", RECOVERY_CONTINUATION_PROMPT]);
-    expect(session.toolSets).toContainEqual([]);
-    expect(session.toolSets.at(-1)).toEqual(["bash", "read"]);
+    expect(session.promptTexts).toEqual(["inspect logs"]);
+    expect(session.toolSets).toEqual([]);
+    expect(session.getActiveToolNames()).toEqual(["bash", "read"]);
   } finally {
     restoreEnv();
   }
 });
 
-test("runAgentPrompt does not start a generic retry after backoff exhausts the configured timeout", async () => {
+test("runAgentPrompt skips generic retry backoff and hands off without another provider call", async () => {
   const restoreEnv = setEnv({
     PICLAW_TURN_AUTO_RECOVERY_ENABLED: "1",
     PICLAW_TURN_AUTO_RECOVERY_MAX_ATTEMPTS: "2",
@@ -4504,13 +4509,16 @@ test("runAgentPrompt does not start a generic retry after backoff exhausts the c
       clearActiveForkBaseLeaf: () => {},
     });
 
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("Response timed out before finalization");
-    expect(result.recovery).toEqual(expect.objectContaining({
-      attemptsUsed: 1,
-      exhausted: true,
-      lastClassifier: "budget_exhausted",
-    }));
+    expect(result).toMatchObject({
+      status: "error",
+      requiresToolEnabledContinuation: true,
+      recovery: {
+        attemptsUsed: 1,
+        exhausted: true,
+        lastClassifier: "tool_activity",
+        strategyHistory: ["retry"],
+      },
+    });
     expect(session.promptCalls).toBe(1);
     expect(attemptTimeouts).toEqual([100]);
   } finally {
@@ -4607,7 +4615,7 @@ test("runAgentPrompt clamps a recovery attempt to the remaining short timeout bu
   }
 });
 
-test("runAgentPrompt hands off after repeated opted-out continuation attempts", async () => {
+test("runAgentPrompt hands off before any opted-out tools-disabled continuation attempt", async () => {
   initDatabase();
   const restoreEnv = setEnv({
     PICLAW_TURN_AUTO_RECOVERY_ENABLED: "1",
@@ -4667,9 +4675,9 @@ test("runAgentPrompt hands off after repeated opted-out continuation attempts", 
     expect(result).toMatchObject({
       status: "error",
       requiresToolEnabledContinuation: true,
-      recovery: { attemptsUsed: 2, recovered: false, exhausted: true, lastClassifier: "tool_activity" },
+      recovery: { attemptsUsed: 1, recovered: false, exhausted: true, lastClassifier: "tool_activity" },
     });
-    expect(session.promptTexts).toEqual(["do work", RECOVERY_CONTINUATION_PROMPT, RECOVERY_CONTINUATION_PROMPT]);
+    expect(session.promptTexts).toEqual(["do work"]);
     expect(session.getActiveToolNames()).toEqual(["bash", "read"]);
   } finally {
     restoreEnv();

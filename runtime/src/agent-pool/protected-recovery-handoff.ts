@@ -1,11 +1,10 @@
 /**
  * protected-recovery-handoff.ts – Bounded ordinary-turn handoff for protected recovery.
  *
- * Generic recovery attempts may temporarily disable tools to obtain a safe
- * terminal response. Such an attempt cannot authoritatively finish work that
- * may still require tools. Non-web callers consume the typed handoff here;
- * web defers it so its handler can durably order the continuation with cursor
- * and terminal-message persistence.
+ * A generic recovery that would require tool suppression is converted into a
+ * typed handoff before another provider request is made. Non-web callers
+ * consume the handoff here; web defers it so its handler can durably order the
+ * continuation with cursor and terminal-message persistence.
  */
 
 import { TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT } from "./context-pressure-retry.js";
@@ -47,10 +46,9 @@ export async function runWithProtectedRecoveryHandoff(
   }
 
   // Preserve committed pre-tool progress from the protected run, but suppress
-  // its terminal prose: only the ordinary continuation may authoritatively
-  // close tool-dependent work. This applies equally when web defers the
-  // handoff; otherwise the intentionally tool-free recovery attempt leaks a
-  // misleading "tools unavailable" assistant turn before tools are restored.
+  // any unauthoritative terminal prose produced by legacy/injected runners:
+  // only the ordinary continuation may close tool-dependent work. Generic
+  // runtime recovery now hands off before making a tools-disabled request.
   for (const turn of bufferedTurns) {
     if (turn.followedByToolUse) originalOnTurnComplete?.(turn);
   }
