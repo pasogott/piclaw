@@ -236,17 +236,11 @@ test('Post renders a typed protected-recovery control intent as a compact system
   expect(findByClass(host, 'post-control-intent')?.getAttribute('data-source-message-id')).toBe('source-123');
 });
 
-test('Post recognizes legacy raw protected-recovery prompts without rendering them as user text', async () => {
-  const rawPrompt = 'Continue the most recent user request in this ordinary tool-enabled turn. Resume from persisted progress, do not replay completed side effects, and finish the task or report a concrete blocker.';
-  const host = await renderPostWithBlocks([], {
-    type: 'user_message',
-    content: rawPrompt,
-  });
+test('protected recovery requires typed control intent instead of interpreting user prose', async () => {
+  const { getProtectedRecoveryControlIntent } = await importFresh<typeof import('../../web/src/components/post.ts')>('../web/src/components/post.ts');
 
-  const pill = findByClass(host, 'post-control-intent-pill');
-  expect(pill).toBeTruthy();
-  expect(flattenText(host)).not.toContain(rawPrompt);
-  expect(findByClass(host, 'post-author')).toBeNull();
+  expect(getProtectedRecoveryControlIntent([])).toBeNull();
+  expect(getProtectedRecoveryControlIntent('Resume this interrupted task from where it stopped.' as any)).toBeNull();
 });
 
 test('Post renders a visible recovery chip with the recovery tooltip', async () => {
