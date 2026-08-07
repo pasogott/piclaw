@@ -1905,6 +1905,35 @@ export async function processChat(
       }));
       throw new Error("Protected recovery handoff persistence failed; retry the source turn.");
     }
+    if (protectedContinuation.required) {
+      // A protected attempt intentionally has no execution tools. Its streamed
+      // draft is not a terminal answer and may falsely claim tools are missing.
+      // Replace that transient prose with a deterministic recovery marker while
+      // the durable typed continuation resumes the work with tools restored.
+      clearCommittedDraft();
+      const marker = buildTurnOutcomeMarker({
+        kind: "recovery",
+        label: "recovery",
+        title: PROTECTED_RECOVERY_CONTROL_LABEL,
+        detail: "Continuing in an ordinary turn with execution tools restored.",
+        severity: "info",
+        attemptsUsed: output.recovery?.attemptsUsed,
+        classifier: output.recovery?.lastClassifier ?? null,
+      });
+      const persisted = persistVisibleFailureOutcome(marker);
+      if (persisted) {
+        await finalizeSuccessfulRun();
+      } else {
+        rollbackChatRunWithError(chatJid, {
+          prevTs: prevCursor,
+          failedTs: lastMessage.timestamp,
+          messageId: lastMessage.id,
+          threadRootId: resolvedThreadRootId ?? null,
+          createdAt: new Date().toISOString(),
+        });
+      }
+      return;
+    }
     const fallbackPublished = output.failureCategory === "timeout" || output.failureCategory === "stalled_work"
       ? publishDraftFallback("timeout", errorText, { markerOptions })
       : rateLimited

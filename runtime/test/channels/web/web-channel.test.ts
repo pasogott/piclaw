@@ -2690,14 +2690,17 @@ test("processChat durably hands protected recovery to one ordinary tool-enabled 
   db.getDb().prepare("UPDATE messages SET thread_id = ? WHERE rowid = ?").run(rootRowId, rootRowId);
 
   const prompts: string[] = [];
+  const protectedDraft = "I cannot continue because workspace tools are unavailable.";
   const webMod = await import("../../../src/channels/web.js");
   const web = new (webMod.WebChannel as any)({
     queue: { enqueue: () => {} },
     agentPool: {
       setSessionBinder: () => {},
-      runAgent: async (prompt: string) => {
+      runAgent: async (prompt: string, _chatJid: string, options: any) => {
         prompts.push(prompt);
         if (prompts.length === 1) {
+          options.onEvent?.({ type: "message_update", assistantMessageEvent: { type: "text_start" } });
+          options.onEvent?.({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: protectedDraft } });
           return {
             status: "error",
             error: "Protected recovery completed without execution tools; continuing once in an ordinary tool-enabled turn.",
@@ -2731,6 +2734,8 @@ test("processChat durably hands protected recovery to one ordinary tool-enabled 
     }),
   ]);
   expect(db.getDb().prepare(`SELECT COUNT(*) AS count FROM messages WHERE chat_jid = ? AND content = ?`).get("web:default", TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT) as any).toMatchObject({ count: 0 });
+  expect(db.getDb().prepare(`SELECT COUNT(*) AS count FROM messages WHERE chat_jid = ? AND is_bot_message = 1 AND content = ?`).get("web:default", protectedDraft) as any).toMatchObject({ count: 0 });
+  expect(db.getDb().prepare(`SELECT COUNT(*) AS count FROM messages WHERE chat_jid = ? AND is_bot_message = 1 AND content LIKE ?`).get("web:default", "%Protected recovery completed without execution tools%") as any).toMatchObject({ count: 0 });
   await web.processChat("web:default", "default", rootRowId);
 
   expect(prompts[1]).toContain(TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT);
