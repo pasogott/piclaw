@@ -198,11 +198,13 @@ export async function seedSessionManagerFromDeferredBranchSeed(
     await seedRotatedSession(persistence, seed.context, {
       sessionName: seed.sessionName || undefined,
       model: seed.model,
+      thinkingLevel: seed.thinkingLevel,
     });
     return;
   }
   if (seed.sessionName?.trim()) await persistence.appendSessionInfo(seed.sessionName.trim());
   if (seed.model) await persistence.appendModelChange(seed.model.provider, seed.model.modelId);
+  if (seed.thinkingLevel) await persistence.appendThinkingLevelChange(seed.thinkingLevel);
 }
 
 function getDeferredBranchSeedPath(chatJid: string): string {

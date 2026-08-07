@@ -58,6 +58,31 @@ test("deferred branch seed creation awaits asynchronous source reads", async () 
   expect(seed.branchEntries).toHaveLength(1);
 });
 
+test("rotated deferred branch seed carries thinking before replaying context", async () => {
+  const calls: string[] = [];
+  const seed: DeferredBranchSeed = {
+    version: 1,
+    parentSession: null,
+    sessionName: "child",
+    model: { provider: "openai", modelId: "gpt" },
+    thinkingLevel: "high",
+    mode: "rotated_context",
+    context: {
+      messages: [{ role: "user", content: "hello", timestamp: Date.now() } as any],
+      thinkingLevel: "high",
+      model: { provider: "openai", modelId: "gpt" },
+    },
+  };
+
+  await seedSessionManagerFromDeferredBranchSeed(delayedAppendPort(calls), seed);
+  expect(calls).toEqual([
+    "session:child",
+    "model:openai/gpt",
+    "thinking:high",
+    "message:user",
+  ]);
+});
+
 test("deferred branch replay preserves entry order and remaps compaction IDs with async writes", async () => {
   const calls: string[] = [];
   const seed: DeferredBranchSeed = {

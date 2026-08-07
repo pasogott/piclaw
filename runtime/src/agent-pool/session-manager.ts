@@ -286,6 +286,7 @@ export class AgentSessionManager {
           await seedRotatedSession(sessionManager, mainContext, {
             sessionName: "BTW",
             model: mainContext.model,
+            thinkingLevel: mainSession.thinkingLevel,
           });
         },
       });

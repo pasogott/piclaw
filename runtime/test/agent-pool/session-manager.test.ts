@@ -226,26 +226,38 @@ test("AgentSessionManager recreates cached main and side sessions", async () => 
   expect(disposed).toBe(2);
 });
 
-test("AgentSessionManager does not copy a transient empty tool set into a side session", async () => {
+test("AgentSessionManager atomically carries thinking and does not copy a transient empty tool set into a side session", async () => {
   const appliedToolSets: string[][] = [];
+  const seededThinkingLevels: string[] = [];
   const sideSession = {
     model: { provider: "test", id: "main-model" },
     setThinkingLevel: () => {},
     setActiveToolsByName: (names: string[]) => appliedToolSets.push([...names]),
   };
   const sideRuntime = createRuntime(sideSession);
-  sideRuntime.newSession = async () => ({ cancelled: false });
+  sideRuntime.newSession = async (options: any) => {
+    await options.setup({
+      appendSessionInfo: async () => {},
+      appendModelChange: async () => {},
+      appendThinkingLevelChange: async (level: string) => seededThinkingLevels.push(level),
+      appendCompaction: async () => {},
+      appendCustomMessageEntry: async () => {},
+      appendMessage: async () => {},
+    });
+    return { cancelled: false };
+  };
 
   const fixture = createManager();
   await fixture.manager.syncSideSessionFromMain({
     sessionManager: {
-      buildSessionContext: () => ({ model: { provider: "test", id: "main-model" }, messages: [] }),
+      buildSessionContext: () => ({ model: { provider: "test", id: "main-model" }, thinkingLevel: "high", messages: [] }),
     },
     model: { provider: "test", id: "main-model" },
     thinkingLevel: "high",
     getActiveToolNames: () => [],
   } as any, sideRuntime);
 
+  expect(seededThinkingLevels).toEqual(["high"]);
   expect(appliedToolSets).toHaveLength(1);
   expect(appliedToolSets[0]).toContain("read");
   expect(appliedToolSets[0]).toContain("activate_tools");
