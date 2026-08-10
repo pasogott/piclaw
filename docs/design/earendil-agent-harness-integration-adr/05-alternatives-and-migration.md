@@ -1,5 +1,7 @@
 # Alternatives and migration
 
+The evidence-based comparison, selected alternative, eight-phase reversible migration, shadow parity metrics, validation matrix and installed-service gates are in [`evidence/alternatives-and-migration.md`](evidence/alternatives-and-migration.md).
+
 ## Alternatives to assess
 
 The completed ADR must compare at least these options:
