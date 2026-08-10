@@ -36,19 +36,19 @@ This matrix connects every capability in [`current-capability-matrix.md`](curren
 | CAP-014 | Piclaw | Claim next consecutive pending `sourceSeq` | SM-frontier-properties; PC-001/008 |
 | CAP-015 | Piclaw | Operation claim/version instead of cursor preflight/inflight authority | SM-claim-cas; SP-claim-crash; PC-001/007/008 |
 | CAP-016 | Piclaw | Immutable failed disposition and blocked frontier | SM-failed-frontier; PC-007; GF-blank-completion |
-| CAP-017 | Earendil | Durable lane snapshot/reducer; activity is projection only | HC-013/014; PC-008 |
+| CAP-017 | Earendil | Public lane/session snapshots and selected-version recovery surface; activity is projection only | HC-013/014; PC-008 |
 | CAP-018 | Earendil session/lane; Piclaw correlation | `SessionRepo`, lane pointers, navigation/fork | HC-010/013/015; SP-session-conformance |
 | CAP-019 | Boundary projector | `(operationId, runId, generation, eventSeq)` projection key | PC-014/015; UI-generation |
-| CAP-020 | Earendil; adapter provisions resources | Harness/session registry and explicit close/eviction | HC-015/016; OPS-session-lifecycle |
+| CAP-020 | Earendil `AgentHarness`/`Session` | Direct `AgentHarnessOptions` resources and explicit close/eviction | HC-015/016; OPS-session-lifecycle |
 | CAP-021 | Earendil | `AgentLane.prompt()` and durable run record | HC-001/009/013; PC-001 |
 | CAP-022 | Earendil events; Piclaw projection | Redacted run event stream; Piclaw terminal commit remains authoritative | HC-001/002/018; PC-007/014/016 |
-| CAP-023 | Earendil; Piclaw tool effectors | Durable `tool_started`, result entry and replay policy | HC-002/003/004/005; TP-safe-never |
+| CAP-023 | Earendil `HarnessTool`/`AgentHarnessTool` | Durable `tool_started`, exact `AgentToolResult` and replay policy | HC-002/003/004/005; TP-safe-never |
 | CAP-024 | Earendil configuration; Piclaw policy | Persisted `active_tools_change`; owner-scoped set operations | HC-config-state; TP-tool-policy; GF-tool-owner-replacement |
 | CAP-025 | Piclaw policy through Earendil hooks/actions | Explicit admission budget and full tool ledger | HC-tool-budget; TP-parallel-budget; GF-tool-budget-lineage |
 | CAP-026 | Piclaw containment policy; Earendil tool ledger | Mutation fingerprint/idempotency classification and `never` uncertainty quarantine | PC-011; TP-mutation-containment; GF-repeated-mutation |
 | CAP-027 | Earendil records; Piclaw billing/UI store | Durable usage record and idempotent projection | HC-019; SP-usage-idempotency |
 | CAP-028 | Piclaw authorisation; Earendil configuration | Typed model/thinking/tool commands and persisted configuration entries | HC-config-state; PC-control-fence |
-| CAP-029 | Boundary adapter | Resource/tool conversion and reviewed hook compatibility | HC-018; TP-resource-adapter; compatibility report |
+| CAP-029 | Earendil `Resources`, tools and hooks; Piclaw command service | Direct `Skill`, `PromptTemplate`, `HarnessTool` and named hook use | HC-018; TP-resource-contract; version-migration report |
 | CAP-030 | Earendil | First-class threshold compaction operation | HC-010/011; PC maintenance cases; GF-late-compaction |
 | CAP-031 | Earendil | Durable attempt/compaction/resume sequence with replay policy | HC-004/005/010/011/013; GF-context-pressure |
 | CAP-032 | Piclaw control; Earendil compaction | Exact owner/version fence followed by `compact()` | SM-control-fence; HC-010; PC-control-race |
@@ -64,13 +64,13 @@ This matrix connects every capability in [`current-capability-matrix.md`](curren
 | CAP-042 | Piclaw | Typed salvage terminal candidate and one settlement path | SM-salvage; PC-007; UI-timeout-marker |
 | CAP-043 | Piclaw | Atomic settlement and outbox wake | SM-settlement-properties; SP-terminal-crash; PC-007/017 |
 | CAP-044 | Piclaw | Immutable failure disposition without frontier overrun | SM-failed-frontier; PC-007; GF-blank-completion |
-| CAP-045 | Piclaw + Earendil reducer | Two-journal restart reconciliation table | HC-013/014; PC-008/009/011; OPS-crash-matrix |
+| CAP-045 | Piclaw + selected Earendil public recovery surface | Two-journal restart reconciliation table | HC-013/014; PC-008/009/011; OPS-crash-matrix |
 | CAP-046 | Piclaw dispatcher | Rebuild wakes from pending source/operation/outbox state | SM-wake-idempotency; SP-restart-wake |
 | CAP-047 | Earendil | Conformant `SessionRepo`/`SessionStorage` | Upstream backend conformance; HC-013/014; SP-backup-restore |
 | CAP-048 | Earendil and Piclaw service | Explicit close, drain and operation claim fence | HC-016; OPS-shutdown/restart |
 | CAP-049 | Piclaw | Reload continuation is an accepted-source/outbox class | SM-restart-continuation; PC-008; OPS-reload |
 | CAP-050 | Piclaw authorisation; Earendil execution | Exact `operationId`/`runId` cancellation | SM-cancel-cas; HC-009; PC-004/005/006/015 |
-| CAP-051 | Tool effector | Shared AbortSignal and owner-tagged process groups | TP-process-abort; OPS-process-tree |
+| CAP-051 | Earendil `ExecutionEnv`/`HarnessTool` | Exact AbortSignal and environment cleanup own process groups | TP-process-abort; OPS-process-tree |
 | CAP-052 | Piclaw | Owner-fenced disposition/retry creates a new operation or explicit skip | SM-retry-skip; PC-008 |
 | CAP-053 | Piclaw control; Earendil action | Exact operation/run/generation controls | SM-control-fence; PC stale-control cases |
 | CAP-054 | Boundary projector | Allowlisted correlated projection reducer | PC-014/016; UI-status-order |
@@ -116,18 +116,18 @@ Every regression already names a golden fixture. This table gives its owner mech
 
 | Assumption | Status | Evidence or required resolution |
 |---|---|---|
-| EA-001 public harness method/result stability | Open, medium confidence | Compile shared adapter against each selected Earendil commit |
-| EA-002 session record protocol is recovery basis | Supported for 0.84.1 | Implemented reducer/session code and declarations |
-| EA-003 `runId` stable across resume | Open, medium confidence | Real-harness HC-012/013 must prove it; correlation supports run history if false |
+| EA-001 public harness method/result stability | Intentionally not assumed | Compile against each selected Earendil version and update Piclaw/contracts to its direct types |
+| EA-002 session record protocol is recovery basis | Supported as evidence, not public reducer API | Session code is exported; reducer implementation is installed but not package-exported |
+| EA-003 `runId` behaviour across resume | Open for 0.84.1 runtime | HC-012/013 determine selected-version behaviour; Piclaw correlation updates to it |
 | EA-004 queue ownership semantics | Supported for 0.84.1 | Record union and reducer implementation; revalidate on upgrade |
 | EA-005 one-action manual drive | Open, medium-low confidence | Declared only; real HC-017 required |
-| EA-006 event ordering data | Open, low confidence | Adapter can assign receipt sequence but durable-log reconciliation remains required |
+| EA-006 event ordering data | Open, low confidence | Piclaw projection can assign receipt sequence, but durable-log/snapshot reconciliation remains authoritative |
 | EA-007 abort intent durability/order | Open, medium confidence | Real HC-009 required; Piclaw cancellation remains authoritative regardless |
-| EA-008 deterministic fake models/tools | Partly supported | Constructor accepts `Models`/tools; execution implementation unavailable |
+| EA-008 deterministic `Models`/tools | Supported by types, unproven in real execution | Constructor accepts exact exports and pi-ai has faux provider support; HC suite remains required |
 | EA-009 backend conformance export | Supported for 0.84.1 | Export map and declarations verified |
-| EA-010 hook payload stability | Explicitly unsupported | Payloads are `unknown`; do not bind Piclaw contracts to them |
+| EA-010 hook payload stability | Intentionally not assumed | Narrow the selected version's direct payloads; update Piclaw when Earendil changes them |
 
-No open assumption can transfer Piclaw acceptance, cancellation or terminal authority to Earendil. Those responsibilities remain stable even if an upstream execution detail changes.
+No execution-type assumption is a compatibility promise. Piclaw updates to each selected Earendil version. Piclaw acceptance, cancellation and terminal authority remain service responsibilities unless a later ADR deliberately transfers them.
 
 ## Coverage completion
 

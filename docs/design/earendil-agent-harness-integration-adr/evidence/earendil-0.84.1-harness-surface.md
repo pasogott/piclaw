@@ -8,7 +8,7 @@ Confidence: source inspection of published declarations and JavaScript in the in
 
 `@earendil-works/pi-agent-core` exports the harness from its package root. It also exports the session contracts and a backend-neutral conformance suite at `@earendil-works/pi-agent-core/session/testing`.
 
-`@earendil-works/pi-coding-agent/dist/server/create-harness` provides `createCodingAgentHarness()`. It supplies an `ExecutionEnv`, coding tools and coding-agent system-prompt construction over the core `AgentHarness` options.
+The installed coding-agent files contain `dist/server/create-harness`, which demonstrates composition of `ExecutionEnv`, public agent-core tools and system-prompt construction over `AgentHarnessOptions`. The coding-agent package export map does **not** expose this path, so Piclaw must not import it directly. At this version, compose from public agent-core exports; if a later selected version exports the helper, adopt its public types and delete local composition.
 
 The package metadata declares Node `>=22.19.0`. Piclaw runs under Bun. Any adoption needs a Bun compatibility test even when the TypeScript surface compiles.
 
@@ -69,7 +69,7 @@ This is close to the event-log structure required by the ADR. It does not record
 
 ## Pure recovery reducer
 
-`reduceLaneState()` is a pure exported function. It accepts a bounded recovery slice and reconstructs:
+`reduceLaneState()` is a pure function in the installed package files. It is exported from its module but **not** through the package export map/root, so Piclaw production code cannot import it under the direct-adoption policy. Its implementation remains evidence for the selected-version fixture and for choosing a later version with a public recovery surface. It accepts a bounded recovery slice and reconstructs:
 
 - current leaf and open operation;
 - operation intent and aborting state;
@@ -95,7 +95,7 @@ This is close to the event-log structure required by the ADR. It does not record
 - provisioned-entry mismatch;
 - invalid deferred handles.
 
-This reducer should be adopted as an Earendil-owned execution-state authority where its protocol applies. Piclaw should not duplicate it in a parallel execution reducer.
+The semantics are Earendil-owned. Piclaw should not duplicate them in a parallel execution reducer or deep-import this private module. Production uses the selected version's public recovery surface.
 
 ## Replay semantics
 
@@ -134,7 +134,7 @@ The harness queue cannot become the sole proof that Piclaw accepted user input b
 
 The declarations model compaction as a first-class operation with a `runId`, outcome and durable result entry. Compaction attempts preserve a reason: manual, threshold or overflow. Suspended operations report missing model/tool identities and can be resumed.
 
-`AgentHarness.create()` returns suspended operations. The target adapter must reconcile them against Piclaw's operation ledger before calling `resume()`. It must not resume an Earendil operation whose Piclaw owner has terminally settled or been cancelled.
+`AgentHarness.create()` returns suspended operations. Piclaw must reconcile them against its operation ledger before calling `AgentLane.resume()`. It must not resume an Earendil operation whose Piclaw owner has terminally settled or been cancelled.
 
 ## Events, hooks and watchers
 
@@ -145,7 +145,7 @@ The declared API includes:
 - lane and session watchers;
 - manual `peekAction()` and `executeAction()` for deterministic driving.
 
-These are useful compatibility targets, but they are not implemented in the installed JavaScript.
+These are useful selected-version fixture targets, but they are not implemented in the installed JavaScript.
 
 ## Installed implementation status
 
@@ -159,7 +159,7 @@ The published `0.84.1` JavaScript contains a structural preview, not a usable ex
 - configuration getters/setters and `close()` work;
 - the pure reducer and session contracts are implemented.
 
-Piclaw cannot integrate the installed `AgentHarness` as its execution plane. The compatibility fixture is required now and must target the declared public shape plus the implemented session/reducer semantics.
+Piclaw cannot integrate the installed `AgentHarness` as its execution plane. A test implementation is required for the `0.84.1` assessment and must use the declared public shape plus the implemented session/reducer semantics. A later selected version can change that shape; Piclaw updates accordingly.
 
 ## Session backend conformance
 
@@ -171,9 +171,12 @@ A future Piclaw-backed or dedicated session backend must pass this upstream conf
 
 Adopt early:
 
+- `AgentHarness`, `AgentLane` and their exact result/error semantics;
 - `Session`, `SessionStorage`, `SessionRepo` and lane terminology;
+- `ExecutionEnv`, `FileSystem`, `Shell`, `Result`, `FileError` and `ExecutionError`;
+- `Models`, `HarnessTool`/`AgentHarnessTool`, `Resources` and `TelemetryContext`;
 - durable operation/attempt/tool/queue record shapes where they meet product semantics;
-- `reduceLaneState()` and corruption validation;
+- the selected version's public recovery reducer/validation or harness restore surface; `0.84.1` reducer code is evidence only because it is not package-exported;
 - tagged `Result` outcomes;
 - `runId` correlation;
 - replay policy;

@@ -20,7 +20,8 @@ Result: **decision-ready with explicit post-approval implementation gates**.
 | Current capabilities | 59 |
 | Regressions/incidents | 25 |
 | Invariants | 14 |
-| Piclaw surfaces classified for effector reuse | 35 |
+| Piclaw surfaces classified for effector reuse | 36 |
+| Direct Earendil contract families detailed | 10: harness, operation result/error, action/snapshot, session, model/credential, tool, environment, resource, compaction/retry, telemetry |
 | Harness contract cases | 20 |
 | Piclaw boundary contract cases | 20 |
 | Earendil assumptions | 10 |
@@ -37,17 +38,18 @@ Result: **decision-ready with explicit post-approval implementation gates**.
 | Known defects treated as specification | `regression-corpus.md` | Pass |
 | Every durable responsibility has a target owner | capability and traceability matrices | Pass |
 | No reuse of current Piclaw orchestration | effector classification rejects agent pool, process-chat/recovery/compaction orchestration | Pass as design constraint; implementation boundary test is an M1 gate |
-| Earendil structure adopted early | installed declarations, session protocol and reducer surveyed | Pass |
+| Earendil structure adopted early | exact exported harness/session/model/tool/environment/result/resource/telemetry contracts surveyed and required directly | Pass |
+| Parallel execution abstractions removed | `direct-type-audit.md` separates Earendil-owned from Piclaw service-owned types | Pass |
 | Real installed harness viability checked | installed JavaScript inspected; execution methods found to be stubs | Pass |
-| Compatibility fixture specified | fixture layout, manual driver, model/tools, fault plan and assumptions | Pass |
-| One suite can target fixture and real harness | parameterised contract factory and compatibility report | Pass as specification; implementation is an M1/M4 gate |
-| Replay and fault boundaries specified | target state model and fixture contract | Pass |
+| Selected-version test implementation specified | fixture layout, manual driver, direct Earendil `Models`/tools, fault plan and assumptions | Pass |
+| One semantic suite can target fixture and real harness | direct Earendil factory input and version-migration report | Pass as specification; implementation is an M1/M4 gate |
+| Replay and fault boundaries specified | target state model and selected-version fixture contract | Pass |
 | Exact-owner cancellation specified | operation/run identity and cancellation protocol | Pass |
 | Atomic terminal settlement specified | nine-step transaction/protocol | Pass |
 | Restart reconciliation specified | two-journal state table | Pass |
 | Scheduler delivery ownership specified | scheduler model and PC-012/013 | Pass |
 | Mobile installed-browser acceptance specified | PC-015 and M5–M7 installed gates | Pass |
-| Alternatives compared | five alternatives with selected fixture-first architecture | Pass |
+| Alternatives compared | five alternatives with selected direct-adoption/selected-version-fixture architecture | Pass |
 | Migration and rollback reversible | M0–M8, per-chat backend cutover and no destructive downgrade | Pass |
 | Unsupported claims labelled | ten assumptions with confidence/failure response and resolution gates | Pass |
 
@@ -69,18 +71,19 @@ An independent review should challenge:
 
 - whether Piclaw should own the accepted-source sequence and terminal frontier;
 - whether timeline persistence can participate in the same transaction as operation settlement;
-- whether the fixture risks encoding assumptions that Earendil later rejects;
+- whether fixture semantic assertions distinguish product invariants from version-specific Earendil details;
 - whether M5 (service authority before execution cutover) is the safest order;
 - whether per-chat rollback can preserve context without uncertain tool replay;
-- whether the contract suite covers add-on/extension resource compatibility sufficiently.
+- whether the semantic suite covers add-on/extension resource migration sufficiently;
+- whether the selected Earendil version exposes enough public restore/recovery surface without private reducer imports.
 
 ## Post-approval gates
 
 These are implementation evidence, not missing assessment prose:
 
-- implement the fixture and shared suite in M1;
+- implement the selected-version fixture and semantic suite in M1;
 - prototype/benchmark the Piclaw operation schema in M2;
-- select a usable Earendil source commit;
+- select a usable Earendil source/version and update Piclaw to its direct types;
 - run the HC suite against the real harness in M4;
 - measure shadow/soak and resource budgets;
 - complete installed-service/mobile/restart/rollback gates before cutover.

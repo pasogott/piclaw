@@ -1,6 +1,6 @@
 # Target architecture and replay model
 
-The reviewed Piclaw effector classification and target port sketches are in [`evidence/effector-inventory.md`](evidence/effector-inventory.md). The complete proposed identity, accepted-source, operation, event, command, settlement, cancellation, restart and replay design is in [`evidence/target-state-model.md`](evidence/target-state-model.md). Current orchestration modules remain evidence only; reuse requires a narrow owner-aware port, deterministic fake and fault-boundary contract.
+The reviewed Piclaw effector classification is in [`evidence/effector-inventory.md`](evidence/effector-inventory.md). [`evidence/earendil-native-effector-contracts.md`](evidence/earendil-native-effector-contracts.md) requires direct use of Earendil's exported harness, session, model, tool, environment, result/error, resource and telemetry types; Piclaw-specific ports are limited to service-plane responsibilities. The complete proposed identity, accepted-source, operation, settlement, cancellation, restart and replay design is in [`evidence/target-state-model.md`](evidence/target-state-model.md). Current orchestration modules remain evidence only.
 
 ## Required target invariants
 
@@ -40,7 +40,7 @@ The ADR must assign each responsibility to one owner. The table below is a hypot
 | Execution-time compaction | Earendil harness | To verify |
 | Harness-native execution recovery | Earendil harness | To verify |
 | Execution checkpoint or restart token | Earendil harness, if exposed | Unknown API |
-| Projection from harness events to Piclaw status | Boundary adapter | To design |
+| Projection from Earendil events/snapshots to Piclaw status | Piclaw projection service | Direct Earendil inputs; web DTO output |
 
 No final design may share ownership of accepted-input queues, operation completion, cancellation authority, scheduler delivery or terminal persistence.
 

@@ -6,7 +6,7 @@
 
 The proposed state-machine runner must not import or call the current Piclaw agent-pool, recovery, compaction-orchestration, queue-orchestration or web turn state machine.
 
-Existing Piclaw code qualifies for reuse only when it is an effector: a narrow adapter that performs an external action or reads/writes an owned resource without deciding the next agent lifecycle transition.
+Existing Piclaw code qualifies for reuse only when it performs a service-plane action outside Earendil or directly implements an Earendil contract such as `ExecutionEnv`, `HarnessTool`, `Models`, `CredentialStore`, `SessionRepo` or `SessionStorage`. It must not decide the next lifecycle transition owned by Earendil.
 
 An effector must satisfy all of these tests:
 
@@ -22,9 +22,9 @@ Code that mixes I/O with lifecycle policy is not an effector. The assessment mus
 
 ### Earendil alignment
 
-The target design should use actual Earendil concepts and public APIs. A local abstraction must not force the future Earendil harness to imitate Piclaw's current loop.
+The target design uses the selected Earendil version's actual concepts and public APIs. Piclaw must not preserve a local execution abstraction that forces later Earendil versions to imitate Piclaw's current loop.
 
-Where the future API is unavailable, the assessment may define a provisional, versioned compatibility fixture. Every fixture field and behaviour must identify its Earendil source or be marked as an assumption.
+Where the selected Earendil implementation is unavailable, the assessment may define a test-only implementation of that version's public contracts. It may not freeze those contracts: the fixture and tests update when Piclaw selects a new Earendil version.
 
 ### Assessment-only change
 
@@ -64,7 +64,7 @@ Every capability receives one row with these fields:
 | Terminal condition | Success, cancellation, retry, deferral or failure |
 | Existing evidence | Tests, traces, issue, PR or operational evidence |
 | Known defects | Fixed, open, intermittent or suspected defects |
-| Target owner | Piclaw service plane, Earendil harness or boundary adapter |
+| Target owner | Piclaw service plane, exact Earendil contract, or Piclaw web projection |
 | Migration disposition | Preserve, replace, simplify or remove |
 | Confidence | One evidence confidence value |
 

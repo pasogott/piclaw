@@ -144,33 +144,26 @@ The persisted operation log contains immutable intent/disposition rows plus a cu
 
 ## Earendil execution model
 
-The compatibility target is the installed declared API:
+The current assessment target is the installed declared API; production follows the later selected version directly:
 
 - `Session` and `SessionStorage` append entries/records;
 - `AgentHarness`/`AgentLane` create `runId`-owned operations;
-- `reduceLaneState()` reconstructs open execution state;
+- the installed private reducer demonstrates reconstruction semantics; production must use the selected version's public restore/recovery surface;
 - actions append intents/results in durable order;
 - tool records declare `safe` or `never` replay;
 - compaction/navigation are first-class operations;
 - abort appends `abort_requested` and returns queued steer/follow-up state;
 - suspended runs require explicit identity reconciliation before resume.
 
-Piclaw reads Earendil snapshots through the adapter. It does not mutate Earendil storage directly except through the supported session/harness ports.
+Piclaw reads Earendil snapshots through the exported harness/session methods. It does not mutate Earendil storage except through `AgentHarness`/`AgentLane`, `SessionRepo`, `Session` and `SessionStorage` contracts.
 
-## Boundary events
+## Harness events and Piclaw projection
 
-Versioned boundary events contain no unbounded secret/tool payload by default.
+Piclaw consumes Earendil's exported `Events`, `WatchHandle<LaneSnapshot>`, `WatchHandle<SessionSnapshot>`, operation results and durable session log directly. It does not define another authoritative harness event union.
 
-```typescript
-type HarnessBoundaryEventV1 =
-  | { v: 1; type: "run_accepted"; operationId: string; runId: string; lane: string }
-  | { v: 1; type: "run_progress"; operationId: string; runId: string; eventSeq: number; phase: string; publicData: JsonValue }
-  | { v: 1; type: "run_suspended"; operationId: string; runId: string; eventSeq: number; missingTools: string[]; missingModels: string[] }
-  | { v: 1; type: "run_terminal"; operationId: string; runId: string; eventSeq: number; outcome: HarnessOutcomeRef }
-  | { v: 1; type: "run_fault"; operationId: string; runId: string | null; eventSeq: number; code: string };
-```
+Because installed hook/event callback payloads are typed `unknown`, Piclaw narrows documented payloads at registration and treats passive callbacks as projection hints. Recovery and settlement authority comes from typed operation results, snapshots and durable `LogItem`/record state.
 
-The adapter normalises real harness events into this boundary. Unknown future events can be journalled as redacted diagnostics but cannot drive service transitions until mapped by a reviewed version.
+After narrowing, Piclaw may create a versioned **web projection DTO** containing Piclaw `operationId`, Earendil `runId`, receipt sequence and allowlisted public data. This DTO exists only for SSE/UI transport. It cannot drive harness state and contains no unbounded secret/tool payload. Unknown future events can be journalled as redacted diagnostics but cannot drive service transitions until mapped by a reviewed version.
 
 ## Service commands
 
@@ -212,7 +205,7 @@ SSE and notifications run from outbox records after commit. Delivery failure can
 Cancellation has two ordered stages:
 
 1. Piclaw accepts a cancellation source against exact `operationId` and expected version. The first accepted cancellation wins.
-2. The adapter aborts the correlated Earendil `runId` and owned process/tool effectors.
+2. Piclaw calls `abort()` on the correlated `AgentLane`; Earendil propagates its AbortSignal to owned `HarnessTool`/`ExecutionEnv` work.
 
 Rules:
 
@@ -228,7 +221,7 @@ Rules:
 For each chat with non-terminal Piclaw work:
 
 1. read the Piclaw operation/source projection and immutable log;
-2. open the correlated Earendil session and reduce each relevant lane;
+2. open the correlated Earendil session and obtain each relevant lane's public restored snapshot/state;
 3. compare `operationId ↔ sessionId/lane/runId` correlation;
 4. classify one of the cases below;
 5. append a Piclaw reconciliation event before issuing a command.

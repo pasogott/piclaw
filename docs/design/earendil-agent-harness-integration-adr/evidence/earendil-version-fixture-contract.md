@@ -1,12 +1,12 @@
-# Earendil compatibility fixture and contract suite
+# Selected-version Earendil fixture and semantic contract suite
 
 Status: required because the installed Earendil `0.84.1` execution harness is a structural preview whose run, queue, abort, lane, watcher and restore methods throw `HarnessNotImplemented`.
 
-The fixture adopts the installed public declarations and implemented session/reducer semantics. It does not imitate Piclaw's current agent loop.
+The fixture implements the selected Earendil version's public declarations and uses its implemented session/reducer semantics. It does not imitate Piclaw's current agent loop or promise compatibility with another Earendil version.
 
 ## Purpose
 
-The fixture lets Piclaw design and test the service/harness boundary before the real harness implementation arrives. It must be disposable: when a usable Earendil harness is installed, the same parameterised contract suite runs against both implementations and reports semantic differences.
+The fixture lets Piclaw test the service/harness boundary while the selected version's real harness is unavailable. It is disposable: when Piclaw selects a usable Earendil version, the fixture and direct integration update to that version, and the semantic product suite runs against both implementations.
 
 The fixture is assessment output. Production implementation follows a separate approved phase.
 
@@ -23,7 +23,7 @@ runtime/test/fixtures/earendil-harness/
 ├── trace.ts
 └── types.ts
 runtime/test/contracts/earendil-harness/
-├── adapter.ts
+├── factory.ts
 ├── cases.ts
 ├── service-boundary-cases.ts
 ├── replay-cases.ts
@@ -34,47 +34,44 @@ The future implementation should place fixture code under tests or a non-shippin
 
 ## API shape
 
-The fixture factory mirrors `AgentHarness.create()`:
+The fixture implements the exported public `AgentHarness` surface. Because the concrete class has private members and a private constructor, a separate implementation cannot be nominally assigned to `AgentHarness`. The test type is therefore derived mechanically with `Pick`/`Omit`; no methods or results are restated:
 
 ```typescript
-interface HarnessUnderTestFactory {
-  name: string;
-  capabilities: HarnessCapabilities;
-  create(options: AgentHarnessOptions): Promise<{
-    harness: AgentHarnessLike;
-    suspended: SuspendedOperation[];
-    controls: HarnessTestControls;
-  }>;
-}
+import {
+  AgentHarness,
+  type AgentHarnessOptions,
+  type SuspendedOperation,
+} from "@earendil-works/pi-agent-core";
+
+type AgentHarnessPublic = Pick<AgentHarness, keyof AgentHarness>;
+type RealCreateResult = Awaited<ReturnType<typeof AgentHarness.create>>;
+type HarnessCreateResult = Omit<RealCreateResult, "harness"> & {
+  harness: AgentHarnessPublic;
+};
+
+type CreateHarnessUnderTest = (
+  options: AgentHarnessOptions,
+) => Promise<HarnessCreateResult>;
+
+const realCreate: CreateHarnessUnderTest = (options) => AgentHarness.create(options);
 ```
 
-`AgentHarnessLike` is compile-checked against the public `AgentHarness`/`AgentLane` declaration. The test adapter may narrow unknown event payloads, but it cannot rename public methods or add Piclaw-only lifecycle methods.
+The real `AgentHarness.create` result is assignable to this factory result. The fixture implements exactly the selected version's mapped public surface and uses `AgentLane`, result unions, snapshots, actions, hooks and watchers without renaming them. A compile-time key/signature audit fails when Earendil changes that surface, and Piclaw updates rather than preserving the old shape. Test-only fault/release controls are held by the fixture factory outside the returned harness object.
 
-```typescript
-interface HarnessCapabilities {
-  restore: boolean;
-  events: boolean;
-  hooks: boolean;
-  watch: boolean;
-  lanes: boolean;
-  manualDrive: boolean;
-  deferred: boolean;
-}
-```
-
-A missing capability skips only cases the published real implementation cannot run. Required boundary cases cannot be marked passed by the fixture when the real implementation lacks them; the compatibility report labels them `unsupported`.
+A separate test support manifest may report which installed methods still throw `HarnessNotImplemented`. It is metadata for selecting/migrating Earendil versions, not an alternative harness interface. Required boundary cases cannot be marked passed by the fixture when the installed implementation is unsupported.
 
 ## Fixture internals
 
-The fixture uses installed Earendil code for:
+The fixture uses public installed Earendil code for:
 
 - `Session`;
 - `InMemorySessionRepo`/`InMemorySessionStorage`;
 - entry and record contracts;
-- `reduceLaneState()` and `validateRecordLog()`;
 - result/error types;
 - compaction/retry configuration types;
 - tool replay metadata.
+
+The installed private reducer implementation is source evidence for expected record semantics, not a fixture import. The fixture reconstructs only enough selected-version behaviour to drive the semantic cases through public session contracts; it must not become production recovery code.
 
 It supplies the unavailable execution driver:
 
@@ -119,34 +116,15 @@ The trace records action metadata, not secret payload values.
 
 ## Deterministic model
 
-The model driver consumes a scripted queue:
+The test model is a real Earendil `Models` implementation, preferably `createModels()` with the exported faux provider. Scripted responses are concrete `AssistantMessage` values and deferred steps use `DeferredHandle`; failures follow the `Models` stream/final-message contract rather than a Piclaw provider result union.
 
-```typescript
-type ModelStep =
-  | { type: "assistant"; content: ContentBlock[]; stopReason: StopReason; usage?: Usage }
-  | { type: "throw"; code: string; message: string }
-  | { type: "defer"; handle: DeferredHandle }
-  | { type: "wait"; token: string };
-```
-
-Tests explicitly release `wait` tokens to create races. Generated message IDs, timestamps and usage values come from injected deterministic sources.
-
-The real-harness adapter uses a fake `Models`/stream function that presents the same script. Contract cases do not inspect fixture model internals.
+Tests hold/release provider streams through test-only controls outside `Models` to create races. Generated message IDs, timestamps and `Usage` values come from injected deterministic sources. Contract cases interact only through `AgentHarnessOptions.models`, `model`, `streamOptions` and harness methods.
 
 ## Deterministic tools
 
-Tools use the reviewed `PiclawToolEffect` shape and expose an Earendil `HarnessTool` adapter.
+Each test tool is an Earendil `HarnessTool` or `AgentHarnessTool` directly. It returns `AgentToolResult`, throws on failure, receives Earendil's `AbortSignal` and optional update callback, and sets `replay` to `safe` or `never`.
 
-```typescript
-type ToolStep =
-  | { type: "return"; result: ToolResult }
-  | { type: "throw"; code: string; message: string }
-  | { type: "effect_then_throw"; effectKey: string; error: string }
-  | { type: "wait"; token: string; then: ToolStep }
-  | { type: "ignore_abort"; then: ToolStep };
-```
-
-The test trace stores tool call ID, name, replay policy, result status and effect key. Secret args/results are replaced by stable hashes.
+Test-only controls can delay completion, record an external effect before throwing, or ignore abort to exercise late results. Those controls are closures captured by the tool implementation; they are not part of the tool contract. The trace stores tool call ID, name, replay policy, result status and effect key. Secret arguments/results are replaced by stable hashes.
 
 ## Fault plan
 
@@ -166,19 +144,22 @@ interface FaultPlan {
 
 Named fault points include every session append, Piclaw acceptance/claim/settlement write, timeline commit, queue delivery, harness action and outbox delivery.
 
-A simulated crash discards in-memory actors, reopens both journals and continues through the same public adapters.
+A simulated crash discards in-memory actors, reopens Piclaw service state and the Earendil `SessionRepo`, then continues through the same public contracts.
 
 ## Shared contract runner
 
 ```typescript
 interface HarnessContractCase {
   id: string;
-  requires?: (keyof HarnessCapabilities)[];
-  run(factory: HarnessUnderTestFactory): Promise<ContractEvidence>;
+  run(createHarness: CreateHarnessUnderTest): Promise<ContractEvidence>;
 }
 
-async function runHarnessContract(factory: HarnessUnderTestFactory): Promise<CompatibilityReport>;
+async function runHarnessContract(
+  createHarness: CreateHarnessUnderTest,
+): Promise<VersionMigrationReport>;
 ```
+
+`ContractEvidence` and `VersionMigrationReport` are test-report DTOs only. They do not wrap or replace Earendil operation results.
 
 The runner is test-framework neutral. Bun tests register each case for:
 
@@ -211,7 +192,7 @@ The report contains:
 | HC-010 | Compaction | Manual/threshold/overflow reason and result entry remain consistent |
 | HC-011 | Retry | Attempts are consecutive and effective retry options change as specified |
 | HC-012 | Suspension | Missing identities are reported; resume requires them and keeps run ID |
-| HC-013 | Restore | Open operation reconstructs from bounded log through `reduceLaneState()` |
+| HC-013 | Restore | Open operation reconstructs through the selected version's public restore/recovery surface; the 0.84.1 fixture follows observed record semantics |
 | HC-014 | Corruption | Invalid log reasons are rejected, not repaired silently |
 | HC-015 | Lane isolation | Operations and queues do not cross named lanes |
 | HC-016 | Close | Close rejects new operations and disposes active resources once |
@@ -266,16 +247,16 @@ Fixture review rules:
 
 | ID | Fixture assumption | Evidence | Confidence | Failure response |
 |---|---|---|---|---|
-| EA-001 | `AgentHarness` public method names and result tags remain compatible | Installed `0.84.1` declarations | Medium | Compile adapter and emit compatibility diff |
-| EA-002 | Session entry/record protocol remains the durable recovery basis | Implemented `Session`, reducer and declaration comments | High for 0.84.1 | Version codec and migrate fixture logs |
-| EA-003 | `runId` remains stable across suspension/resume | `ResumeOutcome`, suspended operation declarations | Medium | Keep Piclaw operation correlation capable of run replacement history |
+| EA-001 | `AgentHarness` public method names and result tags may change | Direct-adoption policy | Expected churn | Update Piclaw and contract cases to the selected version; retain semantic product assertions |
+| EA-002 | Session entry/record protocol is the durable recovery evidence | Public `Session`; installed non-exported reducer implementation | High as 0.84.1 evidence | Update fixture to selected-version public restore/recovery semantics; no private production import |
+| EA-003 | `runId` behaviour across suspension/resume follows the selected version | `ResumeOutcome`, suspended operation declarations | Unknown at 0.84.1 runtime | Update Piclaw correlation and semantic expectations to observed selected-version behaviour |
 | EA-004 | `steer`/`followUp` queue records remain run-owned; `nextRun` lane-owned | Record union and reducer implementation | High for 0.84.1 | Update acceptance mapping and contract cases |
-| EA-005 | `peekAction`/`executeAction` expose one action at a time | Method names and `ActionInfo` declaration | Medium-low | Adapter can derive manual stepping from event/action API if semantics differ |
-| EA-006 | Events/watchers eventually expose enough ordering data to assign `eventSeq` | Declared unknown event listeners/watchers | Low | Boundary adapter assigns sequence at receipt and reconciles from durable log |
-| EA-007 | Abort durably appends intent before returning queued state | Record model and `AbortResult` declarations | Medium | Contract requires this or Piclaw adds an abort-intent adapter fence |
-| EA-008 | A real harness supports deterministic fake `Models` and tools | `AgentHarnessOptions` accepts `Models`, model and tools | Medium | Build provider adapter at stream boundary |
+| EA-005 | `peekAction`/`executeAction` expose one action at a time | Method names and `ActionInfo` declaration | Medium-low | Update the fixture to the selected direct action semantics; do not hide differences behind a Piclaw action type |
+| EA-006 | Events/watchers eventually expose enough ordering data to assign a projection receipt sequence | Declared unknown event listeners/watchers | Low | Piclaw projector assigns receipt sequence and reconciles authority from typed snapshots/durable log |
+| EA-007 | Abort durably appends intent before returning queued state | Record model and `AbortResult` declarations | Medium | Contract requires this; Piclaw's own cancellation fence remains outside the harness |
+| EA-008 | A real harness supports deterministic `Models` and `HarnessTool` implementations | `AgentHarnessOptions` accepts the exported types; pi-ai exports faux provider support | Medium-high | Contract suite supplies direct selected-version implementations; no parallel provider/tool type |
 | EA-009 | Session backend conformance remains exported | Package export map | High for 0.84.1 | Pin source/version and port suite if renamed |
-| EA-010 | Hook payload shapes are not stable yet | All hook events are `unknown` | High | Do not design Piclaw contracts around concrete hook payloads |
+| EA-010 | Hook payload shapes may change | All 0.84.1 hook events are `unknown` | Expected churn | Narrow the selected version directly and update Piclaw on change |
 
 ## Acceptance of the fixture design
 
@@ -286,5 +267,5 @@ Implementation may start only when:
 - upstream session backend conformance passes for its chosen backend;
 - every contract case names required capabilities and unsupported real-harness gaps;
 - at least one complete golden replay demonstrates crash/restart at every service settlement boundary;
-- replacing fixture with real harness changes only the factory/adapter, not cases or expected service invariants;
-- compatibility reports are committed or attached as review evidence for each Earendil upgrade.
+- within one selected Earendil version, replacing the fixture factory with `AgentHarness.create` changes only the factory supplied to cases; on version upgrades, fixture code and Earendil-specific assertions may change while Piclaw service invariants remain explicit;
+- version-migration reports record contract changes and Piclaw updates for each selected Earendil upgrade; source compatibility with earlier versions is not required.

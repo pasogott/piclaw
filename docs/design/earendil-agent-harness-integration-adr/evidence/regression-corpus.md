@@ -79,7 +79,7 @@ The archive is root-cause and regression evidence. Its implementation is not the
 - **Evidence:** `run-tool-ceiling.test.ts`, `session-manager.test.ts`, `run-agent-orchestrator.test.ts` empty-set restoration tests.
 - **Baseline status:** targeted owner-transfer and restoration guards exist.
 - **Violates:** INV-03, INV-09.
-- **Target prevention:** Earendil persists `active_tools_change`; the adapter applies owner-scoped policy commands and never restores state from another run/session.
+- **Target prevention:** Earendil persists `active_tools_change`; Piclaw uses direct `AgentLane.setActiveTools()` owner-fenced by its operation correlation and never restores state from another run/session.
 - **Contract scenario:** `tool_policy_owner_survives_session_replacement`.
 
 ### REG-006 — Protected recovery dead-ends or claims success without tools
@@ -266,7 +266,7 @@ The archive is root-cause and regression evidence. Its implementation is not the
 - **Evidence:** issue [#956](https://github.com/rcarmo/piclaw/issues/956); archive PR #957; rollback operational note.
 - **Baseline status:** stable baseline predates the durable mutation gateway, but the lesson applies to the new boundary.
 - **Violates:** INV-02, INV-03.
-- **Target prevention:** no ambient authority. Every command carries explicit operation/run/generation; adapter validates against current durable owner.
+- **Target prevention:** no ambient authority. Piclaw validates explicit operation/run/generation before calling the exact `AgentLane` method.
 - **Contract scenario:** `inherited_async_context_has_no_mutation_authority`.
 
 ### REG-023 — Scheduled agent output is delivered twice
