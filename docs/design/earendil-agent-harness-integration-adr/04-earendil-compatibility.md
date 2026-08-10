@@ -25,7 +25,9 @@ The survey must record exact package versions and source commits. [`docs/earendi
 
 ### Provisional compatibility fixture
 
-If the future harness cannot be imported, the assessment should specify a fixture that mirrors the expected Earendil package/module structure and names. The fixture must remain small and replaceable.
+The required fixture, deterministic driver/fault model, assumption ledger and parameterised contract cases are specified in [`evidence/compatibility-fixture-contract.md`](evidence/compatibility-fixture-contract.md).
+
+The installed harness cannot execute runs, so the assessment specifies a fixture that mirrors the Earendil package/module structure and names. The fixture remains small and replaceable.
 
 It should model only the lifecycle Piclaw needs:
 

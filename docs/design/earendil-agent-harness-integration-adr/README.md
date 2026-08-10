@@ -60,6 +60,7 @@ The assessment produces this single ADR, its evidence tables and a proposed cont
   - [Agent lifecycle regression corpus](evidence/regression-corpus.md)
   - [Piclaw effector inventory](evidence/effector-inventory.md)
   - [Target state, event and settlement model](evidence/target-state-model.md)
+  - [Compatibility fixture and shared contract suite](evidence/compatibility-fixture-contract.md)
   - [Earendil 0.84.1 harness surface](evidence/earendil-0.84.1-harness-surface.md)
 
 The index is the ADR decision record. Chapters hold the assessment and design analysis. The evidence directory holds registers, captures and replayable scenario descriptions. All files remain part of one ADR.
