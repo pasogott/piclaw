@@ -1,5 +1,7 @@
 # Acceptance plan and open questions
 
+Full capability/regression/assumption coverage is recorded in [`evidence/traceability-matrix.md`](evidence/traceability-matrix.md): 59 capabilities, 25 regressions and 10 Earendil assumptions all map to owners, mechanisms and planned tests.
+
 ## ADR acceptance criteria
 
 This ADR is complete only when it contains:
