@@ -12,3 +12,4 @@
 | E-008 | `archive/post-v2.13.2-fixes-20260810` | Candidate fixes and regression history | Preserved at `da47ca62f3c1e7e0d5e538cc250303eb8c9ca1f4`; inspect selectively |
 | E-009 | `/workspace/backups/piclaw-post-v2.13.2-fixes-20260810.bundle` | Verified archive backup | `git bundle verify` passed; complete history at `da47ca62f3c1e7e0d5e538cc250303eb8c9ca1f4` |
 | E-010 | Baseline pre-push `make ci-fast` on ADR-only commits | Release validation environment | Guard reached the baseline test suite but failed because the host injects `PICLAW_MCP_MEMENTO_TOKEN`; isolated `runtime/test/secure/mcp-keychain.test.ts` passes 8/8 with that variable unset and fails 1/8 with it inherited |
+| E-011 | `node_modules/@earendil-works/pi-agent-core/dist/harness/agent-harness.d.ts` | Installed Earendil harness surface at `0.84.1` | Located; detailed API and implementation survey pending |
