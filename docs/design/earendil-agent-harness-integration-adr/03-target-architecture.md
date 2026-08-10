@@ -1,5 +1,7 @@
 # Target architecture and replay model
 
+The reviewed Piclaw effector classification and target port sketches are in [`evidence/effector-inventory.md`](evidence/effector-inventory.md). Current orchestration modules remain evidence only; reuse requires a narrow owner-aware port, deterministic fake and fault-boundary contract.
+
 ## Required target invariants
 
 The assessment must test and refine these candidate invariants:

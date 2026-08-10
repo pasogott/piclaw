@@ -15,3 +15,4 @@
 | E-011 | [`earendil-0.84.1-harness-surface.md`](earendil-0.84.1-harness-surface.md) | Installed Earendil harness declarations, implementation, reducer and session contracts at `0.84.1` | Surveyed; execution methods are structural stubs, while reducer/session contracts are implemented |
 | E-012 | [`current-capability-matrix.md`](current-capability-matrix.md) | Piclaw v2.13.2 agent lifecycle inventory | Initial 59-capability ownership and evidence matrix complete; named coverage gaps retained |
 | E-013 | [`regression-corpus.md`](regression-corpus.md) | Baseline tests, issues, audits and post-v2.13.2 rollback campaign | 25 regressions mapped to 14 invariants and named contract scenarios |
+| E-014 | [`effector-inventory.md`](effector-inventory.md) | Piclaw v2.13.2 I/O, storage, session, tool, scheduler and projection surfaces | 35 surfaces classified as reusable, split, replace or reject; target ports and fake requirements defined |
