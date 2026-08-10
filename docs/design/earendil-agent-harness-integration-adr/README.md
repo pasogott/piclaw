@@ -1,8 +1,8 @@
 # ADR: Earendil-aligned agent harness integration
 
-Status: **Draft — assessment in progress; no architecture approved**
+Status: **Proposed — assessment complete; architecture awaiting Rui's decision**
 
-This ADR will define how Piclaw replaces or refactors its agentic loop to align with the future Earendil agent harness. The assessment phase changes no production code.
+This ADR proposes how Piclaw replaces its agentic loop with a service-plane coordinator around the future Earendil agent harness. The assessment changed documentation only.
 
 ## Decision record
 
@@ -12,9 +12,9 @@ This ADR will define how Piclaw replaces or refactors its agentic loop to align 
 | Assessment baseline | Piclaw `v2.13.2` |
 | Baseline commit | `0afd3ae645c423bed82deef80c343bcaa6f31d4d` |
 | Earendil packages | `pi-coding-agent`, `pi-agent-core`, `pi-ai` and installer-pinned `pi-tui` verified at exact `0.84.1` |
-| Document state | Evidence collection and design criteria |
+| Document state | Assessment complete; decision requested |
 | Production changes | None authorised |
-| Final decision | Open |
+| Final decision | Proposed: select the fixture-first Earendil integration described below |
 
 ## Problem
 
@@ -45,7 +45,7 @@ The assessment covers the complete lifecycle of agent work:
 9. SSE and web status projection;
 10. extension and add-on integration points.
 
-The assessment produces this single ADR, its evidence tables and a proposed contract suite. It may specify an Earendil compatibility fixture. It does not implement the runner, change persistence, replay archived fixes or deploy a new runtime.
+The assessment produced this ADR, its evidence tables and a proposed contract suite. It specifies an Earendil compatibility fixture because the installed execution harness is incomplete. It does not implement the runner, change persistence, replay archived fixes or deploy a new runtime.
 
 ## Chapters and evidence
 
@@ -67,6 +67,14 @@ The assessment produces this single ADR, its evidence tables and a proposed cont
 
 The index is the ADR decision record. Chapters hold the assessment and design analysis. The evidence directory holds registers, captures and replayable scenario descriptions. All files remain part of one ADR.
 
-## Decision
+## Proposed decision
 
-Open. Evidence collection must precede the architecture decision.
+Select the fixture-first architecture in [`evidence/alternatives-and-migration.md`](evidence/alternatives-and-migration.md):
+
+- Piclaw retains authenticated acceptance, canonical source order, operation identity, exact cancellation, timeline/media persistence, scheduler/delivery policy, terminal disposition, frontier and restart reconciliation.
+- Earendil owns transcript execution, model/tool lifecycle, execution compaction and execution recovery.
+- Piclaw imports no current agent orchestration into the replacement path; reviewed external actions move behind effector ports.
+- A test-only Earendil-shaped fixture and one shared contract suite precede real-harness integration.
+- Production remains on the v2.13.2 loop until the real harness and staged migration pass the documented gates.
+
+Rui's approval is required before M1 or any production implementation.

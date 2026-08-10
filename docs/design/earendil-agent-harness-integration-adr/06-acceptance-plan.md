@@ -88,13 +88,17 @@ The assessment passes when:
 
 ## Open questions
 
-- Where is the future Earendil harness source or design proposal, and which commit should this ADR target?
-- Which Earendil lifecycle types are expected to remain stable?
-- Does Earendil intend to expose recoverable run state or a restart token?
-- Does the harness own tool process groups, or only tool invocation protocol?
-- Which transcript events are durable, and who owns transcript persistence?
-- Can the real harness run against deterministic fake model and tool providers?
-- Which Piclaw persistence actions can form one SQLite transaction, and which require an outbox protocol?
-- Which existing modules pass the effector eligibility test without refactoring?
-- Which baseline behaviours should be deliberately removed rather than preserved?
-- What live shadow period and performance budget are required before cutover?
+The assessment resolves ownership and design questions that can be answered from the current baseline. Remaining questions are implementation gates tied to a future Earendil source and deployment policy.
+
+| Question | Current assessment position | Resolution gate |
+|---|---|---|
+| Which future Earendil source should production target? | Installed `0.84.1` declarations are the fixture compatibility target; its execution harness is incomplete. | Pin the first usable source commit in M0 and run the shared compatibility report. |
+| Which lifecycle types remain stable? | Session record/reducer contracts are implemented at `0.84.1`; execution methods/events are less certain. | Compile and run HC-001–HC-020 for every selected version. |
+| Does Earendil expose recoverable run state? | Declarations expose suspended operations, durable records and `resume`; installed restore/resume is not implemented. | HC-012/HC-013 on the selected real harness. |
+| Who owns tool process groups? | Piclaw tool effectors retain process tracking; Earendil owns invocation and supplies AbortSignal. | TP process-group and real-harness abort tests before M6. |
+| Who owns transcript persistence? | Earendil owns harness transcript/session records; Piclaw owns accepted sources, timeline and dispositions. | Session backend conformance and two-journal reconciliation tests. |
+| Can real harness use deterministic fake models/tools? | Options accept `Models`, model and tools; execution is unavailable in `0.84.1`. | HC suite against the selected real harness. |
+| Which Piclaw writes share one transaction? | Accepted-source, operation, timeline/media rows, disposition, frontier and outbox should share `messages.db`; otherwise use persisted `settling`. Earendil sessions stay separate. | Schema prototype and SP transaction/fault benchmark in M2. |
+| Which modules qualify as effectors? | Classified in `evidence/effector-inventory.md`; orchestration modules are rejected. | Per-port implementation review and import-boundary checks. |
+| Which baseline behaviours are removed? | Cursor authority, deferred JSON queue, chat-scoped abort/provenance, Piclaw recovery/compaction loop and direct scheduler agent delivery are migration targets. User-visible capabilities remain unless separately approved. | M0 ADR decision and per-capability implementation issues. |
+| What shadow/soak and resource budgets apply? | Metrics and gates are defined; numeric budgets need measured real-harness evidence. | Set numbers after M4 canary measurements and before M6/M7 approval. |

@@ -45,9 +45,7 @@ It should model only the lifecycle Piclaw needs:
 
 Every provisional symbol needs an assumption record:
 
-| Assumption ID | Fixture symbol or behaviour | Earendil evidence | Confidence | Change cost if wrong |
-|---|---|---|---|---|
-| EA-001 | To be populated | To be populated | Unresolved | To be assessed |
+The current assumption ledger is in [`evidence/compatibility-fixture-contract.md`](evidence/compatibility-fixture-contract.md) and its coverage status is summarised in [`evidence/traceability-matrix.md`](evidence/traceability-matrix.md). It contains ten versioned assumptions with confidence and failure responses.
 
 The fixture must import no current Piclaw orchestration code. It runs against fake effectors and deterministic model/tool drivers.
 
