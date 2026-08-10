@@ -56,6 +56,8 @@ The assessment produces this single ADR, its evidence tables and a proposed cont
 - [Alternatives and migration](05-alternatives-and-migration.md)
 - [Acceptance plan and open questions](06-acceptance-plan.md)
 - [Evidence register](evidence/README.md)
+  - [Piclaw v2.13.2 capability matrix](evidence/current-capability-matrix.md)
+  - [Earendil 0.84.1 harness surface](evidence/earendil-0.84.1-harness-surface.md)
 
 The index is the ADR decision record. Chapters hold the assessment and design analysis. The evidence directory holds registers, captures and replayable scenario descriptions. All files remain part of one ADR.
 

@@ -4,6 +4,8 @@
 
 ### API and package survey
 
+The installed `0.84.1` package survey is recorded in [`evidence/earendil-0.84.1-harness-surface.md`](evidence/earendil-0.84.1-harness-surface.md). It found implemented session contracts and a pure recovery reducer, but the published execution methods, queues, hooks, watchers, lanes and restore path are structural stubs that throw `HarnessNotImplemented`. The compatibility fixture is therefore required until a later Earendil version supplies the execution plane.
+
 Before choosing Piclaw interfaces, the assessment must inventory the pinned Earendil packages and any available future harness source, branch, proposal or example:
 
 - public package exports;
