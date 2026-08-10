@@ -11,7 +11,7 @@ This ADR will define how Piclaw replaces or refactors its agentic loop to align 
 | Decision owner | Rui Carmo |
 | Assessment baseline | Piclaw `v2.13.2` |
 | Baseline commit | `0afd3ae645c423bed82deef80c343bcaa6f31d4d` |
-| Earendil packages | Exact `0.84.1` pins, to be verified from the baseline package and installer |
+| Earendil packages | `pi-coding-agent`, `pi-agent-core`, `pi-ai` and installer-pinned `pi-tui` verified at exact `0.84.1` |
 | Document state | Evidence collection and design criteria |
 | Production changes | None authorised |
 | Final decision | Open |
