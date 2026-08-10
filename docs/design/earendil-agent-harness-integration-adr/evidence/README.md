@@ -16,3 +16,4 @@
 | E-012 | [`current-capability-matrix.md`](current-capability-matrix.md) | Piclaw v2.13.2 agent lifecycle inventory | Initial 59-capability ownership and evidence matrix complete; named coverage gaps retained |
 | E-013 | [`regression-corpus.md`](regression-corpus.md) | Baseline tests, issues, audits and post-v2.13.2 rollback campaign | 25 regressions mapped to 14 invariants and named contract scenarios |
 | E-014 | [`effector-inventory.md`](effector-inventory.md) | Piclaw v2.13.2 I/O, storage, session, tool, scheduler and projection surfaces | 35 surfaces classified as reusable, split, replace or reject; target ports and fake requirements defined |
+| E-015 | [`target-state-model.md`](target-state-model.md) | Proposed Piclaw service-plane and Earendil execution-plane integration | Identity hierarchy, accepted-source and operation models, terminal transaction, cancellation, restart reconciliation, replay and safety properties defined |
