@@ -247,8 +247,9 @@ describe("web agent streaming", () => {
       const clearDraftIndices = events.flatMap((event, index) => event.type === "agent_draft" && event.data?.text === "" ? [index] : []);
       const committedResponseIndex = events.findIndex((event) => event.type === "agent_response" && event.data?.data?.content === "I will inspect the workspace now.");
       const toolStartIndex = events.findIndex((event) => event.type === "agent_status" && event.data?.type === "tool_call" && event.data?.tool_name === "read");
-      expect(clearDraftIndices).toHaveLength(2);
-      expect(committedResponseIndex).toBeGreaterThan(clearDraftIndices.at(-1) ?? -1);
+      expect(clearDraftIndices).toHaveLength(1);
+      expect(committedResponseIndex).toBeLessThan(toolStartIndex);
+      expect(clearDraftIndices[0]).toBeLessThan(toolStartIndex);
       expect(toolStartIndex).toBeGreaterThan(committedResponseIndex);
     } finally {
       fixture.cleanup();
@@ -301,7 +302,7 @@ describe("web agent streaming", () => {
         kind: "tool_complete",
         draft_recovered: true,
       }));
-      expect(events.filter((event) => event.type === "agent_draft" && event.data?.text === "")).toHaveLength(1);
+      expect(events.filter((event) => event.type === "agent_draft" && event.data?.text === "")).toHaveLength(0);
     } finally {
       fixture.cleanup();
     }
