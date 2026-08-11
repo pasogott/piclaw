@@ -253,7 +253,50 @@ test("SSEClient disconnect invalidates a reconnect callback that was already que
     expect(queuedReconnect).not.toBeNull();
     client.disconnect();
     (queuedReconnect as unknown as () => void)();
+    client.connect();
+    client.reconnectIfNeeded();
+    client.forceReconnect();
     expect(instances).toHaveLength(1);
+  } finally {
+    globalThis.EventSource = OriginalEventSource;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
+test("SSEClient ignores a replaced reconnect timer from the same connection generation", () => {
+  const OriginalEventSource = globalThis.EventSource;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const instances: FakeEventSource[] = [];
+  const queued: Array<() => void> = [];
+
+  class FakeEventSource {
+    onopen: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    constructor(_url: string) {
+      instances.push(this);
+    }
+    addEventListener() {}
+    close() {}
+  }
+
+  globalThis.EventSource = FakeEventSource as any;
+  globalThis.setTimeout = ((callback: () => void) => {
+    queued.push(callback);
+    return queued.length as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
+
+  try {
+    const client = new SSEClient(() => {}, () => {});
+    client.scheduleReconnect();
+    client.scheduleReconnect();
+    queued[0]();
+    expect(instances).toHaveLength(0);
+    queued[1]();
+    expect(instances).toHaveLength(1);
+    client.disconnect();
   } finally {
     globalThis.EventSource = OriginalEventSource;
     globalThis.setTimeout = originalSetTimeout;
