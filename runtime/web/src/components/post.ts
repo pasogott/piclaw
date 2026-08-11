@@ -23,6 +23,7 @@ import {
     HIGHLIGHT_COLORS,
     persistHighlight,
     persistAside,
+    buildHighlightFromSelectionSnapshot,
     removeAnnotationAtIndex,
     subscribePostSelectionChanges,
     type PostHighlight,
@@ -1419,12 +1420,8 @@ export function Post({ post, onClick, onHashtagClick, onMessageRef, onScrollToMe
             console.warn('[post-highlight] No highlightPopup state — handler called with stale closure');
             return;
         }
-        const highlight: PostHighlight = {
-            type: 'highlight',
-            text: highlightPopup.text,
-            textOffset: highlightPopup.textOffset,
-            color,
-        };
+        const highlight = buildHighlightFromSelectionSnapshot(highlightPopup, color);
+        if (!highlight) return;
         // Clear popup and selection immediately
         setHighlightPopup(null);
         window.getSelection()?.removeAllRanges();

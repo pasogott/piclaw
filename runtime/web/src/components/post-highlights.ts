@@ -41,6 +41,20 @@ export const HIGHLIGHT_COLORS = [
 
 export const DEFAULT_HIGHLIGHT_COLOR = HIGHLIGHT_COLORS[0]!.value;
 
+export function buildHighlightFromSelectionSnapshot(
+  snapshot: { text: string; textOffset: number } | null | undefined,
+  color: string,
+): PostHighlight | null {
+  if (!snapshot || typeof snapshot.text !== 'string' || typeof snapshot.textOffset !== 'number') return null;
+  if (!snapshot.text) return null;
+  return {
+    type: 'highlight',
+    text: snapshot.text,
+    textOffset: snapshot.textOffset,
+    color,
+  };
+}
+
 // ── Read highlights from post data ──────────────────────────────
 
 export function extractHighlightsFromAnnotations(annotations: unknown[] | undefined | null): PostHighlight[] {
