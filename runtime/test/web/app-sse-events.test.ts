@@ -152,7 +152,7 @@ test('handleAppSseEvent routes status-panel widget events and clears finished pe
   expect(Array.from(state.getPendingPanelActions())).toEqual(['autoresearch:stop']);
 });
 
-test('handleAppSseEvent preserves preview panes during post-tool model phases', () => {
+test('handleAppSseEvent preserves snapshot-only preview panes without treating bounded text as authoritative', () => {
   const state = createDeps();
 
   handleAppSseEvent('agent_thought', {
@@ -177,8 +177,8 @@ test('handleAppSseEvent preserves preview panes during post-tool model phases', 
 
   expect(state.getAgentThoughtState()).toMatchObject({ text: 'reasoning before the tool', totalLines: 1 });
   expect(state.getAgentDraftState()).toMatchObject({ text: 'commentary before the tool', totalLines: 1 });
-  expect(state.deps.thoughtBufferRef.current).toBe('reasoning before the tool');
-  expect(state.deps.draftBufferRef.current).toBe('commentary before the tool');
+  expect(state.deps.thoughtBufferRef.current).toBe('');
+  expect(state.deps.draftBufferRef.current).toBe('');
   expect(state.getAgentStatusState()).toMatchObject({ phase: 'post_tool_model' });
 });
 
