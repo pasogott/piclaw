@@ -211,6 +211,14 @@ export function handleAppSseEvent(
     }
   };
 
+  const clearPreviewState = () => {
+    draftBufferRef.current = '';
+    thoughtBufferRef.current = '';
+    setAgentDraft({ text: '', totalLines: 0 });
+    setAgentPlan('');
+    setAgentThought({ text: '', totalLines: 0 });
+  };
+
   const { turnId, isCurrentChatEvent } = resolveSseEventRoutingContext(eventType, data, currentChatJid);
 
   if (isCurrentChatEvent) {
@@ -283,16 +291,10 @@ export function handleAppSseEvent(
     previewResyncGenerationRef.current = resyncGeneration;
     previewResyncPendingRef.current = true;
     dirtyPreviewResyncRefs.delete(previewResyncPendingRef);
-    draftBufferRef.current = '';
-    thoughtBufferRef.current = '';
     setAgentStatus(null);
-    setAgentDraft({ text: '', totalLines: 0 });
-    setAgentPlan('');
-    setAgentThought({ text: '', totalLines: 0 });
     setExtensionWorkingState({ message: null, indicator: null, visible: true });
     setPendingRequest(null);
     pendingRequestRef.current = null;
-    clearAgentRunState();
     if (isAppChatActivationRecent(currentChatJid)) {
       if (previewResyncGenerationRef.current === resyncGeneration) {
         previewResyncPendingRef.current = false;
@@ -303,17 +305,27 @@ export function handleAppSseEvent(
     const targetChatJid = currentChatJid;
     const applyStatusSnapshot = (response) => {
       if (activeChatJidRef.current !== targetChatJid) return;
-      if (!response?.data) return;
+      if (!response?.data) {
+        clearPreviewState();
+        clearAgentRunState();
+        return;
+      }
 
       const payload = response.data;
       if (payload.type === 'done' || payload.type === 'error') {
         // A terminal event may have landed while SSE was disconnected. The
         // connected handler already refreshes timeline/model state; refresh
         // context explicitly so session rotation completion is fully applied.
+        clearPreviewState();
+        clearAgentRunState();
         void refreshContextUsage();
         return;
       }
-      if (response.status !== 'active') return;
+      if (response.status !== 'active') {
+        clearPreviewState();
+        clearAgentRunState();
+        return;
+      }
       const activeTurn = readAgentTurnId(payload);
       if (activeTurn) setActiveTurn(activeTurn);
       setAgentStatus(payload);

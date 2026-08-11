@@ -576,13 +576,6 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
           last_event_at: now,
         });
         options.onDraftBuffer?.(draftBuffer, 0);
-        options.emitter.draft({
-          ...base,
-          text: "",
-          total_lines: 0,
-          kind: "draft",
-          mode: "replace",
-        });
         if (options.includeDraftFull?.()) {
           draftDeltaActive = true;
           options.emitter.draftDelta({

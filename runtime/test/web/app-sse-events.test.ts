@@ -276,7 +276,11 @@ test('handleAppSseEvent restores active agent status on reconnect', async () => 
     draft: { text: 'draft preview', totalLines: 3 },
   });
 
+  state.deps.draftBufferRef.current = 'visible draft during reconnect';
+  state.deps.setAgentDraft({ text: 'visible draft during reconnect', totalLines: 1 });
+
   handleAppSseEvent('connected', { app_asset_version: 'test' }, state.deps);
+  expect(state.getAgentDraftState()).toMatchObject({ text: 'visible draft during reconnect' });
   await Promise.resolve();
 
   expect(state.getAgentStatusState()).toEqual({
@@ -300,11 +304,16 @@ test('handleAppSseEvent applies terminal status context after reconnect', async 
     contextRefreshes += 1;
   };
 
+  state.deps.draftBufferRef.current = 'visible draft until terminal snapshot';
+  state.deps.setAgentDraft({ text: 'visible draft until terminal snapshot', totalLines: 1 });
+
   handleAppSseEvent('connected', { app_asset_version: 'test' }, state.deps);
+  expect(state.getAgentDraftState()).toMatchObject({ text: 'visible draft until terminal snapshot' });
   await Promise.resolve();
 
   expect(contextRefreshes).toBe(1);
   expect(state.getAgentStatusState()).toBeNull();
+  expect(state.getAgentDraftState()).toEqual({ text: '', totalLines: 0 });
 });
 
 test('handleAppSseEvent refetches preview state when updates race reconnect restore', async () => {
@@ -319,11 +328,16 @@ test('handleAppSseEvent refetches preview state when updates race reconnect rest
     return statusCalls === 1 ? firstStatusRequest.promise : secondStatusRequest.promise;
   };
 
+  state.deps.setAgentDraft({ text: 'stale draft', totalLines: 1 });
+  state.deps.setAgentThought({ text: 'stale thought', totalLines: 1 });
+
   handleAppSseEvent('connected', { app_asset_version: 'test' }, state.deps);
 
   expect(state.deps.previewResyncPendingRef.current).toBe(true);
-  expect(state.deps.draftBufferRef.current).toBe('');
-  expect(state.deps.thoughtBufferRef.current).toBe('');
+  expect(state.deps.draftBufferRef.current).toBe('stale draft');
+  expect(state.deps.thoughtBufferRef.current).toBe('stale thought');
+  expect(state.getAgentDraftState()).toMatchObject({ text: 'stale draft' });
+  expect(state.getAgentThoughtState()).toMatchObject({ text: 'stale thought' });
 
   handleAppSseEvent('agent_draft_delta', {
     chat_jid: 'chat:alpha',
@@ -413,7 +427,7 @@ test('handleAppSseEvent skips duplicate reconnect recovery during a fresh cold-o
   expect(agentStatusCalls).toBe(0);
   expect(timelineCalls).toBe(0);
   expect(bundleCalls).toBe(0);
-  expect(resetCalls).toEqual(['status', 'draft', 'plan', 'thought', 'pending', 'clear']);
+  expect(resetCalls).toEqual(['status', 'pending']);
 });
 
 test('handleAppSseEvent refreshes compaction status metadata even when title stays the same', () => {
