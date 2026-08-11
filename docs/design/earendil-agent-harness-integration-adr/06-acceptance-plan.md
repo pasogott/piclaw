@@ -14,16 +14,17 @@ This ADR is complete only when it contains:
 6. Piclaw service state/event/command model aligned with Harness v3 execution/storage semantics;
 7. Piclaw–Earendil ownership boundary;
 8. reviewed effector inventory;
-9. released Earendil API/source survey and Harness v3 design/type/runtime status survey;
-10. fixture design and assumption ledger, if needed;
-11. Piclaw service replay plus Harness v3 manual-drive/instrumented-storage design;
-12. failure, cancellation and restart semantics;
-13. alternatives with evidence;
-14. incremental migration sequence;
-15. compatibility and rollback strategy;
-16. contract and acceptance-test plan;
-17. unresolved questions and Earendil dependencies;
-18. traceability from every preserved capability and known bug to a target mechanism and test.
+9. complete future-effector specifications with interfaces, current-internal adapter maps, independent fake oracles, fault cases, relative effort, dependency order and documentation work packages;
+10. released Earendil API/source survey and Harness v3 design/type/runtime status survey;
+11. fixture design and assumption ledger, if needed;
+12. Piclaw service replay plus Harness v3 manual-drive/instrumented-storage design;
+13. failure, cancellation and restart semantics;
+14. alternatives with evidence;
+15. incremental migration sequence;
+16. compatibility and rollback strategy;
+17. contract and acceptance-test plan;
+18. unresolved questions and Earendil dependencies;
+19. traceability from every preserved capability and known bug to a target mechanism and test.
 
 ## Definition of done for the assessment
 
@@ -33,6 +34,8 @@ The assessment passes when:
 - every durable lifecycle mutation has one target owner;
 - every known bug maps to an invariant and regression scenario;
 - every target responsibility has one owner;
+- every Piclaw-owned future effector has a complete illustrative interface, bounded errors, idempotency rule, current-internal adapter source, independent fake and fault cases;
+- every Earendil-owned boundary names direct selected-version contracts and prohibits duplicate Piclaw wrappers;
 - the proposed machine runs without importing Piclaw orchestration;
 - golden scenarios replay deterministically;
 - the semantic suite runs against both the selected-version test implementation and real Earendil harness; source compatibility across Earendil upgrades is not required;
@@ -98,7 +101,7 @@ The assessment resolves ownership and design questions that can be answered from
 | Who owns tool process groups? | Harness v3 owns effect signals/tool invocation; Piclaw's `ExecutionEnv` implementation may retain host process tracking. | TP process-group and real-harness abort/close tests before M6. |
 | Who owns transcript persistence? | Harness v3 owns entries/registers/usage ledger; Piclaw owns accepted sources, timeline and service dispositions. | Selected backend conformance and two-domain reconciliation tests. |
 | Can real harness use deterministic fake models/tools? | Harness v3 types directly support generic contextual tools, `Models`, manual drive and instrumented storage. | HC suite against the selected real Harness v3 implementation. |
-| Which Piclaw writes share one transaction? | Accepted-source, operation, timeline/media rows, disposition, frontier and outbox should share `messages.db`; otherwise use persisted `settling`. Earendil sessions stay separate. | Schema prototype and SP transaction/fault benchmark in M2. |
-| Which modules qualify as effectors? | Classified in `evidence/effector-inventory.md`; orchestration modules are rejected. | Per-port implementation review and import-boundary checks. |
+| Which Piclaw writes share one transaction? | EF-S01 atomically accepts/claims service work. EF-S02 separately performs one terminal transaction across disposition, terminal timeline/media binding, source disposal, frontier, owner release and outbox. Both use `messages.db`; Earendil sessions stay separate. | Future logical-schema review and EF-S01/EF-S02 contract fault suites. |
+| Which modules qualify as effectors? | Classified in `evidence/effector-inventory.md`; nine implementable interfaces and their current-internal adapter sources are specified in `evidence/future-effector-specifications.md`; orchestration modules are rejected. | G-SHAPE, G-OWNER, G-CURRENT and per-interface contract review. |
 | Which baseline behaviours are removed? | Cursor authority, deferred JSON queue, chat-scoped abort/provenance, Piclaw recovery/compaction loop and direct scheduler agent delivery are migration targets. User-visible capabilities remain unless separately approved. | M0 ADR decision and per-capability implementation issues. |
 | What shadow/soak and resource budgets apply? | Metrics and gates are defined; numeric budgets need measured real-harness evidence. | Set numbers after M4 canary measurements and before M6/M7 approval. |

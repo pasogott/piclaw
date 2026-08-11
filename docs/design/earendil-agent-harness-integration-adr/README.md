@@ -14,8 +14,8 @@ This ADR proposes how Piclaw replaces its agentic loop with a service-plane coor
 | Earendil installed baseline | `pi-coding-agent`, `pi-agent-core`, `pi-ai` and installer-pinned `pi-tui` verified at exact `0.84.1` |
 | Earendil target design | Harness v3 `packages/agent/docs/harness.md` at `2a9b4ebc680053c64e31f635b0b22d5e22564001` (blob `9e38c1fab7ed77107952c1de850cdba987fff82c`) |
 | Earendil implementation watch | Draft PR `earendil-works/pi#7976`, type-contract slice at `69130ae34e91207249b262008eea3fb0ac3adf44` |
-| Document state | Assessment updated for Harness v3; decision requested |
-| Production changes | None authorised |
+| Document state | Assessment updated for Harness v3; future effector specifications added; decision requested |
+| Production changes | None authorised; documentation and illustrative interface examples only |
 | Final decision | Proposed: select direct Earendil adoption with a selected-version test implementation first |
 
 ## Problem
@@ -61,6 +61,7 @@ The assessment produced this ADR, its evidence tables and a proposed semantic co
   - [Piclaw v2.13.2 capability matrix](evidence/current-capability-matrix.md)
   - [Agent lifecycle regression corpus](evidence/regression-corpus.md)
   - [Piclaw effector inventory](evidence/effector-inventory.md)
+  - [Future effector specifications](evidence/future-effector-specifications.md)
   - [Earendil-native effector contracts](evidence/earendil-native-effector-contracts.md)
   - [Tool, environment and resource migration](evidence/tool-resource-migration.md)
   - [Earendil 0.84.1 adoption constraints](evidence/earendil-0.84.1-constraints.md)
@@ -86,4 +87,4 @@ Select the direct-adoption architecture in [`evidence/alternatives-and-migration
 - A test-only implementation of the selected Earendil public contracts and one semantic contract suite precede real-harness integration. Piclaw updates the fixture and integration when Earendil types change; backward source compatibility is not a goal.
 - Production remains on the v2.13.2 loop until the real harness and staged migration pass the documented gates.
 
-Rui's approval is required before M1 or any production implementation.
+Rui's approval is required before M1 or any production implementation. [`evidence/future-effector-specifications.md`](evidence/future-effector-specifications.md) is a documentation-only specification of contracts, fakes and later implementation slices; its TypeScript blocks are illustrative.

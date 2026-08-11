@@ -21,6 +21,9 @@ Result: **decision-ready with explicit post-approval implementation gates**.
 | Regressions/incidents | 25 |
 | Invariants | 14 |
 | Piclaw surfaces classified for effector reuse | 36 |
+| Future Piclaw-owned interfaces specified | 9 (`EF-S01`–`EF-S08`, `EF-H01`) |
+| Direct Earendil boundary specifications | 5 (`EB-01`–`EB-05`) |
+| Documentation work packages | 11 (`WP-0A`–`WP-3C`) |
 | Direct Earendil contract families detailed | 11: harness, operation result/error, action/snapshot, storage/session, model/credential, tool, environment, resource, compaction/retry, events/hooks, telemetry |
 | Harness contract cases | 20 |
 | Piclaw boundary contract cases | 20 |
@@ -37,6 +40,7 @@ Result: **decision-ready with explicit post-approval implementation gates**.
 | Existing functionality captured systematically | `current-capability-matrix.md` | Pass; named evidence-strength gaps retained |
 | Known defects treated as specification | `regression-corpus.md` | Pass |
 | Every durable responsibility has a target owner | capability and traceability matrices | Pass |
+| Future effectors are implementable over current internals | `future-effector-specifications.md` gives complete illustrative types, adapter source maps, fakes, fault cases, effort and dependencies | Pass as documentation; no code authorised |
 | No reuse of current Piclaw orchestration | effector classification rejects agent pool, process-chat/recovery/compaction orchestration | Pass as design constraint; implementation boundary test is an M1 gate |
 | Earendil structure adopted early | released 0.84.1 contracts audited; authoritative Harness v3 design and draft type slice pinned and adopted as target | Pass |
 | Parallel execution abstractions removed | `direct-type-audit.md` separates Earendil-owned from Piclaw service-owned types | Pass |
@@ -80,7 +84,7 @@ An independent review should challenge:
 
 ## Post-approval gates
 
-These are implementation evidence, not missing assessment prose:
+The future-effector specification is documentation only. Its TypeScript blocks are illustrative and its work packages organise later design/implementation reviews. These are implementation evidence, not missing assessment prose:
 
 - implement the selected-version fixture and semantic suite in M1;
 - prototype/benchmark the Piclaw operation schema in M2;

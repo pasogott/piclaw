@@ -53,33 +53,23 @@ The detailed direct-import design is in [`earendil-native-effector-contracts.md`
 
 Piclaw-specific ports exist only for responsibilities outside Earendil. They use Earendil's exported generic `Result` and `TaggedError` utilities rather than a second result convention.
 
-```typescript
-import type { Result } from "@earendil-works/pi-agent-core";
+The implementable interface set is specified in [`future-effector-specifications.md`](future-effector-specifications.md):
 
-interface AcceptedSourceStore {
-  accept(request: AcceptSource): Promise<Result<AcceptValue, AcceptError>>;
-  claimNext(chatJid: string, expectedFrontier: number): Promise<Result<ClaimValue, ClaimError>>;
-  appendIntent(request: AppendOperationIntent): Promise<Result<AppendIntentValue, AppendIntentError>>;
-  settle(request: SettleOperation): Promise<Result<SettleValue, SettleError>>;
-  reconcile(chatJid: string): Promise<Result<PiclawOperationSnapshot, ReconcileError>>;
-}
+| ID | Interface | Responsibility |
+|---|---|---|
+| EF-S01 | `ServiceWorkStore` | Accepted sources, owner/version, cancellation and harness correlation |
+| EF-S02 | `TerminalSettlementStore` | Atomic service terminal transaction |
+| EF-S03 | `TimelineDraftStore` | Non-terminal drafts and service notices |
+| EF-S04 | `OperationMediaStore` | Media storage and operation binding |
+| EF-S05 | `ServiceOutboxStore` | Durable post-commit intent and lease state |
+| EF-S06 | `DeliveryDriver` | One external delivery attempt and certainty result |
+| EF-S07 | `ScheduledRunStore` | Scheduled occurrence, lease, result and next occurrence |
+| EF-S08 | `AgentProjectionSink` | Already narrowed/redacted web projection transport |
+| EF-H01 | `ExecutionContextResolver` | Piclaw routing to direct Earendil `ExecutionEnv` values |
 
-interface TimelinePort {
-  commitTerminal(request: CommitTerminalMessage): Promise<Result<CommitTerminalValue, TimelineError>>;
-  commitIntermediate(request: CommitIntermediateMessage): Promise<Result<CommitIntermediateValue, TimelineError>>;
-  readOperationArtifacts(operationId: string): Promise<Result<OperationArtifacts, TimelineError>>;
-}
+All mutations carry Piclaw `operationId` where applicable, accepted-source sequence, expected operation version, idempotency key, request hash, redaction class and provenance.
 
-interface DeliveryOutbox {
-  enqueue(request: DeliveryIntent): Promise<Result<DeliveryEnqueueValue, DeliveryError>>;
-  claimNext(): Promise<Result<DeliveryClaim | null, DeliveryError>>;
-  complete(request: CompleteDelivery): Promise<Result<void, DeliveryError>>;
-}
-```
-
-All mutations carry Piclaw `operationId`, accepted-source sequence, expected operation version, idempotency key, redaction class and provenance.
-
-`settle()` atomically persists terminal disposition, consumes source intents, advances the frontier, releases ownership and appends successor/wake outbox records. Timeline terminal persistence belongs in the same SQLite transaction where the selected schema permits it; otherwise `settle()` uses a persisted pending-terminal/outbox protocol and never treats an in-memory callback as completion.
+`TerminalSettlementStore.commitTerminal()` is the only Piclaw terminal mutation. In one SQLite transaction it persists the immutable disposition and terminal timeline/media row, consumes or disposes claimed sources, advances the frontier, releases ownership and appends successor, delivery and maintenance outbox records. Intermediate timeline writes cannot settle an operation.
 
 ### Earendil harness contract
 
@@ -111,16 +101,9 @@ Target tools are Harness v3 `AgentHarnessTool<TContext>` directly, with `AgentTo
 
 Prefer Earendil's public `createReadTool`, `createWriteTool`, `createEditTool` and `createBashTool`. Piclaw-specific tools retain Earendil's execute signature, `AgentToolResult`, update callback, execution mode and terminate semantics.
 
-### Projection port
+### Projection boundary
 
-```typescript
-interface AgentProjectionPort {
-  apply(event: CorrelatedHarnessEvent): Promise<void>;
-  complete(disposition: PiclawDisposition): Promise<void>;
-}
-```
-
-The projector accepts only events matching `(chatJid, operationId, runId, generation)` and a monotonic event sequence. It emits allowlisted SSE/status fields and never accepts raw tool arguments/results by default.
+A future projection coordinator narrows selected Earendil snapshots/events, verifies `(chatJid, operationId, runId, generation, receiptSeq)`, and builds allowlisted Piclaw DTOs. The Piclaw-owned `AgentProjectionSink` only transports those DTOs. Raw tool arguments/results are excluded by default.
 
 ## Fake requirements
 
@@ -134,7 +117,7 @@ Each port gets an in-memory deterministic fake with:
 - crash snapshot and restore;
 - payload redaction assertions.
 
-The fake accepted-source store must use the same Piclaw service transition model as the SQLite implementation, but not the same implementation code. The selected-version Harness v3 fixture should use that version's public Memory `Storage`/`Session` and instrumented commit decorator; it must not import Piclaw's existing agent orchestration.
+The fake accepted-source and terminal-settlement stores must implement the same semantic model as the SQLite adapters without sharing their implementation code. The selected-version Harness v3 fixture should use that version's public Memory `Storage`/`Session` and instrumented commit decorator; it must not import Piclaw's existing agent orchestration.
 
 ## Tool replay policy
 
@@ -150,6 +133,6 @@ Initial classes:
 
 A restored Harness v3 tool in `effect_pending` is replayed only when both persisted and current declarations are `safe`; otherwise Earendil settles an interrupted result under the reserved ID. Piclaw does not replay it independently.
 
-## Migration rule
+## Preparation rule
 
-No current module is reused merely because it has tests. Reuse requires the narrow target port, explicit owner identity, deterministic fake and fault-boundary contract. Orchestration modules remain evidence until their last required external effect has moved behind a port.
+No current module is selected merely because it has tests. An adapter specification requires a narrow target port, explicit owner identity, deterministic fake and fault-boundary contract. Current orchestration modules remain behavioural evidence; these specifications do not change their callers or authority.
