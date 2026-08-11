@@ -3,8 +3,8 @@ import { applyMetersFromEvent } from './meters.js';
 import {
   applyDraftDeltaBuffer,
   applyThoughtDeltaBuffer,
-  buildCollapsedAgentPreviewState,
-  buildExpandedAgentPreviewState,
+  buildAuthoritativeAgentPreviewState,
+  mergeAgentPreviewSnapshot,
   resolveAgentPlanText,
 } from './app-agent-previews.js';
 import {
@@ -200,6 +200,17 @@ export function handleAppSseEvent(
     openEditor,
   } = deps;
 
+  const flushAuthoritativePreviews = () => {
+    if (draftBufferRef.current) {
+      const fullText = draftBufferRef.current;
+      setAgentDraft((previous) => buildAuthoritativeAgentPreviewState(fullText, previous));
+    }
+    if (thoughtBufferRef.current) {
+      const fullText = thoughtBufferRef.current;
+      setAgentThought((previous) => buildAuthoritativeAgentPreviewState(fullText, previous));
+    }
+  };
+
   const { turnId, isCurrentChatEvent } = resolveSseEventRoutingContext(eventType, data, currentChatJid);
 
   if (isCurrentChatEvent) {
@@ -374,6 +385,7 @@ export function handleAppSseEvent(
       if (shouldIgnoreMismatchedTurn(turnId, currentTurnIdRef.current)) {
         return;
       }
+      flushAuthoritativePreviews();
       if (data.type === 'done') {
         notifyForFinalResponse(turnId || currentTurnIdRef.current);
         if (isMainTimelineView(viewStateRef.current)) {
@@ -479,14 +491,10 @@ export function handleAppSseEvent(
     noteAgentActivity({ running: true, clearSilence: true });
     draftBufferRef.current = applyDraftDeltaBuffer(draftBufferRef.current, data);
     const now = Date.now();
-    if (!draftThrottleRef.current || now - draftThrottleRef.current >= 100) {
+    if (data.reset || !draftThrottleRef.current || now - draftThrottleRef.current >= 100) {
       draftThrottleRef.current = now;
       const fullText = draftBufferRef.current;
-      if (draftExpandedRef.current) {
-        setAgentDraft((prev) => buildExpandedAgentPreviewState(fullText, prev));
-      } else {
-        setAgentDraft(buildCollapsedAgentPreviewState(fullText, null));
-      }
+      setAgentDraft((previous) => buildAuthoritativeAgentPreviewState(fullText, previous));
     }
     return;
   }
@@ -510,8 +518,8 @@ export function handleAppSseEvent(
     if (data.kind === 'plan') {
       setAgentPlan((prev) => resolveAgentPlanText(prev, text, mode));
     } else if (!draftExpandedRef.current) {
-      draftBufferRef.current = text;
-      setAgentDraft(buildCollapsedAgentPreviewState(text, data.total_lines));
+      const fullText = draftBufferRef.current;
+      setAgentDraft((previous) => mergeAgentPreviewSnapshot(text, data.total_lines, fullText, previous));
     }
     return;
   }
@@ -531,10 +539,10 @@ export function handleAppSseEvent(
     noteAgentActivity({ running: true, clearSilence: true });
     thoughtBufferRef.current = applyThoughtDeltaBuffer(thoughtBufferRef.current, data);
     const now = Date.now();
-    if (thoughtExpandedRef.current && (!thoughtThrottleRef.current || now - thoughtThrottleRef.current >= 100)) {
+    if (data.reset || !thoughtThrottleRef.current || now - thoughtThrottleRef.current >= 100) {
       thoughtThrottleRef.current = now;
       const fullText = thoughtBufferRef.current;
-      setAgentThought((prev) => buildExpandedAgentPreviewState(fullText, prev));
+      setAgentThought((previous) => buildAuthoritativeAgentPreviewState(fullText, previous));
     }
     return;
   }
@@ -554,8 +562,8 @@ export function handleAppSseEvent(
     noteAgentActivity({ running: true, clearSilence: true });
     const text = data.text || '';
     if (!thoughtExpandedRef.current) {
-      thoughtBufferRef.current = text;
-      setAgentThought(buildCollapsedAgentPreviewState(text, data.total_lines));
+      const fullText = thoughtBufferRef.current;
+      setAgentThought((previous) => mergeAgentPreviewSnapshot(text, data.total_lines, fullText, previous));
     }
     return;
   }
@@ -639,6 +647,7 @@ export function handleAppSseEvent(
   const onMainTimeline = isMainTimelineView(viewStateRef.current);
   if (eventType === 'agent_response') {
     if (!isCurrentChatEvent) return;
+    flushAuthoritativePreviews();
     setExtensionWorkingState({ message: null, indicator: null, visible: true });
     removeStalledPost();
     lastAgentResponseRef.current = {

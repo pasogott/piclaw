@@ -27,6 +27,37 @@ export function buildExpandedAgentPreviewState(fullText: string, previousState: 
   };
 }
 
+export function buildAuthoritativeAgentPreviewState(
+  fullText: string,
+  previousState: AgentPreviewState | null | undefined,
+  options: { previewText?: string; totalLines?: unknown } = {},
+): AgentPreviewState {
+  const inferredTotalLines = estimatePreviewLines(fullText);
+  const explicitTotalLines = Number.isFinite(options.totalLines as number)
+    ? Number(options.totalLines)
+    : 0;
+  return {
+    text: options.previewText ?? previousState?.text ?? '',
+    totalLines: Math.max(inferredTotalLines, explicitTotalLines),
+    fullText,
+  };
+}
+
+export function mergeAgentPreviewSnapshot(
+  previewText: string,
+  explicitTotalLines: unknown,
+  authoritativeFullText: string,
+  previousState: AgentPreviewState | null | undefined,
+): AgentPreviewState {
+  if (!authoritativeFullText) {
+    return buildCollapsedAgentPreviewState(previewText, explicitTotalLines);
+  }
+  return buildAuthoritativeAgentPreviewState(authoritativeFullText, previousState, {
+    previewText,
+    totalLines: explicitTotalLines,
+  });
+}
+
 export function resolveAgentPlanText(currentPlan: string | null | undefined, text: string, mode: unknown): string {
   return mode === 'replace' ? text : `${currentPlan || ''}${text}`;
 }
