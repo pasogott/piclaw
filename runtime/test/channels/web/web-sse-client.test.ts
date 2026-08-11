@@ -71,6 +71,258 @@ test("SSEClient connects to a chat-scoped SSE stream when chatJid is provided", 
   }
 });
 
+test("SSEClient disposal fences delayed stale callbacks across an A-to-B-to-A remount", () => {
+  const OriginalEventSource = globalThis.EventSource;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const instances: FakeEventSource[] = [];
+  const timers = new Map<number, () => void>();
+  let timerSerial = 0;
+
+  class FakeEventSource {
+    onopen: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    listeners = new Map<string, Array<(event: { data: string }) => void>>();
+    closed = false;
+    constructor(readonly url: string) {
+      instances.push(this);
+    }
+    addEventListener(event: string, listener: (event: { data: string }) => void) {
+      const current = this.listeners.get(event) ?? [];
+      current.push(listener);
+      this.listeners.set(event, current);
+    }
+    emit(event: string, data: unknown = {}) {
+      for (const listener of this.listeners.get(event) ?? []) listener({ data: JSON.stringify(data) });
+    }
+    close() {
+      this.closed = true;
+    }
+  }
+
+  globalThis.EventSource = FakeEventSource as any;
+  globalThis.setTimeout = ((callback: () => void) => {
+    const id = ++timerSerial;
+    timers.set(id, callback);
+    return id as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((id: ReturnType<typeof setTimeout>) => {
+    timers.delete(Number(id));
+  }) as typeof clearTimeout;
+
+  try {
+    const applied: Array<{ type: string; data: unknown }> = [];
+    const collect = (type: string, data: unknown) => applied.push({ type, data });
+
+    const firstA = new SSEClient(collect, () => {}, { chatJid: "web:a" });
+    firstA.connect();
+    const staleA = instances[0];
+    const delayedError = staleA.onerror!;
+    staleA.onopen?.();
+    firstA.disconnect();
+
+    const mountB = new SSEClient(collect, () => {}, { chatJid: "web:b" });
+    mountB.connect();
+    mountB.disconnect();
+
+    const currentA = new SSEClient(collect, () => {}, { chatJid: "web:a" });
+    currentA.connect();
+    const authoritativeA = instances[2];
+    authoritativeA.onopen?.();
+
+    delayedError();
+    for (const callback of [...timers.values()]) callback();
+
+    staleA.emit("agent_status", { operation_id: "stale" });
+    authoritativeA.emit("agent_status", { operation_id: "current" });
+    for (const source of instances.slice(3)) source.emit("agent_status", { operation_id: "resurrected" });
+
+    expect(instances.map(source => source.url)).toEqual([
+      "/sse/stream?chat_jid=web%3Aa",
+      "/sse/stream?chat_jid=web%3Ab",
+      "/sse/stream?chat_jid=web%3Aa",
+    ]);
+    expect(timers.size).toBe(0);
+    expect(applied).toEqual([{ type: "agent_status", data: { operation_id: "current" } }]);
+    currentA.disconnect();
+  } finally {
+    globalThis.EventSource = OriginalEventSource;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
+test("SSEClient current-source errors reconnect once and ignore later callbacks from the failed source", () => {
+  const OriginalEventSource = globalThis.EventSource;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const instances: FakeEventSource[] = [];
+  const timers = new Map<number, () => void>();
+  let timerSerial = 0;
+
+  class FakeEventSource {
+    onopen: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    listeners = new Map<string, Array<(event: { data: string }) => void>>();
+    closeCalls = 0;
+    constructor(_url: string) {
+      instances.push(this);
+    }
+    addEventListener(event: string, listener: (event: { data: string }) => void) {
+      const current = this.listeners.get(event) ?? [];
+      current.push(listener);
+      this.listeners.set(event, current);
+    }
+    emit(event: string, data: unknown = {}) {
+      for (const listener of this.listeners.get(event) ?? []) listener({ data: JSON.stringify(data) });
+    }
+    close() {
+      this.closeCalls += 1;
+    }
+  }
+
+  globalThis.EventSource = FakeEventSource as any;
+  globalThis.setTimeout = ((callback: () => void) => {
+    const id = ++timerSerial;
+    timers.set(id, callback);
+    return id as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((id: ReturnType<typeof setTimeout>) => {
+    timers.delete(Number(id));
+  }) as typeof clearTimeout;
+
+  try {
+    const statuses: string[] = [];
+    const applied: string[] = [];
+    const client = new SSEClient((type) => applied.push(type), status => statuses.push(status), { chatJid: "web:a" });
+    client.connect();
+    const failed = instances[0];
+    failed.onopen?.();
+    failed.onerror?.();
+    failed.onerror?.();
+
+    expect(failed.closeCalls).toBe(1);
+    expect(statuses).toEqual(["connected", "disconnected"]);
+    expect(client.reconnectAttempts).toBe(1);
+    expect(timers.size).toBe(1);
+
+    for (const callback of [...timers.values()]) callback();
+    const replacement = instances[1];
+    replacement.onopen?.();
+    failed.emit("agent_status", {});
+    replacement.emit("agent_status", {});
+
+    expect(instances).toHaveLength(2);
+    expect(applied).toEqual(["agent_status"]);
+    client.disconnect();
+  } finally {
+    globalThis.EventSource = OriginalEventSource;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
+test("SSEClient disconnect invalidates a reconnect callback that was already queued", () => {
+  const OriginalEventSource = globalThis.EventSource;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const instances: FakeEventSource[] = [];
+  let queuedReconnect: (() => void) | null = null;
+
+  class FakeEventSource {
+    onopen: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    constructor(_url: string) {
+      instances.push(this);
+    }
+    addEventListener() {}
+    close() {}
+  }
+
+  globalThis.EventSource = FakeEventSource as any;
+  globalThis.setTimeout = ((callback: () => void) => {
+    queuedReconnect = callback;
+    return 1 as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
+
+  try {
+    const client = new SSEClient(() => {}, () => {});
+    client.connect();
+    instances[0].onerror?.();
+    expect(queuedReconnect).not.toBeNull();
+    client.disconnect();
+    (queuedReconnect as unknown as () => void)();
+    expect(instances).toHaveLength(1);
+  } finally {
+    globalThis.EventSource = OriginalEventSource;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
+test("SSEClient forced reconnect fences the replaced source and opens one successor", () => {
+  const OriginalEventSource = globalThis.EventSource;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const instances: FakeEventSource[] = [];
+  let reconnect: (() => void) | null = null;
+
+  class FakeEventSource {
+    onopen: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    listeners = new Map<string, Array<(event: { data: string }) => void>>();
+    closeCalls = 0;
+    constructor(_url: string) {
+      instances.push(this);
+    }
+    addEventListener(event: string, listener: (event: { data: string }) => void) {
+      const current = this.listeners.get(event) ?? [];
+      current.push(listener);
+      this.listeners.set(event, current);
+    }
+    emit(event: string, data: unknown = {}) {
+      for (const listener of this.listeners.get(event) ?? []) listener({ data: JSON.stringify(data) });
+    }
+    close() {
+      this.closeCalls += 1;
+    }
+  }
+
+  globalThis.EventSource = FakeEventSource as any;
+  globalThis.setTimeout = ((callback: () => void) => {
+    reconnect = callback;
+    return 1 as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
+
+  try {
+    const statuses: string[] = [];
+    const applied: string[] = [];
+    const client = new SSEClient(type => applied.push(type), status => statuses.push(status));
+    client.connect();
+    const replaced = instances[0];
+    replaced.onopen?.();
+    client.forceReconnect();
+    replaced.onerror?.();
+    (reconnect as unknown as () => void)();
+    const successor = instances[1];
+    successor.onopen?.();
+    replaced.emit("agent_status", {});
+    successor.emit("agent_status", {});
+
+    expect(replaced.closeCalls).toBe(1);
+    expect(instances).toHaveLength(2);
+    expect(statuses).toEqual(["connected", "disconnected", "connected"]);
+    expect(applied).toEqual(["agent_status"]);
+    client.disconnect();
+  } finally {
+    globalThis.EventSource = OriginalEventSource;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
 test("SSEClient no longer registers stale agent_request listeners", () => {
   const OriginalEventSource = globalThis.EventSource;
   const seenEvents: string[] = [];
