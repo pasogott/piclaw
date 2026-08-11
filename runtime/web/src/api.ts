@@ -1063,6 +1063,8 @@ export class SSEClient {
     lastActivityAt: number;
     staleCheckTimer: ReturnType<typeof setInterval> | null;
     staleThresholdMs: number;
+    connectionGeneration: number;
+    disposed: boolean;
 
     constructor(onEvent, onStatusChange, options: ApiOptions = {}) {
         this.onEvent = onEvent;
@@ -1078,6 +1080,14 @@ export class SSEClient {
         this.lastActivityAt = 0;
         this.staleCheckTimer = null;
         this.staleThresholdMs = 70000;
+        this.connectionGeneration = 0;
+        this.disposed = false;
+    }
+
+    isAuthoritativeConnection(source: EventSource, generation: number) {
+        return !this.disposed
+            && this.connectionGeneration === generation
+            && this.eventSource === source;
     }
 
     markActivity() {
@@ -1091,10 +1101,10 @@ export class SSEClient {
         }
     }
 
-    startStaleMonitor() {
+    startStaleMonitor(source: EventSource, generation: number) {
         this.clearStaleMonitor();
         this.staleCheckTimer = setInterval(() => {
-            if (this.status !== 'connected') return;
+            if (!this.isAuthoritativeConnection(source, generation) || this.status !== 'connected') return;
             if (!this.lastActivityAt) return;
             if (Date.now() - this.lastActivityAt <= this.staleThresholdMs) return;
             console.warn('SSE connection went stale; forcing reconnect');
@@ -1103,11 +1113,12 @@ export class SSEClient {
     }
 
     forceReconnect() {
+        if (this.disposed) return;
         this.connecting = false;
-        if (this.eventSource) {
-            this.eventSource.close();
-            this.eventSource = null;
-        }
+        this.connectionGeneration += 1;
+        const source = this.eventSource;
+        this.eventSource = null;
+        source?.close();
         this.clearStaleMonitor();
         this.status = 'disconnected';
         this.onStatusChange('disconnected');
@@ -1116,37 +1127,50 @@ export class SSEClient {
     }
     
     connect() {
-        if (this.connecting) return;
+        if (this.disposed || this.connecting) return;
         if (this.eventSource && this.status === 'connected') return;
-        this.connecting = true;
-        if (this.eventSource) {
-            this.eventSource.close();
+        if (this.reconnectTimeout) {
+            clearTimeout(this.reconnectTimeout);
+            this.reconnectTimeout = null;
         }
+        this.connecting = true;
+        this.connectionGeneration += 1;
+        const generation = this.connectionGeneration;
+        const previousSource = this.eventSource;
+        this.eventSource = null;
+        previousSource?.close();
         this.clearStaleMonitor();
         
         const query = this.chatJid ? `?chat_jid=${encodeURIComponent(this.chatJid)}` : '';
-        this.eventSource = new EventSource(API_BASE + '/sse/stream' + query);
+        const source = new EventSource(API_BASE + '/sse/stream' + query);
+        this.eventSource = source;
 
         const bindJsonEvent = (eventType) => {
-            this.eventSource.addEventListener(eventType, (e) => {
+            source.addEventListener(eventType, (e) => {
+                if (!this.isAuthoritativeConnection(source, generation)) return;
                 this.markActivity();
                 this.onEvent(eventType, JSON.parse(e.data));
             });
         };
         
-        this.eventSource.onopen = () => {
+        source.onopen = () => {
+            if (!this.isAuthoritativeConnection(source, generation)) return;
             this.connecting = false;
             this.reconnectDelay = 1000;
             this.reconnectAttempts = 0;
             this.cooldownUntil = 0;
             this.status = 'connected';
             this.markActivity();
-            this.startStaleMonitor();
+            this.startStaleMonitor(source, generation);
             this.onStatusChange('connected');
         };
         
-        this.eventSource.onerror = () => {
+        source.onerror = () => {
+            if (!this.isAuthoritativeConnection(source, generation)) return;
             this.connecting = false;
+            this.connectionGeneration += 1;
+            this.eventSource = null;
+            source.close();
             this.clearStaleMonitor();
             this.status = 'disconnected';
             this.onStatusChange('disconnected');
@@ -1155,13 +1179,15 @@ export class SSEClient {
         };
         
         // Event handlers
-        this.eventSource.addEventListener('connected', () => {
+        source.addEventListener('connected', () => {
+            if (!this.isAuthoritativeConnection(source, generation)) return;
             this.markActivity();
             console.log('SSE connected');
             this.onEvent('connected', {});
         });
 
-        this.eventSource.addEventListener('heartbeat', () => {
+        source.addEventListener('heartbeat', () => {
+            if (!this.isAuthoritativeConnection(source, generation)) return;
             this.markActivity();
         });
         
@@ -1200,6 +1226,7 @@ export class SSEClient {
     }
     
     scheduleReconnect() {
+        if (this.disposed) return;
         if (this.reconnectTimeout) {
             clearTimeout(this.reconnectTimeout);
         }
@@ -1214,17 +1241,21 @@ export class SSEClient {
 
         const cooldownDelay = Math.max(this.cooldownUntil - now, 0);
         const delay = Math.max(this.reconnectDelay, cooldownDelay);
-        
-        this.reconnectTimeout = setTimeout(() => {
+        const generation = this.connectionGeneration;
+        const timeout = setTimeout(() => {
+            if (this.disposed || this.connectionGeneration !== generation || this.reconnectTimeout !== timeout) return;
+            this.reconnectTimeout = null;
             console.log('Reconnecting SSE...');
             this.connect();
         }, delay);
+        this.reconnectTimeout = timeout;
         
         // Exponential backoff, max 30 seconds
         this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
     }
 
     reconnectIfNeeded() {
+        if (this.disposed) return;
         const now = Date.now();
         if (this.status === 'connected') {
             if (this.lastActivityAt && now - this.lastActivityAt > this.staleThresholdMs) {
@@ -1241,16 +1272,19 @@ export class SSEClient {
     }
     
     disconnect() {
+        if (this.disposed) return;
+        this.disposed = true;
         this.connecting = false;
+        this.connectionGeneration += 1;
         this.clearStaleMonitor();
-        if (this.eventSource) {
-            this.eventSource.close();
-            this.eventSource = null;
-        }
+        const source = this.eventSource;
+        this.eventSource = null;
+        source?.close();
         if (this.reconnectTimeout) {
             clearTimeout(this.reconnectTimeout);
             this.reconnectTimeout = null;
         }
+        this.status = 'disconnected';
     }
 }
 
