@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { getSelectionInElement } from '../../web/src/components/post-highlights.ts';
+import { buildHighlightFromSelectionSnapshot, getSelectionInElement } from '../../web/src/components/post-highlights.ts';
 
 test('getSelectionInElement preserves multiline list selection while trimming only edge whitespace', () => {
   if (typeof document === 'undefined') return;
@@ -39,6 +39,25 @@ test('getSelectionInElement preserves multiline list selection while trimming on
   } finally {
     (window as any).getSelection = previousGetSelection;
     host.remove();
+  }
+});
+
+test('buildHighlightFromSelectionSnapshot survives live selection clearing before color click', () => {
+  const snapshot = { text: 'selected text', textOffset: 42 };
+  const previousGetSelection = typeof window !== 'undefined' ? window.getSelection : undefined;
+  if (typeof window !== 'undefined') {
+    (window as any).getSelection = () => ({ isCollapsed: true, rangeCount: 0, toString: () => '' });
+  }
+
+  try {
+    expect(buildHighlightFromSelectionSnapshot(snapshot, 'yellow')).toEqual({
+      type: 'highlight',
+      text: 'selected text',
+      textOffset: 42,
+      color: 'yellow',
+    });
+  } finally {
+    if (typeof window !== 'undefined') (window as any).getSelection = previousGetSelection;
   }
 });
 
