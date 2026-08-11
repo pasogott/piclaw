@@ -87,7 +87,7 @@
       "semanticReaderOccurrences": 67
     },
     "docsDeploy": {
-      "referencedNames": 122,
+      "referencedNames": 123,
       "directReaderNames": 16,
       "directReaderOccurrences": 32,
       "helperReaderNames": 0,
@@ -2617,6 +2617,22 @@
           "semanticReaders": 0,
           "files": [
             "skel/.pi/mcp.json.example"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
+      "name": "PICLAW_MCP_MEMENTO_TOKEN",
+      "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "docs/design/earendil-agent-harness-integration-adr/evidence/README.md",
+            "docs/design/earendil-agent-harness-integration-adr/evidence/quality-review.md"
           ],
           "readerFiles": []
         }
