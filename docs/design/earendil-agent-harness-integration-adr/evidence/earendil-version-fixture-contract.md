@@ -1,8 +1,8 @@
 # Selected-version Earendil fixture and semantic contract suite
 
-Status: required because the installed Earendil `0.84.1` execution harness is a structural preview whose run, queue, abort, lane, watcher and restore methods throw `HarnessNotImplemented`.
+Status: required while Harness v3 runtime/storage slices remain incomplete. Released `0.84.1` is a stub baseline; authoritative `harness.md` plus draft PR #7976 define the target design/type surface.
 
-The fixture implements the selected Earendil version's public declarations and uses its implemented session/reducer semantics. It does not imitate Piclaw's current agent loop or promise compatibility with another Earendil version.
+The fixture implements the selected Earendil version's public declarations and durable semantics. Released `0.84.1` fixture evidence may follow its v2 session/record model; the target fixture follows Harness v3 entries/registers/usage and manual effects as implementation slices land. It does not imitate Piclaw's current agent loop or promise compatibility with another Earendil version.
 
 ## Purpose
 
@@ -62,31 +62,26 @@ A separate test support manifest may report which installed methods still throw 
 
 ## Fixture internals
 
-The fixture uses public installed Earendil code for:
+For the Harness v3 target, the fixture uses the selected public type slice for:
 
-- `Session`;
-- `InMemorySessionRepo`/`InMemorySessionStorage`;
-- entry and record contracts;
-- result/error types;
-- compaction/retry configuration types;
-- tool replay metadata.
+- `Storage`, `Transaction`, `Entry`, typed registers and `UsageRow`;
+- `Session`, `SessionTree`, `SessionRepo` and Memory backend/conformance when available;
+- `AgentHarness`, `AgentLane`, operation results and `lane.lastResult`;
+- typed events, snapshots, hooks and manual actions/effects;
+- generic contextual tools, model contracts, compaction/retry and telemetry.
 
-The installed private reducer implementation is source evidence for expected record semantics, not a fixture import. The fixture reconstructs only enough selected-version behaviour to drive the semantic cases through public session contracts; it must not become production recovery code.
+The fixture supplies unavailable runtime slices through the selected public interfaces. An instrumented storage decorator records committed transactions for assertions; production authority remains current entries/registers/usage, not a test log. It implements enough target behaviour to drive semantic cases:
 
-It supplies the unavailable execution driver:
+1. atomically accept input plus `op.meta`/initial `op.state` and lane registers;
+2. commit provider/tool intent before dispatch;
+3. execute deterministic model/tool effects;
+4. atomically settle output, usage and next total state;
+5. consume queue IDs through `pending.entry` placement transactions;
+6. commit cancellation control before signal pull;
+7. terminate by deleting operation registers, clearing lane state and writing `lane.lastResult`;
+8. expose selected-version manual actions/effects and snapshot-first buffered watches.
 
-1. append `operation_started` before model execution;
-2. append provisioned initial messages;
-3. append `step_attempt` before each model/compaction/summary effect;
-4. execute a deterministic model effect;
-5. append assistant result entry;
-6. append `tool_started` before each tool effect;
-7. append tool results in assistant source order;
-8. consume durable steer/follow-up queue records according to queue mode;
-9. append `operation_finished` exactly once;
-10. expose manual actions matching `ActionInfo`.
-
-The fixture's transition decisions follow the declared Earendil record semantics and minimal agent-loop behaviour. Piclaw service acceptance, terminal settlement and delivery run in a separate reference implementation around it.
+Released `0.84.1` record/reducer code remains historical fixture evidence only. No new target case should require `operation_started`, `step_attempt`, `tool_started`, `operation_finished` or a recovery reducer. Piclaw service acceptance, terminal settlement and delivery run in a separate reference implementation around the fixture.
 
 ## Manual drive
 
@@ -98,19 +93,7 @@ await lane.executeAction();
 await lane.runToCompletion();
 ```
 
-Each `executeAction()` performs at most one declared action and appends its durable intent/result. This provides deterministic interleaving with Piclaw commands, faults, restart and cancellation.
-
-Supported action vocabulary matches `ActionInfo`:
-
-- append entry/record;
-- move lane/set fact;
-- try finish run/finish operation;
-- commit follow-up/consume queue item/apply pending write;
-- stream assistant;
-- execute tool;
-- fetch/cancel deferred;
-- hook;
-- sleep.
+Each `executeAction()` performs at most one selected-version effect/transition. This provides deterministic interleaving with Piclaw commands, faults, restart and cancellation. Harness v3 `ActionInfo` is intentionally generic (`kind`, description and details); the concrete effects boundary covers storage commits, model/tool/deferred effects, hooks and sleeps without freezing v2 action names.
 
 The trace records action metadata, not secret payload values.
 
@@ -138,11 +121,11 @@ interface FaultPlan {
     | "ack_then_crash"
     | "duplicate_result"
     | "delay_result"
-    | "corrupt_record";
+    | "corrupt_state";
 }
 ```
 
-Named fault points include every session append, Piclaw acceptance/claim/settlement write, timeline commit, queue delivery, harness action and outbox delivery.
+Named fault points include every Harness v3 storage transaction/effect boundary, Piclaw acceptance/claim/settlement write, timeline commit, queue delivery, manual action and outbox delivery.
 
 A simulated crash discards in-memory actors, reopens Piclaw service state and the Earendil `SessionRepo`, then continues through the same public contracts.
 
@@ -164,42 +147,43 @@ async function runHarnessContract(
 The runner is test-framework neutral. Bun tests register each case for:
 
 - `fixture`;
-- `installed-real` when supported;
-- a later selected Earendil package/source build.
+- released `0.84.1` only for supported baseline methods/negative capability evidence;
+- the pinned Harness v3 draft type/runtime source as slices become usable;
+- a later selected released or approved source build.
 
 The report contains:
 
 - pass/fail/unsupported per case;
-- normalised harness log;
+- normalised Harness v3 storage transactions and terminal current state;
 - normalised Piclaw service log;
-- command/effect trace;
+- selected action/effect trace;
 - semantic diff;
-- installed package/version/commit metadata.
+- installed package/version/commit/specification metadata.
 
 ## Harness-level cases
 
 | ID | Case | Required assertion |
 |---|---|---|
-| HC-001 | Simple prompt | One run start, initial user entry, assistant entry and one completed finish |
-| HC-002 | Tool prompt | Tool start precedes effect; result follows; final assistant settles once |
-| HC-003 | Parallel tools | Effects may complete out of order; persisted results follow source order |
-| HC-004 | Safe replay | Unresolved `safe` tool resumes/re-executes once according to protocol |
-| HC-005 | Never replay | Unresolved `never` tool is reported suspended/blocked and is not executed again |
-| HC-006 | Steer | Queue record belongs to active run and is consumed in defined order |
-| HC-007 | Follow-up | Follow-up remains run-owned and executes after current work |
-| HC-008 | Next run | Lane-level input is captured once by the next operation |
-| HC-009 | Abort | Abort request is durable; late model/tool result cannot create second finish |
-| HC-010 | Compaction | Manual/threshold/overflow reason and result entry remain consistent |
-| HC-011 | Retry | Attempts are consecutive and effective retry options change as specified |
-| HC-012 | Suspension | Missing identities are reported; resume requires them and keeps run ID |
-| HC-013 | Restore | Open operation reconstructs through the selected version's public restore/recovery surface; the 0.84.1 fixture follows observed record semantics |
-| HC-014 | Corruption | Invalid log reasons are rejected, not repaired silently |
-| HC-015 | Lane isolation | Operations and queues do not cross named lanes |
-| HC-016 | Close | Close rejects new operations and disposes active resources once |
-| HC-017 | Manual drive | One action per step and `runToCompletion` reaches same semantic terminal trace |
-| HC-018 | Hooks/events | Ordering and settlement barriers match selected real harness behaviour |
-| HC-019 | Usage | Usage records correlate to run, entry, attempt/tool and do not duplicate |
-| HC-020 | Deferred provider | Fetch/cancel and restart retain the same handle and outcome |
+| HC-001 | Simple prompt | Acceptance transaction precedes provider intent/effect; terminal transaction yields one result and `lane.lastResult` |
+| HC-002 | Tool prompt | Tool `effect_pending` commits before execution; result settlement and final run happen once |
+| HC-003 | Parallel tools | Effects may complete out of order; finalisation/result entries commit in source order |
+| HC-004 | Safe replay | Restored `effect_pending` tool re-executes only when persisted and current declarations are `safe` |
+| HC-005 | Never replay | Restored `never` tool settles interrupted under its reserved result ID and is not executed again |
+| HC-006 | Steer | `pending.entry` plus operation inbox owns active-operation steer until one placement transaction consumes it |
+| HC-007 | Follow-up | Follow-up remains operation-owned and executes after current work according to queue mode |
+| HC-008 | Next run | Lane-level `pendingNextRun` survives terminal cleanup and is captured once by a later operation |
+| HC-009 | Abort | Cancellation control commits before signal pull; late model/tool results cannot create a second terminal transaction |
+| HC-010 | Compaction | Manual/threshold/overflow structural state, preparation and result entry remain consistent |
+| HC-011 | Retry | Captured policy/options and attempt progression survive restore; effective retry options change as specified |
+| HC-012 | Suspension | Deferred/missing-identity/crash suspension reports exact current operation and resumes safely |
+| HC-013 | Restore | Five current-register reads plus bounded hydration reconstruct open state without history folding |
+| HC-014 | Corruption | Invalid current register/reference combinations are rejected, not repaired silently |
+| HC-015 | Lane isolation | Operations, configuration and queues do not cross named lanes |
+| HC-016 | Close | Close writes nothing, rejects new work, drains admitted commits and leaves open work resumable |
+| HC-017 | Manual drive | Manual and automatic drive produce identical durable state; one selected action/effect advances at a time |
+| HC-018 | Hooks/events | Typed hook ordering, durable settlement barriers and snapshot-buffer event ordering match the selected harness |
+| HC-019 | Usage | Every settled attempt has one `UsageRow`; totals equal ledger sum and do not duplicate |
+| HC-020 | Deferred provider | One poll per resume, exact handle lineage, cancel and restart retain the specified outcome |
 
 ## Piclaw boundary cases
 
@@ -214,7 +198,7 @@ These wrap the same harness factory with the Piclaw service reference model and 
 | PC-005 | Stale cancellation | Replacement run remains untouched |
 | PC-006 | Late completion after cancellation | One cancelled disposition; late output is observation only |
 | PC-007 | Terminal commit fault matrix | No frontier advance before durable terminal row; eventual one disposition |
-| PC-008 | Restart with open run | Journals reconcile without duplicate prompt/tool/delivery |
+| PC-008 | Restart with open run | Piclaw service log and Harness v3 current state/`lane.lastResult` reconcile without duplicate prompt/tool/delivery |
 | PC-009 | Pending steer restart | FIFO owner and delivery state survive |
 | PC-010 | Protected hand-off | One accepted successor, no tool-free false success |
 | PC-011 | Mutation containment | `never` tool uncertainty disables tools until settlement/operator disposition |
@@ -238,7 +222,7 @@ Fixture review rules:
 - no credentials, raw protected tool data or private timeline content;
 - deterministic symbolic IDs;
 - explicit input order and fault point;
-- expected Piclaw and Earendil logs;
+- expected Piclaw service log and Earendil transactions/current state;
 - expected delivery cardinality;
 - expected terminal disposition and frontier;
 - source link to issue/test/evidence.
@@ -248,15 +232,15 @@ Fixture review rules:
 | ID | Fixture assumption | Evidence | Confidence | Failure response |
 |---|---|---|---|---|
 | EA-001 | `AgentHarness` public method names and result tags may change | Direct-adoption policy | Expected churn | Update Piclaw and contract cases to the selected version; retain semantic product assertions |
-| EA-002 | Session entry/record protocol is the durable recovery evidence | Public `Session`; installed non-exported reducer implementation | High as 0.84.1 evidence | Update fixture to selected-version public restore/recovery semantics; no private production import |
-| EA-003 | `runId` behaviour across suspension/resume follows the selected version | `ResumeOutcome`, suspended operation declarations | Unknown at 0.84.1 runtime | Update Piclaw correlation and semantic expectations to observed selected-version behaviour |
-| EA-004 | `steer`/`followUp` queue records remain run-owned; `nextRun` lane-owned | Record union and reducer implementation | High for 0.84.1 | Update acceptance mapping and contract cases |
-| EA-005 | `peekAction`/`executeAction` expose one action at a time | Method names and `ActionInfo` declaration | Medium-low | Update the fixture to the selected direct action semantics; do not hide differences behind a Piclaw action type |
-| EA-006 | Events/watchers eventually expose enough ordering data to assign a projection receipt sequence | Declared unknown event listeners/watchers | Low | Piclaw projector assigns receipt sequence and reconciles authority from typed snapshots/durable log |
-| EA-007 | Abort durably appends intent before returning queued state | Record model and `AbortResult` declarations | Medium | Contract requires this; Piclaw's own cancellation fence remains outside the harness |
-| EA-008 | A real harness supports deterministic `Models` and `HarnessTool` implementations | `AgentHarnessOptions` accepts the exported types; pi-ai exports faux provider support | Medium-high | Contract suite supplies direct selected-version implementations; no parallel provider/tool type |
-| EA-009 | Session backend conformance remains exported | Package export map | High for 0.84.1 | Pin source/version and port suite if renamed |
-| EA-010 | Hook payload shapes may change | All 0.84.1 hook events are `unknown` | Expected churn | Narrow the selected version directly and update Piclaw on change |
+| EA-002 | Harness v3 entries/registers/usage are the target durable protocol | Authoritative `harness.md`; draft PR #7976 type slice | High as design, incomplete runtime | Update fixture to merged selected-version types/storage; no v2 reducer dependency |
+| EA-003 | Public `runId` is the durable Harness v3 operation ID | `harness.md` and PR #7976 result types | High as design, incomplete runtime | Correlate directly once selected implementation passes HC-012/013 |
+| EA-004 | Steer/follow-up are operation-owned; nextRun is lane-owned | `harness.md` inbox/lane-state design | High as design, incomplete runtime | Validate pending-entry/placement semantics on selected implementation |
+| EA-005 | Manual drive exposes one selected action/effect at a time | `harness.md` effects/manual scheduler; PR #7976 generic `ActionInfo` | High as design, incomplete runtime | Update fixture to merged effects API and prove HC-017 |
+| EA-006 | Typed snapshot-first buffered watching removes event registration gaps | `harness.md`; PR #7976 typed event/watch contracts | High as design, incomplete runtime | Piclaw still assigns web receipt sequence and validates selected runtime |
+| EA-007 | Abort commits cancellation before pulling the harness signal | `harness.md` §4.6 and PR #7976 result/control types | High as design, incomplete runtime | Piclaw's cancellation fence remains outside harness; prove HC-009 |
+| EA-008 | Real harness supports deterministic `Models` and generic contextual tools | Harness v3 generic options/tools and manual effects | High as design, type slice drafted | Contract suite supplies direct selected-version implementations |
+| EA-009 | Harness v3 backend conformance remains public | `harness.md` build Slice 2; not implemented | Medium | Pin selected source/version and run its unchanged suite |
+| EA-010 | Hook/event payloads follow typed Harness v3 maps/unions | `harness.md`; PR #7976 type tests | High as design, incomplete runtime | Adopt selected direct types and update Piclaw on change |
 
 ## Acceptance of the fixture design
 
@@ -264,8 +248,8 @@ Implementation may start only when:
 
 - the fixture compiles against the selected Earendil declarations;
 - no fixture module imports Piclaw agent-pool/recovery/compaction/process-chat orchestration;
-- upstream session backend conformance passes for its chosen backend;
+- the selected Harness v3 backend conformance suite passes unchanged;
 - every contract case names required capabilities and unsupported real-harness gaps;
-- at least one complete golden replay demonstrates crash/restart at every service settlement boundary;
-- within one selected Earendil version, replacing the fixture factory with `AgentHarness.create` changes only the factory supplied to cases; on version upgrades, fixture code and Earendil-specific assertions may change while Piclaw service invariants remain explicit;
+- at least one complete golden replay demonstrates crash/restart at every Piclaw settlement boundary and every relevant Harness v3 effect sandwich;
+- within one coherent selected Harness v3 source, replacing the fixture factory with the real constructor changes only the factory supplied to semantic cases; on version upgrades, fixture code and Earendil-specific assertions may change while Piclaw service invariants remain explicit;
 - version-migration reports record contract changes and Piclaw updates for each selected Earendil upgrade; source compatibility with earlier versions is not required.

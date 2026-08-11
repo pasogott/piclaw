@@ -21,7 +21,7 @@ The archive is root-cause and regression evidence. Its implementation is not the
 | INV-09 | Containment keeps tools disabled until an accepted terminal settlement or explicit hand-off. |
 | INV-10 | Restart reconciliation preserves FIFO input, steer/follow-up ownership, partial output and successor claims truthfully. |
 | INV-11 | Scheduler execution, timeline response, run log and notification each have one delivery owner. |
-| INV-12 | UI status and SSE events carry exact Piclaw operation, Earendil run and event-generation identity. |
+| INV-12 | UI status and SSE events carry exact Piclaw operation, correlated Earendil operation and watch/connection-generation identity. |
 | INV-13 | Harness transcript/queue state is execution evidence, not proof of Piclaw acceptance or terminal consumption. |
 | INV-14 | Protected tool arguments, results, scheduling intent and secrets do not leak through timelines, UI events or logs. |
 
@@ -57,7 +57,7 @@ The archive is root-cause and regression evidence. Its implementation is not the
 - **Evidence:** `docs/audits/2026-08-05-code-change-audit.md`, defect 2; `run-agent-orchestrator.test.ts` stale-entry and exceptional-exit tests.
 - **Baseline status:** fixed by clear-on-entry and consume-on-exit.
 - **Violates:** INV-02, INV-03, INV-06.
-- **Target prevention:** cancellation is an operation-owned durable event; harness abort and later fallout carry the correlated Piclaw operation/Earendil run IDs.
+- **Target prevention:** Piclaw cancellation is operation-owned; Harness v3 durably commits `cancel_requested` before signal pull, and later fallout remains under the correlated Piclaw/Harness operation IDs.
 - **Contract scenario:** `stale_abort_cause_cannot_cross_run`.
 
 ### REG-004 — Timed-out compaction mutates a replacement generation
@@ -68,7 +68,7 @@ The archive is root-cause and regression evidence. Its implementation is not the
 - **Evidence:** `compaction.test.ts`: late timed-out compaction and late cancellation cleanup cases.
 - **Baseline status:** baseline has generation-focused tests and quarantine-until-settlement logic.
 - **Violates:** INV-02, INV-03, INV-08.
-- **Target prevention:** use Earendil compaction `runId`, Piclaw operation correlation and expected state sequence on every result; reject stale results without compensation against the new owner.
+- **Target prevention:** use the Harness v3 compaction operation ID, Piclaw correlation and conditional current-state sequence on every settlement; reject stale results without mutating the new owner.
 - **Contract scenario:** `late_compaction_result_is_ignored_after_replacement`.
 
 ### REG-005 — Session replacement leaves stale tool-policy owner
@@ -101,7 +101,7 @@ The archive is root-cause and regression evidence. Its implementation is not the
 - **Evidence:** issue [#913](https://github.com/rcarmo/piclaw/issues/913); `run-agent-recovery-phase.test.ts`; context-pressure tests.
 - **Baseline status:** budget and neutral-continuation mitigations exist.
 - **Violates:** INV-07, INV-08.
-- **Target prevention:** Earendil durable step/tool records decide whether to compact/resume; tool replay policy forbids unsafe repetition; deadlines are explicit command inputs.
+- **Target prevention:** Harness v3 total generation/tool/compaction state decides whether to resume; tool replay policy forbids unsafe repetition; Piclaw deadlines trigger exact abort commands.
 - **Contract scenario:** `first_context_pressure_compaction_gets_budget_without_prompt_replay`.
 
 ### REG-008 — Accepted self-continuation fails to wake
@@ -123,7 +123,7 @@ The archive is root-cause and regression evidence. Its implementation is not the
 - **Evidence:** rollback manifest PRs #910, #911, #914 and #915; issues [#920](https://github.com/rcarmo/piclaw/issues/920) and related archive tests.
 - **Baseline status:** architectural limitation of v2.13.2.
 - **Violates:** INV-01, INV-04, INV-05, INV-13.
-- **Target prevention:** Piclaw operation ledger owns acceptance/frontier; Earendil session log owns execution; one persisted correlation joins them.
+- **Target prevention:** Piclaw operation log owns service acceptance/frontier; Harness v3 entries/registers/usage own execution; one persisted correlation joins the durable domains.
 - **Contract scenario:** `fault_between_every_accept_execute_settle_boundary`.
 
 ### REG-010 — Cancellation targets whichever operation is active later
@@ -167,7 +167,7 @@ The archive is root-cause and regression evidence. Its implementation is not the
 - **Evidence:** issues [#927](https://github.com/rcarmo/piclaw/issues/927) and [#933](https://github.com/rcarmo/piclaw/issues/933); rollback PRs #934/#938.
 - **Baseline status:** stable steer path is in-memory and chat-scoped.
 - **Violates:** INV-01, INV-02, INV-10.
-- **Target prevention:** Piclaw accepts steer with exact operation ID and sequence, then calls Earendil `steer()` on correlated run; acknowledgement follows durable acceptance.
+- **Target prevention:** Piclaw accepts steer with exact operation ID and sequence, then calls `steer()` on the correlated Harness v3 lane/operation; acknowledgement follows Piclaw durable acceptance.
 - **Contract scenario:** `cross_session_steer_ack_after_durable_exact_owner_acceptance`.
 
 ### REG-014 — Trusted internal enqueue bypasses durable provenance
@@ -200,7 +200,7 @@ The archive is root-cause and regression evidence. Its implementation is not the
 - **Evidence:** issue [#930](https://github.com/rcarmo/piclaw/issues/930); archive PR #941.
 - **Baseline status:** stable `PendingSteeringStore` is in-memory.
 - **Violates:** INV-01, INV-10.
-- **Target prevention:** Piclaw accepted-source row records target operation and sequence; Earendil queue record is correlated; restart reconciles both logs.
+- **Target prevention:** Piclaw accepted-source row records target operation and sequence; Harness v3 queue state/`pending.entry` is correlated; restart reconciles Piclaw state with the harness snapshot/current state.
 - **Contract scenario:** `restart_preserves_pending_steer_fifo_and_owner`.
 
 ### REG-017 — Late steer races checkpoint successor settlement
@@ -233,7 +233,7 @@ The archive is root-cause and regression evidence. Its implementation is not the
 - **Evidence:** issues [#936](https://github.com/rcarmo/piclaw/issues/936) and [#946](https://github.com/rcarmo/piclaw/issues/946); archive PRs #943/#950.
 - **Baseline status:** some redaction exists, but protected operation ledger is not separated.
 - **Violates:** INV-14.
-- **Target prevention:** separate encrypted/restricted execution journal from timeline projection; project allowlisted fields only; owner-authorised erasure has its own audit event.
+- **Target prevention:** keep Harness v3 storage/events restricted from the user timeline; project allowlisted fields only; owner-authorised erasure uses a separately reviewed administrative rewrite/audit path.
 - **Contract scenario:** `protected_evidence_never_enters_user_projection`.
 
 ### REG-020 — SSE reconnect applies duplicate or stale generation events
@@ -244,7 +244,7 @@ The archive is root-cause and regression evidence. Its implementation is not the
 - **Evidence:** issues [#937](https://github.com/rcarmo/piclaw/issues/937) and [#947](https://github.com/rcarmo/piclaw/issues/947); archive PRs #944/#949.
 - **Baseline status:** stable has ref-based reconnect handling but not complete exact-operation projection.
 - **Violates:** INV-03, INV-12.
-- **Target prevention:** every event carries Piclaw operation ID, Earendil run ID and SSE generation/sequence; client reducer rejects older tuples.
+- **Target prevention:** Piclaw projects typed Harness v3 watch events under its operation correlation and watch/connection generation; client rejects older receipt sequences/generations.
 - **Contract scenario:** `old_sse_generation_cannot_mutate_live_projection`.
 
 ### REG-021 — Compose Abort route or authority is missing
@@ -288,7 +288,7 @@ The archive is root-cause and regression evidence. Its implementation is not the
 - **Evidence:** `run-agent-attempt-finalization.test.ts` and `run-agent-orchestrator.test.ts` terminal-side-effect masking cases.
 - **Baseline status:** guarded in v2.13.2.
 - **Violates:** INV-04, INV-07.
-- **Target prevention:** Earendil tool batch records every call/result; completion policy evaluates the full batch and required effect set.
+- **Target prevention:** Harness v3 total tool-batch state and committed result entries cover every call; completion policy evaluates the full batch and required effect set.
 - **Contract scenario:** `terminal_side_effect_cannot_hide_failed_tool`.
 
 ### REG-025 — Provider length repair repeats the same effective cap
@@ -299,7 +299,7 @@ The archive is root-cause and regression evidence. Its implementation is not the
 - **Evidence:** `docs/audits/2026-08-05-code-change-audit.md`, defect 3.
 - **Baseline status:** fixed in v2.13.2.
 - **Violates:** INV-08.
-- **Target prevention:** command/result record stores effective stream options; retry policy computes from the actual previous request.
+- **Target prevention:** Harness v3 generation context stores effective stream options/retry policy in total state; later attempts derive from the actual captured request.
 - **Contract scenario:** `length_repair_reduces_effective_output_cap`.
 
 ## Open issue requirements
@@ -313,8 +313,8 @@ Two open project issues affect the target architecture:
 
 Every corpus scenario must run at the narrowest applicable layer:
 
-1. pure state/reducer replay;
-2. fixture contract with deterministic model/tool effectors;
+1. pure Piclaw service-state/reducer replay;
+2. Harness v3 manual-drive fixture with instrumented storage and deterministic model/tool effects;
 3. Piclaw service-plane fault-boundary integration;
 4. restart/compaction integration with durable storage;
 5. installed browser/service E2E for UI authority and process lifecycle.

@@ -6,17 +6,17 @@ This inventory applies the direct-contract rule in [`earendil-native-effector-co
 
 | Current Piclaw surface | Earendil target | Replay | Required Piclaw work |
 |---|---|---|---|
-| coding-agent `read` | public `createReadTool()` | `safe` | Supply selected `ExecutionEnv`; inject image processor only if required |
-| coding-agent `write` | public `createWriteTool()` | `never` | No legacy wrapper; test mutation queue and abort semantics |
-| coding-agent `edit` | public `createEditTool()` | `never` | No legacy wrapper; retain exact replacement/diff contract |
-| tracked/SSH-aware `bash` | public `createBashTool()` | `never` | Implement Piclaw local/SSH/keychain behaviour in `ExecutionEnv`; use `prepare` for `PI_*` env values |
-| Windows `powershell` | Piclaw `AgentHarnessTool` using `ExecutionEnv.exec` or a Windows `ExecutionEnv` | `never` | Preserve PowerShell schema/description; return Earendil `AgentToolResult` |
-| `local_bash` under SSH | second direct `HarnessTool` bound to local `ExecutionEnv` | `never` | Tool context holds local and selected envs; no mutable registration patch |
+| coding-agent `read` | selected Harness v3 public read tool | `safe` | Supply `PiclawToolContext`/`ExecutionEnv`; inject image processor only if required |
+| coding-agent `write` | selected Harness v3 public write tool | `never` | No legacy wrapper; test mutation queue and abort semantics |
+| coding-agent `edit` | selected Harness v3 public edit tool | `never` | No legacy wrapper; retain exact replacement/diff contract |
+| tracked/SSH-aware `bash` | Harness v3 `createBashTool()` / `AgentHarnessTool<PiclawToolContext>` | `never` | Implement local/SSH/keychain behaviour in `ExecutionEnv`; v3 resolves context once per tool batch; use `prepare` for `PI_*` env values |
+| Windows `powershell` | Harness v3 `AgentHarnessTool<PiclawToolContext>` using `ExecutionEnv.exec` | `never` | Preserve PowerShell schema/description; return Earendil `AgentToolResult` |
+| `local_bash` under SSH | second direct v3 contextual tool bound to local `ExecutionEnv` in context | `never` | Tool context holds local and selected envs; no mutable registration patch |
 
 Earendil's built-in bash already handles streaming updates, output capture/truncation and full-output temp files. Piclaw's `createContextBashTool` should not wrap another legacy bash tool. Large-output storage can be implemented as:
 
-- an `after_tool` Earendil hook that replaces `content`/`details` using exact `AfterToolCallResult` semantics; or
-- a direct `HarnessTool` composed from public `createBashTool()` when hook payloads become typed and stable.
+- Harness v3's typed `after_tool` hook that replaces `content`/`details` using exact patch semantics; or
+- a direct contextual `AgentHarnessTool` composed from the selected public `createBashTool()`.
 
 The selected approach must not double-execute shell work or redefine the bash result type.
 
@@ -33,7 +33,7 @@ The selected approach must not double-execute shell work or redefine the bash re
 
 ## Piclaw-specific tools
 
-These tools should be direct `HarnessTool` definitions. The table gives the default replay value; individual operations inside multipurpose tools may require a conservative `never` for the whole tool until split.
+These tools should be direct Harness v3 `AgentHarnessTool<PiclawToolContext>` definitions. The table gives the default replay value; individual operations inside multipurpose tools may require a conservative `never` for the whole tool until split.
 
 | Tool family | Examples | Replay | Context/ownership notes |
 |---|---|---|---|
@@ -85,7 +85,7 @@ Current Pi extensions combine tools, commands, prompts and many AgentSession hoo
 
 | Existing registration | Target |
 |---|---|
-| `registerTool` | direct `HarnessTool`/`AgentHarnessTool` |
+| `registerTool` | direct Harness v3 `AgentHarnessTool<TContext>` |
 | resource skill/template | Earendil `Resources` |
 | slash command | Piclaw service command registry |
 | `before_agent_start` resource/tool changes | harness construction/system prompt callback, resource setters or named `before_run` hook |
@@ -95,7 +95,7 @@ Current Pi extensions combine tools, commands, prompts and many AgentSession hoo
 | UI-only hooks | Piclaw projection/service event subscribers, never harness authority |
 | session tree/fork hooks | `before_navigation` or Piclaw service command plus direct lane/session operation |
 
-Since installed hook payloads are `unknown`, each migrated hook needs a selected Earendil source commit and a semantic case. Piclaw narrows that version directly and updates on churn. Unsupported hooks do not justify a parallel extension runtime inside the harness path.
+Harness v3 specifies a typed `HookMap`; each migrated hook still needs a selected implementation commit and semantic case. Piclaw adopts that version's direct types and updates on churn. Unsupported hooks do not justify a parallel extension runtime inside the harness path.
 
 ## Coding-agent harness composition
 
@@ -108,13 +108,13 @@ The installed private `createCodingAgentHarness` implementation shows the intend
 - system prompt is a callback derived from current tools and active names;
 - final construction calls `AgentHarness.create()`.
 
-At `0.84.1`, Piclaw can reproduce this composition using public agent-core exports and accept the local prompt-composition churn. If a later selected release exports the coding-agent helper, adopt that direct public API and delete the local composition.
+At `0.84.1`, Piclaw can reproduce this composition for fixture work using public agent-core exports. The target is Harness v3 generic contextual tools/options; adopt their selected public implementation and delete the v2 binding/composition when available.
 
 ## Verification
 
 For each migrated tool/resource:
 
-- TypeScript `satisfies HarnessTool` or `satisfies AgentHarnessTool<...>`;
+- TypeScript `satisfies AgentHarnessTool<PiclawToolContext,...>` against the selected Harness v3 types;
 - explicit replay value;
 - exact tool result/update/error semantics;
 - abort and late-result test;

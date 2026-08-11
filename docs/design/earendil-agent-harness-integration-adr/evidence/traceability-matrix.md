@@ -40,31 +40,31 @@ This matrix connects every capability in [`current-capability-matrix.md`](curren
 | CAP-018 | Earendil session/lane; Piclaw correlation | `SessionRepo`, lane pointers, navigation/fork | HC-010/013/015; SP-session-conformance |
 | CAP-019 | Boundary projector | `(operationId, runId, generation, eventSeq)` projection key | PC-014/015; UI-generation |
 | CAP-020 | Earendil `AgentHarness`/`Session` | Direct `AgentHarnessOptions` resources and explicit close/eviction | HC-015/016; OPS-session-lifecycle |
-| CAP-021 | Earendil | `AgentLane.prompt()` and durable run record | HC-001/009/013; PC-001 |
-| CAP-022 | Earendil events; Piclaw projection | Redacted run event stream; Piclaw terminal commit remains authoritative | HC-001/002/018; PC-007/014/016 |
-| CAP-023 | Earendil `HarnessTool`/`AgentHarnessTool` | Durable `tool_started`, exact `AgentToolResult` and replay policy | HC-002/003/004/005; TP-safe-never |
-| CAP-024 | Earendil configuration; Piclaw policy | Persisted `active_tools_change`; owner-scoped set operations | HC-config-state; TP-tool-policy; GF-tool-owner-replacement |
+| CAP-021 | Earendil | `AgentLane.prompt()` and durable Harness v3 operation registers | HC-001/009/013; PC-001 |
+| CAP-022 | Earendil typed events/watch; Piclaw projection | Snapshot-first buffered watch, redacted event projection; Piclaw terminal commit remains authoritative | HC-001/002/018; PC-007/014/016 |
+| CAP-023 | Earendil `AgentHarnessTool<TContext>` | Harness v3 tool plan/`effect_pending`, exact `AgentToolResult` and replay policy | HC-002/003/004/005; TP-safe-never |
+| CAP-024 | Earendil lane configuration; Piclaw policy | Total `lane.config` and direct owner-scoped setters | HC-config-state; TP-tool-policy; GF-tool-owner-replacement |
 | CAP-025 | Piclaw policy through Earendil hooks/actions | Explicit admission budget and full tool ledger | HC-tool-budget; TP-parallel-budget; GF-tool-budget-lineage |
-| CAP-026 | Piclaw containment policy; Earendil tool ledger | Mutation fingerprint/idempotency classification and `never` uncertainty quarantine | PC-011; TP-mutation-containment; GF-repeated-mutation |
-| CAP-027 | Earendil records; Piclaw billing/UI store | Durable usage record and idempotent projection | HC-019; SP-usage-idempotency |
-| CAP-028 | Piclaw authorisation; Earendil configuration | Typed model/thinking/tool commands and persisted configuration entries | HC-config-state; PC-control-fence |
+| CAP-026 | Piclaw mutation policy; Earendil tool recovery | Piclaw policy/hook can block repeated mutation; Harness v3 `never` unknown effect settles interrupted and never replays | PC-011; TP-mutation-containment; GF-repeated-mutation |
+| CAP-027 | Earendil usage ledger; Piclaw billing/UI projection | Durable `UsageRow`, session totals and idempotent projection | HC-019; SP-usage-idempotency |
+| CAP-028 | Piclaw authorisation; Earendil configuration | Typed model/thinking/tool commands and total `lane.config` register | HC-config-state; PC-control-fence |
 | CAP-029 | Earendil `Resources`, tools and hooks; Piclaw command service | Direct `Skill`, `PromptTemplate`, `HarnessTool` and named hook use | HC-018; TP-resource-contract; version-migration report |
 | CAP-030 | Earendil | First-class threshold compaction operation | HC-010/011; PC maintenance cases; GF-late-compaction |
 | CAP-031 | Earendil | Durable attempt/compaction/resume sequence with replay policy | HC-004/005/010/011/013; GF-context-pressure |
 | CAP-032 | Piclaw control; Earendil compaction | Exact owner/version fence followed by `compact()` | SM-control-fence; HC-010; PC-control-race |
 | CAP-033 | Earendil session repository | Fork/navigation/new session at a terminal or fenced recovery boundary | HC-010/013/015; SP-session-rollback |
-| CAP-034 | Earendil retry policy | Consecutive `step_attempt` records and effective options | HC-011; GF-length-repair |
-| CAP-035 | Earendil outcome/tool batch | Full-batch completion and terminate semantics; no explanatory false success | HC-002/003; PC-010; GF-protected-handoff/terminal-tool |
-| CAP-036 | Piclaw deadline; Earendil abort | Explicit deadline input and ordered abort/result records | HC-009; PC-004/006; SM-cancel-complete-race |
-| CAP-037 | Piclaw watchdog over correlated events | Operation/run-scoped progress sequence and cancellation command | SM-watchdog-owner; PC-004/014 |
-| CAP-038 | Boundary projector | Active tool-call IDs from harness records/events | HC-002/003; UI-tool-heartbeat |
+| CAP-034 | Earendil retry policy | Total generation/summary state with captured effective options and numbered attempts | HC-011; GF-length-repair |
+| CAP-035 | Earendil outcome/tool batch | Full-batch completion and terminate semantics; optional final assistant; no explanatory false success | HC-002/003; PC-010; GF-protected-handoff/terminal-tool |
+| CAP-036 | Piclaw deadline; Earendil abort | Piclaw deadline triggers exact abort; Harness v3 commits cancellation before signal and reconciles late results | HC-009; PC-004/006; SM-cancel-complete-race |
+| CAP-037 | Piclaw watchdog over correlated events | Operation-scoped typed events/snapshot and cancellation command | SM-watchdog-owner; PC-004/014 |
+| CAP-038 | Boundary projector | Active tool-call IDs from typed events/snapshots | HC-002/003; UI-tool-heartbeat |
 | CAP-039 | Piclaw policy | Durable bounded recovery/containment counters, no chat-global ambient map | SM-recovery-bound; PC-011; OPS-restart-loop |
 | CAP-040 | Piclaw acceptance; Earendil successor | One accepted continuation source before owner release | SM-successor-one-shot; PC-010; GF-protected-handoff |
 | CAP-041 | Piclaw | Operation-aware intermediate/terminal timeline port | SP-terminal-transaction; PC-007/016 |
 | CAP-042 | Piclaw | Typed salvage terminal candidate and one settlement path | SM-salvage; PC-007; UI-timeout-marker |
 | CAP-043 | Piclaw | Atomic settlement and outbox wake | SM-settlement-properties; SP-terminal-crash; PC-007/017 |
 | CAP-044 | Piclaw | Immutable failure disposition without frontier overrun | SM-failed-frontier; PC-007; GF-blank-completion |
-| CAP-045 | Piclaw + selected Earendil public recovery surface | Two-journal restart reconciliation table | HC-013/014; PC-008/009/011; OPS-crash-matrix |
+| CAP-045 | Piclaw + Harness v3 restore/`lane.lastResult` | Piclaw log reconciled with Earendil current registers/snapshot and last result | HC-013/014; PC-008/009/011; OPS-crash-matrix |
 | CAP-046 | Piclaw dispatcher | Rebuild wakes from pending source/operation/outbox state | SM-wake-idempotency; SP-restart-wake |
 | CAP-047 | Earendil | Conformant `SessionRepo`/`SessionStorage` | Upstream backend conformance; HC-013/014; SP-backup-restore |
 | CAP-048 | Earendil and Piclaw service | Explicit close, drain and operation claim fence | HC-016; OPS-shutdown/restart |
@@ -73,7 +73,7 @@ This matrix connects every capability in [`current-capability-matrix.md`](curren
 | CAP-051 | Earendil `ExecutionEnv`/`HarnessTool` | Exact AbortSignal and environment cleanup own process groups | TP-process-abort; OPS-process-tree |
 | CAP-052 | Piclaw | Owner-fenced disposition/retry creates a new operation or explicit skip | SM-retry-skip; PC-008 |
 | CAP-053 | Piclaw control; Earendil action | Exact operation/run/generation controls | SM-control-fence; PC stale-control cases |
-| CAP-054 | Boundary projector | Allowlisted correlated projection reducer | PC-014/016; UI-status-order |
+| CAP-054 | Piclaw projection service | Allowlisted projection over Harness v3 snapshot/watch and Piclaw correlation | PC-014/016; UI-status-order |
 | CAP-055 | Boundary projector/UI | Generation-fenced draft/thought state | PC-014; UI-reconnect-draft |
 | CAP-056 | Piclaw projection | Typed outcome/usage marker rendering; no prose classification | UI-outcome-markers; PC-016 |
 | CAP-057 | Piclaw delivery outbox | One `deliveryId` per channel response | SP-outbox-idempotency; PC-017; SCH-agent-cardinality |
@@ -94,7 +94,7 @@ Every regression already names a golden fixture. This table gives its owner mech
 | REG-006 | Harness execution outcome plus one Piclaw successor | GF `protected_recovery_handoff_is_one_shot_and_non_terminal`; PC-010 |
 | REG-007 | Durable attempts and safe/never replay | GF `first_context_pressure_compaction_gets_budget_without_prompt_replay`; HC-004/005/011 |
 | REG-008 | Acceptance plus wake outbox transaction | GF `accepted_successor_always_has_recoverable_wake`; SP-wake-crash |
-| REG-009 | Canonical source sequence and two-journal correlation | GF `fault_between_every_accept_execute_settle_boundary`; PC-007/008 |
+| REG-009 | Canonical Piclaw source sequence correlated to Harness v3 durable current state | GF `fault_between_every_accept_execute_settle_boundary`; PC-007/008 |
 | REG-010 | Exact operation/run compare-and-act | GF `stale_abort_cannot_cancel_replacement`; PC-004/005 |
 | REG-011 | First immutable disposition wins | GF `cancel_wins_over_late_success_exactly_once`; PC-006 |
 | REG-012 | Piclaw terminal commit before maintenance outbox | GF `terminal_commit_precedes_maintenance_failure`; PC-017 |
@@ -104,7 +104,7 @@ Every regression already names a golden fixture. This table gives its owner mech
 | REG-016 | Durable source delivery state reconciled with harness queue | GF `restart_preserves_pending_steer_fifo_and_owner`; PC-009 |
 | REG-017 | Version-fenced steer acceptance vs settlement | GF `checkpoint_terminal_race_with_late_steer`; PC-020 |
 | REG-018 | `never` replay containment and mutation identity | GF `repeated_successful_mutation_is_blocked_and_contained`; PC-011/TP |
-| REG-019 | Restricted journal and allowlisted projector | GF `protected_evidence_never_enters_user_projection`; PC-016 |
+| REG-019 | Restricted harness storage/events and allowlisted Piclaw projector | GF `protected_evidence_never_enters_user_projection`; PC-016 |
 | REG-020 | Operation/run/SSE generation projection key | GF `old_sse_generation_cannot_mutate_live_projection`; PC-014/UI |
 | REG-021 | Fresh operation authority and idempotent exact abort | GF `installed_mobile_abort_refreshes_and_cancels_exact_run_once`; PC-015/OPS |
 | REG-022 | Explicit command identity; no ambient authority | GF `inherited_async_context_has_no_mutation_authority`; SM-control-fence |
@@ -117,15 +117,15 @@ Every regression already names a golden fixture. This table gives its owner mech
 | Assumption | Status | Evidence or required resolution |
 |---|---|---|
 | EA-001 public harness method/result stability | Intentionally not assumed | Compile against each selected Earendil version and update Piclaw/contracts to its direct types |
-| EA-002 session record protocol is recovery basis | Supported as evidence, not public reducer API | Session code is exported; reducer implementation is installed but not package-exported |
-| EA-003 `runId` behaviour across resume | Open for 0.84.1 runtime | HC-012/013 determine selected-version behaviour; Piclaw correlation updates to it |
-| EA-004 queue ownership semantics | Supported for 0.84.1 | Record union and reducer implementation; revalidate on upgrade |
-| EA-005 one-action manual drive | Open, medium-low confidence | Declared only; real HC-017 required |
-| EA-006 event ordering data | Open, low confidence | Piclaw projection can assign receipt sequence, but durable-log/snapshot reconciliation remains authoritative |
-| EA-007 abort intent durability/order | Open, medium confidence | Real HC-009 required; Piclaw cancellation remains authoritative regardless |
-| EA-008 deterministic `Models`/tools | Supported by types, unproven in real execution | Constructor accepts exact exports and pi-ai has faux provider support; HC suite remains required |
-| EA-009 backend conformance export | Supported for 0.84.1 | Export map and declarations verified |
-| EA-010 hook payload stability | Intentionally not assumed | Narrow the selected version's direct payloads; update Piclaw when Earendil changes them |
+| EA-002 session record protocol is recovery basis | Superseded by Harness v3 design | Target uses entries/registers/usage and total current state, not v2 records/reducer |
+| EA-003 `runId` behaviour across resume | Specified by Harness v3 types/design; runtime pending | Public `runId` is durable operation ID; HC-012/013 prove selected implementation |
+| EA-004 queue ownership semantics | Specified by Harness v3 design; runtime pending | Queue IDs live in lane/operation state with `pending.entry`; validate selected implementation |
+| EA-005 one-action manual drive | Specified by Harness v3; runtime pending | `ActionInfo`/effects/manual scheduler require HC-017 on selected implementation |
+| EA-006 event ordering data | Typed v3 design available; runtime pending | Snapshot-first buffered watch removes registration gap; Piclaw still assigns web receipt sequence |
+| EA-007 abort intent durability/order | Specified by Harness v3; runtime pending | Cancellation transaction precedes signal and reconciliation; HC-009 still required; Piclaw cancellation remains authoritative |
+| EA-008 deterministic `Models`/tools | Supported by Harness v3 types; runtime pending | Generic contextual tools, manual effects and direct `Models` are in spec/PR #7976; HC suite remains required |
+| EA-009 backend conformance export | Specified as Harness v3 build Slice 2; not implemented | Select a coherent backend/source and run its unchanged conformance suite |
+| EA-010 hook payload stability | Typed v3 `HookMap` drafted; implementation pending | Adopt selected direct map and update Piclaw when Earendil changes it |
 
 No execution-type assumption is a compatibility promise. Piclaw updates to each selected Earendil version. Piclaw acceptance, cancellation and terminal authority remain service responsibilities unless a later ADR deliberately transfers them.
 

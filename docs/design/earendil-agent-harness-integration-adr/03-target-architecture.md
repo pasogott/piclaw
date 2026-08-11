@@ -1,6 +1,6 @@
 # Target architecture and replay model
 
-The reviewed Piclaw effector classification is in [`evidence/effector-inventory.md`](evidence/effector-inventory.md). [`evidence/earendil-native-effector-contracts.md`](evidence/earendil-native-effector-contracts.md) requires direct use of Earendil's exported harness, session, model, tool, environment, result/error, resource and telemetry types; Piclaw-specific ports are limited to service-plane responsibilities. The complete proposed identity, accepted-source, operation, settlement, cancellation, restart and replay design is in [`evidence/target-state-model.md`](evidence/target-state-model.md). Current orchestration modules remain evidence only.
+The reviewed Piclaw effector classification is in [`evidence/effector-inventory.md`](evidence/effector-inventory.md). [`evidence/earendil-native-effector-contracts.md`](evidence/earendil-native-effector-contracts.md) requires direct use of Earendil's exported harness, session, model, tool, environment, result/error, resource and telemetry types; Piclaw-specific ports are limited to service-plane responsibilities. Harness v3's authoritative entries/registers/usage-ledger design and emerging type contracts are assessed in [`evidence/earendil-harness-v3-assessment.md`](evidence/earendil-harness-v3-assessment.md). The complete proposed Piclaw identity, accepted-source, settlement, cancellation, restart and replay design is in [`evidence/target-state-model.md`](evidence/target-state-model.md). Current Piclaw orchestration and Earendil v2 record-log details remain evidence only.
 
 ## Required target invariants
 
@@ -46,17 +46,17 @@ No final design may share ownership of accepted-input queues, operation completi
 
 ## State-machine design quality bar
 
-### Pure transition model
+### Piclaw service transition model
 
-The proposed core should have the semantic shape:
+Piclaw's service-plane coordinator should have the semantic shape:
 
 ```text
-reduce(state, event) -> { state, commands }
+reduce(serviceState, serviceEvent) -> { serviceState, commands }
 ```
 
-The reducer performs no I/O. Command executors call effectors and turn results into new events.
+This reducer owns accepted sources, Piclaw operation correlation, terminal disposition, frontier and external delivery. It performs no I/O. Command executors call service effectors and direct Earendil methods, then turn results into service events.
 
-Time, IDs, randomness, provider events, tool results, process signals and storage faults must be injected. The same initial snapshot and ordered event stream must produce the same semantic state and command trace.
+Earendil execution is not replayed through this reducer. Harness v3 owns its durable interpreter through `op.state` and atomic storage transactions. Time, IDs, external delivery results and storage faults must be injected into the Piclaw model; model/tool/provider execution uses the selected Earendil contracts. The same Piclaw snapshot and ordered service event stream must produce the same semantic service state and command trace.
 
 ### Versioned state, events and commands
 

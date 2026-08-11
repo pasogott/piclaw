@@ -6,17 +6,17 @@ Full capability/regression/assumption coverage is recorded in [`evidence/traceab
 
 This ADR is complete only when it contains:
 
-1. pinned Piclaw and Earendil baselines;
+1. pinned Piclaw/released-Earendil baselines plus the exact unreleased Harness v3 target specification and implementation evidence;
 2. current architecture and responsibility map;
 3. completed capability traceability matrix;
 4. completed bug and regression corpus;
 5. approved invariants;
-6. target state, event and command model;
+6. Piclaw service state/event/command model aligned with Harness v3 execution/storage semantics;
 7. Piclaw–Earendil ownership boundary;
 8. reviewed effector inventory;
-9. Earendil API and source survey;
+9. released Earendil API/source survey and Harness v3 design/type/runtime status survey;
 10. fixture design and assumption ledger, if needed;
-11. recording and replay design;
+11. Piclaw service replay plus Harness v3 manual-drive/instrumented-storage design;
 12. failure, cancellation and restart semantics;
 13. alternatives with evidence;
 14. incremental migration sequence;
@@ -92,12 +92,12 @@ The assessment resolves ownership and design questions that can be answered from
 
 | Question | Current assessment position | Resolution gate |
 |---|---|---|
-| Which Earendil source/version should production target? | Installed `0.84.1` declarations are the assessment/fixture target; its execution harness is incomplete. | Pin a usable source in M0, update Piclaw to its direct types and run the shared semantic suite. |
+| Which Earendil source/version should production target? | Released `0.84.1` is baseline evidence only. Harness v3 `harness.md` at `2a9b4ebc` is the target design; draft PR #7976 implements only the first type slice. | Select a coherent source after required v3 runtime/storage slices land, update Piclaw to its direct types and run the shared semantic suite. |
 | How much Earendil type stability is required? | None across selected upgrades. Piclaw accepts source breakage and removes obsolete glue. | Compile and run HC-001–HC-020 for every selected version; record migration differences. |
-| Does Earendil expose recoverable run state? | Declarations expose suspended operations, durable records and `resume`; installed restore/resume is not implemented. | HC-012/HC-013 on the selected real harness. |
-| Who owns tool process groups? | Piclaw tool effectors retain process tracking; Earendil owns invocation and supplies AbortSignal. | TP process-group and real-harness abort tests before M6. |
-| Who owns transcript persistence? | Earendil owns harness transcript/session records; Piclaw owns accepted sources, timeline and dispositions. | Session backend conformance and two-journal reconciliation tests. |
-| Can real harness use deterministic fake models/tools? | Options accept `Models`, model and tools; execution is unavailable in `0.84.1`. | HC suite against the selected real harness. |
+| Does Earendil expose recoverable run state? | Harness v3 specifies total `op.state`, bounded restore, accepted suspension outcomes and `lane.lastResult`; implementation is incomplete. | HC-012/HC-013 plus storage fault tests on the selected real harness/backend. |
+| Who owns tool process groups? | Harness v3 owns effect signals/tool invocation; Piclaw's `ExecutionEnv` implementation may retain host process tracking. | TP process-group and real-harness abort/close tests before M6. |
+| Who owns transcript persistence? | Harness v3 owns entries/registers/usage ledger; Piclaw owns accepted sources, timeline and service dispositions. | Selected backend conformance and two-domain reconciliation tests. |
+| Can real harness use deterministic fake models/tools? | Harness v3 types directly support generic contextual tools, `Models`, manual drive and instrumented storage. | HC suite against the selected real Harness v3 implementation. |
 | Which Piclaw writes share one transaction? | Accepted-source, operation, timeline/media rows, disposition, frontier and outbox should share `messages.db`; otherwise use persisted `settling`. Earendil sessions stay separate. | Schema prototype and SP transaction/fault benchmark in M2. |
 | Which modules qualify as effectors? | Classified in `evidence/effector-inventory.md`; orchestration modules are rejected. | Per-port implementation review and import-boundary checks. |
 | Which baseline behaviours are removed? | Cursor authority, deferred JSON queue, chat-scoped abort/provenance, Piclaw recovery/compaction loop and direct scheduler agent delivery are migration targets. User-visible capabilities remain unless separately approved. | M0 ADR decision and per-capability implementation issues. |

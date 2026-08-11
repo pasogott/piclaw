@@ -13,11 +13,13 @@ Piclaw follows Earendil's type system and semantics. It does not require Earendi
 - Do not maintain two Earendil type dialects in production or add shims solely to keep an older selected version compiling.
 - Keep only Piclaw service-plane types that represent responsibilities Earendil does not own.
 
-## Current 0.84.1 constraints
+## Current baseline and target
 
-The installed version is useful for assessment because it contains the exported session model, reducer, action vocabulary, tools, environment, models and telemetry types. It is not a production execution target because most `AgentHarness` operations are unimplemented.
+The installed `0.84.1` version is useful as implementation evidence because it contains the exported v2 session model, action vocabulary, tools, environment, models and telemetry types. It is not a production execution target because most `AgentHarness` operations are unimplemented.
 
-Piclaw may build a test fixture against `0.84.1` declarations to make the service boundary concrete. Before production work, reassess the latest selected Earendil version and update the fixture/contracts to that exact shape. There is no promise that a fixture compiled against `0.84.1` remains source-compatible.
+The target execution design is the authoritative Harness v3 [`packages/agent/docs/harness.md`](https://github.com/earendil-works/pi/blob/2a9b4ebc680053c64e31f635b0b22d5e22564001/packages/agent/docs/harness.md), assessed in [`earendil-harness-v3-assessment.md`](earendil-harness-v3-assessment.md). Draft PR #7976 begins implementing its public type slice but is not released.
+
+Piclaw may retain a test fixture against `0.84.1` declarations for baseline comparisons, but new design work should follow Harness v3 types/semantics as their implementation slices land. Before production work, select a coherent Earendil source/version and update the fixture/contracts to that exact shape. No source compatibility with `0.84.1` is required.
 
 ## Upgrade workflow
 
@@ -27,9 +29,9 @@ For each Earendil candidate:
 2. compile Piclaw's direct imports and `satisfies` checks;
 3. update local construction/context binding to the candidate's API;
 4. run upstream session backend conformance unchanged;
-5. run HC-001–HC-020 through the candidate's real `AgentHarness.create`;
+5. verify the candidate implements the required Harness v3 slices, then run HC-001–HC-020 through its real `AgentHarness.create`;
 6. run PC-001–PC-020 and golden replay fixtures;
-7. inspect semantic differences in result tags, records, actions, snapshots, tools, errors and telemetry;
+7. inspect semantic differences in result tags, storage/register state, actions/effects, snapshots, tools, errors and telemetry;
 8. remove obsolete Piclaw glue rather than retaining both paths;
 9. record the selected version and evidence in the ADR/release review.
 

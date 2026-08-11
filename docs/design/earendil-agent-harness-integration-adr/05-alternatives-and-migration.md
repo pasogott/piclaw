@@ -1,6 +1,6 @@
 # Alternatives and migration
 
-The evidence-based comparison, selected alternative, nine-phase reversible migration, shadow parity metrics, validation matrix and installed-service gates are in [`evidence/alternatives-and-migration.md`](evidence/alternatives-and-migration.md).
+The evidence-based comparison, selected alternative, nine-phase reversible migration, shadow parity metrics, validation matrix and installed-service gates are in [`evidence/alternatives-and-migration.md`](evidence/alternatives-and-migration.md). The selected execution target is Earendil Harness v3 [`harness.md`](https://github.com/earendil-works/pi/blob/2a9b4ebc680053c64e31f635b0b22d5e22564001/packages/agent/docs/harness.md); released `0.84.1` remains baseline evidence.
 
 ## Alternatives to assess
 

@@ -1,26 +1,26 @@
 # Direct Earendil type audit
 
-This audit checks that the ADR uses Earendil's execution type system directly and defines Piclaw types only for Piclaw service responsibilities.
+This audit checks that the ADR uses Earendil's execution type system directly and defines Piclaw types only for Piclaw service responsibilities. The original compile probe covered installed `0.84.1`; Harness v3 design and draft PR #7976 now supersede several v2 type families as noted below.
 
 ## Earendil-owned type families
 
 | Family | Direct exported types/values | ADR treatment |
 |---|---|---|
-| Harness | `AgentHarness`, `AgentHarnessOptions`, `AgentLane`, `Hooks`, `Events`, `WatchHandle` | Use directly; no Piclaw execution port/interface |
-| Operation results | `RunResult`, `CompactionResult`, `NavigationResult`, `ResumeResult`, `QueueResult`, `CancelQueuedResult`, `AbortResult` | Preserve exact tagged `Result` unions |
-| Harness errors | `LaneBusy`, `MissingIdentities`, `NoActiveRun`, `NoActiveOperation`, `NothingToResume`, `Closed`, related tags, `HarnessFault`, `HarnessClosed` | Match direct tags/classes; no second error taxonomy |
-| Actions/snapshots | `ActionInfo`, `LaneSnapshot`, `SessionSnapshot`, `SuspendedOperation` | Fixture/manual drive and reconciliation use exact shapes |
-| Session | `SessionRepo`, `SessionStorage`, `Session`, `SessionTree`, `SessionMetadata`, `Entry`, `LaneRecord`, `LogItem`, `SessionError` | Use directly; backend passes upstream conformance |
-| Recovery reducer | Installed `reduceLaneState`, `validateRecordLog`, `RecordLogCorruption` | Semantics are evidence at 0.84.1, but symbols are not package-exported; no production deep import or Piclaw execution reducer |
+| Harness | v3 generic `AgentHarness<TContext>`, `AgentHarnessConstructor`, `AgentHarnessOptions<TContext>`, `AgentLane`, `Hooks`, `Events`, `WatchHandle` | Use directly; no Piclaw execution port/interface |
+| Operation results | v3 `RunResult`, `CompactionResult`, `NavigationResult`, `ResumeResult`, `QueueResult`, `NextRunResult`, `CancelQueuedResult`, `AbortResult`, `LaneLastResult` | Preserve selected exact tagged `Result`/outcome unions |
+| Harness errors | v3 `LaneBusy`, `MissingIdentities`, `InvalidNavigation`, `NoActiveRun`, `NoActiveOperation`, `NothingToResume`, `Closed`, related tags, `HarnessFault`, `HarnessClosed` | Match direct tags/classes; no second error taxonomy |
+| Actions/snapshots | Harness v3 `ActionInfo`, `LaneSnapshot`, `SessionSnapshot`, `SuspendedOperation`, `LaneLastResult` | Fixture/manual drive and reconciliation use selected exact shapes |
+| Session/storage | `Storage`, `Transaction`, `Entry`, `Register`, `UsageRow`, `SessionRepo`, `Session`, `SessionTree`, metadata/errors | Harness v3 target; backend passes selected conformance suite |
+| Released v2 recovery reducer | Installed `reduceLaneState`, `validateRecordLog`, `RecordLogCorruption` | Historical evidence only; Harness v3 uses total current registers and bounded restore, with no reducer/history |
 | Models/auth | `Models`, `Model`, `CredentialStore`, `ModelsError`; concrete `ModelRuntime implements Models` | Pass directly in `AgentHarnessOptions` |
-| Tools | `HarnessTool`, `AgentHarnessTool`, `AgentToolResult`, `AgentToolUpdateCallback`, `ToolExecutionMode` | Use directly; explicit `safe`/`never` replay |
+| Tools | Harness v3 `AgentTool.replay`, generic `AgentHarnessTool<TContext>`, `AgentToolResult`, update callback/mode | Use directly; explicit `safe`/`never`; no v2 widening binder in target |
 | Environment | `ExecutionEnv`, `FileSystem`, `Shell`, `FileError`, `ExecutionError`, `NodeExecutionEnv` | Implement/delegate exact no-throw `Result` contract |
 | Generic result/error | `Result`, `TaggedError`, `matchError` | May also be used by Piclaw service ports without pretending service errors are harness errors |
-| Resources | `Resources`, `Skill`, `PromptTemplate`, sourced loaders | Use directly; commands stay Piclaw service-side |
+| Events/hooks/resources | v3 `HarnessEvent`, `HookMap`, `Resources`, `Skill`, `PromptTemplate`, sourced loaders | Use directly; Piclaw redacts/projects events and keeps commands service-side |
 | Compaction/retry | `CompactionSettings`, `RetryPolicy`, `CompactionError`, helper results | Harness owns execution semantics |
 | Telemetry | `TelemetryContext`, `HARNESS_TELEMETRY_SCHEMA`, `AGENT_TELEMETRY_SCHEMAS` | Pass/use directly; Piclaw adds external service spans only |
-| JSONL | `JsonlSessionRepo`, `JsonlSessionMetadata`, `JsonlSessionRepoFileSystem` | Preferred initial backend at matching version |
-| Built-in tool binding | contextual `AgentHarnessTool<TContext,TSchema,...>` widened to `HarnessTool` | Generic closure binder; one `Static<TSchema>` assertion after harness validation at 0.84.1 |
+| Durable backend | Harness v3 `Storage`/`SessionRepo` plus selected Memory/JSONL/SQLite implementation | Do not select current v2 JSONL format 4; use a coherent v3 backend/conformance slice |
+| Built-in tool binding | v2 contextual tool widened to `HarnessTool` | `0.84.1` fixture-only workaround; Harness v3 generic options/tools remove it |
 
 ## Piclaw-owned type families
 
@@ -71,7 +71,7 @@ A temporary strict TypeScript probe against installed `0.84.1` verified:
 - direct local `NodeExecutionEnv` construction;
 - the generic contextual built-in tool binder using one `Static<TSchema>` assertion after `HarnessTool` schema erasure.
 
-The first probe correctly failed on private reducer imports and naive contextual tool spreading; the ADR was corrected. The final strict probe passed. The transient source file was deleted.
+The first probe correctly failed on private reducer imports and naive contextual tool spreading; the ADR was corrected. The final strict `0.84.1` probe passed and the transient source file was deleted. Draft PR #7976 now provides compile-time tests for the Harness v3 type slice; Piclaw must run its own strict compile audit against the merged selected commit before implementation.
 
 ## Audit result
 

@@ -1,6 +1,6 @@
 # Earendil 0.84.1 constraints for direct adoption
 
-This file records what Piclaw must account for when using the installed version's public contracts. It is not a request for Earendil changes.
+This file records what Piclaw must account for when using the installed version's public contracts. It is not a request for Earendil changes. Harness v3 resolves or supersedes several constraints at design/type level; see [`earendil-harness-v3-assessment.md`](earendil-harness-v3-assessment.md).
 
 ## Production blockers in this version
 
@@ -8,7 +8,7 @@ This file records what Piclaw must account for when using the installed version'
 
 `AgentHarness` prompt, queue, abort, compaction, navigation, resume, lane, watcher and manual-drive methods throw `HarnessNotImplemented`. Restore rejects sessions containing records.
 
-Piclaw response: use this version for type/fixture assessment only. Select a later working version before production execution.
+Piclaw response: use this version for baseline/fixture assessment only. Track Harness v3 implementation slices; select a coherent working v3 source/version before production execution.
 
 ### C-002 — Coding-agent harness helper is private
 
@@ -20,27 +20,27 @@ Piclaw response: use public agent-core composition at this version. If a later s
 
 `AgentHarnessTool<TContext,...>` and `toolContext` exist, while `AgentHarnessOptions.tools` is `HarnessTool[]`. The installed coding-agent helper binds context into tool closures.
 
-Piclaw response: follow that exact closure-binding pattern with public types in test code. Rework it when the selected Earendil API changes.
+Piclaw response: follow that exact closure-binding pattern only in `0.84.1` fixture code. Harness v3 generic `AgentHarnessOptions<TContext>` and contextual tools supersede it.
 
 ### C-004 — `HarnessTool` erases the parameter schema
 
 `HarnessTool = AgentTool` uses the default schema and exposes `execute` parameters as `unknown`. Binding a contextual `AgentHarnessTool<TContext, TSchema,...>` to `HarnessTool` requires one assertion back to `Static<TSchema>` after harness validation.
 
-Piclaw response: use a small generic closure binder derived entirely from Earendil/typebox exports; no `any`, copied schema or Piclaw tool interface. Delete/update it with the selected version.
+Piclaw response: use a small generic closure binder only for `0.84.1` fixture evidence; no `any`, copied schema or Piclaw tool interface. Harness v3 removes the target need.
 
 ### C-005 — Hook/event payloads are `unknown`
 
-Piclaw response: narrow payloads locally for projection only. Use typed operation results, snapshots and durable session logs for authority. Update narrowing when Earendil types evolve.
+Piclaw response: narrow payloads locally only for `0.84.1` fixture projection. Harness v3 specifies typed event/hook unions and snapshot-first watches; adopt those directly.
 
 ### C-006 — Restore/resume semantics are declared but not executable
 
-Piclaw response: keep assumptions explicit in fixture tests; select a version where HC-009/HC-012/HC-013 pass before cutover.
+Piclaw response: Harness v3 specifies total-state restore/resume. Keep assumptions explicit until the runtime slices pass HC-009/HC-012/HC-013.
 
 ### C-007 — Recovery reducer is not package-exported
 
 The installed files implement `reduceLaneState()` and `validateRecordLog()`, but the package export map exposes only `.`, `./node`, `./session/testing` and `./package.json`; the root index does not re-export the reducer.
 
-Piclaw response: do not deep-import it. Use it as assessment/fixture evidence only. Select a production version with a sufficient public restore/recovery surface.
+Piclaw response: do not deep-import it. Harness v3 removes reducer/history recovery in favour of current registers and bounded restore; select that public implementation.
 
 ### C-008 — Bun is outside the declared engine contract
 
@@ -48,11 +48,11 @@ Piclaw response: run public session conformance, execution environment and real 
 
 ## Lower-confidence surfaces
 
-- passive event ordering and correlation to durable record sequence;
-- exact `runId` behaviour across restore/resume;
-- abort ordering around pending queues and late tool/model results;
-- concrete hook payload shapes;
-- manual-drive action timing.
+- implementation fidelity to Harness v3 typed event/watch ordering;
+- runtime enforcement that public `runId` is the durable operation ID;
+- abort ordering around queue state and late tool/model results;
+- hook durability/replay timing;
+- manual-drive action/effect timing.
 
 Piclaw response: let the selected version's direct contract tests determine behaviour. Do not hide differences behind compatibility interfaces.
 

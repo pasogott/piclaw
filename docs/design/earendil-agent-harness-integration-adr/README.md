@@ -11,8 +11,10 @@ This ADR proposes how Piclaw replaces its agentic loop with a service-plane coor
 | Decision owner | Rui Carmo |
 | Assessment baseline | Piclaw `v2.13.2` |
 | Baseline commit | `0afd3ae645c423bed82deef80c343bcaa6f31d4d` |
-| Earendil packages | `pi-coding-agent`, `pi-agent-core`, `pi-ai` and installer-pinned `pi-tui` verified at exact `0.84.1` |
-| Document state | Assessment complete; decision requested |
+| Earendil installed baseline | `pi-coding-agent`, `pi-agent-core`, `pi-ai` and installer-pinned `pi-tui` verified at exact `0.84.1` |
+| Earendil target design | Harness v3 `packages/agent/docs/harness.md` at `2a9b4ebc680053c64e31f635b0b22d5e22564001` (blob `9e38c1fab7ed77107952c1de850cdba987fff82c`) |
+| Earendil implementation watch | Draft PR `earendil-works/pi#7976`, type-contract slice at `69130ae34e91207249b262008eea3fb0ac3adf44` |
+| Document state | Assessment updated for Harness v3; decision requested |
 | Production changes | None authorised |
 | Final decision | Proposed: select direct Earendil adoption with a selected-version test implementation first |
 
@@ -62,6 +64,7 @@ The assessment produced this ADR, its evidence tables and a proposed semantic co
   - [Earendil-native effector contracts](evidence/earendil-native-effector-contracts.md)
   - [Tool, environment and resource migration](evidence/tool-resource-migration.md)
   - [Earendil 0.84.1 adoption constraints](evidence/earendil-0.84.1-constraints.md)
+  - [Earendil Harness v3 assessment](evidence/earendil-harness-v3-assessment.md)
   - [Earendil version-selection policy](evidence/earendil-version-selection.md)
   - [Direct Earendil type audit](evidence/direct-type-audit.md)
   - [Target state, event and settlement model](evidence/target-state-model.md)
@@ -78,7 +81,7 @@ The index is the ADR decision record. Chapters hold the assessment and design an
 Select the direct-adoption architecture in [`evidence/alternatives-and-migration.md`](evidence/alternatives-and-migration.md), starting with a selected-version test implementation:
 
 - Piclaw retains authenticated acceptance, canonical source order, operation identity, exact cancellation, timeline/media persistence, scheduler/delivery policy, terminal disposition, frontier and restart reconciliation.
-- Earendil owns transcript execution, model/tool lifecycle, execution compaction and execution recovery.
+- Earendil owns transcript execution, model/tool lifecycle, execution compaction and execution recovery. Harness v3's entries/registers/usage-ledger design is the target execution model; released `0.84.1` remains implementation evidence only.
 - Piclaw imports no current agent orchestration into the replacement path. Piclaw service actions use reviewed service-plane ports; execution uses Earendil's exported harness/session/model/tool/environment contracts directly.
 - A test-only implementation of the selected Earendil public contracts and one semantic contract suite precede real-harness integration. Piclaw updates the fixture and integration when Earendil types change; backward source compatibility is not a goal.
 - Production remains on the v2.13.2 loop until the real harness and staged migration pass the documented gates.

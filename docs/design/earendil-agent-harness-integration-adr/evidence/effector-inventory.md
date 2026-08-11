@@ -15,20 +15,20 @@ An effector performs one external query or mutation from an explicit request. It
 | EF-005 | `db/connection.ts:getDb`, migration and transaction mechanism | Reusable | Storage mechanism, no agent lifecycle decision required | Use for Piclaw operation ledger/outbox migrations |
 | EF-006 | `AgentQueue` | Reusable only as dispatcher | Serialises and retries closures but is not durable acceptance and contains generic retry policy | Keep as idempotent wake/worker mechanism; derive tasks from durable pending work |
 | EF-007 | `AgentPool` | Reject | Central current orchestrator: session cache, run/recovery, controls, tools, branches and status | Replace with Piclaw service coordinator plus Earendil harness registry |
-| EF-008 | `run-agent-orchestrator.ts` | Reject | Implements prompt lifecycle, timers, tool policy, compaction, retries, status and cleanup | Earendil harness/fixture owns execution; Piclaw supplies policy inputs and projects events |
-| EF-009 | `run-agent-recovery-phase.ts` | Reject | Decides recovery strategy, budgets, compaction, rotation, tool suppression and terminal outcome | Adopt Earendil durable reducer/actions; retain only product policy configuration where needed |
+| EF-008 | `run-agent-orchestrator.ts` | Reject | Implements prompt lifecycle, timers, tool policy, compaction, retries, status and cleanup | Harness v3 interpreter/effects boundary owns execution; Piclaw supplies service policy and projects events |
+| EF-009 | `run-agent-recovery-phase.ts` | Reject | Decides recovery strategy, budgets, compaction, rotation, tool suppression and terminal outcome | Adopt Harness v3 total `op.state`, intent/effect/settlement and public resume semantics; retain only Piclaw service policy |
 | EF-010 | `run-agent-attempt-finalization.ts` | Reject | Classifies provider/tool facts into terminal/recovery outcomes | Harness contract returns typed outcome; Piclaw maps to service disposition without prose classification |
 | EF-011 | `agent-pool/compaction.ts` | Split | Estimation and product thresholds may be policy; execution, timeout, single-flight and recovery are orchestration | Earendil compaction operation; Piclaw may provide threshold settings and UI projection |
-| EF-012 | `session-rotation.ts`, branch seeding | Replace with direct Earendil session operations | Mixes archive/session creation with fallback and recovery policy | Use selected-version `SessionRepo`, lanes, navigation/fork; keep only Piclaw chat correlation/archive policy |
-| EF-013 | `agent-pool/session-manager.ts` | Reject | Cache, creation, branch realization, model restore, side session sync, eviction and shutdown policy | Harness registry with explicit lane/session lifetime; storage and resource provisioning become ports |
-| EF-014 | `agent-pool/session-persistence.ts` and JSONL bridge | Replace with direct Earendil repository | Targets legacy `SessionManager` shape | Prefer selected-version `JsonlSessionRepo`; any custom backend implements exact `SessionRepo`/`SessionStorage` and passes conformance |
-| EF-015 | `agent-pool/sqlite-session-store.ts` prototype | Evidence only | Non-shipping schema is deliberately incompatible with Earendil session protocol | Do not adopt; use its benchmark/fault evidence when selecting a backend |
-| EF-016 | `createTrackedBashOperations` | Replace with direct Earendil environment/tool composition | Legacy `BashOperations` overlaps Earendil `ExecutionEnv`, `createBashTool` and built-in truncation/update semantics | Implement Piclaw requirements in an `ExecutionEnv` satisfying exact `Result`/`ExecutionError` semantics; pass it to public `createBashTool`; set `replay: "never"` |
-| EF-017 | read/write/edit tools | Replace legacy definitions with public Earendil tools | Earendil already implements `AgentHarnessTool`, `ExecutionEnv`, path resolution, mutation queue, truncation and result details | Use `createReadTool`, `createWriteTool`, `createEditTool` directly with explicit replay metadata |
-| EF-018 | image/browser/integration/add-on tools | Direct Earendil tool implementations after review | These remain application capabilities but must use Earendil's exact tool types and semantics | Implement/satisfy `HarnessTool` or `AgentHarnessTool<PiclawToolContext,...>` directly; no Piclaw tool interface |
-| EF-019 | `extensions/ssh-core.ts` | Reimplement as `ExecutionEnv` backend | Remote filesystem/shell routing overlaps Earendil `FileSystem`/`Shell`; live profile mutation remains service policy | Provide local/SSH `ExecutionEnv` instances with exact no-throw `Result` errors; select via `toolContext` snapshot |
-| EF-020 | `ModelRuntime`, model registry and credential store | Reuse directly | `ModelRuntime implements Models`; `FileCredentialStore implements CredentialStore` | Pass concrete `ModelRuntime` as `AgentHarnessOptions.models`; keep direct credential contract; no model effector wrapper |
-| EF-021 | coding-agent resource loader/extensions | Split; use Earendil resources/tools directly | Skills/templates/tools have public Earendil contracts; legacy extension commands/hooks target AgentSession | Supply `Resources`, `Skill`, `PromptTemplate`, `HarnessTool`; retain Piclaw commands in service plane; map only supported hooks |
+| EF-012 | `session-rotation.ts`, branch seeding | Replace with direct Harness v3 session operations | Mixes archive/session creation with fallback and recovery policy | Use selected v3 `SessionRepo`, lanes, navigation/fork; keep only Piclaw chat correlation/archive policy |
+| EF-013 | `agent-pool/session-manager.ts` | Reject | Cache, creation, branch realization, model restore, side session sync, eviction and shutdown policy | Harness v3 registry/session lifetime and selected backend own execution resources; Piclaw retains service correlation/cache policy only where needed |
+| EF-014 | `agent-pool/session-persistence.ts` and JSONL bridge | Replace with coherent Harness v3 backend | Targets legacy `SessionManager`/v2 shape | Do not target current v2 JSONL format 4; adopt selected v3 Memory/JSONL/SQLite `Storage`/`SessionRepo` and conformance |
+| EF-015 | `agent-pool/sqlite-session-store.ts` prototype | Evidence only | Non-shipping schema is incompatible with Harness v3's planned per-session storage/register model | Do not adopt; use benchmark/fault evidence when selecting the v3 SQLite slice |
+| EF-016 | `createTrackedBashOperations` | Replace with direct Harness v3 environment/tool composition | Legacy `BashOperations` overlaps Earendil `ExecutionEnv`, `createBashTool` and built-in truncation/update semantics | Implement Piclaw requirements in `ExecutionEnv`; supply it through v3 `toolContext`; use public `createBashTool`; set `replay: "never"` |
+| EF-017 | read/write/edit tools | Replace legacy definitions with public Earendil tools | Earendil already implements contextual tools, `ExecutionEnv`, path handling, mutation queue, truncation and result details | Use selected Harness v3 `AgentHarnessTool<PiclawToolContext>` definitions directly with explicit replay metadata |
+| EF-018 | image/browser/integration/add-on tools | Direct Harness v3 tool implementations after review | These remain application capabilities but must use Earendil's exact selected tool types and semantics | Implement/satisfy `AgentHarnessTool<PiclawToolContext,...>` directly; no Piclaw tool interface |
+| EF-019 | `extensions/ssh-core.ts` | Reimplement as `ExecutionEnv` backend | Remote filesystem/shell routing overlaps Earendil `FileSystem`/`Shell`; live profile mutation remains service policy | Provide local/SSH `ExecutionEnv` instances with exact no-throw `Result` errors; Harness v3 resolves selected context once per tool batch |
+| EF-020 | `ModelRuntime`, model registry and credential store | Reuse directly, subject to selected v3 API | `ModelRuntime implements Models`; `FileCredentialStore implements CredentialStore` | Pass concrete `ModelRuntime` through v3 options; adopt any selected `Models` changes directly; no model effector wrapper |
+| EF-021 | coding-agent resource loader/extensions | Split; use Earendil resources/tools/hooks directly | Skills/templates/tools have public contracts; legacy extension commands/hooks target AgentSession | Supply selected Harness v3 `Resources`, `Skill`, `PromptTemplate`, generic tools and typed hooks; retain Piclaw commands in service plane |
 | EF-022 | `task-scheduler.ts` | Split | Polling and schedule computation are service effects; task execution and delivery are mixed in one function | Piclaw scheduler accepts/claims task; call `AgentLane.prompt` directly; separate timeline, log, Pushover and shell effects |
 | EF-023 | scheduled task DB accessors | Reusable behind Piclaw service contract | Durable schedule/run-log persistence remains outside Earendil | Add claim/idempotency semantics and explicit delivery IDs |
 | EF-024 | `runtime/progress-watchdog.ts` | Split | Timer/monitor mechanism is reusable; chat-scoped phase policy is current orchestration | Observe Earendil events/watchers and exact run; invoke `AgentLane.abort` after Piclaw cancellation fence |
@@ -107,7 +107,7 @@ Piclaw stores correlation beside the actual harness/lane objects and verifies ex
 
 ### Earendil tool and environment contracts
 
-Tools are `HarnessTool`/`AgentHarnessTool` directly, with an explicit `replay: "safe" | "never"`. Filesystem and shell operations implement `ExecutionEnv` and return Earendil `Result<T, FileError | ExecutionError>` semantics. Do not add a `PiclawToolEffect`, custom filesystem result or duplicate tool-result type.
+Target tools are Harness v3 `AgentHarnessTool<TContext>` directly, with `AgentTool.replay: "safe" | "never"` (omission defaults to `never`). Filesystem and shell operations implement `ExecutionEnv` and return Earendil `Result<T, FileError | ExecutionError>` semantics. Do not add a `PiclawToolEffect`, custom filesystem result or duplicate tool-result type.
 
 Prefer Earendil's public `createReadTool`, `createWriteTool`, `createEditTool` and `createBashTool`. Piclaw-specific tools retain Earendil's execute signature, `AgentToolResult`, update callback, execution mode and terminate semantics.
 
@@ -134,7 +134,7 @@ Each port gets an in-memory deterministic fake with:
 - crash snapshot and restore;
 - payload redaction assertions.
 
-The fake accepted-source store must use the same transition reference model as the SQLite implementation, but not the same implementation code. The selected-version harness fixture may use Earendil's public in-memory `Session` backend and observed record semantics; it must not deep-import the non-exported reducer or import Piclaw's existing agent orchestration.
+The fake accepted-source store must use the same Piclaw service transition model as the SQLite implementation, but not the same implementation code. The selected-version Harness v3 fixture should use that version's public Memory `Storage`/`Session` and instrumented commit decorator; it must not import Piclaw's existing agent orchestration.
 
 ## Tool replay policy
 
@@ -148,7 +148,7 @@ Initial classes:
 | Terminal UI/process action | `never` | send card/widget, exit/restart, notification |
 | Unknown add-on tool | `never` by default | dynamically installed tools without reviewed metadata |
 
-A `never` tool that has a durable `tool_started` record and no result after restart enters reconciliation/containment. It is not replayed automatically.
+A restored Harness v3 tool in `effect_pending` is replayed only when both persisted and current declarations are `safe`; otherwise Earendil settles an interrupted result under the reserved ID. Piclaw does not replay it independently.
 
 ## Migration rule
 

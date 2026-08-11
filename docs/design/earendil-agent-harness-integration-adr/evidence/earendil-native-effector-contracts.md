@@ -1,6 +1,6 @@
 # Earendil-native effector contracts
 
-Baseline: exported types and implemented semantics in `@earendil-works/pi-agent-core@0.84.1`, `@earendil-works/pi-ai@0.84.1` and `@earendil-works/pi-coding-agent@0.84.1`.
+Implemented baseline: exported types and semantics in `@earendil-works/pi-agent-core@0.84.1`, `@earendil-works/pi-ai@0.84.1` and `@earendil-works/pi-coding-agent@0.84.1`. Target design: Harness v3 [`harness.md`](https://github.com/earendil-works/pi/blob/2a9b4ebc680053c64e31f635b0b22d5e22564001/packages/agent/docs/harness.md), with emerging public types in draft PR #7976. Version-specific v2 details below are baseline evidence and must be replaced by direct v3 contracts when selected.
 
 ## Rule
 
@@ -9,6 +9,8 @@ Piclaw must not define a parallel execution abstraction over Earendil. Productio
 Allowed composition uses TypeScript's standard `Pick`, `Omit`, generics and declaration merging over Earendil exports. It must not rename a harness method, wrap a tagged harness error in a second error taxonomy, or replace Earendil `Result`/session/tool semantics with a Piclaw equivalent.
 
 ## Supported imports
+
+The following block is the verified `0.84.1` import baseline. Harness v3 draft PR #7976 changes this surface substantially (`AgentHarnessConstructor`, generic harness/options/tools, `Storage`/register types, typed events/hooks, `NextRunResult`, `LaneLastResult`). Production must regenerate the import list from the selected merged v3 commit rather than preserving this block.
 
 Use public package exports:
 
@@ -48,10 +50,6 @@ import {
   type SessionMetadata,
   type SessionTree,
   type Entry,
-  type LaneRecord,
-  type StepAttemptRecord,
-  type ToolStartedRecord,
-  type LogItem,
   type JsonlSessionMetadata,
   type JsonlSessionRepoFileSystem,
   type Resources,
@@ -89,11 +87,13 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 The installed coding-agent package contains `dist/server/create-harness.js`, but its export map does not expose that path. Piclaw must not use this private deep import. Build from public agent-core exports at the selected version; if a later Earendil release exports the helper, adopt that release's public composition and remove Piclaw's temporary composition code.
 
+For the Harness v3 target, additionally require the selected public equivalents of `AgentHarnessConstructor`, `Storage`, `Transaction`, `Register`, `UsageRow`, `HarnessEvent`, `HookMap`, `NextRunResult` and `LaneLastResult` as specified in [`earendil-harness-v3-assessment.md`](earendil-harness-v3-assessment.md).
+
 ## Direct harness boundary
 
 Do not add `HarnessExecutionPort`, `AgentHarnessLike`, `PromptHarnessRun`, `HarnessRunHandle` or renamed queue/abort result types.
 
-The runtime registry stores actual Earendil objects:
+The runtime registry stores actual selected-version Earendil objects. The shown binding uses `0.84.1` names; Harness v3 may expose construction through `AgentHarnessConstructor` rather than a concrete static class:
 
 ```typescript
 interface PiclawHarnessBinding {
@@ -103,7 +103,7 @@ interface PiclawHarnessBinding {
   readonly piclawOperationId: string;
   readonly sessionId: string;
   readonly laneName: string;
-  runId: string | null;
+  harnessOperationId: string | null; // public name is runId
 }
 ```
 
@@ -118,15 +118,15 @@ const aborted: AbortResult = await binding.lane.abort();
 const resumed: ResumeResult = await binding.lane.resume();
 ```
 
-Expected rejection uses Earendil's tagged `Result` errors (`LaneBusy`, `NoActiveRun`, `NoActiveOperation`, `MissingIdentities`, `NothingToResume`, `Closed`, and related tags). Piclaw matches `_tag` or the exported `.is()` predicates. It does not catch an expected rejection and convert it to a second generic exception.
+Expected rejection uses the selected Earendil tagged `Result` errors (`LaneBusy`, `NoActiveRun`, `NoActiveOperation`, `MissingIdentities`, `NothingToResume`, `Closed`, and related tags). Piclaw matches `_tag` or exported predicates and does not convert expected rejection into a second generic exception. Harness v3 also returns accepted failed/aborted/suspended outcomes and exposes `lane.lastResult` after terminal settlement.
 
 Unexpected implementation faults may throw `HarnessFault`, `HarnessClosed` or another `Error`; these are faults, not ordinary result branches.
 
 ## Direct session persistence
 
-Earendil owns transcript/session mutation through `SessionRepo`, `Session`, `SessionStorage`, `Entry`, `LaneRecord` and `LogItem`.
+Earendil owns transcript/session mutation. In released `0.84.1` this uses `SessionRepo`, `Session`, `SessionStorage`, entries and operation records. Harness v3 replaces that storage contract with `Storage.commit(Transaction)`, immutable `Entry`, mutable typed `Register`, append-only `UsageRow`, `Session` and `SessionRepo`; Piclaw should adopt the selected v3 surface directly.
 
-Piclaw should first use the exported `JsonlSessionRepo` rather than inventing a session schema. Its filesystem dependency is already typed as:
+For released-v2 fixture work, the exported `JsonlSessionRepo` is available and its filesystem dependency is typed as:
 
 ```typescript
 type JsonlSessionRepoFileSystem = Pick<
@@ -145,21 +145,29 @@ type JsonlSessionRepoFileSystem = Pick<
 >;
 ```
 
-The repository preserves source format 3 or 4 metadata, supports lanes/forks and uses Earendil's single mutation sequence. Piclaw chat/operation correlation remains in Piclaw's database; it may place bounded application metadata in `JsonlSessionMetadata.metadata`, but that metadata cannot become the Piclaw source of record.
+This v2 repository evidence does not select its unfinished format 4 for production. Harness v3 explicitly replaces the current implementation/storage shape. Piclaw chat/operation correlation remains in Piclaw's database and cannot become Earendil session state.
 
-Any new backend implements `SessionRepo`/`SessionStorage` exactly and passes `createSessionBackendConformance()`. It must preserve Earendil `SessionError` codes and query semantics. Piclaw does not wrap it in another transcript repository interface.
+A selected Harness v3 backend implements that version's `Storage`, `Session` and `SessionRepo` contracts and passes its conformance suite unchanged. Piclaw does not wrap it in another transcript repository interface.
 
-The installed files contain `reduceLaneState()` and `validateRecordLog()`, but `@earendil-works/pi-agent-core@0.84.1` does not export them through `.`, `./node` or `./session/testing`. Direct-adoption policy therefore forbids importing them in Piclaw production code. The selected production version must expose the reducer/validation needed for external recovery, or Piclaw treats `AgentHarness.create`/snapshots/session APIs as the only supported recovery surface. The `0.84.1` test fixture may test the observed reducer semantics internally, but cannot make a private import part of Piclaw's production contract. Piclaw must not implement a second reducer for Earendil entries/records.
+The installed v2 files contain `reduceLaneState()` and `validateRecordLog()`, but `0.84.1` does not package-export them. Harness v3 intentionally eliminates orchestration-history reduction: current total state lives in registers and restore performs bounded point reads/hydration. Piclaw must neither deep-import the v2 reducer nor implement a second reducer. Production uses Harness v3's public `AgentHarness.create`, snapshots, `getLastResult()`, `Session` and storage contracts.
 
 ## Direct model and credential contracts
 
-Piclaw's installed `ModelRuntime` already implements `Models`. Pass it directly:
+Piclaw's installed `ModelRuntime` already implements the released `Models` contract. Pass it directly if it satisfies the selected Harness v3 `Models` surface; otherwise update the concrete runtime rather than wrapping it. Harness v3 target construction is:
 
 ```typescript
-const options: AgentHarnessOptions = {
+interface PiclawToolContext {
+  env: ExecutionEnv;
+  chatJid: string;
+  operationId: string;
+}
+
+const options: AgentHarnessOptions<PiclawToolContext> = {
   session,
   models: modelRuntime,
   model: selectedModel,
+  toolContext: resolvePiclawToolContext,
+  tools,
   // ...
 };
 ```
@@ -194,17 +202,11 @@ Piclaw needs a custom `ExecutionEnv` implementation only for semantics the publi
 
 That implementation must still expose Earendil methods and `Result` errors exactly. It can delegate to `NodeExecutionEnv` locally and a remote backend for SSH. It must not expose a Piclaw-specific filesystem or shell interface to the harness.
 
-A per-turn environment snapshot should use `AgentHarnessOptions.toolContext`, not global mutable tool routing. The installed declarations expose `AgentHarnessToolContextSource<TContext>` and contextual `AgentHarnessTool<TContext,...>`, but `AgentHarnessOptions.tools` currently accepts non-contextual `HarnessTool[]`. The private coding-agent helper resolves this by binding context into each tool closure before `AgentHarness.create()`.
+At released `0.84.1`, a per-turn environment snapshot must be closure-bound because `AgentHarnessOptions.tools` erases contextual tool types. Harness v3 directly defines generic `AgentHarness<TContext>`, `AgentHarnessOptions<TContext>` and `AgentHarnessTool<TContext>[]`; it resolves `toolContext` once per live/restored tool batch. Target implementation should use those v3 types directly and delete the v2 binder.
 
-Piclaw must not invent another tool interface to bridge this mismatch or prescribe an upstream API. At `0.84.1`, a direct `HarnessTool` may close over a Piclaw-owned context source exactly as the installed coding-agent helper does:
+The following binder is only a `0.84.1` fixture/baseline technique, not the Harness v3 target:
 
 ```typescript
-interface PiclawToolContext {
-  env: ExecutionEnv;
-  chatJid: string;
-  operationId: string;
-}
-
 const contextSource: AgentHarnessToolContextSource<PiclawToolContext> = async () => ({
   env: await resolveExecutionEnv(chatJid),
   chatJid,
@@ -221,11 +223,11 @@ const bound: HarnessTool = {
 };
 ```
 
-This binding preserves Earendil's exact tool types and result semantics. It is temporary version-specific composition code, not a Piclaw execution abstraction. When Earendil changes this surface, Piclaw updates to the new direct type shape and deletes the binding even if that causes local churn. `chatJid` and `operationId` are application metadata for Piclaw-specific tools; built-in tools need only `{ env }`.
+This binding preserves the `0.84.1` tool types and result semantics. It must be deleted when adopting Harness v3 generic contextual tools. `chatJid` and Piclaw operation ID remain application metadata in Piclaw's selected context type; built-in tools need only `{ env }`.
 
 ## Direct built-in tool contracts
 
-Use Earendil's built-in tools rather than wrapping Piclaw's legacy read/write/edit/bash definitions. At `0.84.1`, bind each exported contextual tool before widening it to `HarnessTool`. The binding is a generic function over Earendil's own `AgentHarnessTool` type, not a Piclaw tool interface:
+Use Earendil's built-in tools rather than wrapping Piclaw's legacy read/write/edit/bash definitions. The following `0.84.1` binding illustrates baseline composition; Harness v3 should receive `AgentHarnessTool<TContext>[]` directly:
 
 ```typescript
 import type { Static, TSchema } from "typebox";
@@ -257,7 +259,7 @@ const tools: HarnessTool[] = [
 ];
 ```
 
-The generic keeps each parameter schema until the closure is created; widening to `HarnessTool` afterwards is intentional. At `0.84.1`, `HarnessTool` erases the schema parameter and exposes `params` as `unknown`, so the single `Static<TSchemaValue>` assertion restores the validated schema at the delegation point. No `any` or second schema is introduced. Context is resolved per invocation as the installed helper intends. The exact timing follows the selected Earendil version; Piclaw does not add a persistent context API.
+This generic is required only because `0.84.1` `HarnessTool` erases the schema parameter. Harness v3's generic options/tools remove that widening and resolve one context per batch. No v2 compatibility binder should remain in the selected v3 production path.
 
 The built-ins already implement:
 
@@ -270,9 +272,9 @@ The built-ins already implement:
 - exact edit validation/diff details;
 - tool errors as thrown errors at the tool boundary.
 
-The harness persists `ToolStartedRecord.replay` and the effective arguments before result persistence. Piclaw must set `replay` explicitly on every supplied tool because the declared property is optional while the durable record requires a concrete value.
+Released v2 persists replay in `ToolStartedRecord`; Harness v3 persists effective arguments and replay state in `op.tool_args`/`op.state` around `effect_pending`. Piclaw should set `replay` explicitly even though v3 omission defaults to `never`.
 
-Do not add a separate `PiclawToolEffect` interface. A Piclaw-specific tool is an Earendil `HarnessTool`/`AgentHarnessTool` directly:
+Do not add a separate `PiclawToolEffect` interface. A target Piclaw-specific tool is a Harness v3 `AgentHarnessTool<PiclawToolContext>` directly. The following is the released-v2 fixture shape only:
 
 ```typescript
 const tool: HarnessTool = {
@@ -287,7 +289,7 @@ const tool: HarnessTool = {
 };
 ```
 
-If it needs Piclaw context, use `AgentHarnessTool<PiclawToolContext, ...>` and the exact five-argument execute signature. Do not rename `AgentToolResult`, `AgentToolUpdateCallback`, `executionMode`, `terminate`, `usage` or `addedToolNames`.
+Harness v3 directly accepts `AgentHarnessTool<PiclawToolContext>[]` and resolves context per batch; use that selected exact execute signature. Do not rename `AgentToolResult`, update callbacks, `executionMode`, `terminate`, `usage`, `addedToolNames` or `replay`.
 
 ## Harness-owned effect execution
 
@@ -295,26 +297,22 @@ Earendil's manual-drive `ActionInfo` already defines the execution effects. Picl
 
 | `ActionInfo.kind` | Earendil contract that performs it | Piclaw role |
 |---|---|---|
-| `append_entry` | `Session.appendEntry()` / `SessionStorage.appendEntry()` | Observe/correlate only |
-| `append_record` | `Session.appendRecord()` / `SessionStorage.appendRecord()` | Observe/correlate only |
-| `move_lane` | `Session.moveLane()` | Maintain Piclaw branch correlation |
-| `set_fact` | `Session.setName()` / `setLabel()` | Project optional metadata |
+| `commit` / entry/register/usage writes | Harness v3 `Storage.commit(Transaction)` through `Session` | Observe through typed events/instrumented test storage; never duplicate writes |
+| lane/config/fact mutation | Harness v3 lane/session mutation line and register writes | Maintain Piclaw correlation/projection only |
 | `stream_assistant` | `Models.streamSimple()` with `Model`, stream options and retry policy | Supply concrete `Models`/model; do not wrap stream semantics |
-| `execute_tool` | exact `HarnessTool.execute()` | Supply direct tool definitions/context/environment |
+| `execute_tool` | exact Harness v3 `AgentHarnessTool<TContext>.execute()` | Supply direct tool definitions/context/environment |
 | `fetch_deferred` | `Models.fetchDeferred()` | Supply `Models`; project status only |
 | `cancel_deferred` | `Models.cancelDeferred()` | Piclaw cancellation fence precedes harness action |
 | `hook` | `Hooks.on()` registrations | Register supported direct hooks |
 | `sleep` | harness retry scheduler | Observe progress/deadline; no second retry timer |
-| `consume_queue_item` | harness queue/session records | Reconcile Piclaw accepted source to durable harness state |
-| `apply_pending_write` | harness session storage | No Piclaw duplicate write |
-| `commit_follow_up` | harness queue/session protocol | Reconcile delivery/consumption |
-| `try_finish_run` / `finish_operation` | harness reducer and `operation_finished` record | Use typed result as Piclaw terminal candidate; Piclaw still commits service disposition |
+| queue/write checkpoint actions | Harness v3 `pending.entry`, lane/operation state and placement transactions | Reconcile Piclaw accepted source to snapshot/current state |
+| terminal transaction | Harness v3 register cleanup plus `lane.lastResult` | Use typed result/`getLastResult()` as Piclaw terminal candidate; Piclaw still commits service disposition |
 
 Piclaw effectors begin outside this table: service acceptance, timeline/media transaction, external delivery, notifications and web projection. Session storage, model calls, tools, hooks and harness retry/compaction are Earendil-owned effects.
 
 ## Direct replay policy
 
-Earendil supports exactly `"never" | "safe"` on `HarnessTool` and persists it in `ToolStartedRecord`. Piclaw adds no third replay state.
+Earendil supports exactly `"never" | "safe"` replay. Harness v3 puts this on `AgentTool`, defaults omission to `never`, and persists the effective state/arguments needed for recovery. Piclaw adds no third replay state.
 
 | Class | Earendil replay value | Examples |
 |---|---|---|
@@ -338,18 +336,18 @@ const resources: Resources = {
 
 Commands are not an Earendil harness resource. Piclaw slash commands stay in the Piclaw service plane and call exact `AgentLane`/`AgentHarness` methods or Piclaw service operations after authorization.
 
-The installed `createCodingAgentHarness()` helper is a private deep module, not a package export. At `0.84.1`, use public agent-core tools/resources and a Piclaw-owned `systemPrompt` callback passed through `AgentHarnessOptions`. If a selected later release exports coding-agent composition, adopt its public types and remove the local composition.
+The installed `createCodingAgentHarness()` helper is a private deep module, not a package export. At `0.84.1`, use public agent-core composition only for fixture evidence. The selected Harness v3 production path must use its public construction/types; if coding-agent exports composition, adopt it directly, otherwise compose public v3 contracts and do not retain the v2 helper shape.
 
 ## Direct compaction and retry semantics
 
 Use Earendil's:
 
-- `CompactionSettings` in `AgentHarnessOptions.compaction`;
-- `RetryPolicy` in `AgentHarnessOptions.retry`;
-- the selected version's `StreamOptions` (`SimpleStreamOptions` at `0.84.1`) in `streamOptions`;
+- Harness v3 `CompactionSettings` in options/current harness settings;
+- Harness v3 `RetryPolicy` in options/current harness settings;
+- `AgentHarnessStreamOptions` and patches, with harness-owned signal/lifecycle callbacks excluded;
 - `AgentLane.compact()` and `CompactionResult`;
-- `StepAttemptRecord` with `manual | threshold | overflow` compaction reasons;
-- `CompactionError` codes;
+- Harness v3 structural operation state with `manual | threshold | overflow` compaction reasons;
+- selected-version compaction outcomes/errors;
 - suspended/resume outcomes.
 
 Piclaw may choose product defaults and deadlines before constructing/configuring the harness. It does not wrap compaction in a second Piclaw single-flight/retry/rotation state machine.
@@ -358,12 +356,12 @@ Piclaw may choose product defaults and deadlines before constructing/configuring
 
 Use `Hooks`, `Events`, `WatchHandle<LaneSnapshot>` and `WatchHandle<SessionSnapshot>` directly.
 
-The installed declarations type hook/event payloads as `unknown`. Piclaw must therefore:
+Released `0.84.1` declarations type hook/event payloads as `unknown`; Harness v3 specifies typed `HookMap` and `HarnessEvent` unions plus snapshot-first buffered watches. Target Piclaw must:
 
-- register only documented hook names;
-- narrow payloads at the boundary;
-- treat passive events as projection hints;
-- use `LaneSnapshot`, `SessionSnapshot` and durable session logs for authority/recovery;
+- adopt the selected v3 hook/event types directly;
+- register only selected-version hook names;
+- treat passive events as projection input rather than standalone authority;
+- use `LaneSnapshot`, `SessionSnapshot`, operation results and `lane.lastResult` for authority/recovery;
 - avoid defining an alternative authoritative harness event union.
 
 Piclaw may define a separate **web projection DTO** after narrowing/redaction. That DTO is not a harness event type and cannot drive execution state.
@@ -372,7 +370,7 @@ Manual execution uses Earendil `ActionInfo` directly from `peekAction()`/`execut
 
 ## Direct telemetry
 
-Pass Piclaw's `TelemetryContext` through `AgentHarnessOptions.context` and use Earendil's `HARNESS_TELEMETRY_SCHEMA`/`AGENT_TELEMETRY_SCHEMAS` directly.
+Pass Piclaw's `TelemetryContext` through the selected Harness v3 `telemetryContext` option (named `context` in released v2) and use the selected Earendil harness/AI telemetry schemas directly.
 
 The schema already covers run, compaction, navigation, checkpoint, turn, step, tool, hook, sleep, event handler and session write spans. Piclaw adds an external parent/service span for accepted-source and terminal-settlement work; it does not duplicate harness spans under Piclaw names.
 
@@ -407,15 +405,15 @@ Only service-plane effects need Piclaw contracts:
 - notification delivery;
 - service restart/reconciliation coordination.
 
-These contracts can use Earendil's generic `Result`/`TaggedError` utilities, but they are not added to `AgentHarnessOptions`, `AgentLane`, `SessionStorage`, `ExecutionEnv` or `HarnessTool`.
+These contracts can use Earendil's generic `Result`/`TaggedError` utilities, but they are not added to Harness v3 options/lane/storage/environment/tool contracts.
 
 ## Implementation checks
 
 - imports come from public package exports only;
 - `ModelRuntime satisfies Models` and Piclaw credential storage satisfies `CredentialStore` at compile time;
 - local/SSH execution environments satisfy `ExecutionEnv` and its no-throw `Result` contract;
-- all tools satisfy `HarnessTool` with explicit replay metadata;
-- session backend passes the public conformance suite unchanged;
+- all tools satisfy selected Harness v3 `AgentHarnessTool<TContext>` with explicit replay metadata;
+- selected Harness v3 backend passes its public conformance suite unchanged;
 - no private reducer import is used in production;
 - fixture actions satisfy `ActionInfo` and operation results retain exact Earendil result types;
 - no `HarnessExecutionPort`, `AgentHarnessLike`, `PiclawToolEffect`, custom filesystem/shell result or duplicate harness error taxonomy exists;

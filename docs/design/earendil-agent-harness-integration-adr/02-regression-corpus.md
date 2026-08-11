@@ -25,8 +25,7 @@ Sources to inspect include:
 - relevant fix commits and PR descriptions;
 - [`docs/archive/turn-mechanism-audit.md`](../../archive/turn-mechanism-audit.md);
 - [`docs/design/agent-turn-state-machine-assessment.md`](../agent-turn-state-machine-assessment.md);
-- [`notes/piclaw-stable-revert-2026-08-10.md`](../../../../notes/piclaw-stable-revert-2026-08-10.md);
-- the archive branch `archive/post-v2.13.2-fixes-20260810`;
+- the archive branch `archive/post-v2.13.2-fixes-20260810` at `da47ca62f3c1e7e0d5e538cc250303eb8c9ca1f4`;
 - `/workspace/backups/piclaw-post-v2.13.2-fixes-20260810.bundle`;
 - operational logs and reproducible runtime failures.
 

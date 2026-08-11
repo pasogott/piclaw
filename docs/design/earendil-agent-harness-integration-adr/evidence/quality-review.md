@@ -21,7 +21,7 @@ Result: **decision-ready with explicit post-approval implementation gates**.
 | Regressions/incidents | 25 |
 | Invariants | 14 |
 | Piclaw surfaces classified for effector reuse | 36 |
-| Direct Earendil contract families detailed | 10: harness, operation result/error, action/snapshot, session, model/credential, tool, environment, resource, compaction/retry, telemetry |
+| Direct Earendil contract families detailed | 11: harness, operation result/error, action/snapshot, storage/session, model/credential, tool, environment, resource, compaction/retry, events/hooks, telemetry |
 | Harness contract cases | 20 |
 | Piclaw boundary contract cases | 20 |
 | Earendil assumptions | 10 |
@@ -38,20 +38,20 @@ Result: **decision-ready with explicit post-approval implementation gates**.
 | Known defects treated as specification | `regression-corpus.md` | Pass |
 | Every durable responsibility has a target owner | capability and traceability matrices | Pass |
 | No reuse of current Piclaw orchestration | effector classification rejects agent pool, process-chat/recovery/compaction orchestration | Pass as design constraint; implementation boundary test is an M1 gate |
-| Earendil structure adopted early | exact exported harness/session/model/tool/environment/result/resource/telemetry contracts surveyed and required directly | Pass |
+| Earendil structure adopted early | released 0.84.1 contracts audited; authoritative Harness v3 design and draft type slice pinned and adopted as target | Pass |
 | Parallel execution abstractions removed | `direct-type-audit.md` separates Earendil-owned from Piclaw service-owned types | Pass |
-| Real installed harness viability checked | installed JavaScript inspected; execution methods found to be stubs | Pass |
+| Real installed harness viability checked | installed 0.84.1 JavaScript is stubbed; Harness v3 runtime/backend implementation remains an explicit gate | Pass |
 | Selected-version test implementation specified | fixture layout, manual driver, direct Earendil `Models`/tools, fault plan and assumptions | Pass |
 | One semantic suite can target fixture and real harness | direct Earendil factory input and version-migration report | Pass as specification; implementation is an M1/M4 gate |
 | Replay and fault boundaries specified | target state model and selected-version fixture contract | Pass |
 | Exact-owner cancellation specified | operation/run identity and cancellation protocol | Pass |
 | Atomic terminal settlement specified | nine-step transaction/protocol | Pass |
-| Restart reconciliation specified | two-journal state table | Pass |
+| Restart reconciliation specified | Piclaw service log correlated to Harness v3 snapshot/current registers/`lane.lastResult` | Pass |
 | Scheduler delivery ownership specified | scheduler model and PC-012/013 | Pass |
 | Mobile installed-browser acceptance specified | PC-015 and M5–M7 installed gates | Pass |
 | Alternatives compared | five alternatives with selected direct-adoption/selected-version-fixture architecture | Pass |
 | Migration and rollback reversible | M0–M8, per-chat backend cutover and no destructive downgrade | Pass |
-| Unsupported claims labelled | ten assumptions with confidence/failure response and resolution gates | Pass |
+| Unsupported claims labelled | ten assumptions updated for Harness v3 design/type-slice/runtime status and resolution gates | Pass |
 
 ## Baseline test evidence
 
@@ -75,7 +75,8 @@ An independent review should challenge:
 - whether M5 (service authority before execution cutover) is the safest order;
 - whether per-chat rollback can preserve context without uncertain tool replay;
 - whether the semantic suite covers add-on/extension resource migration sufficiently;
-- whether the selected Earendil version exposes enough public restore/recovery surface without private reducer imports.
+- whether the selected Harness v3 implementation faithfully delivers bounded restore, `lane.lastResult`, external finalisation and total schema migration;
+- whether Piclaw should wait for a released coherent v3 backend or approve a pinned source commit.
 
 ## Post-approval gates
 
@@ -83,8 +84,9 @@ These are implementation evidence, not missing assessment prose:
 
 - implement the selected-version fixture and semantic suite in M1;
 - prototype/benchmark the Piclaw operation schema in M2;
-- select a usable Earendil source/version and update Piclaw to its direct types;
-- run the HC suite against the real harness in M4;
+- track draft PR #7976 and subsequent Harness v3 storage/runtime slices;
+- select a coherent usable Harness v3 source/version and update Piclaw to its direct types;
+- run the HC suite plus selected backend conformance against the real harness in M4;
 - measure shadow/soak and resource budgets;
 - complete installed-service/mobile/restart/rollback gates before cutover.
 

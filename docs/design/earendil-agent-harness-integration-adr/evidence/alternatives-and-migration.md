@@ -8,7 +8,7 @@ The design must:
 
 - reuse no Piclaw agent orchestration code;
 - preserve Piclaw's service acceptance, operation ownership, timeline, scheduler and delivery responsibilities;
-- align with Earendil's declared harness/session/reducer model;
+- align with Harness v3's declared entries/registers/usage, interpreter and effects model;
 - support deterministic manual driving, replay and fault injection;
 - prevent the 25 catalogued regressions;
 - allow rollback without rewriting or deleting stable Piclaw data;
@@ -37,7 +37,7 @@ The earlier state-machine assessment proposed a Piclaw-owned reducer and effect 
 
 | Criterion | Assessment |
 |---|---|
-| Earendil alignment | Medium-low; duplicates Earendil's lane reducer and record protocol |
+| Earendil alignment | Medium-low; duplicates Earendil's execution state machine (v2 reducer or v3 total-state interpreter) |
 | Existing behaviour | Medium-high |
 | Replay | High if completed |
 | Defect prevention | Medium-high |
@@ -70,7 +70,7 @@ Piclaw would replace its loop with `AgentHarness` now.
 | Earendil alignment | Highest |
 | Existing behaviour | Cannot execute |
 | Replay | Declared manual surface is promising |
-| Defect prevention | Session reducer covers execution corruption |
+| Defect prevention | Target v3 total-state validation/effect boundaries cover execution corruption |
 | Migration cost | Blocked |
 | Constraint compliance | Meets architectural constraint |
 
@@ -80,11 +80,11 @@ The installed `0.84.1` JavaScript throws `HarnessNotImplemented` for prompt, que
 
 ### E — Selected-version Earendil fixture now, real harness under the same semantic suite later
 
-Piclaw builds only its service-plane operation model and service effectors. Tests use a provisional `AgentHarness` implementation compiled against Earendil declarations and the implemented session reducer. The real `AgentHarness.create` factory replaces the fixture factory when execution becomes available; contract cases continue to call Earendil types and methods directly.
+Piclaw builds only its service-plane operation model and service effectors. Tests implement the selected Harness v3 public types over instrumented Memory storage and deterministic effects until the corresponding real slices are available. The real `AgentHarness.create` factory replaces the fixture factory when execution becomes available; semantic cases continue to call Earendil types and methods directly.
 
 | Criterion | Assessment |
 |---|---|
-| Earendil alignment | High; public types, session protocol, reducer and action vocabulary are adopted early |
+| Earendil alignment | High; Harness v3 public types, storage transactions/registers, effects and manual-drive vocabulary are adopted early |
 | Existing behaviour | Captured by capability/regression traceability and contracts |
 | Replay | High; fixture is manual and deterministic |
 | Defect prevention | High; service and execution owners are explicit |
@@ -97,7 +97,7 @@ Piclaw builds only its service-plane operation model and service effectors. Test
 
 Piclaw implements a new service-plane operation coordinator over reviewed service effectors. It imports no current agent-pool, process-chat, recovery or compaction orchestration. For execution it stores and calls the exported `AgentHarness`/`AgentLane` objects directly; it does not insert a Piclaw-shaped execution interface.
 
-Until Earendil provides a usable harness, only tests use the fixture. Production remains on the stable loop. Production cutover waits for the real harness to pass the shared suite.
+Harness v3 now has an authoritative specification and a draft first type slice, but no complete runtime/backend. Until the required v3 slices are usable, only tests use the fixture. Production remains on the stable loop and cutover waits for the real harness/backend to pass the shared suite.
 
 The selected architecture has three independently replaceable components:
 
@@ -126,12 +126,12 @@ Gate:
 
 Rollback: documentation only.
 
-### M1 — Add fixture and contract runner in tests
+### M1 — Add Harness v3 fixture and semantic runner in tests
 
 Deliver:
 
-- test implementation of the pinned Earendil public contracts;
-- deterministic model/tools/fault plan;
+- test implementation of pinned Harness v3 public contracts over instrumented Memory storage;
+- deterministic model/tools/fault plan and selected transaction traces;
 - 20 harness and 20 Piclaw boundary contract cases;
 - first 25 golden regression fixtures;
 - no production imports.
@@ -139,7 +139,7 @@ Deliver:
 Gate:
 
 - fixture compiles against pinned public declarations;
-- upstream in-memory backend and conformance suite pass;
+- selected Harness v3 Memory/backend conformance suite passes when available; fixture tests remain clearly non-production before then;
 - dependency-boundary check proves no Piclaw orchestration import.
 
 Rollback: remove test-only files.
@@ -192,9 +192,9 @@ Gate:
 
 Rollback: switch wrappers back to existing implementations; schemas are additive.
 
-### M4 — Integrate real Earendil harness in shadow execution
+### M4 — Integrate real Harness v3 in shadow execution
 
-Prerequisite: a usable Earendil harness passes the shared HC cases.
+Prerequisite: the required Harness v3 runtime/storage slices are available and a real harness/backend passes the shared HC cases.
 
 Deliver:
 
@@ -290,7 +290,7 @@ Gate:
 - independent exact-head review;
 - explicit deployment permission and no active sessions at restart.
 
-Rollback: change default and per-chat backend flags; keep Earendil journals intact.
+Rollback: change default and per-chat backend flags; preserve Earendil permanent entries/usage and current selected-version registers.
 
 ### M8 — Remove legacy orchestration
 
@@ -334,8 +334,8 @@ A parity divergence stores a bounded fixture candidate with payload hashes. It d
 | Layer | Required validation |
 |---|---|
 | Pure service model | Table/property/model tests for all transitions and invariants |
-| Earendil fixture | HC contract suite and golden replay |
-| Real harness | Same HC semantic suite and version-migration diff |
+| Harness v3 fixture | HC contract suite, instrumented storage transactions and golden replay |
+| Real Harness v3 | Same HC semantic suite, backend conformance and version-migration diff |
 | Piclaw boundary | PC suite with fake and real harness factories |
 | SQLite | migration, integrity, transaction crash, busy lock, backup/restore |
 | Tools | safe/never replay, abort/process-group, redaction, ambiguous effect |
@@ -344,7 +344,7 @@ A parity divergence stores a bounded fixture candidate with payload hashes. It d
 | Web | exact status authority, SSE generations, timeline cardinality |
 | Installed mobile | iPhone PWA silence-watchdog Abort path |
 | Installed service | systemd lifecycle, PID/HTTP, database integrity, restart and rollback |
-| Resources | cold RSS, per-session memory, startup/prompt latency, journal growth |
+| Resources | cold RSS, per-session memory, startup/prompt latency, entry/usage growth and register/JSONL compaction behaviour |
 
 ## Installed-service acceptance
 
@@ -368,9 +368,9 @@ Before production default changes:
 - Piclaw operation tables are additive and remain readable across rollback.
 - Existing timeline/media/task tables remain Piclaw-owned.
 - Legacy cursor fields are maintained as a projection until M8.
-- Earendil sessions use a backend that passes upstream conformance; no schema is placed into `messages.db` unless separately approved.
-- JSONL source is preserved during any session migration/soak.
-- No downgrade deletes Earendil records or rewrites uncertain tool results.
+- Earendil sessions use a coherent Harness v3 backend that passes its conformance suite; no harness schema is placed into `messages.db` unless separately approved.
+- Existing JSONL source is preserved during migration/soak; current unfinished v2 format 4 is not selected as the target v3 backend.
+- No downgrade deletes Earendil permanent entries/usage or rewrites uncertain tool results; current registers follow selected-version migration policy.
 
 ## Earendil version-selection gates
 
@@ -378,14 +378,14 @@ Before M4/M6, Piclaw must select an Earendil version whose direct public contrac
 
 - implemented prompt/queue/abort/compact/resume/manual-drive methods;
 - restore from open durable operations;
-- event or watcher behaviour sufficient for Piclaw projection when reconciled with snapshots/logs;
+- typed snapshot-first buffered watch behaviour sufficient for Piclaw projection, plus `lane.lastResult` reconciliation;
 - explicit tool replay semantics and unresolved-tool recovery;
 - session backend operation under Bun or an approved runtime boundary;
 - disposal/resource ownership;
 - public construction from agent-core, or a public coding-agent harness entry point.
 
-The current-version constraints and Piclaw responses are recorded in [`earendil-0.84.1-constraints.md`](earendil-0.84.1-constraints.md). Version adoption follows [`earendil-version-selection.md`](earendil-version-selection.md): Piclaw accepts local breakage and updates to the selected Earendil public types rather than requiring upstream compatibility.
+Released-version constraints are recorded in [`earendil-0.84.1-constraints.md`](earendil-0.84.1-constraints.md); Harness v3 target semantics and implementation progress are in [`earendil-harness-v3-assessment.md`](earendil-harness-v3-assessment.md). Version adoption follows [`earendil-version-selection.md`](earendil-version-selection.md): Piclaw accepts local breakage and updates to the selected Earendil public types rather than requiring upstream compatibility.
 
 ## Selected decision
 
-Select alternative E: build the Piclaw service-plane operation model and a test implementation of the pinned Earendil public contracts first; integrate a selected real harness only after it satisfies the same semantic suite. Accept Piclaw migration churn when selecting or upgrading Earendil. Keep production on the stable loop until M5/M6 gates are met. Remove the legacy loop only in M8 after an approved soak and rollback window.
+Select alternative E: build the Piclaw service-plane operation model and a test implementation of the pinned Harness v3 contracts first; integrate a selected real v3 harness/backend only after it satisfies the same semantic suite. Track draft PR #7976 and later build slices without pinning production prematurely. Accept Piclaw migration churn when selecting or upgrading Earendil. Keep production on the stable loop until M5/M6 gates are met. Remove the legacy loop only in M8 after an approved soak and rollback window.

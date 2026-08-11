@@ -167,7 +167,9 @@ The exported session-testing module provides `createSessionBackendConformance(fa
 
 A future Piclaw-backed or dedicated session backend must pass this upstream conformance suite before use. Passing it does not prove Piclaw operation acceptance or terminal settlement; those remain separate service-plane contracts.
 
-## Adoption boundary
+## Historical adoption boundary
+
+This was the direct-adoption boundary derived from released `0.84.1`. Harness v3 now supersedes its storage/reducer/event/tool-context details; see [`earendil-harness-v3-assessment.md`](earendil-harness-v3-assessment.md). Retain only concepts that remain in the selected v3 public surface.
 
 Adopt early:
 
@@ -175,14 +177,14 @@ Adopt early:
 - `Session`, `SessionStorage`, `SessionRepo` and lane terminology;
 - `ExecutionEnv`, `FileSystem`, `Shell`, `Result`, `FileError` and `ExecutionError`;
 - `Models`, `HarnessTool`/`AgentHarnessTool`, `Resources` and `TelemetryContext`;
-- durable operation/attempt/tool/queue record shapes where they meet product semantics;
-- the selected version's public recovery reducer/validation or harness restore surface; `0.84.1` reducer code is evidence only because it is not package-exported;
+- durable operation/tool/queue semantics, mapped to Harness v3 current registers rather than v2 record shapes;
+- the selected version's public Harness v3 restore/current-state surface; `0.84.1` reducer code is historical evidence only;
 - tagged `Result` outcomes;
 - `runId` correlation;
 - replay policy;
 - suspended-operation and missing-identity concepts;
-- the session backend conformance suite;
-- manual-drive action vocabulary as the fixture target.
+- the selected Harness v3 backend conformance suite;
+- manual-drive effects/action vocabulary as the fixture target.
 
 Keep in Piclaw:
 
@@ -196,11 +198,12 @@ Keep in Piclaw:
 - reconciliation between Piclaw operations and Earendil runs;
 - redacted web/SSE projection.
 
-Do not build against yet:
+Do not build production against released `0.84.1`:
 
-- concrete event names beyond declared contracts;
-- hook payload shapes, which are `unknown`;
-- watcher event payloads, which are `unknown`;
-- restore/resume behaviour beyond reducer evidence;
-- concrete `peekAction` execution semantics not represented in declarations;
-- installed `AgentHarness` methods that currently throw.
+- its v2 record-log/reducer/session format;
+- its untyped hook/event/watcher payloads;
+- restore/resume behaviour limited to private reducer evidence;
+- its contextual-tool widening workaround;
+- installed `AgentHarness` methods that throw.
+
+Harness v3 specifies replacements for all except runtime completeness; use its selected merged types and implementation slices.
