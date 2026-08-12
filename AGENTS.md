@@ -22,7 +22,7 @@
 - `bun run build:web` — build the web frontend
 - `bun run test:controlled -- -- <path>` — run focused tests through the local test-priority launcher
 - `bun run test:local --cwd runtime -- bun test <path>` — direct focused Bun test form when staging is not wanted
-- Local repository-owned test processes default to nice `10`; override with `PICLAW_LOCAL_TEST_NICE=0..19`. Hosted CI bypasses niceness.
+- Local repository-owned test processes use minimum effective niceness `10`; override with `PICLAW_LOCAL_TEST_NICE=0..19`. The launcher never raises priority, and hosted CI bypasses niceness.
 - Do not add raw `bun test`/Playwright test entry points outside the central launcher or its documented nested-runner allowlist.
 - `make ci-fast` — full CI gate
 

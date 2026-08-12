@@ -22,9 +22,10 @@ describe("local test priority plan", () => {
     expect(planLocalTestCommand(["bun", "test"], { PICLAW_LOCAL_TEST_NICE: "0" }, "linux", { processGroupAvailable: true, currentNice: 0 })).toMatchObject({ command: ["bun", "test"], niceValue: 0, niceAdjustment: 0 });
     expect(planLocalTestCommand(["bun", "test"], { PICLAW_LOCAL_TEST_NICE: "17" }, "linux", { processGroupAvailable: true, currentNice: 10 }).command)
       .toEqual(["nice", "-n", "7", "bun", "test"]);
-    expect(() => planLocalTestCommand(["bun"], { PICLAW_LOCAL_TEST_NICE: "-1" }, "linux", true)).toThrow("0 through 19");
-    expect(() => planLocalTestCommand(["bun"], { PICLAW_LOCAL_TEST_NICE: "20" }, "linux", true)).toThrow("0 through 19");
-    expect(() => planLocalTestCommand(["bun"], { PICLAW_LOCAL_TEST_NICE: "abc" }, "linux", true)).toThrow("0 through 19");
+    const available = { processGroupAvailable: true, currentNice: 0 };
+    expect(() => planLocalTestCommand(["bun"], { PICLAW_LOCAL_TEST_NICE: "-1" }, "linux", available)).toThrow("0 through 19");
+    expect(() => planLocalTestCommand(["bun"], { PICLAW_LOCAL_TEST_NICE: "20" }, "linux", available)).toThrow("0 through 19");
+    expect(() => planLocalTestCommand(["bun"], { PICLAW_LOCAL_TEST_NICE: "abc" }, "linux", available)).toThrow("0 through 19");
   });
 
   test("hosted CI, nested launchers, and unsupported platforms execute directly", () => {
@@ -63,10 +64,25 @@ describe("local test priority process behavior", () => {
         stderr: "pipe",
       });
       expect(run.exitCode, run.stderr.toString()).toBe(0);
-      expect(JSON.parse(run.stdout.toString().trim())).toEqual({ self: DEFAULT_LOCAL_TEST_NICE, descendant: DEFAULT_LOCAL_TEST_NICE });
+      const parentNice = Number(readFileSync(`/proc/${process.pid}/stat`, "utf8").split(" ")[18]);
+      const expectedNice = Math.max(parentNice, DEFAULT_LOCAL_TEST_NICE);
+      expect(JSON.parse(run.stdout.toString().trim())).toEqual({ self: expectedNice, descendant: expectedNice });
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  test("override zero never raises an already lowered process priority", () => {
+    if (process.platform !== "linux") return;
+    const parentNice = Number(readFileSync(`/proc/${process.pid}/stat`, "utf8").split(" ")[18]);
+    const run = Bun.spawnSync([process.execPath, LAUNCHER, "--", process.execPath, "-e", "console.log(require('node:fs').readFileSync('/proc/self/stat','utf8').split(' ')[18])"], {
+      cwd: ROOT,
+      env: { ...process.env, CI: undefined, GITHUB_ACTIONS: undefined, PICLAW_LOCAL_TEST_NICE: "0", PICLAW_LOCAL_TEST_PRIORITY_ACTIVE: undefined },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(run.exitCode, run.stderr.toString()).toBe(0);
+    expect(Number(run.stdout.toString().trim())).toBe(parentNice);
   });
 
   test("hosted CI executes the command directly", () => {
@@ -159,12 +175,16 @@ describe("local test entrypoint audit", () => {
     try {
       mkdirSync(join(directory, "arbitrary/deep"), { recursive: true });
       writeFileSync(join(directory, "arbitrary/deep/nested-test.sh"), "#!/bin/sh\nbun test runtime/test/example.test.ts\n");
+      mkdirSync(join(directory, "runtime/test"), { recursive: true });
+      writeFileSync(join(directory, "runtime/test/custom-runner.ts"), "Bun.spawn([process.execPath, 'test', 'example.test.ts']);\nBun.spawn(['bun', 'test', 'other.test.ts']);\n");
       writeFileSync(join(directory, "package.json"), "{\"scripts\":{\"test\":\"playwright test\"}}\n");
       writeFileSync(join(directory, "Makefile"), "test:\n\tbun test\n");
-      expect(await auditLocalTestEntrypoints(directory, ["arbitrary/deep/nested-test.sh", "package.json", "Makefile"])).toEqual([
+      expect(await auditLocalTestEntrypoints(directory, ["arbitrary/deep/nested-test.sh", "runtime/test/custom-runner.ts", "package.json", "Makefile"])).toEqual([
         "Makefile:2:bun test",
         "arbitrary/deep/nested-test.sh:2:bun test runtime/test/example.test.ts",
         "package.json:1:{\"scripts\":{\"test\":\"playwright test\"}}",
+        "runtime/test/custom-runner.ts:1:Bun.spawn([process.execPath, 'test', 'example.test.ts']);",
+        "runtime/test/custom-runner.ts:2:Bun.spawn(['bun', 'test', 'other.test.ts']);",
       ]);
     } finally {
       rmSync(directory, { recursive: true, force: true });

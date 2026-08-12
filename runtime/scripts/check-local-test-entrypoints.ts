@@ -16,7 +16,8 @@ const ALLOWLIST = new Set([
 const EXCLUDED_PREFIXES = [
   "runtime/web/static/", // generated browser output
   "runtime/extensions/viewers/editor/vendor/", // checked-in third-party source
-  "runtime/test/", // test fixtures and assertions, except audit-owned test below
+  "runtime/test/fixtures/", // test fixture inputs
+  "runtime/test/snapshots/", // generated test expectations
   "skel/", // templates, not repository test entrypoints
 ];
 const SOURCE_EXTENSIONS = new Set([".ts", ".js", ".mjs", ".cjs", ".sh", ".json"]);
@@ -24,6 +25,7 @@ const RAW_PATTERNS = [
   /\bbun\s+test\b/,
   /\b(?:bunx\s+)?playwright\s+test\b/,
   /["'](?:bun|playwright)["']\s*,\s*["']test["']/,
+  /process\.execPath\s*,\s*["']test["']/,
 ];
 
 function repositoryFiles(root: string, files?: readonly string[]): string[] {
@@ -41,8 +43,8 @@ function normalizePath(path: string): string {
 }
 
 function isAuditedSource(path: string): boolean {
-  if (path === "runtime/test/scripts/local-test-priority.test.ts") return true;
   if (EXCLUDED_PREFIXES.some((prefix) => path.startsWith(prefix))) return false;
+  if (/\.(?:test|spec)\.[cm]?[jt]s$/.test(path) && path !== "runtime/test/scripts/local-test-priority.test.ts") return false;
   const basename = path.slice(path.lastIndexOf("/") + 1);
   return basename === "Makefile" || basename === "package.json" || SOURCE_EXTENSIONS.has(extname(path));
 }
