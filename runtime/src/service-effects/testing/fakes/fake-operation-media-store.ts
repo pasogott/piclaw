@@ -37,6 +37,7 @@ interface FakeBindingRecord extends OperationMediaBinding {
 export interface FakeOperationMediaSnapshot {
   readonly nextMediaId: number;
   readonly media: readonly FakeMediaRecord[];
+  readonly creationHistory: readonly FakeMediaRecord[];
   readonly bindings: readonly FakeBindingRecord[];
   readonly deletions: readonly Readonly<{ key: string; requestHash: string; value: boolean }>[];
   readonly messageReferences: readonly number[];
@@ -48,6 +49,7 @@ export class FakeOperationMediaStore implements OperationMediaStore {
   trace = new EffectTraceRecorder();
   #nextMediaId = 1;
   #media: FakeMediaRecord[] = [];
+  #creationHistory: FakeMediaRecord[] = [];
   #bindings: FakeBindingRecord[] = [];
   #deletions: Array<{ key: string; requestHash: string; value: boolean }> = [];
   #messageReferences = new Set<number>();
@@ -63,11 +65,11 @@ export class FakeOperationMediaStore implements OperationMediaStore {
     this.call("create", request.effect.idempotencyKey, request.effect.operationId);
     if (!hasValidRequestHash(request)) return this.fail("create", request, "idempotency_conflict");
     if (this.context.faults.hit("before_effect")) return this.fail("create", request, "storage_unavailable", "not_applied", true);
-    const byKey = this.#media.find((entry) => entry.idempotencyKey === request.effect.idempotencyKey);
+    const byKey = this.#creationHistory.find((entry) => entry.idempotencyKey === request.effect.idempotencyKey);
     if (byKey) return byKey.requestHash === request.effect.requestHash
       ? this.ok("create", request, byKey.ref, "duplicate")
       : this.fail("create", request, "idempotency_conflict");
-    const byUpload = this.#media.find((entry) => entry.uploadId === request.uploadId);
+    const byUpload = this.#creationHistory.find((entry) => entry.uploadId === request.uploadId);
     if (byUpload) {
       if (byUpload.ref.sha256 !== request.sha256 || byUpload.byteLength !== request.byteLength) {
         return this.fail("create", request, "digest_mismatch");
@@ -91,11 +93,11 @@ export class FakeOperationMediaStore implements OperationMediaStore {
     if (request.metadataRef && (!metadata || typeof metadata !== "object" || Array.isArray(metadata))) {
       return this.fail("create", request, "unsupported_media");
     }
-    const byKeyAfterResolve = this.#media.find((entry) => entry.idempotencyKey === request.effect.idempotencyKey);
+    const byKeyAfterResolve = this.#creationHistory.find((entry) => entry.idempotencyKey === request.effect.idempotencyKey);
     if (byKeyAfterResolve) return byKeyAfterResolve.requestHash === request.effect.requestHash
       ? this.ok("create", request, byKeyAfterResolve.ref, "duplicate")
       : this.fail("create", request, "idempotency_conflict");
-    const byUploadAfterResolve = this.#media.find((entry) => entry.uploadId === request.uploadId);
+    const byUploadAfterResolve = this.#creationHistory.find((entry) => entry.uploadId === request.uploadId);
     if (byUploadAfterResolve) {
       if (byUploadAfterResolve.ref.sha256 !== request.sha256 || byUploadAfterResolve.byteLength !== request.byteLength) {
         return this.fail("create", request, "digest_mismatch");
@@ -105,7 +107,7 @@ export class FakeOperationMediaStore implements OperationMediaStore {
         : this.fail("create", request, "idempotency_conflict");
     }
     const ref = Object.freeze({ mediaId: this.#nextMediaId++, sha256: request.sha256 });
-    this.#media.push(Object.freeze({
+    const record = Object.freeze({
       ref,
       uploadId: request.uploadId,
       idempotencyKey: request.effect.idempotencyKey,
@@ -118,7 +120,9 @@ export class FakeOperationMediaStore implements OperationMediaStore {
       metadataRef: request.metadataRef,
       createdAt: request.createdAt,
       bytes: new Uint8Array(payload.bytes),
-    }));
+    });
+    this.#media.push(record);
+    this.#creationHistory.push(record);
     if (this.context.faults.hit("effect_then_lost_acknowledgement")) {
       return this.fail("create", request, "storage_unavailable", "unknown", true);
     }
@@ -213,6 +217,7 @@ export class FakeOperationMediaStore implements OperationMediaStore {
     return structuredClone({
       nextMediaId: this.#nextMediaId,
       media: this.#media,
+      creationHistory: this.#creationHistory,
       bindings: this.#bindings,
       deletions: this.#deletions,
       messageReferences: [...this.#messageReferences],
@@ -225,6 +230,7 @@ export class FakeOperationMediaStore implements OperationMediaStore {
     const state = structuredClone(snapshot);
     this.#nextMediaId = state.nextMediaId;
     this.#media = [...state.media];
+    this.#creationHistory = [...state.creationHistory];
     this.#bindings = [...state.bindings];
     this.#deletions = [...state.deletions];
     this.#messageReferences = new Set(state.messageReferences);

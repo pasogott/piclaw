@@ -28,6 +28,7 @@ export interface OperationMediaContractSubject {
   hasUploadMapping(mediaId: number): boolean;
   indexTextMedia(mediaId: number, expectedTerm: string): boolean;
   countMediaRows(): number;
+  useMutableResolverForNextCreate(dataRef: string, thumbnailRef: string): void;
 }
 
 export async function defineOperationMediaStoreContract(
@@ -219,7 +220,45 @@ const mediaCases: readonly ParameterisedContractCase<OperationMediaContractSubje
     },
   },
   {
-    name: "EF-S04-C15 orphan deletion is blocked by operation message or outbox reference",
+    name: "EF-S04-C15 deleted media preserves immutable create history",
+    async run({ subject }) {
+      seedMedia(subject.payloads, "data:c15", "delete history");
+      seedMedia(subject.payloads, "data:c15-conflict", "changed digest");
+      const request = mediaRequest(subject, "media-c15", "upload-c15", "data:c15");
+      const created = await subject.store.create(request);
+      assert(created.ok, "media must commit before deletion");
+      const deleted = await subject.store.deleteIfUnreferenced(deleteRequest("delete-c15", created.value));
+      assert(deleted.ok && deleted.value, "orphan media must delete");
+      const exact = await subject.store.create(request);
+      assert(exact.ok && exact.value.mediaId === created.value.mediaId, "exact create replay must return original deleted identity");
+      assert(subject.countMediaRows() === 0, "exact replay must not recreate deleted bytes");
+      const absent = await subject.store.get(created.value);
+      assert(absent.ok && absent.value === null, "deleted media must remain absent");
+      const bind = await subject.store.bindToOperation(bindingRequest("bind-c15", created.value.mediaId, "draft"));
+      assert(!bind.ok && bind.error._tag === "media_not_found", "deleted media identity cannot be rebound");
+      const digestConflict = await subject.store.create(mediaRequest(subject, "media-c15-digest", "upload-c15", "data:c15-conflict"));
+      assert(!digestConflict.ok && digestConflict.error._tag === "digest_mismatch", "changed digest must conflict with deleted history");
+      const semanticConflict = await subject.store.create(mediaRequest(subject, "media-c15-semantic", "upload-c15", "data:c15", "application/octet-stream", { filename: "changed.bin" }));
+      assert(!semanticConflict.ok && semanticConflict.error._tag === "idempotency_conflict", "changed semantics must conflict with deleted history");
+    },
+  },
+  {
+    name: "EF-S04-C16 mutable resolver bytes are defensively snapshotted",
+    async run({ subject }) {
+      seedMedia(subject.payloads, "data:c16", "stable main bytes");
+      seedMedia(subject.payloads, "thumbnail:c16", "thumbnail bytes");
+      const request = mediaRequest(subject, "media-c16", "upload-c16", "data:c16", "application/octet-stream", {
+        thumbnailRef: "thumbnail:c16",
+      });
+      subject.useMutableResolverForNextCreate(request.dataRef, request.thumbnailRef!);
+      const created = await subject.store.create(request);
+      assert(created.ok, "mutable resolver create must commit");
+      const stored = subject.inspectStoredBytes(created.value.mediaId);
+      assert(stored && new TextDecoder().decode(stored) === "stable main bytes", "post-resolution mutation must not change stored bytes");
+    },
+  },
+  {
+    name: "EF-S04-C17 orphan deletion is blocked by operation message or outbox reference",
     async run({ subject }) {
       const operation = await createNamed(subject, "operation");
       const bound = await subject.store.bindToOperation(bindingRequest("bind-c7", operation.mediaId, "draft"));

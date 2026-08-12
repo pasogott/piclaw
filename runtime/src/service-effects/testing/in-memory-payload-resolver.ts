@@ -23,8 +23,13 @@ export class InMemoryEffectPayloadResolver implements EffectPayloadResolver {
       redactionClass,
       bytes: copy,
     });
+    const existing = this.#payloads.get(ref);
+    if (existing) {
+      if (!samePayload(existing, payload)) throw new Error(`payload reference ${ref} is immutable`);
+      return Object.freeze({ ...existing, bytes: new Uint8Array(existing.bytes) });
+    }
     this.#payloads.set(ref, payload);
-    return payload;
+    return Object.freeze({ ...payload, bytes: new Uint8Array(payload.bytes) });
   }
 
   putText(ref: string, text: string, mediaType = "text/plain"): ResolvedEffectPayload {
@@ -73,4 +78,13 @@ export class InMemoryEffectPayloadResolver implements EffectPayloadResolver {
     }
     return this.peek(ref);
   }
+}
+
+function samePayload(left: ResolvedEffectPayload, right: ResolvedEffectPayload): boolean {
+  if (
+    left.sha256 !== right.sha256 || left.byteLength !== right.byteLength ||
+    left.mediaType !== right.mediaType || left.redactionClass !== right.redactionClass ||
+    left.bytes.byteLength !== right.bytes.byteLength
+  ) return false;
+  return left.bytes.every((byte, index) => byte === right.bytes[index]);
 }

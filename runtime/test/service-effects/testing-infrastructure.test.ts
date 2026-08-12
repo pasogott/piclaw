@@ -10,6 +10,7 @@ import {
   type ContractTestContext,
   type ParameterisedContractCase,
 } from "../../src/service-effects/testing/contract-suite.js";
+import { InMemoryEffectPayloadResolver } from "../../src/service-effects/testing/in-memory-payload-resolver.js";
 import {
   ControlledBarrier,
   crashAndRestore,
@@ -252,6 +253,17 @@ describe("generic parameterised contract-suite lifecycle", () => {
     expect(runParameterisedContractSuite(factory, duplicateCases, createSampleContext))
       .rejects.toThrow("non-empty and unique");
     expect(createCount).toBe(0);
+  });
+});
+
+describe("in-memory payload resolver", () => {
+  test("accepts equal registration and rejects conflicting immutable references", () => {
+    const resolver = new InMemoryEffectPayloadResolver();
+    const first = resolver.putText("payload:immutable", "same bytes", "text/plain");
+    const equal = resolver.putText("payload:immutable", "same bytes", "text/plain");
+    expect(equal.sha256).toBe(first.sha256);
+    expect(() => resolver.putText("payload:immutable", "changed bytes", "text/plain")).toThrow("immutable");
+    expect(() => resolver.putText("payload:immutable", "same bytes", "application/json")).toThrow("immutable");
   });
 });
 

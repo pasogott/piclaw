@@ -88,6 +88,18 @@ export function installTimelineMediaAdapterTestSchema(database: Database): void 
       ON service_effect_timeline_writes(notice_kind, source_id)
       WHERE write_type = 'notice';
 
+    CREATE TABLE service_effect_media_upload_history (
+      idempotency_key TEXT NOT NULL UNIQUE,
+      request_hash TEXT NOT NULL,
+      upload_id TEXT PRIMARY KEY,
+      media_id INTEGER NOT NULL UNIQUE,
+      sha256 TEXT NOT NULL,
+      byte_length INTEGER NOT NULL,
+      data_ref TEXT NOT NULL,
+      thumbnail_ref TEXT,
+      metadata_ref TEXT,
+      created_at TEXT NOT NULL
+    );
     CREATE TABLE service_effect_media_uploads (
       idempotency_key TEXT NOT NULL UNIQUE,
       request_hash TEXT NOT NULL,

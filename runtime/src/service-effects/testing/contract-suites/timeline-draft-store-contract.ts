@@ -234,7 +234,24 @@ const timelineCases: readonly ParameterisedContractCase<TimelineDraftContractSub
     },
   },
   {
-    name: "EF-S03-C13 out-of-order replacement cannot overwrite a higher revision",
+    name: "EF-S03-C13 concurrent equal draft returns one immutable write",
+    async run({ subject }) {
+      seedTimelinePayloads(subject.payloads);
+      const heldRef = "content:c13-held";
+      subject.payloads.putText(heldRef, "equal concurrent draft");
+      const request = draftRequest("draft-c13-equal", 1, { contentRef: heldRef });
+      const release = subject.payloads.hold(heldRef);
+      const delayed = subject.store.commitDraft(request);
+      await subject.payloads.waitUntilHeld(heldRef);
+      const winnerPromise = subject.store.commitDraft(request);
+      release();
+      const [first, second] = await Promise.all([delayed, winnerPromise]);
+      assert(first.ok && second.ok && first.value.rowId === second.value.rowId, "concurrent equal draft must return one write");
+      assert(subject.countTimelineRows() === 1, "concurrent equal draft must retain one row");
+    },
+  },
+  {
+    name: "EF-S03-C14 out-of-order replacement cannot overwrite a higher revision",
     async run({ subject }) {
       seedTimelinePayloads(subject.payloads);
       const initial = await subject.store.commitDraft(draftRequest("draft-c11-r1", 1));
@@ -257,7 +274,7 @@ const timelineCases: readonly ParameterisedContractCase<TimelineDraftContractSub
     },
   },
   {
-    name: "EF-S03-C14 draft and notice rows remain non-terminal",
+    name: "EF-S03-C15 draft and notice rows remain non-terminal",
     async run({ subject }) {
       seedTimelinePayloads(subject.payloads);
       const mediaId = await subject.bindDraftMedia("operation-1");

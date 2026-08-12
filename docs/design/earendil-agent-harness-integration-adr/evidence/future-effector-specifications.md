@@ -111,7 +111,7 @@ interface PayloadReference {
 }
 ```
 
-A `payloadRef` resolves through an existing Piclaw-owned content store or a later content-addressed store. It is immutable: the referenced digest, byte length, media type and redaction class cannot change. Effector tables store references and hashes, not duplicate protected bodies. Small public DTOs may remain inline when the interface says so explicitly.
+A `payloadRef` resolves through an existing Piclaw-owned content store or a later content-addressed store. It is immutable: every successful resolution of one reference returns the same digest, byte length, media type, redaction class and bytes. A reference may be temporarily unavailable, but it never resolves to another payload. Consumers verify the tuple and take a defensive byte snapshot before later awaits or persistence because TypeScript's `readonly Uint8Array` does not prevent element mutation. Effector tables store references and hashes, not duplicate protected bodies. Small public DTOs may remain inline when the interface says so explicitly.
 
 All mutating methods follow these rules:
 

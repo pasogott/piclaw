@@ -14,7 +14,8 @@ export async function resolveVerifiedPayload(
   if (!payload || payload.ref !== ref) return null;
   if (payload.byteLength !== payload.bytes.byteLength) return null;
   if (payload.sha256 !== sha256Bytes(payload.bytes)) return null;
-  return payload;
+  const bytes = new Uint8Array(payload.bytes);
+  return Object.freeze({ ...payload, bytes });
 }
 
 export async function resolveVerifiedText(

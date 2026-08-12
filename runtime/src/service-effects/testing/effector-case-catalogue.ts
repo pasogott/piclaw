@@ -141,6 +141,7 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
       "stale request hash is rejected before mutation",
       "content blocks require JSON media type",
       "concurrent first inserts retain one current row",
+      "concurrent equal draft returns one immutable write",
       "out-of-order replacement cannot overwrite a higher revision",
       "draft and notice rows remain non-terminal",
     ]),
@@ -172,6 +173,8 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
       "compressed data round trips with stable digest",
       "text-index maintenance follows media lifecycle",
       "reference arriving at delete boundary preserves upload identity",
+      "deleted media preserves immutable create history",
+      "mutable resolver bytes are defensively snapshotted",
       "orphan deletion is blocked by operation message or outbox reference",
     ]),
     faultPoints: [

@@ -75,6 +75,12 @@ export class FakeTimelineDraftStore implements TimelineDraftStore {
     }
     const payloads = await this.resolve(request.contentRef, request.contentBlocksRef);
     if (!payloads.ok) return this.fail("commitDraft", request, payloads.error);
+    const byKeyAfterResolve = this.#revisions.find((entry) => entry.key === request.effect.idempotencyKey);
+    if (byKeyAfterResolve) return this.replay("commitDraft", request, byKeyAfterResolve);
+    const knownAfterResolve = this.#revisions.find((entry) =>
+      entry.writeType === "draft" && entry.operationId === request.effect.operationId &&
+      entry.draftKind === request.draftKind && entry.revision === request.revision);
+    if (knownAfterResolve) return this.replay("commitDraft", request, knownAfterResolve);
     const latestAfterResolve = this.latest(request.effect.operationId, request.draftKind);
     if (latestAfterResolve && request.revision <= (latestAfterResolve.revision ?? -1)) {
       return this.fail("commitDraft", request, "stale_revision");

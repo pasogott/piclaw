@@ -73,16 +73,12 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
       }
 
       const outcome = this.database.transaction((): MediaCreateOutcome => {
-        const byKey = this.database.prepare(
-          "SELECT * FROM service_effect_media_uploads WHERE idempotency_key = ?",
-        ).get(request.effect.idempotencyKey) as UploadRow | undefined;
+        const byKey = this.findUploadByKey(request.effect.idempotencyKey);
         if (byKey) return byKey.request_hash === request.effect.requestHash
           ? { ok: true, ref: { mediaId: byKey.media_id, sha256: byKey.sha256 }, duplicate: true }
           : { ok: false, tag: "idempotency_conflict" };
 
-        const byUpload = this.database.prepare(
-          "SELECT * FROM service_effect_media_uploads WHERE upload_id = ?",
-        ).get(request.uploadId) as UploadRow | undefined;
+        const byUpload = this.findUploadById(request.uploadId);
         if (byUpload) {
           if (byUpload.sha256 !== request.sha256 || byUpload.byte_length !== request.byteLength) {
             return { ok: false, tag: "digest_mismatch" };
@@ -96,16 +92,18 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
           this.database, request.filename, request.contentType, data.bytes, thumbnail?.bytes ?? null,
           metadataValue as Record<string, unknown> | null, request.createdAt,
         );
-        this.database.prepare(`
-          INSERT INTO service_effect_media_uploads (
-            idempotency_key, request_hash, upload_id, media_id, sha256, byte_length,
-            data_ref, thumbnail_ref, metadata_ref, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          request.effect.idempotencyKey, request.effect.requestHash, request.uploadId, mediaId,
-          request.sha256, request.byteLength, request.dataRef, request.thumbnailRef,
-          request.metadataRef, request.createdAt,
-        );
+        for (const table of ["service_effect_media_upload_history", "service_effect_media_uploads"] as const) {
+          this.database.prepare(`
+            INSERT INTO ${table} (
+              idempotency_key, request_hash, upload_id, media_id, sha256, byte_length,
+              data_ref, thumbnail_ref, metadata_ref, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            request.effect.idempotencyKey, request.effect.requestHash, request.uploadId, mediaId,
+            request.sha256, request.byteLength, request.dataRef, request.thumbnailRef,
+            request.metadataRef, request.createdAt,
+          );
+        }
         return { ok: true, ref: Object.freeze({ mediaId, sha256: request.sha256 }), duplicate: false };
       }).immediate();
 
@@ -265,12 +263,12 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
   }
 
   private findUploadByKey(idempotencyKey: string): UploadRow | undefined {
-    return this.database.prepare("SELECT * FROM service_effect_media_uploads WHERE idempotency_key = ?")
+    return this.database.prepare("SELECT * FROM service_effect_media_upload_history WHERE idempotency_key = ?")
       .get(idempotencyKey) as UploadRow | undefined;
   }
 
   private findUploadById(uploadId: string): UploadRow | undefined {
-    return this.database.prepare("SELECT * FROM service_effect_media_uploads WHERE upload_id = ?")
+    return this.database.prepare("SELECT * FROM service_effect_media_upload_history WHERE upload_id = ?")
       .get(uploadId) as UploadRow | undefined;
   }
 

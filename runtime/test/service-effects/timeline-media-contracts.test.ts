@@ -1,6 +1,7 @@
 import "../helpers.js";
 
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 
 import { getDb, initDatabase } from "../../src/db/connection.js";
@@ -23,6 +24,7 @@ import {
 } from "../../src/db/messages.js";
 import type { CanonicalJsonValue } from "../../src/service-effects/contracts/common.js";
 import { hashCanonicalRequest } from "../../src/service-effects/contracts/common.js";
+import type { EffectPayloadResolver, ResolvedEffectPayload } from "../../src/service-effects/contracts/payload-resolver.js";
 import { CurrentPiclawOperationMediaStore } from "../../src/service-effects/current-piclaw/operation-media-store.js";
 import { CurrentPiclawTimelineDraftStore } from "../../src/service-effects/current-piclaw/timeline-draft-store.js";
 import { installTimelineMediaAdapterTestSchema } from "../../src/service-effects/current-piclaw/timeline-media-test-schema.js";
@@ -109,24 +111,24 @@ const fakeTimelineFactory: ContractSubjectFactory<TimelineDraftContractSubject> 
 describe("EF-S03 TimelineDraftStore shared contract", () => {
   test("current-Piclaw adapter", async () => {
     const results = await defineTimelineDraftStoreContract(currentTimelineFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(15);
+    expect(results.map((result) => result.caseName)).toHaveLength(16);
   });
 
   test("independent deterministic fake", async () => {
     const results = await defineTimelineDraftStoreContract(fakeTimelineFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(15);
+    expect(results.map((result) => result.caseName)).toHaveLength(16);
   });
 });
 
 describe("EF-S04 OperationMediaStore shared contract", () => {
   test("current-Piclaw adapter", async () => {
     const results = await defineOperationMediaStoreContract(currentMediaFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(16);
+    expect(results.map((result) => result.caseName)).toHaveLength(18);
   });
 
   test("independent deterministic fake", async () => {
     const results = await defineOperationMediaStoreContract(fakeMediaFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(16);
+    expect(results.map((result) => result.caseName)).toHaveLength(18);
   });
 });
 
@@ -198,7 +200,8 @@ function currentMediaSubject(
   restoredRuntime?: TestingCurrentPiclawAdapterRuntime,
 ): CurrentMediaSubject {
   const runtime = restoredRuntime ?? new TestingCurrentPiclawAdapterRuntime(context);
-  const store = new CurrentPiclawOperationMediaStore(database, payloads, runtime);
+  let resolver: EffectPayloadResolver = payloads;
+  const store = new CurrentPiclawOperationMediaStore(database, { resolve: (ref) => resolver.resolve(ref) }, runtime);
   return {
     database,
     payloads,
@@ -226,6 +229,9 @@ function currentMediaSubject(
     countMediaRows() {
       return (database.prepare("SELECT COUNT(*) AS count FROM media").get() as { count: number }).count;
     },
+    useMutableResolverForNextCreate(dataRef, thumbnailRef) {
+      resolver = mutableResolver(payloads, dataRef, thumbnailRef);
+    },
   };
 }
 
@@ -235,7 +241,8 @@ interface FakeMediaSubject extends OperationMediaContractSubject {
 }
 
 function fakeMediaSubject(payloads: InMemoryEffectPayloadResolver, context: ContractTestContext): FakeMediaSubject {
-  const store = new FakeOperationMediaStore(payloads, context);
+  let resolver: EffectPayloadResolver = payloads;
+  const store = new FakeOperationMediaStore({ resolve: (ref) => resolver.resolve(ref) }, context);
   return {
     payloads,
     store,
@@ -254,6 +261,34 @@ function fakeMediaSubject(payloads: InMemoryEffectPayloadResolver, context: Cont
       return Boolean(bytes && new TextDecoder().decode(bytes).includes(expectedTerm));
     },
     countMediaRows() { return store.snapshot().media.length; },
+    useMutableResolverForNextCreate(dataRef, thumbnailRef) {
+      resolver = mutableResolver(payloads, dataRef, thumbnailRef);
+    },
+  };
+}
+
+function mutableResolver(
+  payloads: InMemoryEffectPayloadResolver,
+  dataRef: string,
+  thumbnailRef: string,
+): EffectPayloadResolver {
+  const original = payloads.peek(dataRef);
+  if (!original) throw new Error(`missing mutable payload ${dataRef}`);
+  const mutableBytes = new Uint8Array(original.bytes);
+  const mutablePayload: ResolvedEffectPayload = {
+    ...original,
+    bytes: mutableBytes,
+    sha256: createHash("sha256").update(mutableBytes).digest("hex"),
+  };
+  return {
+    async resolve(ref) {
+      if (ref === dataRef) return mutablePayload;
+      if (ref === thumbnailRef) {
+        mutableBytes.fill(0);
+        return payloads.resolve(ref);
+      }
+      return payloads.resolve(ref);
+    },
   };
 }
 
