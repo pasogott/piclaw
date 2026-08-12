@@ -34,8 +34,9 @@ export function extractModuleSpecifiers(content: string): string[] {
   const specifiers: string[] = [];
   const staticImportRegex = /\b(?:import|export)\s+(?:[^"']*?\s+from\s+)?["']([^"']+)["']/g;
   const dynamicImportRegex = /\bimport\(\s*["']([^"']+)["']\s*\)/g;
+  const requireRegex = /\brequire\(\s*["']([^"']+)["']\s*\)/g;
 
-  for (const regex of [staticImportRegex, dynamicImportRegex]) {
+  for (const regex of [staticImportRegex, dynamicImportRegex, requireRegex]) {
     let match: RegExpExecArray | null;
     while ((match = regex.exec(content)) !== null) {
       specifiers.push(match[1]);

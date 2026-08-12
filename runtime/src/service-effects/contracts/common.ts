@@ -104,8 +104,8 @@ const PROTECTED_TRACE_KEYS = /(?:body|bytes|content|credential|media|message|pas
 export type NormalisedTraceInput = Readonly<Record<string, unknown>>;
 
 /**
- * Narrow an effect observation to the fixed trace contract. Unknown and
- * protected fields are ignored rather than copied or stringified.
+ * Narrow an effect observation to the fixed trace contract. Protected fields
+ * are rejected; other unknown fields are ignored rather than copied.
  */
 export function normaliseEffectTrace(input: NormalisedTraceInput): NormalisedEffectTrace {
   for (const key of Object.keys(input)) {

@@ -5,14 +5,16 @@ import { tmpdir } from "os";
 import { extractModuleSpecifiers, findImportBoundaryViolations } from "../../scripts/check-import-boundaries.ts";
 
 describe("check-import-boundaries", () => {
-  test("extractModuleSpecifiers parses static and dynamic imports", () => {
+  test("extractModuleSpecifiers parses static, dynamic, and CommonJS imports", () => {
     const content = [
       "import x from 'a';",
       "export { y } from \"b\";",
       "const mod = await import('c');",
+      "const legacy = require(\"d\");",
+      "const dynamicLegacy = require(moduleName);",
     ].join("\n");
 
-    expect(extractModuleSpecifiers(content)).toEqual(["a", "b", "c"]);
+    expect(extractModuleSpecifiers(content)).toEqual(["a", "b", "c", "d"]);
   });
 
   test("findImportBoundaryViolations reports restricted extension imports", () => {
@@ -69,14 +71,19 @@ describe("check-import-boundaries", () => {
       );
       writeFileSync(
         join(dir, "src", "service-effects", "contracts", "peer.ts"),
-        "import { latent } from './common.js';\nexport { latent };\n",
+        "import { latent } from './common.js';\nconst peer = require('./common.js');\nexport { latent, peer };\n",
       );
       writeFileSync(
         join(dir, "src", "runtime", "bad.ts"),
         "import { latent } from '../service-effects/contracts/common.js';\n",
       );
+      writeFileSync(
+        join(dir, "src", "runtime", "bad-require.ts"),
+        "const latent = require('../service-effects/contracts/common.js');\n",
+      );
 
       expect(findImportBoundaryViolations(dir)).toEqual([
+        "src/runtime/bad-require.ts: production core cannot import latent service effects (../service-effects/contracts/common.js)",
         "src/runtime/bad.ts: production core cannot import latent service effects (../service-effects/contracts/common.js)",
       ]);
     } finally {
