@@ -31,21 +31,25 @@ export function planLocalTestCommand(
 ): LocalTestPriorityPlan {
   if (argv.length === 0) throw new Error("local test launcher requires a command after --");
   const niceValue = parseLocalTestNice(env[LOCAL_TEST_NICE_ENV]);
-  if (env.CI || env.GITHUB_ACTIONS) {
+  if (isHostedFlag(env.CI) || isHostedFlag(env.GITHUB_ACTIONS)) {
     return { command: [...argv], applied: false, niceValue, diagnostic: null };
   }
   if (env[LOCAL_TEST_PRIORITY_ACTIVE_ENV] === "1") {
     return { command: [...argv], applied: false, niceValue, diagnostic: null };
   }
-  if (!SUPPORTED_PLATFORMS.has(platform) || !niceAvailable) {
+  if (!SUPPORTED_PLATFORMS.has(platform) || !niceAvailable || (platform === "linux" && !commandExists("setsid"))) {
     return {
       command: [...argv],
       applied: false,
       niceValue,
-      diagnostic: `[local-test-priority] nice unavailable on ${platform}; running test command directly`,
+      diagnostic: `[local-test-priority] process-group niceness unavailable on ${platform}; running test command directly`,
     };
   }
   return { command: ["nice", "-n", String(niceValue), ...argv], applied: true, niceValue, diagnostic: null };
+}
+
+function isHostedFlag(value: string | undefined): boolean {
+  return value === "1" || value?.toLowerCase() === "true";
 }
 
 function commandExists(command: string): boolean {
@@ -60,16 +64,20 @@ export async function runLocalTestCommand(
 ): Promise<never> {
   const env = { ...process.env, ...(options.env ?? {}) };
   const plan = planLocalTestCommand(argv, env);
+  const spawnCommand = plan.applied
+    ? ["setsid", "--wait", "nice", "-n", String(plan.niceValue), ...argv]
+    : [...plan.command];
   if (plan.diagnostic) process.stderr.write(`${plan.diagnostic}\n`);
   if (plan.applied) env[LOCAL_TEST_PRIORITY_ACTIVE_ENV] = "1";
   let child: ReturnType<typeof Bun.spawn>;
   try {
-    child = Bun.spawn([...plan.command], {
+    child = Bun.spawn(spawnCommand, {
       cwd: options.cwd ?? process.cwd(),
       env,
       stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",
+      detached: false,
     });
   } catch (error) {
     process.stderr.write(`[local-test-priority] failed to start test command: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -78,11 +86,20 @@ export async function runLocalTestCommand(
 
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   const forward = (signal: typeof signals[number]) => {
-    if (child.exitCode === null) child.kill(signal);
+    if (child.exitCode !== null) return;
+    if (plan.applied) {
+      const signum = signal === "SIGINT" ? 2 : signal === "SIGHUP" ? 1 : 15;
+      const result = spawnSync("kill", [`-${signum}`, `-${child.pid}`], { stdio: "ignore" });
+      if (result.status === 0) return;
+    }
+    child.kill(signal);
   };
   for (const signal of signals) process.on(signal, forward);
   const exitCode = await child.exited;
   for (const signal of signals) process.off(signal, forward);
+  if (plan.applied) {
+    spawnSync("kill", ["-KILL", `-${child.pid}`], { stdio: "ignore" });
+  }
   process.exit(exitCode);
 }
 

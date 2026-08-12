@@ -18,11 +18,11 @@ const RAW_PATTERNS = [
   /["']test["']\s*,/,
 ];
 
-async function sourceFiles(): Promise<string[]> {
+async function sourceFiles(root: string): Promise<string[]> {
   const files: string[] = [];
-  for (const pattern of ["package.json", "Makefile", "scripts/**/*", "runtime/scripts/**/*", "runtime/test/features/**/*", "tests/e2e/package.json"]) {
+  for (const pattern of ["*.sh", "*.ts", "*.js", "*.mjs", "*.cjs", "package.json", "Makefile", "scripts/**/*", "runtime/scripts/**/*", "runtime/test/features/**/*", "tests/e2e/package.json"]) {
     const glob = new Bun.Glob(pattern);
-    for await (const match of glob.scan({ cwd: ROOT, absolute: false, onlyFiles: true })) {
+    for await (const match of glob.scan({ cwd: root, absolute: false, onlyFiles: true })) {
       const extension = match === "Makefile" ? ".sh" : match.slice(match.lastIndexOf("."));
       if (SOURCE_EXTENSIONS.has(extension)) files.push(match.replaceAll("\\", "/"));
     }
@@ -30,11 +30,11 @@ async function sourceFiles(): Promise<string[]> {
   return [...new Set(files)].sort();
 }
 
-export async function auditLocalTestEntrypoints(): Promise<readonly string[]> {
+export async function auditLocalTestEntrypoints(root = ROOT): Promise<readonly string[]> {
   const violations: string[] = [];
-  for (const path of await sourceFiles()) {
+  for (const path of await sourceFiles(root)) {
     if (ALLOWLIST.has(path)) continue;
-    const lines = readFileSync(join(ROOT, path), "utf8").split("\n");
+    const lines = readFileSync(join(root, path), "utf8").split("\n");
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
       if (/^\s*(?:#|\/\/|\*)/.test(line)) continue;

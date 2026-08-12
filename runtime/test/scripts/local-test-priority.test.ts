@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -29,7 +29,10 @@ describe("local test priority plan", () => {
 
   test("hosted CI, nested launchers, and unsupported platforms execute directly", () => {
     expect(planLocalTestCommand(["bun", "test"], { CI: "true" }, "linux", true).applied).toBe(false);
+    expect(planLocalTestCommand(["bun", "test"], { CI: "1" }, "linux", true).applied).toBe(false);
     expect(planLocalTestCommand(["bun", "test"], { GITHUB_ACTIONS: "true" }, "linux", true).applied).toBe(false);
+    expect(planLocalTestCommand(["bun", "test"], { GITHUB_ACTIONS: "1" }, "linux", true).applied).toBe(false);
+    expect(planLocalTestCommand(["bun", "test"], { CI: "false", GITHUB_ACTIONS: "0" }, "linux", true).applied).toBe(true);
     expect(planLocalTestCommand(["bun", "test"], { PICLAW_LOCAL_TEST_PRIORITY_ACTIVE: "1" }, "linux", true).applied).toBe(false);
     const unsupported = planLocalTestCommand(["bun", "test"], {}, "win32", false);
     expect(unsupported.command).toEqual(["bun", "test"]);
@@ -53,7 +56,7 @@ describe("local test priority process behavior", () => {
       ].join("\n"));
       const run = Bun.spawnSync([process.execPath, LAUNCHER, "--", process.execPath, script], {
         cwd: ROOT,
-        env: { ...process.env, CI: undefined, GITHUB_ACTIONS: undefined, PICLAW_LOCAL_TEST_NICE: "10" },
+        env: { ...process.env, CI: undefined, GITHUB_ACTIONS: undefined, PICLAW_LOCAL_TEST_NICE: "0", PICLAW_LOCAL_TEST_PRIORITY_ACTIVE: undefined },
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -64,32 +67,34 @@ describe("local test priority process behavior", () => {
     }
   });
 
-  test("forwards termination and lets the child clean up its descendant group", async () => {
+  test("terminating the launcher removes child and uncooperative descendant process group", async () => {
     if (process.platform !== "linux") return;
     const directory = mkdtempSync(join(tmpdir(), "piclaw-signal-probe-"));
     const childScript = join(directory, "child.sh");
-    const marker = join(directory, "terminated.txt");
+    const pidsFile = join(directory, "pids.txt");
     try {
       writeFileSync(childScript, [
         "#!/bin/sh",
-        "marker=$1",
-        "sleep 30 &",
+        "pids_file=$1",
+        "bun -e 'setTimeout(() => {}, 30000)' &",
         "descendant=$!",
-        "cleanup() { kill \"$descendant\" 2>/dev/null || true; wait \"$descendant\" 2>/dev/null || true; printf terminated > \"$marker\"; exit 0; }",
-        "trap cleanup TERM INT HUP",
+        "printf '%s %s' \"$$\" \"$descendant\" > \"$pids_file\"",
         "wait \"$descendant\"",
       ].join("\n"));
       chmodSync(childScript, 0o755);
-      const run = Bun.spawn([process.execPath, LAUNCHER, "--", childScript, marker], {
+      const run = Bun.spawn([process.execPath, LAUNCHER, "--", childScript, pidsFile], {
         cwd: ROOT,
-        env: { ...process.env, CI: undefined, GITHUB_ACTIONS: undefined },
+        env: { ...process.env, CI: undefined, GITHUB_ACTIONS: undefined, PICLAW_LOCAL_TEST_PRIORITY_ACTIVE: undefined },
         stdout: "pipe",
         stderr: "pipe",
       });
-      await Bun.sleep(100);
+      for (let tries = 0; tries < 100 && !existsSync(pidsFile); tries += 1) await Bun.sleep(10);
+      const [childPid, descendantPid] = readFileSync(pidsFile, "utf8").trim().split(" ").map(Number);
       run.kill("SIGTERM");
-      expect(await run.exited).toBe(0);
-      expect(await Bun.file(marker).text()).toBe("terminated");
+      await run.exited;
+      for (let tries = 0; tries < 300 && (processExists(childPid) || processExists(descendantPid)); tries += 1) await Bun.sleep(10);
+      expect(processExists(childPid)).toBe(false);
+      expect(processExists(descendantPid)).toBe(false);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -103,7 +108,7 @@ describe("local test priority process behavior", () => {
       const run = Bun.spawnSync([
         process.execPath, LAUNCHER, "--cwd", directory, "--env", "PROBE=kept", "--",
         process.execPath, script, "argument with spaces", "literal-$value",
-      ], { cwd: ROOT, env: { ...process.env, CI: undefined, GITHUB_ACTIONS: undefined }, stdout: "pipe", stderr: "pipe" });
+      ], { cwd: ROOT, env: { ...process.env, CI: undefined, GITHUB_ACTIONS: undefined, PICLAW_LOCAL_TEST_PRIORITY_ACTIVE: undefined }, stdout: "pipe", stderr: "pipe" });
       expect(run.exitCode).toBe(7);
       expect(JSON.parse(run.stdout.toString().trim())).toEqual({
         cwd: directory,
@@ -116,8 +121,27 @@ describe("local test priority process behavior", () => {
   });
 });
 
+function processExists(pid: number): boolean {
+  const statPath = `/proc/${pid}/stat`;
+  if (!existsSync(statPath)) return false;
+  const fields = readFileSync(statPath, "utf8").split(" ");
+  return fields[2] !== "Z";
+}
+
 describe("local test entrypoint audit", () => {
   test("repository test entrypoints use the launcher or explicit nested allowlist", async () => {
     expect(await auditLocalTestEntrypoints()).toEqual([]);
+  });
+
+  test("detects a raw Bun test command in a root script", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "piclaw-entrypoint-audit-"));
+    try {
+      writeFileSync(join(directory, "raw-test.sh"), "#!/bin/sh\nbun test runtime/test/example.test.ts\n");
+      expect(await auditLocalTestEntrypoints(directory)).toEqual([
+        "raw-test.sh:2:bun test runtime/test/example.test.ts",
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
