@@ -7,7 +7,12 @@ export interface DeliveryDriverContractSubject {
   scriptError(error: DeliveryDriverError): void;
   scriptDelayed(outcome: DeliveryOutcome): { release(): void; started(): Promise<void> };
   countAttempts(): number;
-  corruptPayload(kind: "ref" | "length" | "digest" | "mutable"): void;
+  corruptPayload(kind: "ref" | "length" | "digest" | "mutable" | "semantic"): void;
+  holdPayload(): { release(): void; started(): Promise<void> };
+  throwValidatorOnce(): void;
+  throwClassifierOnce(): void;
+  mutateResolverBytesAfterReturn(): Promise<void>;
+  observedPayloadBytes(): Uint8Array | null;
 }
 
 export function defineDeliveryDriverContract(
@@ -143,6 +148,73 @@ const cases: readonly ParameterisedContractCase<DeliveryDriverContractSubject>[]
       subject.scriptError({ _tag: "rejected", certainty: "applied", retryable: false } as DeliveryDriverError);
       const result = await subject.driver.deliver(request());
       assert(!result.ok && result.error._tag === "transport_unavailable" && result.error.certainty === "unknown", "errors cannot claim applied certainty");
+    },
+  },
+  {
+    name: "EF-S06-C12 malformed requests are rejected before boundary",
+    async run({ subject }) {
+      const malformed = [
+        { ...request(), outboxId: "" }, { ...request(), idempotencyKey: "" }, { ...request(), payloadRef: "" }, { ...request(), deliveryIdentity: "" },
+        { ...request(), destinationRef: null }, { ...request(), attempt: Number.NaN }, { ...request(), attempt: 1.5 }, { ...request(), attempt: Number.MAX_SAFE_INTEGER + 1 },
+      ];
+      for (const value of malformed) {
+        const before = subject.countAttempts(); const result = await subject.driver.deliver(value);
+        assert(!result.ok && (result.error._tag === "invalid_payload" || result.error._tag === "destination_missing"), "malformed request must be bounded");
+        assert(subject.countAttempts() === before, "malformed request must not call boundary");
+      }
+    },
+  },
+  {
+    name: "EF-S06-C13 semantic payload rejection does not consume attempt",
+    async run({ subject }) {
+      subject.corruptPayload("semantic"); const before = subject.countAttempts();
+      const result = await subject.driver.deliver(request());
+      assert(!result.ok && result.error._tag === "invalid_payload" && subject.countAttempts() === before, "semantic policy must reject before effect");
+    },
+  },
+  {
+    name: "EF-S06-C14 abort during payload resolution consumes no attempt",
+    async run({ subject }) {
+      const controller = new AbortController(); const hold = subject.holdPayload();
+      const pending = subject.driver.deliver(request("delivery-held", controller.signal)); await hold.started(); controller.abort(); hold.release();
+      const result = await pending;
+      assert(!result.ok && result.error._tag === "aborted" && subject.countAttempts() === 0, "abort after awaited resolution must remain pre-effect");
+    },
+  },
+  {
+    name: "EF-S06-C15 injected validator and classifier faults stay bounded",
+    async run({ subject }) {
+      subject.throwValidatorOnce(); const validation = await subject.driver.deliver(request());
+      assert(!validation.ok && validation.error._tag === "invalid_payload" && validation.error.certainty === "not_applied", "validator throw must be bounded pre-effect");
+      subject.throwClassifierOnce(); subject.scriptError({ _tag: "transport_unavailable", certainty: "unknown", retryable: true });
+      const classifier = await subject.driver.deliver(request("delivery-classifier"));
+      assert(!classifier.ok && classifier.error._tag === "transport_unavailable" && classifier.error.certainty === "unknown", "classifier throw must be bounded unknown");
+    },
+  },
+  {
+    name: "EF-S06-C16 malformed outcome receipt and provider identity are rejected while certainty is derived",
+    async run({ subject }) {
+      const base = outcome(detailFor(subject.driver.kind));
+      for (const malformed of [
+        { ...base, receiptRef: "" },
+        { ...base, detail: { ...base.detail, providerMessageId: "" } } as DeliveryOutcome,
+      ]) {
+        subject.scriptOutcome(malformed); const result = await subject.driver.deliver(request());
+        assert(!result.ok && result.error.certainty === "unknown", "malformed provider outcome must be bounded unknown");
+      }
+      subject.scriptOutcome({ ...base, certainty: "unknown" });
+      const derived = await subject.driver.deliver(request("delivery-derived-certainty"));
+      assert(derived.ok && derived.value.certainty === (derived.value.detail.kind === "web_push" ? derived.value.certainty : "applied"), "success certainty must be derived from provider detail");
+    },
+  },
+  {
+    name: "EF-S06-C17 mutable resolver bytes are defensively snapshotted",
+    async run({ subject }) {
+      subject.scriptOutcome(outcome(detailFor(subject.driver.kind)));
+      const mutation = subject.mutateResolverBytesAfterReturn();
+      const result = await subject.driver.deliver(request("delivery-mutable-snapshot")); await mutation;
+      const observed = subject.observedPayloadBytes();
+      assert(result.ok && observed !== null && new TextDecoder().decode(observed) === "safe payload", "boundary must observe verified defensive snapshot");
     },
   },
 ];

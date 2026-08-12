@@ -23,20 +23,20 @@ function createContext(): ContractTestContext {
 for (const kind of ["timeline_broadcast", "channel_delivery", "web_push", "pushover", "wake_chat"] as const) {
   describe(`EF-S06 DeliveryDriver shared contract: ${kind}`, () => {
     test("current-Piclaw adapter", async () => {
-      expect(await defineDeliveryDriverContract(currentDeliveryFactory(kind), createContext)).toHaveLength(11);
+      expect(await defineDeliveryDriverContract(currentDeliveryFactory(kind), createContext)).toHaveLength(17);
     });
     test("independent scripted fake", async () => {
-      expect(await defineDeliveryDriverContract(fakeDeliveryFactory(kind), createContext)).toHaveLength(11);
+      expect(await defineDeliveryDriverContract(fakeDeliveryFactory(kind), createContext)).toHaveLength(17);
     });
   });
 }
 
 describe("EF-S08 AgentProjectionSink shared contract", () => {
   test("current-Piclaw adapter", async () => {
-    expect(await defineAgentProjectionSinkContract(currentProjectionFactory, createContext)).toHaveLength(9);
+    expect(await defineAgentProjectionSinkContract(currentProjectionFactory, createContext)).toHaveLength(13);
   });
   test("independent captured-DTO fake", async () => {
-    expect(await defineAgentProjectionSinkContract(fakeProjectionFactory, createContext)).toHaveLength(9);
+    expect(await defineAgentProjectionSinkContract(fakeProjectionFactory, createContext)).toHaveLength(13);
   });
 });
 
@@ -62,22 +62,26 @@ interface CurrentDeliverySubject extends DeliveryDriverContractSubject { readonl
 function currentDeliverySubject(kind: DeliveryKind, context: ContractTestContext): CurrentDeliverySubject {
   const runtime = new TestingCurrentPiclawAdapterRuntime(context);
   const payloads = new InMemoryEffectPayloadResolver(); payloads.putText("payload:delivery", "safe payload");
-  let resolverOverride: (() => ReturnType<InMemoryEffectPayloadResolver["peek"]>) | null = null;
+  let resolverOverride: (() => ReturnType<InMemoryEffectPayloadResolver["peek"]> | Promise<ReturnType<InMemoryEffectPayloadResolver["peek"]>>) | null = null;
+  let semanticValid = true; let validatorThrows = false; let classifierThrows = false; let observedPayload: Uint8Array | null = null;
   const queue: Array<DeliveryBoundarySuccess | DeliveryDriverError | DelayedBoundary> = [];
   let attempts = 0;
   const boundary: DeliveryBoundary = {
-    async attempt() {
-      attempts += 1;
+    async attempt(input) {
+      observedPayload = new Uint8Array(input.payload.bytes); attempts += 1;
       const next = queue.shift();
       if (!next) throw new Error("unscripted");
       if ("gate" in next) { next.startedResolve(); await next.gate; return next.success; }
       if ("certainty" in next) throw next;
       return next;
     },
-    classifyError(value) { return isDeliveryError(value) ? value : null; },
+    classifyError(value) { if (classifierThrows) { classifierThrows = false; throw new Error("classifier fault"); } return isDeliveryError(value) ? value : null; },
   };
   const resolver = { resolve(ref: string) { return resolverOverride ? resolverOverride() : payloads.resolve(ref); } };
-  const driver = new CurrentPiclawDeliveryDriver(kind, resolver, (expected, request, payload) => expected === kind && request.destinationRef !== null && payload.mediaType === "text/plain", boundary, runtime);
+  const driver = new CurrentPiclawDeliveryDriver(kind, resolver, (expected, request, payload) => {
+    if (validatorThrows) { validatorThrows = false; throw new Error("validator fault"); }
+    return semanticValid && expected === kind && request.destinationRef !== null && payload.mediaType === "text/plain";
+  }, boundary, runtime);
   return {
     runtime, driver,
     scriptOutcome(value) { queue.push({ acceptedAt: value.acceptedAt, receiptRef: value.receiptRef, detail: value.detail }); },
@@ -91,9 +95,24 @@ function currentDeliverySubject(kind: DeliveryKind, context: ContractTestContext
     countAttempts() { return attempts; },
     corruptPayload(corruption) {
       const payload = payloads.peek("payload:delivery")!;
+      if (corruption === "semantic") { semanticValid = false; return; }
       if (corruption === "mutable") { resolverOverride = () => ({ ...payload, bytes: new Uint8Array(payload.bytes) }); return; }
       resolverOverride = () => ({ ...payload, ref: corruption === "ref" ? "payload:other" : payload.ref, byteLength: corruption === "length" ? payload.byteLength + 1 : payload.byteLength, sha256: corruption === "digest" ? "0".repeat(64) : payload.sha256 });
     },
+    holdPayload() {
+      let release!: () => void; let startedResolve!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; }); const started = new Promise<void>((resolve) => { startedResolve = resolve; });
+      resolverOverride = async () => { startedResolve(); await gate; return payloads.peek("payload:delivery"); };
+      return { release, started: () => started };
+    },
+    throwValidatorOnce() { validatorThrows = true; }, throwClassifierOnce() { classifierThrows = true; },
+    mutateResolverBytesAfterReturn() {
+      const payload = payloads.peek("payload:delivery")!; const bytes = new Uint8Array(payload.bytes);
+      return new Promise<void>((resolve) => {
+        resolverOverride = () => { setTimeout(() => { bytes.fill(0); resolve(); }, 0); return { ...payload, bytes }; };
+      });
+    },
+    observedPayloadBytes() { return observedPayload ? new Uint8Array(observedPayload) : null; },
   };
 }
 interface DelayedBoundary { gate: Promise<void>; startedResolve(): void; success: DeliveryBoundarySuccess; }
@@ -101,8 +120,12 @@ function isDeliveryError(value: unknown): value is DeliveryDriverError { return 
 
 function fakeDeliverySubject(kind: DeliveryKind): DeliveryDriverContractSubject {
   const payloads = new InMemoryEffectPayloadResolver(); payloads.putText("payload:delivery", "safe payload");
-  let resolverOverride: (() => ReturnType<InMemoryEffectPayloadResolver["peek"]>) | null = null;
-  const driver = new FakeDeliveryDriver(kind, { resolve(ref) { return resolverOverride ? resolverOverride() : payloads.resolve(ref); } });
+  let resolverOverride: (() => ReturnType<InMemoryEffectPayloadResolver["peek"]> | Promise<ReturnType<InMemoryEffectPayloadResolver["peek"]>>) | null = null;
+  let semanticValid = true; let validatorThrows = false;
+  const driver = new FakeDeliveryDriver(kind, { resolve(ref) { return resolverOverride ? resolverOverride() : payloads.resolve(ref); } }, (expected, request, payload) => {
+    if (validatorThrows) { validatorThrows = false; throw new Error("validator fault"); }
+    return semanticValid && expected === kind && request.destinationRef !== null && payload.mediaType === "text/plain";
+  });
   const push = (step: ScriptedDeliveryStep) => { driver.script(step); };
   return {
     driver,
@@ -117,20 +140,35 @@ function fakeDeliverySubject(kind: DeliveryKind): DeliveryDriverContractSubject 
     countAttempts() { return driver.countAttempts(); },
     corruptPayload(corruption) {
       const payload = payloads.peek("payload:delivery")!;
+      if (corruption === "semantic") { semanticValid = false; return; }
       if (corruption === "mutable") { resolverOverride = () => ({ ...payload, bytes: new Uint8Array(payload.bytes) }); return; }
       resolverOverride = () => ({ ...payload, ref: corruption === "ref" ? "payload:other" : payload.ref, byteLength: corruption === "length" ? payload.byteLength + 1 : payload.byteLength, sha256: corruption === "digest" ? "0".repeat(64) : payload.sha256 });
     },
+    holdPayload() {
+      let release!: () => void; let startedResolve!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; }); const started = new Promise<void>((resolve) => { startedResolve = resolve; });
+      resolverOverride = async () => { startedResolve(); await gate; return payloads.peek("payload:delivery"); };
+      return { release, started: () => started };
+    },
+    throwValidatorOnce() { validatorThrows = true; }, throwClassifierOnce() { driver.throwClassifierOnce(); },
+    mutateResolverBytesAfterReturn() {
+      const payload = payloads.peek("payload:delivery")!; const bytes = new Uint8Array(payload.bytes);
+      return new Promise<void>((resolve) => {
+        resolverOverride = () => { setTimeout(() => { bytes.fill(0); resolve(); }, 0); return { ...payload, bytes }; };
+      });
+    },
+    observedPayloadBytes() { return driver.observedPayloadBytes(); },
   };
 }
 
 class TestAuthority implements ProjectionAuthority {
-  readonly owners = new Set<string>(); readonly commits = new Set<string>();
-  isCurrentOwner(owner: ProjectionOwner): boolean { return this.owners.has(ownerKey(owner)); }
-  isCommittedTerminalRef(owner: ProjectionOwner, ref: string): boolean { return this.commits.has(`${ownerKey(owner)}:${ref}`); }
+  readonly owners = new Set<string>(); readonly commits = new Set<string>(); throwOwner = false; throwTerminal = false;
+  isCurrentOwner(owner: ProjectionOwner): boolean { if (this.throwOwner) { this.throwOwner = false; throw new Error("owner predicate fault"); } return this.owners.has(ownerKey(owner)); }
+  isCommittedTerminalRef(owner: ProjectionOwner, ref: string): boolean { if (this.throwTerminal) { this.throwTerminal = false; throw new Error("terminal predicate fault"); } return this.commits.has(`${ownerKey(owner)}:${ref}`); }
 }
 class TestTransport implements ProjectionTransport {
-  readonly calls: PublicAgentProjection[] = []; failNext = false;
-  publish(value: PublicAgentProjection): void { if (this.failNext) { this.failNext = false; throw new Error("partial fanout"); } this.calls.push(value); }
+  readonly calls: PublicAgentProjection[] = []; failNext = false; asyncNext = false;
+  publish(value: PublicAgentProjection): void { if (this.asyncNext) { this.asyncNext = false; return Promise.resolve() as unknown as void; } if (this.failNext) { this.failNext = false; throw new Error("partial fanout"); } this.calls.push(value); }
 }
 function ownerKey(owner: ProjectionOwner): string { return JSON.stringify([owner.chatJid, owner.operationId, owner.harnessOperationId]); }
 
@@ -141,8 +179,8 @@ const currentProjectionFactory: ContractSubjectFactory<AgentProjectionContractSu
     return projectionSubject(new CurrentPiclawAgentProjectionSink(authority, transport, runtime), authority, transport, runtime);
   },
   crashAndRestore(subject, context) {
-    const current = subject as ProjectionSubject; const transport = new TestTransport();
-    return { subject: projectionSubject(new CurrentPiclawAgentProjectionSink(current.authority, transport, current.runtime.restore()), current.authority, transport, current.runtime.restore()), context };
+    const current = subject as ProjectionSubject; const transport = new TestTransport(); const runtime = current.runtime.restore();
+    return { subject: projectionSubject(new CurrentPiclawAgentProjectionSink(current.authority, transport, runtime), current.authority, transport, runtime), context };
   },
   inspectTrace(subject) { return (subject as ProjectionSubject).runtime.snapshot(); },
 };
@@ -150,18 +188,20 @@ const fakeProjectionFactory: ContractSubjectFactory<AgentProjectionContractSubje
   name: "fake-agent-projection",
   create() { const authority = new TestAuthority(); const transport = new TestTransport(); return projectionSubject(new FakeAgentProjectionSink(authority), authority, transport); },
   crashAndRestore(subject, context) {
-    const current = subject as ProjectionSubject; const transport = new TestTransport();
-    return { subject: projectionSubject(new FakeAgentProjectionSink(current.authority), current.authority, transport), context };
+    const current = subject as ProjectionSubject; const transport = new TestTransport(); const sink = new FakeAgentProjectionSink(current.authority, current.fakeTrace());
+    return { subject: projectionSubject(sink, current.authority, transport), context };
   },
   inspectTrace(subject) { return (subject.sink as FakeAgentProjectionSink).trace.snapshot(); },
 };
-interface ProjectionSubject extends AgentProjectionContractSubject { runtime: TestingCurrentPiclawAdapterRuntime; authority: TestAuthority; }
+interface ProjectionSubject extends AgentProjectionContractSubject { runtime: TestingCurrentPiclawAdapterRuntime; authority: TestAuthority; fakeTrace(): ReturnType<FakeAgentProjectionSink["trace"]["snapshot"]>; }
 function projectionSubject(sink: AgentProjectionContractSubject["sink"], authority: TestAuthority, transport: TestTransport, runtime = new TestingCurrentPiclawAdapterRuntime(createContext())): ProjectionSubject {
   const fake = sink instanceof FakeAgentProjectionSink;
   return {
-    sink, runtime, authority,
+    sink, runtime, authority, fakeTrace() { return fake ? (sink as FakeAgentProjectionSink).trace.snapshot() : []; },
     authorize(owner) { authority.owners.add(ownerKey(owner)); }, commit(owner, ref) { authority.commits.add(`${ownerKey(owner)}:${ref}`); },
     rejectTransportOnce() { if (fake) (sink as FakeAgentProjectionSink).rejectTransportOnce(); else transport.failNext = true; },
+    returnAsyncTransportOnce() { if (fake) (sink as FakeAgentProjectionSink).returnAsyncTransportOnce(); else transport.asyncNext = true; },
+    throwAuthorityOnce(predicate) { if (predicate === "owner") authority.throwOwner = true; else authority.throwTerminal = true; },
     transportCalls() { return fake ? (sink as FakeAgentProjectionSink).published : transport.calls; },
   };
 }

@@ -6,6 +6,8 @@ export interface AgentProjectionContractSubject {
   authorize(owner: ProjectionOwner): void;
   commit(owner: ProjectionOwner, terminalCommitRef: string): void;
   rejectTransportOnce(): void;
+  returnAsyncTransportOnce(): void;
+  throwAuthorityOnce(predicate: "owner" | "terminal"): void;
   transportCalls(): readonly PublicAgentProjection[];
 }
 
@@ -122,10 +124,50 @@ const cases: readonly ParameterisedContractCase<AgentProjectionContractSubject>[
     async run(fixture) {
       const owner = projectionOwner(); fixture.subject.authorize(owner);
       await fixture.subject.sink.publishSnapshot(snapshot(owner, 1, 1));
+      const traceBefore = fixture.inspectTrace().length;
       const restored = await fixture.crashAndRestore(); restored.authorize(owner);
       const eventFirst = await restored.sink.publishEvent(event(owner, 1, 2));
       assert(!eventFirst.ok && eventFirst.error._tag === "stale_generation", "cursor is intentionally in-memory after restart");
       assert((await restored.sink.publishSnapshot(snapshot(owner, 2, 0))).ok, "fresh snapshot re-establishes projection after restart");
+      assert(fixture.inspectTrace().length > traceBefore, "restored observer must retain and append trace continuity");
+    },
+  },
+  {
+    name: "EF-S08-C10 same-generation snapshot cannot reset an established cursor",
+    async run({ subject }) {
+      const owner = projectionOwner(); subject.authorize(owner);
+      await subject.sink.publishSnapshot(snapshot(owner, 1, 1));
+      const duplicate = await subject.sink.publishSnapshot(snapshot(owner, 1, 2));
+      assert(!duplicate.ok && duplicate.error._tag === "stale_generation", "same-generation snapshot must be rejected");
+    },
+  },
+  {
+    name: "EF-S08-C11 non-void transport is unknown and does not advance cursor",
+    async run({ subject }) {
+      const owner = projectionOwner(); subject.authorize(owner); subject.returnAsyncTransportOnce();
+      const invalid = await subject.sink.publishSnapshot(snapshot(owner, 1, 1));
+      assert(!invalid.ok && invalid.error.certainty === "unknown", "async transport violates synchronous contract");
+      assert((await subject.sink.publishSnapshot(snapshot(owner, 1, 1))).ok, "invalid transport return must not advance cursor");
+    },
+  },
+  {
+    name: "EF-S08-C12 authority predicate faults remain bounded",
+    async run({ subject }) {
+      const owner = projectionOwner(); subject.authorize(owner); subject.throwAuthorityOnce("owner");
+      const ownerFault = await subject.sink.publishSnapshot(snapshot(owner, 1, 1));
+      assert(!ownerFault.ok && ownerFault.error._tag === "transport_unavailable" && ownerFault.error.certainty === "not_applied", "owner predicate fault must be bounded");
+      await subject.sink.publishSnapshot(snapshot(owner, 1, 1)); const value = terminal(owner, 1, 2); subject.commit(owner, value.terminalCommitRef); subject.throwAuthorityOnce("terminal");
+      const terminalFault = await subject.sink.publishTerminal(value);
+      assert(!terminalFault.ok && terminalFault.error._tag === "transport_unavailable" && terminalFault.error.certainty === "not_applied", "terminal predicate fault must be bounded");
+    },
+  },
+  {
+    name: "EF-S08-C13 arbitrary malformed inputs resolve typed errors",
+    async run({ subject }) {
+      for (const malformed of [null, 1, Symbol("bad"), { type: "agent_snapshot", chatJid: Symbol("bad") }, { ...snapshot(projectionOwner(), 1, 1), activeToolNames: null }, { ...snapshot(projectionOwner(), 1, 1), modelLabel: 3 }, { ...snapshot(projectionOwner(), 1, 1), watchGeneration: Number.MAX_SAFE_INTEGER + 1 }] as unknown[]) {
+        const result = await subject.sink.publishSnapshot(malformed as PublicAgentSnapshot);
+        assert(!result.ok && result.error._tag === "protected_payload", "malformed input must resolve protected_payload");
+      }
     },
   },
 ];
