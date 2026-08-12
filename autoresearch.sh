@@ -30,7 +30,7 @@ for optional_test in \
   fi
 done
 
-bun run ../runtime/scripts/local-test-priority.ts --env PICLAW_DB_IN_MEMORY=1 -- bun test --max-concurrency=1 "${tests[@]}"
+bun run runtime/scripts/local-test-priority.ts --env PICLAW_DB_IN_MEMORY=1 -- bun test --max-concurrency=1 "${tests[@]}"
 
 end_ms=$(date +%s%3N)
 focused_web_tests_ms=$((end_ms - start_ms))

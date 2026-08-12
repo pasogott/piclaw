@@ -1,39 +1,59 @@
 #!/usr/bin/env bun
 
 import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { extname, join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 
 const ROOT = resolve(import.meta.dir, "../..");
 const ALLOWLIST = new Set([
-  "runtime/scripts/local-test-priority.ts", // the central launcher implementation
-  "runtime/scripts/controlled-test-runner.ts", // nested Bun stages inherit the launcher root's niceness
-  "runtime/test/features/run-feature-tests.ts", // nested feature subprocess inherits the launcher root's niceness
-  "runtime/test/scripts/local-test-priority.test.ts", // launcher/audit fixtures intentionally mention raw runners
-  "runtime/test/scripts/controlled-test-runner.test.ts", // invokes the controlled runner as a test fixture
+  "runtime/scripts/local-test-priority.ts", // central launcher implementation
+  "runtime/scripts/controlled-test-runner.ts", // nested stages inherit launcher niceness
+  "runtime/test/features/run-feature-tests.ts", // nested feature subprocess inherits launcher niceness
+  "runtime/test/scripts/local-test-priority.test.ts", // launcher/audit fixtures mention raw runners
+  "runtime/test/scripts/controlled-test-runner.test.ts", // controlled-runner fixture
+  "tests/e2e/scripts/run-microvm-suite.ts", // nested Playwright runner launched by niced package entrypoints
 ]);
+const EXCLUDED_PREFIXES = [
+  "runtime/web/static/", // generated browser output
+  "runtime/extensions/viewers/editor/vendor/", // checked-in third-party source
+  "runtime/test/", // test fixtures and assertions, except audit-owned test below
+  "skel/", // templates, not repository test entrypoints
+];
 const SOURCE_EXTENSIONS = new Set([".ts", ".js", ".mjs", ".cjs", ".sh", ".json"]);
 const RAW_PATTERNS = [
   /\bbun\s+test\b/,
   /\b(?:bunx\s+)?playwright\s+test\b/,
-  /["']test["']\s*,/,
+  /["'](?:bun|playwright)["']\s*,\s*["']test["']/,
 ];
 
-async function sourceFiles(root: string): Promise<string[]> {
-  const files: string[] = [];
-  for (const pattern of ["*.sh", "*.ts", "*.js", "*.mjs", "*.cjs", "package.json", "Makefile", "scripts/**/*", "runtime/scripts/**/*", "runtime/test/features/**/*", "tests/e2e/package.json"]) {
-    const glob = new Bun.Glob(pattern);
-    for await (const match of glob.scan({ cwd: root, absolute: false, onlyFiles: true })) {
-      const extension = match === "Makefile" ? ".sh" : match.slice(match.lastIndexOf("."));
-      if (SOURCE_EXTENSIONS.has(extension)) files.push(match.replaceAll("\\", "/"));
-    }
-  }
-  return [...new Set(files)].sort();
+function repositoryFiles(root: string, files?: readonly string[]): string[] {
+  if (files) return [...files].map(normalizePath).sort();
+  const result = spawnSync("git", ["ls-files", "-co", "--exclude-standard"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) throw new Error(`git ls-files failed: ${result.stderr.trim()}`);
+  return result.stdout.split("\n").filter(Boolean).map(normalizePath).sort();
 }
 
-export async function auditLocalTestEntrypoints(root = ROOT): Promise<readonly string[]> {
+function normalizePath(path: string): string {
+  return path.replaceAll("\\", "/");
+}
+
+function isAuditedSource(path: string): boolean {
+  if (path === "runtime/test/scripts/local-test-priority.test.ts") return true;
+  if (EXCLUDED_PREFIXES.some((prefix) => path.startsWith(prefix))) return false;
+  const basename = path.slice(path.lastIndexOf("/") + 1);
+  return basename === "Makefile" || basename === "package.json" || SOURCE_EXTENSIONS.has(extname(path));
+}
+
+export async function auditLocalTestEntrypoints(
+  root = ROOT,
+  files?: readonly string[],
+): Promise<readonly string[]> {
   const violations: string[] = [];
-  for (const path of await sourceFiles(root)) {
-    if (ALLOWLIST.has(path)) continue;
+  for (const path of repositoryFiles(root, files)) {
+    if (!isAuditedSource(path) || ALLOWLIST.has(path)) continue;
     const lines = readFileSync(join(root, path), "utf8").split("\n");
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];

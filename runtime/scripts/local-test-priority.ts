@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 export const LOCAL_TEST_NICE_ENV = "PICLAW_LOCAL_TEST_NICE";
 export const LOCAL_TEST_PRIORITY_ACTIVE_ENV = "PICLAW_LOCAL_TEST_PRIORITY_ACTIVE";
@@ -10,10 +11,11 @@ export type LocalTestPriorityPlan = {
   readonly command: readonly string[];
   readonly applied: boolean;
   readonly niceValue: number;
+  readonly niceAdjustment: number;
   readonly diagnostic: string | null;
 };
 
-const SUPPORTED_PLATFORMS = new Set(["linux", "darwin", "freebsd", "openbsd", "netbsd", "sunos", "aix"]);
+const SUPPORTED_PLATFORM = "linux";
 
 export function parseLocalTestNice(value: string | undefined): number {
   if (value === undefined || value.trim() === "") return DEFAULT_LOCAL_TEST_NICE;
@@ -27,25 +29,31 @@ export function planLocalTestCommand(
   argv: readonly string[],
   env: Readonly<Record<string, string | undefined>> = process.env,
   platform = process.platform,
-  niceAvailable = commandExists("nice"),
+  capability: { readonly processGroupAvailable: boolean; readonly currentNice: number } = {
+    processGroupAvailable: platform === SUPPORTED_PLATFORM && commandExists("nice") && commandExists("setsid"),
+    currentNice: readCurrentNice(),
+  },
 ): LocalTestPriorityPlan {
   if (argv.length === 0) throw new Error("local test launcher requires a command after --");
   const niceValue = parseLocalTestNice(env[LOCAL_TEST_NICE_ENV]);
+  const niceAdjustment = Math.max(0, niceValue - capability.currentNice);
   if (isHostedFlag(env.CI) || isHostedFlag(env.GITHUB_ACTIONS)) {
-    return { command: [...argv], applied: false, niceValue, diagnostic: null };
+    return { command: [...argv], applied: false, niceValue, niceAdjustment: 0, diagnostic: null };
   }
   if (env[LOCAL_TEST_PRIORITY_ACTIVE_ENV] === "1") {
-    return { command: [...argv], applied: false, niceValue, diagnostic: null };
+    return { command: [...argv], applied: false, niceValue, niceAdjustment: 0, diagnostic: null };
   }
-  if (!SUPPORTED_PLATFORMS.has(platform) || !niceAvailable || (platform === "linux" && !commandExists("setsid"))) {
+  if (platform !== SUPPORTED_PLATFORM || !capability.processGroupAvailable) {
     return {
       command: [...argv],
       applied: false,
       niceValue,
+      niceAdjustment: 0,
       diagnostic: `[local-test-priority] process-group niceness unavailable on ${platform}; running test command directly`,
     };
   }
-  return { command: ["nice", "-n", String(niceValue), ...argv], applied: true, niceValue, diagnostic: null };
+  const command = niceAdjustment > 0 ? ["nice", "-n", String(niceAdjustment), ...argv] : [...argv];
+  return { command, applied: true, niceValue, niceAdjustment, diagnostic: null };
 }
 
 function isHostedFlag(value: string | undefined): boolean {
@@ -58,6 +66,15 @@ function commandExists(command: string): boolean {
   return result.status === 0;
 }
 
+function readCurrentNice(): number {
+  if (process.platform !== SUPPORTED_PLATFORM) return 0;
+  try {
+    return Number(readFileSync(`/proc/${process.pid}/stat`, "utf8").split(" ")[18]);
+  } catch {
+    return 0;
+  }
+}
+
 export async function runLocalTestCommand(
   argv: readonly string[],
   options: { readonly cwd?: string; readonly env?: Record<string, string | undefined> } = {},
@@ -65,7 +82,7 @@ export async function runLocalTestCommand(
   const env = { ...process.env, ...(options.env ?? {}) };
   const plan = planLocalTestCommand(argv, env);
   const spawnCommand = plan.applied
-    ? ["setsid", "--wait", "nice", "-n", String(plan.niceValue), ...argv]
+    ? ["setsid", "--wait", ...plan.command]
     : [...plan.command];
   if (plan.diagnostic) process.stderr.write(`${plan.diagnostic}\n`);
   if (plan.applied) env[LOCAL_TEST_PRIORITY_ACTIVE_ENV] = "1";

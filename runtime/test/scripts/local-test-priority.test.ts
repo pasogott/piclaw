@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -14,34 +14,36 @@ const LAUNCHER = join(ROOT, "runtime/scripts/local-test-priority.ts");
 
 describe("local test priority plan", () => {
   test("applies default and validated override only to supported local launches", () => {
-    expect(planLocalTestCommand(["bun", "test"], {}, "linux", true)).toEqual({
-      command: ["nice", "-n", String(DEFAULT_LOCAL_TEST_NICE), "bun", "test"],
-      applied: true,
-      niceValue: 10,
-      diagnostic: null,
+    expect(planLocalTestCommand(["bun", "test"], {}, "linux", { processGroupAvailable: true, currentNice: 0 })).toEqual({
+      command: ["nice", "-n", "10", "bun", "test"], applied: true, niceValue: 10, niceAdjustment: 10, diagnostic: null,
     });
-    expect(planLocalTestCommand(["bun", "test"], { PICLAW_LOCAL_TEST_NICE: "17" }, "linux", true).command)
-      .toEqual(["nice", "-n", "17", "bun", "test"]);
+    expect(planLocalTestCommand(["bun", "test"], {}, "linux", { processGroupAvailable: true, currentNice: 10 })).toMatchObject({ command: ["bun", "test"], niceValue: 10, niceAdjustment: 0 });
+    expect(planLocalTestCommand(["bun", "test"], {}, "linux", { processGroupAvailable: true, currentNice: 15 })).toMatchObject({ command: ["bun", "test"], niceValue: 10, niceAdjustment: 0 });
+    expect(planLocalTestCommand(["bun", "test"], { PICLAW_LOCAL_TEST_NICE: "0" }, "linux", { processGroupAvailable: true, currentNice: 0 })).toMatchObject({ command: ["bun", "test"], niceValue: 0, niceAdjustment: 0 });
+    expect(planLocalTestCommand(["bun", "test"], { PICLAW_LOCAL_TEST_NICE: "17" }, "linux", { processGroupAvailable: true, currentNice: 10 }).command)
+      .toEqual(["nice", "-n", "7", "bun", "test"]);
     expect(() => planLocalTestCommand(["bun"], { PICLAW_LOCAL_TEST_NICE: "-1" }, "linux", true)).toThrow("0 through 19");
     expect(() => planLocalTestCommand(["bun"], { PICLAW_LOCAL_TEST_NICE: "20" }, "linux", true)).toThrow("0 through 19");
     expect(() => planLocalTestCommand(["bun"], { PICLAW_LOCAL_TEST_NICE: "abc" }, "linux", true)).toThrow("0 through 19");
   });
 
   test("hosted CI, nested launchers, and unsupported platforms execute directly", () => {
-    expect(planLocalTestCommand(["bun", "test"], { CI: "true" }, "linux", true).applied).toBe(false);
-    expect(planLocalTestCommand(["bun", "test"], { CI: "1" }, "linux", true).applied).toBe(false);
-    expect(planLocalTestCommand(["bun", "test"], { GITHUB_ACTIONS: "true" }, "linux", true).applied).toBe(false);
-    expect(planLocalTestCommand(["bun", "test"], { GITHUB_ACTIONS: "1" }, "linux", true).applied).toBe(false);
-    expect(planLocalTestCommand(["bun", "test"], { CI: "false", GITHUB_ACTIONS: "0" }, "linux", true).applied).toBe(true);
-    expect(planLocalTestCommand(["bun", "test"], { PICLAW_LOCAL_TEST_PRIORITY_ACTIVE: "1" }, "linux", true).applied).toBe(false);
-    const unsupported = planLocalTestCommand(["bun", "test"], {}, "win32", false);
+    const available = { processGroupAvailable: true, currentNice: 0 };
+    expect(planLocalTestCommand(["bun", "test"], { CI: "true" }, "linux", available).applied).toBe(false);
+    expect(planLocalTestCommand(["bun", "test"], { CI: "1" }, "linux", available).applied).toBe(false);
+    expect(planLocalTestCommand(["bun", "test"], { GITHUB_ACTIONS: "true" }, "linux", available).applied).toBe(false);
+    expect(planLocalTestCommand(["bun", "test"], { GITHUB_ACTIONS: "1" }, "linux", available).applied).toBe(false);
+    expect(planLocalTestCommand(["bun", "test"], { CI: "false", GITHUB_ACTIONS: "0" }, "linux", available).applied).toBe(true);
+    expect(planLocalTestCommand(["bun", "test"], { PICLAW_LOCAL_TEST_PRIORITY_ACTIVE: "1" }, "linux", available).applied).toBe(false);
+    const unsupported = planLocalTestCommand(["bun", "test"], {}, "darwin", available);
     expect(unsupported.command).toEqual(["bun", "test"]);
     expect(unsupported.diagnostic).toContain("running test command directly");
+    expect(planLocalTestCommand(["bun", "test"], {}, "linux", { processGroupAvailable: false, currentNice: 0 }).applied).toBe(false);
   });
 });
 
 describe("local test priority process behavior", () => {
-  test("Linux child and descendant inherit the effective nice value", () => {
+  test("Linux child and descendant inherit default niceness relative to their parent", () => {
     if (process.platform !== "linux") return;
     const directory = mkdtempSync(join(tmpdir(), "piclaw-nice-probe-"));
     const script = join(directory, "probe.ts");
@@ -56,15 +58,26 @@ describe("local test priority process behavior", () => {
       ].join("\n"));
       const run = Bun.spawnSync([process.execPath, LAUNCHER, "--", process.execPath, script], {
         cwd: ROOT,
-        env: { ...process.env, CI: undefined, GITHUB_ACTIONS: undefined, PICLAW_LOCAL_TEST_NICE: "0", PICLAW_LOCAL_TEST_PRIORITY_ACTIVE: undefined },
+        env: { ...process.env, CI: undefined, GITHUB_ACTIONS: undefined, PICLAW_LOCAL_TEST_NICE: undefined, PICLAW_LOCAL_TEST_PRIORITY_ACTIVE: undefined },
         stdout: "pipe",
         stderr: "pipe",
       });
       expect(run.exitCode, run.stderr.toString()).toBe(0);
-      expect(JSON.parse(run.stdout.toString().trim())).toEqual({ self: 10, descendant: 10 });
+      expect(JSON.parse(run.stdout.toString().trim())).toEqual({ self: DEFAULT_LOCAL_TEST_NICE, descendant: DEFAULT_LOCAL_TEST_NICE });
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  test("hosted CI executes the command directly", () => {
+    const run = Bun.spawnSync([process.execPath, LAUNCHER, "--", process.execPath, "-e", "console.log(process.env.PICLAW_LOCAL_TEST_PRIORITY_ACTIVE ?? 'direct')"], {
+      cwd: ROOT,
+      env: { ...process.env, CI: "true", GITHUB_ACTIONS: undefined, PICLAW_LOCAL_TEST_PRIORITY_ACTIVE: undefined },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(run.exitCode, run.stderr.toString()).toBe(0);
+    expect(run.stdout.toString().trim()).toBe("direct");
   });
 
   test("terminating the launcher removes child and uncooperative descendant process group", async () => {
@@ -88,8 +101,16 @@ describe("local test priority process behavior", () => {
         stdout: "pipe",
         stderr: "pipe",
       });
-      for (let tries = 0; tries < 100 && !existsSync(pidsFile); tries += 1) await Bun.sleep(10);
-      const [childPid, descendantPid] = readFileSync(pidsFile, "utf8").trim().split(" ").map(Number);
+      let pids: number[] = [];
+      for (let tries = 0; tries < 100; tries += 1) {
+        if (existsSync(pidsFile)) {
+          pids = readFileSync(pidsFile, "utf8").trim().split(/\s+/).map(Number);
+          if (pids.length === 2 && pids.every((pid) => Number.isInteger(pid) && pid > 0)) break;
+        }
+        await Bun.sleep(10);
+      }
+      expect(pids).toHaveLength(2);
+      const [childPid, descendantPid] = pids;
       run.kill("SIGTERM");
       await run.exited;
       for (let tries = 0; tries < 300 && (processExists(childPid) || processExists(descendantPid)); tries += 1) await Bun.sleep(10);
@@ -133,12 +154,17 @@ describe("local test entrypoint audit", () => {
     expect(await auditLocalTestEntrypoints()).toEqual([]);
   });
 
-  test("detects a raw Bun test command in a root script", async () => {
+  test("detects raw test commands in arbitrary nested scripts, package manifests, and Makefiles", async () => {
     const directory = mkdtempSync(join(tmpdir(), "piclaw-entrypoint-audit-"));
     try {
-      writeFileSync(join(directory, "raw-test.sh"), "#!/bin/sh\nbun test runtime/test/example.test.ts\n");
-      expect(await auditLocalTestEntrypoints(directory)).toEqual([
-        "raw-test.sh:2:bun test runtime/test/example.test.ts",
+      mkdirSync(join(directory, "arbitrary/deep"), { recursive: true });
+      writeFileSync(join(directory, "arbitrary/deep/nested-test.sh"), "#!/bin/sh\nbun test runtime/test/example.test.ts\n");
+      writeFileSync(join(directory, "package.json"), "{\"scripts\":{\"test\":\"playwright test\"}}\n");
+      writeFileSync(join(directory, "Makefile"), "test:\n\tbun test\n");
+      expect(await auditLocalTestEntrypoints(directory, ["arbitrary/deep/nested-test.sh", "package.json", "Makefile"])).toEqual([
+        "Makefile:2:bun test",
+        "arbitrary/deep/nested-test.sh:2:bun test runtime/test/example.test.ts",
+        "package.json:1:{\"scripts\":{\"test\":\"playwright test\"}}",
       ]);
     } finally {
       rmSync(directory, { recursive: true, force: true });
