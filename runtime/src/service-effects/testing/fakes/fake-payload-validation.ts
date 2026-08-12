@@ -36,8 +36,14 @@ export async function fakeResolveVerifiedJson(
   resolver: EffectPayloadResolver,
   ref: string,
 ): Promise<unknown | null> {
-  const text = await fakeResolveVerifiedText(resolver, ref);
-  if (text === null) return null;
+  const payload = await fakeResolveVerifiedPayload(resolver, ref);
+  if (!payload || payload.mediaType !== "application/json") return null;
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(payload.bytes);
+  } catch {
+    return null;
+  }
   try {
     return JSON.parse(text);
   } catch {

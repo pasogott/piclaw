@@ -1,5 +1,6 @@
 import { Result, type Result as ResultValue } from "@earendil-works/pi-agent-core";
 
+import { hashCanonicalRequest, type CanonicalJsonValue } from "../../contracts/common.js";
 import type { EffectPayloadResolver } from "../../contracts/payload-resolver.js";
 import type {
   CommitDraftRequest,
@@ -62,6 +63,7 @@ export class FakeTimelineDraftStore implements TimelineDraftStore {
 
   async commitDraft(request: CommitDraftRequest): Promise<ResultValue<TimelineWrite, TimelineStoreError>> {
     this.call("commitDraft", request.effect.idempotencyKey, request.effect.operationId, request.revision);
+    if (!hasValidRequestHash(request)) return this.fail("commitDraft", request, "idempotency_conflict");
     if (this.context.faults.hit("before_effect")) return this.fail("commitDraft", request, "storage_unavailable", "not_applied", true);
     const byKey = this.#revisions.find((entry) => entry.key === request.effect.idempotencyKey);
     if (byKey) return this.replay("commitDraft", request, byKey);
@@ -111,6 +113,7 @@ export class FakeTimelineDraftStore implements TimelineDraftStore {
 
   async commitServiceNotice(request: CommitServiceNoticeRequest): Promise<ResultValue<TimelineWrite, TimelineStoreError>> {
     this.call("commitServiceNotice", request.effect.idempotencyKey, request.effect.operationId, null);
+    if (!hasValidRequestHash(request)) return this.fail("commitServiceNotice", request, "idempotency_conflict");
     if (this.context.faults.hit("before_effect")) return this.fail("commitServiceNotice", request, "storage_unavailable", "not_applied", true);
     const byKey = this.#revisions.find((entry) => entry.key === request.effect.idempotencyKey);
     if (byKey) return this.replay("commitServiceNotice", request, byKey);
@@ -215,6 +218,10 @@ export class FakeTimelineDraftStore implements TimelineDraftStore {
 }
 
 type EffectRequest = { effect: { idempotencyKey: string; operationId: string | null } };
+
+function hasValidRequestHash(request: { effect: { requestHash: string } }): boolean {
+  return request.effect.requestHash === hashCanonicalRequest(request as unknown as CanonicalJsonValue);
+}
 
 function timelineWrite(rowId: number, chatJid: string, operationId: string | null, revision: number | null, writtenAt: string): TimelineWrite {
   return Object.freeze({ rowId, chatJid, operationId, revision, terminal: false, writtenAt });

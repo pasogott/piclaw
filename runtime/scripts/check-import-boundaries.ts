@@ -8,6 +8,7 @@ const SRC_EXTENSIONS_DIR = "src/extensions";
 
 const ALLOWED_ENTRY_SRC_IMPORT_PREFIX = "../src/extensions/";
 const LATENT_SERVICE_EFFECTS_DIR = "src/service-effects";
+const SERVICE_EFFECTS_TESTING_DIR = "src/service-effects/testing";
 
 function walkFiles(baseDir: string, suffix: string): string[] {
   if (!existsSync(baseDir)) return [];
@@ -50,6 +51,11 @@ function importsLatentServiceEffects(specifier: string): boolean {
   return /(?:^|\/)service-effects(?:\/|$)/.test(specifier);
 }
 
+function importsServiceEffectsTesting(specifier: string): boolean {
+  return /(?:^|\/)service-effects\/testing(?:\/|$)/.test(specifier) ||
+    /(?:^|\/)testing(?:\/|$)/.test(specifier);
+}
+
 export function findImportBoundaryViolations(projectDir: string): string[] {
   const violations: string[] = [];
   const entryFiles = walkFiles(join(projectDir, ENTRY_EXTENSIONS_DIR), ".ts");
@@ -85,11 +91,15 @@ export function findImportBoundaryViolations(projectDir: string): string[] {
 
   for (const file of productionFiles) {
     const rel = relative(projectDir, file);
-    if (rel === LATENT_SERVICE_EFFECTS_DIR || rel.startsWith(`${LATENT_SERVICE_EFFECTS_DIR}/`)) continue;
+    const inServiceEffects = rel === LATENT_SERVICE_EFFECTS_DIR || rel.startsWith(`${LATENT_SERVICE_EFFECTS_DIR}/`);
+    const inServiceEffectsTesting = rel === SERVICE_EFFECTS_TESTING_DIR || rel.startsWith(`${SERVICE_EFFECTS_TESTING_DIR}/`);
     const specifiers = extractModuleSpecifiers(readFileSync(file, "utf8"));
     for (const specifier of specifiers) {
-      if (importsLatentServiceEffects(specifier)) {
+      if (!inServiceEffects && importsLatentServiceEffects(specifier)) {
         violations.push(`${rel}: production core cannot import latent service effects (${specifier})`);
+      }
+      if (inServiceEffects && !inServiceEffectsTesting && importsServiceEffectsTesting(specifier)) {
+        violations.push(`${rel}: service-effects production layer cannot import testing (${specifier})`);
       }
     }
   }

@@ -136,6 +136,8 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
       "replacement artifacts include latest media only",
       "service notice is idempotent by source",
       "invalid content blocks are rejected",
+      "stale request hash is rejected before mutation",
+      "content blocks require JSON media type",
       "draft and notice rows remain non-terminal",
     ]),
     faultPoints: [
@@ -157,6 +159,9 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
       "equal digest with changed upload semantics is rejected",
       "operation binding is unique by operation media and role",
       "changed binding semantics conflict",
+      "stale request hash is rejected before mutation",
+      "payload media type must match request content type",
+      "metadata reference requires JSON media type",
       "missing media cannot be bound",
       "compressed data round trips with stable digest",
       "text-index maintenance follows media lifecycle",

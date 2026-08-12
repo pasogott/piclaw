@@ -6,6 +6,7 @@ import {
   deleteUnreferencedMediaInDatabase,
   getMediaByIdFromDatabase,
 } from "../../db/media.js";
+import { hashCanonicalRequest, type CanonicalJsonValue } from "../contracts/common.js";
 import type {
   BindOperationMediaRequest,
   CreateMediaRequest,
@@ -19,8 +20,7 @@ import type {
 } from "../contracts/operation-media-store.js";
 import type { EffectPayloadResolver } from "../contracts/payload-resolver.js";
 import { resolveVerifiedJson, resolveVerifiedPayload, sha256Bytes } from "../payloads.js";
-import type { ContractTestContext } from "../testing/contract-suite.js";
-import { EffectTraceRecorder } from "../testing/trace-recorder.js";
+import type { CurrentPiclawAdapterRuntime } from "./adapter-runtime.js";
 
 interface UploadRow {
   idempotency_key: string;
@@ -45,17 +45,16 @@ interface BindingRow {
 }
 
 export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
-  readonly trace = new EffectTraceRecorder();
-
   constructor(
     readonly database: Database,
     private readonly payloads: EffectPayloadResolver,
-    private readonly context: ContractTestContext,
+    private readonly runtime: CurrentPiclawAdapterRuntime,
   ) {}
 
   async create(request: CreateMediaRequest): Promise<ResultValue<MediaRef, MediaStoreError>> {
     this.call("create", request.effect.idempotencyKey, request.effect.operationId, null);
-    if (this.context.faults.hit("before_effect")) return this.failure("create", request, "storage_unavailable", "not_applied", true);
+    if (!hasValidRequestHash(request)) return this.failure("create", request, "idempotency_conflict");
+    if (this.runtime.hitFault("before_effect")) return this.failure("create", request, "storage_unavailable", "not_applied", true);
 
     try {
       const byKey = this.database.prepare(
@@ -84,6 +83,7 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
       if (!data || data.sha256 !== request.sha256 || data.byteLength !== request.byteLength) {
         return this.failure("create", request, "digest_mismatch");
       }
+      if (data.mediaType !== request.contentType) return this.failure("create", request, "unsupported_media");
       const thumbnail = request.thumbnailRef
         ? await resolveVerifiedPayload(this.payloads, request.thumbnailRef)
         : null;
@@ -125,7 +125,7 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
         return Object.freeze({ mediaId, sha256: request.sha256 });
       }).immediate();
 
-      if (this.context.faults.hit("effect_then_lost_acknowledgement")) {
+      if (this.runtime.hitFault("effect_then_lost_acknowledgement")) {
         return this.failure("create", request, "storage_unavailable", "unknown", true);
       }
       return this.success("create", request, mediaRef);
@@ -138,7 +138,8 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
     request: BindOperationMediaRequest,
   ): Promise<ResultValue<OperationMediaBinding, MediaStoreError>> {
     this.call("bindToOperation", request.effect.idempotencyKey, request.effect.operationId, null);
-    if (this.context.faults.hit("before_effect")) {
+    if (!hasValidRequestHash(request)) return this.failure("bindToOperation", request, "idempotency_conflict");
+    if (this.runtime.hitFault("before_effect")) {
       return this.failure("bindToOperation", request, "storage_unavailable", "not_applied", true);
     }
 
@@ -182,7 +183,7 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
         request.role,
         request.boundAt,
       );
-      if (this.context.faults.hit("effect_then_lost_acknowledgement")) {
+      if (this.runtime.hitFault("effect_then_lost_acknowledgement")) {
         return this.failure("bindToOperation", request, "storage_unavailable", "unknown", true);
       }
       return this.success("bindToOperation", request, binding);
@@ -192,7 +193,7 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
   }
 
   async get(ref: MediaRef): Promise<ResultValue<StoredMediaRecord | null, MediaStoreError>> {
-    const effectId = this.context.ids.nextId();
+    const effectId = this.runtime.nextId();
     this.call("get", effectId, null, null);
     try {
       const upload = this.database.prepare(
@@ -211,7 +212,7 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
   }
 
   async listForOperation(operationId: string): Promise<ResultValue<readonly MediaRef[], MediaStoreError>> {
-    const effectId = this.context.ids.nextId();
+    const effectId = this.runtime.nextId();
     this.call("listForOperation", effectId, operationId, null);
     try {
       const rows = this.database.prepare(`
@@ -233,7 +234,8 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
     request: DeleteMediaIfUnreferencedRequest,
   ): Promise<ResultValue<boolean, MediaStoreError>> {
     this.call("deleteIfUnreferenced", request.effect.idempotencyKey, request.effect.operationId, null);
-    if (this.context.faults.hit("before_effect")) {
+    if (!hasValidRequestHash(request)) return this.failure("deleteIfUnreferenced", request, "idempotency_conflict");
+    if (this.runtime.hitFault("before_effect")) {
       return this.failure("deleteIfUnreferenced", request, "storage_unavailable", "not_applied", true);
     }
     try {
@@ -276,7 +278,7 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
         );
         return didDelete;
       }).immediate();
-      if (this.context.faults.hit("effect_then_lost_acknowledgement")) {
+      if (this.runtime.hitFault("effect_then_lost_acknowledgement")) {
         return this.failure("deleteIfUnreferenced", request, "storage_unavailable", "unknown", true);
       }
       return this.success("deleteIfUnreferenced", request, deleted);
@@ -286,7 +288,7 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
   }
 
   private call(method: string, effectId: string, operationId: string | null, version: number | null): void {
-    this.trace.recordCall({ contract: "EF-S04", method, effectId, operationId, version });
+    this.runtime.recordTrace({ contract: "EF-S04", method, effectId, operationId, version });
   }
 
   private success<T>(
@@ -295,7 +297,7 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
     value: T,
     resultTag = "ok",
   ): ResultValue<T, never> {
-    this.trace.recordResult({
+    this.runtime.recordTrace({
       contract: "EF-S04", method, effectId: request.effect.idempotencyKey,
       operationId: request.effect.operationId, certainty: "applied", resultTag,
     });
@@ -309,7 +311,7 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
     certainty: MediaStoreError["certainty"] = "not_applied",
     retryable = false,
   ): ResultValue<never, MediaStoreError> {
-    this.trace.recordResult({
+    this.runtime.recordTrace({
       contract: "EF-S04", method, effectId: request.effect.idempotencyKey,
       operationId: request.effect.operationId, certainty, resultTag: tag,
     });
@@ -317,7 +319,7 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
   }
 
   private querySuccess<T>(method: string, effectId: string, value: T, resultTag = "ok"): ResultValue<T, never> {
-    this.trace.recordResult({ contract: "EF-S04", method, effectId, certainty: "applied", resultTag });
+    this.runtime.recordTrace({ contract: "EF-S04", method, effectId, certainty: "applied", resultTag });
     return Result.ok(value);
   }
 
@@ -328,9 +330,13 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
     certainty: MediaStoreError["certainty"] = "not_applied",
     retryable = false,
   ): ResultValue<never, MediaStoreError> {
-    this.trace.recordResult({ contract: "EF-S04", method, effectId, certainty, resultTag: tag });
+    this.runtime.recordTrace({ contract: "EF-S04", method, effectId, certainty, resultTag: tag });
     return Result.err(Object.freeze({ _tag: tag, certainty, retryable }));
   }
+}
+
+function hasValidRequestHash(request: { effect: { requestHash: string } }): boolean {
+  return request.effect.requestHash === hashCanonicalRequest(request as unknown as CanonicalJsonValue);
 }
 
 function validCreateRequest(request: CreateMediaRequest): boolean {

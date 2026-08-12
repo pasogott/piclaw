@@ -1,5 +1,7 @@
 import { Result, type Result as ResultValue } from "@earendil-works/pi-agent-core";
 
+import { hashCanonicalRequest, type CanonicalJsonValue } from "../../contracts/common.js";
+
 import type {
   BindOperationMediaRequest,
   CreateMediaRequest,
@@ -58,6 +60,7 @@ export class FakeOperationMediaStore implements OperationMediaStore {
 
   async create(request: CreateMediaRequest): Promise<ResultValue<MediaRef, MediaStoreError>> {
     this.call("create", request.effect.idempotencyKey, request.effect.operationId);
+    if (!hasValidRequestHash(request)) return this.fail("create", request, "idempotency_conflict");
     if (this.context.faults.hit("before_effect")) return this.fail("create", request, "storage_unavailable", "not_applied", true);
     const byKey = this.#media.find((entry) => entry.idempotencyKey === request.effect.idempotencyKey);
     if (byKey) return byKey.requestHash === request.effect.requestHash
@@ -79,6 +82,7 @@ export class FakeOperationMediaStore implements OperationMediaStore {
     if (!payload || payload.sha256 !== request.sha256 || payload.byteLength !== request.byteLength) {
       return this.fail("create", request, "digest_mismatch");
     }
+    if (payload.mediaType !== request.contentType) return this.fail("create", request, "unsupported_media");
     if (request.thumbnailRef && !await fakeResolveVerifiedPayload(this.payloads, request.thumbnailRef)) {
       return this.fail("create", request, "unsupported_media");
     }
@@ -109,6 +113,7 @@ export class FakeOperationMediaStore implements OperationMediaStore {
 
   async bindToOperation(request: BindOperationMediaRequest): Promise<ResultValue<OperationMediaBinding, MediaStoreError>> {
     this.call("bindToOperation", request.effect.idempotencyKey, request.effect.operationId);
+    if (!hasValidRequestHash(request)) return this.fail("bindToOperation", request, "idempotency_conflict");
     if (this.context.faults.hit("before_effect")) return this.fail("bindToOperation", request, "storage_unavailable", "not_applied", true);
     const byKey = this.#bindings.find((entry) => entry.idempotencyKey === request.effect.idempotencyKey);
     if (byKey) return byKey.requestHash === request.effect.requestHash
@@ -158,6 +163,7 @@ export class FakeOperationMediaStore implements OperationMediaStore {
 
   async deleteIfUnreferenced(request: DeleteMediaIfUnreferencedRequest): Promise<ResultValue<boolean, MediaStoreError>> {
     this.call("deleteIfUnreferenced", request.effect.idempotencyKey, request.effect.operationId);
+    if (!hasValidRequestHash(request)) return this.fail("deleteIfUnreferenced", request, "idempotency_conflict");
     if (this.context.faults.hit("before_effect")) return this.fail("deleteIfUnreferenced", request, "storage_unavailable", "not_applied", true);
     const prior = this.#deletions.find((entry) => entry.key === request.effect.idempotencyKey);
     if (prior) return prior.requestHash === request.effect.requestHash
@@ -228,6 +234,10 @@ export class FakeOperationMediaStore implements OperationMediaStore {
 }
 
 type EffectRequest = { effect: { idempotencyKey: string; operationId: string | null } };
+
+function hasValidRequestHash(request: { effect: { requestHash: string } }): boolean {
+  return request.effect.requestHash === hashCanonicalRequest(request as unknown as CanonicalJsonValue);
+}
 
 function bindingValue(record: FakeBindingRecord): OperationMediaBinding {
   return Object.freeze({ operationId: record.operationId, mediaId: record.mediaId, role: record.role, boundAt: record.boundAt });

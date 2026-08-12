@@ -47,12 +47,8 @@ const mediaCases: readonly ParameterisedContractCase<OperationMediaContractSubje
       const request = mediaRequest(subject, "media-c1", "upload-c1", "data:c1");
       const first = await subject.store.create(request);
       const duplicate = await subject.store.create(request);
-      const equalOtherKey = await subject.store.create({
-        ...request,
-        effect: { ...request.effect, idempotencyKey: "media-c1-other-key" },
-      });
-      assert(first.ok && duplicate.ok && equalOtherKey.ok, "equal upload must replay under either key identity");
-      assert(first.value.mediaId === duplicate.value.mediaId && first.value.mediaId === equalOtherKey.value.mediaId, "equal upload must return original reference");
+      assert(first.ok && duplicate.ok, "equal upload must replay under its semantic key");
+      assert(first.value.mediaId === duplicate.value.mediaId, "equal upload must return original reference");
       assert(subject.countMediaRows() === 1, "equal upload must create one blob");
     },
   },
@@ -90,11 +86,7 @@ const mediaCases: readonly ParameterisedContractCase<OperationMediaContractSubje
       const request = bindingRequest("bind-c4", created.value.mediaId, "draft");
       const first = await subject.store.bindToOperation(request);
       const duplicate = await subject.store.bindToOperation(request);
-      const equalOtherKey = await subject.store.bindToOperation({
-        ...request,
-        effect: { ...request.effect, idempotencyKey: "bind-c4-other-key" },
-      });
-      assert(first.ok && duplicate.ok && equalOtherKey.ok && first.value.boundAt === duplicate.value.boundAt, "equal binding must return original");
+      assert(first.ok && duplicate.ok && first.value.boundAt === duplicate.value.boundAt, "equal binding must return original");
       const listed = await subject.store.listForOperation("operation-1");
       assert(listed.ok && listed.value.length === 1, "binding uniqueness must expose one media ref");
     },
@@ -114,18 +106,50 @@ const mediaCases: readonly ParameterisedContractCase<OperationMediaContractSubje
     },
   },
   {
-    name: "EF-S04-C6 missing media cannot be bound",
+    name: "EF-S04-C6 stale request hash is rejected before mutation",
     async run({ subject }) {
-      const result = await subject.store.bindToOperation(bindingRequest("bind-c6", 999, "draft"));
+      seedMedia(subject.payloads, "data:c6", "stale hash");
+      const request = mediaRequest(subject, "media-c6", "upload-c6", "data:c6");
+      const malformed = { ...request, filename: "mutated-after-hash.bin" };
+      const result = await subject.store.create(malformed);
+      assert(!result.ok && result.error._tag === "idempotency_conflict", "stale request hash must conflict");
+      assert(subject.countMediaRows() === 0, "stale request hash must not write");
+    },
+  },
+  {
+    name: "EF-S04-C7 payload media type must match request content type",
+    async run({ subject }) {
+      seedMedia(subject.payloads, "data:c7", "typed as text", "text/plain");
+      const result = await subject.store.create(mediaRequest(subject, "media-c7", "upload-c7", "data:c7", "application/octet-stream"));
+      assert(!result.ok && result.error._tag === "unsupported_media", "payload media type mismatch must fail");
+      assert(subject.countMediaRows() === 0, "payload media type mismatch must not write");
+    },
+  },
+  {
+    name: "EF-S04-C8 metadata reference requires JSON media type",
+    async run({ subject }) {
+      seedMedia(subject.payloads, "data:c8", "metadata carrier");
+      subject.payloads.putText("metadata:c8", JSON.stringify({ source: "wrong media type" }), "text/plain");
+      const result = await subject.store.create(mediaRequest(subject, "media-c8", "upload-c8", "data:c8", "application/octet-stream", {
+        metadataRef: "metadata:c8",
+      }));
+      assert(!result.ok && result.error._tag === "unsupported_media", "metadata must be application/json");
+      assert(subject.countMediaRows() === 0, "invalid metadata media type must not write");
+    },
+  },
+  {
+    name: "EF-S04-C9 missing media cannot be bound",
+    async run({ subject }) {
+      const result = await subject.store.bindToOperation(bindingRequest("bind-c9", 999, "draft"));
       assert(!result.ok && result.error._tag === "media_not_found", "missing media bind must fail");
     },
   },
   {
-    name: "EF-S04-C7 compressed data round trips with stable digest",
+    name: "EF-S04-C10 compressed data round trips with stable digest",
     async run({ subject }) {
       const text = "compressible deterministic text ".repeat(100);
-      seedMedia(subject.payloads, "data:c7", text, "text/plain");
-      const created = await subject.store.create(mediaRequest(subject, "media-c7", "upload-c7", "data:c7", "text/plain"));
+      seedMedia(subject.payloads, "data:c10", text, "text/plain");
+      const created = await subject.store.create(mediaRequest(subject, "media-c10", "upload-c10", "data:c10", "text/plain"));
       assert(created.ok, "compressible media must commit");
       const stored = subject.inspectStoredBytes(created.value.mediaId);
       assert(stored && new TextDecoder().decode(stored) === text, "stored compressed data must round trip");
@@ -134,16 +158,16 @@ const mediaCases: readonly ParameterisedContractCase<OperationMediaContractSubje
     },
   },
   {
-    name: "EF-S04-C8 text-index maintenance follows media lifecycle",
+    name: "EF-S04-C11 text-index maintenance follows media lifecycle",
     async run({ subject }) {
-      seedMedia(subject.payloads, "data:c8", "unique-index-token", "text/plain");
-      const created = await subject.store.create(mediaRequest(subject, "media-c8", "upload-c8", "data:c8", "text/plain"));
+      seedMedia(subject.payloads, "data:c11", "unique-index-token", "text/plain");
+      const created = await subject.store.create(mediaRequest(subject, "media-c11", "upload-c11", "data:c11", "text/plain"));
       assert(created.ok, "text media must commit");
       assert(subject.indexTextMedia(created.value.mediaId, "unique-index-token"), "message attachment must index media text");
     },
   },
   {
-    name: "EF-S04-C9 orphan deletion is blocked by operation message or outbox reference",
+    name: "EF-S04-C12 orphan deletion is blocked by operation message or outbox reference",
     async run({ subject }) {
       const operation = await createNamed(subject, "operation");
       const bound = await subject.store.bindToOperation(bindingRequest("bind-c7", operation.mediaId, "draft"));

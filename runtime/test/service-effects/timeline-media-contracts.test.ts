@@ -33,6 +33,7 @@ import { ManualEffectClock, SequenceEffectIdSource } from "../../src/service-eff
 import { DeterministicFaultPlan, type PlannedFault } from "../../src/service-effects/testing/fault-plan.js";
 import { FakeOperationMediaStore } from "../../src/service-effects/testing/fakes/fake-operation-media-store.js";
 import { FakeTimelineDraftStore } from "../../src/service-effects/testing/fakes/fake-timeline-draft-store.js";
+import { TestingCurrentPiclawAdapterRuntime } from "../../src/service-effects/testing/current-piclaw-adapter-runtime.js";
 import { InMemoryEffectPayloadResolver } from "../../src/service-effects/testing/in-memory-payload-resolver.js";
 
 function createContext(faults: readonly PlannedFault[] = []): ContractTestContext {
@@ -53,7 +54,7 @@ const currentMediaFactory: ContractSubjectFactory<OperationMediaContractSubject>
     return { subject: currentMediaSubject(current.database, current.payloads, context), context };
   },
   inspectTrace(subject) {
-    return (subject.store as CurrentPiclawOperationMediaStore).trace.snapshot();
+    return (subject as CurrentMediaSubject).runtime.snapshot();
   },
 };
 
@@ -84,7 +85,7 @@ const currentTimelineFactory: ContractSubjectFactory<TimelineDraftContractSubjec
     return { subject: currentTimelineSubject(current.database, current.payloads, context), context };
   },
   inspectTrace(subject) {
-    return (subject.store as CurrentPiclawTimelineDraftStore).trace.snapshot();
+    return (subject as CurrentTimelineSubject).runtime.snapshot();
   },
 };
 
@@ -108,24 +109,24 @@ const fakeTimelineFactory: ContractSubjectFactory<TimelineDraftContractSubject> 
 describe("EF-S03 TimelineDraftStore shared contract", () => {
   test("current-Piclaw adapter", async () => {
     const results = await defineTimelineDraftStoreContract(currentTimelineFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(9);
+    expect(results.map((result) => result.caseName)).toHaveLength(11);
   });
 
   test("independent deterministic fake", async () => {
     const results = await defineTimelineDraftStoreContract(fakeTimelineFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(9);
+    expect(results.map((result) => result.caseName)).toHaveLength(11);
   });
 });
 
 describe("EF-S04 OperationMediaStore shared contract", () => {
   test("current-Piclaw adapter", async () => {
     const results = await defineOperationMediaStoreContract(currentMediaFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(10);
+    expect(results.map((result) => result.caseName)).toHaveLength(13);
   });
 
   test("independent deterministic fake", async () => {
     const results = await defineOperationMediaStoreContract(fakeMediaFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(10);
+    expect(results.map((result) => result.caseName)).toHaveLength(13);
   });
 });
 
@@ -186,6 +187,7 @@ function freshDatabase(): Database {
 interface CurrentMediaSubject extends OperationMediaContractSubject {
   readonly database: Database;
   readonly payloads: InMemoryEffectPayloadResolver;
+  readonly runtime: TestingCurrentPiclawAdapterRuntime;
   readonly store: CurrentPiclawOperationMediaStore;
 }
 
@@ -194,10 +196,12 @@ function currentMediaSubject(
   payloads: InMemoryEffectPayloadResolver,
   context: ContractTestContext,
 ): CurrentMediaSubject {
-  const store = new CurrentPiclawOperationMediaStore(database, payloads, context);
+  const runtime = new TestingCurrentPiclawAdapterRuntime(context);
+  const store = new CurrentPiclawOperationMediaStore(database, payloads, runtime);
   return {
     database,
     payloads,
+    runtime,
     store,
     inspectStoredBytes(mediaId) {
       return getMediaByIdFromDatabase(database, mediaId)?.data ?? null;
@@ -265,6 +269,7 @@ function ensureIndexMessage(database: Database, mediaId: number, indexText: bool
 interface CurrentTimelineSubject extends TimelineDraftContractSubject {
   readonly database: Database;
   readonly payloads: InMemoryEffectPayloadResolver;
+  readonly runtime: TestingCurrentPiclawAdapterRuntime;
   readonly store: CurrentPiclawTimelineDraftStore;
 }
 
@@ -273,12 +278,14 @@ function currentTimelineSubject(
   payloads: InMemoryEffectPayloadResolver,
   context: ContractTestContext,
 ): CurrentTimelineSubject {
-  const store = new CurrentPiclawTimelineDraftStore(database, payloads, context);
-  const mediaStore = new CurrentPiclawOperationMediaStore(database, payloads, context);
+  const runtime = new TestingCurrentPiclawAdapterRuntime(context);
+  const store = new CurrentPiclawTimelineDraftStore(database, payloads, runtime);
+  const mediaStore = new CurrentPiclawOperationMediaStore(database, payloads, runtime);
   let nextMediaOrdinal = (database.prepare("SELECT COUNT(*) AS count FROM service_effect_media_uploads").get() as { count: number }).count + 1;
   return {
     database,
     payloads,
+    runtime,
     store,
     async bindDraftMedia(operationId) {
       const ordinal = nextMediaOrdinal++;

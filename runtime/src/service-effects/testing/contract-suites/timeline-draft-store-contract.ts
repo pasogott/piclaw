@@ -149,7 +149,28 @@ const timelineCases: readonly ParameterisedContractCase<TimelineDraftContractSub
     },
   },
   {
-    name: "EF-S03-C8 draft and notice rows remain non-terminal",
+    name: "EF-S03-C8 stale request hash is rejected before mutation",
+    async run({ subject }) {
+      seedTimelinePayloads(subject.payloads);
+      const request = draftRequest("draft-c8", 1);
+      const malformed = { ...request, contentRef: "content:two" };
+      const result = await subject.store.commitDraft(malformed);
+      assert(!result.ok && result.error._tag === "idempotency_conflict", "stale request hash must conflict");
+      assert(subject.countTimelineRows() === 0, "stale request hash must not write");
+    },
+  },
+  {
+    name: "EF-S03-C9 content blocks require JSON media type",
+    async run({ subject }) {
+      seedTimelinePayloads(subject.payloads);
+      subject.payloads.putText("blocks:wrong-type", JSON.stringify([{ type: "text" }]), "text/plain");
+      const result = await subject.store.commitDraft(draftRequest("draft-c9", 1, { contentBlocksRef: "blocks:wrong-type" }));
+      assert(!result.ok && result.error._tag === "invalid_content_blocks", "content blocks must be application/json");
+      assert(subject.countTimelineRows() === 0, "invalid content-block media type must not write");
+    },
+  },
+  {
+    name: "EF-S03-C10 draft and notice rows remain non-terminal",
     async run({ subject }) {
       seedTimelinePayloads(subject.payloads);
       const mediaId = await subject.bindDraftMedia("operation-1");

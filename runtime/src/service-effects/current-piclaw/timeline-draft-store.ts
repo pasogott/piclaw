@@ -2,6 +2,7 @@ import { Result, type Result as ResultValue } from "@earendil-works/pi-agent-cor
 import type Database from "bun:sqlite";
 
 import { validateServiceEffectContentBlocks } from "../../channels/web/messaging/content-block-safety.js";
+import { hashCanonicalRequest, type CanonicalJsonValue } from "../contracts/common.js";
 import { storeMessageInDatabase, replaceMessageContentInDatabase } from "../../db/messages.js";
 import type { NewMessage } from "../../types.js";
 import type { EffectPayloadResolver } from "../contracts/payload-resolver.js";
@@ -15,8 +16,7 @@ import type {
   TimelineWrite,
 } from "../contracts/timeline-draft-store.js";
 import { resolveVerifiedJson, resolveVerifiedText } from "../payloads.js";
-import type { ContractTestContext } from "../testing/contract-suite.js";
-import { EffectTraceRecorder } from "../testing/trace-recorder.js";
+import type { CurrentPiclawAdapterRuntime } from "./adapter-runtime.js";
 
 interface TimelineWriteRow {
   idempotency_key: string;
@@ -33,17 +33,16 @@ interface TimelineWriteRow {
 }
 
 export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
-  readonly trace = new EffectTraceRecorder();
-
   constructor(
     readonly database: Database,
     private readonly payloads: EffectPayloadResolver,
-    private readonly context: ContractTestContext,
+    private readonly runtime: CurrentPiclawAdapterRuntime,
   ) {}
 
   async commitDraft(request: CommitDraftRequest): Promise<ResultValue<TimelineWrite, TimelineStoreError>> {
     this.call("commitDraft", request.effect.idempotencyKey, request.effect.operationId, request.revision);
-    if (this.context.faults.hit("before_effect")) {
+    if (!hasValidRequestHash(request)) return this.failure("commitDraft", request, "idempotency_conflict");
+    if (this.runtime.hitFault("before_effect")) {
       return this.failure("commitDraft", request, "storage_unavailable", "not_applied", true);
     }
 
@@ -136,7 +135,7 @@ export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
         return timelineWrite(rowId, request.chatJid, request.effect.operationId, request.revision, request.writtenAt);
       }).immediate();
 
-      if (this.context.faults.hit("effect_then_lost_acknowledgement")) {
+      if (this.runtime.hitFault("effect_then_lost_acknowledgement")) {
         return this.failure("commitDraft", request, "storage_unavailable", "unknown", true);
       }
       return this.success("commitDraft", request, write);
@@ -150,7 +149,8 @@ export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
     request: CommitServiceNoticeRequest,
   ): Promise<ResultValue<TimelineWrite, TimelineStoreError>> {
     this.call("commitServiceNotice", request.effect.idempotencyKey, request.effect.operationId, null);
-    if (this.context.faults.hit("before_effect")) {
+    if (!hasValidRequestHash(request)) return this.failure("commitServiceNotice", request, "idempotency_conflict");
+    if (this.runtime.hitFault("before_effect")) {
       return this.failure("commitServiceNotice", request, "storage_unavailable", "not_applied", true);
     }
     try {
@@ -184,7 +184,7 @@ export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
         );
         return timelineWrite(rowId, request.chatJid, null, null, request.writtenAt);
       }).immediate();
-      if (this.context.faults.hit("effect_then_lost_acknowledgement")) {
+      if (this.runtime.hitFault("effect_then_lost_acknowledgement")) {
         return this.failure("commitServiceNotice", request, "storage_unavailable", "unknown", true);
       }
       return this.success("commitServiceNotice", request, write);
@@ -196,7 +196,7 @@ export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
   async getOperationArtifacts(
     operationId: string,
   ): Promise<ResultValue<OperationArtifacts, TimelineStoreError>> {
-    const effectId = this.context.ids.nextId();
+    const effectId = this.runtime.nextId();
     this.call("getOperationArtifacts", effectId, operationId, null);
     try {
       const rows = this.database.prepare(`
@@ -220,13 +220,13 @@ export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
         draftRows,
         mediaIds: Object.freeze(mediaIds),
       });
-      this.trace.recordResult({
+      this.runtime.recordTrace({
         contract: "EF-S03", method: "getOperationArtifacts", effectId,
         operationId, certainty: "applied", resultTag: "ok",
       });
       return Result.ok(value);
     } catch {
-      this.trace.recordResult({
+      this.runtime.recordTrace({
         contract: "EF-S03", method: "getOperationArtifacts", effectId,
         operationId, certainty: "unknown", resultTag: "storage_unavailable",
       });
@@ -285,7 +285,7 @@ export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
   }
 
   private call(method: string, effectId: string, operationId: string | null, version: number | null): void {
-    this.trace.recordCall({ contract: "EF-S03", method, effectId, operationId, version });
+    this.runtime.recordTrace({ contract: "EF-S03", method, effectId, operationId, version });
   }
 
   private success<T>(
@@ -294,7 +294,7 @@ export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
     value: T,
     resultTag = "ok",
   ): ResultValue<T, never> {
-    this.trace.recordResult({
+    this.runtime.recordTrace({
       contract: "EF-S03", method, effectId: request.effect.idempotencyKey,
       operationId: request.effect.operationId, certainty: "applied", resultTag,
     });
@@ -308,12 +308,16 @@ export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
     certainty: TimelineStoreError["certainty"] = "not_applied",
     retryable = false,
   ): ResultValue<never, TimelineStoreError> {
-    this.trace.recordResult({
+    this.runtime.recordTrace({
       contract: "EF-S03", method, effectId: request.effect.idempotencyKey,
       operationId: request.effect.operationId, certainty, resultTag: tag,
     });
     return Result.err(timelineError(tag, certainty, retryable));
   }
+}
+
+function hasValidRequestHash(request: { effect: { requestHash: string } }): boolean {
+  return request.effect.requestHash === hashCanonicalRequest(request as unknown as CanonicalJsonValue);
 }
 
 class TimelineMutationError extends Error {
