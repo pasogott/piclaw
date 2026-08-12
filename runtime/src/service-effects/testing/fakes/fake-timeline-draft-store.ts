@@ -1,6 +1,5 @@
 import { Result, type Result as ResultValue } from "@earendil-works/pi-agent-core";
 
-import { validateServiceEffectContentBlocks } from "../../../channels/web/messaging/content-block-safety.js";
 import type { EffectPayloadResolver } from "../../contracts/payload-resolver.js";
 import type {
   CommitDraftRequest,
@@ -11,9 +10,13 @@ import type {
   TimelineStoreErrorTag,
   TimelineWrite,
 } from "../../contracts/timeline-draft-store.js";
-import { resolveVerifiedJson, resolveVerifiedText } from "../../payloads.js";
 import type { ContractTestContext } from "../contract-suite.js";
 import { EffectTraceRecorder } from "../trace-recorder.js";
+import {
+  fakeResolveVerifiedJson,
+  fakeResolveVerifiedText,
+  fakeValidateContentBlocks,
+} from "./fake-payload-validation.js";
 
 interface FakeTimelineRevision {
   readonly key: string;
@@ -88,7 +91,7 @@ export class FakeTimelineDraftStore implements TimelineDraftStore {
       row = Object.freeze({ ...current, content: payloads.content, mediaIds: Object.freeze([...request.mediaIds]) });
       this.#rows[index] = row;
     } else {
-      if (request.existingRowId !== null) return this.fail("commitDraft", request, "row_owner_conflict");
+      if (request.existingRowId !== null || latest) return this.fail("commitDraft", request, "row_owner_conflict");
       row = Object.freeze({
         rowId: this.#nextRowId++, chatJid: request.chatJid, operationId: request.effect.operationId,
         draftKind: request.draftKind, content: payloads.content, threadId: request.threadId,
@@ -151,6 +154,23 @@ export class FakeTimelineDraftStore implements TimelineDraftStore {
 
   inspectRows(): readonly FakeTimelineRow[] { return Object.freeze([...this.#rows]); }
 
+  injectHistoricalMedia(operationId: string, draftKind: string, mediaId: number): void {
+    const latest = this.latest(operationId, draftKind);
+    if (!latest) throw new Error("cannot inject history without a current draft");
+    const historical = this.#revisions.find((entry) =>
+      entry.writeType === "draft" && entry.operationId === operationId && entry.draftKind === draftKind && entry !== latest);
+    if (!historical) throw new Error("cannot inject history without an older revision");
+    const row = this.#rows.find((entry) => entry.rowId === historical.write.rowId);
+    if (!row) throw new Error("historical row is missing");
+    const historicalRowId = this.#nextRowId++;
+    this.#rows.push(Object.freeze({ ...row, rowId: historicalRowId, mediaIds: Object.freeze([mediaId]) }));
+    const index = this.#revisions.indexOf(historical);
+    this.#revisions[index] = Object.freeze({
+      ...historical,
+      write: timelineWrite(historicalRowId, historical.write.chatJid, operationId, historical.revision, historical.write.writtenAt),
+    });
+  }
+
   snapshot(): FakeTimelineDraftSnapshot {
     return structuredClone({ nextRowId: this.#nextRowId, revisions: this.#revisions, rows: this.#rows, trace: this.trace.snapshot() });
   }
@@ -173,11 +193,13 @@ export class FakeTimelineDraftStore implements TimelineDraftStore {
       : this.fail(method, request, "idempotency_conflict");
   }
   private async resolve(contentRef: string, blocksRef: string | null): Promise<{ ok: true; content: string } | { ok: false; error: TimelineStoreErrorTag }> {
-    const content = await resolveVerifiedText(this.payloads, contentRef);
+    const content = await fakeResolveVerifiedText(this.payloads, contentRef);
     if (content === null) return { ok: false, error: "storage_unavailable" };
     if (!blocksRef) return { ok: true, content };
-    const blocks = validateServiceEffectContentBlocks(await resolveVerifiedJson(this.payloads, blocksRef));
-    return blocks ? { ok: true, content } : { ok: false, error: "invalid_content_blocks" };
+    const blocks = await fakeResolveVerifiedJson(this.payloads, blocksRef);
+    return fakeValidateContentBlocks(blocks)
+      ? { ok: true, content }
+      : { ok: false, error: "invalid_content_blocks" };
   }
   private call(method: string, effectId: string, operationId: string | null, version: number | null): void {
     this.trace.recordCall({ contract: "EF-S03", method, effectId, operationId, version });

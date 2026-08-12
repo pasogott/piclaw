@@ -48,9 +48,8 @@ const currentMediaFactory: ContractSubjectFactory<OperationMediaContractSubject>
   create(context) {
     return currentMediaSubject(freshDatabase(), new InMemoryEffectPayloadResolver(), context);
   },
-  crashAndRestore(subject) {
+  crashAndRestore(subject, context) {
     const current = subject as CurrentMediaSubject;
-    const context = createContext();
     return { subject: currentMediaSubject(current.database, current.payloads, context), context };
   },
   inspectTrace(subject) {
@@ -63,10 +62,9 @@ const fakeMediaFactory: ContractSubjectFactory<OperationMediaContractSubject> = 
   create(context) {
     return fakeMediaSubject(new InMemoryEffectPayloadResolver(), context);
   },
-  crashAndRestore(subject) {
+  crashAndRestore(subject, context) {
     const current = subject as FakeMediaSubject;
     const snapshot = current.store.snapshot();
-    const context = createContext();
     const restored = fakeMediaSubject(current.payloads, context);
     restored.store.restore(snapshot);
     return { subject: restored, context };
@@ -81,9 +79,8 @@ const currentTimelineFactory: ContractSubjectFactory<TimelineDraftContractSubjec
   create(context) {
     return currentTimelineSubject(freshDatabase(), new InMemoryEffectPayloadResolver(), context);
   },
-  crashAndRestore(subject) {
+  crashAndRestore(subject, context) {
     const current = subject as CurrentTimelineSubject;
-    const context = createContext();
     return { subject: currentTimelineSubject(current.database, current.payloads, context), context };
   },
   inspectTrace(subject) {
@@ -96,10 +93,9 @@ const fakeTimelineFactory: ContractSubjectFactory<TimelineDraftContractSubject> 
   create(context) {
     return fakeTimelineSubject(new InMemoryEffectPayloadResolver(), context);
   },
-  crashAndRestore(subject) {
+  crashAndRestore(subject, context) {
     const current = subject as FakeTimelineSubject;
     const snapshot = current.store.snapshot();
-    const context = createContext();
     const restored = fakeTimelineSubject(current.payloads, context, new Set(current.ownedMedia));
     restored.store.restore(snapshot);
     return { subject: restored, context };
@@ -112,24 +108,24 @@ const fakeTimelineFactory: ContractSubjectFactory<TimelineDraftContractSubject> 
 describe("EF-S03 TimelineDraftStore shared contract", () => {
   test("current-Piclaw adapter", async () => {
     const results = await defineTimelineDraftStoreContract(currentTimelineFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(7);
+    expect(results.map((result) => result.caseName)).toHaveLength(9);
   });
 
   test("independent deterministic fake", async () => {
     const results = await defineTimelineDraftStoreContract(fakeTimelineFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(7);
+    expect(results.map((result) => result.caseName)).toHaveLength(9);
   });
 });
 
 describe("EF-S04 OperationMediaStore shared contract", () => {
   test("current-Piclaw adapter", async () => {
     const results = await defineOperationMediaStoreContract(currentMediaFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(8);
+    expect(results.map((result) => result.caseName)).toHaveLength(10);
   });
 
   test("independent deterministic fake", async () => {
     const results = await defineOperationMediaStoreContract(fakeMediaFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(8);
+    expect(results.map((result) => result.caseName)).toHaveLength(10);
   });
 });
 
@@ -279,22 +275,24 @@ function currentTimelineSubject(
 ): CurrentTimelineSubject {
   const store = new CurrentPiclawTimelineDraftStore(database, payloads, context);
   const mediaStore = new CurrentPiclawOperationMediaStore(database, payloads, context);
+  let nextMediaOrdinal = (database.prepare("SELECT COUNT(*) AS count FROM service_effect_media_uploads").get() as { count: number }).count + 1;
   return {
     database,
     payloads,
     store,
     async bindDraftMedia(operationId) {
-      const dataRef = `timeline-media:${operationId}`;
-      const payload = payloads.putText(dataRef, "draft media", "text/plain");
+      const ordinal = nextMediaOrdinal++;
+      const dataRef = `timeline-media:${operationId}:${ordinal}`;
+      const payload = payloads.putText(dataRef, `draft media ${ordinal}`, "text/plain");
       const created = await mediaStore.create(withHash({
-        effect: nullableEffect(`create-${operationId}`), uploadId: `upload-${operationId}`,
+        effect: nullableEffect(`create-${operationId}-${ordinal}`), uploadId: `upload-${operationId}-${ordinal}`,
         filename: "draft.txt", contentType: "text/plain", byteLength: payload.byteLength,
         sha256: payload.sha256, dataRef, thumbnailRef: null, metadataRef: null,
         createdAt: "2026-08-12T00:00:00.000Z",
       }));
       if (!created.ok) throw new Error(created.error._tag);
       const bound = await mediaStore.bindToOperation(withHash({
-        effect: operationEffect(`bind-${operationId}`, operationId), mediaId: created.value.mediaId,
+        effect: operationEffect(`bind-${operationId}-${ordinal}`, operationId), mediaId: created.value.mediaId,
         role: "draft" as const, boundAt: "2026-08-12T00:00:01.000Z",
       }));
       if (!bound.ok) throw new Error(bound.error._tag);
@@ -304,6 +302,23 @@ function currentTimelineSubject(
       const row = database.prepare("SELECT rowid, content, thread_id, is_terminal_agent_reply FROM messages WHERE rowid = ?")
         .get(rowId) as { rowid: number; content: string; thread_id: number | null; is_terminal_agent_reply: number } | undefined;
       return row ? { rowId: row.rowid, content: row.content, threadId: row.thread_id, terminal: row.is_terminal_agent_reply === 1 } : null;
+    },
+    injectHistoricalMedia(operationId, draftKind, mediaId) {
+      const historical = database.prepare(`
+        SELECT idempotency_key, message_rowid, chat_jid, written_at
+        FROM service_effect_timeline_writes
+        WHERE write_type = 'draft' AND operation_id = ? AND draft_kind = ?
+        ORDER BY revision ASC LIMIT 1
+      `).get(operationId, draftKind) as {
+        idempotency_key: string; message_rowid: number; chat_jid: string; written_at: string;
+      } | undefined;
+      if (!historical) throw new Error("historical revision is missing");
+      const rowId = storeMessageInDatabase(database, parityMessage(
+        historical.chat_jid, `historical-${operationId}-${draftKind}`, "historical fixture",
+      ));
+      attachMediaToMessageInDatabase(database, rowId, [mediaId]);
+      database.prepare("UPDATE service_effect_timeline_writes SET message_rowid = ? WHERE idempotency_key = ?")
+        .run(rowId, historical.idempotency_key);
     },
     countTimelineRows() {
       return (database.prepare("SELECT COUNT(*) AS count FROM messages").get() as { count: number }).count;
@@ -336,6 +351,9 @@ function fakeTimelineSubject(
     inspectRow(rowId) {
       const row = store.inspectRows().find((entry) => entry.rowId === rowId);
       return row ? { rowId: row.rowId, content: row.content, threadId: row.threadId, terminal: row.terminal } : null;
+    },
+    injectHistoricalMedia(operationId, draftKind, mediaId) {
+      store.injectHistoricalMedia(operationId, draftKind, mediaId);
     },
     countTimelineRows() { return store.inspectRows().length; },
   };

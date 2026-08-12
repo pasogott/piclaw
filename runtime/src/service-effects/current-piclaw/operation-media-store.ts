@@ -71,9 +71,12 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
         "SELECT * FROM service_effect_media_uploads WHERE upload_id = ?",
       ).get(request.uploadId) as UploadRow | undefined;
       if (byUpload) {
-        return byUpload.sha256 === request.sha256 && byUpload.byte_length === request.byteLength
+        if (byUpload.sha256 !== request.sha256 || byUpload.byte_length !== request.byteLength) {
+          return this.failure("create", request, "digest_mismatch");
+        }
+        return byUpload.request_hash === request.effect.requestHash
           ? this.success("create", request, { mediaId: byUpload.media_id, sha256: byUpload.sha256 }, "duplicate")
-          : this.failure("create", request, "digest_mismatch");
+          : this.failure("create", request, "idempotency_conflict");
       }
 
       if (!validCreateRequest(request)) return this.failure("create", request, "unsupported_media");
@@ -157,7 +160,9 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
         SELECT * FROM service_effect_operation_media
         WHERE operation_id = ? AND media_id = ? AND role = ?
       `).get(request.effect.operationId, request.mediaId, request.role) as BindingRow | undefined;
-      if (existing) return this.success("bindToOperation", request, bindingFromRow(existing), "duplicate");
+      if (existing) return existing.request_hash === request.effect.requestHash
+        ? this.success("bindToOperation", request, bindingFromRow(existing), "duplicate")
+        : this.failure("bindToOperation", request, "binding_conflict");
 
       const binding = Object.freeze({
         operationId: request.effect.operationId,

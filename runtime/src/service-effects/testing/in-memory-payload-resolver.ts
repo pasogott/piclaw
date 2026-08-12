@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
+
 import type { RedactionClass } from "../contracts/common.js";
 import type { EffectPayloadResolver, ResolvedEffectPayload } from "../contracts/payload-resolver.js";
-import { sha256Bytes } from "../payloads.js";
 
 export class InMemoryEffectPayloadResolver implements EffectPayloadResolver {
   readonly #payloads = new Map<string, ResolvedEffectPayload>();
@@ -14,7 +15,7 @@ export class InMemoryEffectPayloadResolver implements EffectPayloadResolver {
     const copy = new Uint8Array(bytes);
     const payload = Object.freeze({
       ref,
-      sha256: sha256Bytes(copy),
+      sha256: createHash("sha256").update(copy).digest("hex"),
       byteLength: copy.byteLength,
       mediaType,
       redactionClass,

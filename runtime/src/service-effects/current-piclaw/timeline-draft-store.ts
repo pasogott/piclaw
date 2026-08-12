@@ -102,7 +102,7 @@ export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
           if (!replaced) throw new TimelineMutationError("row_not_found");
           rowId = request.existingRowId;
         } else {
-          if (request.existingRowId !== null) throw new TimelineMutationError("row_owner_conflict");
+          if (request.existingRowId !== null || latest) throw new TimelineMutationError("row_owner_conflict");
           this.ensureChat(request.chatJid, request.writtenAt);
           rowId = storeMessageInDatabase(this.database, draftMessage(request, resolved.content, resolved.blocks));
           if (rowId <= 0) throw new Error("draft insert failed");
@@ -207,17 +207,18 @@ export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
       const latest = new Map<string, TimelineWriteRow>();
       for (const row of rows) if (row.draft_kind && !latest.has(row.draft_kind)) latest.set(row.draft_kind, row);
       const draftRows = Object.freeze([...latest.values()].map(writeFromRow));
-      const mediaRows = this.database.prepare(`
-        SELECT DISTINCT mm.media_id
-        FROM service_effect_timeline_writes w
-        JOIN message_media mm ON mm.message_rowid = w.message_rowid
-        WHERE w.write_type = 'draft' AND w.operation_id = ?
-        ORDER BY mm.media_id
-      `).all(operationId) as Array<{ media_id: number }>;
+      const latestRowIds = [...latest.values()].map((row) => row.message_rowid);
+      const mediaIds = latestRowIds.length === 0
+        ? []
+        : (this.database.prepare(`
+          SELECT DISTINCT media_id FROM message_media
+          WHERE message_rowid IN (${latestRowIds.map(() => "?").join(",")})
+          ORDER BY media_id
+        `).all(...latestRowIds) as Array<{ media_id: number }>).map((row) => row.media_id);
       const value = Object.freeze({
         operationId,
         draftRows,
-        mediaIds: Object.freeze(mediaRows.map((row) => row.media_id)),
+        mediaIds: Object.freeze(mediaIds),
       });
       this.trace.recordResult({
         contract: "EF-S03", method: "getOperationArtifacts", effectId,

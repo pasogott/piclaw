@@ -132,6 +132,8 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
       "duplicate equal draft revision returns original write",
       "conflicting or stale revision creates no row",
       "replacement preserves row ownership and thread association",
+      "later insert cannot create a second current row",
+      "replacement artifacts include latest media only",
       "service notice is idempotent by source",
       "invalid content blocks are rejected",
       "draft and notice rows remain non-terminal",
@@ -152,7 +154,9 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
     requiredCases: numberedCases("EF-S04", [
       "equal upload ID and digest returns original media reference",
       "conflicting digest is rejected",
+      "equal digest with changed upload semantics is rejected",
       "operation binding is unique by operation media and role",
+      "changed binding semantics conflict",
       "missing media cannot be bound",
       "compressed data round trips with stable digest",
       "text-index maintenance follows media lifecycle",

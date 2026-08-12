@@ -27,6 +27,7 @@ export interface TimelineDraftContractSubject {
   readonly payloads: InMemoryEffectPayloadResolver;
   bindDraftMedia(operationId: string): Promise<number> | number;
   inspectRow(rowId: number): TimelineDraftContractRow | null;
+  injectHistoricalMedia(operationId: string, draftKind: string, mediaId: number): void;
   countTimelineRows(): number;
 }
 
@@ -85,10 +86,44 @@ const timelineCases: readonly ParameterisedContractCase<TimelineDraftContractSub
       assert(subject.inspectRow(first.value.rowId)?.content === "draft two", "old replay must not rewrite current content");
       const artifacts = await subject.store.getOperationArtifacts("operation-1");
       assert(artifacts.ok && artifacts.value.draftRows.length === 1 && artifacts.value.draftRows[0].revision === 2, "artifacts must expose latest revision per kind");
+      assert(artifacts.value.draftRows[0].rowId === first.value.rowId, "latest artifacts must retain the one current row");
     },
   },
   {
-    name: "EF-S03-C4 service notice is idempotent by kind and source",
+    name: "EF-S03-C4 later insert cannot create a second current row",
+    async run({ subject }) {
+      seedTimelinePayloads(subject.payloads);
+      const first = await subject.store.commitDraft(draftRequest("draft-c4-r1", 1));
+      assert(first.ok, "first insert must commit");
+      const mediaId = await subject.bindDraftMedia("operation-1");
+      const secondInsert = await subject.store.commitDraft(draftRequest("draft-c4-r2", 2, {
+        contentRef: "content:two", mediaIds: [mediaId],
+      }));
+      assert(!secondInsert.ok && secondInsert.error._tag === "row_owner_conflict", "later insert must be rejected");
+      assert(subject.countTimelineRows() === 1, "one operation/kind must retain one current row");
+      const artifacts = await subject.store.getOperationArtifacts("operation-1");
+      assert(artifacts.ok && artifacts.value.mediaIds.length === 0, "rejected insert media must not enter latest artifacts");
+    },
+  },
+  {
+    name: "EF-S03-C5 replacement artifacts include latest media only",
+    async run({ subject }) {
+      seedTimelinePayloads(subject.payloads);
+      const oldMediaId = await subject.bindDraftMedia("operation-1");
+      const newMediaId = await subject.bindDraftMedia("operation-1");
+      const first = await subject.store.commitDraft(draftRequest("draft-c5-r1", 1, { mediaIds: [oldMediaId] }));
+      assert(first.ok, "first media revision must commit");
+      const replacement = await subject.store.commitDraft(draftRequest("draft-c5-r2", 2, {
+        mode: "replace", existingRowId: first.value.rowId, contentRef: "content:two", mediaIds: [newMediaId],
+      }));
+      assert(replacement.ok, "media replacement must commit");
+      subject.injectHistoricalMedia("operation-1", "assistant_progress", oldMediaId);
+      const artifacts = await subject.store.getOperationArtifacts("operation-1");
+      assert(artifacts.ok && artifacts.value.mediaIds.length === 1 && artifacts.value.mediaIds[0] === newMediaId, "artifacts must expose latest-row media only");
+    },
+  },
+  {
+    name: "EF-S03-C6 service notice is idempotent by kind and source",
     async run({ subject }) {
       seedTimelinePayloads(subject.payloads);
       const request = noticeRequest("notice-c4");
@@ -101,7 +136,7 @@ const timelineCases: readonly ParameterisedContractCase<TimelineDraftContractSub
     },
   },
   {
-    name: "EF-S03-C5 invalid content blocks are rejected",
+    name: "EF-S03-C7 invalid content blocks are rejected",
     async run({ subject }) {
       seedTimelinePayloads(subject.payloads);
       subject.payloads.putJson("blocks:invalid", [{ type: "text" }, "not-an-object"]);
@@ -114,7 +149,7 @@ const timelineCases: readonly ParameterisedContractCase<TimelineDraftContractSub
     },
   },
   {
-    name: "EF-S03-C6 draft and notice rows remain non-terminal",
+    name: "EF-S03-C8 draft and notice rows remain non-terminal",
     async run({ subject }) {
       seedTimelinePayloads(subject.payloads);
       const mediaId = await subject.bindDraftMedia("operation-1");
@@ -141,7 +176,10 @@ const timelineCrashCases: readonly ParameterisedContractCase<TimelineDraftContra
       });
       const lost = await fixture.subject.store.commitDraft(replacement);
       assert(!lost.ok && lost.error.certainty === "unknown", "lost acknowledgement must report unknown");
+      const idBeforeRestore = fixture.context.ids.nextId();
       await fixture.crashAndRestore();
+      assert(fixture.context.ids.nextId() !== idBeforeRestore, "deterministic IDs must continue across restore");
+      assert(!fixture.context.faults.hit("effect_then_lost_acknowledgement"), "consumed fault occurrence must remain consumed");
       const reconciled = await fixture.subject.store.commitDraft(replacement);
       assert(reconciled.ok && reconciled.value.rowId === first.value.rowId, "retry must recover committed replacement");
       assert(fixture.subject.countTimelineRows() === 1, "reconciliation must retain one current row");

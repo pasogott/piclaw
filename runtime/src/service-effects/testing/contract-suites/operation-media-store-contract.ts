@@ -47,7 +47,12 @@ const mediaCases: readonly ParameterisedContractCase<OperationMediaContractSubje
       const request = mediaRequest(subject, "media-c1", "upload-c1", "data:c1");
       const first = await subject.store.create(request);
       const duplicate = await subject.store.create(request);
-      assert(first.ok && duplicate.ok && first.value.mediaId === duplicate.value.mediaId, "equal upload must return original reference");
+      const equalOtherKey = await subject.store.create({
+        ...request,
+        effect: { ...request.effect, idempotencyKey: "media-c1-other-key" },
+      });
+      assert(first.ok && duplicate.ok && equalOtherKey.ok, "equal upload must replay under either key identity");
+      assert(first.value.mediaId === duplicate.value.mediaId && first.value.mediaId === equalOtherKey.value.mediaId, "equal upload must return original reference");
       assert(subject.countMediaRows() === 1, "equal upload must create one blob");
     },
   },
@@ -64,32 +69,63 @@ const mediaCases: readonly ParameterisedContractCase<OperationMediaContractSubje
     },
   },
   {
-    name: "EF-S04-C3 operation binding is unique by operation media and role",
+    name: "EF-S04-C3 equal digest with changed upload semantics is rejected",
     async run({ subject }) {
-      seedMedia(subject.payloads, "data:c3", "binding");
-      const created = await subject.store.create(mediaRequest(subject, "media-c3", "upload-c3", "data:c3"));
+      seedMedia(subject.payloads, "data:c3", "semantic conflict");
+      const first = await subject.store.create(mediaRequest(subject, "media-c3-a", "upload-c3", "data:c3"));
+      assert(first.ok, "first upload must commit");
+      const conflict = await subject.store.create(mediaRequest(
+        subject, "media-c3-b", "upload-c3", "data:c3", "application/octet-stream", { filename: "changed.bin" },
+      ));
+      assert(!conflict.ok && conflict.error._tag === "idempotency_conflict", "same digest with changed semantics must conflict");
+      assert(subject.countMediaRows() === 1, "semantic conflict must not add a blob");
+    },
+  },
+  {
+    name: "EF-S04-C4 operation binding is unique by operation media and role",
+    async run({ subject }) {
+      seedMedia(subject.payloads, "data:c4", "binding");
+      const created = await subject.store.create(mediaRequest(subject, "media-c4", "upload-c4", "data:c4"));
       assert(created.ok, "media must commit");
-      const request = bindingRequest("bind-c3", created.value.mediaId, "draft");
+      const request = bindingRequest("bind-c4", created.value.mediaId, "draft");
       const first = await subject.store.bindToOperation(request);
       const duplicate = await subject.store.bindToOperation(request);
-      assert(first.ok && duplicate.ok && first.value.boundAt === duplicate.value.boundAt, "equal binding must return original");
+      const equalOtherKey = await subject.store.bindToOperation({
+        ...request,
+        effect: { ...request.effect, idempotencyKey: "bind-c4-other-key" },
+      });
+      assert(first.ok && duplicate.ok && equalOtherKey.ok && first.value.boundAt === duplicate.value.boundAt, "equal binding must return original");
       const listed = await subject.store.listForOperation("operation-1");
       assert(listed.ok && listed.value.length === 1, "binding uniqueness must expose one media ref");
     },
   },
   {
-    name: "EF-S04-C4 missing media cannot be bound",
+    name: "EF-S04-C5 changed binding semantics conflict",
     async run({ subject }) {
-      const result = await subject.store.bindToOperation(bindingRequest("bind-c4", 999, "draft"));
+      seedMedia(subject.payloads, "data:c5", "binding conflict");
+      const created = await subject.store.create(mediaRequest(subject, "media-c5", "upload-c5", "data:c5"));
+      assert(created.ok, "media must commit");
+      const first = await subject.store.bindToOperation(bindingRequest("bind-c5-a", created.value.mediaId, "draft"));
+      assert(first.ok, "first binding must commit");
+      const conflict = await subject.store.bindToOperation(bindingRequest(
+        "bind-c5-b", created.value.mediaId, "draft", { boundAt: "2026-08-12T00:02:00.000Z" },
+      ));
+      assert(!conflict.ok && conflict.error._tag === "binding_conflict", "changed binding semantics must conflict");
+    },
+  },
+  {
+    name: "EF-S04-C6 missing media cannot be bound",
+    async run({ subject }) {
+      const result = await subject.store.bindToOperation(bindingRequest("bind-c6", 999, "draft"));
       assert(!result.ok && result.error._tag === "media_not_found", "missing media bind must fail");
     },
   },
   {
-    name: "EF-S04-C5 compressed data round trips with stable digest",
+    name: "EF-S04-C7 compressed data round trips with stable digest",
     async run({ subject }) {
       const text = "compressible deterministic text ".repeat(100);
-      seedMedia(subject.payloads, "data:c5", text, "text/plain");
-      const created = await subject.store.create(mediaRequest(subject, "media-c5", "upload-c5", "data:c5", "text/plain"));
+      seedMedia(subject.payloads, "data:c7", text, "text/plain");
+      const created = await subject.store.create(mediaRequest(subject, "media-c7", "upload-c7", "data:c7", "text/plain"));
       assert(created.ok, "compressible media must commit");
       const stored = subject.inspectStoredBytes(created.value.mediaId);
       assert(stored && new TextDecoder().decode(stored) === text, "stored compressed data must round trip");
@@ -98,16 +134,16 @@ const mediaCases: readonly ParameterisedContractCase<OperationMediaContractSubje
     },
   },
   {
-    name: "EF-S04-C6 text-index maintenance follows media lifecycle",
+    name: "EF-S04-C8 text-index maintenance follows media lifecycle",
     async run({ subject }) {
-      seedMedia(subject.payloads, "data:c6", "unique-index-token", "text/plain");
-      const created = await subject.store.create(mediaRequest(subject, "media-c6", "upload-c6", "data:c6", "text/plain"));
+      seedMedia(subject.payloads, "data:c8", "unique-index-token", "text/plain");
+      const created = await subject.store.create(mediaRequest(subject, "media-c8", "upload-c8", "data:c8", "text/plain"));
       assert(created.ok, "text media must commit");
       assert(subject.indexTextMedia(created.value.mediaId, "unique-index-token"), "message attachment must index media text");
     },
   },
   {
-    name: "EF-S04-C7 orphan deletion is blocked by operation message or outbox reference",
+    name: "EF-S04-C9 orphan deletion is blocked by operation message or outbox reference",
     async run({ subject }) {
       const operation = await createNamed(subject, "operation");
       const bound = await subject.store.bindToOperation(bindingRequest("bind-c7", operation.mediaId, "draft"));
@@ -139,7 +175,10 @@ const mediaCrashCases: readonly ParameterisedContractCase<OperationMediaContract
       const request = mediaRequest(fixture.subject, "media-r01", "upload-r01", "data:r01");
       const lost = await fixture.subject.store.create(request);
       assert(!lost.ok && lost.error.certainty === "unknown", "lost create acknowledgement must be unknown");
+      const idBeforeRestore = fixture.context.ids.nextId();
       await fixture.crashAndRestore();
+      assert(fixture.context.ids.nextId() !== idBeforeRestore, "deterministic IDs must continue across restore");
+      assert(!fixture.context.faults.hit("effect_then_lost_acknowledgement"), "consumed fault occurrence must remain consumed");
       const recovered = await fixture.subject.store.create(request);
       assert(recovered.ok, "create retry must recover committed blob");
       const listedBeforeBind = await fixture.subject.store.listForOperation("operation-1");
@@ -169,6 +208,7 @@ function mediaRequest(
   uploadId: string,
   dataRef: string,
   contentType = "application/octet-stream",
+  patch: Partial<CreateMediaRequest> = {},
 ): CreateMediaRequest {
   const payload = subject.payloads.resolve(dataRef);
   assert(payload, `missing seeded payload ${dataRef}`);
@@ -176,12 +216,19 @@ function mediaRequest(
     effect: nullableEffect(key), uploadId, filename: `${uploadId}.dat`, contentType,
     byteLength: payload.byteLength, sha256: payload.sha256, dataRef,
     thumbnailRef: null, metadataRef: null, createdAt: "2026-08-12T00:00:00.000Z",
+    ...patch,
   });
 }
 
-function bindingRequest(key: string, mediaId: number, role: OperationMediaRole): BindOperationMediaRequest {
+function bindingRequest(
+  key: string,
+  mediaId: number,
+  role: OperationMediaRole,
+  patch: Partial<BindOperationMediaRequest> = {},
+): BindOperationMediaRequest {
   return withRequestHash({
     effect: operationEffect(key), mediaId, role, boundAt: "2026-08-12T00:01:00.000Z",
+    ...patch,
   });
 }
 

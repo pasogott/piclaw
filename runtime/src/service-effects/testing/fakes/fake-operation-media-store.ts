@@ -12,8 +12,12 @@ import type {
   StoredMediaRecord,
 } from "../../contracts/operation-media-store.js";
 import type { EffectPayloadResolver } from "../../contracts/payload-resolver.js";
-import { resolveVerifiedJson, resolveVerifiedPayload, sha256Bytes } from "../../payloads.js";
 import type { ContractTestContext } from "../contract-suite.js";
+import {
+  fakeResolveVerifiedJson,
+  fakeResolveVerifiedPayload,
+  fakeSha256,
+} from "./fake-payload-validation.js";
 import { EffectTraceRecorder } from "../trace-recorder.js";
 
 interface FakeMediaRecord extends StoredMediaRecord {
@@ -60,20 +64,25 @@ export class FakeOperationMediaStore implements OperationMediaStore {
       ? this.ok("create", request, byKey.ref, "duplicate")
       : this.fail("create", request, "idempotency_conflict");
     const byUpload = this.#media.find((entry) => entry.uploadId === request.uploadId);
-    if (byUpload) return byUpload.ref.sha256 === request.sha256 && byUpload.byteLength === request.byteLength
-      ? this.ok("create", request, byUpload.ref, "duplicate")
-      : this.fail("create", request, "digest_mismatch");
+    if (byUpload) {
+      if (byUpload.ref.sha256 !== request.sha256 || byUpload.byteLength !== request.byteLength) {
+        return this.fail("create", request, "digest_mismatch");
+      }
+      return byUpload.requestHash === request.effect.requestHash
+        ? this.ok("create", request, byUpload.ref, "duplicate")
+        : this.fail("create", request, "idempotency_conflict");
+    }
     if (!request.uploadId || !request.filename || !request.contentType || !request.dataRef) {
       return this.fail("create", request, "unsupported_media");
     }
-    const payload = await resolveVerifiedPayload(this.payloads, request.dataRef);
+    const payload = await fakeResolveVerifiedPayload(this.payloads, request.dataRef);
     if (!payload || payload.sha256 !== request.sha256 || payload.byteLength !== request.byteLength) {
       return this.fail("create", request, "digest_mismatch");
     }
-    if (request.thumbnailRef && !await resolveVerifiedPayload(this.payloads, request.thumbnailRef)) {
+    if (request.thumbnailRef && !await fakeResolveVerifiedPayload(this.payloads, request.thumbnailRef)) {
       return this.fail("create", request, "unsupported_media");
     }
-    const metadata = request.metadataRef ? await resolveVerifiedJson(this.payloads, request.metadataRef) : null;
+    const metadata = request.metadataRef ? await fakeResolveVerifiedJson(this.payloads, request.metadataRef) : null;
     if (request.metadataRef && (!metadata || typeof metadata !== "object" || Array.isArray(metadata))) {
       return this.fail("create", request, "unsupported_media");
     }
@@ -110,7 +119,9 @@ export class FakeOperationMediaStore implements OperationMediaStore {
     }
     const existing = this.#bindings.find((entry) =>
       entry.operationId === request.effect.operationId && entry.mediaId === request.mediaId && entry.role === request.role);
-    if (existing) return this.ok("bindToOperation", request, bindingValue(existing), "duplicate");
+    if (existing) return existing.requestHash === request.effect.requestHash
+      ? this.ok("bindToOperation", request, bindingValue(existing), "duplicate")
+      : this.fail("bindToOperation", request, "binding_conflict");
     const binding = Object.freeze({
       operationId: request.effect.operationId,
       mediaId: request.mediaId,
@@ -131,7 +142,7 @@ export class FakeOperationMediaStore implements OperationMediaStore {
     this.call("get", effectId, null);
     const record = this.#media.find((entry) => entry.ref.mediaId === ref.mediaId);
     if (!record) return this.queryOk("get", effectId, null, "absent");
-    if (record.ref.sha256 !== ref.sha256 || sha256Bytes(record.bytes) !== record.ref.sha256) {
+    if (record.ref.sha256 !== ref.sha256 || fakeSha256(record.bytes) !== record.ref.sha256) {
       return this.queryFail("get", effectId, "digest_mismatch");
     }
     return this.queryOk("get", effectId, storedValue(record));
