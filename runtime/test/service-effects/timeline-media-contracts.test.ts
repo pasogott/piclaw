@@ -109,24 +109,24 @@ const fakeTimelineFactory: ContractSubjectFactory<TimelineDraftContractSubject> 
 describe("EF-S03 TimelineDraftStore shared contract", () => {
   test("current-Piclaw adapter", async () => {
     const results = await defineTimelineDraftStoreContract(currentTimelineFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(13);
+    expect(results.map((result) => result.caseName)).toHaveLength(15);
   });
 
   test("independent deterministic fake", async () => {
     const results = await defineTimelineDraftStoreContract(fakeTimelineFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(13);
+    expect(results.map((result) => result.caseName)).toHaveLength(15);
   });
 });
 
 describe("EF-S04 OperationMediaStore shared contract", () => {
   test("current-Piclaw adapter", async () => {
     const results = await defineOperationMediaStoreContract(currentMediaFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(14);
+    expect(results.map((result) => result.caseName)).toHaveLength(16);
   });
 
   test("independent deterministic fake", async () => {
     const results = await defineOperationMediaStoreContract(fakeMediaFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(14);
+    expect(results.map((result) => result.caseName)).toHaveLength(16);
   });
 });
 

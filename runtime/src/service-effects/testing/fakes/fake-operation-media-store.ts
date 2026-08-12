@@ -91,6 +91,19 @@ export class FakeOperationMediaStore implements OperationMediaStore {
     if (request.metadataRef && (!metadata || typeof metadata !== "object" || Array.isArray(metadata))) {
       return this.fail("create", request, "unsupported_media");
     }
+    const byKeyAfterResolve = this.#media.find((entry) => entry.idempotencyKey === request.effect.idempotencyKey);
+    if (byKeyAfterResolve) return byKeyAfterResolve.requestHash === request.effect.requestHash
+      ? this.ok("create", request, byKeyAfterResolve.ref, "duplicate")
+      : this.fail("create", request, "idempotency_conflict");
+    const byUploadAfterResolve = this.#media.find((entry) => entry.uploadId === request.uploadId);
+    if (byUploadAfterResolve) {
+      if (byUploadAfterResolve.ref.sha256 !== request.sha256 || byUploadAfterResolve.byteLength !== request.byteLength) {
+        return this.fail("create", request, "digest_mismatch");
+      }
+      return byUploadAfterResolve.requestHash === request.effect.requestHash
+        ? this.ok("create", request, byUploadAfterResolve.ref, "duplicate")
+        : this.fail("create", request, "idempotency_conflict");
+    }
     const ref = Object.freeze({ mediaId: this.#nextMediaId++, sha256: request.sha256 });
     this.#media.push(Object.freeze({
       ref,

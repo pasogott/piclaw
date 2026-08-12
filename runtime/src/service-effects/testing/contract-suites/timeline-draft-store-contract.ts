@@ -136,7 +136,54 @@ const timelineCases: readonly ParameterisedContractCase<TimelineDraftContractSub
     },
   },
   {
-    name: "EF-S03-C7 invalid content blocks are rejected",
+    name: "EF-S03-C7 committed draft replay does not require payload availability",
+    async run({ subject }) {
+      seedTimelinePayloads(subject.payloads);
+      const request = draftRequest("draft-c7-replay", 1);
+      const first = await subject.store.commitDraft(request);
+      assert(first.ok, "draft must commit before payload removal");
+      subject.payloads.delete(request.contentRef);
+      subject.payloads.delete(request.contentBlocksRef!);
+      const replay = await subject.store.commitDraft(request);
+      assert(replay.ok && replay.value.rowId === first.value.rowId, "exact replay must return persisted write without payloads");
+      assert(subject.countTimelineRows() === 1, "replay without payloads must not add a row");
+    },
+  },
+  {
+    name: "EF-S03-C8 concurrent service notices decide key and source atomically",
+    async run({ subject }) {
+      seedTimelinePayloads(subject.payloads);
+      const equal = noticeRequest("notice-c8-equal");
+      const equalHeld = withRequestHash({ ...equal, contentRef: "content:notice-equal-held" });
+      subject.payloads.putText(equalHeld.contentRef, "equal notice");
+      const releaseEqual = subject.payloads.hold(equalHeld.contentRef);
+      const delayedEqual = subject.store.commitServiceNotice(equalHeld);
+      await subject.payloads.waitUntilHeld(equalHeld.contentRef);
+      releaseEqual();
+      const replayEqual = await delayedEqual;
+      const firstEqual = await subject.store.commitServiceNotice(equalHeld);
+      assert(firstEqual.ok && replayEqual.ok && firstEqual.value.rowId === replayEqual.value.rowId, "concurrent equal notice must replay original");
+
+      const conflictBase = withRequestHash({
+        ...noticeRequest("notice-c8-first"), sourceId: "restart-source-2", contentRef: "content:notice-conflict-held",
+      });
+      subject.payloads.putText(conflictBase.contentRef, "delayed notice");
+      const releaseConflict = subject.payloads.hold(conflictBase.contentRef);
+      const delayedFirst = subject.store.commitServiceNotice(conflictBase);
+      await subject.payloads.waitUntilHeld(conflictBase.contentRef);
+      const conflictingRequest = withRequestHash({
+        ...conflictBase, effect: { ...conflictBase.effect, idempotencyKey: "notice-c8-conflict" }, contentRef: "content:two",
+      });
+      const winnerPromise = subject.store.commitServiceNotice(conflictingRequest);
+      releaseConflict();
+      const [loser, winner] = await Promise.all([delayedFirst, winnerPromise]);
+      assert(winner.ok, "concurrent source winner must commit");
+      assert(!loser.ok && loser.error._tag === "idempotency_conflict", "changed concurrent notice must conflict deterministically");
+      assert(subject.countTimelineRows() === 2, "equal and conflicting notice races must each retain one row");
+    },
+  },
+  {
+    name: "EF-S03-C9 invalid content blocks are rejected",
     async run({ subject }) {
       seedTimelinePayloads(subject.payloads);
       subject.payloads.putJson("blocks:invalid", [{ type: "text" }, "not-an-object"]);
@@ -149,7 +196,7 @@ const timelineCases: readonly ParameterisedContractCase<TimelineDraftContractSub
     },
   },
   {
-    name: "EF-S03-C8 stale request hash is rejected before mutation",
+    name: "EF-S03-C10 stale request hash is rejected before mutation",
     async run({ subject }) {
       seedTimelinePayloads(subject.payloads);
       const request = draftRequest("draft-c8", 1);
@@ -160,7 +207,7 @@ const timelineCases: readonly ParameterisedContractCase<TimelineDraftContractSub
     },
   },
   {
-    name: "EF-S03-C9 content blocks require JSON media type",
+    name: "EF-S03-C11 content blocks require JSON media type",
     async run({ subject }) {
       seedTimelinePayloads(subject.payloads);
       subject.payloads.putText("blocks:wrong-type", JSON.stringify([{ type: "text" }]), "text/plain");
@@ -170,11 +217,14 @@ const timelineCases: readonly ParameterisedContractCase<TimelineDraftContractSub
     },
   },
   {
-    name: "EF-S03-C10 concurrent first inserts retain one current row",
+    name: "EF-S03-C12 concurrent first inserts retain one current row",
     async run({ subject }) {
       seedTimelinePayloads(subject.payloads);
-      const releaseFirst = subject.payloads.hold("content:one");
-      const first = subject.store.commitDraft(draftRequest("draft-c10-r1", 1));
+      const heldRef = "content:c10-held";
+      subject.payloads.putText(heldRef, "delayed draft");
+      const releaseFirst = subject.payloads.hold(heldRef);
+      const first = subject.store.commitDraft(draftRequest("draft-c10-r1", 1, { contentRef: heldRef }));
+      await subject.payloads.waitUntilHeld(heldRef);
       const second = await subject.store.commitDraft(draftRequest("draft-c10-r2", 2, { contentRef: "content:two" }));
       releaseFirst();
       const delayed = await first;
@@ -184,15 +234,18 @@ const timelineCases: readonly ParameterisedContractCase<TimelineDraftContractSub
     },
   },
   {
-    name: "EF-S03-C11 out-of-order replacement cannot overwrite a higher revision",
+    name: "EF-S03-C13 out-of-order replacement cannot overwrite a higher revision",
     async run({ subject }) {
       seedTimelinePayloads(subject.payloads);
       const initial = await subject.store.commitDraft(draftRequest("draft-c11-r1", 1));
       assert(initial.ok, "initial revision must commit");
-      const releaseLower = subject.payloads.hold("content:one");
+      const heldRef = "content:c11-held";
+      subject.payloads.putText(heldRef, "delayed replacement");
+      const releaseLower = subject.payloads.hold(heldRef);
       const lower = subject.store.commitDraft(draftRequest("draft-c11-r2", 2, {
-        mode: "replace", existingRowId: initial.value.rowId,
+        mode: "replace", existingRowId: initial.value.rowId, contentRef: heldRef,
       }));
+      await subject.payloads.waitUntilHeld(heldRef);
       const higher = await subject.store.commitDraft(draftRequest("draft-c11-r3", 3, {
         mode: "replace", existingRowId: initial.value.rowId, contentRef: "content:two",
       }));
@@ -204,7 +257,7 @@ const timelineCases: readonly ParameterisedContractCase<TimelineDraftContractSub
     },
   },
   {
-    name: "EF-S03-C12 draft and notice rows remain non-terminal",
+    name: "EF-S03-C14 draft and notice rows remain non-terminal",
     async run({ subject }) {
       seedTimelinePayloads(subject.payloads);
       const mediaId = await subject.bindDraftMedia("operation-1");

@@ -47,6 +47,8 @@ export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
     }
 
     try {
+      const reconciled = this.findByKey(request.effect.idempotencyKey) ?? this.findDraftRevision(request);
+      if (reconciled) return this.replayOrConflict("commitDraft", request, reconciled);
       if (!Number.isSafeInteger(request.revision) || request.revision < 0) {
         return this.failure("commitDraft", request, "stale_revision");
       }
@@ -151,17 +153,16 @@ export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
       return this.failure("commitServiceNotice", request, "storage_unavailable", "not_applied", true);
     }
     try {
-      const byKey = this.findByKey(request.effect.idempotencyKey);
-      if (byKey) return this.replayOrConflict("commitServiceNotice", request, byKey);
-      const existing = this.database.prepare(`
-        SELECT * FROM service_effect_timeline_writes
-        WHERE write_type = 'notice' AND notice_kind = ? AND source_id = ?
-      `).get(request.noticeKind, request.sourceId) as TimelineWriteRow | undefined;
-      if (existing) return this.replayOrConflict("commitServiceNotice", request, existing);
-
+      const reconciled = this.findByKey(request.effect.idempotencyKey) ?? this.findNotice(request);
+      if (reconciled) return this.replayOrConflict("commitServiceNotice", request, reconciled);
       const resolved = await this.resolveTimelinePayloads(request.contentRef, request.contentBlocksRef);
       if (!resolved.ok) return this.failure("commitServiceNotice", request, resolved.error);
-      const write = this.database.transaction(() => {
+
+      const outcome = this.database.transaction((): TimelineMutationOutcome => {
+        const byKey = this.findByKey(request.effect.idempotencyKey);
+        if (byKey) return replayOutcome(request.effect.requestHash, byKey);
+        const existing = this.findNotice(request);
+        if (existing) return replayOutcome(request.effect.requestHash, existing);
         this.ensureChat(request.chatJid, request.writtenAt);
         const rowId = storeMessageInDatabase(this.database, noticeMessage(request, resolved.content, resolved.blocks));
         if (rowId <= 0) throw new Error("notice insert failed");
@@ -171,20 +172,18 @@ export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
             revision, notice_kind, source_id, message_rowid, chat_jid, written_at
           ) VALUES (?, ?, 'notice', NULL, NULL, NULL, ?, ?, ?, ?, ?)
         `).run(
-          request.effect.idempotencyKey,
-          request.effect.requestHash,
-          request.noticeKind,
-          request.sourceId,
-          rowId,
-          request.chatJid,
-          request.writtenAt,
+          request.effect.idempotencyKey, request.effect.requestHash, request.noticeKind,
+          request.sourceId, rowId, request.chatJid, request.writtenAt,
         );
-        return timelineWrite(rowId, request.chatJid, null, null, request.writtenAt);
+        return { ok: true, write: timelineWrite(rowId, request.chatJid, null, null, request.writtenAt), duplicate: false };
       }).immediate();
+
+      if (!outcome.ok) return this.failure("commitServiceNotice", request, outcome.tag);
+      if (outcome.duplicate) return this.success("commitServiceNotice", request, outcome.write, "duplicate");
       if (this.runtime.hitFault("effect_then_lost_acknowledgement")) {
         return this.failure("commitServiceNotice", request, "storage_unavailable", "unknown", true);
       }
-      return this.success("commitServiceNotice", request, write);
+      return this.success("commitServiceNotice", request, outcome.write);
     } catch {
       return this.failure("commitServiceNotice", request, "storage_unavailable", "unknown", true);
     }
@@ -235,6 +234,20 @@ export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
     return this.database.prepare(
       "SELECT * FROM service_effect_timeline_writes WHERE idempotency_key = ?",
     ).get(idempotencyKey) as TimelineWriteRow | undefined;
+  }
+
+  private findDraftRevision(request: CommitDraftRequest): TimelineWriteRow | undefined {
+    return this.database.prepare(`
+      SELECT * FROM service_effect_timeline_writes
+      WHERE write_type = 'draft' AND operation_id = ? AND draft_kind = ? AND revision = ?
+    `).get(request.effect.operationId, request.draftKind, request.revision) as TimelineWriteRow | undefined;
+  }
+
+  private findNotice(request: CommitServiceNoticeRequest): TimelineWriteRow | undefined {
+    return this.database.prepare(`
+      SELECT * FROM service_effect_timeline_writes
+      WHERE write_type = 'notice' AND notice_kind = ? AND source_id = ?
+    `).get(request.noticeKind, request.sourceId) as TimelineWriteRow | undefined;
   }
 
   private replayOrConflict<TRequest extends { effect: { requestHash: string } }>(

@@ -6,6 +6,7 @@ import type { EffectPayloadResolver, ResolvedEffectPayload } from "../contracts/
 export class InMemoryEffectPayloadResolver implements EffectPayloadResolver {
   readonly #payloads = new Map<string, ResolvedEffectPayload>();
   readonly #holds = new Map<string, Promise<void>>();
+  readonly #arrivals = new Map<string, { promise: Promise<void>; resolve: () => void }>();
 
   putBytes(
     ref: string,
@@ -38,10 +39,24 @@ export class InMemoryEffectPayloadResolver implements EffectPayloadResolver {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => { release = resolve; });
     this.#holds.set(ref, pending);
+    let arrivedResolve!: () => void;
+    const arrived = new Promise<void>((resolve) => { arrivedResolve = resolve; });
+    this.#arrivals.set(ref, { promise: arrived, resolve: arrivedResolve });
     return () => {
       if (this.#holds.get(ref) === pending) this.#holds.delete(ref);
+      this.#arrivals.delete(ref);
       release();
     };
+  }
+
+  async waitUntilHeld(ref: string): Promise<void> {
+    const arrival = this.#arrivals.get(ref);
+    if (!arrival) throw new Error(`payload ${ref} is not held`);
+    await arrival.promise;
+  }
+
+  delete(ref: string): void {
+    this.#payloads.delete(ref);
   }
 
   peek(ref: string): ResolvedEffectPayload | null {
@@ -50,7 +65,12 @@ export class InMemoryEffectPayloadResolver implements EffectPayloadResolver {
   }
 
   async resolve(ref: string): Promise<ResolvedEffectPayload | null> {
-    await this.#holds.get(ref);
+    const hold = this.#holds.get(ref);
+    if (hold) {
+      this.#holds.delete(ref);
+      this.#arrivals.get(ref)?.resolve();
+      await hold;
+    }
     return this.peek(ref);
   }
 }

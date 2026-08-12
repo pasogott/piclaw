@@ -57,6 +57,8 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
     if (this.runtime.hitFault("before_effect")) return this.failure("create", request, "storage_unavailable", "not_applied", true);
 
     try {
+      const reconciled = this.findUploadByKey(request.effect.idempotencyKey) ?? this.findUploadById(request.uploadId);
+      if (reconciled) return this.reconcileCreate(request, reconciled);
       if (!validCreateRequest(request)) return this.failure("create", request, "unsupported_media");
       const data = await resolveVerifiedPayload(this.payloads, request.dataRef);
       if (!data || data.sha256 !== request.sha256 || data.byteLength !== request.byteLength) {
@@ -128,49 +130,45 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
     }
 
     try {
-      const byKey = this.database.prepare(
-        "SELECT * FROM service_effect_operation_media WHERE idempotency_key = ?",
-      ).get(request.effect.idempotencyKey) as BindingRow | undefined;
-      if (byKey) {
-        return byKey.request_hash === request.effect.requestHash
-          ? this.success("bindToOperation", request, bindingFromRow(byKey), "duplicate")
-          : this.failure("bindToOperation", request, "idempotency_conflict");
-      }
-      const media = this.database.prepare(
-        "SELECT 1 FROM service_effect_media_uploads WHERE media_id = ?",
-      ).get(request.mediaId);
-      if (!media) return this.failure("bindToOperation", request, "media_not_found");
+      const outcome = this.database.transaction((): MediaBindingOutcome => {
+        const byKey = this.database.prepare(
+          "SELECT * FROM service_effect_operation_media WHERE idempotency_key = ?",
+        ).get(request.effect.idempotencyKey) as BindingRow | undefined;
+        if (byKey) return byKey.request_hash === request.effect.requestHash
+          ? { ok: true, binding: bindingFromRow(byKey), duplicate: true }
+          : { ok: false, tag: "idempotency_conflict" };
+        const media = this.database.prepare(
+          "SELECT 1 FROM service_effect_media_uploads WHERE media_id = ?",
+        ).get(request.mediaId);
+        if (!media) return { ok: false, tag: "media_not_found" };
+        const existing = this.database.prepare(`
+          SELECT * FROM service_effect_operation_media
+          WHERE operation_id = ? AND media_id = ? AND role = ?
+        `).get(request.effect.operationId, request.mediaId, request.role) as BindingRow | undefined;
+        if (existing) return existing.request_hash === request.effect.requestHash
+          ? { ok: true, binding: bindingFromRow(existing), duplicate: true }
+          : { ok: false, tag: "binding_conflict" };
+        const binding = Object.freeze({
+          operationId: request.effect.operationId, mediaId: request.mediaId,
+          role: request.role, boundAt: request.boundAt,
+        });
+        this.database.prepare(`
+          INSERT INTO service_effect_operation_media (
+            idempotency_key, request_hash, operation_id, media_id, role, bound_at
+          ) VALUES (?, ?, ?, ?, ?, ?)
+        `).run(
+          request.effect.idempotencyKey, request.effect.requestHash, request.effect.operationId,
+          request.mediaId, request.role, request.boundAt,
+        );
+        return { ok: true, binding, duplicate: false };
+      }).immediate();
 
-      const existing = this.database.prepare(`
-        SELECT * FROM service_effect_operation_media
-        WHERE operation_id = ? AND media_id = ? AND role = ?
-      `).get(request.effect.operationId, request.mediaId, request.role) as BindingRow | undefined;
-      if (existing) return existing.request_hash === request.effect.requestHash
-        ? this.success("bindToOperation", request, bindingFromRow(existing), "duplicate")
-        : this.failure("bindToOperation", request, "binding_conflict");
-
-      const binding = Object.freeze({
-        operationId: request.effect.operationId,
-        mediaId: request.mediaId,
-        role: request.role,
-        boundAt: request.boundAt,
-      });
-      this.database.prepare(`
-        INSERT INTO service_effect_operation_media (
-          idempotency_key, request_hash, operation_id, media_id, role, bound_at
-        ) VALUES (?, ?, ?, ?, ?, ?)
-      `).run(
-        request.effect.idempotencyKey,
-        request.effect.requestHash,
-        request.effect.operationId,
-        request.mediaId,
-        request.role,
-        request.boundAt,
-      );
+      if (!outcome.ok) return this.failure("bindToOperation", request, outcome.tag);
+      if (outcome.duplicate) return this.success("bindToOperation", request, outcome.binding, "duplicate");
       if (this.runtime.hitFault("effect_then_lost_acknowledgement")) {
         return this.failure("bindToOperation", request, "storage_unavailable", "unknown", true);
       }
-      return this.success("bindToOperation", request, binding);
+      return this.success("bindToOperation", request, outcome.binding);
     } catch {
       return this.failure("bindToOperation", request, "storage_unavailable", "unknown", true);
     }
@@ -266,6 +264,25 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
     }
   }
 
+  private findUploadByKey(idempotencyKey: string): UploadRow | undefined {
+    return this.database.prepare("SELECT * FROM service_effect_media_uploads WHERE idempotency_key = ?")
+      .get(idempotencyKey) as UploadRow | undefined;
+  }
+
+  private findUploadById(uploadId: string): UploadRow | undefined {
+    return this.database.prepare("SELECT * FROM service_effect_media_uploads WHERE upload_id = ?")
+      .get(uploadId) as UploadRow | undefined;
+  }
+
+  private reconcileCreate(request: CreateMediaRequest, row: UploadRow): ResultValue<MediaRef, MediaStoreError> {
+    if (row.sha256 !== request.sha256 || row.byte_length !== request.byteLength) {
+      return this.failure("create", request, "digest_mismatch");
+    }
+    return row.request_hash === request.effect.requestHash
+      ? this.success("create", request, { mediaId: row.media_id, sha256: row.sha256 }, "duplicate")
+      : this.failure("create", request, "idempotency_conflict");
+  }
+
   private call(method: string, effectId: string, operationId: string | null, version: number | null): void {
     this.runtime.recordTrace({ contract: "EF-S04", method, effectId, operationId, version });
   }
@@ -316,6 +333,10 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
 
 type MediaCreateOutcome =
   | { readonly ok: true; readonly ref: MediaRef; readonly duplicate: boolean }
+  | { readonly ok: false; readonly tag: MediaStoreErrorTag };
+
+type MediaBindingOutcome =
+  | { readonly ok: true; readonly binding: OperationMediaBinding; readonly duplicate: boolean }
   | { readonly ok: false; readonly tag: MediaStoreErrorTag };
 
 type MediaDeleteOutcome =
