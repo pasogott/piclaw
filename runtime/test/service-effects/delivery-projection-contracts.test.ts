@@ -23,20 +23,20 @@ function createContext(): ContractTestContext {
 for (const kind of ["timeline_broadcast", "channel_delivery", "web_push", "pushover", "wake_chat"] as const) {
   describe(`EF-S06 DeliveryDriver shared contract: ${kind}`, () => {
     test("current-Piclaw adapter", async () => {
-      expect(await defineDeliveryDriverContract(currentDeliveryFactory(kind), createContext)).toHaveLength(7);
+      expect(await defineDeliveryDriverContract(currentDeliveryFactory(kind), createContext)).toHaveLength(11);
     });
     test("independent scripted fake", async () => {
-      expect(await defineDeliveryDriverContract(fakeDeliveryFactory(kind), createContext)).toHaveLength(7);
+      expect(await defineDeliveryDriverContract(fakeDeliveryFactory(kind), createContext)).toHaveLength(11);
     });
   });
 }
 
 describe("EF-S08 AgentProjectionSink shared contract", () => {
   test("current-Piclaw adapter", async () => {
-    expect(await defineAgentProjectionSinkContract(currentProjectionFactory, createContext)).toHaveLength(7);
+    expect(await defineAgentProjectionSinkContract(currentProjectionFactory, createContext)).toHaveLength(9);
   });
   test("independent captured-DTO fake", async () => {
-    expect(await defineAgentProjectionSinkContract(fakeProjectionFactory, createContext)).toHaveLength(7);
+    expect(await defineAgentProjectionSinkContract(fakeProjectionFactory, createContext)).toHaveLength(9);
   });
 });
 
@@ -62,6 +62,7 @@ interface CurrentDeliverySubject extends DeliveryDriverContractSubject { readonl
 function currentDeliverySubject(kind: DeliveryKind, context: ContractTestContext): CurrentDeliverySubject {
   const runtime = new TestingCurrentPiclawAdapterRuntime(context);
   const payloads = new InMemoryEffectPayloadResolver(); payloads.putText("payload:delivery", "safe payload");
+  let resolverOverride: (() => ReturnType<InMemoryEffectPayloadResolver["peek"]>) | null = null;
   const queue: Array<DeliveryBoundarySuccess | DeliveryDriverError | DelayedBoundary> = [];
   let attempts = 0;
   const boundary: DeliveryBoundary = {
@@ -75,7 +76,8 @@ function currentDeliverySubject(kind: DeliveryKind, context: ContractTestContext
     },
     classifyError(value) { return isDeliveryError(value) ? value : null; },
   };
-  const driver = new CurrentPiclawDeliveryDriver(kind, payloads, (expected, request, payload) => expected === kind && request.destinationRef !== null && payload.mediaType === "text/plain", boundary, runtime);
+  const resolver = { resolve(ref: string) { return resolverOverride ? resolverOverride() : payloads.resolve(ref); } };
+  const driver = new CurrentPiclawDeliveryDriver(kind, resolver, (expected, request, payload) => expected === kind && request.destinationRef !== null && payload.mediaType === "text/plain", boundary, runtime);
   return {
     runtime, driver,
     scriptOutcome(value) { queue.push({ acceptedAt: value.acceptedAt, receiptRef: value.receiptRef, detail: value.detail }); },
@@ -87,13 +89,20 @@ function currentDeliverySubject(kind: DeliveryKind, context: ContractTestContext
       return { release, started: () => startedPromise };
     },
     countAttempts() { return attempts; },
+    corruptPayload(corruption) {
+      const payload = payloads.peek("payload:delivery")!;
+      if (corruption === "mutable") { resolverOverride = () => ({ ...payload, bytes: new Uint8Array(payload.bytes) }); return; }
+      resolverOverride = () => ({ ...payload, ref: corruption === "ref" ? "payload:other" : payload.ref, byteLength: corruption === "length" ? payload.byteLength + 1 : payload.byteLength, sha256: corruption === "digest" ? "0".repeat(64) : payload.sha256 });
+    },
   };
 }
 interface DelayedBoundary { gate: Promise<void>; startedResolve(): void; success: DeliveryBoundarySuccess; }
 function isDeliveryError(value: unknown): value is DeliveryDriverError { return Boolean(value && typeof value === "object" && "certainty" in value && "_tag" in value); }
 
 function fakeDeliverySubject(kind: DeliveryKind): DeliveryDriverContractSubject {
-  const driver = new FakeDeliveryDriver(kind);
+  const payloads = new InMemoryEffectPayloadResolver(); payloads.putText("payload:delivery", "safe payload");
+  let resolverOverride: (() => ReturnType<InMemoryEffectPayloadResolver["peek"]>) | null = null;
+  const driver = new FakeDeliveryDriver(kind, { resolve(ref) { return resolverOverride ? resolverOverride() : payloads.resolve(ref); } });
   const push = (step: ScriptedDeliveryStep) => { driver.script(step); };
   return {
     driver,
@@ -106,6 +115,11 @@ function fakeDeliverySubject(kind: DeliveryKind): DeliveryDriverContractSubject 
       return { release, started: () => startedPromise };
     },
     countAttempts() { return driver.countAttempts(); },
+    corruptPayload(corruption) {
+      const payload = payloads.peek("payload:delivery")!;
+      if (corruption === "mutable") { resolverOverride = () => ({ ...payload, bytes: new Uint8Array(payload.bytes) }); return; }
+      resolverOverride = () => ({ ...payload, ref: corruption === "ref" ? "payload:other" : payload.ref, byteLength: corruption === "length" ? payload.byteLength + 1 : payload.byteLength, sha256: corruption === "digest" ? "0".repeat(64) : payload.sha256 });
+    },
   };
 }
 
@@ -126,20 +140,26 @@ const currentProjectionFactory: ContractSubjectFactory<AgentProjectionContractSu
     const authority = new TestAuthority(); const transport = new TestTransport(); const runtime = new TestingCurrentPiclawAdapterRuntime(context);
     return projectionSubject(new CurrentPiclawAgentProjectionSink(authority, transport, runtime), authority, transport, runtime);
   },
-  crashAndRestore(subject, context) { return { subject, context }; },
+  crashAndRestore(subject, context) {
+    const current = subject as ProjectionSubject; const transport = new TestTransport();
+    return { subject: projectionSubject(new CurrentPiclawAgentProjectionSink(current.authority, transport, current.runtime.restore()), current.authority, transport, current.runtime.restore()), context };
+  },
   inspectTrace(subject) { return (subject as ProjectionSubject).runtime.snapshot(); },
 };
 const fakeProjectionFactory: ContractSubjectFactory<AgentProjectionContractSubject> = {
   name: "fake-agent-projection",
   create() { const authority = new TestAuthority(); const transport = new TestTransport(); return projectionSubject(new FakeAgentProjectionSink(authority), authority, transport); },
-  crashAndRestore(subject, context) { return { subject, context }; },
+  crashAndRestore(subject, context) {
+    const current = subject as ProjectionSubject; const transport = new TestTransport();
+    return { subject: projectionSubject(new FakeAgentProjectionSink(current.authority), current.authority, transport), context };
+  },
   inspectTrace(subject) { return (subject.sink as FakeAgentProjectionSink).trace.snapshot(); },
 };
-interface ProjectionSubject extends AgentProjectionContractSubject { runtime: TestingCurrentPiclawAdapterRuntime; }
+interface ProjectionSubject extends AgentProjectionContractSubject { runtime: TestingCurrentPiclawAdapterRuntime; authority: TestAuthority; }
 function projectionSubject(sink: AgentProjectionContractSubject["sink"], authority: TestAuthority, transport: TestTransport, runtime = new TestingCurrentPiclawAdapterRuntime(createContext())): ProjectionSubject {
   const fake = sink instanceof FakeAgentProjectionSink;
   return {
-    sink, runtime,
+    sink, runtime, authority,
     authorize(owner) { authority.owners.add(ownerKey(owner)); }, commit(owner, ref) { authority.commits.add(`${ownerKey(owner)}:${ref}`); },
     rejectTransportOnce() { if (fake) (sink as FakeAgentProjectionSink).rejectTransportOnce(); else transport.failNext = true; },
     transportCalls() { return fake ? (sink as FakeAgentProjectionSink).published : transport.calls; },

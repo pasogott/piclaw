@@ -12,6 +12,7 @@ import type {
   DeliveryProviderDetail,
   WebPushDeliveryCounts,
 } from "../contracts/delivery-driver.js";
+import { resolveVerifiedPayload } from "../payloads.js";
 import type { CurrentPiclawAdapterRuntime } from "./adapter-runtime.js";
 
 export class CurrentPiclawDeliveryDriver implements DeliveryDriver {
@@ -31,7 +32,7 @@ export class CurrentPiclawDeliveryDriver implements DeliveryDriver {
 
     let payload: ResolvedEffectPayload | null;
     try {
-      payload = await this.payloads.resolve(request.payloadRef);
+      payload = await resolveVerifiedPayload(this.payloads, request.payloadRef);
     } catch {
       return this.fail(request, "invalid_payload", "not_applied", false);
     }
@@ -45,6 +46,7 @@ export class CurrentPiclawDeliveryDriver implements DeliveryDriver {
 
     try {
       const success = await this.boundary.attempt({ request, payload: immutablePayload });
+      if (!validBoundarySuccess(this.kind, request, success)) return this.fail(request, "transport_unavailable", "unknown", true);
       const certainty = certaintyFor(success.detail);
       const outcome = Object.freeze({
         certainty,
@@ -56,7 +58,7 @@ export class CurrentPiclawDeliveryDriver implements DeliveryDriver {
       return Result.ok(outcome);
     } catch (error) {
       const classified = this.boundary.classifyError?.(error);
-      return classified
+      return validClassifiedError(classified)
         ? this.fail(request, classified._tag, classified.certainty, classified.retryable, classified.retryAfter)
         : this.fail(request, "transport_unavailable", "unknown", true);
     }
@@ -79,8 +81,29 @@ export class CurrentPiclawDeliveryDriver implements DeliveryDriver {
 }
 
 function validRequest(request: DeliveryAttempt): boolean {
-  return Boolean(request.outboxId && request.idempotencyKey && request.payloadRef && Number.isSafeInteger(request.attempt) && request.attempt >= 1);
+  return Boolean(request.outboxId && request.idempotencyKey && request.payloadRef && request.deliveryIdentity && Number.isSafeInteger(request.attempt) && request.attempt >= 1);
 }
+
+const ERROR_TAGS = new Set<DeliveryDriverError["_tag"]>(["invalid_payload", "destination_missing", "rejected", "rate_limited", "timeout", "transport_unavailable", "aborted"]);
+function validClassifiedError(error: DeliveryDriverError | null | undefined): error is DeliveryDriverError {
+  return Boolean(error && ERROR_TAGS.has(error._tag) && (error.certainty === "not_applied" || error.certainty === "unknown") && typeof error.retryable === "boolean" && (error.retryAfter === undefined || nonEmptyInstant(error.retryAfter)));
+}
+
+function validBoundarySuccess(kind: DeliveryKind, request: DeliveryAttempt, success: { acceptedAt: string; receiptRef: string | null; detail: DeliveryProviderDetail }): boolean {
+  if (!nonEmptyInstant(success.acceptedAt) || (success.receiptRef !== null && typeof success.receiptRef !== "string")) return false;
+  if (success.detail.kind !== kind) return false;
+  if (kind === "timeline_broadcast" && success.detail.kind === kind) return success.detail.providerMessageId === null && success.detail.eventId === request.deliveryIdentity;
+  if (kind === "wake_chat" && success.detail.kind === kind) return success.detail.providerMessageId === null && success.detail.wakeId === request.deliveryIdentity;
+  if (kind === "web_push" && success.detail.kind === kind) return success.detail.providerMessageId === null && validCounts(success.detail.counts);
+  return (success.detail.kind === "channel_delivery" || success.detail.kind === "pushover") && (success.detail.providerMessageId === null || typeof success.detail.providerMessageId === "string");
+}
+
+function validCounts(counts: WebPushDeliveryCounts): boolean {
+  const values = [counts.attempted, counts.sent, counts.removed, counts.failed];
+  return values.every((value) => Number.isSafeInteger(value) && value >= 0) && counts.attempted === counts.sent + counts.removed + counts.failed;
+}
+
+function nonEmptyInstant(value: string): boolean { return typeof value === "string" && value.length > 0 && Number.isFinite(Date.parse(value)); }
 
 function certaintyFor(detail: DeliveryProviderDetail): DeliveryOutcome["certainty"] {
   if (detail.kind !== "web_push") return "applied";

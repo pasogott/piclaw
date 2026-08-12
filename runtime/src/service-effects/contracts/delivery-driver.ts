@@ -15,6 +15,8 @@ export interface DeliveryAttempt {
   readonly idempotencyKey: string;
   readonly payloadRef: string;
   readonly destinationRef: string | null;
+  /** Caller-owned stable identity for this external delivery attempt. */
+  readonly deliveryIdentity: string;
   readonly attempt: number;
   readonly signal: AbortSignal;
 }

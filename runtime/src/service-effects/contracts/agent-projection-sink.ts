@@ -66,5 +66,6 @@ export interface ProjectionAuthority {
 }
 
 export interface ProjectionTransport {
-  publish(projection: PublicAgentProjection): Promise<void> | void;
+  /** Existing SSE broadcast is synchronous; cursor decisions rely on that boundary. */
+  publish(projection: PublicAgentProjection): void;
 }

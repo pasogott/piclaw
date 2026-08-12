@@ -948,6 +948,7 @@ interface DeliveryAttempt {
   idempotencyKey: string;
   payloadRef: string;
   destinationRef: string | null;
+  deliveryIdentity: string;
   attempt: number;
   signal: AbortSignal;
 }
@@ -1001,7 +1002,7 @@ interface DeliveryDriver {
 | Pushover | `runtime/src/channels/pushover.ts` | Success is `applied`; typed pre-acceptance rejection is `not_applied`; timeout/disconnect after dispatch is `unknown` |
 | Wake | `runtime/src/queue.ts` | Callback completion means wake invocation accepted (`applied`), not durable work completion; caller supplies wake identity |
 
-Exactly-once applies to Piclaw's durable outbox intent and terminal timeline row. A provider without deduplication or reconciliation cannot promise exactly-once delivery. `deliver()` resolves and validates one immutable payload and executes one attempt only; it owns no claim, retry, sleep, persistence, dedupe or lifecycle policy. Current timeline, channel, Web Push, Pushover and wake mechanics expose no stable receipt query, so their drivers omit `reconcile()` rather than synthesize one.
+Exactly-once applies to Piclaw's durable outbox intent and terminal timeline row. A provider without deduplication or reconciliation cannot promise exactly-once delivery. `deliver()` verifies the resolved payload reference, byte length and digest, takes a defensive byte snapshot, then executes one attempt only; it owns no claim, retry, sleep, persistence, dedupe or lifecycle policy. `deliveryIdentity` is caller-owned trace/correlation identity and must match timeline event or wake detail without creating driver dedupe state. Current timeline, channel, Web Push, Pushover and wake mechanics expose no stable receipt query, so their drivers omit `reconcile()` rather than synthesize one.
 
 Each driver gets a scripted fake with before-send failure, accepted-then-disconnected, delayed receipt and abort controls. Formatting/truncation tests remain driver-specific.
 
@@ -1178,7 +1179,7 @@ interface PublicTerminalProjection extends ProjectionIdentity {
 }
 ```
 
-The caller narrows and redacts future Earendil events before invoking the sink. A caller-owned authority predicate validates exact `(chatJid, operationId, harnessOperationId)` ownership, and a second predicate validates the committed Piclaw terminal reference. The sink owns only a per-owner projection cursor: an authorized snapshot establishes or resets generation, events and terminal require that generation plus a strictly increasing receipt sequence, and terminal closes the exact generation. Different owners never share cursor state. Unknown keys outside the closed DTO union are rejected before transport.
+The caller narrows and semantically redacts future Earendil events before invoking the sink. Allowed public strings such as assistant deltas and summaries are intentionally content, so the sink validates their type and closed DTO shape rather than attempting secret detection. A caller-owned authority predicate validates exact `(chatJid, operationId, harnessOperationId)` ownership, and a second predicate validates the committed Piclaw terminal reference. The sink owns only an in-memory per-owner projection cursor: an authorized snapshot establishes or resets generation, events and terminal require that generation plus a strictly increasing receipt sequence, and terminal permanently closes the exact generation. Different owners never share cursor state. Unknown keys outside the closed DTO union are rejected before transport. Existing SSE publication is a synchronous boundary, so authority, cursor validation and publish occur without an async replacement race. After process restart the cursor is empty and the watcher must publish a fresh authorized snapshot before events.
 
 ### Adapter and tests
 

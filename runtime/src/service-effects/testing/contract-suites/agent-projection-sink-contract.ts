@@ -77,6 +77,9 @@ const cases: readonly ParameterisedContractCase<AgentProjectionContractSubject>[
       assert((await subject.sink.publishTerminal(value)).ok, "committed terminal must publish");
       const later = await subject.sink.publishEvent(event(owner, 1, 3));
       assert(!later.ok && later.error._tag === "generation_closed", "terminal must close exact generation");
+      const reopen = await subject.sink.publishSnapshot(snapshot(owner, 1, 4));
+      assert(!reopen.ok && reopen.error._tag === "generation_closed", "same-generation snapshot cannot reopen terminal cursor");
+      assert((await subject.sink.publishSnapshot(snapshot(owner, 2, 0))).ok, "newer authorized snapshot may establish a fresh generation");
     },
   },
   {
@@ -96,6 +99,33 @@ const cases: readonly ParameterisedContractCase<AgentProjectionContractSubject>[
       const failed = await subject.sink.publishSnapshot(snapshot(owner, 1, 1));
       assert(!failed.ok && failed.error._tag === "transport_unavailable" && failed.error.certainty === "unknown", "partial fanout throw must be unknown");
       assert((await subject.sink.publishSnapshot(snapshot(owner, 1, 1))).ok, "failed transport must not advance cursor");
+    },
+  },
+  {
+    name: "EF-S08-C8 malformed DTO values are rejected before authority and transport",
+    async run({ subject }) {
+      const owner = projectionOwner(); subject.authorize(owner);
+      for (const malformed of [
+        { ...snapshot(owner, 1, 1), chatJid: "" },
+        { ...snapshot(owner, 1, 1), receiptSeq: -1 },
+        { ...snapshot(owner, 1, 1), activeToolNames: [1] },
+        { ...snapshot(owner, 1, 1), phase: "bogus" },
+      ] as unknown as PublicAgentSnapshot[]) {
+        const result = await subject.sink.publishSnapshot(malformed);
+        assert(!result.ok && result.error._tag === "protected_payload", "malformed closed DTO must fail runtime validation");
+      }
+      assert(subject.transportCalls().length === 0, "malformed DTO must not call transport");
+    },
+  },
+  {
+    name: "EF-S08-C9 reconstructed sink requires a fresh snapshot",
+    async run(fixture) {
+      const owner = projectionOwner(); fixture.subject.authorize(owner);
+      await fixture.subject.sink.publishSnapshot(snapshot(owner, 1, 1));
+      const restored = await fixture.crashAndRestore(); restored.authorize(owner);
+      const eventFirst = await restored.sink.publishEvent(event(owner, 1, 2));
+      assert(!eventFirst.ok && eventFirst.error._tag === "stale_generation", "cursor is intentionally in-memory after restart");
+      assert((await restored.sink.publishSnapshot(snapshot(owner, 2, 0))).ok, "fresh snapshot re-establishes projection after restart");
     },
   },
 ];

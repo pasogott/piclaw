@@ -51,8 +51,8 @@ export class CurrentPiclawAgentProjectionSink implements AgentProjectionSink {
     terminalValidated = false,
   ): Promise<ResultValue<void, ProjectionSinkError>> {
     this.call(method, projection);
+    if (!validProjection(projection)) return this.fail(method, projection, "protected_payload");
     if (!this.authority.isCurrentOwner(projection)) return this.fail(method, projection, "owner_conflict");
-    if (!isClosedProjection(projection)) return this.fail(method, projection, "protected_payload");
     if (projection.type === "agent_terminal" && !terminalValidated) return this.fail(method, projection, "terminal_not_committed");
 
     const ownerKey = keyOf(projection);
@@ -64,13 +64,13 @@ export class CurrentPiclawAgentProjectionSink implements AgentProjectionSink {
     } else if (projection.watchGeneration > cursor.generation) {
       if (projection.type !== "agent_snapshot") return this.fail(method, projection, "stale_generation");
     } else {
-      if (cursor.closed && projection.type !== "agent_snapshot") return this.fail(method, projection, "generation_closed");
+      if (cursor.closed) return this.fail(method, projection, "generation_closed");
       if (projection.receiptSeq <= cursor.receiptSeq) return this.fail(method, projection, "stale_sequence");
     }
 
     if (this.runtime.hitFault("before_effect")) return this.fail(method, projection, "transport_unavailable", "not_applied", true);
     try {
-      await this.transport.publish(freezeProjection(projection));
+      this.transport.publish(freezeProjection(projection));
       this.cursors.set(ownerKey, {
         generation: projection.watchGeneration,
         receiptSeq: projection.receiptSeq,
@@ -107,10 +107,28 @@ function traceInput(method: string, value: PublicAgentProjection, certainty: Pro
   return { contract: "EF-S08", method, effectId: `${keyOf(value)}:${value.watchGeneration}:${value.receiptSeq}`, operationId: value.operationId, sourceSeq: value.receiptSeq, version: value.watchGeneration, certainty, resultTag };
 }
 
-function isClosedProjection(value: PublicAgentProjection): boolean {
+function validProjection(value: PublicAgentProjection): boolean {
   const allowed = ALLOWED_KEYS[value.type];
-  return Object.keys(value).every((key) => allowed.has(key));
+  if (!allowed || !Object.keys(value).every((key) => allowed.has(key))) return false;
+  if (![value.chatJid, value.operationId].every(nonEmpty) || (value.harnessOperationId !== null && !nonEmpty(value.harnessOperationId))) return false;
+  if (![value.watchGeneration, value.receiptSeq].every(nonNegativeSafeInteger)) return false;
+  switch (value.type) {
+    case "agent_snapshot": return PHASES.has(value.phase) && nullableString(value.modelLabel) && value.activeToolNames.every(nonEmpty) && typeof value.cancellationRequested === "boolean";
+    case "phase_changed": return PHASES.has(value.phase);
+    case "assistant_delta": return typeof value.textDelta === "string";
+    case "tool_started": return nonEmpty(value.toolCallId) && nonEmpty(value.toolName);
+    case "tool_updated": return nonEmpty(value.toolCallId) && nullableString(value.publicSummary);
+    case "tool_finished": return nonEmpty(value.toolCallId) && TOOL_OUTCOMES.has(value.outcome);
+    case "usage_updated": return nonNegativeSafeInteger(value.inputTokens) && nonNegativeSafeInteger(value.outputTokens);
+    case "agent_terminal": return nonEmpty(value.terminalCommitRef) && DISPOSITIONS.has(value.disposition) && (value.messageRowId === null || (Number.isSafeInteger(value.messageRowId) && value.messageRowId > 0)) && nullableString(value.errorCode);
+  }
 }
+const PHASES = new Set(["idle", "accepted", "running", "waiting", "suspended", "cancelling"]);
+const TOOL_OUTCOMES = new Set(["completed", "failed", "cancelled"]);
+const DISPOSITIONS = new Set(["completed", "cancelled", "failed", "skipped", "superseded"]);
+function nonEmpty(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
+function nullableString(value: unknown): value is string | null { return value === null || typeof value === "string"; }
+function nonNegativeSafeInteger(value: unknown): value is number { return Number.isSafeInteger(value) && (value as number) >= 0; }
 
 const IDENTITY_KEYS = ["type", "chatJid", "operationId", "harnessOperationId", "watchGeneration", "receiptSeq"];
 const ALLOWED_KEYS: Record<PublicAgentProjection["type"], ReadonlySet<string>> = {

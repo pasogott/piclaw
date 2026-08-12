@@ -35,8 +35,8 @@ export class FakeAgentProjectionSink implements AgentProjectionSink {
 
   private async accept(method: string, value: PublicAgentProjection): Promise<ResultValue<void, ProjectionSinkError>> {
     this.trace.recordCall(trace(method, value, null, "call"));
+    if (!validProjection(value)) return this.reject(method, value, "protected_payload");
     if (!this.authority.isCurrentOwner(value)) return this.reject(method, value, "owner_conflict");
-    if (!closedShape(value)) return this.reject(method, value, "protected_payload");
     const key = ownerKey(value);
     const cursor = this.#cursors.get(key);
     if (!cursor) {
@@ -44,7 +44,7 @@ export class FakeAgentProjectionSink implements AgentProjectionSink {
     } else if (value.watchGeneration < cursor.generation || (value.watchGeneration > cursor.generation && value.type !== "agent_snapshot")) {
       return this.reject(method, value, "stale_generation");
     } else if (value.watchGeneration === cursor.generation) {
-      if (cursor.closed && value.type !== "agent_snapshot") return this.reject(method, value, "generation_closed");
+      if (cursor.closed) return this.reject(method, value, "generation_closed");
       if (value.receiptSeq <= cursor.seq) return this.reject(method, value, "stale_sequence");
     }
     if (this.#failTransport) {
@@ -76,7 +76,24 @@ const KEYS: Record<PublicAgentProjection["type"], Set<string>> = {
   tool_finished: new Set([...BASE, "toolCallId", "outcome"]), usage_updated: new Set([...BASE, "inputTokens", "outputTokens"]),
   agent_terminal: new Set([...BASE, "terminalCommitRef", "disposition", "messageRowId", "errorCode"]),
 };
-function closedShape(value: PublicAgentProjection): boolean { return Object.keys(value).every((key) => KEYS[value.type].has(key)); }
+function validProjection(value: PublicAgentProjection): boolean {
+  const allowed = KEYS[value.type];
+  if (!allowed || !Object.keys(value).every((key) => allowed.has(key))) return false;
+  if (!nonEmpty(value.chatJid) || !nonEmpty(value.operationId) || (value.harnessOperationId !== null && !nonEmpty(value.harnessOperationId)) || !safe(value.watchGeneration) || !safe(value.receiptSeq)) return false;
+  if (value.type === "agent_snapshot") return PHASES.has(value.phase) && (value.modelLabel === null || typeof value.modelLabel === "string") && value.activeToolNames.every(nonEmpty) && typeof value.cancellationRequested === "boolean";
+  if (value.type === "phase_changed") return PHASES.has(value.phase);
+  if (value.type === "assistant_delta") return typeof value.textDelta === "string";
+  if (value.type === "tool_started") return nonEmpty(value.toolCallId) && nonEmpty(value.toolName);
+  if (value.type === "tool_updated") return nonEmpty(value.toolCallId) && (value.publicSummary === null || typeof value.publicSummary === "string");
+  if (value.type === "tool_finished") return nonEmpty(value.toolCallId) && OUTCOMES.has(value.outcome);
+  if (value.type === "usage_updated") return safe(value.inputTokens) && safe(value.outputTokens);
+  return nonEmpty(value.terminalCommitRef) && DISPOSITIONS.has(value.disposition) && (value.messageRowId === null || (Number.isSafeInteger(value.messageRowId) && value.messageRowId > 0)) && (value.errorCode === null || typeof value.errorCode === "string");
+}
+const PHASES = new Set(["idle", "accepted", "running", "waiting", "suspended", "cancelling"]);
+const OUTCOMES = new Set(["completed", "failed", "cancelled"]);
+const DISPOSITIONS = new Set(["completed", "cancelled", "failed", "skipped", "superseded"]);
+function nonEmpty(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
+function safe(value: unknown): value is number { return Number.isSafeInteger(value) && (value as number) >= 0; }
 function freezeProjection(value: PublicAgentProjection): PublicAgentProjection {
   if (value.type === "agent_snapshot") return Object.freeze({ ...value, activeToolNames: Object.freeze([...value.activeToolNames]) });
   return Object.freeze({ ...value });

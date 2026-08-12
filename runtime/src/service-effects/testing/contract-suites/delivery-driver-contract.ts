@@ -7,6 +7,7 @@ export interface DeliveryDriverContractSubject {
   scriptError(error: DeliveryDriverError): void;
   scriptDelayed(outcome: DeliveryOutcome): { release(): void; started(): Promise<void> };
   countAttempts(): number;
+  corruptPayload(kind: "ref" | "length" | "digest" | "mutable"): void;
 }
 
 export function defineDeliveryDriverContract(
@@ -101,10 +102,53 @@ const cases: readonly ParameterisedContractCase<DeliveryDriverContractSubject>[]
       }
     },
   },
+  {
+    name: "EF-S06-C8 malformed payload tuples never reach the boundary",
+    async run({ subject }) {
+      subject.scriptOutcome(outcome(detailFor(subject.driver.kind)));
+      for (const kind of ["ref", "length", "digest", "mutable"] as const) {
+        const before = subject.countAttempts(); subject.corruptPayload(kind);
+        const result = await subject.driver.deliver(request(`delivery-payload-${kind}`));
+        if (kind === "mutable") {
+          assert(result.ok, "mutable resolver bytes must be defensively snapshotted");
+        } else {
+          assert(!result.ok && result.error._tag === "invalid_payload", "mismatched payload tuple must fail validation");
+          assert(subject.countAttempts() === before, "invalid payload must not call boundary");
+        }
+      }
+    },
+  },
+  {
+    name: "EF-S06-C9 provider identity and detail shape are fenced",
+    async run({ subject }) {
+      const detail = detailFor(subject.driver.kind);
+      const mismatched: DeliveryProviderDetail = detail.kind === "timeline_broadcast" ? { ...detail, eventId: "wrong" } : detail.kind === "wake_chat" ? { ...detail, wakeId: "wrong" } : { kind: "timeline_broadcast", providerMessageId: null, eventId: "delivery-identity-1" };
+      subject.scriptOutcome(outcome(mismatched));
+      const result = await subject.driver.deliver(request());
+      assert(!result.ok && result.error.certainty === "unknown", "mismatched provider detail must become boundary fault");
+    },
+  },
+  {
+    name: "EF-S06-C10 malformed Web Push aggregate is rejected",
+    async run({ subject }) {
+      if (subject.driver.kind !== "web_push") return;
+      subject.scriptOutcome(outcome({ kind: "web_push", providerMessageId: null, counts: { attempted: 1, sent: 1, removed: 0, failed: 1 } }));
+      const result = await subject.driver.deliver(request());
+      assert(!result.ok && result.error._tag === "transport_unavailable" && result.error.certainty === "unknown", "malformed aggregate must be boundary fault");
+    },
+  },
+  {
+    name: "EF-S06-C11 malformed classifier output becomes unknown transport failure",
+    async run({ subject }) {
+      subject.scriptError({ _tag: "rejected", certainty: "applied", retryable: false } as DeliveryDriverError);
+      const result = await subject.driver.deliver(request());
+      assert(!result.ok && result.error._tag === "transport_unavailable" && result.error.certainty === "unknown", "errors cannot claim applied certainty");
+    },
+  },
 ];
 
 export function request(outboxId = "delivery-1", signal: AbortSignal = new AbortController().signal): DeliveryAttempt {
-  return { outboxId, idempotencyKey: `key-${outboxId}`, payloadRef: "payload:delivery", destinationRef: "destination:one", attempt: 1, signal };
+  return { outboxId, idempotencyKey: `key-${outboxId}`, payloadRef: "payload:delivery", destinationRef: "destination:one", deliveryIdentity: "delivery-identity-1", attempt: 1, signal };
 }
 
 export function outcome(detail: DeliveryProviderDetail, certainty: DeliveryOutcome["certainty"] = "applied"): DeliveryOutcome {
@@ -113,11 +157,11 @@ export function outcome(detail: DeliveryProviderDetail, certainty: DeliveryOutco
 
 export function detailFor(kind: DeliveryDriver["kind"]): DeliveryProviderDetail {
   switch (kind) {
-    case "timeline_broadcast": return { kind, providerMessageId: null, eventId: "event-1" };
+    case "timeline_broadcast": return { kind, providerMessageId: null, eventId: "delivery-identity-1" };
     case "channel_delivery": return { kind, providerMessageId: null };
     case "web_push": return { kind, providerMessageId: null, counts: { attempted: 1, sent: 1, removed: 0, failed: 0 } };
     case "pushover": return { kind, providerMessageId: null };
-    case "wake_chat": return { kind, providerMessageId: null, wakeId: "wake-1" };
+    case "wake_chat": return { kind, providerMessageId: null, wakeId: "delivery-identity-1" };
   }
 }
 
