@@ -7,10 +7,18 @@ export interface ContractTestContext {
   readonly faults: DeterministicFaultPlan;
 }
 
+export interface RestoredContractSubject<TSubject> {
+  readonly subject: TSubject;
+  readonly context: ContractTestContext;
+}
+
 export interface ContractSubjectFactory<TSubject> {
   readonly name: string;
   create(context: ContractTestContext): Promise<TSubject> | TSubject;
-  crashAndRestore(subject: TSubject): Promise<TSubject> | TSubject;
+  crashAndRestore(
+    subject: TSubject,
+    context: ContractTestContext,
+  ): Promise<RestoredContractSubject<TSubject>> | RestoredContractSubject<TSubject>;
   inspectTrace(subject: TSubject): readonly NormalisedEffectTrace[];
 }
 
@@ -49,15 +57,19 @@ export async function runParameterisedContractSuite<TSubject>(
 
   const results: ContractCaseResult[] = [];
   for (const contractCase of cases) {
-    const context = createContext();
-    let subject = await factory.create(context);
+    let context = createContext();
+    let subject = await factory.create(context) as TSubject;
     const fixture: ContractCaseFixture<TSubject> = {
-      context,
+      get context() {
+        return context;
+      },
       get subject() {
         return subject;
       },
       async crashAndRestore() {
-        subject = await factory.crashAndRestore(subject);
+        const restored = await factory.crashAndRestore(subject, context);
+        subject = restored.subject;
+        context = restored.context;
         return subject;
       },
       inspectTrace() {
@@ -68,9 +80,15 @@ export async function runParameterisedContractSuite<TSubject>(
     results.push(Object.freeze({
       factoryName: factory.name,
       caseName: contractCase.name,
-      trace: fixture.inspectTrace(),
+      trace: freezeTraceSnapshot(fixture.inspectTrace()),
     }));
   }
 
   return Object.freeze(results);
+}
+
+function freezeTraceSnapshot(
+  trace: readonly NormalisedEffectTrace[],
+): readonly NormalisedEffectTrace[] {
+  return Object.freeze(trace.map((entry) => Object.freeze({ ...entry })));
 }

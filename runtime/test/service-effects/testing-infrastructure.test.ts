@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { hashCanonicalRequest } from "../../src/service-effects/contracts/common.js";
+import {
+  hashCanonicalRequest,
+  type NormalisedEffectTrace,
+} from "../../src/service-effects/contracts/common.js";
 import {
   runParameterisedContractSuite,
   type ContractSubjectFactory,
@@ -19,6 +22,9 @@ import {
   assertCompleteEffectorCaseCatalogue,
   EFFECTOR_CASE_CATALOGUE,
   EFFECTOR_CONTRACT_IDS,
+  SHARED_EFFECTOR_CASE_CATALOGUE,
+  type SharedEffectorCase,
+  type SharedEffectorCaseId,
 } from "../../src/service-effects/testing/effector-case-catalogue.js";
 import {
   DeterministicFaultPlan,
@@ -183,11 +189,11 @@ describe("generic parameterised contract-suite lifecycle", () => {
     const factory: ContractSubjectFactory<SampleCounterContract> = {
       name: "sample-counter",
       create: (context) => new SampleCounterContract(context),
-      crashAndRestore: (subject) => {
+      crashAndRestore: (subject, context) => {
         const snapshot = structuredClone(subject.snapshot());
-        const restored = new SampleCounterContract(createSampleContext());
+        const restored = new SampleCounterContract(context);
         restored.restore(snapshot);
-        return restored;
+        return { subject: restored, context };
       },
       inspectTrace: (subject) => subject.trace.inspect(),
     };
@@ -202,11 +208,16 @@ describe("generic parameterised contract-suite lifecycle", () => {
       {
         name: "crash restore",
         run: async (fixture) => {
+          const originalContext = fixture.context;
           fixture.subject.increment();
+          expect(fixture.context.faults.snapshot().consumed.before_effect).toBe(1);
           const restored = await fixture.crashAndRestore();
+          expect(fixture.context).toBe(originalContext);
           expect(restored.value).toBe(1);
           restored.increment();
           expect(restored.value).toBe(2);
+          expect(fixture.context.faults.snapshot().consumed.before_effect).toBe(2);
+          expect(fixture.inspectTrace().map((entry) => entry.effectId)).toEqual(["sample-01", "sample-02"]);
         },
       },
     ];
@@ -215,6 +226,12 @@ describe("generic parameterised contract-suite lifecycle", () => {
     expect(results.map((result) => result.caseName)).toEqual(["ordinary effect", "crash restore"]);
     expect(results[0].trace).toHaveLength(1);
     expect(results[1].trace).toHaveLength(2);
+    expect(Object.isFrozen(results)).toBeTrue();
+    expect(Object.isFrozen(results[1])).toBeTrue();
+    expect(Object.isFrozen(results[1].trace)).toBeTrue();
+    expect(Object.isFrozen(results[1].trace[0])).toBeTrue();
+    expect(() => (results[1].trace as unknown as NormalisedEffectTrace[]).push(results[1].trace[0]))
+      .toThrow();
   });
 
   test("rejects duplicate case names before creating a subject", async () => {
@@ -225,7 +242,7 @@ describe("generic parameterised contract-suite lifecycle", () => {
         createCount += 1;
         return new SampleCounterContract(context);
       },
-      crashAndRestore: (subject) => subject,
+      crashAndRestore: (subject, context) => ({ subject, context }),
       inspectTrace: (subject) => subject.trace.inspect(),
     };
     const duplicateCases: readonly ParameterisedContractCase<SampleCounterContract>[] = [
@@ -287,6 +304,31 @@ describe("typed effector case catalogue", () => {
       { ...EFFECTOR_CASE_CATALOGUE[1], crashOracle: first.crashOracle },
       ...EFFECTOR_CASE_CATALOGUE.slice(2),
     ])).toThrow("misplaced or duplicated");
+  });
+
+  test("all shared links resolve through a closed registry and are unique per entry", () => {
+    const registered = new Set(SHARED_EFFECTOR_CASE_CATALOGUE.map((entry) => entry.caseId));
+    for (const entry of EFFECTOR_CASE_CATALOGUE) {
+      expect(new Set(entry.sharedCaseLinks).size).toBe(entry.sharedCaseLinks.length);
+      for (const link of entry.sharedCaseLinks) expect(registered.has(link)).toBeTrue();
+    }
+  });
+
+  test("rejects unknown or duplicate shared links and duplicate registry IDs", () => {
+    const first = EFFECTOR_CASE_CATALOGUE[0];
+    const unknownLink = "shared:unknown" as SharedEffectorCaseId;
+    expect(() => assertCompleteEffectorCaseCatalogue([
+      { ...first, sharedCaseLinks: [...first.sharedCaseLinks, unknownLink] },
+      ...EFFECTOR_CASE_CATALOGUE.slice(1),
+    ])).toThrow("link is unknown");
+    expect(() => assertCompleteEffectorCaseCatalogue([
+      { ...first, sharedCaseLinks: [...first.sharedCaseLinks, first.sharedCaseLinks[0]] },
+      ...EFFECTOR_CASE_CATALOGUE.slice(1),
+    ])).toThrow("link is duplicated");
+    expect(() => assertCompleteEffectorCaseCatalogue(
+      EFFECTOR_CASE_CATALOGUE,
+      [...SHARED_EFFECTOR_CASE_CATALOGUE, SHARED_EFFECTOR_CASE_CATALOGUE[0]] as readonly SharedEffectorCase[],
+    )).toThrow("case is duplicated");
   });
 
   test("catalogue has stable semantic content without protected payloads", () => {

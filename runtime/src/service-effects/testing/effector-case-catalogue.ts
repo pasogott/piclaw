@@ -15,7 +15,19 @@ export const EFFECTOR_CONTRACT_IDS = Object.freeze([
 export type EffectorContractId = typeof EFFECTOR_CONTRACT_IDS[number];
 export type EffectorCaseId = `${EffectorContractId}-C${number}`;
 export type EffectorCrashOracleId = `${EffectorContractId}-R01`;
-export type SharedEffectorCaseId = `shared:${string}`;
+
+export const SHARED_EFFECTOR_CASE_CATALOGUE = Object.freeze([
+  { caseId: "shared:atomicity", description: "Partial failure cannot expose a partially committed effect." },
+  { caseId: "shared:certainty", description: "Every external effect reports bounded not-applied, applied, or unknown certainty." },
+  { caseId: "shared:delayed-completion", description: "A delayed or late result cannot replace a newer owner or version." },
+  { caseId: "shared:idempotency", description: "Equal duplicate requests return the original result while conflicts are rejected." },
+  { caseId: "shared:lease", description: "Only the current unexpired lease owner may record a worker result." },
+  { caseId: "shared:owner-version", description: "Stale owner or version mutations are deterministic no-ops." },
+  { caseId: "shared:redaction", description: "Protected payload values never enter traces or public projections." },
+] as const);
+
+export type SharedEffectorCase = typeof SHARED_EFFECTOR_CASE_CATALOGUE[number];
+export type SharedEffectorCaseId = SharedEffectorCase["caseId"];
 
 export interface RequiredEffectorCase {
   readonly caseId: EffectorCaseId;
@@ -268,7 +280,16 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
 
 export function assertCompleteEffectorCaseCatalogue(
   catalogue: readonly EffectorCaseCatalogueEntry[] = EFFECTOR_CASE_CATALOGUE,
+  sharedCatalogue: readonly SharedEffectorCase[] = SHARED_EFFECTOR_CASE_CATALOGUE,
 ): void {
+  const sharedIds = new Set<SharedEffectorCaseId>();
+  for (const sharedCase of sharedCatalogue) {
+    if (sharedIds.has(sharedCase.caseId)) {
+      throw new Error(`Shared effector case is duplicated: ${sharedCase.caseId}`);
+    }
+    sharedIds.add(sharedCase.caseId);
+  }
+
   const ids = catalogue.map((entry) => entry.contractId);
   for (const id of EFFECTOR_CONTRACT_IDS) {
     if (ids.filter((candidate) => candidate === id).length !== 1) {
@@ -294,5 +315,14 @@ export function assertCompleteEffectorCaseCatalogue(
       throw new Error(`Effector crash oracle is misplaced or duplicated: ${entry.crashOracle.oracleId}`);
     }
     oracleIds.add(entry.crashOracle.oracleId);
+
+    const entryLinks = new Set<SharedEffectorCaseId>();
+    for (const link of entry.sharedCaseLinks) {
+      if (!sharedIds.has(link)) throw new Error(`Shared effector case link is unknown: ${link}`);
+      if (entryLinks.has(link)) {
+        throw new Error(`Shared effector case link is duplicated for ${entry.contractId}: ${link}`);
+      }
+      entryLinks.add(link);
+    }
   }
 }
