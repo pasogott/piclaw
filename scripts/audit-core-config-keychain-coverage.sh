@@ -22,7 +22,9 @@ run_suite() {
 
   {
     echo "== $label =="
-    (cd "$ROOT_DIR/runtime" && rm -rf generated/coverage && PICLAW_DB_IN_MEMORY=1 bun test --max-concurrency=1 "$@" --coverage --coverage-dir=generated/coverage --coverage-reporter=lcov)
+    rm -rf "$ROOT_DIR/runtime/generated/coverage"
+    bun run --cwd "$ROOT_DIR" test:local --cwd runtime --env PICLAW_DB_IN_MEMORY=1 -- \
+      bun test --max-concurrency=1 "$@" --coverage --coverage-dir=generated/coverage --coverage-reporter=lcov
     echo
   } >>"$TEST_LOG" 2>&1
 
