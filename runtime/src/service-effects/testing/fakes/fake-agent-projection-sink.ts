@@ -27,16 +27,13 @@ export class FakeAgentProjectionSink implements AgentProjectionSink {
 
   publishSnapshot(value: PublicAgentSnapshot): Promise<ResultValue<void, ProjectionSinkError>> { return this.accept("publishSnapshot", value); }
   publishEvent(value: PublicAgentEvent): Promise<ResultValue<void, ProjectionSinkError>> { return this.accept("publishEvent", value); }
-  publishTerminal(value: PublicTerminalProjection): Promise<ResultValue<void, ProjectionSinkError>> {
-    if (!this.authority.isCurrentOwner(value)) return Promise.resolve(this.reject("publishTerminal", value, "owner_conflict"));
-    if (!value.terminalCommitRef || !this.authority.isCommittedTerminalRef(value, value.terminalCommitRef)) return Promise.resolve(this.reject("publishTerminal", value, "terminal_not_committed"));
-    return this.accept("publishTerminal", value);
-  }
+  publishTerminal(value: PublicTerminalProjection): Promise<ResultValue<void, ProjectionSinkError>> { return this.accept("publishTerminal", value); }
 
   private async accept(method: string, value: PublicAgentProjection): Promise<ResultValue<void, ProjectionSinkError>> {
     this.trace.recordCall(trace(method, value, null, "call"));
     if (!validProjection(value)) return this.reject(method, value, "protected_payload");
     if (!this.authority.isCurrentOwner(value)) return this.reject(method, value, "owner_conflict");
+    if (value.type === "agent_terminal" && !this.authority.isCommittedTerminalRef(value, value.terminalCommitRef)) return this.reject(method, value, "terminal_not_committed");
     const key = ownerKey(value);
     const cursor = this.#cursors.get(key);
     if (!cursor) {

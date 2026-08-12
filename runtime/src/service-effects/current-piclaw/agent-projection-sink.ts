@@ -38,22 +38,19 @@ export class CurrentPiclawAgentProjectionSink implements AgentProjectionSink {
   }
 
   publishTerminal(terminal: PublicTerminalProjection): Promise<ResultValue<void, ProjectionSinkError>> {
-    if (!this.authority.isCurrentOwner(terminal)) return Promise.resolve(this.fail("publishTerminal", terminal, "owner_conflict"));
-    if (!terminal.terminalCommitRef || !this.authority.isCommittedTerminalRef(terminal, terminal.terminalCommitRef)) {
-      return Promise.resolve(this.fail("publishTerminal", terminal, "terminal_not_committed"));
-    }
-    return this.publish("publishTerminal", terminal, true);
+    return this.publish("publishTerminal", terminal);
   }
 
   private async publish(
     method: string,
     projection: PublicAgentProjection,
-    terminalValidated = false,
   ): Promise<ResultValue<void, ProjectionSinkError>> {
     this.call(method, projection);
     if (!validProjection(projection)) return this.fail(method, projection, "protected_payload");
     if (!this.authority.isCurrentOwner(projection)) return this.fail(method, projection, "owner_conflict");
-    if (projection.type === "agent_terminal" && !terminalValidated) return this.fail(method, projection, "terminal_not_committed");
+    if (projection.type === "agent_terminal" && !this.authority.isCommittedTerminalRef(projection, projection.terminalCommitRef)) {
+      return this.fail(method, projection, "terminal_not_committed");
+    }
 
     const ownerKey = keyOf(projection);
     const cursor = this.cursors.get(ownerKey);
@@ -70,7 +67,13 @@ export class CurrentPiclawAgentProjectionSink implements AgentProjectionSink {
 
     if (this.runtime.hitFault("before_effect")) return this.fail(method, projection, "transport_unavailable", "not_applied", true);
     try {
-      this.transport.publish(freezeProjection(projection));
+      const transportResult = this.transport.publish(freezeProjection(projection)) as unknown;
+      if (transportResult !== undefined) {
+        if (transportResult && typeof (transportResult as { catch?: unknown }).catch === "function") {
+          void (transportResult as Promise<unknown>).catch(() => undefined);
+        }
+        return this.fail(method, projection, "transport_unavailable", "unknown", true);
+      }
       this.cursors.set(ownerKey, {
         generation: projection.watchGeneration,
         receiptSeq: projection.receiptSeq,
