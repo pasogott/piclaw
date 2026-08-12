@@ -1247,7 +1247,6 @@
           "files": [
             "runtime/scripts/benchmark-cold-session.ts",
             "runtime/scripts/controlled-test-runner.ts",
-            "runtime/scripts/local-test-priority.ts",
             "scripts/audit-baseline-quality-deterministic.ts",
             "scripts/audit-core-config-keychain-coverage.sh",
             "scripts/audit-extract-typed-config-objects.sh",
