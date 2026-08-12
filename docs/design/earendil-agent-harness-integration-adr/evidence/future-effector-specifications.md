@@ -718,7 +718,9 @@ interface OperationArtifacts {
 }
 ```
 
-A draft is idempotent by `(operationId, draftKind, revision)`. Revisions increase within one draft kind; replaying an older revision returns the existing write or a stale-revision no-op, never a new row. A notice is idempotent by its service source, such as a restart request ID. Both are explicitly non-terminal.
+A draft is idempotent by `(operationId, draftKind, revision)`. Revisions increase within one draft kind. Immutable per-revision request/result metadata is retained while the operation-owned current message row is updated in place. Replaying a known revision returns its original `TimelineWrite` without rewriting the current row; an unseen revision below the current one returns `stale_revision`, never a new row. A notice is idempotent by its service source, such as a restart request ID. Both are explicitly non-terminal.
+
+`contentRef` and `contentBlocksRef` are resolved through an injected payload lookup. The resolved reference identity, digest and byte length are verified before persistence. Content blocks must be an array of non-null, non-array objects; a reserved internal block type is rejected rather than silently removed. The adapter receives a caller-supplied `bun:sqlite` database and uses only low-level persistence statements: it does not broadcast, settle an operation, consume a source or advance a frontier.
 
 ### Adapter and tests
 
@@ -799,6 +801,8 @@ interface DeleteMediaIfUnreferencedRequest {
 ### Adapter and tests
 
 Reuse compression, decompression, metadata and safe reads from `runtime/src/db/media.ts`, plus validation and thumbnail preparation from `runtime/src/channels/web/media/media-service.ts`. Add durable operation/media bindings. The volatile `runtime/src/agent-pool/attachments.ts` registry remains a legacy caller detail and is not the future owner.
+
+Payload bytes, optional thumbnail and optional metadata JSON are materialised through injected lookups. Reference identity, digest and byte length are verified before creation; upload identity plus digest/length determines equal replay. Bindings are unique per `(operationId, mediaId, role)`. Deletion is allowed only when no operation, message or outbox reference exists. The current-internal adapter receives a caller-supplied `bun:sqlite` database; its additive binding/idempotency schema is private to temporary or in-memory contract tests and is not a global migration or startup dependency.
 
 Contract cases cover equal upload IDs/content digests, operation-binding uniqueness, missing media, compressed round trips, text-index maintenance and orphan deletion while any operation/message/outbox reference exists.
 
