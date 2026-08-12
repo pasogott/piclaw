@@ -58,6 +58,32 @@ describe("check-import-boundaries", () => {
     }
   });
 
+  test("findImportBoundaryViolations keeps latent service effects unreachable from production core", () => {
+    const dir = mkdtempSync(join(tmpdir(), "import-boundaries-"));
+    try {
+      mkdirSync(join(dir, "src", "service-effects", "contracts"), { recursive: true });
+      mkdirSync(join(dir, "src", "runtime"), { recursive: true });
+      writeFileSync(
+        join(dir, "src", "service-effects", "contracts", "common.ts"),
+        "export const latent = true;\n",
+      );
+      writeFileSync(
+        join(dir, "src", "service-effects", "contracts", "peer.ts"),
+        "import { latent } from './common.js';\nexport { latent };\n",
+      );
+      writeFileSync(
+        join(dir, "src", "runtime", "bad.ts"),
+        "import { latent } from '../service-effects/contracts/common.js';\n",
+      );
+
+      expect(findImportBoundaryViolations(dir)).toEqual([
+        "src/runtime/bad.ts: production core cannot import latent service effects (../service-effects/contracts/common.js)",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("findImportBoundaryViolations ignores optional extension node_modules", () => {
     const dir = mkdtempSync(join(tmpdir(), "import-boundaries-"));
     try {
