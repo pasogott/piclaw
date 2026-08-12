@@ -59,6 +59,7 @@ export async function runLocalTestCommand(
   options: { readonly cwd?: string; readonly env?: Record<string, string | undefined> } = {},
 ): Promise<never> {
   const env = { ...process.env, ...(options.env ?? {}) };
+  if (!env.PICLAW_DB_IN_MEMORY) env.PICLAW_DB_IN_MEMORY = "1";
   const plan = planLocalTestCommand(argv, env);
   if (plan.diagnostic) process.stderr.write(`${plan.diagnostic}\n`);
   if (plan.applied) env[LOCAL_TEST_PRIORITY_ACTIVE_ENV] = "1";

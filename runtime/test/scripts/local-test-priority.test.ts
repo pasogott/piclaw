@@ -99,7 +99,7 @@ describe("local test priority process behavior", () => {
     const directory = mkdtempSync(join(tmpdir(), "piclaw-launch-probe-"));
     const script = join(directory, "probe.ts");
     try {
-      writeFileSync(script, "console.log(JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2), env: process.env.PROBE })); process.exit(7);\n");
+      writeFileSync(script, "console.log(JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2), env: process.env.PROBE, db: process.env.PICLAW_DB_IN_MEMORY })); process.exit(7);\n");
       const run = Bun.spawnSync([
         process.execPath, LAUNCHER, "--cwd", directory, "--env", "PROBE=kept", "--",
         process.execPath, script, "argument with spaces", "literal-$value",
@@ -109,6 +109,7 @@ describe("local test priority process behavior", () => {
         cwd: directory,
         args: ["argument with spaces", "literal-$value"],
         env: "kept",
+        db: "1",
       });
     } finally {
       rmSync(directory, { recursive: true, force: true });
