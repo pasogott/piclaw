@@ -75,13 +75,18 @@ export class FakeTimelineDraftStore implements TimelineDraftStore {
     }
     const payloads = await this.resolve(request.contentRef, request.contentBlocksRef);
     if (!payloads.ok) return this.fail("commitDraft", request, payloads.error);
+    const latestAfterResolve = this.latest(request.effect.operationId, request.draftKind);
+    if (latestAfterResolve && request.revision <= (latestAfterResolve.revision ?? -1)) {
+      return this.fail("commitDraft", request, "stale_revision");
+    }
     if (new Set(request.mediaIds).size !== request.mediaIds.length || request.mediaIds.some((id) => !this.mediaIsDraftOwned(request.effect.operationId, id))) {
       return this.fail("commitDraft", request, "missing_media");
     }
 
     let row: FakeTimelineRow;
+    const currentLatest = latestAfterResolve ?? latest;
     if (request.mode === "replace") {
-      if (!request.existingRowId || !latest || latest.write.rowId !== request.existingRowId) {
+      if (!request.existingRowId || !currentLatest || currentLatest.write.rowId !== request.existingRowId) {
         return this.fail("commitDraft", request, "row_owner_conflict");
       }
       const index = this.#rows.findIndex((entry) => entry.rowId === request.existingRowId);
@@ -93,7 +98,7 @@ export class FakeTimelineDraftStore implements TimelineDraftStore {
       row = Object.freeze({ ...current, content: payloads.content, mediaIds: Object.freeze([...request.mediaIds]) });
       this.#rows[index] = row;
     } else {
-      if (request.existingRowId !== null || latest) return this.fail("commitDraft", request, "row_owner_conflict");
+      if (request.existingRowId !== null || currentLatest) return this.fail("commitDraft", request, "row_owner_conflict");
       row = Object.freeze({
         rowId: this.#nextRowId++, chatJid: request.chatJid, operationId: request.effect.operationId,
         draftKind: request.draftKind, content: payloads.content, threadId: request.threadId,

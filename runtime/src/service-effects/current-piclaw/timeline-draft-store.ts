@@ -47,37 +47,37 @@ export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
     }
 
     try {
-      const byKey = this.findByKey(request.effect.idempotencyKey);
-      if (byKey) return this.replayOrConflict("commitDraft", request, byKey);
-      const knownRevision = this.database.prepare(`
-        SELECT * FROM service_effect_timeline_writes
-        WHERE write_type = 'draft' AND operation_id = ? AND draft_kind = ? AND revision = ?
-      `).get(request.effect.operationId, request.draftKind, request.revision) as TimelineWriteRow | undefined;
-      if (knownRevision) return this.replayOrConflict("commitDraft", request, knownRevision);
-
-      const latest = this.database.prepare(`
-        SELECT * FROM service_effect_timeline_writes
-        WHERE write_type = 'draft' AND operation_id = ? AND draft_kind = ?
-        ORDER BY revision DESC LIMIT 1
-      `).get(request.effect.operationId, request.draftKind) as TimelineWriteRow | undefined;
-      if (latest && request.revision <= (latest.revision ?? -1)) {
-        return this.failure("commitDraft", request, "stale_revision");
-      }
       if (!Number.isSafeInteger(request.revision) || request.revision < 0) {
         return this.failure("commitDraft", request, "stale_revision");
       }
-
       const resolved = await this.resolveTimelinePayloads(request.contentRef, request.contentBlocksRef);
       if (!resolved.ok) return this.failure("commitDraft", request, resolved.error);
-      if (!this.mediaAreDraftOwned(request.effect.operationId, request.mediaIds)) {
-        return this.failure("commitDraft", request, "missing_media");
-      }
 
-      const write = this.database.transaction(() => {
+      const outcome = this.database.transaction((): TimelineMutationOutcome => {
+        const byKey = this.findByKey(request.effect.idempotencyKey);
+        if (byKey) return replayOutcome(request.effect.requestHash, byKey);
+        const knownRevision = this.database.prepare(`
+          SELECT * FROM service_effect_timeline_writes
+          WHERE write_type = 'draft' AND operation_id = ? AND draft_kind = ? AND revision = ?
+        `).get(request.effect.operationId, request.draftKind, request.revision) as TimelineWriteRow | undefined;
+        if (knownRevision) return replayOutcome(request.effect.requestHash, knownRevision);
+
+        const latest = this.database.prepare(`
+          SELECT * FROM service_effect_timeline_writes
+          WHERE write_type = 'draft' AND operation_id = ? AND draft_kind = ?
+          ORDER BY revision DESC LIMIT 1
+        `).get(request.effect.operationId, request.draftKind) as TimelineWriteRow | undefined;
+        if (latest && request.revision <= (latest.revision ?? -1)) {
+          return { ok: false, tag: "stale_revision" };
+        }
+        if (!this.mediaAreDraftOwned(request.effect.operationId, request.mediaIds)) {
+          return { ok: false, tag: "missing_media" };
+        }
+
         let rowId: number;
         if (request.mode === "replace") {
           if (!request.existingRowId || !latest || latest.message_rowid !== request.existingRowId) {
-            throw new TimelineMutationError("row_owner_conflict");
+            return { ok: false, tag: "row_owner_conflict" };
           }
           const current = this.database.prepare(`
             SELECT chat_jid, thread_id, is_terminal_agent_reply FROM messages WHERE rowid = ?
@@ -86,35 +86,31 @@ export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
             thread_id: number | null;
             is_terminal_agent_reply: number;
           } | undefined;
-          if (!current) throw new TimelineMutationError("row_not_found");
+          if (!current) return { ok: false, tag: "row_not_found" };
           if (
             current.chat_jid !== request.chatJid || current.thread_id !== request.threadId ||
             current.is_terminal_agent_reply !== 0
-          ) throw new TimelineMutationError("row_owner_conflict");
-          const replaced = replaceMessageContentInDatabase(
+          ) return { ok: false, tag: "row_owner_conflict" };
+          if (!replaceMessageContentInDatabase(
             this.database,
             request.chatJid,
             request.existingRowId,
             resolved.content,
             { contentBlocks: resolved.blocks ? [...resolved.blocks] : undefined, mediaIds: [...request.mediaIds], isTerminalAgentReply: false },
-          );
-          if (!replaced) throw new TimelineMutationError("row_not_found");
+          )) return { ok: false, tag: "row_not_found" };
           rowId = request.existingRowId;
         } else {
-          if (request.existingRowId !== null || latest) throw new TimelineMutationError("row_owner_conflict");
+          if (request.existingRowId !== null || latest) return { ok: false, tag: "row_owner_conflict" };
           this.ensureChat(request.chatJid, request.writtenAt);
           rowId = storeMessageInDatabase(this.database, draftMessage(request, resolved.content, resolved.blocks));
           if (rowId <= 0) throw new Error("draft insert failed");
-          if (request.mediaIds.length > 0) {
-            // Reuse the replacement primitive to preserve current media/FTS semantics.
-            if (!replaceMessageContentInDatabase(
-              this.database,
-              request.chatJid,
-              rowId,
-              resolved.content,
-              { contentBlocks: resolved.blocks ? [...resolved.blocks] : undefined, mediaIds: [...request.mediaIds], isTerminalAgentReply: false },
-            )) throw new Error("draft media attachment failed");
-          }
+          if (request.mediaIds.length > 0 && !replaceMessageContentInDatabase(
+            this.database,
+            request.chatJid,
+            rowId,
+            resolved.content,
+            { contentBlocks: resolved.blocks ? [...resolved.blocks] : undefined, mediaIds: [...request.mediaIds], isTerminalAgentReply: false },
+          )) throw new Error("draft media attachment failed");
         }
 
         this.database.prepare(`
@@ -132,15 +128,16 @@ export class CurrentPiclawTimelineDraftStore implements TimelineDraftStore {
           request.chatJid,
           request.writtenAt,
         );
-        return timelineWrite(rowId, request.chatJid, request.effect.operationId, request.revision, request.writtenAt);
+        return { ok: true, write: timelineWrite(rowId, request.chatJid, request.effect.operationId, request.revision, request.writtenAt), duplicate: false };
       }).immediate();
 
+      if (!outcome.ok) return this.failure("commitDraft", request, outcome.tag);
+      if (outcome.duplicate) return this.success("commitDraft", request, outcome.write, "duplicate");
       if (this.runtime.hitFault("effect_then_lost_acknowledgement")) {
         return this.failure("commitDraft", request, "storage_unavailable", "unknown", true);
       }
-      return this.success("commitDraft", request, write);
-    } catch (error) {
-      if (error instanceof TimelineMutationError) return this.failure("commitDraft", request, error.tag);
+      return this.success("commitDraft", request, outcome.write);
+    } catch {
       return this.failure("commitDraft", request, "storage_unavailable", "unknown", true);
     }
   }
@@ -320,10 +317,14 @@ function hasValidRequestHash(request: { effect: { requestHash: string } }): bool
   return request.effect.requestHash === hashCanonicalRequest(request as unknown as CanonicalJsonValue);
 }
 
-class TimelineMutationError extends Error {
-  constructor(readonly tag: TimelineStoreErrorTag) {
-    super(tag);
-  }
+type TimelineMutationOutcome =
+  | { readonly ok: true; readonly write: TimelineWrite; readonly duplicate: boolean }
+  | { readonly ok: false; readonly tag: TimelineStoreErrorTag };
+
+function replayOutcome(requestHash: string, row: TimelineWriteRow): TimelineMutationOutcome {
+  return row.request_hash === requestHash
+    ? { ok: true, write: writeFromRow(row), duplicate: true }
+    : { ok: false, tag: "idempotency_conflict" };
 }
 
 function timelineError(

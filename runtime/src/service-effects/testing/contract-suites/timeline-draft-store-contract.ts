@@ -170,7 +170,41 @@ const timelineCases: readonly ParameterisedContractCase<TimelineDraftContractSub
     },
   },
   {
-    name: "EF-S03-C10 draft and notice rows remain non-terminal",
+    name: "EF-S03-C10 concurrent first inserts retain one current row",
+    async run({ subject }) {
+      seedTimelinePayloads(subject.payloads);
+      const releaseFirst = subject.payloads.hold("content:one");
+      const first = subject.store.commitDraft(draftRequest("draft-c10-r1", 1));
+      const second = await subject.store.commitDraft(draftRequest("draft-c10-r2", 2, { contentRef: "content:two" }));
+      releaseFirst();
+      const delayed = await first;
+      assert(second.ok, "higher concurrent first insert must commit");
+      assert(!delayed.ok && delayed.error._tag === "stale_revision", "delayed lower first insert must become stale");
+      assert(subject.countTimelineRows() === 1, "concurrent first inserts must retain one current row");
+    },
+  },
+  {
+    name: "EF-S03-C11 out-of-order replacement cannot overwrite a higher revision",
+    async run({ subject }) {
+      seedTimelinePayloads(subject.payloads);
+      const initial = await subject.store.commitDraft(draftRequest("draft-c11-r1", 1));
+      assert(initial.ok, "initial revision must commit");
+      const releaseLower = subject.payloads.hold("content:one");
+      const lower = subject.store.commitDraft(draftRequest("draft-c11-r2", 2, {
+        mode: "replace", existingRowId: initial.value.rowId,
+      }));
+      const higher = await subject.store.commitDraft(draftRequest("draft-c11-r3", 3, {
+        mode: "replace", existingRowId: initial.value.rowId, contentRef: "content:two",
+      }));
+      releaseLower();
+      const delayed = await lower;
+      assert(higher.ok, "higher replacement must commit");
+      assert(!delayed.ok && delayed.error._tag === "stale_revision", "delayed lower replacement must become stale");
+      assert(subject.inspectRow(initial.value.rowId)?.content === "draft two", "lower replacement must not overwrite higher content");
+    },
+  },
+  {
+    name: "EF-S03-C12 draft and notice rows remain non-terminal",
     async run({ subject }) {
       seedTimelinePayloads(subject.payloads);
       const mediaId = await subject.bindDraftMedia("operation-1");
@@ -197,12 +231,15 @@ const timelineCrashCases: readonly ParameterisedContractCase<TimelineDraftContra
       });
       const lost = await fixture.subject.store.commitDraft(replacement);
       assert(!lost.ok && lost.error.certainty === "unknown", "lost acknowledgement must report unknown");
+      const traceBeforeRestore = fixture.inspectTrace();
       const idBeforeRestore = fixture.context.ids.nextId();
       await fixture.crashAndRestore();
+      assert(fixture.inspectTrace().length === traceBeforeRestore.length, "pre-crash trace must survive restore");
       assert(fixture.context.ids.nextId() !== idBeforeRestore, "deterministic IDs must continue across restore");
       assert(!fixture.context.faults.hit("effect_then_lost_acknowledgement"), "consumed fault occurrence must remain consumed");
       const reconciled = await fixture.subject.store.commitDraft(replacement);
       assert(reconciled.ok && reconciled.value.rowId === first.value.rowId, "retry must recover committed replacement");
+      assert(fixture.inspectTrace().length > traceBeforeRestore.length, "post-restore trace must append to prior observations");
       assert(fixture.subject.countTimelineRows() === 1, "reconciliation must retain one current row");
     },
   },

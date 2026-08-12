@@ -5,6 +5,7 @@ import type { EffectPayloadResolver, ResolvedEffectPayload } from "../contracts/
 
 export class InMemoryEffectPayloadResolver implements EffectPayloadResolver {
   readonly #payloads = new Map<string, ResolvedEffectPayload>();
+  readonly #holds = new Map<string, Promise<void>>();
 
   putBytes(
     ref: string,
@@ -33,8 +34,23 @@ export class InMemoryEffectPayloadResolver implements EffectPayloadResolver {
     return this.putText(ref, JSON.stringify(value), "application/json");
   }
 
-  resolve(ref: string): ResolvedEffectPayload | null {
+  hold(ref: string): () => void {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    this.#holds.set(ref, pending);
+    return () => {
+      if (this.#holds.get(ref) === pending) this.#holds.delete(ref);
+      release();
+    };
+  }
+
+  peek(ref: string): ResolvedEffectPayload | null {
     const payload = this.#payloads.get(ref);
     return payload ? Object.freeze({ ...payload, bytes: new Uint8Array(payload.bytes) }) : null;
+  }
+
+  async resolve(ref: string): Promise<ResolvedEffectPayload | null> {
+    await this.#holds.get(ref);
+    return this.peek(ref);
   }
 }

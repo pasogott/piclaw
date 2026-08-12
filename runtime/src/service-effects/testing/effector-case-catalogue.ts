@@ -138,6 +138,8 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
       "invalid content blocks are rejected",
       "stale request hash is rejected before mutation",
       "content blocks require JSON media type",
+      "concurrent first inserts retain one current row",
+      "out-of-order replacement cannot overwrite a higher revision",
       "draft and notice rows remain non-terminal",
     ]),
     faultPoints: [
@@ -165,6 +167,7 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
       "missing media cannot be bound",
       "compressed data round trips with stable digest",
       "text-index maintenance follows media lifecycle",
+      "reference arriving at delete boundary preserves upload identity",
       "orphan deletion is blocked by operation message or outbox reference",
     ]),
     faultPoints: [

@@ -52,6 +52,7 @@ export class FakeOperationMediaStore implements OperationMediaStore {
   #deletions: Array<{ key: string; requestHash: string; value: boolean }> = [];
   #messageReferences = new Set<number>();
   #outboxReferences = new Set<number>();
+  #beforeDeleteDecision: (() => void) | null = null;
 
   constructor(
     private readonly payloads: EffectPayloadResolver,
@@ -165,6 +166,11 @@ export class FakeOperationMediaStore implements OperationMediaStore {
     this.call("deleteIfUnreferenced", request.effect.idempotencyKey, request.effect.operationId);
     if (!hasValidRequestHash(request)) return this.fail("deleteIfUnreferenced", request, "idempotency_conflict");
     if (this.context.faults.hit("before_effect")) return this.fail("deleteIfUnreferenced", request, "storage_unavailable", "not_applied", true);
+    if (this.#beforeDeleteDecision) {
+      const run = this.#beforeDeleteDecision;
+      this.#beforeDeleteDecision = null;
+      run();
+    }
     const prior = this.#deletions.find((entry) => entry.key === request.effect.idempotencyKey);
     if (prior) return prior.requestHash === request.effect.requestHash
       ? this.ok("deleteIfUnreferenced", request, prior.value, "duplicate")
@@ -184,6 +190,7 @@ export class FakeOperationMediaStore implements OperationMediaStore {
     return this.ok("deleteIfUnreferenced", request, true);
   }
 
+  beforeDeleteDecisionOnce(run: () => void): void { this.#beforeDeleteDecision = run; }
   addMessageReference(mediaId: number): void { this.#messageReferences.add(mediaId); }
   removeMessageReference(mediaId: number): void { this.#messageReferences.delete(mediaId); }
   addOutboxReference(mediaId: number): void { this.#outboxReferences.add(mediaId); }

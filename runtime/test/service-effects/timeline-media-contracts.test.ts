@@ -51,7 +51,7 @@ const currentMediaFactory: ContractSubjectFactory<OperationMediaContractSubject>
   },
   crashAndRestore(subject, context) {
     const current = subject as CurrentMediaSubject;
-    return { subject: currentMediaSubject(current.database, current.payloads, context), context };
+    return { subject: currentMediaSubject(current.database, current.payloads, context, current.runtime.restore()), context };
   },
   inspectTrace(subject) {
     return (subject as CurrentMediaSubject).runtime.snapshot();
@@ -82,7 +82,7 @@ const currentTimelineFactory: ContractSubjectFactory<TimelineDraftContractSubjec
   },
   crashAndRestore(subject, context) {
     const current = subject as CurrentTimelineSubject;
-    return { subject: currentTimelineSubject(current.database, current.payloads, context), context };
+    return { subject: currentTimelineSubject(current.database, current.payloads, context, current.runtime.restore()), context };
   },
   inspectTrace(subject) {
     return (subject as CurrentTimelineSubject).runtime.snapshot();
@@ -109,24 +109,24 @@ const fakeTimelineFactory: ContractSubjectFactory<TimelineDraftContractSubject> 
 describe("EF-S03 TimelineDraftStore shared contract", () => {
   test("current-Piclaw adapter", async () => {
     const results = await defineTimelineDraftStoreContract(currentTimelineFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(11);
+    expect(results.map((result) => result.caseName)).toHaveLength(13);
   });
 
   test("independent deterministic fake", async () => {
     const results = await defineTimelineDraftStoreContract(fakeTimelineFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(11);
+    expect(results.map((result) => result.caseName)).toHaveLength(13);
   });
 });
 
 describe("EF-S04 OperationMediaStore shared contract", () => {
   test("current-Piclaw adapter", async () => {
     const results = await defineOperationMediaStoreContract(currentMediaFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(13);
+    expect(results.map((result) => result.caseName)).toHaveLength(14);
   });
 
   test("independent deterministic fake", async () => {
     const results = await defineOperationMediaStoreContract(fakeMediaFactory, createContext);
-    expect(results.map((result) => result.caseName)).toHaveLength(13);
+    expect(results.map((result) => result.caseName)).toHaveLength(14);
   });
 });
 
@@ -195,8 +195,9 @@ function currentMediaSubject(
   database: Database,
   payloads: InMemoryEffectPayloadResolver,
   context: ContractTestContext,
+  restoredRuntime?: TestingCurrentPiclawAdapterRuntime,
 ): CurrentMediaSubject {
-  const runtime = new TestingCurrentPiclawAdapterRuntime(context);
+  const runtime = restoredRuntime ?? new TestingCurrentPiclawAdapterRuntime(context);
   const store = new CurrentPiclawOperationMediaStore(database, payloads, runtime);
   return {
     database,
@@ -212,6 +213,10 @@ function currentMediaSubject(
     addOutboxReference(mediaId) {
       database.prepare("INSERT INTO service_effect_outbox_media_refs (outbox_id, media_id) VALUES (?, ?)")
         .run(`outbox-${mediaId}`, mediaId);
+    },
+    beforeDeleteTransactionOnce(run) { runtime.beforeDeleteTransactionOnce(run); },
+    hasUploadMapping(mediaId) {
+      return Boolean(database.prepare("SELECT 1 FROM service_effect_media_uploads WHERE media_id = ?").get(mediaId));
     },
     indexTextMedia(mediaId, expectedTerm) {
       ensureIndexMessage(database, mediaId, true);
@@ -239,6 +244,10 @@ function fakeMediaSubject(payloads: InMemoryEffectPayloadResolver, context: Cont
     },
     addMessageReference(mediaId) { store.addMessageReference(mediaId); },
     addOutboxReference(mediaId) { store.addOutboxReference(mediaId); },
+    beforeDeleteTransactionOnce(run) { store.beforeDeleteDecisionOnce(run); },
+    hasUploadMapping(mediaId) {
+      return store.snapshot().media.some((entry) => entry.ref.mediaId === mediaId);
+    },
     indexTextMedia(mediaId, expectedTerm) {
       store.addMessageReference(mediaId);
       const bytes = store.snapshot().media.find((entry) => entry.ref.mediaId === mediaId)?.bytes;
@@ -277,8 +286,9 @@ function currentTimelineSubject(
   database: Database,
   payloads: InMemoryEffectPayloadResolver,
   context: ContractTestContext,
+  restoredRuntime?: TestingCurrentPiclawAdapterRuntime,
 ): CurrentTimelineSubject {
-  const runtime = new TestingCurrentPiclawAdapterRuntime(context);
+  const runtime = restoredRuntime ?? new TestingCurrentPiclawAdapterRuntime(context);
   const store = new CurrentPiclawTimelineDraftStore(database, payloads, runtime);
   const mediaStore = new CurrentPiclawOperationMediaStore(database, payloads, runtime);
   let nextMediaOrdinal = (database.prepare("SELECT COUNT(*) AS count FROM service_effect_media_uploads").get() as { count: number }).count + 1;

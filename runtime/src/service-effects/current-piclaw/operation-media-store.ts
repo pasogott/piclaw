@@ -57,53 +57,42 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
     if (this.runtime.hitFault("before_effect")) return this.failure("create", request, "storage_unavailable", "not_applied", true);
 
     try {
-      const byKey = this.database.prepare(
-        "SELECT * FROM service_effect_media_uploads WHERE idempotency_key = ?",
-      ).get(request.effect.idempotencyKey) as UploadRow | undefined;
-      if (byKey) {
-        return byKey.request_hash === request.effect.requestHash
-          ? this.success("create", request, { mediaId: byKey.media_id, sha256: byKey.sha256 }, "duplicate")
-          : this.failure("create", request, "idempotency_conflict");
-      }
-
-      const byUpload = this.database.prepare(
-        "SELECT * FROM service_effect_media_uploads WHERE upload_id = ?",
-      ).get(request.uploadId) as UploadRow | undefined;
-      if (byUpload) {
-        if (byUpload.sha256 !== request.sha256 || byUpload.byte_length !== request.byteLength) {
-          return this.failure("create", request, "digest_mismatch");
-        }
-        return byUpload.request_hash === request.effect.requestHash
-          ? this.success("create", request, { mediaId: byUpload.media_id, sha256: byUpload.sha256 }, "duplicate")
-          : this.failure("create", request, "idempotency_conflict");
-      }
-
       if (!validCreateRequest(request)) return this.failure("create", request, "unsupported_media");
       const data = await resolveVerifiedPayload(this.payloads, request.dataRef);
       if (!data || data.sha256 !== request.sha256 || data.byteLength !== request.byteLength) {
         return this.failure("create", request, "digest_mismatch");
       }
       if (data.mediaType !== request.contentType) return this.failure("create", request, "unsupported_media");
-      const thumbnail = request.thumbnailRef
-        ? await resolveVerifiedPayload(this.payloads, request.thumbnailRef)
-        : null;
+      const thumbnail = request.thumbnailRef ? await resolveVerifiedPayload(this.payloads, request.thumbnailRef) : null;
       if (request.thumbnailRef && !thumbnail) return this.failure("create", request, "unsupported_media");
-      const metadataValue = request.metadataRef
-        ? await resolveVerifiedJson(this.payloads, request.metadataRef)
-        : null;
+      const metadataValue = request.metadataRef ? await resolveVerifiedJson(this.payloads, request.metadataRef) : null;
       if (request.metadataRef && (!metadataValue || typeof metadataValue !== "object" || Array.isArray(metadataValue))) {
         return this.failure("create", request, "unsupported_media");
       }
 
-      const mediaRef = this.database.transaction(() => {
+      const outcome = this.database.transaction((): MediaCreateOutcome => {
+        const byKey = this.database.prepare(
+          "SELECT * FROM service_effect_media_uploads WHERE idempotency_key = ?",
+        ).get(request.effect.idempotencyKey) as UploadRow | undefined;
+        if (byKey) return byKey.request_hash === request.effect.requestHash
+          ? { ok: true, ref: { mediaId: byKey.media_id, sha256: byKey.sha256 }, duplicate: true }
+          : { ok: false, tag: "idempotency_conflict" };
+
+        const byUpload = this.database.prepare(
+          "SELECT * FROM service_effect_media_uploads WHERE upload_id = ?",
+        ).get(request.uploadId) as UploadRow | undefined;
+        if (byUpload) {
+          if (byUpload.sha256 !== request.sha256 || byUpload.byte_length !== request.byteLength) {
+            return { ok: false, tag: "digest_mismatch" };
+          }
+          return byUpload.request_hash === request.effect.requestHash
+            ? { ok: true, ref: { mediaId: byUpload.media_id, sha256: byUpload.sha256 }, duplicate: true }
+            : { ok: false, tag: "idempotency_conflict" };
+        }
+
         const mediaId = createMediaInDatabase(
-          this.database,
-          request.filename,
-          request.contentType,
-          data.bytes,
-          thumbnail?.bytes ?? null,
-          metadataValue as Record<string, unknown> | null,
-          request.createdAt,
+          this.database, request.filename, request.contentType, data.bytes, thumbnail?.bytes ?? null,
+          metadataValue as Record<string, unknown> | null, request.createdAt,
         );
         this.database.prepare(`
           INSERT INTO service_effect_media_uploads (
@@ -111,24 +100,19 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
             data_ref, thumbnail_ref, metadata_ref, created_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
-          request.effect.idempotencyKey,
-          request.effect.requestHash,
-          request.uploadId,
-          mediaId,
-          request.sha256,
-          request.byteLength,
-          request.dataRef,
-          request.thumbnailRef,
-          request.metadataRef,
-          request.createdAt,
+          request.effect.idempotencyKey, request.effect.requestHash, request.uploadId, mediaId,
+          request.sha256, request.byteLength, request.dataRef, request.thumbnailRef,
+          request.metadataRef, request.createdAt,
         );
-        return Object.freeze({ mediaId, sha256: request.sha256 });
+        return { ok: true, ref: Object.freeze({ mediaId, sha256: request.sha256 }), duplicate: false };
       }).immediate();
 
+      if (!outcome.ok) return this.failure("create", request, outcome.tag);
+      if (outcome.duplicate) return this.success("create", request, outcome.ref, "duplicate");
       if (this.runtime.hitFault("effect_then_lost_acknowledgement")) {
         return this.failure("create", request, "storage_unavailable", "unknown", true);
       }
-      return this.success("create", request, mediaRef);
+      return this.success("create", request, outcome.ref);
     } catch {
       return this.failure("create", request, "storage_unavailable", "unknown", true);
     }
@@ -239,49 +223,44 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
       return this.failure("deleteIfUnreferenced", request, "storage_unavailable", "not_applied", true);
     }
     try {
-      const prior = this.database.prepare(
-        "SELECT request_hash, deleted FROM service_effect_media_deletions WHERE idempotency_key = ?",
-      ).get(request.effect.idempotencyKey) as { request_hash: string; deleted: number } | undefined;
-      if (prior) {
-        return prior.request_hash === request.effect.requestHash
-          ? this.success("deleteIfUnreferenced", request, prior.deleted === 1, "duplicate")
-          : this.failure("deleteIfUnreferenced", request, "idempotency_conflict");
-      }
-      const upload = this.database.prepare(
-        "SELECT * FROM service_effect_media_uploads WHERE media_id = ?",
-      ).get(request.mediaId) as UploadRow | undefined;
-      if (!upload) return this.failure("deleteIfUnreferenced", request, "media_not_found");
-      if (upload.sha256 !== request.expectedSha256) {
-        return this.failure("deleteIfUnreferenced", request, "digest_mismatch");
-      }
-      const referenced = this.database.prepare(`
-        SELECT 1 FROM service_effect_operation_media WHERE media_id = ?
-        UNION ALL SELECT 1 FROM message_media WHERE media_id = ?
-        UNION ALL SELECT 1 FROM service_effect_outbox_media_refs WHERE media_id = ?
-        LIMIT 1
-      `).get(request.mediaId, request.mediaId, request.mediaId);
-      if (referenced) return this.failure("deleteIfUnreferenced", request, "still_referenced");
+      this.runtime.hitFault("before_delete_transaction");
+      const outcome = this.database.transaction((): MediaDeleteOutcome => {
+        const prior = this.database.prepare(
+          "SELECT request_hash, deleted FROM service_effect_media_deletions WHERE idempotency_key = ?",
+        ).get(request.effect.idempotencyKey) as { request_hash: string; deleted: number } | undefined;
+        if (prior) return prior.request_hash === request.effect.requestHash
+          ? { ok: true, deleted: prior.deleted === 1, duplicate: true }
+          : { ok: false, tag: "idempotency_conflict" };
 
-      const deleted = this.database.transaction(() => {
+        const upload = this.database.prepare(
+          "SELECT * FROM service_effect_media_uploads WHERE media_id = ?",
+        ).get(request.mediaId) as UploadRow | undefined;
+        if (!upload) return { ok: false, tag: "media_not_found" };
+        if (upload.sha256 !== request.expectedSha256) return { ok: false, tag: "digest_mismatch" };
+        const referenced = this.database.prepare(`
+          SELECT 1 FROM service_effect_operation_media WHERE media_id = ?
+          UNION ALL SELECT 1 FROM message_media WHERE media_id = ?
+          UNION ALL SELECT 1 FROM service_effect_outbox_media_refs WHERE media_id = ?
+          LIMIT 1
+        `).get(request.mediaId, request.mediaId, request.mediaId);
+        if (referenced) return { ok: false, tag: "still_referenced" };
+
         this.database.prepare("DELETE FROM service_effect_media_uploads WHERE media_id = ?").run(request.mediaId);
-        const didDelete = deleteUnreferencedMediaInDatabase(this.database, [request.mediaId]) === 1;
+        const deleted = deleteUnreferencedMediaInDatabase(this.database, [request.mediaId]) === 1;
         this.database.prepare(`
           INSERT INTO service_effect_media_deletions
             (idempotency_key, request_hash, media_id, expected_sha256, deleted)
           VALUES (?, ?, ?, ?, ?)
-        `).run(
-          request.effect.idempotencyKey,
-          request.effect.requestHash,
-          request.mediaId,
-          request.expectedSha256,
-          didDelete ? 1 : 0,
-        );
-        return didDelete;
+        `).run(request.effect.idempotencyKey, request.effect.requestHash, request.mediaId, request.expectedSha256, deleted ? 1 : 0);
+        return { ok: true, deleted, duplicate: false };
       }).immediate();
+
+      if (!outcome.ok) return this.failure("deleteIfUnreferenced", request, outcome.tag);
+      if (outcome.duplicate) return this.success("deleteIfUnreferenced", request, outcome.deleted, "duplicate");
       if (this.runtime.hitFault("effect_then_lost_acknowledgement")) {
         return this.failure("deleteIfUnreferenced", request, "storage_unavailable", "unknown", true);
       }
-      return this.success("deleteIfUnreferenced", request, deleted);
+      return this.success("deleteIfUnreferenced", request, outcome.deleted);
     } catch {
       return this.failure("deleteIfUnreferenced", request, "storage_unavailable", "unknown", true);
     }
@@ -334,6 +313,14 @@ export class CurrentPiclawOperationMediaStore implements OperationMediaStore {
     return Result.err(Object.freeze({ _tag: tag, certainty, retryable }));
   }
 }
+
+type MediaCreateOutcome =
+  | { readonly ok: true; readonly ref: MediaRef; readonly duplicate: boolean }
+  | { readonly ok: false; readonly tag: MediaStoreErrorTag };
+
+type MediaDeleteOutcome =
+  | { readonly ok: true; readonly deleted: boolean; readonly duplicate: boolean }
+  | { readonly ok: false; readonly tag: MediaStoreErrorTag };
 
 function hasValidRequestHash(request: { effect: { requestHash: string } }): boolean {
   return request.effect.requestHash === hashCanonicalRequest(request as unknown as CanonicalJsonValue);

@@ -24,6 +24,8 @@ export interface OperationMediaContractSubject {
   inspectStoredBytes(mediaId: number): Uint8Array | null;
   addMessageReference(mediaId: number): void;
   addOutboxReference(mediaId: number): void;
+  beforeDeleteTransactionOnce(run: () => void): void;
+  hasUploadMapping(mediaId: number): boolean;
   indexTextMedia(mediaId: number, expectedTerm: string): boolean;
   countMediaRows(): number;
 }
@@ -167,7 +169,19 @@ const mediaCases: readonly ParameterisedContractCase<OperationMediaContractSubje
     },
   },
   {
-    name: "EF-S04-C12 orphan deletion is blocked by operation message or outbox reference",
+    name: "EF-S04-C12 reference arriving at delete boundary preserves upload identity",
+    async run({ subject }) {
+      const referenced = await createNamed(subject, "boundary-reference");
+      subject.beforeDeleteTransactionOnce(() => subject.addMessageReference(referenced.mediaId));
+      const result = await subject.store.deleteIfUnreferenced(deleteRequest("delete-c12-boundary", referenced));
+      assert(!result.ok && result.error._tag === "still_referenced", "boundary reference must block deletion");
+      const retained = await subject.store.get(referenced);
+      assert(retained.ok && retained.value?.ref.mediaId === referenced.mediaId, "upload mapping and media must remain intact");
+      assert(subject.hasUploadMapping(referenced.mediaId), "upload identity mapping must remain intact");
+    },
+  },
+  {
+    name: "EF-S04-C13 orphan deletion is blocked by operation message or outbox reference",
     async run({ subject }) {
       const operation = await createNamed(subject, "operation");
       const bound = await subject.store.bindToOperation(bindingRequest("bind-c7", operation.mediaId, "draft"));
@@ -199,8 +213,10 @@ const mediaCrashCases: readonly ParameterisedContractCase<OperationMediaContract
       const request = mediaRequest(fixture.subject, "media-r01", "upload-r01", "data:r01");
       const lost = await fixture.subject.store.create(request);
       assert(!lost.ok && lost.error.certainty === "unknown", "lost create acknowledgement must be unknown");
+      const traceBeforeRestore = fixture.inspectTrace();
       const idBeforeRestore = fixture.context.ids.nextId();
       await fixture.crashAndRestore();
+      assert(fixture.inspectTrace().length === traceBeforeRestore.length, "pre-crash trace must survive restore");
       assert(fixture.context.ids.nextId() !== idBeforeRestore, "deterministic IDs must continue across restore");
       assert(!fixture.context.faults.hit("effect_then_lost_acknowledgement"), "consumed fault occurrence must remain consumed");
       const recovered = await fixture.subject.store.create(request);
@@ -209,6 +225,7 @@ const mediaCrashCases: readonly ParameterisedContractCase<OperationMediaContract
       assert(listedBeforeBind.ok && listedBeforeBind.value.length === 0, "restored blob must remain unbound");
       const bound = await fixture.subject.store.bindToOperation(bindingRequest("bind-r01", recovered.value.mediaId, "draft"));
       assert(bound.ok, "recovered blob can bind exactly once");
+      assert(fixture.inspectTrace().length > traceBeforeRestore.length, "post-restore trace must append to prior observations");
       assert(fixture.subject.countMediaRows() === 1, "crash reconciliation must retain one blob");
     },
   },
@@ -234,7 +251,7 @@ function mediaRequest(
   contentType = "application/octet-stream",
   patch: Partial<CreateMediaRequest> = {},
 ): CreateMediaRequest {
-  const payload = subject.payloads.resolve(dataRef);
+  const payload = subject.payloads.peek(dataRef);
   assert(payload, `missing seeded payload ${dataRef}`);
   return withRequestHash({
     effect: nullableEffect(key), uploadId, filename: `${uploadId}.dat`, contentType,
