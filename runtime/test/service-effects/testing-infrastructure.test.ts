@@ -264,6 +264,13 @@ describe("in-memory payload resolver", () => {
     expect(equal.sha256).toBe(first.sha256);
     expect(() => resolver.putText("payload:immutable", "changed bytes", "text/plain")).toThrow("immutable");
     expect(() => resolver.putText("payload:immutable", "same bytes", "application/json")).toThrow("immutable");
+
+    resolver.makeTemporarilyUnavailable("payload:immutable");
+    expect(resolver.peek("payload:immutable")).toBeNull();
+    expect(() => resolver.putText("payload:immutable", "changed while unavailable", "text/plain")).toThrow("immutable");
+    const restored = resolver.putText("payload:immutable", "same bytes", "text/plain");
+    expect(restored.sha256).toBe(first.sha256);
+    expect(new TextDecoder().decode(resolver.peek("payload:immutable")?.bytes)).toBe("same bytes");
   });
 });
 

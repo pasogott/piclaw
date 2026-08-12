@@ -232,6 +232,7 @@ function currentMediaSubject(
     useMutableResolverForNextCreate(dataRef, thumbnailRef) {
       resolver = mutableResolver(payloads, dataRef, thumbnailRef);
     },
+    retainedCreationHistoryBytes() { return 0; },
   };
 }
 
@@ -263,6 +264,13 @@ function fakeMediaSubject(payloads: InMemoryEffectPayloadResolver, context: Cont
     countMediaRows() { return store.snapshot().media.length; },
     useMutableResolverForNextCreate(dataRef, thumbnailRef) {
       resolver = mutableResolver(payloads, dataRef, thumbnailRef);
+    },
+    retainedCreationHistoryBytes(mediaId) {
+      const history = store.snapshot().creationHistory.find((entry) => entry.ref.mediaId === mediaId);
+      if (!history) return 0;
+      return Object.values(history).reduce(
+        (total, value) => total + (value instanceof Uint8Array ? value.byteLength : 0), 0,
+      );
     },
   };
 }

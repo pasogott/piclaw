@@ -142,8 +142,8 @@ const timelineCases: readonly ParameterisedContractCase<TimelineDraftContractSub
       const request = draftRequest("draft-c7-replay", 1);
       const first = await subject.store.commitDraft(request);
       assert(first.ok, "draft must commit before payload removal");
-      subject.payloads.delete(request.contentRef);
-      subject.payloads.delete(request.contentBlocksRef!);
+      subject.payloads.makeTemporarilyUnavailable(request.contentRef);
+      subject.payloads.makeTemporarilyUnavailable(request.contentBlocksRef!);
       const replay = await subject.store.commitDraft(request);
       assert(replay.ok && replay.value.rowId === first.value.rowId, "exact replay must return persisted write without payloads");
       assert(subject.countTimelineRows() === 1, "replay without payloads must not add a row");

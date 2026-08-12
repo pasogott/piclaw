@@ -29,6 +29,18 @@ interface FakeMediaRecord extends StoredMediaRecord {
   readonly bytes: Uint8Array;
 }
 
+interface FakeMediaCreationRecord {
+  readonly ref: MediaRef;
+  readonly uploadId: string;
+  readonly idempotencyKey: string;
+  readonly requestHash: string;
+  readonly byteLength: number;
+  readonly dataRef: string;
+  readonly thumbnailRef: string | null;
+  readonly metadataRef: string | null;
+  readonly createdAt: string;
+}
+
 interface FakeBindingRecord extends OperationMediaBinding {
   readonly idempotencyKey: string;
   readonly requestHash: string;
@@ -37,7 +49,7 @@ interface FakeBindingRecord extends OperationMediaBinding {
 export interface FakeOperationMediaSnapshot {
   readonly nextMediaId: number;
   readonly media: readonly FakeMediaRecord[];
-  readonly creationHistory: readonly FakeMediaRecord[];
+  readonly creationHistory: readonly FakeMediaCreationRecord[];
   readonly bindings: readonly FakeBindingRecord[];
   readonly deletions: readonly Readonly<{ key: string; requestHash: string; value: boolean }>[];
   readonly messageReferences: readonly number[];
@@ -49,7 +61,7 @@ export class FakeOperationMediaStore implements OperationMediaStore {
   trace = new EffectTraceRecorder();
   #nextMediaId = 1;
   #media: FakeMediaRecord[] = [];
-  #creationHistory: FakeMediaRecord[] = [];
+  #creationHistory: FakeMediaCreationRecord[] = [];
   #bindings: FakeBindingRecord[] = [];
   #deletions: Array<{ key: string; requestHash: string; value: boolean }> = [];
   #messageReferences = new Set<number>();
@@ -122,7 +134,12 @@ export class FakeOperationMediaStore implements OperationMediaStore {
       bytes: new Uint8Array(payload.bytes),
     });
     this.#media.push(record);
-    this.#creationHistory.push(record);
+    this.#creationHistory.push(Object.freeze({
+      ref, uploadId: request.uploadId, idempotencyKey: request.effect.idempotencyKey,
+      requestHash: request.effect.requestHash, byteLength: request.byteLength,
+      dataRef: request.dataRef, thumbnailRef: request.thumbnailRef,
+      metadataRef: request.metadataRef, createdAt: request.createdAt,
+    }));
     if (this.context.faults.hit("effect_then_lost_acknowledgement")) {
       return this.fail("create", request, "storage_unavailable", "unknown", true);
     }

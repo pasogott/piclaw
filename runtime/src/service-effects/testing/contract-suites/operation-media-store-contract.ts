@@ -29,6 +29,7 @@ export interface OperationMediaContractSubject {
   indexTextMedia(mediaId: number, expectedTerm: string): boolean;
   countMediaRows(): number;
   useMutableResolverForNextCreate(dataRef: string, thumbnailRef: string): void;
+  retainedCreationHistoryBytes(mediaId: number): number;
 }
 
 export async function defineOperationMediaStoreContract(
@@ -62,7 +63,7 @@ const mediaCases: readonly ParameterisedContractCase<OperationMediaContractSubje
       const request = mediaRequest(subject, "media-c2-replay", "upload-c2-replay", "data:c2-replay");
       const first = await subject.store.create(request);
       assert(first.ok, "media must commit before payload removal");
-      subject.payloads.delete(request.dataRef);
+      subject.payloads.makeTemporarilyUnavailable(request.dataRef);
       const replay = await subject.store.create(request);
       assert(replay.ok && replay.value.mediaId === first.value.mediaId, "exact replay must return persisted media without payload");
       assert(subject.countMediaRows() === 1, "replay without payload must not add a blob");
@@ -232,6 +233,7 @@ const mediaCases: readonly ParameterisedContractCase<OperationMediaContractSubje
       const exact = await subject.store.create(request);
       assert(exact.ok && exact.value.mediaId === created.value.mediaId, "exact create replay must return original deleted identity");
       assert(subject.countMediaRows() === 0, "exact replay must not recreate deleted bytes");
+      assert(subject.retainedCreationHistoryBytes(created.value.mediaId) === 0, "creation history must retain metadata only, not raw bytes");
       const absent = await subject.store.get(created.value);
       assert(absent.ok && absent.value === null, "deleted media must remain absent");
       const bind = await subject.store.bindToOperation(bindingRequest("bind-c15", created.value.mediaId, "draft"));

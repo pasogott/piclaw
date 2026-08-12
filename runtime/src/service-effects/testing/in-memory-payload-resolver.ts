@@ -4,7 +4,8 @@ import type { RedactionClass } from "../contracts/common.js";
 import type { EffectPayloadResolver, ResolvedEffectPayload } from "../contracts/payload-resolver.js";
 
 export class InMemoryEffectPayloadResolver implements EffectPayloadResolver {
-  readonly #payloads = new Map<string, ResolvedEffectPayload>();
+  readonly #definitions = new Map<string, ResolvedEffectPayload>();
+  readonly #unavailable = new Set<string>();
   readonly #holds = new Map<string, Promise<void>>();
   readonly #arrivals = new Map<string, { promise: Promise<void>; resolve: () => void }>();
 
@@ -23,12 +24,13 @@ export class InMemoryEffectPayloadResolver implements EffectPayloadResolver {
       redactionClass,
       bytes: copy,
     });
-    const existing = this.#payloads.get(ref);
+    const existing = this.#definitions.get(ref);
     if (existing) {
       if (!samePayload(existing, payload)) throw new Error(`payload reference ${ref} is immutable`);
+      this.#unavailable.delete(ref);
       return Object.freeze({ ...existing, bytes: new Uint8Array(existing.bytes) });
     }
-    this.#payloads.set(ref, payload);
+    this.#definitions.set(ref, payload);
     return Object.freeze({ ...payload, bytes: new Uint8Array(payload.bytes) });
   }
 
@@ -60,12 +62,13 @@ export class InMemoryEffectPayloadResolver implements EffectPayloadResolver {
     await arrival.promise;
   }
 
-  delete(ref: string): void {
-    this.#payloads.delete(ref);
+  makeTemporarilyUnavailable(ref: string): void {
+    if (this.#definitions.has(ref)) this.#unavailable.add(ref);
   }
 
   peek(ref: string): ResolvedEffectPayload | null {
-    const payload = this.#payloads.get(ref);
+    if (this.#unavailable.has(ref)) return null;
+    const payload = this.#definitions.get(ref);
     return payload ? Object.freeze({ ...payload, bytes: new Uint8Array(payload.bytes) }) : null;
   }
 
