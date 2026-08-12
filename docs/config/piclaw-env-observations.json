@@ -78,7 +78,7 @@
       "semanticReaderOccurrences": 0
     },
     "tooling": {
-      "referencedNames": 75,
+      "referencedNames": 77,
       "directReaderNames": 40,
       "directReaderOccurrences": 67,
       "helperReaderNames": 0,
@@ -1231,6 +1231,7 @@
           "semanticReaders": 0,
           "files": [
             ".github/workflows/integration-gate.yml",
+            "Makefile",
             "docs/configuration.md",
             "docs/development.md",
             "docs/development/testing-and-linting-flow-presentation-2026-04-18.html",
@@ -2333,6 +2334,36 @@
           "semanticReaders": 0,
           "files": [
             "scripts/audit-piclaw-env-surface.ts"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
+      "name": "PICLAW_LOCAL_TEST_NICE",
+      "scopes": {
+        "tooling": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "runtime/scripts/local-test-priority.ts"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
+      "name": "PICLAW_LOCAL_TEST_PRIORITY_ACTIVE",
+      "scopes": {
+        "tooling": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "runtime/scripts/local-test-priority.ts"
           ],
           "readerFiles": []
         }
