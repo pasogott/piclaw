@@ -1491,7 +1491,7 @@ A future implementation PR should cover one interface plus its fake, current ada
 | Package | Documents/results | Entry condition | Exit condition | Explicit exclusion |
 |---|---|---|---|---|
 | WP-0A | Common canonical-hash, error-certainty, clock/ID and trace specification | E-026 approved for refinement | Fixed vectors and bounded error tags documented | No TypeScript module |
-| WP-0B | Fake state machines and parameterised case catalogue | WP-0A vocabulary stable | Every interface method maps to fake state and fault points | No executable fake |
+| WP-0B | Generic deterministic test controls, contract-runner lifecycle and typed case catalogue | WP-0A vocabulary stable | Every interface maps to named cases, fault points, prerequisites and a crash oracle | No concrete interface or fake factory |
 | WP-1A | EF-S03/EF-S04 adapter extraction map | Existing source evidence pinned | Each method maps to current persistence primitive and compatibility case | No source extraction |
 | WP-1B | EF-S06/EF-S08 adapter extraction map | Transport evidence pinned | Certainty/redaction/generation rules complete | No transport change |
 | WP-1C | EF-H01 environment map | Selected `ExecutionEnv` contract rechecked | Local/SSH method, error, abort and cleanup mapping complete | No environment implementation |
@@ -1501,6 +1501,13 @@ A future implementation PR should cover one interface plus its fake, current ada
 | WP-3A | EF-S07 occurrence model | Scheduler behaviour evidence pinned | Occurrence identity, lease, completion and recurrence rules documented | No scheduler change |
 | WP-3B | EB-01–EB-05 compatibility matrix | Coherent Earendil source available for recheck | Exact exports/signatures and pass/unsupported report pinned | No dependency update |
 | WP-3C | Tool manifest | Current tool inventory available | Every tool family has replay/context/service/redaction classification | No tool rewrite |
+
+WP-0B implementation clarification (2026-08-12): WP-0A landed only the common
+compile-checked vocabulary, while the per-interface signatures in this evidence
+remain illustrative. WP-0B therefore supplies reusable deterministic controls
+and the typed EF-S01–EF-S08/EF-H01 case catalogue without freezing those
+signatures. Each later adapter/store issue owns its concrete interface and
+independent fake factory.
 
 ### Interface dependencies
 
