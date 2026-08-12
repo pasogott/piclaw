@@ -96,18 +96,15 @@ await runStage("check:structured-logging", ["bun", "run", "check:structured-logg
 
 // ── Stage 2: Full unit/component test suite ───────────────────────────
 
-await runStage("test:full", ["bun", "test", "--max-concurrency=1",
+await runStage("test:full", ["bun", "run", "test:local", "--cwd", "runtime", "--env", "PICLAW_DB_IN_MEMORY=1", "--", "bun", "test", "--max-concurrency=1",
   "--path-ignore-patterns=**/features/**",
   "--path-ignore-patterns=**/scripts/**",
   "--path-ignore-patterns=**/*.optional.test.ts",
-], {
-  cwd: resolve(ROOT, "runtime"),
-  env: { PICLAW_DB_IN_MEMORY: "1" },
-});
+]);
 
 // ── Stage 2b: Feature regression tests (isolated subprocess) ─────────
 
-await runStage("test:features", ["bun", "run", "runtime/test/features/run-feature-tests.ts"]);
+await runStage("test:features", ["bun", "run", "test:local", "--", "bun", "run", "runtime/test/features/run-feature-tests.ts"]);
 
 // ── Stage 3: Static analysis (advisory — pre-existing debt may exist) ──
 

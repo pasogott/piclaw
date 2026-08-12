@@ -8,28 +8,28 @@ cd "$repo_root"
 
 test_log="$out_dir/targeted-tests.txt"
 : >"$test_log"
-PICLAW_DB_IN_MEMORY=1 bun test --max-concurrency=1 \
-  runtime/test/config/config.test.ts \
-  runtime/test/config/config-coverage-import.test.ts \
-  runtime/test/remote/remote-interop.test.ts \
-  runtime/test/remote/ssrf.test.ts \
-  >>"$test_log" 2>&1
-PICLAW_DB_IN_MEMORY=1 bun test --max-concurrency=1 \
-  runtime/test/agent-pool/agent-pool-slash-command.test.ts \
-  runtime/test/agent-pool/session-auto-rotation.test.ts \
-  >>"$test_log" 2>&1
-PICLAW_DB_IN_MEMORY=1 bun test --max-concurrency=1 \
-  runtime/test/runtime/bootstrap.test.ts \
-  runtime/test/runtime/scheduler.test.ts \
-  runtime/test/ipc/ipc.test.ts \
-  >>"$test_log" 2>&1
-PICLAW_DB_IN_MEMORY=1 bun test --max-concurrency=1 \
-  runtime/test/agent-control/passkey-totp-handler.test.ts \
-  runtime/test/channels/web/totp-auth.test.ts \
-  runtime/test/channels/web/totp-card.test.ts \
-  runtime/test/channels/web/proxy-sensitive-flows.test.ts \
-  runtime/test/utils/request-client.test.ts \
-  >>"$test_log" 2>&1
+run_tests() {
+  bun run test:local --cwd runtime --env PICLAW_DB_IN_MEMORY=1 -- bun test --max-concurrency=1 "$@" \
+    >>"$test_log" 2>&1
+}
+run_tests \
+  test/config/config.test.ts \
+  test/config/config-coverage-import.test.ts \
+  test/remote/remote-interop.test.ts \
+  test/remote/ssrf.test.ts
+run_tests \
+  test/agent-pool/agent-pool-slash-command.test.ts \
+  test/agent-pool/session-auto-rotation.test.ts
+run_tests \
+  test/runtime/bootstrap.test.ts \
+  test/runtime/scheduler.test.ts \
+  test/ipc/ipc.test.ts
+run_tests \
+  test/agent-control/passkey-totp-handler.test.ts \
+  test/channels/web/totp-auth.test.ts \
+  test/channels/web/totp-card.test.ts \
+  test/channels/web/proxy-sensitive-flows.test.ts \
+  test/utils/request-client.test.ts
 
 bare_constant_exports=$(bun -e 'const fs=require("fs"); const src=fs.readFileSync("runtime/src/core/config.ts","utf8").split(/\n/); let count=0; for (const line of src) { const m=line.match(/^export\s+(const|let)\s+([A-Z_][A-Z0-9_]*)\b/); if (m && !m[2].endsWith("_CONFIG")) count++; } console.log(count);')
 remote_bare_exports=$(bun -e 'const fs=require("fs"); const src=fs.readFileSync("runtime/src/core/config.ts","utf8").split(/\n/); let count=0; for (const line of src) { const m=line.match(/^export\s+(const|let)\s+(REMOTE_[A-Z0-9_]*)\b/); if (m && !m[2].endsWith("_CONFIG")) count++; } console.log(count);')

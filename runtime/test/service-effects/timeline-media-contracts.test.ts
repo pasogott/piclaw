@@ -138,20 +138,24 @@ describe("current singleton wrapper parity", () => {
     const database = getDb();
     const suffix = `parity-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const chatJid = `web:${suffix}`;
-    database.prepare("INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)")
-      .run(chatJid, chatJid, "2026-08-12T00:00:00.000Z");
-    const first = storeMessage({ ...parityMessage(chatJid, `${suffix}-wrapper`, "wrapper one"), timestamp: "2026-08-12T00:00:00.000Z" });
-    const second = storeMessageInDatabase(database, { ...parityMessage(chatJid, `${suffix}-seam`, "seam one"), timestamp: "2026-08-12T00:00:01.000Z" });
-    expect(first).toBeGreaterThan(0);
-    expect(second).toBeGreaterThan(first);
-    expect(replaceMessageContent(chatJid, first, "wrapper two", { contentBlocks: [{ type: "text" }] })?.data.content).toBe("wrapper two");
-    expect(replaceMessageContentInDatabase(database, chatJid, second, "seam two", { contentBlocks: [{ type: "text" }] })).toBeTrue();
-    const rows = database.prepare("SELECT rowid, content, content_blocks FROM messages WHERE rowid IN (?, ?) ORDER BY rowid")
-      .all(first, second) as Array<{ rowid: number; content: string; content_blocks: string }>;
-    expect(rows).toEqual([
-      { rowid: first, content: "wrapper two", content_blocks: '[{"type":"text"}]' },
-      { rowid: second, content: "seam two", content_blocks: '[{"type":"text"}]' },
-    ]);
+    try {
+      database.prepare("INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)")
+        .run(chatJid, chatJid, "2026-08-12T00:00:00.000Z");
+      const first = storeMessage({ ...parityMessage(chatJid, `${suffix}-wrapper`, "wrapper one"), timestamp: "2026-08-12T00:00:00.000Z" });
+      const second = storeMessageInDatabase(database, { ...parityMessage(chatJid, `${suffix}-seam`, "seam one"), timestamp: "2026-08-12T00:00:01.000Z" });
+      expect(first).toBeGreaterThan(0);
+      expect(second).toBeGreaterThan(first);
+      expect(replaceMessageContent(chatJid, first, "wrapper two", { contentBlocks: [{ type: "text" }] })?.data.content).toBe("wrapper two");
+      expect(replaceMessageContentInDatabase(database, chatJid, second, "seam two", { contentBlocks: [{ type: "text" }] })).toBeTrue();
+      const rows = database.prepare("SELECT rowid, content, content_blocks FROM messages WHERE rowid IN (?, ?) ORDER BY rowid")
+        .all(first, second) as Array<{ rowid: number; content: string; content_blocks: string }>;
+      expect(rows).toEqual([
+        { rowid: first, content: "wrapper two", content_blocks: '[{"type":"text"}]' },
+        { rowid: second, content: "seam two", content_blocks: '[{"type":"text"}]' },
+      ]);
+    } finally {
+      cleanupSingletonParity(database, chatJid);
+    }
   });
 
   test("media wrappers preserve create attach read and delete behaviour", () => {
@@ -165,20 +169,36 @@ describe("current singleton wrapper parity", () => {
     expect(getMediaByIdFromDatabase(database, seamId)?.data).toEqual(bytes);
 
     const chatJid = `web:${suffix}`;
-    database.prepare("INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)")
-      .run(chatJid, chatJid, "2026-08-12T00:00:00.000Z");
-    const first = storeMessage(parityMessage(chatJid, `${suffix}-wrapper-message`, "wrapper media"));
-    const second = storeMessage(parityMessage(chatJid, `${suffix}-seam-message`, "seam media"));
-    attachMediaToMessage(first, [wrapperId]);
-    attachMediaToMessageInDatabase(database, second, [seamId]);
-    expect(getMediaIdsForMessage(first)).toEqual([wrapperId]);
-    expect(getMediaIdsForMessage(second)).toEqual([seamId]);
+    try {
+      database.prepare("INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)")
+        .run(chatJid, chatJid, "2026-08-12T00:00:00.000Z");
+      const first = storeMessage(parityMessage(chatJid, `${suffix}-wrapper-message`, "wrapper media"));
+      const second = storeMessage(parityMessage(chatJid, `${suffix}-seam-message`, "seam media"));
+      attachMediaToMessage(first, [wrapperId]);
+      attachMediaToMessageInDatabase(database, second, [seamId]);
+      expect(getMediaIdsForMessage(first)).toEqual([wrapperId]);
+      expect(getMediaIdsForMessage(second)).toEqual([seamId]);
 
-    database.prepare("DELETE FROM message_media WHERE message_rowid IN (?, ?)").run(first, second);
-    expect(deleteUnreferencedMedia([wrapperId])).toBe(1);
-    expect(deleteUnreferencedMediaInDatabase(database, [seamId])).toBe(1);
+      database.prepare("DELETE FROM message_media WHERE message_rowid IN (?, ?)").run(first, second);
+      expect(deleteUnreferencedMedia([wrapperId])).toBe(1);
+      expect(deleteUnreferencedMediaInDatabase(database, [seamId])).toBe(1);
+    } finally {
+      cleanupSingletonParity(database, chatJid, [wrapperId, seamId]);
+    }
   });
 });
+
+function cleanupSingletonParity(database: Database, chatJid: string, mediaIds: readonly number[] = []): void {
+  database.transaction(() => {
+    database.prepare("DELETE FROM message_media WHERE message_rowid IN (SELECT rowid FROM messages WHERE chat_jid = ?)").run(chatJid);
+    database.prepare("DELETE FROM messages WHERE chat_jid = ?").run(chatJid);
+    database.prepare("DELETE FROM chats WHERE jid = ?").run(chatJid);
+    if (mediaIds.length > 0) {
+      const placeholders = mediaIds.map(() => "?").join(", ");
+      database.prepare(`DELETE FROM media WHERE id IN (${placeholders})`).run(...mediaIds);
+    }
+  })();
+}
 
 function freshDatabase(): Database {
   const database = new Database(":memory:", { strict: true });

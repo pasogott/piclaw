@@ -871,7 +871,7 @@ async function runGroup(group: DeterministicGroup): Promise<GroupResult> {
   if (group.files.length === 0) {
     throw new Error(`Deterministic group ${group.id} resolved to zero files.`);
   }
-  const command = `cd ${shellQuote(runtimeDir)} && PICLAW_DB_IN_MEMORY=1 bun test --max-concurrency=1 --timeout=30000 ${group.files
+  const command = `cd ${shellQuote(repoRoot)} && bun run test:local --cwd runtime --env PICLAW_DB_IN_MEMORY=1 -- bun test --max-concurrency=1 --timeout=30000 ${group.files
     .map((file) => shellQuote(path.posix.join("test", file)))
     .join(" ")}`;
   const attempts: AttemptResult[] = [];
