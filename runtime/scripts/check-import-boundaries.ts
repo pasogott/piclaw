@@ -7,6 +7,7 @@ const ENTRY_EXTENSIONS_DIR = "extensions";
 const SRC_EXTENSIONS_DIR = "src/extensions";
 
 const ALLOWED_ENTRY_SRC_IMPORT_PREFIX = "../src/extensions/";
+const LATENT_SERVICE_EFFECTS_DIR = "src/service-effects";
 
 function walkFiles(baseDir: string, suffix: string): string[] {
   if (!existsSync(baseDir)) return [];
@@ -33,8 +34,9 @@ export function extractModuleSpecifiers(content: string): string[] {
   const specifiers: string[] = [];
   const staticImportRegex = /\b(?:import|export)\s+(?:[^"']*?\s+from\s+)?["']([^"']+)["']/g;
   const dynamicImportRegex = /\bimport\(\s*["']([^"']+)["']\s*\)/g;
+  const requireRegex = /\brequire\(\s*["']([^"']+)["']\s*\)/g;
 
-  for (const regex of [staticImportRegex, dynamicImportRegex]) {
+  for (const regex of [staticImportRegex, dynamicImportRegex, requireRegex]) {
     let match: RegExpExecArray | null;
     while ((match = regex.exec(content)) !== null) {
       specifiers.push(match[1]);
@@ -44,10 +46,15 @@ export function extractModuleSpecifiers(content: string): string[] {
   return specifiers;
 }
 
+function importsLatentServiceEffects(specifier: string): boolean {
+  return /(?:^|\/)service-effects(?:\/|$)/.test(specifier);
+}
+
 export function findImportBoundaryViolations(projectDir: string): string[] {
   const violations: string[] = [];
   const entryFiles = walkFiles(join(projectDir, ENTRY_EXTENSIONS_DIR), ".ts");
   const srcBridgeFiles = walkFiles(join(projectDir, SRC_EXTENSIONS_DIR), ".ts");
+  const productionFiles = walkFiles(join(projectDir, "src"), ".ts");
 
   for (const file of entryFiles) {
     const rel = relative(projectDir, file);
@@ -72,6 +79,17 @@ export function findImportBoundaryViolations(projectDir: string): string[] {
     for (const specifier of specifiers) {
       if (specifier.startsWith("@earendil-works/pi-ai/dist/")) {
         violations.push(`${rel}: disallowed pi-ai dist import outside allowlist (${specifier})`);
+      }
+    }
+  }
+
+  for (const file of productionFiles) {
+    const rel = relative(projectDir, file);
+    if (rel === LATENT_SERVICE_EFFECTS_DIR || rel.startsWith(`${LATENT_SERVICE_EFFECTS_DIR}/`)) continue;
+    const specifiers = extractModuleSpecifiers(readFileSync(file, "utf8"));
+    for (const specifier of specifiers) {
+      if (importsLatentServiceEffects(specifier)) {
+        violations.push(`${rel}: production core cannot import latent service effects (${specifier})`);
       }
     }
   }
