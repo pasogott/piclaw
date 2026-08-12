@@ -81,10 +81,21 @@ describe("check-import-boundaries", () => {
         join(dir, "src", "runtime", "bad-require.ts"),
         "const latent = require('../service-effects/contracts/common.js');\n",
       );
+      mkdirSync(join(dir, "src", "service-effects", "current-piclaw"), { recursive: true });
+      mkdirSync(join(dir, "src", "service-effects", "testing"), { recursive: true });
+      writeFileSync(
+        join(dir, "src", "service-effects", "current-piclaw", "bad.ts"),
+        "import { runner } from '../testing/contract-suite.js';\n",
+      );
+      writeFileSync(
+        join(dir, "src", "service-effects", "testing", "allowed.ts"),
+        "import { latent } from '../contracts/common.js';\nexport { latent };\n",
+      );
 
       expect(findImportBoundaryViolations(dir)).toEqual([
         "src/runtime/bad-require.ts: production core cannot import latent service effects (../service-effects/contracts/common.js)",
         "src/runtime/bad.ts: production core cannot import latent service effects (../service-effects/contracts/common.js)",
+        "src/service-effects/current-piclaw/bad.ts: service-effects production layer cannot import testing (../testing/contract-suite.js)",
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });

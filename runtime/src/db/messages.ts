@@ -17,13 +17,15 @@
  *   - agent-pool.ts calls storeMessage() to persist agent responses.
  */
 
+import type Database from "bun:sqlite";
+
 import { getDb } from "./connection.js";
 import { ensureChatBranch } from "./chat-branches.js";
 import { clampWebContent } from "./web-content.js";
 import type { InteractionRow } from "./types.js";
 import type { NewMessage } from "../types.js";
 import {
-  attachMediaToMessage,
+  attachMediaToMessageInDatabase,
   deleteUnreferencedMedia,
   getMediaIdsForMessage,
   getMediaIdsForMessages,
@@ -58,12 +60,15 @@ interface StoredMessageRow {
 /** Column list used in SELECT queries to ensure a consistent shape. */
 const MESSAGE_COLUMNS = "rowid, chat_jid, sender, sender_name, content, screen_hint, content_blocks, link_previews, annotations, thread_id, timestamp, is_bot_message";
 
-function ensureMonotonicMessageTimestamp(chatJid: string, requestedTimestamp: string): string {
+function ensureMonotonicMessageTimestampInDatabase(
+  database: Database,
+  chatJid: string,
+  requestedTimestamp: string,
+): string {
   const requestedMs = Date.parse(requestedTimestamp);
   if (!Number.isFinite(requestedMs)) return requestedTimestamp;
 
-  const db = getDb();
-  const row = db
+  const row = database
     .prepare("SELECT timestamp FROM messages WHERE chat_jid = ? ORDER BY timestamp DESC, rowid DESC LIMIT 1")
     .get(chatJid) as { timestamp: string } | undefined;
   if (!row?.timestamp) return requestedTimestamp;
@@ -170,13 +175,12 @@ export function listRecentChatJids(limit = 10, options?: { excludeChatJids?: str
  * Returns the SQLite rowid of the inserted row (used as the interaction id
  * in the web timeline and for media attachment linking).
  */
-export function storeMessage(msg: NewMessage): number {
-  const db = getDb();
-  msg.timestamp = ensureMonotonicMessageTimestamp(msg.chat_jid, msg.timestamp);
+export function storeMessageInDatabase(database: Database, msg: NewMessage): number {
+  msg.timestamp = ensureMonotonicMessageTimestampInDatabase(database, msg.chat_jid, msg.timestamp);
   const contentBlocks = msg.content_blocks ? JSON.stringify(msg.content_blocks) : null;
   const linkPreviews = msg.link_previews ? JSON.stringify(msg.link_previews) : null;
 
-  db.prepare(
+  database.prepare(
     `INSERT INTO messages (
       id, chat_jid, sender, sender_name, content, screen_hint, content_blocks, link_previews,
       thread_id, timestamp, is_from_me, is_bot_message, is_terminal_agent_reply, is_steering_message
@@ -212,10 +216,14 @@ export function storeMessage(msg: NewMessage): number {
     msg.is_steering_message ? 1 : 0
   );
 
-  const row = db
+  const row = database
     .prepare("SELECT rowid as rowid FROM messages WHERE id = ? AND chat_jid = ?")
     .get(msg.id, msg.chat_jid) as { rowid: number } | undefined;
   return row?.rowid ?? 0;
+}
+
+export function storeMessage(msg: NewMessage): number {
+  return storeMessageInDatabase(getDb(), msg);
 }
 
 /**
@@ -442,16 +450,23 @@ export {
  * of an existing message. Used by the web channel's edit-post feature.
  * Returns the updated InteractionRow, or undefined if the row didn't exist.
  */
-export function replaceMessageContent(
+export interface ReplaceMessageContentOptions {
+  contentBlocks?: unknown[];
+  linkPreviews?: unknown[];
+  mediaIds?: number[];
+  isTerminalAgentReply?: boolean;
+}
+
+export function replaceMessageContentInDatabase(
+  database: Database,
   chatJid: string,
   rowId: number,
   content: string,
-  options: { contentBlocks?: unknown[]; linkPreviews?: unknown[]; mediaIds?: number[]; isTerminalAgentReply?: boolean } = {}
-): InteractionRow | undefined {
-  const db = getDb();
+  options: ReplaceMessageContentOptions = {},
+): boolean {
   const contentBlocks = options.contentBlocks ? JSON.stringify(options.contentBlocks) : null;
   const linkPreviews = options.linkPreviews ? JSON.stringify(options.linkPreviews) : null;
-  const res = db
+  const res = database
     .prepare(
       "UPDATE messages SET content = ?, content_blocks = ?, link_previews = ?, is_terminal_agent_reply = COALESCE(?, is_terminal_agent_reply) WHERE chat_jid = ? AND rowid = ?"
     )
@@ -461,17 +476,24 @@ export function replaceMessageContent(
       linkPreviews,
       typeof options.isTerminalAgentReply === "boolean" ? (options.isTerminalAgentReply ? 1 : 0) : null,
       chatJid,
-      rowId
+      rowId,
     );
 
-  if (res.changes <= 0) return undefined;
-
-  // Re-link media: remove old associations and attach the new set.
-  db.prepare("DELETE FROM message_media WHERE message_rowid = ?").run(rowId);
+  if (res.changes <= 0) return false;
+  database.prepare("DELETE FROM message_media WHERE message_rowid = ?").run(rowId);
   if (options.mediaIds && options.mediaIds.length > 0) {
-    attachMediaToMessage(rowId, options.mediaIds);
+    attachMediaToMessageInDatabase(database, rowId, options.mediaIds);
   }
+  return true;
+}
 
+export function replaceMessageContent(
+  chatJid: string,
+  rowId: number,
+  content: string,
+  options: ReplaceMessageContentOptions = {},
+): InteractionRow | undefined {
+  if (!replaceMessageContentInDatabase(getDb(), chatJid, rowId, content, options)) return undefined;
   return getMessageByRowId(chatJid, rowId);
 }
 
