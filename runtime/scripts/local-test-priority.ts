@@ -78,7 +78,7 @@ export async function runLocalTestCommand(
 
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   const forward = (signal: typeof signals[number]) => {
-    try { child.kill(signal); } catch { /* child already exited */ }
+    if (child.exitCode === null) child.kill(signal);
   };
   for (const signal of signals) process.on(signal, forward);
   const exitCode = await child.exited;
