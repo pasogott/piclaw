@@ -112,16 +112,25 @@ export function createCurrentPiclawServiceWorkStore(
   database: Database,
   runtime: ServiceWorkAdapterRuntime,
 ): ServiceWorkStoreConstructionResult {
-  try {
-    return Result.ok(new CurrentPiclawServiceWorkStore(database, runtime));
-  } catch (caught) {
-    void caught;
-    return Result.err(serviceError("storage_unavailable", "not_applied", true));
-  }
+  return CurrentPiclawServiceWorkStore.create(database, runtime);
 }
 
 export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
-  constructor(
+  static create(
+    database: Database,
+    runtime: ServiceWorkAdapterRuntime,
+  ): ServiceWorkStoreConstructionResult {
+    try {
+      return Result.ok(new CurrentPiclawServiceWorkStore(database, runtime));
+    } catch (caught) {
+      void caught;
+      return Result.err(
+        serviceError("storage_unavailable", "not_applied", true),
+      );
+    }
+  }
+
+  private constructor(
     readonly database: Database,
     private readonly runtime: ServiceWorkAdapterRuntime,
   ) {

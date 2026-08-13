@@ -3,6 +3,7 @@ import {
   type Result as ResultValue,
 } from "@earendil-works/pi-agent-core";
 
+import type { NormalisedTraceInput } from "../../contracts/common.js";
 import type {
   AcceptCancellationRequest,
   AcceptedSourceSnapshot,
@@ -88,13 +89,16 @@ export class FakeServiceWorkStore implements ServiceWorkStore {
   readonly #runtimeFault: (
     point: "before_effect" | "effect_then_lost_acknowledgement",
   ) => unknown;
+  readonly #traceObserver: (input: NormalisedTraceInput) => void;
   constructor(
     private readonly context: ContractTestContext,
     runtimeFault?: (
       point: "before_effect" | "effect_then_lost_acknowledgement",
     ) => unknown,
+    traceObserver: (input: NormalisedTraceInput) => void = () => undefined,
   ) {
     this.#runtimeFault = runtimeFault ?? ((point) => context.faults.hit(point));
+    this.#traceObserver = traceObserver;
   }
 
   planFault(
@@ -394,6 +398,7 @@ export class FakeServiceWorkStore implements ServiceWorkStore {
             harnessEntryId: request.harnessEntryId,
             state: request.state,
           });
+          this.replaceSource(freezeSource({ ...source, state: "claimed" }));
         } else {
           if (
             known.queueKind !== request.queueKind ||
@@ -484,7 +489,7 @@ export class FakeServiceWorkStore implements ServiceWorkStore {
     });
     await previous;
     try {
-      this.trace.recordCall({
+      this.recordTrace({
         contract: "EF-S01",
         method,
         effectId: request?.effect?.idempotencyKey ?? "invalid",
@@ -590,7 +595,7 @@ export class FakeServiceWorkStore implements ServiceWorkStore {
     outcome: Outcome<T>,
   ): ResultValue<T, ServiceWorkError> {
     if (outcome.ok) {
-      this.trace.recordResult({
+      this.recordTrace({
         contract: "EF-S01",
         method,
         effectId: request?.effect.idempotencyKey ?? "invalid",
@@ -601,7 +606,7 @@ export class FakeServiceWorkStore implements ServiceWorkStore {
       });
       return Result.ok(outcome.value);
     }
-    this.trace.recordResult({
+    this.recordTrace({
       contract: "EF-S01",
       method,
       effectId: request?.effect?.idempotencyKey ?? "invalid",
@@ -612,6 +617,23 @@ export class FakeServiceWorkStore implements ServiceWorkStore {
     });
     return Result.err(outcome.error);
   }
+  private recordTrace(input: NormalisedTraceInput): void {
+    try {
+      if (input.resultTag === undefined || input.resultTag === "call")
+        this.trace.recordCall(input);
+      else this.trace.recordResult(input);
+    } catch (caught) {
+      void caught;
+      // Internal trace inspection is observational.
+    }
+    try {
+      this.#traceObserver(input);
+    } catch (caught) {
+      void caught;
+      // Injected trace observers cannot alter fake durable semantics.
+    }
+  }
+
   private source(chat: string, seq: number) {
     return this.#state.sources.find(
       (s) => s.chatJid === chat && s.sourceSeq === seq,

@@ -89,7 +89,7 @@ const cases: readonly ParameterisedContractCase<ServiceWorkContractSubject>[] =
       },
     },
     {
-      name: "EF-S01-C1A every mutation consumes a closed request snapshot",
+      name: "EF-S01-S07 every mutation consumes a closed request snapshot",
       async run({ subject }) {
         const acceptRequest = accept("snapshot-primary");
         const acceptPending = subject.store.acceptSource(acceptRequest);
@@ -356,6 +356,18 @@ const cases: readonly ParameterisedContractCase<ServiceWorkContractSubject>[] =
             queue(current, target.value.sourceSeq, `queue:${state}`, state),
           );
           assert(result.ok, `queue ${state} succeeds`);
+          const inspection = fixture.subject.inspect();
+          const queueState = inspection.queues.find(
+            (entry) => entry.sourceSeq === target.value.sourceSeq,
+          )?.state;
+          const sourceState = inspection.sources.find(
+            (entry) => entry.sourceSeq === target.value.sourceSeq,
+          )?.state;
+          assert(queueState === state, `queue row is ${state}`);
+          assert(
+            sourceState === (state === "accepted" ? "claimed" : state),
+            `source state follows ${state}`,
+          );
           current = result.value;
         }
         const restored = await fixture.crashAndRestore();
@@ -367,6 +379,13 @@ const cases: readonly ParameterisedContractCase<ServiceWorkContractSubject>[] =
         assert(
           restored.inspect().queues.at(-1)?.state === "consumed",
           "consumed row survives",
+        );
+        assert(
+          restored
+            .inspect()
+            .sources.find((entry) => entry.sourceSeq === target.value.sourceSeq)
+            ?.state === "consumed",
+          "consumed source state survives",
         );
         const disposeOperation = await seededOperationInChat(
           restored.store,
@@ -389,6 +408,16 @@ const cases: readonly ParameterisedContractCase<ServiceWorkContractSubject>[] =
           ),
         );
         assert(accepted.ok, "dispose target recorded accepted");
+        assert(
+          restored
+            .inspect()
+            .sources.find(
+              (entry) =>
+                entry.chatJid === "chat-dispose" &&
+                entry.sourceSeq === disposeTarget.value.sourceSeq,
+            )?.state === "claimed",
+          "accepted queue leaves source claimed",
+        );
         const disposed = await restored.store.recordQueuedInput(
           queue(
             accepted.value,
@@ -400,6 +429,17 @@ const cases: readonly ParameterisedContractCase<ServiceWorkContractSubject>[] =
         assert(
           disposed.ok && restored.inspect().queues.at(-1)?.state === "disposed",
           "accepted to disposed survives",
+        );
+        const disposedRestored = await fixture.crashAndRestore();
+        assert(
+          disposedRestored
+            .inspect()
+            .sources.find(
+              (entry) =>
+                entry.chatJid === "chat-dispose" &&
+                entry.sourceSeq === disposeTarget.value.sourceSeq,
+            )?.state === "disposed",
+          "disposed source state survives restore",
         );
       },
     },
@@ -937,6 +977,10 @@ const cases: readonly ParameterisedContractCase<ServiceWorkContractSubject>[] =
       },
     },
   ];
+
+export const SERVICE_WORK_STORE_CONTRACT_CASE_NAMES = Object.freeze(
+  cases.map((contractCase) => contractCase.name),
+);
 
 export function defineServiceWorkStoreContract(
   factory: ContractSubjectFactory<ServiceWorkContractSubject>,

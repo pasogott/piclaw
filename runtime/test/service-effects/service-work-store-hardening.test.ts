@@ -43,6 +43,15 @@ class Runtime implements ServiceWorkAdapterRuntime {
   }
 }
 
+function mustCreateCurrentStore(
+  database: Database,
+  runtime: ServiceWorkAdapterRuntime,
+): CurrentPiclawServiceWorkStore {
+  const result = createCurrentPiclawServiceWorkStore(database, runtime);
+  if (!result.ok) throw new Error("test store construction failed");
+  return result.value;
+}
+
 function open(path = ":memory:"): {
   database: Database;
   runtime: Runtime;
@@ -54,7 +63,7 @@ function open(path = ":memory:"): {
   return {
     database,
     runtime,
-    store: new CurrentPiclawServiceWorkStore(database, runtime),
+    store: mustCreateCurrentStore(database, runtime),
   };
 }
 
@@ -571,6 +580,27 @@ describe("EF-S01 hostile boundaries and identity", () => {
 });
 
 describe("EF-S01 corruption, redaction and callback faults", () => {
+  test("throwing fake trace observers are observational and redact protected values", async () => {
+    const context = {
+      clock: new ManualEffectClock("2026-08-13T07:00:00.000Z"),
+      ids: new SequenceEffectIdSource("fake-trace"),
+      faults: new DeterministicFaultPlan(),
+    };
+    const observed: NormalisedTraceInput[] = [];
+    const store = new FakeServiceWorkStore(context, undefined, (input) => {
+      observed.push(input);
+      throw new Error("protected observer failure");
+    });
+    const request = source("secret-trace-source");
+    const result = await store.acceptSource(request);
+    expect(result.ok).toBeTrue();
+    expect(store.inspectState().sources).toHaveLength(1);
+    const serialized = JSON.stringify(observed);
+    expect(serialized).not.toContain(request.payloadRef);
+    expect(serialized).not.toContain(request.effect.provenanceRef);
+    expect(store.trace.inspect()).toHaveLength(2);
+  });
+
   test("fake normalizer is independently structured and never imports the adapter", async () => {
     const sourceText = await Bun.file(
       new URL(
@@ -626,7 +656,7 @@ describe("EF-S01 corruption, redaction and callback faults", () => {
           if (database) installServiceWorkSchema(database);
           const store =
             implementation === "sqlite"
-              ? new CurrentPiclawServiceWorkStore(database!, {
+              ? mustCreateCurrentStore(database!, {
                   hitFault: (point) => callback(point),
                   recordTrace: () => undefined,
                 })
@@ -691,7 +721,7 @@ describe("EF-S01 corruption, redaction and callback faults", () => {
         if (implementation === "sqlite") {
           const database = new Database(":memory:", { strict: true });
           installServiceWorkSchema(database);
-          const store = new CurrentPiclawServiceWorkStore(database, {
+          const store = mustCreateCurrentStore(database, {
             hitFault: (point) => callback(point),
             recordTrace: () => undefined,
           });
@@ -874,7 +904,7 @@ describe("EF-S01 corruption, redaction and callback faults", () => {
         hitFault: () => value,
         recordTrace: () => undefined,
       };
-      const store = new CurrentPiclawServiceWorkStore(database, runtime);
+      const store = mustCreateCurrentStore(database, runtime);
       const result = await store.acceptSource(source("callback"));
       expectTypedFailure(result, "storage_unavailable");
       if (!result.ok) expect(result.error.certainty).toBe("not_applied");
@@ -890,10 +920,9 @@ describe("EF-S01 corruption, redaction and callback faults", () => {
         throw new Error("protected");
       },
     };
-    const result = await new CurrentPiclawServiceWorkStore(
-      database,
-      runtime,
-    ).acceptSource(source("throwing"));
+    const result = await mustCreateCurrentStore(database, runtime).acceptSource(
+      source("throwing"),
+    );
     expectTypedFailure(result, "storage_unavailable");
     database.close();
   });

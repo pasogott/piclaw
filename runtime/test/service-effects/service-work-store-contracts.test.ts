@@ -15,6 +15,7 @@ import {
 import { DeterministicFaultPlan } from "../../src/service-effects/testing/fault-plan.js";
 import { EffectTraceRecorder } from "../../src/service-effects/testing/trace-recorder.js";
 import {
+  createCurrentPiclawServiceWorkStore,
   CurrentPiclawServiceWorkStore,
   type ServiceWorkAdapterRuntime,
 } from "../../src/service-effects/current-piclaw/service-work-store.js";
@@ -81,6 +82,15 @@ interface SqliteSubject extends ServiceWorkContractSubject {
   path: string;
   runtime: Runtime;
 }
+function mustCreateCurrentStore(
+  database: Database,
+  runtime: ServiceWorkAdapterRuntime,
+): CurrentPiclawServiceWorkStore {
+  const result = createCurrentPiclawServiceWorkStore(database, runtime);
+  if (!result.ok) throw new Error("test store construction failed");
+  return result.value;
+}
+
 function sqliteSubject(
   path: string,
   ctx: ContractTestContext,
@@ -92,7 +102,7 @@ function sqliteSubject(
   );
   installServiceWorkSchema(database);
   const runtime = new Runtime(ctx, trace);
-  const store = new CurrentPiclawServiceWorkStore(database, runtime);
+  const store = mustCreateCurrentStore(database, runtime);
   return {
     database,
     path,
@@ -247,13 +257,47 @@ describe("EF-S01 private schema installer", () => {
       names.every((name) => name.startsWith("service_effect_s01_")),
     ).toBeTrue();
     database.exec("PRAGMA foreign_keys=ON");
+    const insertSource = database.prepare(
+      "INSERT INTO service_effect_s01_sources(chat_jid,source_seq,source_id,source_hash,kind,state,payload_ref,target_operation_id,parent_source_seq,accepted_at,disposition_reason,provenance_ref,create_wake_intent) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    );
+    const validValues = [
+      "missing",
+      1,
+      "source-1",
+      "a".repeat(64),
+      "message",
+      "pending",
+      "payload:1",
+      null,
+      null,
+      "2026-01-01T00:00:00.000Z",
+      null,
+      "provenance:1",
+      0,
+    ] as const;
+    let constraintCode: unknown;
+    try {
+      insertSource.run(...validValues);
+    } catch (caught) {
+      constraintCode = Object.getOwnPropertyDescriptor(
+        caught as object,
+        "code",
+      )?.value;
+    }
+    expect(constraintCode).toBe("SQLITE_CONSTRAINT_FOREIGNKEY");
+    database
+      .query("INSERT INTO service_effect_s01_chats(chat_jid) VALUES (?)")
+      .run("present");
     expect(() =>
-      database
-        .prepare(
-          "INSERT INTO service_effect_s01_sources(chat_jid,source_seq,source_id,request_hash,kind,state,payload_ref,accepted_at,provenance_ref,create_wake_intent) VALUES ('missing',1,'s','h','message','pending','p','2026-01-01T00:00:00Z','x',0)",
-        )
-        .run(),
-    ).toThrow();
+      insertSource.run("present", ...validValues.slice(1)),
+    ).not.toThrow();
+    expect(
+      (
+        database
+          .query("SELECT COUNT(*) AS count FROM service_effect_s01_sources")
+          .get() as { count: number }
+      ).count,
+    ).toBe(1);
     database.close();
   });
   test("does not appear without explicit installation", () => {
