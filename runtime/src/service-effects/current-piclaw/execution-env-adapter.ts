@@ -1,4 +1,6 @@
-import { resolve as resolvePath } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   ExecutionError,
@@ -90,8 +92,8 @@ export class PiclawExecutionEnv implements ExecutionEnv {
     return this.file(path, abortSignal, voidValue, () => this.#appendFile(path, snapshotContent(content), abortSignal));
   }
   async renameFile(sourcePath: string, destinationPath: string, abortSignal?: AbortSignal) { return this.file(sourcePath, abortSignal, voidValue, () => this.#renameFile(sourcePath, destinationPath, abortSignal)); }
-  async fileInfo(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, fileInfoValue, () => this.#fileInfo(path, abortSignal)); }
-  async listDir(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, fileInfoArrayValue, () => this.#listDir(path, abortSignal)); }
+  async fileInfo(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, (value) => fileInfoValue(value, this.cwd), () => this.#fileInfo(path, abortSignal)); }
+  async listDir(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, (value) => fileInfoArrayValue(value, this.cwd), () => this.#listDir(path, abortSignal)); }
   async canonicalPath(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, stringValue, () => this.#canonicalPath(path, abortSignal)); }
   async exists(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, booleanValue, () => this.#exists(path, abortSignal)); }
   async createDir(path: string, options?: { recursive?: boolean; abortSignal?: AbortSignal }) {
@@ -115,7 +117,7 @@ export class PiclawExecutionEnv implements ExecutionEnv {
       const aborted = readAborted(snapshot.abortSignal);
       if (aborted === null) return executionFailure("unknown", "Invalid abort signal.");
       if (aborted) return executionFailure("aborted", "aborted");
-    } catch { return executionFailure("unknown", "Invalid shell execution options."); }
+    } catch (error) { return error instanceof InvalidTimeoutError ? executionFailure("timeout", "Invalid timeout.") : executionFailure("unknown", "Invalid shell execution options."); }
 
     let prepared: unknown;
     try { prepared = await Promise.resolve(this.#prepareShellEnvironment(command, snapshot)); }
@@ -155,7 +157,7 @@ export class PiclawExecutionEnv implements ExecutionEnv {
   }
 
   private addressedPath(path: string | undefined): string | undefined {
-    try { return typeof path === "string" ? resolvePath(this.cwd, path) : undefined; } catch { return undefined; }
+    try { return typeof path === "string" ? resolveSelectedPath(this.cwd, path) : undefined; } catch { return undefined; }
   }
 }
 
@@ -167,7 +169,7 @@ function captureMethod<K extends keyof ExecutionEnv>(receiver: ExecutionEnv, key
 function requireStableCwd(value: ExecutionEnv): string {
   const cwd = value.cwd;
   if (value.cwd !== cwd || typeof cwd !== "string" || cwd.trim().length === 0 || !cwd.startsWith("/")) throw new TypeError("Invalid ExecutionEnv cwd.");
-  return resolvePath(cwd);
+  return resolveSelectedPath("/", cwd);
 }
 function normaliseFileResult<T>(candidate: unknown, fallbackPath: string | undefined, normalise: FileNormaliser<T>): ResultValue<T, FileError> {
   try {
@@ -196,7 +198,7 @@ function normaliseExecutionResult(candidate: unknown): ResultValue<ExecValue, Ex
     if (ok === true) {
       const value = stable(candidate, "value"); if (!record(value)) return executionFailure("unknown", "Execution environment returned a malformed result.");
       const stdout = stable(value, "stdout"); const stderr = stable(value, "stderr"); const exitCode = stable(value, "exitCode");
-      return typeof stdout === "string" && typeof stderr === "string" && Number.isInteger(exitCode)
+      return typeof stdout === "string" && typeof stderr === "string" && Number.isSafeInteger(exitCode)
         ? Result.ok(Object.freeze({ stdout, stderr, exitCode: exitCode as number }))
         : executionFailure("unknown", "Execution environment returned a malformed result.");
     }
@@ -214,7 +216,7 @@ function snapshotShellOptions(value: unknown): ShellExecOptions {
   const cwd = stable(value, "cwd"); const timeout = stable(value, "timeout"); const signal = stable(value, "abortSignal");
   const stdout = stable(value, "onStdout"); const stderr = stable(value, "onStderr"); const environment = stable(value, "env"); const inherit = stable(value, "inheritEnv");
   if (cwd !== undefined && typeof cwd !== "string") throw new TypeError("Invalid cwd.");
-  if (timeout !== undefined && typeof timeout !== "number") throw new TypeError("Invalid timeout.");
+  if (timeout !== undefined && (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0 || timeout > MAX_TIMEOUT_SECONDS)) throw new InvalidTimeoutError();
   if (signal !== undefined && !record(signal)) throw new TypeError("Invalid abort signal.");
   if (stdout !== undefined && typeof stdout !== "function" || stderr !== undefined && typeof stderr !== "function") throw new TypeError("Invalid callback.");
   if (inherit !== undefined && typeof inherit !== "boolean") throw new TypeError("Invalid inheritance option.");
@@ -252,10 +254,10 @@ function snapshotStringArray(value: unknown): string[] | null {
 function normaliseEnvironment(value: unknown): Record<string, string> | null {
   try { if (!record(value)) return null; const output: Record<string, string> = {}; for (const key of Object.keys(value)) { const item = stable(value, key); if (typeof item !== "string") return null; output[key] = item; } return output; } catch { return null; }
 }
-function fileInfoValue(value: unknown): FileInfo | null {
-  try { if (!record(value)) return null; const name = stable(value, "name"); const path = stable(value, "path"); const kind = stable(value, "kind"); const size = stable(value, "size"); const mtimeMs = stable(value, "mtimeMs"); if (typeof name !== "string" || typeof path !== "string" || !path.startsWith("/") || !FILE_KINDS.has(kind as FileInfo["kind"]) || typeof size !== "number" || !Number.isFinite(size) || typeof mtimeMs !== "number" || !Number.isFinite(mtimeMs)) return null; return Object.freeze({ name, path: resolvePath(path), kind: kind as FileInfo["kind"], size, mtimeMs }); } catch { return null; }
+function fileInfoValue(value: unknown, cwd: string): FileInfo | null {
+  try { if (!record(value)) return null; const name = stable(value, "name"); const path = stable(value, "path"); const kind = stable(value, "kind"); const size = stable(value, "size"); const mtimeMs = stable(value, "mtimeMs"); if (typeof name !== "string" || typeof path !== "string" || !FILE_KINDS.has(kind as FileInfo["kind"]) || !Number.isSafeInteger(size) || (size as number) < 0 || typeof mtimeMs !== "number" || !Number.isFinite(mtimeMs) || mtimeMs < 0) return null; return Object.freeze({ name, path: resolveSelectedPath(cwd, path), kind: kind as FileInfo["kind"], size: size as number, mtimeMs }); } catch { return null; }
 }
-function fileInfoArrayValue(value: unknown): FileInfo[] | null { try { if (!Array.isArray(value)) return null; const output = value.map(fileInfoValue); return output.some((item) => item === null) ? null : Object.freeze(output) as FileInfo[]; } catch { return null; } }
+function fileInfoArrayValue(value: unknown, cwd: string): FileInfo[] | null { try { if (!Array.isArray(value)) return null; const output = value.map((entry) => fileInfoValue(entry, cwd)); return output.some((item) => item === null) ? null : Object.freeze(output) as FileInfo[]; } catch { return null; } }
 function stringValue(value: unknown): string | null { return typeof value === "string" ? value : null; }
 function stringArrayValue(value: unknown): string[] | null { const output = snapshotStringArray(value); return output ? Object.freeze(output) as string[] : null; }
 function binaryValue(value: unknown): Uint8Array | null { try { return value instanceof Uint8Array ? new Uint8Array(value) : null; } catch { return null; } }
@@ -263,12 +265,23 @@ function booleanValue(value: unknown): boolean | null { return typeof value === 
 function voidValue(value: unknown): undefined | null { return value === undefined ? undefined : null; }
 function readAborted(signal: unknown): boolean | null { try { if (signal === undefined) return false; if (!record(signal)) return null; const value = stable(signal, "aborted"); return typeof value === "boolean" ? value : null; } catch { return null; } }
 function guardCallback(callback: ((chunk: string) => void) | undefined, fault: () => void): ((chunk: string) => void) | undefined { return callback ? (chunk) => { try { callback(chunk); } catch (error) { fault(); throw error; } } : undefined; }
-function normaliseErrorPath(path: string | undefined, fallback: string | undefined): string | undefined { try { return path === undefined ? fallback : path.startsWith("/") ? resolvePath(path) : fallback; } catch { return fallback; } }
+function normaliseErrorPath(path: string | undefined, fallback: string | undefined): string | undefined { try { return path === undefined ? fallback : path.startsWith("/") || path === "~" || path.startsWith("~/") || path.startsWith("file://") ? resolveSelectedPath("/", path) : fallback; } catch { return fallback; } }
 function fileFailure(code: FileErrorCode, message: string, path?: string): ResultValue<never, FileError> { return Result.err(new FileError(code, message, path)); }
 function executionFailure(code: ExecutionErrorCode, message: string): ResultValue<never, ExecutionError> { return Result.err(new ExecutionError(code, message)); }
 function record(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === "object" && !Array.isArray(value)); }
 function stable(value: Record<string, unknown>, key: string): unknown { const first = value[key]; return value[key] === first ? first : CHANGED; }
 function stableObject(value: object, key: string): unknown { return stable(value as Record<string, unknown>, key); }
+function resolveSelectedPath(cwd: string, path: string): string {
+  let normalised = path;
+  if (normalised === "~") normalised = homedir();
+  else if (normalised.startsWith("~/")) normalised = join(homedir(), normalised.slice(2));
+  else if (normalised.startsWith("file://")) {
+    try { normalised = fileURLToPath(normalised); } catch { /* selected Earendil behavior treats malformed URLs as paths */ }
+  }
+  return resolvePath(cwd, normalised);
+}
+class InvalidTimeoutError extends Error {}
+const MAX_TIMEOUT_SECONDS = 2_147_483_647 / 1000;
 const CHANGED = Symbol("changed");
 const FILE_CODES = new Set<FileErrorCode>(["aborted", "not_found", "permission_denied", "not_directory", "is_directory", "invalid", "not_supported", "unknown"]);
 const EXECUTION_CODES = new Set<ExecutionErrorCode>(["aborted", "timeout", "shell_unavailable", "spawn_error", "callback_error", "unknown"]);

@@ -1,5 +1,9 @@
 import "../helpers.js";
 
+import { homedir } from "node:os";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, test } from "bun:test";
 import { ExecutionError, FileError, Result } from "@earendil-works/pi-agent-core";
 
@@ -37,6 +41,17 @@ describe("EF-H01 resolver factory normalization", () => {
 });
 
 describe("EF-H01 hostile ExecutionEnv adapter boundaries", () => {
+  test("adapter-generated and FileInfo paths mirror selected Earendil syntax", async () => {
+    const rejecting = new FakeExecutionEnv("/root"); rejecting.rejectAllFiles = true; rejecting.rejectAllFilesWithThrow = true; const env = adapter(rejecting);
+    for (const [input, expected] of [
+      ["a/../x", "/root/x"], ["/tmp/x", "/tmp/x"], ["~", homedir()], ["~/x", resolve(homedir(), "x")],
+      ["file:///tmp/x", fileURLToPath("file:///tmp/x")], ["file://%", "/root/file:/%"], ["/remote/path/../x", "/remote/x"],
+    ] as const) {
+      const failed = await env.readTextFile(input); expect(!failed.ok && failed.error.path).toBe(expected);
+      const info = { name: "x", path: input, kind: "file", size: 0, mtimeMs: 0 } as const;
+      const normalized = await adapter(delegateWith(Result.ok(info))).fileInfo(input); expect(normalized.ok && normalized.value.path).toBe(expected);
+    }
+  });
   test("runtime-hostile filesystem arguments always settle typed errors", async () => {
     const env = adapter();
     const changing = changingField("abortSignal", undefined, { aborted: false });
@@ -70,18 +85,26 @@ describe("EF-H01 hostile ExecutionEnv adapter boundaries", () => {
     expect((await adapter(delegateWith(Result.ok(true))).exists("x")).ok).toBeTrue();
     expect((await adapter(delegateWith(Result.ok(undefined))).remove("x")).ok).toBeTrue();
     expect((await adapter(delegateWith(Result.ok([info]))).listDir("x")).ok).toBeTrue();
-    expect((await adapter(delegateWith(Result.ok({ ...info, path: "relative" }))).fileInfo("x")).ok).toBeFalse();
+    expect((await adapter(delegateWith(Result.ok({ ...info, size: -1 }))).fileInfo("x")).ok).toBeFalse();
+    expect((await adapter(delegateWith(Result.ok({ ...info, size: 1.5 }))).fileInfo("x")).ok).toBeFalse();
+    expect((await adapter(delegateWith(Result.ok({ ...info, mtimeMs: -1 }))).fileInfo("x")).ok).toBeFalse();
+    expect((await adapter(delegateWith(Result.ok({ ...info, mtimeMs: Number.POSITIVE_INFINITY }))).fileInfo("x")).ok).toBeFalse();
   });
 
   test("shell options results callbacks and preparation failures remain bounded and sanitized", async () => {
     const hostileOptions = changingField("abortSignal", undefined, { aborted: false });
     expect((await adapter().exec("x", hostileOptions)).ok).toBeFalse();
+    for (const timeout of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, -1, 2_147_483.648]) {
+      const result = await adapter().exec("x", { timeout }); expect(!result.ok && result.error.code).toBe("timeout");
+    }
+    expect((await adapter().exec("x", { timeout: 2_147_483.647 })).ok).toBeTrue();
     const leaked = new Error(`preparer ${SECRET}`); (leaked as Error & { secret?: string }).secret = SECRET;
     const prepared = new PiclawExecutionEnv(new FakeExecutionEnv("/root"), () => { throw leaked; }); const failure = await prepared.exec("x");
     expect(!failure.ok && failure.error.code).toBe("unknown"); expect(JSON.stringify(!failure.ok && failure.error)).not.toContain(SECRET); expect(!failure.ok && failure.error.cause).toBeUndefined();
 
     const malformed = await adapter(delegateWith({ ok: true, value: { stdout: "x", stderr: "", exitCode: 1.5 } })).exec("x");
     expect(!malformed.ok && malformed.error.code).toBe("unknown");
+    expect((await adapter(delegateWith(Result.ok({ stdout: "x", stderr: "", exitCode: Number.MAX_SAFE_INTEGER + 1 }))).exec("x")).ok).toBeFalse();
     const changing = await adapter(delegateWith(changingResult("ok", true, false, "value", { stdout: "x", stderr: "", exitCode: 0 }))).exec("x");
     expect(!changing.ok && changing.error.code).toBe("unknown");
     const changingOutput = await adapter(delegateWith(Result.ok(changingOutputValue()))).exec("x");

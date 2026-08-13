@@ -96,9 +96,12 @@ const cases: readonly ParameterisedContractCase<ExecutionContextResolverContract
         env.remove("x", { abortSignal: abort.signal }), env.createTempDir("x", abort.signal), env.createTempFile({ abortSignal: abort.signal }),
       ]);
       assert(aborted.every((result) => !result.ok && result.error.code === "aborted"), "every FS method must resolve aborted Result");
-      const backend = subject.createdRemotes().at(-1) as ExecutionEnv & { rejectAllFiles?: boolean }; backend.rejectAllFiles = true;
-      const bounded = await Promise.all([env.absolutePath("x"), env.joinPath(["x"]), env.readTextFile("x"), env.readTextLines("x"), env.readBinaryFile("x"), env.writeFile("x", "x"), env.appendFile("x", "x"), env.renameFile("x", "y"), env.fileInfo("x"), env.listDir("x"), env.canonicalPath("x"), env.exists("x"), env.createDir("x"), env.remove("x"), env.createTempDir(), env.createTempFile()]);
-      assert(bounded.every((result) => !result.ok && result.error.code === "unknown"), "every delegated FS rejection must become FileError unknown");
+      const backend = subject.createdRemotes().at(-1) as ExecutionEnv & { rejectAllFiles?: boolean; rejectAllFilesWithThrow?: boolean }; backend.rejectAllFiles = true;
+      const directErrors = await allFileMethods(env);
+      assert(directErrors.every((result) => !result.ok && result.error.code === "unknown"), "every direct FileError must remain bounded");
+      backend.rejectAllFilesWithThrow = true;
+      const rejections = await allFileMethods(env);
+      assert(rejections.every((result) => !result.ok && result.error.code === "unknown"), "every delegated FS rejection must become FileError unknown");
     },
   },
   {
@@ -190,6 +193,9 @@ const cases: readonly ParameterisedContractCase<ExecutionContextResolverContract
 ];
 
 interface ScriptableProcessEnv { script(...steps: unknown[]): void; readonly killedGroups: number[]; throwCleanup: boolean; cleanupCalls: number; }
+async function allFileMethods(env: ExecutionEnv) {
+  return Promise.all([env.absolutePath("x"), env.joinPath(["x"]), env.readTextFile("x"), env.readTextLines("x"), env.readBinaryFile("x"), env.writeFile("x", "x"), env.appendFile("x", "x"), env.renameFile("x", "y"), env.fileInfo("x"), env.listDir("x"), env.canonicalPath("x"), env.exists("x"), env.createDir("x"), env.remove("x"), env.createTempDir(), env.createTempFile()]);
+}
 function request(requestedRoute: "current" | "local" = "current"): ResolveExecutionContextRequest { return { chatJid: "chat-1", operationId: "operation-1", expectedOperationVersion: 1, requestedRoute }; }
 function hostile(field: string, first: unknown, second: unknown): object { let reads = 0; return { kind: "ssh", profileId: "profile-1", transportRef: "transport-a", cwd: "/remote/a", get [field]() { return reads++ === 0 ? first : second; } }; }
 function assert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message); }
