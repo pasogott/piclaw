@@ -94,7 +94,7 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
       "before_effect", "effect_then_lost_acknowledgement", "duplicate_result", "delayed_or_late_result",
       "stale_owner_or_version", "cancellation_race", "malformed_state",
     ],
-    crashOracle: crashOracle("EF-S01", "Lost acknowledgement after accept, claim, cancellation, and harness binding returns the committed identity after restore."),
+    crashOracle: crashOracle("EF-S01", "Lost acknowledgement after accept, claim, intent, cancellation, harness binding, and every queued-input edge returns the committed identity after fresh restore."),
     sharedCaseLinks: ["shared:idempotency", "shared:atomicity", "shared:owner-version", "shared:redaction"],
   },
   {

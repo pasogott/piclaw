@@ -303,7 +303,7 @@ interface ListOpenOperationsRequest {
 }
 ```
 
-The coordinator supplies IDs and timestamps. The store validates them and never invents lifecycle identity. `claimNext` selects the lowest pending sequence after `expectedFrontier`; all other eligibility decisions belong to the caller and must already be represented in persisted source state.
+The coordinator supplies IDs and canonical UTC timestamps. The store validates them and never invents lifecycle identity, so EF-S01 has no clock or ID-generation runtime seam. `claimNext` selects the lowest pending sequence after `expectedFrontier`; all other eligibility decisions belong to the caller and must already be represented in persisted source state.
 
 ### Errors
 
@@ -509,7 +509,7 @@ Do not implement this adapter by calling composite cursor helpers. Small additiv
 
 ### Fake and contract tests
 
-`FakeServiceWorkStore` provides injected clock/IDs, a call/result trace, commit barriers and crash snapshot/restore.
+`FakeServiceWorkStore` consumes caller-supplied clock/ID values, provides a call/result trace and commit fault boundaries, and reconstructs only durable fake state on crash/restore; transient fault scripts are not restored.
 
 Required cases:
 
