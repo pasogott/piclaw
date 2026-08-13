@@ -45,7 +45,7 @@ export class CurrentPiclawAgentProjectionSink implements AgentProjectionSink {
     method: string,
     candidate: unknown,
   ): Promise<ResultValue<void, ProjectionSinkError>> {
-    if (!validProjection(candidate)) return this.invalid(method, candidate);
+    if (!safeValidProjection(candidate)) return this.invalid(method, candidate);
     const projection = candidate;
     this.call(method, projection);
     let authorized: boolean;
@@ -121,6 +121,7 @@ function traceInput(method: string, value: PublicAgentProjection, certainty: Pro
   return { contract: "EF-S08", method, effectId: `${keyOf(value)}:${value.watchGeneration}:${value.receiptSeq}`, operationId: value.operationId, sourceSeq: value.receiptSeq, version: value.watchGeneration, certainty, resultTag };
 }
 
+function safeValidProjection(value: unknown): value is PublicAgentProjection { try { return validProjection(value); } catch { return false; } }
 function validProjection(value: unknown): value is PublicAgentProjection {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;

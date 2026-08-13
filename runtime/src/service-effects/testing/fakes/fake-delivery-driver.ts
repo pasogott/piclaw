@@ -24,14 +24,16 @@ export class FakeDeliveryDriver implements DeliveryDriver {
   observedPayloadBytes(): Uint8Array | null { return this.observedPayload ? new Uint8Array(this.observedPayload) : null; }
   throwClassifierOnce(): void { this.classifierThrows = true; }
 
-  async deliver(request: DeliveryAttempt): Promise<ResultValue<DeliveryOutcome, DeliveryDriverError>> {
-    const effectId = typeof request?.outboxId === "string" && request.outboxId.length > 0 ? request.outboxId : "invalid-outbox";
+  async deliver(candidate: unknown): Promise<ResultValue<DeliveryOutcome, DeliveryDriverError>> {
+    const effectId = safeEffectId(candidate);
     this.trace.recordCall({ contract: "EF-S06", method: "deliver", effectId });
+    if (!validRequest(candidate)) return this.fail(effectId, Object.freeze({ _tag: "invalid_payload", certainty: "not_applied", retryable: false }));
+    const request = candidate;
     if (request.signal.aborted) return this.fail(effectId, Object.freeze({ _tag: "aborted", certainty: "not_applied", retryable: false }));
     if (![request.outboxId, request.idempotencyKey, request.payloadRef, request.deliveryIdentity].every((value) => typeof value === "string" && value.length > 0) || !Number.isSafeInteger(request.attempt) || request.attempt < 1) {
       return this.fail(effectId, Object.freeze({ _tag: "invalid_payload", certainty: "not_applied", retryable: false }));
     }
-    if (!request.destinationRef) return this.fail(effectId, Object.freeze({ _tag: "destination_missing", certainty: "not_applied", retryable: false }));
+    if (!request.destinationRef?.trim()) return this.fail(effectId, Object.freeze({ _tag: "destination_missing", certainty: "not_applied", retryable: false }));
     let payload;
     try { payload = await this.payloads.resolve(request.payloadRef); } catch { payload = null; }
     if (!payload || payload.ref !== request.payloadRef || payload.byteLength !== payload.bytes.byteLength || payload.sha256 !== createHash("sha256").update(payload.bytes).digest("hex")) {
@@ -69,16 +71,27 @@ export class FakeDeliveryDriver implements DeliveryDriver {
   }
 }
 
+function validRequest(value: unknown): value is DeliveryAttempt {
+  try { if (!value || typeof value !== "object" || Array.isArray(value)) return false; const request = value as Record<string, unknown>; return typeof request.destinationRef === "string" && request.signal !== null && typeof request.signal === "object" && typeof (request.signal as { aborted?: unknown }).aborted === "boolean"; } catch { return false; }
+}
+function safeEffectId(value: unknown): string { try { const id = (value as { outboxId?: unknown } | null)?.outboxId; return typeof id === "string" && id.length > 0 ? id : "invalid-outbox"; } catch { return "invalid-outbox"; } }
 const TAGS = new Set(["invalid_payload", "destination_missing", "rejected", "rate_limited", "timeout", "transport_unavailable", "aborted"]);
 function validError(error: DeliveryDriverError): boolean {
-  return TAGS.has(error._tag) && (error.certainty === "not_applied" || error.certainty === "unknown") && typeof error.retryable === "boolean" && (error.retryAfter === undefined || (typeof error.retryAfter === "string" && error.retryAfter.length > 0 && Number.isFinite(Date.parse(error.retryAfter))));
+  try {
+    if (!error || !TAGS.has(error._tag) || (error.certainty !== "not_applied" && error.certainty !== "unknown") || typeof error.retryable !== "boolean") return false;
+    if (["aborted", "invalid_payload", "destination_missing", "rejected"].includes(error._tag) && (error.certainty !== "not_applied" || error.retryable)) return false;
+    if (error._tag === "rate_limited") return error.certainty === "not_applied" && error.retryable && typeof error.retryAfter === "string" && error.retryAfter.length > 0 && Number.isFinite(Date.parse(error.retryAfter));
+    return error.retryAfter === undefined;
+  } catch { return false; }
 }
 function validOutcome(kind: DeliveryKind, request: DeliveryAttempt, outcome: DeliveryOutcome): boolean {
-  if (!outcome || typeof outcome !== "object" || !Number.isFinite(Date.parse(outcome.acceptedAt)) || (outcome.receiptRef !== null && (typeof outcome.receiptRef !== "string" || outcome.receiptRef.length === 0)) || outcome.detail.kind !== kind) return false;
-  if (outcome.detail.kind === "timeline_broadcast") return outcome.detail.providerMessageId === null && outcome.detail.eventId === request.deliveryIdentity;
-  if (outcome.detail.kind === "wake_chat") return outcome.detail.providerMessageId === null && outcome.detail.wakeId === request.deliveryIdentity;
-  if (outcome.detail.kind === "web_push") return outcome.detail.providerMessageId === null && validCounts(outcome.detail.counts);
-  return outcome.detail.providerMessageId === null || (typeof outcome.detail.providerMessageId === "string" && outcome.detail.providerMessageId.length > 0);
+  try {
+    if (!outcome || typeof outcome !== "object" || typeof outcome.acceptedAt !== "string" || !Number.isFinite(Date.parse(outcome.acceptedAt)) || (outcome.receiptRef !== null && (typeof outcome.receiptRef !== "string" || outcome.receiptRef.length === 0)) || !outcome.detail || typeof outcome.detail !== "object" || outcome.detail.kind !== kind) return false;
+    if (outcome.detail.kind === "timeline_broadcast") return outcome.detail.providerMessageId === null && outcome.detail.eventId === request.deliveryIdentity;
+    if (outcome.detail.kind === "wake_chat") return outcome.detail.providerMessageId === null && outcome.detail.wakeId === request.deliveryIdentity;
+    if (outcome.detail.kind === "web_push") return outcome.detail.providerMessageId === null && validCounts(outcome.detail.counts);
+    return outcome.detail.providerMessageId === null || (typeof outcome.detail.providerMessageId === "string" && outcome.detail.providerMessageId.length > 0);
+  } catch { return false; }
 }
 function validCounts(counts: WebPushDeliveryCounts): boolean {
   return [counts.attempted, counts.sent, counts.removed, counts.failed].every((value) => Number.isSafeInteger(value) && value >= 0) && counts.attempted === counts.sent + counts.removed + counts.failed;

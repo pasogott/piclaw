@@ -23,10 +23,10 @@ function createContext(): ContractTestContext {
 for (const kind of ["timeline_broadcast", "channel_delivery", "web_push", "pushover", "wake_chat"] as const) {
   describe(`EF-S06 DeliveryDriver shared contract: ${kind}`, () => {
     test("current-Piclaw adapter", async () => {
-      expect(await defineDeliveryDriverContract(currentDeliveryFactory(kind), createContext)).toHaveLength(17);
+      expect(await defineDeliveryDriverContract(currentDeliveryFactory(kind), createContext)).toHaveLength(18);
     });
     test("independent scripted fake", async () => {
-      expect(await defineDeliveryDriverContract(fakeDeliveryFactory(kind), createContext)).toHaveLength(17);
+      expect(await defineDeliveryDriverContract(fakeDeliveryFactory(kind), createContext)).toHaveLength(18);
     });
   });
 }
@@ -44,7 +44,7 @@ function currentDeliveryFactory(kind: DeliveryKind): ContractSubjectFactory<Deli
   return {
     name: `current-piclaw-delivery-${kind}`,
     create(context) { return currentDeliverySubject(kind, context); },
-    crashAndRestore(subject, context) { return { subject, context }; },
+    crashAndRestore(subject, context) { const current = subject as CurrentDeliverySubject; current.runtime = current.runtime.restore(); return { subject: current, context }; },
     inspectTrace(subject) { return (subject as CurrentDeliverySubject).runtime.snapshot(); },
   };
 }
@@ -58,7 +58,7 @@ function fakeDeliveryFactory(kind: DeliveryKind): ContractSubjectFactory<Deliver
   };
 }
 
-interface CurrentDeliverySubject extends DeliveryDriverContractSubject { readonly runtime: TestingCurrentPiclawAdapterRuntime; }
+interface CurrentDeliverySubject extends DeliveryDriverContractSubject { runtime: TestingCurrentPiclawAdapterRuntime; }
 function currentDeliverySubject(kind: DeliveryKind, context: ContractTestContext): CurrentDeliverySubject {
   const runtime = new TestingCurrentPiclawAdapterRuntime(context);
   const payloads = new InMemoryEffectPayloadResolver(); payloads.putText("payload:delivery", "safe payload");

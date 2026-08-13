@@ -164,7 +164,11 @@ const cases: readonly ParameterisedContractCase<AgentProjectionContractSubject>[
   {
     name: "EF-S08-C13 arbitrary malformed inputs resolve typed errors",
     async run({ subject }) {
-      for (const malformed of [null, 1, Symbol("bad"), { type: "agent_snapshot", chatJid: Symbol("bad") }, { ...snapshot(projectionOwner(), 1, 1), activeToolNames: null }, { ...snapshot(projectionOwner(), 1, 1), modelLabel: 3 }, { ...snapshot(projectionOwner(), 1, 1), watchGeneration: Number.MAX_SAFE_INTEGER + 1 }] as unknown[]) {
+      const throwingProxy = new Proxy({}, { ownKeys() { throw new Error("ownKeys trap"); }, get() { throw new Error("get trap"); } });
+      const throwingGetter = Object.defineProperty({}, "type", { enumerable: true, get() { throw new Error("type getter"); } });
+      const identityGetter = Object.defineProperty({ ...snapshot(projectionOwner(), 1, 1) }, "chatJid", { enumerable: true, get() { throw new Error("identity getter"); } });
+      const payloadGetter = Object.defineProperty({ ...snapshot(projectionOwner(), 1, 1) }, "activeToolNames", { enumerable: true, get() { throw new Error("payload getter"); } });
+      for (const malformed of [null, 1, Symbol("bad"), throwingProxy, throwingGetter, identityGetter, payloadGetter, { type: "agent_snapshot", chatJid: Symbol("bad") }, { ...snapshot(projectionOwner(), 1, 1), activeToolNames: null }, { ...snapshot(projectionOwner(), 1, 1), modelLabel: 3 }, { ...snapshot(projectionOwner(), 1, 1), watchGeneration: Number.MAX_SAFE_INTEGER + 1 }] as unknown[]) {
         const result = await subject.sink.publishSnapshot(malformed as PublicAgentSnapshot);
         assert(!result.ok && result.error._tag === "protected_payload", "malformed input must resolve protected_payload");
       }

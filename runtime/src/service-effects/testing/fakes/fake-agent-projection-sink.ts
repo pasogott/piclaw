@@ -33,7 +33,7 @@ export class FakeAgentProjectionSink implements AgentProjectionSink {
   publishTerminal(value: PublicTerminalProjection): Promise<ResultValue<void, ProjectionSinkError>> { return this.accept("publishTerminal", value as unknown); }
 
   private async accept(method: string, candidate: unknown): Promise<ResultValue<void, ProjectionSinkError>> {
-    if (!validProjection(candidate)) return this.invalid(method);
+    if (!safeValidProjection(candidate)) return this.invalid(method);
     const value = candidate;
     this.trace.recordCall(trace(method, value, null, "call"));
     let authorized: boolean;
@@ -94,6 +94,7 @@ const KEYS: Record<PublicAgentProjection["type"], Set<string>> = {
   tool_finished: new Set([...BASE, "toolCallId", "outcome"]), usage_updated: new Set([...BASE, "inputTokens", "outputTokens"]),
   agent_terminal: new Set([...BASE, "terminalCommitRef", "disposition", "messageRowId", "errorCode"]),
 };
+function safeValidProjection(value: unknown): value is PublicAgentProjection { try { return validProjection(value); } catch { return false; } }
 function validProjection(value: unknown): value is PublicAgentProjection {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;

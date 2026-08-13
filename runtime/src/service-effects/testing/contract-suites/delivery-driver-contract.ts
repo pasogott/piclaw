@@ -155,10 +155,11 @@ const cases: readonly ParameterisedContractCase<DeliveryDriverContractSubject>[]
     async run({ subject }) {
       const malformed = [
         { ...request(), outboxId: "" }, { ...request(), idempotencyKey: "" }, { ...request(), payloadRef: "" }, { ...request(), deliveryIdentity: "" },
-        { ...request(), destinationRef: null }, { ...request(), attempt: Number.NaN }, { ...request(), attempt: 1.5 }, { ...request(), attempt: Number.MAX_SAFE_INTEGER + 1 },
+        null, 1, { ...request(), signal: undefined }, { ...request(), signal: { aborted: "no" } },
+        { ...request(), destinationRef: "   " }, { ...request(), attempt: Number.NaN }, { ...request(), attempt: 1.5 }, { ...request(), attempt: Number.MAX_SAFE_INTEGER + 1 },
       ];
       for (const value of malformed) {
-        const before = subject.countAttempts(); const result = await subject.driver.deliver(value);
+        const before = subject.countAttempts(); const result = await subject.driver.deliver(value as DeliveryAttempt);
         assert(!result.ok && (result.error._tag === "invalid_payload" || result.error._tag === "destination_missing"), "malformed request must be bounded");
         assert(subject.countAttempts() === before, "malformed request must not call boundary");
       }
@@ -192,15 +193,32 @@ const cases: readonly ParameterisedContractCase<DeliveryDriverContractSubject>[]
     },
   },
   {
-    name: "EF-S06-C16 malformed outcome receipt and provider identity are rejected while certainty is derived",
+    name: "EF-S06-C16 malformed outcome and classifier matrix stays bounded while certainty is derived",
     async run({ subject }) {
       const base = outcome(detailFor(subject.driver.kind));
-      for (const malformed of [
-        { ...base, receiptRef: "" },
-        { ...base, detail: { ...base.detail, providerMessageId: "" } } as DeliveryOutcome,
-      ]) {
+      const malformedOutcomes = [
+        { ...base, acceptedAt: "not-an-instant" }, { ...base, acceptedAt: 3 },
+        { ...base, receiptRef: "" }, { ...base, receiptRef: 3 },
+        { ...base, detail: null }, { ...base, detail: "bad" },
+        { ...base, detail: { ...base.detail, providerMessageId: "" } },
+      ] as unknown as DeliveryOutcome[];
+      for (const malformed of malformedOutcomes) {
         subject.scriptOutcome(malformed); const result = await subject.driver.deliver(request());
         assert(!result.ok && result.error.certainty === "unknown", "malformed provider outcome must be bounded unknown");
+      }
+      const malformedErrors = [
+        { _tag: "unknown_tag", certainty: "not_applied", retryable: false },
+        { _tag: "rejected", certainty: "not_applied", retryable: true },
+        { _tag: "aborted", certainty: "unknown", retryable: false },
+        { _tag: "invalid_payload", certainty: "not_applied", retryable: true },
+        { _tag: "destination_missing", certainty: "not_applied", retryable: true },
+        { _tag: "rate_limited", certainty: "not_applied", retryable: true },
+        { _tag: "rate_limited", certainty: "not_applied", retryable: true, retryAfter: "bad" },
+        { _tag: "timeout", certainty: "unknown", retryable: true, retryAfter: "2026-08-12T00:01:00.000Z" },
+      ] as unknown as DeliveryDriverError[];
+      for (const malformed of malformedErrors) {
+        subject.scriptError(malformed); const result = await subject.driver.deliver(request("delivery-malformed-classifier"));
+        assert(!result.ok && result.error._tag === "transport_unavailable" && result.error.certainty === "unknown", "malformed classifier output must become bounded unknown");
       }
       subject.scriptOutcome({ ...base, certainty: "unknown" });
       const derived = await subject.driver.deliver(request("delivery-derived-certainty"));
@@ -215,6 +233,19 @@ const cases: readonly ParameterisedContractCase<DeliveryDriverContractSubject>[]
       const result = await subject.driver.deliver(request("delivery-mutable-snapshot")); await mutation;
       const observed = subject.observedPayloadBytes();
       assert(result.ok && observed !== null && new TextDecoder().decode(observed) === "safe payload", "boundary must observe verified defensive snapshot");
+    },
+  },
+  {
+    name: "EF-S06-R01 unknown acceptance remains stateless across restore",
+    async run(fixture) {
+      fixture.subject.scriptError(error("transport_unavailable", "unknown", true));
+      const lost = await fixture.subject.driver.deliver(request("delivery-crash-oracle"));
+      assert(!lost.ok && lost.error.certainty === "unknown" && fixture.subject.countAttempts() === 1, "lost provider response must remain unknown after one attempt");
+      const beforeTrace = fixture.inspectTrace();
+      const restored = await fixture.crashAndRestore();
+      assert(restored.countAttempts() === 1, "restore must not start or reconcile a second attempt");
+      assert(restored.driver.reconcile === undefined, "stateless current drivers cannot invent reconciliation");
+      assert(fixture.inspectTrace().length >= beforeTrace.length, "claimed trace-preserving runtimes must retain prior observations");
     },
   },
 ];
