@@ -69,7 +69,7 @@ async function cleanupUnknown(value: unknown): Promise<void> {
     if (!record(value)) return;
     const cleanup = stable(value, "cleanup");
     if (typeof cleanup === "function") await cleanup.call(value);
-  } catch { /* best effort */ }
+  } catch (error) { void error; /* cleanup is best effort by contract */ }
 }
 function record(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === "object" && !Array.isArray(value)); }
 function stable(value: Record<string, unknown>, key: string): unknown { const first = value[key]; return value[key] === first ? first : CHANGED; }

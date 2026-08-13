@@ -179,7 +179,7 @@ function context(request: Readonly<ResolveExecutionContextRequest>, env: Executi
 function recordValue(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === "object" && !Array.isArray(value)); }
 function stable(record: Record<string, unknown>, key: string): unknown { const value = record[key]; return record[key] === value ? value : UNSTABLE; }
 function nonBlank(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
-async function safeCleanup(env: ExecutionEnv): Promise<void> { try { await env.cleanup(); } catch { /* best effort */ } }
+async function safeCleanup(env: ExecutionEnv): Promise<void> { try { await env.cleanup(); } catch (error) { void error; /* cleanup is best effort by contract */ } }
 function error(_tag: ExecutionContextError["_tag"], retryable: boolean): ExecutionContextError { return Object.freeze({ _tag, certainty: "not_applied", retryable }); }
 const UNSTABLE = Symbol("unstable");
 const TAGS = new Set<ExecutionContextError["_tag"]>(["operation_not_found", "version_mismatch", "route_unavailable", "invalid_ssh_profile", "credential_unavailable", "environment_unavailable"]);

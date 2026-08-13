@@ -143,7 +143,7 @@ export class PiclawExecutionEnv implements ExecutionEnv {
   }
 
   cleanup(): Promise<void> {
-    if (!this.#cleanupPromise) this.#cleanupPromise = (async () => { try { await this.#cleanup(); } catch { /* best effort */ } })();
+    if (!this.#cleanupPromise) this.#cleanupPromise = (async () => { try { await this.#cleanup(); } catch (error) { void error; /* cleanup is best effort by contract */ } })();
     return this.#cleanupPromise;
   }
 
@@ -276,7 +276,7 @@ function resolveSelectedPath(cwd: string, path: string): string {
   if (normalised === "~") normalised = homedir();
   else if (normalised.startsWith("~/")) normalised = join(homedir(), normalised.slice(2));
   else if (normalised.startsWith("file://")) {
-    try { normalised = fileURLToPath(normalised); } catch { /* selected Earendil behavior treats malformed URLs as paths */ }
+    try { normalised = fileURLToPath(normalised); } catch (error) { void error; /* selected Earendil behavior treats malformed URLs as paths */ }
   }
   return resolvePath(cwd, normalised);
 }
