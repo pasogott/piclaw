@@ -10,7 +10,7 @@ import { sendStoredWebPushNotification, type WebPushNotificationPayload } from "
 import { upsertStoredWebPushSubscription } from "../../src/channels/web/push/web-push-store.js";
 import { broadcastEvent, type SseClientContainer } from "../../src/channels/web/sse/sse.js";
 import type { ProjectionAuthority, ProjectionOwner, PublicAgentProjection } from "../../src/service-effects/contracts/agent-projection-sink.js";
-import type { DeliveryBoundaryAttempt, DeliveryDriverError } from "../../src/service-effects/contracts/delivery-driver.js";
+import type { DeliveryBoundary, DeliveryBoundaryAttempt, DeliveryDriverError, DeliveryKind } from "../../src/service-effects/contracts/delivery-driver.js";
 import { CurrentPiclawAgentProjectionSink } from "../../src/service-effects/current-piclaw/agent-projection-sink.js";
 import { createChannelDeliveryBoundary, createPushoverBoundary, createTimelineBroadcastBoundary, createWakeBoundary, createWebPushBoundary, type ChannelSendCallback, type WakeCallback } from "../../src/service-effects/current-piclaw/delivery-boundaries.js";
 import { CurrentPiclawDeliveryDriver } from "../../src/service-effects/current-piclaw/delivery-driver.js";
@@ -53,6 +53,10 @@ describe("current Piclaw delivery boundary factories", () => {
       () => ({ chat_jid: "web:chat", delivery_id: "" }),
       () => ({ chat_jid: "web:other", delivery_id: "identity-1" }),
       () => ({ chat_jid: "web:chat", delivery_id: "identity-other" }),
+      () => throwingMappedValue("chat_jid", "web:chat", { delivery_id: "identity-1" }),
+      () => throwingMappedValue("delivery_id", "identity-1", { chat_jid: "web:chat" }),
+      () => changingMappedValue("chat_jid", "web:chat", { delivery_id: "identity-1" }),
+      () => changingMappedValue("delivery_id", "identity-1", { chat_jid: "web:chat" }),
     ];
     for (const mapper of invalid) {
       const boundary = createTimelineBroadcastBoundary(clock, () => { calls += 1; }, "agent_status", mapper);
@@ -88,7 +92,11 @@ describe("current Piclaw delivery boundary factories", () => {
   test("payload mappers and fatal UTF-8 failures classify pre-effect invalid_payload", async () => {
     let calls = 0; const text = createChannelDeliveryBoundary(clock, async () => { calls += 1; }); const invalidBytes = new Uint8Array([0xc3, 0x28]);
     await expect(text.attempt(input(invalidBytes))).rejects.toThrow(); expect(text.classifyError?.(await captureError(() => text.attempt(input(invalidBytes))))?._tag).toBe("invalid_payload"); expect(calls).toBe(0);
-    for (const mapper of [() => { throw new Error("mapper"); }, () => ({ title: 1, body: "body" }), () => ({ title: "title", body: 2 }), () => ({ title: "title", body: "body", url: 3 })]) {
+    const hostilePushMappers = ["title", "body", "url", "tag", "sourceLabel"].flatMap((field) => [
+      () => throwingMappedValue(field, field === "title" ? "title" : field === "body" ? "body" : undefined, { title: "title", body: "body" }),
+      () => changingMappedValue(field, field === "title" ? "title" : field === "body" ? "body" : undefined, { title: "title", body: "body" }),
+    ]);
+    for (const mapper of [() => { throw new Error("mapper"); }, () => ({ title: 1, body: "body" }), () => ({ title: "title", body: 2 }), () => ({ title: "title", body: "body", url: 3 }), ...hostilePushMappers]) {
       const push = createWebPushBoundary(clock, async () => { calls += 1; return { attempted: 0, sent: 0, removed: 0, failed: 0 }; }, mapper as never);
       expect(push.classifyError?.(await captureError(() => push.attempt(input())))?._tag).toBe("invalid_payload");
     }
@@ -103,6 +111,28 @@ describe("current Piclaw delivery boundary factories", () => {
     expect((await sink.publishSnapshot(dto)).ok).toBe(true); expect(calls).toEqual([["agent_snapshot", expect.any(Object), true, true]]);
   });
 
+  test("all current provider factories compose through the current driver with derived certainty", async () => {
+    const callbacks = { timeline: 0, channel: 0, wake: 0, push: 0, pushover: 0 };
+    const timeline = driverFor("timeline_broadcast", createTimelineBroadcastBoundary(clock, () => { callbacks.timeline += 1; }, "agent_status", ({ request }) => ({ chat_jid: request.destinationRef!, delivery_id: request.deliveryIdentity })));
+    const channel = driverFor("channel_delivery", createChannelDeliveryBoundary(clock, async (jid) => { callbacks.channel += 1; expect(jid).toBe("web:chat"); }));
+    const wake = driverFor("wake_chat", createWakeBoundary(clock, (jid) => { callbacks.wake += 1; expect(jid).toBe("web:chat"); }));
+    for (const driver of [timeline, channel, wake]) { const result = await driver.deliver({ ...input().request, destinationRef: "  web:chat  " }); expect(result.ok && result.value.certainty).toBe("applied"); expect(driver.reconcile).toBeUndefined(); }
+
+    const baseDir = mkdtempSync(join(tmpdir(), "piclaw-composed-push-")); tempDirs.push(baseDir);
+    for (const id of [11, 12]) upsertStoredWebPushSubscription({ endpoint: `https://push.example.test/composed/${id}`, expirationTime: null, keys: { auth: `auth-${id}`, p256dh: `key-${id}` } }, { baseDir });
+    const webPush = driverFor("web_push", createWebPushBoundary(clock, (payload) => sendStoredWebPushNotification(payload, { baseDir, presenceService: new WebNotificationPresenceService(), sendNotification: async (subscription) => { callbacks.push += 1; if (subscription.endpoint.endsWith("/11")) throw new Error("partial"); } }), () => ({ title: "Title", body: "Body" })));
+    const pushResult = await webPush.deliver(input().request); expect(pushResult.ok && pushResult.value.certainty).toBe("unknown"); expect(callbacks.push).toBe(2); expect(webPush.reconcile).toBeUndefined();
+
+    const previousFetch = globalThis.fetch; globalThis.fetch = (async () => { callbacks.pushover += 1; return new Response("ok", { status: 200 }); }) as typeof fetch;
+    try {
+      const pushoverChannel = new PushoverChannel({ appToken: "app", userKey: "user" }); const pushover = driverFor("pushover", createPushoverBoundary(clock, pushoverChannel.sendMessage.bind(pushoverChannel)));
+      const success = await pushover.deliver(input().request); expect(success.ok && success.value.certainty).toBe("applied"); expect(success.ok && success.value.receiptRef).toBeNull(); expect(callbacks.pushover).toBe(1); expect(pushover.reconcile).toBeUndefined();
+    } finally { globalThis.fetch = previousFetch; }
+    const generic = driverFor("pushover", createPushoverBoundary(clock, async () => { throw new Error("transport"); })); const genericResult = await generic.deliver(input().request); expect(!genericResult.ok && genericResult.error.certainty).toBe("unknown");
+    const typed = driverFor("pushover", createPushoverBoundary(clock, async () => { throw new Error("rejected"); }, () => ({ _tag: "rejected", certainty: "not_applied", retryable: false }))); const typedResult = await typed.deliver(input().request); expect(!typedResult.ok && typedResult.error._tag).toBe("rejected"); expect(!typedResult.ok && typedResult.error.certainty).toBe("not_applied");
+    expect(callbacks).toEqual({ timeline: 1, channel: 1, wake: 1, push: 2, pushover: 1 });
+  });
+
   test("driver maps fatal decode before callback to bounded invalid_payload", async () => {
     const payloads = new InMemoryEffectPayloadResolver(); payloads.putBytes("p", new Uint8Array([0xc3, 0x28]), "text/plain");
     const boundary = createChannelDeliveryBoundary(clock, async () => { throw new Error("must not run"); }); const runtime = new TestingCurrentPiclawAdapterRuntime({ clock, ids: new SequenceEffectIdSource("boundary"), faults: new DeterministicFaultPlan() });
@@ -110,4 +140,11 @@ describe("current Piclaw delivery boundary factories", () => {
   });
 });
 
+function throwingMappedValue(field: string, value: unknown, other: Record<string, unknown>): Record<string, unknown> { return Object.defineProperty({ ...other }, field, { enumerable: true, get() { throw new Error(`throwing ${field}`); } }); }
+function changingMappedValue(field: string, value: unknown, other: Record<string, unknown>): Record<string, unknown> { let reads = 0; return Object.defineProperty({ ...other }, field, { enumerable: true, get() { reads += 1; return reads === 1 ? value : (() => { throw new Error(`changing ${field}`); })(); } }); }
+function driverFor(kind: DeliveryKind, boundary: DeliveryBoundary): CurrentPiclawDeliveryDriver {
+  const payloads = new InMemoryEffectPayloadResolver(); payloads.putText("p", "hello");
+  const runtime = new TestingCurrentPiclawAdapterRuntime({ clock, ids: new SequenceEffectIdSource(`driver-${kind}`), faults: new DeterministicFaultPlan() });
+  return new CurrentPiclawDeliveryDriver(kind, payloads, () => true, boundary, runtime);
+}
 async function captureError(run: () => Promise<unknown>): Promise<unknown> { try { await run(); return null; } catch (error) { return error; } }

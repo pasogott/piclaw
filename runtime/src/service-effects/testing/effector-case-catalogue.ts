@@ -229,7 +229,7 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
       "unknown requests including hostile or changing getters, missing full AbortSignal shape, whitespace destinations, identity fields, and attempt numbers normalize once or fail before resolver/boundary",
       "semantic payload validation independently rejects a valid tuple before effect",
       "abort during awaited payload resolution consumes no attempt",
-      "injected validator and classifier faults remain bounded",
+      "injected validator non-booleans/throws and classifier faults remain bounded before effect",
       "malformed timestamps, receipts, provider detail/identity and classifier tag/retry combinations stay bounded while provider certainty is derived",
       "mutable resolver bytes are defensively snapshotted before boundary observation and injected provider-specific factories preserve current timeline/channel/Web Push/Pushover/wake shapes",
     ]),
@@ -282,7 +282,7 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
       "reconstructed sink starts without cursors and requires a fresh snapshot with trace continuity",
       "same-generation snapshot cannot reset an established cursor",
       "non-void transport return is unknown and does not advance cursor",
-      "authority predicate faults remain bounded before transport",
+      "authority predicate non-booleans and faults remain bounded before transport",
       "arbitrary malformed runtime inputs including hostile/changing identity, sequence, terminal and array getters normalize to plain deeply frozen DTOs or resolve protected-payload before authority/transport",
     ]),
     faultPoints: [

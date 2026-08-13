@@ -8,6 +8,7 @@ export interface AgentProjectionContractSubject {
   rejectTransportOnce(): void;
   returnAsyncTransportOnce(): void;
   throwAuthorityOnce(predicate: "owner" | "terminal"): void;
+  returnAuthorityOnce(predicate: "owner" | "terminal", value: unknown): void;
   transportCalls(): readonly PublicAgentProjection[];
 }
 
@@ -159,6 +160,12 @@ const cases: readonly ParameterisedContractCase<AgentProjectionContractSubject>[
       await subject.sink.publishSnapshot(snapshot(owner, 1, 1)); const value = terminal(owner, 1, 2); subject.commit(owner, value.terminalCommitRef); subject.throwAuthorityOnce("terminal");
       const terminalFault = await subject.sink.publishTerminal(value);
       assert(!terminalFault.ok && terminalFault.error._tag === "transport_unavailable" && terminalFault.error.certainty === "not_applied", "terminal predicate fault must be bounded");
+      for (const malformed of ["yes", 1, null]) {
+        subject.returnAuthorityOnce("owner", malformed); const ownerResult = await subject.sink.publishSnapshot(snapshot(owner, 2, 0));
+        assert(!ownerResult.ok && ownerResult.error._tag === "transport_unavailable" && ownerResult.error.certainty === "not_applied", "owner authority requires exact boolean");
+        subject.returnAuthorityOnce("terminal", malformed); const terminalResult = await subject.sink.publishTerminal(value);
+        assert(!terminalResult.ok && terminalResult.error._tag === "transport_unavailable" && terminalResult.error.certainty === "not_applied", "terminal authority requires exact boolean");
+      }
     },
   },
   {

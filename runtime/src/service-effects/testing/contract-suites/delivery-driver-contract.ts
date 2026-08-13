@@ -11,6 +11,7 @@ export interface DeliveryDriverContractSubject {
   corruptPayload(kind: "ref" | "length" | "digest" | "mutable" | "semantic"): void;
   holdPayload(): { release(): void; started(): Promise<void> };
   throwValidatorOnce(): void;
+  returnValidatorOnce(value: unknown): void;
   throwClassifierOnce(): void;
   mutateResolverBytesAfterReturn(): Promise<void>;
   observedPayloadBytes(): Uint8Array | null;
@@ -156,7 +157,7 @@ const cases: readonly ParameterisedContractCase<DeliveryDriverContractSubject>[]
     async run({ subject }) {
       const hostileFields = (["outboxId", "destinationRef", "signal", "attempt"] as const).flatMap((field) => [throwingFieldRequest(field), changingFieldRequest(field)]);
       const malformed = [
-        { ...request(), outboxId: "" }, { ...request(), idempotencyKey: "" }, { ...request(), payloadRef: "" }, { ...request(), deliveryIdentity: "" },
+        { ...request(), outboxId: "" }, { ...request(), outboxId: "   " }, { ...request(), idempotencyKey: "" }, { ...request(), idempotencyKey: "   " }, { ...request(), payloadRef: "" }, { ...request(), payloadRef: "   " }, { ...request(), deliveryIdentity: "" }, { ...request(), deliveryIdentity: "   " },
         null, 1, { ...request(), signal: undefined }, { ...request(), signal: { aborted: "no" } }, { ...request(), signal: { aborted: false } },
         { ...request(), destinationRef: "   " }, { ...request(), attempt: Number.NaN }, { ...request(), attempt: 1.5 }, { ...request(), attempt: Number.MAX_SAFE_INTEGER + 1 },
         ...hostileFields,
@@ -190,6 +191,10 @@ const cases: readonly ParameterisedContractCase<DeliveryDriverContractSubject>[]
     async run({ subject }) {
       subject.throwValidatorOnce(); const validation = await subject.driver.deliver(request());
       assert(!validation.ok && validation.error._tag === "invalid_payload" && validation.error.certainty === "not_applied", "validator throw must be bounded pre-effect");
+      for (const malformed of ["yes", 1, null]) {
+        const before = subject.countAttempts(); subject.returnValidatorOnce(malformed); const result = await subject.driver.deliver(request("delivery-validator-result"));
+        assert(!result.ok && result.error._tag === "invalid_payload" && subject.countAttempts() === before, "validator must return exact true before effect");
+      }
       subject.throwClassifierOnce(); subject.scriptError({ _tag: "transport_unavailable", certainty: "unknown", retryable: true });
       const classifier = await subject.driver.deliver(request("delivery-classifier"));
       assert(!classifier.ok && classifier.error._tag === "transport_unavailable" && classifier.error.certainty === "unknown", "classifier throw must be bounded unknown");

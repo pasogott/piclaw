@@ -39,13 +39,20 @@ function textBoundary(clock: EffectClock, kind: "channel_delivery" | "pushover",
 class InvalidBoundaryPayloadError extends Error {}
 function decode(input: DeliveryBoundaryAttempt): string { try { return new TextDecoder("utf-8", { fatal: true }).decode(input.payload.bytes); } catch { throw new InvalidBoundaryPayloadError("delivery payload is not valid UTF-8"); } }
 function mapTimelineEnvelope(mapper: (input: DeliveryBoundaryAttempt) => TimelineDeliveryEnvelope, input: DeliveryBoundaryAttempt): TimelineDeliveryEnvelope {
-  try { const value = mapper(input); if (!value || typeof value !== "object" || Array.isArray(value) || value.chat_jid !== input.request.destinationRef || value.delivery_id !== input.request.deliveryIdentity) throw new Error("invalid timeline envelope"); return Object.freeze({ ...value }); }
-  catch (error) { if (error instanceof InvalidBoundaryPayloadError) throw error; throw new InvalidBoundaryPayloadError("timeline envelope mapper failed"); }
+  try {
+    const value = mapper(input); if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid timeline envelope");
+    const candidate = value as Record<string, unknown>; const entries = Object.entries(candidate); const chatJid = candidate.chat_jid; const deliveryId = candidate.delivery_id;
+    if (candidate.chat_jid !== chatJid || candidate.delivery_id !== deliveryId || chatJid !== input.request.destinationRef || deliveryId !== input.request.deliveryIdentity) throw new Error("invalid timeline envelope");
+    const snapshot = Object.fromEntries(entries); if (snapshot.chat_jid !== chatJid || snapshot.delivery_id !== deliveryId) throw new Error("changing timeline envelope");
+    return Object.freeze(snapshot) as TimelineDeliveryEnvelope;
+  } catch (error) { if (error instanceof InvalidBoundaryPayloadError) throw error; throw new InvalidBoundaryPayloadError("timeline envelope mapper failed"); }
 }
 function mapPayload(mapper: (input: DeliveryBoundaryAttempt) => WebPushNotificationPayload, input: DeliveryBoundaryAttempt): WebPushNotificationPayload {
   try {
-    const value = mapper(input); if (!value || typeof value !== "object" || Array.isArray(value) || typeof value.title !== "string" || typeof value.body !== "string" || !optionalString(value.url) || !optionalString(value.tag) || !optionalString(value.sourceLabel)) throw new Error("invalid mapped payload");
-    return Object.freeze({ title: value.title, body: value.body, ...(value.url === undefined ? {} : { url: value.url }), ...(value.tag === undefined ? {} : { tag: value.tag }), ...(value.sourceLabel === undefined ? {} : { sourceLabel: value.sourceLabel }) });
+    const value = mapper(input); if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid mapped payload");
+    const title = value.title; const body = value.body; const url = value.url; const tag = value.tag; const sourceLabel = value.sourceLabel;
+    if (value.title !== title || value.body !== body || value.url !== url || value.tag !== tag || value.sourceLabel !== sourceLabel || typeof title !== "string" || typeof body !== "string" || !optionalString(url) || !optionalString(tag) || !optionalString(sourceLabel)) throw new Error("invalid mapped payload");
+    return Object.freeze({ title, body, ...(url === undefined ? {} : { url }), ...(tag === undefined ? {} : { tag }), ...(sourceLabel === undefined ? {} : { sourceLabel }) });
   } catch (error) { if (error instanceof InvalidBoundaryPayloadError) throw error; throw new InvalidBoundaryPayloadError("delivery payload mapper failed"); }
 }
 function optionalString(value: unknown): boolean { return value === undefined || typeof value === "string"; }

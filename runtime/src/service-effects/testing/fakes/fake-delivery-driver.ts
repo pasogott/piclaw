@@ -50,7 +50,7 @@ export class FakeDeliveryDriver implements DeliveryDriver {
     }
     const immutablePayload = Object.freeze({ ...payload, bytes: new Uint8Array(payload.bytes) });
     try {
-      if (!this.validatePayload(this.kind, request, immutablePayload)) return this.fail(effectId, Object.freeze({ _tag: "invalid_payload", certainty: "not_applied", retryable: false }));
+      if (this.validatePayload(this.kind, request, immutablePayload) !== true) return this.fail(effectId, Object.freeze({ _tag: "invalid_payload", certainty: "not_applied", retryable: false }));
     } catch {
       return this.fail(effectId, Object.freeze({ _tag: "invalid_payload", certainty: "not_applied", retryable: false }));
     }
@@ -89,8 +89,8 @@ function normaliseRequest(value: unknown): DeliveryAttempt | null {
     const outboxId = candidate.outboxId; const idempotencyKey = candidate.idempotencyKey; const payloadRef = candidate.payloadRef;
     const destinationRef = candidate.destinationRef; const deliveryIdentity = candidate.deliveryIdentity; const attempt = candidate.attempt; const signal = candidate.signal;
     if (candidate.outboxId !== outboxId || candidate.idempotencyKey !== idempotencyKey || candidate.payloadRef !== payloadRef || candidate.destinationRef !== destinationRef || candidate.deliveryIdentity !== deliveryIdentity || candidate.attempt !== attempt || candidate.signal !== signal) return null;
-    if (typeof outboxId !== "string" || outboxId.length === 0 || typeof idempotencyKey !== "string" || idempotencyKey.length === 0 || typeof payloadRef !== "string" || payloadRef.length === 0 || typeof destinationRef !== "string" || typeof deliveryIdentity !== "string" || deliveryIdentity.length === 0 || !Number.isSafeInteger(attempt) || (attempt as number) < 1 || !isAbortSignalCompatible(signal)) return null;
-    return Object.freeze({ outboxId, idempotencyKey, payloadRef, destinationRef, deliveryIdentity, attempt: attempt as number, signal });
+    if (![outboxId, idempotencyKey, payloadRef, destinationRef, deliveryIdentity].every((entry) => typeof entry === "string" && entry.trim().length > 0) || !Number.isSafeInteger(attempt) || (attempt as number) < 1 || !isAbortSignalCompatible(signal)) return null;
+    return Object.freeze({ outboxId: outboxId as string, idempotencyKey: idempotencyKey as string, payloadRef: payloadRef as string, destinationRef: (destinationRef as string).trim(), deliveryIdentity: deliveryIdentity as string, attempt: attempt as number, signal });
   } catch { return null; }
 }
 function isAbortSignalCompatible(value: unknown): value is AbortSignal { return Boolean(value && typeof value === "object" && typeof (value as AbortSignal).aborted === "boolean" && typeof (value as AbortSignal).addEventListener === "function" && typeof (value as AbortSignal).removeEventListener === "function"); }

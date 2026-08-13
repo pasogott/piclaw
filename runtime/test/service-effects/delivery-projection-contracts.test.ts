@@ -64,7 +64,7 @@ interface CurrentDeliverySubject extends DeliveryDriverContractSubject { readonl
 function currentDeliverySubject(kind: DeliveryKind, context: ContractTestContext, external: { attempts: number }, runtime = new TestingCurrentPiclawAdapterRuntime(context)): CurrentDeliverySubject {
   const payloads = new InMemoryEffectPayloadResolver(); payloads.putText("payload:delivery", "safe payload");
   let resolverOverride: (() => ReturnType<InMemoryEffectPayloadResolver["peek"]> | Promise<ReturnType<InMemoryEffectPayloadResolver["peek"]>>) | null = null;
-  let semanticValid = true; let validatorThrows = false; let classifierThrows = false; let observedPayload: Uint8Array | null = null;
+  let semanticValid: unknown = true; let validatorThrows = false; let classifierThrows = false; let observedPayload: Uint8Array | null = null;
   const queue: Array<DeliveryBoundarySuccess | DeliveryDriverError | DelayedBoundary> = [];
   let attempts = 0;
   const boundary: DeliveryBoundary = {
@@ -81,7 +81,7 @@ function currentDeliverySubject(kind: DeliveryKind, context: ContractTestContext
   const resolver = { resolve(ref: string) { return resolverOverride ? resolverOverride() : payloads.resolve(ref); } };
   const driver = new CurrentPiclawDeliveryDriver(kind, resolver, (expected, request, payload) => {
     if (validatorThrows) { validatorThrows = false; throw new Error("validator fault"); }
-    return semanticValid && expected === kind && request.destinationRef !== null && payload.mediaType === "text/plain";
+    const result = semanticValid; semanticValid = true; return result !== true ? result as boolean : expected === kind && request.destinationRef !== null && payload.mediaType === "text/plain";
   }, boundary, runtime);
   return {
     runtime, driver,
@@ -106,7 +106,7 @@ function currentDeliverySubject(kind: DeliveryKind, context: ContractTestContext
       resolverOverride = async () => { startedResolve(); await gate; return payloads.peek("payload:delivery"); };
       return { release, started: () => started };
     },
-    throwValidatorOnce() { validatorThrows = true; }, throwClassifierOnce() { classifierThrows = true; },
+    throwValidatorOnce() { validatorThrows = true; }, returnValidatorOnce(value) { semanticValid = value; }, throwClassifierOnce() { classifierThrows = true; },
     mutateResolverBytesAfterReturn() {
       const payload = payloads.peek("payload:delivery")!; const bytes = new Uint8Array(payload.bytes);
       return new Promise<void>((resolve) => {
@@ -122,10 +122,10 @@ function isDeliveryError(value: unknown): value is DeliveryDriverError { return 
 function fakeDeliverySubject(kind: DeliveryKind, external: { attempts: number }, traceSnapshot: ReturnType<FakeDeliveryDriver["trace"]["snapshot"]> = []): DeliveryDriverContractSubject {
   const payloads = new InMemoryEffectPayloadResolver(); payloads.putText("payload:delivery", "safe payload");
   let resolverOverride: (() => ReturnType<InMemoryEffectPayloadResolver["peek"]> | Promise<ReturnType<InMemoryEffectPayloadResolver["peek"]>>) | null = null;
-  let semanticValid = true; let validatorThrows = false;
+  let semanticValid: unknown = true; let validatorThrows = false;
   const driver = new FakeDeliveryDriver(kind, { resolve(ref) { return resolverOverride ? resolverOverride() : payloads.resolve(ref); } }, (expected, request, payload) => {
     if (validatorThrows) { validatorThrows = false; throw new Error("validator fault"); }
-    return semanticValid && expected === kind && request.destinationRef !== null && payload.mediaType === "text/plain";
+    const result = semanticValid; semanticValid = true; return result !== true ? result as boolean : expected === kind && request.destinationRef !== null && payload.mediaType === "text/plain";
   }, traceSnapshot, () => { external.attempts += 1; });
   const push = (step: ScriptedDeliveryStep) => { driver.script(step); };
   return {
@@ -151,7 +151,7 @@ function fakeDeliverySubject(kind: DeliveryKind, external: { attempts: number },
       resolverOverride = async () => { startedResolve(); await gate; return payloads.peek("payload:delivery"); };
       return { release, started: () => started };
     },
-    throwValidatorOnce() { validatorThrows = true; }, throwClassifierOnce() { driver.throwClassifierOnce(); },
+    throwValidatorOnce() { validatorThrows = true; }, returnValidatorOnce(value) { semanticValid = value; }, throwClassifierOnce() { driver.throwClassifierOnce(); },
     mutateResolverBytesAfterReturn() {
       const payload = payloads.peek("payload:delivery")!; const bytes = new Uint8Array(payload.bytes);
       return new Promise<void>((resolve) => {
@@ -163,9 +163,9 @@ function fakeDeliverySubject(kind: DeliveryKind, external: { attempts: number },
 }
 
 class TestAuthority implements ProjectionAuthority {
-  readonly owners = new Set<string>(); readonly commits = new Set<string>(); throwOwner = false; throwTerminal = false;
-  isCurrentOwner(owner: ProjectionOwner): boolean { if (this.throwOwner) { this.throwOwner = false; throw new Error("owner predicate fault"); } return this.owners.has(ownerKey(owner)); }
-  isCommittedTerminalRef(owner: ProjectionOwner, ref: string): boolean { if (this.throwTerminal) { this.throwTerminal = false; throw new Error("terminal predicate fault"); } return this.commits.has(`${ownerKey(owner)}:${ref}`); }
+  readonly owners = new Set<string>(); readonly commits = new Set<string>(); throwOwner = false; throwTerminal = false; ownerResult: unknown = undefined; terminalResult: unknown = undefined;
+  isCurrentOwner(owner: ProjectionOwner): boolean { if (this.throwOwner) { this.throwOwner = false; throw new Error("owner predicate fault"); } if (this.ownerResult !== undefined) { const result = this.ownerResult; this.ownerResult = undefined; return result as boolean; } return this.owners.has(ownerKey(owner)); }
+  isCommittedTerminalRef(owner: ProjectionOwner, ref: string): boolean { if (this.throwTerminal) { this.throwTerminal = false; throw new Error("terminal predicate fault"); } if (this.terminalResult !== undefined) { const result = this.terminalResult; this.terminalResult = undefined; return result as boolean; } return this.commits.has(`${ownerKey(owner)}:${ref}`); }
 }
 class TestTransport implements ProjectionTransport {
   readonly calls: PublicAgentProjection[] = []; failNext = false; asyncNext = false;
@@ -203,6 +203,7 @@ function projectionSubject(sink: AgentProjectionContractSubject["sink"], authori
     rejectTransportOnce() { if (fake) (sink as FakeAgentProjectionSink).rejectTransportOnce(); else transport.failNext = true; },
     returnAsyncTransportOnce() { if (fake) (sink as FakeAgentProjectionSink).returnAsyncTransportOnce(); else transport.asyncNext = true; },
     throwAuthorityOnce(predicate) { if (predicate === "owner") authority.throwOwner = true; else authority.throwTerminal = true; },
+    returnAuthorityOnce(predicate, value) { if (predicate === "owner") authority.ownerResult = value; else authority.terminalResult = value; },
     transportCalls() { return fake ? (sink as FakeAgentProjectionSink).published : transport.calls; },
   };
 }

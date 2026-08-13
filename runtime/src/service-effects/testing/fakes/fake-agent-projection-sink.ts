@@ -38,10 +38,12 @@ export class FakeAgentProjectionSink implements AgentProjectionSink {
     this.trace.recordCall(trace(method, value, null, "call"));
     let authorized: boolean;
     try { authorized = this.authority.isCurrentOwner(value); } catch { return this.reject(method, value, "transport_unavailable", "not_applied", true); }
+    if (typeof authorized !== "boolean") return this.reject(method, value, "transport_unavailable", "not_applied", true);
     if (!authorized) return this.reject(method, value, "owner_conflict");
     if (value.type === "agent_terminal") {
       let committed: boolean;
       try { committed = this.authority.isCommittedTerminalRef(value, value.terminalCommitRef); } catch { return this.reject(method, value, "transport_unavailable", "not_applied", true); }
+      if (typeof committed !== "boolean") return this.reject(method, value, "transport_unavailable", "not_applied", true);
       if (!committed) return this.reject(method, value, "terminal_not_committed");
     }
     const key = ownerKey(value);

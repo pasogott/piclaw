@@ -50,10 +50,12 @@ export class CurrentPiclawAgentProjectionSink implements AgentProjectionSink {
     this.call(method, projection);
     let authorized: boolean;
     try { authorized = this.authority.isCurrentOwner(projection); } catch { return this.fail(method, projection, "transport_unavailable", "not_applied", true); }
+    if (typeof authorized !== "boolean") return this.fail(method, projection, "transport_unavailable", "not_applied", true);
     if (!authorized) return this.fail(method, projection, "owner_conflict");
     if (projection.type === "agent_terminal") {
       let committed: boolean;
       try { committed = this.authority.isCommittedTerminalRef(projection, projection.terminalCommitRef); } catch { return this.fail(method, projection, "transport_unavailable", "not_applied", true); }
+      if (typeof committed !== "boolean") return this.fail(method, projection, "transport_unavailable", "not_applied", true);
       if (!committed) return this.fail(method, projection, "terminal_not_committed");
     }
 

@@ -42,7 +42,7 @@ export class CurrentPiclawDeliveryDriver implements DeliveryDriver {
     if (!payload) return this.fail(request, "invalid_payload", "not_applied", false);
     const immutablePayload = snapshotPayload(payload);
     try {
-      if (!this.validatePayload(this.kind, request, immutablePayload)) {
+      if (this.validatePayload(this.kind, request, immutablePayload) !== true) {
         return this.fail(request, "invalid_payload", "not_applied", false);
       }
     } catch {
@@ -108,8 +108,8 @@ function normaliseRequest(value: unknown): DeliveryAttempt | null {
     const attempt = candidate.attempt;
     const signal = candidate.signal;
     if (candidate.outboxId !== outboxId || candidate.idempotencyKey !== idempotencyKey || candidate.payloadRef !== payloadRef || candidate.destinationRef !== destinationRef || candidate.deliveryIdentity !== deliveryIdentity || candidate.attempt !== attempt || candidate.signal !== signal) return null;
-    if (!nonEmptyString(outboxId) || !nonEmptyString(idempotencyKey) || !nonEmptyString(payloadRef) || typeof destinationRef !== "string" || !nonEmptyString(deliveryIdentity) || !Number.isSafeInteger(attempt) || (attempt as number) < 1 || !isAbortSignalCompatible(signal)) return null;
-    return Object.freeze({ outboxId, idempotencyKey, payloadRef, destinationRef, deliveryIdentity, attempt: attempt as number, signal });
+    if (!nonBlankString(outboxId) || !nonBlankString(idempotencyKey) || !nonBlankString(payloadRef) || !nonBlankString(destinationRef) || !nonBlankString(deliveryIdentity) || !Number.isSafeInteger(attempt) || (attempt as number) < 1 || !isAbortSignalCompatible(signal)) return null;
+    return Object.freeze({ outboxId, idempotencyKey, payloadRef, destinationRef: destinationRef.trim(), deliveryIdentity, attempt: attempt as number, signal });
   } catch { return null; }
 }
 function isAbortSignalCompatible(value: unknown): value is AbortSignal {
@@ -117,6 +117,7 @@ function isAbortSignalCompatible(value: unknown): value is AbortSignal {
 }
 function safeAborted(signal: AbortSignal): boolean | null { try { return typeof signal.aborted === "boolean" ? signal.aborted : null; } catch { return null; } }
 function nonEmptyString(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
+function nonBlankString(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
 
 const ERROR_TAGS = new Set<DeliveryDriverError["_tag"]>(["invalid_payload", "destination_missing", "rejected", "rate_limited", "timeout", "transport_unavailable", "aborted"]);
 function validClassifiedError(error: DeliveryDriverError | null | undefined): error is DeliveryDriverError {
