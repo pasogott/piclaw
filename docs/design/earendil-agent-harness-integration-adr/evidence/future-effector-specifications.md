@@ -284,6 +284,7 @@ interface BindHarnessRequest {
   lane: string;
   harnessOperationId: string | null;
   state: HarnessCorrelation["state"];
+  watchGeneration: number;
 }
 
 interface RecordQueuedInputRequest {
@@ -302,7 +303,7 @@ interface ListOpenOperationsRequest {
 }
 ```
 
-The coordinator supplies IDs and timestamps. The store validates them and never invents lifecycle identity. `claimNext` selects the lowest pending sequence after `expectedFrontier`; all other eligibility decisions belong to the caller and must already be represented in persisted source state.
+The coordinator supplies IDs and canonical UTC timestamps. The store validates them and never invents lifecycle identity, so EF-S01 has no clock or ID-generation runtime seam. `claimNext` selects the lowest pending sequence after `expectedFrontier`; all other eligibility decisions belong to the caller and must already be represented in persisted source state.
 
 ### Errors
 
@@ -488,7 +489,7 @@ interface ServiceWorkStore {
 | `claimNext` | Compare the expected frontier; claim the first eligible source once; create or return one service operation; increment its version |
 | `appendIntent` | Verify exact operation/version and append one immutable service intent; update the rebuildable current projection |
 | `acceptCancellation` | Persist the first exact-operation cancellation and increment the operation version; repeated equal cancellation returns it; wrong owner is a no-op |
-| `bindHarness` | Store exact `sessionId`, lane and returned Earendil `runId`/operation ID; another run ID is an owner conflict |
+| `bindHarness` | Store exact `sessionId`, lane, returned Earendil `runId` in `harnessOperationId`, and caller-supplied nonnegative `watchGeneration`; any changed binding component is an owner conflict |
 | `recordQueuedInput` | Distinguish accepted-but-undelivered, queued in Earendil and consumed/disposed source states |
 
 `acceptCancellation` records Piclaw authority only. A future coordinator calls direct `lane.abort()` after this mutation succeeds.
@@ -508,7 +509,7 @@ Do not implement this adapter by calling composite cursor helpers. Small additiv
 
 ### Fake and contract tests
 
-`FakeServiceWorkStore` provides injected clock/IDs, a call/result trace, commit barriers and crash snapshot/restore.
+`FakeServiceWorkStore` consumes caller-supplied clock/ID values, provides a call/result trace and commit fault boundaries, and reconstructs only durable fake state on crash/restore; transient fault scripts are not restored.
 
 Required cases:
 

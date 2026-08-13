@@ -4,6 +4,7 @@ import {
   hashCanonicalRequest,
   type NormalisedEffectTrace,
 } from "../../src/service-effects/contracts/common.js";
+import { SERVICE_WORK_STORE_CONTRACT_CASE_NAMES } from "../../src/service-effects/testing/contract-suites/service-work-store-contract.js";
 import {
   runParameterisedContractSuite,
   type ContractSubjectFactory,
@@ -235,6 +236,26 @@ describe("generic parameterised contract-suite lifecycle", () => {
       .toThrow();
   });
 
+  test("disposes the latest subject once on pass and case failure", async () => {
+    let id = 0;
+    const disposed: number[] = [];
+    const factory: ContractSubjectFactory<{ id: number }> = {
+      name: "disposal",
+      create: () => ({ id: ++id }),
+      crashAndRestore: () => ({ subject: { id: ++id }, context: createSampleContext() }),
+      inspectTrace: () => [],
+    };
+    await runParameterisedContractSuite(factory, [{ name: "pass", run: (fixture) => fixture.crashAndRestore() }], createSampleContext, (subject) => void disposed.push(subject.id));
+    expect(disposed).toEqual([2]);
+    expect(runParameterisedContractSuite(factory, [{ name: "fail", run: () => { throw new Error("case failure"); } }], createSampleContext, (subject) => void disposed.push(subject.id))).rejects.toThrow("case failure");
+    expect(disposed).toEqual([2, 3]);
+  });
+
+  test("propagates disposal failure deterministically", async () => {
+    const factory: ContractSubjectFactory<{ id: number }> = { name: "disposal-error", create: () => ({ id: 1 }), crashAndRestore: (subject, context) => ({ subject, context }), inspectTrace: () => [] };
+    expect(runParameterisedContractSuite(factory, [{ name: "pass", run: () => undefined }], createSampleContext, () => { throw new Error("dispose failure"); })).rejects.toThrow("dispose failure");
+  });
+
   test("rejects duplicate case names before creating a subject", async () => {
     let createCount = 0;
     const factory: ContractSubjectFactory<SampleCounterContract> = {
@@ -275,6 +296,15 @@ describe("in-memory payload resolver", () => {
 });
 
 describe("typed effector case catalogue", () => {
+  test("EF-S01 suite maps required cases and labels extras supplementary", () => {
+    const ids = SERVICE_WORK_STORE_CONTRACT_CASE_NAMES.map((name) => name.split(" ", 1)[0]);
+    const catalogue = EFFECTOR_CASE_CATALOGUE.find((entry) => entry.contractId === "EF-S01");
+    expect(catalogue).toBeDefined();
+    expect(ids.filter((id) => /^EF-S01-C\d+$/.test(id))).toEqual(catalogue?.requiredCases.map((entry) => entry.caseId));
+    expect(ids.filter((id) => id === "EF-S01-R01")).toEqual(["EF-S01-R01"]);
+    expect(ids.every((id) => /^EF-S01-(?:C(?:10|[1-9])|R01|S\d{2})$/.test(id))).toBeTrue();
+  });
+
   test("covers EF-S01 through EF-S08 and EF-H01 exactly once", () => {
     expect(() => assertCompleteEffectorCaseCatalogue()).not.toThrow();
     expect(EFFECTOR_CASE_CATALOGUE.map((entry) => entry.contractId)).toEqual(EFFECTOR_CONTRACT_IDS);

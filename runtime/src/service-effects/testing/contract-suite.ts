@@ -45,6 +45,7 @@ export async function runParameterisedContractSuite<TSubject>(
   factory: ContractSubjectFactory<TSubject>,
   cases: readonly ParameterisedContractCase<TSubject>[],
   createContext: () => ContractTestContext,
+  dispose?: (subject: TSubject) => Promise<void> | void,
 ): Promise<readonly ContractCaseResult[]> {
   if (!factory.name) throw new Error("Contract factory name must be non-empty.");
   const names = new Set<string>();
@@ -76,12 +77,16 @@ export async function runParameterisedContractSuite<TSubject>(
         return factory.inspectTrace(subject);
       },
     };
-    await contractCase.run(fixture);
-    results.push(Object.freeze({
-      factoryName: factory.name,
-      caseName: contractCase.name,
-      trace: freezeTraceSnapshot(fixture.inspectTrace()),
-    }));
+    try {
+      await contractCase.run(fixture);
+      results.push(Object.freeze({
+        factoryName: factory.name,
+        caseName: contractCase.name,
+        trace: freezeTraceSnapshot(fixture.inspectTrace()),
+      }));
+    } finally {
+      await dispose?.(subject);
+    }
   }
 
   return Object.freeze(results);

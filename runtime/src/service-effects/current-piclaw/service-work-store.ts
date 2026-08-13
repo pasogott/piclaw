@@ -1,0 +1,1701 @@
+import {
+  Result,
+  type Result as ResultValue,
+} from "@earendil-works/pi-agent-core";
+import type Database from "bun:sqlite";
+
+import type { NormalisedTraceInput } from "../contracts/common.js";
+import type {
+  AcceptCancellationRequest,
+  AcceptedSourceSnapshot,
+  AcceptSourceRequest,
+  AppendOperationIntentRequest,
+  BindHarnessRequest,
+  ChatFrontierSnapshot,
+  ClaimedOperation,
+  ClaimNextSourceRequest,
+  HarnessCorrelation,
+  ListOpenOperationsRequest,
+  OperationSnapshot,
+  QueuedInputState,
+  RecordQueuedInputRequest,
+  ServiceWorkError,
+  ServiceWorkErrorTag,
+  ServiceWorkStore,
+} from "../contracts/service-work-store.js";
+import {
+  normaliseListRequest,
+  normaliseMutationRequest,
+  normaliseReadIdentifier,
+  semanticIntentHash,
+  semanticSourceHash,
+  type MutationMethod,
+  type NormalisedMutationRequest,
+} from "./service-work-request-normalizer.js";
+
+export interface ServiceWorkAdapterRuntime {
+  hitFault(
+    point: "before_effect" | "effect_then_lost_acknowledgement",
+    method: MutationMethod,
+  ): unknown;
+  recordTrace(input: NormalisedTraceInput): void;
+}
+
+type MutationRequest = NormalisedMutationRequest;
+type MutationOutcome<T> =
+  | { readonly ok: true; readonly value: T; readonly duplicate: boolean }
+  | { readonly ok: false; readonly error: ServiceWorkError };
+
+type StoredDecision =
+  | {
+      readonly kind: "source";
+      readonly chatJid: string;
+      readonly sourceSeq: number;
+      readonly state: AcceptedSourceSnapshot["state"];
+    }
+  | { readonly kind: "operation"; readonly operation: OperationSnapshot }
+  | {
+      readonly kind: "claim";
+      readonly chatJid: string;
+      readonly sourceSeq: number;
+      readonly sourceState: "claimed";
+      readonly operation: OperationSnapshot;
+    }
+  | { readonly kind: "empty" };
+
+interface SourceRow {
+  chat_jid: string;
+  source_seq: number;
+  source_id: string;
+  source_hash: string;
+  kind: AcceptedSourceSnapshot["kind"];
+  state: AcceptedSourceSnapshot["state"];
+  payload_ref: string;
+  target_operation_id: string | null;
+  parent_source_seq: number | null;
+  accepted_at: string;
+  disposition_reason: string | null;
+  provenance_ref: string;
+}
+
+interface OperationRow {
+  operation_id: string;
+  chat_jid: string;
+  version: number;
+  phase: OperationSnapshot["phase"];
+  primary_source_seq: number;
+  cancellation_source_id: string | null;
+  cancellation_source_seq: number | null;
+  cancellation_cause: string | null;
+  cancellation_requested_at: string | null;
+  harness_session_id: string | null;
+  harness_lane: string | null;
+  harness_operation_id: string | null;
+  harness_state: HarnessCorrelation["state"] | null;
+  harness_watch_generation: number | null;
+  terminal_disposition: string | null;
+  terminal_message_row_id: number | null;
+  terminal_error_code: string | null;
+  terminal_committed_at: string | null;
+}
+
+export type ServiceWorkStoreConstructionResult = ResultValue<
+  CurrentPiclawServiceWorkStore,
+  ServiceWorkError
+>;
+
+/**
+ * Construct only after explicit successful `installServiceWorkSchema` setup.
+ * This bounded helper prevents SQLite/setup exception text crossing the effector boundary.
+ */
+export function createCurrentPiclawServiceWorkStore(
+  database: Database,
+  runtime: ServiceWorkAdapterRuntime,
+): ServiceWorkStoreConstructionResult {
+  return CurrentPiclawServiceWorkStore.create(database, runtime);
+}
+
+export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
+  static create(
+    database: Database,
+    runtime: ServiceWorkAdapterRuntime,
+  ): ServiceWorkStoreConstructionResult {
+    try {
+      return Result.ok(new CurrentPiclawServiceWorkStore(database, runtime));
+    } catch (caught) {
+      void caught;
+      return Result.err(
+        serviceError("storage_unavailable", "not_applied", true),
+      );
+    }
+  }
+
+  private constructor(
+    readonly database: Database,
+    private readonly runtime: ServiceWorkAdapterRuntime,
+  ) {
+    const foreignKeys = database.query("PRAGMA foreign_keys").get() as
+      { foreign_keys?: number } | undefined;
+    if (foreignKeys?.foreign_keys !== 1) {
+      throw new Error("EF-S01 requires SQLite foreign-key enforcement.");
+    }
+    database.exec("PRAGMA busy_timeout = 5000");
+  }
+
+  acceptSource(
+    input: AcceptSourceRequest,
+  ): Promise<ResultValue<AcceptedSourceSnapshot, ServiceWorkError>> {
+    return this.mutate("acceptSource", input, (request) =>
+      this.applyAcceptSource(request as AcceptSourceRequest),
+    );
+  }
+
+  claimNext(
+    input: ClaimNextSourceRequest,
+  ): Promise<ResultValue<ClaimedOperation | null, ServiceWorkError>> {
+    return this.mutate("claimNext", input, (request) =>
+      this.applyClaimNext(request as ClaimNextSourceRequest),
+    );
+  }
+
+  appendIntent(
+    input: AppendOperationIntentRequest,
+  ): Promise<ResultValue<OperationSnapshot, ServiceWorkError>> {
+    return this.mutate("appendIntent", input, (request) =>
+      this.applyAppendIntent(request as AppendOperationIntentRequest),
+    );
+  }
+
+  acceptCancellation(
+    input: AcceptCancellationRequest,
+  ): Promise<ResultValue<OperationSnapshot, ServiceWorkError>> {
+    return this.mutate("acceptCancellation", input, (request) =>
+      this.applyCancellation(request as AcceptCancellationRequest),
+    );
+  }
+
+  bindHarness(
+    input: BindHarnessRequest,
+  ): Promise<ResultValue<OperationSnapshot, ServiceWorkError>> {
+    return this.mutate("bindHarness", input, (request) =>
+      this.applyHarnessBinding(request as BindHarnessRequest),
+    );
+  }
+
+  recordQueuedInput(
+    input: RecordQueuedInputRequest,
+  ): Promise<ResultValue<OperationSnapshot, ServiceWorkError>> {
+    return this.mutate("recordQueuedInput", input, (request) =>
+      this.applyQueuedInput(request as RecordQueuedInputRequest),
+    );
+  }
+
+  getOperation(
+    operationId: string,
+  ): Promise<ResultValue<OperationSnapshot | null, ServiceWorkError>> {
+    const id = normaliseReadIdentifier(operationId);
+    return this.read("getOperation", id, () =>
+      id === null ? invalidRead() : this.operationSnapshot(id),
+    );
+  }
+
+  getChatFrontier(
+    chatJid: string,
+  ): Promise<ResultValue<ChatFrontierSnapshot, ServiceWorkError>> {
+    const id = normaliseReadIdentifier(chatJid);
+    return this.read("getChatFrontier", id, () => {
+      if (id === null) return invalidRead();
+      this.ensureChat(id);
+      const chat = this.chatRow(id);
+      const pending = this.database
+        .query(
+          `
+        SELECT MIN(source_seq) AS source_seq
+        FROM service_effect_s01_sources
+        WHERE chat_jid = ? AND state = 'pending'
+      `,
+        )
+        .get(id) as { source_seq?: unknown } | undefined;
+      const nextPendingSourceSeq = nullableInteger(pending?.source_seq, 1);
+      return Object.freeze({
+        chatJid: id,
+        consumedThroughSourceSeq: chat.consumedThroughSourceSeq,
+        activeOperationId: chat.activeOperationId,
+        nextPendingSourceSeq,
+      });
+    });
+  }
+
+  listOpenOperations(
+    input: ListOpenOperationsRequest = {},
+  ): Promise<ResultValue<readonly OperationSnapshot[], ServiceWorkError>> {
+    const request = normaliseListRequest(input);
+    return this.read("listOpenOperations", "list", () => {
+      if (request === null) return invalidRead();
+      const rows = this.database
+        .query(
+          `
+        SELECT operation_id
+        FROM service_effect_s01_operations
+        WHERE phase <> 'terminal'
+          AND (? IS NULL OR chat_jid = ?)
+          AND operation_id > ?
+        ORDER BY operation_id
+        LIMIT ?
+      `,
+        )
+        .all(
+          request.chatJid ?? null,
+          request.chatJid ?? null,
+          request.afterOperationId ?? "",
+          request.limit ?? 100,
+        ) as Array<{ operation_id?: unknown }>;
+      return Object.freeze(
+        rows.map((row) => {
+          const id = requiredText(row.operation_id);
+          const operation = this.operationSnapshot(id);
+          if (!operation) throw new CorruptStateError();
+          return operation;
+        }),
+      );
+    });
+  }
+
+  private applyAcceptSource(
+    request: AcceptSourceRequest,
+  ): MutationOutcome<AcceptedSourceSnapshot> {
+    this.ensureChat(request.chatJid);
+    const known = this.database
+      .query(
+        `
+      SELECT * FROM service_effect_s01_sources WHERE chat_jid = ? AND source_id = ?
+    `,
+      )
+      .get(request.chatJid, request.sourceId) as
+      Record<string, unknown> | undefined;
+    if (known) {
+      const row = sourceRow(known);
+      return row.source_hash === semanticSourceHash(request)
+        ? this.applied(sourceSnapshot(row), true)
+        : this.rejected("idempotency_conflict");
+    }
+    if (
+      request.parentSourceSeq !== null &&
+      !this.sourceRow(request.chatJid, request.parentSourceSeq)
+    ) {
+      return this.rejected("not_found");
+    }
+    if (request.targetOperationId !== null) {
+      const target = this.operationRow(request.targetOperationId);
+      if (
+        !target ||
+        target.chat_jid !== request.chatJid ||
+        target.phase === "terminal"
+      ) {
+        return this.rejected("owner_conflict", {
+          conflictingOperationId: request.targetOperationId,
+        });
+      }
+    }
+
+    const chat = this.chatRow(request.chatJid);
+    const sourceSeq = chat.nextSourceSeq;
+    const allocation = this.database
+      .query(
+        `
+      UPDATE service_effect_s01_chats
+      SET next_source_seq = next_source_seq + 1
+      WHERE chat_jid = ? AND next_source_seq = ?
+    `,
+      )
+      .run(request.chatJid, sourceSeq);
+    if (allocation.changes !== 1)
+      return this.rejected("frontier_mismatch", {
+        observedFrontier: chat.consumedThroughSourceSeq,
+      });
+
+    this.database
+      .query(
+        `
+      INSERT INTO service_effect_s01_sources (
+        chat_jid, source_seq, source_id, source_hash, kind, state, payload_ref,
+        target_operation_id, parent_source_seq, accepted_at, disposition_reason,
+        provenance_ref, create_wake_intent
+      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, NULL, ?, ?)
+    `,
+      )
+      .run(
+        request.chatJid,
+        sourceSeq,
+        request.sourceId,
+        semanticSourceHash(request),
+        request.kind,
+        request.payloadRef,
+        request.targetOperationId,
+        request.parentSourceSeq,
+        request.acceptedAt,
+        request.effect.provenanceRef,
+        request.createWakeIntent ? 1 : 0,
+      );
+    if (request.createWakeIntent) {
+      this.database
+        .query(
+          `
+        INSERT INTO service_effect_s01_wake_intents(chat_jid, source_seq) VALUES (?, ?)
+      `,
+        )
+        .run(request.chatJid, sourceSeq);
+    }
+    return this.applied(
+      sourceSnapshot(this.requireSourceRow(request.chatJid, sourceSeq)),
+      false,
+    );
+  }
+
+  private applyClaimNext(
+    request: ClaimNextSourceRequest,
+  ): MutationOutcome<ClaimedOperation | null> {
+    this.ensureChat(request.chatJid);
+    const chat = this.chatRow(request.chatJid);
+    if (chat.consumedThroughSourceSeq !== request.expectedFrontier) {
+      return this.rejected("frontier_mismatch", {
+        observedFrontier: chat.consumedThroughSourceSeq,
+      });
+    }
+    if (chat.activeOperationId) {
+      return this.rejected("owner_conflict", {
+        conflictingOperationId: chat.activeOperationId,
+      });
+    }
+    const candidate = this.database
+      .query(
+        `
+      SELECT * FROM service_effect_s01_sources
+      WHERE chat_jid = ? AND state = 'pending' AND source_seq > ?
+      ORDER BY source_seq LIMIT 1
+    `,
+      )
+      .get(request.chatJid, request.expectedFrontier) as
+      Record<string, unknown> | undefined;
+    if (!candidate) return this.applied(null, false);
+    const source = sourceRow(candidate);
+    if (this.operationRow(request.newOperationId)) {
+      return this.rejected("owner_conflict", {
+        conflictingOperationId: request.newOperationId,
+      });
+    }
+
+    const claim = this.database
+      .query(
+        `
+      UPDATE service_effect_s01_sources SET state = 'claimed'
+      WHERE chat_jid = ? AND source_seq = ? AND state = 'pending'
+    `,
+      )
+      .run(request.chatJid, source.source_seq);
+    if (claim.changes !== 1) return this.rejected("owner_conflict");
+
+    this.database
+      .query(
+        `
+      INSERT INTO service_effect_s01_operations(operation_id, chat_jid, version, phase, primary_source_seq)
+      VALUES (?, ?, 1, 'claimed', ?)
+    `,
+      )
+      .run(request.newOperationId, request.chatJid, source.source_seq);
+    this.database
+      .query(
+        `
+      INSERT INTO service_effect_s01_operation_sources(chat_jid, operation_id, source_seq)
+      VALUES (?, ?, ?)
+    `,
+      )
+      .run(request.chatJid, request.newOperationId, source.source_seq);
+    const owner = this.database
+      .query(
+        `
+      UPDATE service_effect_s01_chats SET active_operation_id = ?
+      WHERE chat_jid = ? AND active_operation_id IS NULL
+    `,
+      )
+      .run(request.newOperationId, request.chatJid);
+    if (owner.changes !== 1) return this.rejected("owner_conflict");
+
+    const claimed = sourceSnapshot(
+      this.requireSourceRow(request.chatJid, source.source_seq),
+    );
+    const operation = this.requireOperationSnapshot(request.newOperationId);
+    return this.applied(Object.freeze({ source: claimed, operation }), false);
+  }
+
+  private applyAppendIntent(
+    request: AppendOperationIntentRequest,
+  ): MutationOutcome<OperationSnapshot> {
+    const row = this.operationRow(request.effect.operationId);
+    if (!row) return this.rejected("not_found");
+    if (row.phase === "terminal")
+      return this.rejected("owner_conflict", {
+        conflictingOperationId: row.operation_id,
+      });
+    const known = this.database
+      .query(
+        `
+      SELECT intent_hash FROM service_effect_s01_intents WHERE operation_id = ? AND intent_id = ?
+    `,
+      )
+      .get(request.effect.operationId, request.intentId) as
+      { intent_hash?: unknown } | undefined;
+    if (known) {
+      return requiredHash(known.intent_hash) === semanticIntentHash(request)
+        ? this.applied(
+            this.requireOperationSnapshot(request.effect.operationId),
+            true,
+          )
+        : this.rejected("idempotency_conflict");
+    }
+    if (row.version !== request.expectedVersion)
+      return this.rejected("version_mismatch", {
+        observedVersion: row.version,
+      });
+    this.database
+      .query(
+        `
+      INSERT INTO service_effect_s01_intents(operation_id, intent_id, intent_hash, kind, payload_ref, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `,
+      )
+      .run(
+        request.effect.operationId,
+        request.intentId,
+        semanticIntentHash(request),
+        request.kind,
+        request.payloadRef,
+        request.createdAt,
+      );
+    if (!this.bumpVersion(request.effect.operationId, request.expectedVersion))
+      return this.rejected("version_mismatch");
+    return this.applied(
+      this.requireOperationSnapshot(request.effect.operationId),
+      false,
+    );
+  }
+
+  private applyCancellation(
+    request: AcceptCancellationRequest,
+  ): MutationOutcome<OperationSnapshot> {
+    const row = this.operationRow(request.effect.operationId);
+    if (!row) return this.rejected("not_found");
+    if (row.phase === "terminal")
+      return this.rejected("owner_conflict", {
+        conflictingOperationId: row.operation_id,
+      });
+    if (row.cancellation_source_seq !== null) {
+      const equal =
+        row.cancellation_source_id === request.sourceId &&
+        row.cancellation_source_seq === request.sourceSeq &&
+        row.cancellation_cause === request.cause &&
+        row.cancellation_requested_at === request.requestedAt;
+      return equal
+        ? this.applied(this.requireOperationSnapshot(row.operation_id), true)
+        : this.rejected("owner_conflict", {
+            conflictingOperationId: row.operation_id,
+          });
+    }
+    if (row.version !== request.expectedVersion)
+      return this.rejected("version_mismatch", {
+        observedVersion: row.version,
+      });
+    const source = this.sourceRow(row.chat_jid, request.sourceSeq);
+    if (
+      !source ||
+      source.source_id !== request.sourceId ||
+      source.target_operation_id !== row.operation_id
+    ) {
+      return this.rejected("owner_conflict", {
+        conflictingOperationId: row.operation_id,
+      });
+    }
+    const update = this.database
+      .query(
+        `
+      UPDATE service_effect_s01_operations
+      SET cancellation_source_id = ?, cancellation_source_seq = ?, cancellation_cause = ?,
+          cancellation_requested_at = ?, phase = 'cancelling', version = version + 1
+      WHERE operation_id = ? AND version = ? AND phase <> 'terminal' AND cancellation_source_seq IS NULL
+    `,
+      )
+      .run(
+        request.sourceId,
+        request.sourceSeq,
+        request.cause,
+        request.requestedAt,
+        row.operation_id,
+        request.expectedVersion,
+      );
+    if (update.changes !== 1)
+      return this.rejected("version_mismatch", {
+        observedVersion: this.requireOperationRow(row.operation_id).version,
+      });
+    return this.applied(this.requireOperationSnapshot(row.operation_id), false);
+  }
+
+  private applyHarnessBinding(
+    request: BindHarnessRequest,
+  ): MutationOutcome<OperationSnapshot> {
+    const row = this.operationRow(request.effect.operationId);
+    if (!row) return this.rejected("not_found");
+    if (row.phase === "terminal")
+      return this.rejected("owner_conflict", {
+        conflictingOperationId: row.operation_id,
+      });
+    if (row.harness_session_id !== null) {
+      const equal =
+        row.harness_session_id === request.sessionId &&
+        row.harness_lane === request.lane &&
+        row.harness_operation_id === request.harnessOperationId &&
+        row.harness_state === request.state &&
+        row.harness_watch_generation === request.watchGeneration;
+      return equal
+        ? this.applied(this.requireOperationSnapshot(row.operation_id), true)
+        : this.rejected("owner_conflict", {
+            conflictingOperationId: row.operation_id,
+          });
+    }
+    if (row.version !== request.expectedVersion)
+      return this.rejected("version_mismatch", {
+        observedVersion: row.version,
+      });
+    const update = this.database
+      .query(
+        `
+      UPDATE service_effect_s01_operations
+      SET harness_session_id = ?, harness_lane = ?, harness_operation_id = ?, harness_state = ?,
+          harness_watch_generation = ?, phase = ?, version = version + 1
+      WHERE operation_id = ? AND version = ? AND phase <> 'terminal' AND harness_session_id IS NULL
+    `,
+      )
+      .run(
+        request.sessionId,
+        request.lane,
+        request.harnessOperationId,
+        request.state,
+        request.watchGeneration,
+        phaseForHarness(request.state),
+        row.operation_id,
+        request.expectedVersion,
+      );
+    if (update.changes !== 1)
+      return this.rejected("version_mismatch", {
+        observedVersion: this.requireOperationRow(row.operation_id).version,
+      });
+    return this.applied(this.requireOperationSnapshot(row.operation_id), false);
+  }
+
+  private applyQueuedInput(
+    request: RecordQueuedInputRequest,
+  ): MutationOutcome<OperationSnapshot> {
+    const checked = this.requireMutableVersion(
+      request.effect.operationId,
+      request.expectedVersion,
+    );
+    if (!checked.ok) return checked;
+    const operation = checked.row;
+    const source = this.sourceRow(operation.chat_jid, request.sourceSeq);
+    if (!source) return this.rejected("not_found");
+    if (
+      source.target_operation_id !== operation.operation_id &&
+      source.source_seq !== operation.primary_source_seq
+    ) {
+      return this.rejected("owner_conflict", {
+        conflictingOperationId:
+          source.target_operation_id ?? operation.operation_id,
+      });
+    }
+
+    const known = this.database
+      .query(
+        `
+      SELECT queue_kind, harness_entry_id, state
+      FROM service_effect_s01_queued_inputs
+      WHERE operation_id = ? AND source_seq = ?
+    `,
+      )
+      .get(operation.operation_id, request.sourceSeq) as
+      | { queue_kind?: unknown; harness_entry_id?: unknown; state?: unknown }
+      | undefined;
+
+    if (!known) {
+      if (
+        request.state !== "accepted" ||
+        request.harnessEntryId !== null ||
+        source.state !== "pending"
+      ) {
+        return this.rejected("invalid_transition");
+      }
+      const existingMembership = this.database
+        .query(
+          `
+        SELECT operation_id FROM service_effect_s01_operation_sources WHERE chat_jid = ? AND source_seq = ?
+      `,
+        )
+        .get(operation.chat_jid, request.sourceSeq) as
+        { operation_id?: unknown } | undefined;
+      if (
+        existingMembership &&
+        requiredText(existingMembership.operation_id) !== operation.operation_id
+      ) {
+        return this.rejected("owner_conflict", {
+          conflictingOperationId: requiredText(existingMembership.operation_id),
+        });
+      }
+      if (!existingMembership) {
+        const membership = this.database
+          .query(
+            `
+          INSERT INTO service_effect_s01_operation_sources(chat_jid, operation_id, source_seq)
+          VALUES (?, ?, ?)
+        `,
+          )
+          .run(operation.chat_jid, operation.operation_id, request.sourceSeq);
+        if (membership.changes !== 1) return this.rejected("owner_conflict");
+      }
+      const sourceUpdate = this.database
+        .query(
+          `
+        UPDATE service_effect_s01_sources SET state = 'claimed'
+        WHERE chat_jid = ? AND source_seq = ? AND state = 'pending'
+      `,
+        )
+        .run(operation.chat_jid, request.sourceSeq);
+      if (sourceUpdate.changes !== 1)
+        return this.rejected("invalid_transition");
+      this.database
+        .query(
+          `
+        INSERT INTO service_effect_s01_queued_inputs(
+          chat_jid, operation_id, source_seq, queue_kind, harness_entry_id, state
+        ) VALUES (?, ?, ?, ?, NULL, 'accepted')
+      `,
+        )
+        .run(
+          operation.chat_jid,
+          operation.operation_id,
+          request.sourceSeq,
+          request.queueKind,
+        );
+    } else {
+      const priorState = queueState(known.state);
+      const priorKind = queueKind(known.queue_kind);
+      const priorEntry = nullableText(known.harness_entry_id);
+      if (
+        priorKind !== request.queueKind ||
+        !queueTransition(priorState, request.state) ||
+        !validQueueEntryTransition(
+          priorState,
+          priorEntry,
+          request.state,
+          request.harnessEntryId,
+        ) ||
+        source.state !== sourceStateForQueue(priorState)
+      ) {
+        return this.rejected("invalid_transition");
+      }
+      const queueUpdate = this.database
+        .query(
+          `
+        UPDATE service_effect_s01_queued_inputs SET state = ?, harness_entry_id = ?
+        WHERE operation_id = ? AND source_seq = ? AND state = ?
+      `,
+        )
+        .run(
+          request.state,
+          request.harnessEntryId,
+          operation.operation_id,
+          request.sourceSeq,
+          priorState,
+        );
+      if (queueUpdate.changes !== 1) return this.rejected("invalid_transition");
+      const sourceUpdate = this.database
+        .query(
+          `
+        UPDATE service_effect_s01_sources SET state = ?
+        WHERE chat_jid = ? AND source_seq = ? AND state = ?
+      `,
+        )
+        .run(
+          sourceStateForQueue(request.state),
+          operation.chat_jid,
+          request.sourceSeq,
+          sourceStateForQueue(priorState),
+        );
+      if (sourceUpdate.changes !== 1) return this.rejected("corrupt_state");
+    }
+    if (!this.bumpVersion(operation.operation_id, request.expectedVersion))
+      return this.rejected("version_mismatch");
+    return this.applied(
+      this.requireOperationSnapshot(operation.operation_id),
+      false,
+    );
+  }
+
+  private async mutate<T>(
+    method: MutationMethod,
+    input: unknown,
+    apply: (request: MutationRequest) => MutationOutcome<T>,
+  ): Promise<ResultValue<T, ServiceWorkError>> {
+    const request = normaliseMutationRequest(method, input);
+    const effect = request?.effect;
+    this.trace(
+      method,
+      effect?.idempotencyKey ?? "invalid",
+      effect?.operationId ?? null,
+      effect?.sourceSeq ?? null,
+      null,
+      "call",
+    );
+    if (!request || !effect)
+      return this.fail(method, effect, serviceError("invalid_transition"));
+
+    const beforeFault = this.fault(method, "before_effect");
+    if (!beforeFault.ok) return this.fail(method, effect, beforeFault.error);
+    if (beforeFault.injected)
+      return this.fail(
+        method,
+        effect,
+        serviceError("storage_unavailable", "not_applied", true),
+      );
+
+    try {
+      const outcome = this.database
+        .transaction(() => {
+          const replay = this.readDecision<T>(
+            method,
+            effect.idempotencyKey,
+            effect.requestHash,
+          );
+          if (replay) return replay;
+          const value = apply(request);
+          if (!value.ok) return value;
+          const transactionFault = this.fault(method, "before_effect");
+          if (!transactionFault.ok || transactionFault.injected)
+            throw new RollbackFault();
+          this.writeDecision(
+            method,
+            effect.idempotencyKey,
+            effect.requestHash,
+            value.value,
+          );
+          return value;
+        })
+        .immediate();
+      if (!outcome.ok) return this.fail(method, effect, outcome.error);
+
+      const acknowledgementFault = this.fault(
+        method,
+        "effect_then_lost_acknowledgement",
+      );
+      if (acknowledgementFault.ok && acknowledgementFault.injected) {
+        return this.fail(
+          method,
+          effect,
+          serviceError("storage_unavailable", "unknown", true),
+        );
+      }
+      // Invalid acknowledgement observers cannot make a known commit uncertain.
+      return this.success(
+        method,
+        effect,
+        outcome.value,
+        outcome.duplicate ? "duplicate" : "ok",
+      );
+    } catch (cause) {
+      const error =
+        cause instanceof CorruptStateError
+          ? serviceError("corrupt_state")
+          : isBusy(cause)
+            ? serviceError("storage_unavailable", "not_applied", true)
+            : serviceError("corrupt_state");
+      return this.fail(method, effect, error);
+    }
+  }
+
+  private async read<T>(
+    method: string,
+    effectId: string | null,
+    run: () => T | { readonly invalid: true },
+  ): Promise<ResultValue<T, ServiceWorkError>> {
+    this.trace(method, effectId ?? "invalid", null, null, null, "call");
+    try {
+      const value = run();
+      if (isInvalidRead(value)) {
+        const error = serviceError("invalid_transition");
+        this.trace(
+          method,
+          effectId ?? "invalid",
+          null,
+          null,
+          null,
+          error._tag,
+          error.certainty,
+        );
+        return Result.err(error);
+      }
+      this.trace(
+        method,
+        effectId ?? "invalid",
+        null,
+        null,
+        null,
+        "ok",
+        "applied",
+      );
+      return Result.ok(value);
+    } catch (cause) {
+      const error =
+        cause instanceof CorruptStateError
+          ? serviceError("corrupt_state")
+          : isBusy(cause)
+            ? serviceError("storage_unavailable", "not_applied", true)
+            : serviceError("corrupt_state");
+      this.trace(
+        method,
+        effectId ?? "invalid",
+        null,
+        null,
+        null,
+        error._tag,
+        error.certainty,
+      );
+      return Result.err(error);
+    }
+  }
+
+  private readDecision<T>(
+    method: MutationMethod,
+    key: string,
+    hash: string,
+  ): MutationOutcome<T> | null {
+    const raw = this.database
+      .query(
+        `
+      SELECT method, request_hash, result_json
+      FROM service_effect_s01_decisions WHERE idempotency_key = ?
+    `,
+      )
+      .get(key) as
+      | { method?: unknown; request_hash?: unknown; result_json?: unknown }
+      | undefined;
+    if (!raw) {
+      const reused = this.database
+        .query(
+          `SELECT method FROM service_effect_s01_decisions WHERE idempotency_key = ?`,
+        )
+        .get(key) as { method?: unknown } | undefined;
+      if (reused && requiredText(reused.method) !== method)
+        return this.rejected("idempotency_conflict");
+      return null;
+    }
+    if (
+      requiredText(raw.method) !== method ||
+      requiredHash(raw.request_hash) !== hash
+    ) {
+      return this.rejected("idempotency_conflict");
+    }
+    if (typeof raw.result_json !== "string")
+      return this.rejected("corrupt_state");
+    try {
+      const stored = normaliseStoredDecision(JSON.parse(raw.result_json));
+      return this.applied(this.materialiseDecision(stored, method) as T, true);
+    } catch (caught) {
+      void caught;
+      return this.rejected("corrupt_state");
+    }
+  }
+
+  private writeDecision(
+    method: MutationMethod,
+    key: string,
+    hash: string,
+    value: unknown,
+  ): void {
+    const decision = decisionForValue(value);
+    this.database
+      .query(
+        `
+      INSERT INTO service_effect_s01_decisions(idempotency_key, method, request_hash, result_json)
+      VALUES (?, ?, ?, ?)
+    `,
+      )
+      .run(key, method, hash, JSON.stringify(decision));
+  }
+
+  private materialiseDecision(
+    decision: StoredDecision,
+    method: MutationMethod,
+  ): unknown {
+    if (decision.kind === "empty") return null;
+    if (decision.kind === "operation")
+      return method === "claimNext"
+        ? this.claimFromOperation(decision.operation)
+        : decision.operation;
+    const source = sourceSnapshot(
+      this.requireSourceRow(decision.chatJid, decision.sourceSeq),
+      decision.kind === "claim" ? decision.sourceState : decision.state,
+    );
+    if (decision.kind === "source") return source;
+    return Object.freeze({ source, operation: decision.operation });
+  }
+
+  private claimFromOperation(operation: OperationSnapshot): ClaimedOperation {
+    const source = sourceSnapshot(
+      this.requireSourceRow(operation.chatJid, operation.primarySourceSeq),
+      "claimed",
+    );
+    return Object.freeze({ source, operation });
+  }
+
+  private ensureChat(chatJid: string): void {
+    this.database
+      .query(
+        `INSERT OR IGNORE INTO service_effect_s01_chats(chat_jid) VALUES (?)`,
+      )
+      .run(chatJid);
+  }
+
+  private chatRow(chatJid: string): {
+    nextSourceSeq: number;
+    consumedThroughSourceSeq: number;
+    activeOperationId: string | null;
+  } {
+    const raw = this.database
+      .query(
+        `
+      SELECT next_source_seq, consumed_through_source_seq, active_operation_id
+      FROM service_effect_s01_chats WHERE chat_jid = ?
+    `,
+      )
+      .get(chatJid) as
+      | {
+          next_source_seq?: unknown;
+          consumed_through_source_seq?: unknown;
+          active_operation_id?: unknown;
+        }
+      | undefined;
+    if (!raw) throw new CorruptStateError();
+    return {
+      nextSourceSeq: requiredInteger(raw.next_source_seq, 1),
+      consumedThroughSourceSeq: requiredInteger(
+        raw.consumed_through_source_seq,
+        0,
+      ),
+      activeOperationId: nullableText(raw.active_operation_id),
+    };
+  }
+
+  private sourceRow(chatJid: string, sourceSeq: number): SourceRow | undefined {
+    const raw = this.database
+      .query(
+        `
+      SELECT * FROM service_effect_s01_sources WHERE chat_jid = ? AND source_seq = ?
+    `,
+      )
+      .get(chatJid, sourceSeq) as Record<string, unknown> | undefined;
+    return raw ? sourceRow(raw) : undefined;
+  }
+
+  private requireSourceRow(chatJid: string, sourceSeq: number): SourceRow {
+    const row = this.sourceRow(chatJid, sourceSeq);
+    if (!row) throw new CorruptStateError();
+    return row;
+  }
+
+  private operationRow(operationId: string): OperationRow | undefined {
+    const raw = this.database
+      .query(
+        `
+      SELECT * FROM service_effect_s01_operations WHERE operation_id = ?
+    `,
+      )
+      .get(operationId) as Record<string, unknown> | undefined;
+    return raw ? operationRow(raw) : undefined;
+  }
+
+  private requireOperationRow(operationId: string): OperationRow {
+    const row = this.operationRow(operationId);
+    if (!row) throw new CorruptStateError();
+    return row;
+  }
+
+  private operationSnapshot(operationId: string): OperationSnapshot | null {
+    const row = this.operationRow(operationId);
+    if (!row) return null;
+    const claimed = this.database
+      .query(
+        `
+      SELECT source_seq FROM service_effect_s01_operation_sources
+      WHERE operation_id = ? ORDER BY source_seq
+    `,
+      )
+      .all(operationId) as Array<{ source_seq?: unknown }>;
+    return operationSnapshot(
+      row,
+      claimed.map((entry) => requiredInteger(entry.source_seq, 1)),
+    );
+  }
+
+  private requireOperationSnapshot(operationId: string): OperationSnapshot {
+    const snapshot = this.operationSnapshot(operationId);
+    if (!snapshot) throw new CorruptStateError();
+    return snapshot;
+  }
+
+  private requireMutableVersion(
+    operationId: string,
+    version: number,
+  ):
+    | { readonly ok: true; readonly row: OperationRow }
+    | { readonly ok: false; readonly error: ServiceWorkError } {
+    const row = this.operationRow(operationId);
+    if (!row) return this.rejected("not_found");
+    if (row.phase === "terminal")
+      return this.rejected("owner_conflict", {
+        conflictingOperationId: operationId,
+      });
+    if (row.version !== version)
+      return this.rejected("version_mismatch", {
+        observedVersion: row.version,
+      });
+    return { ok: true, row };
+  }
+
+  private bumpVersion(operationId: string, version: number): boolean {
+    return (
+      this.database
+        .query(
+          `
+      UPDATE service_effect_s01_operations SET version = version + 1
+      WHERE operation_id = ? AND version = ? AND phase <> 'terminal'
+    `,
+        )
+        .run(operationId, version).changes === 1
+    );
+  }
+
+  private fault(
+    method: MutationMethod,
+    point: "before_effect" | "effect_then_lost_acknowledgement",
+  ):
+    | { readonly ok: true; readonly injected: boolean }
+    | { readonly ok: false; readonly error: ServiceWorkError } {
+    try {
+      const value = this.runtime.hitFault(point, method);
+      if (value === true || value === false)
+        return { ok: true, injected: value };
+      return {
+        ok: false,
+        error: serviceError("storage_unavailable", "not_applied", true),
+      };
+    } catch (caught) {
+      void caught;
+      return {
+        ok: false,
+        error: serviceError("storage_unavailable", "not_applied", true),
+      };
+    }
+  }
+
+  private trace(
+    method: string,
+    effectId: string,
+    operationId: string | null,
+    sourceSeq: number | null,
+    version: number | null,
+    resultTag: string,
+    certainty?: ServiceWorkError["certainty"],
+  ): void {
+    try {
+      this.runtime.recordTrace({
+        contract: "EF-S01",
+        method,
+        effectId,
+        operationId,
+        sourceSeq,
+        version,
+        ...(certainty ? { certainty } : {}),
+        resultTag,
+      });
+    } catch (caught) {
+      void caught;
+      // Tracing is observational and cannot change durable semantics.
+    }
+  }
+
+  private applied<T>(value: T, duplicate: boolean): MutationOutcome<T> {
+    return { ok: true, value: deepFreeze(value), duplicate };
+  }
+
+  private rejected(
+    tag: ServiceWorkErrorTag,
+    details: Partial<ServiceWorkError> = {},
+  ): { readonly ok: false; readonly error: ServiceWorkError } {
+    return {
+      ok: false,
+      error: serviceError(tag, "not_applied", false, details),
+    };
+  }
+
+  private success<T>(
+    method: string,
+    effect: MutationRequest["effect"],
+    value: T,
+    tag: string,
+  ): ResultValue<T, never> {
+    this.trace(
+      method,
+      effect.idempotencyKey,
+      effect.operationId,
+      effect.sourceSeq,
+      operationVersion(value),
+      tag,
+      "applied",
+    );
+    return Result.ok(value);
+  }
+
+  private fail(
+    method: string,
+    effect: MutationRequest["effect"] | undefined,
+    error: ServiceWorkError,
+  ): ResultValue<never, ServiceWorkError> {
+    this.trace(
+      method,
+      effect?.idempotencyKey ?? "invalid",
+      effect?.operationId ?? null,
+      effect?.sourceSeq ?? null,
+      null,
+      error._tag,
+      error.certainty,
+    );
+    return Result.err(error);
+  }
+}
+
+class CorruptStateError extends Error {}
+class RollbackFault extends Error {}
+
+const INVALID_READ = Object.freeze({ invalid: true as const });
+function invalidRead(): typeof INVALID_READ {
+  return INVALID_READ;
+}
+function isInvalidRead(value: unknown): value is typeof INVALID_READ {
+  return value === INVALID_READ;
+}
+
+function sourceRow(raw: Record<string, unknown>): SourceRow {
+  const kind = sourceKind(raw.kind);
+  const state = sourceState(raw.state);
+  return {
+    chat_jid: requiredText(raw.chat_jid),
+    source_seq: requiredInteger(raw.source_seq, 1),
+    source_id: requiredText(raw.source_id),
+    source_hash: requiredHash(raw.source_hash),
+    kind,
+    state,
+    payload_ref: requiredText(raw.payload_ref),
+    target_operation_id: nullableText(raw.target_operation_id),
+    parent_source_seq: nullableInteger(raw.parent_source_seq, 1),
+    accepted_at: requiredInstant(raw.accepted_at),
+    disposition_reason: nullableText(raw.disposition_reason),
+    provenance_ref: requiredText(raw.provenance_ref),
+  };
+}
+
+function operationRow(raw: Record<string, unknown>): OperationRow {
+  const phase = operationPhase(raw.phase);
+  const cancellationSourceSeq = nullableInteger(raw.cancellation_source_seq, 1);
+  const harnessSessionId = nullableText(raw.harness_session_id);
+  const terminalDisposition = nullableText(raw.terminal_disposition);
+  return {
+    operation_id: requiredText(raw.operation_id),
+    chat_jid: requiredText(raw.chat_jid),
+    version: requiredInteger(raw.version, 1),
+    phase,
+    primary_source_seq: requiredInteger(raw.primary_source_seq, 1),
+    cancellation_source_id:
+      cancellationSourceSeq === null
+        ? null
+        : requiredText(raw.cancellation_source_id),
+    cancellation_source_seq: cancellationSourceSeq,
+    cancellation_cause:
+      cancellationSourceSeq === null
+        ? null
+        : requiredText(raw.cancellation_cause),
+    cancellation_requested_at:
+      cancellationSourceSeq === null
+        ? null
+        : requiredInstant(raw.cancellation_requested_at),
+    harness_session_id: harnessSessionId,
+    harness_lane:
+      harnessSessionId === null ? null : requiredText(raw.harness_lane),
+    harness_operation_id: nullableText(raw.harness_operation_id),
+    harness_state:
+      harnessSessionId === null ? null : harnessState(raw.harness_state),
+    harness_watch_generation:
+      harnessSessionId === null
+        ? null
+        : requiredInteger(raw.harness_watch_generation, 0),
+    terminal_disposition: terminalDisposition,
+    terminal_message_row_id: nullableInteger(raw.terminal_message_row_id, 1),
+    terminal_error_code: nullableText(raw.terminal_error_code),
+    terminal_committed_at:
+      terminalDisposition === null
+        ? null
+        : requiredInstant(raw.terminal_committed_at),
+  };
+}
+
+function sourceSnapshot(
+  row: SourceRow,
+  state: AcceptedSourceSnapshot["state"] = row.state,
+): AcceptedSourceSnapshot {
+  return Object.freeze({
+    chatJid: row.chat_jid,
+    sourceSeq: row.source_seq,
+    sourceId: row.source_id,
+    kind: row.kind,
+    state,
+    payloadRef: row.payload_ref,
+    targetOperationId: row.target_operation_id,
+    parentSourceSeq: row.parent_source_seq,
+    acceptedAt: row.accepted_at,
+    dispositionReason: row.disposition_reason,
+    provenanceRef: row.provenance_ref,
+  });
+}
+
+function operationSnapshot(
+  row: OperationRow,
+  claimedSourceSeqs: readonly number[],
+): OperationSnapshot {
+  const cancellation =
+    row.cancellation_source_seq === null
+      ? null
+      : Object.freeze({
+          sourceSeq: row.cancellation_source_seq,
+          cause: row.cancellation_cause!,
+          requestedAt: row.cancellation_requested_at!,
+        });
+  const harness =
+    row.harness_session_id === null
+      ? null
+      : Object.freeze({
+          sessionId: row.harness_session_id,
+          lane: row.harness_lane!,
+          harnessOperationId: row.harness_operation_id,
+          state: row.harness_state!,
+          watchGeneration: row.harness_watch_generation!,
+        });
+  const terminal =
+    row.terminal_disposition === null
+      ? null
+      : Object.freeze({
+          disposition: row.terminal_disposition as NonNullable<
+            OperationSnapshot["terminal"]
+          >["disposition"],
+          messageRowId: row.terminal_message_row_id,
+          errorCode: row.terminal_error_code,
+          committedAt: row.terminal_committed_at!,
+        });
+  return Object.freeze({
+    operationId: row.operation_id,
+    chatJid: row.chat_jid,
+    version: row.version,
+    phase: row.phase,
+    primarySourceSeq: row.primary_source_seq,
+    claimedSourceSeqs: Object.freeze([...claimedSourceSeqs]),
+    cancellation,
+    harness,
+    terminal,
+  });
+}
+
+function decisionForValue(value: unknown): StoredDecision {
+  if (value === null) return { kind: "empty" };
+  if (isClaimedOperation(value)) {
+    return {
+      kind: "claim",
+      chatJid: value.source.chatJid,
+      sourceSeq: value.source.sourceSeq,
+      sourceState: "claimed",
+      operation: value.operation,
+    };
+  }
+  if (isOperation(value)) return { kind: "operation", operation: value };
+  if (isAcceptedSource(value))
+    return {
+      kind: "source",
+      chatJid: value.chatJid,
+      sourceSeq: value.sourceSeq,
+      state: value.state,
+    };
+  throw new CorruptStateError();
+}
+
+function normaliseStoredDecision(input: unknown): StoredDecision {
+  if (!plainRecord(input)) throw new CorruptStateError();
+  if (input.kind === "empty" && exactKeys(input, ["kind"]))
+    return { kind: "empty" };
+  if (
+    input.kind === "source" &&
+    exactKeys(input, ["kind", "chatJid", "sourceSeq", "state"])
+  ) {
+    return {
+      kind: "source",
+      chatJid: requiredText(input.chatJid),
+      sourceSeq: requiredInteger(input.sourceSeq, 1),
+      state: sourceState(input.state),
+    };
+  }
+  if (input.kind === "operation" && exactKeys(input, ["kind", "operation"])) {
+    return {
+      kind: "operation",
+      operation: normaliseStoredOperation(input.operation),
+    };
+  }
+  if (
+    input.kind === "claim" &&
+    exactKeys(input, [
+      "kind",
+      "chatJid",
+      "sourceSeq",
+      "sourceState",
+      "operation",
+    ]) &&
+    input.sourceState === "claimed"
+  ) {
+    return {
+      kind: "claim",
+      chatJid: requiredText(input.chatJid),
+      sourceSeq: requiredInteger(input.sourceSeq, 1),
+      sourceState: "claimed",
+      operation: normaliseStoredOperation(input.operation),
+    };
+  }
+  throw new CorruptStateError();
+}
+
+function normaliseStoredOperation(input: unknown): OperationSnapshot {
+  if (
+    !plainRecord(input) ||
+    !exactKeys(input, [
+      "operationId",
+      "chatJid",
+      "version",
+      "phase",
+      "primarySourceSeq",
+      "claimedSourceSeqs",
+      "cancellation",
+      "harness",
+      "terminal",
+    ])
+  )
+    throw new CorruptStateError();
+  if (
+    !Array.isArray(input.claimedSourceSeqs) ||
+    input.claimedSourceSeqs.some(
+      (entry) => !Number.isSafeInteger(entry) || (entry as number) < 1,
+    )
+  )
+    throw new CorruptStateError();
+  const cancellation =
+    input.cancellation === null
+      ? null
+      : normaliseCancellation(input.cancellation);
+  const harness =
+    input.harness === null ? null : normaliseHarness(input.harness);
+  if (input.terminal !== null) throw new CorruptStateError();
+  return Object.freeze({
+    operationId: requiredText(input.operationId),
+    chatJid: requiredText(input.chatJid),
+    version: requiredInteger(input.version, 1),
+    phase: operationPhase(input.phase),
+    primarySourceSeq: requiredInteger(input.primarySourceSeq, 1),
+    claimedSourceSeqs: Object.freeze(
+      input.claimedSourceSeqs.map((entry) => requiredInteger(entry, 1)),
+    ),
+    cancellation,
+    harness,
+    terminal: null,
+  });
+}
+
+function normaliseCancellation(
+  input: unknown,
+): NonNullable<OperationSnapshot["cancellation"]> {
+  if (
+    !plainRecord(input) ||
+    !exactKeys(input, ["sourceSeq", "cause", "requestedAt"])
+  )
+    throw new CorruptStateError();
+  return Object.freeze({
+    sourceSeq: requiredInteger(input.sourceSeq, 1),
+    cause: requiredText(input.cause),
+    requestedAt: requiredInstant(input.requestedAt),
+  });
+}
+
+function normaliseHarness(
+  input: unknown,
+): NonNullable<OperationSnapshot["harness"]> {
+  if (
+    !plainRecord(input) ||
+    !exactKeys(input, [
+      "sessionId",
+      "lane",
+      "harnessOperationId",
+      "state",
+      "watchGeneration",
+    ])
+  )
+    throw new CorruptStateError();
+  return Object.freeze({
+    sessionId: requiredText(input.sessionId),
+    lane: requiredText(input.lane),
+    harnessOperationId: nullableText(input.harnessOperationId),
+    state: harnessState(input.state),
+    watchGeneration: requiredInteger(input.watchGeneration, 0),
+  });
+}
+
+function serviceError(
+  tag: ServiceWorkErrorTag,
+  certainty: ServiceWorkError["certainty"] = "not_applied",
+  retryable = false,
+  details: Partial<ServiceWorkError> = {},
+): ServiceWorkError {
+  return Object.freeze({
+    _tag: tag,
+    certainty,
+    retryable,
+    ...(Number.isSafeInteger(details.observedVersion)
+      ? { observedVersion: details.observedVersion }
+      : {}),
+    ...(Number.isSafeInteger(details.observedFrontier)
+      ? { observedFrontier: details.observedFrontier }
+      : {}),
+    ...(typeof details.conflictingOperationId === "string" &&
+    details.conflictingOperationId.length > 0
+      ? { conflictingOperationId: details.conflictingOperationId }
+      : {}),
+  });
+}
+
+function isBusy(cause: unknown): boolean {
+  if (cause === null || typeof cause !== "object") return false;
+  try {
+    const code = Object.getOwnPropertyDescriptor(cause, "code")?.value;
+    const errno = Object.getOwnPropertyDescriptor(cause, "errno")?.value;
+    return (
+      code === "SQLITE_BUSY" || code === "SQLITE_BUSY_SNAPSHOT" || errno === 5
+    );
+  } catch (caught) {
+    void caught;
+    return false;
+  }
+}
+function requiredText(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.trim().length === 0
+  )
+    throw new CorruptStateError();
+  return value;
+}
+function nullableText(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  return requiredText(value);
+}
+function requiredHash(value: unknown): string {
+  const result = requiredText(value);
+  if (!/^[0-9a-f]{64}$/.test(result)) throw new CorruptStateError();
+  return result;
+}
+function requiredInteger(value: unknown, minimum: number): number {
+  if (!Number.isSafeInteger(value) || (value as number) < minimum)
+    throw new CorruptStateError();
+  return value as number;
+}
+function nullableInteger(value: unknown, minimum: number): number | null {
+  return value === null || value === undefined
+    ? null
+    : requiredInteger(value, minimum);
+}
+function requiredInstant(value: unknown): string {
+  const result = requiredText(value);
+  const parsed = Date.parse(result);
+  if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== result)
+    throw new CorruptStateError();
+  return result;
+}
+function sourceKind(value: unknown): AcceptedSourceSnapshot["kind"] {
+  if (
+    typeof value !== "string" ||
+    ![
+      "message",
+      "steer",
+      "follow_up",
+      "continuation",
+      "control",
+      "cancellation",
+      "scheduled_agent",
+      "internal",
+    ].includes(value)
+  )
+    throw new CorruptStateError();
+  return value as AcceptedSourceSnapshot["kind"];
+}
+function sourceState(value: unknown): AcceptedSourceSnapshot["state"] {
+  if (
+    typeof value !== "string" ||
+    !["pending", "claimed", "queued", "consumed", "disposed"].includes(value)
+  )
+    throw new CorruptStateError();
+  return value as AcceptedSourceSnapshot["state"];
+}
+function operationPhase(value: unknown): OperationSnapshot["phase"] {
+  if (
+    typeof value !== "string" ||
+    ![
+      "accepted",
+      "claimed",
+      "starting_harness",
+      "executing",
+      "suspended",
+      "cancelling",
+      "settling",
+      "terminal",
+    ].includes(value)
+  )
+    throw new CorruptStateError();
+  return value as OperationSnapshot["phase"];
+}
+function harnessState(value: unknown): HarnessCorrelation["state"] {
+  if (
+    typeof value !== "string" ||
+    !["not_started", "running", "suspended", "aborting", "finished"].includes(
+      value,
+    )
+  )
+    throw new CorruptStateError();
+  return value as HarnessCorrelation["state"];
+}
+function queueState(value: unknown): QueuedInputState {
+  if (
+    typeof value !== "string" ||
+    !["accepted", "queued", "consumed", "disposed"].includes(value)
+  )
+    throw new CorruptStateError();
+  return value as QueuedInputState;
+}
+function queueKind(value: unknown): RecordQueuedInputRequest["queueKind"] {
+  if (
+    typeof value !== "string" ||
+    !["steer", "follow_up", "next_run"].includes(value)
+  )
+    throw new CorruptStateError();
+  return value as RecordQueuedInputRequest["queueKind"];
+}
+function phaseForHarness(
+  state: HarnessCorrelation["state"],
+): OperationSnapshot["phase"] {
+  return state === "not_started"
+    ? "starting_harness"
+    : state === "running"
+      ? "executing"
+      : state === "suspended"
+        ? "suspended"
+        : state === "aborting"
+          ? "cancelling"
+          : "settling";
+}
+function queueTransition(
+  from: QueuedInputState,
+  to: QueuedInputState,
+): boolean {
+  return (
+    (from === "accepted" && (to === "queued" || to === "disposed")) ||
+    (from === "queued" && (to === "consumed" || to === "disposed"))
+  );
+}
+function validQueueEntryTransition(
+  from: QueuedInputState,
+  previous: string | null,
+  to: QueuedInputState,
+  next: string | null,
+): boolean {
+  return from === "accepted" && to === "queued"
+    ? previous === null && next !== null
+    : previous === next;
+}
+function sourceStateForQueue(
+  state: QueuedInputState,
+): AcceptedSourceSnapshot["state"] {
+  return state === "accepted" ? "claimed" : state;
+}
+function operationVersion(value: unknown): number | null {
+  if (isOperation(value)) return value.version;
+  if (isClaimedOperation(value)) return value.operation.version;
+  return null;
+}
+function isAcceptedSource(value: unknown): value is AcceptedSourceSnapshot {
+  return (
+    plainRecord(value) &&
+    typeof value.chatJid === "string" &&
+    Number.isSafeInteger(value.sourceSeq) &&
+    typeof value.sourceId === "string" &&
+    typeof value.state === "string"
+  );
+}
+function isOperation(value: unknown): value is OperationSnapshot {
+  return (
+    plainRecord(value) &&
+    typeof value.operationId === "string" &&
+    Number.isSafeInteger(value.version) &&
+    Array.isArray(value.claimedSourceSeqs)
+  );
+}
+function isClaimedOperation(value: unknown): value is ClaimedOperation {
+  return (
+    plainRecord(value) &&
+    isAcceptedSource(value.source) &&
+    isOperation(value.operation)
+  );
+}
+function plainRecord(value: unknown): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (Object.getPrototypeOf(value) === Object.prototype ||
+      Object.getPrototypeOf(value) === null)
+  );
+}
+function exactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+): boolean {
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  return (
+    actual.length === wanted.length &&
+    actual.every((key, index) => key === wanted[index])
+  );
+}
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object") {
+    for (const entry of Object.values(value)) deepFreeze(entry);
+    Object.freeze(value);
+  }
+  return value;
+}
