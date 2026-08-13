@@ -86,7 +86,7 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
       "two claimers observe one operation owner",
       "exact duplicate and wrong-owner cancellation remain distinct",
       "another harness run cannot replace an existing binding",
-      "queued input survives accepted delivered consumed and disposed transitions",
+      "queued input survives accepted queued consumed and disposed transitions",
       "restart lists every non-terminal operation",
       "dropped or duplicate wakes do not alter durable state",
     ]),
@@ -95,7 +95,7 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
       "stale_owner_or_version", "cancellation_race", "malformed_state",
     ],
     crashOracle: crashOracle("EF-S01", "Lost acknowledgement after accept, claim, cancellation, and harness binding returns the committed identity after restore."),
-    sharedCaseLinks: ["shared:idempotency", "shared:owner-version", "shared:redaction"],
+    sharedCaseLinks: ["shared:idempotency", "shared:atomicity", "shared:owner-version", "shared:redaction"],
   },
   {
     contractId: "EF-S02",
