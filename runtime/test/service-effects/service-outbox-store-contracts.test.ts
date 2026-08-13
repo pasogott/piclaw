@@ -55,12 +55,14 @@ class Runtime implements ServiceOutboxAdapterRuntime {
 		point: "before_effect" | "effect_then_lost_acknowledgement",
 		method: ServiceOutboxMutationMethod,
 	) {
-		const k = `${method}:${point}`,
-			planned = this.faults.get(k);
-		if (planned) {
-			const n = (this.counts.get(k) ?? 0) + 1;
-			this.counts.set(k, n);
-			return planned.has(n);
+		const key = `${method}:${point}`;
+		const occurrence = (this.counts.get(key) ?? 0) + 1;
+		this.counts.set(key, occurrence);
+		const planned = this.faults.get(key);
+		if (planned?.has(occurrence)) {
+			return point === "before_effect" && occurrence > 1
+				? "in_transaction"
+				: true;
 		}
 		return this.ctx.faults.hit(point);
 	}
@@ -108,8 +110,8 @@ const sqliteFactory: ContractSubjectFactory<ServiceOutboxContractSubject> = {
 	crashAndRestore(subject, ctx) {
 		const old = subject as SqliteSubject,
 			trace = old.runtime.trace.snapshot();
-		old.database.close();
 		const fresh = sqliteSubject(old.path, ctx, trace);
+		old.database.close();
 		fresh.runtime.faults.clear();
 		fresh.runtime.counts.clear();
 		return { subject: fresh, context: ctx };
@@ -170,7 +172,10 @@ describe("EF-S05 private schema", () => {
 			.all() as { name: string }[];
 		expect(names.map((x) => x.name)).toEqual([
 			"service_effect_s05_decisions",
+			"service_effect_s05_leases",
 			"service_effect_s05_outbox",
+			"service_effect_s05_outcomes",
+			"service_effect_s05_resolutions",
 		]);
 		db.close();
 	});

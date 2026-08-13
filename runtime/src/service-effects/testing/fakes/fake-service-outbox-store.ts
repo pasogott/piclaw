@@ -1,661 +1,523 @@
-import {
-	Result,
-	type Result as ResultValue,
-} from "@earendil-works/pi-agent-core";
-import type {
-	EffectCertainty,
-	NormalisedTraceInput,
-} from "../../contracts/common.js";
-import type {
-	ClaimOutboxRequest,
-	CleanupTerminalOutboxRequest,
-	CompleteOutboxRequest,
-	EnqueueOutboxRequest,
-	FailOutboxRequest,
-	ListUnknownOutboxRequest,
-	ListUnknownOutboxResult,
-	MarkOutboxUnknownRequest,
-	OutboxClaimDecision,
-	OutboxCleanupDecision,
-	OutboxEnqueueDecision,
-	OutboxLease,
-	OutboxMutationDecision,
-	OutboxRecord,
-	OutboxStoreError,
-	OutboxStoreErrorTag,
-	ReclaimOutboxRequest,
-	ResolveUnknownOutboxRequest,
-	ServiceOutboxStore,
-} from "../../contracts/service-outbox-store.js";
+import { createHash } from "node:crypto";
+import { Result, type Result as ResultValue } from "@earendil-works/pi-agent-core";
+
+import type { EffectCertainty, NormalisedTraceInput } from "../../contracts/common.js";
+import type { ClaimOutboxRequest, CleanupTerminalOutboxRequest, CompleteOutboxRequest, EnqueueOutboxRequest, FailOutboxRequest, ListUnknownOutboxRequest, ListUnknownOutboxResult, MarkOutboxUnknownRequest, OutboxClaimDecision, OutboxCleanupDecision, OutboxEnqueueDecision, OutboxLease, OutboxMutationDecision, OutboxRecord, OutboxStoreError, OutboxStoreErrorTag, ReclaimOutboxRequest, ResolveUnknownOutboxRequest, ServiceOutboxStore } from "../../contracts/service-outbox-store.js";
 import type { ContractTestContext } from "../contract-suite.js";
 import { EffectTraceRecorder } from "../trace-recorder.js";
-import {
-	type FakeOutboxMutationMethod,
-	hashFakeOutboxRequest,
-	normaliseFakeOutboxId,
-	normaliseFakeOutboxList,
-	normaliseFakeOutboxMutation,
-} from "./fake-service-outbox-request-normalizer.js";
+import { type FakeOutboxMutationMethod, hashFakeOutboxRequest, normaliseFakeOutboxId, normaliseFakeOutboxList, normaliseFakeOutboxMutation } from "./fake-service-outbox-request-normalizer.js";
 
-type Decision = {
-	method: string;
-	hash: string;
-	value: unknown;
-	outboxId: string | null;
-	token: string | null;
-};
+type DecisionOutcome = "applied" | "stale" | "empty";
+interface Decision {
+  readonly method: FakeOutboxMutationMethod;
+  readonly hash: string;
+  readonly outcome: DecisionOutcome;
+  readonly outboxId: string | null;
+  readonly attempt: number | null;
+  readonly tokenHash: string | null;
+  readonly cleanupResult: OutboxCleanupDecision["result"] | null;
+}
+interface LeaseAuthority {
+  readonly method: "claimNext" | "reclaim";
+  readonly requestHash: string;
+  readonly outboxId: string;
+  readonly attempt: number;
+  readonly workerId: string;
+  readonly claimedAt: string;
+  readonly leaseExpiresAt: string;
+  readonly reconciliationRef: string | null;
+}
+interface OutcomeAuthority {
+  readonly method: "complete" | "fail" | "markUnknown";
+  readonly requestHash: string;
+  readonly outboxId: string;
+  readonly attempt: number;
+  readonly state: "completed" | "failed" | "unknown";
+  readonly certainty: EffectCertainty;
+  readonly resultAt: string;
+  readonly receiptRef: string | null;
+  readonly errorTag: string | null;
+  readonly retryAt: string | null;
+  readonly reconciliationRef: string | null;
+}
+interface ResolutionAuthority {
+  readonly requestHash: string;
+  readonly outboxId: string;
+  readonly attempt: number;
+  readonly state: "completed" | "failed" | "cancelled";
+  readonly certainty: "applied" | "not_applied";
+  readonly reconciledAt: string;
+  readonly reconciliationRef: string;
+  readonly receiptRef: string | null;
+  readonly errorTag: string | null;
+  readonly retryAt: string | null;
+  readonly reasonTag: string | null;
+}
 interface State {
-	records: Record<string, OutboxRecord>;
-	decisions: Record<string, Decision>;
+  records: Record<string, OutboxRecord>;
+  decisions: Record<string, Decision>;
+  leases: Record<string, LeaseAuthority>;
+  outcomes: Record<string, OutcomeAuthority>;
+  resolutions: Record<string, ResolutionAuthority>;
 }
+type PlannedPoint = "before_effect" | "effect_then_lost_acknowledgement";
+type FaultValue = boolean | "in_transaction" | unknown;
+
 export class FakeServiceOutboxStore implements ServiceOutboxStore {
-	readonly trace = new EffectTraceRecorder();
-	#state: State = { records: {}, decisions: {} };
-	#serial = Promise.resolve();
-	#faults = new Map<string, Set<number>>();
-	#counts = new Map<string, number>();
-	constructor(
-		private readonly context: ContractTestContext,
-		private readonly observer: (input: NormalisedTraceInput) => void = () =>
-			undefined,
-	) {}
-	planFault(
-		method: string,
-		point: "before_effect" | "effect_then_lost_acknowledgement",
-		occurrence = 1,
-	) {
-		const k = `${method}:${point}`,
-			n = this.#counts.get(k) ?? 0;
-		this.#faults.set(k, new Set([n + occurrence]));
-	}
-	snapshot(): State {
-		return structuredClone(this.#state);
-	}
-	restore(snapshot: State) {
-		this.#state = structuredClone(snapshot);
-		this.#faults.clear();
-		this.#counts.clear();
-	}
-	inspectState() {
-		return structuredClone(this.#state);
-	}
-	enqueue(
-		input: EnqueueOutboxRequest,
-	): Promise<ResultValue<OutboxEnqueueDecision, OutboxStoreError>> {
-		return this.mutate<OutboxEnqueueDecision>("enqueue", input, (q) => {
-			const r = q as EnqueueOutboxRequest,
-				k = `enqueue:${r.kind}:${r.effect.idempotencyKey}`,
-				known = this.#state.decisions[k];
-			if (known)
-				return known.method === "enqueue" && known.hash === r.effect.requestHash
-					? Result.ok(replay(known.value))
-					: Result.err(err("idempotency_conflict"));
-			if (this.#state.records[r.outboxId])
-				return Result.err(err("idempotency_conflict"));
-			const record = freeze({
-				outboxId: r.outboxId,
-				kind: r.kind,
-				state: "pending",
-				idempotencyKey: r.effect.idempotencyKey,
-				requestHash: r.effect.requestHash,
-				operationId: r.effect.operationId,
-				sourceSeq: r.effect.sourceSeq,
-				provenanceRef: r.effect.provenanceRef,
-				redactionClass: r.effect.redactionClass,
-				payloadRef: r.payloadRef,
-				destinationRef: r.destinationRef,
-				availableAt: r.availableAt,
-				enqueuedAt: r.enqueuedAt,
-				stateChangedAt: r.enqueuedAt,
-				repeatability: r.repeatability,
-				attempt: 0,
-				workerId: null,
-				claimedAt: null,
-				leaseToken: null,
-				leaseExpiresAt: null,
-				certainty: "not_applied",
-				retryAt: null,
-				receiptRef: null,
-				lastErrorTag: null,
-				resultAt: null,
-				reconciliationRef: null,
-				reconciledAt: null,
-				cancellationReasonTag: null,
-			} as OutboxRecord);
-			this.#state.records[r.outboxId] = record;
-			const value = freeze({ decision: "applied" as const, record });
-			this.decision(
-				k,
-				"enqueue",
-				r.effect.requestHash,
-				value,
-				r.outboxId,
-				null,
-			);
-			return Result.ok(value);
-		});
-	}
-	claimNext(
-		input: ClaimOutboxRequest,
-	): Promise<ResultValue<OutboxClaimDecision, OutboxStoreError>> {
-		return this.mutate<OutboxClaimDecision>("claimNext", input, (q) => {
-			const r = q as ClaimOutboxRequest,
-				h = hashFakeOutboxRequest(r),
-				k = `claim:${r.leaseToken}`,
-				known = this.#state.decisions[k];
-			if (known)
-				return known.method === "claimNext" && known.hash === h
-					? Result.ok(replay(known.value))
-					: Result.err(err("idempotency_conflict"));
-			if (this.tokenUsed(r.leaseToken))
-				return Result.err(err("idempotency_conflict"));
-			const row = Object.values(this.#state.records)
-				.filter(
-					(x) =>
-						r.kinds.includes(x.kind) &&
-						((x.state === "pending" && x.availableAt <= r.now) ||
-							(x.state === "failed" &&
-								x.retryAt !== null &&
-								x.retryAt <= r.now)),
-				)
-				.sort(
-					(a, b) =>
-						effective(a).localeCompare(effective(b)) ||
-						a.outboxId.localeCompare(b.outboxId),
-				)[0];
-			let value: OutboxClaimDecision,
-				outboxId: string | null = null;
-			if (!row) value = freeze({ decision: "empty", lease: null });
-			else {
-				outboxId = row.outboxId;
-				const record = this.replace(row, {
-					state: "started",
-					stateChangedAt: r.now,
-					attempt: row.attempt + 1,
-					workerId: r.workerId,
-					claimedAt: r.now,
-					leaseToken: r.leaseToken,
-					leaseExpiresAt: r.leaseExpiresAt,
-					certainty: null,
-					retryAt: null,
-					receiptRef: null,
-					lastErrorTag: null,
-					resultAt: null,
-					reconciledAt: null,
-					cancellationReasonTag: null,
-				});
-				value = freeze({
-					decision: "applied",
-					lease: freeze({
-						record: record as OutboxLease["record"],
-						workerId: r.workerId,
-					}),
-				});
-			}
-			this.decision(k, "claimNext", h, value, outboxId, r.leaseToken);
-			return Result.ok(value);
-		});
-	}
-	reclaim(
-		input: ReclaimOutboxRequest,
-	): Promise<ResultValue<OutboxMutationDecision, OutboxStoreError>> {
-		return this.mutate<OutboxMutationDecision>("reclaim", input, (q) => {
-			const r = q as ReclaimOutboxRequest,
-				h = hashFakeOutboxRequest(r),
-				k = `reclaim:${r.outboxId}:${r.expectedAttempt}`,
-				known = this.#state.decisions[k];
-			if (known)
-				return known.method === "reclaim" && known.hash === h
-					? Result.ok(replay(known.value))
-					: Result.err(err("idempotency_conflict"));
-			if (this.tokenUsed(r.leaseToken))
-				return Result.err(err("idempotency_conflict"));
-			const row = this.#state.records[r.outboxId];
-			if (!row) return Result.err(err("not_found"));
-			const ok =
-				row.state === "started" &&
-				row.attempt === r.expectedAttempt &&
-				!!row.leaseExpiresAt &&
-				row.leaseExpiresAt <= r.now &&
-				((r.authority.kind === "repeatable" &&
-					row.repeatability === "repeatable") ||
-					r.authority.kind === "reconciled_absent");
-			const value = ok
-				? applied(
-						this.replace(row, {
-							stateChangedAt: r.now,
-							attempt: row.attempt + 1,
-							workerId: r.workerId,
-							claimedAt: r.now,
-							leaseToken: r.leaseToken,
-							leaseExpiresAt: r.leaseExpiresAt,
-							reconciliationRef:
-								r.authority.kind === "reconciled_absent"
-									? r.authority.reconciliationRef
-									: row.reconciliationRef,
-						}),
-					)
-				: stale();
-			this.decision(k, "reclaim", h, value, r.outboxId, r.leaseToken);
-			return Result.ok(value);
-		});
-	}
-	complete(
-		input: CompleteOutboxRequest,
-	): Promise<ResultValue<OutboxMutationDecision, OutboxStoreError>> {
-		return this.worker("complete", input, (r) => ({
-			state: "completed",
-			certainty: "applied",
-			at: r.completedAt,
-			receiptRef: r.receiptRef,
-			errorTag: null,
-			retryAt: null,
-		}));
-	}
-	fail(
-		input: FailOutboxRequest,
-	): Promise<ResultValue<OutboxMutationDecision, OutboxStoreError>> {
-		return this.worker("fail", input, (r) => ({
-			state: "failed",
-			certainty: "not_applied",
-			at: r.failedAt,
-			receiptRef: null,
-			errorTag: r.errorTag,
-			retryAt: r.retryAt,
-		}));
-	}
-	markUnknown(
-		input: MarkOutboxUnknownRequest,
-	): Promise<ResultValue<OutboxMutationDecision, OutboxStoreError>> {
-		return this.worker("markUnknown", input, (r) => ({
-			state: "unknown",
-			certainty: "unknown",
-			at: r.observedAt,
-			receiptRef: null,
-			errorTag: r.errorTag,
-			retryAt: null,
-		}));
-	}
-	resolveUnknown(
-		input: ResolveUnknownOutboxRequest,
-	): Promise<ResultValue<OutboxMutationDecision, OutboxStoreError>> {
-		return this.mutate<OutboxMutationDecision>("resolveUnknown", input, (q) => {
-			const r = q as ResolveUnknownOutboxRequest,
-				h = hashFakeOutboxRequest(r),
-				k = `resolve:${r.outboxId}:${r.expectedAttempt}`,
-				known = this.#state.decisions[k];
-			if (known)
-				return known.method === "resolveUnknown" && known.hash === h
-					? Result.ok(replay(known.value))
-					: Result.err(err("idempotency_conflict"));
-			const row = this.#state.records[r.outboxId];
-			if (!row) return Result.err(err("not_found"));
-			let value: OutboxMutationDecision;
-			if (row.state !== "unknown" || row.attempt !== r.expectedAttempt)
-				value = stale();
-			else if (r.resolution.kind === "applied")
-				value = applied(
-					this.replace(row, {
-						state: "completed",
-						stateChangedAt: r.reconciledAt,
-						certainty: "applied",
-						receiptRef: r.resolution.receiptRef,
-						lastErrorTag: null,
-						retryAt: null,
-						resultAt: r.reconciledAt,
-						reconciliationRef: r.reconciliationRef,
-						reconciledAt: r.reconciledAt,
-						cancellationReasonTag: null,
-					}),
-				);
-			else if (r.resolution.kind === "not_applied")
-				value = applied(
-					this.replace(row, {
-						state: "failed",
-						stateChangedAt: r.reconciledAt,
-						certainty: "not_applied",
-						receiptRef: null,
-						lastErrorTag: r.resolution.errorTag,
-						retryAt: r.resolution.retryAt,
-						resultAt: r.reconciledAt,
-						reconciliationRef: r.reconciliationRef,
-						reconciledAt: r.reconciledAt,
-						cancellationReasonTag: null,
-					}),
-				);
-			else
-				value = applied(
-					this.replace(row, {
-						state: "cancelled",
-						stateChangedAt: r.reconciledAt,
-						certainty: "not_applied",
-						receiptRef: null,
-						lastErrorTag: null,
-						retryAt: null,
-						resultAt: r.reconciledAt,
-						reconciliationRef: r.reconciliationRef,
-						reconciledAt: r.reconciledAt,
-						cancellationReasonTag: r.resolution.reasonTag,
-					}),
-				);
-			this.decision(k, "resolveUnknown", h, value, r.outboxId, null);
-			return Result.ok(value);
-		});
-	}
-	async get(
-		input: string,
-	): Promise<ResultValue<OutboxRecord | null, OutboxStoreError>> {
-		const id = normaliseFakeOutboxId(input);
-		return id
-			? Result.ok(this.#state.records[id] ?? null)
-			: Result.err(err("invalid_request"));
-	}
-	async listUnknown(
-		input: ListUnknownOutboxRequest,
-	): Promise<ResultValue<ListUnknownOutboxResult, OutboxStoreError>> {
-		const r = normaliseFakeOutboxList(input);
-		if (!r) return Result.err(err("invalid_request"));
-		const rows = Object.values(this.#state.records)
-				.filter(
-					(x) =>
-						x.state === "unknown" &&
-						r.kinds.includes(x.kind) &&
-						(!r.after ||
-							x.stateChangedAt > r.after.stateChangedAt ||
-							(x.stateChangedAt === r.after.stateChangedAt &&
-								x.outboxId > r.after.outboxId)),
-				)
-				.sort(order)
-				.slice(0, r.limit),
-			last = rows.length === r.limit ? (rows.at(-1) ?? null) : null;
-		return Result.ok(
-			freeze({
-				records: Object.freeze(rows),
-				nextCursor: last
-					? { stateChangedAt: last.stateChangedAt, outboxId: last.outboxId }
-					: null,
-			}),
-		);
-	}
-	cleanupTerminal(
-		input: CleanupTerminalOutboxRequest,
-	): Promise<ResultValue<OutboxCleanupDecision, OutboxStoreError>> {
-		return this.mutate<OutboxCleanupDecision>("cleanupTerminal", input, (q) => {
-			const r = q as CleanupTerminalOutboxRequest,
-				h = hashFakeOutboxRequest(r),
-				k = `cleanup:${r.cleanupId}`,
-				known = this.#state.decisions[k];
-			if (known)
-				return known.method === "cleanupTerminal" && known.hash === h
-					? Result.ok(replay(known.value))
-					: Result.err(err("idempotency_conflict"));
-			const rows = Object.values(this.#state.records)
-				.filter(
-					(x) =>
-						x.stateChangedAt < r.before &&
-						(x.state === "cancelled" ||
-							(x.state === "failed" &&
-								x.certainty === "not_applied" &&
-								x.retryAt === null)) &&
-						(!r.after ||
-							x.stateChangedAt > r.after.stateChangedAt ||
-							(x.stateChangedAt === r.after.stateChangedAt &&
-								x.outboxId > r.after.outboxId)),
-				)
-				.sort(order)
-				.slice(0, r.limit);
-			for (const row of rows) {
-				delete this.#state.records[row.outboxId];
-				for (const [key, d] of Object.entries(this.#state.decisions))
-					if (d.outboxId === row.outboxId) delete this.#state.decisions[key];
-			}
-			const last = rows.length === r.limit ? (rows.at(-1) ?? null) : null,
-				result = freeze({
-					deletedIds: Object.freeze(rows.map((x) => x.outboxId)),
-					deletedCount: rows.length,
-					nextCursor: last
-						? { stateChangedAt: last.stateChangedAt, outboxId: last.outboxId }
-						: null,
-				}),
-				value = freeze({ decision: "applied" as const, result });
-			this.decision(k, "cleanupTerminal", h, value, null, null);
-			return Result.ok(value);
-		});
-	}
-	private worker<
-		T extends
-			| CompleteOutboxRequest
-			| FailOutboxRequest
-			| MarkOutboxUnknownRequest,
-	>(
-		method: "complete" | "fail" | "markUnknown",
-		input: T,
-		map: (r: T) => {
-			state: "completed" | "failed" | "unknown";
-			certainty: EffectCertainty;
-			at: string;
-			receiptRef: string | null;
-			errorTag: string | null;
-			retryAt: string | null;
-		},
-	): Promise<ResultValue<OutboxMutationDecision, OutboxStoreError>> {
-		return this.mutate<OutboxMutationDecision>(method, input, (q) => {
-			const r = q as T,
-				h = hashFakeOutboxRequest(r),
-				k = `outcome:${r.outboxId}:${r.expectedAttempt}`,
-				known = this.#state.decisions[k];
-			if (known) {
-				if (known.method === method && known.hash === h)
-					return Result.ok(replay(known.value));
-				if ((known.value as { decision?: unknown }).decision !== "stale")
-					return Result.ok(stale());
-			}
-			const row = this.#state.records[r.outboxId];
-			if (!row) return Result.err(err("not_found"));
-			const o = map(r),
-				ok =
-					row.state === "started" &&
-					row.workerId === r.workerId &&
-					row.attempt === r.expectedAttempt &&
-					row.leaseToken === r.leaseToken &&
-					!!row.leaseExpiresAt &&
-					o.at < row.leaseExpiresAt,
-				value = ok
-					? applied(
-							this.replace(row, {
-								state: o.state,
-								stateChangedAt: o.at,
-								workerId: null,
-								claimedAt: null,
-								leaseToken: null,
-								leaseExpiresAt: null,
-								certainty: o.certainty,
-								retryAt: o.retryAt,
-								receiptRef: o.receiptRef,
-								lastErrorTag: o.errorTag,
-								resultAt: o.at,
-								reconciledAt: null,
-								cancellationReasonTag: null,
-							}),
-						)
-					: stale();
-			this.decision(k, method, h, value, r.outboxId, null);
-			return Result.ok(value);
-		});
-	}
-	private async mutate<T>(
-		method: FakeOutboxMutationMethod,
-		input: unknown,
-		apply: (q: unknown) => ResultValue<T, OutboxStoreError>,
-	): Promise<ResultValue<T, OutboxStoreError>> {
-		const q = normaliseFakeOutboxMutation(method, input),
-			before = this.#serial;
-		let release!: () => void;
-		this.#serial = new Promise((r) => (release = r));
-		await before;
-		try {
-			this.observe(method, q, "call", null);
-			if (!q) return this.finish(method, Result.err(err("invalid_request")));
-			const snapshot = structuredClone(this.#state),
-				value = apply(q);
-			if (!value.ok) return this.finish(method, value);
-			const pre = this.fault(method, "before_effect");
-			if (!pre.ok) {
-				this.#state = snapshot;
-				return this.finish(method, Result.err(pre.error));
-			}
-			if (pre.injected) {
-				this.#state = snapshot;
-				return this.finish(
-					method,
-					Result.err(err("storage_unavailable", "not_applied", true)),
-				);
-			}
-			const lost = this.fault(method, "effect_then_lost_acknowledgement");
-			if (!lost.ok) return this.finish(method, Result.err(lost.error));
-			if (lost.injected)
-				return this.finish(
-					method,
-					Result.err(err("storage_unavailable", "unknown", true)),
-				);
-			return this.finish(method, value);
-		} finally {
-			release();
-		}
-	}
-	private replace(row: OutboxRecord, patch: Partial<OutboxRecord>) {
-		const next = freeze({ ...row, ...patch });
-		this.#state.records[row.outboxId] = next;
-		return next;
-	}
-	private decision(
-		key: string,
-		method: string,
-		hash: string,
-		value: unknown,
-		outboxId: string | null,
-		token: string | null,
-	) {
-		this.#state.decisions[key] = {
-			method,
-			hash,
-			value: structuredClone(value),
-			outboxId,
-			token,
-		};
-	}
-	private tokenUsed(token: string) {
-		return Object.values(this.#state.decisions).some((d) => d.token === token);
-	}
-	private fault(
-		method: string,
-		point: "before_effect" | "effect_then_lost_acknowledgement",
-	): { ok: true; injected: boolean } | { ok: false; error: OutboxStoreError } {
-		try {
-			const k = `${method}:${point}`,
-				n = (this.#counts.get(k) ?? 0) + 1;
-			this.#counts.set(k, n);
-			const planned = this.#faults.get(k);
-			const v = planned ? planned.has(n) : this.context.faults.hit(point);
-			return typeof v === "boolean"
-				? { ok: true, injected: v }
-				: { ok: false, error: err("storage_unavailable", "not_applied", true) };
-		} catch {
-			return {
-				ok: false,
-				error: err("storage_unavailable", "not_applied", true),
-			};
-		}
-	}
-	private observe(
-		method: string,
-		q: unknown,
-		resultTag: string,
-		certainty: EffectCertainty | null,
-	) {
-		try {
-			const r = q as {
-				outboxId?: string;
-				effect?: { operationId?: string | null; sourceSeq?: number | null };
-				expectedAttempt?: number;
-			};
-			const input = {
-				contract: "EF-S05",
-				method,
-				effectId: r?.outboxId ?? "invalid",
-				operationId: r?.effect?.operationId ?? null,
-				sourceSeq: r?.effect?.sourceSeq ?? null,
-				version: r?.expectedAttempt ?? null,
-				certainty,
-				resultTag,
-			};
-			if (resultTag === "call") this.trace.recordCall(input);
-			else this.trace.recordResult(input);
-			this.observer(input);
-		} catch {}
-	}
-	private finish<T>(method: string, r: ResultValue<T, OutboxStoreError>) {
-		this.observe(
-			method,
-			null,
-			r.ok ? tag(r.value) : r.error._tag,
-			r.ok ? certainty(r.value) : r.error.certainty,
-		);
-		return r;
-	}
+  readonly trace = new EffectTraceRecorder();
+  #state: State = emptyState();
+  #serial: Promise<void> = Promise.resolve();
+  #faults = new Map<string, Set<number>>();
+  #faultValues = new Map<string, unknown>();
+  #counts = new Map<string, number>();
+
+  constructor(
+    private readonly context: ContractTestContext,
+    private readonly observer: (input: NormalisedTraceInput) => void = () => undefined,
+  ) {}
+
+  planFault(method: string, point: PlannedPoint, occurrence = 1): void {
+    const key = `${method}:${point}`;
+    const consumed = this.#counts.get(key) ?? 0;
+    this.#faults.set(key, new Set([consumed + occurrence]));
+    this.#faultValues.set(key, true);
+  }
+
+  planFaultValue(method: string, point: PlannedPoint, value: unknown, occurrence = 1): void {
+    const key = `${method}:${point}`;
+    const consumed = this.#counts.get(key) ?? 0;
+    this.#faults.set(key, new Set([consumed + occurrence]));
+    this.#faultValues.set(key, value);
+  }
+
+  planFaultThrow(method: string, point: PlannedPoint, occurrence = 1): void {
+    this.planFaultValue(method, point, throwFault, occurrence);
+  }
+
+  snapshot(): State {
+    return structuredClone(this.#state);
+  }
+
+  restore(snapshot: State): void {
+    this.#state = structuredClone(snapshot);
+    this.#faults.clear();
+    this.#faultValues.clear();
+    this.#counts.clear();
+  }
+
+  inspectState(): State {
+    return structuredClone(this.#state);
+  }
+
+  enqueue(input: EnqueueOutboxRequest): Promise<ResultValue<OutboxEnqueueDecision, OutboxStoreError>> {
+    return this.mutate<OutboxEnqueueDecision>("enqueue", input, candidate => {
+      const request = candidate as EnqueueOutboxRequest;
+      const key = `enqueue:${request.kind}:${request.effect.idempotencyKey}`;
+      const known = this.#state.decisions[key];
+      if (known) {
+        if (known.method !== "enqueue" || known.hash !== request.effect.requestHash) {
+          return Result.err(errorOf("idempotency_conflict"));
+        }
+        const identity = this.identity(known.outboxId);
+        return Result.ok(freeze({ decision: "replayed" as const, record: pendingFrom(identity) }));
+      }
+      if (this.#state.records[request.outboxId]) {
+        return Result.err(errorOf("idempotency_conflict"));
+      }
+      const record = pendingRecord(request);
+      this.#state.records[request.outboxId] = record;
+      this.remember(key, "enqueue", request.effect.requestHash, "applied", request.outboxId, 0, null, null);
+      return Result.ok(freeze({ decision: "applied" as const, record }));
+    });
+  }
+
+  claimNext(input: ClaimOutboxRequest): Promise<ResultValue<OutboxClaimDecision, OutboxStoreError>> {
+    return this.mutate<OutboxClaimDecision>("claimNext", input, candidate => {
+      const request = candidate as ClaimOutboxRequest;
+      const requestHash = hashFakeOutboxRequest(request);
+      const tokenHash = hashToken(request.leaseToken);
+      const key = `claim:${tokenHash}`;
+      const known = this.#state.decisions[key];
+      const authority = this.#state.leases[tokenHash];
+      if (known) {
+        if (known.method !== "claimNext" || known.hash !== requestHash) {
+          return Result.err(errorOf("idempotency_conflict"));
+        }
+        if (known.outcome === "empty") {
+          return Result.ok(freeze({ decision: "replayed" as const, lease: null }));
+        }
+        if (!authority || authority.method !== "claimNext" || authority.requestHash !== requestHash) {
+          return Result.err(errorOf("corrupt_state"));
+        }
+        return Result.ok(freeze({ decision: "replayed" as const, lease: leaseFrom(this.identity(authority.outboxId), authority, request.leaseToken) }));
+      }
+      if (authority) {
+        return Result.err(errorOf("idempotency_conflict"));
+      }
+      const record = Object.values(this.#state.records)
+        .filter(row => request.kinds.includes(row.kind) && ((row.state === "pending" && row.availableAt <= request.now) || (row.state === "failed" && row.retryAt !== null && row.retryAt <= request.now)))
+        .sort((left, right) => effectiveAt(left).localeCompare(effectiveAt(right)) || left.outboxId.localeCompare(right.outboxId))[0];
+      if (!record) {
+        this.remember(key, "claimNext", requestHash, "empty", null, null, tokenHash, null);
+        return Result.ok(freeze({ decision: "empty" as const, lease: null }));
+      }
+      const started = this.replace(record, {
+        state: "started",
+        stateChangedAt: request.now,
+        attempt: record.attempt + 1,
+        workerId: request.workerId,
+        claimedAt: request.now,
+        leaseToken: request.leaseToken,
+        leaseExpiresAt: request.leaseExpiresAt,
+        certainty: null,
+        retryAt: null,
+        receiptRef: null,
+        lastErrorTag: null,
+        resultAt: null,
+        reconciledAt: null,
+        cancellationReasonTag: null,
+      });
+      const leaseAuthority: LeaseAuthority = freeze({ method: "claimNext", requestHash, outboxId: record.outboxId, attempt: started.attempt, workerId: request.workerId, claimedAt: request.now, leaseExpiresAt: request.leaseExpiresAt, reconciliationRef: started.reconciliationRef });
+      this.#state.leases[tokenHash] = leaseAuthority;
+      this.remember(key, "claimNext", requestHash, "applied", record.outboxId, started.attempt, tokenHash, null);
+      return Result.ok(freeze({ decision: "applied" as const, lease: leaseFrom(started, leaseAuthority, request.leaseToken) }));
+    });
+  }
+
+  reclaim(input: ReclaimOutboxRequest): Promise<ResultValue<OutboxMutationDecision, OutboxStoreError>> {
+    return this.mutate("reclaim", input, candidate => {
+      const request = candidate as ReclaimOutboxRequest;
+      const requestHash = hashFakeOutboxRequest(request);
+      const tokenHash = hashToken(request.leaseToken);
+      const key = `reclaim:${request.outboxId}:${request.expectedAttempt}`;
+      const known = this.#state.decisions[key];
+      if (known) {
+        if (known.method !== "reclaim" || known.hash !== requestHash) {
+          return Result.err(errorOf("idempotency_conflict"));
+        }
+        if (known.outcome === "stale") return Result.ok(stale());
+        const authority = this.#state.leases[tokenHash];
+        if (!authority || authority.requestHash !== requestHash) return Result.err(errorOf("corrupt_state"));
+        return Result.ok(freeze({ decision: "replayed" as const, record: recordFromLease(this.identity(request.outboxId), authority, request.leaseToken) }));
+      }
+      if (this.#state.leases[tokenHash]) return Result.err(errorOf("idempotency_conflict"));
+      const row = this.#state.records[request.outboxId];
+      const permitted = row?.state === "started" && row.attempt === request.expectedAttempt && row.claimedAt !== null && row.leaseExpiresAt !== null && request.now >= row.claimedAt && request.now >= row.leaseExpiresAt && ((request.authority.kind === "repeatable" && row.repeatability === "repeatable") || request.authority.kind === "reconciled_absent");
+      if (!row || !permitted) {
+        this.remember(key, "reclaim", requestHash, "stale", request.outboxId, request.expectedAttempt, null, null);
+        return Result.ok(stale());
+      }
+      const reconciliationRef = request.authority.kind === "reconciled_absent" ? request.authority.reconciliationRef : row.reconciliationRef;
+      const started = this.replace(row, { stateChangedAt: request.now, attempt: row.attempt + 1, workerId: request.workerId, claimedAt: request.now, leaseToken: request.leaseToken, leaseExpiresAt: request.leaseExpiresAt, reconciliationRef });
+      const authority: LeaseAuthority = freeze({ method: "reclaim", requestHash, outboxId: row.outboxId, attempt: started.attempt, workerId: request.workerId, claimedAt: request.now, leaseExpiresAt: request.leaseExpiresAt, reconciliationRef });
+      this.#state.leases[tokenHash] = authority;
+      this.remember(key, "reclaim", requestHash, "applied", row.outboxId, started.attempt, tokenHash, null);
+      return Result.ok(applied(started));
+    });
+  }
+
+  complete(input: CompleteOutboxRequest) {
+    return this.workerResult("complete", input, { state: "completed", certainty: "applied", resultAt: input.completedAt, receiptRef: input.receiptRef, errorTag: null, retryAt: null });
+  }
+
+  fail(input: FailOutboxRequest) {
+    return this.workerResult("fail", input, { state: "failed", certainty: "not_applied", resultAt: input.failedAt, receiptRef: null, errorTag: input.errorTag, retryAt: input.retryAt });
+  }
+
+  markUnknown(input: MarkOutboxUnknownRequest) {
+    return this.workerResult("markUnknown", input, { state: "unknown", certainty: "unknown", resultAt: input.observedAt, receiptRef: null, errorTag: input.errorTag, retryAt: null });
+  }
+
+  resolveUnknown(input: ResolveUnknownOutboxRequest): Promise<ResultValue<OutboxMutationDecision, OutboxStoreError>> {
+    return this.mutate("resolveUnknown", input, candidate => {
+      const request = candidate as ResolveUnknownOutboxRequest;
+      const requestHash = hashFakeOutboxRequest(request);
+      const key = `resolve:${request.outboxId}:${request.expectedAttempt}`;
+      const known = this.#state.decisions[key];
+      if (known) {
+        if (known.method !== "resolveUnknown" || known.hash !== requestHash) return Result.err(errorOf("idempotency_conflict"));
+        if (known.outcome === "stale") return Result.ok(stale());
+        const authority = this.#state.resolutions[outcomeKey(request.outboxId, request.expectedAttempt)];
+        if (!authority || authority.requestHash !== requestHash) return Result.err(errorOf("corrupt_state"));
+        return Result.ok(freeze({ decision: "replayed" as const, record: recordFromResolution(this.identity(request.outboxId), authority) }));
+      }
+      const row = this.#state.records[request.outboxId];
+      const validTime = row?.resultAt !== null && row?.resultAt !== undefined && request.reconciledAt >= row.resultAt && (request.resolution.kind !== "not_applied" || request.resolution.retryAt === null || request.resolution.retryAt > request.reconciledAt);
+      if (!row || row.state !== "unknown" || row.attempt !== request.expectedAttempt || !validTime) {
+        this.remember(key, "resolveUnknown", requestHash, "stale", request.outboxId, request.expectedAttempt, null, null);
+        return Result.ok(stale());
+      }
+      const resolution = resolutionAuthority(request);
+      this.#state.resolutions[outcomeKey(request.outboxId, request.expectedAttempt)] = resolution;
+      const record = recordFromResolution(row, resolution);
+      this.#state.records[row.outboxId] = record;
+      this.remember(key, "resolveUnknown", requestHash, "applied", row.outboxId, row.attempt, null, null);
+      return Result.ok(applied(record));
+    });
+  }
+
+  async get(input: string): Promise<ResultValue<OutboxRecord | null, OutboxStoreError>> {
+    const id = normaliseFakeOutboxId(input);
+    if (!id) return Result.err(errorOf("invalid_request"));
+    try {
+      return Result.ok(this.#state.records[id] ?? null);
+    } catch (error) {
+      void error;
+      return Result.err(errorOf("corrupt_state"));
+    }
+  }
+
+  async listUnknown(input: ListUnknownOutboxRequest): Promise<ResultValue<ListUnknownOutboxResult, OutboxStoreError>> {
+    const request = normaliseFakeOutboxList(input);
+    if (!request) return Result.err(errorOf("invalid_request"));
+    try {
+      const records = Object.values(this.#state.records)
+        .filter(row => row.state === "unknown" && request.kinds.includes(row.kind) && (!request.after || row.stateChangedAt > request.after.stateChangedAt || (row.stateChangedAt === request.after.stateChangedAt && row.outboxId > request.after.outboxId)))
+        .sort(orderRecords)
+        .slice(0, request.limit);
+      const last = records.length === request.limit ? records.at(-1) ?? null : null;
+      return Result.ok(freeze({ records: Object.freeze(records), nextCursor: last ? { stateChangedAt: last.stateChangedAt, outboxId: last.outboxId } : null }));
+    } catch (error) {
+      void error;
+      return Result.err(errorOf("corrupt_state"));
+    }
+  }
+
+  cleanupTerminal(input: CleanupTerminalOutboxRequest): Promise<ResultValue<OutboxCleanupDecision, OutboxStoreError>> {
+    return this.mutate<OutboxCleanupDecision>("cleanupTerminal", input, candidate => {
+      const request = candidate as CleanupTerminalOutboxRequest;
+      const requestHash = hashFakeOutboxRequest(request);
+      const key = `cleanup:${request.cleanupId}`;
+      const known = this.#state.decisions[key];
+      if (known) {
+        if (known.method !== "cleanupTerminal" || known.hash !== requestHash) return Result.err(errorOf("idempotency_conflict"));
+        if (!known.cleanupResult) return Result.err(errorOf("corrupt_state"));
+        return Result.ok(freeze({ decision: "replayed" as const, result: known.cleanupResult }));
+      }
+      const rows = Object.values(this.#state.records)
+        .filter(row => row.stateChangedAt < request.before && (row.state === "cancelled" || (row.state === "failed" && row.certainty === "not_applied" && row.retryAt === null)) && (!request.after || row.stateChangedAt > request.after.stateChangedAt || (row.stateChangedAt === request.after.stateChangedAt && row.outboxId > request.after.outboxId)))
+        .sort(orderRecords)
+        .slice(0, request.limit);
+      for (const row of rows) {
+        delete this.#state.records[row.outboxId];
+        delete this.#state.outcomes[outcomeKey(row.outboxId, row.attempt)];
+        delete this.#state.resolutions[outcomeKey(row.outboxId, row.attempt)];
+        for (const [decisionKey, decision] of Object.entries(this.#state.decisions)) {
+          if (decision.outboxId === row.outboxId) delete this.#state.decisions[decisionKey];
+        }
+      }
+      const last = rows.length === request.limit ? rows.at(-1) ?? null : null;
+      const result = freeze({ deletedIds: Object.freeze(rows.map(row => row.outboxId)), deletedCount: rows.length, nextCursor: last ? { stateChangedAt: last.stateChangedAt, outboxId: last.outboxId } : null });
+      this.remember(key, "cleanupTerminal", requestHash, "applied", null, null, null, result);
+      return Result.ok(freeze({ decision: "applied" as const, result }));
+    });
+  }
+
+  private workerResult<T extends CompleteOutboxRequest | FailOutboxRequest | MarkOutboxUnknownRequest>(
+    method: "complete" | "fail" | "markUnknown",
+    input: T,
+    outcome: Omit<OutcomeAuthority, "method" | "requestHash" | "outboxId" | "attempt" | "reconciliationRef">,
+  ): Promise<ResultValue<OutboxMutationDecision, OutboxStoreError>> {
+    return this.mutate(method, input, candidate => {
+      const request = candidate as T;
+      const requestHash = hashFakeOutboxRequest(request);
+      const key = `outcome:${request.outboxId}:${request.expectedAttempt}`;
+      const authorityKey = outcomeKey(request.outboxId, request.expectedAttempt);
+      const authority = this.#state.outcomes[authorityKey];
+      if (authority) {
+        if (authority.method === method && authority.requestHash === requestHash) {
+          return Result.ok(freeze({ decision: "replayed" as const, record: recordFromOutcome(this.identity(request.outboxId), authority) }));
+        }
+        return Result.ok(stale());
+      }
+      const known = this.#state.decisions[key];
+      if (known && known.outcome !== "stale") return Result.ok(stale());
+      if (known && known.method === method && known.hash === requestHash) return Result.ok(stale());
+      const row = this.#state.records[request.outboxId];
+      const validTime = row?.claimedAt !== null && row?.claimedAt !== undefined && row.leaseExpiresAt !== null && outcome.resultAt >= row.claimedAt && outcome.resultAt < row.leaseExpiresAt && (outcome.retryAt === null || outcome.retryAt > outcome.resultAt);
+      const owns = row?.state === "started" && row.workerId === request.workerId && row.attempt === request.expectedAttempt && row.leaseToken === request.leaseToken;
+      if (!row || !owns || !validTime) {
+        this.remember(key, method, requestHash, "stale", request.outboxId, request.expectedAttempt, null, null);
+        return Result.ok(stale());
+      }
+      const durable: OutcomeAuthority = freeze({ ...outcome, method, requestHash, outboxId: request.outboxId, attempt: request.expectedAttempt, reconciliationRef: row.reconciliationRef });
+      this.#state.outcomes[authorityKey] = durable;
+      const record = recordFromOutcome(row, durable);
+      this.#state.records[row.outboxId] = record;
+      this.remember(key, method, requestHash, "applied", row.outboxId, row.attempt, null, null);
+      return Result.ok(applied(record));
+    });
+  }
+
+  private async mutate<T>(method: FakeOutboxMutationMethod, input: unknown, apply: (request: unknown) => ResultValue<T, OutboxStoreError>): Promise<ResultValue<T, OutboxStoreError>> {
+    const request = normaliseFakeOutboxMutation(method, input);
+    const previous = this.#serial;
+    let release!: () => void;
+    this.#serial = new Promise(resolve => { release = resolve; });
+    await previous;
+    let snapshot: State | null = null;
+    try {
+      this.observe(method, request, "call", null);
+      if (!request) return this.finish(method, request, Result.err(errorOf("invalid_request")));
+      const checkpoint = this.readBeforeEffectFault(method);
+      if (checkpoint === "pre_transaction") return this.finish(method, request, Result.err(errorOf("storage_unavailable", "not_applied", true)));
+      snapshot = structuredClone(this.#state);
+      const value = apply(request);
+      if (!value.ok) return this.finish(method, request, value);
+      if (checkpoint === "in_transaction") {
+        this.#state = snapshot;
+        return this.finish(method, request, Result.err(errorOf("storage_unavailable", "not_applied", true)));
+      }
+      if (this.exactLostAcknowledgement(method)) return this.finish(method, request, Result.err(errorOf("storage_unavailable", "unknown", true)));
+      return this.finish(method, request, value);
+    } catch (error) {
+      void error;
+      if (snapshot) this.#state = snapshot;
+      return this.finish(method, request, Result.err(errorOf("corrupt_state")));
+    } finally {
+      release();
+    }
+  }
+
+  private readBeforeEffectFault(method: FakeOutboxMutationMethod): "pre_transaction" | "in_transaction" | null {
+    const value = this.hitFault(method, "before_effect");
+    if (value === true) return "pre_transaction";
+    if (value === "in_transaction") return "in_transaction";
+    return null;
+  }
+
+  private exactLostAcknowledgement(method: FakeOutboxMutationMethod): boolean {
+    return this.hitFault(method, "effect_then_lost_acknowledgement") === true;
+  }
+
+  private hitFault(method: FakeOutboxMutationMethod, point: PlannedPoint): FaultValue {
+    try {
+      const key = `${method}:${point}`;
+      const occurrence = (this.#counts.get(key) ?? 0) + 1;
+      this.#counts.set(key, occurrence);
+      const planned = this.#faults.get(key);
+      if (planned?.has(occurrence)) {
+        const value = this.#faultValues.get(key);
+        if (value === throwFault) throw new Error("planned fake fault observer failure");
+        if (value === true && point === "before_effect" && occurrence > 1) {
+          return "in_transaction";
+        }
+        return value;
+      }
+      return this.context.faults.hit(point);
+    } catch (error) {
+      void error;
+      return false;
+    }
+  }
+
+  private replace(record: OutboxRecord, patch: Partial<OutboxRecord>): OutboxRecord {
+    const next = freeze({ ...record, ...patch });
+    this.#state.records[record.outboxId] = next;
+    return next;
+  }
+
+  private identity(outboxId: string | null): OutboxRecord {
+    if (!outboxId) throw new TypeError("Missing fake outbox identity.");
+    const record = this.#state.records[outboxId];
+    if (!record) throw new TypeError("Missing fake outbox record.");
+    return record;
+  }
+
+  private remember(key: string, method: FakeOutboxMutationMethod, hash: string, outcome: DecisionOutcome, outboxId: string | null, attempt: number | null, tokenHash: string | null, cleanupResult: OutboxCleanupDecision["result"] | null): void {
+    this.#state.decisions[key] = freeze({ method, hash, outcome, outboxId, attempt, tokenHash, cleanupResult });
+  }
+
+  private observe(method: string, request: unknown, resultTag: string, certainty: EffectCertainty | null): void {
+    try {
+      const value = request as { outboxId?: string; effect?: { operationId?: string | null; sourceSeq?: number | null }; expectedAttempt?: number } | null;
+      const trace: NormalisedTraceInput = { contract: "EF-S05", method, effectId: value?.outboxId ?? "invalid", operationId: value?.effect?.operationId ?? null, sourceSeq: value?.effect?.sourceSeq ?? null, version: value?.expectedAttempt ?? null, certainty, resultTag };
+      if (resultTag === "call") this.trace.recordCall(trace);
+      else this.trace.recordResult(trace);
+      this.observer(trace);
+    } catch (error) {
+      void error;
+    }
+  }
+
+  private finish<T>(method: string, request: unknown, result: ResultValue<T, OutboxStoreError>): ResultValue<T, OutboxStoreError> {
+    this.observe(method, request, result.ok ? decisionTag(result.value) : result.error._tag, result.ok ? decisionCertainty(result.value) : result.error.certainty);
+    return result;
+  }
 }
-function effective(r: OutboxRecord) {
-	if (r.state === "pending") return r.availableAt;
-	if (r.retryAt === null)
-		throw new TypeError("Retryable row requires retryAt.");
-	return r.retryAt;
+
+const throwFault = Symbol("throw-fault");
+
+function emptyState(): State {
+  return { records: {}, decisions: {}, leases: {}, outcomes: {}, resolutions: {} };
 }
-function order(a: OutboxRecord, b: OutboxRecord) {
-	return (
-		a.stateChangedAt.localeCompare(b.stateChangedAt) ||
-		a.outboxId.localeCompare(b.outboxId)
-	);
+function hashToken(token: string): string {
+  return createHash("sha256").update(token, "utf8").digest("hex");
 }
-function err(
-	_tag: OutboxStoreErrorTag,
-	certainty: EffectCertainty = "not_applied",
-	retryable = false,
-): OutboxStoreError {
-	return freeze({ _tag, certainty, retryable });
+function outcomeKey(outboxId: string, attempt: number): string {
+  return `${outboxId}:${attempt}`;
+}
+function pendingRecord(request: EnqueueOutboxRequest): OutboxRecord {
+  return freeze({ outboxId: request.outboxId, kind: request.kind, state: "pending", idempotencyKey: request.effect.idempotencyKey, requestHash: request.effect.requestHash, operationId: request.effect.operationId, sourceSeq: request.effect.sourceSeq, provenanceRef: request.effect.provenanceRef, redactionClass: request.effect.redactionClass, payloadRef: request.payloadRef, destinationRef: request.destinationRef, availableAt: request.availableAt, enqueuedAt: request.enqueuedAt, stateChangedAt: request.enqueuedAt, repeatability: request.repeatability, attempt: 0, workerId: null, claimedAt: null, leaseToken: null, leaseExpiresAt: null, certainty: "not_applied", retryAt: null, receiptRef: null, lastErrorTag: null, resultAt: null, reconciliationRef: null, reconciledAt: null, cancellationReasonTag: null });
+}
+function pendingFrom(identity: OutboxRecord): OutboxRecord {
+  return freeze({ ...identity, state: "pending", stateChangedAt: identity.enqueuedAt, attempt: 0, workerId: null, claimedAt: null, leaseToken: null, leaseExpiresAt: null, certainty: "not_applied", retryAt: null, receiptRef: null, lastErrorTag: null, resultAt: null, reconciliationRef: null, reconciledAt: null, cancellationReasonTag: null });
+}
+function leaseFrom(identity: OutboxRecord, authority: LeaseAuthority, token: string): OutboxLease {
+  const record = recordFromLease(identity, authority, token) as OutboxLease["record"];
+  return freeze({ record, workerId: authority.workerId });
+}
+function recordFromLease(identity: OutboxRecord, authority: LeaseAuthority, token: string): OutboxRecord {
+  return freeze({ ...identity, state: "started", stateChangedAt: authority.claimedAt, attempt: authority.attempt, workerId: authority.workerId, claimedAt: authority.claimedAt, leaseToken: token, leaseExpiresAt: authority.leaseExpiresAt, certainty: null, retryAt: null, receiptRef: null, lastErrorTag: null, resultAt: null, reconciliationRef: authority.reconciliationRef, reconciledAt: null, cancellationReasonTag: null });
+}
+function recordFromOutcome(identity: OutboxRecord, authority: OutcomeAuthority): OutboxRecord {
+  return freeze({ ...identity, state: authority.state, stateChangedAt: authority.resultAt, attempt: authority.attempt, workerId: null, claimedAt: null, leaseToken: null, leaseExpiresAt: null, certainty: authority.certainty, retryAt: authority.retryAt, receiptRef: authority.receiptRef, lastErrorTag: authority.errorTag, resultAt: authority.resultAt, reconciliationRef: authority.reconciliationRef, reconciledAt: null, cancellationReasonTag: null });
+}
+function resolutionAuthority(request: ResolveUnknownOutboxRequest): ResolutionAuthority {
+  const resolution = request.resolution;
+  return freeze({ requestHash: hashFakeOutboxRequest(request), outboxId: request.outboxId, attempt: request.expectedAttempt, state: resolution.kind === "applied" ? "completed" : resolution.kind === "not_applied" ? "failed" : "cancelled", certainty: resolution.kind === "applied" ? "applied" : "not_applied", reconciledAt: request.reconciledAt, reconciliationRef: request.reconciliationRef, receiptRef: resolution.kind === "applied" ? resolution.receiptRef : null, errorTag: resolution.kind === "not_applied" ? resolution.errorTag : null, retryAt: resolution.kind === "not_applied" ? resolution.retryAt : null, reasonTag: resolution.kind === "cancelled" ? resolution.reasonTag : null });
+}
+function recordFromResolution(identity: OutboxRecord, authority: ResolutionAuthority): OutboxRecord {
+  return freeze({ ...identity, state: authority.state, stateChangedAt: authority.reconciledAt, attempt: authority.attempt, workerId: null, claimedAt: null, leaseToken: null, leaseExpiresAt: null, certainty: authority.certainty, retryAt: authority.retryAt, receiptRef: authority.receiptRef, lastErrorTag: authority.errorTag, resultAt: authority.reconciledAt, reconciliationRef: authority.reconciliationRef, reconciledAt: authority.reconciledAt, cancellationReasonTag: authority.reasonTag });
+}
+function effectiveAt(record: OutboxRecord): string {
+  if (record.state === "pending") return record.availableAt;
+  if (record.state === "failed" && record.retryAt !== null) return record.retryAt;
+  throw new TypeError("Ineligible fake outbox record.");
+}
+function orderRecords(left: OutboxRecord, right: OutboxRecord): number {
+  return left.stateChangedAt.localeCompare(right.stateChangedAt) || left.outboxId.localeCompare(right.outboxId);
+}
+function errorOf(_tag: OutboxStoreErrorTag, certainty: EffectCertainty = "not_applied", retryable = false): OutboxStoreError {
+  return freeze({ _tag, certainty, retryable });
 }
 function applied(record: OutboxRecord): OutboxMutationDecision {
-	return freeze({ decision: "applied", record });
+  return freeze({ decision: "applied", record });
 }
 function stale(): OutboxMutationDecision {
-	return freeze({ decision: "stale", record: null });
+  return freeze({ decision: "stale", record: null });
 }
-function replay<T>(input: unknown): T {
-	const v = structuredClone(input) as Record<string, unknown>;
-	if (v.decision === "applied" || v.decision === "empty")
-		v.decision = "replayed";
-	return freeze(v) as T;
+function decisionTag(value: unknown): string {
+  try {
+    return typeof (value as { decision?: unknown })?.decision === "string" ? (value as { decision: string }).decision : "ok";
+  } catch (error) {
+    void error;
+    return "ok";
+  }
 }
-function freeze<T>(v: T): T {
-	if (v && typeof v === "object") {
-		for (const x of Object.values(v)) freeze(x);
-		Object.freeze(v);
-	}
-	return v;
+function decisionCertainty(value: unknown): EffectCertainty | null {
+  try {
+    const decision = value as { record?: OutboxRecord; lease?: OutboxLease };
+    return (decision.record ?? decision.lease?.record)?.certainty ?? null;
+  } catch (error) {
+    void error;
+    return null;
+  }
 }
-function tag(v: unknown) {
-	try {
-		return typeof (v as { decision?: unknown })?.decision === "string"
-			? (v as { decision: string }).decision
-			: "ok";
-	} catch {
-		return "ok";
-	}
-}
-function certainty(v: unknown): EffectCertainty | null {
-	try {
-		const x = v as { record?: OutboxRecord; lease?: OutboxLease };
-		return (x.record ?? x.lease?.record)?.certainty ?? null;
-	} catch {
-		return null;
-	}
+function freeze<T>(value: T): T {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value)) freeze(child);
+    Object.freeze(value);
+  }
+  return value;
 }

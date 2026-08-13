@@ -68,9 +68,11 @@ export async function runParameterisedContractSuite<TSubject>(
         return subject;
       },
       async crashAndRestore() {
-        const restored = await factory.crashAndRestore(subject, context);
+        const previous = subject;
+        const restored = await factory.crashAndRestore(previous, context);
         subject = restored.subject;
         context = restored.context;
+        if (subject !== previous) await dispose?.(previous);
         return subject;
       },
       inspectTrace() {

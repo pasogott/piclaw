@@ -5,6 +5,7 @@ import {
   type NormalisedEffectTrace,
 } from "../../src/service-effects/contracts/common.js";
 import { SERVICE_WORK_STORE_CONTRACT_CASE_NAMES } from "../../src/service-effects/testing/contract-suites/service-work-store-contract.js";
+import { SERVICE_OUTBOX_STORE_CONTRACT_CASE_NAMES } from "../../src/service-effects/testing/contract-suites/service-outbox-store-contract.js";
 import {
   runParameterisedContractSuite,
   type ContractSubjectFactory,
@@ -246,9 +247,9 @@ describe("generic parameterised contract-suite lifecycle", () => {
       inspectTrace: () => [],
     };
     await runParameterisedContractSuite(factory, [{ name: "pass", run: (fixture) => fixture.crashAndRestore() }], createSampleContext, (subject) => void disposed.push(subject.id));
-    expect(disposed).toEqual([2]);
+    expect(disposed).toEqual([1, 2]);
     expect(runParameterisedContractSuite(factory, [{ name: "fail", run: () => { throw new Error("case failure"); } }], createSampleContext, (subject) => void disposed.push(subject.id))).rejects.toThrow("case failure");
-    expect(disposed).toEqual([2, 3]);
+    expect(disposed).toEqual([1, 2, 3]);
   });
 
   test("propagates disposal failure deterministically", async () => {
@@ -303,6 +304,17 @@ describe("typed effector case catalogue", () => {
     expect(ids.filter((id) => /^EF-S01-C\d+$/.test(id))).toEqual(catalogue?.requiredCases.map((entry) => entry.caseId));
     expect(ids.filter((id) => id === "EF-S01-R01")).toEqual(["EF-S01-R01"]);
     expect(ids.every((id) => /^EF-S01-(?:C(?:10|[1-9])|R01|S\d{2})$/.test(id))).toBeTrue();
+  });
+
+  test("EF-S05 suite maps exact C1-C8 and R01 with labelled supplements", () => {
+    const ids = SERVICE_OUTBOX_STORE_CONTRACT_CASE_NAMES.map((name) => name.split(" ", 1)[0]);
+    const catalogue = EFFECTOR_CASE_CATALOGUE.find((entry) => entry.contractId === "EF-S05");
+    expect(catalogue).toBeDefined();
+    expect(ids.filter((id) => /^EF-S05-C\d+$/.test(id))).toEqual(
+      catalogue?.requiredCases.map((entry) => entry.caseId),
+    );
+    expect(ids.filter((id) => id === "EF-S05-R01")).toEqual(["EF-S05-R01"]);
+    expect(ids.every((id) => /^EF-S05-(?:C[1-8]|R01|S\d{2})$/.test(id))).toBeTrue();
   });
 
   test("covers EF-S01 through EF-S08 and EF-H01 exactly once", () => {

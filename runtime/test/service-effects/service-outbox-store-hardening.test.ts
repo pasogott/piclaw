@@ -18,17 +18,29 @@ import type {
 	OutboxStoreError,
 	ReclaimOutboxRequest,
 } from "../../src/service-effects/contracts/service-outbox-store.js";
+import type { ContractTestContext } from "../../src/service-effects/testing/contract-suite.js";
+import {
+	ManualEffectClock,
+	SequenceEffectIdSource,
+} from "../../src/service-effects/testing/deterministic-controls.js";
+import { FakeServiceOutboxStore } from "../../src/service-effects/testing/fakes/fake-service-outbox-store.js";
+import { DeterministicFaultPlan } from "../../src/service-effects/testing/fault-plan.js";
 import { installServiceOutboxSchema } from "../../src/service-effects/current-piclaw/service-outbox-schema.js";
 import {
 	createCurrentPiclawServiceOutboxStore,
 	createServiceOutboxEnqueueInserter,
+	decodeServiceOutboxRecordForTesting,
 	type ServiceOutboxAdapterRuntime,
 } from "../../src/service-effects/current-piclaw/service-outbox-store.js";
 
 class Runtime implements ServiceOutboxAdapterRuntime {
 	readonly traces: NormalisedTraceInput[] = [];
-	hitFault() {
-		return false;
+	faultValue: unknown = false;
+	throwFault = false;
+	hitFault(point: "before_effect" | "effect_then_lost_acknowledgement") {
+		if (point === "before_effect") return false;
+		if (this.throwFault) throw new Error("planned observer failure");
+		return this.faultValue;
 	}
 	recordTrace(input: NormalisedTraceInput) {
 		this.traces.push(input);
@@ -85,6 +97,13 @@ function open(path = ":memory:") {
 	if (!made.ok) throw new Error("store");
 	return { database, runtime, store: made.value };
 }
+function fakeContext(): ContractTestContext {
+	return {
+		clock: new ManualEffectClock("2026-08-13T09:00:00.000Z"),
+		ids: new SequenceEffectIdSource("s05-hardening"),
+		faults: new DeterministicFaultPlan(),
+	};
+}
 function typed(
 	result: { ok: true } | { ok: false; error: OutboxStoreError },
 	tag: OutboxStoreError["_tag"],
@@ -126,6 +145,53 @@ describe("EF-S05 transaction composition and construction", () => {
 		db.close();
 	});
 });
+describe("EF-S05 exact acknowledgement fault semantics", () => {
+	test("only boolean true after commit reports unknown for SQLite and fake", async () => {
+		for (const value of [false, "truthy", 1, null]) {
+			const sqlite = open();
+			try {
+				sqlite.runtime.faultValue = value;
+				const result = await sqlite.store.enqueue(enqueue(`sqlite-${String(value)}`));
+				expect(result.ok).toBeTrue();
+			} finally {
+				sqlite.database.close();
+			}
+		}
+		const throwing = open();
+		try {
+			throwing.runtime.throwFault = true;
+			expect((await throwing.store.enqueue(enqueue("sqlite-throw"))).ok).toBeTrue();
+		} finally {
+			throwing.database.close();
+		}
+		const lost = open();
+		try {
+			lost.runtime.faultValue = true;
+			const result = await lost.store.enqueue(enqueue("sqlite-true"));
+			expect(result.ok).toBeFalse();
+			if (!result.ok) expect(result.error.certainty).toBe("unknown");
+			expect((await lost.store.get("sqlite-true")).ok).toBeTrue();
+		} finally {
+			lost.database.close();
+		}
+
+		for (const value of [false, "truthy", 1, null]) {
+			const fake = new FakeServiceOutboxStore(fakeContext());
+			fake.planFaultValue("enqueue", "effect_then_lost_acknowledgement", value);
+			expect((await fake.enqueue(enqueue(`fake-${String(value)}`))).ok).toBeTrue();
+		}
+		const fakeThrow = new FakeServiceOutboxStore(fakeContext());
+		fakeThrow.planFaultThrow("enqueue", "effect_then_lost_acknowledgement");
+		expect((await fakeThrow.enqueue(enqueue("fake-throw"))).ok).toBeTrue();
+		const fakeLost = new FakeServiceOutboxStore(fakeContext());
+		fakeLost.planFaultValue("enqueue", "effect_then_lost_acknowledgement", true);
+		const fakeResult = await fakeLost.enqueue(enqueue("fake-true"));
+		expect(fakeResult.ok).toBeFalse();
+		if (!fakeResult.ok) expect(fakeResult.error.certainty).toBe("unknown");
+		expect((await fakeLost.get("fake-true")).ok).toBeTrue();
+	});
+});
+
 describe("EF-S05 two-connection lease races", () => {
 	test("one claim owner wins and stale result CAS cannot replace it", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "piclaw-s05-race-"));
@@ -167,6 +233,66 @@ describe("EF-S05 two-connection lease races", () => {
 			left.database.close();
 			right.database.close();
 			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("EF-S05 durable replay authority", () => {
+	test("replays immutable claim/outcome records and never reuses a cleaned lease token", async () => {
+		const fixture = open();
+		try {
+			const enqueueRequest = enqueue("authority");
+			await fixture.store.enqueue(enqueueRequest);
+			const claimRequest = claim("authority");
+			const claimed = await fixture.store.claimNext(claimRequest);
+			if (!claimed.ok || !claimed.value.lease) throw new Error("claim");
+			const lease = claimed.value.lease;
+			const failRequest = {
+				outboxId: "authority",
+				workerId: lease.workerId,
+				expectedAttempt: lease.record.attempt,
+				leaseToken: lease.record.leaseToken,
+				errorTag: "poison",
+				certainty: "not_applied" as const,
+				retryAt: null,
+				failedAt: "2026-08-13T10:00:30.000Z",
+			};
+			await fixture.store.fail(failRequest);
+			const enqueueReplay = await fixture.store.enqueue(enqueueRequest);
+			expect(enqueueReplay.ok && enqueueReplay.value.record.state).toBe("pending");
+			const claimReplay = await fixture.store.claimNext(claimRequest);
+			expect(claimReplay.ok && claimReplay.value.lease?.record.state).toBe("started");
+			const failReplay = await fixture.store.fail(failRequest);
+			expect(failReplay.ok && failReplay.value.record?.state).toBe("failed");
+			await fixture.store.cleanupTerminal({
+				cleanupId: "authority-cleanup",
+				before: "2026-08-13T11:00:00.000Z",
+				after: null,
+				limit: 10,
+			});
+			await fixture.store.enqueue(enqueue("authority-next"));
+			const reused = await fixture.store.claimNext({
+				...claimRequest,
+				now: "2026-08-13T12:00:00.000Z",
+				leaseExpiresAt: "2026-08-13T12:01:00.000Z",
+			});
+			typed(reused, "idempotency_conflict");
+
+			const decisions = JSON.stringify(
+				fixture.database.query("SELECT * FROM service_effect_s05_decisions").all(),
+			);
+			for (const forbidden of [
+				enqueueRequest.payloadRef,
+				enqueueRequest.destinationRef,
+				enqueueRequest.effect.provenanceRef,
+				claimRequest.leaseToken,
+				"opaque:secret-receipt",
+				"opaque:secret-reconciliation",
+			]) {
+				if (forbidden !== null) expect(decisions).not.toContain(forbidden);
+			}
+		} finally {
+			fixture.database.close();
 		}
 	});
 });
@@ -256,6 +382,31 @@ describe("EF-S05 held immediate lock is bounded", () => {
 		}
 	});
 });
+describe("EF-S05 closed row decoding", () => {
+	test("rejects malformed enums, correlations, instants, hashes and counters", async () => {
+		const fixture = open();
+		try {
+			await fixture.store.enqueue(enqueue("decode"));
+			const row = fixture.database
+				.query("SELECT * FROM service_effect_s05_outbox WHERE outbox_id='decode'")
+				.get() as Record<string, unknown>;
+			expect(() => decodeServiceOutboxRecordForTesting(row)).not.toThrow();
+			for (const patch of [
+				{ kind: "other" },
+				{ state: "other" },
+				{ request_hash: "x" },
+				{ attempt: -1 },
+				{ enqueued_at: "not-an-instant" },
+				{ state: "started", attempt: 1, certainty: null },
+			]) {
+				expect(() => decodeServiceOutboxRecordForTesting({ ...row, ...patch })).toThrow();
+			}
+		} finally {
+			fixture.database.close();
+		}
+	});
+});
+
 describe("EF-S05 hostile input and redaction", () => {
 	test("malformed closed requests never reach SQL and protected values stay out of traces/errors", async () => {
 		const f = open();
@@ -281,6 +432,12 @@ describe("EF-S05 hostile input and redaction", () => {
 					await f.store.enqueue(candidate as EnqueueOutboxRequest),
 					"invalid_request",
 				);
+			for (const candidate of [
+				enqueue("oversized-id", { outboxId: "x".repeat(513) }),
+				enqueue("oversized-payload", { payloadRef: "x".repeat(2049) }),
+			]) {
+				typed(await f.store.enqueue(candidate), "invalid_request");
+			}
 			const good = await f.store.enqueue(valid);
 			expect(good.ok).toBeTrue();
 			const text = JSON.stringify(f.runtime.traces);

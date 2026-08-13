@@ -76,7 +76,8 @@ export function normaliseOutboxMutation(
 				break;
 		}
 		return request ? deepFreeze(request) : null;
-	} catch {
+	} catch (error) {
+		void error;
 		return null;
 	}
 }
@@ -93,7 +94,8 @@ export function normaliseOutboxList(
 			after: cursor(value.after),
 			limit: limit(value.limit),
 		});
-	} catch {
+	} catch (error) {
+		void error;
 		return null;
 	}
 }
@@ -101,7 +103,8 @@ export function normaliseOutboxList(
 export function normaliseOutboxId(input: unknown): string | null {
 	try {
 		return text(input);
-	} catch {
+	} catch (error) {
+		void error;
 		return null;
 	}
 }
@@ -135,10 +138,10 @@ function enqueue(value: Record<string, unknown>): EnqueueOutboxRequest | null {
 	if (!effect || !kind || !repeatability) return null;
 	const request: EnqueueOutboxRequest = {
 		effect,
-		outboxId: requiredText(value.outboxId),
+		outboxId: boundedText(value.outboxId, 512),
 		kind,
-		payloadRef: requiredText(value.payloadRef),
-		destinationRef: nullableTextRequired(value.destinationRef),
+		payloadRef: boundedText(value.payloadRef, 2048),
+		destinationRef: nullableBoundedText(value.destinationRef, 2048),
 		availableAt: requiredInstant(value.availableAt),
 		enqueuedAt: requiredInstant(value.enqueuedAt),
 		repeatability: repeatability as EnqueueOutboxRequest["repeatability"],
@@ -158,8 +161,8 @@ function claim(value: Record<string, unknown>): ClaimOutboxRequest | null {
 	if (leaseExpiresAt <= now) return null;
 	return {
 		kinds: kinds(value.kinds),
-		workerId: requiredText(value.workerId),
-		leaseToken: requiredText(value.leaseToken),
+		workerId: boundedText(value.workerId, 512),
+		leaseToken: boundedText(value.leaseToken, 2048),
 		now,
 		leaseExpiresAt,
 	};
@@ -188,17 +191,17 @@ function reclaim(value: Record<string, unknown>): ReclaimOutboxRequest | null {
 	)
 		authority = {
 			kind: "reconciled_absent",
-			reconciliationRef: requiredText(authorityValue.reconciliationRef),
+			reconciliationRef: boundedText(authorityValue.reconciliationRef, 2048),
 		};
 	else return null;
 	const now = requiredInstant(value.now),
 		leaseExpiresAt = requiredInstant(value.leaseExpiresAt);
 	if (leaseExpiresAt <= now) return null;
 	return {
-		outboxId: requiredText(value.outboxId),
+		outboxId: boundedText(value.outboxId, 512),
 		expectedAttempt: integer(value.expectedAttempt, 1),
-		workerId: requiredText(value.workerId),
-		leaseToken: requiredText(value.leaseToken),
+		workerId: boundedText(value.workerId, 512),
+		leaseToken: boundedText(value.leaseToken, 2048),
 		now,
 		leaseExpiresAt,
 		authority,
@@ -216,10 +219,10 @@ function worker(value: Record<string, unknown>, extras: readonly string[]) {
 	)
 		return null;
 	return {
-		outboxId: requiredText(value.outboxId),
-		workerId: requiredText(value.workerId),
+		outboxId: boundedText(value.outboxId, 512),
+		workerId: boundedText(value.workerId, 512),
 		expectedAttempt: integer(value.expectedAttempt, 1),
-		leaseToken: requiredText(value.leaseToken),
+		leaseToken: boundedText(value.leaseToken, 2048),
 	};
 }
 function complete(
@@ -229,7 +232,7 @@ function complete(
 	return base
 		? {
 				...base,
-				receiptRef: nullableTextRequired(value.receiptRef),
+				receiptRef: nullableBoundedText(value.receiptRef, 2048),
 				completedAt: requiredInstant(value.completedAt),
 			}
 		: null;
@@ -239,7 +242,7 @@ function fail(value: Record<string, unknown>): FailOutboxRequest | null {
 	if (!base || value.certainty !== "not_applied") return null;
 	return {
 		...base,
-		errorTag: requiredText(value.errorTag),
+		errorTag: diagnosticTag(value.errorTag),
 		certainty: "not_applied",
 		retryAt: nullableInstant(value.retryAt),
 		failedAt: requiredInstant(value.failedAt),
@@ -252,7 +255,7 @@ function unknown(
 	if (!base || value.certainty !== "unknown") return null;
 	return {
 		...base,
-		errorTag: requiredText(value.errorTag),
+		errorTag: diagnosticTag(value.errorTag),
 		certainty: "unknown",
 		observedAt: requiredInstant(value.observedAt),
 	};
@@ -276,7 +279,7 @@ function resolve(
 	if (exact(r, ["kind", "receiptRef"]) && r.kind === "applied")
 		resolution = {
 			kind: "applied",
-			receiptRef: nullableTextRequired(r.receiptRef),
+			receiptRef: nullableBoundedText(r.receiptRef, 2048),
 		};
 	else if (
 		exact(r, ["kind", "errorTag", "retryAt"]) &&
@@ -284,16 +287,16 @@ function resolve(
 	)
 		resolution = {
 			kind: "not_applied",
-			errorTag: requiredText(r.errorTag),
+			errorTag: diagnosticTag(r.errorTag),
 			retryAt: nullableInstant(r.retryAt),
 		};
 	else if (exact(r, ["kind", "reasonTag"]) && r.kind === "cancelled")
-		resolution = { kind: "cancelled", reasonTag: requiredText(r.reasonTag) };
+		resolution = { kind: "cancelled", reasonTag: diagnosticTag(r.reasonTag) };
 	else return null;
 	return {
-		outboxId: requiredText(value.outboxId),
+		outboxId: boundedText(value.outboxId, 512),
 		expectedAttempt: integer(value.expectedAttempt, 1),
-		reconciliationRef: requiredText(value.reconciliationRef),
+		reconciliationRef: boundedText(value.reconciliationRef, 2048),
 		reconciledAt: requiredInstant(value.reconciledAt),
 		resolution,
 	};
@@ -303,7 +306,7 @@ function cleanup(
 ): CleanupTerminalOutboxRequest | null {
 	if (!exact(value, ["cleanupId", "before", "after", "limit"])) return null;
 	return {
-		cleanupId: requiredText(value.cleanupId),
+		cleanupId: boundedText(value.cleanupId, 512),
 		before: requiredInstant(value.before),
 		after: cursor(value.after),
 		limit: limit(value.limit),
@@ -330,11 +333,11 @@ function normaliseEffect(input: unknown): EffectIdentity | null {
 	const redactionClass = enumText(value.redactionClass, REDACTION);
 	if (!requestHash || !redactionClass) return null;
 	return {
-		idempotencyKey: requiredText(value.idempotencyKey),
+		idempotencyKey: boundedText(value.idempotencyKey, 512),
 		requestHash,
-		operationId: nullableTextRequired(value.operationId),
+		operationId: nullableBoundedText(value.operationId, 512),
 		sourceSeq: nullableInteger(value.sourceSeq, 0),
-		provenanceRef: requiredText(value.provenanceRef),
+		provenanceRef: boundedText(value.provenanceRef, 2048),
 		redactionClass: redactionClass as EffectIdentity["redactionClass"],
 	};
 }
@@ -358,7 +361,7 @@ function cursor(input: unknown): OutboxCursor | null {
 		throw new TypeError();
 	return Object.freeze({
 		stateChangedAt: requiredInstant(value.stateChangedAt),
-		outboxId: requiredText(value.outboxId),
+		outboxId: boundedText(value.outboxId, 512),
 	});
 }
 function limit(input: unknown): number {
@@ -417,9 +420,18 @@ function requiredText(input: unknown): string {
 	if (!value) throw new TypeError();
 	return value;
 }
-function nullableTextRequired(input: unknown): string | null {
-	if (input === null) return null;
-	return requiredText(input);
+function boundedText(input: unknown, maxLength: number): string {
+	const value = requiredText(input);
+	if (value.length > maxLength) throw new TypeError();
+	return value;
+}
+function nullableBoundedText(input: unknown, maxLength: number): string | null {
+	return input === null ? null : boundedText(input, maxLength);
+}
+function diagnosticTag(input: unknown): string {
+	const value = boundedText(input, 128);
+	if (!/^[A-Za-z0-9_.:-]+$/.test(value)) throw new TypeError();
+	return value;
 }
 function enumText(input: unknown, values: ReadonlySet<string>): string | null {
 	return typeof input === "string" && values.has(input) ? input : null;

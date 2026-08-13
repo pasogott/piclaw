@@ -45,19 +45,25 @@ export function normaliseFakeOutboxMutation(
 	input: unknown,
 ): NormalisedFakeOutboxMutation | null {
 	try {
-		const v = rec(input);
-		if (!v || !tree(input)) return null;
-		let q: NormalisedFakeOutboxMutation | null = null;
-		if (method === "enqueue") q = enq(v);
-		else if (method === "claimNext") q = claim(v);
-		else if (method === "reclaim") q = reclaim(v);
-		else if (method === "complete") q = complete(v);
-		else if (method === "fail") q = fail(v);
-		else if (method === "markUnknown") q = unknown(v);
-		else if (method === "resolveUnknown") q = resolve(v);
-		else q = cleanup(v);
-		return q ? deep(q) : null;
-	} catch {
+		const value = rec(input);
+		if (!value || !tree(input)) return null;
+		const parsers: Record<
+			FakeOutboxMutationMethod,
+			(input: Record<string, unknown>) => NormalisedFakeOutboxMutation | null
+		> = {
+			enqueue: enq,
+			claimNext: claim,
+			reclaim,
+			complete,
+			fail,
+			markUnknown: unknown,
+			resolveUnknown: resolve,
+			cleanupTerminal: cleanup,
+		};
+		const request = parsers[method](value);
+		return request ? deep(request) : null;
+	} catch (error) {
+		void error;
 		return null;
 	}
 }
@@ -73,14 +79,16 @@ export function normaliseFakeOutboxList(
 			after: cursor(v.after),
 			limit: limit(v.limit),
 		});
-	} catch {
+	} catch (error) {
+		void error;
 		return null;
 	}
 }
 export function normaliseFakeOutboxId(input: unknown): string | null {
 	try {
 		return txt(input);
-	} catch {
+	} catch (error) {
+		void error;
 		return null;
 	}
 }
@@ -112,10 +120,10 @@ function enq(v: Record<string, unknown>): EnqueueOutboxRequest | null {
 	if (!effect || !kind || !repeatability) return null;
 	const q: EnqueueOutboxRequest = {
 		effect,
-		outboxId: req(v.outboxId),
+		outboxId: bounded(v.outboxId, 512),
 		kind: kind as OutboxKind,
-		payloadRef: req(v.payloadRef),
-		destinationRef: ntext(v.destinationRef),
+		payloadRef: bounded(v.payloadRef, 2048),
+		destinationRef: nullableBounded(v.destinationRef, 2048),
 		availableAt: instant(v.availableAt),
 		enqueuedAt: instant(v.enqueuedAt),
 		repeatability: repeatability as EnqueueOutboxRequest["repeatability"],
@@ -133,8 +141,8 @@ function claim(v: Record<string, unknown>): ClaimOutboxRequest | null {
 	if (leaseExpiresAt <= now) return null;
 	return {
 		kinds: kinds(v.kinds),
-		workerId: req(v.workerId),
-		leaseToken: req(v.leaseToken),
+		workerId: bounded(v.workerId, 512),
+		leaseToken: bounded(v.leaseToken, 2048),
 		now,
 		leaseExpiresAt,
 	};
@@ -163,17 +171,17 @@ function reclaim(v: Record<string, unknown>): ReclaimOutboxRequest | null {
 	)
 		authority = {
 			kind: "reconciled_absent",
-			reconciliationRef: req(a.reconciliationRef),
+			reconciliationRef: bounded(a.reconciliationRef, 2048),
 		};
 	else return null;
 	const now = instant(v.now),
 		leaseExpiresAt = instant(v.leaseExpiresAt);
 	if (leaseExpiresAt <= now) return null;
 	return {
-		outboxId: req(v.outboxId),
+		outboxId: bounded(v.outboxId, 512),
 		expectedAttempt: int(v.expectedAttempt, 1),
-		workerId: req(v.workerId),
-		leaseToken: req(v.leaseToken),
+		workerId: bounded(v.workerId, 512),
+		leaseToken: bounded(v.leaseToken, 2048),
 		now,
 		leaseExpiresAt,
 		authority,
@@ -191,10 +199,10 @@ function worker(v: Record<string, unknown>, extra: string[]) {
 	)
 		return null;
 	return {
-		outboxId: req(v.outboxId),
-		workerId: req(v.workerId),
+		outboxId: bounded(v.outboxId, 512),
+		workerId: bounded(v.workerId, 512),
 		expectedAttempt: int(v.expectedAttempt, 1),
-		leaseToken: req(v.leaseToken),
+		leaseToken: bounded(v.leaseToken, 2048),
 	};
 }
 function complete(v: Record<string, unknown>): CompleteOutboxRequest | null {
@@ -202,7 +210,7 @@ function complete(v: Record<string, unknown>): CompleteOutboxRequest | null {
 	return b
 		? {
 				...b,
-				receiptRef: ntext(v.receiptRef),
+				receiptRef: nullableBounded(v.receiptRef, 2048),
 				completedAt: instant(v.completedAt),
 			}
 		: null;
@@ -212,7 +220,7 @@ function fail(v: Record<string, unknown>): FailOutboxRequest | null {
 	return b && v.certainty === "not_applied"
 		? {
 				...b,
-				errorTag: req(v.errorTag),
+				errorTag: tag(v.errorTag),
 				certainty: "not_applied",
 				retryAt: ninstant(v.retryAt),
 				failedAt: instant(v.failedAt),
@@ -224,7 +232,7 @@ function unknown(v: Record<string, unknown>): MarkOutboxUnknownRequest | null {
 	return b && v.certainty === "unknown"
 		? {
 				...b,
-				errorTag: req(v.errorTag),
+				errorTag: tag(v.errorTag),
 				certainty: "unknown",
 				observedAt: instant(v.observedAt),
 			}
@@ -247,20 +255,20 @@ function resolve(
 	if (!r) return null;
 	let resolution: ResolveUnknownOutboxRequest["resolution"];
 	if (keys(r, ["kind", "receiptRef"]) && r.kind === "applied")
-		resolution = { kind: "applied", receiptRef: ntext(r.receiptRef) };
+		resolution = { kind: "applied", receiptRef: nullableBounded(r.receiptRef, 2048) };
 	else if (keys(r, ["kind", "errorTag", "retryAt"]) && r.kind === "not_applied")
 		resolution = {
 			kind: "not_applied",
-			errorTag: req(r.errorTag),
+			errorTag: tag(r.errorTag),
 			retryAt: ninstant(r.retryAt),
 		};
 	else if (keys(r, ["kind", "reasonTag"]) && r.kind === "cancelled")
-		resolution = { kind: "cancelled", reasonTag: req(r.reasonTag) };
+		resolution = { kind: "cancelled", reasonTag: tag(r.reasonTag) };
 	else return null;
 	return {
-		outboxId: req(v.outboxId),
+		outboxId: bounded(v.outboxId, 512),
 		expectedAttempt: int(v.expectedAttempt, 1),
-		reconciliationRef: req(v.reconciliationRef),
+		reconciliationRef: bounded(v.reconciliationRef, 2048),
 		reconciledAt: instant(v.reconciledAt),
 		resolution,
 	};
@@ -270,7 +278,7 @@ function cleanup(
 ): CleanupTerminalOutboxRequest | null {
 	if (!keys(v, ["cleanupId", "before", "after", "limit"])) return null;
 	return {
-		cleanupId: req(v.cleanupId),
+		cleanupId: bounded(v.cleanupId, 512),
 		before: instant(v.before),
 		after: cursor(v.after),
 		limit: limit(v.limit),
@@ -297,11 +305,11 @@ function effectOf(input: unknown): EffectIdentity | null {
 		redaction = enm(v.redactionClass, R);
 	if (!hash || !redaction) return null;
 	return {
-		idempotencyKey: req(v.idempotencyKey),
+		idempotencyKey: bounded(v.idempotencyKey, 512),
 		requestHash: hash,
-		operationId: ntext(v.operationId),
+		operationId: nullableBounded(v.operationId, 512),
 		sourceSeq: nint(v.sourceSeq, 0),
-		provenanceRef: req(v.provenanceRef),
+		provenanceRef: bounded(v.provenanceRef, 2048),
 		redactionClass: redaction as EffectIdentity["redactionClass"],
 	};
 }
@@ -322,7 +330,7 @@ function cursor(input: unknown): OutboxCursor | null {
 	if (!v || !keys(v, ["stateChangedAt", "outboxId"])) throw 0;
 	return {
 		stateChangedAt: instant(v.stateChangedAt),
-		outboxId: req(v.outboxId),
+		outboxId: bounded(v.outboxId, 512),
 	};
 }
 function rec(input: unknown): Record<string, unknown> | null {
@@ -365,8 +373,18 @@ function req(v: unknown) {
 	if (!x) throw 0;
 	return x;
 }
-function ntext(v: unknown) {
-	return v === null ? null : req(v);
+function bounded(v: unknown, max: number) {
+	const x = req(v);
+	if (x.length > max) throw 0;
+	return x;
+}
+function nullableBounded(v: unknown, max: number) {
+	return v === null ? null : bounded(v, max);
+}
+function tag(v: unknown) {
+	const x = bounded(v, 128);
+	if (!/^[A-Za-z0-9_.:-]+$/.test(x)) throw 0;
+	return x;
 }
 function enm(v: unknown, s: Set<string>) {
 	return typeof v === "string" && s.has(v) ? v : null;

@@ -843,7 +843,9 @@ Mutation decisions distinguish `applied`, exact `replayed` results and expected 
 
 `reclaim` addresses one expired started row and accepts either immutable repeatable authority or a caller-supplied reconciled-absent reference. Expiry alone grants no authority. `resolveUnknown` accepts only applied, not-applied or cancelled reconciliation. There is no pre-attempt cancellation method. Ordinary claim never selects unknown work.
 
-`listUnknown` and `cleanupTerminal` use a bounded exclusive `(stateChangedAt, outboxId)` cursor. Cleanup may delete only fatal failed rows and cancelled rows older than its caller cutoff; it retains pending, started, retryable failed, unknown and completed rows. Cleanup removes row-linked decisions atomically and retains its own replay decision.
+`listUnknown` and `cleanupTerminal` use a bounded exclusive `(stateChangedAt, outboxId)` cursor. Cleanup may delete only fatal failed rows and cancelled rows older than its caller cutoff; it retains pending, started, retryable failed, unknown and completed rows. Cleanup removes row-linked decisions atomically, retains its own replay decision, and never removes permanent hashed lease-token authority.
+
+Replay ledgers contain only bounded method/hash/outcome/row/attempt/token-hash metadata (plus bounded cleanup IDs/cursor data). They never contain payload, destination, provenance, receipt, reconciliation, plaintext token, secret, or raw cause values. Applied worker outcomes and unknown resolutions have separate minimal per-attempt authority, so later state cannot change an original result replay.
 
 Authoritative stores use a transaction-compatible enqueue inserter that requires an active caller transaction and performs no transaction control. Independent work uses `enqueue()`. All IDs, timestamps, worker identities, lease tokens, retry instants, receipts and reconciliation references are caller-owned; the store generates none.
 ```
@@ -852,10 +854,11 @@ Authoritative stores use a transaction-compatible enqueue inserter that requires
 
 - Unique `(kind, idempotencyKey)` plus the exact closed semantic request hash identifies one intent; `outboxId` is globally unique.
 - A claim has a caller-owned worker, globally unique lease token, expiry and attempt number. Due work orders by effective availability instant and then `outboxId`.
-- Completion, failure and unknown results require the exact current worker, lease token and attempt before lease expiry. Stale results are typed no-ops.
+- Completion, failure and unknown results require the exact current worker, lease token and attempt, with result time at or after claim and strictly before lease expiry. Stale results are typed no-ops.
 - Expired `started` work can be reclaimed only through exact-row repeatable or reconciled-absent authority.
 - `unknown` blocks automatic retry until an explicit reconciliation resolves it.
-- Fatal failed and cancelled rows alone are eligible for bounded cleanup. Completed and unknown rows retain effect evidence.
+- Reclaim time is at or after the previous claim and expiry; reconciliation time is at or after the unknown result; every non-null retry time is strictly later than its failure/reconciliation time.
+- Fatal failed and cancelled rows alone are eligible for bounded cleanup. Completed and unknown rows retain effect evidence, and lease-token uniqueness survives cleanup.
 - Authoritative stores can insert rows using shared transaction statements; independent work uses `enqueue()`.
 
 ### Adapter and tests
