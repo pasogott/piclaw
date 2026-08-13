@@ -137,7 +137,7 @@ class SubjectState {
     if (fault === "throw") throw new Error(`${kind} factory fault`);
     if (fault === "thenable") return rejectingThenable();
     if (fault === "malformed") return { ok: true, value: { cwd } } as unknown as ReturnType<LocalExecutionEnvFactory["createLocalEnv"]>;
-    const env = new FakeExecutionEnv(cwd, routeId, this.fake ? { PICLAW_AUTH: this.secret } : {});
+    const env = new FakeExecutionEnv(cwd, routeId, this.fake ? { EF_H01_FIXTURE_AUTH: this.secret } : {});
     if (kind === "remote" && this.nextRemoteDisconnect !== null) {
       env.script({ _tag: "disconnect", afterSubmission: this.nextRemoteDisconnect });
       this.nextRemoteDisconnect = null;
@@ -150,9 +150,9 @@ class SubjectState {
   private prepareEnvironment(): Record<string, string> | Promise<Record<string, string>> {
     if (this.preparedEnvironmentFault === "throw") throw new Error("prepared environment fault");
     if (this.preparedEnvironmentFault === "thenable") return rejectingThenable() as PromiseLike<never> as Promise<never>;
-    if (this.preparedEnvironmentFault === "malformed") return { PICLAW_AUTH: 1 } as unknown as Record<string, string>;
+    if (this.preparedEnvironmentFault === "malformed") return { EF_H01_FIXTURE_AUTH: 1 } as unknown as Record<string, string>;
     if (this.preparedEnvironmentFault === "changing") return changingEnvironment() as unknown as Record<string, string>;
-    return { PICLAW_AUTH: this.secret };
+    return { EF_H01_FIXTURE_AUTH: this.secret };
   }
 }
 
@@ -165,7 +165,7 @@ function callback(fault: CallbackFault, value: unknown): never | unknown {
   return value;
 }
 function rejectingThenable(): PromiseLike<never> { return { then(_resolve, reject) { reject?.(new Error("thenable fault")); } }; }
-function changingEnvironment(): object { let reads = 0; return { get PICLAW_AUTH() { return reads++ === 0 ? "first" : "second"; } }; }
+function changingEnvironment(): object { let reads = 0; return { get EF_H01_FIXTURE_AUTH() { return reads++ === 0 ? "first" : "second"; } }; }
 function readPids(chunk: string): number[] { return chunk.trim().split(/\s+/).map(Number).filter((value) => Number.isInteger(value) && value > 1); }
 function isAlive(pid: number): boolean { try { process.kill(pid, 0); return true; } catch { return false; } }
 async function expectGone(pids: readonly number[]): Promise<void> {

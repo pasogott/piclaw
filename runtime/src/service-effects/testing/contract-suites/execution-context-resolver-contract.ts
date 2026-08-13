@@ -149,7 +149,7 @@ const cases: readonly ParameterisedContractCase<ExecutionContextResolverContract
       const resolved = await subject.resolver.resolve(request()); assert(resolved.ok, "context must resolve");
       const result = await resolved.value.env.exec("env"); assert(result.ok, "execution must consume prepared environment");
       const backend = subject.createdRemotes().at(-1) as ExecutionEnv & { observedShellEnvironments?: Array<Record<string, string> | undefined> };
-      assert(backend.observedShellEnvironments?.at(-1)?.PICLAW_AUTH === subject.secretFixture(), "prepared secret must reach only delegate execution environment");
+      assert(backend.observedShellEnvironments?.at(-1)?.EF_H01_FIXTURE_AUTH === subject.secretFixture(), "prepared secret must reach only delegate execution environment");
       const metadata = { chatJid: resolved.value.chatJid, operationId: resolved.value.operationId, route: { kind: "ssh", profileId: "profile-1" }, profile: { profileId: "profile-1", transportRef: "transport-a", cwd: "/remote/a" }, trace: subject.traceText() };
       assert(!JSON.stringify(metadata).includes(subject.secretFixture()) && !("env" in metadata.profile), "secret environment must not enter metadata or traces");
     },
