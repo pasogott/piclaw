@@ -60,6 +60,14 @@ export interface ServiceWorkContractSubject {
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
+function mutateAfterReturn<T extends object>(
+  target: T,
+  replacement: Partial<T>,
+): void {
+  for (const [key, value] of Object.entries(replacement)) {
+    (target as Record<string, unknown>)[key] = value;
+  }
+}
 const cases: readonly ParameterisedContractCase<ServiceWorkContractSubject>[] =
   [
     {
@@ -77,6 +85,108 @@ const cases: readonly ParameterisedContractCase<ServiceWorkContractSubject>[] =
         assert(
           subject.inspect().nextByChat["chat-1"] === 3,
           "next-to-allocate must be three",
+        );
+      },
+    },
+    {
+      name: "EF-S01-C1A every mutation consumes a closed request snapshot",
+      async run({ subject }) {
+        const acceptRequest = accept("snapshot-primary");
+        const acceptPending = subject.store.acceptSource(acceptRequest);
+        mutateAfterReturn(acceptRequest, {
+          sourceId: "mutated-source",
+          payloadRef: "mutated-payload",
+          effect: {
+            ...acceptRequest.effect,
+            provenanceRef: "mutated-provenance",
+          },
+        });
+        const accepted = await acceptPending;
+        assert(
+          accepted.ok && accepted.value.sourceId === "snapshot-primary",
+          "accept snapshot",
+        );
+
+        const claimRequest = claim("snapshot-claim");
+        const claimPending = subject.store.claimNext(claimRequest);
+        mutateAfterReturn(claimRequest, {
+          chatJid: "mutated-chat",
+          newOperationId: "mutated-operation",
+        });
+        const claimed = await claimPending;
+        assert(
+          claimed.ok && claimed.value?.operation.operationId === "operation-1",
+          "claim snapshot",
+        );
+        assert(claimed.value, "claim value");
+        let operation = claimed.value.operation;
+
+        const intentRequest = intent(operation, "snapshot-intent");
+        const intentPending = subject.store.appendIntent(intentRequest);
+        mutateAfterReturn(intentRequest, {
+          intentId: "mutated-intent",
+          payloadRef: "mutated-intent-payload",
+        });
+        const appended = await intentPending;
+        assert(appended.ok, "intent snapshot");
+        operation = appended.value;
+
+        const bindRequest = binding(operation, "snapshot-bind");
+        const bindPending = subject.store.bindHarness(bindRequest);
+        mutateAfterReturn(bindRequest, {
+          sessionId: "mutated-session",
+          lane: "mutated-lane",
+          harnessOperationId: "mutated-harness",
+        });
+        const bound = await bindPending;
+        assert(
+          bound.ok && bound.value.harness?.sessionId === "session-1",
+          "harness snapshot",
+        );
+        operation = bound.value;
+
+        const targetRequest = accept("snapshot-target", {
+          targetOperationId: operation.operationId,
+        });
+        const target = await subject.store.acceptSource(targetRequest);
+        assert(target.ok, "target accepted");
+        const queueRequest = queue(
+          operation,
+          target.value.sourceSeq,
+          "snapshot-queue",
+          "accepted",
+        );
+        const queuePending = subject.store.recordQueuedInput(queueRequest);
+        mutateAfterReturn(queueRequest, {
+          sourceSeq: target.value.sourceSeq + 100,
+          state: "disposed",
+        });
+        const queued = await queuePending;
+        assert(queued.ok, "queue snapshot");
+        operation = queued.value;
+
+        const cancellationSource = await subject.store.acceptSource(
+          accept("snapshot-cancellation", {
+            kind: "cancellation",
+            targetOperationId: operation.operationId,
+          }),
+        );
+        assert(cancellationSource.ok, "cancellation source accepted");
+        const cancellationRequest = cancellation(
+          operation,
+          "snapshot-cancel",
+          cancellationSource.value,
+        );
+        const cancellationPending =
+          subject.store.acceptCancellation(cancellationRequest);
+        mutateAfterReturn(cancellationRequest, {
+          cause: "mutated-cause",
+          sourceId: "mutated-cancellation",
+        });
+        const cancelled = await cancellationPending;
+        assert(
+          cancelled.ok && cancelled.value.cancellation?.cause === "operator",
+          "cancellation snapshot",
         );
       },
     },
@@ -623,6 +733,45 @@ const cases: readonly ParameterisedContractCase<ServiceWorkContractSubject>[] =
           "recordQueuedInput",
           consumedQueue,
           (store) => store.recordQueuedInput(consumedQueue),
+        );
+        const queuedDisposeTarget = await fixture.subject.store.acceptSource(
+          accept("lost-queue-dispose-target", {
+            targetOperationId: operation.operationId,
+          }),
+        );
+        assert(queuedDisposeTarget.ok, "queued dispose target accepted");
+        const disposeAccepted = await fixture.subject.store.recordQueuedInput(
+          queue(
+            operation,
+            queuedDisposeTarget.value.sourceSeq,
+            "lost-queue-dispose:accepted",
+            "accepted",
+          ),
+        );
+        assert(disposeAccepted.ok, "queued dispose accepted");
+        const disposeQueued = await fixture.subject.store.recordQueuedInput(
+          queue(
+            disposeAccepted.value,
+            queuedDisposeTarget.value.sourceSeq,
+            "lost-queue-dispose:queued",
+            "queued",
+          ),
+        );
+        assert(disposeQueued.ok, "queued dispose queued");
+        const queuedDisposed = withHash({
+          ...queue(
+            disposeQueued.value,
+            queuedDisposeTarget.value.sourceSeq,
+            "lost-queue-dispose:disposed",
+            "queued",
+          ),
+          state: "disposed" as const,
+        });
+        operation = await expectLostAndReplay(
+          fixture,
+          "recordQueuedInput",
+          queuedDisposed,
+          (store) => store.recordQueuedInput(queuedDisposed),
         );
         const cancellationSource = await fixture.subject.store.acceptSource(
           accept("lost-cancel-source", {

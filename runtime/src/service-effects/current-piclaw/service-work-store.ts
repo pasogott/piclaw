@@ -99,6 +99,27 @@ interface OperationRow {
   terminal_committed_at: string | null;
 }
 
+export type ServiceWorkStoreConstructionResult = ResultValue<
+  CurrentPiclawServiceWorkStore,
+  ServiceWorkError
+>;
+
+/**
+ * Construct only after explicit successful `installServiceWorkSchema` setup.
+ * This bounded helper prevents SQLite/setup exception text crossing the effector boundary.
+ */
+export function createCurrentPiclawServiceWorkStore(
+  database: Database,
+  runtime: ServiceWorkAdapterRuntime,
+): ServiceWorkStoreConstructionResult {
+  try {
+    return Result.ok(new CurrentPiclawServiceWorkStore(database, runtime));
+  } catch (caught) {
+    void caught;
+    return Result.err(serviceError("storage_unavailable", "not_applied", true));
+  }
+}
+
 export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
   constructor(
     readonly database: Database,
@@ -764,13 +785,14 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
         method,
         "effect_then_lost_acknowledgement",
       );
-      if (!acknowledgementFault.ok || acknowledgementFault.injected) {
+      if (acknowledgementFault.ok && acknowledgementFault.injected) {
         return this.fail(
           method,
           effect,
           serviceError("storage_unavailable", "unknown", true),
         );
       }
+      // Invalid acknowledgement observers cannot make a known commit uncertain.
       return this.success(
         method,
         effect,
@@ -875,7 +897,8 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
     try {
       const stored = normaliseStoredDecision(JSON.parse(raw.result_json));
       return this.applied(this.materialiseDecision(stored, method) as T, true);
-    } catch {
+    } catch (caught) {
+      void caught;
       return this.rejected("corrupt_state");
     }
   }
@@ -1063,7 +1086,8 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
         ok: false,
         error: serviceError("storage_unavailable", "not_applied", true),
       };
-    } catch {
+    } catch (caught) {
+      void caught;
       return {
         ok: false,
         error: serviceError("storage_unavailable", "not_applied", true),
@@ -1091,7 +1115,8 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
         ...(certainty ? { certainty } : {}),
         resultTag,
       });
-    } catch {
+    } catch (caught) {
+      void caught;
       // Tracing is observational and cannot change durable semantics.
     }
   }
@@ -1457,9 +1482,17 @@ function serviceError(
 }
 
 function isBusy(cause: unknown): boolean {
-  return (
-    plainRecord(cause) && (cause.code === "SQLITE_BUSY" || cause.errno === 5)
-  );
+  if (cause === null || typeof cause !== "object") return false;
+  try {
+    const code = Object.getOwnPropertyDescriptor(cause, "code")?.value;
+    const errno = Object.getOwnPropertyDescriptor(cause, "errno")?.value;
+    return (
+      code === "SQLITE_BUSY" || code === "SQLITE_BUSY_SNAPSHOT" || errno === 5
+    );
+  } catch (caught) {
+    void caught;
+    return false;
+  }
 }
 function requiredText(value: unknown): string {
   if (

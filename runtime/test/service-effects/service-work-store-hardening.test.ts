@@ -17,7 +17,14 @@ import type {
   ServiceWorkError,
 } from "../../src/service-effects/contracts/service-work-store.js";
 import { installServiceWorkSchema } from "../../src/service-effects/current-piclaw/service-work-schema.js";
+import { FakeServiceWorkStore } from "../../src/service-effects/testing/fakes/fake-service-work-store.js";
 import {
+  ManualEffectClock,
+  SequenceEffectIdSource,
+} from "../../src/service-effects/testing/deterministic-controls.js";
+import { DeterministicFaultPlan } from "../../src/service-effects/testing/fault-plan.js";
+import {
+  createCurrentPiclawServiceWorkStore,
   CurrentPiclawServiceWorkStore,
   type ServiceWorkAdapterRuntime,
 } from "../../src/service-effects/current-piclaw/service-work-store.js";
@@ -117,6 +124,29 @@ function expectTypedFailure(
 }
 
 describe("EF-S01 schema and two-connection concurrency", () => {
+  test("bounded construction hides setup and SQLite messages", async () => {
+    const database = new Database(":memory:", { strict: true });
+    const runtime = new Runtime();
+    const beforeInstall = createCurrentPiclawServiceWorkStore(
+      database,
+      runtime,
+    );
+    expect(beforeInstall.ok).toBeFalse();
+    if (!beforeInstall.ok) {
+      expect(JSON.stringify(beforeInstall.error)).not.toContain("SQLite");
+      expect(JSON.stringify(beforeInstall.error)).not.toContain("foreign-key");
+    }
+    installServiceWorkSchema(database);
+    const constructed = createCurrentPiclawServiceWorkStore(database, runtime);
+    expect(constructed.ok).toBeTrue();
+    if (constructed.ok) {
+      const result = await constructed.value.acceptSource(
+        source("constructed"),
+      );
+      expect(result.ok).toBeTrue();
+    }
+    database.close();
+  });
   test("failed installation rolls back every EF-S01 table", () => {
     const database = new Database(":memory:", { strict: true });
     database.exec(
@@ -132,7 +162,81 @@ describe("EF-S01 schema and two-connection concurrency", () => {
     database.close();
   });
 
-  test("two independent writers allocate consecutive sources and one owner", async () => {
+  test("held immediate lock yields bounded not_applied then same-key retry succeeds", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "piclaw-s01-busy-"));
+    const path = join(directory, "store.sqlite");
+    const left = open(path);
+    const right = open(path);
+    try {
+      right.database.exec("PRAGMA busy_timeout = 0");
+      left.database.exec("BEGIN IMMEDIATE");
+      const request = source("busy-source");
+      const blocked = await right.store.acceptSource(request);
+      expectTypedFailure(blocked, "storage_unavailable");
+      if (!blocked.ok) expect(blocked.error.certainty).toBe("not_applied");
+      left.database.exec("ROLLBACK");
+      expect((await right.store.acceptSource(request)).ok).toBeTrue();
+
+      const claimRequest = claim(
+        "chat-1",
+        "busy-claim-operation",
+        "busy-claim",
+      );
+      left.database.exec("BEGIN IMMEDIATE");
+      const claimBlocked = await right.store.claimNext(claimRequest);
+      expectTypedFailure(claimBlocked, "storage_unavailable");
+      if (!claimBlocked.ok)
+        expect(claimBlocked.error.certainty).toBe("not_applied");
+      left.database.exec("ROLLBACK");
+      expect((await right.store.claimNext(claimRequest)).ok).toBeTrue();
+
+      const operation = await seedOperation(
+        right.store,
+        "busy-chat",
+        "busy-operation",
+      );
+      const target = await right.store.acceptSource(
+        hashed({
+          ...source("busy-target", "busy-chat"),
+          targetOperationId: operation.operationId,
+        }),
+      );
+      expect(target.ok).toBeTrue();
+      if (!target.ok) return;
+      const queueAccepted = await right.store.recordQueuedInput(
+        queueRequest(
+          operation,
+          target.value.sourceSeq,
+          "busy-queue:accepted",
+          "accepted",
+          null,
+        ),
+      );
+      expect(queueAccepted.ok).toBeTrue();
+      if (!queueAccepted.ok) return;
+      left.database.exec("BEGIN IMMEDIATE");
+      const cas = queueRequest(
+        queueAccepted.value,
+        target.value.sourceSeq,
+        "busy-queue:queued",
+        "queued",
+        "busy-entry",
+      );
+      const casBlocked = await right.store.recordQueuedInput(cas);
+      expectTypedFailure(casBlocked, "storage_unavailable");
+      if (!casBlocked.ok)
+        expect(casBlocked.error.certainty).toBe("not_applied");
+      left.database.exec("ROLLBACK");
+      expect((await right.store.recordQueuedInput(cas)).ok).toBeTrue();
+    } finally {
+      if (left.database.inTransaction) left.database.exec("ROLLBACK");
+      left.database.close();
+      right.database.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("sequential independent writers allocate consecutive sources and one owner", async () => {
     const directory = mkdtempSync(join(tmpdir(), "piclaw-s01-race-"));
     const path = join(directory, "store.sqlite");
     const left = open(path);
@@ -467,6 +571,151 @@ describe("EF-S01 hostile boundaries and identity", () => {
 });
 
 describe("EF-S01 corruption, redaction and callback faults", () => {
+  test("fake normalizer is independently structured and never imports the adapter", async () => {
+    const sourceText = await Bun.file(
+      new URL(
+        "../../src/service-effects/testing/fakes/fake-service-work-request-normalizer.ts",
+        import.meta.url,
+      ),
+    ).text();
+    expect(sourceText).toContain("function parseMutation");
+    expect(sourceText).toContain("switch (method)");
+    expect(sourceText).not.toContain(
+      "current-piclaw/service-work-request-normalizer",
+    );
+    expect(sourceText).not.toContain("normaliseMutationRequest");
+  });
+
+  test("fault callback matrix is closed at pre-effect and in-transaction boundaries", async () => {
+    const cases = [
+      { name: "false", invoke: () => false, succeeds: true },
+      { name: "true", invoke: () => true, succeeds: false },
+      { name: "nonboolean", invoke: () => Symbol("invalid"), succeeds: false },
+      {
+        name: "throw",
+        invoke: () => {
+          throw new Error("protected");
+        },
+        succeeds: false,
+      },
+    ];
+    for (const boundary of ["pre", "transaction"] as const) {
+      for (const callbackCase of cases) {
+        for (const implementation of ["sqlite", "fake"] as const) {
+          let calls = 0;
+          let hostile = true;
+          const callback = (point: string) => {
+            if (point !== "before_effect" || !hostile) return false;
+            calls += 1;
+            return boundary === "pre" || calls === 2
+              ? callbackCase.invoke()
+              : false;
+          };
+          const request = source(
+            `fault-${boundary}-${callbackCase.name}-${implementation}`,
+          );
+          const context = {
+            clock: new ManualEffectClock("2026-08-13T07:00:00.000Z"),
+            ids: new SequenceEffectIdSource("fault-matrix"),
+            faults: new DeterministicFaultPlan(),
+          };
+          const database =
+            implementation === "sqlite"
+              ? new Database(":memory:", { strict: true })
+              : null;
+          if (database) installServiceWorkSchema(database);
+          const store =
+            implementation === "sqlite"
+              ? new CurrentPiclawServiceWorkStore(database!, {
+                  hitFault: (point) => callback(point),
+                  recordTrace: () => undefined,
+                })
+              : new FakeServiceWorkStore(context, callback);
+          const result = await store.acceptSource(request);
+          expect(result.ok).toBe(callbackCase.succeeds);
+          if (!result.ok) expect(result.error.certainty).toBe("not_applied");
+          hostile = false;
+          if (!callbackCase.succeeds)
+            expect((await store.acceptSource(request)).ok).toBeTrue();
+          database?.close();
+        }
+      }
+    }
+  });
+  test("fake hostile pre-effect fault callbacks are closed not_applied", async () => {
+    for (const callback of [
+      () => Symbol("invalid"),
+      () => Promise.resolve(true),
+      () => {
+        throw new Error("protected");
+      },
+    ]) {
+      const context = {
+        clock: new ManualEffectClock("2026-08-13T07:00:00.000Z"),
+        ids: new SequenceEffectIdSource("fake-hostile"),
+        faults: new DeterministicFaultPlan(),
+      };
+      const store = new FakeServiceWorkStore(context, callback);
+      const result = await store.acceptSource(source("fake-callback"));
+      expectTypedFailure(result, "storage_unavailable");
+      if (!result.ok) expect(result.error.certainty).toBe("not_applied");
+      expect(store.inspectState().sources).toHaveLength(0);
+      const restored = new FakeServiceWorkStore(context);
+      restored.restore(store.snapshot());
+      expect(
+        (await restored.acceptSource(source("fake-callback"))).ok,
+      ).toBeTrue();
+    }
+  });
+
+  test("acknowledgement callback matrix reserves unknown for exact true", async () => {
+    const cases = [
+      { name: "false", invoke: () => false, succeeds: true },
+      { name: "true", invoke: () => true, succeeds: false },
+      { name: "nonboolean", invoke: () => Symbol("invalid"), succeeds: true },
+      {
+        name: "throw",
+        invoke: () => {
+          throw new Error("protected");
+        },
+        succeeds: true,
+      },
+    ];
+    for (const callbackCase of cases) {
+      for (const implementation of ["sqlite", "fake"] as const) {
+        const callback = (point: string) =>
+          point === "effect_then_lost_acknowledgement"
+            ? callbackCase.invoke()
+            : false;
+        const request = source(`ack-${implementation}-${callbackCase.name}`);
+        if (implementation === "sqlite") {
+          const database = new Database(":memory:", { strict: true });
+          installServiceWorkSchema(database);
+          const store = new CurrentPiclawServiceWorkStore(database, {
+            hitFault: (point) => callback(point),
+            recordTrace: () => undefined,
+          });
+          const result = await store.acceptSource(request);
+          expect(result.ok).toBe(callbackCase.succeeds);
+          if (!result.ok) expect(result.error.certainty).toBe("unknown");
+          expect((await store.acceptSource(request)).ok).toBe(
+            callbackCase.succeeds,
+          );
+          database.close();
+        } else {
+          const context = {
+            clock: new ManualEffectClock("2026-08-13T07:00:00.000Z"),
+            ids: new SequenceEffectIdSource("fake-ack"),
+            faults: new DeterministicFaultPlan(),
+          };
+          const store = new FakeServiceWorkStore(context, callback);
+          const result = await store.acceptSource(request);
+          expect(result.ok).toBe(callbackCase.succeeds);
+          if (!result.ok) expect(result.error.certainty).toBe("unknown");
+        }
+      }
+    }
+  });
   test("malformed decisions and rows return closed corrupt_state", async () => {
     const fixture = open();
     try {
@@ -519,6 +768,96 @@ describe("EF-S01 corruption, redaction and callback faults", () => {
       expect(traces).not.toContain(request.effect.provenanceRef);
       expect(decision.result_json).not.toContain(request.payloadRef);
       expect(decision.result_json).not.toContain(request.effect.provenanceRef);
+
+      let operation = await seedOperation(
+        fixture.store,
+        "secret-chat",
+        "secret-operation",
+      );
+      const intentPayload = "secret-intent-payload";
+      const intent = await fixture.store.appendIntent(
+        hashed({
+          effect: {
+            ...effect("secret-intent-key"),
+            operationId: operation.operationId,
+            provenanceRef: "secret-intent-provenance",
+          },
+          expectedVersion: operation.version,
+          intentId: "secret-intent-id",
+          kind: "prompt" as const,
+          payloadRef: intentPayload,
+          createdAt: "2026-08-13T07:00:02.000Z",
+        }),
+      );
+      expect(intent.ok).toBeTrue();
+      if (!intent.ok) return;
+      operation = intent.value;
+      const harness = await fixture.store.bindHarness(
+        hashed({
+          effect: {
+            ...effect("secret-bind-key"),
+            operationId: operation.operationId,
+          },
+          expectedVersion: operation.version,
+          sessionId: "secret-session",
+          lane: "secret-lane",
+          harnessOperationId: "secret-run",
+          state: "running" as const,
+          watchGeneration: 9,
+        }),
+      );
+      expect(harness.ok).toBeTrue();
+      if (!harness.ok) return;
+      operation = harness.value;
+      const cancellationSource = await fixture.store.acceptSource(
+        hashed({
+          ...source("secret-cancel-source", "secret-chat"),
+          kind: "cancellation" as const,
+          targetOperationId: operation.operationId,
+          payloadRef: "secret-cancellation-payload",
+        }),
+      );
+      expect(cancellationSource.ok).toBeTrue();
+      if (!cancellationSource.ok) return;
+      const cancelled = await fixture.store.acceptCancellation(
+        hashed({
+          effect: {
+            ...effect("secret-cancel-key"),
+            operationId: operation.operationId,
+            provenanceRef: "secret-cancel-provenance",
+          },
+          expectedVersion: operation.version,
+          sourceId: cancellationSource.value.sourceId,
+          sourceSeq: cancellationSource.value.sourceSeq,
+          cause: "secret-cause",
+          requestedAt: "2026-08-13T07:00:03.000Z",
+        }),
+      );
+      expect(cancelled.ok).toBeTrue();
+      const protectedValues = [
+        intentPayload,
+        "secret-intent-provenance",
+        "secret-cancellation-payload",
+        "secret-cancel-provenance",
+        "secret-cause",
+        "secret-session",
+        "secret-lane",
+        "secret-run",
+      ];
+      const observations = JSON.stringify(fixture.runtime.traces);
+      for (const protectedValue of protectedValues)
+        expect(observations).not.toContain(protectedValue);
+      const decisions = fixture.database
+        .query("SELECT result_json FROM service_effect_s01_decisions")
+        .all() as Array<{ result_json: string }>;
+      const durable = decisions.map((row) => row.result_json).join("\n");
+      expect(durable).not.toContain(intentPayload);
+      expect(durable).not.toContain("secret-intent-provenance");
+      expect(durable).not.toContain("secret-cancellation-payload");
+      expect(durable).not.toContain("secret-cancel-provenance");
+      // Opaque operation identity/correlation and cancellation state are required replay aggregate fields.
+      expect(durable).toContain("secret-session");
+      expect(durable).toContain("secret-cause");
     } finally {
       fixture.database.close();
     }

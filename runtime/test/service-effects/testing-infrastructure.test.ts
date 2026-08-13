@@ -235,6 +235,26 @@ describe("generic parameterised contract-suite lifecycle", () => {
       .toThrow();
   });
 
+  test("disposes the latest subject once on pass and case failure", async () => {
+    let id = 0;
+    const disposed: number[] = [];
+    const factory: ContractSubjectFactory<{ id: number }> = {
+      name: "disposal",
+      create: () => ({ id: ++id }),
+      crashAndRestore: () => ({ subject: { id: ++id }, context: createSampleContext() }),
+      inspectTrace: () => [],
+    };
+    await runParameterisedContractSuite(factory, [{ name: "pass", run: (fixture) => fixture.crashAndRestore() }], createSampleContext, (subject) => void disposed.push(subject.id));
+    expect(disposed).toEqual([2]);
+    expect(runParameterisedContractSuite(factory, [{ name: "fail", run: () => { throw new Error("case failure"); } }], createSampleContext, (subject) => void disposed.push(subject.id))).rejects.toThrow("case failure");
+    expect(disposed).toEqual([2, 3]);
+  });
+
+  test("propagates disposal failure deterministically", async () => {
+    const factory: ContractSubjectFactory<{ id: number }> = { name: "disposal-error", create: () => ({ id: 1 }), crashAndRestore: (subject, context) => ({ subject, context }), inspectTrace: () => [] };
+    expect(runParameterisedContractSuite(factory, [{ name: "pass", run: () => undefined }], createSampleContext, () => { throw new Error("dispose failure"); })).rejects.toThrow("dispose failure");
+  });
+
   test("rejects duplicate case names before creating a subject", async () => {
     let createCount = 0;
     const factory: ContractSubjectFactory<SampleCounterContract> = {

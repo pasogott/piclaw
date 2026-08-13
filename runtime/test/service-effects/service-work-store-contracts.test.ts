@@ -223,11 +223,11 @@ describe("EF-S01 ServiceWorkStore shared contract", () => {
       sqliteFactory,
       context,
     );
-    expect(results).toHaveLength(17);
+    expect(results).toHaveLength(18);
   });
   test("independent deterministic fake", async () => {
     const results = await defineServiceWorkStoreContract(fakeFactory, context);
-    expect(results).toHaveLength(17);
+    expect(results).toHaveLength(18);
   });
 });
 describe("EF-S01 private schema installer", () => {

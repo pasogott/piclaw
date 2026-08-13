@@ -69,151 +69,208 @@ export function normaliseFakeMutationRequest(
     const effect = normaliseEffect(request.effect);
     if (!effect) return null;
 
-    let normalised: NormalisedFakeMutationRequest | null = null;
-    if (
-      method === "acceptSource" &&
-      exactKeys(request, [
-        "effect",
-        "chatJid",
-        "sourceId",
-        "kind",
-        "payloadRef",
-        "targetOperationId",
-        "parentSourceSeq",
-        "acceptedAt",
-        "createWakeIntent",
-      ])
-    ) {
-      const kind = enumValue(request.kind, SOURCE_KINDS);
-      if (!kind) return null;
-      normalised = {
-        effect,
-        chatJid: requiredText(request.chatJid),
-        sourceId: requiredText(request.sourceId),
-        kind: kind as AcceptSourceRequest["kind"],
-        payloadRef: requiredText(request.payloadRef),
-        targetOperationId: requiredNullableText(request.targetOperationId),
-        parentSourceSeq: requiredNullableSafeInteger(
-          request.parentSourceSeq,
-          1,
-        ),
-        acceptedAt: requiredInstant(request.acceptedAt),
-        createWakeIntent: requiredBoolean(request.createWakeIntent),
-      };
-    } else if (
-      method === "claimNext" &&
-      exactKeys(request, [
-        "effect",
-        "chatJid",
-        "expectedFrontier",
-        "newOperationId",
-        "claimedAt",
-      ])
-    ) {
-      normalised = {
-        effect,
-        chatJid: requiredText(request.chatJid),
-        expectedFrontier: requiredSafeInteger(request.expectedFrontier, 0),
-        newOperationId: requiredText(request.newOperationId),
-        claimedAt: requiredInstant(request.claimedAt),
-      };
-    } else if (
-      method === "appendIntent" &&
-      exactKeys(request, [
-        "effect",
-        "expectedVersion",
-        "intentId",
-        "kind",
-        "payloadRef",
-        "createdAt",
-      ])
-    ) {
-      const kind = enumValue(request.kind, INTENT_KINDS);
-      if (!kind || !effect.operationId) return null;
-      normalised = {
-        effect: { ...effect, operationId: effect.operationId },
-        expectedVersion: requiredSafeInteger(request.expectedVersion, 1),
-        intentId: requiredText(request.intentId),
-        kind: kind as AppendOperationIntentRequest["kind"],
-        payloadRef: requiredText(request.payloadRef),
-        createdAt: requiredInstant(request.createdAt),
-      };
-    } else if (
-      method === "acceptCancellation" &&
-      exactKeys(request, [
-        "effect",
-        "expectedVersion",
-        "sourceId",
-        "sourceSeq",
-        "cause",
-        "requestedAt",
-      ])
-    ) {
-      if (!effect.operationId) return null;
-      normalised = {
-        effect: { ...effect, operationId: effect.operationId },
-        expectedVersion: requiredSafeInteger(request.expectedVersion, 1),
-        sourceId: requiredText(request.sourceId),
-        sourceSeq: requiredSafeInteger(request.sourceSeq, 1),
-        cause: requiredText(request.cause),
-        requestedAt: requiredInstant(request.requestedAt),
-      };
-    } else if (
-      method === "bindHarness" &&
-      exactKeys(request, [
-        "effect",
-        "expectedVersion",
-        "sessionId",
-        "lane",
-        "harnessOperationId",
-        "state",
-        "watchGeneration",
-      ])
-    ) {
-      const state = enumValue(request.state, HARNESS_STATES);
-      if (!effect.operationId || !state) return null;
-      normalised = {
-        effect: { ...effect, operationId: effect.operationId },
-        expectedVersion: requiredSafeInteger(request.expectedVersion, 1),
-        sessionId: requiredText(request.sessionId),
-        lane: requiredText(request.lane),
-        harnessOperationId: requiredNullableText(request.harnessOperationId),
-        state: state as BindHarnessRequest["state"],
-        watchGeneration: requiredSafeInteger(request.watchGeneration, 0),
-      };
-    } else if (
-      method === "recordQueuedInput" &&
-      exactKeys(request, [
-        "effect",
-        "expectedVersion",
-        "sourceSeq",
-        "queueKind",
-        "harnessEntryId",
-        "state",
-      ])
-    ) {
-      const queueKind = enumValue(request.queueKind, QUEUE_KINDS);
-      const state = enumValue(request.state, QUEUE_STATES);
-      if (!effect.operationId || !queueKind || !state) return null;
-      normalised = {
-        effect: { ...effect, operationId: effect.operationId },
-        expectedVersion: requiredSafeInteger(request.expectedVersion, 1),
-        sourceSeq: requiredSafeInteger(request.sourceSeq, 1),
-        queueKind: queueKind as RecordQueuedInputRequest["queueKind"],
-        harnessEntryId: requiredNullableText(request.harnessEntryId),
-        state: state as RecordQueuedInputRequest["state"],
-      };
-    }
-
+    const normalised = parseMutation(method, request, effect);
     if (!normalised) return null;
     const expectedHash = hashCanonicalRequest(
       normalised as unknown as CanonicalJsonValue,
     );
     if (effect.requestHash !== expectedHash) return null;
     return deepFreeze(normalised);
-  } catch {
+  } catch (caught) {
+    void caught;
     return null;
   }
+}
+
+function parseMutation(
+  method: FakeMutationMethod,
+  request: Record<string, unknown>,
+  effect: EffectIdentity,
+): NormalisedFakeMutationRequest | null {
+  switch (method) {
+    case "acceptSource":
+      return parseAcceptSource(request, effect);
+    case "claimNext":
+      return parseClaim(request, effect);
+    case "appendIntent":
+      return parseIntent(request, effect);
+    case "acceptCancellation":
+      return parseCancellation(request, effect);
+    case "bindHarness":
+      return parseHarness(request, effect);
+    case "recordQueuedInput":
+      return parseQueue(request, effect);
+  }
+}
+
+function parseAcceptSource(
+  value: Record<string, unknown>,
+  effect: EffectIdentity,
+): AcceptSourceRequest | null {
+  if (
+    !exactKeys(value, [
+      "effect",
+      "chatJid",
+      "sourceId",
+      "kind",
+      "payloadRef",
+      "targetOperationId",
+      "parentSourceSeq",
+      "acceptedAt",
+      "createWakeIntent",
+    ])
+  )
+    return null;
+  const kind = enumValue(value.kind, SOURCE_KINDS);
+  if (!kind) return null;
+  return {
+    effect,
+    chatJid: requiredText(value.chatJid),
+    sourceId: requiredText(value.sourceId),
+    kind: kind as AcceptSourceRequest["kind"],
+    payloadRef: requiredText(value.payloadRef),
+    targetOperationId: requiredNullableText(value.targetOperationId),
+    parentSourceSeq: requiredNullableSafeInteger(value.parentSourceSeq, 1),
+    acceptedAt: requiredInstant(value.acceptedAt),
+    createWakeIntent: requiredBoolean(value.createWakeIntent),
+  };
+}
+
+function parseClaim(
+  value: Record<string, unknown>,
+  effect: EffectIdentity,
+): ClaimNextSourceRequest | null {
+  if (
+    !exactKeys(value, [
+      "effect",
+      "chatJid",
+      "expectedFrontier",
+      "newOperationId",
+      "claimedAt",
+    ])
+  )
+    return null;
+  return {
+    effect,
+    chatJid: requiredText(value.chatJid),
+    expectedFrontier: requiredSafeInteger(value.expectedFrontier, 0),
+    newOperationId: requiredText(value.newOperationId),
+    claimedAt: requiredInstant(value.claimedAt),
+  };
+}
+
+function parseIntent(
+  value: Record<string, unknown>,
+  effect: EffectIdentity,
+): AppendOperationIntentRequest | null {
+  const kind = enumValue(value.kind, INTENT_KINDS);
+  if (
+    !effect.operationId ||
+    !kind ||
+    !exactKeys(value, [
+      "effect",
+      "expectedVersion",
+      "intentId",
+      "kind",
+      "payloadRef",
+      "createdAt",
+    ])
+  )
+    return null;
+  return {
+    effect: { ...effect, operationId: effect.operationId },
+    expectedVersion: requiredSafeInteger(value.expectedVersion, 1),
+    intentId: requiredText(value.intentId),
+    kind: kind as AppendOperationIntentRequest["kind"],
+    payloadRef: requiredText(value.payloadRef),
+    createdAt: requiredInstant(value.createdAt),
+  };
+}
+
+function parseCancellation(
+  value: Record<string, unknown>,
+  effect: EffectIdentity,
+): AcceptCancellationRequest | null {
+  if (
+    !effect.operationId ||
+    !exactKeys(value, [
+      "effect",
+      "expectedVersion",
+      "sourceId",
+      "sourceSeq",
+      "cause",
+      "requestedAt",
+    ])
+  )
+    return null;
+  return {
+    effect: { ...effect, operationId: effect.operationId },
+    expectedVersion: requiredSafeInteger(value.expectedVersion, 1),
+    sourceId: requiredText(value.sourceId),
+    sourceSeq: requiredSafeInteger(value.sourceSeq, 1),
+    cause: requiredText(value.cause),
+    requestedAt: requiredInstant(value.requestedAt),
+  };
+}
+
+function parseHarness(
+  value: Record<string, unknown>,
+  effect: EffectIdentity,
+): BindHarnessRequest | null {
+  const state = enumValue(value.state, HARNESS_STATES);
+  if (
+    !effect.operationId ||
+    !state ||
+    !exactKeys(value, [
+      "effect",
+      "expectedVersion",
+      "sessionId",
+      "lane",
+      "harnessOperationId",
+      "state",
+      "watchGeneration",
+    ])
+  )
+    return null;
+  return {
+    effect: { ...effect, operationId: effect.operationId },
+    expectedVersion: requiredSafeInteger(value.expectedVersion, 1),
+    sessionId: requiredText(value.sessionId),
+    lane: requiredText(value.lane),
+    harnessOperationId: requiredNullableText(value.harnessOperationId),
+    state: state as BindHarnessRequest["state"],
+    watchGeneration: requiredSafeInteger(value.watchGeneration, 0),
+  };
+}
+
+function parseQueue(
+  value: Record<string, unknown>,
+  effect: EffectIdentity,
+): RecordQueuedInputRequest | null {
+  const queueKind = enumValue(value.queueKind, QUEUE_KINDS);
+  const state = enumValue(value.state, QUEUE_STATES);
+  if (
+    !effect.operationId ||
+    !queueKind ||
+    !state ||
+    !exactKeys(value, [
+      "effect",
+      "expectedVersion",
+      "sourceSeq",
+      "queueKind",
+      "harnessEntryId",
+      "state",
+    ])
+  )
+    return null;
+  return {
+    effect: { ...effect, operationId: effect.operationId },
+    expectedVersion: requiredSafeInteger(value.expectedVersion, 1),
+    sourceSeq: requiredSafeInteger(value.sourceSeq, 1),
+    queueKind: queueKind as RecordQueuedInputRequest["queueKind"],
+    harnessEntryId: requiredNullableText(value.harnessEntryId),
+    state: state as RecordQueuedInputRequest["state"],
+  };
 }
 
 export function normaliseFakeListRequest(
@@ -247,7 +304,8 @@ export function normaliseFakeListRequest(
       ...(afterOperationId ? { afterOperationId } : {}),
       ...(limit ? { limit } : {}),
     });
-  } catch {
+  } catch (caught) {
+    void caught;
     return null;
   }
 }
@@ -255,7 +313,8 @@ export function normaliseFakeListRequest(
 export function normaliseFakeReadIdentifier(input: unknown): string | null {
   try {
     return text(input);
-  } catch {
+  } catch (caught) {
+    void caught;
     return null;
   }
 }

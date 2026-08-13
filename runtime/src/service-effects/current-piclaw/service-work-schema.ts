@@ -5,6 +5,8 @@ const SCHEMA_PREFIX = "service_effect_s01_";
 /**
  * Install the latent EF-S01 schema on an explicitly supplied isolated database.
  * The caller owns the connection and must not pass Piclaw's live message store.
+ * This setup-only installer may throw bounded or raw infrastructure exceptions;
+ * callers must complete it before exposing a store at the effector boundary.
  */
 export function installServiceWorkSchema(database: Database): void {
   database.exec("PRAGMA foreign_keys = ON");

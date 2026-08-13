@@ -31,6 +31,15 @@ import {
   type NormalisedFakeMutationRequest,
 } from "./fake-service-work-request-normalizer.js";
 
+interface FakeMutationRequests {
+  acceptSource: AcceptSourceRequest;
+  claimNext: ClaimNextSourceRequest;
+  appendIntent: AppendOperationIntentRequest;
+  acceptCancellation: AcceptCancellationRequest;
+  bindHarness: BindHarnessRequest;
+  recordQueuedInput: RecordQueuedInputRequest;
+}
+
 interface FakeState {
   sources: AcceptedSourceSnapshot[];
   sourceHashes: Record<string, string>;
@@ -76,7 +85,17 @@ export class FakeServiceWorkStore implements ServiceWorkStore {
   #serial: Promise<void> = Promise.resolve();
   #faults = new Map<string, Set<number>>();
   #faultCounts = new Map<string, number>();
-  constructor(private readonly context: ContractTestContext) {}
+  readonly #runtimeFault: (
+    point: "before_effect" | "effect_then_lost_acknowledgement",
+  ) => unknown;
+  constructor(
+    private readonly context: ContractTestContext,
+    runtimeFault?: (
+      point: "before_effect" | "effect_then_lost_acknowledgement",
+    ) => unknown,
+  ) {
+    this.#runtimeFault = runtimeFault ?? ((point) => context.faults.hit(point));
+  }
 
   planFault(
     method: string,
@@ -100,283 +119,312 @@ export class FakeServiceWorkStore implements ServiceWorkStore {
     return structuredClone(this.#state);
   }
 
-  acceptSource(request: AcceptSourceRequest) {
-    return this.mutate<AcceptedSourceSnapshot>("acceptSource", request, () => {
-      const known = this.#state.sources.find(
-        (s) => s.chatJid === request.chatJid && s.sourceId === request.sourceId,
-      );
-      if (known)
-        return this.#state.sourceHashes[
-          sourceKey(request.chatJid, request.sourceId)
-        ] === fakeSemanticSourceHash(request)
-          ? this.apply(known, true)
-          : this.reject("idempotency_conflict");
-      if (
-        request.parentSourceSeq !== null &&
-        !this.source(request.chatJid, request.parentSourceSeq)
-      )
-        return this.reject("not_found");
-      if (request.targetOperationId !== null) {
-        const target = this.operation(request.targetOperationId);
-        if (
-          !target ||
-          target.chatJid !== request.chatJid ||
-          target.phase === "terminal"
-        ) {
-          return this.reject("owner_conflict", {
-            conflictingOperationId: request.targetOperationId,
-          });
-        }
-      }
-      const sourceSeq = this.#state.nextByChat[request.chatJid] ?? 1;
-      this.#state.nextByChat[request.chatJid] = sourceSeq + 1;
-      const source = freezeSource({
-        chatJid: request.chatJid,
-        sourceSeq,
-        sourceId: request.sourceId,
-        kind: request.kind,
-        state: "pending",
-        payloadRef: request.payloadRef,
-        targetOperationId: request.targetOperationId,
-        parentSourceSeq: request.parentSourceSeq,
-        acceptedAt: request.acceptedAt,
-        dispositionReason: null,
-        provenanceRef: request.effect.provenanceRef,
-      });
-      this.#state.sources.push(source);
-      this.#state.sourceHashes[sourceKey(request.chatJid, request.sourceId)] =
-        fakeSemanticSourceHash(request);
-      if (request.createWakeIntent)
-        this.#state.wakes.push(`${request.chatJid}:${sourceSeq}`);
-      return this.apply(source);
-    });
-  }
-  claimNext(request: ClaimNextSourceRequest) {
-    return this.mutate<ClaimedOperation | null>("claimNext", request, () => {
-      if (request.expectedFrontier !== 0)
-        return this.reject("frontier_mismatch", { observedFrontier: 0 });
-      const active = this.#state.activeByChat[request.chatJid];
-      if (active)
-        return this.reject("owner_conflict", {
-          conflictingOperationId: active,
-        });
-      const source = this.#state.sources
-        .filter(
+  acceptSource(input: AcceptSourceRequest) {
+    return this.mutate<AcceptedSourceSnapshot, "acceptSource">(
+      "acceptSource",
+      input,
+      (request) => {
+        const known = this.#state.sources.find(
           (s) =>
-            s.chatJid === request.chatJid &&
-            s.state === "pending" &&
-            s.sourceSeq > request.expectedFrontier,
-        )
-        .sort((a, b) => a.sourceSeq - b.sourceSeq)[0];
-      if (!source) return this.apply(null);
-      if (this.operation(request.newOperationId))
-        return this.reject("owner_conflict", {
-          conflictingOperationId: request.newOperationId,
-        });
-      const claimed = freezeSource({ ...source, state: "claimed" });
-      this.replaceSource(claimed);
-      const operation = freezeOperation({
-        operationId: request.newOperationId,
-        chatJid: request.chatJid,
-        version: 1,
-        phase: "claimed",
-        primarySourceSeq: source.sourceSeq,
-        claimedSourceSeqs: [source.sourceSeq],
-        cancellation: null,
-        harness: null,
-        terminal: null,
-      });
-      this.#state.operations.push(operation);
-      this.#state.activeByChat[request.chatJid] = operation.operationId;
-      return this.apply(Object.freeze({ source: claimed, operation }));
-    });
-  }
-  appendIntent(request: AppendOperationIntentRequest) {
-    return this.mutate<OperationSnapshot>("appendIntent", request, () => {
-      const existing = this.operation(request.effect.operationId);
-      if (!existing) return this.reject("not_found");
-      if (existing.phase === "terminal")
-        return this.reject("owner_conflict", {
-          conflictingOperationId: existing.operationId,
-        });
-      const key = `${existing.operationId}\0${request.intentId}`;
-      if (
-        this.#state.intents.some(
-          (i) =>
-            i.operationId === existing.operationId &&
-            i.intentId === request.intentId,
-        )
-      )
-        return this.#state.intentHashes[key] === fakeSemanticIntentHash(request)
-          ? this.apply(existing, true)
-          : this.reject("idempotency_conflict");
-      if (existing.version !== request.expectedVersion)
-        return this.reject("version_mismatch", {
-          observedVersion: existing.version,
-        });
-      this.#state.intents.push({
-        operationId: existing.operationId,
-        intentId: request.intentId,
-        kind: request.kind,
-        payloadRef: request.payloadRef,
-        createdAt: request.createdAt,
-      });
-      this.#state.intentHashes[key] = fakeSemanticIntentHash(request);
-      return this.apply(
-        this.update(existing, { version: existing.version + 1 }),
-      );
-    });
-  }
-  acceptCancellation(request: AcceptCancellationRequest) {
-    return this.mutate<OperationSnapshot>("acceptCancellation", request, () => {
-      const existing = this.operation(request.effect.operationId);
-      if (!existing) return this.reject("not_found");
-      if (existing.phase === "terminal")
-        return this.reject("owner_conflict", {
-          conflictingOperationId: existing.operationId,
-        });
-      if (existing.cancellation)
-        return existing.cancellation.sourceSeq === request.sourceSeq &&
-          existing.cancellation.cause === request.cause &&
-          existing.cancellation.requestedAt === request.requestedAt &&
-          this.source(existing.chatJid, request.sourceSeq)?.sourceId ===
-            request.sourceId
-          ? this.apply(existing, true)
-          : this.reject("owner_conflict", {
-              conflictingOperationId: existing.operationId,
-            });
-      const op = this.version(
-        request.effect.operationId,
-        request.expectedVersion,
-      );
-      if (!op.ok) return op;
-      const source = this.source(op.value.chatJid, request.sourceSeq);
-      if (
-        !source ||
-        source.sourceId !== request.sourceId ||
-        source.targetOperationId !== op.value.operationId
-      )
-        return this.reject("owner_conflict", {
-          conflictingOperationId: op.value.operationId,
-        });
-      return this.apply(
-        this.update(op.value, {
-          version: op.value.version + 1,
-          phase: "cancelling",
-          cancellation: Object.freeze({
-            sourceSeq: request.sourceSeq,
-            cause: request.cause,
-            requestedAt: request.requestedAt,
-          }),
-        }),
-      );
-    });
-  }
-  bindHarness(request: BindHarnessRequest) {
-    return this.mutate<OperationSnapshot>("bindHarness", request, () => {
-      const existing = this.operation(request.effect.operationId);
-      if (!existing) return this.reject("not_found");
-      if (existing.phase === "terminal")
-        return this.reject("owner_conflict", {
-          conflictingOperationId: existing.operationId,
-        });
-      if (existing.harness)
-        return existing.harness.sessionId === request.sessionId &&
-          existing.harness.lane === request.lane &&
-          existing.harness.harnessOperationId === request.harnessOperationId &&
-          existing.harness.state === request.state &&
-          existing.harness.watchGeneration === request.watchGeneration
-          ? this.apply(existing, true)
-          : this.reject("owner_conflict", {
-              conflictingOperationId: existing.operationId,
-            });
-      const op = this.version(
-        request.effect.operationId,
-        request.expectedVersion,
-      );
-      if (!op.ok) return op;
-      return this.apply(
-        this.update(op.value, {
-          version: op.value.version + 1,
-          phase:
-            request.state === "running"
-              ? "executing"
-              : request.state === "suspended"
-                ? "suspended"
-                : request.state === "aborting"
-                  ? "cancelling"
-                  : request.state === "finished"
-                    ? "settling"
-                    : "starting_harness",
-          harness: Object.freeze({
-            sessionId: request.sessionId,
-            lane: request.lane,
-            harnessOperationId: request.harnessOperationId,
-            state: request.state,
-            watchGeneration: request.watchGeneration,
-          }),
-        }),
-      );
-    });
-  }
-  recordQueuedInput(request: RecordQueuedInputRequest) {
-    return this.mutate<OperationSnapshot>("recordQueuedInput", request, () => {
-      const op = this.version(
-        request.effect.operationId,
-        request.expectedVersion,
-      );
-      if (!op.ok) return op;
-      const source = this.source(op.value.chatJid, request.sourceSeq);
-      if (!source) return this.reject("not_found");
-      const known = this.#state.queues.find(
-        (q) =>
-          q.operationId === op.value.operationId &&
-          q.sourceSeq === request.sourceSeq,
-      );
-      if (!known) {
+            s.chatJid === request.chatJid && s.sourceId === request.sourceId,
+        );
+        if (known)
+          return this.#state.sourceHashes[
+            sourceKey(request.chatJid, request.sourceId)
+          ] === fakeSemanticSourceHash(request)
+            ? this.apply(known, true)
+            : this.reject("idempotency_conflict");
         if (
-          request.state !== "accepted" ||
-          request.harnessEntryId !== null ||
-          source.state !== "pending" ||
-          (source.targetOperationId !== op.value.operationId &&
-            source.sourceSeq !== op.value.primarySourceSeq)
+          request.parentSourceSeq !== null &&
+          !this.source(request.chatJid, request.parentSourceSeq)
         )
-          return this.reject("invalid_transition");
-        this.#state.queues.push({
-          operationId: op.value.operationId,
-          sourceSeq: request.sourceSeq,
-          queueKind: request.queueKind,
-          harnessEntryId: request.harnessEntryId,
-          state: request.state,
+          return this.reject("not_found");
+        if (request.targetOperationId !== null) {
+          const target = this.operation(request.targetOperationId);
+          if (
+            !target ||
+            target.chatJid !== request.chatJid ||
+            target.phase === "terminal"
+          ) {
+            return this.reject("owner_conflict", {
+              conflictingOperationId: request.targetOperationId,
+            });
+          }
+        }
+        const sourceSeq = this.#state.nextByChat[request.chatJid] ?? 1;
+        this.#state.nextByChat[request.chatJid] = sourceSeq + 1;
+        const source = freezeSource({
+          chatJid: request.chatJid,
+          sourceSeq,
+          sourceId: request.sourceId,
+          kind: request.kind,
+          state: "pending",
+          payloadRef: request.payloadRef,
+          targetOperationId: request.targetOperationId,
+          parentSourceSeq: request.parentSourceSeq,
+          acceptedAt: request.acceptedAt,
+          dispositionReason: null,
+          provenanceRef: request.effect.provenanceRef,
         });
-      } else {
-        if (
-          known.queueKind !== request.queueKind ||
-          !validEntryTransition(
-            known.state,
-            known.harnessEntryId,
-            request.state,
-            request.harnessEntryId,
-          ) ||
-          !transition(known.state, request.state)
-        )
-          return this.reject("invalid_transition");
-        known.state = request.state;
-        known.harnessEntryId = request.harnessEntryId;
-        if (request.state !== "accepted")
-          this.replaceSource(freezeSource({ ...source, state: request.state }));
-      }
-      return this.apply(
-        this.update(op.value, {
-          version: op.value.version + 1,
-          claimedSourceSeqs: op.value.claimedSourceSeqs.includes(
-            source.sourceSeq,
+        this.#state.sources.push(source);
+        this.#state.sourceHashes[sourceKey(request.chatJid, request.sourceId)] =
+          fakeSemanticSourceHash(request);
+        if (request.createWakeIntent)
+          this.#state.wakes.push(`${request.chatJid}:${sourceSeq}`);
+        return this.apply(source);
+      },
+    );
+  }
+  claimNext(input: ClaimNextSourceRequest) {
+    return this.mutate<ClaimedOperation | null, "claimNext">(
+      "claimNext",
+      input,
+      (request) => {
+        if (request.expectedFrontier !== 0)
+          return this.reject("frontier_mismatch", { observedFrontier: 0 });
+        const active = this.#state.activeByChat[request.chatJid];
+        if (active)
+          return this.reject("owner_conflict", {
+            conflictingOperationId: active,
+          });
+        const source = this.#state.sources
+          .filter(
+            (s) =>
+              s.chatJid === request.chatJid &&
+              s.state === "pending" &&
+              s.sourceSeq > request.expectedFrontier,
           )
-            ? op.value.claimedSourceSeqs
-            : [...op.value.claimedSourceSeqs, source.sourceSeq],
-        }),
-      );
-    });
+          .sort((a, b) => a.sourceSeq - b.sourceSeq)[0];
+        if (!source) return this.apply(null);
+        if (this.operation(request.newOperationId))
+          return this.reject("owner_conflict", {
+            conflictingOperationId: request.newOperationId,
+          });
+        const claimed = freezeSource({ ...source, state: "claimed" });
+        this.replaceSource(claimed);
+        const operation = freezeOperation({
+          operationId: request.newOperationId,
+          chatJid: request.chatJid,
+          version: 1,
+          phase: "claimed",
+          primarySourceSeq: source.sourceSeq,
+          claimedSourceSeqs: [source.sourceSeq],
+          cancellation: null,
+          harness: null,
+          terminal: null,
+        });
+        this.#state.operations.push(operation);
+        this.#state.activeByChat[request.chatJid] = operation.operationId;
+        return this.apply(Object.freeze({ source: claimed, operation }));
+      },
+    );
+  }
+  appendIntent(input: AppendOperationIntentRequest) {
+    return this.mutate<OperationSnapshot, "appendIntent">(
+      "appendIntent",
+      input,
+      (request) => {
+        const existing = this.operation(request.effect.operationId);
+        if (!existing) return this.reject("not_found");
+        if (existing.phase === "terminal")
+          return this.reject("owner_conflict", {
+            conflictingOperationId: existing.operationId,
+          });
+        const key = `${existing.operationId}\0${request.intentId}`;
+        if (
+          this.#state.intents.some(
+            (i) =>
+              i.operationId === existing.operationId &&
+              i.intentId === request.intentId,
+          )
+        )
+          return this.#state.intentHashes[key] ===
+            fakeSemanticIntentHash(request)
+            ? this.apply(existing, true)
+            : this.reject("idempotency_conflict");
+        if (existing.version !== request.expectedVersion)
+          return this.reject("version_mismatch", {
+            observedVersion: existing.version,
+          });
+        this.#state.intents.push({
+          operationId: existing.operationId,
+          intentId: request.intentId,
+          kind: request.kind,
+          payloadRef: request.payloadRef,
+          createdAt: request.createdAt,
+        });
+        this.#state.intentHashes[key] = fakeSemanticIntentHash(request);
+        return this.apply(
+          this.update(existing, { version: existing.version + 1 }),
+        );
+      },
+    );
+  }
+  acceptCancellation(input: AcceptCancellationRequest) {
+    return this.mutate<OperationSnapshot, "acceptCancellation">(
+      "acceptCancellation",
+      input,
+      (request) => {
+        const existing = this.operation(request.effect.operationId);
+        if (!existing) return this.reject("not_found");
+        if (existing.phase === "terminal")
+          return this.reject("owner_conflict", {
+            conflictingOperationId: existing.operationId,
+          });
+        if (existing.cancellation)
+          return existing.cancellation.sourceSeq === request.sourceSeq &&
+            existing.cancellation.cause === request.cause &&
+            existing.cancellation.requestedAt === request.requestedAt &&
+            this.source(existing.chatJid, request.sourceSeq)?.sourceId ===
+              request.sourceId
+            ? this.apply(existing, true)
+            : this.reject("owner_conflict", {
+                conflictingOperationId: existing.operationId,
+              });
+        const op = this.version(
+          request.effect.operationId,
+          request.expectedVersion,
+        );
+        if (!op.ok) return op;
+        const source = this.source(op.value.chatJid, request.sourceSeq);
+        if (
+          !source ||
+          source.sourceId !== request.sourceId ||
+          source.targetOperationId !== op.value.operationId
+        )
+          return this.reject("owner_conflict", {
+            conflictingOperationId: op.value.operationId,
+          });
+        return this.apply(
+          this.update(op.value, {
+            version: op.value.version + 1,
+            phase: "cancelling",
+            cancellation: Object.freeze({
+              sourceSeq: request.sourceSeq,
+              cause: request.cause,
+              requestedAt: request.requestedAt,
+            }),
+          }),
+        );
+      },
+    );
+  }
+  bindHarness(input: BindHarnessRequest) {
+    return this.mutate<OperationSnapshot, "bindHarness">(
+      "bindHarness",
+      input,
+      (request) => {
+        const existing = this.operation(request.effect.operationId);
+        if (!existing) return this.reject("not_found");
+        if (existing.phase === "terminal")
+          return this.reject("owner_conflict", {
+            conflictingOperationId: existing.operationId,
+          });
+        if (existing.harness)
+          return existing.harness.sessionId === request.sessionId &&
+            existing.harness.lane === request.lane &&
+            existing.harness.harnessOperationId ===
+              request.harnessOperationId &&
+            existing.harness.state === request.state &&
+            existing.harness.watchGeneration === request.watchGeneration
+            ? this.apply(existing, true)
+            : this.reject("owner_conflict", {
+                conflictingOperationId: existing.operationId,
+              });
+        const op = this.version(
+          request.effect.operationId,
+          request.expectedVersion,
+        );
+        if (!op.ok) return op;
+        return this.apply(
+          this.update(op.value, {
+            version: op.value.version + 1,
+            phase:
+              request.state === "running"
+                ? "executing"
+                : request.state === "suspended"
+                  ? "suspended"
+                  : request.state === "aborting"
+                    ? "cancelling"
+                    : request.state === "finished"
+                      ? "settling"
+                      : "starting_harness",
+            harness: Object.freeze({
+              sessionId: request.sessionId,
+              lane: request.lane,
+              harnessOperationId: request.harnessOperationId,
+              state: request.state,
+              watchGeneration: request.watchGeneration,
+            }),
+          }),
+        );
+      },
+    );
+  }
+  recordQueuedInput(input: RecordQueuedInputRequest) {
+    return this.mutate<OperationSnapshot, "recordQueuedInput">(
+      "recordQueuedInput",
+      input,
+      (request) => {
+        const op = this.version(
+          request.effect.operationId,
+          request.expectedVersion,
+        );
+        if (!op.ok) return op;
+        const source = this.source(op.value.chatJid, request.sourceSeq);
+        if (!source) return this.reject("not_found");
+        const known = this.#state.queues.find(
+          (q) =>
+            q.operationId === op.value.operationId &&
+            q.sourceSeq === request.sourceSeq,
+        );
+        if (!known) {
+          if (
+            request.state !== "accepted" ||
+            request.harnessEntryId !== null ||
+            source.state !== "pending" ||
+            (source.targetOperationId !== op.value.operationId &&
+              source.sourceSeq !== op.value.primarySourceSeq)
+          )
+            return this.reject("invalid_transition");
+          this.#state.queues.push({
+            operationId: op.value.operationId,
+            sourceSeq: request.sourceSeq,
+            queueKind: request.queueKind,
+            harnessEntryId: request.harnessEntryId,
+            state: request.state,
+          });
+        } else {
+          if (
+            known.queueKind !== request.queueKind ||
+            !validEntryTransition(
+              known.state,
+              known.harnessEntryId,
+              request.state,
+              request.harnessEntryId,
+            ) ||
+            !transition(known.state, request.state)
+          )
+            return this.reject("invalid_transition");
+          known.state = request.state;
+          known.harnessEntryId = request.harnessEntryId;
+          if (request.state !== "accepted")
+            this.replaceSource(
+              freezeSource({ ...source, state: request.state }),
+            );
+        }
+        return this.apply(
+          this.update(op.value, {
+            version: op.value.version + 1,
+            claimedSourceSeqs: op.value.claimedSourceSeqs.includes(
+              source.sourceSeq,
+            )
+              ? op.value.claimedSourceSeqs
+              : [...op.value.claimedSourceSeqs, source.sourceSeq],
+          }),
+        );
+      },
+    );
   }
   async getOperation(
     id: string,
@@ -421,12 +469,14 @@ export class FakeServiceWorkStore implements ServiceWorkStore {
     return Result.ok(Object.freeze(values));
   }
 
-  private async mutate<T>(
-    method: FakeMutationMethod,
+  private async mutate<T, TMethod extends FakeMutationMethod>(
+    method: TMethod,
     input: unknown,
-    apply: () => Outcome<T>,
+    apply: (request: FakeMutationRequests[TMethod]) => Outcome<T>,
   ): Promise<ResultValue<T, ServiceWorkError>> {
-    const request = normaliseFakeMutationRequest(method, input);
+    // The method discriminator and closed normalizer branch define this type.
+    const request = normaliseFakeMutationRequest(method, input) as
+      FakeMutationRequests[TMethod] | null;
     const previous = this.#serial;
     let release!: () => void;
     this.#serial = new Promise<void>((resolve) => {
@@ -443,7 +493,8 @@ export class FakeServiceWorkStore implements ServiceWorkStore {
       });
       if (!request?.effect)
         return this.finish(method, request, this.reject("invalid_transition"));
-      if (this.hitFault(method, "before_effect"))
+      const beforeFault = this.hitFault(method, "before_effect");
+      if (!beforeFault.ok || beforeFault.injected)
         return this.finish(
           method,
           request,
@@ -469,12 +520,13 @@ export class FakeServiceWorkStore implements ServiceWorkStore {
         );
       }
       const before = structuredClone(this.#state);
-      const outcome = apply();
+      const outcome = apply(request);
       if (!outcome.ok) {
         this.#state = before;
         return this.finish(method, request, outcome);
       }
-      if (this.hitFault(method, "before_effect")) {
+      const transactionFault = this.hitFault(method, "before_effect");
+      if (!transactionFault.ok || transactionFault.injected) {
         this.#state = before;
         return this.finish(
           method,
@@ -487,18 +539,24 @@ export class FakeServiceWorkStore implements ServiceWorkStore {
         hash: request.effect.requestHash,
         value: structuredClone(outcome),
       };
-      if (this.hitFault(method, "effect_then_lost_acknowledgement"))
+      const acknowledgementFault = this.hitFault(
+        method,
+        "effect_then_lost_acknowledgement",
+      );
+      if (acknowledgementFault.ok && acknowledgementFault.injected)
         return this.finish(
           method,
           request,
           this.reject("storage_unavailable", {}, "unknown", true),
         );
+      // An invalid observational callback cannot make a known commit uncertain.
       return this.finish(method, request, outcome);
-    } catch {
+    } catch (caught) {
+      void caught;
       return this.finish(
         method,
         request,
-        this.reject("storage_unavailable", {}, "unknown", true),
+        this.reject("storage_unavailable", {}, "not_applied", true),
       );
     } finally {
       release();
@@ -507,15 +565,24 @@ export class FakeServiceWorkStore implements ServiceWorkStore {
   private hitFault(
     method: string,
     point: "before_effect" | "effect_then_lost_acknowledgement",
-  ): boolean {
+  ):
+    { readonly ok: true; readonly injected: boolean } | { readonly ok: false } {
     const key = `${method}:${point}`;
     const planned = this.#faults.get(key);
     if (planned) {
       const occurrence = (this.#faultCounts.get(key) ?? 0) + 1;
       this.#faultCounts.set(key, occurrence);
-      return planned.has(occurrence);
+      return { ok: true, injected: planned.has(occurrence) };
     }
-    return this.context.faults.hit(point);
+    try {
+      const value: unknown = this.#runtimeFault(point);
+      return value === true || value === false
+        ? { ok: true, injected: value }
+        : { ok: false };
+    } catch (caught) {
+      void caught;
+      return { ok: false };
+    }
   }
   private finish<T>(
     method: string,

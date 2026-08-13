@@ -211,7 +211,8 @@ export function normaliseMutationRequest(
     );
     if (effect.requestHash !== expectedHash) return null;
     return deepFreeze(normalised);
-  } catch {
+  } catch (caught) {
+    void caught;
     return null;
   }
 }
@@ -247,7 +248,8 @@ export function normaliseListRequest(
       ...(afterOperationId ? { afterOperationId } : {}),
       ...(limit ? { limit } : {}),
     });
-  } catch {
+  } catch (caught) {
+    void caught;
     return null;
   }
 }
@@ -255,7 +257,8 @@ export function normaliseListRequest(
 export function normaliseReadIdentifier(input: unknown): string | null {
   try {
     return text(input);
-  } catch {
+  } catch (caught) {
+    void caught;
     return null;
   }
 }
