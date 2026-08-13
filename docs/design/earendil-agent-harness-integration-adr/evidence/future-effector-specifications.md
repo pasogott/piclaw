@@ -948,14 +948,23 @@ interface DeliveryAttempt {
   idempotencyKey: string;
   payloadRef: string;
   destinationRef: string | null;
+  deliveryIdentity: string;
   attempt: number;
   signal: AbortSignal;
 }
 
-interface DeliveryReceipt {
-  providerMessageId: string | null;
+type DeliveryProviderDetail =
+  | { kind: "timeline_broadcast"; providerMessageId: null; eventId: string }
+  | { kind: "channel_delivery"; providerMessageId: string | null }
+  | { kind: "web_push"; providerMessageId: null; counts: Readonly<{ attempted: number; sent: number; removed: number; failed: number }> }
+  | { kind: "pushover"; providerMessageId: string | null }
+  | { kind: "wake_chat"; providerMessageId: null; wakeId: string };
+
+interface DeliveryOutcome {
+  certainty: EffectCertainty;
   acceptedAt: string;
   receiptRef: string | null;
+  detail: DeliveryProviderDetail;
 }
 
 interface DeliveryDriverError extends PiclawEffectError {
@@ -975,11 +984,11 @@ interface DeliveryDriver {
 
   deliver(
     request: DeliveryAttempt,
-  ): Promise<Result<DeliveryReceipt, DeliveryDriverError>>;
+  ): Promise<Result<DeliveryOutcome, DeliveryDriverError>>;
 
   reconcile?(
     request: Omit<DeliveryAttempt, "signal">,
-  ): Promise<Result<DeliveryReceipt | null, DeliveryDriverError>>;
+  ): Promise<Result<DeliveryOutcome | null, DeliveryDriverError>>;
 }
 ```
 
@@ -987,15 +996,17 @@ interface DeliveryDriver {
 
 | Driver | Existing mechanics | Certainty rule |
 |---|---|---|
-| Timeline broadcast | Web SSE broadcaster and messaging broadcaster | Row/event identity deduplicates within Piclaw; reconnect starts from fresh state |
-| Channel delivery | Channel `sendMessage` and router | Use provider identity/query support if present; otherwise lost acknowledgement is `unknown` |
-| Web Push | `runtime/src/channels/web/push/web-push-service.ts` | Track per-subscription result; partial success is explicit |
-| Pushover | `runtime/src/channels/pushover.ts` | Pushover has no application idempotency key or receipt query; timeout after request may be `unknown` and must not auto-repeat |
-| Wake | `runtime/src/queue.ts` | Repeatable because a worker claims durable work after waking |
+| Timeline broadcast | Web SSE broadcaster and messaging broadcaster | A completed chat-scoped broadcast is `applied` to the transport boundary, including zero connected clients; caller supplies event identity |
+| Channel delivery | Channel `sendMessage` and router | Resolved current `Promise<void>` is `applied`; generic throw is `unknown` unless an injected typed classifier proves pre-send rejection |
+| Web Push | `runtime/src/channels/web/push/web-push-service.ts` | Preserve aggregate `{attempted,sent,removed,failed}` exactly; zero attempted is `not_applied`, any failure is `unknown`, otherwise `applied` |
+| Pushover | `runtime/src/channels/pushover.ts` | Success is `applied`; typed pre-acceptance rejection is `not_applied`; timeout/disconnect after dispatch is `unknown` |
+| Wake | `runtime/src/queue.ts` | Callback completion means wake invocation accepted (`applied`), not durable work completion; caller supplies wake identity |
 
-Exactly-once applies to Piclaw's durable outbox intent and terminal timeline row. A provider without deduplication or reconciliation cannot promise exactly-once delivery.
+Exactly-once applies to Piclaw's durable outbox intent and terminal timeline row. A provider without deduplication or reconciliation cannot promise exactly-once delivery. `deliver()` reads the unknown runtime request through one guarded normalization pass, rejects hostile or changing getters and whitespace-only identities, and creates a plain immutable scalar snapshot retaining identity bytes exactly while trimming the destination and retaining only a full AbortSignal-compatible reference (`aborted`, `addEventListener`, and `removeEventListener`). It then verifies the safe positive attempt, resolved payload reference, byte length and digest, takes a defensive byte snapshot, and executes one attempt only. It owns no claim, retry, sleep, persistence, dedupe or lifecycle policy. `deliveryIdentity` is caller-owned trace/correlation identity and must match timeline event or wake detail without creating driver dedupe state. Current timeline, channel, Web Push, Pushover and wake mechanics expose no stable receipt query, so their drivers omit `reconcile()` rather than synthesize one. Drivers are stateless: after provider acceptance with a lost response, reconstruction creates a fresh driver with empty local attempt/script state, while an injected observer retains the one external attempt. It starts no automatic retry or reconciliation; the durable outbox owns the persisted `unknown` outcome and every later decision.
 
-Each driver gets a scripted fake with before-send failure, accepted-then-disconnected, delayed receipt and abort controls. Formatting/truncation tests remain driver-specific.
+Payload validators must return exactly `true` or `false`; non-booleans and throws become pre-effect `invalid_payload/not_applied`. Injected typed classifier output is accepted only under these rules: `aborted`, `invalid_payload`, `destination_missing`, and definite `rejected` are `not_applied` and non-retryable; `rate_limited` is `not_applied`, retryable, and carries a valid `retryAfter` instant; timeout/transport failures may be `not_applied` or `unknown`, carry no `retryAfter`, and expose their explicit retryable flag. Every other combination becomes a bounded `transport_unavailable/unknown` result. Success timestamps, receipts, provider detail and identities are validated, and certainty is derived rather than trusted.
+
+Each driver gets a scripted fake with before-send failure, accepted-then-disconnected, delayed receipt, abort, malformed boundary/classifier, and crash/restore controls. Latent current-Piclaw boundary factories receive injected callbacks only for timeline/SSE, channel, Web Push, Pushover, and wake; they do not import configured singletons or perform live effects. Compatibility tests invoke the real SSE broadcaster, stored Web Push service with injected send/presence seams, and Pushover channel with stub fetch, plus typed current channel/wake signatures. Timeline uses a typed envelope whose `chat_jid` equals the destination and whose `delivery_id` equals caller-owned `deliveryIdentity`; mapper throw or identity mismatch is pre-effect `invalid_payload/not_applied`. Web Push mappers require string `title`/`body` and string optional fields before service invocation; channel/Pushover use fatal UTF-8 decoding. The current wake/resume callback receives only the destination chat (and no dedupe identity); `wakeId` is result trace/correlation only. Formatting/truncation tests remain driver-specific.
 
 ## EF-S07 — scheduled run store
 
@@ -1153,16 +1164,13 @@ interface PublicAgentSnapshot extends ProjectionIdentity {
   cancellationRequested: boolean;
 }
 
-interface PublicAgentEvent extends ProjectionIdentity {
-  type:
-    | "phase_changed"
-    | "assistant_delta"
-    | "tool_started"
-    | "tool_updated"
-    | "tool_finished"
-    | "usage_updated";
-  publicPayload: Readonly<Record<string, string | number | boolean | null>>;
-}
+type PublicAgentEvent =
+  | (ProjectionIdentity & { type: "phase_changed"; phase: PublicAgentSnapshot["phase"] })
+  | (ProjectionIdentity & { type: "assistant_delta"; textDelta: string })
+  | (ProjectionIdentity & { type: "tool_started"; toolCallId: string; toolName: string })
+  | (ProjectionIdentity & { type: "tool_updated"; toolCallId: string; publicSummary: string | null })
+  | (ProjectionIdentity & { type: "tool_finished"; toolCallId: string; outcome: "completed" | "failed" | "cancelled" })
+  | (ProjectionIdentity & { type: "usage_updated"; inputTokens: number; outputTokens: number });
 
 interface PublicTerminalProjection extends ProjectionIdentity {
   type: "agent_terminal";
@@ -1173,7 +1181,7 @@ interface PublicTerminalProjection extends ProjectionIdentity {
 }
 ```
 
-The caller narrows and redacts future Earendil events before invoking the sink. `publishTerminal` requires a committed Piclaw terminal reference. The sink drops stale generation or non-increasing receipt sequence when the transport maintains that state.
+The caller narrows and semantically redacts future Earendil events before invoking the sink. Allowed public strings such as assistant deltas and summaries are trusted already-redacted values; the sink enforces their type plus closed DTO keys/shape and does not attempt semantic secret detection inside allowed strings. Unknown runtime DTOs pass through one guarded normalization: every field is copied into locals and checked against changing/throwing getters, arrays are independently copied, and the result is a plain deeply frozen DTO. Only that normalized DTO reaches trace, authority, cursor, and transport. Authority predicates must return exact booleans; non-booleans and throws become `transport_unavailable/not_applied`. A caller-owned authority predicate validates exact `(chatJid, operationId, harnessOperationId)` ownership, and a second predicate validates the committed Piclaw terminal reference. The sink owns only an in-memory per-owner projection cursor: an authorized snapshot establishes or resets generation, events and terminal require that generation plus a strictly increasing receipt sequence, and terminal permanently closes the exact generation. Different owners never share cursor state. Unknown keys outside the closed DTO union are rejected before transport. Existing SSE publication is a synchronous boundary, so authority, cursor validation and publish occur without an async replacement race. After process restart the cursor is empty and the watcher must publish a fresh authorized snapshot before events.
 
 ### Adapter and tests
 
