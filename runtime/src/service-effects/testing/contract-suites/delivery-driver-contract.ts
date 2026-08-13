@@ -7,6 +7,7 @@ export interface DeliveryDriverContractSubject {
   scriptError(error: DeliveryDriverError): void;
   scriptDelayed(outcome: DeliveryOutcome): { release(): void; started(): Promise<void> };
   countAttempts(): number;
+  countExternalAttempts(): number;
   corruptPayload(kind: "ref" | "length" | "digest" | "mutable" | "semantic"): void;
   holdPayload(): { release(): void; started(): Promise<void> };
   throwValidatorOnce(): void;
@@ -153,10 +154,12 @@ const cases: readonly ParameterisedContractCase<DeliveryDriverContractSubject>[]
   {
     name: "EF-S06-C12 malformed requests are rejected before boundary",
     async run({ subject }) {
+      const hostileFields = (["outboxId", "destinationRef", "signal", "attempt"] as const).flatMap((field) => [throwingFieldRequest(field), changingFieldRequest(field)]);
       const malformed = [
         { ...request(), outboxId: "" }, { ...request(), idempotencyKey: "" }, { ...request(), payloadRef: "" }, { ...request(), deliveryIdentity: "" },
-        null, 1, { ...request(), signal: undefined }, { ...request(), signal: { aborted: "no" } },
+        null, 1, { ...request(), signal: undefined }, { ...request(), signal: { aborted: "no" } }, { ...request(), signal: { aborted: false } },
         { ...request(), destinationRef: "   " }, { ...request(), attempt: Number.NaN }, { ...request(), attempt: 1.5 }, { ...request(), attempt: Number.MAX_SAFE_INTEGER + 1 },
+        ...hostileFields,
       ];
       for (const value of malformed) {
         const before = subject.countAttempts(); const result = await subject.driver.deliver(value as DeliveryAttempt);
@@ -238,12 +241,14 @@ const cases: readonly ParameterisedContractCase<DeliveryDriverContractSubject>[]
   {
     name: "EF-S06-R01 unknown acceptance remains stateless across restore",
     async run(fixture) {
+      const originalDriver = fixture.subject.driver;
       fixture.subject.scriptError(error("transport_unavailable", "unknown", true));
       const lost = await fixture.subject.driver.deliver(request("delivery-crash-oracle"));
-      assert(!lost.ok && lost.error.certainty === "unknown" && fixture.subject.countAttempts() === 1, "lost provider response must remain unknown after one attempt");
+      assert(!lost.ok && lost.error.certainty === "unknown" && fixture.subject.countAttempts() === 1 && fixture.subject.countExternalAttempts() === 1, "lost provider response must remain unknown after one attempt");
       const beforeTrace = fixture.inspectTrace();
       const restored = await fixture.crashAndRestore();
-      assert(restored.countAttempts() === 1, "restore must not start or reconcile a second attempt");
+      assert(restored.driver !== originalDriver, "restore must construct a fresh stateless driver");
+      assert(restored.countAttempts() === 0 && restored.countExternalAttempts() === 1, "fresh driver-local attempts must be empty without a second external attempt");
       assert(restored.driver.reconcile === undefined, "stateless current drivers cannot invent reconciliation");
       assert(fixture.inspectTrace().length >= beforeTrace.length, "claimed trace-preserving runtimes must retain prior observations");
     },
@@ -272,4 +277,11 @@ function error(tag: DeliveryDriverError["_tag"], certainty: DeliveryDriverError[
   return Object.freeze({ _tag: tag, certainty, retryable, ...(retryAfter ? { retryAfter } : {}) });
 }
 
+function throwingFieldRequest(field: "outboxId" | "destinationRef" | "signal" | "attempt"): DeliveryAttempt {
+  return new Proxy(request(), { get(target, key, receiver) { if (key === field) throw new Error(`hostile ${field} getter`); return Reflect.get(target, key, receiver); } });
+}
+function changingFieldRequest(field: "outboxId" | "destinationRef" | "signal" | "attempt"): DeliveryAttempt {
+  const candidate = request(); let reads = 0; const original = candidate[field];
+  return Object.defineProperty(candidate, field, { enumerable: true, get() { reads += 1; if (reads === 1) return original; throw new Error(`changing ${field} getter`); } });
+}
 function assert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message); }

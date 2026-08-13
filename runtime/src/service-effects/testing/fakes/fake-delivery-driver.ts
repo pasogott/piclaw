@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Result, type Result as ResultValue } from "@earendil-works/pi-agent-core";
 
+import type { NormalisedEffectTrace } from "../../contracts/common.js";
 import type { DeliveryAttempt, DeliveryDriver, DeliveryDriverError, DeliveryKind, DeliveryOutcome, DeliveryPayloadValidator, WebPushDeliveryCounts } from "../../contracts/delivery-driver.js";
 import type { EffectPayloadResolver } from "../../contracts/payload-resolver.js";
 import { EffectTraceRecorder } from "../trace-recorder.js";
@@ -11,13 +12,19 @@ export type ScriptedDeliveryStep =
   | { readonly _tag: "delay"; readonly gate: Promise<void>; readonly next: ScriptedDeliveryStep };
 
 export class FakeDeliveryDriver implements DeliveryDriver {
-  readonly trace = new EffectTraceRecorder();
+  readonly trace: EffectTraceRecorder;
   private readonly steps: ScriptedDeliveryStep[] = [];
   private attempts = 0;
   private observedPayload: Uint8Array | null = null;
   private classifierThrows = false;
 
-  constructor(readonly kind: DeliveryKind, private readonly payloads: EffectPayloadResolver, private readonly validatePayload: DeliveryPayloadValidator) {}
+  constructor(
+    readonly kind: DeliveryKind,
+    private readonly payloads: EffectPayloadResolver,
+    private readonly validatePayload: DeliveryPayloadValidator,
+    traceSnapshot: readonly NormalisedEffectTrace[] = [],
+    private readonly observeExternalAttempt: () => void = () => {},
+  ) { this.trace = EffectTraceRecorder.fromSnapshot(traceSnapshot); }
 
   script(...steps: readonly ScriptedDeliveryStep[]): void { this.steps.push(...steps); }
   countAttempts(): number { return this.attempts; }
@@ -25,11 +32,13 @@ export class FakeDeliveryDriver implements DeliveryDriver {
   throwClassifierOnce(): void { this.classifierThrows = true; }
 
   async deliver(candidate: unknown): Promise<ResultValue<DeliveryOutcome, DeliveryDriverError>> {
-    const effectId = safeEffectId(candidate);
+    const request = normaliseRequest(candidate);
+    const effectId = request?.outboxId ?? "invalid-outbox";
     this.trace.recordCall({ contract: "EF-S06", method: "deliver", effectId });
-    if (!validRequest(candidate)) return this.fail(effectId, Object.freeze({ _tag: "invalid_payload", certainty: "not_applied", retryable: false }));
-    const request = candidate;
-    if (request.signal.aborted) return this.fail(effectId, Object.freeze({ _tag: "aborted", certainty: "not_applied", retryable: false }));
+    if (!request) return this.fail(effectId, Object.freeze({ _tag: "invalid_payload", certainty: "not_applied", retryable: false }));
+    const initiallyAborted = safeAborted(request.signal);
+    if (initiallyAborted === null) return this.fail(effectId, Object.freeze({ _tag: "invalid_payload", certainty: "not_applied", retryable: false }));
+    if (initiallyAborted) return this.fail(effectId, Object.freeze({ _tag: "aborted", certainty: "not_applied", retryable: false }));
     if (![request.outboxId, request.idempotencyKey, request.payloadRef, request.deliveryIdentity].every((value) => typeof value === "string" && value.length > 0) || !Number.isSafeInteger(request.attempt) || request.attempt < 1) {
       return this.fail(effectId, Object.freeze({ _tag: "invalid_payload", certainty: "not_applied", retryable: false }));
     }
@@ -45,9 +54,11 @@ export class FakeDeliveryDriver implements DeliveryDriver {
     } catch {
       return this.fail(effectId, Object.freeze({ _tag: "invalid_payload", certainty: "not_applied", retryable: false }));
     }
-    if (request.signal.aborted) return this.fail(effectId, Object.freeze({ _tag: "aborted", certainty: "not_applied", retryable: false }));
+    const abortedAfterResolution = safeAborted(request.signal);
+    if (abortedAfterResolution === null) return this.fail(effectId, Object.freeze({ _tag: "invalid_payload", certainty: "not_applied", retryable: false }));
+    if (abortedAfterResolution) return this.fail(effectId, Object.freeze({ _tag: "aborted", certainty: "not_applied", retryable: false }));
     this.observedPayload = new Uint8Array(immutablePayload.bytes);
-    this.attempts += 1;
+    this.attempts += 1; this.observeExternalAttempt();
     let step = this.steps.shift() ?? { _tag: "error", error: Object.freeze({ _tag: "transport_unavailable", certainty: "not_applied", retryable: true }) } as const;
     while (step._tag === "delay") { await step.gate; step = step.next; }
     if (step._tag === "error") {
@@ -71,10 +82,19 @@ export class FakeDeliveryDriver implements DeliveryDriver {
   }
 }
 
-function validRequest(value: unknown): value is DeliveryAttempt {
-  try { if (!value || typeof value !== "object" || Array.isArray(value)) return false; const request = value as Record<string, unknown>; return typeof request.destinationRef === "string" && request.signal !== null && typeof request.signal === "object" && typeof (request.signal as { aborted?: unknown }).aborted === "boolean"; } catch { return false; }
+function normaliseRequest(value: unknown): DeliveryAttempt | null {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const candidate = value as Record<string, unknown>;
+    const outboxId = candidate.outboxId; const idempotencyKey = candidate.idempotencyKey; const payloadRef = candidate.payloadRef;
+    const destinationRef = candidate.destinationRef; const deliveryIdentity = candidate.deliveryIdentity; const attempt = candidate.attempt; const signal = candidate.signal;
+    if (candidate.outboxId !== outboxId || candidate.idempotencyKey !== idempotencyKey || candidate.payloadRef !== payloadRef || candidate.destinationRef !== destinationRef || candidate.deliveryIdentity !== deliveryIdentity || candidate.attempt !== attempt || candidate.signal !== signal) return null;
+    if (typeof outboxId !== "string" || outboxId.length === 0 || typeof idempotencyKey !== "string" || idempotencyKey.length === 0 || typeof payloadRef !== "string" || payloadRef.length === 0 || typeof destinationRef !== "string" || typeof deliveryIdentity !== "string" || deliveryIdentity.length === 0 || !Number.isSafeInteger(attempt) || (attempt as number) < 1 || !isAbortSignalCompatible(signal)) return null;
+    return Object.freeze({ outboxId, idempotencyKey, payloadRef, destinationRef, deliveryIdentity, attempt: attempt as number, signal });
+  } catch { return null; }
 }
-function safeEffectId(value: unknown): string { try { const id = (value as { outboxId?: unknown } | null)?.outboxId; return typeof id === "string" && id.length > 0 ? id : "invalid-outbox"; } catch { return "invalid-outbox"; } }
+function isAbortSignalCompatible(value: unknown): value is AbortSignal { return Boolean(value && typeof value === "object" && typeof (value as AbortSignal).aborted === "boolean" && typeof (value as AbortSignal).addEventListener === "function" && typeof (value as AbortSignal).removeEventListener === "function"); }
+function safeAborted(signal: AbortSignal): boolean | null { try { return typeof signal.aborted === "boolean" ? signal.aborted : null; } catch { return null; } }
 const TAGS = new Set(["invalid_payload", "destination_missing", "rejected", "rate_limited", "timeout", "transport_unavailable", "aborted"]);
 function validError(error: DeliveryDriverError): boolean {
   try {

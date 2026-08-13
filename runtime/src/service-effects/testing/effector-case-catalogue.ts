@@ -226,7 +226,7 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
       "provider kind and caller-owned timeline or wake identity are fenced",
       "malformed Web Push aggregate is a bounded unknown boundary fault",
       "malformed typed error classifier output becomes an unknown transport failure",
-      "unknown requests including missing or malformed signals, whitespace destinations, identity fields, and attempt numbers fail before resolver or boundary invocation",
+      "unknown requests including hostile or changing getters, missing full AbortSignal shape, whitespace destinations, identity fields, and attempt numbers normalize once or fail before resolver/boundary",
       "semantic payload validation independently rejects a valid tuple before effect",
       "abort during awaited payload resolution consumes no attempt",
       "injected validator and classifier faults remain bounded",
@@ -237,7 +237,7 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
       "before_effect", "effect_then_lost_acknowledgement", "acknowledgement_then_crash",
       "duplicate_result", "delayed_or_late_result", "cancellation_race", "redaction_violation",
     ],
-    crashOracle: crashOracle("EF-S06", "A provider acceptance/lost-response result remains unknown after restore; stateless drivers start no retry or reconciliation and outbox policy owns every later decision."),
+    crashOracle: crashOracle("EF-S06", "A fresh stateless driver restores with no local attempt/script state after an unknown provider response; observer total remains one, no retry/reconciliation starts, and outbox policy owns the persisted outcome and later decision."),
     sharedCaseLinks: ["shared:certainty", "shared:delayed-completion", "shared:redaction"],
   },
   {

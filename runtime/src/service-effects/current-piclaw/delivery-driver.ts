@@ -25,10 +25,12 @@ export class CurrentPiclawDeliveryDriver implements DeliveryDriver {
   ) {}
 
   async deliver(candidate: unknown): Promise<ResultValue<DeliveryOutcome, DeliveryDriverError>> {
-    if (!validRequest(candidate)) return this.invalid(candidate, "invalid_payload");
-    const request = candidate;
+    const request = normaliseRequest(candidate);
+    if (!request) return this.invalid("invalid-outbox", "invalid_payload");
     this.call(request);
-    if (request.signal.aborted) return this.fail(request, "aborted", "not_applied", false);
+    const initiallyAborted = safeAborted(request.signal);
+    if (initiallyAborted === null) return this.fail(request, "invalid_payload", "not_applied", false);
+    if (initiallyAborted) return this.fail(request, "aborted", "not_applied", false);
     if (!request.destinationRef?.trim()) return this.fail(request, "destination_missing", "not_applied", false);
 
     let payload: ResolvedEffectPayload | null;
@@ -46,7 +48,9 @@ export class CurrentPiclawDeliveryDriver implements DeliveryDriver {
     } catch {
       return this.fail(request, "invalid_payload", "not_applied", false);
     }
-    if (request.signal.aborted) return this.fail(request, "aborted", "not_applied", false);
+    const abortedAfterResolution = safeAborted(request.signal);
+    if (abortedAfterResolution === null) return this.fail(request, "invalid_payload", "not_applied", false);
+    if (abortedAfterResolution) return this.fail(request, "aborted", "not_applied", false);
     if (this.runtime.hitFault("before_effect")) return this.fail(request, "transport_unavailable", "not_applied", true);
 
     try {
@@ -70,15 +74,14 @@ export class CurrentPiclawDeliveryDriver implements DeliveryDriver {
     }
   }
 
-  private invalid(candidate: unknown, tag: DeliveryDriverError["_tag"]): ResultValue<never, DeliveryDriverError> {
-    const effectId = safeEffectId(candidate);
+  private invalid(effectId: string, tag: DeliveryDriverError["_tag"]): ResultValue<never, DeliveryDriverError> {
     this.runtime.recordTrace({ contract: "EF-S06", method: "deliver", effectId, certainty: null, resultTag: "call" });
     this.runtime.recordTrace({ contract: "EF-S06", method: "deliver", effectId, certainty: "not_applied", resultTag: tag });
     return Result.err(Object.freeze({ _tag: tag, certainty: "not_applied", retryable: false }));
   }
 
   private call(request: DeliveryAttempt): void {
-    this.runtime.recordTrace({ contract: "EF-S06", method: "deliver", effectId: safeEffectId(request), certainty: null, resultTag: "call" });
+    this.runtime.recordTrace({ contract: "EF-S06", method: "deliver", effectId: request.outboxId, certainty: null, resultTag: "call" });
   }
 
   private fail(
@@ -88,19 +91,31 @@ export class CurrentPiclawDeliveryDriver implements DeliveryDriver {
     retryable: boolean,
     retryAfter?: string,
   ): ResultValue<never, DeliveryDriverError> {
-    this.runtime.recordTrace({ contract: "EF-S06", method: "deliver", effectId: safeEffectId(request), certainty, resultTag: tag });
+    this.runtime.recordTrace({ contract: "EF-S06", method: "deliver", effectId: request.outboxId, certainty, resultTag: tag });
     return Result.err(Object.freeze({ _tag: tag, certainty, retryable, ...(retryAfter ? { retryAfter } : {}) }));
   }
 }
 
-function validRequest(value: unknown): value is DeliveryAttempt {
+function normaliseRequest(value: unknown): DeliveryAttempt | null {
   try {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-    const request = value as Record<string, unknown>;
-    return Boolean(nonEmptyString(request.outboxId) && nonEmptyString(request.idempotencyKey) && nonEmptyString(request.payloadRef) && nonEmptyString(request.deliveryIdentity) && typeof request.destinationRef === "string" && Number.isSafeInteger(request.attempt) && (request.attempt as number) >= 1 && request.signal && typeof request.signal === "object" && typeof (request.signal as { aborted?: unknown }).aborted === "boolean");
-  } catch { return false; }
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const candidate = value as Record<string, unknown>;
+    const outboxId = candidate.outboxId;
+    const idempotencyKey = candidate.idempotencyKey;
+    const payloadRef = candidate.payloadRef;
+    const destinationRef = candidate.destinationRef;
+    const deliveryIdentity = candidate.deliveryIdentity;
+    const attempt = candidate.attempt;
+    const signal = candidate.signal;
+    if (candidate.outboxId !== outboxId || candidate.idempotencyKey !== idempotencyKey || candidate.payloadRef !== payloadRef || candidate.destinationRef !== destinationRef || candidate.deliveryIdentity !== deliveryIdentity || candidate.attempt !== attempt || candidate.signal !== signal) return null;
+    if (!nonEmptyString(outboxId) || !nonEmptyString(idempotencyKey) || !nonEmptyString(payloadRef) || typeof destinationRef !== "string" || !nonEmptyString(deliveryIdentity) || !Number.isSafeInteger(attempt) || (attempt as number) < 1 || !isAbortSignalCompatible(signal)) return null;
+    return Object.freeze({ outboxId, idempotencyKey, payloadRef, destinationRef, deliveryIdentity, attempt: attempt as number, signal });
+  } catch { return null; }
 }
-function safeEffectId(value: unknown): string { try { const id = (value as { outboxId?: unknown } | null)?.outboxId; return nonEmptyString(id) ? id : "invalid-outbox"; } catch { return "invalid-outbox"; } }
+function isAbortSignalCompatible(value: unknown): value is AbortSignal {
+  return Boolean(value && typeof value === "object" && typeof (value as AbortSignal).aborted === "boolean" && typeof (value as AbortSignal).addEventListener === "function" && typeof (value as AbortSignal).removeEventListener === "function");
+}
+function safeAborted(signal: AbortSignal): boolean | null { try { return typeof signal.aborted === "boolean" ? signal.aborted : null; } catch { return null; } }
 function nonEmptyString(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
 
 const ERROR_TAGS = new Set<DeliveryDriverError["_tag"]>(["invalid_payload", "destination_missing", "rejected", "rate_limited", "timeout", "transport_unavailable", "aborted"]);

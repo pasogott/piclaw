@@ -41,26 +41,27 @@ describe("EF-S08 AgentProjectionSink shared contract", () => {
 });
 
 function currentDeliveryFactory(kind: DeliveryKind): ContractSubjectFactory<DeliveryDriverContractSubject> {
+  const external = { attempts: 0 };
   return {
     name: `current-piclaw-delivery-${kind}`,
-    create(context) { return currentDeliverySubject(kind, context); },
-    crashAndRestore(subject, context) { const current = subject as CurrentDeliverySubject; current.runtime = current.runtime.restore(); return { subject: current, context }; },
+    create(context) { external.attempts = 0; return currentDeliverySubject(kind, context, external); },
+    crashAndRestore(subject, context) { const current = subject as CurrentDeliverySubject; return { subject: currentDeliverySubject(kind, context, external, current.runtime.restore()), context }; },
     inspectTrace(subject) { return (subject as CurrentDeliverySubject).runtime.snapshot(); },
   };
 }
 
 function fakeDeliveryFactory(kind: DeliveryKind): ContractSubjectFactory<DeliveryDriverContractSubject> {
+  const external = { attempts: 0 };
   return {
     name: `fake-delivery-${kind}`,
-    create() { return fakeDeliverySubject(kind); },
-    crashAndRestore(subject, context) { return { subject, context }; },
+    create() { external.attempts = 0; return fakeDeliverySubject(kind, external); },
+    crashAndRestore(subject, context) { const trace = (subject.driver as FakeDeliveryDriver).trace.snapshot(); return { subject: fakeDeliverySubject(kind, external, trace), context }; },
     inspectTrace(subject) { return (subject.driver as FakeDeliveryDriver).trace.snapshot(); },
   };
 }
 
-interface CurrentDeliverySubject extends DeliveryDriverContractSubject { runtime: TestingCurrentPiclawAdapterRuntime; }
-function currentDeliverySubject(kind: DeliveryKind, context: ContractTestContext): CurrentDeliverySubject {
-  const runtime = new TestingCurrentPiclawAdapterRuntime(context);
+interface CurrentDeliverySubject extends DeliveryDriverContractSubject { readonly runtime: TestingCurrentPiclawAdapterRuntime; }
+function currentDeliverySubject(kind: DeliveryKind, context: ContractTestContext, external: { attempts: number }, runtime = new TestingCurrentPiclawAdapterRuntime(context)): CurrentDeliverySubject {
   const payloads = new InMemoryEffectPayloadResolver(); payloads.putText("payload:delivery", "safe payload");
   let resolverOverride: (() => ReturnType<InMemoryEffectPayloadResolver["peek"]> | Promise<ReturnType<InMemoryEffectPayloadResolver["peek"]>>) | null = null;
   let semanticValid = true; let validatorThrows = false; let classifierThrows = false; let observedPayload: Uint8Array | null = null;
@@ -68,7 +69,7 @@ function currentDeliverySubject(kind: DeliveryKind, context: ContractTestContext
   let attempts = 0;
   const boundary: DeliveryBoundary = {
     async attempt(input) {
-      observedPayload = new Uint8Array(input.payload.bytes); attempts += 1;
+      observedPayload = new Uint8Array(input.payload.bytes); attempts += 1; external.attempts += 1;
       const next = queue.shift();
       if (!next) throw new Error("unscripted");
       if ("gate" in next) { next.startedResolve(); await next.gate; return next.success; }
@@ -92,7 +93,7 @@ function currentDeliverySubject(kind: DeliveryKind, context: ContractTestContext
       queue.push({ gate, startedResolve, success: { acceptedAt: value.acceptedAt, receiptRef: value.receiptRef, detail: value.detail } });
       return { release, started: () => startedPromise };
     },
-    countAttempts() { return attempts; },
+    countAttempts() { return attempts; }, countExternalAttempts() { return external.attempts; },
     corruptPayload(corruption) {
       const payload = payloads.peek("payload:delivery")!;
       if (corruption === "semantic") { semanticValid = false; return; }
@@ -118,14 +119,14 @@ function currentDeliverySubject(kind: DeliveryKind, context: ContractTestContext
 interface DelayedBoundary { gate: Promise<void>; startedResolve(): void; success: DeliveryBoundarySuccess; }
 function isDeliveryError(value: unknown): value is DeliveryDriverError { return Boolean(value && typeof value === "object" && "certainty" in value && "_tag" in value); }
 
-function fakeDeliverySubject(kind: DeliveryKind): DeliveryDriverContractSubject {
+function fakeDeliverySubject(kind: DeliveryKind, external: { attempts: number }, traceSnapshot: ReturnType<FakeDeliveryDriver["trace"]["snapshot"]> = []): DeliveryDriverContractSubject {
   const payloads = new InMemoryEffectPayloadResolver(); payloads.putText("payload:delivery", "safe payload");
   let resolverOverride: (() => ReturnType<InMemoryEffectPayloadResolver["peek"]> | Promise<ReturnType<InMemoryEffectPayloadResolver["peek"]>>) | null = null;
   let semanticValid = true; let validatorThrows = false;
   const driver = new FakeDeliveryDriver(kind, { resolve(ref) { return resolverOverride ? resolverOverride() : payloads.resolve(ref); } }, (expected, request, payload) => {
     if (validatorThrows) { validatorThrows = false; throw new Error("validator fault"); }
     return semanticValid && expected === kind && request.destinationRef !== null && payload.mediaType === "text/plain";
-  });
+  }, traceSnapshot, () => { external.attempts += 1; });
   const push = (step: ScriptedDeliveryStep) => { driver.script(step); };
   return {
     driver,
@@ -137,7 +138,7 @@ function fakeDeliverySubject(kind: DeliveryKind): DeliveryDriverContractSubject 
       push({ _tag: "delay", gate: (async () => { startedResolve(); await gate; })(), next: { _tag: "outcome", outcome: value } });
       return { release, started: () => startedPromise };
     },
-    countAttempts() { return driver.countAttempts(); },
+    countAttempts() { return driver.countAttempts(); }, countExternalAttempts() { return external.attempts; },
     corruptPayload(corruption) {
       const payload = payloads.peek("payload:delivery")!;
       if (corruption === "semantic") { semanticValid = false; return; }
