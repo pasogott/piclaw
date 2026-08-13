@@ -132,7 +132,7 @@ export class FakeExecutionEnv implements ExecutionEnv {
     this.cleaned = true;
     this.cleanupCalls += 1;
     for (const group of [...this.ownedGroups]) { this.ownedGroups.delete(group); this.killedGroups.push(group); }
-    if (this.throwCleanup) return; // deterministic best-effort cleanup fault
+    if (this.throwCleanup) throw new Error("cleanup fault");
   }
 
   private async file<T>(path: string | undefined, signal: AbortSignal | undefined, run: () => T): Promise<ResultValue<T, FileError>> {

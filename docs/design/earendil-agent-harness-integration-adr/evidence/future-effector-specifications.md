@@ -1229,7 +1229,7 @@ interface ExecutionContextError extends PiclawEffectError {
 }
 ```
 
-Resolution takes a snapshot. A later SSH profile change does not redirect an already executing tool batch. Secrets are injected into the environment implementation and never returned in context metadata.
+Resolution takes a snapshot. A later SSH profile change does not redirect an already executing tool batch. Secrets are injected into the environment implementation and never returned in context metadata. Every resolver failure occurs before an external effect and therefore has `certainty: "not_applied"`; this includes missing/stale operation authority, routing/profile/credential lookup, environment construction, and malformed or throwing injected callbacks. SSH execution certainty is not a resolver error: a disconnect proved before command submission is a bounded Earendil execution failure, while a disconnect after submission is returned directly as Earendil `ExecutionError("unknown")` and carries no retry claim.
 
 ### Adapter over current Piclaw internals
 

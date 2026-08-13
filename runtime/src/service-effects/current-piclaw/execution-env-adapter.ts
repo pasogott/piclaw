@@ -1,8 +1,13 @@
+import { resolve as resolvePath } from "node:path";
+
 import {
   ExecutionError,
   FileError,
   Result,
   type ExecutionEnv,
+  type ExecutionErrorCode,
+  type FileErrorCode,
+  type FileInfo,
   type Result as ResultValue,
   type ShellExecOptions,
 } from "@earendil-works/pi-agent-core";
@@ -12,95 +17,259 @@ export type ShellEnvironmentPreparer = (
   options: Readonly<ShellExecOptions>,
 ) => Promise<Record<string, string>> | Record<string, string>;
 
+type FileNormaliser<T> = (value: unknown) => T | null;
+type ExecValue = { stdout: string; stderr: string; exitCode: number };
+
 /** Defensive Earendil boundary around one captured environment instance. */
 export class PiclawExecutionEnv implements ExecutionEnv {
   readonly cwd: string;
-  readonly #delegate: ExecutionEnv;
+  readonly #absolutePath: ExecutionEnv["absolutePath"];
+  readonly #joinPath: ExecutionEnv["joinPath"];
+  readonly #readTextFile: ExecutionEnv["readTextFile"];
+  readonly #readTextLines: ExecutionEnv["readTextLines"];
+  readonly #readBinaryFile: ExecutionEnv["readBinaryFile"];
+  readonly #writeFile: ExecutionEnv["writeFile"];
+  readonly #appendFile: ExecutionEnv["appendFile"];
+  readonly #renameFile: ExecutionEnv["renameFile"];
+  readonly #fileInfo: ExecutionEnv["fileInfo"];
+  readonly #listDir: ExecutionEnv["listDir"];
+  readonly #canonicalPath: ExecutionEnv["canonicalPath"];
+  readonly #exists: ExecutionEnv["exists"];
+  readonly #createDir: ExecutionEnv["createDir"];
+  readonly #remove: ExecutionEnv["remove"];
+  readonly #createTempDir: ExecutionEnv["createTempDir"];
+  readonly #createTempFile: ExecutionEnv["createTempFile"];
+  readonly #exec: ExecutionEnv["exec"];
+  readonly #cleanup: ExecutionEnv["cleanup"];
   readonly #prepareShellEnvironment: ShellEnvironmentPreparer;
   #cleanupPromise: Promise<void> | null = null;
 
   constructor(delegate: ExecutionEnv, prepareShellEnvironment: ShellEnvironmentPreparer) {
-    this.cwd = delegate.cwd;
-    this.#delegate = delegate;
+    this.cwd = requireStableCwd(delegate);
+    this.#absolutePath = captureMethod(delegate, "absolutePath");
+    this.#joinPath = captureMethod(delegate, "joinPath");
+    this.#readTextFile = captureMethod(delegate, "readTextFile");
+    this.#readTextLines = captureMethod(delegate, "readTextLines");
+    this.#readBinaryFile = captureMethod(delegate, "readBinaryFile");
+    this.#writeFile = captureMethod(delegate, "writeFile");
+    this.#appendFile = captureMethod(delegate, "appendFile");
+    this.#renameFile = captureMethod(delegate, "renameFile");
+    this.#fileInfo = captureMethod(delegate, "fileInfo");
+    this.#listDir = captureMethod(delegate, "listDir");
+    this.#canonicalPath = captureMethod(delegate, "canonicalPath");
+    this.#exists = captureMethod(delegate, "exists");
+    this.#createDir = captureMethod(delegate, "createDir");
+    this.#remove = captureMethod(delegate, "remove");
+    this.#createTempDir = captureMethod(delegate, "createTempDir");
+    this.#createTempFile = captureMethod(delegate, "createTempFile");
+    this.#exec = captureMethod(delegate, "exec");
+    this.#cleanup = captureMethod(delegate, "cleanup");
+    if (typeof prepareShellEnvironment !== "function") throw new TypeError("Invalid shell environment preparer.");
     this.#prepareShellEnvironment = prepareShellEnvironment;
+    Object.freeze(this);
   }
 
-  absolutePath(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, () => this.#delegate.absolutePath(path, abortSignal)); }
-  joinPath(parts: string[], abortSignal?: AbortSignal) { return this.file(undefined, abortSignal, () => this.#delegate.joinPath([...parts], abortSignal)); }
-  readTextFile(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, () => this.#delegate.readTextFile(path, abortSignal)); }
-  readTextLines(path: string, options?: { maxLines?: number; abortSignal?: AbortSignal }) { const snapshot = options ? { ...options } : undefined; return this.file(path, snapshot?.abortSignal, () => this.#delegate.readTextLines(path, snapshot)); }
-  readBinaryFile(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, () => this.#delegate.readBinaryFile(path, abortSignal)); }
-  writeFile(path: string, content: string | Uint8Array, abortSignal?: AbortSignal) { const snapshot = typeof content === "string" ? content : new Uint8Array(content); return this.file(path, abortSignal, () => this.#delegate.writeFile(path, snapshot, abortSignal)); }
-  appendFile(path: string, content: string | Uint8Array, abortSignal?: AbortSignal) { const snapshot = typeof content === "string" ? content : new Uint8Array(content); return this.file(path, abortSignal, () => this.#delegate.appendFile(path, snapshot, abortSignal)); }
-  renameFile(sourcePath: string, destinationPath: string, abortSignal?: AbortSignal) { return this.file(sourcePath, abortSignal, () => this.#delegate.renameFile(sourcePath, destinationPath, abortSignal)); }
-  fileInfo(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, () => this.#delegate.fileInfo(path, abortSignal)); }
-  listDir(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, () => this.#delegate.listDir(path, abortSignal)); }
-  canonicalPath(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, () => this.#delegate.canonicalPath(path, abortSignal)); }
-  exists(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, () => this.#delegate.exists(path, abortSignal)); }
-  createDir(path: string, options?: { recursive?: boolean; abortSignal?: AbortSignal }) { const snapshot = options ? { ...options } : undefined; return this.file(path, snapshot?.abortSignal, () => this.#delegate.createDir(path, snapshot)); }
-  remove(path: string, options?: { recursive?: boolean; force?: boolean; abortSignal?: AbortSignal }) { const snapshot = options ? { ...options } : undefined; return this.file(path, snapshot?.abortSignal, () => this.#delegate.remove(path, snapshot)); }
-  createTempDir(prefix?: string, abortSignal?: AbortSignal) { return this.file(undefined, abortSignal, () => this.#delegate.createTempDir(prefix, abortSignal)); }
-  createTempFile(options?: { prefix?: string; suffix?: string; abortSignal?: AbortSignal }) { const snapshot = options ? { ...options } : undefined; return this.file(undefined, snapshot?.abortSignal, () => this.#delegate.createTempFile(snapshot)); }
+  async absolutePath(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, stringValue, () => this.#absolutePath(path, abortSignal)); }
+  async joinPath(parts: string[], abortSignal?: AbortSignal) {
+    return this.file(undefined, abortSignal, stringValue, () => {
+      const snapshot = snapshotStringArray(parts);
+      if (!snapshot) throw new TypeError("Invalid path parts.");
+      return this.#joinPath(snapshot, abortSignal);
+    });
+  }
+  async readTextFile(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, stringValue, () => this.#readTextFile(path, abortSignal)); }
+  async readTextLines(path: string, options?: { maxLines?: number; abortSignal?: AbortSignal }) {
+    try { const snapshot = snapshotReadOptions(options); return this.file(path, snapshot?.abortSignal, stringArrayValue, () => this.#readTextLines(path, snapshot)); }
+    catch { return fileFailure("unknown", "Invalid filesystem options.", this.addressedPath(path)); }
+  }
+  async readBinaryFile(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, binaryValue, () => this.#readBinaryFile(path, abortSignal)); }
+  async writeFile(path: string, content: string | Uint8Array, abortSignal?: AbortSignal) {
+    return this.file(path, abortSignal, voidValue, () => this.#writeFile(path, snapshotContent(content), abortSignal));
+  }
+  async appendFile(path: string, content: string | Uint8Array, abortSignal?: AbortSignal) {
+    return this.file(path, abortSignal, voidValue, () => this.#appendFile(path, snapshotContent(content), abortSignal));
+  }
+  async renameFile(sourcePath: string, destinationPath: string, abortSignal?: AbortSignal) { return this.file(sourcePath, abortSignal, voidValue, () => this.#renameFile(sourcePath, destinationPath, abortSignal)); }
+  async fileInfo(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, fileInfoValue, () => this.#fileInfo(path, abortSignal)); }
+  async listDir(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, fileInfoArrayValue, () => this.#listDir(path, abortSignal)); }
+  async canonicalPath(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, stringValue, () => this.#canonicalPath(path, abortSignal)); }
+  async exists(path: string, abortSignal?: AbortSignal) { return this.file(path, abortSignal, booleanValue, () => this.#exists(path, abortSignal)); }
+  async createDir(path: string, options?: { recursive?: boolean; abortSignal?: AbortSignal }) {
+    try { const snapshot = snapshotCreateOptions(options); return this.file(path, snapshot?.abortSignal, voidValue, () => this.#createDir(path, snapshot)); }
+    catch { return fileFailure("unknown", "Invalid filesystem options.", this.addressedPath(path)); }
+  }
+  async remove(path: string, options?: { recursive?: boolean; force?: boolean; abortSignal?: AbortSignal }) {
+    try { const snapshot = snapshotRemoveOptions(options); return this.file(path, snapshot?.abortSignal, voidValue, () => this.#remove(path, snapshot)); }
+    catch { return fileFailure("unknown", "Invalid filesystem options.", this.addressedPath(path)); }
+  }
+  async createTempDir(prefix?: string, abortSignal?: AbortSignal) { return this.file(undefined, abortSignal, stringValue, () => this.#createTempDir(prefix, abortSignal)); }
+  async createTempFile(options?: { prefix?: string; suffix?: string; abortSignal?: AbortSignal }) {
+    try { const snapshot = snapshotTempOptions(options); return this.file(undefined, snapshot?.abortSignal, stringValue, () => this.#createTempFile(snapshot)); }
+    catch { return fileFailure("unknown", "Invalid filesystem options."); }
+  }
 
-  async exec(command: string, options: ShellExecOptions = {}): Promise<ResultValue<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>> {
-    if (options.abortSignal?.aborted) return Result.err(new ExecutionError("aborted", "aborted"));
-    const snapshot = snapshotShellOptions(options);
+  async exec(command: string, options: ShellExecOptions = {}): Promise<ResultValue<ExecValue, ExecutionError>> {
+    let snapshot: ShellExecOptions;
     try {
-      const prepared = await Promise.resolve(this.#prepareShellEnvironment(command, snapshot));
-      const env = normaliseEnvironment(prepared);
-      if (!env) return Result.err(new ExecutionError("unknown", "Shell environment preparation returned an invalid environment."));
-      if (snapshot.abortSignal?.aborted) return Result.err(new ExecutionError("aborted", "aborted"));
-      const result = await this.#delegate.exec(command, { ...snapshot, env, inheritEnv: false });
-      return validExecutionResult(result) ? result : Result.err(new ExecutionError("unknown", "Execution environment returned a malformed result."));
-    } catch (error) {
-      return Result.err(new ExecutionError("unknown", "Shell environment preparation or execution failed.", toError(error)));
+      snapshot = snapshotShellOptions(options);
+      const aborted = readAborted(snapshot.abortSignal);
+      if (aborted === null) return executionFailure("unknown", "Invalid abort signal.");
+      if (aborted) return executionFailure("aborted", "aborted");
+    } catch { return executionFailure("unknown", "Invalid shell execution options."); }
+
+    let prepared: unknown;
+    try { prepared = await Promise.resolve(this.#prepareShellEnvironment(command, snapshot)); }
+    catch { return executionFailure("unknown", "Shell environment preparation failed."); }
+    const env = normaliseEnvironment(prepared);
+    if (!env) return executionFailure("unknown", "Shell environment preparation returned an invalid environment.");
+    const aborted = readAborted(snapshot.abortSignal);
+    if (aborted === null) return executionFailure("unknown", "Invalid abort signal.");
+    if (aborted) return executionFailure("aborted", "aborted");
+
+    let callbackFault = false;
+    const guardedStdout = guardCallback(snapshot.onStdout, () => { callbackFault = true; });
+    const guardedStderr = guardCallback(snapshot.onStderr, () => { callbackFault = true; });
+    try {
+      const result = await this.#exec(command, { ...snapshot, env, inheritEnv: false, onStdout: guardedStdout, onStderr: guardedStderr });
+      if (callbackFault) return executionFailure("callback_error", "Shell output callback failed.");
+      return normaliseExecutionResult(result);
+    } catch {
+      return callbackFault
+        ? executionFailure("callback_error", "Shell output callback failed.")
+        : executionFailure("unknown", "Execution environment failed.");
     }
   }
 
   cleanup(): Promise<void> {
-    if (!this.#cleanupPromise) this.#cleanupPromise = (async () => { try { await this.#delegate.cleanup(); } catch { /* best effort */ } })();
+    if (!this.#cleanupPromise) this.#cleanupPromise = (async () => { try { await this.#cleanup(); } catch { /* best effort */ } })();
     return this.#cleanupPromise;
   }
 
-  private async file<T>(path: string | undefined, abortSignal: AbortSignal | undefined, effect: () => Promise<ResultValue<T, FileError>>): Promise<ResultValue<T, FileError>> {
-    const addressedPath = this.addressedPath(path);
-    if (abortSignal?.aborted) return Result.err(new FileError("aborted", "aborted", addressedPath));
-    try {
-      const result = await effect();
-      return validFileResult(result) ? result : Result.err(new FileError("unknown", "Filesystem environment returned a malformed result.", addressedPath));
-    } catch (error) { return Result.err(new FileError("unknown", "Filesystem environment failed.", addressedPath, toError(error))); }
+  private async file<T>(path: string | undefined, signal: AbortSignal | undefined, normalise: FileNormaliser<T>, effect: () => Promise<unknown>): Promise<ResultValue<T, FileError>> {
+    const addressed = this.addressedPath(path);
+    const aborted = readAborted(signal);
+    if (aborted === null) return fileFailure("unknown", "Invalid abort signal.", addressed);
+    if (aborted) return fileFailure("aborted", "aborted", addressed);
+    try { return normaliseFileResult(await effect(), addressed, normalise); }
+    catch { return fileFailure("unknown", "Filesystem environment failed.", addressed); }
   }
 
   private addressedPath(path: string | undefined): string | undefined {
-    if (!path) return undefined;
-    try { return path.startsWith("/") ? path : `${this.cwd.replace(/\/$/, "")}/${path}`; } catch { return undefined; }
+    try { return typeof path === "string" ? resolvePath(this.cwd, path) : undefined; } catch { return undefined; }
   }
 }
 
-function snapshotShellOptions(options: ShellExecOptions): ShellExecOptions {
-  return Object.freeze({
-    ...(options.cwd === undefined ? {} : { cwd: options.cwd }), ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
-    ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }), ...(options.onStdout === undefined ? {} : { onStdout: options.onStdout }),
-    ...(options.onStderr === undefined ? {} : { onStderr: options.onStderr }), env: Object.freeze({ ...(options.env ?? {}) }), inheritEnv: options.inheritEnv ?? true,
-  });
+function captureMethod<K extends keyof ExecutionEnv>(receiver: ExecutionEnv, key: K): ExecutionEnv[K] {
+  const first = receiver[key]; const second = receiver[key];
+  if (first !== second || typeof first !== "function") throw new TypeError(`Invalid ExecutionEnv method: ${key}`);
+  return first.bind(receiver) as ExecutionEnv[K];
+}
+function requireStableCwd(value: ExecutionEnv): string {
+  const cwd = value.cwd;
+  if (value.cwd !== cwd || typeof cwd !== "string" || cwd.trim().length === 0 || !cwd.startsWith("/")) throw new TypeError("Invalid ExecutionEnv cwd.");
+  return resolvePath(cwd);
+}
+function normaliseFileResult<T>(candidate: unknown, fallbackPath: string | undefined, normalise: FileNormaliser<T>): ResultValue<T, FileError> {
+  try {
+    if (!record(candidate)) return fileFailure("unknown", "Filesystem environment returned a malformed result.", fallbackPath);
+    const ok = stable(candidate, "ok");
+    if (ok === true) {
+      const value = stable(candidate, "value"); const snapshot = normalise(value);
+      return snapshot === null ? fileFailure("unknown", "Filesystem environment returned a malformed result.", fallbackPath) : Result.ok(snapshot);
+    }
+    if (ok !== false) return fileFailure("unknown", "Filesystem environment returned a malformed result.", fallbackPath);
+    return normaliseFileError(stable(candidate, "error"), fallbackPath);
+  } catch { return fileFailure("unknown", "Filesystem environment returned a malformed result.", fallbackPath); }
+}
+function normaliseFileError(value: unknown, fallbackPath: string | undefined): ResultValue<never, FileError> {
+  try {
+    if (!(value instanceof FileError)) return fileFailure("unknown", "Filesystem environment returned a malformed error.", fallbackPath);
+    const code = stableObject(value, "code"); const message = stableObject(value, "message"); const path = stableObject(value, "path");
+    if (!FILE_CODES.has(code as FileErrorCode) || typeof message !== "string" || (path !== undefined && typeof path !== "string")) return fileFailure("unknown", "Filesystem environment returned a malformed error.", fallbackPath);
+    return fileFailure(code as FileErrorCode, `Filesystem operation failed (${code as string}).`, normaliseErrorPath(path as string | undefined, fallbackPath));
+  } catch { return fileFailure("unknown", "Filesystem environment returned a malformed error.", fallbackPath); }
+}
+function normaliseExecutionResult(candidate: unknown): ResultValue<ExecValue, ExecutionError> {
+  try {
+    if (!record(candidate)) return executionFailure("unknown", "Execution environment returned a malformed result.");
+    const ok = stable(candidate, "ok");
+    if (ok === true) {
+      const value = stable(candidate, "value"); if (!record(value)) return executionFailure("unknown", "Execution environment returned a malformed result.");
+      const stdout = stable(value, "stdout"); const stderr = stable(value, "stderr"); const exitCode = stable(value, "exitCode");
+      return typeof stdout === "string" && typeof stderr === "string" && Number.isInteger(exitCode)
+        ? Result.ok(Object.freeze({ stdout, stderr, exitCode: exitCode as number }))
+        : executionFailure("unknown", "Execution environment returned a malformed result.");
+    }
+    if (ok !== false) return executionFailure("unknown", "Execution environment returned a malformed result.");
+    const value = stable(candidate, "error");
+    if (!(value instanceof ExecutionError)) return executionFailure("unknown", "Execution environment returned a malformed error.");
+    const code = stableObject(value, "code"); const message = stableObject(value, "message");
+    return EXECUTION_CODES.has(code as ExecutionErrorCode) && typeof message === "string"
+      ? executionFailure(code as ExecutionErrorCode, `Execution failed (${code as string}).`)
+      : executionFailure("unknown", "Execution environment returned a malformed error.");
+  } catch { return executionFailure("unknown", "Execution environment returned a malformed result."); }
+}
+function snapshotShellOptions(value: unknown): ShellExecOptions {
+  if (!record(value)) throw new TypeError("Invalid shell options.");
+  const cwd = stable(value, "cwd"); const timeout = stable(value, "timeout"); const signal = stable(value, "abortSignal");
+  const stdout = stable(value, "onStdout"); const stderr = stable(value, "onStderr"); const environment = stable(value, "env"); const inherit = stable(value, "inheritEnv");
+  if (cwd !== undefined && typeof cwd !== "string") throw new TypeError("Invalid cwd.");
+  if (timeout !== undefined && typeof timeout !== "number") throw new TypeError("Invalid timeout.");
+  if (signal !== undefined && !record(signal)) throw new TypeError("Invalid abort signal.");
+  if (stdout !== undefined && typeof stdout !== "function" || stderr !== undefined && typeof stderr !== "function") throw new TypeError("Invalid callback.");
+  if (inherit !== undefined && typeof inherit !== "boolean") throw new TypeError("Invalid inheritance option.");
+  const env = environment === undefined ? {} : normaliseEnvironment(environment); if (!env) throw new TypeError("Invalid environment.");
+  return Object.freeze({ ...(cwd === undefined ? {} : { cwd }), ...(timeout === undefined ? {} : { timeout }), ...(signal === undefined ? {} : { abortSignal: signal as unknown as AbortSignal }), ...(stdout === undefined ? {} : { onStdout: stdout as (chunk: string) => void }), ...(stderr === undefined ? {} : { onStderr: stderr as (chunk: string) => void }), env: Object.freeze(env), inheritEnv: inherit as boolean | undefined });
+}
+function snapshotReadOptions(value: unknown): { maxLines?: number; abortSignal?: AbortSignal } | undefined {
+  if (value === undefined) return undefined; if (!record(value)) throw new TypeError("Invalid read options.");
+  const maxLines = stable(value, "maxLines"); const signal = stable(value, "abortSignal");
+  if (maxLines !== undefined && (!Number.isSafeInteger(maxLines) || (maxLines as number) < 0) || signal !== undefined && !record(signal)) throw new TypeError("Invalid read options.");
+  return Object.freeze({ ...(maxLines === undefined ? {} : { maxLines: maxLines as number }), ...(signal === undefined ? {} : { abortSignal: signal as unknown as AbortSignal }) });
+}
+function snapshotCreateOptions(value: unknown): { recursive?: boolean; abortSignal?: AbortSignal } | undefined {
+  if (value === undefined) return undefined; if (!record(value)) throw new TypeError("Invalid create options.");
+  const recursive = stable(value, "recursive"); const signal = stable(value, "abortSignal");
+  if (recursive !== undefined && typeof recursive !== "boolean" || signal !== undefined && !record(signal)) throw new TypeError("Invalid create options.");
+  return Object.freeze({ ...(recursive === undefined ? {} : { recursive }), ...(signal === undefined ? {} : { abortSignal: signal as unknown as AbortSignal }) });
+}
+function snapshotRemoveOptions(value: unknown): { recursive?: boolean; force?: boolean; abortSignal?: AbortSignal } | undefined {
+  if (value === undefined) return undefined; if (!record(value)) throw new TypeError("Invalid remove options.");
+  const recursive = stable(value, "recursive"); const force = stable(value, "force"); const signal = stable(value, "abortSignal");
+  if (recursive !== undefined && typeof recursive !== "boolean" || force !== undefined && typeof force !== "boolean" || signal !== undefined && !record(signal)) throw new TypeError("Invalid remove options.");
+  return Object.freeze({ ...(recursive === undefined ? {} : { recursive }), ...(force === undefined ? {} : { force }), ...(signal === undefined ? {} : { abortSignal: signal as unknown as AbortSignal }) });
+}
+function snapshotTempOptions(value: unknown): { prefix?: string; suffix?: string; abortSignal?: AbortSignal } | undefined {
+  if (value === undefined) return undefined; if (!record(value)) throw new TypeError("Invalid temp options.");
+  const prefix = stable(value, "prefix"); const suffix = stable(value, "suffix"); const signal = stable(value, "abortSignal");
+  if (prefix !== undefined && typeof prefix !== "string" || suffix !== undefined && typeof suffix !== "string" || signal !== undefined && !record(signal)) throw new TypeError("Invalid temp options.");
+  return Object.freeze({ ...(prefix === undefined ? {} : { prefix }), ...(suffix === undefined ? {} : { suffix }), ...(signal === undefined ? {} : { abortSignal: signal as unknown as AbortSignal }) });
+}
+function snapshotContent(value: unknown): string | Uint8Array { if (typeof value === "string") return value; if (!(value instanceof Uint8Array)) throw new TypeError("Invalid content."); return new Uint8Array(value); }
+function snapshotStringArray(value: unknown): string[] | null {
+  try { if (!Array.isArray(value)) return null; const length = value.length; if (value.length !== length) return null; const output: string[] = []; for (let index = 0; index < length; index += 1) { const item = value[index]; if (value[index] !== item || typeof item !== "string") return null; output.push(item); } return output; } catch { return null; }
 }
 function normaliseEnvironment(value: unknown): Record<string, string> | null {
-  try {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    const output: Record<string, string> = {};
-    for (const key of Object.keys(value)) { const first = (value as Record<string, unknown>)[key]; if ((value as Record<string, unknown>)[key] !== first || typeof first !== "string") return null; output[key] = first; }
-    return output;
-  } catch { return null; }
+  try { if (!record(value)) return null; const output: Record<string, string> = {}; for (const key of Object.keys(value)) { const item = stable(value, key); if (typeof item !== "string") return null; output[key] = item; } return output; } catch { return null; }
 }
-function validFileResult<T>(value: unknown): value is ResultValue<T, FileError> {
-  try { if (!value || typeof value !== "object" || typeof (value as { ok?: unknown }).ok !== "boolean") return false; return (value as { ok: boolean }).ok || (value as { error?: unknown }).error instanceof FileError; } catch { return false; }
+function fileInfoValue(value: unknown): FileInfo | null {
+  try { if (!record(value)) return null; const name = stable(value, "name"); const path = stable(value, "path"); const kind = stable(value, "kind"); const size = stable(value, "size"); const mtimeMs = stable(value, "mtimeMs"); if (typeof name !== "string" || typeof path !== "string" || !path.startsWith("/") || !FILE_KINDS.has(kind as FileInfo["kind"]) || typeof size !== "number" || !Number.isFinite(size) || typeof mtimeMs !== "number" || !Number.isFinite(mtimeMs)) return null; return Object.freeze({ name, path: resolvePath(path), kind: kind as FileInfo["kind"], size, mtimeMs }); } catch { return null; }
 }
-function validExecutionResult(value: unknown): value is ResultValue<{ stdout: string; stderr: string; exitCode: number }, ExecutionError> {
-  try {
-    if (!value || typeof value !== "object" || typeof (value as { ok?: unknown }).ok !== "boolean") return false;
-    if (!(value as { ok: boolean }).ok) return (value as { error?: unknown }).error instanceof ExecutionError;
-    const result = (value as { value?: unknown }).value as Record<string, unknown> | undefined;
-    return Boolean(result && typeof result.stdout === "string" && typeof result.stderr === "string" && Number.isInteger(result.exitCode));
-  } catch { return false; }
-}
-function toError(value: unknown): Error { return value instanceof Error ? value : new Error(String(value)); }
+function fileInfoArrayValue(value: unknown): FileInfo[] | null { try { if (!Array.isArray(value)) return null; const output = value.map(fileInfoValue); return output.some((item) => item === null) ? null : Object.freeze(output) as FileInfo[]; } catch { return null; } }
+function stringValue(value: unknown): string | null { return typeof value === "string" ? value : null; }
+function stringArrayValue(value: unknown): string[] | null { const output = snapshotStringArray(value); return output ? Object.freeze(output) as string[] : null; }
+function binaryValue(value: unknown): Uint8Array | null { try { return value instanceof Uint8Array ? new Uint8Array(value) : null; } catch { return null; } }
+function booleanValue(value: unknown): boolean | null { return typeof value === "boolean" ? value : null; }
+function voidValue(value: unknown): undefined | null { return value === undefined ? undefined : null; }
+function readAborted(signal: unknown): boolean | null { try { if (signal === undefined) return false; if (!record(signal)) return null; const value = stable(signal, "aborted"); return typeof value === "boolean" ? value : null; } catch { return null; } }
+function guardCallback(callback: ((chunk: string) => void) | undefined, fault: () => void): ((chunk: string) => void) | undefined { return callback ? (chunk) => { try { callback(chunk); } catch (error) { fault(); throw error; } } : undefined; }
+function normaliseErrorPath(path: string | undefined, fallback: string | undefined): string | undefined { try { return path === undefined ? fallback : path.startsWith("/") ? resolvePath(path) : fallback; } catch { return fallback; } }
+function fileFailure(code: FileErrorCode, message: string, path?: string): ResultValue<never, FileError> { return Result.err(new FileError(code, message, path)); }
+function executionFailure(code: ExecutionErrorCode, message: string): ResultValue<never, ExecutionError> { return Result.err(new ExecutionError(code, message)); }
+function record(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === "object" && !Array.isArray(value)); }
+function stable(value: Record<string, unknown>, key: string): unknown { const first = value[key]; return value[key] === first ? first : CHANGED; }
+function stableObject(value: object, key: string): unknown { return stable(value as Record<string, unknown>, key); }
+const CHANGED = Symbol("changed");
+const FILE_CODES = new Set<FileErrorCode>(["aborted", "not_found", "permission_denied", "not_directory", "is_directory", "invalid", "not_supported", "unknown"]);
+const EXECUTION_CODES = new Set<ExecutionErrorCode>(["aborted", "timeout", "shell_unavailable", "spawn_error", "callback_error", "unknown"]);
+const FILE_KINDS = new Set<FileInfo["kind"]>(["file", "directory", "symlink"]);

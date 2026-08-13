@@ -146,19 +146,34 @@ function normaliseProfile(value: unknown): SshExecutionProfileSnapshot | null {
 
 function normaliseFactoryResult(value: unknown, tag: ExecutionContextError["_tag"]): ResultValue<ExecutionEnv, ExecutionContextError> {
   try {
-    if (!recordValue(value) || typeof value.ok !== "boolean") return Result.err(error(tag, true));
-    if (!value.ok) return validError(value.error) ? Result.err(value.error) : Result.err(error(tag, true));
-    return isExecutionEnv(value.value) ? Result.ok(value.value) : Result.err(error(tag, true));
+    if (!recordValue(value)) return Result.err(error(tag, true));
+    const ok = stable(value, "ok");
+    if (ok === false) return Result.err(normaliseError(stable(value, "error"), tag));
+    if (ok !== true) return Result.err(error(tag, true));
+    const captured = captureExecutionEnv(stable(value, "value"));
+    return captured ? Result.ok(captured) : Result.err(error(tag, true));
   } catch { return Result.err(error(tag, true)); }
 }
 
-function validError(value: unknown): value is ExecutionContextError {
-  try { return Boolean(recordValue(value) && TAGS.has(value._tag as ExecutionContextError["_tag"]) && value.certainty === "not_applied" && typeof value.retryable === "boolean"); }
-  catch { return false; }
+function normaliseError(value: unknown, fallback: ExecutionContextError["_tag"]): ExecutionContextError {
+  try {
+    if (!recordValue(value)) return error(fallback, true);
+    const tag = stable(value, "_tag"); const certainty = stable(value, "certainty"); const retryable = stable(value, "retryable");
+    return TAGS.has(tag as ExecutionContextError["_tag"]) && certainty === "not_applied" && typeof retryable === "boolean"
+      ? error(tag as ExecutionContextError["_tag"], retryable)
+      : error(fallback, true);
+  } catch { return error(fallback, true); }
 }
-function isExecutionEnv(value: unknown): value is ExecutionEnv {
-  try { return Boolean(recordValue(value) && nonBlank(value.cwd) && METHODS.every((name) => typeof value[name] === "function")); }
-  catch { return false; }
+function captureExecutionEnv(value: unknown): ExecutionEnv | null {
+  try {
+    if (!recordValue(value)) return null;
+    const cwd = stable(value, "cwd"); if (!nonBlank(cwd) || !cwd.startsWith("/")) return null;
+    const methods = Object.fromEntries(METHODS.map((name) => {
+      const method = stable(value, name); if (typeof method !== "function") throw new TypeError("Invalid environment method.");
+      return [name, method.bind(value)];
+    })) as unknown as Omit<ExecutionEnv, "cwd">;
+    return Object.freeze({ cwd, ...methods });
+  } catch { return null; }
 }
 function context(request: Readonly<ResolveExecutionContextRequest>, env: ExecutionEnv, localEnv: ExecutionEnv): PiclawToolContext { return Object.freeze({ chatJid: request.chatJid, operationId: request.operationId, env, localEnv }); }
 function recordValue(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === "object" && !Array.isArray(value)); }

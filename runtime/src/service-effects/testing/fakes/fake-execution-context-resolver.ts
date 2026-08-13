@@ -64,9 +64,12 @@ export class FakeExecutionContextResolver implements ExecutionContextResolver {
   private async create(factory: () => unknown): Promise<ResultValue<ExecutionEnv, ExecutionContextError>> {
     try {
       const result = await Promise.resolve(factory());
-      if (!record(result) || typeof result.ok !== "boolean") return Result.err(failure("environment_unavailable", true));
-      if (!result.ok) return validFailure(result.error) ? Result.err(result.error) : Result.err(failure("environment_unavailable", true));
-      return executionEnv(result.value) ? Result.ok(result.value) : Result.err(failure("environment_unavailable", true));
+      if (!record(result)) return Result.err(failure("environment_unavailable", true));
+      const ok = once(result, "ok");
+      if (ok === false) return Result.err(normaliseFailure(once(result, "error")));
+      if (ok !== true) return Result.err(failure("environment_unavailable", true));
+      const captured = captureEnvironment(once(result, "value"));
+      return captured ? Result.ok(captured) : Result.err(failure("environment_unavailable", true));
     } catch { return Result.err(failure("environment_unavailable", true)); }
   }
 }
@@ -88,8 +91,8 @@ function routeSnapshot(value: unknown) {
 function profileSnapshot(value: unknown) {
   try { if (!record(value)) return null; const profileId = once(value, "profileId"); const transportRef = once(value, "transportRef"); const cwd = once(value, "cwd"); return text(profileId) && text(transportRef) && text(cwd) && cwd.startsWith("/") ? Object.freeze({ profileId, transportRef, cwd }) : null; } catch { return null; }
 }
-function validFailure(value: unknown): value is ExecutionContextError { try { return Boolean(record(value) && TAGS.has(value._tag as ExecutionContextError["_tag"]) && value.certainty === "not_applied" && typeof value.retryable === "boolean"); } catch { return false; } }
-function executionEnv(value: unknown): value is ExecutionEnv { try { return Boolean(record(value) && text(value.cwd) && METHODS.every((method) => typeof value[method] === "function")); } catch { return false; } }
+function normaliseFailure(value: unknown): ExecutionContextError { try { if (!record(value)) return failure("environment_unavailable", true); const tag = once(value, "_tag"); const certainty = once(value, "certainty"); const retryable = once(value, "retryable"); return TAGS.has(tag as ExecutionContextError["_tag"]) && certainty === "not_applied" && typeof retryable === "boolean" ? failure(tag as ExecutionContextError["_tag"], retryable) : failure("environment_unavailable", true); } catch { return failure("environment_unavailable", true); } }
+function captureEnvironment(value: unknown): ExecutionEnv | null { try { if (!record(value)) return null; const cwd = once(value, "cwd"); if (!text(cwd) || !cwd.startsWith("/")) return null; const methods = Object.fromEntries(METHODS.map((method) => { const fn = once(value, method); if (typeof fn !== "function") throw new TypeError("invalid environment"); return [method, fn.bind(value)]; })) as unknown as Omit<ExecutionEnv, "cwd">; return Object.freeze({ cwd, ...methods }); } catch { return null; } }
 function record(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === "object" && !Array.isArray(value)); }
 function once(value: Record<string, unknown>, key: string): unknown { const first = value[key]; return value[key] === first ? first : CHANGED; }
 function text(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
