@@ -33,8 +33,8 @@ export class FakeAgentProjectionSink implements AgentProjectionSink {
   publishTerminal(value: PublicTerminalProjection): Promise<ResultValue<void, ProjectionSinkError>> { return this.accept("publishTerminal", value as unknown); }
 
   private async accept(method: string, candidate: unknown): Promise<ResultValue<void, ProjectionSinkError>> {
-    if (!safeValidProjection(candidate)) return this.invalid(method);
-    const value = candidate;
+    const value = normaliseProjection(candidate);
+    if (!value) return this.invalid(method);
     this.trace.recordCall(trace(method, value, null, "call"));
     let authorized: boolean;
     try { authorized = this.authority.isCurrentOwner(value); } catch { return this.reject(method, value, "transport_unavailable", "not_applied", true); }
@@ -66,7 +66,7 @@ export class FakeAgentProjectionSink implements AgentProjectionSink {
       return Result.err(Object.freeze({ _tag: "transport_unavailable", certainty: "unknown", retryable: true }));
     }
     this.#cursors.set(key, { generation: value.watchGeneration, seq: value.receiptSeq, closed: value.type === "agent_terminal" });
-    this.published.push(freezeProjection(value));
+    this.published.push(value);
     this.trace.recordResult(trace(method, value, "applied", "published"));
     return Result.ok(undefined);
   }
@@ -94,30 +94,30 @@ const KEYS: Record<PublicAgentProjection["type"], Set<string>> = {
   tool_finished: new Set([...BASE, "toolCallId", "outcome"]), usage_updated: new Set([...BASE, "inputTokens", "outputTokens"]),
   agent_terminal: new Set([...BASE, "terminalCommitRef", "disposition", "messageRowId", "errorCode"]),
 };
-function safeValidProjection(value: unknown): value is PublicAgentProjection { try { return validProjection(value); } catch { return false; } }
-function validProjection(value: unknown): value is PublicAgentProjection {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const candidate = value as Record<string, unknown>;
-  if (typeof candidate.type !== "string") return false;
-  const allowed = KEYS[candidate.type as PublicAgentProjection["type"]];
-  if (!allowed || !Object.keys(candidate).every((key) => allowed.has(key))) return false;
-  const projection = candidate as unknown as PublicAgentProjection;
-  if (!nonEmpty(projection.chatJid) || !nonEmpty(projection.operationId) || (projection.harnessOperationId !== null && !nonEmpty(projection.harnessOperationId)) || !safe(projection.watchGeneration) || !safe(projection.receiptSeq)) return false;
-  if (projection.type === "agent_snapshot") return PHASES.has(projection.phase) && (projection.modelLabel === null || typeof projection.modelLabel === "string") && Array.isArray(projection.activeToolNames) && projection.activeToolNames.every(nonEmpty) && typeof projection.cancellationRequested === "boolean";
-  if (projection.type === "phase_changed") return PHASES.has(projection.phase);
-  if (projection.type === "assistant_delta") return typeof projection.textDelta === "string";
-  if (projection.type === "tool_started") return nonEmpty(projection.toolCallId) && nonEmpty(projection.toolName);
-  if (projection.type === "tool_updated") return nonEmpty(projection.toolCallId) && (projection.publicSummary === null || typeof projection.publicSummary === "string");
-  if (projection.type === "tool_finished") return nonEmpty(projection.toolCallId) && OUTCOMES.has(projection.outcome);
-  if (projection.type === "usage_updated") return safe(projection.inputTokens) && safe(projection.outputTokens);
-  return nonEmpty(projection.terminalCommitRef) && DISPOSITIONS.has(projection.disposition) && (projection.messageRowId === null || (Number.isSafeInteger(projection.messageRowId) && projection.messageRowId > 0)) && (projection.errorCode === null || typeof projection.errorCode === "string");
+function normaliseProjection(value: unknown): PublicAgentProjection | null {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const candidate = value as Record<string, unknown>; const type = candidate.type;
+    if (typeof type !== "string") return null; const allowed = KEYS[type as PublicAgentProjection["type"]];
+    if (!allowed || !Object.keys(candidate).every((key) => allowed.has(key))) return null;
+    const chatJid = candidate.chatJid; const operationId = candidate.operationId; const harnessOperationId = candidate.harnessOperationId; const watchGeneration = candidate.watchGeneration; const receiptSeq = candidate.receiptSeq;
+    if (!["type", "chatJid", "operationId", "harnessOperationId", "watchGeneration", "receiptSeq"].every((key) => stable(candidate, key, ({ type, chatJid, operationId, harnessOperationId, watchGeneration, receiptSeq } as Record<string, unknown>)[key])) || !nonEmpty(chatJid) || !nonEmpty(operationId) || (harnessOperationId !== null && !nonEmpty(harnessOperationId)) || !safe(watchGeneration) || !safe(receiptSeq)) return null;
+    const base = { type, chatJid, operationId, harnessOperationId, watchGeneration, receiptSeq };
+    if (type === "agent_snapshot") { const phase = candidate.phase; const modelLabel = candidate.modelLabel; const tools = candidate.activeToolNames; const cancellationRequested = candidate.cancellationRequested; const activeToolNames = stableArray(candidate, "activeToolNames", tools); return stable(candidate, "phase", phase) && stable(candidate, "modelLabel", modelLabel) && stable(candidate, "cancellationRequested", cancellationRequested) && PHASES.has(phase as string) && (modelLabel === null || typeof modelLabel === "string") && activeToolNames && typeof cancellationRequested === "boolean" ? Object.freeze({ ...base, type, phase, modelLabel, activeToolNames, cancellationRequested } as PublicAgentProjection) : null; }
+    if (type === "phase_changed") { const phase = candidate.phase; return stable(candidate, "phase", phase) && PHASES.has(phase as string) ? Object.freeze({ ...base, type, phase } as PublicAgentProjection) : null; }
+    if (type === "assistant_delta") { const textDelta = candidate.textDelta; return stable(candidate, "textDelta", textDelta) && typeof textDelta === "string" ? Object.freeze({ ...base, type, textDelta } as PublicAgentProjection) : null; }
+    if (type === "tool_started") { const toolCallId = candidate.toolCallId; const toolName = candidate.toolName; return stable(candidate, "toolCallId", toolCallId) && stable(candidate, "toolName", toolName) && nonEmpty(toolCallId) && nonEmpty(toolName) ? Object.freeze({ ...base, type, toolCallId, toolName } as PublicAgentProjection) : null; }
+    if (type === "tool_updated") { const toolCallId = candidate.toolCallId; const publicSummary = candidate.publicSummary; return stable(candidate, "toolCallId", toolCallId) && stable(candidate, "publicSummary", publicSummary) && nonEmpty(toolCallId) && (publicSummary === null || typeof publicSummary === "string") ? Object.freeze({ ...base, type, toolCallId, publicSummary } as PublicAgentProjection) : null; }
+    if (type === "tool_finished") { const toolCallId = candidate.toolCallId; const outcome = candidate.outcome; return stable(candidate, "toolCallId", toolCallId) && stable(candidate, "outcome", outcome) && nonEmpty(toolCallId) && OUTCOMES.has(outcome as string) ? Object.freeze({ ...base, type, toolCallId, outcome } as PublicAgentProjection) : null; }
+    if (type === "usage_updated") { const inputTokens = candidate.inputTokens; const outputTokens = candidate.outputTokens; return stable(candidate, "inputTokens", inputTokens) && stable(candidate, "outputTokens", outputTokens) && safe(inputTokens) && safe(outputTokens) ? Object.freeze({ ...base, type, inputTokens, outputTokens } as PublicAgentProjection) : null; }
+    if (type === "agent_terminal") { const terminalCommitRef = candidate.terminalCommitRef; const disposition = candidate.disposition; const messageRowId = candidate.messageRowId; const errorCode = candidate.errorCode; return stable(candidate, "terminalCommitRef", terminalCommitRef) && stable(candidate, "disposition", disposition) && stable(candidate, "messageRowId", messageRowId) && stable(candidate, "errorCode", errorCode) && nonEmpty(terminalCommitRef) && DISPOSITIONS.has(disposition as string) && (messageRowId === null || (Number.isSafeInteger(messageRowId) && (messageRowId as number) > 0)) && (errorCode === null || typeof errorCode === "string") ? Object.freeze({ ...base, type, terminalCommitRef, disposition, messageRowId, errorCode } as PublicAgentProjection) : null; }
+    return null;
+  } catch { return null; }
 }
+function stable(candidate: Record<string, unknown>, key: string, value: unknown): boolean { return Object.is(candidate[key], value); }
+function stableArray(candidate: Record<string, unknown>, key: string, value: unknown): readonly string[] | null { if (!Array.isArray(value) || !stable(candidate, key, value)) return null; const first = Array.from(value as unknown[]); const second = Array.from(value as unknown[]); return first.length === second.length && first.every((entry, index) => nonEmpty(entry) && Object.is(entry, second[index])) ? Object.freeze(first as string[]) : null; }
 const PHASES = new Set(["idle", "accepted", "running", "waiting", "suspended", "cancelling"]);
 const OUTCOMES = new Set(["completed", "failed", "cancelled"]);
 const DISPOSITIONS = new Set(["completed", "cancelled", "failed", "skipped", "superseded"]);
 function nonEmpty(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
 function safe(value: unknown): value is number { return Number.isSafeInteger(value) && (value as number) >= 0; }
-function freezeProjection(value: PublicAgentProjection): PublicAgentProjection {
-  if (value.type === "agent_snapshot") return Object.freeze({ ...value, activeToolNames: Object.freeze([...value.activeToolNames]) });
-  return Object.freeze({ ...value });
-}

@@ -45,8 +45,8 @@ export class CurrentPiclawAgentProjectionSink implements AgentProjectionSink {
     method: string,
     candidate: unknown,
   ): Promise<ResultValue<void, ProjectionSinkError>> {
-    if (!safeValidProjection(candidate)) return this.invalid(method, candidate);
-    const projection = candidate;
+    const projection = normaliseProjection(candidate);
+    if (!projection) return this.invalid(method, candidate);
     this.call(method, projection);
     let authorized: boolean;
     try { authorized = this.authority.isCurrentOwner(projection); } catch { return this.fail(method, projection, "transport_unavailable", "not_applied", true); }
@@ -73,7 +73,7 @@ export class CurrentPiclawAgentProjectionSink implements AgentProjectionSink {
 
     if (this.runtime.hitFault("before_effect")) return this.fail(method, projection, "transport_unavailable", "not_applied", true);
     try {
-      const transportResult = this.transport.publish(freezeProjection(projection)) as unknown;
+      const transportResult = this.transport.publish(projection) as unknown;
       if (transportResult !== undefined) {
         if (transportResult && typeof (transportResult as { catch?: unknown }).catch === "function") {
           void (transportResult as Promise<unknown>).catch(() => undefined);
@@ -121,26 +121,47 @@ function traceInput(method: string, value: PublicAgentProjection, certainty: Pro
   return { contract: "EF-S08", method, effectId: `${keyOf(value)}:${value.watchGeneration}:${value.receiptSeq}`, operationId: value.operationId, sourceSeq: value.receiptSeq, version: value.watchGeneration, certainty, resultTag };
 }
 
-function safeValidProjection(value: unknown): value is PublicAgentProjection { try { return validProjection(value); } catch { return false; } }
-function validProjection(value: unknown): value is PublicAgentProjection {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const candidate = value as Record<string, unknown>;
-  if (typeof candidate.type !== "string") return false;
-  const allowed = ALLOWED_KEYS[candidate.type as PublicAgentProjection["type"]];
-  if (!allowed || !Object.keys(candidate).every((key) => allowed.has(key))) return false;
-  const projection = candidate as unknown as PublicAgentProjection;
-  if (![projection.chatJid, projection.operationId].every(nonEmpty) || (projection.harnessOperationId !== null && !nonEmpty(projection.harnessOperationId))) return false;
-  if (![projection.watchGeneration, projection.receiptSeq].every(nonNegativeSafeInteger)) return false;
-  switch (projection.type) {
-    case "agent_snapshot": return PHASES.has(projection.phase) && nullableString(projection.modelLabel) && Array.isArray(projection.activeToolNames) && projection.activeToolNames.every(nonEmpty) && typeof projection.cancellationRequested === "boolean";
-    case "phase_changed": return PHASES.has(projection.phase);
-    case "assistant_delta": return typeof projection.textDelta === "string";
-    case "tool_started": return nonEmpty(projection.toolCallId) && nonEmpty(projection.toolName);
-    case "tool_updated": return nonEmpty(projection.toolCallId) && nullableString(projection.publicSummary);
-    case "tool_finished": return nonEmpty(projection.toolCallId) && TOOL_OUTCOMES.has(projection.outcome);
-    case "usage_updated": return nonNegativeSafeInteger(projection.inputTokens) && nonNegativeSafeInteger(projection.outputTokens);
-    case "agent_terminal": return nonEmpty(projection.terminalCommitRef) && DISPOSITIONS.has(projection.disposition) && (projection.messageRowId === null || (Number.isSafeInteger(projection.messageRowId) && projection.messageRowId > 0)) && nullableString(projection.errorCode);
-  }
+function normaliseProjection(value: unknown): PublicAgentProjection | null {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const candidate = value as Record<string, unknown>;
+    const type = candidate.type;
+    if (typeof type !== "string") return null;
+    const allowed = ALLOWED_KEYS[type as PublicAgentProjection["type"]];
+    if (!allowed || !Object.keys(candidate).every((key) => allowed.has(key))) return null;
+    const chatJid = candidate.chatJid; const operationId = candidate.operationId; const harnessOperationId = candidate.harnessOperationId;
+    const watchGeneration = candidate.watchGeneration; const receiptSeq = candidate.receiptSeq;
+    if (!stable(candidate, "type", type) || !stable(candidate, "chatJid", chatJid) || !stable(candidate, "operationId", operationId) || !stable(candidate, "harnessOperationId", harnessOperationId) || !stable(candidate, "watchGeneration", watchGeneration) || !stable(candidate, "receiptSeq", receiptSeq)) return null;
+    if (!nonEmpty(chatJid) || !nonEmpty(operationId) || (harnessOperationId !== null && !nonEmpty(harnessOperationId)) || !nonNegativeSafeInteger(watchGeneration) || !nonNegativeSafeInteger(receiptSeq)) return null;
+    const identity = { type, chatJid, operationId, harnessOperationId, watchGeneration, receiptSeq };
+    switch (type) {
+      case "agent_snapshot": {
+        const phase = candidate.phase; const modelLabel = candidate.modelLabel; const tools = candidate.activeToolNames; const cancellationRequested = candidate.cancellationRequested;
+        const activeToolNames = stableStringArray(candidate, "activeToolNames", tools);
+        if (!stable(candidate, "phase", phase) || !stable(candidate, "modelLabel", modelLabel) || !stable(candidate, "cancellationRequested", cancellationRequested) || !PHASES.has(phase as string) || !nullableString(modelLabel) || !activeToolNames || typeof cancellationRequested !== "boolean") return null;
+        return Object.freeze({ ...identity, type, phase, modelLabel, activeToolNames, cancellationRequested } as PublicAgentSnapshot);
+      }
+      case "phase_changed": { const phase = candidate.phase; return stable(candidate, "phase", phase) && PHASES.has(phase as string) ? Object.freeze({ ...identity, type, phase } as PublicAgentEvent) : null; }
+      case "assistant_delta": { const textDelta = candidate.textDelta; return stable(candidate, "textDelta", textDelta) && typeof textDelta === "string" ? Object.freeze({ ...identity, type, textDelta }) : null; }
+      case "tool_started": { const toolCallId = candidate.toolCallId; const toolName = candidate.toolName; return stable(candidate, "toolCallId", toolCallId) && stable(candidate, "toolName", toolName) && nonEmpty(toolCallId) && nonEmpty(toolName) ? Object.freeze({ ...identity, type, toolCallId, toolName }) : null; }
+      case "tool_updated": { const toolCallId = candidate.toolCallId; const publicSummary = candidate.publicSummary; return stable(candidate, "toolCallId", toolCallId) && stable(candidate, "publicSummary", publicSummary) && nonEmpty(toolCallId) && nullableString(publicSummary) ? Object.freeze({ ...identity, type, toolCallId, publicSummary }) : null; }
+      case "tool_finished": { const toolCallId = candidate.toolCallId; const outcome = candidate.outcome; return stable(candidate, "toolCallId", toolCallId) && stable(candidate, "outcome", outcome) && nonEmpty(toolCallId) && TOOL_OUTCOMES.has(outcome as string) ? Object.freeze({ ...identity, type, toolCallId, outcome } as PublicAgentEvent) : null; }
+      case "usage_updated": { const inputTokens = candidate.inputTokens; const outputTokens = candidate.outputTokens; return stable(candidate, "inputTokens", inputTokens) && stable(candidate, "outputTokens", outputTokens) && nonNegativeSafeInteger(inputTokens) && nonNegativeSafeInteger(outputTokens) ? Object.freeze({ ...identity, type, inputTokens, outputTokens }) : null; }
+      case "agent_terminal": {
+        const terminalCommitRef = candidate.terminalCommitRef; const disposition = candidate.disposition; const messageRowId = candidate.messageRowId; const errorCode = candidate.errorCode;
+        if (!stable(candidate, "terminalCommitRef", terminalCommitRef) || !stable(candidate, "disposition", disposition) || !stable(candidate, "messageRowId", messageRowId) || !stable(candidate, "errorCode", errorCode) || !nonEmpty(terminalCommitRef) || !DISPOSITIONS.has(disposition as string) || (messageRowId !== null && (!Number.isSafeInteger(messageRowId) || (messageRowId as number) <= 0)) || !nullableString(errorCode)) return null;
+        return Object.freeze({ ...identity, type, terminalCommitRef, disposition, messageRowId, errorCode } as PublicTerminalProjection);
+      }
+      default: return null;
+    }
+  } catch { return null; }
+}
+function stable(candidate: Record<string, unknown>, key: string, value: unknown): boolean { return Object.is(candidate[key], value); }
+function stableStringArray(candidate: Record<string, unknown>, key: string, value: unknown): readonly string[] | null {
+  if (!Array.isArray(value) || !stable(candidate, key, value)) return null;
+  const first = Array.from(value as unknown[]); const second = Array.from(value as unknown[]);
+  if (first.length !== second.length || first.some((entry, index) => !nonEmpty(entry) || !Object.is(entry, second[index]))) return null;
+  return Object.freeze(first as string[]);
 }
 const PHASES = new Set(["idle", "accepted", "running", "waiting", "suspended", "cancelling"]);
 const TOOL_OUTCOMES = new Set(["completed", "failed", "cancelled"]);
@@ -160,8 +181,3 @@ const ALLOWED_KEYS: Record<PublicAgentProjection["type"], ReadonlySet<string>> =
   usage_updated: new Set([...IDENTITY_KEYS, "inputTokens", "outputTokens"]),
   agent_terminal: new Set([...IDENTITY_KEYS, "terminalCommitRef", "disposition", "messageRowId", "errorCode"]),
 };
-
-function freezeProjection(projection: PublicAgentProjection): PublicAgentProjection {
-  if (projection.type === "agent_snapshot") return Object.freeze({ ...projection, activeToolNames: Object.freeze([...projection.activeToolNames]) });
-  return Object.freeze({ ...projection });
-}

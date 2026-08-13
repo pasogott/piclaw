@@ -33,9 +33,9 @@ describe("current Piclaw delivery boundary factories", () => {
     ]) };
     try {
       const callback = ((eventType, data) => broadcastEvent(container, eventType, data)) satisfies (eventType: string, data: unknown) => void;
-      const boundary = createTimelineBroadcastBoundary(clock, callback, "agent_status", ({ request }) => ({ chat_jid: request.destinationRef, value: "ready" }));
+      const boundary = createTimelineBroadcastBoundary(clock, callback, "agent_status", ({ request }) => ({ chat_jid: request.destinationRef!, delivery_id: request.deliveryIdentity, value: "ready" }));
       expect((await boundary.attempt(input())).detail).toEqual({ kind: "timeline_broadcast", providerMessageId: null, eventId: "identity-1" });
-      expect(new TextDecoder().decode(webFrames[0])).toBe('event: agent_status\ndata: {"chat_jid":"web:chat","value":"ready"}\n\n'); expect(otherFrames).toEqual([]);
+      expect(new TextDecoder().decode(webFrames[0])).toBe('event: agent_status\ndata: {"chat_jid":"web:chat","delivery_id":"identity-1","value":"ready"}\n\n'); expect(otherFrames).toEqual([]);
     } finally { for (const client of container.clients) clearInterval(client.heartbeat); }
   });
 
@@ -44,6 +44,21 @@ describe("current Piclaw delivery boundary factories", () => {
     const send = channelMethod satisfies ChannelSendCallback; await createChannelDeliveryBoundary(clock, send).attempt(input()); expect(sent).toEqual([["web:chat", "hello"]]);
     const wakes: string[] = []; const currentResume: (chatJid: string, threadRootId?: number | null) => void = (jid) => { wakes.push(jid); };
     const wake = currentResume satisfies WakeCallback; const result = await createWakeBoundary(clock, wake).attempt(input()); expect(wakes).toEqual(["web:chat"]); expect(result.detail).toEqual({ kind: "wake_chat", providerMessageId: null, wakeId: "identity-1" });
+  });
+
+  test("timeline mapper throw/missing/mismatched identities are bounded before broadcast", async () => {
+    let calls = 0;
+    const invalid = [
+      () => { throw new Error("mapper"); },
+      () => ({ chat_jid: "web:chat", delivery_id: "" }),
+      () => ({ chat_jid: "web:other", delivery_id: "identity-1" }),
+      () => ({ chat_jid: "web:chat", delivery_id: "identity-other" }),
+    ];
+    for (const mapper of invalid) {
+      const boundary = createTimelineBroadcastBoundary(clock, () => { calls += 1; }, "agent_status", mapper);
+      const error = await captureError(() => boundary.attempt(input())); expect(boundary.classifyError?.(error)).toEqual({ _tag: "invalid_payload", certainty: "not_applied", retryable: false });
+    }
+    expect(calls).toBe(0);
   });
 
   test("real stored Web Push service preserves partial aggregate counts without network", async () => {
@@ -73,8 +88,11 @@ describe("current Piclaw delivery boundary factories", () => {
   test("payload mappers and fatal UTF-8 failures classify pre-effect invalid_payload", async () => {
     let calls = 0; const text = createChannelDeliveryBoundary(clock, async () => { calls += 1; }); const invalidBytes = new Uint8Array([0xc3, 0x28]);
     await expect(text.attempt(input(invalidBytes))).rejects.toThrow(); expect(text.classifyError?.(await captureError(() => text.attempt(input(invalidBytes))))?._tag).toBe("invalid_payload"); expect(calls).toBe(0);
-    const push = createWebPushBoundary(clock, async () => { calls += 1; return { attempted: 0, sent: 0, removed: 0, failed: 0 }; }, () => { throw new Error("mapper"); });
-    expect(push.classifyError?.(await captureError(() => push.attempt(input())))?._tag).toBe("invalid_payload"); expect(calls).toBe(0);
+    for (const mapper of [() => { throw new Error("mapper"); }, () => ({ title: 1, body: "body" }), () => ({ title: "title", body: 2 }), () => ({ title: "title", body: "body", url: 3 })]) {
+      const push = createWebPushBoundary(clock, async () => { calls += 1; return { attempted: 0, sent: 0, removed: 0, failed: 0 }; }, mapper as never);
+      expect(push.classifyError?.(await captureError(() => push.attempt(input())))?._tag).toBe("invalid_payload");
+    }
+    expect(calls).toBe(0);
   });
 
   test("projection adapter accepts current synchronous broadcastEvent shape and sends a frozen DTO", async () => {

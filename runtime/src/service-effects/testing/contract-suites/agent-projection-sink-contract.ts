@@ -168,10 +168,15 @@ const cases: readonly ParameterisedContractCase<AgentProjectionContractSubject>[
       const throwingGetter = Object.defineProperty({}, "type", { enumerable: true, get() { throw new Error("type getter"); } });
       const identityGetter = Object.defineProperty({ ...snapshot(projectionOwner(), 1, 1) }, "chatJid", { enumerable: true, get() { throw new Error("identity getter"); } });
       const payloadGetter = Object.defineProperty({ ...snapshot(projectionOwner(), 1, 1) }, "activeToolNames", { enumerable: true, get() { throw new Error("payload getter"); } });
-      for (const malformed of [null, 1, Symbol("bad"), throwingProxy, throwingGetter, identityGetter, payloadGetter, { type: "agent_snapshot", chatJid: Symbol("bad") }, { ...snapshot(projectionOwner(), 1, 1), activeToolNames: null }, { ...snapshot(projectionOwner(), 1, 1), modelLabel: 3 }, { ...snapshot(projectionOwner(), 1, 1), watchGeneration: Number.MAX_SAFE_INTEGER + 1 }] as unknown[]) {
+      const changing = [
+        changingProjection(snapshot(projectionOwner(), 1, 1), "chatJid"), changingProjection(snapshot(projectionOwner(), 1, 1), "watchGeneration"), changingProjection(snapshot(projectionOwner(), 1, 1), "receiptSeq"),
+        changingProjection(terminal(projectionOwner(), 1, 2), "terminalCommitRef"), changingProjection(snapshot(projectionOwner(), 1, 1), "activeToolNames"),
+      ];
+      for (const malformed of [null, 1, Symbol("bad"), throwingProxy, throwingGetter, identityGetter, payloadGetter, ...changing, { type: "agent_snapshot", chatJid: Symbol("bad") }, { ...snapshot(projectionOwner(), 1, 1), activeToolNames: null }, { ...snapshot(projectionOwner(), 1, 1), modelLabel: 3 }, { ...snapshot(projectionOwner(), 1, 1), watchGeneration: Number.MAX_SAFE_INTEGER + 1 }] as unknown[]) {
         const result = await subject.sink.publishSnapshot(malformed as PublicAgentSnapshot);
         assert(!result.ok && result.error._tag === "protected_payload", "malformed input must resolve protected_payload");
       }
+      assert(subject.transportCalls().length === 0, "hostile/changing projections must not reach transport");
     },
   },
 ];
@@ -185,5 +190,9 @@ export function event(owner: ProjectionOwner, generation: number, receiptSeq: nu
 }
 export function terminal(owner: ProjectionOwner, generation: number, receiptSeq: number): PublicTerminalProjection {
   return { ...owner, watchGeneration: generation, receiptSeq, type: "agent_terminal", terminalCommitRef: "terminal:1", disposition: "completed", messageRowId: 1, errorCode: null };
+}
+function changingProjection<T extends PublicAgentProjection>(value: T, field: keyof T): T {
+  let reads = 0; const original = value[field];
+  return Object.defineProperty({ ...value }, field, { enumerable: true, get() { reads += 1; if (reads === 1) return original; throw new Error(`changing ${String(field)} getter`); } }) as T;
 }
 function assert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message); }

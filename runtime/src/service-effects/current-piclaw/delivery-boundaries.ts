@@ -3,13 +3,14 @@ import type { EffectClock } from "../contracts/common.js";
 import type { DeliveryBoundary, DeliveryBoundaryAttempt, DeliveryBoundarySuccess, DeliveryDriverError, WebPushDeliveryCounts } from "../contracts/delivery-driver.js";
 
 export interface TimelineBroadcastCallback { (eventType: string, data: unknown): void; }
+export interface TimelineDeliveryEnvelope { readonly chat_jid: string; readonly delivery_id: string; readonly [key: string]: unknown; }
 export interface ChannelSendCallback { (jid: string, text: string): Promise<void>; }
 export interface WebPushCallback { (payload: WebPushNotificationPayload): Promise<StoredWebPushSendResult>; }
 export interface WakeCallback { (chatJid: string, threadRootId?: number | null): void | Promise<void>; }
 export type TypedDeliveryErrorClassifier = (error: unknown) => DeliveryDriverError | null;
 
-export function createTimelineBroadcastBoundary(clock: EffectClock, broadcastEvent: TimelineBroadcastCallback, eventType: string, data: (input: DeliveryBoundaryAttempt) => unknown): DeliveryBoundary {
-  return { async attempt(input) { const result = broadcastEvent(eventType, data(input)) as unknown; if (result !== undefined) throw new Error("timeline broadcast must be synchronous"); return success(clock, { kind: "timeline_broadcast", providerMessageId: null, eventId: input.request.deliveryIdentity }); } };
+export function createTimelineBroadcastBoundary(clock: EffectClock, broadcastEvent: TimelineBroadcastCallback, eventType: string, data: (input: DeliveryBoundaryAttempt) => TimelineDeliveryEnvelope): DeliveryBoundary {
+  return { async attempt(input) { const envelope = mapTimelineEnvelope(data, input); const result = broadcastEvent(eventType, envelope) as unknown; if (result !== undefined) throw new Error("timeline broadcast must be synchronous"); return success(clock, { kind: "timeline_broadcast", providerMessageId: null, eventId: input.request.deliveryIdentity }); }, classifyError: classifyPayloadMappingError };
 }
 
 export function createChannelDeliveryBoundary(clock: EffectClock, sendMessage: ChannelSendCallback): DeliveryBoundary {
@@ -37,7 +38,17 @@ function textBoundary(clock: EffectClock, kind: "channel_delivery" | "pushover",
 }
 class InvalidBoundaryPayloadError extends Error {}
 function decode(input: DeliveryBoundaryAttempt): string { try { return new TextDecoder("utf-8", { fatal: true }).decode(input.payload.bytes); } catch { throw new InvalidBoundaryPayloadError("delivery payload is not valid UTF-8"); } }
-function mapPayload(mapper: (input: DeliveryBoundaryAttempt) => WebPushNotificationPayload, input: DeliveryBoundaryAttempt): WebPushNotificationPayload { try { const value = mapper(input); if (!value || typeof value !== "object") throw new Error("invalid mapped payload"); return value; } catch (error) { if (error instanceof InvalidBoundaryPayloadError) throw error; throw new InvalidBoundaryPayloadError("delivery payload mapper failed"); } }
+function mapTimelineEnvelope(mapper: (input: DeliveryBoundaryAttempt) => TimelineDeliveryEnvelope, input: DeliveryBoundaryAttempt): TimelineDeliveryEnvelope {
+  try { const value = mapper(input); if (!value || typeof value !== "object" || Array.isArray(value) || value.chat_jid !== input.request.destinationRef || value.delivery_id !== input.request.deliveryIdentity) throw new Error("invalid timeline envelope"); return Object.freeze({ ...value }); }
+  catch (error) { if (error instanceof InvalidBoundaryPayloadError) throw error; throw new InvalidBoundaryPayloadError("timeline envelope mapper failed"); }
+}
+function mapPayload(mapper: (input: DeliveryBoundaryAttempt) => WebPushNotificationPayload, input: DeliveryBoundaryAttempt): WebPushNotificationPayload {
+  try {
+    const value = mapper(input); if (!value || typeof value !== "object" || Array.isArray(value) || typeof value.title !== "string" || typeof value.body !== "string" || !optionalString(value.url) || !optionalString(value.tag) || !optionalString(value.sourceLabel)) throw new Error("invalid mapped payload");
+    return Object.freeze({ title: value.title, body: value.body, ...(value.url === undefined ? {} : { url: value.url }), ...(value.tag === undefined ? {} : { tag: value.tag }), ...(value.sourceLabel === undefined ? {} : { sourceLabel: value.sourceLabel }) });
+  } catch (error) { if (error instanceof InvalidBoundaryPayloadError) throw error; throw new InvalidBoundaryPayloadError("delivery payload mapper failed"); }
+}
+function optionalString(value: unknown): boolean { return value === undefined || typeof value === "string"; }
 function classifyPayloadMappingError(error: unknown): DeliveryDriverError | null { return error instanceof InvalidBoundaryPayloadError ? Object.freeze({ _tag: "invalid_payload", certainty: "not_applied", retryable: false }) : null; }
 function requireDestination(input: DeliveryBoundaryAttempt): string { return input.request.destinationRef!; }
 function freezeCounts(value: StoredWebPushSendResult): WebPushDeliveryCounts { return Object.freeze({ attempted: value.attempted, sent: value.sent, removed: value.removed, failed: value.failed }); }

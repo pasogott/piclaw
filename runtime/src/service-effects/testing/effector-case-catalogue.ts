@@ -283,7 +283,7 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
       "same-generation snapshot cannot reset an established cursor",
       "non-void transport return is unknown and does not advance cursor",
       "authority predicate faults remain bounded before transport",
-      "arbitrary malformed runtime inputs including hostile proxies and getters resolve typed protected-payload errors before authority or synchronous broadcast transport",
+      "arbitrary malformed runtime inputs including hostile/changing identity, sequence, terminal and array getters normalize to plain deeply frozen DTOs or resolve protected-payload before authority/transport",
     ]),
     faultPoints: [
       "before_effect", "effect_then_lost_acknowledgement", "duplicate_result", "delayed_or_late_result",
