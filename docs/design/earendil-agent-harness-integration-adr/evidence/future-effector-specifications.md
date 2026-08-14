@@ -549,40 +549,51 @@ interface TerminalSettlementStore {
 
 interface CommitTerminalRequest {
   effect: EffectIdentity & { operationId: string };
+  expectedChatJid: string;
   expectedVersion: number;
-  expectedHarnessOperationId: string | null;
+  expectedHarness: HarnessCorrelation | null;
   disposition: PiclawDisposition;
   errorCode: string | null;
-  timeline: TerminalTimelineWrite | null;
+  terminalAuthorityRef: string | null;
+  timeline: TerminalTimelineWrite;
   sourceDispositions: readonly SourceDisposition[];
-  outboxIntents: readonly OutboxIntent[];
+  outboxIntents: readonly EnqueueOutboxRequest[];
   committedAt: string;
 }
 
-interface TerminalTimelineWrite {
-  mode: "insert" | "replace_placeholder" | "none";
-  placeholderRowId: number | null;
-  chatJid: string;
-  contentRef: string | null;
-  threadId: number | null;
-  mediaIds: readonly number[];
-  contentBlocksRef: string | null;
-}
+type TerminalTimelineWrite =
+  | {
+      mode: "insert";
+      placeholderRowId: null;
+      chatJid: string;
+      contentRef: string;
+      threadId: number | null;
+      mediaIds: readonly number[];
+      contentBlocksRef: string | null;
+    }
+  | {
+      mode: "replace_placeholder";
+      placeholderRowId: number;
+      chatJid: string;
+      contentRef: string;
+      threadId: number | null;
+      mediaIds: readonly number[];
+      contentBlocksRef: string | null;
+    }
+  | {
+      mode: "none";
+      placeholderRowId: null;
+      chatJid: string;
+      contentRef: null;
+      threadId: null;
+      mediaIds: readonly [];
+      contentBlocksRef: null;
+    };
 
 interface SourceDisposition {
   sourceSeq: number;
   state: "consumed" | "disposed";
   reason: string;
-}
-
-interface OutboxIntent {
-  outboxId: string;
-  kind: OutboxKind;
-  idempotencyKey: string;
-  requestHash: string;
-  payloadRef: string;
-  destinationRef: string | null;
-  availableAt: string;
 }
 
 interface TerminalCommit {
@@ -621,12 +632,18 @@ One SQLite transaction:
 2. inserts one immutable disposition;
 3. inserts or replaces the designated terminal timeline row and binds media;
 4. consumes or disposes claimed sources with reasons;
-5. advances the per-chat frontier through consecutive disposed sources only;
+5. advances the per-chat frontier through consecutive closed (`consumed` or `disposed`) sources only, stopping at missing, pending or claimed work;
 6. releases service ownership;
 7. inserts delivery, notification, wake and maintenance outbox rows;
-8. records the terminal projection and commits.
+8. records immutable terminal-commit visibility and commits; no projection is emitted by EF-S02.
 
-A duplicate equal request returns the original `TerminalCommit`. Another disposition, harness owner or timeline payload returns `terminal_conflict`. Broadcast and notification are never part of this transaction.
+A duplicate equal request returns the original `TerminalCommit`. Another disposition, chat, complete harness owner, terminal authority, timeline payload, source disposition or outbox set returns `already_terminal_conflict` with the original closed commit. Terminalisation increments the Piclaw operation version exactly once. Broadcast and notification are never part of this transaction.
+
+The operation fence compares the exact expected chat, active owner, version and complete nullable harness correlation: session, lane, Earendil run (`harnessOperationId`), state and watch generation. `terminalAuthorityRef` is required only for `skipped` and `superseded`; it is null for other dispositions and is retained only in the protected terminal decision ledger.
+
+Disposition authority is closed: `completed` requires `settling` with no cancellation and no error; `cancelled` requires an accepted cancellation and `cancelling` or `settling`; `failed` requires `executing`, `suspended`, `cancelling` or `settling`, a bounded error code and no accepted cancellation; `skipped` requires `claimed` or `starting_harness`, no started harness run and no cancellation; `superseded` requires `claimed`, `starting_harness` or `suspended` and no cancellation.
+
+Every still-claimed operation source must be settled in the request. Matching queued-input rows move to the same `consumed` or `disposed` state. Each outbox intent is a complete `EnqueueOutboxRequest`; its operation and source authority must match the settlement.
 
 ### Adapter over current Piclaw internals
 
