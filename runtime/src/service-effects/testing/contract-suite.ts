@@ -14,6 +14,8 @@ export interface ContractTestContext {
 export interface RestoredContractSubject<TSubject> {
   readonly subject: TSubject;
   readonly context: ContractTestContext;
+  /** Opt in only when the factory has not already disposed or transferred the prior subject. */
+  readonly disposePrevious?: boolean;
 }
 
 export interface ContractSubjectFactory<TSubject> {
@@ -81,13 +83,17 @@ export async function runParameterisedContractSuite<TSubject>(
         const restored = await factory.crashAndRestore(previous, context);
         subject = restored.subject;
         context = restored.context;
-        if (subject !== previous) await dispose?.(previous);
+        if (restored.disposePrevious === true && subject !== previous) {
+          await dispose?.(previous);
+        }
         return subject;
       },
       inspectTrace() {
         return factory.inspectTrace(subject);
       },
     };
+    let failure: unknown;
+    let failed = false;
     try {
       await contractCase.run(fixture);
       results.push(
@@ -97,9 +103,19 @@ export async function runParameterisedContractSuite<TSubject>(
           trace: freezeTraceSnapshot(fixture.inspectTrace()),
         }),
       );
-    } finally {
-      await dispose?.(subject);
+    } catch (error) {
+      failed = true;
+      failure = error;
     }
+    try {
+      await dispose?.(subject);
+    } catch (error) {
+      if (!failed) {
+        failed = true;
+        failure = error;
+      }
+    }
+    if (failed) throw failure;
   }
 
   return Object.freeze(results);

@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -176,9 +176,17 @@ const fakeFactory: ContractSubjectFactory<ServiceOutboxContractSubject> = {
 };
 describe("EF-S05 ServiceOutboxStore shared contract", () => {
   test("isolated SQLite adapter", async () => {
+    const before = readdirSync(tmpdir())
+      .filter((name) => name.startsWith("piclaw-s05-"))
+      .sort();
     expect(
       await defineServiceOutboxStoreContract(sqliteFactory, context),
     ).toHaveLength(15);
+    expect(
+      readdirSync(tmpdir())
+        .filter((name) => name.startsWith("piclaw-s05-"))
+        .sort(),
+    ).toEqual(before);
   });
   test("independent deterministic fake", async () => {
     expect(

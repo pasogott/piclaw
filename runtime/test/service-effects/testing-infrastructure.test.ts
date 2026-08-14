@@ -274,28 +274,42 @@ describe("generic parameterised contract-suite lifecycle", () => {
     ).toThrow();
   });
 
-  test("disposes the latest subject once on pass and case failure", async () => {
-    let id = 0;
-    const disposed: number[] = [];
-    const factory: ContractSubjectFactory<{ id: number }> = {
-      name: "disposal",
-      create: () => ({ id: ++id }),
-      crashAndRestore: () => ({
-        subject: { id: ++id },
-        context: createSampleContext(),
-      }),
-      inspectTrace: () => [],
+  test("restore disposal is explicit and the latest subject is always disposed once", async () => {
+    const run = async (disposePrevious: boolean | undefined) => {
+      let id = 0;
+      const disposed: number[] = [];
+      const factory: ContractSubjectFactory<{ id: number }> = {
+        name: disposePrevious ? "explicit-disposal" : "default-disposal",
+        create: () => ({ id: ++id }),
+        crashAndRestore: () => ({
+          subject: { id: ++id },
+          context: createSampleContext(),
+          disposePrevious,
+        }),
+        inspectTrace: () => [],
+      };
+      await runParameterisedContractSuite(
+        factory,
+        [{ name: "restore", run: (fixture) => fixture.crashAndRestore() }],
+        createSampleContext,
+        (subject) => void disposed.push(subject.id),
+      );
+      return disposed;
     };
-    await runParameterisedContractSuite(
-      factory,
-      [{ name: "pass", run: (fixture) => fixture.crashAndRestore() }],
-      createSampleContext,
-      (subject) => void disposed.push(subject.id),
-    );
-    expect(disposed).toEqual([1, 2]);
+
+    expect(await run(undefined)).toEqual([2]);
+    expect(await run(false)).toEqual([2]);
+    expect(await run(true)).toEqual([1, 2]);
+
+    const disposed: number[] = [];
     expect(
       runParameterisedContractSuite(
-        factory,
+        {
+          name: "case-failure",
+          create: () => ({ id: 1 }),
+          crashAndRestore: (subject, context) => ({ subject, context }),
+          inspectTrace: () => [],
+        },
         [
           {
             name: "fail",
@@ -308,22 +322,21 @@ describe("generic parameterised contract-suite lifecycle", () => {
         (subject) => void disposed.push(subject.id),
       ),
     ).rejects.toThrow("case failure");
-    expect(disposed).toEqual([1, 2, 3]);
+    expect(disposed).toEqual([1]);
   });
 
-  test("dispose semantics cover restore failure and old-subject disposal precedence", async () => {
-    const restoreFailureFactory: ContractSubjectFactory<{ id: number }> = {
-      name: "restore-failure",
-      create: () => ({ id: 1 }),
-      crashAndRestore: () => {
-        throw new Error("restore failure");
-      },
-      inspectTrace: () => [],
-    };
-    const disposed: number[] = [];
+  test("restore and old-subject disposal failures still dispose the active subject", async () => {
+    const restoreDisposed: number[] = [];
     expect(
       runParameterisedContractSuite(
-        restoreFailureFactory,
+        {
+          name: "restore-failure",
+          create: () => ({ id: 1 }),
+          crashAndRestore: () => {
+            throw new Error("restore failure");
+          },
+          inspectTrace: () => [],
+        },
         [
           {
             name: "restore-fails",
@@ -331,23 +344,24 @@ describe("generic parameterised contract-suite lifecycle", () => {
           },
         ],
         createSampleContext,
-        (subject) => void disposed.push(subject.id),
+        (subject) => void restoreDisposed.push(subject.id),
       ),
     ).rejects.toThrow("restore failure");
-    expect(disposed).toEqual([1]);
+    expect(restoreDisposed).toEqual([1]);
 
-    const oldDisposeFailureFactory: ContractSubjectFactory<{ id: number }> = {
-      name: "old-dispose-failure",
-      create: () => ({ id: 1 }),
-      crashAndRestore: () => ({
-        subject: { id: 2 },
-        context: createSampleContext(),
-      }),
-      inspectTrace: () => [],
-    };
+    const disposalAttempts: number[] = [];
     expect(
       runParameterisedContractSuite(
-        oldDisposeFailureFactory,
+        {
+          name: "old-dispose-failure",
+          create: () => ({ id: 1 }),
+          crashAndRestore: () => ({
+            subject: { id: 2 },
+            context: createSampleContext(),
+            disposePrevious: true,
+          }),
+          inspectTrace: () => [],
+        },
         [
           {
             name: "dispose-old-fails",
@@ -356,29 +370,102 @@ describe("generic parameterised contract-suite lifecycle", () => {
         ],
         createSampleContext,
         (subject) => {
+          disposalAttempts.push(subject.id);
           if (subject.id === 1) throw new Error("old dispose failure");
         },
       ),
     ).rejects.toThrow("old dispose failure");
+    expect(disposalAttempts).toEqual([1, 2]);
   });
 
-  test("propagates disposal failure deterministically", async () => {
-    const factory: ContractSubjectFactory<{ id: number }> = {
-      name: "disposal-error",
-      create: () => ({ id: 1 }),
-      crashAndRestore: (subject, context) => ({ subject, context }),
-      inspectTrace: () => [],
-    };
+  test("the first operational failure takes precedence over final disposal failure", async () => {
+    const restoreAttempts: number[] = [];
     expect(
       runParameterisedContractSuite(
-        factory,
+        {
+          name: "restore-and-final-failure",
+          create: () => ({ id: 1 }),
+          crashAndRestore: () => {
+            throw new Error("restore failure");
+          },
+          inspectTrace: () => [],
+        },
+        [{ name: "restore", run: (fixture) => fixture.crashAndRestore() }],
+        createSampleContext,
+        (subject) => {
+          restoreAttempts.push(subject.id);
+          throw new Error("final dispose failure");
+        },
+      ),
+    ).rejects.toThrow("restore failure");
+    expect(restoreAttempts).toEqual([1]);
+
+    const caseAttempts: number[] = [];
+    expect(
+      runParameterisedContractSuite(
+        {
+          name: "case-and-final-failure",
+          create: () => ({ id: 1 }),
+          crashAndRestore: (subject, context) => ({ subject, context }),
+          inspectTrace: () => [],
+        },
+        [
+          {
+            name: "case",
+            run: () => {
+              throw new Error("case failure");
+            },
+          },
+        ],
+        createSampleContext,
+        (subject) => {
+          caseAttempts.push(subject.id);
+          throw new Error("final dispose failure");
+        },
+      ),
+    ).rejects.toThrow("case failure");
+    expect(caseAttempts).toEqual([1]);
+
+    const oldAttempts: number[] = [];
+    expect(
+      runParameterisedContractSuite(
+        {
+          name: "old-and-final-disposal-failure",
+          create: () => ({ id: 1 }),
+          crashAndRestore: () => ({
+            subject: { id: 2 },
+            context: createSampleContext(),
+            disposePrevious: true,
+          }),
+          inspectTrace: () => [],
+        },
+        [{ name: "old", run: (fixture) => fixture.crashAndRestore() }],
+        createSampleContext,
+        (subject) => {
+          oldAttempts.push(subject.id);
+          throw new Error(
+            subject.id === 1 ? "old dispose failure" : "final dispose failure",
+          );
+        },
+      ),
+    ).rejects.toThrow("old dispose failure");
+    expect(oldAttempts).toEqual([1, 2]);
+
+    expect(
+      runParameterisedContractSuite(
+        {
+          name: "final-disposal-failure",
+          create: () => ({ id: 1 }),
+          crashAndRestore: (subject, context) => ({ subject, context }),
+          inspectTrace: () => [],
+        },
         [{ name: "pass", run: () => undefined }],
         createSampleContext,
         () => {
-          throw new Error("dispose failure");
+          throw new Error("final dispose failure");
         },
       ),
-    ).rejects.toThrow("dispose failure");
+    ).rejects.toThrow("final dispose failure");
   });
 
   test("rejects duplicate case names before creating a subject", async () => {
