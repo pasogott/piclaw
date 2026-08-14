@@ -355,11 +355,11 @@ interface MediaStoreError extends PiclawEffectError {
 
 interface OutboxStoreError extends PiclawEffectError {
   readonly _tag:
+    | "invalid_request"
     | "idempotency_conflict"
-    | "lease_conflict"
-    | "lease_expired"
-    | "invalid_transition"
     | "not_found"
+    | "invalid_transition"
+    | "corrupt_state"
     | "storage_unavailable";
 }
 
@@ -825,108 +825,42 @@ type OutboxKind =
   | "maintenance";
 
 interface ServiceOutboxStore {
-  enqueue(
-    request: EnqueueOutboxRequest,
-  ): Promise<Result<OutboxRecord, OutboxStoreError>>;
-
-  claimNext(
-    request: ClaimOutboxRequest,
-  ): Promise<Result<OutboxLease | null, OutboxStoreError>>;
-
-  complete(
-    request: CompleteOutboxRequest,
-  ): Promise<Result<OutboxRecord, OutboxStoreError>>;
-
-  fail(
-    request: FailOutboxRequest,
-  ): Promise<Result<OutboxRecord, OutboxStoreError>>;
-
-  markUnknown(
-    request: MarkOutboxUnknownRequest,
-  ): Promise<Result<OutboxRecord, OutboxStoreError>>;
-
-  get(
-    outboxId: string,
-  ): Promise<Result<OutboxRecord | null, OutboxStoreError>>;
+  enqueue(request: EnqueueOutboxRequest): Promise<Result<OutboxEnqueueDecision, OutboxStoreError>>;
+  claimNext(request: ClaimOutboxRequest): Promise<Result<OutboxClaimDecision, OutboxStoreError>>;
+  reclaim(request: ReclaimOutboxRequest): Promise<Result<OutboxMutationDecision, OutboxStoreError>>;
+  complete(request: CompleteOutboxRequest): Promise<Result<OutboxMutationDecision, OutboxStoreError>>;
+  fail(request: FailOutboxRequest): Promise<Result<OutboxMutationDecision, OutboxStoreError>>;
+  markUnknown(request: MarkOutboxUnknownRequest): Promise<Result<OutboxMutationDecision, OutboxStoreError>>;
+  resolveUnknown(request: ResolveUnknownOutboxRequest): Promise<Result<OutboxMutationDecision, OutboxStoreError>>;
+  get(outboxId: string): Promise<Result<OutboxRecord | null, OutboxStoreError>>;
+  listUnknown(request: ListUnknownOutboxRequest): Promise<Result<ListUnknownOutboxResult, OutboxStoreError>>;
+  cleanupTerminal(request: CleanupTerminalOutboxRequest): Promise<Result<OutboxCleanupDecision, OutboxStoreError>>;
 }
 
-type OutboxState =
-  | "pending"
-  | "started"
-  | "completed"
-  | "failed"
-  | "unknown"
-  | "cancelled";
+The closed contract is implemented in `runtime/src/service-effects/contracts/service-outbox-store.ts`. The record retains immutable effect provenance, caller-owned enqueue and result timestamps, repeatability, exact worker/lease/attempt ownership, external-effect certainty, retry/receipt diagnostics and reconciliation history. Attempt starts at zero and increments once per successful claim or reclaim. Worker, lease, state, attempt, and time fences return typed `stale`; `invalid_transition` is reserved for caller-owned enqueue inserter misuse outside a transaction. The public error set is otherwise closed to malformed requests, idempotency conflicts, absent exact rows, corrupt durable state, and bounded storage unavailability.
 
-interface OutboxRecord {
-  outboxId: string;
-  kind: OutboxKind;
-  state: OutboxState;
-  idempotencyKey: string;
-  requestHash: string;
-  operationId: string | null;
-  payloadRef: string;
-  destinationRef: string | null;
-  availableAt: string;
-  attempt: number;
-  leaseToken: string | null;
-  leaseExpiresAt: string | null;
-  receiptRef: string | null;
-  lastErrorTag: string | null;
-}
+Mutation decisions distinguish `applied`, exact `replayed` results and expected `stale` no-ops. A claim is identified by its globally unique lease token and returns `empty` when no due row exists. Exact-row mutation of an absent outbox returns bounded `not_found`; wrong owner, token, attempt or state is `stale`; `get` alone returns `null` for absence. Worker results require the exact unexpired worker, token and attempt. Competing result methods share durable authority for one outbox attempt.
 
-interface EnqueueOutboxRequest {
-  effect: EffectIdentity;
-  outboxId: string;
-  kind: OutboxKind;
-  payloadRef: string;
-  destinationRef: string | null;
-  availableAt: string;
-}
+`reclaim` addresses one expired started row and accepts either immutable repeatable authority or a caller-supplied reconciled-absent reference. Expiry alone grants no authority. `resolveUnknown` accepts only applied, not-applied or cancelled reconciliation. There is no pre-attempt cancellation method. Ordinary claim never selects unknown work.
 
-interface ClaimOutboxRequest {
-  kinds: readonly OutboxKind[];
-  workerId: string;
-  leaseToken: string;
-  now: string;
-  leaseExpiresAt: string;
-}
+`listUnknown` and `cleanupTerminal` use a bounded exclusive `(stateChangedAt, outboxId)` cursor. Cleanup may delete only fatal failed rows and cancelled rows older than its caller cutoff; it retains pending, started, retryable failed, unknown and completed rows. Cleanup removes row-linked decisions atomically, retains its own replay decision, and never removes permanent hashed lease-token authority.
 
-interface OutboxLease {
-  record: OutboxRecord & { state: "started"; leaseToken: string };
-  workerId: string;
-}
+Replay ledgers contain only bounded method/hash/outcome/row/attempt/token-hash metadata (plus bounded cleanup IDs/cursor data). They never contain payload, destination, provenance, receipt, reconciliation, plaintext token, secret, or raw cause values. Applied worker outcomes and unknown resolutions have separate minimal per-attempt authority, so later state cannot change an original result replay.
 
-interface CompleteOutboxRequest {
-  outboxId: string;
-  leaseToken: string;
-  receiptRef: string | null;
-  completedAt: string;
-}
+Reads are intentionally not traced: they perform no durable effect and return only closed bounded data/errors. Mutations emit closed call/result traces with method, outbox/effect identity, operation/source sequence, expected attempt, result tag and certainty; protected request or authority values are never traced.
 
-interface FailOutboxRequest {
-  outboxId: string;
-  leaseToken: string;
-  errorTag: string;
-  certainty: "not_applied";
-  retryAt: string | null;
-}
-
-interface MarkOutboxUnknownRequest {
-  outboxId: string;
-  leaseToken: string;
-  errorTag: string;
-  observedAt: string;
-}
+Authoritative stores use a transaction-compatible enqueue inserter that requires an active caller transaction and performs no transaction control. Independent work uses `enqueue()`. All IDs, timestamps, worker identities, lease tokens, retry instants, receipts and reconciliation references are caller-owned; the store generates none.
 ```
 
 ### Required semantics
 
-- Unique `(kind, idempotencyKey)` plus request hash identifies one intent.
-- A claim has a lease token, expiry and attempt number.
-- Completion/failure requires the current lease token.
-- Expired `started` work can be reclaimed only when policy says the underlying effect is repeatable or reconciled absent.
-- `unknown` blocks automatic retry until an operator or driver-specific reconciler resolves it.
+- Unique `(kind, idempotencyKey)` plus the exact closed semantic request hash identifies one intent; `outboxId` is globally unique.
+- A claim has a caller-owned worker, globally unique lease token, expiry and attempt number. Due work orders by effective availability instant and then `outboxId`.
+- Completion, failure and unknown results require the exact current worker, lease token and attempt, with result time at or after claim and strictly before lease expiry. Stale results are typed no-ops.
+- Expired `started` work can be reclaimed only through exact-row repeatable or reconciled-absent authority.
+- `unknown` blocks automatic retry until an explicit reconciliation resolves it.
+- Reclaim time is at or after the previous claim and expiry; reconciliation time is at or after the unknown result; every non-null retry time is strictly later than its failure/reconciliation time.
+- Fatal failed and cancelled rows alone are eligible for bounded cleanup. Completed and unknown rows retain effect evidence, and lease-token uniqueness survives cleanup.
 - Authoritative stores can insert rows using shared transaction statements; independent work uses `enqueue()`.
 
 ### Adapter and tests

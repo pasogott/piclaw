@@ -1,4 +1,8 @@
-import type { EffectClock, EffectIdSource, NormalisedEffectTrace } from "../contracts/common.js";
+import type {
+  EffectClock,
+  EffectIdSource,
+  NormalisedEffectTrace,
+} from "../contracts/common.js";
 import type { DeterministicFaultPlan } from "./fault-plan.js";
 
 export interface ContractTestContext {
@@ -10,6 +14,8 @@ export interface ContractTestContext {
 export interface RestoredContractSubject<TSubject> {
   readonly subject: TSubject;
   readonly context: ContractTestContext;
+  /** Opt in only when the factory has not already disposed or transferred the prior subject. */
+  readonly disposePrevious?: boolean;
 }
 
 export interface ContractSubjectFactory<TSubject> {
@@ -18,7 +24,9 @@ export interface ContractSubjectFactory<TSubject> {
   crashAndRestore(
     subject: TSubject,
     context: ContractTestContext,
-  ): Promise<RestoredContractSubject<TSubject>> | RestoredContractSubject<TSubject>;
+  ):
+    | Promise<RestoredContractSubject<TSubject>>
+    | RestoredContractSubject<TSubject>;
   inspectTrace(subject: TSubject): readonly NormalisedEffectTrace[];
 }
 
@@ -47,11 +55,14 @@ export async function runParameterisedContractSuite<TSubject>(
   createContext: () => ContractTestContext,
   dispose?: (subject: TSubject) => Promise<void> | void,
 ): Promise<readonly ContractCaseResult[]> {
-  if (!factory.name) throw new Error("Contract factory name must be non-empty.");
+  if (!factory.name)
+    throw new Error("Contract factory name must be non-empty.");
   const names = new Set<string>();
   for (const contractCase of cases) {
     if (!contractCase.name || names.has(contractCase.name)) {
-      throw new Error(`Contract case names must be non-empty and unique: ${contractCase.name}`);
+      throw new Error(
+        `Contract case names must be non-empty and unique: ${contractCase.name}`,
+      );
     }
     names.add(contractCase.name);
   }
@@ -59,7 +70,7 @@ export async function runParameterisedContractSuite<TSubject>(
   const results: ContractCaseResult[] = [];
   for (const contractCase of cases) {
     let context = createContext();
-    let subject = await factory.create(context) as TSubject;
+    let subject = (await factory.create(context)) as TSubject;
     const fixture: ContractCaseFixture<TSubject> = {
       get context() {
         return context;
@@ -68,25 +79,43 @@ export async function runParameterisedContractSuite<TSubject>(
         return subject;
       },
       async crashAndRestore() {
-        const restored = await factory.crashAndRestore(subject, context);
+        const previous = subject;
+        const restored = await factory.crashAndRestore(previous, context);
         subject = restored.subject;
         context = restored.context;
+        if (restored.disposePrevious === true && subject !== previous) {
+          await dispose?.(previous);
+        }
         return subject;
       },
       inspectTrace() {
         return factory.inspectTrace(subject);
       },
     };
+    let failure: unknown;
+    let failed = false;
     try {
       await contractCase.run(fixture);
-      results.push(Object.freeze({
-        factoryName: factory.name,
-        caseName: contractCase.name,
-        trace: freezeTraceSnapshot(fixture.inspectTrace()),
-      }));
-    } finally {
-      await dispose?.(subject);
+      results.push(
+        Object.freeze({
+          factoryName: factory.name,
+          caseName: contractCase.name,
+          trace: freezeTraceSnapshot(fixture.inspectTrace()),
+        }),
+      );
+    } catch (error) {
+      failed = true;
+      failure = error;
     }
+    try {
+      await dispose?.(subject);
+    } catch (error) {
+      if (!failed) {
+        failed = true;
+        failure = error;
+      }
+    }
+    if (failed) throw failure;
   }
 
   return Object.freeze(results);
