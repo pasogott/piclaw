@@ -147,6 +147,7 @@ export class FakeServiceOutboxStore implements ServiceOutboxStore {
     return structuredClone(this.#state);
   }
 
+  /** Test-layer corruption hook for public-path containment contracts only. */
   restoreMalformedForTesting(snapshot: unknown): void {
     this.#state = structuredClone(snapshot) as State;
     this.#faults.clear();
@@ -569,13 +570,14 @@ export class FakeServiceOutboxStore implements ServiceOutboxStore {
         const key = `cleanup:${request.cleanupId}`;
         const known = this.#state.decisions[key];
         if (known) {
+          validateFakeDecision(known);
           if (known.method !== "cleanupTerminal" || known.hash !== requestHash)
             return Result.err(errorOf("idempotency_conflict"));
           if (!known.cleanupResult) return Result.err(errorOf("corrupt_state"));
           return Result.ok(
             freeze({
               decision: "replayed" as const,
-              result: known.cleanupResult,
+              result: validateFakeCleanupResult(known.cleanupResult),
             }),
           );
         }
@@ -771,9 +773,7 @@ export class FakeServiceOutboxStore implements ServiceOutboxStore {
     }
   }
 
-  private readBeforeEffectFault(
-    method: FakeOutboxMutationMethod,
-  ):
+  private readBeforeEffectFault(method: FakeOutboxMutationMethod):
     | {
         readonly ok: true;
         readonly checkpoint: "pre_transaction" | "in_transaction" | null;
@@ -1082,6 +1082,48 @@ function recordFromResolution(
     cancellationReasonTag: authority.reasonTag,
   });
 }
+function validateFakeDecision(decision: Decision): Decision {
+  const methods = new Set([
+    "enqueue",
+    "claimNext",
+    "reclaim",
+    "complete",
+    "fail",
+    "markUnknown",
+    "resolveUnknown",
+    "cleanupTerminal",
+  ]);
+  if (
+    !decision ||
+    typeof decision !== "object" ||
+    !methods.has(decision.method) ||
+    !/^[0-9a-f]{64}$/.test(decision.hash) ||
+    !new Set(["applied", "stale", "empty"]).has(decision.outcome)
+  ) {
+    throw new TypeError("Malformed fake decision.");
+  }
+  return decision;
+}
+
+function validateFakeCleanupResult(
+  result: OutboxCleanupDecision["result"],
+): OutboxCleanupDecision["result"] {
+  if (
+    !result ||
+    typeof result !== "object" ||
+    !Array.isArray(result.deletedIds) ||
+    !result.deletedIds.every((id) => boundedText(id, 512)) ||
+    !Number.isSafeInteger(result.deletedCount) ||
+    result.deletedCount !== result.deletedIds.length ||
+    (result.nextCursor !== null &&
+      (!instant(result.nextCursor.stateChangedAt) ||
+        !boundedText(result.nextCursor.outboxId, 512)))
+  ) {
+    throw new TypeError("Malformed fake cleanup result.");
+  }
+  return result;
+}
+
 function validateFakeRecord(record: OutboxRecord): OutboxRecord {
   const states = new Set([
     "pending",
@@ -1092,7 +1134,16 @@ function validateFakeRecord(record: OutboxRecord): OutboxRecord {
     "cancelled",
   ]);
   const certainties = new Set(["not_applied", "applied", "unknown"]);
-  if (!record || typeof record !== "object" || !states.has(record.state)) {
+  if (
+    !record ||
+    typeof record !== "object" ||
+    !states.has(record.state) ||
+    !boundedText(record.outboxId, 512) ||
+    !instant(record.stateChangedAt) ||
+    !instant(record.availableAt) ||
+    !instant(record.enqueuedAt) ||
+    !/^[0-9a-f]{64}$/.test(record.requestHash)
+  ) {
     throw new TypeError("Malformed fake outbox record.");
   }
   if (!Number.isSafeInteger(record.attempt) || record.attempt < 0) {
@@ -1122,6 +1173,19 @@ function validateFakeRecord(record: OutboxRecord): OutboxRecord {
   if (record.certainty !== expected)
     throw new TypeError("Malformed fake state certainty.");
   return record;
+}
+
+function boundedText(value: unknown, maximum: number): value is string {
+  return (
+    typeof value === "string" && value.length >= 1 && value.length <= maximum
+  );
+}
+function instant(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) &&
+    !Number.isNaN(Date.parse(value))
+  );
 }
 
 function effectiveAt(record: OutboxRecord): string {

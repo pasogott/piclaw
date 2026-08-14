@@ -347,102 +347,88 @@ const cases: readonly ParameterisedContractCase<ServiceOutboxContractSubject>[] 
       },
     },
     {
-      name: "EF-S05-R01 every durable decision replays after fresh restore",
+      name: "EF-S05-R01 every durable mutation survives lost acknowledgement and fresh restore",
       async run(fixture) {
+        const lostAndReplay = async (
+          method: ServiceOutboxMutationMethod,
+          invoke: () => ReturnType<
+            ServiceOutboxStore[ServiceOutboxMutationMethod]
+          >,
+        ) => {
+          assert(fixture.subject.planFault, "fault planning available");
+          fixture.subject.planFault(
+            method,
+            "effect_then_lost_acknowledgement",
+            1,
+          );
+          const lost = await invoke();
+          assert(
+            !lost.ok &&
+              lost.error._tag === "storage_unavailable" &&
+              lost.error.certainty === "unknown",
+            `${method} lost acknowledgement`,
+          );
+          await fixture.crashAndRestore();
+          const replay = await invoke();
+          assert(
+            replay.ok && replay.value.decision === "replayed",
+            `${method} durable replay`,
+          );
+          return replay;
+        };
+
         const enqueueRequest = enqueue("r01-enqueue");
-        await fixture.subject.store.enqueue(enqueueRequest);
-        await fixture.crashAndRestore();
-        const enqueueReplay =
-          await fixture.subject.store.enqueue(enqueueRequest);
+        await lostAndReplay("enqueue", () =>
+          fixture.subject.store.enqueue(enqueueRequest),
+        );
+        const enqueuedClaim = await fixture.subject.store.claimNext(
+          claim("r01-enqueue-consume"),
+        );
         assert(
-          enqueueReplay.ok && enqueueReplay.value.decision === "replayed",
-          "enqueue replay",
+          enqueuedClaim.ok && enqueuedClaim.value.lease,
+          "enqueue consume",
+        );
+        await fixture.subject.store.fail(
+          failRequest(enqueuedClaim.value.lease, {
+            errorTag: "enqueue-covered",
+          }),
         );
 
         const emptyRequest = claim("r01-empty", { kinds: ["notification"] });
-        const empty = await fixture.subject.store.claimNext(emptyRequest);
-        assert(empty.ok && empty.value.lease === null, "empty claim");
+        assert(fixture.subject.planFault, "fault planning available");
+        fixture.subject.planFault(
+          "claimNext",
+          "effect_then_lost_acknowledgement",
+          1,
+        );
+        const emptyLost = await fixture.subject.store.claimNext(emptyRequest);
+        assert(
+          (!emptyLost.ok && emptyLost.error._tag === "storage_unavailable") ||
+            (emptyLost.ok && emptyLost.value.lease === null),
+          "empty claim lost response is bounded",
+        );
         await fixture.crashAndRestore();
         const emptyReplay = await fixture.subject.store.claimNext(emptyRequest);
         assert(
           emptyReplay.ok &&
             emptyReplay.value.decision === "replayed" &&
             emptyReplay.value.lease === null,
-          "empty replay",
+          "empty claim durable replay",
         );
 
         await fixture.subject.store.enqueue(enqueue("r01-claim"));
         const claimRequest = claim("r01-claim");
-        const nonemptyClaim =
-          await fixture.subject.store.claimNext(claimRequest);
-        assert(nonemptyClaim.ok && nonemptyClaim.value.lease, "nonempty claim");
-        await fixture.crashAndRestore();
-        const nonemptyReplay =
-          await fixture.subject.store.claimNext(claimRequest);
-        assert(
-          nonemptyReplay.ok &&
-            nonemptyReplay.value.decision === "replayed" &&
-            nonemptyReplay.value.lease?.record.state === "started",
-          "nonempty claim replay",
-        );
-
-        const completedLease = await seedLease(
-          fixture.subject.store,
-          "r01-complete",
-        );
-        const completedRequest = complete(completedLease);
-        await fixture.subject.store.complete(completedRequest);
-        await fixture.crashAndRestore();
-        const completedReplay =
-          await fixture.subject.store.complete(completedRequest);
-        assert(
-          completedReplay.ok && completedReplay.value.decision === "replayed",
-          "complete replay",
-        );
-
-        for (const [id, retryAt] of [
-          ["r01-retryable", "2026-08-13T10:02:00.000Z"],
-          ["r01-fatal", null],
-        ] as const) {
-          const lease = await seedLease(fixture.subject.store, id);
-          const request = failRequest(lease, { retryAt });
-          await fixture.subject.store.fail(request);
-          await fixture.crashAndRestore();
-          const replay = await fixture.subject.store.fail(request);
-          assert(
-            replay.ok && replay.value.decision === "replayed",
-            "failure replay",
-          );
-        }
-
-        const unknownLease = await seedLease(
-          fixture.subject.store,
-          "r01-unknown",
-          undefined,
-          {
-            repeatability: "reconciliation_required",
-          },
-        );
-        const unknown = unknownRequest(unknownLease, {
-          errorTag: "external_ambiguous",
-        });
-        await fixture.subject.store.markUnknown(unknown);
-        await fixture.crashAndRestore();
-        const unknownReplay = await fixture.subject.store.markUnknown(unknown);
-        assert(
-          unknownReplay.ok && unknownReplay.value.decision === "replayed",
-          "unknown replay",
-        );
-        const claimResult = await fixture.subject.store.claimNext(
-          claim("r01-next", {
-            kinds: ["notification"],
-            now: "2026-08-13T12:00:00.000Z",
-            leaseExpiresAt: "2026-08-13T12:01:00.000Z",
-          }),
+        const claimReplay = await lostAndReplay("claimNext", () =>
+          fixture.subject.store.claimNext(claimRequest),
         );
         assert(
-          claimResult.ok && claimResult.value.lease === null,
-          "unknown blocked",
+          claimReplay.ok &&
+            "lease" in claimReplay.value &&
+            claimReplay.value.lease?.record.state === "started",
+          "nonempty claim replay state",
+        );
+        await fixture.subject.store.fail(
+          failRequest(claimReplay.value.lease, { errorTag: "claim-covered" }),
         );
 
         const reclaimLease = await seedLease(
@@ -458,13 +444,41 @@ const cases: readonly ParameterisedContractCase<ServiceOutboxContractSubject>[] 
           leaseExpiresAt: "2026-08-13T10:03:00.000Z",
           authority: { kind: "repeatable" },
         };
-        await fixture.subject.store.reclaim(reclaimRequest);
-        await fixture.crashAndRestore();
-        const reclaimReplay =
-          await fixture.subject.store.reclaim(reclaimRequest);
-        assert(
-          reclaimReplay.ok && reclaimReplay.value.decision === "replayed",
-          "reclaim replay",
+        await lostAndReplay("reclaim", () =>
+          fixture.subject.store.reclaim(reclaimRequest),
+        );
+
+        const completedLease = await seedLease(
+          fixture.subject.store,
+          "r01-complete",
+        );
+        const completedRequest = complete(completedLease);
+        await lostAndReplay("complete", () =>
+          fixture.subject.store.complete(completedRequest),
+        );
+
+        for (const [id, retryAt] of [
+          ["r01-retryable", "2026-08-13T10:02:00.000Z"],
+          ["r01-fatal", null],
+        ] as const) {
+          const lease = await seedLease(fixture.subject.store, id);
+          const request = failRequest(lease, { retryAt });
+          await lostAndReplay("fail", () =>
+            fixture.subject.store.fail(request),
+          );
+        }
+
+        const unknownLease = await seedLease(
+          fixture.subject.store,
+          "r01-unknown",
+          undefined,
+          { repeatability: "reconciliation_required" },
+        );
+        const unknownRequestValue = unknownRequest(unknownLease, {
+          errorTag: "external_ambiguous",
+        });
+        await lostAndReplay("markUnknown", () =>
+          fixture.subject.store.markUnknown(unknownRequestValue),
         );
 
         for (const [id, resolution] of [
@@ -474,7 +488,11 @@ const cases: readonly ParameterisedContractCase<ServiceOutboxContractSubject>[] 
           ],
           [
             "r01-resolve-failed",
-            { kind: "not_applied" as const, errorTag: "fatal", retryAt: null },
+            {
+              kind: "not_applied" as const,
+              errorTag: "retryable",
+              retryAt: "2026-08-13T10:03:00.000Z",
+            },
           ],
           [
             "r01-resolve-cancelled",
@@ -490,12 +508,8 @@ const cases: readonly ParameterisedContractCase<ServiceOutboxContractSubject>[] 
             reconciledAt: "2026-08-13T10:02:00.000Z",
             resolution,
           };
-          await fixture.subject.store.resolveUnknown(request);
-          await fixture.crashAndRestore();
-          const replay = await fixture.subject.store.resolveUnknown(request);
-          assert(
-            replay.ok && replay.value.decision === "replayed",
-            "resolution replay",
+          await lostAndReplay("resolveUnknown", () =>
+            fixture.subject.store.resolveUnknown(request),
           );
         }
 
@@ -510,13 +524,14 @@ const cases: readonly ParameterisedContractCase<ServiceOutboxContractSubject>[] 
           after: null,
           limit: 10,
         };
-        await fixture.subject.store.cleanupTerminal(cleanupRequest);
-        await fixture.crashAndRestore();
-        const cleanupReplay =
-          await fixture.subject.store.cleanupTerminal(cleanupRequest);
+        const cleanupReplay = await lostAndReplay("cleanupTerminal", () =>
+          fixture.subject.store.cleanupTerminal(cleanupRequest),
+        );
         assert(
-          cleanupReplay.ok && cleanupReplay.value.decision === "replayed",
-          "cleanup replay",
+          cleanupReplay.ok &&
+            "result" in cleanupReplay.value &&
+            cleanupReplay.value.result.deletedIds.includes("r01-cleanup"),
+          "cleanup durable result",
         );
       },
     },

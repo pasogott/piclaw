@@ -466,11 +466,38 @@ describe("EF-S05 fake implementation independence", () => {
       ),
       "utf8",
     );
+    const adapterStore = readFileSync(
+      join(
+        import.meta.dir,
+        "../../src/service-effects/current-piclaw/service-outbox-store.ts",
+      ),
+      "utf8",
+    );
+    const fakeStore = readFileSync(
+      join(
+        import.meta.dir,
+        "../../src/service-effects/testing/fakes/fake-service-outbox-store.ts",
+      ),
+      "utf8",
+    );
+    for (const source of [fake, fakeStore]) {
+      expect(source).not.toContain("current-piclaw");
+      expect(source).not.toContain("service-outbox-schema");
+      expect(source).not.toContain("bun:sqlite");
+    }
     expect(fake).not.toContain("service-outbox-request-normalizer");
     expect(fake).toContain("type Reader<T>");
     expect(fake).toContain("const parsers:");
     expect(adapter).not.toContain("type Reader<T>");
     expect(adapter).not.toContain("const parsers:");
+    expect(fakeStore).toContain("#state: State");
+    expect(fakeStore).toContain("records: Record<string, OutboxRecord>");
+    expect(fakeStore).not.toContain("database.query");
+    expect(fakeStore).not.toMatch(
+      /\b(?:SELECT|INSERT|UPDATE|DELETE)\s+(?:FROM|INTO|service_effect)/,
+    );
+    expect(adapterStore).toContain("this.database");
+    expect(adapterStore).toContain("SELECT * FROM");
   });
 });
 

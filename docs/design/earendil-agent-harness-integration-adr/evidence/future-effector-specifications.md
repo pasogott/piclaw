@@ -355,11 +355,11 @@ interface MediaStoreError extends PiclawEffectError {
 
 interface OutboxStoreError extends PiclawEffectError {
   readonly _tag:
+    | "invalid_request"
     | "idempotency_conflict"
-    | "lease_conflict"
-    | "lease_expired"
-    | "invalid_transition"
     | "not_found"
+    | "invalid_transition"
+    | "corrupt_state"
     | "storage_unavailable";
 }
 
@@ -837,7 +837,7 @@ interface ServiceOutboxStore {
   cleanupTerminal(request: CleanupTerminalOutboxRequest): Promise<Result<OutboxCleanupDecision, OutboxStoreError>>;
 }
 
-The closed contract is implemented in `runtime/src/service-effects/contracts/service-outbox-store.ts`. The record retains immutable effect provenance, caller-owned enqueue and result timestamps, repeatability, exact worker/lease/attempt ownership, external-effect certainty, retry/receipt diagnostics and reconciliation history. Attempt starts at zero and increments once per successful claim or reclaim.
+The closed contract is implemented in `runtime/src/service-effects/contracts/service-outbox-store.ts`. The record retains immutable effect provenance, caller-owned enqueue and result timestamps, repeatability, exact worker/lease/attempt ownership, external-effect certainty, retry/receipt diagnostics and reconciliation history. Attempt starts at zero and increments once per successful claim or reclaim. Worker, lease, state, attempt, and time fences return typed `stale`; `invalid_transition` is reserved for caller-owned enqueue inserter misuse outside a transaction. The public error set is otherwise closed to malformed requests, idempotency conflicts, absent exact rows, corrupt durable state, and bounded storage unavailability.
 
 Mutation decisions distinguish `applied`, exact `replayed` results and expected `stale` no-ops. A claim is identified by its globally unique lease token and returns `empty` when no due row exists. Exact-row mutation of an absent outbox returns bounded `not_found`; wrong owner, token, attempt or state is `stale`; `get` alone returns `null` for absence. Worker results require the exact unexpired worker, token and attempt. Competing result methods share durable authority for one outbox attempt.
 

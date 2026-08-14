@@ -238,8 +238,20 @@ export class CurrentPiclawServiceOutboxStore implements ServiceOutboxStore {
           request.now,
           request.now,
         );
-      if (changed.changes !== 1)
-        return Result.ok(freeze({ decision: "empty" as const, lease: null }));
+      if (changed.changes !== 1) {
+        const decision = freeze({ decision: "empty" as const, lease: null });
+        this.writeDecision({
+          key: `claim:${tokenHash}`,
+          method: "claimNext",
+          requestHash,
+          outcome: "empty",
+          outboxId: null,
+          attempt: null,
+          tokenHash,
+          resultJson: null,
+        });
+        return Result.ok(decision);
+      }
       this.writeLease(
         tokenHash,
         requestHash,
@@ -650,15 +662,6 @@ export class CurrentPiclawServiceOutboxStore implements ServiceOutboxStore {
         row.leaseToken === request.leaseToken;
       if (!temporal || !ownsAttempt) return Result.ok(stale());
 
-      if (previousDecision) {
-        const removed = this.database
-          .query(
-            `DELETE FROM ${DECISIONS} WHERE decision_key=? AND method=? AND request_hash=? AND outcome='stale'`,
-          )
-          .run(key, previousDecision.method, previousDecision.requestHash);
-        if (removed.changes !== 1) throw new CorruptStateFault();
-      }
-
       const changed = this.database
         .query(
           `UPDATE ${OUTBOX} SET state=?,state_changed_at=?,worker_id=NULL,claimed_at=NULL,lease_token=NULL,lease_expires_at=NULL,certainty=?,retry_at=?,receipt_ref=?,last_error_tag=?,result_at=?,reconciled_at=NULL,cancellation_reason_tag=NULL WHERE outbox_id=? AND state='started' AND worker_id=? AND attempt=? AND lease_token=? AND claimed_at<=? AND lease_expires_at>?`,
@@ -679,6 +682,15 @@ export class CurrentPiclawServiceOutboxStore implements ServiceOutboxStore {
           outcome.at,
         );
       if (changed.changes !== 1) return Result.ok(stale());
+
+      if (previousDecision) {
+        const removed = this.database
+          .query(
+            `DELETE FROM ${DECISIONS} WHERE decision_key=? AND method=? AND request_hash=? AND outcome='stale'`,
+          )
+          .run(key, previousDecision.method, previousDecision.requestHash);
+        if (removed.changes !== 1) throw new CorruptStateFault();
+      }
 
       this.database
         .query(
@@ -766,9 +778,7 @@ export class CurrentPiclawServiceOutboxStore implements ServiceOutboxStore {
     }
   }
 
-  private readBeforeEffectFault(
-    method: OutboxMutationMethod,
-  ):
+  private readBeforeEffectFault(method: OutboxMutationMethod):
     | {
         readonly ok: true;
         readonly checkpoint: "pre_transaction" | "in_transaction" | null;
@@ -1259,12 +1269,6 @@ function readRecordFrom(
     .query(`SELECT * FROM ${OUTBOX} WHERE outbox_id=?`)
     .get(id) as Row | null;
   return row ? decodeRecord(row) : null;
-}
-
-export function decodeServiceOutboxRecordForTesting(
-  row: Readonly<Record<string, unknown>>,
-): OutboxRecord {
-  return decodeRecord(row);
 }
 
 function decodeRecord(row: Row): OutboxRecord {

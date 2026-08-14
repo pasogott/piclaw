@@ -30,7 +30,6 @@ import { installServiceOutboxSchema } from "../../src/service-effects/current-pi
 import {
   createCurrentPiclawServiceOutboxStore,
   createServiceOutboxEnqueueInserter,
-  decodeServiceOutboxRecordForTesting,
   type ServiceOutboxAdapterRuntime,
 } from "../../src/service-effects/current-piclaw/service-outbox-store.js";
 
@@ -263,6 +262,71 @@ describe("EF-S05 typed missing-row semantics", () => {
   });
 });
 
+describe("EF-S05 retained error-tag reachability", () => {
+  test("every retained tag has one definitive public or composition path", async () => {
+    const fixture = open();
+    const tags = new Set<string>();
+    const capture = (
+      result: { ok: true } | { ok: false; error: OutboxStoreError },
+    ) => {
+      expect(result.ok).toBeFalse();
+      if (!result.ok) tags.add(result.error._tag);
+    };
+    try {
+      capture(
+        await fixture.store.enqueue({
+          unexpected: true,
+        } as EnqueueOutboxRequest),
+      );
+      const first = enqueue("error-idempotency");
+      await fixture.store.enqueue(first);
+      const conflict = enqueue("error-idempotency-other", {
+        effect: {
+          ...effect("error-idempotency-other"),
+          idempotencyKey: first.effect.idempotencyKey,
+        },
+      });
+      capture(await fixture.store.enqueue(conflict));
+      capture(
+        await fixture.store.complete({
+          outboxId: "error-missing",
+          workerId: "worker:missing",
+          expectedAttempt: 1,
+          leaseToken: "lease:missing",
+          receiptRef: null,
+          completedAt: "2026-08-13T10:00:30.000Z",
+        }),
+      );
+      const inserter = createServiceOutboxEnqueueInserter(fixture.database);
+      expect(inserter.ok).toBeTrue();
+      if (inserter.ok)
+        capture(inserter.value.insert(enqueue("error-inserter")));
+
+      fixture.runtime.beforeValue = true;
+      capture(await fixture.store.enqueue(enqueue("error-storage")));
+      fixture.runtime.beforeValue = false;
+
+      fixture.database.exec("PRAGMA ignore_check_constraints=ON");
+      fixture.database
+        .query(
+          "UPDATE service_effect_s05_outbox SET state='other' WHERE outbox_id='error-idempotency'",
+        )
+        .run();
+      capture(await fixture.store.get("error-idempotency"));
+      expect([...tags].sort()).toEqual([
+        "corrupt_state",
+        "idempotency_conflict",
+        "invalid_request",
+        "invalid_transition",
+        "not_found",
+        "storage_unavailable",
+      ]);
+    } finally {
+      fixture.database.close();
+    }
+  });
+});
+
 describe("EF-S05 exact before-effect fault semantics", () => {
   test("false proceeds while true, rollback, throw, nonboolean and thenable are not_applied", async () => {
     const observations: Array<{ value?: unknown; throws?: boolean }> = [
@@ -317,7 +381,7 @@ describe("EF-S05 exact before-effect fault semantics", () => {
 
 describe("EF-S05 exact acknowledgement fault semantics", () => {
   test("only boolean true after commit reports unknown for SQLite and fake", async () => {
-    for (const value of [false, "truthy", 1, null]) {
+    for (const value of [false, "truthy", 1, null, Promise.resolve(true)]) {
       const sqlite = open();
       try {
         sqlite.runtime.acknowledgementValue = value;
@@ -349,7 +413,7 @@ describe("EF-S05 exact acknowledgement fault semantics", () => {
       lost.database.close();
     }
 
-    for (const value of [false, "truthy", 1, null]) {
+    for (const value of [false, "truthy", 1, null, Promise.resolve(true)]) {
       const fake = new FakeServiceOutboxStore(fakeContext());
       fake.planFaultValue("enqueue", "effect_then_lost_acknowledgement", value);
       expect(
@@ -382,10 +446,14 @@ describe("EF-S05 closed request snapshots", () => {
         const enqueueRequest = enqueue(
           `snapshot-${fixture.database ? "sqlite" : "fake"}`,
         );
+        const originalEnqueue = structuredClone(enqueueRequest);
         const enqueuePromise = fixture.store.enqueue(enqueueRequest);
         (enqueueRequest as { payloadRef: string }).payloadRef = "mutated";
         (enqueueRequest.effect as { provenanceRef: string }).provenanceRef =
           "mutated";
+        (enqueueRequest.effect as { operationId: string }).operationId =
+          "mutated";
+        (enqueueRequest.effect as { sourceSeq: number }).sourceSeq = 999;
         const inserted = await enqueuePromise;
         expect(inserted.ok && inserted.value.record.payloadRef).toBe(
           "opaque:secret-payload",
@@ -393,18 +461,39 @@ describe("EF-S05 closed request snapshots", () => {
         expect(inserted.ok && inserted.value.record.provenanceRef).toBe(
           "opaque:secret-provenance",
         );
+        expect(inserted.ok && inserted.value.record.operationId).toBe(
+          "opaque:operation",
+        );
+        expect(inserted.ok && inserted.value.record.sourceSeq).toBe(1);
+        const enqueueReplay = await fixture.store.enqueue(originalEnqueue);
+        expect(enqueueReplay.ok && enqueueReplay.value.decision).toBe(
+          "replayed",
+        );
         if (!inserted.ok) continue;
 
         const claimRequest = claim(
           `snapshot-${fixture.database ? "sqlite" : "fake"}`,
         );
+        const originalClaim = structuredClone(claimRequest);
         const claimPromise = fixture.store.claimNext(claimRequest);
         (claimRequest.kinds as OutboxKind[])[0] = "notification";
         (claimRequest as { workerId: string }).workerId = "mutated";
+        (claimRequest as { leaseToken: string }).leaseToken = "mutated";
+        (claimRequest as { now: string }).now = "2026-08-13T15:00:00.000Z";
+        (claimRequest as { leaseExpiresAt: string }).leaseExpiresAt =
+          "2026-08-13T16:00:00.000Z";
         const claimed = await claimPromise;
         expect(claimed.ok && claimed.value.lease?.workerId).toStartWith(
           "worker:snapshot-",
         );
+        expect(claimed.ok && claimed.value.lease?.record.leaseToken).toBe(
+          originalClaim.leaseToken,
+        );
+        expect(claimed.ok && claimed.value.lease?.record.claimedAt).toBe(
+          originalClaim.now,
+        );
+        const claimReplay = await fixture.store.claimNext(originalClaim);
+        expect(claimReplay.ok && claimReplay.value.decision).toBe("replayed");
         if (!claimed.ok || !claimed.value.lease) continue;
 
         const unknown = {
@@ -419,11 +508,17 @@ describe("EF-S05 closed request snapshots", () => {
         await fixture.store.markUnknown(unknown);
         const listRequest = {
           kinds: ["maintenance"] as OutboxKind[],
-          after: null,
+          after: {
+            stateChangedAt: "2026-08-13T09:00:00.000Z",
+            outboxId: "before",
+          },
           limit: 1,
         };
         const listPromise = fixture.store.listUnknown(listRequest);
         listRequest.kinds[0] = "notification";
+        listRequest.after.stateChangedAt = "2026-08-13T15:00:00.000Z";
+        listRequest.after.outboxId = "mutated";
+        listRequest.limit = 100;
         const listed = await listPromise;
         expect(listed.ok && listed.value.records).toHaveLength(1);
 
@@ -434,14 +529,288 @@ describe("EF-S05 closed request snapshots", () => {
           reconciledAt: "2026-08-13T10:02:00.000Z",
           resolution: { kind: "cancelled" as const, reasonTag: "operator" },
         };
+        const originalResolution = structuredClone(resolutionRequest);
         const resolutionPromise =
           fixture.store.resolveUnknown(resolutionRequest);
+        (resolutionRequest as { reconciliationRef: string }).reconciliationRef =
+          "mutated";
+        (resolutionRequest as { reconciledAt: string }).reconciledAt =
+          "2026-08-13T15:00:00.000Z";
         (resolutionRequest.resolution as { reasonTag: string }).reasonTag =
           "mutated";
         const resolved = await resolutionPromise;
         expect(
           resolved.ok && resolved.value.record?.cancellationReasonTag,
         ).toBe("operator");
+        expect(resolved.ok && resolved.value.record?.reconciliationRef).toBe(
+          "original",
+        );
+        expect(resolved.ok && resolved.value.record?.reconciledAt).toBe(
+          "2026-08-13T10:02:00.000Z",
+        );
+        const resolutionReplay =
+          await fixture.store.resolveUnknown(originalResolution);
+        expect(resolutionReplay.ok && resolutionReplay.value.decision).toBe(
+          "replayed",
+        );
+      } finally {
+        fixture.database?.close();
+      }
+    }
+  });
+  test("SQLite and fake snapshot every mutation authority before returning", async () => {
+    for (const fixture of [
+      open(),
+      { database: null, store: new FakeServiceOutboxStore(fakeContext()) },
+    ]) {
+      const flavour = fixture.database ? "sqlite" : "fake";
+      const seed = async (id: string) => {
+        await fixture.store.enqueue(enqueue(id));
+        const claimed = await fixture.store.claimNext(claim(id));
+        if (!claimed.ok || !claimed.value.lease) throw new Error("claim");
+        return claimed.value.lease;
+      };
+      try {
+        const reclaimLease = await seed(`snapshot-reclaim-${flavour}`);
+        const reclaimRequest: ReclaimOutboxRequest = {
+          outboxId: reclaimLease.record.outboxId,
+          expectedAttempt: 1,
+          workerId: `worker:reclaim:${flavour}`,
+          leaseToken: `lease:reclaim:${flavour}`,
+          now: "2026-08-13T10:02:00.000Z",
+          leaseExpiresAt: "2026-08-13T10:03:00.000Z",
+          authority: { kind: "repeatable" },
+        };
+        const originalReclaim = structuredClone(reclaimRequest);
+        const reclaimPromise = fixture.store.reclaim(reclaimRequest);
+        Object.assign(reclaimRequest, {
+          outboxId: "mutated",
+          expectedAttempt: 9,
+          workerId: "mutated",
+          leaseToken: "mutated",
+          now: "2026-08-13T15:00:00.000Z",
+          leaseExpiresAt: "2026-08-13T16:00:00.000Z",
+          authority: {
+            kind: "reconciled_absent",
+            reconciliationRef: "mutated",
+          },
+        });
+        const reclaimed = await reclaimPromise;
+        expect(reclaimed.ok && reclaimed.value.record?.workerId).toBe(
+          originalReclaim.workerId,
+        );
+        expect(reclaimed.ok && reclaimed.value.record?.leaseToken).toBe(
+          originalReclaim.leaseToken,
+        );
+        const reclaimReplay = await fixture.store.reclaim(originalReclaim);
+        expect(reclaimReplay.ok && reclaimReplay.value.decision).toBe(
+          "replayed",
+        );
+
+        const completeLease = await seed(`snapshot-complete-${flavour}`);
+        const completeRequest = {
+          outboxId: completeLease.record.outboxId,
+          workerId: completeLease.workerId,
+          expectedAttempt: 1,
+          leaseToken: completeLease.record.leaseToken,
+          receiptRef: `receipt:${flavour}`,
+          completedAt: "2026-08-13T10:00:30.000Z",
+        };
+        const originalComplete = structuredClone(completeRequest);
+        const completePromise = fixture.store.complete(completeRequest);
+        Object.assign(completeRequest, {
+          workerId: "mutated",
+          leaseToken: "mutated",
+          receiptRef: "mutated",
+          completedAt: "2026-08-13T15:00:00.000Z",
+        });
+        const completed = await completePromise;
+        expect(completed.ok && completed.value.record?.receiptRef).toBe(
+          originalComplete.receiptRef,
+        );
+        expect(completed.ok && completed.value.record?.resultAt).toBe(
+          originalComplete.completedAt,
+        );
+        const completeReplay = await fixture.store.complete(originalComplete);
+        expect(completeReplay.ok && completeReplay.value.decision).toBe(
+          "replayed",
+        );
+
+        const failLease = await seed(`snapshot-fail-${flavour}`);
+        const failInput = {
+          outboxId: failLease.record.outboxId,
+          workerId: failLease.workerId,
+          expectedAttempt: 1,
+          leaseToken: failLease.record.leaseToken,
+          errorTag: "retryable-original",
+          certainty: "not_applied" as const,
+          retryAt: "2026-08-13T10:02:00.000Z",
+          failedAt: "2026-08-13T10:00:30.000Z",
+        };
+        const originalFail = structuredClone(failInput);
+        const failPromise = fixture.store.fail(failInput);
+        Object.assign(failInput, {
+          workerId: "mutated",
+          leaseToken: "mutated",
+          errorTag: "mutated",
+          retryAt: null,
+          failedAt: "2026-08-13T15:00:00.000Z",
+        });
+        const failed = await failPromise;
+        expect(failed.ok && failed.value.record?.lastErrorTag).toBe(
+          originalFail.errorTag,
+        );
+        expect(failed.ok && failed.value.record?.retryAt).toBe(
+          originalFail.retryAt,
+        );
+        const failReplay = await fixture.store.fail(originalFail);
+        expect(failReplay.ok && failReplay.value.decision).toBe("replayed");
+
+        const unknownLease = await seed(`snapshot-unknown-${flavour}`);
+        const unknownInput = {
+          outboxId: unknownLease.record.outboxId,
+          workerId: unknownLease.workerId,
+          expectedAttempt: 1,
+          leaseToken: unknownLease.record.leaseToken,
+          errorTag: "ambiguous-original",
+          certainty: "unknown" as const,
+          observedAt: "2026-08-13T10:00:30.000Z",
+        };
+        const originalUnknown = structuredClone(unknownInput);
+        const unknownPromise = fixture.store.markUnknown(unknownInput);
+        Object.assign(unknownInput, {
+          workerId: "mutated",
+          leaseToken: "mutated",
+          errorTag: "mutated",
+          observedAt: "2026-08-13T15:00:00.000Z",
+        });
+        const unknown = await unknownPromise;
+        expect(unknown.ok && unknown.value.record?.lastErrorTag).toBe(
+          originalUnknown.errorTag,
+        );
+        expect(unknown.ok && unknown.value.record?.resultAt).toBe(
+          originalUnknown.observedAt,
+        );
+        const unknownReplay = await fixture.store.markUnknown(originalUnknown);
+        expect(unknownReplay.ok && unknownReplay.value.decision).toBe(
+          "replayed",
+        );
+
+        for (const [name, resolution] of [
+          [
+            "applied",
+            { kind: "applied" as const, receiptRef: `receipt:${flavour}` },
+          ],
+          [
+            "not-applied",
+            {
+              kind: "not_applied" as const,
+              errorTag: "retryable-original",
+              retryAt: "2026-08-13T10:03:00.000Z",
+            },
+          ],
+          [
+            "cancelled",
+            { kind: "cancelled" as const, reasonTag: "operator-original" },
+          ],
+        ] as const) {
+          const lease = await seed(`snapshot-resolve-${name}-${flavour}`);
+          await fixture.store.markUnknown({
+            outboxId: lease.record.outboxId,
+            workerId: lease.workerId,
+            expectedAttempt: 1,
+            leaseToken: lease.record.leaseToken,
+            errorTag: "ambiguous",
+            certainty: "unknown",
+            observedAt: "2026-08-13T10:00:30.000Z",
+          });
+          const resolutionInput = {
+            outboxId: lease.record.outboxId,
+            expectedAttempt: 1,
+            reconciliationRef: `reconciliation:${name}:${flavour}`,
+            reconciledAt: "2026-08-13T10:02:00.000Z",
+            resolution,
+          };
+          const originalResolution = structuredClone(resolutionInput);
+          const resolutionPromise =
+            fixture.store.resolveUnknown(resolutionInput);
+          Object.assign(resolutionInput, {
+            outboxId: "mutated",
+            expectedAttempt: 9,
+            reconciliationRef: "mutated",
+            reconciledAt: "2026-08-13T15:00:00.000Z",
+          });
+          Object.assign(resolutionInput.resolution, {
+            receiptRef: "mutated",
+            errorTag: "mutated",
+            retryAt: null,
+            reasonTag: "mutated",
+          });
+          const resolved = await resolutionPromise;
+          expect(resolved.ok && resolved.value.record?.reconciliationRef).toBe(
+            originalResolution.reconciliationRef,
+          );
+          if (originalResolution.resolution.kind === "applied") {
+            expect(resolved.ok && resolved.value.record?.receiptRef).toBe(
+              originalResolution.resolution.receiptRef,
+            );
+          } else if (originalResolution.resolution.kind === "not_applied") {
+            expect(resolved.ok && resolved.value.record?.lastErrorTag).toBe(
+              originalResolution.resolution.errorTag,
+            );
+            expect(resolved.ok && resolved.value.record?.retryAt).toBe(
+              originalResolution.resolution.retryAt,
+            );
+          } else {
+            expect(
+              resolved.ok && resolved.value.record?.cancellationReasonTag,
+            ).toBe(originalResolution.resolution.reasonTag);
+          }
+          const resolutionReplay =
+            await fixture.store.resolveUnknown(originalResolution);
+          expect(resolutionReplay.ok && resolutionReplay.value.decision).toBe(
+            "replayed",
+          );
+        }
+
+        const cleanupLease = await seed(`snapshot-cleanup-${flavour}`);
+        await fixture.store.fail({
+          outboxId: cleanupLease.record.outboxId,
+          workerId: cleanupLease.workerId,
+          expectedAttempt: 1,
+          leaseToken: cleanupLease.record.leaseToken,
+          errorTag: "fatal",
+          certainty: "not_applied",
+          retryAt: null,
+          failedAt: "2026-08-13T10:00:30.000Z",
+        });
+        const cleanupInput = {
+          cleanupId: `cleanup:snapshot:${flavour}`,
+          before: "2026-08-13T11:00:00.000Z",
+          after: {
+            stateChangedAt: "2026-08-13T09:00:00.000Z",
+            outboxId: "before",
+          },
+          limit: 1,
+        };
+        const originalCleanup = structuredClone(cleanupInput);
+        const cleanupPromise = fixture.store.cleanupTerminal(cleanupInput);
+        Object.assign(cleanupInput, {
+          cleanupId: "mutated",
+          before: "2026-08-13T09:00:00.000Z",
+          limit: 100,
+        });
+        cleanupInput.after.stateChangedAt = "2026-08-13T15:00:00.000Z";
+        cleanupInput.after.outboxId = "mutated";
+        const cleaned = await cleanupPromise;
+        expect(cleaned.ok && cleaned.value.result.deletedIds).toEqual([
+          cleanupLease.record.outboxId,
+        ]);
+        const cleanupReplay =
+          await fixture.store.cleanupTerminal(originalCleanup);
+        expect(cleanupReplay.ok && cleanupReplay.value.decision).toBe(
+          "replayed",
+        );
       } finally {
         fixture.database?.close();
       }
@@ -494,7 +863,211 @@ describe("EF-S05 two-connection lease races", () => {
   });
 });
 
+describe("EF-S05 claim contention replay authority", () => {
+  test("two connections preserve CAS-zero empty authority for replay and conflict", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "piclaw-s05-claim-cas-"));
+    const path = join(dir, "store.sqlite");
+    const left = open(path);
+    const right = open(path);
+    try {
+      await left.store.enqueue(enqueue("claim-cas-zero"));
+      left.database.exec(`
+        CREATE TRIGGER force_claim_cas_zero
+        BEFORE UPDATE ON service_effect_s05_outbox
+        WHEN OLD.outbox_id='claim-cas-zero' AND NEW.state='started'
+        BEGIN SELECT RAISE(IGNORE); END;
+      `);
+      const request = claim("claim-cas-zero");
+      const first = await right.store.claimNext(request);
+      expect(first.ok && first.value).toEqual({
+        decision: "empty",
+        lease: null,
+      });
+      left.database.exec("DROP TRIGGER force_claim_cas_zero");
+      const replay = await left.store.claimNext(request);
+      expect(replay.ok && replay.value).toEqual({
+        decision: "replayed",
+        lease: null,
+      });
+      typed(
+        await right.store.claimNext({
+          ...request,
+          workerId: "worker:changed",
+        }),
+        "idempotency_conflict",
+      );
+      const fresh = await right.store.claimNext(claim("claim-cas-fresh"));
+      expect(fresh.ok && fresh.value.lease?.record.outboxId).toBe(
+        "claim-cas-zero",
+      );
+    } finally {
+      left.database.close();
+      right.database.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("EF-S05 concurrent outcome authority", () => {
+  test("CAS-zero preserves the exact prior stale decision", async () => {
+    const fixture = open();
+    try {
+      await fixture.store.enqueue(enqueue("outcome-cas-zero"));
+      const claimed = await fixture.store.claimNext(claim("outcome-cas-zero"));
+      if (!claimed.ok || !claimed.value.lease) throw new Error("claim");
+      const lease = claimed.value.lease;
+      const staleRequest = {
+        outboxId: "outcome-cas-zero",
+        workerId: "worker:stale",
+        expectedAttempt: 1,
+        leaseToken: "opaque:secret-stale",
+        receiptRef: null,
+        completedAt: "2026-08-13T10:00:30.000Z",
+      };
+      fixture.database
+        .query(
+          "INSERT INTO service_effect_s05_decisions(decision_key,method,request_hash,outcome,outbox_id,attempt,lease_token_hash,result_json) VALUES (?,?,?,?,?,?,NULL,NULL)",
+        )
+        .run(
+          "outcome:outcome-cas-zero:1",
+          "complete",
+          hashCanonicalRequest(staleRequest as unknown as CanonicalJsonValue),
+          "stale",
+          "outcome-cas-zero",
+          1,
+        );
+      fixture.database.exec(`
+        CREATE TRIGGER force_outcome_cas_zero
+        BEFORE UPDATE ON service_effect_s05_outbox
+        WHEN OLD.outbox_id='outcome-cas-zero' AND NEW.state='completed'
+        BEGIN SELECT RAISE(IGNORE); END;
+      `);
+      const correctRequest = {
+        ...staleRequest,
+        workerId: lease.workerId,
+        leaseToken: lease.record.leaseToken,
+      };
+      const attempted = await fixture.store.complete(correctRequest);
+      expect(attempted.ok && attempted.value.decision).toBe("stale");
+      expect(
+        fixture.database
+          .query(
+            "SELECT outcome FROM service_effect_s05_decisions WHERE decision_key='outcome:outcome-cas-zero:1'",
+          )
+          .get(),
+      ).toEqual({ outcome: "stale" });
+      const replay = await fixture.store.complete(staleRequest);
+      expect(replay.ok && replay.value.decision).toBe("stale");
+    } finally {
+      fixture.database.close();
+    }
+  });
+
+  test("failed stale-decision deletion rolls back the record CAS as corrupt", async () => {
+    const fixture = open();
+    try {
+      await fixture.store.enqueue(enqueue("outcome-delete-zero"));
+      const claimed = await fixture.store.claimNext(
+        claim("outcome-delete-zero"),
+      );
+      if (!claimed.ok || !claimed.value.lease) throw new Error("claim");
+      const lease = claimed.value.lease;
+      const staleRequest = {
+        outboxId: "outcome-delete-zero",
+        workerId: "worker:stale",
+        expectedAttempt: 1,
+        leaseToken: "lease:stale",
+        receiptRef: null,
+        completedAt: "2026-08-13T10:00:30.000Z",
+      };
+      fixture.database
+        .query(
+          "INSERT INTO service_effect_s05_decisions(decision_key,method,request_hash,outcome,outbox_id,attempt,lease_token_hash,result_json) VALUES (?,?,?,?,?,?,NULL,NULL)",
+        )
+        .run(
+          "outcome:outcome-delete-zero:1",
+          "complete",
+          hashCanonicalRequest(staleRequest as unknown as CanonicalJsonValue),
+          "stale",
+          "outcome-delete-zero",
+          1,
+        );
+      fixture.database.exec(`
+        CREATE TRIGGER force_decision_delete_zero
+        BEFORE DELETE ON service_effect_s05_decisions
+        WHEN OLD.decision_key='outcome:outcome-delete-zero:1'
+        BEGIN SELECT RAISE(IGNORE); END;
+      `);
+      typed(
+        await fixture.store.complete({
+          ...staleRequest,
+          workerId: lease.workerId,
+          leaseToken: lease.record.leaseToken,
+        }),
+        "corrupt_state",
+      );
+      const record = await fixture.store.get("outcome-delete-zero");
+      expect(record.ok && record.value?.state).toBe("started");
+      expect(
+        fixture.database
+          .query(
+            "SELECT outcome FROM service_effect_s05_decisions WHERE decision_key='outcome:outcome-delete-zero:1'",
+          )
+          .get(),
+      ).toEqual({ outcome: "stale" });
+    } finally {
+      fixture.database.close();
+    }
+  });
+
+  test("fake rollback preserves prior stale authority before replacement", async () => {
+    const fake = new FakeServiceOutboxStore(fakeContext());
+    await fake.enqueue(enqueue("outcome-fake-rollback"));
+    const claimed = await fake.claimNext(claim("outcome-fake-rollback"));
+    if (!claimed.ok || !claimed.value.lease) throw new Error("claim");
+    const staleRequest = {
+      outboxId: "outcome-fake-rollback",
+      workerId: "worker:stale",
+      expectedAttempt: 1,
+      leaseToken: "lease:stale",
+      receiptRef: null,
+      completedAt: "2026-08-13T10:00:30.000Z",
+    };
+    const staleHash = hashCanonicalRequest(
+      staleRequest as unknown as CanonicalJsonValue,
+    );
+    const snapshot = fake.inspectState();
+    (snapshot.decisions as unknown as Record<string, Record<string, unknown>>)[
+      "outcome:outcome-fake-rollback:1"
+    ] = {
+      method: "complete",
+      hash: staleHash,
+      outcome: "stale",
+      outboxId: "outcome-fake-rollback",
+      attempt: 1,
+      tokenHash: null,
+      cleanupResult: null,
+    };
+    fake.restoreMalformedForTesting(snapshot);
+    fake.planFaultValue("complete", "before_effect", "in_transaction", 1);
+    const rolledBack = await fake.complete({
+      ...staleRequest,
+      workerId: claimed.value.lease.workerId,
+      leaseToken: claimed.value.lease.record.leaseToken,
+    });
+    typed(rolledBack, "storage_unavailable");
+    expect(
+      (
+        fake.inspectState().decisions as unknown as Record<
+          string,
+          Record<string, unknown>
+        >
+      )["outcome:outcome-fake-rollback:1"]?.hash,
+    ).toBe(staleHash);
+    const replay = await fake.complete(staleRequest);
+    expect(replay.ok && replay.value.decision).toBe("stale");
+  });
+
   for (const outcome of ["complete", "fail", "markUnknown"] as const) {
     test(`one of two ${outcome} owners wins without authority overwrite`, async () => {
       const dir = mkdtempSync(join(tmpdir(), `piclaw-s05-${outcome}-`));
@@ -805,77 +1378,152 @@ describe("EF-S05 held immediate lock is bounded", () => {
   });
 });
 describe("EF-S05 closed row decoding", () => {
-  test("rejects malformed enums, correlations, instants, hashes and counters", async () => {
-    const fixture = open();
-    try {
-      await fixture.store.enqueue(enqueue("decode"));
-      const row = fixture.database
-        .query(
-          "SELECT * FROM service_effect_s05_outbox WHERE outbox_id='decode'",
-        )
-        .get() as Record<string, unknown>;
-      expect(() => decodeServiceOutboxRecordForTesting(row)).not.toThrow();
-      for (const patch of [
-        { kind: "other" },
-        { state: "other" },
-        { request_hash: "x" },
-        { attempt: -1 },
-        { enqueued_at: "not-an-instant" },
-        { state: "started", attempt: 1, certainty: null },
-      ]) {
-        expect(() =>
-          decodeServiceOutboxRecordForTesting({ ...row, ...patch }),
-        ).toThrow();
+  test("public reads reject malformed enums, correlations, instants, hashes and counters", async () => {
+    const corruptions = [
+      "UPDATE service_effect_s05_outbox SET kind='other' WHERE outbox_id='decode'",
+      "UPDATE service_effect_s05_outbox SET state='other' WHERE outbox_id='decode'",
+      "UPDATE service_effect_s05_outbox SET request_hash='x' WHERE outbox_id='decode'",
+      "UPDATE service_effect_s05_outbox SET attempt=-1 WHERE outbox_id='decode'",
+      "UPDATE service_effect_s05_outbox SET enqueued_at='not-an-instant' WHERE outbox_id='decode'",
+      "UPDATE service_effect_s05_outbox SET state='started',attempt=1,certainty=NULL WHERE outbox_id='decode'",
+    ];
+    for (const statement of corruptions) {
+      const fixture = open();
+      try {
+        await fixture.store.enqueue(enqueue("decode"));
+        expect((await fixture.store.get("decode")).ok).toBeTrue();
+        fixture.database.exec("PRAGMA ignore_check_constraints=ON");
+        fixture.database.exec(statement);
+        typed(await fixture.store.get("decode"), "corrupt_state");
+      } finally {
+        fixture.database.close();
       }
-    } finally {
-      fixture.database.close();
     }
   });
 });
 
 describe("EF-S05 trace identity and observer containment", () => {
-  test("mutations preserve closed identity and reads remain intentionally untraced", async () => {
-    const fixture = open();
-    try {
-      const request = enqueue("trace-identity");
-      await fixture.store.enqueue(request);
-      const claimed = await fixture.store.claimNext(claim("trace-identity"));
-      if (!claimed.ok || !claimed.value.lease) throw new Error("claim");
-      await fixture.store.complete({
-        outboxId: "trace-identity",
-        workerId: claimed.value.lease.workerId,
-        expectedAttempt: 1,
-        leaseToken: claimed.value.lease.record.leaseToken,
-        receiptRef: null,
-        completedAt: "2026-08-13T10:00:30.000Z",
-      });
-      const beforeReads = fixture.runtime.traces.length;
-      await fixture.store.get("trace-identity");
-      await fixture.store.listUnknown({
-        kinds: ["maintenance"],
-        after: null,
-        limit: 1,
-      });
-      expect(fixture.runtime.traces).toHaveLength(beforeReads);
-      const enqueueCall = fixture.runtime.traces.find(
-        (trace) => trace.method === "enqueue" && trace.resultTag === "call",
-      );
-      expect(enqueueCall).toMatchObject({
-        effectId: "trace-identity",
-        operationId: request.effect.operationId,
-        sourceSeq: request.effect.sourceSeq,
-        version: null,
-      });
-      const completeResult = fixture.runtime.traces.find(
-        (trace) => trace.method === "complete" && trace.resultTag === "applied",
-      );
-      expect(completeResult).toMatchObject({
-        effectId: "trace-identity",
-        version: 1,
-        certainty: "applied",
-      });
-    } finally {
-      fixture.database.close();
+  test("applied replayed stale error and unknown traces preserve exact closed identity", async () => {
+    for (const flavour of ["sqlite", "fake"] as const) {
+      const sqlite = flavour === "sqlite" ? open() : null;
+      const traces: NormalisedTraceInput[] = sqlite?.runtime.traces ?? [];
+      const fake =
+        flavour === "fake"
+          ? new FakeServiceOutboxStore(fakeContext(), (trace) =>
+              traces.push(trace),
+            )
+          : null;
+      const store = sqlite?.store ?? fake;
+      if (!store) throw new Error("store");
+      try {
+        const request = enqueue(`trace-applied-${flavour}`);
+        await store.enqueue(request);
+        await store.enqueue(request);
+        const claimed = await store.claimNext(claim(`trace-claim-${flavour}`));
+        if (!claimed.ok || !claimed.value.lease) throw new Error("claim");
+        await store.complete({
+          outboxId: request.outboxId,
+          workerId: "worker:stale",
+          expectedAttempt: 1,
+          leaseToken: "lease:stale",
+          receiptRef: null,
+          completedAt: "2026-08-13T10:00:30.000Z",
+        });
+        await store.enqueue({
+          ...request,
+          unexpected: true,
+        } as EnqueueOutboxRequest);
+        await store.complete({
+          outboxId: `trace-missing-${flavour}`,
+          workerId: "worker:missing",
+          expectedAttempt: 1,
+          leaseToken: "lease:missing",
+          receiptRef: null,
+          completedAt: "2026-08-13T10:00:30.000Z",
+        });
+        const lostRequest = enqueue(`trace-lost-${flavour}`);
+        if (sqlite) sqlite.runtime.acknowledgementValue = true;
+        else fake?.planFault("enqueue", "effect_then_lost_acknowledgement", 1);
+        const lost = await store.enqueue(lostRequest);
+        expect(!lost.ok && lost.error.certainty).toBe("unknown");
+
+        const expected = [
+          {
+            method: "enqueue",
+            effectId: request.outboxId,
+            operationId: request.effect.operationId,
+            sourceSeq: request.effect.sourceSeq,
+            version: null,
+            resultTag: "applied",
+            certainty: "not_applied",
+          },
+          {
+            method: "enqueue",
+            effectId: request.outboxId,
+            operationId: request.effect.operationId,
+            sourceSeq: request.effect.sourceSeq,
+            version: null,
+            resultTag: "replayed",
+            certainty: "not_applied",
+          },
+          {
+            method: "complete",
+            effectId: request.outboxId,
+            operationId: null,
+            sourceSeq: null,
+            version: 1,
+            resultTag: "stale",
+            certainty: null,
+          },
+          {
+            method: "enqueue",
+            effectId: "invalid",
+            operationId: null,
+            sourceSeq: null,
+            version: null,
+            resultTag: "invalid_request",
+            certainty: "not_applied",
+          },
+          {
+            method: "complete",
+            effectId: `trace-missing-${flavour}`,
+            operationId: null,
+            sourceSeq: null,
+            version: 1,
+            resultTag: "not_found",
+            certainty: "not_applied",
+          },
+          {
+            method: "enqueue",
+            effectId: lostRequest.outboxId,
+            operationId: lostRequest.effect.operationId,
+            sourceSeq: lostRequest.effect.sourceSeq,
+            version: null,
+            resultTag: "storage_unavailable",
+            certainty: "unknown",
+          },
+        ];
+        for (const entry of expected) {
+          expect(
+            traces.find(
+              (trace) =>
+                trace.method === entry.method &&
+                trace.effectId === entry.effectId &&
+                trace.resultTag === entry.resultTag,
+            ),
+          ).toEqual({ contract: "EF-S05", ...entry });
+        }
+        const beforeReads = traces.length;
+        await store.get(request.outboxId);
+        await store.listUnknown({
+          kinds: ["maintenance"],
+          after: null,
+          limit: 1,
+        });
+        expect(traces).toHaveLength(beforeReads);
+      } finally {
+        sqlite?.database.close();
+      }
     }
   });
 
@@ -925,6 +1573,139 @@ describe("EF-S05 public corruption containment", () => {
     (snapshot.records["corrupt-fake"] as { state: string }).state = "other";
     fake.restoreMalformedForTesting(snapshot);
     typed(await fake.get("corrupt-fake"), "corrupt_state");
+  });
+
+  test("listUnknown closes malformed row and tuple cursor fields in SQLite and fake", async () => {
+    for (const statement of [
+      "UPDATE service_effect_s05_outbox SET state_changed_at='bad' WHERE outbox_id='corrupt-list'",
+      "UPDATE service_effect_s05_outbox SET outbox_id='' WHERE outbox_id='corrupt-list'",
+    ]) {
+      const sqlite = open();
+      try {
+        await sqlite.store.enqueue(enqueue("corrupt-list"));
+        const claimed = await sqlite.store.claimNext(claim("corrupt-list"));
+        if (!claimed.ok || !claimed.value.lease) throw new Error("claim");
+        await sqlite.store.markUnknown({
+          outboxId: "corrupt-list",
+          workerId: claimed.value.lease.workerId,
+          expectedAttempt: 1,
+          leaseToken: claimed.value.lease.record.leaseToken,
+          errorTag: "ambiguous",
+          certainty: "unknown",
+          observedAt: "2026-08-13T10:00:30.000Z",
+        });
+        sqlite.database.exec("PRAGMA ignore_check_constraints=ON");
+        sqlite.database.exec(statement);
+        typed(
+          await sqlite.store.listUnknown({
+            kinds: ["maintenance"],
+            after: null,
+            limit: 1,
+          }),
+          "corrupt_state",
+        );
+      } finally {
+        sqlite.database.close();
+      }
+    }
+
+    for (const field of ["stateChangedAt", "outboxId"] as const) {
+      const fake = new FakeServiceOutboxStore(fakeContext());
+      await fake.enqueue(enqueue("corrupt-list-fake"));
+      const claimed = await fake.claimNext(claim("corrupt-list-fake"));
+      if (!claimed.ok || !claimed.value.lease) throw new Error("claim");
+      await fake.markUnknown({
+        outboxId: "corrupt-list-fake",
+        workerId: claimed.value.lease.workerId,
+        expectedAttempt: 1,
+        leaseToken: claimed.value.lease.record.leaseToken,
+        errorTag: "ambiguous",
+        certainty: "unknown",
+        observedAt: "2026-08-13T10:00:30.000Z",
+      });
+      const snapshot = fake.inspectState();
+      (snapshot.records["corrupt-list-fake"] as Record<string, unknown>)[
+        field
+      ] = field === "outboxId" ? "" : "bad";
+      fake.restoreMalformedForTesting(snapshot);
+      typed(
+        await fake.listUnknown({
+          kinds: ["maintenance"],
+          after: null,
+          limit: 1,
+        }),
+        "corrupt_state",
+      );
+    }
+  });
+
+  test("cleanup replay closes malformed result cursor and decision authority in SQLite and fake", async () => {
+    const request = {
+      cleanupId: "corrupt-cleanup-matrix",
+      before: "2026-08-13T11:00:00.000Z",
+      after: null,
+      limit: 1,
+    };
+    for (const [column, value] of [
+      ["result_json", "{"],
+      [
+        "result_json",
+        JSON.stringify({
+          deletedIds: [],
+          deletedCount: 0,
+          nextCursor: { stateChangedAt: "bad", outboxId: "cursor" },
+        }),
+      ],
+      ["method", "other"],
+      ["request_hash", "x"],
+      ["outcome", "other"],
+    ] as const) {
+      const sqlite = open();
+      try {
+        await sqlite.store.cleanupTerminal(request);
+        sqlite.database.exec("PRAGMA ignore_check_constraints=ON");
+        sqlite.database
+          .query(
+            `UPDATE service_effect_s05_decisions SET ${column}=? WHERE decision_key='cleanup:corrupt-cleanup-matrix'`,
+          )
+          .run(value);
+        typed(await sqlite.store.cleanupTerminal(request), "corrupt_state");
+      } finally {
+        sqlite.database.close();
+      }
+    }
+
+    for (const corrupt of [
+      (decision: Record<string, unknown>) => {
+        decision.method = "other";
+      },
+      (decision: Record<string, unknown>) => {
+        decision.hash = "x";
+      },
+      (decision: Record<string, unknown>) => {
+        decision.outcome = "other";
+      },
+      (decision: Record<string, unknown>) => {
+        (decision.cleanupResult as Record<string, unknown>).deletedCount = -1;
+      },
+      (decision: Record<string, unknown>) => {
+        (decision.cleanupResult as Record<string, unknown>).nextCursor = {
+          stateChangedAt: "bad",
+          outboxId: "cursor",
+        };
+      },
+    ]) {
+      const fake = new FakeServiceOutboxStore(fakeContext());
+      await fake.cleanupTerminal(request);
+      const snapshot = fake.inspectState();
+      corrupt(
+        snapshot.decisions[
+          "cleanup:corrupt-cleanup-matrix"
+        ] as unknown as Record<string, unknown>,
+      );
+      fake.restoreMalformedForTesting(snapshot);
+      typed(await fake.cleanupTerminal(request), "corrupt_state");
+    }
   });
 
   test("malformed decision, lease, outcome and cleanup authority stay closed", async () => {
