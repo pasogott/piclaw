@@ -839,13 +839,15 @@ interface ServiceOutboxStore {
 
 The closed contract is implemented in `runtime/src/service-effects/contracts/service-outbox-store.ts`. The record retains immutable effect provenance, caller-owned enqueue and result timestamps, repeatability, exact worker/lease/attempt ownership, external-effect certainty, retry/receipt diagnostics and reconciliation history. Attempt starts at zero and increments once per successful claim or reclaim.
 
-Mutation decisions distinguish `applied`, exact `replayed` results and expected `stale` no-ops. A claim is identified by its globally unique lease token and returns `empty` when no due row exists. Worker results require the exact unexpired worker, token and attempt. Competing result methods share durable authority for one outbox attempt.
+Mutation decisions distinguish `applied`, exact `replayed` results and expected `stale` no-ops. A claim is identified by its globally unique lease token and returns `empty` when no due row exists. Exact-row mutation of an absent outbox returns bounded `not_found`; wrong owner, token, attempt or state is `stale`; `get` alone returns `null` for absence. Worker results require the exact unexpired worker, token and attempt. Competing result methods share durable authority for one outbox attempt.
 
 `reclaim` addresses one expired started row and accepts either immutable repeatable authority or a caller-supplied reconciled-absent reference. Expiry alone grants no authority. `resolveUnknown` accepts only applied, not-applied or cancelled reconciliation. There is no pre-attempt cancellation method. Ordinary claim never selects unknown work.
 
 `listUnknown` and `cleanupTerminal` use a bounded exclusive `(stateChangedAt, outboxId)` cursor. Cleanup may delete only fatal failed rows and cancelled rows older than its caller cutoff; it retains pending, started, retryable failed, unknown and completed rows. Cleanup removes row-linked decisions atomically, retains its own replay decision, and never removes permanent hashed lease-token authority.
 
 Replay ledgers contain only bounded method/hash/outcome/row/attempt/token-hash metadata (plus bounded cleanup IDs/cursor data). They never contain payload, destination, provenance, receipt, reconciliation, plaintext token, secret, or raw cause values. Applied worker outcomes and unknown resolutions have separate minimal per-attempt authority, so later state cannot change an original result replay.
+
+Reads are intentionally not traced: they perform no durable effect and return only closed bounded data/errors. Mutations emit closed call/result traces with method, outbox/effect identity, operation/source sequence, expected attempt, result tag and certainty; protected request or authority values are never traced.
 
 Authoritative stores use a transaction-compatible enqueue inserter that requires an active caller transaction and performs no transaction control. Independent work uses `enqueue()`. All IDs, timestamps, worker identities, lease tokens, retry instants, receipts and reconciliation references are caller-owned; the store generates none.
 ```

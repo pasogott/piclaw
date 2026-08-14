@@ -1,4 +1,8 @@
-import type { EffectClock, EffectIdSource, NormalisedEffectTrace } from "../contracts/common.js";
+import type {
+  EffectClock,
+  EffectIdSource,
+  NormalisedEffectTrace,
+} from "../contracts/common.js";
 import type { DeterministicFaultPlan } from "./fault-plan.js";
 
 export interface ContractTestContext {
@@ -18,7 +22,9 @@ export interface ContractSubjectFactory<TSubject> {
   crashAndRestore(
     subject: TSubject,
     context: ContractTestContext,
-  ): Promise<RestoredContractSubject<TSubject>> | RestoredContractSubject<TSubject>;
+  ):
+    | Promise<RestoredContractSubject<TSubject>>
+    | RestoredContractSubject<TSubject>;
   inspectTrace(subject: TSubject): readonly NormalisedEffectTrace[];
 }
 
@@ -47,11 +53,14 @@ export async function runParameterisedContractSuite<TSubject>(
   createContext: () => ContractTestContext,
   dispose?: (subject: TSubject) => Promise<void> | void,
 ): Promise<readonly ContractCaseResult[]> {
-  if (!factory.name) throw new Error("Contract factory name must be non-empty.");
+  if (!factory.name)
+    throw new Error("Contract factory name must be non-empty.");
   const names = new Set<string>();
   for (const contractCase of cases) {
     if (!contractCase.name || names.has(contractCase.name)) {
-      throw new Error(`Contract case names must be non-empty and unique: ${contractCase.name}`);
+      throw new Error(
+        `Contract case names must be non-empty and unique: ${contractCase.name}`,
+      );
     }
     names.add(contractCase.name);
   }
@@ -59,7 +68,7 @@ export async function runParameterisedContractSuite<TSubject>(
   const results: ContractCaseResult[] = [];
   for (const contractCase of cases) {
     let context = createContext();
-    let subject = await factory.create(context) as TSubject;
+    let subject = (await factory.create(context)) as TSubject;
     const fixture: ContractCaseFixture<TSubject> = {
       get context() {
         return context;
@@ -81,11 +90,13 @@ export async function runParameterisedContractSuite<TSubject>(
     };
     try {
       await contractCase.run(fixture);
-      results.push(Object.freeze({
-        factoryName: factory.name,
-        caseName: contractCase.name,
-        trace: freezeTraceSnapshot(fixture.inspectTrace()),
-      }));
+      results.push(
+        Object.freeze({
+          factoryName: factory.name,
+          caseName: contractCase.name,
+          trace: freezeTraceSnapshot(fixture.inspectTrace()),
+        }),
+      );
     } finally {
       await dispose?.(subject);
     }

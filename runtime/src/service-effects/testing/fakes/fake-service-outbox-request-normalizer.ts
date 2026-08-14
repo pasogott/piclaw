@@ -1,419 +1,452 @@
 import {
-	type CanonicalJsonValue,
-	type EffectIdentity,
-	hashCanonicalRequest,
+  type CanonicalJsonValue,
+  type EffectIdentity,
+  hashCanonicalRequest,
 } from "../../contracts/common.js";
 import {
-	type ClaimOutboxRequest,
-	type CleanupTerminalOutboxRequest,
-	type CompleteOutboxRequest,
-	type EnqueueOutboxRequest,
-	type FailOutboxRequest,
-	type ListUnknownOutboxRequest,
-	type MarkOutboxUnknownRequest,
-	OUTBOX_KINDS,
-	type OutboxCursor,
-	type OutboxKind,
-	type ReclaimOutboxRequest,
-	type ResolveUnknownOutboxRequest,
+  type ClaimOutboxRequest,
+  type CleanupTerminalOutboxRequest,
+  type CompleteOutboxRequest,
+  type EnqueueOutboxRequest,
+  type FailOutboxRequest,
+  type ListUnknownOutboxRequest,
+  type MarkOutboxUnknownRequest,
+  OUTBOX_KINDS,
+  type OutboxCursor,
+  type OutboxKind,
+  type ReclaimOutboxRequest,
+  type ResolveUnknownOutboxRequest,
 } from "../../contracts/service-outbox-store.js";
 
 export type FakeOutboxMutationMethod =
-	| "enqueue"
-	| "claimNext"
-	| "reclaim"
-	| "complete"
-	| "fail"
-	| "markUnknown"
-	| "resolveUnknown"
-	| "cleanupTerminal";
+  | "enqueue"
+  | "claimNext"
+  | "reclaim"
+  | "complete"
+  | "fail"
+  | "markUnknown"
+  | "resolveUnknown"
+  | "cleanupTerminal";
+
 export type NormalisedFakeOutboxMutation =
-	| EnqueueOutboxRequest
-	| ClaimOutboxRequest
-	| ReclaimOutboxRequest
-	| CompleteOutboxRequest
-	| FailOutboxRequest
-	| MarkOutboxUnknownRequest
-	| ResolveUnknownOutboxRequest
-	| CleanupTerminalOutboxRequest;
-const K = new Set<string>(OUTBOX_KINDS),
-	R = new Set(["public", "private", "secret"]),
-	H = /^[0-9a-f]{64}$/;
+  | EnqueueOutboxRequest
+  | ClaimOutboxRequest
+  | ReclaimOutboxRequest
+  | CompleteOutboxRequest
+  | FailOutboxRequest
+  | MarkOutboxUnknownRequest
+  | ResolveUnknownOutboxRequest
+  | CleanupTerminalOutboxRequest;
+
+type Plain = Readonly<Record<string, unknown>>;
+type Reader<T> = (value: unknown) => T;
+
+const KIND_VALUES = new Set<string>(OUTBOX_KINDS);
+const REDACTION_VALUES = new Set<string>(["public", "private", "secret"]);
+const HASH = /^[0-9a-f]{64}$/;
+const TAG = /^[A-Za-z0-9_.:-]+$/;
+
+const text =
+  (max: number): Reader<string> =>
+  (value) => {
+    if (
+      typeof value !== "string" ||
+      value.length === 0 ||
+      value.length > max ||
+      value.trim().length === 0
+    ) {
+      throw new TypeError("text");
+    }
+    return value;
+  };
+
+const optional =
+  <T>(reader: Reader<T>): Reader<T | null> =>
+  (value) =>
+    value === null ? null : reader(value);
+
+const integer =
+  (minimum: number, maximum = Number.MAX_SAFE_INTEGER): Reader<number> =>
+  (value) => {
+    if (
+      !Number.isSafeInteger(value) ||
+      (value as number) < minimum ||
+      (value as number) > maximum
+    ) {
+      throw new TypeError("integer");
+    }
+    return value as number;
+  };
+
+const instant: Reader<string> = (value) => {
+  if (typeof value !== "string") throw new TypeError("instant");
+  const milliseconds = Date.parse(value);
+  if (
+    !Number.isFinite(milliseconds) ||
+    new Date(milliseconds).toISOString() !== value
+  ) {
+    throw new TypeError("instant");
+  }
+  return value;
+};
+
+const tag: Reader<string> = (value) => {
+  const output = text(128)(value);
+  if (!TAG.test(output)) throw new TypeError("tag");
+  return output;
+};
+
+function snapshot(
+  value: unknown,
+  depth = 0,
+  seen = new Set<object>(),
+): unknown {
+  if (depth > 8) throw new TypeError("depth");
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError("number");
+    return value;
+  }
+  if (typeof value !== "object" || seen.has(value)) throw new TypeError("tree");
+  seen.add(value);
+  if (Array.isArray(value)) {
+    if (Object.keys(value).length !== value.length)
+      throw new TypeError("array");
+    return value.map((entry) => snapshot(entry, depth + 1, seen));
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null)
+    throw new TypeError("prototype");
+  const output: Record<string, unknown> = {};
+  for (const [key, descriptor] of Object.entries(
+    Object.getOwnPropertyDescriptors(value),
+  )) {
+    if (!("value" in descriptor) || !descriptor.enumerable)
+      throw new TypeError("descriptor");
+    output[key] = snapshot(descriptor.value, depth + 1, seen);
+  }
+  return output;
+}
+
+function object(value: unknown, fields: readonly string[]): Plain {
+  const record = snapshot(value) as Plain;
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    throw new TypeError("object");
+  }
+  const actual = Object.keys(record).sort();
+  const expected = [...fields].sort();
+  if (
+    actual.length !== expected.length ||
+    actual.some((key, index) => key !== expected[index])
+  ) {
+    throw new TypeError("fields");
+  }
+  return record;
+}
+
+function member<T extends string>(values: ReadonlySet<string>): Reader<T> {
+  return (value) => {
+    if (typeof value !== "string" || !values.has(value))
+      throw new TypeError("enum");
+    return value as T;
+  };
+}
+
+function cursor(value: unknown): OutboxCursor | null {
+  if (value === null) return null;
+  const record = object(value, ["stateChangedAt", "outboxId"]);
+  return freeze({
+    stateChangedAt: instant(record.stateChangedAt),
+    outboxId: text(512)(record.outboxId),
+  });
+}
+
+function kinds(value: unknown): readonly OutboxKind[] {
+  const array = snapshot(value);
+  if (!Array.isArray(array) || array.length === 0) throw new TypeError("kinds");
+  const values = array.map(member<OutboxKind>(KIND_VALUES));
+  return Object.freeze([...new Set(values)].sort());
+}
+
+function effect(value: unknown): EffectIdentity {
+  const record = object(value, [
+    "idempotencyKey",
+    "requestHash",
+    "operationId",
+    "sourceSeq",
+    "provenanceRef",
+    "redactionClass",
+  ]);
+  const requestHash = text(64)(record.requestHash);
+  if (!HASH.test(requestHash)) throw new TypeError("hash");
+  return freeze({
+    idempotencyKey: text(512)(record.idempotencyKey),
+    requestHash,
+    operationId: optional(text(512))(record.operationId),
+    sourceSeq: optional(integer(0))(record.sourceSeq),
+    provenanceRef: text(2048)(record.provenanceRef),
+    redactionClass: member<EffectIdentity["redactionClass"]>(REDACTION_VALUES)(
+      record.redactionClass,
+    ),
+  });
+}
+
+function worker(record: Plain): {
+  outboxId: string;
+  workerId: string;
+  expectedAttempt: number;
+  leaseToken: string;
+} {
+  return {
+    outboxId: text(512)(record.outboxId),
+    workerId: text(512)(record.workerId),
+    expectedAttempt: integer(1)(record.expectedAttempt),
+    leaseToken: text(2048)(record.leaseToken),
+  };
+}
+
+const parsers: Readonly<
+  Record<FakeOutboxMutationMethod, Reader<NormalisedFakeOutboxMutation>>
+> = {
+  enqueue(value) {
+    const record = object(value, [
+      "effect",
+      "outboxId",
+      "kind",
+      "payloadRef",
+      "destinationRef",
+      "availableAt",
+      "enqueuedAt",
+      "repeatability",
+    ]);
+    const output: EnqueueOutboxRequest = freeze({
+      effect: effect(record.effect),
+      outboxId: text(512)(record.outboxId),
+      kind: member<OutboxKind>(KIND_VALUES)(record.kind),
+      payloadRef: text(2048)(record.payloadRef),
+      destinationRef: optional(text(2048))(record.destinationRef),
+      availableAt: instant(record.availableAt),
+      enqueuedAt: instant(record.enqueuedAt),
+      repeatability: member<EnqueueOutboxRequest["repeatability"]>(
+        new Set(["repeatable", "reconciliation_required"]),
+      )(record.repeatability),
+    });
+    if (
+      hashCanonicalRequest(output as unknown as CanonicalJsonValue) !==
+      output.effect.requestHash
+    ) {
+      throw new TypeError("request hash");
+    }
+    return output;
+  },
+
+  claimNext(value) {
+    const record = object(value, [
+      "kinds",
+      "workerId",
+      "leaseToken",
+      "now",
+      "leaseExpiresAt",
+    ]);
+    const now = instant(record.now);
+    const leaseExpiresAt = instant(record.leaseExpiresAt);
+    if (leaseExpiresAt <= now) throw new TypeError("lease interval");
+    return freeze({
+      kinds: kinds(record.kinds),
+      workerId: text(512)(record.workerId),
+      leaseToken: text(2048)(record.leaseToken),
+      now,
+      leaseExpiresAt,
+    });
+  },
+
+  reclaim(value) {
+    const record = object(value, [
+      "outboxId",
+      "expectedAttempt",
+      "workerId",
+      "leaseToken",
+      "now",
+      "leaseExpiresAt",
+      "authority",
+    ]);
+    const authorityRecord = snapshot(record.authority) as Plain;
+    let authority: ReclaimOutboxRequest["authority"];
+    if (authorityRecord?.kind === "repeatable") {
+      object(authorityRecord, ["kind"]);
+      authority = { kind: "repeatable" };
+    } else {
+      const checked = object(authorityRecord, ["kind", "reconciliationRef"]);
+      if (checked.kind !== "reconciled_absent")
+        throw new TypeError("authority");
+      authority = {
+        kind: "reconciled_absent",
+        reconciliationRef: text(2048)(checked.reconciliationRef),
+      };
+    }
+    const now = instant(record.now);
+    const leaseExpiresAt = instant(record.leaseExpiresAt);
+    if (leaseExpiresAt <= now) throw new TypeError("lease interval");
+    return freeze({ ...worker(record), now, leaseExpiresAt, authority });
+  },
+
+  complete(value) {
+    const record = object(value, [
+      "outboxId",
+      "workerId",
+      "expectedAttempt",
+      "leaseToken",
+      "receiptRef",
+      "completedAt",
+    ]);
+    return freeze({
+      ...worker(record),
+      receiptRef: optional(text(2048))(record.receiptRef),
+      completedAt: instant(record.completedAt),
+    });
+  },
+
+  fail(value) {
+    const record = object(value, [
+      "outboxId",
+      "workerId",
+      "expectedAttempt",
+      "leaseToken",
+      "errorTag",
+      "certainty",
+      "retryAt",
+      "failedAt",
+    ]);
+    if (record.certainty !== "not_applied") throw new TypeError("certainty");
+    return freeze({
+      ...worker(record),
+      errorTag: tag(record.errorTag),
+      certainty: "not_applied" as const,
+      retryAt: optional(instant)(record.retryAt),
+      failedAt: instant(record.failedAt),
+    });
+  },
+
+  markUnknown(value) {
+    const record = object(value, [
+      "outboxId",
+      "workerId",
+      "expectedAttempt",
+      "leaseToken",
+      "errorTag",
+      "certainty",
+      "observedAt",
+    ]);
+    if (record.certainty !== "unknown") throw new TypeError("certainty");
+    return freeze({
+      ...worker(record),
+      errorTag: tag(record.errorTag),
+      certainty: "unknown" as const,
+      observedAt: instant(record.observedAt),
+    });
+  },
+
+  resolveUnknown(value) {
+    const record = object(value, [
+      "outboxId",
+      "expectedAttempt",
+      "reconciliationRef",
+      "reconciledAt",
+      "resolution",
+    ]);
+    const raw = snapshot(record.resolution) as Plain;
+    let resolution: ResolveUnknownOutboxRequest["resolution"];
+    if (raw?.kind === "applied") {
+      const checked = object(raw, ["kind", "receiptRef"]);
+      resolution = {
+        kind: "applied",
+        receiptRef: optional(text(2048))(checked.receiptRef),
+      };
+    } else if (raw?.kind === "not_applied") {
+      const checked = object(raw, ["kind", "errorTag", "retryAt"]);
+      resolution = {
+        kind: "not_applied",
+        errorTag: tag(checked.errorTag),
+        retryAt: optional(instant)(checked.retryAt),
+      };
+    } else {
+      const checked = object(raw, ["kind", "reasonTag"]);
+      if (checked.kind !== "cancelled") throw new TypeError("resolution");
+      resolution = { kind: "cancelled", reasonTag: tag(checked.reasonTag) };
+    }
+    return freeze({
+      outboxId: text(512)(record.outboxId),
+      expectedAttempt: integer(1)(record.expectedAttempt),
+      reconciliationRef: text(2048)(record.reconciliationRef),
+      reconciledAt: instant(record.reconciledAt),
+      resolution,
+    });
+  },
+
+  cleanupTerminal(value) {
+    const record = object(value, ["cleanupId", "before", "after", "limit"]);
+    return freeze({
+      cleanupId: text(512)(record.cleanupId),
+      before: instant(record.before),
+      after: cursor(record.after),
+      limit: integer(1, 100)(record.limit),
+    });
+  },
+};
 
 export function normaliseFakeOutboxMutation(
-	method: FakeOutboxMutationMethod,
-	input: unknown,
+  method: FakeOutboxMutationMethod,
+  input: unknown,
 ): NormalisedFakeOutboxMutation | null {
-	try {
-		const value = rec(input);
-		if (!value || !tree(input)) return null;
-		const parsers: Record<
-			FakeOutboxMutationMethod,
-			(input: Record<string, unknown>) => NormalisedFakeOutboxMutation | null
-		> = {
-			enqueue: enq,
-			claimNext: claim,
-			reclaim,
-			complete,
-			fail,
-			markUnknown: unknown,
-			resolveUnknown: resolve,
-			cleanupTerminal: cleanup,
-		};
-		const request = parsers[method](value);
-		return request ? deep(request) : null;
-	} catch (error) {
-		void error;
-		return null;
-	}
+  try {
+    return parsers[method](input);
+  } catch (error) {
+    void error;
+    return null;
+  }
 }
+
 export function normaliseFakeOutboxList(
-	input: unknown,
+  input: unknown,
 ): ListUnknownOutboxRequest | null {
-	try {
-		const v = rec(input);
-		if (!v || !tree(input) || !keys(v, ["kinds", "after", "limit"]))
-			return null;
-		return deep({
-			kinds: kinds(v.kinds),
-			after: cursor(v.after),
-			limit: limit(v.limit),
-		});
-	} catch (error) {
-		void error;
-		return null;
-	}
+  try {
+    const record = object(input, ["kinds", "after", "limit"]);
+    return freeze({
+      kinds: kinds(record.kinds),
+      after: cursor(record.after),
+      limit: integer(1, 100)(record.limit),
+    });
+  } catch (error) {
+    void error;
+    return null;
+  }
 }
+
 export function normaliseFakeOutboxId(input: unknown): string | null {
-	try {
-		return txt(input);
-	} catch (error) {
-		void error;
-		return null;
-	}
+  try {
+    return text(512)(input);
+  } catch (error) {
+    void error;
+    return null;
+  }
 }
+
 export function hashFakeOutboxRequest(
-	request: Exclude<NormalisedFakeOutboxMutation, EnqueueOutboxRequest>,
+  request: Exclude<NormalisedFakeOutboxMutation, EnqueueOutboxRequest>,
 ): string {
-	return hashCanonicalRequest(request as unknown as CanonicalJsonValue);
+  return hashCanonicalRequest(request as unknown as CanonicalJsonValue);
 }
-function enq(v: Record<string, unknown>): EnqueueOutboxRequest | null {
-	if (
-		!keys(v, [
-			"effect",
-			"outboxId",
-			"kind",
-			"payloadRef",
-			"destinationRef",
-			"availableAt",
-			"enqueuedAt",
-			"repeatability",
-		])
-	)
-		return null;
-	const effect = effectOf(v.effect),
-		kind = enm(v.kind, K),
-		repeatability = enm(
-			v.repeatability,
-			new Set(["repeatable", "reconciliation_required"]),
-		);
-	if (!effect || !kind || !repeatability) return null;
-	const q: EnqueueOutboxRequest = {
-		effect,
-		outboxId: bounded(v.outboxId, 512),
-		kind: kind as OutboxKind,
-		payloadRef: bounded(v.payloadRef, 2048),
-		destinationRef: nullableBounded(v.destinationRef, 2048),
-		availableAt: instant(v.availableAt),
-		enqueuedAt: instant(v.enqueuedAt),
-		repeatability: repeatability as EnqueueOutboxRequest["repeatability"],
-	};
-	return hashCanonicalRequest(q as unknown as CanonicalJsonValue) ===
-		effect.requestHash
-		? q
-		: null;
-}
-function claim(v: Record<string, unknown>): ClaimOutboxRequest | null {
-	if (!keys(v, ["kinds", "workerId", "leaseToken", "now", "leaseExpiresAt"]))
-		return null;
-	const now = instant(v.now),
-		leaseExpiresAt = instant(v.leaseExpiresAt);
-	if (leaseExpiresAt <= now) return null;
-	return {
-		kinds: kinds(v.kinds),
-		workerId: bounded(v.workerId, 512),
-		leaseToken: bounded(v.leaseToken, 2048),
-		now,
-		leaseExpiresAt,
-	};
-}
-function reclaim(v: Record<string, unknown>): ReclaimOutboxRequest | null {
-	if (
-		!keys(v, [
-			"outboxId",
-			"expectedAttempt",
-			"workerId",
-			"leaseToken",
-			"now",
-			"leaseExpiresAt",
-			"authority",
-		])
-	)
-		return null;
-	const a = rec(v.authority);
-	if (!a) return null;
-	let authority: ReclaimOutboxRequest["authority"];
-	if (keys(a, ["kind"]) && a.kind === "repeatable")
-		authority = { kind: "repeatable" };
-	else if (
-		keys(a, ["kind", "reconciliationRef"]) &&
-		a.kind === "reconciled_absent"
-	)
-		authority = {
-			kind: "reconciled_absent",
-			reconciliationRef: bounded(a.reconciliationRef, 2048),
-		};
-	else return null;
-	const now = instant(v.now),
-		leaseExpiresAt = instant(v.leaseExpiresAt);
-	if (leaseExpiresAt <= now) return null;
-	return {
-		outboxId: bounded(v.outboxId, 512),
-		expectedAttempt: int(v.expectedAttempt, 1),
-		workerId: bounded(v.workerId, 512),
-		leaseToken: bounded(v.leaseToken, 2048),
-		now,
-		leaseExpiresAt,
-		authority,
-	};
-}
-function worker(v: Record<string, unknown>, extra: string[]) {
-	if (
-		!keys(v, [
-			"outboxId",
-			"workerId",
-			"expectedAttempt",
-			"leaseToken",
-			...extra,
-		])
-	)
-		return null;
-	return {
-		outboxId: bounded(v.outboxId, 512),
-		workerId: bounded(v.workerId, 512),
-		expectedAttempt: int(v.expectedAttempt, 1),
-		leaseToken: bounded(v.leaseToken, 2048),
-	};
-}
-function complete(v: Record<string, unknown>): CompleteOutboxRequest | null {
-	const b = worker(v, ["receiptRef", "completedAt"]);
-	return b
-		? {
-				...b,
-				receiptRef: nullableBounded(v.receiptRef, 2048),
-				completedAt: instant(v.completedAt),
-			}
-		: null;
-}
-function fail(v: Record<string, unknown>): FailOutboxRequest | null {
-	const b = worker(v, ["errorTag", "certainty", "retryAt", "failedAt"]);
-	return b && v.certainty === "not_applied"
-		? {
-				...b,
-				errorTag: tag(v.errorTag),
-				certainty: "not_applied",
-				retryAt: ninstant(v.retryAt),
-				failedAt: instant(v.failedAt),
-			}
-		: null;
-}
-function unknown(v: Record<string, unknown>): MarkOutboxUnknownRequest | null {
-	const b = worker(v, ["errorTag", "certainty", "observedAt"]);
-	return b && v.certainty === "unknown"
-		? {
-				...b,
-				errorTag: tag(v.errorTag),
-				certainty: "unknown",
-				observedAt: instant(v.observedAt),
-			}
-		: null;
-}
-function resolve(
-	v: Record<string, unknown>,
-): ResolveUnknownOutboxRequest | null {
-	if (
-		!keys(v, [
-			"outboxId",
-			"expectedAttempt",
-			"reconciliationRef",
-			"reconciledAt",
-			"resolution",
-		])
-	)
-		return null;
-	const r = rec(v.resolution);
-	if (!r) return null;
-	let resolution: ResolveUnknownOutboxRequest["resolution"];
-	if (keys(r, ["kind", "receiptRef"]) && r.kind === "applied")
-		resolution = { kind: "applied", receiptRef: nullableBounded(r.receiptRef, 2048) };
-	else if (keys(r, ["kind", "errorTag", "retryAt"]) && r.kind === "not_applied")
-		resolution = {
-			kind: "not_applied",
-			errorTag: tag(r.errorTag),
-			retryAt: ninstant(r.retryAt),
-		};
-	else if (keys(r, ["kind", "reasonTag"]) && r.kind === "cancelled")
-		resolution = { kind: "cancelled", reasonTag: tag(r.reasonTag) };
-	else return null;
-	return {
-		outboxId: bounded(v.outboxId, 512),
-		expectedAttempt: int(v.expectedAttempt, 1),
-		reconciliationRef: bounded(v.reconciliationRef, 2048),
-		reconciledAt: instant(v.reconciledAt),
-		resolution,
-	};
-}
-function cleanup(
-	v: Record<string, unknown>,
-): CleanupTerminalOutboxRequest | null {
-	if (!keys(v, ["cleanupId", "before", "after", "limit"])) return null;
-	return {
-		cleanupId: bounded(v.cleanupId, 512),
-		before: instant(v.before),
-		after: cursor(v.after),
-		limit: limit(v.limit),
-	};
-}
-function effectOf(input: unknown): EffectIdentity | null {
-	const v = rec(input);
-	if (
-		!v ||
-		!keys(v, [
-			"idempotencyKey",
-			"requestHash",
-			"operationId",
-			"sourceSeq",
-			"provenanceRef",
-			"redactionClass",
-		])
-	)
-		return null;
-	const hash =
-			typeof v.requestHash === "string" && H.test(v.requestHash)
-				? v.requestHash
-				: null,
-		redaction = enm(v.redactionClass, R);
-	if (!hash || !redaction) return null;
-	return {
-		idempotencyKey: bounded(v.idempotencyKey, 512),
-		requestHash: hash,
-		operationId: nullableBounded(v.operationId, 512),
-		sourceSeq: nint(v.sourceSeq, 0),
-		provenanceRef: bounded(v.provenanceRef, 2048),
-		redactionClass: redaction as EffectIdentity["redactionClass"],
-	};
-}
-function kinds(input: unknown): readonly OutboxKind[] {
-	if (
-		!Array.isArray(input) ||
-		!input.length ||
-		Object.keys(input).length !== input.length
-	)
-		throw 0;
-	const x = input.map((v) => enm(v, K));
-	if (x.some((v) => !v)) throw 0;
-	return Object.freeze([...new Set(x as OutboxKind[])].sort());
-}
-function cursor(input: unknown): OutboxCursor | null {
-	if (input === null) return null;
-	const v = rec(input);
-	if (!v || !keys(v, ["stateChangedAt", "outboxId"])) throw 0;
-	return {
-		stateChangedAt: instant(v.stateChangedAt),
-		outboxId: bounded(v.outboxId, 512),
-	};
-}
-function rec(input: unknown): Record<string, unknown> | null {
-	if (!input || typeof input !== "object" || Array.isArray(input)) return null;
-	const p = Object.getPrototypeOf(input);
-	if (p !== Object.prototype && p !== null) return null;
-	const o: Record<string, unknown> = {};
-	for (const [k, d] of Object.entries(
-		Object.getOwnPropertyDescriptors(input),
-	)) {
-		if (!("value" in d) || !d.enumerable) return null;
-		o[k] = d.value;
-	}
-	return o;
-}
-function keys(v: Record<string, unknown>, e: string[]) {
-	const a = Object.keys(v).sort(),
-		b = [...e].sort();
-	return a.length === b.length && a.every((x, i) => x === b[i]);
-}
-function tree(v: unknown, d = 0, s = new Set<object>()): boolean {
-	if (d > 8) return false;
-	if (v === null || typeof v === "string" || typeof v === "boolean")
-		return true;
-	if (typeof v === "number") return Number.isFinite(v);
-	if (typeof v !== "object" || s.has(v)) return false;
-	s.add(v);
-	if (Array.isArray(v))
-		return (
-			Object.keys(v).length === v.length && v.every((x) => tree(x, d + 1, s))
-		);
-	const r = rec(v);
-	return !!r && Object.values(r).every((x) => tree(x, d + 1, s));
-}
-function txt(v: unknown) {
-	return typeof v === "string" && v.length && v.trim().length ? v : null;
-}
-function req(v: unknown) {
-	const x = txt(v);
-	if (!x) throw 0;
-	return x;
-}
-function bounded(v: unknown, max: number) {
-	const x = req(v);
-	if (x.length > max) throw 0;
-	return x;
-}
-function nullableBounded(v: unknown, max: number) {
-	return v === null ? null : bounded(v, max);
-}
-function tag(v: unknown) {
-	const x = bounded(v, 128);
-	if (!/^[A-Za-z0-9_.:-]+$/.test(x)) throw 0;
-	return x;
-}
-function enm(v: unknown, s: Set<string>) {
-	return typeof v === "string" && s.has(v) ? v : null;
-}
-function int(v: unknown, m: number) {
-	if (!Number.isSafeInteger(v) || (v as number) < m) throw 0;
-	return v as number;
-}
-function nint(v: unknown, m: number) {
-	return v === null ? null : int(v, m);
-}
-function instant(v: unknown) {
-	if (typeof v !== "string") throw 0;
-	const n = Date.parse(v);
-	if (!Number.isFinite(n) || new Date(n).toISOString() !== v) throw 0;
-	return v;
-}
-function ninstant(v: unknown) {
-	return v === null ? null : instant(v);
-}
-function limit(v: unknown) {
-	const x = int(v, 1);
-	if (x > 100) throw 0;
-	return x;
-}
-function deep<T>(v: T): T {
-	if (v && typeof v === "object") {
-		for (const x of Object.values(v)) deep(x);
-		Object.freeze(v);
-	}
-	return v;
+
+function freeze<T>(value: T): T {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value)) freeze(child);
+    Object.freeze(value);
+  }
+  return value;
 }

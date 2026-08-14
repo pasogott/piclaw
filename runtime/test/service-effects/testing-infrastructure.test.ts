@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import {
   hashCanonicalRequest,
@@ -56,7 +58,9 @@ describe("latent deterministic effect testing controls", () => {
   });
 
   test("fault consumption survives deterministic crash and restore", () => {
-    const plan = new DeterministicFaultPlan([{ point: "lease_expiry", occurrence: 2 }]);
+    const plan = new DeterministicFaultPlan([
+      { point: "lease_expiry", occurrence: 2 },
+    ]);
     expect(plan.hit("lease_expiry")).toBeFalse();
     const snapshot = crashAndRestore(plan);
     expect(snapshot.consumed.lease_expiry).toBe(1);
@@ -66,7 +70,9 @@ describe("latent deterministic effect testing controls", () => {
   test("controlled barrier releases current and future waiters without timers", async () => {
     const barrier = new ControlledBarrier();
     let passed = false;
-    const waiting = barrier.wait().then(() => { passed = true; });
+    const waiting = barrier.wait().then(() => {
+      passed = true;
+    });
     await Promise.resolve();
     expect(passed).toBeFalse();
     barrier.release();
@@ -77,10 +83,16 @@ describe("latent deterministic effect testing controls", () => {
 
   test("effect interleaving controller releases every effect and acknowledgement boundary independently", async () => {
     const controls = new EffectInterleavingController();
-    const points = ["before_effect", "after_effect", "after_acknowledgement"] as const;
+    const points = [
+      "before_effect",
+      "after_effect",
+      "after_acknowledgement",
+    ] as const;
     for (const point of points) {
       let passed = false;
-      const waiting = controls.waitAt(point).then(() => { passed = true; });
+      const waiting = controls.waitAt(point).then(() => {
+        passed = true;
+      });
       await Promise.resolve();
       expect(passed).toBeFalse();
       expect(controls.isReleased(point)).toBeFalse();
@@ -93,10 +105,14 @@ describe("latent deterministic effect testing controls", () => {
 
   test("delayed completion exposes deterministic resolve, late-ignore, and reject controls", async () => {
     const resolved = new DelayedCompletion<string>();
-    expect(resolved.resolveIfCurrent("owner:1", "owner:2", "protected-value")).toBe("late_ignored");
+    expect(
+      resolved.resolveIfCurrent("owner:1", "owner:2", "protected-value"),
+    ).toBe("late_ignored");
     expect(resolved.settled).toBeFalse();
     expect(resolved.ignoredLateResults).toBe(1);
-    expect(resolved.resolveIfCurrent("owner:2", "owner:2", "receipt-1")).toBe("resolved");
+    expect(resolved.resolveIfCurrent("owner:2", "owner:2", "receipt-1")).toBe(
+      "resolved",
+    );
     expect(await resolved.promise).toBe("receipt-1");
     expect(resolved.settled).toBeTrue();
     expect(() => resolved.resolve("receipt-2")).toThrow("already settled");
@@ -132,13 +148,15 @@ describe("latent deterministic effect testing controls", () => {
     expect(Object.isFrozen(inspected[0])).toBeTrue();
     const restored = EffectTraceRecorder.fromSnapshot(trace.snapshot());
     expect(restored.inspect()).toEqual(inspected);
-    expect(() => trace.recordResult({
-      contract: "sample",
-      method: "increment",
-      effectId: "effect-3",
-      resultTag: "rejected",
-      toolArguments: "protected",
-    })).toThrow("Protected trace field rejected");
+    expect(() =>
+      trace.recordResult({
+        contract: "sample",
+        method: "increment",
+        effectId: "effect-3",
+        resultTag: "rejected",
+        toolArguments: "protected",
+      }),
+    ).toThrow("Protected trace field rejected");
     expect(trace.inspect()).toHaveLength(2);
   });
 });
@@ -155,7 +173,8 @@ class SampleCounterContract {
   constructor(private readonly context: ContractTestContext) {}
 
   increment(): void {
-    if (this.context.faults.hit("before_effect")) throw new Error("before effect");
+    if (this.context.faults.hit("before_effect"))
+      throw new Error("before effect");
     this.value += 1;
     this.trace.append({
       contract: "sample-counter",
@@ -179,7 +198,9 @@ class SampleCounterContract {
   }
 }
 
-function createSampleContext(faults: readonly PlannedFault[] = []): ContractTestContext {
+function createSampleContext(
+  faults: readonly PlannedFault[] = [],
+): ContractTestContext {
   return {
     clock: new ManualEffectClock("2026-02-03T04:05:06.000Z"),
     ids: new SequenceEffectIdSource("sample", 2),
@@ -213,28 +234,44 @@ describe("generic parameterised contract-suite lifecycle", () => {
         run: async (fixture) => {
           const originalContext = fixture.context;
           fixture.subject.increment();
-          expect(fixture.context.faults.snapshot().consumed.before_effect).toBe(1);
+          expect(fixture.context.faults.snapshot().consumed.before_effect).toBe(
+            1,
+          );
           const restored = await fixture.crashAndRestore();
           expect(fixture.context).toBe(originalContext);
           expect(restored.value).toBe(1);
           restored.increment();
           expect(restored.value).toBe(2);
-          expect(fixture.context.faults.snapshot().consumed.before_effect).toBe(2);
-          expect(fixture.inspectTrace().map((entry) => entry.effectId)).toEqual(["sample-01", "sample-02"]);
+          expect(fixture.context.faults.snapshot().consumed.before_effect).toBe(
+            2,
+          );
+          expect(fixture.inspectTrace().map((entry) => entry.effectId)).toEqual(
+            ["sample-01", "sample-02"],
+          );
         },
       },
     ];
 
-    const results = await runParameterisedContractSuite(factory, cases, createSampleContext);
-    expect(results.map((result) => result.caseName)).toEqual(["ordinary effect", "crash restore"]);
+    const results = await runParameterisedContractSuite(
+      factory,
+      cases,
+      createSampleContext,
+    );
+    expect(results.map((result) => result.caseName)).toEqual([
+      "ordinary effect",
+      "crash restore",
+    ]);
     expect(results[0].trace).toHaveLength(1);
     expect(results[1].trace).toHaveLength(2);
     expect(Object.isFrozen(results)).toBeTrue();
     expect(Object.isFrozen(results[1])).toBeTrue();
     expect(Object.isFrozen(results[1].trace)).toBeTrue();
     expect(Object.isFrozen(results[1].trace[0])).toBeTrue();
-    expect(() => (results[1].trace as unknown as NormalisedEffectTrace[]).push(results[1].trace[0]))
-      .toThrow();
+    expect(() =>
+      (results[1].trace as unknown as NormalisedEffectTrace[]).push(
+        results[1].trace[0],
+      ),
+    ).toThrow();
   });
 
   test("disposes the latest subject once on pass and case failure", async () => {
@@ -243,18 +280,105 @@ describe("generic parameterised contract-suite lifecycle", () => {
     const factory: ContractSubjectFactory<{ id: number }> = {
       name: "disposal",
       create: () => ({ id: ++id }),
-      crashAndRestore: () => ({ subject: { id: ++id }, context: createSampleContext() }),
+      crashAndRestore: () => ({
+        subject: { id: ++id },
+        context: createSampleContext(),
+      }),
       inspectTrace: () => [],
     };
-    await runParameterisedContractSuite(factory, [{ name: "pass", run: (fixture) => fixture.crashAndRestore() }], createSampleContext, (subject) => void disposed.push(subject.id));
+    await runParameterisedContractSuite(
+      factory,
+      [{ name: "pass", run: (fixture) => fixture.crashAndRestore() }],
+      createSampleContext,
+      (subject) => void disposed.push(subject.id),
+    );
     expect(disposed).toEqual([1, 2]);
-    expect(runParameterisedContractSuite(factory, [{ name: "fail", run: () => { throw new Error("case failure"); } }], createSampleContext, (subject) => void disposed.push(subject.id))).rejects.toThrow("case failure");
+    expect(
+      runParameterisedContractSuite(
+        factory,
+        [
+          {
+            name: "fail",
+            run: () => {
+              throw new Error("case failure");
+            },
+          },
+        ],
+        createSampleContext,
+        (subject) => void disposed.push(subject.id),
+      ),
+    ).rejects.toThrow("case failure");
     expect(disposed).toEqual([1, 2, 3]);
   });
 
+  test("dispose semantics cover restore failure and old-subject disposal precedence", async () => {
+    const restoreFailureFactory: ContractSubjectFactory<{ id: number }> = {
+      name: "restore-failure",
+      create: () => ({ id: 1 }),
+      crashAndRestore: () => {
+        throw new Error("restore failure");
+      },
+      inspectTrace: () => [],
+    };
+    const disposed: number[] = [];
+    expect(
+      runParameterisedContractSuite(
+        restoreFailureFactory,
+        [
+          {
+            name: "restore-fails",
+            run: (fixture) => fixture.crashAndRestore(),
+          },
+        ],
+        createSampleContext,
+        (subject) => void disposed.push(subject.id),
+      ),
+    ).rejects.toThrow("restore failure");
+    expect(disposed).toEqual([1]);
+
+    const oldDisposeFailureFactory: ContractSubjectFactory<{ id: number }> = {
+      name: "old-dispose-failure",
+      create: () => ({ id: 1 }),
+      crashAndRestore: () => ({
+        subject: { id: 2 },
+        context: createSampleContext(),
+      }),
+      inspectTrace: () => [],
+    };
+    expect(
+      runParameterisedContractSuite(
+        oldDisposeFailureFactory,
+        [
+          {
+            name: "dispose-old-fails",
+            run: (fixture) => fixture.crashAndRestore(),
+          },
+        ],
+        createSampleContext,
+        (subject) => {
+          if (subject.id === 1) throw new Error("old dispose failure");
+        },
+      ),
+    ).rejects.toThrow("old dispose failure");
+  });
+
   test("propagates disposal failure deterministically", async () => {
-    const factory: ContractSubjectFactory<{ id: number }> = { name: "disposal-error", create: () => ({ id: 1 }), crashAndRestore: (subject, context) => ({ subject, context }), inspectTrace: () => [] };
-    expect(runParameterisedContractSuite(factory, [{ name: "pass", run: () => undefined }], createSampleContext, () => { throw new Error("dispose failure"); })).rejects.toThrow("dispose failure");
+    const factory: ContractSubjectFactory<{ id: number }> = {
+      name: "disposal-error",
+      create: () => ({ id: 1 }),
+      crashAndRestore: (subject, context) => ({ subject, context }),
+      inspectTrace: () => [],
+    };
+    expect(
+      runParameterisedContractSuite(
+        factory,
+        [{ name: "pass", run: () => undefined }],
+        createSampleContext,
+        () => {
+          throw new Error("dispose failure");
+        },
+      ),
+    ).rejects.toThrow("dispose failure");
   });
 
   test("rejects duplicate case names before creating a subject", async () => {
@@ -268,12 +392,18 @@ describe("generic parameterised contract-suite lifecycle", () => {
       crashAndRestore: (subject, context) => ({ subject, context }),
       inspectTrace: (subject) => subject.trace.inspect(),
     };
-    const duplicateCases: readonly ParameterisedContractCase<SampleCounterContract>[] = [
-      { name: "duplicate", run: () => undefined },
-      { name: "duplicate", run: () => undefined },
-    ];
-    expect(runParameterisedContractSuite(factory, duplicateCases, createSampleContext))
-      .rejects.toThrow("non-empty and unique");
+    const duplicateCases: readonly ParameterisedContractCase<SampleCounterContract>[] =
+      [
+        { name: "duplicate", run: () => undefined },
+        { name: "duplicate", run: () => undefined },
+      ];
+    expect(
+      runParameterisedContractSuite(
+        factory,
+        duplicateCases,
+        createSampleContext,
+      ),
+    ).rejects.toThrow("non-empty and unique");
     expect(createCount).toBe(0);
   });
 });
@@ -281,45 +411,109 @@ describe("generic parameterised contract-suite lifecycle", () => {
 describe("in-memory payload resolver", () => {
   test("accepts equal registration and rejects conflicting immutable references", () => {
     const resolver = new InMemoryEffectPayloadResolver();
-    const first = resolver.putText("payload:immutable", "same bytes", "text/plain");
-    const equal = resolver.putText("payload:immutable", "same bytes", "text/plain");
+    const first = resolver.putText(
+      "payload:immutable",
+      "same bytes",
+      "text/plain",
+    );
+    const equal = resolver.putText(
+      "payload:immutable",
+      "same bytes",
+      "text/plain",
+    );
     expect(equal.sha256).toBe(first.sha256);
-    expect(() => resolver.putText("payload:immutable", "changed bytes", "text/plain")).toThrow("immutable");
-    expect(() => resolver.putText("payload:immutable", "same bytes", "application/json")).toThrow("immutable");
+    expect(() =>
+      resolver.putText("payload:immutable", "changed bytes", "text/plain"),
+    ).toThrow("immutable");
+    expect(() =>
+      resolver.putText("payload:immutable", "same bytes", "application/json"),
+    ).toThrow("immutable");
 
     resolver.makeTemporarilyUnavailable("payload:immutable");
     expect(resolver.peek("payload:immutable")).toBeNull();
-    expect(() => resolver.putText("payload:immutable", "changed while unavailable", "text/plain")).toThrow("immutable");
-    const restored = resolver.putText("payload:immutable", "same bytes", "text/plain");
+    expect(() =>
+      resolver.putText(
+        "payload:immutable",
+        "changed while unavailable",
+        "text/plain",
+      ),
+    ).toThrow("immutable");
+    const restored = resolver.putText(
+      "payload:immutable",
+      "same bytes",
+      "text/plain",
+    );
     expect(restored.sha256).toBe(first.sha256);
-    expect(new TextDecoder().decode(resolver.peek("payload:immutable")?.bytes)).toBe("same bytes");
+    expect(
+      new TextDecoder().decode(resolver.peek("payload:immutable")?.bytes),
+    ).toBe("same bytes");
+  });
+});
+
+describe("EF-S05 fake implementation independence", () => {
+  test("fake normalizer uses a distinct reader-combinator architecture", () => {
+    const adapter = readFileSync(
+      join(
+        import.meta.dir,
+        "../../src/service-effects/current-piclaw/service-outbox-request-normalizer.ts",
+      ),
+      "utf8",
+    );
+    const fake = readFileSync(
+      join(
+        import.meta.dir,
+        "../../src/service-effects/testing/fakes/fake-service-outbox-request-normalizer.ts",
+      ),
+      "utf8",
+    );
+    expect(fake).not.toContain("service-outbox-request-normalizer");
+    expect(fake).toContain("type Reader<T>");
+    expect(fake).toContain("const parsers:");
+    expect(adapter).not.toContain("type Reader<T>");
+    expect(adapter).not.toContain("const parsers:");
   });
 });
 
 describe("typed effector case catalogue", () => {
   test("EF-S01 suite maps required cases and labels extras supplementary", () => {
-    const ids = SERVICE_WORK_STORE_CONTRACT_CASE_NAMES.map((name) => name.split(" ", 1)[0]);
-    const catalogue = EFFECTOR_CASE_CATALOGUE.find((entry) => entry.contractId === "EF-S01");
+    const ids = SERVICE_WORK_STORE_CONTRACT_CASE_NAMES.map(
+      (name) => name.split(" ", 1)[0],
+    );
+    const catalogue = EFFECTOR_CASE_CATALOGUE.find(
+      (entry) => entry.contractId === "EF-S01",
+    );
     expect(catalogue).toBeDefined();
-    expect(ids.filter((id) => /^EF-S01-C\d+$/.test(id))).toEqual(catalogue?.requiredCases.map((entry) => entry.caseId));
+    expect(ids.filter((id) => /^EF-S01-C\d+$/.test(id))).toEqual(
+      catalogue?.requiredCases.map((entry) => entry.caseId),
+    );
     expect(ids.filter((id) => id === "EF-S01-R01")).toEqual(["EF-S01-R01"]);
-    expect(ids.every((id) => /^EF-S01-(?:C(?:10|[1-9])|R01|S\d{2})$/.test(id))).toBeTrue();
+    expect(
+      ids.every((id) => /^EF-S01-(?:C(?:10|[1-9])|R01|S\d{2})$/.test(id)),
+    ).toBeTrue();
   });
 
   test("EF-S05 suite maps exact C1-C8 and R01 with labelled supplements", () => {
-    const ids = SERVICE_OUTBOX_STORE_CONTRACT_CASE_NAMES.map((name) => name.split(" ", 1)[0]);
-    const catalogue = EFFECTOR_CASE_CATALOGUE.find((entry) => entry.contractId === "EF-S05");
+    const ids = SERVICE_OUTBOX_STORE_CONTRACT_CASE_NAMES.map(
+      (name) => name.split(" ", 1)[0],
+    );
+    const catalogue = EFFECTOR_CASE_CATALOGUE.find(
+      (entry) => entry.contractId === "EF-S05",
+    );
     expect(catalogue).toBeDefined();
     expect(ids.filter((id) => /^EF-S05-C\d+$/.test(id))).toEqual(
       catalogue?.requiredCases.map((entry) => entry.caseId),
     );
     expect(ids.filter((id) => id === "EF-S05-R01")).toEqual(["EF-S05-R01"]);
-    expect(ids.every((id) => /^EF-S05-(?:C[1-8]|R01|S\d{2})$/.test(id))).toBeTrue();
+    expect(
+      ids.every((id) => /^EF-S05-(?:C[1-8]|R01|S\d{2})$/.test(id)),
+    ).toBeTrue();
   });
 
   test("covers EF-S01 through EF-S08 and EF-H01 exactly once", () => {
     expect(() => assertCompleteEffectorCaseCatalogue()).not.toThrow();
-    expect(EFFECTOR_CASE_CATALOGUE.map((entry) => entry.contractId)).toEqual(EFFECTOR_CONTRACT_IDS);
+    expect(EFFECTOR_CASE_CATALOGUE.map((entry) => entry.contractId)).toEqual(
+      EFFECTOR_CONTRACT_IDS,
+    );
   });
 
   test("maps every entry to unique named cases, prerequisites, faults, and one crash oracle", () => {
@@ -348,60 +542,88 @@ describe("typed effector case catalogue", () => {
   });
 
   test("catalogue collectively maps every standard fault point", () => {
-    const mapped = new Set(EFFECTOR_CASE_CATALOGUE.flatMap((entry) => entry.faultPoints));
+    const mapped = new Set(
+      EFFECTOR_CASE_CATALOGUE.flatMap((entry) => entry.faultPoints),
+    );
     expect([...mapped].sort()).toEqual([...STANDARD_FAULT_POINTS].sort());
   });
 
   test("rejects duplicate catalogue entries, case IDs, and crash oracles", () => {
     const first = EFFECTOR_CASE_CATALOGUE[0];
-    expect(() => assertCompleteEffectorCaseCatalogue([...EFFECTOR_CASE_CATALOGUE, first]))
-      .toThrow("exactly once");
-    expect(() => assertCompleteEffectorCaseCatalogue([
-      { ...first, requiredCases: [first.requiredCases[0], first.requiredCases[0]] },
-      ...EFFECTOR_CASE_CATALOGUE.slice(1),
-    ])).toThrow("misplaced or duplicated");
-    expect(() => assertCompleteEffectorCaseCatalogue([
-      first,
-      { ...EFFECTOR_CASE_CATALOGUE[1], crashOracle: first.crashOracle },
-      ...EFFECTOR_CASE_CATALOGUE.slice(2),
-    ])).toThrow("misplaced or duplicated");
+    expect(() =>
+      assertCompleteEffectorCaseCatalogue([...EFFECTOR_CASE_CATALOGUE, first]),
+    ).toThrow("exactly once");
+    expect(() =>
+      assertCompleteEffectorCaseCatalogue([
+        {
+          ...first,
+          requiredCases: [first.requiredCases[0], first.requiredCases[0]],
+        },
+        ...EFFECTOR_CASE_CATALOGUE.slice(1),
+      ]),
+    ).toThrow("misplaced or duplicated");
+    expect(() =>
+      assertCompleteEffectorCaseCatalogue([
+        first,
+        { ...EFFECTOR_CASE_CATALOGUE[1], crashOracle: first.crashOracle },
+        ...EFFECTOR_CASE_CATALOGUE.slice(2),
+      ]),
+    ).toThrow("misplaced or duplicated");
   });
 
   test("all shared links resolve through a closed registry and are unique per entry", () => {
-    const registered = new Set(SHARED_EFFECTOR_CASE_CATALOGUE.map((entry) => entry.caseId));
+    const registered = new Set(
+      SHARED_EFFECTOR_CASE_CATALOGUE.map((entry) => entry.caseId),
+    );
     for (const entry of EFFECTOR_CASE_CATALOGUE) {
-      expect(new Set(entry.sharedCaseLinks).size).toBe(entry.sharedCaseLinks.length);
-      for (const link of entry.sharedCaseLinks) expect(registered.has(link)).toBeTrue();
+      expect(new Set(entry.sharedCaseLinks).size).toBe(
+        entry.sharedCaseLinks.length,
+      );
+      for (const link of entry.sharedCaseLinks)
+        expect(registered.has(link)).toBeTrue();
     }
   });
 
   test("rejects unknown or duplicate shared links and duplicate registry IDs", () => {
     const first = EFFECTOR_CASE_CATALOGUE[0];
     const unknownLink = "shared:unknown" as SharedEffectorCaseId;
-    expect(() => assertCompleteEffectorCaseCatalogue([
-      { ...first, sharedCaseLinks: [...first.sharedCaseLinks, unknownLink] },
-      ...EFFECTOR_CASE_CATALOGUE.slice(1),
-    ])).toThrow("link is unknown");
-    expect(() => assertCompleteEffectorCaseCatalogue([
-      { ...first, sharedCaseLinks: [...first.sharedCaseLinks, first.sharedCaseLinks[0]] },
-      ...EFFECTOR_CASE_CATALOGUE.slice(1),
-    ])).toThrow("link is duplicated");
-    expect(() => assertCompleteEffectorCaseCatalogue(
-      EFFECTOR_CASE_CATALOGUE,
-      [...SHARED_EFFECTOR_CASE_CATALOGUE, SHARED_EFFECTOR_CASE_CATALOGUE[0]] as readonly SharedEffectorCase[],
-    )).toThrow("case is duplicated");
+    expect(() =>
+      assertCompleteEffectorCaseCatalogue([
+        { ...first, sharedCaseLinks: [...first.sharedCaseLinks, unknownLink] },
+        ...EFFECTOR_CASE_CATALOGUE.slice(1),
+      ]),
+    ).toThrow("link is unknown");
+    expect(() =>
+      assertCompleteEffectorCaseCatalogue([
+        {
+          ...first,
+          sharedCaseLinks: [...first.sharedCaseLinks, first.sharedCaseLinks[0]],
+        },
+        ...EFFECTOR_CASE_CATALOGUE.slice(1),
+      ]),
+    ).toThrow("link is duplicated");
+    expect(() =>
+      assertCompleteEffectorCaseCatalogue(EFFECTOR_CASE_CATALOGUE, [
+        ...SHARED_EFFECTOR_CASE_CATALOGUE,
+        SHARED_EFFECTOR_CASE_CATALOGUE[0],
+      ] as readonly SharedEffectorCase[]),
+    ).toThrow("case is duplicated");
   });
 
   test("catalogue has stable semantic content without protected payloads", () => {
-    const digest = hashCanonicalRequest(EFFECTOR_CASE_CATALOGUE.map((entry) => ({
-      contractId: entry.contractId,
-      futureIssue: entry.futureIssue,
-      suiteEntryPoint: entry.suiteEntryPoint,
-      requiredCases: entry.requiredCases,
-      faultPoints: entry.faultPoints,
-      crashOracle: entry.crashOracle,
-    })));
+    const digest = hashCanonicalRequest(
+      EFFECTOR_CASE_CATALOGUE.map((entry) => ({
+        contractId: entry.contractId,
+        futureIssue: entry.futureIssue,
+        suiteEntryPoint: entry.suiteEntryPoint,
+        requiredCases: entry.requiredCases,
+        faultPoints: entry.faultPoints,
+        crashOracle: entry.crashOracle,
+      })),
+    );
     expect(digest).toMatch(/^[a-f0-9]{64}$/);
-    expect(JSON.stringify(EFFECTOR_CASE_CATALOGUE)).not.toMatch(/message body|media bytes|tool arguments|tool results|secret value/i);
+    expect(JSON.stringify(EFFECTOR_CASE_CATALOGUE)).not.toMatch(
+      /message body|media bytes|tool arguments|tool results|secret value/i,
+    );
   });
 });
