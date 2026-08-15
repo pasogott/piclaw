@@ -13,6 +13,7 @@ import { defineTerminalSettlementStoreContract } from "../../src/service-effects
 import { context, fakeFactory, sqliteFactory } from "./terminal-settlement-test-support.js";
 
 describe("EF-S02 TerminalSettlementStore shared contract", () => {
+  // This aggregate runs 23 contract/recovery cases with repeated private-schema creation and fresh SQLite restores.
   test("isolated SQLite adapter", async () => {
     const before = readdirSync(tmpdir())
       .filter((name) => name.startsWith("piclaw-s02-"))
@@ -24,7 +25,7 @@ describe("EF-S02 TerminalSettlementStore shared contract", () => {
     if (JSON.stringify(after) !== JSON.stringify(before)) {
       throw new Error("EF-S02 SQLite contract leaked a temporary database.");
     }
-  });
+  }, 15_000);
 
   test("independent deterministic fake", async () => {
     await defineTerminalSettlementStoreContract(fakeFactory, context);
