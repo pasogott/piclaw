@@ -2,17 +2,9 @@ import { Result, type Result as ResultValue } from "@earendil-works/pi-agent-cor
 import type Database from "bun:sqlite";
 
 import { validateServiceEffectContentBlocks } from "../../channels/web/messaging/content-block-safety.js";
-import {
-  replaceMessageContentInDatabase,
-  storeMessageInDatabase,
-} from "../../db/messages.js";
-import type { NewMessage } from "../../types.js";
 import type { NormalisedTraceInput } from "../contracts/common.js";
 import type { EffectPayloadResolver } from "../contracts/payload-resolver.js";
-import type {
-  OutboxStoreError,
-  ServiceOutboxEnqueueInserter,
-} from "../contracts/service-outbox-store.js";
+import type { EnqueueOutboxRequest } from "../contracts/service-outbox-store.js";
 import type {
   HarnessCorrelation,
   HarnessState,
@@ -27,11 +19,17 @@ import type {
   TerminalSettlementStore,
 } from "../contracts/terminal-settlement-store.js";
 import { resolveVerifiedPayload } from "../payloads.js";
-import { createServiceOutboxEnqueueInserter } from "./service-outbox-store.js";
 import {
   normaliseCommitTerminalRequest,
   normaliseTerminalLookupId,
 } from "./terminal-settlement-request-normalizer.js";
+import {
+  insertTerminalTimeline,
+  replaceTerminalTimeline,
+  TerminalTimelineStatementError,
+  type TerminalTimelineContent,
+  type TerminalTimelineStatement,
+} from "./terminal-settlement-timeline-statements.js";
 
 const PHASES = new Set<PiclawOperationPhase>([
   "accepted",
@@ -64,18 +62,50 @@ const REQUIRED_SCHEMA = Object.freeze([
   "message_media",
   "messages",
   "messages_fts",
+  "messages_fts_config",
+  "messages_fts_data",
+  "messages_fts_docsize",
+  "messages_fts_idx",
+  "service_effect_media_deletions",
+  "service_effect_media_upload_history",
   "service_effect_media_uploads",
   "service_effect_operation_media",
+  "service_effect_outbox_media_refs",
   "service_effect_s01_chats",
+  "service_effect_s01_decisions",
+  "service_effect_s01_intents",
   "service_effect_s01_operation_sources",
   "service_effect_s01_operations",
   "service_effect_s01_queued_inputs",
   "service_effect_s01_sources",
+  "service_effect_s01_wake_intents",
   "service_effect_s02_commit_outbox",
   "service_effect_s02_commits",
   "service_effect_s05_decisions",
+  "service_effect_s05_leases",
   "service_effect_s05_outbox",
+  "service_effect_s05_outcomes",
+  "service_effect_s05_resolutions",
   "service_effect_timeline_writes",
+]);
+const REQUIRED_INDEXES = Object.freeze([
+  "service_effect_draft_revision",
+  "service_effect_notice_source",
+  "service_effect_operation_media_id",
+  "service_effect_outbox_media_id",
+  "service_effect_s01_one_active_operation",
+  "service_effect_s01_open_operations",
+  "service_effect_s01_pending_sources",
+  "service_effect_s02_commit_chat",
+  "service_effect_s05_decision_outbox",
+  "service_effect_s05_expired_started",
+  "service_effect_s05_failed_claim",
+  "service_effect_s05_lease_outbox",
+  "service_effect_s05_operation_lookup",
+  "service_effect_s05_pending_claim",
+  "service_effect_s05_terminal_cleanup",
+  "service_effect_s05_unknown_list",
+  "service_effect_timeline_operation",
 ]);
 const REQUIRED_TRIGGERS = Object.freeze([
   "messages_ad",
@@ -84,30 +114,33 @@ const REQUIRED_TRIGGERS = Object.freeze([
 ]);
 const REQUIRED_SCHEMA_PROBES = Object.freeze([
   "SELECT jid,name,last_message_time FROM chats LIMIT 1",
-  "SELECT rowid,id,chat_jid,content,content_blocks,thread_id,timestamp,is_bot_message,is_terminal_agent_reply FROM messages LIMIT 1",
-  "SELECT rowid,content,chat_jid FROM messages_fts LIMIT 1",
-  "SELECT id,filename,content_type,data FROM media LIMIT 1",
+  "SELECT rowid,id,chat_jid,sender,sender_name,content,content_blocks,thread_id,timestamp,is_from_me,is_bot_message,is_terminal_agent_reply,is_steering_message FROM messages LIMIT 1",
+  "SELECT rowid,content,chat_jid,sender,sender_name,timestamp,is_bot_message FROM messages_fts LIMIT 1",
+  "SELECT id,filename,content_type,data,metadata FROM media LIMIT 1",
   "SELECT message_rowid,media_id FROM message_media LIMIT 1",
   "SELECT chat_jid,next_source_seq,consumed_through_source_seq,active_operation_id FROM service_effect_s01_chats LIMIT 1",
-  "SELECT chat_jid,source_seq,state,target_operation_id,disposition_reason FROM service_effect_s01_sources LIMIT 1",
-  "SELECT operation_id,chat_jid,version,phase,harness_session_id,harness_lane,harness_operation_id,harness_state,harness_watch_generation,terminal_disposition FROM service_effect_s01_operations LIMIT 1",
+  "SELECT chat_jid,source_seq,state,kind,target_operation_id,accepted_at,disposition_reason FROM service_effect_s01_sources LIMIT 1",
+  "SELECT operation_id,chat_jid,primary_source_seq,version,phase,cancellation_source_id,cancellation_source_seq,cancellation_cause,cancellation_requested_at,harness_session_id,harness_lane,harness_operation_id,harness_state,harness_watch_generation,terminal_disposition,terminal_message_row_id,terminal_error_code,terminal_committed_at FROM service_effect_s01_operations LIMIT 1",
   "SELECT chat_jid,operation_id,source_seq FROM service_effect_s01_operation_sources LIMIT 1",
   "SELECT chat_jid,operation_id,source_seq,state FROM service_effect_s01_queued_inputs LIMIT 1",
   "SELECT operation_id,media_id,role FROM service_effect_operation_media LIMIT 1",
-  "SELECT idempotency_key,request_hash,operation_id,chat_jid,operation_version,disposition,message_row_id,consumed_through_source_seq,committed_at,terminal_authority_ref FROM service_effect_s02_commits LIMIT 1",
+  "SELECT idempotency_key,request_hash,operation_id,chat_jid,operation_version,disposition,message_row_id,consumed_through_source_seq,outbox_count,committed_at,terminal_authority_ref FROM service_effect_s02_commits LIMIT 1",
   "SELECT operation_id,ordinal,outbox_id FROM service_effect_s02_commit_outbox LIMIT 1",
-  "SELECT outbox_id,kind,state,idempotency_key,request_hash,operation_id,source_seq FROM service_effect_s05_outbox LIMIT 1",
+  "SELECT outbox_id,kind,state,idempotency_key,request_hash,operation_id,source_seq,provenance_ref,redaction_class,payload_ref,destination_ref,available_at,enqueued_at,state_changed_at,repeatability,attempt,certainty FROM service_effect_s05_outbox LIMIT 1",
+  "SELECT decision_key,method,request_hash,outcome,outbox_id,attempt FROM service_effect_s05_decisions LIMIT 1",
+  "SELECT write_type,operation_id,revision,message_rowid,chat_jid FROM service_effect_timeline_writes LIMIT 1",
 ]);
 
 export type TerminalSettlementStatement =
-  | "ensure_timeline_chat"
-  | "insert_terminal_message"
-  | "replace_terminal_message"
+  | TerminalTimelineStatement
+  | "fence_operation"
+  | "fence_owner"
   | "settle_source"
   | "settle_queued_input"
   | "advance_frontier_release_owner"
   | "terminalise_operation"
-  | "enqueue_outbox"
+  | "outbox_insert"
+  | "outbox_decision_insert"
   | "insert_commit"
   | "link_commit_outbox";
 
@@ -133,6 +166,7 @@ interface CommitRow {
   disposition: unknown;
   message_row_id: unknown;
   consumed_through_source_seq: unknown;
+  outbox_count: unknown;
   committed_at: unknown;
   terminal_authority_ref: unknown;
 }
@@ -140,6 +174,7 @@ interface CommitRow {
 interface OperationRow {
   operation_id: unknown;
   chat_jid: unknown;
+  primary_source_seq: unknown;
   version: unknown;
   phase: unknown;
   cancellation_source_id: unknown;
@@ -164,8 +199,10 @@ interface ClosedOperation {
   operationId: string;
   chatJid: string;
   version: number;
+  primarySourceSeq: number;
   phase: PiclawOperationPhase;
   cancellationSourceSeq: number | null;
+  cancellationRequestedAt: string | null;
   harness: HarnessCorrelation | null;
   terminalDisposition: PiclawDisposition | null;
   activeOperationId: string | null;
@@ -173,10 +210,6 @@ interface ClosedOperation {
   nextSourceSeq: number;
 }
 
-interface ResolvedTimeline {
-  content: string;
-  blocks: readonly Readonly<Record<string, unknown>>[] | null;
-}
 
 class SettlementAbort extends Error {
   constructor(readonly error: TerminalSettlementError) {
@@ -192,16 +225,8 @@ export function createCurrentPiclawTerminalSettlementStore(
   runtime: TerminalSettlementAdapterRuntime,
 ): TerminalSettlementConstructionResult {
   try {
-    validateConstruction(database);
-    const inserter = createServiceOutboxEnqueueInserter(database);
-    if (!inserter.ok) return Result.err(mapOutboxConstructionError(inserter.error));
     return Result.ok(
-      new CurrentPiclawTerminalSettlementStore(
-        database,
-        payloads,
-        runtime,
-        inserter.value,
-      ),
+      CurrentPiclawTerminalSettlementStore.create(database, payloads, runtime),
     );
   } catch (error) {
     void error;
@@ -214,12 +239,20 @@ export class CurrentPiclawTerminalSettlementStore
 {
   private checkpointOccurrence = 0;
 
-  constructor(
+  private constructor(
     readonly database: Database,
     private readonly payloads: EffectPayloadResolver,
     private readonly runtime: TerminalSettlementAdapterRuntime,
-    private readonly outbox: ServiceOutboxEnqueueInserter,
   ) {}
+
+  static create(
+    database: Database,
+    payloads: EffectPayloadResolver,
+    runtime: TerminalSettlementAdapterRuntime,
+  ): CurrentPiclawTerminalSettlementStore {
+    validateConstruction(database);
+    return new CurrentPiclawTerminalSettlementStore(database, payloads, runtime);
+  }
 
   async commitTerminal(
     input: CommitTerminalRequest,
@@ -241,7 +274,7 @@ export class CurrentPiclawTerminalSettlementStore
         effectId,
         operationId,
         null,
-        settlementError("invalid_source_disposition"),
+        settlementError("invalid_request"),
       );
     }
 
@@ -312,7 +345,7 @@ export class CurrentPiclawTerminalSettlementStore
     operationId: string,
   ): Promise<ResultValue<TerminalCommit | null, TerminalSettlementError>> {
     const id = normaliseTerminalLookupId(operationId);
-    if (!id) return Result.err(settlementError("corrupt_state"));
+    if (!id) return Result.err(settlementError("invalid_request"));
     try {
       const row = this.commitByOperation(id);
       if (!row) {
@@ -340,7 +373,7 @@ export class CurrentPiclawTerminalSettlementStore
     idempotencyKey: string,
   ): Promise<ResultValue<TerminalCommit | null, TerminalSettlementError>> {
     const key = normaliseTerminalLookupId(idempotencyKey);
-    if (!key) return Result.err(settlementError("corrupt_state"));
+    if (!key) return Result.err(settlementError("invalid_request"));
     try {
       const row = this.commitByKey(key);
       if (!row) return Result.ok(null);
@@ -356,21 +389,46 @@ export class CurrentPiclawTerminalSettlementStore
 
   private apply(
     request: CommitTerminalRequest,
-    resolved: ResolvedTimeline | null,
+    resolved: TerminalTimelineContent | null,
   ): TerminalCommit {
     const operation = this.readOperation(request.effect.operationId);
     this.authoriseOperation(request, operation);
+    this.validateTemporalAuthority(request, operation);
     this.validateOutboxAuthority(request, operation);
     this.validateSources(request, operation);
     if (request.timeline.mode !== "none") this.validateMedia(request);
+
+    const fencedOperation = this.database
+      .prepare(
+        `UPDATE service_effect_s01_operations SET version=version
+         WHERE operation_id=? AND chat_jid=? AND version=? AND phase=?
+           AND terminal_disposition IS NULL AND terminal_message_row_id IS NULL
+           AND terminal_error_code IS NULL AND terminal_committed_at IS NULL`,
+      )
+      .run(operation.operationId, operation.chatJid, operation.version, operation.phase);
+    if (!changedUnique(fencedOperation.changes)) {
+      throw new SettlementAbort(settlementError("version_mismatch"));
+    }
+    this.afterStatement("fence_operation");
+    const fencedOwner = this.database
+      .prepare(
+        `UPDATE service_effect_s01_chats SET active_operation_id=active_operation_id
+         WHERE chat_jid=? AND active_operation_id=?
+           AND consumed_through_source_seq=?`,
+      )
+      .run(operation.chatJid, operation.operationId, operation.consumedThroughSourceSeq);
+    if (!changedUnique(fencedOwner.changes)) {
+      throw new SettlementAbort(settlementError("owner_conflict"));
+    }
+    this.afterStatement("fence_owner");
 
     const messageRowId = this.writeTimeline(request, resolved);
     this.settleSources(request, operation);
     const consumedThroughSourceSeq = this.computeFrontier(operation);
     const operationVersion = operation.version + 1;
 
-    this.database
-      .query(
+    const terminalised = this.database
+      .prepare(
         `UPDATE service_effect_s01_operations
          SET version=?, phase='terminal', terminal_disposition=?, terminal_message_row_id=?,
              terminal_error_code=?, terminal_committed_at=?
@@ -389,13 +447,13 @@ export class CurrentPiclawTerminalSettlementStore
         operation.version,
         operation.phase,
       );
-    if (!changedOne(this.database)) {
+    if (!changedUnique(terminalised.changes)) {
       throw new SettlementAbort(settlementError("version_mismatch"));
     }
     this.afterStatement("terminalise_operation");
 
-    this.database
-      .query(
+    const released = this.database
+      .prepare(
         `UPDATE service_effect_s01_chats
          SET consumed_through_source_seq=?, active_operation_id=NULL
          WHERE chat_jid=? AND consumed_through_source_seq=? AND active_operation_id=?`,
@@ -406,16 +464,12 @@ export class CurrentPiclawTerminalSettlementStore
         operation.consumedThroughSourceSeq,
         operation.operationId,
       );
-    if (!changedOne(this.database)) {
+    if (!changedUnique(released.changes)) {
       throw new SettlementAbort(settlementError("owner_conflict"));
     }
     this.afterStatement("advance_frontier_release_owner");
 
-    for (const intent of request.outboxIntents) {
-      const inserted = this.outbox.insert(intent);
-      if (!inserted.ok) throw new SettlementAbort(mapOutboxError(inserted.error));
-      this.afterStatement("enqueue_outbox");
-    }
+    for (const intent of request.outboxIntents) this.insertOutbox(intent);
 
     const commit: TerminalCommit = freezeCommit({
       operationId: operation.operationId,
@@ -426,13 +480,13 @@ export class CurrentPiclawTerminalSettlementStore
       outboxIds: request.outboxIntents.map((intent) => intent.outboxId),
       committedAt: request.committedAt,
     });
-    this.database
-      .query(
+    const insertedCommit = this.database
+      .prepare(
         `INSERT INTO service_effect_s02_commits(
            idempotency_key,request_hash,operation_id,chat_jid,operation_version,
-           disposition,message_row_id,consumed_through_source_seq,committed_at,
+           disposition,message_row_id,consumed_through_source_seq,outbox_count,committed_at,
            terminal_authority_ref
-         ) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+         ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         request.effect.idempotencyKey,
@@ -443,20 +497,21 @@ export class CurrentPiclawTerminalSettlementStore
         request.disposition,
         messageRowId,
         consumedThroughSourceSeq,
+        request.outboxIntents.length,
         request.committedAt,
         request.terminalAuthorityRef,
       );
-    if (!changedOne(this.database)) throw new CorruptSettlementState();
+    if (!changedUnique(insertedCommit.changes)) throw new CorruptSettlementState();
     this.afterStatement("insert_commit");
 
     request.outboxIntents.forEach((intent, ordinal) => {
-      this.database
-        .query(
+      const linked = this.database
+        .prepare(
           `INSERT INTO service_effect_s02_commit_outbox(operation_id,ordinal,outbox_id)
            VALUES (?,?,?)`,
         )
         .run(operation.operationId, ordinal, intent.outboxId);
-      if (!changedOne(this.database)) throw new CorruptSettlementState();
+      if (!changedUnique(linked.changes)) throw new CorruptSettlementState();
       this.afterStatement("link_commit_outbox");
     });
     return commit;
@@ -464,119 +519,116 @@ export class CurrentPiclawTerminalSettlementStore
 
   private writeTimeline(
     request: CommitTerminalRequest,
-    resolved: ResolvedTimeline | null,
+    resolved: TerminalTimelineContent | null,
   ): number | null {
     const timeline = request.timeline;
     if (timeline.mode === "none") return null;
     if (!resolved) throw new CorruptSettlementState();
-
-    if (timeline.mode === "replace_placeholder") {
-      const latest = this.database
-        .query(
-          `SELECT w.message_rowid,w.chat_jid
-           FROM service_effect_timeline_writes w
-           WHERE w.write_type='draft' AND w.operation_id=?
-             AND w.message_rowid=?
-             AND w.revision=(
-               SELECT MAX(newer.revision)
-               FROM service_effect_timeline_writes newer
-               WHERE newer.write_type='draft' AND newer.operation_id=w.operation_id
-             )
-           LIMIT 1`,
-        )
-        .get(request.effect.operationId, timeline.placeholderRowId) as
-        | { message_rowid?: unknown; chat_jid?: unknown }
-        | undefined;
-      if (
-        !latest ||
-        requiredInteger(latest.message_rowid, 1) !== timeline.placeholderRowId ||
-        requiredText(latest.chat_jid, 512) !== request.expectedChatJid
-      ) {
-        throw new SettlementAbort(settlementError("owner_conflict"));
+    try {
+      return timeline.mode === "replace_placeholder"
+        ? replaceTerminalTimeline(
+            this.database,
+            request.effect.operationId,
+            timeline,
+            resolved,
+            (statement) => this.afterStatement(statement),
+          )
+        : insertTerminalTimeline(
+            this.database,
+            request.effect.operationId,
+            request.committedAt,
+            timeline,
+            resolved,
+            (statement) => this.afterStatement(statement),
+          );
+    } catch (error) {
+      if (error instanceof TerminalTimelineStatementError) {
+        throw new SettlementAbort(settlementError(error.tag));
       }
-      const message = this.database
-        .query(
-          `SELECT chat_jid,thread_id,is_terminal_agent_reply,is_bot_message
-           FROM messages WHERE rowid=?`,
-        )
-        .get(timeline.placeholderRowId) as
-        | {
-            chat_jid?: unknown;
-            thread_id?: unknown;
-            is_terminal_agent_reply?: unknown;
-            is_bot_message?: unknown;
-          }
-        | undefined;
-      if (!message) throw new SettlementAbort(settlementError("owner_conflict"));
-      const threadId = nullableInteger(message.thread_id, 1);
-      if (
-        requiredText(message.chat_jid, 512) !== request.expectedChatJid ||
-        threadId !== timeline.threadId ||
-        requiredInteger(message.is_terminal_agent_reply, 0) !== 0 ||
-        requiredInteger(message.is_bot_message, 0) !== 1
-      ) {
-        throw new SettlementAbort(settlementError("owner_conflict"));
-      }
-      const replaced = replaceMessageContentInDatabase(
-        this.database,
-        request.expectedChatJid,
-        timeline.placeholderRowId,
-        resolved.content,
-        {
-          contentBlocks: resolved.blocks ? [...resolved.blocks] : undefined,
-          mediaIds: [...timeline.mediaIds],
-          isTerminalAgentReply: true,
-        },
-      );
-      if (!replaced) throw new SettlementAbort(settlementError("owner_conflict"));
-      this.afterStatement("replace_terminal_message");
-      return timeline.placeholderRowId;
+      throw error;
     }
+  }
 
-    const existing = this.database
-      .query("SELECT rowid FROM messages WHERE id=?")
-      .get(`service-terminal:${request.effect.operationId}`);
-    if (existing) throw new CorruptSettlementState();
-    this.database
-      .query(
-        `INSERT INTO chats(jid,name,last_message_time) VALUES (?,?,?)
-         ON CONFLICT(jid) DO UPDATE SET last_message_time=MAX(last_message_time,excluded.last_message_time)`,
+  private insertOutbox(intent: EnqueueOutboxRequest): void {
+    const collision = this.database
+      .prepare(
+        `SELECT 1 present FROM service_effect_s05_outbox
+         WHERE outbox_id=? OR (kind=? AND idempotency_key=?) LIMIT 1`,
       )
-      .run(request.expectedChatJid, request.expectedChatJid, request.committedAt);
-    this.afterStatement("ensure_timeline_chat");
-
-    const message: NewMessage = {
-      id: `service-terminal:${request.effect.operationId}`,
-      chat_jid: request.expectedChatJid,
-      sender: "web-agent",
-      sender_name: "Piclaw",
-      content: resolved.content,
-      timestamp: request.committedAt,
-      is_from_me: false,
-      is_bot_message: true,
-      is_terminal_agent_reply: true,
-      content_blocks: resolved.blocks ? [...resolved.blocks] : undefined,
-      thread_id: timeline.threadId,
-    };
-    const rowId = storeMessageInDatabase(this.database, message);
-    if (rowId <= 0) throw new CorruptSettlementState();
-    this.afterStatement("insert_terminal_message");
-    if (timeline.mediaIds.length > 0) {
-      const rebound = replaceMessageContentInDatabase(
-        this.database,
-        request.expectedChatJid,
-        rowId,
-        resolved.content,
-        {
-          contentBlocks: resolved.blocks ? [...resolved.blocks] : undefined,
-          mediaIds: [...timeline.mediaIds],
-          isTerminalAgentReply: true,
-        },
-      );
-      if (!rebound) throw new CorruptSettlementState();
-      this.afterStatement("replace_terminal_message");
+      .get(intent.outboxId, intent.kind, intent.effect.idempotencyKey) as
+      | { present?: unknown }
+      | undefined;
+    if (collision) {
+      throw new SettlementAbort(settlementError("idempotency_conflict"));
     }
-    return rowId;
+    const inserted = this.database
+      .prepare(
+        `INSERT INTO service_effect_s05_outbox(
+           outbox_id,kind,state,idempotency_key,request_hash,operation_id,source_seq,
+           provenance_ref,redaction_class,payload_ref,destination_ref,available_at,
+           enqueued_at,state_changed_at,repeatability,attempt,certainty
+         ) VALUES (?,?, 'pending', ?,?,?,?,?,?,?,?,?,?,?,?,0,'not_applied')`,
+      )
+      .run(
+        intent.outboxId,
+        intent.kind,
+        intent.effect.idempotencyKey,
+        intent.effect.requestHash,
+        intent.effect.operationId,
+        intent.effect.sourceSeq,
+        intent.effect.provenanceRef,
+        intent.effect.redactionClass,
+        intent.payloadRef,
+        intent.destinationRef,
+        intent.availableAt,
+        intent.enqueuedAt,
+        intent.enqueuedAt,
+        intent.repeatability,
+      );
+    if (!changedUnique(inserted.changes)) throw new CorruptSettlementState();
+    this.afterStatement("outbox_insert");
+    const decisionKey = `enqueue:${intent.kind}:${intent.effect.idempotencyKey}`;
+    const decided = this.database
+      .prepare(
+        `INSERT INTO service_effect_s05_decisions(
+           decision_key,method,request_hash,outcome,outbox_id,attempt
+         ) VALUES (?,'enqueue',?,'applied',?,0)`,
+      )
+      .run(decisionKey, intent.effect.requestHash, intent.outboxId);
+    if (!changedUnique(decided.changes)) throw new CorruptSettlementState();
+    this.afterStatement("outbox_decision_insert");
+    const exact = this.database
+      .prepare(
+        `SELECT 1 present FROM service_effect_s05_outbox o
+         JOIN service_effect_s05_decisions d ON d.outbox_id=o.outbox_id
+         WHERE o.outbox_id=? AND o.kind=? AND o.idempotency_key=?
+           AND o.request_hash=? AND o.operation_id IS ? AND o.source_seq IS ?
+           AND o.provenance_ref=? AND o.redaction_class=? AND o.payload_ref=?
+           AND o.destination_ref IS ? AND o.available_at=? AND o.enqueued_at=?
+           AND o.state_changed_at=? AND o.repeatability=? AND o.state='pending'
+           AND o.attempt=0 AND o.certainty='not_applied'
+           AND d.decision_key=? AND d.method='enqueue' AND d.request_hash=?
+           AND d.outcome='applied' AND d.attempt=0`,
+      )
+      .get(
+        intent.outboxId,
+        intent.kind,
+        intent.effect.idempotencyKey,
+        intent.effect.requestHash,
+        intent.effect.operationId,
+        intent.effect.sourceSeq,
+        intent.effect.provenanceRef,
+        intent.effect.redactionClass,
+        intent.payloadRef,
+        intent.destinationRef,
+        intent.availableAt,
+        intent.enqueuedAt,
+        intent.enqueuedAt,
+        intent.repeatability,
+        decisionKey,
+        intent.effect.requestHash,
+      ) as { present?: unknown } | undefined;
+    if (exact?.present !== 1) throw new CorruptSettlementState();
   }
 
   private validateMedia(request: CommitTerminalRequest): void {
@@ -601,23 +653,45 @@ export class CurrentPiclawTerminalSettlementStore
     request: CommitTerminalRequest,
     operation: ClosedOperation,
   ): void {
-    const claimed = this.database
-      .query(
-        `SELECT s.source_seq
+    const memberships = this.database
+      .prepare(
+        `SELECT s.source_seq,s.state,s.kind,q.state queue_state
          FROM service_effect_s01_operation_sources os
          JOIN service_effect_s01_sources s
            ON s.chat_jid=os.chat_jid AND s.source_seq=os.source_seq
-         WHERE os.operation_id=? AND s.state IN ('claimed','queued')
-         ORDER BY s.source_seq`,
+         LEFT JOIN service_effect_s01_queued_inputs q
+           ON q.operation_id=os.operation_id AND q.source_seq=os.source_seq
+         WHERE os.operation_id=? ORDER BY s.source_seq`,
       )
-      .all(operation.operationId) as Array<{ source_seq?: unknown }>;
-    const expected = claimed.map((row) => requiredInteger(row.source_seq, 1));
+      .all(operation.operationId) as Array<{
+        source_seq?: unknown;
+        state?: unknown;
+        kind?: unknown;
+        queue_state?: unknown;
+      }>;
+    const expected = memberships.map((row) => requiredInteger(row.source_seq, 1));
     const supplied = request.sourceDispositions.map((entry) => entry.sourceSeq);
     if (
+      expected.length === 0 ||
       expected.length !== supplied.length ||
       expected.some((sourceSeq, index) => sourceSeq !== supplied[index])
     ) {
       throw new SettlementAbort(settlementError("invalid_source_disposition"));
+    }
+    for (const row of memberships) {
+      if (row.state !== "claimed" && row.state !== "queued") {
+        throw new CorruptSettlementState();
+      }
+      const sourceSeq = requiredInteger(row.source_seq, 1);
+      const queueExpected =
+        sourceSeq !== operation.primarySourceSeq &&
+        (row.kind === "steer" || row.kind === "follow_up" || row.kind === "continuation");
+      if (queueExpected && row.queue_state !== row.state) {
+        throw new CorruptSettlementState();
+      }
+      if (!queueExpected && row.queue_state !== null && row.queue_state !== undefined) {
+        if (row.queue_state !== row.state) throw new CorruptSettlementState();
+      }
     }
   }
 
@@ -628,7 +702,7 @@ export class CurrentPiclawTerminalSettlementStore
     for (const disposition of request.sourceDispositions) {
       const owned = this.database
         .query(
-          `SELECT s.state source_state,q.state queue_state
+          `SELECT s.state source_state,s.kind source_kind,q.state queue_state
            FROM service_effect_s01_sources s
            JOIN service_effect_s01_operation_sources os
              ON os.chat_jid=s.chat_jid AND os.source_seq=s.source_seq
@@ -641,7 +715,7 @@ export class CurrentPiclawTerminalSettlementStore
           disposition.sourceSeq,
           operation.operationId,
         ) as
-        | { source_state?: unknown; queue_state?: unknown }
+        | { source_state?: unknown; source_kind?: unknown; queue_state?: unknown }
         | undefined;
       if (
         !owned ||
@@ -661,8 +735,8 @@ export class CurrentPiclawTerminalSettlementStore
         throw new SettlementAbort(settlementError("invalid_source_disposition"));
       }
 
-      this.database
-        .query(
+      const settledSource = this.database
+        .prepare(
           `UPDATE service_effect_s01_sources
            SET state=?,disposition_reason=?
            WHERE chat_jid=? AND source_seq=? AND state=?`,
@@ -674,14 +748,14 @@ export class CurrentPiclawTerminalSettlementStore
           disposition.sourceSeq,
           owned.source_state,
         );
-      if (!changedOne(this.database)) {
+      if (!changedUnique(settledSource.changes)) {
         throw new SettlementAbort(settlementError("invalid_source_disposition"));
       }
       this.afterStatement("settle_source");
 
       if (owned.queue_state === null || owned.queue_state === undefined) continue;
-      this.database
-        .query(
+      const settledQueue = this.database
+        .prepare(
           `UPDATE service_effect_s01_queued_inputs SET state=?
            WHERE operation_id=? AND source_seq=? AND state=?`,
         )
@@ -691,7 +765,7 @@ export class CurrentPiclawTerminalSettlementStore
           disposition.sourceSeq,
           expectedQueueState,
         );
-      if (!changedOne(this.database)) {
+      if (!changedUnique(settledQueue.changes)) {
         throw new SettlementAbort(settlementError("invalid_source_disposition"));
       }
       this.afterStatement("settle_queued_input");
@@ -706,7 +780,9 @@ export class CurrentPiclawTerminalSettlementStore
           "SELECT state FROM service_effect_s01_sources WHERE chat_jid=? AND source_seq=?",
         )
         .get(operation.chatJid, frontier + 1) as { state?: unknown } | undefined;
-      if (!row || typeof row.state !== "string") break;
+      if (!row || typeof row.state !== "string") {
+        throw new CorruptSettlementState();
+      }
       if (!CLOSED_SOURCE_STATES.has(row.state)) break;
       frontier += 1;
     }
@@ -742,6 +818,32 @@ export class CurrentPiclawTerminalSettlementStore
       ) {
         throw new SettlementAbort(settlementError("owner_conflict"));
       }
+    }
+  }
+
+  private validateTemporalAuthority(
+    request: CommitTerminalRequest,
+    operation: ClosedOperation,
+  ): void {
+    const row = this.database
+      .prepare(
+        `SELECT MAX(accepted_at) latest_accepted_at
+         FROM service_effect_s01_sources
+         WHERE chat_jid=? AND source_seq IN (
+           SELECT source_seq FROM service_effect_s01_operation_sources
+           WHERE operation_id=?
+         )`,
+      )
+      .get(operation.chatJid, operation.operationId) as
+      | { latest_accepted_at?: unknown }
+      | undefined;
+    const latestAcceptedAt = nullableText(row?.latest_accepted_at, 24);
+    if (
+      (latestAcceptedAt !== null && request.committedAt < latestAcceptedAt) ||
+      (operation.cancellationRequestedAt !== null &&
+        request.committedAt < operation.cancellationRequestedAt)
+    ) {
+      throw new SettlementAbort(settlementError("owner_conflict"));
     }
   }
 
@@ -784,14 +886,14 @@ export class CurrentPiclawTerminalSettlementStore
          WHERE o.operation_id=?`,
       )
       .get(operationId) as OperationRow | undefined;
-    if (!row) throw new SettlementAbort(settlementError("owner_conflict"));
+    if (!row) throw new SettlementAbort(settlementError("not_found"));
     return closeOperation(row);
   }
 
   private async resolveTimeline(
     request: CommitTerminalRequest,
   ): Promise<
-    | { ok: true; value: ResolvedTimeline | null }
+    | { ok: true; value: TerminalTimelineContent | null }
     | { ok: false; error: TerminalSettlementError }
   > {
     if (request.timeline.mode === "none") return { ok: true, value: null };
@@ -802,6 +904,7 @@ export class CurrentPiclawTerminalSettlementStore
       );
       if (
         !content ||
+        content.redactionClass !== request.effect.redactionClass ||
         (content.mediaType !== "text/plain" &&
           content.mediaType !== "text/markdown") ||
         content.byteLength > 1_048_576
@@ -829,6 +932,7 @@ export class CurrentPiclawTerminalSettlementStore
         );
         if (
           !payload ||
+          payload.redactionClass !== request.effect.redactionClass ||
           payload.mediaType !== "application/json" ||
           payload.byteLength > 262_144
         ) {
@@ -936,34 +1040,90 @@ export class CurrentPiclawTerminalSettlementStore
     if (authorityRequired !== (authority !== null)) {
       throw new CorruptSettlementState();
     }
+    const expectedOutboxCount = requiredInteger(row.outbox_count, 0);
+    const ledgerCommittedAt = requiredInstant(row.committed_at);
     const outboxIds = (
       this.database
         .query(
-          `SELECT l.ordinal,l.outbox_id,o.operation_id outbox_operation_id
+          `SELECT l.ordinal,l.outbox_id,o.operation_id outbox_operation_id,
+                  o.kind,o.state,o.idempotency_key,o.request_hash,o.source_seq,
+                  o.provenance_ref,o.redaction_class,o.payload_ref,o.destination_ref,
+                  o.available_at,o.enqueued_at,o.state_changed_at,o.repeatability,
+                  o.attempt,o.certainty,d.decision_key,d.method,d.request_hash decision_hash,
+                  d.outcome,d.outbox_id decision_outbox_id,d.attempt decision_attempt
            FROM service_effect_s02_commit_outbox l
            JOIN service_effect_s05_outbox o ON o.outbox_id=l.outbox_id
+           JOIN service_effect_s05_decisions d ON d.outbox_id=o.outbox_id
            WHERE l.operation_id=? ORDER BY l.ordinal`,
         )
         .all(operationId) as Array<{
         ordinal?: unknown;
         outbox_id?: unknown;
         outbox_operation_id?: unknown;
+        kind?: unknown;
+        state?: unknown;
+        idempotency_key?: unknown;
+        request_hash?: unknown;
+        source_seq?: unknown;
+        provenance_ref?: unknown;
+        redaction_class?: unknown;
+        payload_ref?: unknown;
+        destination_ref?: unknown;
+        available_at?: unknown;
+        enqueued_at?: unknown;
+        state_changed_at?: unknown;
+        repeatability?: unknown;
+        attempt?: unknown;
+        certainty?: unknown;
+        decision_key?: unknown;
+        method?: unknown;
+        decision_hash?: unknown;
+        outcome?: unknown;
+        decision_outbox_id?: unknown;
+        decision_attempt?: unknown;
       }>
     ).map((entry, index) => {
+      const outboxId = requiredText(entry.outbox_id, 512);
+      const enqueuedAt = requiredInstant(entry.enqueued_at);
+      const availableAt = requiredInstant(entry.available_at);
       if (
         requiredInteger(entry.ordinal, 0) !== index ||
-        nullableText(entry.outbox_operation_id, 512) !== operationId
+        nullableText(entry.outbox_operation_id, 512) !== operationId ||
+        !["wake_chat", "timeline_broadcast", "channel_delivery", "notification", "scheduler_run_log", "maintenance"].includes(requiredText(entry.kind, 64)) ||
+        entry.state !== "pending" ||
+        requiredText(entry.idempotency_key, 512).length < 1 ||
+        requiredHash(entry.request_hash).length !== 64 ||
+        (entry.source_seq !== null && requiredInteger(entry.source_seq, 0) < 0) ||
+        requiredText(entry.provenance_ref, 2048).length < 1 ||
+        !["public", "private", "secret"].includes(requiredText(entry.redaction_class, 16)) ||
+        requiredText(entry.payload_ref, 2048).length < 1 ||
+        (entry.destination_ref !== null && nullableText(entry.destination_ref, 2048) === null) ||
+        availableAt < enqueuedAt ||
+        enqueuedAt !== ledgerCommittedAt ||
+        requiredInstant(entry.state_changed_at) !== enqueuedAt ||
+        !["repeatable", "reconciliation_required"].includes(requiredText(entry.repeatability, 64)) ||
+        requiredInteger(entry.attempt, 0) !== 0 ||
+        entry.certainty !== "not_applied" ||
+        requiredText(entry.decision_key, 1200) !== `enqueue:${requiredText(entry.kind, 64)}:${requiredText(entry.idempotency_key, 512)}` ||
+        entry.method !== "enqueue" ||
+        requiredHash(entry.decision_hash) !== requiredHash(entry.request_hash) ||
+        entry.outcome !== "applied" ||
+        requiredText(entry.decision_outbox_id, 512) !== outboxId ||
+        requiredInteger(entry.decision_attempt, 0) !== 0
       ) {
         throw new CorruptSettlementState();
       }
-      return requiredText(entry.outbox_id, 512);
+      return outboxId;
     });
+    if (outboxIds.length !== expectedOutboxCount) {
+      throw new CorruptSettlementState();
+    }
     const operationVersion = requiredInteger(row.operation_version, 2);
     const consumedThroughSourceSeq = requiredInteger(
       row.consumed_through_source_seq,
       0,
     );
-    const committedAt = requiredInstant(row.committed_at);
+    const committedAt = ledgerCommittedAt;
     const messageRowId = nullableInteger(row.message_row_id, 1);
     if (messageRowId !== null) {
       const message = this.database
@@ -985,9 +1145,8 @@ export class CurrentPiclawTerminalSettlementStore
       .query(
         `SELECT o.chat_jid,o.version,o.phase,o.terminal_disposition,
                 o.terminal_message_row_id,o.terminal_error_code,
-                o.terminal_committed_at,c.consumed_through_source_seq
+                o.terminal_committed_at,o.cancellation_source_seq
          FROM service_effect_s01_operations o
-         JOIN service_effect_s01_chats c ON c.chat_jid=o.chat_jid
          WHERE o.operation_id=?`,
       )
       .get(operationId) as
@@ -999,7 +1158,7 @@ export class CurrentPiclawTerminalSettlementStore
           terminal_message_row_id?: unknown;
           terminal_error_code?: unknown;
           terminal_committed_at?: unknown;
-          consumed_through_source_seq?: unknown;
+          cancellation_source_seq?: unknown;
         }
       | undefined;
     const terminalErrorCode = terminal
@@ -1013,12 +1172,23 @@ export class CurrentPiclawTerminalSettlementStore
       requiredDisposition(terminal.terminal_disposition) !== disposition ||
       nullableInteger(terminal.terminal_message_row_id, 1) !== messageRowId ||
       requiredInstant(terminal.terminal_committed_at) !== committedAt ||
-      requiredInteger(terminal.consumed_through_source_seq, 0) <
-        consumedThroughSourceSeq ||
-      (disposition === "failed") !== (terminalErrorCode !== null)
+      (disposition === "failed") !== (terminalErrorCode !== null) ||
+      (disposition === "cancelled") !==
+        (nullableInteger(terminal.cancellation_source_seq, 1) !== null)
     ) {
       throw new CorruptSettlementState();
     }
+    const openMembership = this.database
+      .prepare(
+        `SELECT 1 present
+         FROM service_effect_s01_operation_sources os
+         JOIN service_effect_s01_sources s
+           ON s.chat_jid=os.chat_jid AND s.source_seq=os.source_seq
+         WHERE os.operation_id=? AND s.state NOT IN ('consumed','disposed')
+         LIMIT 1`,
+      )
+      .get(operationId) as { present?: unknown } | undefined;
+    if (openMembership) throw new CorruptSettlementState();
     return freezeCommit({
       operationId,
       operationVersion,
@@ -1034,9 +1204,9 @@ export class CurrentPiclawTerminalSettlementStore
     this.checkpointOccurrence += 1;
     if (!this.runtime.checkpoint) return;
     try {
-      if (this.runtime.checkpoint(statement, this.checkpointOccurrence) === true) {
-        throw new InjectedStatementRollback();
-      }
+      const decision = this.runtime.checkpoint(statement, this.checkpointOccurrence);
+      if (decision === false) return;
+      throw new InjectedStatementRollback();
     } catch (error) {
       if (error instanceof InjectedStatementRollback) throw error;
       throw new InjectedStatementRollback();
@@ -1125,13 +1295,43 @@ function validateConstruction(database: Database): void {
   if (foreignKeys?.foreign_keys !== 1) throw new Error("foreign keys disabled");
   const objects = database
     .query(
-      "SELECT name,type FROM sqlite_master WHERE name IN (" +
+      "SELECT name,type,sql FROM sqlite_master WHERE name IN (" +
         REQUIRED_SCHEMA.map(() => "?").join(",") +
         ")",
     )
-    .all(...REQUIRED_SCHEMA) as Array<{ name?: unknown; type?: unknown }>;
-  const names = new Set(objects.map((row) => String(row.name)));
-  if (REQUIRED_SCHEMA.some((name) => !names.has(name))) throw new Error("schema");
+    .all(...REQUIRED_SCHEMA) as Array<{
+      name?: unknown;
+      type?: unknown;
+      sql?: unknown;
+    }>;
+  const tables = new Set(
+    objects
+      .filter(
+        (row) =>
+          row.type === "table" &&
+          typeof row.sql === "string" &&
+          row.sql.length > 0,
+      )
+      .map((row) => String(row.name)),
+  );
+  if (REQUIRED_SCHEMA.some((name) => !tables.has(name))) {
+    throw new Error("schema");
+  }
+  const indexes = database
+    .query(
+      "SELECT name,sql FROM sqlite_master WHERE type='index' AND name IN (" +
+        REQUIRED_INDEXES.map(() => "?").join(",") +
+        ")",
+    )
+    .all(...REQUIRED_INDEXES) as Array<{ name?: unknown; sql?: unknown }>;
+  const indexNames = new Set(
+    indexes
+      .filter((row) => typeof row.sql === "string" && row.sql.length > 0)
+      .map((row) => String(row.name)),
+  );
+  if (REQUIRED_INDEXES.some((name) => !indexNames.has(name))) {
+    throw new Error("indexes");
+  }
   const triggers = database
     .query(
       "SELECT name FROM sqlite_master WHERE type='trigger' AND name IN (?,?,?)",
@@ -1212,8 +1412,10 @@ function closeOperation(row: OperationRow): ClosedOperation {
     operationId: requiredText(row.operation_id, 512),
     chatJid: requiredText(row.chat_jid, 512),
     version: requiredInteger(row.version, 1),
+    primarySourceSeq: requiredInteger(row.primary_source_seq, 1),
     phase: phase as PiclawOperationPhase,
     cancellationSourceSeq,
+    cancellationRequestedAt,
     harness,
     terminalDisposition,
     activeOperationId: nullableText(row.active_operation_id, 512),
@@ -1278,26 +1480,6 @@ function equalHarness(
   );
 }
 
-function mapOutboxConstructionError(
-  error: OutboxStoreError,
-): TerminalSettlementError {
-  return settlementError(
-    error._tag === "corrupt_state" ? "corrupt_state" : "storage_unavailable",
-    error.certainty,
-    error.retryable,
-  );
-}
-
-function mapOutboxError(error: OutboxStoreError): TerminalSettlementError {
-  if (error._tag === "idempotency_conflict") {
-    return settlementError("idempotency_conflict");
-  }
-  if (error._tag === "storage_unavailable") {
-    return settlementError("storage_unavailable", error.certainty, error.retryable);
-  }
-  return settlementError("corrupt_state");
-}
-
 function settlementError(
   tag: TerminalSettlementErrorTag,
   certainty: TerminalSettlementError["certainty"] = "not_applied",
@@ -1321,7 +1503,9 @@ function freezeCommit(input: TerminalCommit): TerminalCommit {
 
 function beforeEffectInjected(runtime: TerminalSettlementAdapterRuntime): boolean {
   try {
-    return runtime.hitFault("before_effect") === true;
+    const decision = runtime.hitFault("before_effect");
+    if (decision === false) return false;
+    return true;
   } catch (error) {
     void error;
     return true;
@@ -1337,17 +1521,17 @@ function lostAcknowledgement(runtime: TerminalSettlementAdapterRuntime): boolean
   }
 }
 
+// Bun includes trigger-side changes in the originating run result. All uses
+// are narrowed by a PK/unique predicate, so a positive own result proves the
+// sole direct row was affected without relying on connection-global follow-up state.
+function changedUnique(changes: number): boolean {
+  return Number.isSafeInteger(changes) && changes >= 1;
+}
+
 function isBusy(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const code = (error as { code?: unknown }).code;
   return code === "SQLITE_BUSY" || code === "SQLITE_LOCKED";
-}
-
-function changedOne(database: Database): boolean {
-  const row = database.query("SELECT changes() AS changed").get() as
-    | { changed?: unknown }
-    | undefined;
-  return row?.changed === 1;
 }
 
 function nullableDiagnostic(input: unknown): string | null {

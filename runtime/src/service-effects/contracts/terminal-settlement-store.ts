@@ -73,6 +73,8 @@ export interface TerminalCommit {
 }
 
 export type TerminalSettlementErrorTag =
+  | "invalid_request"
+  | "not_found"
   | "idempotency_conflict"
   | "version_mismatch"
   | "owner_conflict"

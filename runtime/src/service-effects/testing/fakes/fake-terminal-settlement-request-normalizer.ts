@@ -65,7 +65,12 @@ export function decodeFakeTerminalRequest(
       outboxIntents: outbox(raw.outboxIntents),
       committedAt: instant(raw.committedAt),
     };
-    if (result.expectedVersion >= Number.MAX_SAFE_INTEGER) {
+    if (
+      result.expectedVersion >= Number.MAX_SAFE_INTEGER ||
+      result.outboxIntents.some(
+        (intent) => intent.enqueuedAt !== result.committedAt,
+      )
+    ) {
       throw new TypeError();
     }
     const authority =
@@ -340,7 +345,7 @@ function text(input: unknown, maximum: number): string {
   ) {
     throw new TypeError();
   }
-  return input;
+  return input.normalize("NFC");
 }
 
 function nullableText(input: unknown, maximum: number): string | null {

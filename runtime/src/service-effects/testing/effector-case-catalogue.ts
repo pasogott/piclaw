@@ -106,7 +106,7 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
     requiredCases: numberedCases("EF-S02", [
       "rollback after every statement leaves no partial terminal state",
       "commit followed by lost acknowledgement returns original result",
-      "completion and cancellation race to one disposition",
+      "durable cancellation cause authorises cancellation and rejects completion",
       "stale Piclaw version chat owner and complete harness correlation are no-ops",
       "missing or duplicate media cannot create two terminal rows",
       "placeholder replacement preserves one terminal message",

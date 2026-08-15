@@ -9,7 +9,8 @@ export function installTimelineMediaAdapterTestSchema(database: Database): void 
   if (foreignKeys?.foreign_keys !== 1) {
     throw new Error("EF-S03/EF-S04 requires SQLite foreign-key enforcement.");
   }
-  const install = () => database.exec(`
+  const install = () => {
+    database.exec(`
     CREATE TABLE IF NOT EXISTS chats (
       jid TEXT PRIMARY KEY,
       name TEXT,
@@ -149,6 +150,17 @@ export function installTimelineMediaAdapterTestSchema(database: Database): void 
     CREATE INDEX IF NOT EXISTS service_effect_outbox_media_id
       ON service_effect_outbox_media_refs(media_id);
   `);
+    const fts = database
+      .query("SELECT type,sql FROM sqlite_master WHERE name='messages_fts'")
+      .get() as { type?: unknown; sql?: unknown } | undefined;
+    if (
+      fts?.type !== "table" ||
+      typeof fts.sql !== "string" ||
+      !/CREATE VIRTUAL TABLE[\s\S]*USING fts5/i.test(fts.sql)
+    ) {
+      throw new Error("EF-S03 requires the supported messages_fts virtual table.");
+    }
+  };
   if (database.inTransaction) install();
   else database.transaction(install).immediate();
 }

@@ -82,6 +82,7 @@ export function normaliseCommitTerminalRequest(
     };
     if (
       request.expectedVersion >= Number.MAX_SAFE_INTEGER ||
+      request.outboxIntents.some((intent) => intent.enqueuedAt !== request.committedAt) ||
       !validDispositionFields(request)
     ) {
       return null;
@@ -272,7 +273,22 @@ function normaliseOutbox(input: unknown): readonly EnqueueOutboxRequest[] {
     const normalised = normaliseOutboxMutation("enqueue", entry);
     if (!normalised) throw new TypeError();
     const request = normalised as EnqueueOutboxRequest;
-    if (request.availableAt < request.enqueuedAt) throw new TypeError();
+    if (
+      request.availableAt < request.enqueuedAt ||
+      [
+        request.effect.idempotencyKey,
+        request.effect.operationId,
+        request.effect.provenanceRef,
+        request.outboxId,
+        request.payloadRef,
+        request.destinationRef,
+      ].some(
+        (value) =>
+          value !== null && value !== value.normalize("NFC"),
+      )
+    ) {
+      throw new TypeError();
+    }
     const scoped = JSON.stringify([
       request.kind,
       request.effect.idempotencyKey,
@@ -363,7 +379,7 @@ function text(input: unknown): string | null {
 function boundedText(input: unknown, maxLength: number): string {
   const value = text(input);
   if (!value || value.length > maxLength) throw new TypeError();
-  return value;
+  return value.normalize("NFC");
 }
 
 function nullableBoundedText(input: unknown, maxLength: number): string | null {

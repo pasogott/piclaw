@@ -58,6 +58,9 @@ export interface TerminalSettlementContractSubject {
     occurrence?: number,
   ): void;
   planStatementFault(occurrence: number): void;
+  removePayload(ref: string): void;
+  payloadResolutionCount(): number;
+  inspectStatements(): readonly string[];
   inspectDurable(operationId?: string): TerminalSettlementDurableView;
   dispose?(): void | Promise<void>;
 }
@@ -147,6 +150,7 @@ interface RequestOptions {
   readonly sourceDispositions?: CommitTerminalRequest["sourceDispositions"];
   readonly outboxIntents?: readonly EnqueueOutboxRequest[];
   readonly committedAt?: string;
+  readonly effectSourceSeq?: number | null;
 }
 
 export function terminalRequest(
@@ -159,7 +163,7 @@ export function terminalRequest(
   const content = {
     chatJid,
     contentRef: options.contentRef ?? "payload:terminal-content",
-    threadId: options.threadId ?? 7,
+    threadId: options.threadId ?? null,
     mediaIds: options.mediaIds ?? [],
     contentBlocksRef: options.contentBlocksRef ?? null,
   };
@@ -184,7 +188,11 @@ export function terminalRequest(
   const authorityRequired =
     disposition === "skipped" || disposition === "superseded";
   const base: CommitTerminalRequest = {
-    effect: effect(options.key ?? "terminal-key-1", operationId, 1) as
+    effect: effect(
+      options.key ?? "terminal-key-1",
+      operationId,
+      options.effectSourceSeq === undefined ? 1 : options.effectSourceSeq,
+    ) as
       EffectIdentity & { readonly operationId: string },
     expectedChatJid: chatJid,
     expectedVersion: options.expectedVersion ?? 3,
@@ -249,49 +257,45 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
         const request = terminalRequest({
           outboxIntents: [terminalOutbox("terminal-c1")],
         });
-        for (let statement = 1; statement <= 8; statement += 1) {
+        let statement = 1;
+        for (; statement <= 100; statement += 1) {
           subject.planStatementFault(statement);
-          const failed = await subject.store.commitTerminal(request);
+          const result = await subject.store.commitTerminal(request);
+          if (result.ok) break;
           assert(
-            !failed.ok &&
-              failed.error._tag === "storage_unavailable" &&
-              failed.error.certainty === "not_applied",
-            `statement ${statement} must roll back: ${
-              failed.ok
-                ? "unexpected-success"
-                : `${failed.error._tag}:${failed.error.certainty}`
-            }`,
+            result.error._tag === "storage_unavailable" &&
+              result.error.certainty === "not_applied",
+            `statement ${statement} must roll back: ${result.error._tag}:${result.error.certainty}`,
           );
           assert(untouched(subject.inspectDurable()), `partial state at ${statement}`);
         }
-        const committed = await subject.store.commitTerminal(request);
+        assert(statement > 1 && statement <= 100, "rollback sweep reached every executed statement");
+        const executed = subject.inspectStatements();
+        assert(executed.length === statement - 1, "statement trace cardinality matches sweep");
         assert(
-          committed.ok,
-          `request must commit after rollback sweep: ${
-            committed.ok ? "ok" : committed.error._tag
-          }`,
+          executed.every((entry, index) => entry.startsWith(`${index + 1}:`)),
+          "statement trace occurrences are consecutive",
         );
       },
     },
     {
       name: "EF-S02-C2 commit followed by lost acknowledgement returns original result",
-      async run(fixture) {
-        fixture.subject.seedOperation(terminalOperation());
+      async run({ subject }) {
+        subject.seedOperation(terminalOperation());
         const request = terminalRequest();
-        fixture.subject.planFault("effect_then_lost_acknowledgement");
-        const lost = await fixture.subject.store.commitTerminal(request);
+        subject.planFault("effect_then_lost_acknowledgement");
+        const lost = await subject.store.commitTerminal(request);
         assert(
           !lost.ok && lost.error.certainty === "unknown",
           "lost response must be unknown",
         );
-        const restored = await fixture.crashAndRestore();
-        const replay = await restored.store.commitTerminal(request);
+        const replay = await subject.store.commitTerminal(request);
         assert(replay.ok && replay.value.operationVersion === 4, "replay original");
-        assert(restored.inspectDurable().commitCount === 1, "one commit");
+        assert(subject.inspectDurable().commitCount === 1, "one commit");
       },
     },
     {
-      name: "EF-S02-C3 completion and cancellation race to one disposition",
+      name: "EF-S02-C3 durable cancellation cause authorises cancellation and rejects completion",
       async run({ subject }) {
         subject.seedOperation(
           terminalOperation({ cancellationSourceSeq: 1, phase: "settling" }),
@@ -311,7 +315,7 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
       },
     },
     {
-      name: "EF-S02-C4 stale version chat owner and complete harness correlation are no-ops",
+      name: "EF-S02-C4 stale Piclaw version chat owner and complete harness correlation are no-ops",
       async run({ subject }) {
         subject.seedOperation(terminalOperation());
         for (const invalid of [
@@ -364,7 +368,7 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
           rowId: 40,
           revision: 2,
           chatJid: "web:terminal",
-          threadId: 7,
+          threadId: null,
           contentRef: "payload:draft",
         });
         const result = await subject.store.commitTerminal(
@@ -405,7 +409,7 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
       },
     },
     {
-      name: "EF-S02-C9 frontier stops before pending or claimed work and emits no projection",
+      name: "EF-S02-C9 frontier cannot cross pending or claimed work and no projection occurs before commit",
       async run({ subject }) {
         subject.seedOperation(
           terminalOperation({
@@ -424,7 +428,43 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
       },
     },
     {
-      name: "EF-S02-R1 equal replay is stable and altered candidate conflicts",
+      name: "EF-S02-R01 durable commit survives lost acknowledgement crash and replays without payload resolution",
+      async run(fixture) {
+        fixture.subject.seedOperation(terminalOperation());
+        const request = terminalRequest({
+          outboxIntents: [terminalOutbox("crash-oracle")],
+        });
+        fixture.subject.planFault("effect_then_lost_acknowledgement");
+        const lost = await fixture.subject.store.commitTerminal(request);
+        assert(!lost.ok && lost.error.certainty === "unknown", "lost acknowledgement is unknown");
+        const restored = await fixture.crashAndRestore();
+        restored.removePayload("payload:terminal-content");
+        const before = restored.payloadResolutionCount();
+        const replay = await restored.store.commitTerminal(request);
+        assert(replay.ok, "durable replay succeeds without payload");
+        assert(restored.payloadResolutionCount() === before, "replay bypasses resolver");
+        const view = restored.inspectDurable();
+        assert(
+          view.commitCount === 1 &&
+            view.operation?.disposition === "completed" &&
+            view.messages.length === 1 &&
+            view.messages[0]?.terminal === true &&
+            JSON.stringify(view.outboxIds) === JSON.stringify(["crash-oracle"]),
+          "one durable disposition timeline and outbox set",
+        );
+        const byOperation = await restored.store.getTerminal("operation-1");
+        const byKey = await restored.store.getTerminalByKey("terminal-key-1");
+        assert(
+          byOperation.ok &&
+            byKey.ok &&
+            JSON.stringify(byOperation.value) === JSON.stringify(replay.value) &&
+            JSON.stringify(byKey.value) === JSON.stringify(replay.value),
+          "stable restored reads",
+        );
+      },
+    },
+    {
+      name: "EF-S02-S05 equal replay is stable and altered candidate conflicts before payload resolution",
       async run({ subject }) {
         subject.seedOperation(terminalOperation());
         const request = terminalRequest();
@@ -432,6 +472,8 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
         const replay = await subject.store.commitTerminal(request);
         assert(first.ok && replay.ok, "equal replay");
         assert(JSON.stringify(first.value) === JSON.stringify(replay.value), "stable commit");
+        subject.removePayload("payload:terminal-content");
+        const before = subject.payloadResolutionCount();
         const conflict = await subject.store.commitTerminal(
           terminalRequest({ key: "altered-terminal" }),
         );
@@ -441,6 +483,7 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
             conflict.error.existing?.operationId === "operation-1",
           "altered candidate returns closed commit",
         );
+        assert(subject.payloadResolutionCount() === before, "conflict precedes resolver");
       },
     },
     {
@@ -484,7 +527,20 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
       },
     },
     {
-      name: "EF-S02-S03 reads return immutable commit by operation and key",
+      name: "EF-S02-S03 byte-equal pre-existing outbox rows are not EF-S02 insertion success",
+      async run({ subject }) {
+        subject.seedOperation(terminalOperation());
+        const intent = terminalOutbox("preexisting-exact");
+        subject.seedOutbox(intent);
+        const result = await subject.store.commitTerminal(
+          terminalRequest({ outboxIntents: [intent] }),
+        );
+        assert(!result.ok && result.error._tag === "idempotency_conflict", "preexisting row conflicts");
+        assert(untouched(subject.inspectDurable()), "preexisting collision rolls back terminal state");
+      },
+    },
+    {
+      name: "EF-S02-S04 reads return immutable commit by operation and key",
       async run({ subject }) {
         subject.seedOperation(terminalOperation());
         const committed = await subject.store.commitTerminal(terminalRequest());
@@ -497,7 +553,7 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
       },
     },
     {
-      name: "EF-S02-S04 protected refs do not appear in traces",
+      name: "EF-S02-S06 protected refs do not appear in traces",
       async run(fixture) {
         fixture.subject.seedOperation(terminalOperation());
         const result = await fixture.subject.store.commitTerminal(
@@ -508,6 +564,10 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
       },
     },
   ]);
+
+export const TERMINAL_SETTLEMENT_CONTRACT_CASE_NAMES = Object.freeze(
+  cases.map((contractCase) => contractCase.name),
+);
 
 export async function defineTerminalSettlementStoreContract(
   factory: ContractSubjectFactory<TerminalSettlementContractSubject>,
