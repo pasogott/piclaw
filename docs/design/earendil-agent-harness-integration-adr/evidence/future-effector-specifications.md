@@ -671,7 +671,7 @@ Required cases:
 
 - rollback after every statement leaves no partial terminal state;
 - commit followed by lost acknowledgement returns the original result on retry;
-- durable cancellation cause authorises cancellation, and separately valid terminal candidates race to one disposition;
+- accepted cancellation authority authorises cancellation, and separately valid terminal candidates race to one disposition;
 - stale Piclaw version and stale Earendil operation ID are no-ops;
 - missing or duplicate media cannot create two terminal rows;
 - placeholder replacement and new-row paths preserve one terminal message;

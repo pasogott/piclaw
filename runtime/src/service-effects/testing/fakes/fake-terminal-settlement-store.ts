@@ -129,7 +129,8 @@ interface FakeDecision {
   idempotencyKey: string;
   requestHash: string;
   operationId: string;
-  terminalAuthorityRef: string | null;
+  terminalAuthorityPresent: boolean;
+  mediaCount: number;
   commit: TerminalCommit;
 }
 
@@ -155,6 +156,7 @@ type FakeSettlementStatement =
   | "timeline_chat_insert"
   | "timeline_chat_update"
   | "timeline_message_insert"
+  | "timeline_placeholder_fence"
   | "timeline_message_replace"
   | "timeline_media_unlink"
   | "timeline_media_link"
@@ -177,6 +179,15 @@ class FakeAbort extends Error {
 class FakeStatementFault extends Error {}
 class FakeCorruption extends Error {}
 
+export interface FakeResolvedPayloadSeed {
+  readonly ref: string;
+  readonly content: string;
+  readonly mediaType?: string;
+  readonly redactionClass?: ResolvedEffectPayload["redactionClass"];
+  readonly sha256?: string;
+  readonly byteLength?: number;
+}
+
 export interface FakeTerminalSettlementObserver {
   recordTrace?(input: NormalisedTraceInput): void;
 }
@@ -190,11 +201,19 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
   #state: FakeState;
   #faults = new Map<string, Set<number>>();
   #faultCounts = new Map<string, number>();
+  #faultObservations = new Map<StandardFault, unknown>();
+  #faultThrows = new Set<StandardFault>();
   #statementFaults = new Set<number>();
+  #checkpointObservation: unknown = undefined;
+  #checkpointThrows = false;
   #statementCount = 0;
   #statementTrace: string[] = [];
   #payloadResolutionCount = 0;
   readonly #payloads = new Map<string, ResolvedEffectPayload>();
+  readonly #payloadBarriers = new Map<
+    string,
+    { started(): void; readonly wait: Promise<void>; release(): void }
+  >();
   readonly #resolver: EffectPayloadResolver;
   readonly #observer: FakeTerminalSettlementObserver | undefined;
 
@@ -207,9 +226,18 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
     this.#state = emptyState();
     this.#observer = observer;
     this.#resolver = resolver ?? {
-      resolve: (ref) => this.#payloads.get(ref) ?? null,
+      resolve: async (ref) => {
+        const payload = this.#payloads.get(ref) ?? null;
+        const barrier = this.#payloadBarriers.get(ref);
+        if (barrier) {
+          barrier.started();
+          await barrier.wait;
+          this.#payloadBarriers.delete(ref);
+        }
+        return payload;
+      },
     };
-    this.seedPayload("payload:terminal-content", "terminal result");
+    this.seedPayload("payload:terminal-content", "terminal content");
   }
 
   seedPayload(
@@ -229,6 +257,45 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
     }));
   }
 
+  seedResolvedPayload(seed: FakeResolvedPayloadSeed): void {
+    const bytes = new TextEncoder().encode(seed.content);
+    this.#payloads.set(
+      seed.ref,
+      Object.freeze({
+        ref: seed.ref,
+        sha256:
+          seed.sha256 ?? createHash("sha256").update(bytes).digest("hex"),
+        byteLength: seed.byteLength ?? bytes.byteLength,
+        mediaType: seed.mediaType ?? "text/plain",
+        redactionClass: seed.redactionClass ?? "secret",
+        bytes,
+      }),
+    );
+  }
+
+  mutatePayloadBytes(ref: string, byte: number): void {
+    const payload = this.#payloads.get(ref);
+    if (!payload) throw new Error("missing fake payload mutation target");
+    payload.bytes.fill(byte);
+  }
+
+  blockPayload(ref: string): { started: Promise<void>; release(): void } {
+    let signalStarted = () => {};
+    let release = () => {};
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.#payloadBarriers.set(ref, {
+      started: signalStarted,
+      wait,
+      release,
+    });
+    return { started, release };
+  }
+
   removePayload(ref: string): void {
     this.#payloads.delete(ref);
   }
@@ -239,6 +306,14 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
 
   inspectStatements(): readonly string[] {
     return Object.freeze([...this.#statementTrace]);
+  }
+
+  corruptCommitRequestHash(operationId: string): void {
+    const decision = this.#state.decisions.find(
+      (entry) => entry.operationId === operationId,
+    );
+    if (!decision) throw new Error("missing fake terminal decision");
+    decision.requestHash = "malformed";
   }
 
   seedOperation(seed: FakeTerminalOperationSeed): void {
@@ -326,6 +401,26 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
     this.#statementFaults.add(occurrence);
   }
 
+  setFaultObservation(point: StandardFault, value: unknown): void {
+    this.#faultThrows.delete(point);
+    this.#faultObservations.set(point, value);
+  }
+
+  setFaultThrow(point: StandardFault): void {
+    this.#faultObservations.delete(point);
+    this.#faultThrows.add(point);
+  }
+
+  setCheckpointObservation(value: unknown): void {
+    this.#checkpointThrows = false;
+    this.#checkpointObservation = value;
+  }
+
+  setCheckpointThrow(): void {
+    this.#checkpointObservation = undefined;
+    this.#checkpointThrows = true;
+  }
+
   snapshot(): FakeTerminalSettlementSnapshot {
     return structuredClone({
       ...this.#state,
@@ -347,7 +442,12 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
     };
     this.#faults.clear();
     this.#faultCounts.clear();
+    this.#payloadBarriers.clear();
+    this.#faultObservations.clear();
+    this.#faultThrows.clear();
     this.#statementFaults.clear();
+    this.#checkpointObservation = undefined;
+    this.#checkpointThrows = false;
     this.#statementCount = 0;
     this.#statementTrace = [];
     this.trace = EffectTraceRecorder.fromSnapshot(restored.trace);
@@ -388,7 +488,7 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
     } catch (error) {
       return this.caught(request, error);
     }
-    if (this.hitFault("before_effect")) {
+    if (this.beforeEffectInjected()) {
       return this.failure(
         effectId,
         operationId,
@@ -414,7 +514,7 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
       if (decision) return this.reconciled(request, decision);
       const commit = this.apply(working, request, resolved.value);
       this.#state = working;
-      if (this.hitFault("effect_then_lost_acknowledgement")) {
+      if (this.lostAcknowledgement()) {
         return this.failure(
           effectId,
           operationId,
@@ -609,12 +709,14 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
       if (request.committedAt < source.acceptedAt) {
         throw new FakeAbort(fakeError("owner_conflict"));
       }
-      const queueExpected =
-        source.sourceSeq !== operation.primarySourceSeq &&
-        (source.kind === "steer" ||
-          source.kind === "follow_up" ||
-          source.kind === "continuation");
-      if (queueExpected && source.queuedState !== source.state) {
+      if (source.state === "queued" && source.queuedState !== "queued") {
+        throw new FakeCorruption();
+      }
+      if (
+        source.state === "claimed" &&
+        source.queuedState !== null &&
+        source.queuedState !== "accepted"
+      ) {
         throw new FakeCorruption();
       }
     }
@@ -735,7 +837,8 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
       idempotencyKey: request.effect.idempotencyKey,
       requestHash: request.effect.requestHash,
       operationId: operation.operationId,
-      terminalAuthorityRef: request.terminalAuthorityRef,
+      terminalAuthorityPresent: request.terminalAuthorityRef !== null,
+      mediaCount: request.timeline.mediaIds.length,
       commit,
     });
     this.afterStatement("insert_commit");
@@ -791,6 +894,7 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
       ) {
         throw new FakeAbort(fakeError("owner_conflict"));
       }
+      this.afterStatement("timeline_placeholder_fence");
       if (message.mediaIds.length > 0) {
         this.afterStatement("timeline_fts_media_delete");
         this.afterStatement("timeline_fts_media_insert");
@@ -851,15 +955,46 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
     this.#statementCount += 1;
     if (this.#statementCount === 1) this.#statementTrace = [];
     this.#statementTrace.push(`${this.#statementCount}:${statement}`);
-    if (this.#statementFaults.delete(this.#statementCount)) {
+    try {
+      if (this.#checkpointThrows) throw new Error("fake checkpoint observer");
+      const observation =
+        this.#checkpointObservation === undefined
+          ? this.#statementFaults.delete(this.#statementCount)
+          : this.#checkpointObservation;
+      if (observation === false) return;
+      throw new FakeStatementFault();
+    } catch (error) {
+      if (error instanceof FakeStatementFault) throw error;
       throw new FakeStatementFault();
     }
   }
 
-  private hitFault(point: StandardFault): boolean {
+  private observeFault(point: StandardFault): unknown {
+    if (this.#faultThrows.has(point)) throw new Error("fake fault observer");
+    if (this.#faultObservations.has(point)) {
+      return this.#faultObservations.get(point);
+    }
     const occurrence = (this.#faultCounts.get(point) ?? 0) + 1;
     this.#faultCounts.set(point, occurrence);
     return this.#faults.get(point)?.has(occurrence) ?? false;
+  }
+
+  private beforeEffectInjected(): boolean {
+    try {
+      return this.observeFault("before_effect") !== false;
+    } catch (error) {
+      void error;
+      return true;
+    }
+  }
+
+  private lostAcknowledgement(): boolean {
+    try {
+      return this.observeFault("effect_then_lost_acknowledgement") === true;
+    } catch (error) {
+      void error;
+      return false;
+    }
   }
 
   private reconciled(
@@ -1006,7 +1141,12 @@ function materialiseDecision(
   }
   const authorityRequired =
     commit.disposition === "skipped" || commit.disposition === "superseded";
-  if (authorityRequired !== (decision.terminalAuthorityRef !== null)) {
+  if (
+    authorityRequired !== decision.terminalAuthorityPresent ||
+    !Number.isSafeInteger(decision.mediaCount) ||
+    decision.mediaCount < 0 ||
+    decision.mediaCount > 100
+  ) {
     throw new FakeCorruption();
   }
   const operation = state.operations.find(
@@ -1027,7 +1167,8 @@ function materialiseDecision(
       (source) =>
         source.chatJid === operation.chatJid &&
         source.operationId === operation.operationId &&
-        (source.state !== "consumed" && source.state !== "disposed"),
+        ((source.state !== "consumed" && source.state !== "disposed") ||
+          (source.queuedState !== null && source.queuedState !== source.state)),
     )
   ) {
     throw new FakeCorruption();
@@ -1036,9 +1177,39 @@ function materialiseDecision(
     const message = state.messages.find(
       (entry) => entry.rowId === commit.messageRowId,
     );
-    if (!message || !message.terminal || message.chatJid !== operation.chatJid) {
+    if (
+      !message ||
+      !message.terminal ||
+      message.chatJid !== operation.chatJid ||
+      message.mediaIds.length !== decision.mediaCount ||
+      message.mediaIds.some(
+        (mediaId) =>
+          !state.media.some(
+            (media) =>
+              media.operationId === operation.operationId &&
+              media.mediaId === mediaId &&
+              media.role === "terminal",
+          ),
+      )
+    ) {
       throw new FakeCorruption();
     }
+  } else if (decision.mediaCount !== 0) {
+    throw new FakeCorruption();
+  }
+  const prefix = state.sources
+    .filter(
+      (source) =>
+        source.chatJid === operation.chatJid &&
+        source.sourceSeq <= commit.consumedThroughSourceSeq,
+    )
+    .map((source) => source.sourceSeq)
+    .sort((left, right) => left - right);
+  if (
+    prefix.length !== commit.consumedThroughSourceSeq ||
+    prefix.some((sourceSeq, index) => sourceSeq !== index + 1)
+  ) {
+    throw new FakeCorruption();
   }
   if (
     new Set(commit.outboxIds).size !== commit.outboxIds.length ||
@@ -1047,6 +1218,12 @@ function materialiseDecision(
       return (
         !row ||
         row.operationId !== commit.operationId ||
+        (row.sourceSeq !== null &&
+          !state.sources.some(
+            (source) =>
+              source.operationId === commit.operationId &&
+              source.sourceSeq === row.sourceSeq,
+          )) ||
         row.outboxId.length === 0 ||
         row.idempotencyKey.length === 0 ||
         !/^[0-9a-f]{64}$/.test(row.requestHash) ||

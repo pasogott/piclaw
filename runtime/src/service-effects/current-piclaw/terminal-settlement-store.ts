@@ -4,7 +4,11 @@ import type Database from "bun:sqlite";
 import { validateServiceEffectContentBlocks } from "../../channels/web/messaging/content-block-safety.js";
 import type { NormalisedTraceInput } from "../contracts/common.js";
 import type { EffectPayloadResolver } from "../contracts/payload-resolver.js";
-import type { EnqueueOutboxRequest } from "../contracts/service-outbox-store.js";
+import type {
+  EnqueueOutboxRequest,
+  OutboxStoreError,
+  ServiceOutboxEnqueueInserter,
+} from "../contracts/service-outbox-store.js";
 import type {
   HarnessCorrelation,
   HarnessState,
@@ -20,12 +24,17 @@ import type {
 } from "../contracts/terminal-settlement-store.js";
 import { resolveVerifiedPayload } from "../payloads.js";
 import {
+  createServiceOutboxEnqueueInserter,
+  type ServiceOutboxEnqueueStatement,
+} from "./service-outbox-store.js";
+import {
   normaliseCommitTerminalRequest,
   normaliseTerminalLookupId,
 } from "./terminal-settlement-request-normalizer.js";
 import {
   insertTerminalTimeline,
   replaceTerminalTimeline,
+  terminalTimelineSnapshotIsValid,
   TerminalTimelineStatementError,
   type TerminalTimelineContent,
   type TerminalTimelineStatement,
@@ -124,7 +133,7 @@ const REQUIRED_SCHEMA_PROBES = Object.freeze([
   "SELECT chat_jid,operation_id,source_seq FROM service_effect_s01_operation_sources LIMIT 1",
   "SELECT chat_jid,operation_id,source_seq,state FROM service_effect_s01_queued_inputs LIMIT 1",
   "SELECT operation_id,media_id,role FROM service_effect_operation_media LIMIT 1",
-  "SELECT idempotency_key,request_hash,operation_id,chat_jid,operation_version,disposition,message_row_id,consumed_through_source_seq,outbox_count,committed_at,terminal_authority_ref FROM service_effect_s02_commits LIMIT 1",
+  "SELECT idempotency_key,request_hash,operation_id,chat_jid,operation_version,disposition,message_row_id,consumed_through_source_seq,outbox_count,media_count,committed_at,terminal_authority_present FROM service_effect_s02_commits LIMIT 1",
   "SELECT operation_id,ordinal,outbox_id FROM service_effect_s02_commit_outbox LIMIT 1",
   "SELECT outbox_id,kind,state,idempotency_key,request_hash,operation_id,source_seq,provenance_ref,redaction_class,payload_ref,destination_ref,available_at,enqueued_at,state_changed_at,repeatability,attempt,certainty FROM service_effect_s05_outbox LIMIT 1",
   "SELECT decision_key,method,request_hash,outcome,outbox_id,attempt FROM service_effect_s05_decisions LIMIT 1",
@@ -167,8 +176,9 @@ interface CommitRow {
   message_row_id: unknown;
   consumed_through_source_seq: unknown;
   outbox_count: unknown;
+  media_count: unknown;
   committed_at: unknown;
-  terminal_authority_ref: unknown;
+  terminal_authority_present: unknown;
 }
 
 interface OperationRow {
@@ -234,7 +244,7 @@ export function createCurrentPiclawTerminalSettlementStore(
   }
 }
 
-export class CurrentPiclawTerminalSettlementStore
+class CurrentPiclawTerminalSettlementStore
   implements TerminalSettlementStore
 {
   private checkpointOccurrence = 0;
@@ -243,6 +253,7 @@ export class CurrentPiclawTerminalSettlementStore
     readonly database: Database,
     private readonly payloads: EffectPayloadResolver,
     private readonly runtime: TerminalSettlementAdapterRuntime,
+    private readonly outbox: ServiceOutboxEnqueueInserter,
   ) {}
 
   static create(
@@ -251,7 +262,21 @@ export class CurrentPiclawTerminalSettlementStore
     runtime: TerminalSettlementAdapterRuntime,
   ): CurrentPiclawTerminalSettlementStore {
     validateConstruction(database);
-    return new CurrentPiclawTerminalSettlementStore(database, payloads, runtime);
+    let observe: (statement: ServiceOutboxEnqueueStatement) => void = () => {
+      throw new Error("EF-S02 outbox observer is not initialised.");
+    };
+    const inserter = createServiceOutboxEnqueueInserter(database, {
+      afterStatement: (statement) => observe(statement),
+    });
+    if (!inserter.ok) throw new Error("EF-S02 outbox inserter unavailable.");
+    const store = new CurrentPiclawTerminalSettlementStore(
+      database,
+      payloads,
+      runtime,
+      inserter.value,
+    );
+    observe = (statement) => store.afterStatement(statement);
+    return store;
   }
 
   async commitTerminal(
@@ -484,9 +509,9 @@ export class CurrentPiclawTerminalSettlementStore
       .prepare(
         `INSERT INTO service_effect_s02_commits(
            idempotency_key,request_hash,operation_id,chat_jid,operation_version,
-           disposition,message_row_id,consumed_through_source_seq,outbox_count,committed_at,
-           terminal_authority_ref
-         ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+           disposition,message_row_id,consumed_through_source_seq,outbox_count,media_count,
+           committed_at,terminal_authority_present
+         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         request.effect.idempotencyKey,
@@ -498,8 +523,9 @@ export class CurrentPiclawTerminalSettlementStore
         messageRowId,
         consumedThroughSourceSeq,
         request.outboxIntents.length,
+        request.timeline.mediaIds.length,
         request.committedAt,
-        request.terminalAuthorityRef,
+        request.terminalAuthorityRef === null ? 0 : 1,
       );
     if (!changedUnique(insertedCommit.changes)) throw new CorruptSettlementState();
     this.afterStatement("insert_commit");
@@ -550,85 +576,32 @@ export class CurrentPiclawTerminalSettlementStore
   }
 
   private insertOutbox(intent: EnqueueOutboxRequest): void {
-    const collision = this.database
-      .prepare(
-        `SELECT 1 present FROM service_effect_s05_outbox
-         WHERE outbox_id=? OR (kind=? AND idempotency_key=?) LIMIT 1`,
-      )
-      .get(intent.outboxId, intent.kind, intent.effect.idempotencyKey) as
-      | { present?: unknown }
-      | undefined;
-    if (collision) {
+    const inserted = this.outbox.insert(intent);
+    if (!inserted.ok) {
+      throw new SettlementAbort(mapOutboxError(inserted.error));
+    }
+    const { decision, record } = inserted.value;
+    if (decision !== "applied") {
       throw new SettlementAbort(settlementError("idempotency_conflict"));
     }
-    const inserted = this.database
-      .prepare(
-        `INSERT INTO service_effect_s05_outbox(
-           outbox_id,kind,state,idempotency_key,request_hash,operation_id,source_seq,
-           provenance_ref,redaction_class,payload_ref,destination_ref,available_at,
-           enqueued_at,state_changed_at,repeatability,attempt,certainty
-         ) VALUES (?,?, 'pending', ?,?,?,?,?,?,?,?,?,?,?,?,0,'not_applied')`,
-      )
-      .run(
-        intent.outboxId,
-        intent.kind,
-        intent.effect.idempotencyKey,
-        intent.effect.requestHash,
-        intent.effect.operationId,
-        intent.effect.sourceSeq,
-        intent.effect.provenanceRef,
-        intent.effect.redactionClass,
-        intent.payloadRef,
-        intent.destinationRef,
-        intent.availableAt,
-        intent.enqueuedAt,
-        intent.enqueuedAt,
-        intent.repeatability,
-      );
-    if (!changedUnique(inserted.changes)) throw new CorruptSettlementState();
-    this.afterStatement("outbox_insert");
-    const decisionKey = `enqueue:${intent.kind}:${intent.effect.idempotencyKey}`;
-    const decided = this.database
-      .prepare(
-        `INSERT INTO service_effect_s05_decisions(
-           decision_key,method,request_hash,outcome,outbox_id,attempt
-         ) VALUES (?,'enqueue',?,'applied',?,0)`,
-      )
-      .run(decisionKey, intent.effect.requestHash, intent.outboxId);
-    if (!changedUnique(decided.changes)) throw new CorruptSettlementState();
-    this.afterStatement("outbox_decision_insert");
-    const exact = this.database
-      .prepare(
-        `SELECT 1 present FROM service_effect_s05_outbox o
-         JOIN service_effect_s05_decisions d ON d.outbox_id=o.outbox_id
-         WHERE o.outbox_id=? AND o.kind=? AND o.idempotency_key=?
-           AND o.request_hash=? AND o.operation_id IS ? AND o.source_seq IS ?
-           AND o.provenance_ref=? AND o.redaction_class=? AND o.payload_ref=?
-           AND o.destination_ref IS ? AND o.available_at=? AND o.enqueued_at=?
-           AND o.state_changed_at=? AND o.repeatability=? AND o.state='pending'
-           AND o.attempt=0 AND o.certainty='not_applied'
-           AND d.decision_key=? AND d.method='enqueue' AND d.request_hash=?
-           AND d.outcome='applied' AND d.attempt=0`,
-      )
-      .get(
-        intent.outboxId,
-        intent.kind,
-        intent.effect.idempotencyKey,
-        intent.effect.requestHash,
-        intent.effect.operationId,
-        intent.effect.sourceSeq,
-        intent.effect.provenanceRef,
-        intent.effect.redactionClass,
-        intent.payloadRef,
-        intent.destinationRef,
-        intent.availableAt,
-        intent.enqueuedAt,
-        intent.enqueuedAt,
-        intent.repeatability,
-        decisionKey,
-        intent.effect.requestHash,
-      ) as { present?: unknown } | undefined;
-    if (exact?.present !== 1) throw new CorruptSettlementState();
+    if (
+      record.outboxId !== intent.outboxId ||
+      record.kind !== intent.kind ||
+      record.idempotencyKey !== intent.effect.idempotencyKey ||
+      record.requestHash !== intent.effect.requestHash ||
+      record.operationId !== intent.effect.operationId ||
+      record.sourceSeq !== intent.effect.sourceSeq ||
+      record.provenanceRef !== intent.effect.provenanceRef ||
+      record.redactionClass !== intent.effect.redactionClass ||
+      record.payloadRef !== intent.payloadRef ||
+      record.destinationRef !== intent.destinationRef ||
+      record.availableAt !== intent.availableAt ||
+      record.enqueuedAt !== intent.enqueuedAt ||
+      record.repeatability !== intent.repeatability ||
+      record.state !== "pending"
+    ) {
+      throw new CorruptSettlementState();
+    }
   }
 
   private validateMedia(request: CommitTerminalRequest): void {
@@ -655,7 +628,7 @@ export class CurrentPiclawTerminalSettlementStore
   ): void {
     const memberships = this.database
       .prepare(
-        `SELECT s.source_seq,s.state,s.kind,q.state queue_state
+        `SELECT s.source_seq,s.state,q.state queue_state
          FROM service_effect_s01_operation_sources os
          JOIN service_effect_s01_sources s
            ON s.chat_jid=os.chat_jid AND s.source_seq=os.source_seq
@@ -666,7 +639,6 @@ export class CurrentPiclawTerminalSettlementStore
       .all(operation.operationId) as Array<{
         source_seq?: unknown;
         state?: unknown;
-        kind?: unknown;
         queue_state?: unknown;
       }>;
     const expected = memberships.map((row) => requiredInteger(row.source_seq, 1));
@@ -682,15 +654,17 @@ export class CurrentPiclawTerminalSettlementStore
       if (row.state !== "claimed" && row.state !== "queued") {
         throw new CorruptSettlementState();
       }
-      const sourceSeq = requiredInteger(row.source_seq, 1);
-      const queueExpected =
-        sourceSeq !== operation.primarySourceSeq &&
-        (row.kind === "steer" || row.kind === "follow_up" || row.kind === "continuation");
-      if (queueExpected && row.queue_state !== row.state) {
+      requiredInteger(row.source_seq, 1);
+      if (row.state === "queued" && row.queue_state !== "queued") {
         throw new CorruptSettlementState();
       }
-      if (!queueExpected && row.queue_state !== null && row.queue_state !== undefined) {
-        if (row.queue_state !== row.state) throw new CorruptSettlementState();
+      if (
+        row.state === "claimed" &&
+        row.queue_state !== null &&
+        row.queue_state !== undefined &&
+        row.queue_state !== "accepted"
+      ) {
+        throw new CorruptSettlementState();
       }
     }
   }
@@ -702,7 +676,7 @@ export class CurrentPiclawTerminalSettlementStore
     for (const disposition of request.sourceDispositions) {
       const owned = this.database
         .query(
-          `SELECT s.state source_state,s.kind source_kind,q.state queue_state
+          `SELECT s.state source_state,q.state queue_state
            FROM service_effect_s01_sources s
            JOIN service_effect_s01_operation_sources os
              ON os.chat_jid=s.chat_jid AND os.source_seq=s.source_seq
@@ -715,7 +689,7 @@ export class CurrentPiclawTerminalSettlementStore
           disposition.sourceSeq,
           operation.operationId,
         ) as
-        | { source_state?: unknown; source_kind?: unknown; queue_state?: unknown }
+        | { source_state?: unknown; queue_state?: unknown }
         | undefined;
       if (
         !owned ||
@@ -1034,13 +1008,20 @@ export class CurrentPiclawTerminalSettlementStore
     requiredHash(row.request_hash);
     const chatJid = requiredText(row.chat_jid, 512);
     const disposition = requiredDisposition(row.disposition);
-    const authority = nullableText(row.terminal_authority_ref, 2048);
+    const authorityPresent = requiredInteger(
+      row.terminal_authority_present,
+      0,
+    );
     const authorityRequired =
       disposition === "skipped" || disposition === "superseded";
-    if (authorityRequired !== (authority !== null)) {
+    if (authorityPresent > 1 || authorityRequired !== (authorityPresent === 1)) {
       throw new CorruptSettlementState();
     }
     const expectedOutboxCount = requiredInteger(row.outbox_count, 0);
+    const expectedMediaCount = requiredInteger(row.media_count, 0);
+    if (expectedOutboxCount > 100 || expectedMediaCount > 100) {
+      throw new CorruptSettlementState();
+    }
     const ledgerCommittedAt = requiredInstant(row.committed_at);
     const outboxIds = (
       this.database
@@ -1086,6 +1067,21 @@ export class CurrentPiclawTerminalSettlementStore
       const outboxId = requiredText(entry.outbox_id, 512);
       const enqueuedAt = requiredInstant(entry.enqueued_at);
       const availableAt = requiredInstant(entry.available_at);
+      const sourceSeq =
+        entry.source_seq === null
+          ? null
+          : requiredInteger(entry.source_seq, 0);
+      if (
+        sourceSeq !== null &&
+        !this.database
+          .prepare(
+            `SELECT 1 FROM service_effect_s01_operation_sources
+             WHERE operation_id=? AND source_seq=?`,
+          )
+          .get(operationId, sourceSeq)
+      ) {
+        throw new CorruptSettlementState();
+      }
       if (
         requiredInteger(entry.ordinal, 0) !== index ||
         nullableText(entry.outbox_operation_id, 512) !== operationId ||
@@ -1093,7 +1089,7 @@ export class CurrentPiclawTerminalSettlementStore
         entry.state !== "pending" ||
         requiredText(entry.idempotency_key, 512).length < 1 ||
         requiredHash(entry.request_hash).length !== 64 ||
-        (entry.source_seq !== null && requiredInteger(entry.source_seq, 0) < 0) ||
+        (sourceSeq !== null && sourceSeq < 0) ||
         requiredText(entry.provenance_ref, 2048).length < 1 ||
         !["public", "private", "secret"].includes(requiredText(entry.redaction_class, 16)) ||
         requiredText(entry.payload_ref, 2048).length < 1 ||
@@ -1136,10 +1132,18 @@ export class CurrentPiclawTerminalSettlementStore
       if (
         !message ||
         requiredText(message.chat_jid, 512) !== chatJid ||
-        requiredInteger(message.is_terminal_agent_reply, 0) !== 1
+        requiredInteger(message.is_terminal_agent_reply, 0) !== 1 ||
+        !terminalTimelineSnapshotIsValid(
+          this.database,
+          operationId,
+          messageRowId,
+          expectedMediaCount,
+        )
       ) {
         throw new CorruptSettlementState();
       }
+    } else if (expectedMediaCount !== 0) {
+      throw new CorruptSettlementState();
     }
     const terminal = this.database
       .query(
@@ -1178,17 +1182,66 @@ export class CurrentPiclawTerminalSettlementStore
     ) {
       throw new CorruptSettlementState();
     }
-    const openMembership = this.database
+    const memberships = this.database
       .prepare(
-        `SELECT 1 present
+        `SELECT s.source_seq,s.state,q.state queue_state
          FROM service_effect_s01_operation_sources os
          JOIN service_effect_s01_sources s
            ON s.chat_jid=os.chat_jid AND s.source_seq=os.source_seq
-         WHERE os.operation_id=? AND s.state NOT IN ('consumed','disposed')
-         LIMIT 1`,
+         LEFT JOIN service_effect_s01_queued_inputs q
+           ON q.operation_id=os.operation_id AND q.source_seq=os.source_seq
+         WHERE os.operation_id=? ORDER BY s.source_seq`,
       )
-      .get(operationId) as { present?: unknown } | undefined;
-    if (openMembership) throw new CorruptSettlementState();
+      .all(operationId) as Array<{
+      source_seq?: unknown;
+      state?: unknown;
+      queue_state?: unknown;
+    }>;
+    if (
+      memberships.length === 0 ||
+      memberships.some((membership) => {
+        requiredInteger(membership.source_seq, 1);
+        return (
+          (membership.state !== "consumed" && membership.state !== "disposed") ||
+          (membership.queue_state !== null &&
+            membership.queue_state !== undefined &&
+            membership.queue_state !== membership.state)
+        );
+      })
+    ) {
+      throw new CorruptSettlementState();
+    }
+    const chat = this.database
+      .prepare(
+        `SELECT consumed_through_source_seq FROM service_effect_s01_chats
+         WHERE chat_jid=?`,
+      )
+      .get(chatJid) as { consumed_through_source_seq?: unknown } | undefined;
+    if (
+      !chat ||
+      requiredInteger(chat.consumed_through_source_seq, 0) <
+        consumedThroughSourceSeq
+    ) {
+      throw new CorruptSettlementState();
+    }
+    const prefix = this.database
+      .prepare(
+        `SELECT count(*) n,min(source_seq) first,max(source_seq) last
+         FROM service_effect_s01_sources
+         WHERE chat_jid=? AND source_seq<=?`,
+      )
+      .get(chatJid, consumedThroughSourceSeq) as
+      | { n?: unknown; first?: unknown; last?: unknown }
+      | undefined;
+    if (
+      !prefix ||
+      requiredInteger(prefix.n, 0) !== consumedThroughSourceSeq ||
+      (consumedThroughSourceSeq > 0 &&
+        (requiredInteger(prefix.first, 1) !== 1 ||
+          requiredInteger(prefix.last, 1) !== consumedThroughSourceSeq))
+    ) {
+      throw new CorruptSettlementState();
+    }
     return freezeCommit({
       operationId,
       operationVersion,
@@ -1478,6 +1531,20 @@ function equalHarness(
     left.state === right.state &&
     left.watchGeneration === right.watchGeneration
   );
+}
+
+function mapOutboxError(error: OutboxStoreError): TerminalSettlementError {
+  if (error._tag === "idempotency_conflict") {
+    return settlementError("idempotency_conflict");
+  }
+  if (error._tag === "storage_unavailable") {
+    return settlementError(
+      "storage_unavailable",
+      error.certainty,
+      error.retryable,
+    );
+  }
+  return settlementError("corrupt_state");
 }
 
 function settlementError(

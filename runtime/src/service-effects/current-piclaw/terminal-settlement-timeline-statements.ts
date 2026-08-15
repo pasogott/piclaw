@@ -6,6 +6,7 @@ export type TerminalTimelineStatement =
   | "timeline_chat_insert"
   | "timeline_chat_update"
   | "timeline_message_insert"
+  | "timeline_placeholder_fence"
   | "timeline_message_replace"
   | "timeline_media_unlink"
   | "timeline_media_link"
@@ -122,6 +123,36 @@ export function replaceTerminalTimeline(
   afterStatement: (statement: TerminalTimelineStatement) => void,
 ): number {
   validateThreadRoot(database, timeline.chatJid, timeline.threadId);
+  const fenced = database
+    .prepare(
+      `UPDATE service_effect_timeline_writes
+       SET revision=revision
+       WHERE write_type='draft' AND operation_id=? AND message_rowid=?
+         AND chat_jid=?
+         AND revision=(
+           SELECT MAX(newer.revision)
+           FROM service_effect_timeline_writes newer
+           WHERE newer.write_type='draft'
+             AND newer.operation_id=service_effect_timeline_writes.operation_id
+         )
+         AND EXISTS (
+           SELECT 1 FROM messages m
+           WHERE m.rowid=service_effect_timeline_writes.message_rowid
+             AND m.chat_jid=service_effect_timeline_writes.chat_jid
+             AND m.thread_id IS ? AND m.is_bot_message=1
+             AND m.is_terminal_agent_reply=0
+         )`,
+    )
+    .run(
+      operationId,
+      timeline.placeholderRowId,
+      timeline.chatJid,
+      timeline.threadId,
+    );
+  if (!changedUnique(fenced.changes)) {
+    throw new TerminalTimelineStatementError("owner_conflict");
+  }
+  afterStatement("timeline_placeholder_fence");
   normaliseExistingMediaFts(
     database,
     timeline.placeholderRowId,
@@ -259,6 +290,62 @@ function appendMediaTextToFts(
   );
 }
 
+export function terminalTimelineSnapshotIsValid(
+  database: Database,
+  operationId: string,
+  messageRowId: number,
+  expectedMediaCount: number,
+): boolean {
+  try {
+    const message = database
+      .prepare("SELECT content FROM messages WHERE rowid=?")
+      .get(messageRowId) as { content?: unknown } | undefined;
+    if (!message || typeof message.content !== "string") return false;
+    const owned = database
+      .prepare(
+        `SELECT mm.media_id
+         FROM message_media mm
+         JOIN service_effect_operation_media m
+           ON m.media_id=mm.media_id AND m.operation_id=? AND m.role='terminal'
+         JOIN media stored ON stored.id=mm.media_id
+         WHERE mm.message_rowid=? ORDER BY mm.media_id`,
+      )
+      .all(operationId, messageRowId) as Array<{ media_id?: unknown }>;
+    const total = database
+      .prepare("SELECT count(*) n FROM message_media WHERE message_rowid=?")
+      .get(messageRowId) as { n?: unknown } | undefined;
+    const mediaIds = owned.map((entry) => requiredCount(entry.media_id));
+    if (
+      requiredCount(total?.n) !== expectedMediaCount ||
+      mediaIds.length !== expectedMediaCount
+    ) {
+      return false;
+    }
+    const indexed = (text: string): boolean => {
+      if (text.length === 0) return true;
+      const phrase = `"${text.replaceAll('"', '""')}"`;
+      const found = database
+        .prepare(
+          "SELECT count(*) n FROM messages_fts WHERE rowid=? AND messages_fts MATCH ?",
+        )
+        .get(messageRowId, phrase) as { n?: unknown } | undefined;
+      return requiredCount(found?.n) === 1;
+    };
+    if (!indexed(message.content)) return false;
+    return collectMediaText(database, mediaIds).every(indexed);
+  } catch (error) {
+    void error;
+    return false;
+  }
+}
+
+function requiredCount(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new TerminalTimelineStatementError("corrupt_state");
+  }
+  return value as number;
+}
+
 function collectMediaText(
   database: Database,
   mediaIds: readonly number[],
@@ -278,13 +365,13 @@ function collectMediaText(
     ) {
       throw new TerminalTimelineStatementError("corrupt_state");
     }
+    const metadata = parseMetadata(row.metadata as string | null);
     if (
       !INDEXABLE_MEDIA_TYPES.has(row.content_type) &&
       !row.content_type.startsWith("text/")
     ) {
       continue;
     }
-    const metadata = parseMetadata(row.metadata as string | null);
     const bytes = decompressMedia(row.data, metadata);
     const raw = new TextDecoder().decode(bytes);
     const text =
@@ -397,7 +484,7 @@ function decompressMedia(
     return new Uint8Array(gunzipSync(Buffer.from(data)));
   } catch (error) {
     void error;
-    return data;
+    throw new TerminalTimelineStatementError("corrupt_state");
   }
 }
 
@@ -405,12 +492,13 @@ function parseMetadata(value: string | null): Record<string, unknown> | null {
   if (value === null) return null;
   try {
     const parsed: unknown = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new TerminalTimelineStatementError("corrupt_state");
+    }
+    return parsed as Record<string, unknown>;
   } catch (error) {
-    void error;
-    return null;
+    if (error instanceof TerminalTimelineStatementError) throw error;
+    throw new TerminalTimelineStatementError("corrupt_state");
   }
 }
 

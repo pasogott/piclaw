@@ -60,8 +60,9 @@ export function installTerminalSettlementCompositionSchema(
         message_row_id INTEGER CHECK(message_row_id IS NULL OR message_row_id >= 1),
         consumed_through_source_seq INTEGER NOT NULL CHECK(consumed_through_source_seq BETWEEN 0 AND 9007199254740991),
         outbox_count INTEGER NOT NULL CHECK(outbox_count BETWEEN 0 AND 100),
+        media_count INTEGER NOT NULL CHECK(media_count BETWEEN 0 AND 100),
         committed_at TEXT NOT NULL CHECK(${INSTANT}),
-        terminal_authority_ref TEXT CHECK(terminal_authority_ref IS NULL OR length(terminal_authority_ref) BETWEEN 1 AND 2048),
+        terminal_authority_present INTEGER NOT NULL CHECK(terminal_authority_present IN (0,1)),
         FOREIGN KEY(operation_id) REFERENCES service_effect_s01_operations(operation_id),
         FOREIGN KEY(chat_jid, operation_id) REFERENCES service_effect_s01_operations(chat_jid, operation_id)
       ) STRICT;

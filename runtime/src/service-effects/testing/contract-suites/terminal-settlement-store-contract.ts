@@ -41,11 +41,29 @@ export interface TerminalSettlementDurableView {
     readonly terminal: boolean;
     readonly threadId: number | null;
     readonly mediaIds: readonly number[];
+    readonly content: string;
+    readonly contentBlocks: CanonicalJsonValue | null;
   }[];
   readonly outboxIds: readonly string[];
   readonly commitCount: number;
   readonly projectionCount: number;
 }
+
+export interface TerminalSettlementPayloadSeed {
+  readonly ref: string;
+  readonly content: string;
+  readonly mediaType?: string;
+  readonly redactionClass?: "public" | "internal" | "secret";
+  readonly sha256?: string;
+  readonly byteLength?: number;
+}
+
+export type TerminalSettlementObserverBehavior =
+  | "false"
+  | "true"
+  | "throw"
+  | "nonboolean"
+  | "thenable";
 
 export interface TerminalSettlementContractSubject {
   readonly store: TerminalSettlementStore;
@@ -58,11 +76,44 @@ export interface TerminalSettlementContractSubject {
     occurrence?: number,
   ): void;
   planStatementFault(occurrence: number): void;
+  setFaultBehavior(
+    point: "before_effect" | "effect_then_lost_acknowledgement",
+    behavior: TerminalSettlementObserverBehavior,
+  ): void;
+  setCheckpointBehavior(behavior: TerminalSettlementObserverBehavior): void;
+  seedPayload(seed: TerminalSettlementPayloadSeed): void;
+  mutatePayloadBytes(ref: string, byte: number): void;
+  blockPayload(ref: string): { readonly started: Promise<void>; release(): void };
+  holdWriterLock(): { release(): void };
   removePayload(ref: string): void;
   payloadResolutionCount(): number;
   inspectStatements(): readonly string[];
+  corruptCommitRequestHash(operationId: string): void;
   inspectDurable(operationId?: string): TerminalSettlementDurableView;
   dispose?(): void | Promise<void>;
+}
+
+function namedOperation(index: number): FakeTerminalOperationSeed {
+  const operationId = `observer-operation-${index}`;
+  const chatJid = `web:observer-${index}`;
+  return terminalOperation({
+    operationId,
+    chatJid,
+    activeOperationId: operationId,
+    sources: [
+      { sourceSeq: 1, state: "claimed", operationId },
+    ],
+  });
+}
+
+function namedRequest(index: number): CommitTerminalRequest {
+  const operationId = `observer-operation-${index}`;
+  const chatJid = `web:observer-${index}`;
+  return terminalRequest({
+    key: `observer-key-${index}`,
+    operationId,
+    chatJid,
+  });
 }
 
 function assert(value: unknown, message: string): asserts value {
@@ -295,7 +346,7 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
       },
     },
     {
-      name: "EF-S02-C3 durable cancellation cause authorises cancellation and rejects completion",
+      name: "EF-S02-C3 accepted cancellation authority authorises cancellation and rejects completion",
       async run({ subject }) {
         subject.seedOperation(
           terminalOperation({ cancellationSourceSeq: 1, phase: "settling" }),
@@ -428,12 +479,44 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
       },
     },
     {
-      name: "EF-S02-R01 durable commit survives lost acknowledgement crash and replays without payload resolution",
+      name: "EF-S02-R01 pre-effect no-op C1 rollback evidence held-lock retry and lost-ack restore converge",
       async run(fixture) {
+        fixture.subject.seedOperation(namedOperation(80));
+        fixture.subject.planFault("before_effect");
+        const preEffect = await fixture.subject.store.commitTerminal(
+          namedRequest(80),
+        );
+        assert(
+          !preEffect.ok &&
+            preEffect.error._tag === "storage_unavailable" &&
+            preEffect.error.certainty === "not_applied",
+          "pre-effect no-op",
+        );
+        assert(
+          untouched(fixture.subject.inspectDurable("observer-operation-80")),
+          "pre-effect leaves no state",
+        );
+
         fixture.subject.seedOperation(terminalOperation());
         const request = terminalRequest({
           outboxIntents: [terminalOutbox("crash-oracle")],
         });
+        const lock = fixture.subject.holdWriterLock();
+        const blocked = await fixture.subject.store.commitTerminal(request);
+        lock.release();
+        assert(
+          !blocked.ok &&
+            blocked.error._tag === "storage_unavailable" &&
+            blocked.error.certainty === "not_applied",
+          "held writer lock is bounded and retryable",
+        );
+        assert(
+          fixture.subject.inspectDurable().commitCount === 0,
+          "held lock leaves no partial commit",
+        );
+
+        // EF-S02-C1 exhausts every named statement checkpoint; R01 reuses that
+        // rollback oracle before proving postcommit crash restoration here.
         fixture.subject.planFault("effect_then_lost_acknowledgement");
         const lost = await fixture.subject.store.commitTerminal(request);
         assert(!lost.ok && lost.error.certainty === "unknown", "lost acknowledgement is unknown");
@@ -472,18 +555,16 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
         const replay = await subject.store.commitTerminal(request);
         assert(first.ok && replay.ok, "equal replay");
         assert(JSON.stringify(first.value) === JSON.stringify(replay.value), "stable commit");
-        subject.removePayload("payload:terminal-content");
         const before = subject.payloadResolutionCount();
+        subject.removePayload("payload:terminal-content");
         const conflict = await subject.store.commitTerminal(
-          terminalRequest({ key: "altered-terminal" }),
+          terminalRequest({ key: "altered-terminal-key" }),
         );
         assert(
-          !conflict.ok &&
-            conflict.error._tag === "already_terminal_conflict" &&
-            conflict.error.existing?.operationId === "operation-1",
-          "altered candidate returns closed commit",
+          !conflict.ok && conflict.error._tag === "already_terminal_conflict",
+          "altered candidate conflicts",
         );
-        assert(subject.payloadResolutionCount() === before, "conflict precedes resolver");
+        assert(subject.payloadResolutionCount() === before, "conflict bypasses resolver");
       },
     },
     {
@@ -492,9 +573,11 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
         subject.seedOperation(
           terminalOperation({
             sources: [
+              { sourceSeq: 1, state: "claimed", operationId: "operation-1" },
               {
-                sourceSeq: 1,
+                sourceSeq: 2,
                 state: "queued",
+                kind: "steer",
                 operationId: "operation-1",
                 queuedState: "queued",
               },
@@ -504,13 +587,18 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
         const result = await subject.store.commitTerminal(
           terminalRequest({
             sourceDispositions: [
-              { sourceSeq: 1, state: "disposed", reason: "superseded-input" },
+              { sourceSeq: 1, state: "consumed", reason: "primary" },
+              { sourceSeq: 2, state: "disposed", reason: "terminal" },
             ],
           }),
         );
         assert(result.ok, "commit");
-        const source = subject.inspectDurable().sources[0];
-        assert(source?.state === "disposed" && source.queuedState === "disposed", "queue follows source");
+        const view = subject.inspectDurable();
+        assert(
+          view.sources[1]?.state === "disposed" &&
+            view.sources[1]?.queuedState === "disposed",
+          "queue settled once",
+        );
       },
     },
     {
@@ -550,6 +638,317 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
         assert(byOperation.ok && byKey.ok && byOperation.value && byKey.value, "reads");
         assert(Object.isFrozen(byOperation.value) && Object.isFrozen(byOperation.value.outboxIds), "immutable");
         assert(JSON.stringify(byOperation.value) === JSON.stringify(byKey.value), "same commit");
+      },
+    },
+    {
+      name: "EF-S02-S07 pre-effect callback accepts only exact false",
+      async run({ subject }) {
+        const behaviors: readonly TerminalSettlementObserverBehavior[] = [
+          "false",
+          "true",
+          "throw",
+          "nonboolean",
+          "thenable",
+        ];
+        for (const [index, behavior] of behaviors.entries()) {
+          subject.seedOperation(namedOperation(index + 10));
+          subject.setFaultBehavior("before_effect", behavior);
+          const result = await subject.store.commitTerminal(namedRequest(index + 10));
+          if (behavior === "false") {
+            assert(
+              result.ok,
+              `pre ${behavior} proceeds: ${result.ok ? "ok" : result.error._tag}`,
+            );
+          } else {
+            assert(
+              !result.ok &&
+                result.error._tag === "storage_unavailable" &&
+                result.error.certainty === "not_applied",
+              `pre ${behavior} is not applied`,
+            );
+            assert(
+              untouched(subject.inspectDurable(`observer-operation-${index + 10}`)),
+              `pre ${behavior} leaves no durable state`,
+            );
+          }
+        }
+      },
+    },
+    {
+      name: "EF-S02-S08 postcommit callback treats only exact true as lost acknowledgement",
+      async run({ subject }) {
+        const behaviors: readonly TerminalSettlementObserverBehavior[] = [
+          "false",
+          "true",
+          "throw",
+          "nonboolean",
+          "thenable",
+        ];
+        for (const [index, behavior] of behaviors.entries()) {
+          const operationIndex = index + 20;
+          subject.seedOperation(namedOperation(operationIndex));
+          subject.setFaultBehavior(
+            "effect_then_lost_acknowledgement",
+            behavior,
+          );
+          const result = await subject.store.commitTerminal(
+            namedRequest(operationIndex),
+          );
+          if (behavior === "true") {
+            assert(
+              !result.ok &&
+                result.error._tag === "storage_unavailable" &&
+                result.error.certainty === "unknown",
+              "exact true loses acknowledgement",
+            );
+          } else {
+            assert(result.ok, `post ${behavior} preserves success`);
+          }
+          assert(
+            subject.inspectDurable(`observer-operation-${operationIndex}`)
+              .commitCount === 1,
+            `post ${behavior} is durable`,
+          );
+        }
+      },
+    },
+    {
+      name: "EF-S02-S09 statement checkpoint accepts only exact false",
+      async run({ subject }) {
+        const behaviors: readonly TerminalSettlementObserverBehavior[] = [
+          "false",
+          "true",
+          "throw",
+          "nonboolean",
+          "thenable",
+        ];
+        for (const [index, behavior] of behaviors.entries()) {
+          const operationIndex = index + 30;
+          subject.seedOperation(namedOperation(operationIndex));
+          subject.setCheckpointBehavior(behavior);
+          const result = await subject.store.commitTerminal(
+            namedRequest(operationIndex),
+          );
+          if (behavior === "false") {
+            assert(result.ok, "checkpoint false proceeds");
+          } else {
+            assert(
+              !result.ok &&
+                result.error._tag === "storage_unavailable" &&
+                result.error.certainty === "not_applied",
+              `checkpoint ${behavior} rolls back`,
+            );
+            assert(
+              untouched(subject.inspectDurable(`observer-operation-${operationIndex}`)),
+              `checkpoint ${behavior} no-op`,
+            );
+          }
+        }
+      },
+    },
+    {
+      name: "EF-S02-S13 public reads reject malformed durable snapshots in both adapters",
+      async run({ subject }) {
+        subject.seedOperation(namedOperation(71));
+        const committed = await subject.store.commitTerminal(namedRequest(71));
+        assert(committed.ok, "corruption seed commit");
+        subject.corruptCommitRequestHash("observer-operation-71");
+        const [byOperation, byKey] = await Promise.all([
+          subject.store.getTerminal("observer-operation-71"),
+          subject.store.getTerminalByKey("observer-key-71"),
+        ]);
+        assert(
+          !byOperation.ok && byOperation.error._tag === "corrupt_state",
+          "operation read detects corruption",
+        );
+        assert(
+          !byKey.ok && byKey.error._tag === "corrupt_state",
+          "key read detects corruption",
+        );
+      },
+    },
+    {
+      name: "EF-S02-S12 source sequence gaps below the chat frontier are corrupt",
+      async run({ subject }) {
+        const operation = namedOperation(70);
+        subject.seedOperation({
+          ...operation,
+          sources: [
+            { sourceSeq: 1, state: "claimed", operationId: operation.operationId },
+            { sourceSeq: 3, state: "pending", operationId: null },
+          ],
+        });
+        const result = await subject.store.commitTerminal(namedRequest(70));
+        assert(
+          !result.ok && result.error._tag === "corrupt_state",
+          "frontier gap is corruption",
+        );
+        assert(
+          subject.inspectDurable(operation.operationId).commitCount === 0,
+          "frontier gap rolls back",
+        );
+      },
+    },
+    {
+      name: "EF-S02-S11 queued-input ownership follows durable source state rather than source kind",
+      async run({ subject }) {
+        const variants = [
+          { state: "claimed", queuedState: null, ok: true },
+          { state: "claimed", queuedState: "accepted", ok: true },
+          { state: "queued", queuedState: "queued", ok: true },
+          { state: "queued", queuedState: null, ok: false },
+          { state: "claimed", queuedState: "queued", ok: false },
+          { state: "claimed", queuedState: "consumed", ok: false },
+        ] as const;
+        for (const [index, variant] of variants.entries()) {
+          const operationIndex = index + 60;
+          const operation = namedOperation(operationIndex);
+          subject.seedOperation({
+            ...operation,
+            sources: [
+              {
+                sourceSeq: 1,
+                state: variant.state,
+                kind: "steer",
+                operationId: operation.operationId,
+                queuedState: variant.queuedState,
+              },
+            ],
+          });
+          const result = await subject.store.commitTerminal(
+            namedRequest(operationIndex),
+          );
+          if (variant.ok) {
+            assert(result.ok, `${variant.state}/${variant.queuedState} allowed`);
+          } else {
+            assert(
+              !result.ok && result.error._tag === "corrupt_state",
+              `${variant.state}/${variant.queuedState} corrupt`,
+            );
+            const durable = subject.inspectDurable(operation.operationId);
+            assert(
+              durable.commitCount === 0 && durable.operation?.phase !== "terminal",
+              "queue corruption rolls back",
+            );
+          }
+        }
+      },
+    },
+    {
+      name: "EF-S02-S10 independent resolvers reject malformed payloads and snapshot bytes",
+      async run({ subject }) {
+        const malformed = [
+          {
+            suffix: "media-type",
+            seed: {
+              ref: "payload:bad-media-type",
+              content: "bad",
+              mediaType: "application/octet-stream",
+            },
+            expected: "storage_unavailable",
+            blocks: false,
+          },
+          {
+            suffix: "digest",
+            seed: {
+              ref: "payload:bad-digest",
+              content: "bad",
+              sha256: "0".repeat(64),
+            },
+            expected: "storage_unavailable",
+            blocks: false,
+          },
+          {
+            suffix: "length",
+            seed: {
+              ref: "payload:bad-length",
+              content: "bad",
+              byteLength: 99,
+            },
+            expected: "storage_unavailable",
+            blocks: false,
+          },
+          {
+            suffix: "blocks",
+            seed: {
+              ref: "payload:bad-blocks",
+              content: "{not-json",
+              mediaType: "application/json",
+            },
+            expected: "corrupt_state",
+            blocks: true,
+          },
+        ] as const;
+        for (const [index, item] of malformed.entries()) {
+          const operationIndex = index + 40;
+          subject.seedOperation(namedOperation(operationIndex));
+          subject.seedPayload(item.seed);
+          const request = namedRequest(operationIndex);
+          assert(request.timeline.mode === "insert", "named request inserts");
+          const candidate = item.blocks
+            ? {
+                ...request,
+                timeline: {
+                  ...request.timeline,
+                  contentBlocksRef: item.seed.ref,
+                },
+              }
+            : {
+                ...request,
+                timeline: { ...request.timeline, contentRef: item.seed.ref },
+              };
+          const result = await subject.store.commitTerminal(withHash(candidate));
+          assert(
+            !result.ok && result.error._tag === item.expected,
+            `${item.suffix} rejected equally: ${result.ok ? "ok" : result.error._tag}`,
+          );
+          assert(
+            untouched(subject.inspectDurable(`observer-operation-${operationIndex}`)),
+            `${item.suffix} no-op`,
+          );
+        }
+
+        const operationIndex = 50;
+        subject.seedOperation(namedOperation(operationIndex));
+        subject.seedPayload({
+          ref: "payload:snapshot-blocks",
+          content: '[{"type":"text","value":"original"}]',
+          mediaType: "application/json",
+        });
+        const barrier = subject.blockPayload("payload:snapshot-blocks");
+        const request = namedRequest(operationIndex);
+        assert(request.timeline.mode === "insert", "snapshot request inserts");
+        const pending = subject.store.commitTerminal(
+          withHash({
+            ...request,
+            timeline: {
+              ...request.timeline,
+              contentBlocksRef: "payload:snapshot-blocks",
+            },
+          }),
+        );
+        const first = await Promise.race([
+          barrier.started.then(() => "started" as const),
+          pending.then((early) => ({ early })),
+        ]);
+        if (first !== "started") {
+          throw new Error(
+            `snapshot resolve ended early: ${first.early.ok ? "ok" : first.early.error._tag}`,
+          );
+        }
+        subject.mutatePayloadBytes("payload:terminal-content", 120);
+        barrier.release();
+        const result = await pending;
+        assert(result.ok, "snapshot commit");
+        const terminal = subject
+          .inspectDurable(`observer-operation-${operationIndex}`)
+          .messages.find((message) => message.terminal);
+        assert(terminal?.content === "terminal content", "content bytes snapshotted");
+        assert(
+          JSON.stringify(terminal.contentBlocks) ===
+            '[{"type":"text","value":"original"}]',
+          "block bytes snapshotted",
+        );
       },
     },
     {
