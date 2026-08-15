@@ -1291,13 +1291,13 @@ Prompts, tool arguments/results, media bytes and secret values are prohibited at
 
 ### EB-05 — harness, session, storage and events
 
-Do not implement these against `0.84.1` or draft PR #7976 merely to create activity. The first coherent selected source must provide:
+Do not implement these against `0.84.1` or draft PR #8076 merely to create activity. PR #8076 is storage/primitives evidence, not a selected runtime. The first coherent tagged release must provide:
 
 | Surface | Selection requirement | Piclaw preparation |
 |---|---|---|
-| `AgentHarness` / `AgentLane` | Implemented prompt, queue, abort, resume, compact, navigation and close | HC semantic cases and exact service correlation expectations |
-| `Storage` / `SessionRepo` | Memory conformance plus one durable backend and migrations | Backend fault, backup, corruption and Bun acceptance cases |
-| Restore | Total open-operation state and `lane.lastResult` | PC reconciliation table and every effect-sandwich crash case |
+| `AgentHarness` / `AgentLane` | Exported concrete `AgentHarnessConstructor` plus implemented prompt, queue, abort, resume, compact, navigation and close | HC semantic cases and exact service correlation expectations |
+| `Storage` / `SessionRepo` | Memory conformance plus one durable backend, total migrations and precise-rewrite fencing | Backend fault, rewrite race, backup, corruption and Bun acceptance cases |
+| Restore | Total open-operation state, process-local task loss and `lane.lastResult` | PC reconciliation table and every intent/admission/settlement crash case |
 | Tools/context | Generic contextual tools and persisted `safe`/`never` semantics | EB-02 and EF-H01 specifications |
 | Hooks/events | Typed hooks/events and snapshot-first buffered watch | EB-03 and EF-S08 projection cases |
 | Manual drive | One selected action/effect at a time | HC manual/automatic equivalence cases |
