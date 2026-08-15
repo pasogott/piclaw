@@ -470,13 +470,14 @@ export function seedSqliteOperation(
 }
 
 export function seedSqliteDraft(database: Database, seed: FakeTerminalDraftSeed): void {
+  const writtenAt = seed.writtenAt ?? "2026-08-14T09:00:00.000Z";
   database.transaction(() => {
     database
       .query(
         `INSERT INTO chats(jid,name,last_message_time) VALUES (?,?,?)
          ON CONFLICT(jid) DO NOTHING`,
       )
-      .run(seed.chatJid, seed.chatJid, "2026-08-14T09:00:00.000Z");
+      .run(seed.chatJid, seed.chatJid, writtenAt);
     database
       .query(
         `INSERT INTO messages(
@@ -492,7 +493,7 @@ export function seedSqliteDraft(database: Database, seed: FakeTerminalDraftSeed)
         "Piclaw",
         "draft content",
         seed.threadId,
-        "2026-08-14T09:00:00.000Z",
+        writtenAt,
         0,
         1,
         0,
@@ -520,7 +521,7 @@ export function seedSqliteDraft(database: Database, seed: FakeTerminalDraftSeed)
           seed.chatJid,
           "web-agent",
           "Piclaw",
-          "2026-08-14T09:00:00.000Z",
+          writtenAt,
           1,
         );
       database
@@ -535,7 +536,7 @@ export function seedSqliteDraft(database: Database, seed: FakeTerminalDraftSeed)
           seed.chatJid,
           "web-agent",
           "Piclaw",
-          "2026-08-14T09:00:00.000Z",
+          writtenAt,
           1,
         );
     }
@@ -557,7 +558,7 @@ export function seedSqliteDraft(database: Database, seed: FakeTerminalDraftSeed)
         null,
         seed.rowId,
         seed.chatJid,
-        "2026-08-14T09:00:00.000Z",
+        writtenAt,
       );
   }).immediate();
 }

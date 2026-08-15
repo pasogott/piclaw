@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { terminalOperation, terminalOutbox, terminalRequest, TERMINAL_HARNESS } from "../../src/service-effects/testing/contract-suites/terminal-settlement-store-contract.js";
 import type { FakeTerminalOperationSeed } from "../../src/service-effects/testing/fakes/fake-terminal-settlement-store.js";
-import { openSqliteSubject } from "./terminal-settlement-test-support.js";
+import { context, fakeFactory, openSqliteSubject, sqliteFactory } from "./terminal-settlement-test-support.js";
 
 describe("EF-S02 authority matrix and composed state", () => {
   test("all five dispositions close only their authorised phase", async () => {
@@ -133,61 +133,90 @@ describe("EF-S02 authority matrix and composed state", () => {
     }
   });
 
-  test("terminal and outbox timestamps obey durable lower bounds", async () => {
-    const accepted = openSqliteSubject(":memory:", [], false);
-    try {
-      accepted.seedOperation(
-        terminalOperation({
-          sources: [
+  test("terminal time fences cover accepted sources cancellation latest draft and outbox equality", async () => {
+    const variants = [
+      {
+        name: "source acceptedAt",
+        seed(subject: Awaited<ReturnType<typeof sqliteFactory.create>>) {
+          subject.seedOperation(
+            terminalOperation({
+              sources: [
+                {
+                  sourceSeq: 1,
+                  state: "claimed",
+                  operationId: "operation-1",
+                  acceptedAt: "2026-08-14T10:30:00.000Z",
+                },
+              ],
+            }),
+          );
+        },
+        request: terminalRequest(),
+        tag: "owner_conflict",
+      },
+      {
+        name: "cancellation requestedAt",
+        seed(subject: Awaited<ReturnType<typeof sqliteFactory.create>>) {
+          subject.seedOperation(
+            terminalOperation({
+              phase: "cancelling",
+              cancellationSourceSeq: 1,
+              cancellationRequestedAt: "2026-08-14T10:30:00.000Z",
+            }),
+          );
+        },
+        request: terminalRequest({ disposition: "cancelled" }),
+        tag: "owner_conflict",
+      },
+      {
+        name: "latest draft writtenAt",
+        seed(subject: Awaited<ReturnType<typeof sqliteFactory.create>>) {
+          subject.seedOperation(terminalOperation());
+          subject.seedDraft({
+            operationId: "operation-1",
+            rowId: 40,
+            revision: 1,
+            chatJid: "web:terminal",
+            threadId: null,
+            contentRef: "payload:draft",
+            writtenAt: "2026-08-14T10:30:00.000Z",
+          });
+        },
+        request: terminalRequest({
+          mode: "replace_placeholder",
+          placeholderRowId: 40,
+        }),
+        tag: "owner_conflict",
+      },
+      {
+        name: "outbox enqueuedAt equality",
+        seed(subject: Awaited<ReturnType<typeof sqliteFactory.create>>) {
+          subject.seedOperation(terminalOperation());
+        },
+        request: terminalRequest({
+          outboxIntents: [
             {
-              sourceSeq: 1,
-              state: "claimed",
-              operationId: "operation-1",
-              acceptedAt: "2026-08-14T10:30:00.000Z",
+              ...terminalOutbox("bad-time"),
+              enqueuedAt: "2026-08-14T09:59:59.000Z",
             },
           ],
         }),
-      );
-      const result = await accepted.store.commitTerminal(terminalRequest());
-      expect(result.ok).toBeFalse();
-      if (!result.ok) expect(result.error._tag).toBe("owner_conflict");
-    } finally {
-      accepted.dispose?.();
-    }
-
-    const cancellation = openSqliteSubject(":memory:", [], false);
-    try {
-      cancellation.seedOperation(
-        terminalOperation({
-          phase: "cancelling",
-          cancellationSourceSeq: 1,
-          cancellationRequestedAt: "2026-08-14T10:30:00.000Z",
-        }),
-      );
-      const result = await cancellation.store.commitTerminal(
-        terminalRequest({ disposition: "cancelled" }),
-      );
-      expect(result.ok).toBeFalse();
-      if (!result.ok) expect(result.error._tag).toBe("owner_conflict");
-    } finally {
-      cancellation.dispose?.();
-    }
-
-    const outbox = openSqliteSubject(":memory:", [], false);
-    try {
-      outbox.seedOperation(terminalOperation());
-      const intent = {
-        ...terminalOutbox("bad-time"),
-        enqueuedAt: "2026-08-14T09:59:59.000Z",
-      };
-      const result = await outbox.store.commitTerminal(
-        terminalRequest({ outboxIntents: [intent] }),
-      );
-      expect(result.ok).toBeFalse();
-      if (!result.ok) expect(result.error._tag).toBe("invalid_request");
-      expect(outbox.inspectDurable().commitCount).toBe(0);
-    } finally {
-      outbox.dispose?.();
+        tag: "invalid_request",
+      },
+    ] as const;
+    for (const factory of [sqliteFactory, fakeFactory]) {
+      for (const variant of variants) {
+        const subject = await factory.create(context());
+        try {
+          variant.seed(subject);
+          const result = await subject.store.commitTerminal(variant.request);
+          expect(result.ok, `${factory.name} ${variant.name}`).toBeFalse();
+          if (!result.ok) expect(result.error._tag).toBe(variant.tag);
+          expect(subject.inspectDurable().commitCount).toBe(0);
+        } finally {
+          await subject.dispose?.();
+        }
+      }
     }
   });
 
@@ -321,104 +350,77 @@ describe("EF-S02 authority matrix and composed state", () => {
     }
   });
 
-  test("placeholder replacement removes old media terms and indexes the new terminal media", async () => {
-    const subject = openSqliteSubject(":memory:", [], false);
-    try {
-      subject.seedOperation(terminalOperation());
-      subject.seedMedia("operation-1", 72, "draft");
-      subject.seedMedia("operation-1", 73, "terminal");
-      subject.seedDraft({
-        operationId: "operation-1",
-        rowId: 40,
-        revision: 1,
-        chatJid: "web:terminal",
-        threadId: null,
-        contentRef: "payload:draft",
-        mediaIds: [72],
-      });
-      const result = await subject.store.commitTerminal(
-        terminalRequest({
-          mode: "replace_placeholder",
-          placeholderRowId: 40,
-          mediaIds: [73],
-        }),
-      );
-      expect(result.ok).toBeTrue();
-      expect(
-        (
-          subject.database
-            .prepare(
-              "SELECT count(*) n FROM messages_fts WHERE messages_fts MATCH 'media AND 72'",
-            )
-            .get() as { n: number }
-        ).n,
-      ).toBe(0);
-      expect(
-        (
-          subject.database
-            .prepare(
-              "SELECT count(*) n FROM messages_fts WHERE messages_fts MATCH 'media AND 73'",
-            )
-            .get() as { n: number }
-        ).n,
-      ).toBe(1);
-      expect(
-        (
-          subject.database
-            .prepare(
-              "SELECT count(*) n FROM messages_fts WHERE messages_fts MATCH 'draft'",
-            )
-            .get() as { n: number }
-        ).n,
-      ).toBe(0);
-      expect(
-        (
-          subject.database
-            .prepare(
-              "SELECT count(*) n FROM messages_fts WHERE messages_fts MATCH 'terminal'",
-            )
-            .get() as { n: number }
-        ).n,
-      ).toBe(1);
-      expect(
-        (subject.database.prepare("SELECT count(*) n FROM messages_fts WHERE rowid=40").get() as { n: number }).n,
-      ).toBe(1);
-    } finally {
-      subject.dispose?.();
-    }
-  });
-
-  test("placeholder replacement without new media leaves one base-only FTS row", async () => {
-    const subject = openSqliteSubject(":memory:", [], false);
-    try {
-      subject.seedOperation(terminalOperation());
-      subject.seedMedia("operation-1", 74, "draft");
-      subject.seedDraft({
-        operationId: "operation-1",
-        rowId: 40,
-        revision: 1,
-        chatJid: "web:terminal",
-        threadId: null,
-        contentRef: "payload:draft",
-        mediaIds: [74],
-      });
-      const result = await subject.store.commitTerminal(
-        terminalRequest({ mode: "replace_placeholder", placeholderRowId: 40 }),
-      );
-      expect(result.ok).toBeTrue();
-      for (const term of ["draft", "74"]) {
+  test("placeholder FTS replacement covers media-to-none none-to-media A-to-B and same-media", async () => {
+    const variants = [
+      { name: "media-to-none", oldMedia: [72], newMedia: [] },
+      { name: "none-to-media", oldMedia: [], newMedia: [73] },
+      { name: "media-A-to-media-B", oldMedia: [74], newMedia: [75] },
+      { name: "same-media", oldMedia: [76], newMedia: [76] },
+    ] as const;
+    for (const variant of variants) {
+      const subject = openSqliteSubject(":memory:", [], false);
+      try {
+        subject.seedOperation(terminalOperation());
+        for (const mediaId of new Set([...variant.oldMedia, ...variant.newMedia])) {
+          subject.seedMedia(
+            "operation-1",
+            mediaId,
+            variant.newMedia.some((candidate) => candidate === mediaId) ? "terminal" : "draft",
+          );
+        }
+        subject.seedDraft({
+          operationId: "operation-1",
+          rowId: 40,
+          revision: 1,
+          chatJid: "web:terminal",
+          threadId: null,
+          contentRef: "payload:draft",
+          mediaIds: variant.oldMedia,
+        });
+        const result = await subject.store.commitTerminal(
+          terminalRequest({
+            mode: "replace_placeholder",
+            placeholderRowId: 40,
+            mediaIds: variant.newMedia,
+          }),
+        );
+        expect(result.ok, variant.name).toBeTrue();
+        const matchCount = (phrase: string): number =>
+          (
+            subject.database
+              .prepare(
+                "SELECT count(*) n FROM messages_fts WHERE rowid=40 AND messages_fts MATCH ?",
+              )
+              .get(`"${phrase}"`) as { n: number }
+          ).n;
         expect(
-          (subject.database.prepare("SELECT count(*) n FROM messages_fts WHERE messages_fts MATCH ?").get(term) as { n: number }).n,
-        ).toBe(0);
+          (
+            subject.database
+              .prepare("SELECT count(*) n FROM messages_fts WHERE rowid=40")
+              .get() as { n: number }
+          ).n,
+        ).toBe(1);
+        expect(matchCount("terminal content")).toBe(1);
+        expect(matchCount("draft content")).toBe(0);
+        for (const mediaId of variant.oldMedia) {
+          if (!variant.newMedia.some((candidate) => candidate === mediaId)) {
+            expect(matchCount(`media-${mediaId}-text`)).toBe(0);
+          }
+        }
+        for (const mediaId of variant.newMedia) {
+          expect(matchCount(`media-${mediaId}-text`)).toBe(1);
+        }
+        expect(
+          subject.database
+            .prepare(
+              "SELECT media_id FROM message_media WHERE message_rowid=40 ORDER BY media_id",
+            )
+            .all()
+            .map((row) => (row as { media_id: number }).media_id),
+        ).toEqual([...variant.newMedia]);
+      } finally {
+        subject.dispose?.();
       }
-      expect(
-        (subject.database.prepare("SELECT count(*) n FROM messages_fts WHERE messages_fts MATCH 'terminal'").get() as { n: number }).n,
-      ).toBe(1);
-      expect(
-        (subject.database.prepare("SELECT count(*) n FROM messages_fts WHERE rowid=40").get() as { n: number }).n,
-      ).toBe(1);
-    } finally {
-      subject.dispose?.();
     }
   });
 

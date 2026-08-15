@@ -56,6 +56,7 @@ describe("EF-S02 composition schema and construction hardening", () => {
     ] as const;
     for (const expected of boundaries) {
       const database = new Database(":memory:", { strict: true });
+      database.exec("PRAGMA foreign_keys=ON; BEGIN IMMEDIATE");
       expect(() =>
         installTerminalSettlementCompositionSchema(database, {
           afterBoundary(boundary) {
@@ -63,6 +64,8 @@ describe("EF-S02 composition schema and construction hardening", () => {
           },
         }),
       ).toThrow(`stop:${expected}`);
+      expect(database.inTransaction).toBeTrue();
+      database.exec("ROLLBACK");
       expect(
         (
           database

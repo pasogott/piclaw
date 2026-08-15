@@ -49,6 +49,10 @@ export interface SourceDisposition {
 }
 
 export interface CommitTerminalRequest {
+  /**
+   * Content and content-block payloads must resolve with this exact redaction
+   * class. EF-S02 performs no implicit redaction upgrade or downgrade.
+   */
   readonly effect: EffectIdentity & { readonly operationId: string };
   readonly expectedChatJid: string;
   readonly expectedVersion: number;

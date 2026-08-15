@@ -1110,14 +1110,14 @@ function insertEnqueue(
       request.enqueuedAt,
       request.repeatability,
     );
-  if (!changedUnique(inserted.changes)) throw new CorruptStateFault();
+  if (!changedExactlyOne(inserted.changes)) throw new CorruptStateFault();
   observer?.afterStatement("outbox_insert");
   const decided = database
     .query(
       `INSERT INTO ${DECISIONS}(decision_key,method,request_hash,outcome,outbox_id,attempt,lease_token_hash,result_json) VALUES (?, 'enqueue', ?, 'applied', ?, 0, NULL, NULL)`,
     )
     .run(key, request.effect.requestHash, request.outboxId);
-  if (!changedUnique(decided.changes)) throw new CorruptStateFault();
+  if (!changedExactlyOne(decided.changes)) throw new CorruptStateFault();
   observer?.afterStatement("outbox_decision_insert");
   const record = readRecordFrom(database, request.outboxId);
   return record
@@ -1125,8 +1125,8 @@ function insertEnqueue(
     : Result.err(errorOf("corrupt_state"));
 }
 
-function changedUnique(changes: number): boolean {
-  return Number.isSafeInteger(changes) && changes >= 1;
+function changedExactlyOne(changes: number): boolean {
+  return Number.isSafeInteger(changes) && changes === 1;
 }
 
 function verifyDatabase(database: Database): void {

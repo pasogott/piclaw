@@ -142,8 +142,6 @@ const REQUIRED_SCHEMA_PROBES = Object.freeze([
 
 export type TerminalSettlementStatement =
   | TerminalTimelineStatement
-  | "fence_operation"
-  | "fence_owner"
   | "settle_source"
   | "settle_queued_input"
   | "advance_frontier_release_owner"
@@ -423,30 +421,9 @@ class CurrentPiclawTerminalSettlementStore
     this.validateSources(request, operation);
     if (request.timeline.mode !== "none") this.validateMedia(request);
 
-    const fencedOperation = this.database
-      .prepare(
-        `UPDATE service_effect_s01_operations SET version=version
-         WHERE operation_id=? AND chat_jid=? AND version=? AND phase=?
-           AND terminal_disposition IS NULL AND terminal_message_row_id IS NULL
-           AND terminal_error_code IS NULL AND terminal_committed_at IS NULL`,
-      )
-      .run(operation.operationId, operation.chatJid, operation.version, operation.phase);
-    if (!changedUnique(fencedOperation.changes)) {
-      throw new SettlementAbort(settlementError("version_mismatch"));
-    }
-    this.afterStatement("fence_operation");
-    const fencedOwner = this.database
-      .prepare(
-        `UPDATE service_effect_s01_chats SET active_operation_id=active_operation_id
-         WHERE chat_jid=? AND active_operation_id=?
-           AND consumed_through_source_seq=?`,
-      )
-      .run(operation.chatJid, operation.operationId, operation.consumedThroughSourceSeq);
-    if (!changedUnique(fencedOwner.changes)) {
-      throw new SettlementAbort(settlementError("owner_conflict"));
-    }
-    this.afterStatement("fence_owner");
-
+    // The surrounding BEGIN IMMEDIATE owns the writer reservation. These reads
+    // are authoritative until the final exact CAS writes below; no no-op UPDATE
+    // is issued merely to manufacture a checkpoint or row lock.
     const messageRowId = this.writeTimeline(request, resolved);
     this.settleSources(request, operation);
     const consumedThroughSourceSeq = this.computeFrontier(operation);
@@ -472,7 +449,7 @@ class CurrentPiclawTerminalSettlementStore
         operation.version,
         operation.phase,
       );
-    if (!changedUnique(terminalised.changes)) {
+    if (!changedExactlyOne(terminalised.changes)) {
       throw new SettlementAbort(settlementError("version_mismatch"));
     }
     this.afterStatement("terminalise_operation");
@@ -481,15 +458,16 @@ class CurrentPiclawTerminalSettlementStore
       .prepare(
         `UPDATE service_effect_s01_chats
          SET consumed_through_source_seq=?, active_operation_id=NULL
-         WHERE chat_jid=? AND consumed_through_source_seq=? AND active_operation_id=?`,
+         WHERE chat_jid=? AND consumed_through_source_seq=? AND active_operation_id=?
+         RETURNING chat_jid`,
       )
-      .run(
+      .get(
         consumedThroughSourceSeq,
         operation.chatJid,
         operation.consumedThroughSourceSeq,
         operation.operationId,
-      );
-    if (!changedUnique(released.changes)) {
+      ) as { chat_jid?: unknown } | undefined;
+    if (released?.chat_jid !== operation.chatJid) {
       throw new SettlementAbort(settlementError("owner_conflict"));
     }
     this.afterStatement("advance_frontier_release_owner");
@@ -527,7 +505,7 @@ class CurrentPiclawTerminalSettlementStore
         request.committedAt,
         request.terminalAuthorityRef === null ? 0 : 1,
       );
-    if (!changedUnique(insertedCommit.changes)) throw new CorruptSettlementState();
+    if (!changedExactlyOne(insertedCommit.changes)) throw new CorruptSettlementState();
     this.afterStatement("insert_commit");
 
     request.outboxIntents.forEach((intent, ordinal) => {
@@ -537,7 +515,7 @@ class CurrentPiclawTerminalSettlementStore
            VALUES (?,?,?)`,
         )
         .run(operation.operationId, ordinal, intent.outboxId);
-      if (!changedUnique(linked.changes)) throw new CorruptSettlementState();
+      if (!changedExactlyOne(linked.changes)) throw new CorruptSettlementState();
       this.afterStatement("link_commit_outbox");
     });
     return commit;
@@ -722,7 +700,7 @@ class CurrentPiclawTerminalSettlementStore
           disposition.sourceSeq,
           owned.source_state,
         );
-      if (!changedUnique(settledSource.changes)) {
+      if (!changedExactlyOne(settledSource.changes)) {
         throw new SettlementAbort(settlementError("invalid_source_disposition"));
       }
       this.afterStatement("settle_source");
@@ -739,7 +717,7 @@ class CurrentPiclawTerminalSettlementStore
           disposition.sourceSeq,
           expectedQueueState,
         );
-      if (!changedUnique(settledQueue.changes)) {
+      if (!changedExactlyOne(settledQueue.changes)) {
         throw new SettlementAbort(settlementError("invalid_source_disposition"));
       }
       this.afterStatement("settle_queued_input");
@@ -799,6 +777,10 @@ class CurrentPiclawTerminalSettlementStore
     request: CommitTerminalRequest,
     operation: ClosedOperation,
   ): void {
+    // S01 operations have no accepted/claimed lifecycle timestamp. The durable
+    // lower bounds available here are source accepted_at, cancellation
+    // requested_at, and the latest replaced draft written_at. The request
+    // normalizer separately requires every outbox enqueued_at === committedAt.
     const row = this.database
       .prepare(
         `SELECT MAX(accepted_at) latest_accepted_at
@@ -811,9 +793,27 @@ class CurrentPiclawTerminalSettlementStore
       .get(operation.chatJid, operation.operationId) as
       | { latest_accepted_at?: unknown }
       | undefined;
-    const latestAcceptedAt = nullableText(row?.latest_accepted_at, 24);
+    const latestAcceptedAt =
+      row?.latest_accepted_at === null || row?.latest_accepted_at === undefined
+        ? null
+        : requiredInstant(row.latest_accepted_at);
+    const latestDraft =
+      request.timeline.mode === "replace_placeholder"
+        ? (this.database
+            .prepare(
+              `SELECT written_at FROM service_effect_timeline_writes
+               WHERE write_type='draft' AND operation_id=?
+               ORDER BY revision DESC LIMIT 1`,
+            )
+            .get(operation.operationId) as { written_at?: unknown } | undefined)
+        : undefined;
+    const latestDraftAt =
+      latestDraft?.written_at === undefined
+        ? null
+        : requiredInstant(latestDraft.written_at);
     if (
       (latestAcceptedAt !== null && request.committedAt < latestAcceptedAt) ||
+      (latestDraftAt !== null && request.committedAt < latestDraftAt) ||
       (operation.cancellationRequestedAt !== null &&
         request.committedAt < operation.cancellationRequestedAt)
     ) {
@@ -1588,11 +1588,10 @@ function lostAcknowledgement(runtime: TerminalSettlementAdapterRuntime): boolean
   }
 }
 
-// Bun includes trigger-side changes in the originating run result. All uses
-// are narrowed by a PK/unique predicate, so a positive own result proves the
-// sole direct row was affected without relying on connection-global follow-up state.
-function changedUnique(changes: number): boolean {
-  return Number.isSafeInteger(changes) && changes >= 1;
+// Every use is singleton DML narrowed by a PK/unique predicate. The statement
+// must report exactly one direct row; trigger work is validated independently.
+function changedExactlyOne(changes: number): boolean {
+  return Number.isSafeInteger(changes) && changes === 1;
 }
 
 function isBusy(error: unknown): boolean {

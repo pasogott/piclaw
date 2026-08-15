@@ -53,7 +53,7 @@ export interface TerminalSettlementPayloadSeed {
   readonly ref: string;
   readonly content: string;
   readonly mediaType?: string;
-  readonly redactionClass?: "public" | "internal" | "secret";
+  readonly redactionClass?: "public" | "private" | "secret";
   readonly sha256?: string;
   readonly byteLength?: number;
 }
@@ -154,6 +154,7 @@ function effect(
   key: string,
   operationId: string,
   sourceSeq: number | null,
+  redactionClass: EffectIdentity["redactionClass"] = "secret",
 ): EffectIdentity {
   return {
     idempotencyKey: key,
@@ -161,7 +162,7 @@ function effect(
     operationId,
     sourceSeq,
     provenanceRef: "opaque:protected-provenance",
-    redactionClass: "secret",
+    redactionClass,
   };
 }
 
@@ -202,6 +203,7 @@ interface RequestOptions {
   readonly outboxIntents?: readonly EnqueueOutboxRequest[];
   readonly committedAt?: string;
   readonly effectSourceSeq?: number | null;
+  readonly redactionClass?: EffectIdentity["redactionClass"];
 }
 
 export function terminalRequest(
@@ -243,6 +245,7 @@ export function terminalRequest(
       options.key ?? "terminal-key-1",
       operationId,
       options.effectSourceSeq === undefined ? 1 : options.effectSourceSeq,
+      options.redactionClass,
     ) as
       EffectIdentity & { readonly operationId: string },
     expectedChatJid: chatJid,
@@ -837,6 +840,63 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
     {
       name: "EF-S02-S10 independent resolvers reject malformed payloads and snapshot bytes",
       async run({ subject }) {
+        const redactions = ["public", "private", "secret"] as const;
+        let redactionIndex = 80;
+        for (const payloadKind of ["content", "blocks"] as const) {
+          for (const requestClass of redactions) {
+            for (const payloadClass of redactions) {
+              redactionIndex += 1;
+              const operation = namedOperation(redactionIndex);
+              const contentRef = `payload:redaction-content-${redactionIndex}`;
+              const blocksRef = `payload:redaction-blocks-${redactionIndex}`;
+              subject.seedOperation(operation);
+              subject.seedPayload({
+                ref: contentRef,
+                content: "redaction content",
+                redactionClass: requestClass,
+              });
+              if (payloadKind === "blocks") {
+                subject.seedPayload({
+                  ref: blocksRef,
+                  content: '[{"type":"text","value":"redaction"}]',
+                  mediaType: "application/json",
+                  redactionClass: payloadClass,
+                });
+              } else {
+                subject.seedPayload({
+                  ref: contentRef,
+                  content: "redaction content",
+                  redactionClass: payloadClass,
+                });
+              }
+              const candidate = terminalRequest({
+                key: `redaction-key-${redactionIndex}`,
+                operationId: operation.operationId,
+                chatJid: operation.chatJid,
+                contentRef,
+                contentBlocksRef: payloadKind === "blocks" ? blocksRef : null,
+                redactionClass: requestClass,
+              });
+              const result = await subject.store.commitTerminal(candidate);
+              const compatible = requestClass === payloadClass;
+              assert(
+                result.ok === compatible,
+                `${payloadKind} ${requestClass}/${payloadClass} exact redaction policy`,
+              );
+              if (!compatible) {
+                assert(
+                  !result.ok && result.error._tag === "storage_unavailable",
+                  "redaction mismatch is bounded not_applied",
+                );
+                assert(
+                  untouched(subject.inspectDurable(operation.operationId)),
+                  "redaction mismatch leaves no durable state",
+                );
+              }
+            }
+          }
+        }
+
         const malformed = [
           {
             suffix: "media-type",
@@ -952,13 +1012,126 @@ const cases: readonly ParameterisedContractCase<TerminalSettlementContractSubjec
       },
     },
     {
-      name: "EF-S02-S06 protected refs do not appear in traces",
+      name: "EF-S02-S06 exact trace matrix is redacted and reads are untraced",
       async run(fixture) {
-        fixture.subject.seedOperation(terminalOperation());
-        const result = await fixture.subject.store.commitTerminal(
-          terminalRequest(),
+        const run = async (
+          request: CommitTerminalRequest,
+          resultTag: string,
+          certainty: NormalisedEffectTrace["certainty"],
+          traceIdentity: {
+            readonly effectId?: string;
+            readonly operationId?: string | null;
+            readonly version?: number | null;
+          } = {},
+        ) => {
+          const before = fixture.inspectTrace().length;
+          await fixture.subject.store.commitTerminal(request);
+          const effectId = traceIdentity.effectId ?? request.effect.idempotencyKey;
+          const operationId =
+            traceIdentity.operationId === undefined
+              ? request.effect.operationId
+              : traceIdentity.operationId;
+          const version =
+            traceIdentity.version === undefined
+              ? request.expectedVersion
+              : traceIdentity.version;
+          assert(
+            JSON.stringify(fixture.inspectTrace().slice(before)) ===
+              JSON.stringify([
+                {
+                  contract: "EF-S02",
+                  method: "commitTerminal",
+                  effectId,
+                  operationId,
+                  sourceSeq: null,
+                  version,
+                  certainty: null,
+                  resultTag: "call",
+                },
+                {
+                  contract: "EF-S02",
+                  method: "commitTerminal",
+                  effectId,
+                  operationId,
+                  sourceSeq: null,
+                  version,
+                  certainty,
+                  resultTag,
+                },
+              ]),
+            `exact trace ${resultTag}/${certainty}: ${JSON.stringify(fixture.inspectTrace().slice(before))}`,
+          );
+        };
+
+        const applied = namedRequest(100);
+        fixture.subject.seedOperation(namedOperation(100));
+        await run(applied, "applied", "applied");
+        await run(applied, "replayed", "applied");
+        await run(
+          terminalRequest({
+            key: "observer-other-100",
+            operationId: "observer-operation-100",
+            chatJid: "web:observer-100",
+          }),
+          "already_terminal_conflict",
+          "not_applied",
         );
-        assert(result.ok, "commit");
+
+        const version = withHash({ ...namedRequest(101), expectedVersion: 99 });
+        fixture.subject.seedOperation(namedOperation(101));
+        await run(version, "version_mismatch", "not_applied");
+
+        const ownerBase = namedRequest(102);
+        const owner = withHash({
+          ...ownerBase,
+          expectedChatJid: "web:wrong",
+          timeline: { ...ownerBase.timeline, chatJid: "web:wrong" },
+        });
+        fixture.subject.seedOperation(namedOperation(102));
+        await run(owner, "owner_conflict", "not_applied");
+
+        const invalid = structuredClone(namedRequest(103));
+        Reflect.set(invalid.effect, "idempotencyKey", "");
+        await run(invalid, "invalid_request", "not_applied", {
+          effectId: "invalid",
+          operationId: null,
+          version: null,
+        });
+
+        await run(namedRequest(104), "not_found", "not_applied");
+
+        const missingBase = namedRequest(105);
+        assert(missingBase.timeline.mode !== "none", "missing-media request writes timeline");
+        const missing = withHash({
+          ...missingBase,
+          timeline: { ...missingBase.timeline, mediaIds: [999] },
+        });
+        fixture.subject.seedOperation(namedOperation(105));
+        await run(missing, "missing_media", "not_applied");
+
+        fixture.subject.seedOperation(namedOperation(106));
+        fixture.subject.setFaultBehavior("before_effect", "true");
+        await run(namedRequest(106), "storage_unavailable", "not_applied");
+        fixture.subject.setFaultBehavior("before_effect", "false");
+
+        fixture.subject.seedOperation(namedOperation(107));
+        fixture.subject.setFaultBehavior(
+          "effect_then_lost_acknowledgement",
+          "true",
+        );
+        await run(namedRequest(107), "storage_unavailable", "unknown");
+        fixture.subject.setFaultBehavior(
+          "effect_then_lost_acknowledgement",
+          "false",
+        );
+
+        const beforeReads = fixture.inspectTrace();
+        await fixture.subject.store.getTerminal("observer-operation-100");
+        await fixture.subject.store.getTerminalByKey("observer-key-100");
+        assert(
+          JSON.stringify(fixture.inspectTrace()) === JSON.stringify(beforeReads),
+          "public reads are explicitly untraced",
+        );
         assertTerminalTraceRedaction(fixture.inspectTrace());
       },
     },

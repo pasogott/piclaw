@@ -7,6 +7,24 @@ describe("EF-S02 exhaustive statement rollback coverage", () => {
   const shapes = [
     {
       name: "insert-media-outbox",
+      expected: [
+        "timeline_chat_insert",
+        "timeline_message_insert",
+        "timeline_media_link",
+        "timeline_media_link",
+        "timeline_fts_media_delete",
+        "timeline_fts_media_insert",
+        "settle_source",
+        "terminalise_operation",
+        "advance_frontier_release_owner",
+        "outbox_insert",
+        "outbox_decision_insert",
+        "outbox_insert",
+        "outbox_decision_insert",
+        "insert_commit",
+        "link_commit_outbox",
+        "link_commit_outbox",
+      ],
       setup(subject: TerminalSettlementContractSubject) {
         subject.seedOperation(terminalOperation());
         subject.seedMedia("operation-1", 81);
@@ -19,6 +37,17 @@ describe("EF-S02 exhaustive statement rollback coverage", () => {
     },
     {
       name: "insert-single-media",
+      expected: [
+        "timeline_chat_insert",
+        "timeline_message_insert",
+        "timeline_media_link",
+        "timeline_fts_media_delete",
+        "timeline_fts_media_insert",
+        "settle_source",
+        "terminalise_operation",
+        "advance_frontier_release_owner",
+        "insert_commit",
+      ],
       setup(subject: TerminalSettlementContractSubject) {
         subject.seedOperation(terminalOperation());
         subject.seedMedia("operation-1", 83);
@@ -27,6 +56,19 @@ describe("EF-S02 exhaustive statement rollback coverage", () => {
     },
     {
       name: "replace-multiple-sources",
+      expected: [
+        "timeline_placeholder_fence",
+        "timeline_fts_media_delete",
+        "timeline_fts_media_insert",
+        "timeline_message_replace",
+        "timeline_media_unlink",
+        "settle_source",
+        "settle_source",
+        "settle_queued_input",
+        "terminalise_operation",
+        "advance_frontier_release_owner",
+        "insert_commit",
+      ],
       setup(subject: TerminalSettlementContractSubject) {
         subject.seedOperation(
           terminalOperation({
@@ -65,6 +107,22 @@ describe("EF-S02 exhaustive statement rollback coverage", () => {
     },
     {
       name: "replace-multiple-new-media-one-outbox",
+      expected: [
+        "timeline_placeholder_fence",
+        "timeline_message_replace",
+        "timeline_media_unlink",
+        "timeline_media_link",
+        "timeline_media_link",
+        "timeline_fts_media_delete",
+        "timeline_fts_media_insert",
+        "settle_source",
+        "terminalise_operation",
+        "advance_frontier_release_owner",
+        "outbox_insert",
+        "outbox_decision_insert",
+        "insert_commit",
+        "link_commit_outbox",
+      ],
       setup(subject: TerminalSettlementContractSubject) {
         subject.seedOperation(terminalOperation());
         subject.seedMedia("operation-1", 84);
@@ -87,6 +145,15 @@ describe("EF-S02 exhaustive statement rollback coverage", () => {
     },
     {
       name: "insert-existing-chat",
+      expected: [
+        "timeline_chat_insert",
+        "timeline_chat_update",
+        "timeline_message_insert",
+        "settle_source",
+        "terminalise_operation",
+        "advance_frontier_release_owner",
+        "insert_commit",
+      ],
       setup(subject: TerminalSettlementContractSubject) {
         subject.seedOperation(terminalOperation());
         subject.seedDraft({
@@ -102,6 +169,12 @@ describe("EF-S02 exhaustive statement rollback coverage", () => {
     },
     {
       name: "no-timeline",
+      expected: [
+        "settle_source",
+        "terminalise_operation",
+        "advance_frontier_release_owner",
+        "insert_commit",
+      ],
       setup(subject: TerminalSettlementContractSubject) {
         subject.seedOperation(terminalOperation());
         return terminalRequest({ mode: "none" });
@@ -109,6 +182,17 @@ describe("EF-S02 exhaustive statement rollback coverage", () => {
     },
     {
       name: "no-timeline-queue-outbox",
+      expected: [
+        "settle_source",
+        "settle_source",
+        "settle_queued_input",
+        "terminalise_operation",
+        "advance_frontier_release_owner",
+        "outbox_insert",
+        "outbox_decision_insert",
+        "insert_commit",
+        "link_commit_outbox",
+      ],
       setup(subject: TerminalSettlementContractSubject) {
         subject.seedOperation(
           terminalOperation({
@@ -179,7 +263,11 @@ describe("EF-S02 exhaustive statement rollback coverage", () => {
       ]);
       expect(sqliteResult.ok).toBeTrue();
       expect(fakeResult.ok).toBeTrue();
-      expect(fake.inspectStatements()).toEqual(sqlite.inspectStatements());
+      const expected = shape.expected.map(
+        (statement, index) => `${index + 1}:${statement}`,
+      );
+      expect(sqlite.inspectStatements()).toEqual(expected);
+      expect(fake.inspectStatements()).toEqual(expected);
     } finally {
       sqlite.dispose?.();
       fake.dispose?.();

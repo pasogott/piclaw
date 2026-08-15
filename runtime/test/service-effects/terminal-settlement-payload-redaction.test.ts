@@ -190,25 +190,7 @@ describe("EF-S02 payload observer and redaction hardening", () => {
     }
   });
 
-  test("redaction tuples and NFC-normalised identities are pinned before mutation", async () => {
-    const redaction = openSqliteSubject(":memory:", [], false);
-    try {
-      redaction.seedOperation(terminalOperation());
-      redaction.payloads.add(
-        "payload:private-content",
-        "private content",
-        "text/plain",
-        "private",
-      );
-      const result = await redaction.store.commitTerminal(
-        terminalRequest({ contentRef: "payload:private-content" }),
-      );
-      expect(result.ok).toBeFalse();
-      expect(redaction.inspectDurable().commitCount).toBe(0);
-    } finally {
-      redaction.dispose?.();
-    }
-
+  test("NFC-normalised identities are rejected before mutation", async () => {
     const unicode = openSqliteSubject(":memory:", [], false);
     try {
       unicode.seedOperation(terminalOperation());

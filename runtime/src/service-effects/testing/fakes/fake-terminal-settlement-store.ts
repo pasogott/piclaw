@@ -65,6 +65,7 @@ export interface FakeTerminalDraftSeed {
   readonly threadId: number | null;
   readonly contentRef: string;
   readonly mediaIds?: readonly number[];
+  readonly writtenAt?: string;
 }
 
 interface FakeOperation {
@@ -105,8 +106,9 @@ interface FakeMessage {
   terminal: boolean;
 }
 
-interface FakeDraft extends FakeTerminalDraftSeed {
+interface FakeDraft extends Omit<FakeTerminalDraftSeed, "writtenAt"> {
   mediaIds: readonly number[];
+  writtenAt: string;
 }
 
 interface FakeOutbox {
@@ -131,6 +133,7 @@ interface FakeDecision {
   operationId: string;
   terminalAuthorityPresent: boolean;
   mediaCount: number;
+  linkedOutboxIds: string[];
   commit: TerminalCommit;
 }
 
@@ -151,8 +154,6 @@ export interface FakeTerminalSettlementSnapshot extends FakeState {
 
 type StandardFault = "before_effect" | "effect_then_lost_acknowledgement";
 type FakeSettlementStatement =
-  | "fence_operation"
-  | "fence_owner"
   | "timeline_chat_insert"
   | "timeline_chat_update"
   | "timeline_message_insert"
@@ -356,6 +357,7 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
     this.#state.drafts.push({
       ...structuredClone(seed),
       mediaIds: Object.freeze([...(seed.mediaIds ?? [])]),
+      writtenAt: seed.writtenAt ?? "2026-08-14T09:00:00.000Z",
     });
     this.#state.messages.push({
       rowId: seed.rowId,
@@ -689,6 +691,14 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
         entry.operationId === operation.operationId,
     );
     authoriseOutbox(request, operation, operationSources);
+    if (request.timeline.mode === "replace_placeholder") {
+      const latestDraftAt = state.drafts
+        .filter((entry) => entry.operationId === operation.operationId)
+        .sort((left, right) => right.revision - left.revision)[0]?.writtenAt;
+      if (latestDraftAt !== undefined && request.committedAt < latestDraftAt) {
+        throw new FakeAbort(fakeError("owner_conflict"));
+      }
+    }
     const claimed = operationSources.sort(
       (left, right) => left.sourceSeq - right.sourceSeq,
     );
@@ -733,8 +743,6 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
       }
     }
 
-    this.afterStatement("fence_operation");
-    this.afterStatement("fence_owner");
     const messageRowId = this.writeTimeline(state, request, resolved);
     for (const disposition of request.sourceDispositions) {
       const source = claimed.find(
@@ -839,6 +847,7 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
       operationId: operation.operationId,
       terminalAuthorityPresent: request.terminalAuthorityRef !== null,
       mediaCount: request.timeline.mediaIds.length,
+      linkedOutboxIds: [...commit.outboxIds],
       commit,
     });
     this.afterStatement("insert_commit");
@@ -1089,20 +1098,22 @@ function reconcile(
     (entry) => entry.idempotencyKey === request.effect.idempotencyKey,
   );
   if (byKey) {
+    const commit = materialiseDecision(state, byKey);
     return byKey.requestHash === request.effect.requestHash &&
       byKey.operationId === request.effect.operationId
-      ? { kind: "replay", commit: materialiseDecision(state, byKey) }
+      ? { kind: "replay", commit }
       : { kind: "error", error: fakeError("idempotency_conflict") };
   }
   const byOperation = state.decisions.find(
     (entry) => entry.operationId === request.effect.operationId,
   );
   if (!byOperation) return null;
+  const commit = materialiseDecision(state, byOperation);
   if (
     byOperation.idempotencyKey === request.effect.idempotencyKey &&
     byOperation.requestHash === request.effect.requestHash
   ) {
-    return { kind: "replay", commit: materialiseDecision(state, byOperation) };
+    return { kind: "replay", commit };
   }
   return {
     kind: "error",
@@ -1110,7 +1121,7 @@ function reconcile(
       "already_terminal_conflict",
       "not_applied",
       false,
-      materialiseDecision(state, byOperation),
+      commit,
     ),
   };
 }
@@ -1143,6 +1154,8 @@ function materialiseDecision(
     commit.disposition === "skipped" || commit.disposition === "superseded";
   if (
     authorityRequired !== decision.terminalAuthorityPresent ||
+    !Array.isArray(decision.linkedOutboxIds) ||
+    JSON.stringify(decision.linkedOutboxIds) !== JSON.stringify(commit.outboxIds) ||
     !Number.isSafeInteger(decision.mediaCount) ||
     decision.mediaCount < 0 ||
     decision.mediaCount > 100
@@ -1152,23 +1165,31 @@ function materialiseDecision(
   const operation = state.operations.find(
     (entry) => entry.operationId === commit.operationId,
   );
+  if (!operation) throw new FakeCorruption();
+  const operationSources = state.sources.filter(
+    (source) =>
+      source.chatJid === operation.chatJid &&
+      source.operationId === operation.operationId,
+  );
   if (
-    !operation ||
     operation.phase !== "terminal" ||
     operation.version !== commit.operationVersion ||
     operation.terminalDisposition !== commit.disposition ||
     operation.terminalMessageRowId !== commit.messageRowId ||
     operation.terminalCommittedAt !== commit.committedAt ||
+    operation.activeOperationId !== null ||
+    operation.consumedThroughSourceSeq !== commit.consumedThroughSourceSeq ||
+    !validFakeHarness(operation.harness) ||
     (commit.disposition === "failed") !==
       (operation.terminalErrorCode !== null) ||
     (commit.disposition === "cancelled") !==
       (operation.cancellationSourceSeq !== null) ||
-    state.sources.some(
+    operationSources.length === 0 ||
+    operationSources.some(
       (source) =>
-        source.chatJid === operation.chatJid &&
-        source.operationId === operation.operationId &&
-        ((source.state !== "consumed" && source.state !== "disposed") ||
-          (source.queuedState !== null && source.queuedState !== source.state)),
+        (source.state !== "consumed" && source.state !== "disposed") ||
+        (source.queuedState !== null && source.queuedState !== source.state) ||
+        source.acceptedAt > commit.committedAt,
     )
   ) {
     throw new FakeCorruption();
@@ -1180,7 +1201,12 @@ function materialiseDecision(
     if (
       !message ||
       !message.terminal ||
+      message.operationId !== operation.operationId ||
       message.chatJid !== operation.chatJid ||
+      typeof message.content !== "string" ||
+      (message.contentBlocks !== null &&
+        validateFakeContentBlocks(message.contentBlocks) === null) ||
+      new Set(message.mediaIds).size !== message.mediaIds.length ||
       message.mediaIds.length !== decision.mediaCount ||
       message.mediaIds.some(
         (mediaId) =>
@@ -1218,6 +1244,14 @@ function materialiseDecision(
       return (
         !row ||
         row.operationId !== commit.operationId ||
+        ![
+          "wake_chat",
+          "timeline_broadcast",
+          "channel_delivery",
+          "notification",
+          "scheduler_run_log",
+          "maintenance",
+        ].includes(row.kind) ||
         (row.sourceSeq !== null &&
           !state.sources.some(
             (source) =>
@@ -1233,6 +1267,7 @@ function materialiseDecision(
         !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(row.enqueuedAt) ||
         !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(row.availableAt) ||
         row.availableAt < row.enqueuedAt ||
+        row.enqueuedAt !== commit.committedAt ||
         !["repeatable", "reconciliation_required"].includes(row.repeatability)
       );
     })
@@ -1343,6 +1378,24 @@ function authoriseOutbox(
       throw new FakeAbort(fakeError("owner_conflict"));
     }
   }
+}
+
+function validFakeHarness(value: HarnessCorrelation | null): boolean {
+  if (value === null) return true;
+  return (
+    typeof value.sessionId === "string" &&
+    value.sessionId.length > 0 &&
+    typeof value.lane === "string" &&
+    value.lane.length > 0 &&
+    (value.harnessOperationId === null ||
+      (typeof value.harnessOperationId === "string" &&
+        value.harnessOperationId.length > 0)) &&
+    ["not_started", "running", "suspended", "aborting", "finished"].includes(
+      value.state,
+    ) &&
+    Number.isSafeInteger(value.watchGeneration) &&
+    value.watchGeneration >= 0
+  );
 }
 
 function sameHarness(

@@ -332,26 +332,37 @@ describe("EF-S02 concurrency crash and corruption hardening", () => {
     }
   });
 
-  test("mutated fake snapshots are validated through public entry points", async () => {
+  test("malformed fake snapshots fail public reads and replay with SQLite-parity corruption", async () => {
     const original = new FakeTerminalSettlementStore();
     original.seedOperation(terminalOperation());
-    expect(
-      (
-        await original.commitTerminal(
-          terminalRequest({ outboxIntents: [terminalOutbox("fake-corrupt")] }),
-        )
-      ).ok,
-    ).toBeTrue();
-    const mutations = [
-      (snapshot: ReturnType<FakeTerminalSettlementStore["snapshot"]>) =>
+    original.seedMedia("operation-1", 91);
+    const request = terminalRequest({
+      mediaIds: [91],
+      outboxIntents: [
+        terminalOutbox("fake-corrupt-a"),
+        terminalOutbox("fake-corrupt-b"),
+      ],
+    });
+    expect((await original.commitTerminal(request)).ok).toBeTrue();
+    type Snapshot = ReturnType<FakeTerminalSettlementStore["snapshot"]>;
+    const mutations: Array<(snapshot: Snapshot) => void> = [
+      (snapshot) =>
+        Reflect.set(snapshot.operations[0]!.harness!, "watchGeneration", "bad"),
+      (snapshot) => Reflect.set(snapshot.sources[0]!, "sourceSeq", 2),
+      (snapshot) => Reflect.set(snapshot.sources[0]!, "queuedState", "accepted"),
+      (snapshot) => Reflect.set(snapshot.messages[0]!, "terminal", false),
+      (snapshot) => snapshot.messages[0]!.mediaIds.splice(0, 1),
+      (snapshot) => Reflect.set(snapshot.media[0]!, "role", "draft"),
+      (snapshot) => Reflect.set(snapshot.outbox[0]!, "operationId", "other"),
+      (snapshot) => snapshot.decisions[0]!.linkedOutboxIds.reverse(),
+      (snapshot) =>
+        Reflect.set(snapshot.decisions[0]!, "terminalAuthorityPresent", true),
+      (snapshot) => Reflect.set(snapshot.decisions[0]!, "requestHash", "bad"),
+      (snapshot) =>
         Reflect.set(snapshot.decisions[0]!.commit, "operationVersion", 99),
-      (snapshot: ReturnType<FakeTerminalSettlementStore["snapshot"]>) =>
-        Reflect.set(snapshot.operations[0]!, "phase", "settling"),
-      (snapshot: ReturnType<FakeTerminalSettlementStore["snapshot"]>) =>
-        Reflect.set(snapshot.messages[0]!, "terminal", false),
-      (snapshot: ReturnType<FakeTerminalSettlementStore["snapshot"]>) =>
-        snapshot.outbox.splice(0, 1),
-      (snapshot: ReturnType<FakeTerminalSettlementStore["snapshot"]>) =>
+      (snapshot) =>
+        Reflect.set(snapshot.decisions[0]!.commit, "consumedThroughSourceSeq", 2),
+      (snapshot) =>
         Reflect.set(snapshot.decisions[0]!.commit, "committedAt", "invalid"),
     ];
     for (const mutate of mutations) {
@@ -359,9 +370,15 @@ describe("EF-S02 concurrency crash and corruption hardening", () => {
       mutate(snapshot);
       const restored = new FakeTerminalSettlementStore();
       restored.restore(snapshot);
-      const read = await restored.getTerminal("operation-1");
-      expect(read.ok).toBeFalse();
-      if (!read.ok) expect(read.error._tag).toBe("corrupt_state");
+      const results = await Promise.all([
+        restored.getTerminal("operation-1"),
+        restored.getTerminalByKey("terminal-key-1"),
+        restored.commitTerminal(request),
+      ]);
+      for (const result of results) {
+        expect(result.ok).toBeFalse();
+        if (!result.ok) expect(result.error._tag).toBe("corrupt_state");
+      }
     }
   });
 });

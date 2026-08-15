@@ -73,7 +73,7 @@ export function insertTerminalTimeline(
          WHERE jid=?`,
       )
       .run(timeline.chatJid, committedAt, committedAt, timeline.chatJid);
-    if (!changedUnique(chatUpdate.changes)) {
+    if (!changedExactlyOne(chatUpdate.changes)) {
       throw new TerminalTimelineStatementError("corrupt_state");
     }
     afterStatement("timeline_chat_update");
@@ -88,9 +88,9 @@ export function insertTerminalTimeline(
       `INSERT INTO messages(
          id,chat_jid,sender,sender_name,content,content_blocks,thread_id,timestamp,
          is_from_me,is_bot_message,is_terminal_agent_reply,is_steering_message
-       ) VALUES (?,?,?,?,?,?,?,?,0,1,1,0)`,
+       ) VALUES (?,?,?,?,?,?,?,?,0,1,1,0) RETURNING rowid`,
     )
-    .run(
+    .get(
       messageId,
       timeline.chatJid,
       "web-agent",
@@ -99,17 +99,15 @@ export function insertTerminalTimeline(
       content.blocks === null ? null : JSON.stringify(content.blocks),
       timeline.threadId,
       committedAt,
-    );
-  if (!changedUnique(inserted.changes)) {
+    ) as { rowid?: unknown } | undefined;
+  const rowId = inserted?.rowid;
+  if (!Number.isSafeInteger(rowId) || (rowId as number) < 1) {
     throw new TerminalTimelineStatementError("corrupt_state");
   }
+  const messageRowId = rowId as number;
   afterStatement("timeline_message_insert");
-  const rowId = Number(inserted.lastInsertRowid);
-  if (!Number.isSafeInteger(rowId) || rowId < 1) {
-    throw new TerminalTimelineStatementError("corrupt_state");
-  }
-  linkTerminalMedia(database, rowId, timeline.mediaIds, afterStatement);
-  return rowId;
+  linkTerminalMedia(database, messageRowId, timeline.mediaIds, afterStatement);
+  return messageRowId;
 }
 
 export function replaceTerminalTimeline(
@@ -149,11 +147,11 @@ export function replaceTerminalTimeline(
       timeline.chatJid,
       timeline.threadId,
     );
-  if (!changedUnique(fenced.changes)) {
+  if (!changedExactlyOne(fenced.changes)) {
     throw new TerminalTimelineStatementError("owner_conflict");
   }
   afterStatement("timeline_placeholder_fence");
-  normaliseExistingMediaFts(
+  const previousMediaCount = normaliseExistingMediaFts(
     database,
     timeline.placeholderRowId,
     afterStatement,
@@ -173,17 +171,17 @@ export function replaceTerminalTimeline(
                FROM service_effect_timeline_writes newer
                WHERE newer.write_type='draft' AND newer.operation_id=w.operation_id
              )
-         )`,
+         ) RETURNING rowid`,
     )
-    .run(
+    .get(
       content.content,
       content.blocks === null ? null : JSON.stringify(content.blocks),
       timeline.placeholderRowId,
       timeline.chatJid,
       timeline.threadId,
       operationId,
-    );
-  if (!changedUnique(updated.changes)) {
+    ) as { rowid?: unknown } | undefined;
+  if (updated?.rowid !== timeline.placeholderRowId) {
     throw new TerminalTimelineStatementError("owner_conflict");
   }
   afterStatement("timeline_message_replace");
@@ -191,7 +189,7 @@ export function replaceTerminalTimeline(
   const removed = database
     .prepare("DELETE FROM message_media WHERE message_rowid=?")
     .run(timeline.placeholderRowId);
-  if (Number(removed.changes) < 0) {
+  if (Number(removed.changes) !== previousMediaCount) {
     throw new TerminalTimelineStatementError("corrupt_state");
   }
   afterStatement("timeline_media_unlink");
@@ -233,7 +231,7 @@ function linkTerminalMedia(
         "INSERT INTO message_media(message_rowid,media_id) VALUES (?,?)",
       )
       .run(messageRowId, mediaId);
-    if (!changedUnique(linked.changes)) {
+    if (!changedExactlyOne(linked.changes)) {
       throw new TerminalTimelineStatementError("corrupt_state");
     }
     afterStatement("timeline_media_link");
@@ -245,7 +243,7 @@ function normaliseExistingMediaFts(
   database: Database,
   messageRowId: number,
   afterStatement: (statement: TerminalTimelineStatement) => void,
-): void {
+): number {
   const mediaIds = (
     database
       .prepare(
@@ -259,16 +257,18 @@ function normaliseExistingMediaFts(
     return row.media_id as number;
   });
   const textParts = collectMediaText(database, mediaIds);
-  if (textParts.length === 0) return;
-  const base = readMessageFtsRow(database, messageRowId);
-  swapMediaFts(
-    database,
-    messageRowId,
-    base,
-    `${base.content}\n\n${textParts.join("\n")}`,
-    base.content,
-    afterStatement,
-  );
+  if (textParts.length > 0) {
+    const base = readMessageFtsRow(database, messageRowId);
+    swapMediaFts(
+      database,
+      messageRowId,
+      base,
+      `${base.content}\n\n${textParts.join("\n")}`,
+      base.content,
+      afterStatement,
+    );
+  }
+  return mediaIds.length;
 }
 
 function appendMediaTextToFts(
@@ -422,7 +422,7 @@ function swapMediaFts(
       base.timestamp,
       base.isBotMessage,
     );
-  if (!changedUnique(removed.changes)) {
+  if (!changedFtsIndex(removed.changes)) {
     throw new TerminalTimelineStatementError("corrupt_state");
   }
   afterStatement("timeline_fts_media_delete");
@@ -441,7 +441,7 @@ function swapMediaFts(
       base.timestamp,
       base.isBotMessage,
     );
-  if (!changedUnique(inserted.changes)) {
+  if (!changedFtsIndex(inserted.changes)) {
     throw new TerminalTimelineStatementError("corrupt_state");
   }
   afterStatement("timeline_fts_media_insert");
@@ -503,9 +503,16 @@ function parseMetadata(value: string | null): Record<string, unknown> | null {
 }
 
 // Bun reports trigger-side FTS work in the originating statement's Changes.
-// Every caller is constrained by a PK/unique predicate, so a positive own
-// result proves the sole direct row was affected without a connection-global follow-up query.
-function changedUnique(changes: number): boolean {
+// Singleton DML is constrained by a PK/unique predicate and must report its
+// own exact direct-row count. Multi-row media unlinking is checked separately.
+function changedExactlyOne(changes: number): boolean {
+  return Number.isSafeInteger(changes) && changes === 1;
+}
+
+// Bun reports FTS5 virtual-table maintenance work in this statement result.
+// The rowid and delete command still target one logical index row; durable FTS
+// cardinality/content is checked by terminalTimelineSnapshotIsValid.
+function changedFtsIndex(changes: number): boolean {
   return Number.isSafeInteger(changes) && changes >= 1;
 }
 
