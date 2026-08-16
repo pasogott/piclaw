@@ -151,7 +151,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: [],
     serviceEffector: null,
     abortExpectation: "may_finish_late",
-    protectedFields: [],
+    protectedFields: ["params.query", "params.intent"],
   }),
   ...rows(["list_scripts"], {
     currentSource: "runtime/src/extensions/runtime-scripts.ts",
@@ -367,7 +367,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: [],
     serviceEffector: null,
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.ref", "result.content", "result.details"],
+    protectedFields: ["params.toolCallIds", "result.content", "result.details"],
   }),
   ...rows(["bun_run"], {
     currentSource: "runtime/extensions/integrations/bun-runner/index.ts; runtime/src/extensions/bun-runner.ts",
@@ -493,12 +493,15 @@ export const DYNAMIC_TOOL_PREPARATION_TEMPLATES: readonly ToolPreparationSpec[] 
   }),
 ]);
 
-/** Core targets are documentation data; WP-3C does not construct or activate them. */
+/** Future direct harness targets; currentSource above remains the released coding-agent wiring. */
 export const CORE_EARENDIL_FACTORY_TARGETS = Object.freeze({
-  read: "createReadTool",
-  write: "createWriteTool",
-  edit: "createEditTool",
-  bash: "createBashTool",
+  package: "@earendil-works/pi-agent-core",
+  exports: Object.freeze({
+    read: "createReadTool",
+    write: "createWriteTool",
+    edit: "createEditTool",
+    bash: "createBashTool",
+  }),
 } as const);
 
 export const MESSAGES_ACTIVATION_BLOCKER = [

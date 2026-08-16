@@ -8,21 +8,6 @@ const SESSION_ROOT = "src/agent-pool/session.ts";
 const SERVICE_FACTORY_ROOT = "src/agent-pool/service-factory.ts";
 const SDK_TOOLS_SOURCE = resolve(runtimeRoot, "../node_modules/@earendil-works/pi-coding-agent/dist/core/tools/index.js");
 
-const TOOL_NAME_CONSTANTS = new Map<string, string>([
-  ["CONTEXT_PRUNE_TOOL_NAME", "context_prune"],
-  ["CONTEXT_TREE_QUERY_TOOL_NAME", "context_tree_query"],
-  ["PRIMARY_TOOL_NAME", "list_tools"],
-]);
-
-const FACTORY_TOOL_NAMES = new Map<string, string>([
-  ["createReadTool", "read"],
-  ["createWriteTool", "write"],
-  ["createEditTool", "edit"],
-  ["createBashTool", "bash"],
-  ["createToolOutputSearchTool", "search_tool_output"],
-  ["createBatchExecTool", "exec_batch"],
-]);
-
 export interface SourceTree {
   readonly files: Readonly<Record<string, string>>;
 }
@@ -39,8 +24,8 @@ export interface RepositoryToolFamilyInventory {
   readonly sdkToolFamilies: readonly string[];
   readonly compositionRoots: readonly string[];
   readonly productionRoots: readonly string[];
-  readonly registrationSites: ReadonlyMap<string, readonly string[]>;
-  readonly nonProductionDuplicateSites: ReadonlyMap<string, readonly string[]>;
+  readonly registrationSites: Readonly<Record<string, readonly string[]>>;
+  readonly nonProductionDuplicateSites: Readonly<Record<string, readonly string[]>>;
 }
 
 /**
@@ -86,7 +71,7 @@ export function inventoryRepositoryToolFamilies(
       unresolved.add(`${file}#missing-production-root`);
       continue;
     }
-    for (const registration of parseRegistrations(file, source)) {
+    for (const registration of parseRegistrations(file, source, files)) {
       if (registration.name) {
         names.add(registration.name);
         addSite(sites, registration.name, file);
@@ -108,7 +93,7 @@ export function inventoryRepositoryToolFamilies(
   const duplicateSites = new Map<string, Set<string>>();
   for (const [file, source] of Object.entries(files).sort(([left], [right]) => left.localeCompare(right))) {
     if (scanned.has(file)) continue;
-    for (const registration of parseRegistrations(file, source)) {
+    for (const registration of parseRegistrations(file, source, files)) {
       if (registration.name && names.has(registration.name)) addSite(duplicateSites, registration.name, file);
     }
   }
@@ -119,8 +104,8 @@ export function inventoryRepositoryToolFamilies(
     sdkToolFamilies,
     compositionRoots,
     productionRoots: Object.freeze([...roots].sort()),
-    registrationSites: readonlySiteMap(sites),
-    nonProductionDuplicateSites: readonlySiteMap(duplicateSites),
+    registrationSites: readonlySiteRecord(sites),
+    nonProductionDuplicateSites: readonlySiteRecord(duplicateSites),
   });
 }
 
@@ -196,41 +181,72 @@ function optionalPath(expression: ts.Expression): string | null {
   return posix.join("extensions", ...(parts as string[]));
 }
 
-export function extractLiteralRegistrationParameterFields(file: string, source: string): ReadonlyMap<string, readonly string[]> {
+export interface RegistrationParameterInventory {
+  readonly fieldsByTool: Readonly<Record<string, readonly string[]>>;
+  readonly unresolvedSchemas: readonly Readonly<{ file: string; registration: string }>[];
+}
+
+export function extractLiteralRegistrationParameterFields(
+  file: string,
+  source: string,
+  files: Readonly<Record<string, string>> = {},
+): RegistrationParameterInventory {
   const ast = sourceFile(file, source);
   const variables = variableInitializers(ast);
-  const result = new Map<string, readonly string[]>();
-  const parameterKeys = (expression: ts.Expression, seen = new Set<string>()): string[] => {
+  const constants = stringConstants(ast);
+  const fieldsByTool: Record<string, readonly string[]> = Object.create(null);
+  const unresolvedSchemas: Array<Readonly<{ file: string; registration: string }>> = [];
+  const parameterKeys = (expression: ts.Expression, seen = new Set<string>()): string[] | null => {
     if (ts.isCallExpression(expression) && expression.arguments[0]) return parameterKeys(expression.arguments[0], seen);
     if (ts.isObjectLiteralExpression(expression)) {
-      return expression.properties.flatMap((property) => {
-        if (!ts.isPropertyAssignment(property)) return [];
+      const names: string[] = [];
+      for (const property of expression.properties) {
+        if (!ts.isPropertyAssignment(property)) return null;
         const name = propertyName(property.name);
-        return name ? [name] : [];
-      });
+        if (!name) return null;
+        names.push(name);
+      }
+      return names;
     }
     if (ts.isIdentifier(expression) && !seen.has(expression.text)) {
       seen.add(expression.text);
       const initializer = variables.get(expression.text);
-      return initializer ? parameterKeys(initializer, seen) : [];
+      return initializer ? parameterKeys(initializer, seen) : null;
     }
-    return [];
+    return null;
   };
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && isRegisterToolCall(node.expression) && node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])) {
       const nameProperty = objectProperty(node.arguments[0], "name");
       const parametersProperty = objectProperty(node.arguments[0], "parameters");
-      if (nameProperty && ts.isStringLiteralLike(nameProperty.initializer) && parametersProperty) {
-        result.set(nameProperty.initializer.text, Object.freeze(parameterKeys(parametersProperty.initializer)));
+      if (nameProperty && parametersProperty) {
+        const toolName = ts.isStringLiteralLike(nameProperty.initializer)
+          ? nameProperty.initializer.text
+          : ts.isIdentifier(nameProperty.initializer)
+            ? constants.get(nameProperty.initializer.text) ?? resolveImportedString(nameProperty.initializer.text, file, ast, files) ?? undefined
+            : undefined;
+        const fields = parameterKeys(parametersProperty.initializer);
+        if (toolName && fields) fieldsByTool[toolName] = Object.freeze(fields);
+        else unresolvedSchemas.push(Object.freeze({
+          file,
+          registration: `${toolName ?? compact(nameProperty.initializer.getText(ast))}#${compact(parametersProperty.initializer.getText(ast))}`,
+        }));
       }
     }
     ts.forEachChild(node, visit);
   };
   visit(ast);
-  return result;
+  return Object.freeze({
+    fieldsByTool: Object.freeze(fieldsByTool),
+    unresolvedSchemas: Object.freeze(unresolvedSchemas),
+  });
 }
 
-function parseRegistrations(file: string, source: string): Array<{ name: string | null; fingerprint: string }> {
+function parseRegistrations(
+  file: string,
+  source: string,
+  files: Readonly<Record<string, string>> = {},
+): Array<{ name: string | null; fingerprint: string }> {
   const ast = sourceFile(file, source);
   const constants = stringConstants(ast);
   const variables = variableInitializers(ast);
@@ -239,7 +255,7 @@ function parseRegistrations(file: string, source: string): Array<{ name: string 
     if (ts.isCallExpression(node) && isRegisterToolCall(node.expression)) {
       const argument = node.arguments[0];
       registrations.push(argument
-        ? resolveRegistration(argument, constants, variables, ast)
+        ? resolveRegistration(argument, constants, variables, ast, file, files)
         : { name: null, fingerprint: "missing-argument" });
     }
     ts.forEachChild(node, visit);
@@ -253,14 +269,16 @@ function resolveRegistration(
   constants: ReadonlyMap<string, string>,
   variables: ReadonlyMap<string, ts.Expression>,
   ast: ts.SourceFile,
+  file: string,
+  files: Readonly<Record<string, string>>,
 ): { name: string | null; fingerprint: string } {
   if (ts.isObjectLiteralExpression(argument)) {
     const property = objectProperty(argument, "name");
     if (property) {
       if (ts.isStringLiteralLike(property.initializer)) return { name: property.initializer.text, fingerprint: "literal" };
       if (ts.isIdentifier(property.initializer)) {
-        const name = constants.get(property.initializer.text) ?? TOOL_NAME_CONSTANTS.get(property.initializer.text);
-        if (name) return { name, fingerprint: "constant" };
+        const name = constants.get(property.initializer.text) ?? resolveImportedString(property.initializer.text, file, ast, files);
+        if (name) return { name, fingerprint: "source-constant" };
       }
       return { name: null, fingerprint: `name:${compact(property.initializer.getText(ast))}` };
     }
@@ -270,20 +288,156 @@ function resolveRegistration(
       const initializer = variables.get(identifier);
       if (initializer && ts.isCallExpression(initializer)) {
         const factory = calleeName(initializer.expression);
-        const name = factory && FACTORY_TOOL_NAMES.get(factory);
-        if (name) return { name, fingerprint: `factory:${factory}` };
+        const name = factory && resolveFactoryToolName(factory, file, ast, files);
+        if (name) return { name, fingerprint: `source-factory:${factory}` };
       }
-      const inferred = /(?:^|_)(read|write|edit|bash)$/i.exec(identifier)?.[1]?.toLowerCase();
-      if (inferred) return { name: inferred, fingerprint: `spread:${identifier}` };
+      const inferred = /([A-Za-z][A-Za-z0-9]*)Tool$/.exec(identifier)?.[1];
+      if (inferred) return { name: camelToSnake(inferred), fingerprint: `spread:${identifier}` };
     }
     return { name: null, fingerprint: `spread:${spreads.map((spread) => compact(spread.expression.getText(ast))).join("+") || "none"}` };
   }
   if (ts.isCallExpression(argument)) {
     const factory = calleeName(argument.expression);
-    const name = factory && FACTORY_TOOL_NAMES.get(factory);
-    return name ? { name, fingerprint: `factory:${factory}` } : { name: null, fingerprint: `factory:${factory ?? "unknown"}` };
+    const name = factory && resolveFactoryToolName(factory, file, ast, files);
+    return name ? { name, fingerprint: `source-factory:${factory}` } : { name: null, fingerprint: `factory:${factory ?? "unknown"}` };
   }
   return { name: null, fingerprint: `expression:${compact(argument.getText(ast))}` };
+}
+
+function resolveImportedString(
+  localName: string,
+  file: string,
+  ast: ts.SourceFile,
+  files: Readonly<Record<string, string>>,
+): string | null {
+  const binding = importBindings(ast).get(localName);
+  if (!binding) return null;
+  const target = resolveSourceFile(file, binding.specifier, files);
+  return target ? resolveExportedString(target, binding.imported, files, new Set()) : null;
+}
+
+function resolveExportedString(
+  file: string,
+  exportedName: string,
+  files: Readonly<Record<string, string>>,
+  seen: Set<string>,
+): string | null {
+  const key = `${file}#${exportedName}`;
+  if (seen.has(key)) return null;
+  seen.add(key);
+  const source = files[file];
+  if (source === undefined) return null;
+  const ast = sourceFile(file, source);
+  const local = stringConstants(ast).get(exportedName);
+  if (local) return local;
+  for (const statement of ast.statements) {
+    if (!ts.isExportDeclaration(statement)) continue;
+    const clause = statement.exportClause;
+    const specifier = statement.moduleSpecifier && ts.isStringLiteralLike(statement.moduleSpecifier)
+      ? statement.moduleSpecifier.text : null;
+    if (clause && ts.isNamedExports(clause)) {
+      const element = clause.elements.find((candidate) => candidate.name.text === exportedName);
+      if (!element) continue;
+      const original = element.propertyName?.text ?? element.name.text;
+      if (!specifier) return stringConstants(ast).get(original) ?? null;
+      const target = resolveSourceFile(file, specifier, files);
+      return target ? resolveExportedString(target, original, files, seen) : null;
+    }
+    if (!clause && specifier) {
+      const target = resolveSourceFile(file, specifier, files);
+      const value = target ? resolveExportedString(target, exportedName, files, seen) : null;
+      if (value) return value;
+    }
+  }
+  return null;
+}
+
+function resolveFactoryToolName(
+  localName: string,
+  file: string,
+  ast: ts.SourceFile,
+  files: Readonly<Record<string, string>>,
+): string | null {
+  const local = findFactoryToolName(ast, localName);
+  if (local) return local;
+  const binding = importBindings(ast).get(localName);
+  if (!binding) return factoryConvention(localName);
+  const target = resolveSourceFile(file, binding.specifier, files);
+  return target
+    ? resolveExportedFactoryToolName(target, binding.imported, files, new Set())
+    : factoryConvention(binding.imported);
+}
+
+function resolveExportedFactoryToolName(
+  file: string,
+  exportedName: string,
+  files: Readonly<Record<string, string>>,
+  seen: Set<string>,
+): string | null {
+  const key = `${file}#${exportedName}`;
+  if (seen.has(key)) return null;
+  seen.add(key);
+  const source = files[file];
+  if (source === undefined) return null;
+  const ast = sourceFile(file, source);
+  const local = findFactoryToolName(ast, exportedName);
+  if (local) return local;
+  for (const statement of ast.statements) {
+    if (!ts.isExportDeclaration(statement)) continue;
+    const clause = statement.exportClause;
+    const specifier = statement.moduleSpecifier && ts.isStringLiteralLike(statement.moduleSpecifier)
+      ? statement.moduleSpecifier.text : null;
+    if (clause && ts.isNamedExports(clause)) {
+      const element = clause.elements.find((candidate) => candidate.name.text === exportedName);
+      if (!element) continue;
+      const original = element.propertyName?.text ?? element.name.text;
+      if (!specifier) return findFactoryToolName(ast, original);
+      const target = resolveSourceFile(file, specifier, files);
+      return target ? resolveExportedFactoryToolName(target, original, files, seen) : null;
+    }
+    if (!clause && specifier) {
+      const target = resolveSourceFile(file, specifier, files);
+      const value = target ? resolveExportedFactoryToolName(target, exportedName, files, seen) : null;
+      if (value) return value;
+    }
+  }
+  return null;
+}
+
+function findFactoryToolName(ast: ts.SourceFile, symbol: string): string | null {
+  let body: ts.ConciseBody | undefined;
+  for (const statement of ast.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name?.text === symbol) body = statement.body;
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (ts.isIdentifier(declaration.name) && declaration.name.text === symbol && declaration.initializer &&
+        (ts.isArrowFunction(declaration.initializer) || ts.isFunctionExpression(declaration.initializer))) body = declaration.initializer.body;
+    }
+  }
+  if (!body) return null;
+  let found: string | null = null;
+  const inspectObject = (object: ts.ObjectLiteralExpression): void => {
+    const property = objectProperty(object, "name");
+    if (property && ts.isStringLiteralLike(property.initializer)) found = property.initializer.text;
+  };
+  if (ts.isObjectLiteralExpression(body)) inspectObject(body);
+  else {
+    const visit = (node: ts.Node): void => {
+      if (!found && ts.isReturnStatement(node) && node.expression && ts.isObjectLiteralExpression(node.expression)) inspectObject(node.expression);
+      if (!found) ts.forEachChild(node, visit);
+    };
+    visit(body);
+  }
+  return found;
+}
+
+function factoryConvention(value: string): string | null {
+  const stem = /^create(.+)Tool$/.exec(value)?.[1];
+  return stem ? camelToSnake(stem) : null;
+}
+
+function camelToSnake(value: string): string {
+  return value.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
 }
 
 function resolveCalledImportedRoots(file: string, source: string, files: Readonly<Record<string, string>>): string[] {
@@ -431,8 +585,10 @@ function addSite(target: Map<string, Set<string>>, name: string, file: string): 
   target.set(name, values);
 }
 
-function readonlySiteMap(source: Map<string, Set<string>>): ReadonlyMap<string, readonly string[]> {
-  return new Map([...source].sort(([left], [right]) => left.localeCompare(right)).map(([name, values]) => [name, Object.freeze([...values].sort())]));
+function readonlySiteRecord(source: Map<string, Set<string>>): Readonly<Record<string, readonly string[]>> {
+  return Object.freeze(Object.fromEntries(
+    [...source].sort(([left], [right]) => left.localeCompare(right)).map(([name, values]) => [name, Object.freeze([...values].sort())]),
+  ));
 }
 
 function compact(value: string): string {

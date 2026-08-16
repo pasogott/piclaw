@@ -88,8 +88,11 @@ export function normalizeToolPreparationManifest(
     "manifest candidates",
     MAX_MANIFEST_ENTRIES,
     issues,
-  ) ?? [];
+  );
   const normalizedOptions = snapshotOptions(options, issues);
+  if (!candidateSnapshot || !normalizedOptions) {
+    return Object.freeze({ specs: Object.freeze([]), issues: Object.freeze(issues) });
+  }
   const dynamicNames = new Set(normalizedOptions.dynamicTemplateNames ?? []);
 
   for (const candidate of candidateSnapshot) {
@@ -165,10 +168,11 @@ export function validateToolPreparationManifest(
   return normalizeToolPreparationManifest(candidates, options).issues;
 }
 
-function snapshotOptions(value: unknown, issues: ToolPreparationValidationIssue[]): ToolPreparationValidationOptions {
+function snapshotOptions(value: unknown, issues: ToolPreparationValidationIssue[]): ToolPreparationValidationOptions | null {
+  const issueStart = issues.length;
   if (!value || typeof value !== "object") {
     issues.push(issue("invalid_options", null, "Validation options must be a closed data object."));
-    return Object.freeze({});
+    return null;
   }
   let keys: readonly PropertyKey[];
   let descriptors: PropertyDescriptorMap;
@@ -177,7 +181,7 @@ function snapshotOptions(value: unknown, issues: ToolPreparationValidationIssue[
     descriptors = Object.getOwnPropertyDescriptors(value);
   } catch {
     issues.push(issue("invalid_options", null, "Validation option reflection failed; hostile proxies are rejected."));
-    return Object.freeze({});
+    return null;
   }
   const snapshot: Record<string, unknown> = Object.create(null);
   let invalid = false;
@@ -203,7 +207,7 @@ function snapshotOptions(value: unknown, issues: ToolPreparationValidationIssue[
       invalid = true;
     }
   }
-  if (invalid) return Object.freeze({});
+  if (invalid || issues.length !== issueStart) return null;
   return Object.freeze({
     knownToolNames: knownToolNames && Object.freeze(knownToolNames),
     dynamicTemplateNames: dynamicTemplateNames && Object.freeze(dynamicTemplateNames),

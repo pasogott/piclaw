@@ -1257,9 +1257,9 @@ Required family rules:
 
 | Family | Selected Earendil contract | Replay | Preparation evidence |
 |---|---|---|---|
-| Read | Public `createReadTool` | `safe` | Path, image, truncation, abort and redaction cases |
-| Write/edit | Public `createWriteTool` / `createEditTool` | `never` | Mutation serialization, exact edit diagnostics and ambiguous crash cases |
-| Bash/PowerShell | Public `createBashTool` or direct `AgentHarnessTool<PiclawToolContext>` | `never` | Streaming updates, output cap/full-output reference, process group, timeout and abort |
+| Read | Root-exported `@earendil-works/pi-agent-core` `createReadTool` | `safe` | Path, image, truncation, abort and redaction cases |
+| Write/edit | Root-exported `@earendil-works/pi-agent-core` `createWriteTool` / `createEditTool` | `never` | Mutation serialization, exact edit diagnostics and ambiguous crash cases |
+| Bash/PowerShell | Root-exported `@earendil-works/pi-agent-core` `createBashTool` or direct `AgentHarnessTool<PiclawToolContext>` | `never` | Streaming updates, output cap/full-output reference, process group, timeout and abort |
 | Pure discovery | Direct `AgentHarnessTool<PiclawToolContext>` | `safe` | Snapshot consistency and no credentials |
 | Piclaw mutation | Direct selected tool calling one EF-S contract | `never` unless exact-key reconciliation proves safety | Service idempotency key and effect certainty |
 | Infrastructure/add-on | Direct selected tool | `never` by default | Query/mutation split before any `safe` classification |
@@ -1277,10 +1277,10 @@ WP-3C accepted preparation corrections (2026-08-16):
 - exact inventory is derived as source data from production composition roots, forwarded factories, optional platform/environment entries and the service factory; SDK families come from the installed package's literal `allToolNames`, and every discovered registration site is checked against the row's `currentSource` instead of relying on an opaque root hash;
 - add-on preparation reads only declared `manifest.pi.extensions` entries, never `main`, and its hermetic package-tree cases cover scoped/unscoped packages, broken links, containment, malformed manifests, duplicate declarations and missing/non-file targets;
 - MCP-direct preparation preserves global, per-server and `MCP_DIRECT_TOOLS` precedence, literal `disabled === true`, metadata-cache validity, tool/resource filters, prefix/resource normalization, built-in and first-wins collisions, stale configured-server reporting and proxy retention unless valid direct registrations make explicit suppression safe;
-- every repository row has closed effect, replay, context, authority and EF evidence; `currentIntegration: "none"` means this latent catalogue currently supplies neither `PiclawToolContext` nor an effector, while frozen `futureContextFields` and `futureServiceEffector` state the proposed target explicitly for that row;
+- every repository row separates `currentIntegration: "existing-production-wiring"` and a concrete `currentAuthorityPath` from latent activation metadata: the catalogue currently supplies neither `PiclawToolContext` nor a WP-3C effector, while frozen `futureContextFields` and `futureServiceEffector` state the proposed target explicitly; service-backed current paths name their actual SQLite/SSE, session-registry, attachment, indexer, shutdown, or task-scheduler authority;
 - validation rejects unknown shapes, accessors, symbols, sparse arrays, proxies, non-canonical context order, unsafe selector grammar and post-input mutation before returning frozen normalized data;
 - source-derived parameter schemas must classify each top-level field as protected or as an explicit safe control field; hostile outer observation containers, updates and selector arrays are fail-closed without invoking accessors;
-- inventory, protected-observer and behaviour evidence is hermetic and static; current public Earendil core factories are tested through a fake `ExecutionEnv`, while one coherent selected Harness v3 release remains required before activation or v3 compile integration.
+- inventory, protected-observer and behaviour evidence is hermetic and static; future direct root exports from `@earendil-works/pi-agent-core` are tested with `AgentHarnessTool<PiclawToolContext>` and `FakeExecutionEnv`, while `@earendil-works/pi-coding-agent` remains only the recorded current source and one coherent selected Harness v3 release remains required before activation.
 
 Core and Piclaw-specific tool cases can be specified against current behaviour now. Compile assertions wait for one coherent selected v3 type surface so the documentation does not freeze a draft execute signature.
 

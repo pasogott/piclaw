@@ -55,33 +55,87 @@ export async function composeAfterSingleExecution(
   }
 }
 
-export class ScriptedServiceAuthority {
-  private available = true;
+export type ScriptedEffectCertainty = "not_applied" | "applied" | "unknown";
 
-  constructor(
-    readonly effector: Exclude<ToolServiceEffector, null>,
-    readonly toolName: string,
-    readonly operationId: string,
-  ) {}
+export interface ScriptedAuthorityRequest {
+  readonly effector: Exclude<ToolServiceEffector, null>;
+  readonly toolName: string;
+  readonly operationId: string;
+  readonly ownerVersion: number;
+  readonly idempotencyKey: string;
+  readonly requestHash: string;
+}
 
-  consume(spec: ToolPreparationSpec, context: PiclawToolContext): boolean {
-    if (!this.available || spec.serviceEffector === null) return false;
-    if (this.effector !== spec.serviceEffector || this.toolName !== spec.toolName || this.operationId !== context.operationId) return false;
-    this.available = false;
-    return true;
+type ScriptedDecision = Readonly<{
+  certainty: ScriptedEffectCertainty;
+  requestHash: string;
+}>;
+
+/** Independent in-memory authority/decision ledger; it imports no live store. */
+export class ScriptedServiceDecisionOracle {
+  private readonly decisions = new Map<string, ScriptedDecision>();
+  private readonly pending = new Map<string, string>();
+
+  constructor(readonly operationId: string, readonly ownerVersion: number) {}
+
+  acquire(spec: ToolPreparationSpec, request: ScriptedAuthorityRequest): Readonly<
+    | { status: "granted" }
+    | { status: "reconciled"; certainty: ScriptedEffectCertainty; autoReplay: false }
+    | { status: "idempotency_conflict" }
+    | { status: "stale_owner" }
+    | { status: "wrong_authority" }
+  > {
+    if (spec.serviceEffector === null || request.effector !== spec.serviceEffector || request.toolName !== spec.toolName) {
+      return Object.freeze({ status: "wrong_authority" });
+    }
+    if (request.operationId !== this.operationId || request.ownerVersion !== this.ownerVersion) {
+      return Object.freeze({ status: "stale_owner" });
+    }
+    const key = `${request.effector}:${request.idempotencyKey}`;
+    const existing = this.decisions.get(key);
+    if (existing) {
+      if (existing.requestHash !== request.requestHash) return Object.freeze({ status: "idempotency_conflict" });
+      return Object.freeze({ status: "reconciled", certainty: existing.certainty, autoReplay: false });
+    }
+    const pendingHash = this.pending.get(key);
+    if (pendingHash !== undefined) {
+      return Object.freeze({ status: pendingHash === request.requestHash ? "wrong_authority" : "idempotency_conflict" });
+    }
+    this.pending.set(key, request.requestHash);
+    return Object.freeze({ status: "granted" });
+  }
+
+  settle(request: ScriptedAuthorityRequest, certainty: ScriptedEffectCertainty): void {
+    const key = `${request.effector}:${request.idempotencyKey}`;
+    if (this.pending.get(key) !== request.requestHash) throw new Error("decision settlement lacks matching grant");
+    this.pending.delete(key);
+    this.decisions.set(key, Object.freeze({ requestHash: request.requestHash, certainty }));
+  }
+
+  snapshot(): Readonly<Record<string, ScriptedDecision>> {
+    return Object.freeze(Object.fromEntries([...this.decisions].map(([key, decision]) => [key, Object.freeze({ ...decision })])));
   }
 }
 
-/** Test-only one-shot authority probe; no production tool or effector is activated. */
-export async function executeWithServiceAuthority(
+/** Test-only decision probe; no production tool, store, or effector is activated. */
+export async function executeWithServiceDecision(
   spec: ToolPreparationSpec,
   tool: ScriptedDirectTool,
   context: PiclawToolContext,
-  authority: ScriptedServiceAuthority | undefined,
-): Promise<Readonly<{ status: "executed"; result: AgentToolResult<unknown> } | { status: "blocked" }>> {
-  if (!authority?.consume(spec, context)) return Object.freeze({ status: "blocked" });
+  oracle: ScriptedServiceDecisionOracle,
+  request: ScriptedAuthorityRequest,
+  certainty: ScriptedEffectCertainty,
+): Promise<Readonly<
+  | { status: "executed"; result: AgentToolResult<unknown>; certainty: ScriptedEffectCertainty }
+  | { status: "reconciled"; certainty: ScriptedEffectCertainty; autoReplay: false }
+  | { status: "idempotency_conflict" | "stale_owner" | "wrong_authority" }
+>> {
+  if (context.operationId !== request.operationId) return Object.freeze({ status: "stale_owner" });
+  const decision = oracle.acquire(spec, request);
+  if (decision.status !== "granted") return decision;
   const result = await tool.execute("authority-call", {}, undefined, undefined, context);
-  return Object.freeze({ status: "executed", result });
+  oracle.settle(request, certainty);
+  return Object.freeze({ status: "executed", result, certainty });
 }
 
 export function acceptsLateResult(expectedOperationId: string, currentOperationId: string): boolean {

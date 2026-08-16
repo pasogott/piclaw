@@ -80,8 +80,8 @@ describe("WP-3C production-root coverage oracle", () => {
     const inventory = inventoryRepositoryToolFamilies();
     expect(inventory.unresolvedRegistrations).toEqual([]);
     expect(TOOL_PREPARATION_MANIFEST.map((row) => row.toolName).sort()).toEqual([...inventory.names]);
-    expect(inventory.registrationSites.get("cdp_browser")).toEqual(["extensions/browser/cdp-browser-tool/index.ts"]);
-    expect(inventory.nonProductionDuplicateSites.get("cdp_browser")).toEqual(["extensions/browser/cdp-browser/index.ts"]);
+    expect(inventory.registrationSites.cdp_browser).toEqual(["extensions/browser/cdp-browser-tool/index.ts"]);
+    expect(inventory.nonProductionDuplicateSites.cdp_browser).toEqual(["extensions/browser/cdp-browser/index.ts"]);
     expect(inventory.sdkToolFamilies).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
     const compositionCategories = {
       builtin: inventory.compositionRoots.filter((root) => root.startsWith("src/extensions/")),
@@ -96,8 +96,8 @@ describe("WP-3C production-root coverage oracle", () => {
     expect(inventory.compositionRoots).toHaveLength(Object.values(compositionCategories).flat().length);
 
     const manifestByName = new Map(TOOL_PREPARATION_MANIFEST.map((row) => [row.toolName, row]));
-    expect(inventory.registrationSites.size).toBe(65);
-    for (const [toolName, sites] of inventory.registrationSites) {
+    expect(Object.keys(inventory.registrationSites)).toHaveLength(65);
+    for (const [toolName, sites] of Object.entries(inventory.registrationSites)) {
       const currentSource = manifestByName.get(toolName)?.currentSource;
       expect(currentSource).toBeDefined();
       for (const site of sites) expect(currentSource).toContain(`runtime/${site}`);
@@ -105,7 +105,7 @@ describe("WP-3C production-root coverage oracle", () => {
     for (const toolName of inventory.sdkToolFamilies) {
       expect(manifestByName.get(toolName)?.currentSource).toContain("@earendil-works/pi-coding-agent");
     }
-    expect(inventory.registrationSites.has("mcp")).toBeFalse();
+    expect(Object.hasOwn(inventory.registrationSites, "mcp")).toBeFalse();
     expect(manifestByName.get("mcp")?.currentSource).toContain("pi-mcp-adapter");
   });
 
@@ -114,8 +114,45 @@ describe("WP-3C production-root coverage oracle", () => {
     expect(inventory.names).toContain("fixture_always");
     expect(inventory.names).toContain("fixture_optional");
     expect(inventory.names).not.toContain("fixture_unreferenced");
-    expect(inventory.registrationSites.get("fixture_always")).toEqual(["src/extensions/always.ts"]);
-    expect(inventory.nonProductionDuplicateSites.get("fixture_always")).toEqual(["extensions/unreferenced.ts"]);
+    expect(inventory.registrationSites.fixture_always).toEqual(["src/extensions/always.ts"]);
+    expect(inventory.nonProductionDuplicateSites.fixture_always).toEqual(["extensions/unreferenced.ts"]);
+  });
+
+  test("returns immutable records and tuples rather than mutable Map/Set views", () => {
+    const inventory = inventoryRepositoryToolFamilies(compositionTree(), { sdkToolFamilies: [] });
+    expect(Object.isFrozen(inventory)).toBeTrue();
+    expect(Object.isFrozen(inventory.registrationSites)).toBeTrue();
+    expect(Object.isFrozen(inventory.nonProductionDuplicateSites)).toBeTrue();
+    expect(Object.values(inventory.registrationSites).every(Object.isFrozen)).toBeTrue();
+    expect(Reflect.set(inventory.registrationSites, "escape", ["mutable.ts"])).toBeFalse();
+    expect(() => (inventory.registrationSites.fixture_always as string[]).push("mutable.ts")).toThrow();
+    expect(Object.values(inventory).some((value) => value instanceof Map || value instanceof Set)).toBeFalse();
+  });
+
+  test("derives imported aliases and named re-exported constants/factories from source", () => {
+    const tree = compositionTree([], "alwaysOn");
+    const files = { ...tree.files };
+    files["src/extensions/always.ts"] = `
+      import { EXPORTED_NAME as LOCAL_NAME, createExportedTool as localFactory } from "./api.js";
+      export const alwaysOn = (pi: any) => {
+        pi.registerTool({ name: LOCAL_NAME });
+        pi.registerTool(localFactory());
+      };
+    `;
+    files["src/extensions/api.ts"] = `
+      export { REAL_NAME as EXPORTED_NAME, createRealTool as createExportedTool } from "./impl.js";
+    `;
+    files["src/extensions/impl.ts"] = `
+      export const REAL_NAME = "fixture_source_constant";
+      export function createRealTool() { return { name: "fixture_source_factory" }; }
+    `;
+    const inventory = inventoryRepositoryToolFamilies({ files }, { sdkToolFamilies: [] });
+    expect(inventory.unresolvedRegistrations).toEqual([]);
+    expect(inventory.names).toEqual(["fixture_source_constant", "fixture_source_factory"]);
+    expect(inventory.registrationSites).toEqual({
+      fixture_source_constant: ["src/extensions/always.ts"],
+      fixture_source_factory: ["src/extensions/always.ts"],
+    });
   });
 
   test("a newly referenced optional registration fails exact coverage", () => {
@@ -168,9 +205,10 @@ describe("WP-3C closed manifest policy and hostile-safe normalization", () => {
     for (const row of TOOL_PREPARATION_MANIFEST) {
       const policy = getToolPreparationPolicy(row.toolName)!;
       expect(policy.activationStatus).toBe("latent");
-      expect(policy.currentIntegration).toBe("none");
+      expect(policy.currentIntegration).toBe("existing-production-wiring");
       expect(policy.currentServiceEffector).toBeNull();
-      expect(policy.currentContextSource).toContain("neither PiclawToolContext nor a service effector");
+      expect(policy.currentContextSource).toContain("neither PiclawToolContext nor a latent WP-3C service effector");
+      expect(policy.currentAuthorityPath.length).toBeGreaterThan(60);
       expect(policy.futureContextFields).toEqual(row.contextFields);
       expect(Object.isFrozen(policy.futureContextFields)).toBeTrue();
       expect(policy.futureServiceEffector).toBe(row.serviceEffector);
@@ -181,6 +219,8 @@ describe("WP-3C closed manifest policy and hostile-safe normalization", () => {
       if (row.serviceEffector !== null) {
         expect(policy.idempotencyIdentity?.length).toBeGreaterThan(10);
         expect(policy.activationPrerequisites.length).toBeGreaterThan(0);
+        expect(policy.currentAuthorityPath).toMatch(/SQLite|SSE|registry|transport|filesystem|persistence|indexer|scheduler|shutdown/i);
+        expect(policy.currentAuthorityPath).not.toMatch(/\bnone\b|future EF-S/i);
       } else if (row.effectClass !== "query") {
         expect(policy.nullAuthorityKind).not.toBeNull();
       }
@@ -222,6 +262,7 @@ describe("WP-3C closed manifest policy and hostile-safe normalization", () => {
       let result: ReturnType<typeof normalizeToolPreparationManifest> | undefined;
       expect(() => { result = normalizeToolPreparationManifest(candidate as unknown[]); }).not.toThrow();
       expect(result?.issues).toContainEqual(expect.objectContaining({ code: "invalid_candidate_array" }));
+      expect(result?.specs).toEqual([]);
     }
 
     const read = TOOL_PREPARATION_MANIFEST.find((row) => row.toolName === "read")!;
@@ -238,6 +279,7 @@ describe("WP-3C closed manifest policy and hostile-safe normalization", () => {
       let result: ReturnType<typeof normalizeToolPreparationManifest> | undefined;
       expect(() => { result = normalizeToolPreparationManifest([read], options as never); }).not.toThrow();
       expect(result?.issues).toContainEqual(expect.objectContaining({ code: "invalid_options" }));
+      expect(result?.specs).toEqual([]);
     }
     expect(getterCalls).toBe(0);
   });
@@ -324,8 +366,10 @@ describe("WP-3C closed manifest policy and hostile-safe normalization", () => {
     });
     expect(MESSAGES_ACTIVATION_BLOCKER).toContain("delete/move");
     expect(CORE_EARENDIL_FACTORY_TARGETS).toEqual({
-      read: "createReadTool", write: "createWriteTool", edit: "createEditTool", bash: "createBashTool",
+      package: "@earendil-works/pi-agent-core",
+      exports: { read: "createReadTool", write: "createWriteTool", edit: "createEditTool", bash: "createBashTool" },
     });
+    expect(Object.isFrozen(CORE_EARENDIL_FACTORY_TARGETS.exports)).toBeTrue();
   });
 });
 
@@ -351,12 +395,17 @@ describe("WP-3C hermetic add-on package-tree oracle", () => {
       },
     };
     const result = resolveAddonPackageTree(tree);
+    expect(result.fixtureValid).toBeTrue();
+    expect(Object.isFrozen(result)).toBeTrue();
+    expect(Object.isFrozen(result.packagePaths)).toBeTrue();
+    expect(Object.isFrozen(result.extensionPaths)).toBeTrue();
+    expect(Object.isFrozen(result.rejections)).toBeTrue();
     expect(result.packagePaths).toEqual(["/node_modules/@scope/pkg", "/node_modules/link", "/node_modules/plain"]);
     expect(result.extensionPaths).toEqual(["/node_modules/@scope/pkg/extension.ts", "/node_modules/link/entry.ts", "/node_modules/plain/entry.ts"]);
     expect(result.rejections.map((entry) => entry.code)).toEqual(["duplicate_declaration", "duplicate_declaration"]);
   });
 
-  test("rejects malformed/main-only/traversal/escape/missing/non-file/broken/unreadable targets", () => {
+  test("ignores normal non-addons and reports only declared path failures with provenance", () => {
     const tree: VirtualPackageTree = {
       nodeModulesRoot: "/node_modules",
       nodes: {
@@ -377,11 +426,38 @@ describe("WP-3C hermetic add-on package-tree oracle", () => {
       },
     };
     const result = resolveAddonPackageTree(tree);
+    expect(result.fixtureValid).toBeTrue();
     expect(result.extensionPaths).toEqual([]);
-    expect(result.rejections.map((entry) => entry.code)).toEqual(expect.arrayContaining([
-      "broken_package", "missing_pi_extensions", "malformed_manifest", "unreadable_manifest", "lexical_escape",
-      "missing_target", "non_file_target", "realpath_escape", "unreadable_target", "non_string_declaration",
-    ]));
+    expect(result.rejections.map((entry) => entry.code).sort()).toEqual([
+      "lexical_escape", "missing_target", "non_file_target", "realpath_escape", "unreadable_target",
+    ]);
+    expect(result.rejections.every((entry) => entry.packagePath === "/node_modules/unsafe" && typeof entry.declaration === "string")).toBeTrue();
+  });
+
+  test("fails closed on hostile outer trees, node maps and accessor nodes without invoking getters", () => {
+    let getterCalls = 0;
+    const accessorOuter = Object.defineProperty({ nodeModulesRoot: "/node_modules" }, "nodes", {
+      get() { getterCalls += 1; return {}; },
+    });
+    const accessorNode = Object.defineProperty({}, "kind", { get() { getterCalls += 1; return "directory"; } });
+    const revokedOuter = Proxy.revocable({}, {});
+    revokedOuter.revoke();
+    const revokedNodes = Proxy.revocable({}, {});
+    revokedNodes.revoke();
+    const symbolNodes = { "/node_modules": { kind: "directory" }, [Symbol("escape")]: { kind: "directory" } };
+    const hostile: unknown[] = [
+      revokedOuter.proxy,
+      accessorOuter,
+      { nodeModulesRoot: "/node_modules", nodes: revokedNodes.proxy },
+      { nodeModulesRoot: "/node_modules", nodes: [] },
+      { nodeModulesRoot: "/node_modules", nodes: { "/node_modules": accessorNode } },
+      { nodeModulesRoot: "/node_modules", nodes: symbolNodes },
+      { nodeModulesRoot: "/node_modules", nodes: { "/node_modules": { kind: "directory" }, "/node_modules/.": { kind: "directory" } } },
+    ];
+    for (const value of hostile) {
+      expect(resolveAddonPackageTree(value)).toEqual({ fixtureValid: false, extensionPaths: [], packagePaths: [], rejections: [] });
+    }
+    expect(getterCalls).toBe(0);
   });
 });
 
@@ -424,6 +500,10 @@ describe("WP-3C hermetic MCP metadata oracle", () => {
         { name: "disabled", disabled: true, directTools: true, cache: freshMcpCache("disabled", { tools: [{ name: "ignored" }] }) },
       ],
     });
+    expect(Object.isFrozen(result)).toBeTrue();
+    expect(Object.isFrozen(result.directNames)).toBeTrue();
+    expect(Object.isFrozen(result.missingConfiguredServers)).toBeTrue();
+    expect(Object.isFrozen(result.skipped)).toBeTrue();
     expect(result.directNames).toEqual(["demo_search", "demo_read_run_book"]);
     expect(result.proxyRegistered).toBeFalse();
     expect(result.skipped).toEqual(expect.arrayContaining([
@@ -497,6 +577,49 @@ describe("WP-3C hermetic MCP metadata oracle", () => {
     });
     expect(absent).toMatchObject({ directNames: [], missingConfiguredServers: ["missing"], proxyRegistered: true });
     expect(empty).toMatchObject({ directNames: [], missingConfiguredServers: [], proxyRegistered: true });
+  });
+
+  test("descriptor-closes hostile containers and rejects invalid or future cache times without getters", () => {
+    let getterCalls = 0;
+    const accessorMetadata = Object.defineProperty({}, "name", { get() { getterCalls += 1; return "escape"; } });
+    const accessorServer = Object.defineProperty({}, "name", { get() { getterCalls += 1; return "escape"; } });
+    const revokedFixture = Proxy.revocable({}, {});
+    revokedFixture.revoke();
+    const revokedTools = Proxy.revocable([], {});
+    revokedTools.revoke();
+    const accessorBuiltins = new Set<string>();
+    Object.defineProperty(accessorBuiltins, "size", { get() { getterCalls += 1; return 99; } });
+    const base = { prefix: "server" as const, globalDirectTools: true, disableProxyTool: true, builtins: new Set<string>() };
+    const invalidOuterValues: unknown[] = [
+      revokedFixture.proxy,
+      { ...base, servers: [accessorServer] },
+      { ...base, servers: new Array(2) },
+      { ...base, servers: new Array(1_001).fill({ name: "x", cache: null }) },
+      { ...base, nowMs: Number.NaN, servers: [] },
+      { ...base, nowMs: Number.POSITIVE_INFINITY, servers: [] },
+      { ...base, maxCacheAgeMs: -1, servers: [] },
+    ];
+    for (const value of invalidOuterValues) {
+      expect(resolveMcpMetadataFixture(value)).toEqual({
+        directNames: [], missingConfiguredServers: [], proxyRegistered: true, skipped: ["invalid-fixture"],
+      });
+    }
+    expect(resolveMcpMetadataFixture({ ...base, builtins: accessorBuiltins, servers: [] })).toEqual({
+      directNames: [], missingConfiguredServers: [], proxyRegistered: true, skipped: [],
+    });
+    const invalidMetadata = resolveMcpMetadataFixture({
+      ...base, servers: [{ name: "metadata", directTools: true, cache: freshMcpCache("metadata", { tools: [accessorMetadata] }) }],
+    });
+    expect(invalidMetadata).toMatchObject({ directNames: [], proxyRegistered: true, skipped: ["metadata:invalid-tool"] });
+    const invalidCacheShape = resolveMcpMetadataFixture({
+      ...base, servers: [{ name: "revoked", directTools: true, cache: { definitionHash: "hash:revoked", cachedAt: 1_000, tools: revokedTools.proxy } }],
+    });
+    expect(invalidCacheShape).toMatchObject({ directNames: [], missingConfiguredServers: ["revoked"], proxyRegistered: true });
+    const future = resolveMcpMetadataFixture({
+      ...base, nowMs: 1_000, servers: [{ name: "future", directTools: true, cache: { definitionHash: "hash:future", cachedAt: 1_001, tools: [{ name: "escape" }] } }],
+    });
+    expect(future).toMatchObject({ directNames: [], missingConfiguredServers: ["future"], proxyRegistered: true });
+    expect(getterCalls).toBe(0);
   });
 
   test("does not freeze arbitrary add-on or MCP names into exact rows", () => {

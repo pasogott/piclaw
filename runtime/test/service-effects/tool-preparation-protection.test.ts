@@ -22,6 +22,7 @@ function requireSelectors(names: readonly string[], selectors: readonly string[]
 }
 
 requireSelectors(["list_tools", "get_model_state", "list_models", "activate_tools", "reset_active_tools", "switch_model", "switch_thinking"], []);
+requireSelectors(["list_tools"], ["params.query", "params.intent"]);
 requireSelectors(["list_models"], ["params.query"]);
 requireSelectors(["list_scripts"], ["params.query", "params.intent", "result.content"]);
 requireSelectors(["refresh_workspace_index"], ["result.content", "result.details"]);
@@ -55,32 +56,38 @@ requireSelectors(["ssh"], ["params.chat_jid", "params.ssh_target", "params.priva
 requireSelectors(["cdp_browser"], ["params.expr", "params.url", "params.selector", "params.outPath", "params.headerTemplate", "params.footerTemplate", "result.content", "result.details"]);
 requireSelectors(["mcp"], ["params.tool", "params.args", "params.server", "params.search", "params.describe", "params.instructions", "params.connect", "params.redirectUrl", "result.content", "result.details"]);
 
-const SAFE_PARAMETER_FIELDS = new Map<string, readonly string[]>([
-  ["list_scripts", ["scope", "role", "limit", "include_metadata"]],
-  ["activate_tools", ["names", "mode"]],
-  ["attach_file", ["content_type", "kind"]],
-  ["read_attachment", ["mode", "max_bytes"]],
-  ["messages", ["action", "role", "after", "before", "since", "after_row", "before_row", "limit", "excerpt_chars", "offset", "context_before", "context_after", "details_max_chars", "content_lines", "regex", "context_lines", "max_matches", "capture_group", "dedupe", "sort", "type", "dry_run", "force"]],
-  ["list_models", ["limit", "offset"]],
-  ["switch_model", ["model"]],
-  ["switch_thinking", ["level"]],
-  ["introspect_sql", ["limit"]],
-  ["schedule_task", ["schedule_type", "schedule_value", "model", "task_kind", "timeout_sec", "notify", "muted", "no_nudge"]],
-  ["scheduled_tasks", ["action", "status", "limit", "include_latest_run_log", "allow_internal", "notify", "muted", "no_nudge", "schedule_type", "schedule_value", "model", "task_kind", "timeout_sec"]],
-  ["search_workspace", ["scope", "limit", "offset", "refresh", "max_kb"]],
-  ["send_adaptive_card", ["schema_version", "submit_behavior", "completed_at"]],
-  ["send_dashboard_widget", ["interactive"]],
-  ["chat", ["mode"]],
-  ["session_control", ["action", "model", "force"]],
-  ["session_status", ["action"]],
-  ["open_workspace_file", ["target"]],
-  ["env", ["action", "limit"]],
-  ["image_process", ["action", "format", "quality", "width", "height", "fit", "left", "top", "angle", "sigma", "gravity", "preserve_transparency", "overwrite", "animated", "delay", "loop", "frame_count", "direction", "brightness", "saturation", "hue", "gamma", "contrast", "tint_color", "clahe_width", "clahe_height", "threshold_value", "median_size", "extend_top", "extend_bottom", "extend_left", "extend_right", "extend_background", "channel", "text_color", "text_size", "density", "tile_size", "affine_matrix", "strip_metadata"]],
-  ["bun_run", ["timeout_sec", "capture_stdout"]],
-  ["keychain", ["action", "field", "type", "limit"]],
-  ["ssh", ["action", "ssh_port", "strict_host_key_checking"]],
-  ["cdp_browser", ["type", "properties", "required"]],
+function safeException(toolName: string, fields: readonly string[], rationale: string) {
+  return Object.freeze({ toolName, fields: Object.freeze([...fields]), rationale });
+}
+
+const SAFE_PARAMETER_EXCEPTIONS = Object.freeze([
+  safeException("list_tools", ["limit", "include_parameters"], "Bounded catalog pagination and a boolean detail switch contain no free-form request content."),
+  safeException("list_scripts", ["scope", "role", "limit", "include_metadata"], "Closed scope/role selectors, a bounded count, and a metadata boolean carry no user-authored content."),
+  safeException("activate_tools", ["names", "mode"], "Tool names come from the public catalog and mode is a closed activation enum, not private payload data."),
+  safeException("attach_file", ["content_type", "kind"], "MIME classification and the closed attachment-kind enum do not reveal file paths, names, or bytes."),
+  safeException("read_attachment", ["mode", "max_bytes"], "The read mode and bounded byte limit are operational controls; attachment identity and content remain protected."),
+  safeException("messages", ["action", "role", "after", "before", "since", "after_row", "before_row", "limit", "excerpt_chars", "offset", "context_before", "context_after", "details_max_chars", "content_lines", "regex", "context_lines", "max_matches", "capture_group", "dedupe", "sort", "type", "dry_run", "force"], "Closed actions, pagination bounds, time/row cursors, and matching switches expose query mechanics but no message content or identities."),
+  safeException("list_models", ["limit", "offset"], "Pagination integers reveal only catalog traversal mechanics and no provider credentials or prompts."),
+  safeException("switch_model", ["model"], "The model value is a public provider/catalog identifier selected from the runtime model registry."),
+  safeException("switch_thinking", ["level"], "Thinking level is a closed public execution-mode enum with no prompt or response content."),
+  safeException("introspect_sql", ["limit"], "The bounded result count is safe while the SQL query and returned database values remain protected."),
+  safeException("schedule_task", ["schedule_type", "schedule_value", "model", "task_kind", "timeout_sec", "notify", "muted", "no_nudge"], "Schedule timing, task/model enums, timeout, and notification flags are controls; command and prompt bodies remain protected."),
+  safeException("scheduled_tasks", ["action", "status", "limit", "include_latest_run_log", "allow_internal", "notify", "muted", "no_nudge", "schedule_type", "schedule_value", "model", "task_kind", "timeout_sec"], "Closed task actions/status, timing, bounds, and notification flags do not include stored prompts, commands, or run output."),
+  safeException("search_workspace", ["scope", "limit", "offset", "refresh", "max_kb"], "Search scope, pagination, refresh, and size bounds are mechanics; the free-form query and matched content stay protected."),
+  safeException("send_adaptive_card", ["schema_version", "submit_behavior", "completed_at"], "Schema version, closed submit behavior, and completion time describe transport state rather than card payload content."),
+  safeException("send_dashboard_widget", ["interactive"], "The interaction boolean is a transport capability flag; widget HTML and fallback content remain protected."),
+  safeException("chat", ["mode"], "Delivery mode is a closed queueing enum and contains neither destination identity nor message content."),
+  safeException("session_control", ["action", "model", "force"], "Closed control action, public model identifier, and force flag carry no cross-session instructions or destination identity."),
+  safeException("session_status", ["action"], "The status action is a closed read-only selector and contains no session result details."),
+  safeException("open_workspace_file", ["target"], "The target is a closed tab/popout presentation enum; file path and user-visible label remain protected."),
+  safeException("env", ["action", "limit"], "Closed environment operation and bounded listing count reveal no variable names or values."),
+  safeException("image_process", ["action", "format", "quality", "width", "height", "fit", "left", "top", "angle", "sigma", "gravity", "preserve_transparency", "overwrite", "animated", "delay", "loop", "frame_count", "direction", "brightness", "saturation", "hue", "gamma", "contrast", "tint_color", "clahe_width", "clahe_height", "threshold_value", "median_size", "extend_top", "extend_bottom", "extend_left", "extend_right", "extend_background", "channel", "text_color", "text_size", "density", "tile_size", "affine_matrix", "strip_metadata"], "Closed image-operation selectors and numeric/rendering controls expose transformation mechanics; paths, overlays, and text remain protected."),
+  safeException("bun_run", ["timeout_sec", "capture_stdout"], "Timeout and output-capture controls contain no script path, arguments, working directory, or process output."),
+  safeException("keychain", ["action", "field", "type", "limit"], "Closed keychain operation/field/type selectors and a bound contain no entry name, username, or secret."),
+  safeException("ssh", ["action", "ssh_port", "strict_host_key_checking"], "Closed profile action, numeric port, and host-key policy expose no target, chat identity, or keychain entry names."),
+  safeException("cdp_browser", ["type", "properties", "required"], "Schema-shape metadata describes the browser tool contract; URL, expression, selectors, paths, and templates remain protected."),
 ]);
+const SAFE_PARAMETER_FIELDS = new Map(SAFE_PARAMETER_EXCEPTIONS.map((entry) => [entry.toolName, entry.fields]));
 
 describe("WP-3C protected trace/projection oracle", () => {
   test("redacts every declared selector from params, results and updates", () => {
@@ -147,16 +154,41 @@ describe("WP-3C protected trace/projection oracle", () => {
     expect(selectorObservation.params).toBe("[UNOBSERVABLE]");
   });
 
+  test("safe-field exceptions are frozen, unique and carry explicit closed rationales", () => {
+    expect(Object.isFrozen(SAFE_PARAMETER_EXCEPTIONS)).toBeTrue();
+    expect(new Set(SAFE_PARAMETER_EXCEPTIONS.map((entry) => entry.toolName)).size).toBe(SAFE_PARAMETER_EXCEPTIONS.length);
+    for (const exception of SAFE_PARAMETER_EXCEPTIONS) {
+      expect(Object.isFrozen(exception)).toBeTrue();
+      expect(Object.isFrozen(exception.fields)).toBeTrue();
+      expect(exception.rationale.length).toBeGreaterThan(60);
+      expect(new Set(exception.fields).size).toBe(exception.fields.length);
+      expect(TOOL_PREPARATION_MANIFEST.some((row) => row.toolName === exception.toolName)).toBeTrue();
+    }
+  });
+
+  test("reports an unresolved registration schema instead of treating it as empty", () => {
+    const inventory = extractLiteralRegistrationParameterFields(
+      "fixture.ts",
+      `declare const externalSchema: unknown; pi.registerTool({ name: "fixture_tool", parameters: externalSchema });`,
+    );
+    expect(inventory.fieldsByTool).toEqual({});
+    expect(inventory.unresolvedSchemas).toEqual([{ file: "fixture.ts", registration: "fixture_tool#externalSchema" }]);
+    expect(Object.isFrozen(inventory.unresolvedSchemas)).toBeTrue();
+  });
+
   test("source schemas are closed by protected fields or explicit safe-field exceptions", () => {
     const sourceTree = readRepositorySourceTree();
     const inventory = inventoryRepositoryToolFamilies(sourceTree);
     const schemaFields = new Map<string, Set<string>>();
+    const unresolvedSchemas: Array<Readonly<{ file: string; registration: string }>> = [];
     const visitedSites = new Set<string>();
-    for (const sites of inventory.registrationSites.values()) {
+    for (const sites of Object.values(inventory.registrationSites)) {
       for (const file of sites) {
         if (visitedSites.has(file)) continue;
         visitedSites.add(file);
-        for (const [toolName, fields] of extractLiteralRegistrationParameterFields(file, sourceTree.files[file])) {
+        const extracted = extractLiteralRegistrationParameterFields(file, sourceTree.files[file], sourceTree.files);
+        unresolvedSchemas.push(...extracted.unresolvedSchemas);
+        for (const [toolName, fields] of Object.entries(extracted.fieldsByTool)) {
           const accumulated = schemaFields.get(toolName) ?? new Set<string>();
           for (const field of fields) accumulated.add(field);
           schemaFields.set(toolName, accumulated);
@@ -164,16 +196,19 @@ describe("WP-3C protected trace/projection oracle", () => {
       }
     }
 
-    const m365Parameters = extractLiteralRegistrationParameterFields(
+    const m365Inventory = extractLiteralRegistrationParameterFields(
       "extensions/experimental/m365/index.ts",
       sourceTree.files["extensions/experimental/m365/index.ts"],
+      sourceTree.files,
     );
-    for (const [toolName, fields] of m365Parameters) {
+    unresolvedSchemas.push(...m365Inventory.unresolvedSchemas);
+    for (const [toolName, fields] of Object.entries(m365Inventory.fieldsByTool)) {
       required.set(toolName, [...new Set(fields)].map((field) => `params.${field}`).concat("result.content", "result.details"));
     }
 
-    expect(schemaFields.size).toBe(54);
-    expect(m365Parameters.size).toBe(25);
+    expect(unresolvedSchemas).toEqual([]);
+    expect(schemaFields.size).toBe(57);
+    expect(Object.keys(m365Inventory.fieldsByTool)).toHaveLength(25);
     for (const [toolName, fields] of schemaFields) {
       const row = TOOL_PREPARATION_MANIFEST.find((candidate) => candidate.toolName === toolName)!;
       const protectedTopLevel = new Set(row.protectedFields.flatMap((selector) => {

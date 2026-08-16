@@ -23,9 +23,10 @@ export interface ToolPreparationPolicyEvidence {
   readonly certainty: string;
   readonly activationPrerequisites: readonly string[];
   readonly activationStatus: "latent";
-  readonly currentIntegration: "none";
+  readonly currentIntegration: "existing-production-wiring";
   readonly currentServiceEffector: null;
   readonly currentContextSource: string;
+  readonly currentAuthorityPath: string;
   readonly futureContextFields: readonly ToolContextField[];
   readonly futureServiceEffector: ToolServiceEffector;
   readonly futureIntegrationTarget: string;
@@ -33,8 +34,24 @@ export interface ToolPreparationPolicyEvidence {
 
 type PolicyInput = Omit<
   ToolPreparationPolicyEvidence,
-  "toolName" | "activationStatus" | "contextRationale" | "currentIntegration" | "currentServiceEffector" | "currentContextSource" | "futureContextFields" | "futureServiceEffector" | "futureIntegrationTarget"
+  "toolName" | "activationStatus" | "contextRationale" | "currentIntegration" | "currentServiceEffector" | "currentContextSource" | "currentAuthorityPath" | "futureContextFields" | "futureServiceEffector" | "futureIntegrationTarget"
 >;
+
+const CURRENT_AUTHORITY_PATHS: Readonly<Record<string, string>> = Object.freeze({
+  chat: "runtime/src/extensions/chat-tool.ts resolves the live session-tree registry and installed one-hop chat transport before delivery.",
+  session_control: "runtime/src/extensions/session-control.ts resolves and mutates the current AgentPool/session registry lane directly.",
+  send_adaptive_card: "runtime/src/extensions/send-adaptive-card.ts writes the messages SQLite timeline and broadcasts the adaptive-card block over web SSE to the renderer.",
+  send_dashboard_widget: "runtime/src/extensions/send-dashboard-widget.ts writes the messages SQLite timeline and broadcasts widget metadata over web SSE to the pane renderer.",
+  attach_file: "runtime/src/extensions/file-attachments.ts uses the attachment registry, workspace filesystem, media persistence, and timeline delivery path.",
+  read_attachment: "runtime/src/extensions/file-attachments.ts reads the current attachment/media persistence and returns bounded decoded bytes.",
+  export_attachment: "runtime/src/extensions/file-attachments.ts reads attachment/media persistence and writes the workspace tmp filesystem.",
+  refresh_workspace_index: "runtime/src/extensions/workspace-search.ts invokes the current workspace FTS indexer and its SQLite-backed index directly.",
+  open_workspace_file: "runtime/src/extensions/open-workspace-file.ts addresses the active web client and waits for the current SSE/browser acknowledgement path.",
+  exit_process: "runtime/src/extensions/exit-process.ts writes restart handoff/timeline state, consults the session registry, and marks the shutdown registry.",
+  schedule_task: "runtime/src/extensions/scheduled-tasks.ts writes the scheduled-task SQLite store and wakes the in-process task scheduler.",
+  scheduled_tasks: "runtime/src/extensions/scheduled-tasks.ts reads or mutates the scheduled-task SQLite store and in-process task scheduler.",
+  messages: "runtime/src/extensions/messages.ts reads or mutates the messages SQLite timeline and uses the current web/SSE broadcast path where applicable.",
+});
 
 const CONTEXT_RATIONALE: Readonly<Record<string, string>> = Object.freeze({
   "": "No Piclaw execution context field is required by this catalogue or harness-local operation.",
@@ -54,9 +71,10 @@ function policy(toolNames: readonly string[], input: PolicyInput): readonly Tool
     contextRationale: CONTEXT_RATIONALE[input.contextFields.join(",")] ?? "The exact context vector requires source review before activation.",
     activationPrerequisites: Object.freeze([...input.activationPrerequisites]),
     activationStatus: "latent" as const,
-    currentIntegration: "none" as const,
+    currentIntegration: "existing-production-wiring" as const,
     currentServiceEffector: null,
-    currentContextSource: "Current production tools retain their existing closure/context plumbing and receive neither PiclawToolContext nor a service effector from this latent catalogue.",
+    currentContextSource: "Current production tools retain their existing closure/context plumbing and receive neither PiclawToolContext nor a latent WP-3C service effector.",
+    currentAuthorityPath: CURRENT_AUTHORITY_PATHS[toolName] ?? `Current production ${toolName} executes through its released registration, closure dependencies, and ${input.nullAuthorityKind ?? "service"} authority path.`,
     futureContextFields: Object.freeze([...input.contextFields]),
     futureServiceEffector: input.serviceEffector,
     futureIntegrationTarget: input.serviceEffector

@@ -6,40 +6,42 @@ export type VirtualTreeNode =
   | { readonly kind: "symlink"; readonly target: string }
   | { readonly kind: "unreadable" }
   | { readonly kind: "broken" };
-
 export interface VirtualPackageTree {
   readonly nodeModulesRoot: string;
   readonly nodes: Readonly<Record<string, VirtualTreeNode>>;
 }
-
 export type AddonRejectionCode =
-  | "broken_package"
-  | "missing_manifest"
-  | "unreadable_manifest"
-  | "malformed_manifest"
-  | "missing_pi_extensions"
-  | "non_string_declaration"
   | "duplicate_declaration"
   | "lexical_escape"
   | "missing_target"
   | "non_file_target"
   | "realpath_escape"
   | "unreadable_target";
-
 export interface AddonPathRejection {
   readonly packagePath: string;
-  readonly declaration: unknown;
+  readonly declaration: string;
   readonly code: AddonRejectionCode;
 }
-
 export interface AddonExtensionResolution {
+  readonly fixtureValid: boolean;
   readonly extensionPaths: readonly string[];
   readonly packagePaths: readonly string[];
   readonly rejections: readonly AddonPathRejection[];
 }
 
-/** Hermetic pi.extensions authority over a virtual package tree. */
-export function resolveAddonPackageTree(tree: VirtualPackageTree): AddonExtensionResolution {
+const TREE_FIELDS = new Set(["nodeModulesRoot", "nodes"]);
+const MAX_TREE_NODES = 20_000;
+const INVALID_RESULT = Object.freeze({
+  fixtureValid: false,
+  extensionPaths: Object.freeze([]),
+  packagePaths: Object.freeze([]),
+  rejections: Object.freeze([]),
+});
+
+/** Hermetic descriptor-closed model of production pi.extensions discovery. */
+export function resolveAddonPackageTree(value: unknown): AddonExtensionResolution {
+  const tree = snapshotTree(value);
+  if (!tree) return INVALID_RESULT;
   const root = normalize(tree.nodeModulesRoot);
   const packagePaths = listPackagePaths(root, tree);
   const extensions: string[] = [];
@@ -48,41 +50,21 @@ export function resolveAddonPackageTree(tree: VirtualPackageTree): AddonExtensio
 
   for (const packagePath of packagePaths) {
     const packageResolution = resolveNode(packagePath, tree);
-    if (!packageResolution || packageResolution.node.kind !== "directory") {
-      reject(rejections, packagePath, null, "broken_package");
-      continue;
-    }
-    const manifestPath = posix.join(packagePath, "package.json");
-    const manifestResolution = resolveNode(manifestPath, tree);
-    if (manifestResolution?.node.kind === "unreadable") {
-      reject(rejections, packagePath, null, "unreadable_manifest");
-      continue;
-    }
-    if (!manifestResolution || manifestResolution.node.kind !== "file") {
-      reject(rejections, packagePath, null, "missing_manifest");
-      continue;
-    }
+    if (!packageResolution || packageResolution.node.kind !== "directory") continue;
+    const manifestResolution = resolveNode(posix.join(packagePath, "package.json"), tree);
+    if (!manifestResolution || manifestResolution.node.kind !== "file") continue;
 
     let manifest: unknown;
-    try {
-      manifest = JSON.parse(manifestResolution.node.content);
-    } catch {
-      reject(rejections, packagePath, null, "malformed_manifest");
-      continue;
-    }
+    try { manifest = JSON.parse(manifestResolution.node.content); }
+    catch { continue; }
     const declared = readDeclaredExtensions(manifest);
-    if (!declared) {
-      reject(rejections, packagePath, null, "missing_pi_extensions");
-      continue;
-    }
+    if (!declared) continue;
 
     const packageRealRoot = packageResolution.realPath;
     const seenDeclarations = new Set<string>();
     for (const declaration of declared) {
-      if (typeof declaration !== "string") {
-        reject(rejections, packagePath, declaration, "non_string_declaration");
-        continue;
-      }
+      // Production discovery ignores malformed declaration values with the package.
+      if (typeof declaration !== "string" || !declaration.trim()) continue;
       if (seenDeclarations.has(declaration)) {
         reject(rejections, packagePath, declaration, "duplicate_declaration");
         continue;
@@ -120,10 +102,76 @@ export function resolveAddonPackageTree(tree: VirtualPackageTree): AddonExtensio
   }
 
   return Object.freeze({
+    fixtureValid: true,
     extensionPaths: Object.freeze(extensions),
     packagePaths: Object.freeze(packagePaths),
     rejections: Object.freeze(rejections),
   });
+}
+
+function snapshotTree(value: unknown): VirtualPackageTree | null {
+  const outer = snapshotClosedObject(value, TREE_FIELDS);
+  if (!outer || typeof outer.nodeModulesRoot !== "string" || !outer.nodeModulesRoot) return null;
+  if (!outer.nodes || typeof outer.nodes !== "object") return null;
+  let keys: readonly PropertyKey[];
+  let descriptors: PropertyDescriptorMap;
+  try {
+    if (Array.isArray(outer.nodes)) return null;
+    keys = Reflect.ownKeys(outer.nodes);
+    descriptors = Object.getOwnPropertyDescriptors(outer.nodes);
+  } catch { return null; }
+  if (keys.length > MAX_TREE_NODES) return null;
+  const nodes: Record<string, VirtualTreeNode> = Object.create(null);
+  for (const key of keys) {
+    if (typeof key !== "string") return null;
+    const descriptor = descriptors[key];
+    if (!descriptor || !("value" in descriptor)) return null;
+    const node = snapshotNode(descriptor.value);
+    if (!node) return null;
+    const path = normalize(key);
+    if (Object.hasOwn(nodes, path)) return null;
+    nodes[path] = node;
+  }
+  return Object.freeze({ nodeModulesRoot: outer.nodeModulesRoot, nodes: Object.freeze(nodes) });
+}
+
+function snapshotNode(value: unknown): VirtualTreeNode | null {
+  const kindSnapshot = snapshotClosedObject(value, new Set(["kind", "content", "target"]));
+  if (!kindSnapshot || typeof kindSnapshot.kind !== "string") return null;
+  const keys = Object.keys(kindSnapshot).sort().join(",");
+  switch (kindSnapshot.kind) {
+    case "directory":
+    case "unreadable":
+    case "broken":
+      return keys === "kind" ? Object.freeze({ kind: kindSnapshot.kind }) : null;
+    case "file":
+      return keys === "content,kind" && typeof kindSnapshot.content === "string"
+        ? Object.freeze({ kind: "file", content: kindSnapshot.content }) : null;
+    case "symlink":
+      return keys === "kind,target" && typeof kindSnapshot.target === "string"
+        ? Object.freeze({ kind: "symlink", target: kindSnapshot.target }) : null;
+    default:
+      return null;
+  }
+}
+
+function snapshotClosedObject(value: unknown, fields: ReadonlySet<string>): Record<string, unknown> | null {
+  if (!value || typeof value !== "object") return null;
+  let keys: readonly PropertyKey[];
+  let descriptors: PropertyDescriptorMap;
+  try {
+    if (Array.isArray(value)) return null;
+    keys = Reflect.ownKeys(value);
+    descriptors = Object.getOwnPropertyDescriptors(value);
+  } catch { return null; }
+  const snapshot: Record<string, unknown> = Object.create(null);
+  for (const key of keys) {
+    if (typeof key !== "string" || !fields.has(key)) return null;
+    const descriptor = descriptors[key];
+    if (!descriptor || !("value" in descriptor)) return null;
+    snapshot[key] = descriptor.value;
+  }
+  return snapshot;
 }
 
 function listPackagePaths(root: string, tree: VirtualPackageTree): string[] {
@@ -141,9 +189,7 @@ function listPackagePaths(root: string, tree: VirtualPackageTree): string[] {
         const childNode = resolveNode(childPath, tree);
         if (childNode?.node.kind === "directory" || tree.nodes[childPath]?.kind === "symlink") packages.push(childPath);
       }
-    } else {
-      packages.push(path);
-    }
+    } else packages.push(path);
   }
   return packages.sort();
 }
@@ -175,7 +221,6 @@ function resolveNode(path: string, tree: VirtualPackageTree): { realPath: string
       continue;
     }
     if (node) return { realPath: current, node };
-
     let ancestor = posix.dirname(current);
     while (ancestor !== "/") {
       const ancestorNode = tree.nodes[ancestor];
@@ -198,20 +243,12 @@ function readDeclaredExtensions(value: unknown): unknown[] | null {
   if (!plainRecord(pi) || !Array.isArray(pi.extensions)) return null;
   return [...pi.extensions];
 }
-
-function plainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function normalize(path: string): string {
-  return posix.resolve("/", path);
-}
-
+function plainRecord(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === "object" && !Array.isArray(value)); }
+function normalize(path: string): string { return posix.resolve("/", path); }
 function contained(parent: string, child: string): boolean {
   const relative = posix.relative(normalize(parent), normalize(child));
   return relative === "" || (!relative.startsWith("../") && relative !== "..");
 }
-
-function reject(rejections: AddonPathRejection[], packagePath: string, declaration: unknown, code: AddonRejectionCode): void {
+function reject(rejections: AddonPathRejection[], packagePath: string, declaration: string, code: AddonRejectionCode): void {
   rejections.push(Object.freeze({ packagePath, declaration, code }));
 }
