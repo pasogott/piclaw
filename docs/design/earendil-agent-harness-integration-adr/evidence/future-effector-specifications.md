@@ -1267,6 +1267,15 @@ Required family rules:
 
 Harness v3 resolves one `PiclawToolContext` per live or restored tool batch. A safe replay receives a fresh context. Piclaw does not retain the released-v2 closure binder once v3 generic tools are selected.
 
+WP-3C accepted preparation corrections (2026-08-16):
+
+- the manifest reuses the merged four-field `PiclawToolContext` (`chatJid`, `operationId`, `env`, `localEnv`) and does not widen or duplicate it;
+- exact rows cover repository-owned core, Piclaw and bundled optional families, including effective `grep`, `find` and `ls` source gaps; arbitrary add-on and MCP-direct families use conservative `mixed`/`never` templates that cannot satisfy exact-name coverage;
+- `messages` is `mixed`/`never` with `serviceEffector: null` and is activation-blocked: `add`/`post` are future EF-S03 candidates, while arbitrary-history `delete`/`move` require a separately approved fenced authority or retirement;
+- non-service filesystem, process, model, credential, add-on-owned and external effects use `serviceEffector: null`; a non-null value identifies exactly one existing Piclaw service-operation contract;
+- output persistence is post-result composition over one Earendil execution, preserving native update, truncation and full-output details and failing open without reinvocation;
+- inventory and behaviour evidence is hermetic and static; one coherent selected Harness v3 release is required before activation or compile integration.
+
 Core and Piclaw-specific tool cases can be specified against current behaviour now. Compile assertions wait for one coherent selected v3 type surface so the documentation does not freeze a draft execute signature.
 
 ### EB-03 — resources and hooks
