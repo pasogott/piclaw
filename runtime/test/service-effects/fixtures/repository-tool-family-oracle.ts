@@ -43,7 +43,7 @@ export interface RepositoryToolFamilyInventory {
 export function readRepositorySourceTree(root = runtimeRoot): SourceTree {
   const files: Record<string, string> = {};
   for (const [name, path] of [["tsconfig.json", resolve(root, "tsconfig.json")], ["package.json", resolve(root, "../package.json")]] as const) {
-    try { files[name] = readFileSync(path, "utf8"); } catch { /* A synthetic source tree may omit repository config. */ }
+    try { files[name] = readFileSync(path, "utf8"); } catch (error) { void error; /* A synthetic source tree may omit repository config. */ }
   }
   for (const directory of [resolve(root, "src"), resolve(root, "extensions")]) {
     for (const path of walkTypeScript(directory)) {
