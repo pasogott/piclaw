@@ -266,7 +266,7 @@ describe("EF-S07 SQLite hardening", () => {
       expect(replay.ok && replay.value[0].record.leaseExpiresAt).toBe(renewal.leaseExpiresAt);
       restored.subject.dispose?.();
     } finally {
-      try { subject.database.close(); } catch { /* restored connection owns cleanup */ }
+      try { subject.database.close(); } catch (error) { void error; /* restored connection owns cleanup */ }
       rmSync(subject.root, { recursive: true, force: true });
     }
   });

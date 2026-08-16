@@ -320,7 +320,7 @@ export class FakeScheduledRunStore implements ScheduledRunStore {
     return result;
   }
   private recordTrace(input: NormalisedTraceInput): void {
-    try { if (input.resultTag === "call") this.trace.recordCall(input); else this.trace.recordResult(input); this.traceObserver(input); } catch { /* observers never own outcomes */ }
+    try { if (input.resultTag === "call") this.trace.recordCall(input); else this.trace.recordResult(input); this.traceObserver(input); } catch (error) { void error; /* observers never own outcomes */ }
   }
   private hitFault(method: string, point: "before_effect" | "effect_then_lost_acknowledgement"): boolean {
     const key = `${method}:${point}`;

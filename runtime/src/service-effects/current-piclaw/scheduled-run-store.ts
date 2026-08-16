@@ -777,7 +777,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
 
   private statement(value: ScheduledRunStatement): void { this.runtime.afterStatement?.(value); }
   private trace(method: string, effectId: string, operationId: string | null, version: number | null, resultTag: string, certainty: "not_applied" | "applied" | "unknown" | null, sourceSeq: number | null = null): void {
-    try { this.runtime.recordTrace({ contract: "EF-S07", method, effectId, operationId, sourceSeq, version, certainty, resultTag }); } catch { /* observers never own outcomes */ }
+    try { this.runtime.recordTrace({ contract: "EF-S07", method, effectId, operationId, sourceSeq, version, certainty, resultTag }); } catch (error) { void error; /* observers never own outcomes */ }
   }
   private failed<T>(method: string, effectId: string, operationId: string | null, version: number | null, error: ScheduledRunStoreError, sourceSeq: number | null = null): ResultValue<T, ScheduledRunStoreError> {
     this.trace(method, effectId, operationId, version, error._tag, error.certainty, sourceSeq);
