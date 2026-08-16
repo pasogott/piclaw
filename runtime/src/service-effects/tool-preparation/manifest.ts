@@ -81,14 +81,23 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     abortExpectation: "must_stop",
     protectedFields: ["params.path", "result.content"],
   }),
-  ...rows(["write", "edit"], {
+  ...rows(["write"], {
     currentSource: source.core,
     effectClass: "mutation",
     replay: "never",
     contextFields: ["env"],
     serviceEffector: null,
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.path", "params.content", "params.oldText", "params.newText"],
+    protectedFields: ["params.path", "params.content"],
+  }),
+  ...rows(["edit"], {
+    currentSource: source.core,
+    effectClass: "mutation",
+    replay: "never",
+    contextFields: ["env"],
+    serviceEffector: null,
+    abortExpectation: "may_finish_late",
+    protectedFields: ["params.path", "params.edits", "params.oldText", "params.newText"],
   }),
   ...rows(["bash"], {
     currentSource: source.core,
@@ -403,7 +412,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["localEnv"],
     serviceEffector: null,
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.expr", "params.url", "params.selector", "params.outPath", "params.headerTemplate", "params.footerTemplate", "result.content", "result.details"],
+    protectedFields: ["params.expr", "params.url", "params.match", "params.selector", "params.outPath", "params.headerTemplate", "params.footerTemplate", "result.content", "result.details"],
   }),
   ...rows(["mcp"], {
     currentSource: "runtime/src/agent-pool/session.ts createMcpAdapter composition; package.json pi-mcp-adapter dependency",

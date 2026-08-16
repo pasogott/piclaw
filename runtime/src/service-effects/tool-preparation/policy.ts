@@ -1,3 +1,4 @@
+import { TOOL_PREPARATION_MANIFEST } from "./manifest.js";
 import type {
   ToolAbortExpectation,
   ToolContextField,
@@ -26,7 +27,9 @@ export interface ToolPreparationPolicyEvidence {
   readonly currentIntegration: "existing-production-wiring";
   readonly currentServiceEffector: null;
   readonly currentContextSource: string;
+  readonly currentAuthorityKind: "repository_file" | "sdk_package" | "external_package";
   readonly currentAuthorityPath: string;
+  readonly currentAuthorityDescription: string;
   readonly futureContextFields: readonly ToolContextField[];
   readonly futureServiceEffector: ToolServiceEffector;
   readonly futureIntegrationTarget: string;
@@ -34,7 +37,7 @@ export interface ToolPreparationPolicyEvidence {
 
 type PolicyInput = Omit<
   ToolPreparationPolicyEvidence,
-  "toolName" | "activationStatus" | "contextRationale" | "currentIntegration" | "currentServiceEffector" | "currentContextSource" | "currentAuthorityPath" | "futureContextFields" | "futureServiceEffector" | "futureIntegrationTarget"
+  "toolName" | "activationStatus" | "contextRationale" | "currentIntegration" | "currentServiceEffector" | "currentContextSource" | "currentAuthorityKind" | "currentAuthorityPath" | "currentAuthorityDescription" | "futureContextFields" | "futureServiceEffector" | "futureIntegrationTarget"
 >;
 
 const CURRENT_AUTHORITY_PATHS: Readonly<Record<string, string>> = Object.freeze({
@@ -50,7 +53,7 @@ const CURRENT_AUTHORITY_PATHS: Readonly<Record<string, string>> = Object.freeze(
   exit_process: "runtime/src/extensions/exit-process.ts writes restart handoff/timeline state, consults the session registry, and marks the shutdown registry.",
   schedule_task: "runtime/src/extensions/scheduled-tasks.ts writes the scheduled-task SQLite store and wakes the in-process task scheduler.",
   scheduled_tasks: "runtime/src/extensions/scheduled-tasks.ts reads or mutates the scheduled-task SQLite store and in-process task scheduler.",
-  messages: "runtime/src/extensions/messages.ts reads or mutates the messages SQLite timeline and uses the current web/SSE broadcast path where applicable.",
+  messages: "runtime/src/extensions/messages-crud.ts reads or mutates the messages SQLite timeline and uses the current web/SSE broadcast path where applicable.",
 });
 
 const CONTEXT_RATIONALE: Readonly<Record<string, string>> = Object.freeze({
@@ -63,8 +66,25 @@ const CONTEXT_RATIONALE: Readonly<Record<string, string>> = Object.freeze({
   "chatJid,operationId,localEnv": "chatJid selects service authority, operationId fences completion, and localEnv selects the local file/workspace boundary.",
 });
 
+const SDK_TOOL_NAMES = new Set(["read", "write", "edit", "bash", "grep", "find", "ls"]);
+const MANIFEST_SOURCE_BY_TOOL = new Map(TOOL_PREPARATION_MANIFEST.map((row) => [row.toolName, row.currentSource]));
+
+function currentAuthority(toolName: string): Readonly<{
+  kind: ToolPreparationPolicyEvidence["currentAuthorityKind"];
+  path: string;
+}> {
+  if (SDK_TOOL_NAMES.has(toolName)) return Object.freeze({ kind: "sdk_package", path: "package:@earendil-works/pi-coding-agent" });
+  if (toolName === "mcp") return Object.freeze({ kind: "external_package", path: "package:pi-mcp-adapter" });
+  const source = MANIFEST_SOURCE_BY_TOOL.get(toolName) ?? "";
+  const path = source.match(/runtime\/[A-Za-z0-9_./-]+\.ts/)?.[0];
+  if (!path) throw new Error(`Missing closed current authority path for ${toolName}`);
+  return Object.freeze({ kind: "repository_file", path });
+}
+
 function policy(toolNames: readonly string[], input: PolicyInput): readonly ToolPreparationPolicyEvidence[] {
-  return Object.freeze(toolNames.map((toolName) => Object.freeze({
+  return Object.freeze(toolNames.map((toolName) => {
+    const authority = currentAuthority(toolName);
+    return Object.freeze({
     toolName,
     ...input,
     contextFields: Object.freeze([...input.contextFields]),
@@ -74,13 +94,16 @@ function policy(toolNames: readonly string[], input: PolicyInput): readonly Tool
     currentIntegration: "existing-production-wiring" as const,
     currentServiceEffector: null,
     currentContextSource: "Current production tools retain their existing closure/context plumbing and receive neither PiclawToolContext nor a latent WP-3C service effector.",
-    currentAuthorityPath: CURRENT_AUTHORITY_PATHS[toolName] ?? `Current production ${toolName} executes through its released registration, closure dependencies, and ${input.nullAuthorityKind ?? "service"} authority path.`,
+    currentAuthorityKind: authority.kind,
+    currentAuthorityPath: authority.path,
+    currentAuthorityDescription: CURRENT_AUTHORITY_PATHS[toolName] ?? `Current production ${toolName} executes through its released registration, closure dependencies, and ${input.nullAuthorityKind ?? "service"} authority path.`,
     futureContextFields: Object.freeze([...input.contextFields]),
     futureServiceEffector: input.serviceEffector,
     futureIntegrationTarget: input.serviceEffector
       ? `A selected direct tool may call exactly ${input.serviceEffector} after its listed activation prerequisites pass.`
       : "A selected direct tool may use the declared context without acquiring Piclaw service-operation authority.",
-  })));
+    });
+  }));
 }
 
 function servicePolicy(

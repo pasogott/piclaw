@@ -1,7 +1,7 @@
 import "../helpers.js";
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, resolve, relative } from "node:path";
+import { resolve, relative } from "node:path";
 
 import { describe, expect, test } from "bun:test";
 import ts from "typescript";
@@ -10,6 +10,8 @@ import { TOOL_PREPARATION_MANIFEST } from "../../src/service-effects/tool-prepar
 import {
   inventoryRepositoryToolFamilies,
   readRepositorySourceTree,
+  resolveRepositoryModule,
+  snapshotRepositoryToolContracts,
 } from "./fixtures/repository-tool-family-oracle.js";
 
 const runtimeRoot = resolve(import.meta.dir, "../..");
@@ -61,41 +63,25 @@ function moduleSpecifiers(file: string, source: string): readonly string[] {
   return Object.freeze(output);
 }
 
-function resolveModule(from: string, specifier: string, files: Readonly<Record<string, string>>): string | null {
-  let raw: string;
-  if (specifier.startsWith(".")) raw = resolve(dirname(resolve(runtimeRoot, from)), specifier);
-  else if (specifier === "piclaw") raw = resolve(runtimeRoot, "src/index.ts");
-  else if (specifier.startsWith("piclaw/runtime/")) raw = resolve(runtimeRoot, specifier.slice("piclaw/runtime/".length));
-  else return null;
-  const relativeRaw = relative(runtimeRoot, raw).replaceAll("\\", "/");
-  const candidates = [
-    relativeRaw,
-    relativeRaw.replace(/\.(?:mjs|cjs|js)$/, ".ts"),
-    `${relativeRaw}.ts`,
-    `${relativeRaw}/index.ts`,
-  ];
-  return candidates.find((candidate) => Object.hasOwn(files, candidate)) ?? null;
-}
-
-function importGraph(files: Readonly<Record<string, string>>): ReadonlyMap<string, readonly string[]> {
-  const graph = new Map<string, readonly string[]>();
+function importGraph(files: Readonly<Record<string, string>>): Readonly<Record<string, readonly string[]>> {
+  const graph: Record<string, readonly string[]> = Object.create(null);
   for (const [file, source] of Object.entries(files)) {
-    graph.set(file, Object.freeze(moduleSpecifiers(file, source).flatMap((specifier) => {
-      const resolved = resolveModule(file, specifier, files);
+    graph[file] = Object.freeze(moduleSpecifiers(file, source).flatMap((specifier) => {
+      const resolved = resolveRepositoryModule(file, specifier, files);
       return resolved ? [resolved] : [];
-    })));
+    }));
   }
-  return graph;
+  return Object.freeze(graph);
 }
 
-function reachable(graph: ReadonlyMap<string, readonly string[]>, root: string): readonly string[] {
+function reachable(graph: Readonly<Record<string, readonly string[]>>, root: string): readonly string[] {
   const seen = new Set<string>();
   const queue = [root];
   while (queue.length > 0) {
     const file = queue.shift()!;
     if (seen.has(file)) continue;
     seen.add(file);
-    queue.push(...(graph.get(file) ?? []));
+    queue.push(...(graph[file] ?? []));
   }
   return Object.freeze([...seen].sort());
 }
@@ -107,7 +93,7 @@ describe("WP-3C static import graph and inert top-level boundary", () => {
     for (const [file, source] of Object.entries(tree.files)) {
       if (file.startsWith(latentPrefix)) continue;
       for (const specifier of moduleSpecifiers(file, source)) {
-        const resolved = resolveModule(file, specifier, tree.files);
+        const resolved = resolveRepositoryModule(file, specifier, tree.files);
         if (specifier.includes("service-effects/tool-preparation") || resolved?.startsWith(latentPrefix)) {
           violations.push(`${file} -> ${specifier}`);
         }
@@ -132,8 +118,11 @@ describe("WP-3C static import graph and inert top-level boundary", () => {
     expect([...moduleSpecifiers("src/forms.ts", source)].sort()).toEqual([
       "./direct.js", "./dynamic.js", "./equal.js", "./exported.js", "./meta.js", "./module.js", "./resolved.js", "./typed.js",
     ]);
-    const files = { "src/index.ts": "", "src/service-effects/tool-preparation/manifest.ts": "" };
-    expect(resolveModule("src/index.ts", "piclaw/runtime/src/service-effects/tool-preparation/manifest.js", files)).toBe(
+    const files = {
+      "package.json": JSON.stringify({ name: "piclaw", exports: { "./runtime/*": "./*" } }),
+      "src/index.ts": "", "src/service-effects/tool-preparation/manifest.ts": "",
+    };
+    expect(resolveRepositoryModule("src/index.ts", "piclaw/runtime/src/service-effects/tool-preparation/manifest.js", files)).toBe(
       "src/service-effects/tool-preparation/manifest.ts",
     );
   });
@@ -219,6 +208,39 @@ describe("WP-3C active-composition snapshots", () => {
       activation.getEffectiveDefaultActiveToolNames(available(withoutInventory.names)),
     );
   });
+
+  test("keeps active name/description/prompt/schema contracts identical with and without latent files", () => {
+    const tree = readRepositorySourceTree();
+    const withoutLatent = Object.freeze({
+      files: Object.freeze(Object.fromEntries(Object.entries(tree.files).filter(([file]) => !file.startsWith(latentPrefix)))),
+    });
+    const activationSource = readFileSync(resolve(runtimeRoot, "src/extensions/tool-activation.ts"), "utf8");
+    const linuxNames = stringArray(activationSource, "DEFAULT_ACTIVE_TOOL_NAMES");
+    const windowsNames = [...linuxNames, ...stringArray(activationSource, "WINDOWS_DEFAULT_ACTIVE_TOOL_NAMES")];
+    const configurations = [
+      { platform: "linux" as const, enabledEnv: new Set<string>(), activeNames: linuxNames },
+      { platform: "win32" as const, enabledEnv: new Set<string>(), activeNames: windowsNames },
+      { platform: "linux" as const, enabledEnv: new Set(["PICLAW_ENABLE_M365_EXPERIMENTAL"]), activeNames: linuxNames },
+    ];
+    for (const { activeNames, ...config } of configurations) {
+      const withContracts = snapshotRepositoryToolContracts(tree, config);
+      const withoutContracts = snapshotRepositoryToolContracts(withoutLatent, config);
+      const availableNames = inventoryRepositoryToolFamilies(tree, config).names;
+      const effectiveActiveNames = activeNames.filter((name) => availableNames.includes(name));
+      const snapshot = (contracts: typeof withContracts) => Object.freeze(Object.fromEntries(
+        effectiveActiveNames.map((name) => [name, contracts[name]]),
+      ));
+      expect(snapshot(withContracts)).toEqual(snapshot(withoutContracts));
+      expect(effectiveActiveNames.filter((name) => !Object.hasOwn(withContracts, name))).toEqual([]);
+      for (const contract of Object.values(withContracts).filter((entry) => effectiveActiveNames.includes(entry.name))) {
+        expect(contract.description.length).toBeGreaterThan(0);
+        expect(contract.description).toBe(contract.description.replace(/\s+/g, " ").trim());
+        expect(contract.promptSnippet).toBe(contract.promptSnippet.replace(/\s+/g, " ").trim());
+        expect(contract.parameterSchemaFingerprint).toMatch(/^(?:[a-f0-9]{64}|external:)/);
+        expect(Object.isFrozen(contract)).toBeTrue();
+      }
+    }
+  }, 15_000);
 
   // Six full source-as-data AST compositions are intentionally bounded above Bun's default timeout.
   test("models Linux, Windows and gated production compositions without execution", () => {

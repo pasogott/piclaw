@@ -22,8 +22,11 @@ export interface AddonPathRejection {
   readonly declaration: string;
   readonly code: AddonRejectionCode;
 }
+export type AddonResolutionPolicy = "current" | "futureHardened";
+
 export interface AddonExtensionResolution {
   readonly fixtureValid: boolean;
+  readonly policy: AddonResolutionPolicy;
   readonly extensionPaths: readonly string[];
   readonly packagePaths: readonly string[];
   readonly rejections: readonly AddonPathRejection[];
@@ -31,17 +34,20 @@ export interface AddonExtensionResolution {
 
 const TREE_FIELDS = new Set(["nodeModulesRoot", "nodes"]);
 const MAX_TREE_NODES = 20_000;
-const INVALID_RESULT = Object.freeze({
-  fixtureValid: false,
-  extensionPaths: Object.freeze([]),
-  packagePaths: Object.freeze([]),
-  rejections: Object.freeze([]),
-});
+function invalidResult(policy: AddonResolutionPolicy): AddonExtensionResolution {
+  return Object.freeze({
+    fixtureValid: false,
+    policy,
+    extensionPaths: Object.freeze([]),
+    packagePaths: Object.freeze([]),
+    rejections: Object.freeze([]),
+  });
+}
 
-/** Hermetic descriptor-closed model of production pi.extensions discovery. */
-export function resolveAddonPackageTree(value: unknown): AddonExtensionResolution {
+/** Hermetic descriptor-closed current-parity or future-hardened pi.extensions model. */
+export function resolveAddonPackageTree(value: unknown, policy: AddonResolutionPolicy): AddonExtensionResolution {
   const tree = snapshotTree(value);
-  if (!tree) return INVALID_RESULT;
+  if (!tree) return invalidResult(policy);
   const root = normalize(tree.nodeModulesRoot);
   const packagePaths = listPackagePaths(root, tree);
   const extensions: string[] = [];
@@ -63,19 +69,28 @@ export function resolveAddonPackageTree(value: unknown): AddonExtensionResolutio
     const packageRealRoot = packageResolution.realPath;
     const seenDeclarations = new Set<string>();
     for (const declaration of declared) {
-      // Production discovery ignores malformed declaration values with the package.
-      if (typeof declaration !== "string" || !declaration.trim()) continue;
+      // Current production's join() throws on a non-string and skips the remainder of that package.
+      if (typeof declaration !== "string") {
+        if (policy === "current") break;
+        continue;
+      }
+      const lexicalTarget = normalize(posix.resolve(packagePath, declaration));
+      const target = resolveNode(lexicalTarget, tree);
+      if (policy === "current") {
+        // Current getInstalledAddonExtensionPaths() performs join + exists + isFile only.
+        if (target && (target.node.kind === "file" || target.node.kind === "unreadable")) extensions.push(lexicalTarget);
+        continue;
+      }
+      if (!declaration.trim()) continue;
       if (seenDeclarations.has(declaration)) {
         reject(rejections, packagePath, declaration, "duplicate_declaration");
         continue;
       }
       seenDeclarations.add(declaration);
-      const lexicalTarget = normalize(posix.resolve(packagePath, declaration));
       if (!contained(packagePath, lexicalTarget)) {
         reject(rejections, packagePath, declaration, "lexical_escape");
         continue;
       }
-      const target = resolveNode(lexicalTarget, tree);
       if (!target) {
         reject(rejections, packagePath, declaration, "missing_target");
         continue;
@@ -103,6 +118,7 @@ export function resolveAddonPackageTree(value: unknown): AddonExtensionResolutio
 
   return Object.freeze({
     fixtureValid: true,
+    policy,
     extensionPaths: Object.freeze(extensions),
     packagePaths: Object.freeze(packagePaths),
     rejections: Object.freeze(rejections),

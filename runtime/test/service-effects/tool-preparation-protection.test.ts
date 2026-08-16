@@ -12,55 +12,31 @@ import {
 } from "./fixtures/protected-observer.js";
 import {
   extractLiteralRegistrationParameterFields,
+  extractNativeToolParameterFields,
   inventoryRepositoryToolFamilies,
   readRepositorySourceTree,
 } from "./fixtures/repository-tool-family-oracle.js";
 
-const required = new Map<string, string[]>();
-function requireSelectors(names: readonly string[], selectors: readonly string[]): void {
-  for (const name of names) required.set(name, [...(required.get(name) ?? []), ...selectors]);
-}
-
-requireSelectors(["list_tools", "get_model_state", "list_models", "activate_tools", "reset_active_tools", "switch_model", "switch_thinking"], []);
-requireSelectors(["list_tools"], ["params.query", "params.intent"]);
-requireSelectors(["list_models"], ["params.query"]);
-requireSelectors(["list_scripts"], ["params.query", "params.intent", "result.content"]);
-requireSelectors(["refresh_workspace_index"], ["result.content", "result.details"]);
-requireSelectors(["read", "grep", "find", "ls"], ["params.path", "result.content"]);
-requireSelectors(["grep", "find", "ls"], ["params.pattern"]);
-requireSelectors(["write", "edit"], ["params.path", "params.content", "params.oldText", "params.newText"]);
-requireSelectors(["bash", "local_bash", "powershell"], ["params.command", "result.content", "result.details.fullOutputPath"]);
-requireSelectors(["exec_batch"], ["params.commands", "result.content"]);
-requireSelectors(["search_tool_output", "search_workspace"], ["params.query", "result.content"]);
-requireSelectors(["search_tool_output"], ["params.handle"]);
-requireSelectors(["attach_file"], ["params.path", "params.name", "result.content", "result.details"]);
-requireSelectors(["read_attachment"], ["params.id", "result.content", "result.details"]);
-requireSelectors(["export_attachment"], ["params.id", "params.filename", "result.content", "result.details"]);
-requireSelectors(["messages"], ["params.chat_jid", "params.target_chat_jid", "params.row_ids", "params.sender", "params.content", "params.content_blocks", "params.content_grep", "params.media_ids", "params.pattern", "params.query", "result.content", "result.details"]);
-requireSelectors(["introspect_sql"], ["params.query", "result.content", "result.details"]);
-requireSelectors(["schedule_task", "scheduled_tasks"], ["params.chat_jid", "params.prompt", "params.command", "params.cwd", "result.content", "result.details"]);
-requireSelectors(["scheduled_tasks"], ["params.id"]);
-requireSelectors(["send_adaptive_card"], ["params.card", "params.content", "params.card_id", "params.payload", "params.chat_jid", "params.fallback_text", "params.state", "params.last_submission", "result.content", "result.details"]);
-requireSelectors(["send_dashboard_widget"], ["params.html", "params.content", "params.title", "params.open_label", "params.chat_jid", "params.widget_id", "result.content", "result.details"]);
-requireSelectors(["chat"], ["params.content", "params.target_address", "params.target_chat_jid", "params.target_agent_name", "params.media_ids", "params.idempotency_key", "params.in_reply_to", "result.content", "result.details"]);
-requireSelectors(["session_control"], ["params.target_address", "params.target_chat_jid", "params.target_agent_name", "params.instructions", "result.content", "result.details"]);
-requireSelectors(["session_status"], ["result.details"]);
-requireSelectors(["open_workspace_file"], ["params.path", "params.label"]);
-requireSelectors(["env"], ["params.name", "params.value", "result.content", "result.details"]);
-requireSelectors(["exit_process"], ["params.reason", "params.resume_message"]);
-requireSelectors(["image_process"], ["params.input", "params.output", "params.overlay", "params.text", "result.content", "result.details"]);
-requireSelectors(["context_prune", "context_tree_query"], ["result.content", "result.details"]);
-requireSelectors(["bun_run"], ["params.script", "params.args", "params.cwd", "result.content", "result.details"]);
-requireSelectors(["keychain"], ["params.name", "params.secret", "params.username", "result.content", "result.details"]);
-requireSelectors(["ssh"], ["params.chat_jid", "params.ssh_target", "params.private_key_keychain", "params.known_hosts_keychain", "result.content", "result.details"]);
-requireSelectors(["cdp_browser"], ["params.expr", "params.url", "params.selector", "params.outPath", "params.headerTemplate", "params.footerTemplate", "result.content", "result.details"]);
-requireSelectors(["mcp"], ["params.tool", "params.args", "params.server", "params.search", "params.describe", "params.instructions", "params.connect", "params.redirectUrl", "result.content", "result.details"]);
+const OPAQUE_FACTORY_SCHEMA_EVIDENCE = Object.freeze([
+  Object.freeze({ toolName: "exec_batch", file: "runtime/src/tools/context-tools.ts", factory: "createBatchExecTool", fields: Object.freeze(["commands"]), rationale: "The registration spreads an imported factory result; the batch command array is user-authored process input." }),
+  Object.freeze({ toolName: "search_tool_output", file: "runtime/src/tools/context-tools.ts", factory: "createToolOutputSearchTool", fields: Object.freeze(["handle", "query"]), rationale: "The registration spreads an imported factory result; both output handle and query identify private prior tool output." }),
+  Object.freeze({ toolName: "local_bash", file: "runtime/src/extensions/ssh-core.ts", factory: "createBashTool", fields: Object.freeze(["command", "timeout"]), rationale: "The registration spreads the installed SDK bash definition and overrides execution without restating its schema." }),
+  Object.freeze({ toolName: "powershell", file: "runtime/extensions/platform/windows/powershell/index.ts", factory: "baseDefinition", fields: Object.freeze(["command", "timeout"]), rationale: "The Windows registration spreads a generated PowerShell base definition rather than declaring a literal parameter object." }),
+  Object.freeze({ toolName: "mcp", file: "node_modules/pi-mcp-adapter", factory: "createMcpAdapter", fields: Object.freeze(["tool", "args", "server", "search", "describe", "instructions", "connect", "redirectUrl"]), rationale: "The programmatic external adapter owns an action-union schema outside repository registration literals." }),
+]);
 
 function safeException(toolName: string, fields: readonly string[], rationale: string) {
   return Object.freeze({ toolName, fields: Object.freeze([...fields]), rationale });
 }
 
 const SAFE_PARAMETER_EXCEPTIONS = Object.freeze([
+  safeException("read", ["offset", "limit"], "Line-window controls bound the public read operation; file paths and returned content remain protected."),
+  safeException("bash", ["timeout"], "The numeric execution timeout is an operational bound; command text and all process output remain protected."),
+  safeException("local_bash", ["timeout"], "The numeric local execution timeout is an operational bound; command text and all process output remain protected."),
+  safeException("powershell", ["timeout"], "The numeric PowerShell execution timeout is an operational bound; command text and all process output remain protected."),
+  safeException("grep", ["glob", "ignoreCase", "literal", "context", "limit"], "Glob syntax, matching switches, context count, and result bound are query controls; search text, paths, and results remain protected."),
+  safeException("find", ["limit"], "The bounded result count is an operational control; path, pattern, and returned filesystem names remain protected."),
+  safeException("ls", ["limit"], "The bounded result count is an operational control; path and returned filesystem names remain protected."),
   safeException("list_tools", ["limit", "include_parameters"], "Bounded catalog pagination and a boolean detail switch contain no free-form request content."),
   safeException("list_scripts", ["scope", "role", "limit", "include_metadata"], "Closed scope/role selectors, a bounded count, and a metadata boolean carry no user-authored content."),
   safeException("activate_tools", ["names", "mode"], "Tool names come from the public catalog and mode is a closed activation enum, not private payload data."),
@@ -85,7 +61,7 @@ const SAFE_PARAMETER_EXCEPTIONS = Object.freeze([
   safeException("bun_run", ["timeout_sec", "capture_stdout"], "Timeout and output-capture controls contain no script path, arguments, working directory, or process output."),
   safeException("keychain", ["action", "field", "type", "limit"], "Closed keychain operation/field/type selectors and a bound contain no entry name, username, or secret."),
   safeException("ssh", ["action", "ssh_port", "strict_host_key_checking"], "Closed profile action, numeric port, and host-key policy expose no target, chat identity, or keychain entry names."),
-  safeException("cdp_browser", ["type", "properties", "required"], "Schema-shape metadata describes the browser tool contract; URL, expression, selectors, paths, and templates remain protected."),
+  safeException("cdp_browser", ["action", "ms", "landscape", "displayHeaderFooter", "preferCSSPageSize"], "The closed browser action, wait duration, and PDF layout booleans are execution controls; expressions, URLs, match text, selectors, paths, and templates remain protected."),
 ]);
 const SAFE_PARAMETER_FIELDS = new Map(SAFE_PARAMETER_EXCEPTIONS.map((entry) => [entry.toolName, entry.fields]));
 
@@ -196,19 +172,30 @@ describe("WP-3C protected trace/projection oracle", () => {
       }
     }
 
-    const m365Inventory = extractLiteralRegistrationParameterFields(
-      "extensions/experimental/m365/index.ts",
-      sourceTree.files["extensions/experimental/m365/index.ts"],
-      sourceTree.files,
-    );
-    unresolvedSchemas.push(...m365Inventory.unresolvedSchemas);
-    for (const [toolName, fields] of Object.entries(m365Inventory.fieldsByTool)) {
-      required.set(toolName, [...new Set(fields)].map((field) => `params.${field}`).concat("result.content", "result.details"));
+    const nativeInventory = extractNativeToolParameterFields();
+    unresolvedSchemas.push(...nativeInventory.unresolvedSchemas);
+    for (const [toolName, fields] of Object.entries(nativeInventory.fieldsByTool)) schemaFields.set(toolName, new Set(fields));
+    for (const toolName of ["read", "write", "edit", "bash"] as const) {
+      const variants = nativeInventory.variantsByTool[toolName];
+      expect(variants.map((variant) => variant.source)).toEqual([
+        `@earendil-works/pi-agent-core:${toolName}.js`, `@earendil-works/pi-coding-agent:${toolName}.js`,
+      ]);
+      expect(variants[0]!.fields).toEqual(variants[1]!.fields);
+      expect(variants.every((variant) => /^[a-f0-9]{64}$/.test(variant.fingerprint))).toBeTrue();
+    }
+
+    const opaqueNames = inventory.names.filter((toolName) => !schemaFields.has(toolName)).sort();
+    expect(opaqueNames).toEqual(OPAQUE_FACTORY_SCHEMA_EVIDENCE.map((entry) => entry.toolName).sort());
+    for (const evidence of OPAQUE_FACTORY_SCHEMA_EVIDENCE) {
+      expect(evidence.file.length).toBeGreaterThan(20);
+      expect(evidence.factory.length).toBeGreaterThan(4);
+      expect(evidence.rationale.length).toBeGreaterThan(80);
+      expect(Object.isFrozen(evidence.fields)).toBeTrue();
+      schemaFields.set(evidence.toolName, new Set(evidence.fields));
     }
 
     expect(unresolvedSchemas).toEqual([]);
-    expect(schemaFields.size).toBe(57);
-    expect(Object.keys(m365Inventory.fieldsByTool)).toHaveLength(25);
+    expect([...schemaFields.keys()].sort()).toEqual(TOOL_PREPARATION_MANIFEST.map((row) => row.toolName).sort());
     for (const [toolName, fields] of schemaFields) {
       const row = TOOL_PREPARATION_MANIFEST.find((candidate) => candidate.toolName === toolName)!;
       const protectedTopLevel = new Set(row.protectedFields.flatMap((selector) => {
@@ -219,11 +206,6 @@ describe("WP-3C protected trace/projection oracle", () => {
       expect([...safe].filter((field) => !fields.has(field))).toEqual([]);
       expect([...safe].filter((field) => protectedTopLevel.has(field))).toEqual([]);
       expect([...fields].filter((field) => !protectedTopLevel.has(field) && !safe.has(field))).toEqual([]);
-    }
-
-    expect([...required.keys()].sort()).toEqual(TOOL_PREPARATION_MANIFEST.map((row) => row.toolName).sort());
-    for (const row of TOOL_PREPARATION_MANIFEST) {
-      for (const selector of required.get(row.toolName) ?? []) expect(row.protectedFields).toContain(selector);
     }
   });
 

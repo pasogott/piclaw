@@ -228,7 +228,25 @@ function snapshotOptionNames(
     issues.push(issue("invalid_options", null, `${field} must contain only strings.`));
     return undefined;
   }
-  return snapshot as string[];
+  const names = snapshot as string[];
+  if (new Set(names).size !== names.length) {
+    issues.push(issue("invalid_options", null, `${field} must contain unique names.`));
+    return undefined;
+  }
+  if (field === "knownToolNames") {
+    if (names.some((name) => !EXACT_TOOL_NAME.test(name))) {
+      issues.push(issue("invalid_options", null, "knownToolNames must contain only canonical lowercase exact tool names."));
+      return undefined;
+    }
+    if (names.join("\0") !== [...names].sort().join("\0")) {
+      issues.push(issue("invalid_options", null, "knownToolNames must use canonical lexical order."));
+      return undefined;
+    }
+  } else if (names.join("\0") !== DEFAULT_DYNAMIC_TEMPLATES.join("\0")) {
+    issues.push(issue("invalid_options", null, "dynamicTemplateNames must be exactly <addon-tool>, <mcp-direct-tool> in canonical order."));
+    return undefined;
+  }
+  return names;
 }
 
 function snapshotDenseDataArray(

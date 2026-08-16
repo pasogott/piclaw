@@ -111,6 +111,31 @@ describe("WP-3C mapped service-effector authority", () => {
       const operationId = `operation:${row.toolName}`;
       const context = createScriptedContext(operationId, "/authority");
       const wrongEffector = effectorIds.find((candidate) => candidate !== row.serviceEffector)!;
+      const pendingRequest = Object.freeze({
+        effector: row.serviceEffector!, toolName: row.toolName, operationId, ownerVersion: 7,
+        idempotencyKey: `${row.toolName}:pending`, requestHash: `sha256:${row.toolName}:pending:v1`,
+      });
+      const pendingOracle = new ScriptedServiceDecisionOracle(operationId, 7);
+      expect(pendingOracle.acquire(row, pendingRequest)).toEqual({ status: "granted" });
+      expect(pendingOracle.acquire(row, pendingRequest)).toEqual({ status: "in_progress", certainty: "unknown", autoReplay: false });
+      expect(pendingOracle.acquire(row, { ...pendingRequest, requestHash: `${pendingRequest.requestHash}:changed` }).status).toBe("idempotency_conflict");
+      expect(() => pendingOracle.settle({ ...pendingRequest, ownerVersion: 8 }, "applied")).toThrow("matching grant authority");
+      expect(() => pendingOracle.settle({ ...pendingRequest, operationId: `${operationId}:stale` }, "applied")).toThrow("matching grant authority");
+      expect(() => pendingOracle.settle({ ...pendingRequest, toolName: `${row.toolName}:other` }, "applied")).toThrow("matching grant authority");
+      const pendingSnapshot = pendingOracle.snapshot();
+      expect(Object.isFrozen(pendingSnapshot)).toBeTrue();
+      expect(Object.isFrozen(pendingSnapshot.entries)).toBeTrue();
+      expect(pendingSnapshot.entries.every(Object.isFrozen)).toBeTrue();
+      const crashRestored = ScriptedServiceDecisionOracle.restore(pendingSnapshot);
+      expect(crashRestored.acquire(row, pendingRequest)).toEqual({ status: "reconciled", certainty: "unknown", autoReplay: false });
+
+      const lostAckOracle = new ScriptedServiceDecisionOracle(operationId, 7);
+      expect(lostAckOracle.acquire(row, pendingRequest).status).toBe("granted");
+      lostAckOracle.recordPostEffectLostAck(pendingRequest);
+      expect(ScriptedServiceDecisionOracle.restore(lostAckOracle.snapshot()).acquire(row, pendingRequest)).toEqual({
+        status: "reconciled", certainty: "unknown", autoReplay: false,
+      });
+
       for (const certainty of certainties) {
         const oracle = new ScriptedServiceDecisionOracle(operationId, 7);
         const tool = new ScriptedDirectTool(async () => ({ content: [{ type: "text", text: row.toolName }], details: undefined }));
@@ -139,8 +164,16 @@ describe("WP-3C mapped service-effector authority", () => {
         expect(tool.contexts).toEqual([context]);
         const snapshot = oracle.snapshot();
         expect(Object.isFrozen(snapshot)).toBeTrue();
-        expect(Object.values(snapshot)).toEqual([{ requestHash: request.requestHash, certainty }]);
-        expect(Object.values(snapshot).every(Object.isFrozen)).toBeTrue();
+        expect(Object.isFrozen(snapshot.entries)).toBeTrue();
+        expect(snapshot.entries).toEqual([{ ...request, state: "settled", certainty }]);
+        expect(snapshot.entries.every(Object.isFrozen)).toBeTrue();
+        const restored = ScriptedServiceDecisionOracle.restore(snapshot);
+        expect(await executeWithServiceDecision(row, tool, context, restored, request, certainty)).toEqual({
+          status: "reconciled", certainty, autoReplay: false,
+        });
+        expect((await executeWithServiceDecision(row, tool, context, restored, {
+          ...request, requestHash: `${request.requestHash}:restored-conflict`,
+        }, certainty)).status).toBe("idempotency_conflict");
         if (certainty === "unknown") expect(exactReplay.autoReplay).toBeFalse();
         exercised.add(`${row.serviceEffector}:${row.toolName}:${certainty}`);
       }

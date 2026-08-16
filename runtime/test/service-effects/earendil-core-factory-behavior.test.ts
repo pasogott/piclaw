@@ -7,6 +7,8 @@ import {
   createReadTool,
   createWriteTool,
   ExecutionError,
+  Result,
+  type ShellExecOptions,
 } from "@earendil-works/pi-agent-core";
 
 import type { PiclawToolContext } from "../../src/service-effects/contracts/execution-context-resolver.js";
@@ -26,6 +28,53 @@ function deferred(): { readonly promise: Promise<void>; readonly resolve: () => 
   return { promise, resolve };
 }
 
+class DelayedReadEnv extends FakeExecutionEnv {
+  readonly started = deferred();
+  readonly release = deferred();
+  override async readBinaryFile(path: string, signal?: AbortSignal) {
+    this.started.resolve();
+    await this.release.promise;
+    return super.readBinaryFile(path, signal);
+  }
+}
+
+class SerializedMutationEnv extends FakeExecutionEnv {
+  readonly firstWriteStarted = deferred();
+  readonly releaseFirstWrite = deferred();
+  readonly events: string[] = [];
+  private writeCount = 0;
+
+  override async writeFile(path: string, content: string | Uint8Array, signal?: AbortSignal) {
+    this.writeCount += 1;
+    this.events.push(`write:${this.writeCount}:start`);
+    if (this.writeCount === 1) {
+      this.firstWriteStarted.resolve();
+      await this.releaseFirstWrite.promise;
+    }
+    const result = await super.writeFile(path, content, signal);
+    this.events.push(`write:${this.writeCount}:end`);
+    return result;
+  }
+
+  override async readTextFile(path: string, signal?: AbortSignal) {
+    this.events.push("read:start");
+    return super.readTextFile(path, signal);
+  }
+}
+
+class ThrottledAbortEnv extends FakeExecutionEnv {
+  readonly started = deferred();
+  readonly release = deferred();
+
+  override async exec(_command: string, options: ShellExecOptions = {}) {
+    options.onStdout?.("first");
+    options.onStdout?.("second");
+    this.started.resolve();
+    await this.release.promise;
+    return Result.err(new ExecutionError("aborted", "aborted"));
+  }
+}
+
 describe("WP-3C selected direct @earendil-works/pi-agent-core harness factories", () => {
   test("root exports bind PiclawToolContext and preserve read offset, limit and line truncation", async () => {
     const env = new FakeExecutionEnv("/repo");
@@ -39,6 +88,24 @@ describe("WP-3C selected direct @earendil-works/pi-agent-core harness factories"
     expect(truncated.details?.truncation).toMatchObject({ truncated: true, truncatedBy: "lines", maxLines: 2_000 });
     expect(text(truncated)).toContain("Use offset=2001 to continue.");
     await expect(tool.execute("read-missing", { path: "missing.txt" }, undefined, undefined, context(env))).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  test("read honors pre-abort and mid-read abort without accepting bytes", async () => {
+    const tool = createReadTool<PiclawToolContext>();
+    const pre = new FakeExecutionEnv("/repo");
+    pre.putText("pre.txt", "must not be read");
+    const preController = new AbortController();
+    preController.abort();
+    await expect(tool.execute("read-pre-abort", { path: "pre.txt" }, preController.signal, undefined, context(pre))).rejects.toMatchObject({ code: "aborted" });
+
+    const mid = new DelayedReadEnv("/repo");
+    mid.putText("mid.txt", "must not be accepted");
+    const midController = new AbortController();
+    const pending = tool.execute("read-mid-abort", { path: "mid.txt" }, midController.signal, undefined, context(mid));
+    await mid.started.promise;
+    midController.abort();
+    mid.release.resolve();
+    await expect(pending).rejects.toMatchObject({ code: "aborted" });
   });
 
   test("read returns native image content and deterministic processor success/failure vectors", async () => {
@@ -97,6 +164,24 @@ describe("WP-3C selected direct @earendil-works/pi-agent-core harness factories"
     expect(new TextDecoder().decode(env.files.get("/repo/overlap.txt"))).toBe("alpha beta");
   });
 
+  test("serializes concurrent write/edit operations on the same canonical path", async () => {
+    const env = new SerializedMutationEnv("/repo");
+    env.putText("shared.txt", "before");
+    const write = createWriteTool<PiclawToolContext>();
+    const edit = createEditTool<PiclawToolContext>();
+    const first = write.execute("write-queued", { path: "./shared.txt", content: "alpha" }, undefined, undefined, context(env));
+    await env.firstWriteStarted.promise;
+    const second = edit.execute("edit-queued", {
+      path: "shared.txt", edits: [{ oldText: "alpha", newText: "gamma" }],
+    }, undefined, undefined, context(env));
+    await Bun.sleep(20);
+    expect(env.events).toEqual(["write:1:start"]);
+    env.releaseFirstWrite.resolve();
+    await Promise.all([first, second]);
+    expect(env.events).toEqual(["write:1:start", "write:1:end", "read:start", "write:2:start", "write:2:end"]);
+    expect(new TextDecoder().decode(env.files.get("/repo/shared.txt"))).toBe("gamma");
+  });
+
   test("bash calls env.exec exactly once, preserves ordered updates and emits no post-terminal update", async () => {
     const env = new FakeExecutionEnv("/repo");
     env.script({ _tag: "result", stdout: "out\n", stderr: "err\n", exitCode: 0 });
@@ -146,6 +231,24 @@ describe("WP-3C selected direct @earendil-works/pi-agent-core harness factories"
     await expect(pending).rejects.toThrow("Command aborted");
     expect(mid.observedShellEnvironments).toHaveLength(1);
     expect(mid.killedGroups).toHaveLength(1);
+  });
+
+  test("bash abort clears a pending throttled update before terminal rejection", async () => {
+    const env = new ThrottledAbortEnv("/repo");
+    const controller = new AbortController();
+    const updates: string[] = [];
+    const pending = createBashTool<PiclawToolContext>().execute(
+      "bash-throttled-abort", { command: "wait" }, controller.signal, (update) => updates.push(text(update)), context(env),
+    );
+    await env.started.promise;
+    expect(updates).toEqual(["", "first"]);
+    controller.abort();
+    env.release.resolve();
+    await expect(pending).rejects.toThrow("Command aborted");
+    const terminalCount = updates.length;
+    expect(updates.at(-1)).toBe("firstsecond");
+    await Bun.sleep(140);
+    expect(updates).toHaveLength(terminalCount);
   });
 
   test("bash truncates UTF-8 on code-point boundaries and persists a complete fullOutputPath", async () => {

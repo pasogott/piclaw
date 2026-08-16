@@ -66,20 +66,48 @@ export interface ScriptedAuthorityRequest {
   readonly requestHash: string;
 }
 
-type ScriptedDecision = Readonly<{
-  certainty: ScriptedEffectCertainty;
-  requestHash: string;
+type ScriptedDecision = Readonly<ScriptedAuthorityRequest & {
+  readonly certainty: ScriptedEffectCertainty;
 }>;
+type ScriptedPendingGrant = Readonly<ScriptedAuthorityRequest>;
+export interface ScriptedDecisionSnapshot {
+  readonly version: 1;
+  readonly operationId: string;
+  readonly ownerVersion: number;
+  readonly entries: readonly Readonly<ScriptedAuthorityRequest & {
+    readonly state: "in_progress" | "settled";
+    readonly certainty: ScriptedEffectCertainty;
+  }>[];
+}
 
 /** Independent in-memory authority/decision ledger; it imports no live store. */
 export class ScriptedServiceDecisionOracle {
   private readonly decisions = new Map<string, ScriptedDecision>();
-  private readonly pending = new Map<string, string>();
+  private readonly pending = new Map<string, ScriptedPendingGrant>();
 
   constructor(readonly operationId: string, readonly ownerVersion: number) {}
 
+  static restore(snapshot: ScriptedDecisionSnapshot): ScriptedServiceDecisionOracle {
+    const oracle = new ScriptedServiceDecisionOracle(snapshot.operationId, snapshot.ownerVersion);
+    for (const entry of snapshot.entries) {
+      const key = oracle.key(entry);
+      // A restored in-progress effect may have crossed the external boundary before the crash.
+      oracle.decisions.set(key, Object.freeze({
+        effector: entry.effector,
+        toolName: entry.toolName,
+        operationId: entry.operationId,
+        ownerVersion: entry.ownerVersion,
+        idempotencyKey: entry.idempotencyKey,
+        requestHash: entry.requestHash,
+        certainty: entry.state === "in_progress" ? "unknown" : entry.certainty,
+      }));
+    }
+    return oracle;
+  }
+
   acquire(spec: ToolPreparationSpec, request: ScriptedAuthorityRequest): Readonly<
     | { status: "granted" }
+    | { status: "in_progress"; certainty: "unknown"; autoReplay: false }
     | { status: "reconciled"; certainty: ScriptedEffectCertainty; autoReplay: false }
     | { status: "idempotency_conflict" }
     | { status: "stale_owner" }
@@ -91,29 +119,57 @@ export class ScriptedServiceDecisionOracle {
     if (request.operationId !== this.operationId || request.ownerVersion !== this.ownerVersion) {
       return Object.freeze({ status: "stale_owner" });
     }
-    const key = `${request.effector}:${request.idempotencyKey}`;
+    const key = this.key(request);
     const existing = this.decisions.get(key);
     if (existing) {
       if (existing.requestHash !== request.requestHash) return Object.freeze({ status: "idempotency_conflict" });
       return Object.freeze({ status: "reconciled", certainty: existing.certainty, autoReplay: false });
     }
-    const pendingHash = this.pending.get(key);
-    if (pendingHash !== undefined) {
-      return Object.freeze({ status: pendingHash === request.requestHash ? "wrong_authority" : "idempotency_conflict" });
+    const pending = this.pending.get(key);
+    if (pending) {
+      if (pending.requestHash !== request.requestHash) return Object.freeze({ status: "idempotency_conflict" });
+      return Object.freeze({ status: "in_progress", certainty: "unknown", autoReplay: false });
     }
-    this.pending.set(key, request.requestHash);
+    this.pending.set(key, Object.freeze({ ...request }));
     return Object.freeze({ status: "granted" });
   }
 
   settle(request: ScriptedAuthorityRequest, certainty: ScriptedEffectCertainty): void {
-    const key = `${request.effector}:${request.idempotencyKey}`;
-    if (this.pending.get(key) !== request.requestHash) throw new Error("decision settlement lacks matching grant");
+    const key = this.key(request);
+    const pending = this.pending.get(key);
+    if (!pending || !this.sameAuthority(pending, request)) throw new Error("decision settlement lacks matching grant authority");
     this.pending.delete(key);
-    this.decisions.set(key, Object.freeze({ requestHash: request.requestHash, certainty }));
+    this.decisions.set(key, Object.freeze({ ...request, certainty }));
   }
 
-  snapshot(): Readonly<Record<string, ScriptedDecision>> {
-    return Object.freeze(Object.fromEntries([...this.decisions].map(([key, decision]) => [key, Object.freeze({ ...decision })])));
+  recordPostEffectLostAck(request: ScriptedAuthorityRequest): void {
+    this.settle(request, "unknown");
+  }
+
+  snapshot(): ScriptedDecisionSnapshot {
+    const entries = [
+      ...[...this.decisions].map(([key, decision]) => {
+        if (this.pending.has(key)) throw new Error("decision key cannot be pending and settled");
+        return Object.freeze({ ...decision, state: "settled" as const });
+      }),
+      ...[...this.pending.values()].map((request) => Object.freeze({ ...request, state: "in_progress" as const, certainty: "unknown" as const })),
+    ].sort((left, right) => this.key(left).localeCompare(this.key(right)));
+    return Object.freeze({
+      version: 1,
+      operationId: this.operationId,
+      ownerVersion: this.ownerVersion,
+      entries: Object.freeze(entries),
+    });
+  }
+
+  private key(request: Pick<ScriptedAuthorityRequest, "effector" | "idempotencyKey">): string {
+    return `${request.effector}:${request.idempotencyKey}`;
+  }
+
+  private sameAuthority(grant: ScriptedPendingGrant, request: ScriptedAuthorityRequest): boolean {
+    return grant.effector === request.effector && grant.toolName === request.toolName
+      && grant.operationId === request.operationId && grant.ownerVersion === request.ownerVersion
+      && grant.idempotencyKey === request.idempotencyKey && grant.requestHash === request.requestHash;
   }
 }
 
@@ -127,6 +183,7 @@ export async function executeWithServiceDecision(
   certainty: ScriptedEffectCertainty,
 ): Promise<Readonly<
   | { status: "executed"; result: AgentToolResult<unknown>; certainty: ScriptedEffectCertainty }
+  | { status: "in_progress"; certainty: "unknown"; autoReplay: false }
   | { status: "reconciled"; certainty: ScriptedEffectCertainty; autoReplay: false }
   | { status: "idempotency_conflict" | "stale_owner" | "wrong_authority" }
 >> {

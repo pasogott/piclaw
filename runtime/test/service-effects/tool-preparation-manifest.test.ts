@@ -1,6 +1,7 @@
 import "../helpers.js";
 
 import { describe, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
 
 import {
   CORE_EARENDIL_FACTORY_TARGETS,
@@ -15,13 +16,16 @@ import {
 import {
   normalizeToolPreparationManifest,
   validateToolPreparationManifest,
+  type ToolPreparationValidationOptions,
 } from "../../src/service-effects/tool-preparation/validator.js";
 import type { ToolPreparationSpec } from "../../src/service-effects/tool-preparation/types.js";
 import { resolveAddonPackageTree, type VirtualPackageTree } from "./fixtures/addon-package-tree-oracle.js";
 import {
+  computeMcpServerIdentityHash,
   formatMcpFixtureToolName,
   resolveMcpMetadataFixture,
   resourceNameToToolName,
+  type McpServerFixture,
 } from "./fixtures/mcp-metadata-oracle.js";
 import {
   inventoryRepositoryToolFamilies,
@@ -34,11 +38,28 @@ const SPEC_FIELDS = [
 ].sort();
 const TEMPLATE_NAMES = DYNAMIC_TOOL_PREPARATION_TEMPLATES.map((row) => row.toolName);
 
+interface TestMcpCacheEntry {
+  readonly configHash?: unknown;
+  readonly cachedAt: unknown;
+  readonly tools?: unknown;
+  readonly resources?: unknown;
+}
+interface TestMcpServer extends McpServerFixture { readonly cache?: TestMcpCacheEntry | null }
+
 function freshMcpCache(
-  serverName: string,
+  _serverName: string,
   metadata: { readonly tools?: readonly Record<string, unknown>[]; readonly resources?: readonly Record<string, unknown>[] } = {},
-) {
-  return { definitionHash: `hash:${serverName}`, cachedAt: 1_000, ...metadata };
+): TestMcpCacheEntry {
+  return { cachedAt: 1_000, ...metadata };
+}
+
+function resolveMcpFixture(value: Omit<Record<string, unknown>, "servers" | "cache"> & { readonly servers: readonly TestMcpServer[] }) {
+  const cacheServers: Record<string, unknown> = {};
+  const servers = value.servers.map(({ cache, ...server }) => {
+    if (cache) cacheServers[server.name] = { configHash: cache.configHash ?? computeMcpServerIdentityHash(server), ...cache };
+    return server;
+  });
+  return resolveMcpMetadataFixture({ ...value, servers, cache: { version: 1, servers: cacheServers } });
 }
 
 function fixtureSpecs(names: readonly string[]): ToolPreparationSpec[] {
@@ -155,6 +176,34 @@ describe("WP-3C production-root coverage oracle", () => {
     });
   });
 
+  test("resolves namespace/export-assignment/import-equals/dynamic edges through tsconfig paths and package exports", () => {
+    const tree = compositionTree([], "alwaysOn");
+    const files = { ...tree.files };
+    files["tsconfig.json"] = JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@latent/*": ["latent/*"] } } });
+    files["package.json"] = JSON.stringify({ name: "fixture-root", imports: { "#assigned": "./latent/assigned.ts" } });
+    files["node_modules/fixture-package/package.json"] = JSON.stringify({
+      name: "fixture-package", exports: { "./dynamic": { import: "./src/dynamic.ts" } },
+    });
+    files["src/extensions/always.ts"] = `
+      export * as latentNamespace from "@latent/namespace";
+      import legacy = require("@latent/legacy");
+      export = require("#assigned");
+      void import("fixture-package/dynamic");
+      export const alwaysOn = (pi: any) => pi.registerTool({ name: "fixture_always" });
+    `;
+    for (const [file, name] of [
+      ["latent/namespace.ts", "fixture_namespace"], ["latent/legacy.ts", "fixture_legacy"],
+      ["latent/assigned.ts", "fixture_assigned"], ["node_modules/fixture-package/src/dynamic.ts", "fixture_dynamic"],
+    ]) files[file] = `declare const pi: any; pi.registerTool({ name: "${name}" });`;
+    const inventory = inventoryRepositoryToolFamilies({ files }, { sdkToolFamilies: [] });
+    expect(inventory.unresolvedRegistrations).toEqual([]);
+    expect(inventory.names).toEqual(["fixture_always"]);
+    expect(inventory.productionRoots).toEqual(expect.arrayContaining([
+      "latent/namespace.ts", "latent/legacy.ts", "latent/assigned.ts", "node_modules/fixture-package/src/dynamic.ts",
+    ]));
+    expect(Object.values(inventory).some((value) => value instanceof Map || value instanceof Set)).toBeFalse();
+  });
+
   test("a newly referenced optional registration fails exact coverage", () => {
     const baseline = inventoryRepositoryToolFamilies(compositionTree());
     const changed = inventoryRepositoryToolFamilies(compositionTree(["one.ts", "two.ts"]));
@@ -208,7 +257,15 @@ describe("WP-3C closed manifest policy and hostile-safe normalization", () => {
       expect(policy.currentIntegration).toBe("existing-production-wiring");
       expect(policy.currentServiceEffector).toBeNull();
       expect(policy.currentContextSource).toContain("neither PiclawToolContext nor a latent WP-3C service effector");
-      expect(policy.currentAuthorityPath.length).toBeGreaterThan(60);
+      expect(policy.currentAuthorityDescription.length).toBeGreaterThan(60);
+      if (policy.currentAuthorityKind === "repository_file") {
+        expect(policy.currentAuthorityPath).toMatch(/^runtime\/.+\.ts$/);
+        expect(existsSync(new URL(`../../${policy.currentAuthorityPath.slice("runtime/".length)}`, import.meta.url))).toBeTrue();
+      } else {
+        expect(policy.currentAuthorityPath).toMatch(/^package:/);
+        const packageName = policy.currentAuthorityPath.slice("package:".length);
+        expect(existsSync(new URL(`../../../node_modules/${packageName}/package.json`, import.meta.url))).toBeTrue();
+      }
       expect(policy.futureContextFields).toEqual(row.contextFields);
       expect(Object.isFrozen(policy.futureContextFields)).toBeTrue();
       expect(policy.futureServiceEffector).toBe(row.serviceEffector);
@@ -219,12 +276,16 @@ describe("WP-3C closed manifest policy and hostile-safe normalization", () => {
       if (row.serviceEffector !== null) {
         expect(policy.idempotencyIdentity?.length).toBeGreaterThan(10);
         expect(policy.activationPrerequisites.length).toBeGreaterThan(0);
-        expect(policy.currentAuthorityPath).toMatch(/SQLite|SSE|registry|transport|filesystem|persistence|indexer|scheduler|shutdown/i);
-        expect(policy.currentAuthorityPath).not.toMatch(/\bnone\b|future EF-S/i);
+        expect(policy.currentAuthorityDescription).toMatch(/SQLite|SSE|registry|transport|filesystem|persistence|indexer|scheduler|shutdown/i);
+        expect(policy.currentAuthorityDescription).not.toMatch(/\bnone\b|future EF-S/i);
       } else if (row.effectClass !== "query") {
         expect(policy.nullAuthorityKind).not.toBeNull();
       }
     }
+    expect(getToolPreparationPolicy("messages")).toMatchObject({
+      currentAuthorityKind: "repository_file",
+      currentAuthorityPath: "runtime/src/extensions/messages-crud.ts",
+    });
   });
 
   test("policy evidence has no runtime mutation surface and validation remains stable", () => {
@@ -282,6 +343,28 @@ describe("WP-3C closed manifest policy and hostile-safe normalization", () => {
       expect(result?.specs).toEqual([]);
     }
     expect(getterCalls).toBe(0);
+  });
+
+  test("closes option names to dense unique canonical exact names and the two approved templates", () => {
+    const read = TOOL_PREPARATION_MANIFEST.find((row) => row.toolName === "read")!;
+    const sparseNames = new Array(2);
+    sparseNames[0] = "read";
+    const invalidOptions: ToolPreparationValidationOptions[] = [
+      { knownToolNames: ["read", "read"] },
+      { knownToolNames: ["write", "read"] },
+      { knownToolNames: ["Read"] },
+      { knownToolNames: ["<addon-tool>"] },
+      { knownToolNames: sparseNames },
+      { dynamicTemplateNames: ["<addon-tool>"] },
+      { dynamicTemplateNames: ["<mcp-direct-tool>", "<addon-tool>"] },
+      { dynamicTemplateNames: ["<addon-tool>", "<unknown-template>"] },
+      { dynamicTemplateNames: ["<addon-tool>", "<addon-tool>"] },
+    ];
+    for (const options of invalidOptions) {
+      const result = normalizeToolPreparationManifest([read], options);
+      expect(result.specs).toEqual([]);
+      expect(result.issues).toContainEqual(expect.objectContaining({ code: "invalid_options" }));
+    }
   });
 
   test("snapshots mutable inputs so later mutation cannot alter normalized policy", () => {
@@ -374,7 +457,15 @@ describe("WP-3C closed manifest policy and hostile-safe normalization", () => {
 });
 
 describe("WP-3C hermetic add-on package-tree oracle", () => {
-  test("accepts deterministic scoped/unscoped contained declarations and contained symlinks", () => {
+  test("pins current join/exists/isFile semantics separately from future containment blockers", () => {
+    const productionSource = readFileSync(new URL("../../src/agent-pool/session.ts", import.meta.url), "utf8");
+    const discoveryBody = productionSource.slice(
+      productionSource.indexOf("export function getInstalledAddonExtensionPaths"),
+      productionSource.indexOf("function getBundledExtensionPaths"),
+    );
+    expect(discoveryBody).toContain("join(packageDir, relativePath)");
+    expect(discoveryBody).toContain("existsSync(fullPath) && statSync(fullPath).isFile()");
+    expect(discoveryBody).not.toMatch(/realpath|relative\(|contain/i);
     const tree: VirtualPackageTree = {
       nodeModulesRoot: "/node_modules",
       nodes: {
@@ -394,15 +485,22 @@ describe("WP-3C hermetic add-on package-tree oracle", () => {
         "/node_modules/not-a-package.txt": { kind: "file", content: "ignored" },
       },
     };
-    const result = resolveAddonPackageTree(tree);
-    expect(result.fixtureValid).toBeTrue();
-    expect(Object.isFrozen(result)).toBeTrue();
-    expect(Object.isFrozen(result.packagePaths)).toBeTrue();
-    expect(Object.isFrozen(result.extensionPaths)).toBeTrue();
-    expect(Object.isFrozen(result.rejections)).toBeTrue();
-    expect(result.packagePaths).toEqual(["/node_modules/@scope/pkg", "/node_modules/link", "/node_modules/plain"]);
-    expect(result.extensionPaths).toEqual(["/node_modules/@scope/pkg/extension.ts", "/node_modules/link/entry.ts", "/node_modules/plain/entry.ts"]);
-    expect(result.rejections.map((entry) => entry.code)).toEqual(["duplicate_declaration", "duplicate_declaration"]);
+    const current = resolveAddonPackageTree(tree, "current");
+    const future = resolveAddonPackageTree(tree, "futureHardened");
+    expect(current).toMatchObject({ fixtureValid: true, policy: "current", rejections: [] });
+    expect(current.extensionPaths).toEqual([
+      "/node_modules/@scope/pkg/extension.ts", "/node_modules/link/entry.ts", "/node_modules/plain/entry.ts",
+      "/node_modules/plain/alias.ts", "/node_modules/plain/entry.ts",
+    ]);
+    expect(future.fixtureValid).toBeTrue();
+    expect(future.policy).toBe("futureHardened");
+    expect(Object.isFrozen(future)).toBeTrue();
+    expect(Object.isFrozen(future.packagePaths)).toBeTrue();
+    expect(Object.isFrozen(future.extensionPaths)).toBeTrue();
+    expect(Object.isFrozen(future.rejections)).toBeTrue();
+    expect(future.packagePaths).toEqual(["/node_modules/@scope/pkg", "/node_modules/link", "/node_modules/plain"]);
+    expect(future.extensionPaths).toEqual(["/node_modules/@scope/pkg/extension.ts", "/node_modules/link/entry.ts", "/node_modules/plain/entry.ts"]);
+    expect(future.rejections.map((entry) => entry.code)).toEqual(["duplicate_declaration", "duplicate_declaration"]);
   });
 
   test("ignores normal non-addons and reports only declared path failures with provenance", () => {
@@ -419,19 +517,25 @@ describe("WP-3C hermetic add-on package-tree oracle", () => {
         "/node_modules/unreadable/package.json": { kind: "unreadable" },
         "/node_modules/unsafe": { kind: "directory" },
         "/node_modules/unsafe/package.json": { kind: "file", content: JSON.stringify({ pi: { extensions: ["../escape.ts", "missing.ts", "dir", "outside.ts", "unreadable.ts", 42] } }) },
+        "/node_modules/escape.ts": { kind: "file", content: "current traversal" },
         "/node_modules/unsafe/dir": { kind: "directory" },
         "/node_modules/unsafe/outside.ts": { kind: "symlink", target: "/outside/entry.ts" },
         "/outside/entry.ts": { kind: "file", content: "escape" },
         "/node_modules/unsafe/unreadable.ts": { kind: "unreadable" },
       },
     };
-    const result = resolveAddonPackageTree(tree);
-    expect(result.fixtureValid).toBeTrue();
-    expect(result.extensionPaths).toEqual([]);
-    expect(result.rejections.map((entry) => entry.code).sort()).toEqual([
+    const current = resolveAddonPackageTree(tree, "current");
+    const future = resolveAddonPackageTree(tree, "futureHardened");
+    expect(current.extensionPaths).toEqual([
+      "/node_modules/escape.ts", "/node_modules/unsafe/outside.ts", "/node_modules/unsafe/unreadable.ts",
+    ]);
+    expect(current.rejections).toEqual([]);
+    expect(future.fixtureValid).toBeTrue();
+    expect(future.extensionPaths).toEqual([]);
+    expect(future.rejections.map((entry) => entry.code).sort()).toEqual([
       "lexical_escape", "missing_target", "non_file_target", "realpath_escape", "unreadable_target",
     ]);
-    expect(result.rejections.every((entry) => entry.packagePath === "/node_modules/unsafe" && typeof entry.declaration === "string")).toBeTrue();
+    expect(future.rejections.every((entry) => entry.packagePath === "/node_modules/unsafe" && typeof entry.declaration === "string")).toBeTrue();
   });
 
   test("fails closed on hostile outer trees, node maps and accessor nodes without invoking getters", () => {
@@ -455,7 +559,8 @@ describe("WP-3C hermetic add-on package-tree oracle", () => {
       { nodeModulesRoot: "/node_modules", nodes: { "/node_modules": { kind: "directory" }, "/node_modules/.": { kind: "directory" } } },
     ];
     for (const value of hostile) {
-      expect(resolveAddonPackageTree(value)).toEqual({ fixtureValid: false, extensionPaths: [], packagePaths: [], rejections: [] });
+      expect(resolveAddonPackageTree(value, "current")).toEqual({ fixtureValid: false, policy: "current", extensionPaths: [], packagePaths: [], rejections: [] });
+      expect(resolveAddonPackageTree(value, "futureHardened")).toEqual({ fixtureValid: false, policy: "futureHardened", extensionPaths: [], packagePaths: [], rejections: [] });
     }
     expect(getterCalls).toBe(0);
   });
@@ -472,22 +577,40 @@ describe("WP-3C hermetic MCP metadata oracle", () => {
     expect(resourceNameToToolName("---")).toBe("resource");
   });
 
-  test("uses supplied programmatic definitions and only literal disabled=true suppresses a server", () => {
-    const result = resolveMcpMetadataFixture({
+  test("computes stable cache identity from exactly the installed authority field set", () => {
+    const identity: McpServerFixture = {
+      name: "identity", command: "bun", args: ["serve.ts"], socket: "/tmp/mcp.sock", env: { A: "1" }, cwd: "/repo",
+      url: "https://mcp.example.test", headers: { "x-tenant": "one" }, auth: { type: "oauth" }, bearerToken: "secret",
+      bearerTokenEnv: "MCP_TOKEN", exposeResources: true, includeTools: ["read_*"], excludeTools: ["write_*"],
+    };
+    const hash = computeMcpServerIdentityHash(identity);
+    expect(hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(computeMcpServerIdentityHash({ ...identity, lifecycle: "lazy", idleTimeout: 5, requestTimeoutMs: 99, debug: true, directTools: true })).toBe(hash);
+    for (const changed of [
+      { ...identity, includeTools: ["other_*"] }, { ...identity, excludeTools: ["delete_*"] },
+      { ...identity, auth: { type: "bearer" } }, { ...identity, url: "https://other.example.test" },
+    ]) expect(computeMcpServerIdentityHash(changed)).not.toBe(hash);
+    expect(computeMcpServerIdentityHash({ ...identity, env: { B: "2", A: "1" } })).toBe(
+      computeMcpServerIdentityHash({ ...identity, env: { A: "1", B: "2" } }),
+    );
+  });
+
+  test("uses supplied programmatic definitions and closes disabled to a literal boolean", () => {
+    const result = resolveMcpFixture({
       prefix: "server",
       disableProxyTool: false,
       builtins: new Set(),
       servers: [
         { name: "boolean-disabled", disabled: true, directTools: true, cache: freshMcpCache("boolean-disabled", { tools: [{ name: "ignored" }] }) },
-        { name: "string-enabled", disabled: "true", directTools: true, cache: freshMcpCache("string-enabled", { tools: [{ name: "search" }] }) },
+        { name: "literal-enabled", disabled: false, directTools: true, cache: freshMcpCache("literal-enabled", { tools: [{ name: "search" }] }) },
       ],
     });
-    expect(result.directNames).toEqual(["string_enabled_search"]);
+    expect(result.directNames).toEqual(["literal_enabled_search"]);
     expect(result.missingConfiguredServers).toEqual([]);
   });
 
   test("handles filters, resources, invalid metadata, collisions, duplicates and proxy suppression", () => {
-    const result = resolveMcpMetadataFixture({
+    const result = resolveMcpFixture({
       prefix: "short",
       disableProxyTool: true,
       builtins: new Set(["demo_read_resource_123"]),
@@ -513,18 +636,18 @@ describe("WP-3C hermetic MCP metadata oracle", () => {
   });
 
   test("validates cache definition hash, timestamp, TTL expiry and exact fresh boundary", () => {
-    const result = resolveMcpMetadataFixture({
+    const result = resolveMcpFixture({
       prefix: "server",
       nowMs: 10_000,
       maxCacheAgeMs: 100,
       disableProxyTool: true,
       builtins: new Set(),
       servers: [
-        { name: "mismatch", directTools: true, cache: { definitionHash: "other", cachedAt: 10_000, tools: [{ name: "search" }] } },
-        { name: "zero", directTools: true, cache: { definitionHash: "hash:zero", cachedAt: 0, tools: [{ name: "search" }] } },
-        { name: "invalid", directTools: true, cache: { definitionHash: "hash:invalid", cachedAt: "10000", tools: [{ name: "search" }] } },
-        { name: "expired", directTools: true, cache: { definitionHash: "hash:expired", cachedAt: 9_899, tools: [{ name: "search" }] } },
-        { name: "boundary", directTools: true, cache: { definitionHash: "hash:boundary", cachedAt: 9_900, tools: [{ name: "search" }] } },
+        { name: "mismatch", directTools: true, cache: { configHash: "other", cachedAt: 10_000, tools: [{ name: "search" }] } },
+        { name: "zero", directTools: true, cache: { cachedAt: 0, tools: [{ name: "search" }] } },
+        { name: "invalid", directTools: true, cache: { cachedAt: "10000", tools: [{ name: "search" }] } },
+        { name: "expired", directTools: true, cache: { cachedAt: 9_899, tools: [{ name: "search" }] } },
+        { name: "boundary", directTools: true, cache: { cachedAt: 9_900, tools: [{ name: "search" }] } },
       ],
     });
     expect(result.directNames).toEqual(["boundary_search"]);
@@ -532,8 +655,19 @@ describe("WP-3C hermetic MCP metadata oracle", () => {
     expect(result.proxyRegistered).toBeTrue();
   });
 
-  test("uses per-server direct selection over the global default", () => {
+  test("requires the versioned server-map cache envelope", () => {
+    const server: McpServerFixture = { name: "versioned", directTools: true };
+    const entry = { configHash: computeMcpServerIdentityHash(server), cachedAt: 1_000, tools: [{ name: "search" }] };
     const result = resolveMcpMetadataFixture({
+      prefix: "server", disableProxyTool: true, builtins: new Set(), servers: [server],
+      cache: { version: 2, servers: { versioned: entry } },
+    });
+    expect(result).toMatchObject({ directNames: [], missingConfiguredServers: ["versioned"], proxyRegistered: true });
+    expect(result.skipped).toEqual(["cache:unsupported-version:2"]);
+  });
+
+  test("uses per-server direct selection over the global default", () => {
+    const result = resolveMcpFixture({
       prefix: "server",
       globalDirectTools: true,
       disableProxyTool: false,
@@ -549,7 +683,7 @@ describe("WP-3C hermetic MCP metadata oracle", () => {
   });
 
   test("models env precedence, exact resource selection, stale cache and proxy retention", () => {
-    const result = resolveMcpMetadataFixture({
+    const result = resolveMcpFixture({
       prefix: "none",
       globalDirectTools: true,
       envSelectors: ["selected/read_run_book", "stale"],
@@ -558,7 +692,7 @@ describe("WP-3C hermetic MCP metadata oracle", () => {
       servers: [
         { name: "ignored-by-env", directTools: true, cache: freshMcpCache("ignored-by-env", { tools: [{ name: "tool" }] }) },
         { name: "selected", directTools: false, cache: freshMcpCache("selected", { tools: [{ name: "other" }], resources: [{ name: "Run Book" }] }) },
-        { name: "stale", directTools: false, cache: { definitionHash: "mismatched", cachedAt: 1_000, tools: [{ name: "old" }] } },
+        { name: "stale", directTools: false, cache: { configHash: "mismatched", cachedAt: 1_000, tools: [{ name: "old" }] } },
       ],
     });
     expect(result.directNames).toEqual(["read_run_book"]);
@@ -567,16 +701,45 @@ describe("WP-3C hermetic MCP metadata oracle", () => {
   });
 
   test("retains proxy when metadata is absent or no valid direct tool remains", () => {
-    const absent = resolveMcpMetadataFixture({
+    const absent = resolveMcpFixture({
       prefix: "server", globalDirectTools: true, disableProxyTool: true, builtins: new Set(),
       servers: [{ name: "missing", cache: null }],
     });
-    const empty = resolveMcpMetadataFixture({
+    const empty = resolveMcpFixture({
       prefix: "server", disableProxyTool: true, builtins: new Set(),
       servers: [{ name: "empty", directTools: true, cache: freshMcpCache("empty", { tools: [{}] }) }],
     });
     expect(absent).toMatchObject({ directNames: [], missingConfiguredServers: ["missing"], proxyRegistered: true });
     expect(empty).toMatchObject({ directNames: [], missingConfiguredServers: [], proxyRegistered: true });
+  });
+
+  test("rejects duplicate selectors/direct names and closes metadata/filter strings", () => {
+    const base = { prefix: "server" as const, globalDirectTools: true, builtins: new Set<string>(), cache: { version: 1, servers: {} } };
+    for (const value of [
+      { ...base, envSelectors: ["demo", "demo"], servers: [] },
+      { ...base, servers: [{ name: "demo", directTools: ["read", "read"] }] },
+      { ...base, servers: [{ name: "demo", includeTools: [" read"], directTools: true }] },
+      { ...base, servers: [{ name: "demo", excludeTools: ["read", "read"], directTools: true }] },
+    ]) expect(resolveMcpMetadataFixture(value).directNames).toEqual([]);
+    expect(resolveMcpMetadataFixture({ ...base, envSelectors: ["demo", "demo"], servers: [] }).skipped).toEqual(["invalid-env-selector:demo"]);
+    const whitespace = resolveMcpFixture({
+      prefix: "server", builtins: new Set(), servers: [{ name: "demo", directTools: true, cache: freshMcpCache("demo", { tools: [{ name: " read " }] }) }],
+    });
+    expect(whitespace.skipped).toEqual(["demo:invalid-tool"]);
+  });
+
+  test("snapshots original MCP inputs and detects identity mutation on a fresh resolution", () => {
+    const server = { name: "stable", directTools: true, url: "https://one.example.test" };
+    const tools = [{ name: "read" }];
+    const fixture = {
+      prefix: "server" as const, builtins: new Set<string>(), servers: [server],
+      cache: { version: 1, servers: { stable: { configHash: computeMcpServerIdentityHash(server), cachedAt: 1_000, tools } } },
+    };
+    const first = resolveMcpMetadataFixture(fixture);
+    server.url = "https://two.example.test";
+    tools[0]!.name = "write";
+    expect(first.directNames).toEqual(["stable_read"]);
+    expect(resolveMcpMetadataFixture(fixture)).toMatchObject({ directNames: [], missingConfiguredServers: ["stable"] });
   });
 
   test("descriptor-closes hostile containers and rejects invalid or future cache times without getters", () => {
@@ -598,25 +761,27 @@ describe("WP-3C hermetic MCP metadata oracle", () => {
       { ...base, nowMs: Number.NaN, servers: [] },
       { ...base, nowMs: Number.POSITIVE_INFINITY, servers: [] },
       { ...base, maxCacheAgeMs: -1, servers: [] },
+      { ...base, servers: [{ name: "bad-disabled", disabled: "true" }] },
     ];
     for (const value of invalidOuterValues) {
       expect(resolveMcpMetadataFixture(value)).toEqual({
         directNames: [], missingConfiguredServers: [], proxyRegistered: true, skipped: ["invalid-fixture"],
       });
     }
-    expect(resolveMcpMetadataFixture({ ...base, builtins: accessorBuiltins, servers: [] })).toEqual({
+    expect(resolveMcpMetadataFixture({ ...base, servers: [{ name: "duplicate" }, { name: "duplicate" }], cache: { version: 1, servers: {} } }).skipped).toEqual(["duplicate-server:duplicate"]);
+    expect(resolveMcpMetadataFixture({ ...base, builtins: accessorBuiltins, servers: [], cache: { version: 1, servers: {} } })).toEqual({
       directNames: [], missingConfiguredServers: [], proxyRegistered: true, skipped: [],
     });
-    const invalidMetadata = resolveMcpMetadataFixture({
+    const invalidMetadata = resolveMcpFixture({
       ...base, servers: [{ name: "metadata", directTools: true, cache: freshMcpCache("metadata", { tools: [accessorMetadata] }) }],
     });
     expect(invalidMetadata).toMatchObject({ directNames: [], proxyRegistered: true, skipped: ["metadata:invalid-tool"] });
-    const invalidCacheShape = resolveMcpMetadataFixture({
-      ...base, servers: [{ name: "revoked", directTools: true, cache: { definitionHash: "hash:revoked", cachedAt: 1_000, tools: revokedTools.proxy } }],
+    const invalidCacheShape = resolveMcpFixture({
+      ...base, servers: [{ name: "revoked", directTools: true, cache: { cachedAt: 1_000, tools: revokedTools.proxy } }],
     });
     expect(invalidCacheShape).toMatchObject({ directNames: [], missingConfiguredServers: ["revoked"], proxyRegistered: true });
-    const future = resolveMcpMetadataFixture({
-      ...base, nowMs: 1_000, servers: [{ name: "future", directTools: true, cache: { definitionHash: "hash:future", cachedAt: 1_001, tools: [{ name: "escape" }] } }],
+    const future = resolveMcpFixture({
+      ...base, nowMs: 1_000, servers: [{ name: "future", directTools: true, cache: { cachedAt: 1_001, tools: [{ name: "escape" }] } }],
     });
     expect(future).toMatchObject({ directNames: [], missingConfiguredServers: ["future"], proxyRegistered: true });
     expect(getterCalls).toBe(0);

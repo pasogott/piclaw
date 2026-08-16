@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { posix, relative, resolve } from "node:path";
 import ts from "typescript";
@@ -18,6 +19,13 @@ export interface ProductionCompositionConfig {
   readonly sdkToolFamilies?: readonly string[];
 }
 
+export interface StaticToolContract {
+  readonly name: string;
+  readonly description: string;
+  readonly promptSnippet: string;
+  readonly parameterSchemaFingerprint: string;
+}
+
 export interface RepositoryToolFamilyInventory {
   readonly names: readonly string[];
   readonly unresolvedRegistrations: readonly string[];
@@ -34,6 +42,9 @@ export interface RepositoryToolFamilyInventory {
  */
 export function readRepositorySourceTree(root = runtimeRoot): SourceTree {
   const files: Record<string, string> = {};
+  for (const [name, path] of [["tsconfig.json", resolve(root, "tsconfig.json")], ["package.json", resolve(root, "../package.json")]] as const) {
+    try { files[name] = readFileSync(path, "utf8"); } catch { /* A synthetic source tree may omit repository config. */ }
+  }
   for (const directory of [resolve(root, "src"), resolve(root, "extensions")]) {
     for (const path of walkTypeScript(directory)) {
       files[relative(root, path).replaceAll("\\", "/")] = readFileSync(path, "utf8");
@@ -90,6 +101,23 @@ export function inventoryRepositoryToolFamilies(
     queue.sort();
   }
 
+  // Module-graph-only edges prove latent reachability without pretending that an imported
+  // factory's registerTool body was invoked by current composition.
+  const graphQueue = [...roots].sort();
+  const graphScanned = new Set<string>();
+  while (graphQueue.length > 0) {
+    const file = graphQueue.shift()!;
+    if (graphScanned.has(file)) continue;
+    graphScanned.add(file);
+    const source = files[file];
+    if (source === undefined) continue;
+    for (const dependency of resolveModuleGraphEdges(file, source, files)) {
+      if (!roots.has(dependency)) roots.add(dependency);
+      if (!graphScanned.has(dependency)) graphQueue.push(dependency);
+    }
+    graphQueue.sort();
+  }
+
   const duplicateSites = new Map<string, Set<string>>();
   for (const [file, source] of Object.entries(files).sort(([left], [right]) => left.localeCompare(right))) {
     if (scanned.has(file)) continue;
@@ -109,6 +137,33 @@ export function inventoryRepositoryToolFamilies(
   });
 }
 
+export function snapshotRepositoryToolContracts(
+  tree: SourceTree = readRepositorySourceTree(),
+  config: ProductionCompositionConfig = {},
+): Readonly<Record<string, StaticToolContract>> {
+  const inventory = inventoryRepositoryToolFamilies(tree, config);
+  const contracts: Record<string, StaticToolContract> = Object.create(null);
+  for (const [name, sites] of Object.entries(inventory.registrationSites)) {
+    const file = sites[0];
+    const source = file && tree.files[file];
+    if (!file || source === undefined) continue;
+    const contract = staticRegistrationContract(name, file, source, tree.files);
+    if (contract) contracts[name] = contract;
+  }
+  for (const name of inventory.sdkToolFamilies) {
+    const path = resolve(runtimeRoot, `../node_modules/@earendil-works/pi-coding-agent/dist/core/tools/${name}.js`);
+    contracts[name] = staticSdkContract(name, readFileSync(path, "utf8"));
+  }
+  if (inventory.names.includes("mcp")) {
+    contracts.mcp = freezeContract("mcp", "programmatic pi-mcp-adapter factory", "", "external:pi-mcp-adapter");
+  }
+  return Object.freeze(Object.fromEntries(Object.entries(contracts).sort(([left], [right]) => left.localeCompare(right))));
+}
+
+export function resolveRepositoryModule(fromFile: string, specifier: string, files: Readonly<Record<string, string>>): string | null {
+  return resolveSourceFile(fromFile, specifier, files);
+}
+
 export function extractSdkToolFamilies(source: string): readonly string[] {
   const ast = sourceFile("@earendil-works/pi-coding-agent/core/tools/index.js", source);
   for (const statement of ast.statements) {
@@ -124,6 +179,65 @@ export function extractSdkToolFamilies(source: string): readonly string[] {
   }
   throw new Error("SDK allToolNames literal was not found");
 }
+
+function staticRegistrationContract(name: string, file: string, source: string, files: Readonly<Record<string, string>>): StaticToolContract | null {
+  const ast = sourceFile(file, source);
+  const constants = stringConstants(ast);
+  const variables = variableInitializers(ast);
+  let contract: StaticToolContract | null = null;
+  const visit = (node: ts.Node): void => {
+    if (contract || !ts.isCallExpression(node) || !isRegisterToolCall(node.expression) || !node.arguments[0]) {
+      if (!contract) ts.forEachChild(node, visit);
+      return;
+    }
+    const resolved = resolveRegistration(node.arguments[0], constants, variables, ast, file, files);
+    if (resolved.name !== name) return;
+    const argument = node.arguments[0];
+    const object = ts.isObjectLiteralExpression(argument) ? argument : null;
+    const description = object && objectProperty(object, "description");
+    const prompt = object && objectProperty(object, "promptSnippet");
+    const parameters = object && objectProperty(object, "parameters");
+    contract = freezeContract(
+      name,
+      description ? normalizeContractText(description.initializer.getText(ast)) : `factory:${normalizeContractText(argument.getText(ast))}`,
+      prompt ? normalizeContractText(prompt.initializer.getText(ast)) : "",
+      parameters ? fingerprint(parameters.initializer.getText(ast)) : fingerprint(`factory:${argument.getText(ast)}`),
+    );
+  };
+  visit(ast);
+  return contract;
+}
+
+function staticSdkContract(name: string, source: string): StaticToolContract {
+  const ast = sourceFile(`${name}.js`, source);
+  const definition = `create${name[0]!.toUpperCase()}${name.slice(1)}ToolDefinition`;
+  let object: ts.ObjectLiteralExpression | null = null;
+  for (const statement of ast.statements) {
+    if (!ts.isFunctionDeclaration(statement) || statement.name?.text !== definition || !statement.body) continue;
+    const visit = (node: ts.Node): void => {
+      if (!object && ts.isReturnStatement(node) && node.expression && ts.isObjectLiteralExpression(node.expression)) object = node.expression;
+      if (!object) ts.forEachChild(node, visit);
+    };
+    visit(statement.body);
+  }
+  if (!object) return freezeContract(name, `unresolved:${definition}`, "", fingerprint(`unresolved:${definition}`));
+  const description = objectProperty(object, "description");
+  const prompt = objectProperty(object, "promptSnippet");
+  const parameters = objectProperty(object, "parameters");
+  return freezeContract(
+    name,
+    description ? normalizeContractText(description.initializer.getText(ast)) : "",
+    prompt ? normalizeContractText(prompt.initializer.getText(ast)) : "",
+    parameters ? fingerprint(parameters.initializer.getText(ast)) : fingerprint(`unresolved-schema:${definition}`),
+  );
+}
+
+function freezeContract(name: string, description: string, promptSnippet: string, parameterSchemaFingerprint: string): StaticToolContract {
+  return Object.freeze({ name, description, promptSnippet, parameterSchemaFingerprint });
+}
+
+function normalizeContractText(value: string): string { return value.replace(/\s+/g, " ").trim(); }
+function fingerprint(value: string): string { return createHash("sha256").update(normalizeContractText(value)).digest("hex"); }
 
 function parseBuiltinFactoryRoots(source: string, file: string, files: Readonly<Record<string, string>>): string[] {
   const ast = sourceFile(file, source);
@@ -186,6 +300,63 @@ export interface RegistrationParameterInventory {
   readonly unresolvedSchemas: readonly Readonly<{ file: string; registration: string }>[];
 }
 
+export interface NativeToolSchemaInventory {
+  readonly fieldsByTool: Readonly<Record<string, readonly string[]>>;
+  readonly variantsByTool: Readonly<Record<string, readonly Readonly<{ source: string; fields: readonly string[]; fingerprint: string }>[]>>;
+  readonly unresolvedSchemas: readonly Readonly<{ file: string; registration: string }>[];
+}
+
+export function extractNativeToolParameterFields(): NativeToolSchemaInventory {
+  const fieldsByTool: Record<string, readonly string[]> = Object.create(null);
+  const variantsByTool: Record<string, readonly Readonly<{ source: string; fields: readonly string[]; fingerprint: string }>[]> = Object.create(null);
+  const unresolvedSchemas: Array<Readonly<{ file: string; registration: string }>> = [];
+  for (const toolName of ["read", "write", "edit", "bash", "grep", "find", "ls"] as const) {
+    const variants = toolName === "grep" || toolName === "find" || toolName === "ls"
+      ? [["@earendil-works/pi-coding-agent", resolve(runtimeRoot, `../node_modules/@earendil-works/pi-coding-agent/dist/core/tools/${toolName}.js`)]] as const
+      : [
+          ["@earendil-works/pi-agent-core", resolve(runtimeRoot, `../node_modules/@earendil-works/pi-agent-core/dist/harness/tools/${toolName}.js`)],
+          ["@earendil-works/pi-coding-agent", resolve(runtimeRoot, `../node_modules/@earendil-works/pi-coding-agent/dist/core/tools/${toolName}.js`)],
+        ] as const;
+    const snapshots: Array<Readonly<{ source: string; fields: readonly string[]; fingerprint: string }>> = [];
+    for (const [packageName, path] of variants) {
+      const source = readFileSync(path, "utf8");
+      const schema = extractFirstTypeObjectSchema(path, source);
+      if (!schema) {
+        unresolvedSchemas.push(Object.freeze({ file: path, registration: toolName }));
+        continue;
+      }
+      snapshots.push(Object.freeze({ source: `${packageName}:${posix.basename(path)}`, fields: Object.freeze(schema.fields), fingerprint: fingerprint(schema.source) }));
+    }
+    if (snapshots.length > 0) fieldsByTool[toolName] = snapshots[0]!.fields;
+    variantsByTool[toolName] = Object.freeze(snapshots);
+  }
+  return Object.freeze({
+    fieldsByTool: Object.freeze(fieldsByTool),
+    variantsByTool: Object.freeze(variantsByTool),
+    unresolvedSchemas: Object.freeze(unresolvedSchemas),
+  });
+}
+
+function extractFirstTypeObjectSchema(file: string, source: string): { fields: string[]; source: string } | null {
+  const ast = sourceFile(file, source);
+  const variables = variableInitializers(ast);
+  let schema: ts.Expression | null = null;
+  const visit = (node: ts.Node): void => {
+    if (!schema && ts.isPropertyAssignment(node) && propertyName(node.name) === "parameters") {
+      schema = ts.isIdentifier(node.initializer) ? variables.get(node.initializer.text) ?? null : node.initializer;
+    }
+    if (!schema) ts.forEachChild(node, visit);
+  };
+  visit(ast);
+  if (!schema || !ts.isCallExpression(schema) || !ts.isPropertyAccessExpression(schema.expression)
+    || schema.expression.expression.getText(ast) !== "Type" || schema.expression.name.text !== "Object") return null;
+  const object = schema.arguments[0];
+  if (!object || !ts.isObjectLiteralExpression(object)) return null;
+  const fields = object.properties.map((property) => propertyName(property.name)).filter((name): name is string => name !== null);
+  if (fields.length !== object.properties.length) return null;
+  return { fields, source: schema.getText(ast) };
+}
+
 export function extractLiteralRegistrationParameterFields(
   file: string,
   source: string,
@@ -199,8 +370,11 @@ export function extractLiteralRegistrationParameterFields(
   const parameterKeys = (expression: ts.Expression, seen = new Set<string>()): string[] | null => {
     if (ts.isCallExpression(expression) && expression.arguments[0]) return parameterKeys(expression.arguments[0], seen);
     if (ts.isObjectLiteralExpression(expression)) {
+      const jsonSchemaProperties = objectProperty(expression, "properties");
+      const fieldObject = jsonSchemaProperties && ts.isObjectLiteralExpression(jsonSchemaProperties.initializer)
+        ? jsonSchemaProperties.initializer : expression;
       const names: string[] = [];
-      for (const property of expression.properties) {
+      for (const property of fieldObject.properties) {
         if (!ts.isPropertyAssignment(property)) return null;
         const name = propertyName(property.name);
         if (!name) return null;
@@ -458,6 +632,28 @@ function resolveCalledImportedRoots(file: string, source: string, files: Readonl
   return [...roots].sort();
 }
 
+function resolveModuleGraphEdges(file: string, source: string, files: Readonly<Record<string, string>>): string[] {
+  const ast = sourceFile(file, source);
+  const roots: string[] = [];
+  const add = (specifier: string): void => {
+    const resolved = resolveSourceFile(file, specifier, files);
+    if (resolved && !roots.includes(resolved)) roots.push(resolved);
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) add(node.moduleSpecifier.text);
+    if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)
+      && node.moduleReference.expression && ts.isStringLiteralLike(node.moduleReference.expression)) add(node.moduleReference.expression.text);
+    if (ts.isCallExpression(node) && node.arguments.length === 1 && ts.isStringLiteralLike(node.arguments[0])) {
+      if (node.expression.kind === ts.SyntaxKind.ImportKeyword || ts.isIdentifier(node.expression) && node.expression.text === "require") {
+        add(node.arguments[0].text);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(ast);
+  return roots.sort();
+}
+
 function resolveForwardedDefaultRoot(file: string, source: string, files: Readonly<Record<string, string>>): string | null {
   const ast = sourceFile(file, source);
   const imports = importBindings(ast);
@@ -477,11 +673,112 @@ function resolveForwardedDefaultRoot(file: string, source: string, files: Readon
 }
 
 function resolveSourceFile(fromFile: string, specifier: string, files: Readonly<Record<string, string>>): string | null {
-  if (!specifier.startsWith(".")) return null;
-  const base = posix.normalize(posix.join(posix.dirname(fromFile), specifier));
-  const withoutJs = base.replace(/\.js$/, "");
-  const candidates = [base, `${withoutJs}.ts`, posix.join(base, "index.ts")];
+  if (specifier.startsWith(".")) return resolveCandidate(posix.join(posix.dirname(fromFile), specifier), files);
+  const configured = resolveTsconfigPath(specifier, files);
+  if (configured) return configured;
+  const imported = resolvePackageImport(specifier, files);
+  if (imported) return imported;
+  return resolvePackageExport(specifier, files);
+}
+
+function resolveTsconfigPath(specifier: string, files: Readonly<Record<string, string>>): string | null {
+  const parsed = parseJsonConfig(files["tsconfig.json"]);
+  const compiler = parsed?.compilerOptions;
+  if (!compiler || typeof compiler !== "object" || Array.isArray(compiler)) return null;
+  const paths = (compiler as Record<string, unknown>).paths;
+  if (!paths || typeof paths !== "object" || Array.isArray(paths)) return null;
+  const baseUrl = typeof (compiler as Record<string, unknown>).baseUrl === "string"
+    ? (compiler as Record<string, unknown>).baseUrl as string : ".";
+  for (const [pattern, rawTargets] of Object.entries(paths as Record<string, unknown>)) {
+    const wildcard = matchPattern(pattern, specifier);
+    if (wildcard === null || !Array.isArray(rawTargets)) continue;
+    for (const rawTarget of rawTargets) {
+      if (typeof rawTarget !== "string") continue;
+      const target = rawTarget.replace("*", wildcard);
+      const resolved = resolveCandidate(posix.join(baseUrl, target), files);
+      if (resolved) return resolved;
+    }
+  }
+  return null;
+}
+
+function resolvePackageImport(specifier: string, files: Readonly<Record<string, string>>): string | null {
+  if (!specifier.startsWith("#")) return null;
+  const manifest = parseJsonConfig(files["package.json"]);
+  const imports = manifest?.imports;
+  if (!imports || typeof imports !== "object" || Array.isArray(imports)) return null;
+  return resolveExportMapTarget(specifier, imports as Record<string, unknown>, "", files);
+}
+
+function resolvePackageExport(specifier: string, files: Readonly<Record<string, string>>): string | null {
+  const segments = specifier.split("/");
+  const packageName = specifier.startsWith("@") ? segments.slice(0, 2).join("/") : segments[0] ?? "";
+  if (!packageName) return null;
+  const subpath = specifier.slice(packageName.length);
+  const rootManifest = parseJsonConfig(files["package.json"]);
+  const rootName = typeof rootManifest?.name === "string" ? rootManifest.name : null;
+  const packageRoot = rootName === packageName ? "" : `node_modules/${packageName}`;
+  const manifest = rootName === packageName ? rootManifest : parseJsonConfig(files[posix.join(packageRoot, "package.json")]);
+  if (!manifest) return null;
+  const exports = manifest.exports;
+  if (exports === undefined) return null;
+  const exportKey = subpath ? `.${subpath}` : ".";
+  if (typeof exports === "string" && exportKey === ".") return resolveCandidate(posix.join(packageRoot, normalizePackageTarget(exports)), files);
+  if (!exports || typeof exports !== "object" || Array.isArray(exports)) return null;
+  return resolveExportMapTarget(exportKey, exports as Record<string, unknown>, packageRoot, files);
+}
+
+function resolveExportMapTarget(specifier: string, map: Record<string, unknown>, packageRoot: string, files: Readonly<Record<string, string>>): string | null {
+  for (const [pattern, rawTarget] of Object.entries(map)) {
+    const wildcard = matchPattern(pattern, specifier);
+    if (wildcard === null) continue;
+    const target = selectExportTarget(rawTarget);
+    if (!target) continue;
+    const resolved = resolveCandidate(posix.join(packageRoot, normalizePackageTarget(target.replace("*", wildcard))), files);
+    if (resolved) return resolved;
+  }
+  return null;
+}
+
+function selectExportTarget(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  for (const condition of ["import", "bun", "node", "default"]) {
+    const selected = selectExportTarget(record[condition]);
+    if (selected) return selected;
+  }
+  return null;
+}
+
+function matchPattern(pattern: string, value: string): string | null {
+  const index = pattern.indexOf("*");
+  if (index < 0) return pattern === value ? "" : null;
+  if (pattern.indexOf("*", index + 1) >= 0) return null;
+  const prefix = pattern.slice(0, index);
+  const suffix = pattern.slice(index + 1);
+  return value.startsWith(prefix) && value.endsWith(suffix) ? value.slice(prefix.length, value.length - suffix.length) : null;
+}
+
+function normalizePackageTarget(target: string): string {
+  const normalized = target.replace(/^\.\//, "");
+  return normalized.startsWith("runtime/") ? normalized.slice("runtime/".length) : normalized;
+}
+
+function resolveCandidate(value: string, files: Readonly<Record<string, string>>): string | null {
+  const base = posix.normalize(value).replace(/^\.\//, "");
+  if (base.startsWith("../") || base === "..") return null;
+  const withoutExtension = base.replace(/\.(?:[cm]?js|tsx?)$/, "");
+  const candidates = [base, `${withoutExtension}.ts`, `${withoutExtension}.tsx`, posix.join(base, "index.ts")];
   return candidates.find((candidate) => Object.hasOwn(files, candidate)) ?? null;
+}
+
+function parseJsonConfig(source: string | undefined): Record<string, unknown> | null {
+  if (source === undefined) return null;
+  try {
+    const parsed = ts.parseConfigFileTextToJson("fixture.json", source).config;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch { return null; }
 }
 
 function importBindings(ast: ts.SourceFile): Map<string, { specifier: string; imported: string }> {
