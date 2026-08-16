@@ -135,8 +135,8 @@ const fakeFactory: ContractSubjectFactory<FakeSubject> = {
 };
 
 describe("EF-S07 ScheduledRunStore shared contract", () => {
-  test("independent fake", async () => { const results = await defineScheduledRunStoreContract(fakeFactory, context); expect(results.length).toBe(19); });
-  test("isolated SQLite adapter", { timeout: 20000 }, async () => { const results = await defineScheduledRunStoreContract(sqliteFactory, context); expect(results.length).toBe(19); });
+  test("independent fake", async () => { const results = await defineScheduledRunStoreContract(fakeFactory, context); expect(results.length).toBe(21); });
+  test("isolated SQLite adapter", { timeout: 20000 }, async () => { const results = await defineScheduledRunStoreContract(sqliteFactory, context); expect(results.length).toBe(21); });
 });
 
 function authorityTask(taskId: string, overrides: Partial<ScheduledTaskAuthorityInput> = {}): ScheduledTaskAuthorityInput {
@@ -147,6 +147,12 @@ function dueClaim(prefix: string, now = "2026-08-16T01:00:00.000Z") {
 }
 function deliveryIntent(id: string) {
   const intent = { effect: { idempotencyKey: `outbox:${id}`, requestHash: "", operationId: null, sourceSeq: null, provenanceRef: `provenance:${id}`, redactionClass: "private" as const }, outboxId: `outbox:${id}`, kind: "channel_delivery" as const, payloadRef: `payload:${id}`, destinationRef: "destination:web", availableAt: "2026-08-16T01:00:10.000Z", enqueuedAt: "2026-08-16T01:00:10.000Z", repeatability: "reconciliation_required" as const };
+  intent.effect.requestHash = hashCanonicalRequest(intent as unknown as CanonicalJsonValue);
+  return intent;
+}
+function agentDeliveryIntent(id: string, operationId: string, sourceSeq: number) {
+  const base = deliveryIntent(id);
+  const intent = { ...base, effect: { ...base.effect, operationId: operationId as string | null, sourceSeq: sourceSeq as number | null, requestHash: "" } };
   intent.effect.requestHash = hashCanonicalRequest(intent as unknown as CanonicalJsonValue);
   return intent;
 }
@@ -230,6 +236,21 @@ describe("EF-S07 SQLite hardening", () => {
     } finally { subject.dispose?.(); }
   });
 
+  test("agent reclaim persists exact reconciled-absence authority", async () => {
+    const subject = isolated();
+    try {
+      subject.authority.create(authorityTask("task:agent-reclaim", { kind: "agent", executionRepeatability: "agent_source" }));
+      const claimed = await subject.store.claimDue({ ...dueClaim("agent-reclaim"), leaseDurationMs: 1000 }); expect(claimed.ok).toBe(true); if (!claimed.ok) return;
+      const lease = claimed.value[0];
+      const denied = await subject.store.claimDue(dueClaim("agent-reclaim-denied", "2026-08-16T01:00:02.000Z"));
+      expect(denied.ok && denied.value.length).toBe(0);
+      const reference = "reconciliation:agent-source-absent";
+      const reclaimed = await subject.store.claimDue({ ...dueClaim("agent-reclaim-allowed", "2026-08-16T01:00:02.000Z"), reclaimAuthorities: [{ runId: lease.record.runId, expectedAttempt: 1, kind: "agent_reconciled_absent" as const, reconciliationRef: reference }] });
+      expect(reclaimed.ok && reclaimed.value[0].record.attempt).toBe(2);
+      expect(subject.database.query("SELECT authority_kind,reconciliation_ref FROM service_effect_s07_leases WHERE run_id=? AND attempt=2").get(lease.record.runId)).toEqual({ authority_kind: "agent_reconciled_absent", reconciliation_ref: reference });
+    } finally { subject.dispose?.(); }
+  });
+
   test("renewal history and claim replay agree with the effective lease after restore", async () => {
     const subject = isolated();
     try {
@@ -264,6 +285,37 @@ describe("EF-S07 SQLite hardening", () => {
         expect(!failed.ok && failed.error._tag).toBe("storage_unavailable");
         const restored = await sqliteFactory.crashAndRestore!(subject, context());
         expect(restored.subject.inspect()).toMatchObject({ runLogs: 0, nextDecisions: 0, outboxRows: 0 });
+        const retry = await restored.subject.store.complete(request);
+        expect(retry.ok).toBe(true);
+        expect(restored.subject.inspect()).toMatchObject({ runLogs: 1, nextDecisions: 1, outboxRows: 1 });
+        restored.subject.dispose?.();
+      } finally { subject.dispose?.(); }
+    }
+  });
+
+  test("agent-bound completion checkpoints restore binding without terminal or outbox partials", async () => {
+    const checkpoints: ScheduledRunStatement[] = ["next_decision_insert", "run_log_insert", "outbox_insert", "outbox_decision_insert", "outbox_link_insert", "task_head_update", "occurrence_terminal_update", "decision_insert"];
+    for (const [index, checkpoint] of checkpoints.entries()) {
+      const subject = isolated();
+      try {
+        const id = `agent-rollback-${index}`;
+        subject.authority.create(authorityTask(`task:${id}`, { chatJid: `chat:${id}`, kind: "agent", executionRepeatability: "agent_source" }));
+        const claimed = await subject.store.claimDue(dueClaim(id)); expect(claimed.ok).toBe(true); if (!claimed.ok) continue;
+        const lease = claimed.value[0], operationId = `operation:${id}`, sourceSeq = 1;
+        acceptSqliteSource(subject.database, { runId: lease.record.runId, chatJid: lease.task.chatJid, sourceSeq, operationId });
+        const binding = { effect: { idempotencyKey: `bind:${id}`, requestHash: "", operationId, sourceSeq, provenanceRef: `provenance:${id}`, redactionClass: "private" as const }, runId: lease.record.runId, workerId: lease.record.workerId, expectedAttempt: 1, expectedTaskRevision: 1, leaseToken: lease.leaseToken, now: "2026-08-16T01:00:05.000Z", sourceSeq, operationId, boundAt: "2026-08-16T01:00:05.000Z" };
+        binding.effect.requestHash = hashCanonicalRequest(binding as unknown as CanonicalJsonValue);
+        const bound = await subject.store.bindAcceptedSource(binding); expect(bound.ok).toBe(true); if (!bound.ok) continue;
+        const boundLease = { ...lease, record: bound.value as ScheduledRunLease["record"] };
+        const request = completion(boundLease, `complete:${id}`, "2026-08-16T01:00:10.000Z", [agentDeliveryIntent(id, operationId, sourceSeq)]);
+        subject.runtime.failAfterStatement(checkpoint);
+        const failed = await subject.store.complete(request);
+        expect(!failed.ok && failed.error._tag).toBe("storage_unavailable");
+        const restored = await sqliteFactory.crashAndRestore!(subject, context());
+        const current = await restored.subject.store.get(lease.record.runId);
+        expect(current.ok && current.value?.state).toBe("source_bound");
+        expect(restored.subject.inspect()).toMatchObject({ runLogs: 0, nextDecisions: 0, outboxRows: 0 });
+        expect((restored.subject.database.query("SELECT COUNT(*) AS count FROM service_effect_s07_source_bindings WHERE run_id=?").get(lease.record.runId) as { count: number }).count).toBe(1);
         const retry = await restored.subject.store.complete(request);
         expect(retry.ok).toBe(true);
         expect(restored.subject.inspect()).toMatchObject({ runLogs: 1, nextDecisions: 1, outboxRows: 1 });
@@ -476,20 +528,31 @@ describe("EF-S07 SQLite hardening", () => {
       expect(!overflow.ok && overflow.error._tag).toBe("corrupt_state");
     } finally { overflowSubject.dispose?.(); }
 
-    const sourceSubject = isolated();
-    try {
-      sourceSubject.authority.create(authorityTask("task:source-corrupt", { kind: "agent", executionRepeatability: "agent_source" }));
-      const claimed = await sourceSubject.store.claimDue(dueClaim("source-corrupt")); expect(claimed.ok).toBe(true); if (!claimed.ok) return;
-      const lease = claimed.value[0], operationId = "operation:source-corrupt";
-      acceptSqliteSource(sourceSubject.database, { runId: lease.record.runId, chatJid: lease.task.chatJid, sourceSeq: 1, operationId });
-      const request = { effect: { idempotencyKey: "bind:source-corrupt", requestHash: "", operationId, sourceSeq: 1, provenanceRef: "provenance:source-corrupt", redactionClass: "private" as const }, runId: lease.record.runId, workerId: lease.record.workerId, expectedAttempt: 1, expectedTaskRevision: 1, leaseToken: lease.leaseToken, now: "2026-08-16T01:00:05.000Z", sourceSeq: 1, operationId, boundAt: "2026-08-16T01:00:05.000Z" };
-      request.effect.requestHash = hashCanonicalRequest(request as unknown as CanonicalJsonValue);
-      const bound = await sourceSubject.store.bindAcceptedSource(request); expect(bound.ok).toBe(true);
-      sourceSubject.database.exec("PRAGMA foreign_keys=OFF");
-      sourceSubject.database.query("UPDATE service_effect_s07_source_bindings SET operation_id='operation:tampered' WHERE run_id=?").run(lease.record.runId);
-      const corrupt = await sourceSubject.store.get(lease.record.runId);
-      expect(!corrupt.ok && corrupt.error._tag).toBe("corrupt_state");
-    } finally { sourceSubject.dispose?.(); }
+    for (const variant of ["binding", "source_owner", "primary_source", "outbox_operation", "outbox_source"] as const) {
+      const sourceSubject = isolated();
+      try {
+        sourceSubject.authority.create(authorityTask(`task:${variant}-corrupt`, { kind: "agent", executionRepeatability: "agent_source" }));
+        const claimed = await sourceSubject.store.claimDue(dueClaim(`${variant}-corrupt`)); expect(claimed.ok).toBe(true); if (!claimed.ok) continue;
+        const lease = claimed.value[0], operationId = `operation:${variant}-corrupt`, sourceSeq = 1;
+        acceptSqliteSource(sourceSubject.database, { runId: lease.record.runId, chatJid: lease.task.chatJid, sourceSeq, operationId });
+        const request = { effect: { idempotencyKey: `bind:${variant}-corrupt`, requestHash: "", operationId, sourceSeq, provenanceRef: "provenance:source-corrupt", redactionClass: "private" as const }, runId: lease.record.runId, workerId: lease.record.workerId, expectedAttempt: 1, expectedTaskRevision: 1, leaseToken: lease.leaseToken, now: "2026-08-16T01:00:05.000Z", sourceSeq, operationId, boundAt: "2026-08-16T01:00:05.000Z" };
+        request.effect.requestHash = hashCanonicalRequest(request as unknown as CanonicalJsonValue);
+        const bound = await sourceSubject.store.bindAcceptedSource(request); expect(bound.ok).toBe(true); if (!bound.ok) continue;
+        const boundLease = { ...lease, record: bound.value as ScheduledRunLease["record"] };
+        if (variant.startsWith("outbox")) {
+          const done = await sourceSubject.store.complete(completion(boundLease, `complete:${variant}`, "2026-08-16T01:00:10.000Z", [agentDeliveryIntent(variant, operationId, sourceSeq)]));
+          expect(done.ok).toBe(true);
+        }
+        sourceSubject.database.exec("PRAGMA foreign_keys=OFF");
+        if (variant === "binding") sourceSubject.database.query("UPDATE service_effect_s07_source_bindings SET operation_id='operation:tampered' WHERE run_id=?").run(lease.record.runId);
+        else if (variant === "source_owner") sourceSubject.database.query("UPDATE service_effect_s01_sources SET source_id='scheduled_run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' WHERE chat_jid=? AND source_seq=?").run(lease.task.chatJid, sourceSeq);
+        else if (variant === "primary_source") sourceSubject.database.query("UPDATE service_effect_s01_operations SET primary_source_seq=2 WHERE operation_id=?").run(operationId);
+        else if (variant === "outbox_operation") sourceSubject.database.query("UPDATE service_effect_s05_outbox SET operation_id='operation:tampered' WHERE outbox_id=?").run(`outbox:${variant}`);
+        else sourceSubject.database.query("UPDATE service_effect_s05_outbox SET source_seq=2 WHERE outbox_id=?").run(`outbox:${variant}`);
+        const corrupt = await sourceSubject.store.get(lease.record.runId);
+        expect(!corrupt.ok && corrupt.error._tag).toBe("corrupt_state");
+      } finally { sourceSubject.dispose?.(); }
+    }
   });
 
   test("current recurrence utility pins UTC and Lisbon DST vectors", () => {

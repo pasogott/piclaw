@@ -990,9 +990,10 @@ and `abandon`), bounded `get`/`listRuns` reads, and the bounded
 - Every lease mutation carries `workerId`, `expectedAttempt`,
   `expectedTaskRevision`, raw token and canonical `now`. Only the token hash is
   stored. Renewal appends durable before/after expiry evidence and updates the
-  effective lease in the same transaction. Claim replay reconstructs the raw
-  token only while the exact claimed attempt remains active; terminal claim
-  replay returns `invalid_transition` and never fabricates an executable lease.
+  effective lease in the same transaction. Claim and renewal replay return raw
+  tokens only while the exact worker/token/attempt remains active; terminal,
+  retained or superseded-attempt replay returns `invalid_transition` and never
+  fabricates an executable lease.
 - `complete` carries an explicit closed success/error shape, duration, bounded
   result references and complete `EnqueueOutboxRequest` values. Success requires
   `resultRef` and forbids `errorCode`; error does the inverse. Agent evidence must
@@ -1032,11 +1033,14 @@ run until resume. Delete settles with no successor. A newer revision settles
 the old snapshot without overwriting the new head.
 
 Agent binding requires stable `sourceId=runId`, EF-S01 kind
-`scheduled_agent`, exact chat/source and primary operation ownership. Shell and
-internal runs never bind EF-S01. Expired agent runs use their stable source for
-reconciliation. Expired shell/internal runs require explicit `repeatable` or
-`reconciled_absent` reclaim authority; a lease alone cannot prove that an
-external command did not run.
+`scheduled_agent`, exact chat/source and primary operation ownership. These
+source/operation projections are revalidated on durable reads. Shell and
+internal runs never bind EF-S01. An expired agent run requires explicit
+`agent_reconciled_absent` authority for that run/attempt plus an opaque evidence
+reference; stable source identity is only the reconciliation key, not proof of
+absence. Expired shell/internal runs require explicit `repeatable` or
+`reconciled_absent` reclaim authority. Every reclaim authority and evidence
+reference is retained in lease history; lease expiry alone authorizes nothing.
 
 ### Recurrence, completion and retention
 
@@ -1049,7 +1053,9 @@ first match only before the next schedule.
 Completion inserts one immutable run log, one next-occurrence decision, ordered
 EF-S05 intents, the exact task-head CAS and the terminal occurrence in one
 transaction. It uses `createServiceOutboxEnqueueInserter`; no worker or delivery
-runs in S07. Existing EF-S05 IDs, changed binding/outbox identity under one
+runs in S07. Durable reads revalidate every dense link against the EF-S05 enqueue
+decision, kind/idempotency/request identity and the frozen run's operation/source
+ownership. Existing EF-S05 IDs, changed binding/outbox identity under one
 idempotency key, and cross-method terminal-key reuse are rejected. A later
 EF-S05 `unknown` delivery is durable but cannot make a completed occurrence
 reclaimable.
@@ -1069,7 +1075,7 @@ not import, edit, register or call the live scheduler, queue, task database,
 management/query API, worker, timer or executor.
 
 The exact shared C01-C08 catalogue remains the normative acceptance list. Its
-19 shared C/S/R cases run unchanged against an independent map-based fake and
+21 shared C/S/R cases run unchanged against an independently parsed map-based fake and
 the isolated SQLite adapter. R01/R02 plus SQLite supplementary cases cover every
 mutation checkpoint, post-commit lost acknowledgement and fresh restore after
 claim/bind/renew/terminal/retention, pause/delete/revision, explicit reclaim

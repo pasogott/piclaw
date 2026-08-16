@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
 
+import {
+  hashCanonicalRequest,
+  type CanonicalJsonValue,
+  type EffectIdentity,
+} from "../../contracts/common.js";
+import type { EnqueueOutboxRequest } from "../../contracts/service-outbox-store.js";
 import type {
   AbandonScheduledRunRequest,
   BindScheduledSourceRequest,
@@ -14,505 +20,388 @@ import type {
   ScheduledTaskSnapshot,
   UpdateScheduledTaskAuthorityRequest,
 } from "../../contracts/scheduled-run-store.js";
-import {
-  hashCanonicalRequest,
-  type CanonicalJsonValue,
-  type EffectIdentity,
-} from "../../contracts/common.js";
-import type { EnqueueOutboxRequest } from "../../contracts/service-outbox-store.js";
 import { computeNextRun } from "../../../task-scheduler-utils.js";
 
-const ID = /^[^\s]{1,512}$/u;
-const REF = /^.{1,2048}$/su;
-const TAG = /^[A-Za-z0-9_.:-]{1,128}$/u;
-const HASH = /^[0-9a-f]{64}$/u;
-const RUN_ID = /^scheduled_run:[0-9a-f]{64}$/u;
-const OPAQUE_REF = /^[^\s]{1,2048}$/u;
-const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
-const MAX_SAFE = Number.MAX_SAFE_INTEGER;
+const MAX = Number.MAX_SAFE_INTEGER;
+const RUN = /^scheduled_run:[0-9a-f]{64}$/u;
+const SHA = /^[0-9a-f]{64}$/u;
+const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
+const CODE = /^[A-Za-z0-9_.:-]{1,128}$/u;
+const OUTBOX_KINDS = Object.freeze(new Set(["wake_chat", "timeline_broadcast", "channel_delivery", "notification", "scheduler_run_log", "maintenance"]));
 
-export function canonicalInstant(value: unknown): string | null {
-  if (typeof value !== "string" || !INSTANT.test(value)) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) || date.toISOString() !== value ? null : value;
-}
+type Dictionary = Record<string, unknown>;
 
-export function addCanonicalDuration(value: string, durationMs: number): string | null {
-  const instant = canonicalInstant(value);
-  if (!instant || !safeInteger(durationMs, 1)) return null;
-  const milliseconds = new Date(instant).getTime() + durationMs;
-  if (!Number.isSafeInteger(milliseconds)) return null;
-  try { return canonicalInstant(new Date(milliseconds).toISOString()); } catch { return null; }
-}
+/** Fake-owned descriptor reader. It never invokes caller code. */
+class ClosedInput {
+  private constructor(private readonly source: Dictionary) {}
 
-export function validId(value: unknown): value is string {
-  return typeof value === "string" && ID.test(value);
-}
-export function validRef(value: unknown): value is string {
-  return typeof value === "string" && REF.test(value);
-}
-export function validTag(value: unknown): value is string {
-  return typeof value === "string" && TAG.test(value);
-}
-export function validHash(value: unknown): value is string {
-  return typeof value === "string" && HASH.test(value);
-}
-export function validScheduledRunId(value: unknown): value is string {
-  return typeof value === "string" && RUN_ID.test(value);
-}
-export function validOpaqueRef(value: unknown): value is string {
-  return typeof value === "string" && OPAQUE_REF.test(value);
-}
-export function safeInteger(value: unknown, min = 0, max = MAX_SAFE): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= min && (value as number) <= max;
+  static capture(candidate: unknown, fields: readonly string[]): ClosedInput | null {
+    if (!isPassiveGraph(candidate) || candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+    const keys = Reflect.ownKeys(candidate);
+    if (keys.length !== fields.length || keys.some((key) => typeof key !== "string" || !fields.includes(key))) return null;
+    return new ClosedInput(candidate as Dictionary);
+  }
+
+  value(name: string): unknown { return this.source[name]; }
+  copy(fields: readonly string[]): Dictionary {
+    return Object.fromEntries(fields.map((field) => [field, this.source[field]]));
+  }
 }
 
-function exactKeys(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+function isPassiveGraph(value: unknown, path = new Set<object>()): boolean {
+  if (value === null || typeof value !== "object") return true;
+  if (path.has(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== null && prototype !== Object.prototype && prototype !== Array.prototype) return false;
+  path.add(value);
   try {
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) return false;
-    const ownKeys = Reflect.ownKeys(value);
-    const actual = ownKeys.filter((key): key is string => typeof key === "string").sort();
-    const expected = [...keys].sort();
-    return ownKeys.length === expected.length
-      && actual.length === expected.length
-      && actual.every((key, index) => key === expected[index])
-      && ownKeys.every((key) => { const descriptor = Object.getOwnPropertyDescriptor(value, key); return !!descriptor && "value" in descriptor && descriptor.get === undefined && descriptor.set === undefined; });
+    const keys = Reflect.ownKeys(value);
+    if (Array.isArray(value)) {
+      if (keys.length !== value.length + 1) return false;
+      for (let index = 0; index < value.length; index += 1) if (!Object.hasOwn(value, index)) return false;
+    }
+    for (const key of keys) {
+      if (Array.isArray(value) && key === "length") continue;
+      if (typeof key !== "string") return false;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor) || !isPassiveGraph(descriptor.value, path)) return false;
+    }
+    return true;
   } catch {
     return false;
+  } finally {
+    path.delete(value);
   }
 }
 
-function dataOnly(value: unknown, seen = new Set<object>()): boolean {
-  if (value === null || typeof value !== "object") return true;
-  if (seen.has(value)) return false;
-  seen.add(value);
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== Array.prototype && prototype !== null) return false;
-  const ownKeys = Reflect.ownKeys(value);
-  if (Array.isArray(value) && (ownKeys.length !== value.length + 1 || ownKeys.some((key) => typeof key !== "string" || (key !== "length" && !/^(0|[1-9]\d*)$/u.test(key))))) return false;
-  for (const key of ownKeys) {
-    if (Array.isArray(value) && key === "length") continue;
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (!descriptor || !("value" in descriptor) || descriptor.get !== undefined || descriptor.set !== undefined || !dataOnly(descriptor.value, seen)) return false;
+function arrayOf<T>(value: unknown, maximum: number, convert: (item: unknown) => T | null): readonly T[] | null {
+  if (!Array.isArray(value) || value.length > maximum || !isPassiveGraph(value)) return null;
+  const output: T[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const converted = convert(value[index]);
+    if (converted === null) return null;
+    output.push(converted);
   }
-  if (Array.isArray(value)) for (let index = 0; index < value.length; index += 1) if (!Object.prototype.hasOwnProperty.call(value, index)) return false;
-  return true;
+  return Object.freeze(output);
 }
 
-function readObject(value: unknown, keys: readonly string[]): Record<string, unknown> | null {
-  if (!exactKeys(value, keys) || !dataOnly(value)) return null;
+const text = {
+  id(value: unknown): value is string { return typeof value === "string" && value.length >= 1 && value.length <= 512 && !/\s/u.test(value); },
+  reference(value: unknown): value is string { return typeof value === "string" && value.length >= 1 && value.length <= 2048; },
+  opaque(value: unknown): value is string { return typeof value === "string" && value.length >= 1 && value.length <= 2048 && !/\s/u.test(value); },
+  code(value: unknown): value is string { return typeof value === "string" && CODE.test(value); },
+  hash(value: unknown): value is string { return typeof value === "string" && SHA.test(value); },
+};
+
+function integer(value: unknown, minimum = 0, maximum = MAX): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum;
+}
+
+export function canonicalInstant(value: unknown): string | null {
+  if (typeof value !== "string" || !UTC.test(value)) return null;
   try {
-    const out: Record<string, unknown> = {};
-    for (const key of keys) out[key] = (value as Record<string, unknown>)[key];
-    return out;
+    const parsed = new Date(value);
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value ? value : null;
   } catch {
     return null;
   }
 }
 
-function validTimezone(value: unknown): value is string {
-  if (typeof value !== "string" || value.length < 1 || value.length > 128) return false;
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: value }).format(new Date(0));
-    return true;
-  } catch {
-    return false;
-  }
+export function addCanonicalDuration(value: string, durationMs: number): string | null {
+  const start = canonicalInstant(value);
+  if (start === null || !integer(durationMs, 1)) return null;
+  const end = Date.parse(start) + durationMs;
+  if (!Number.isSafeInteger(end)) return null;
+  try { return canonicalInstant(new Date(end).toISOString()); } catch { return null; }
 }
 
-function effect(value: unknown): EffectIdentity | null {
-  const row = readObject(value, [
-    "idempotencyKey", "requestHash", "operationId", "sourceSeq", "provenanceRef", "redactionClass",
-  ]);
-  if (!row || !validId(row.idempotencyKey) || !validHash(row.requestHash)) return null;
-  if (row.operationId !== null && !validId(row.operationId)) return null;
-  if (row.sourceSeq !== null && !safeInteger(row.sourceSeq, 0)) return null;
-  if (!validRef(row.provenanceRef)) return null;
-  if (row.redactionClass !== "public" && row.redactionClass !== "private" && row.redactionClass !== "secret") return null;
-  return Object.freeze({
-    idempotencyKey: row.idempotencyKey,
-    requestHash: row.requestHash,
-    operationId: row.operationId as string | null,
-    sourceSeq: row.sourceSeq as number | null,
-    provenanceRef: row.provenanceRef,
-    redactionClass: row.redactionClass,
-  });
+export function validScheduledRunId(value: unknown): value is string {
+  return typeof value === "string" && RUN.test(value);
 }
 
-function outbox(value: unknown): EnqueueOutboxRequest | null {
-  const row = readObject(value, [
-    "effect", "outboxId", "kind", "payloadRef", "destinationRef", "availableAt", "enqueuedAt", "repeatability",
-  ]);
-  if (!row) return null;
-  const identity = effect(row.effect);
-  const kinds = new Set(["wake_chat", "timeline_broadcast", "channel_delivery", "notification", "scheduler_run_log", "maintenance"]);
-  if (!identity || !validId(row.outboxId) || !kinds.has(row.kind as string) || !validOpaqueRef(row.payloadRef)) return null;
-  if (row.destinationRef !== null && !validOpaqueRef(row.destinationRef)) return null;
-  const availableAt = canonicalInstant(row.availableAt), enqueuedAt = canonicalInstant(row.enqueuedAt);
-  if (!availableAt || !enqueuedAt || availableAt < enqueuedAt) return null;
-  if (row.repeatability !== "repeatable" && row.repeatability !== "reconciliation_required") return null;
-  return Object.freeze({
-    effect: identity,
-    outboxId: row.outboxId,
-    kind: row.kind as EnqueueOutboxRequest["kind"],
-    payloadRef: row.payloadRef,
-    destinationRef: row.destinationRef as string | null,
-    availableAt,
-    enqueuedAt,
-    repeatability: row.repeatability,
-  });
+function timezone(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 128) return false;
+  try { new Intl.DateTimeFormat("en", { timeZone: value }).format(0); return true; } catch { return false; }
+}
+
+function parseEffect(candidate: unknown): EffectIdentity | null {
+  const fields = ["idempotencyKey", "requestHash", "operationId", "sourceSeq", "provenanceRef", "redactionClass"];
+  const input = ClosedInput.capture(candidate, fields);
+  if (!input) return null;
+  const idempotencyKey = input.value("idempotencyKey"), requestHash = input.value("requestHash");
+  const operationId = input.value("operationId"), sourceSeq = input.value("sourceSeq"), provenanceRef = input.value("provenanceRef"), redactionClass = input.value("redactionClass");
+  if (!text.id(idempotencyKey) || !text.hash(requestHash) || (operationId !== null && !text.id(operationId))
+    || (sourceSeq !== null && !integer(sourceSeq, 0)) || !text.reference(provenanceRef)
+    || !["public", "private", "secret"].includes(redactionClass as string)) return null;
+  return Object.freeze({ idempotencyKey, requestHash, operationId: operationId as string | null, sourceSeq: sourceSeq as number | null, provenanceRef, redactionClass: redactionClass as EffectIdentity["redactionClass"] });
+}
+
+function parseOutbox(candidate: unknown): EnqueueOutboxRequest | null {
+  const fields = ["effect", "outboxId", "kind", "payloadRef", "destinationRef", "availableAt", "enqueuedAt", "repeatability"];
+  const input = ClosedInput.capture(candidate, fields);
+  if (!input) return null;
+  const effect = parseEffect(input.value("effect")), outboxId = input.value("outboxId"), kind = input.value("kind");
+  const payloadRef = input.value("payloadRef"), destinationRef = input.value("destinationRef");
+  const availableAt = canonicalInstant(input.value("availableAt")), enqueuedAt = canonicalInstant(input.value("enqueuedAt"));
+  const repeatability = input.value("repeatability");
+  if (!effect || !text.id(outboxId) || !OUTBOX_KINDS.has(kind as string) || !text.opaque(payloadRef)
+    || (destinationRef !== null && !text.opaque(destinationRef)) || !availableAt || !enqueuedAt || availableAt < enqueuedAt
+    || (repeatability !== "repeatable" && repeatability !== "reconciliation_required")) return null;
+  return Object.freeze({ effect, outboxId, kind: kind as EnqueueOutboxRequest["kind"], payloadRef, destinationRef: destinationRef as string | null, availableAt, enqueuedAt, repeatability });
+}
+
+function digestTuple(values: readonly unknown[]): string {
+  return createHash("sha256").update(JSON.stringify(values), "utf8").digest("hex");
 }
 
 export function deriveScheduledRunId(taskId: string, scheduledFor: string): string {
-  const digest = createHash("sha256")
-    .update(JSON.stringify([taskId, scheduledFor]), "utf8")
-    .digest("hex");
-  return `scheduled_run:${digest}`;
+  return `scheduled_run:${digestTuple([taskId, scheduledFor])}`;
 }
-
 export function validateScheduledRunId(runId: string, taskId: string, scheduledFor: string): boolean {
   return runId === deriveScheduledRunId(taskId, scheduledFor);
 }
-
 export function deriveScheduledLeaseToken(prefix: string, runId: string, attempt: number): string {
-  const digest = createHash("sha256")
-    .update(JSON.stringify([prefix, runId, attempt]), "utf8")
-    .digest("hex");
-  return `scheduled_lease:${digest}`;
+  return `scheduled_lease:${digestTuple([prefix, runId, attempt])}`;
 }
-
 export function hashScheduledLeaseToken(token: string): string {
-  return createHash("sha256").update(token, "utf8").digest("hex");
+  return createHash("sha256").update(token).digest("hex");
 }
 
-function scheduleValid(type: unknown, value: unknown, timezone: string, anchor: string): boolean {
-  if (typeof value !== "string" || value.length < 1 || value.length > 1024) return false;
-  if (type === "interval") return /^[1-9]\d*$/u.test(value) && safeInteger(Number(value), 1);
-  if (type === "once") return canonicalInstant(value) !== null;
-  if (type === "cron") return computeNextRun("cron", value, { currentDate: anchor, timezone }) !== null;
-  return false;
-}
-
-const TASK_KEYS = [
+const TASK_FIELDS = Object.freeze([
   "taskId", "chatJid", "kind", "payloadRef", "modelLabel", "scheduleType", "scheduleValue", "timezone",
-  "notifyOnComplete", "muted", "cwd", "timeoutSec", "internalTask", "redactionClass",
-  "executionRepeatability", "nextRunAt", "authoredAt",
-] as const;
+  "notifyOnComplete", "muted", "cwd", "timeoutSec", "internalTask", "redactionClass", "executionRepeatability",
+  "nextRunAt", "authoredAt",
+]);
 
-export function normaliseTaskAuthorityInput(value: unknown): ScheduledTaskAuthorityInput | null {
-  const row = readObject(value, TASK_KEYS);
-  if (!row || !validId(row.taskId) || !validId(row.chatJid) || !validOpaqueRef(row.payloadRef)) return null;
-  if (row.kind !== "agent" && row.kind !== "shell" && row.kind !== "internal") return null;
-  if (row.modelLabel !== null && !validId(row.modelLabel)) return null;
-  if (!validTimezone(row.timezone)) return null;
-  const nextRunAt = canonicalInstant(row.nextRunAt), authoredAt = canonicalInstant(row.authoredAt);
-  if (!nextRunAt || !authoredAt || !scheduleValid(row.scheduleType, row.scheduleValue, row.timezone as string, nextRunAt)) return null;
-  if (row.scheduleType === "once" && row.scheduleValue !== nextRunAt) return null;
-  if (typeof row.notifyOnComplete !== "boolean" || typeof row.muted !== "boolean" || row.muted === row.notifyOnComplete) return null;
-  if (row.cwd !== null && !validRef(row.cwd)) return null;
-  if (row.timeoutSec !== null && !safeInteger(row.timeoutSec, 1, 86400)) return null;
-  if (row.redactionClass !== "public" && row.redactionClass !== "private" && row.redactionClass !== "secret") return null;
-  if (row.executionRepeatability !== "agent_source" && row.executionRepeatability !== "repeatable" && row.executionRepeatability !== "reconciliation_required") return null;
-  if (row.kind === "agent" && row.executionRepeatability !== "agent_source") return null;
-  if (row.kind !== "agent" && row.executionRepeatability === "agent_source") return null;
-  let internalTask: { discriminator: string; reference: string } | null = null;
-  if (row.kind === "internal") {
-    const internal = readObject(row.internalTask, ["discriminator", "reference"]);
-    if (!internal || !validTag(internal.discriminator) || !validRef(internal.reference)) return null;
-    internalTask = Object.freeze({ discriminator: internal.discriminator, reference: internal.reference });
-  } else if (row.internalTask !== null) return null;
-  if (row.kind !== "shell" && (row.cwd !== null || row.timeoutSec !== null)) return null;
-  return Object.freeze({
-    taskId: row.taskId,
-    chatJid: row.chatJid,
-    kind: row.kind,
-    payloadRef: row.payloadRef,
-    modelLabel: row.modelLabel as string | null,
-    scheduleType: row.scheduleType as ScheduledTaskAuthorityInput["scheduleType"],
-    scheduleValue: row.scheduleValue as string,
-    timezone: row.timezone,
-    notifyOnComplete: row.notifyOnComplete,
-    muted: row.muted,
-    cwd: row.cwd as string | null,
-    timeoutSec: row.timeoutSec as number | null,
-    internalTask,
-    redactionClass: row.redactionClass,
-    executionRepeatability: row.executionRepeatability,
-    nextRunAt,
-    authoredAt,
-  });
+function parseInternal(value: unknown): ScheduledTaskAuthorityInput["internalTask"] | undefined {
+  if (value === null) return null;
+  const input = ClosedInput.capture(value, ["discriminator", "reference"]);
+  const discriminator = input?.value("discriminator"), reference = input?.value("reference");
+  return input && text.code(discriminator) && text.reference(reference) ? Object.freeze({ discriminator, reference }) : undefined;
 }
 
-export function normaliseTaskUpdate(value: unknown): UpdateScheduledTaskAuthorityRequest | null {
-  if (!value || typeof value !== "object") return null;
-  const keys = [...TASK_KEYS, "expectedRevision"];
-  const row = readObject(value, keys);
-  if (!row || !safeInteger(row.expectedRevision, 1)) return null;
-  const base: Record<string, unknown> = {};
-  for (const key of TASK_KEYS) base[key] = row[key];
-  const parsed = normaliseTaskAuthorityInput(base);
-  return parsed ? Object.freeze({ ...parsed, expectedRevision: row.expectedRevision }) : null;
+function scheduleIsUsable(kind: unknown, value: unknown, zone: string, anchor: string): boolean {
+  if (typeof value !== "string" || value.length === 0 || value.length > 1024) return false;
+  switch (kind) {
+    case "once": return canonicalInstant(value) !== null;
+    case "interval": return /^[1-9]\d*$/u.test(value) && integer(Number(value), 1);
+    case "cron": return computeNextRun("cron", value, { currentDate: anchor, timezone: zone }) !== null;
+    default: return false;
+  }
+}
+
+export function normaliseTaskAuthorityInput(candidate: unknown): ScheduledTaskAuthorityInput | null {
+  const input = ClosedInput.capture(candidate, TASK_FIELDS);
+  if (!input) return null;
+  const taskId = input.value("taskId"), chatJid = input.value("chatJid"), kind = input.value("kind"), payloadRef = input.value("payloadRef");
+  const modelLabel = input.value("modelLabel"), scheduleType = input.value("scheduleType"), scheduleValue = input.value("scheduleValue"), zone = input.value("timezone");
+  const notifyOnComplete = input.value("notifyOnComplete"), muted = input.value("muted"), cwd = input.value("cwd"), timeoutSec = input.value("timeoutSec");
+  const internalTask = parseInternal(input.value("internalTask")), redactionClass = input.value("redactionClass"), repeatability = input.value("executionRepeatability");
+  const nextRunAt = canonicalInstant(input.value("nextRunAt")), authoredAt = canonicalInstant(input.value("authoredAt"));
+  if (!text.id(taskId) || !text.id(chatJid) || !["agent", "shell", "internal"].includes(kind as string) || !text.opaque(payloadRef)
+    || (modelLabel !== null && !text.id(modelLabel)) || !timezone(zone) || !nextRunAt || !authoredAt
+    || !scheduleIsUsable(scheduleType, scheduleValue, zone, nextRunAt) || (scheduleType === "once" && scheduleValue !== nextRunAt)
+    || typeof notifyOnComplete !== "boolean" || typeof muted !== "boolean" || notifyOnComplete === muted
+    || (cwd !== null && !text.reference(cwd)) || (timeoutSec !== null && !integer(timeoutSec, 1, 86400))
+    || internalTask === undefined || (kind === "internal") !== (internalTask !== null)
+    || !["public", "private", "secret"].includes(redactionClass as string)
+    || !["agent_source", "repeatable", "reconciliation_required"].includes(repeatability as string)
+    || (kind === "agent") !== (repeatability === "agent_source") || (kind !== "shell" && (cwd !== null || timeoutSec !== null))) return null;
+  return Object.freeze({ taskId, chatJid, kind: kind as ScheduledTaskAuthorityInput["kind"], payloadRef, modelLabel: modelLabel as string | null,
+    scheduleType: scheduleType as ScheduledTaskAuthorityInput["scheduleType"], scheduleValue: scheduleValue as string, timezone: zone,
+    notifyOnComplete, muted, cwd: cwd as string | null, timeoutSec: timeoutSec as number | null, internalTask,
+    redactionClass: redactionClass as ScheduledTaskAuthorityInput["redactionClass"], executionRepeatability: repeatability as ScheduledTaskAuthorityInput["executionRepeatability"], nextRunAt, authoredAt });
+}
+
+export function normaliseTaskUpdate(candidate: unknown): UpdateScheduledTaskAuthorityRequest | null {
+  const fields = [...TASK_FIELDS, "expectedRevision"];
+  const input = ClosedInput.capture(candidate, fields), expectedRevision = input?.value("expectedRevision");
+  if (!input || !integer(expectedRevision, 1)) return null;
+  const base = normaliseTaskAuthorityInput(input.copy(TASK_FIELDS));
+  return base ? Object.freeze({ ...base, expectedRevision }) : null;
 }
 
 export function taskConfigProjection(input: ScheduledTaskAuthorityInput): CanonicalJsonValue {
-  return {
-    taskId: input.taskId,
-    chatJid: input.chatJid,
-    kind: input.kind,
-    payloadRef: input.payloadRef,
-    modelLabel: input.modelLabel,
-    scheduleType: input.scheduleType,
-    scheduleValue: input.scheduleValue,
-    timezone: input.timezone,
-    notifyOnComplete: input.notifyOnComplete,
-    muted: input.muted,
-    cwd: input.cwd,
-    timeoutSec: input.timeoutSec,
-    internalTask: input.internalTask,
-    redactionClass: input.redactionClass,
-    executionRepeatability: input.executionRepeatability,
-  } as CanonicalJsonValue;
+  const { taskId, chatJid, kind, payloadRef, modelLabel, scheduleType, scheduleValue, timezone: zone, notifyOnComplete, muted,
+    cwd, timeoutSec, internalTask, redactionClass, executionRepeatability } = input;
+  return { taskId, chatJid, kind, payloadRef, modelLabel, scheduleType, scheduleValue, timezone: zone, notifyOnComplete, muted,
+    cwd, timeoutSec, internalTask, redactionClass, executionRepeatability } as CanonicalJsonValue;
 }
 
 export function makeTaskSnapshot(input: ScheduledTaskAuthorityInput, revision: number): ScheduledTaskSnapshot {
-  return Object.freeze({
-    ...taskConfigProjection(input) as Omit<ScheduledTaskSnapshot, "revision" | "configHash">,
-    revision,
-    configHash: hashCanonicalRequest(taskConfigProjection(input)),
-  }) as ScheduledTaskSnapshot;
+  const projection = taskConfigProjection(input);
+  return Object.freeze({ ...(projection as Dictionary), revision, configHash: hashCanonicalRequest(projection) }) as unknown as ScheduledTaskSnapshot;
 }
 
-export function decodeTaskSnapshot(value: unknown): ScheduledTaskSnapshot | null {
-  const row = readObject(value, [
-    "taskId", "revision", "configHash", "chatJid", "kind", "payloadRef", "modelLabel", "scheduleType",
-    "scheduleValue", "timezone", "notifyOnComplete", "muted", "cwd", "timeoutSec", "internalTask",
-    "redactionClass", "executionRepeatability",
-  ]);
-  if (!row || !safeInteger(row.revision, 1) || !validHash(row.configHash)) return null;
-  const authored = normaliseTaskAuthorityInput({
-    taskId: row.taskId,
-    chatJid: row.chatJid,
-    kind: row.kind,
-    payloadRef: row.payloadRef,
-    modelLabel: row.modelLabel,
-    scheduleType: row.scheduleType,
-    scheduleValue: row.scheduleValue,
-    timezone: row.timezone,
-    notifyOnComplete: row.notifyOnComplete,
-    muted: row.muted,
-    cwd: row.cwd,
-    timeoutSec: row.timeoutSec,
-    internalTask: row.internalTask,
-    redactionClass: row.redactionClass,
-    executionRepeatability: row.executionRepeatability,
-    nextRunAt: row.scheduleType === "once" ? row.scheduleValue : "2000-01-01T00:00:00.000Z",
-    authoredAt: "2000-01-01T00:00:00.000Z",
-  });
-  if (!authored) return null;
-  const snapshot = makeTaskSnapshot(authored, row.revision);
-  return snapshot.configHash === row.configHash ? snapshot : null;
+export function decodeTaskSnapshot(candidate: unknown): ScheduledTaskSnapshot | null {
+  const fields = ["taskId", "revision", "configHash", "chatJid", "kind", "payloadRef", "modelLabel", "scheduleType", "scheduleValue", "timezone",
+    "notifyOnComplete", "muted", "cwd", "timeoutSec", "internalTask", "redactionClass", "executionRepeatability"];
+  const input = ClosedInput.capture(candidate, fields), revision = input?.value("revision"), configHash = input?.value("configHash");
+  if (!input || !integer(revision, 1) || !text.hash(configHash)) return null;
+  const artificial = { ...input.copy(fields.filter((field) => field !== "revision" && field !== "configHash")),
+    nextRunAt: input.value("scheduleType") === "once" ? input.value("scheduleValue") : "2000-01-01T00:00:00.000Z", authoredAt: "2000-01-01T00:00:00.000Z" };
+  const authority = normaliseTaskAuthorityInput(artificial);
+  if (!authority) return null;
+  const snapshot = makeTaskSnapshot(authority, revision);
+  return snapshot.configHash === configHash ? snapshot : null;
 }
 
-export function normaliseClaim(value: unknown): ClaimDueRunsRequest | null {
-  const row = readObject(value, ["now", "limit", "workerId", "leaseTokenPrefix", "leaseDurationMs", "reclaimAuthorities"]);
-  const now = row && canonicalInstant(row.now);
-  if (!row || !now || !safeInteger(row.limit, 1, 100) || !validId(row.workerId) || !validId(row.leaseTokenPrefix) || !safeInteger(row.leaseDurationMs, 1, 86400000) || addCanonicalDuration(now, row.leaseDurationMs) === null || !Array.isArray(row.reclaimAuthorities) || row.reclaimAuthorities.length > 100) return null;
-  const seen = new Set<string>();
-  const authorities: ScheduledRunReclaimAuthority[] = [];
-  for (const item of row.reclaimAuthorities) {
-    const parsed = normaliseAuthority(item);
-    if (!parsed || seen.has(parsed.runId)) return null;
-    seen.add(parsed.runId);
-    authorities.push(parsed);
-  }
-  return Object.freeze({ now, limit: row.limit, workerId: row.workerId, leaseTokenPrefix: row.leaseTokenPrefix, leaseDurationMs: row.leaseDurationMs, reclaimAuthorities: Object.freeze(authorities) });
-}
-
-function normaliseAuthority(value: unknown): ScheduledRunReclaimAuthority | null {
-  const row = readObject(value, ["runId", "expectedAttempt", "kind", "reconciliationRef"]);
-  if (!row || !validScheduledRunId(row.runId) || !safeInteger(row.expectedAttempt, 1)) return null;
-  if (row.kind === "repeatable" && row.reconciliationRef === null) return Object.freeze({ runId: row.runId, expectedAttempt: row.expectedAttempt, kind: "repeatable", reconciliationRef: null });
-  if (row.kind === "reconciled_absent" && validRef(row.reconciliationRef)) return Object.freeze({ runId: row.runId, expectedAttempt: row.expectedAttempt, kind: "reconciled_absent", reconciliationRef: row.reconciliationRef });
+function parseAuthority(candidate: unknown): ScheduledRunReclaimAuthority | null {
+  const input = ClosedInput.capture(candidate, ["runId", "expectedAttempt", "kind", "reconciliationRef"]);
+  const runId = input?.value("runId"), expectedAttempt = input?.value("expectedAttempt"), kind = input?.value("kind"), reference = input?.value("reconciliationRef");
+  if (!input || !validScheduledRunId(runId) || !integer(expectedAttempt, 1)) return null;
+  if (kind === "repeatable" && reference === null) return Object.freeze({ runId, expectedAttempt, kind, reconciliationRef: null });
+  if ((kind === "reconciled_absent" || kind === "agent_reconciled_absent") && text.reference(reference)) return Object.freeze({ runId, expectedAttempt, kind, reconciliationRef: reference });
   return null;
 }
 
-const FENCE_KEYS = ["runId", "workerId", "expectedAttempt", "expectedTaskRevision", "leaseToken", "now"] as const;
-function fence(row: Record<string, unknown>): boolean {
-  return validScheduledRunId(row.runId) && validId(row.workerId) && safeInteger(row.expectedAttempt, 1) && safeInteger(row.expectedTaskRevision, 1) && validRef(row.leaseToken) && canonicalInstant(row.now) !== null;
+export function normaliseClaim(candidate: unknown): ClaimDueRunsRequest | null {
+  const input = ClosedInput.capture(candidate, ["now", "limit", "workerId", "leaseTokenPrefix", "leaseDurationMs", "reclaimAuthorities"]);
+  const now = canonicalInstant(input?.value("now")), limit = input?.value("limit"), workerId = input?.value("workerId"), prefix = input?.value("leaseTokenPrefix"), duration = input?.value("leaseDurationMs");
+  const authorities = arrayOf(input?.value("reclaimAuthorities"), 100, parseAuthority);
+  if (!input || !now || !integer(limit, 1, 100) || !text.id(workerId) || !text.id(prefix) || !integer(duration, 1, 86_400_000)
+    || addCanonicalDuration(now, duration) === null || !authorities) return null;
+  if (new Set(authorities.map((entry) => entry.runId)).size !== authorities.length) return null;
+  return Object.freeze({ now, limit, workerId, leaseTokenPrefix: prefix, leaseDurationMs: duration, reclaimAuthorities: authorities });
 }
 
-export function normaliseRenew(value: unknown): RenewScheduledRunRequest | null {
-  const row = readObject(value, [...FENCE_KEYS, "leaseExpiresAt"]);
-  if (!row || !fence(row)) return null;
-  const now = canonicalInstant(row.now)!, leaseExpiresAt = canonicalInstant(row.leaseExpiresAt);
-  return leaseExpiresAt && leaseExpiresAt > now ? Object.freeze({ ...row, now, leaseExpiresAt }) as unknown as RenewScheduledRunRequest : null;
+const FENCE = Object.freeze(["runId", "workerId", "expectedAttempt", "expectedTaskRevision", "leaseToken", "now"]);
+function fenceFrom(input: ClosedInput): { runId: string; workerId: string; expectedAttempt: number; expectedTaskRevision: number; leaseToken: string; now: string } | null {
+  const runId = input.value("runId"), workerId = input.value("workerId"), attempt = input.value("expectedAttempt"), revision = input.value("expectedTaskRevision"), token = input.value("leaseToken"), now = canonicalInstant(input.value("now"));
+  return validScheduledRunId(runId) && text.id(workerId) && integer(attempt, 1) && integer(revision, 1) && text.reference(token) && now
+    ? { runId, workerId, expectedAttempt: attempt, expectedTaskRevision: revision, leaseToken: token, now } : null;
 }
 
-export function normaliseBind(value: unknown): BindScheduledSourceRequest | null {
-  const row = readObject(value, [...FENCE_KEYS, "effect", "sourceSeq", "operationId", "boundAt"]);
-  if (!row || !fence(row)) return null;
-  const identity = effect(row.effect), boundAt = canonicalInstant(row.boundAt);
-  if (!identity || !safeInteger(row.sourceSeq, 1) || !validId(row.operationId) || !boundAt) return null;
-  const request = Object.freeze({ ...row, now: canonicalInstant(row.now), effect: identity, boundAt }) as unknown as BindScheduledSourceRequest;
-  return identity.requestHash === hashCanonicalRequest(request as unknown as CanonicalJsonValue) ? request : null;
+function hashMatches<T extends object>(value: T & { effect: EffectIdentity }): T | null {
+  return value.effect.requestHash === hashCanonicalRequest(value as unknown as CanonicalJsonValue) ? Object.freeze(value) : null;
 }
 
-export function normaliseComplete(value: unknown): CompleteScheduledRunRequest | null {
-  const row = readObject(value, [...FENCE_KEYS, "effect", "status", "durationMs", "resultRef", "errorCode", "completedAt", "outboxIntents"]);
-  if (!row || !fence(row)) return null;
-  const identity = effect(row.effect), completedAt = canonicalInstant(row.completedAt);
-  if (!identity || !completedAt || !safeInteger(row.durationMs, 0) || (row.status !== "success" && row.status !== "error")) return null;
-  if (row.resultRef !== null && !validOpaqueRef(row.resultRef)) return null;
-  if (row.errorCode !== null && !validTag(row.errorCode)) return null;
-  if (row.status === "success" && (row.errorCode !== null || row.resultRef === null)) return null;
-  if (row.status === "error" && (row.errorCode === null || row.resultRef !== null)) return null;
-  if (!Array.isArray(row.outboxIntents) || row.outboxIntents.length > 100) return null;
-  const intents: EnqueueOutboxRequest[] = [], ids = new Set<string>();
-  for (const item of row.outboxIntents) {
-    const parsed = outbox(item);
-    if (!parsed || ids.has(parsed.outboxId)) return null;
-    ids.add(parsed.outboxId); intents.push(parsed);
-  }
-  const request = Object.freeze({ ...row, now: canonicalInstant(row.now), effect: identity, completedAt, outboxIntents: Object.freeze(intents) }) as unknown as CompleteScheduledRunRequest;
-  return identity.requestHash === hashCanonicalRequest(request as unknown as CanonicalJsonValue) ? request : null;
+export function normaliseRenew(candidate: unknown): RenewScheduledRunRequest | null {
+  const input = ClosedInput.capture(candidate, [...FENCE, "leaseExpiresAt"]);
+  if (!input) return null;
+  const fence = fenceFrom(input), expires = canonicalInstant(input.value("leaseExpiresAt"));
+  return fence && expires && expires > fence.now ? Object.freeze({ ...fence, leaseExpiresAt: expires }) : null;
 }
 
-export function normaliseAbandon(value: unknown): AbandonScheduledRunRequest | null {
-  const row = readObject(value, [...FENCE_KEYS, "effect", "reasonTag", "abandonedAt", "retryAt"]);
-  if (!row || !fence(row)) return null;
-  const identity = effect(row.effect), abandonedAt = canonicalInstant(row.abandonedAt);
-  const retryAt = row.retryAt === null ? null : canonicalInstant(row.retryAt);
-  if (!identity || !abandonedAt || !validTag(row.reasonTag) || (row.retryAt !== null && !retryAt) || (retryAt && retryAt <= abandonedAt)) return null;
-  const request = Object.freeze({ ...row, now: canonicalInstant(row.now), effect: identity, abandonedAt, retryAt }) as unknown as AbandonScheduledRunRequest;
-  return identity.requestHash === hashCanonicalRequest(request as unknown as CanonicalJsonValue) ? request : null;
+export function normaliseBind(candidate: unknown): BindScheduledSourceRequest | null {
+  const fields = [...FENCE, "effect", "sourceSeq", "operationId", "boundAt"];
+  const input = ClosedInput.capture(candidate, fields);
+  if (!input) return null;
+  const fence = fenceFrom(input), effect = parseEffect(input.value("effect")), sourceSeq = input.value("sourceSeq"), operationId = input.value("operationId"), boundAt = canonicalInstant(input.value("boundAt"));
+  if (!fence || !effect || !integer(sourceSeq, 1) || !text.id(operationId) || !boundAt) return null;
+  return hashMatches({ ...fence, effect, sourceSeq, operationId, boundAt });
 }
 
-export function normaliseList(value: unknown): ListScheduledRunsRequest | null {
-  const candidate = value ?? {};
-  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate) || !dataOnly(candidate)) return null;
-  const allowed = new Set(["taskId", "state", "limit", "afterScheduledFor", "afterRunId"]);
-  try { if (Reflect.ownKeys(candidate).some((key) => typeof key !== "string" || !allowed.has(key))) return null; } catch { return null; }
-  const row = candidate as Record<string, unknown>;
-  if (row.taskId !== undefined && !validId(row.taskId)) return null;
-  if (row.state !== undefined && !["claimed", "source_bound", "completed", "abandoned"].includes(row.state as string)) return null;
-  const limit = row.limit === undefined ? 50 : row.limit;
-  if (!safeInteger(limit, 1, 100)) return null;
-  if ((row.afterScheduledFor === undefined) !== (row.afterRunId === undefined)) return null;
-  if (row.afterScheduledFor !== undefined && (!canonicalInstant(row.afterScheduledFor) || !validScheduledRunId(row.afterRunId))) return null;
-  return Object.freeze({ taskId: row.taskId as string | undefined, state: row.state as ListScheduledRunsRequest["state"], limit, afterScheduledFor: row.afterScheduledFor as string | undefined, afterRunId: row.afterRunId as string | undefined });
+export function normaliseComplete(candidate: unknown): CompleteScheduledRunRequest | null {
+  const fields = [...FENCE, "effect", "status", "durationMs", "resultRef", "errorCode", "completedAt", "outboxIntents"];
+  const input = ClosedInput.capture(candidate, fields);
+  if (!input) return null;
+  const fence = fenceFrom(input), effect = parseEffect(input.value("effect")), status = input.value("status"), durationMs = input.value("durationMs");
+  const resultRef = input.value("resultRef"), errorCode = input.value("errorCode"), completedAt = canonicalInstant(input.value("completedAt"));
+  const intents = arrayOf(input.value("outboxIntents"), 100, parseOutbox);
+  if (!fence || !effect || !["success", "error"].includes(status as string) || !integer(durationMs, 0) || !completedAt || !intents
+    || (resultRef !== null && !text.opaque(resultRef)) || (errorCode !== null && !text.code(errorCode))
+    || (status === "success" ? resultRef === null || errorCode !== null : resultRef !== null || errorCode === null)
+    || new Set(intents.map((entry) => entry.outboxId)).size !== intents.length) return null;
+  return hashMatches({ ...fence, effect, status: status as CompleteScheduledRunRequest["status"], durationMs, resultRef: resultRef as string | null,
+    errorCode: errorCode as string | null, completedAt, outboxIntents: intents });
 }
 
-export function normaliseCleanup(value: unknown): CleanupScheduledRunsRequest | null {
-  const row = readObject(value, ["settledBefore", "limit"]);
-  const settledBefore = row && canonicalInstant(row.settledBefore);
-  return row && settledBefore && safeInteger(row.limit, 1, 100) ? Object.freeze({ settledBefore, limit: row.limit }) : null;
+export function normaliseAbandon(candidate: unknown): AbandonScheduledRunRequest | null {
+  const input = ClosedInput.capture(candidate, [...FENCE, "effect", "reasonTag", "abandonedAt", "retryAt"]);
+  if (!input) return null;
+  const fence = fenceFrom(input), effect = parseEffect(input.value("effect")), reasonTag = input.value("reasonTag"), abandonedAt = canonicalInstant(input.value("abandonedAt"));
+  const rawRetry = input.value("retryAt"), retryAt = rawRetry === null ? null : canonicalInstant(rawRetry);
+  if (!fence || !effect || !text.code(reasonTag) || !abandonedAt || (rawRetry !== null && !retryAt) || (retryAt !== null && retryAt <= abandonedAt)) return null;
+  return hashMatches({ ...fence, effect, reasonTag, abandonedAt, retryAt });
+}
+
+export function normaliseList(candidate: unknown): ListScheduledRunsRequest | null {
+  const source = candidate ?? {};
+  if (!isPassiveGraph(source) || source === null || Array.isArray(source)) return null;
+  const allowed = ["taskId", "state", "limit", "afterScheduledFor", "afterRunId"];
+  const keys = Reflect.ownKeys(source);
+  if (keys.some((key) => typeof key !== "string" || !allowed.includes(key))) return null;
+  const row = source as Dictionary, taskId = row.taskId, state = row.state, limit = row.limit ?? 50, after = row.afterScheduledFor, afterId = row.afterRunId;
+  if (taskId !== undefined && !text.id(taskId)) return null;
+  if (state !== undefined && !["claimed", "source_bound", "completed", "abandoned"].includes(state as string)) return null;
+  if (!integer(limit, 1, 100) || ((after === undefined) !== (afterId === undefined)) || (after !== undefined && (!canonicalInstant(after) || !validScheduledRunId(afterId)))) return null;
+  return Object.freeze({ taskId: taskId as string | undefined, state: state as ListScheduledRunsRequest["state"], limit, afterScheduledFor: after as string | undefined, afterRunId: afterId as string | undefined });
+}
+
+export function normaliseCleanup(candidate: unknown): CleanupScheduledRunsRequest | null {
+  const input = ClosedInput.capture(candidate, ["settledBefore", "limit"]), settledBefore = canonicalInstant(input?.value("settledBefore")), limit = input?.value("limit");
+  return input && settledBefore && integer(limit, 1, 100) ? Object.freeze({ settledBefore, limit }) : null;
 }
 
 export function computeScheduledSuccessor(snapshot: ScheduledTaskSnapshot, scheduledFor: string, settledAt: string): string | null {
-  if (snapshot.scheduleType === "once") return null;
-  if (snapshot.scheduleType === "interval") {
-    const interval = Number(snapshot.scheduleValue);
-    if (!safeInteger(interval, 1)) return null;
-    return addCanonicalDuration(settledAt, interval);
+  switch (snapshot.scheduleType) {
+    case "once": return null;
+    case "interval": {
+      const milliseconds = Number(snapshot.scheduleValue);
+      return integer(milliseconds, 1) ? addCanonicalDuration(settledAt, milliseconds) : null;
+    }
+    case "cron": return computeNextRun("cron", snapshot.scheduleValue, { currentDate: scheduledFor, timezone: snapshot.timezone });
   }
-  return computeNextRun("cron", snapshot.scheduleValue, { currentDate: scheduledFor, timezone: snapshot.timezone });
 }
 
-const RECORD_KEYS = [
-  "runId", "taskId", "taskRevision", "scheduledFor", "state", "attempt", "workerId", "leaseExpiresAt",
-  "acceptedSourceSeq", "operationId", "status", "durationMs", "resultRef", "errorCode", "nextRunAt",
-  "headDisposition", "settledAt", "abandonmentReasonTag", "outboxIds", "retained",
-] as const;
+const RECORD_FIELDS = Object.freeze(["runId", "taskId", "taskRevision", "scheduledFor", "state", "attempt", "workerId", "leaseExpiresAt",
+  "acceptedSourceSeq", "operationId", "status", "durationMs", "resultRef", "errorCode", "nextRunAt", "headDisposition", "settledAt",
+  "abandonmentReasonTag", "outboxIds", "retained"]);
 
-export function decodeScheduledRunRecord(value: unknown): ScheduledRunRecord | null {
-  const row = readObject(value, RECORD_KEYS);
-  const scheduledFor = row && canonicalInstant(row.scheduledFor);
-  if (!row || !scheduledFor || !validScheduledRunId(row.runId) || !validId(row.taskId) || !safeInteger(row.taskRevision, 1)
-    || !validateScheduledRunId(row.runId, row.taskId, scheduledFor)
-    || !safeInteger(row.attempt, 1) || typeof row.retained !== "boolean") return null;
-  if (!Array.isArray(row.outboxIds) || row.outboxIds.length > 100) return null;
-  const outboxIds: string[] = [], seen = new Set<string>();
-  for (const id of row.outboxIds) {
-    if (!validId(id) || seen.has(id)) return null;
-    seen.add(id); outboxIds.push(id);
-  }
-  const state = row.state;
-  if (state !== "claimed" && state !== "source_bound" && state !== "completed" && state !== "abandoned") return null;
-  if (!safeInteger(row.acceptedSourceSeq, 1) && row.acceptedSourceSeq !== null) return null;
-  if (row.operationId !== null && !validId(row.operationId)) return null;
-  if (row.status !== null && row.status !== "success" && row.status !== "error") return null;
-  if (!safeInteger(row.durationMs, 0) && row.durationMs !== null) return null;
-  if (row.resultRef !== null && !validOpaqueRef(row.resultRef)) return null;
-  if (row.errorCode !== null && !validTag(row.errorCode)) return null;
-  if (row.nextRunAt !== null && !canonicalInstant(row.nextRunAt)) return null;
-  if (row.headDisposition !== "pending" && row.headDisposition !== "advanced" && row.headDisposition !== "paused" && row.headDisposition !== "deleted" && row.headDisposition !== "superseded") return null;
-  if (row.settledAt !== null && !canonicalInstant(row.settledAt)) return null;
-  if (row.abandonmentReasonTag !== null && !validTag(row.abandonmentReasonTag)) return null;
+export function decodeScheduledRunRecord(candidate: unknown): ScheduledRunRecord | null {
+  const input = ClosedInput.capture(candidate, RECORD_FIELDS);
+  if (!input) return null;
+  const runId = input.value("runId"), taskId = input.value("taskId"), scheduledFor = canonicalInstant(input.value("scheduledFor"));
+  const revision = input.value("taskRevision"), attempt = input.value("attempt"), state = input.value("state"), retained = input.value("retained");
+  const workerId = input.value("workerId"), leaseExpiresAt = input.value("leaseExpiresAt"), sourceSeq = input.value("acceptedSourceSeq"), operationId = input.value("operationId");
+  const status = input.value("status"), durationMs = input.value("durationMs"), resultRef = input.value("resultRef"), errorCode = input.value("errorCode");
+  const nextRunAt = input.value("nextRunAt"), disposition = input.value("headDisposition"), settledAt = input.value("settledAt"), reason = input.value("abandonmentReasonTag");
+  const outboxIds = arrayOf(input.value("outboxIds"), 100, (id) => text.id(id) ? id : null);
+  if (!validScheduledRunId(runId) || !text.id(taskId) || !scheduledFor || runId !== deriveScheduledRunId(taskId, scheduledFor)
+    || !integer(revision, 1) || !integer(attempt, 1) || !["claimed", "source_bound", "completed", "abandoned"].includes(state as string)
+    || typeof retained !== "boolean" || !outboxIds || new Set(outboxIds).size !== outboxIds.length
+    || (workerId !== null && !text.id(workerId)) || (leaseExpiresAt !== null && !canonicalInstant(leaseExpiresAt))
+    || (sourceSeq !== null && !integer(sourceSeq, 1)) || (operationId !== null && !text.id(operationId)) || ((sourceSeq === null) !== (operationId === null))
+    || (status !== null && status !== "success" && status !== "error") || (durationMs !== null && !integer(durationMs, 0))
+    || (resultRef !== null && !text.opaque(resultRef)) || (errorCode !== null && !text.code(errorCode))
+    || (nextRunAt !== null && !canonicalInstant(nextRunAt)) || !["pending", "advanced", "paused", "deleted", "superseded"].includes(disposition as string)
+    || (settledAt !== null && !canonicalInstant(settledAt)) || (reason !== null && !text.code(reason))) return null;
 
-  const sourcePair = (row.acceptedSourceSeq === null) === (row.operationId === null);
-  if (!sourcePair) return null;
-  if (row.retained) {
-    if ((state !== "completed" && state !== "abandoned") || row.workerId !== null || row.leaseExpiresAt !== null
-      || row.acceptedSourceSeq !== null || row.operationId !== null || row.durationMs !== null || row.resultRef !== null
-      || row.errorCode !== null || row.abandonmentReasonTag !== null || row.headDisposition === "pending"
-      || row.settledAt === null || outboxIds.length !== 0) return null;
-    if (state === "completed" ? row.status === null : row.status !== null) return null;
-  } else if (state === "claimed" || state === "source_bound") {
-    if (!validId(row.workerId) || !canonicalInstant(row.leaseExpiresAt) || row.status !== null || row.durationMs !== null
-      || row.resultRef !== null || row.errorCode !== null || row.nextRunAt !== null || row.headDisposition !== "pending"
-      || row.settledAt !== null || row.abandonmentReasonTag !== null || outboxIds.length !== 0) return null;
-    if (state === "claimed" ? !sourcePair || row.acceptedSourceSeq !== null : row.acceptedSourceSeq === null) return null;
-  } else if (state === "completed") {
-    if (row.workerId !== null || row.leaseExpiresAt !== null || row.status === null || row.durationMs === null
-      || row.headDisposition === "pending" || row.settledAt === null || row.abandonmentReasonTag !== null) return null;
-    if (row.status === "success" ? (row.resultRef === null || row.errorCode !== null) : (row.resultRef !== null || row.errorCode === null)) return null;
-  } else {
-    if (row.workerId !== null || row.leaseExpiresAt !== null || row.status !== null || row.durationMs !== null
-      || row.resultRef !== null || row.errorCode !== null || row.headDisposition === "pending" || row.settledAt === null
-      || row.abandonmentReasonTag === null || outboxIds.length !== 0) return null;
-  }
-  return Object.freeze({
-    runId: row.runId, taskId: row.taskId, taskRevision: row.taskRevision, scheduledFor,
-    state, attempt: row.attempt, workerId: row.workerId as string | null, leaseExpiresAt: row.leaseExpiresAt as string | null,
-    acceptedSourceSeq: row.acceptedSourceSeq as number | null, operationId: row.operationId as string | null,
-    status: row.status as ScheduledRunRecord["status"], durationMs: row.durationMs as number | null,
-    resultRef: row.resultRef as string | null, errorCode: row.errorCode as string | null, nextRunAt: row.nextRunAt as string | null,
-    headDisposition: row.headDisposition, settledAt: row.settledAt as string | null,
-    abandonmentReasonTag: row.abandonmentReasonTag as string | null, outboxIds: Object.freeze(outboxIds), retained: row.retained,
+  const sourcePresent = sourceSeq !== null;
+  let shape = false;
+  if (retained) shape = (state === "completed" || state === "abandoned") && workerId === null && leaseExpiresAt === null && !sourcePresent
+    && durationMs === null && resultRef === null && errorCode === null && reason === null && disposition !== "pending" && settledAt !== null
+    && outboxIds.length === 0 && (state === "completed" ? status !== null : status === null);
+  else if (state === "claimed" || state === "source_bound") shape = workerId !== null && leaseExpiresAt !== null && status === null && durationMs === null
+    && resultRef === null && errorCode === null && nextRunAt === null && disposition === "pending" && settledAt === null && reason === null
+    && outboxIds.length === 0 && (state === "source_bound" ? sourcePresent : !sourcePresent);
+  else if (state === "completed") shape = workerId === null && leaseExpiresAt === null && status !== null && durationMs !== null && disposition !== "pending"
+    && settledAt !== null && reason === null && (status === "success" ? resultRef !== null && errorCode === null : resultRef === null && errorCode !== null);
+  else shape = workerId === null && leaseExpiresAt === null && status === null && durationMs === null && resultRef === null && errorCode === null
+    && disposition !== "pending" && settledAt !== null && reason !== null && outboxIds.length === 0;
+  if (!shape) return null;
+
+  return Object.freeze({ runId, taskId, taskRevision: revision, scheduledFor, state: state as ScheduledRunRecord["state"], attempt,
+    workerId: workerId as string | null, leaseExpiresAt: leaseExpiresAt as string | null, acceptedSourceSeq: sourceSeq as number | null,
+    operationId: operationId as string | null, status: status as ScheduledRunRecord["status"], durationMs: durationMs as number | null,
+    resultRef: resultRef as string | null, errorCode: errorCode as string | null, nextRunAt: nextRunAt as string | null,
+    headDisposition: disposition as ScheduledRunRecord["headDisposition"], settledAt: settledAt as string | null,
+    abandonmentReasonTag: reason as string | null, outboxIds, retained });
+}
+
+export interface ScheduledClaimReplayRow { readonly runId: string; readonly attempt: number; readonly state: "claimed" | "source_bound"; }
+export function decodeClaimReplayRows(candidate: unknown): readonly ScheduledClaimReplayRow[] | null {
+  const rows = arrayOf(candidate, 100, (item): ScheduledClaimReplayRow | null => {
+    const input = ClosedInput.capture(item, ["runId", "attempt", "state"]), runId = input?.value("runId"), attempt = input?.value("attempt"), state = input?.value("state");
+    return input && validScheduledRunId(runId) && integer(attempt, 1) && (state === "claimed" || state === "source_bound") ? Object.freeze({ runId, attempt, state }) : null;
   });
+  return rows && new Set(rows.map((row) => row.runId)).size === rows.length ? rows : null;
 }
 
-export interface ScheduledClaimReplayRow {
-  readonly runId: string;
-  readonly attempt: number;
-  readonly state: "claimed" | "source_bound";
-}
-
-export function decodeClaimReplayRows(value: unknown): readonly ScheduledClaimReplayRow[] | null {
-  if (!Array.isArray(value) || !dataOnly(value) || value.length > 100) return null;
-  const rows: ScheduledClaimReplayRow[] = [], seen = new Set<string>();
-  for (const item of value) {
-    const row = readObject(item, ["runId", "attempt", "state"]);
-    if (!row || !validScheduledRunId(row.runId) || !safeInteger(row.attempt, 1)
-      || (row.state !== "claimed" && row.state !== "source_bound") || seen.has(row.runId)) return null;
-    seen.add(row.runId); rows.push(Object.freeze({ runId: row.runId, attempt: row.attempt, state: row.state }));
-  }
-  return Object.freeze(rows);
-}
-
-export function decodeCleanupResult(value: unknown): { readonly removed: number; readonly runIds: readonly string[] } | null {
-  const row = readObject(value, ["removed", "runIds"]);
-  if (!row || !safeInteger(row.removed, 0, 100) || !Array.isArray(row.runIds) || row.runIds.length !== row.removed) return null;
-  const runIds: string[] = [], seen = new Set<string>();
-  for (const id of row.runIds) {
-    if (!validScheduledRunId(id) || seen.has(id)) return null;
-    seen.add(id); runIds.push(id);
-  }
-  return Object.freeze({ removed: row.removed, runIds: Object.freeze(runIds) });
-}
-
-export function canonicalRequestHash(value: unknown): string {
-  return hashCanonicalRequest(value as CanonicalJsonValue);
+export function decodeCleanupResult(candidate: unknown): { readonly removed: number; readonly runIds: readonly string[] } | null {
+  const input = ClosedInput.capture(candidate, ["removed", "runIds"]), removed = input?.value("removed");
+  const runIds = arrayOf(input?.value("runIds"), 100, (id) => validScheduledRunId(id) ? id : null);
+  return input && integer(removed, 0, 100) && runIds && runIds.length === removed && new Set(runIds).size === runIds.length
+    ? Object.freeze({ removed, runIds }) : null;
 }

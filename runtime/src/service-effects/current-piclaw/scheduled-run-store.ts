@@ -46,6 +46,7 @@ import {
   validateScheduledRunId,
   validHash,
   validId,
+  validRef,
   validScheduledRunId,
 } from "./scheduled-run-values.js";
 
@@ -54,6 +55,7 @@ const TASKS = `${P}tasks`, REVISIONS = `${P}task_revisions`, RUNS = `${P}occurre
 const LEASES = `${P}leases`, RENEWALS = `${P}lease_renewals`, BINDINGS = `${P}source_bindings`, LOGS = `${P}run_logs`;
 const NEXT = `${P}next_decisions`, ABANDONMENTS = `${P}abandonments`, LINKS = `${P}outbox_links`;
 const DECISIONS = `${P}decisions`, TOMBSTONES = `${P}tombstones`;
+const OUTBOX_KINDS = new Set(["wake_chat", "timeline_broadcast", "channel_delivery", "notification", "scheduler_run_log", "maintenance"]);
 
 export type ScheduledRunMutationMethod = "claimDue" | "renew" | "bindAcceptedSource" | "complete" | "abandon" | "cleanupTerminal";
 type MutationMethod = ScheduledRunMutationMethod;
@@ -302,10 +304,11 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
           if (!run || run.lease_expires_at! > request.now) continue;
           const snapshot = this.readSnapshot(run.task_id, run.task_revision);
           const authority = request.reclaimAuthorities.find((item) => item.runId === run.run_id && item.expectedAttempt === run.attempt);
-          let authorityKind: "agent_source" | "repeatable" | "reconciled_absent" | null = null;
+          let authorityKind: "agent_reconciled_absent" | "repeatable" | "reconciled_absent" | null = null;
           let reconciliationRef: string | null = null;
-          if (snapshot.executionRepeatability === "agent_source") authorityKind = "agent_source";
-          else if (snapshot.executionRepeatability === "repeatable" && authority?.kind === "repeatable") authorityKind = "repeatable";
+          if (snapshot.executionRepeatability === "agent_source" && authority?.kind === "agent_reconciled_absent") {
+            authorityKind = "agent_reconciled_absent"; reconciliationRef = authority.reconciliationRef;
+          } else if (snapshot.executionRepeatability === "repeatable" && authority?.kind === "repeatable") authorityKind = "repeatable";
           else if (snapshot.executionRepeatability === "reconciliation_required" && authority?.kind === "reconciled_absent") {
             authorityKind = "reconciled_absent"; reconciliationRef = authority.reconciliationRef;
           }
@@ -361,11 +364,19 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     return this.database.transaction(() => {
       const replay = this.replay(key, requestHash, "renew", request.runId);
       if (replay !== undefined) {
-        const record = decodeScheduledRunRecord(replay);
-        if (!record || (record.state !== "claimed" && record.state !== "source_bound") || record.leaseExpiresAt !== request.leaseExpiresAt) throw new CorruptState();
-        const current = this.readRecord(record.runId);
-        if (!current || current.attempt !== record.attempt || current.taskRevision !== record.taskRevision) throw new AbortMutation(errorOf("invalid_transition"));
-        return Result.ok(this.lease(record as ScheduledRunLease["record"], this.readSnapshot(record.taskId, record.taskRevision), request.leaseToken));
+        const saved = decodeScheduledRunRecord(replay);
+        if (!saved || (saved.state !== "claimed" && saved.state !== "source_bound") || saved.leaseExpiresAt !== request.leaseExpiresAt) throw new CorruptState();
+        const currentRow = this.readRunRow(saved.runId);
+        if (!currentRow) {
+          if (this.readTombstone(saved.runId)) throw new AbortMutation(errorOf("invalid_transition"));
+          throw new CorruptState();
+        }
+        if (currentRow.state === "completed" || currentRow.state === "abandoned" || currentRow.attempt !== saved.attempt
+          || currentRow.task_revision !== saved.taskRevision) throw new AbortMutation(errorOf("invalid_transition"));
+        const current = this.requireActiveRecord(this.recordFromRun(currentRow));
+        if (current.workerId !== request.workerId || currentRow.lease_token_hash !== tokenHash) throw new AbortMutation(errorOf("invalid_transition"));
+        if (current.leaseExpiresAt < request.leaseExpiresAt) throw new CorruptState();
+        return Result.ok(this.lease(current, this.readSnapshot(current.taskId, current.taskRevision), request.leaseToken));
       }
       const run = this.requireFencedRun(request, tokenHash);
       if (!run.lease_expires_at || request.leaseExpiresAt <= run.lease_expires_at) throw new AbortMutation(errorOf("invalid_request"));
@@ -626,8 +637,15 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     const outboxIds: string[] = [];
     for (const [index, link] of links.entries()) {
       if (link.ordinal !== index || !validId(link.outbox_id) || outboxIds.includes(link.outbox_id)) throw new CorruptState();
-      const target = this.database.query("SELECT outbox_id FROM service_effect_s05_outbox WHERE outbox_id=?").get(link.outbox_id) as { outbox_id: unknown } | undefined;
-      if (!target || target.outbox_id !== link.outbox_id) throw new CorruptState();
+      const target = this.database.query(
+        "SELECT o.outbox_id,o.kind,o.idempotency_key,o.request_hash,o.operation_id,o.source_seq,d.decision_key,d.method,d.request_hash AS decision_request_hash,d.outcome,d.outbox_id AS decision_outbox_id,d.attempt,d.lease_token_hash,d.result_json FROM service_effect_s05_outbox o LEFT JOIN service_effect_s05_decisions d ON d.decision_key=('enqueue:' || o.kind || ':' || o.idempotency_key) WHERE o.outbox_id=?",
+      ).get(link.outbox_id) as Record<string, unknown> | undefined;
+      const expectedDecisionKey = target && `enqueue:${String(target.kind)}:${String(target.idempotency_key)}`;
+      if (!target || target.outbox_id !== link.outbox_id || !OUTBOX_KINDS.has(target.kind as string) || !validId(target.idempotency_key)
+        || !validHash(target.request_hash) || target.operation_id !== run.operation_id || target.source_seq !== run.accepted_source_seq
+        || target.decision_key !== expectedDecisionKey || target.method !== "enqueue" || target.decision_request_hash !== target.request_hash
+        || target.outcome !== "applied" || target.decision_outbox_id !== link.outbox_id || target.attempt !== 0
+        || target.lease_token_hash !== null || target.result_json !== null) throw new CorruptState();
       outboxIds.push(link.outbox_id);
     }
     const record = decodeScheduledRunRecord({
@@ -642,7 +660,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     const snapshot = this.readSnapshot(run.task_id, run.task_revision);
     if ((snapshot.kind !== "agent" && record.acceptedSourceSeq !== null)
       || (snapshot.kind === "agent" && (record.state === "source_bound" || record.state === "completed") && record.acceptedSourceSeq === null)) throw new CorruptState();
-    this.validateLeaseEvidence(run, record.state === "claimed" || record.state === "source_bound");
+    this.validateLeaseEvidence(run, snapshot, record.state === "claimed" || record.state === "source_bound");
     if (record.acceptedSourceSeq !== null) this.validateSourceBinding(run, record);
     if (record.state === "completed" || record.state === "abandoned") this.validateTerminalEvidence(run, record);
     return record;
@@ -657,12 +675,20 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     return current.retained ? current : saved;
   }
 
-  private validateLeaseEvidence(run: RunRow, active: boolean): void {
-    const leases = this.database.query(`SELECT attempt,token_hash,worker_id,claimed_at,lease_expires_at FROM ${LEASES} WHERE run_id=? ORDER BY attempt`).all(run.run_id) as Array<Record<string, unknown>>;
+  private validateLeaseEvidence(run: RunRow, snapshot: ScheduledTaskSnapshot, active: boolean): void {
+    const leases = this.database.query(`SELECT attempt,token_hash,worker_id,claimed_at,lease_expires_at,authority_kind,reconciliation_ref FROM ${LEASES} WHERE run_id=? ORDER BY attempt`).all(run.run_id) as Array<Record<string, unknown>>;
     if (leases.length !== run.attempt) throw new CorruptState();
     for (const [index, row] of leases.entries()) {
       const attempt = index + 1, claimedAt = canonicalInstant(row.claimed_at), leaseExpiresAt = canonicalInstant(row.lease_expires_at);
       if (row.attempt !== attempt || !claimedAt || !leaseExpiresAt || !validHash(row.token_hash) || !validId(row.worker_id) || claimedAt >= leaseExpiresAt) throw new CorruptState();
+      const authorityValid = attempt === 1
+        ? row.authority_kind === "new" && row.reconciliation_ref === null
+        : snapshot.executionRepeatability === "agent_source"
+          ? row.authority_kind === "agent_reconciled_absent" && validRef(row.reconciliation_ref)
+          : snapshot.executionRepeatability === "repeatable"
+            ? row.authority_kind === "repeatable" && row.reconciliation_ref === null
+            : row.authority_kind === "reconciled_absent" && validRef(row.reconciliation_ref);
+      if (!authorityValid) throw new CorruptState();
       const renewals = this.database.query(`SELECT ordinal,request_hash,previous_expires_at,lease_expires_at,renewed_at FROM ${RENEWALS} WHERE run_id=? AND attempt=? ORDER BY ordinal`).all(run.run_id, attempt) as Array<Record<string, unknown>>;
       let previous: string | null = null;
       for (const [renewalIndex, renewal] of renewals.entries()) {
@@ -683,6 +709,13 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     const row = this.database.query(`SELECT request_hash,idempotency_key,chat_jid,source_seq,operation_id,bound_at FROM ${BINDINGS} WHERE run_id=?`).get(run.run_id) as Record<string, unknown> | undefined;
     if (!row || !validHash(row.request_hash) || !validId(row.idempotency_key) || row.chat_jid !== snapshot.chatJid
       || row.source_seq !== record.acceptedSourceSeq || row.operation_id !== record.operationId || !canonicalInstant(row.bound_at)) throw new CorruptState();
+    const owner = this.database.query(
+      "SELECT s.source_id,s.kind,s.chat_jid AS source_chat,s.source_seq,o.operation_id,o.chat_jid AS operation_chat,o.primary_source_seq,os.chat_jid AS membership_chat,os.source_seq AS membership_source_seq FROM service_effect_s01_sources s JOIN service_effect_s01_operation_sources os ON os.chat_jid=s.chat_jid AND os.source_seq=s.source_seq JOIN service_effect_s01_operations o ON o.operation_id=os.operation_id AND o.chat_jid=os.chat_jid WHERE s.chat_jid=? AND s.source_seq=? AND o.operation_id=?",
+    ).get(snapshot.chatJid, record.acceptedSourceSeq, record.operationId) as Record<string, unknown> | undefined;
+    if (!owner || owner.source_id !== run.run_id || owner.kind !== "scheduled_agent" || owner.source_chat !== snapshot.chatJid
+      || owner.source_seq !== record.acceptedSourceSeq || owner.operation_id !== record.operationId || owner.operation_chat !== snapshot.chatJid
+      || owner.primary_source_seq !== record.acceptedSourceSeq || owner.membership_chat !== snapshot.chatJid
+      || owner.membership_source_seq !== record.acceptedSourceSeq) throw new CorruptState();
   }
 
   private validateTerminalEvidence(run: RunRow, record: ScheduledRunRecord): void {

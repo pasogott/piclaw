@@ -335,6 +335,7 @@ function normaliseAuthority(value: unknown): ScheduledRunReclaimAuthority | null
   if (!row || !validScheduledRunId(row.runId) || !safeInteger(row.expectedAttempt, 1)) return null;
   if (row.kind === "repeatable" && row.reconciliationRef === null) return Object.freeze({ runId: row.runId, expectedAttempt: row.expectedAttempt, kind: "repeatable", reconciliationRef: null });
   if (row.kind === "reconciled_absent" && validRef(row.reconciliationRef)) return Object.freeze({ runId: row.runId, expectedAttempt: row.expectedAttempt, kind: "reconciled_absent", reconciliationRef: row.reconciliationRef });
+  if (row.kind === "agent_reconciled_absent" && validRef(row.reconciliationRef)) return Object.freeze({ runId: row.runId, expectedAttempt: row.expectedAttempt, kind: "agent_reconciled_absent", reconciliationRef: row.reconciliationRef });
   return null;
 }
 

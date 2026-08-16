@@ -104,6 +104,13 @@ export type ScheduledRunReclaimAuthority =
       readonly expectedAttempt: number;
       readonly kind: "reconciled_absent";
       readonly reconciliationRef: string;
+    }
+  | {
+      /** Stable scheduled-agent sourceId is this runId; evidence proves it absent. */
+      readonly runId: string;
+      readonly expectedAttempt: number;
+      readonly kind: "agent_reconciled_absent";
+      readonly reconciliationRef: string;
     };
 
 export interface ClaimDueRunsRequest {

@@ -404,6 +404,45 @@ const cases: readonly ParameterisedContractCase<ScheduledRunContractSubject>[] =
     },
   },
   {
+    name: "EF-S07-S10 agent reclaim requires exact reconciled-absence authority",
+    async run({ subject }) {
+      subject.authority.create(task("task:s10-agent", { kind: "agent", executionRepeatability: "agent_source" }));
+      const firstClaim = await subject.store.claimDue({ ...claim("s10-first"), leaseDurationMs: 1000 }); assert(firstClaim.ok && firstClaim.value.length === 1, "agent claim required");
+      const first = firstClaim.value[0];
+      const noEvidence = await subject.store.claimDue(claim("s10-none", "2026-08-16T01:00:02.000Z"));
+      assert(noEvidence.ok && noEvidence.value.length === 0, "agent expiry alone must not authorize reclaim");
+      const staleRunId = `${first.record.runId.slice(0, -1)}${first.record.runId.endsWith("0") ? "1" : "0"}`;
+      const staleSource = await subject.store.claimDue({ ...claim("s10-stale-source", "2026-08-16T01:00:02.000Z"), reclaimAuthorities: [{ runId: staleRunId, expectedAttempt: 1, kind: "agent_reconciled_absent", reconciliationRef: "reconciliation:stale-source" }] });
+      assert(staleSource.ok && staleSource.value.length === 0, "authority for another stable source/run must not reclaim");
+      const authority = { runId: first.record.runId, expectedAttempt: 1, kind: "agent_reconciled_absent" as const, reconciliationRef: "reconciliation:agent-source-absent" };
+      const reclaimed = await subject.store.claimDue({ ...claim("s10-authorized", "2026-08-16T01:00:02.000Z"), leaseDurationMs: 1000, reclaimAuthorities: [authority] });
+      assert(reclaimed.ok && reclaimed.value.length === 1 && reclaimed.value[0].record.attempt === 2, "exact agent reconciled absence must authorize one new attempt");
+      const staleAttempt = await subject.store.claimDue({ ...claim("s10-stale-attempt", "2026-08-16T01:00:04.000Z"), reclaimAuthorities: [authority] });
+      assert(staleAttempt.ok && staleAttempt.value.length === 0, "authority for the prior attempt must not authorize a later reclaim");
+    },
+  },
+  {
+    name: "EF-S07-S11 renew replay never revives terminal or superseded lease authority",
+    async run({ subject }) {
+      for (const suffix of ["complete", "abandon", "reclaim"]) subject.authority.create(task(`task:s11-${suffix}`, { scheduleType: "once", scheduleValue: "2026-08-16T01:00:00.000Z" }));
+      const claimed = await subject.store.claimDue(claim("s11")); assert(claimed.ok && claimed.value.length === 3, "renew replay fixtures required");
+      const leases = new Map(claimed.value.map((lease) => [lease.record.taskId.split("-").at(-1)!, lease]));
+      const renewal = (lease: ScheduledRunLease): RenewScheduledRunRequest => ({ runId: lease.record.runId, workerId: lease.record.workerId, expectedAttempt: 1, expectedTaskRevision: 1, leaseToken: lease.leaseToken, now: "2026-08-16T01:00:10.000Z", leaseExpiresAt: "2026-08-16T01:02:00.000Z" });
+      const renewed = new Map<string, { request: RenewScheduledRunRequest; lease: ScheduledRunLease }>();
+      for (const [suffix, lease] of leases) { const request = renewal(lease), result = await subject.store.renew(request); assert(result.ok, `renew ${suffix} required`); renewed.set(suffix, { request, lease: result.value }); }
+      const completed = await subject.store.complete(complete(renewed.get("complete")!.lease, "s11-complete")); assert(completed.ok, "terminal completion required");
+      const completeReplay = await subject.store.renew(renewed.get("complete")!.request); assert(!completeReplay.ok && completeReplay.error._tag === "invalid_transition", "renew replay after completion must be non-executable");
+      const abandonLease = renewed.get("abandon")!.lease;
+      const abandonRequest: AbandonScheduledRunRequest = hashed({ effect: { idempotencyKey: "abandon:s11", requestHash: "", operationId: null, sourceSeq: null, provenanceRef: "provenance:s11", redactionClass: "private" }, runId: abandonLease.record.runId, workerId: abandonLease.record.workerId, expectedAttempt: 1, expectedTaskRevision: 1, leaseToken: abandonLease.leaseToken, now: "2026-08-16T01:00:20.000Z", reasonTag: "test", abandonedAt: "2026-08-16T01:00:20.000Z", retryAt: null });
+      const abandoned = await subject.store.abandon(abandonRequest); assert(abandoned.ok, "terminal abandonment required");
+      const abandonReplay = await subject.store.renew(renewed.get("abandon")!.request); assert(!abandonReplay.ok && abandonReplay.error._tag === "invalid_transition", "renew replay after abandonment must be non-executable");
+      const reclaimLease = renewed.get("reclaim")!.lease;
+      const reclaimed = await subject.store.claimDue({ ...claim("s11-reclaim", "2026-08-16T01:02:01.000Z"), reclaimAuthorities: [{ runId: reclaimLease.record.runId, expectedAttempt: 1, kind: "repeatable", reconciliationRef: null }] });
+      assert(reclaimed.ok && reclaimed.value[0].record.attempt === 2, "new attempt required");
+      const oldReplay = await subject.store.renew(renewed.get("reclaim")!.request); assert(!oldReplay.ok && oldReplay.error._tag === "invalid_transition", "renew replay after reclaim must not revive the old attempt");
+    },
+  },
+  {
     name: "EF-S07-R02 fresh restore preserves claim binding abandonment and retention authorities",
     async run({ subject, crashAndRestore }) {
       subject.authority.create(task("task:r02-claim"));

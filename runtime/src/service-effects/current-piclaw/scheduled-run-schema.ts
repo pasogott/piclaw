@@ -100,7 +100,7 @@ export function installScheduledRunSchema(database: Database): void {
       worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 512),
       claimed_at TEXT NOT NULL CHECK(${instant("claimed_at")}),
       lease_expires_at TEXT NOT NULL CHECK(${instant("lease_expires_at")} AND claimed_at < lease_expires_at),
-      authority_kind TEXT NOT NULL CHECK(authority_kind IN ('new','agent_source','repeatable','reconciled_absent')),
+      authority_kind TEXT NOT NULL CHECK(authority_kind IN ('new','agent_reconciled_absent','repeatable','reconciled_absent')),
       reconciliation_ref TEXT CHECK(reconciliation_ref IS NULL OR length(reconciliation_ref) BETWEEN 1 AND 2048),
       PRIMARY KEY(run_id,attempt),
       FOREIGN KEY(run_id) REFERENCES ${PREFIX}occurrences(run_id)

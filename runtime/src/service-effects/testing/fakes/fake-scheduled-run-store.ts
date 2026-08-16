@@ -50,7 +50,7 @@ import { EffectTraceRecorder } from "../trace-recorder.js";
 type FakeMutationMethod = "claimDue" | "renew" | "bindAcceptedSource" | "complete" | "abandon" | "cleanupTerminal";
 
 type Head = { revision: number; status: "active" | "paused" | "completed" | "deleted"; nextRunAt: string | null; snapshots: Map<number, ScheduledTaskSnapshot> };
-type Run = { record: ScheduledRunRecord; snapshot: ScheduledTaskSnapshot; tokenHash: string | null; claimedAt: string };
+type Run = { record: ScheduledRunRecord; snapshot: ScheduledTaskSnapshot; tokenHash: string | null; claimedAt: string; leaseAuthorities: Array<{ attempt: number; kind: "new" | "agent_reconciled_absent" | "repeatable" | "reconciled_absent"; reconciliationRef: string | null }> };
 type Source = { sourceId: string; kind: string; chatJid: string; sourceSeq: number; operationId: string; primary: boolean };
 type Decision = { method: FakeMutationMethod; requestHash: string; value: unknown; runId: string | null };
 type Tombstone = ScheduledRunRecord & { decisionMethod: "complete" | "abandon"; decisionHash: string };
@@ -171,16 +171,19 @@ export class FakeScheduledRunStore implements ScheduledRunStore {
           const expires = addCanonicalDuration(request.now, request.leaseDurationMs); if (!expires) throw new FakeFailure(err("invalid_request"));
           const leaseToken = token(request.leaseTokenPrefix, candidate.id, 1);
           const record = freezeRecord({ runId: candidate.id, taskId: candidate.taskId, taskRevision: snapshot.revision, scheduledFor: candidate.scheduledFor, state: "claimed", attempt: 1, workerId: request.workerId, leaseExpiresAt: expires, acceptedSourceSeq: null, operationId: null, status: null, durationMs: null, resultRef: null, errorCode: null, nextRunAt: null, headDisposition: "pending", settledAt: null, abandonmentReasonTag: null, outboxIds: [], retained: false });
-          this.backend.runs.set(candidate.id, { record, snapshot, tokenHash: tokenHash(leaseToken), claimedAt: request.now });
+          this.backend.runs.set(candidate.id, { record, snapshot, tokenHash: tokenHash(leaseToken), claimedAt: request.now, leaseAuthorities: [{ attempt: 1, kind: "new", reconciliationRef: null }] });
           leases.push(Object.freeze({ record: record as ScheduledRunLease["record"], task: snapshot, leaseToken })); rows.push({ runId: candidate.id, attempt: 1, state: "claimed" });
         } else {
           const run = this.backend.runs.get(candidate.id)!; const expected = request.reclaimAuthorities.find((item) => item.runId === candidate.id && item.expectedAttempt === run.record.attempt);
-          const allowed = run.snapshot.executionRepeatability === "agent_source" || (run.snapshot.executionRepeatability === "repeatable" && expected?.kind === "repeatable") || (run.snapshot.executionRepeatability === "reconciliation_required" && expected?.kind === "reconciled_absent");
-          if (!allowed) continue;
+          const allowed = (run.snapshot.executionRepeatability === "agent_source" && expected?.kind === "agent_reconciled_absent")
+            || (run.snapshot.executionRepeatability === "repeatable" && expected?.kind === "repeatable")
+            || (run.snapshot.executionRepeatability === "reconciliation_required" && expected?.kind === "reconciled_absent");
+          if (!allowed || !expected) continue;
           const attempt = run.record.attempt + 1; if (!Number.isSafeInteger(attempt)) throw new FakeFailure(err("corrupt_state"));
           const expires = addCanonicalDuration(request.now, request.leaseDurationMs); if (!expires) throw new FakeFailure(err("invalid_request"));
           const leaseToken = token(request.leaseTokenPrefix, candidate.id, attempt);
           run.tokenHash = tokenHash(leaseToken); run.claimedAt = request.now;
+          run.leaseAuthorities.push({ attempt, kind: expected.kind, reconciliationRef: expected.reconciliationRef });
           run.record = freezeRecord({ ...run.record, attempt, workerId: request.workerId, leaseExpiresAt: expires });
           leases.push(Object.freeze({ record: run.record as ScheduledRunLease["record"], task: run.snapshot, leaseToken })); rows.push({ runId: candidate.id, attempt, state: run.record.state === "source_bound" ? "source_bound" : "claimed" });
         }
@@ -196,10 +199,17 @@ export class FakeScheduledRunStore implements ScheduledRunStore {
       const key = `renew:${request.runId}:${request.expectedAttempt}:${tokenHash(request.leaseToken)}:${request.leaseExpiresAt}`, hash = requestHash(request);
       const replay = this.decision(key, "renew", hash, request.runId);
       if (replay !== undefined) {
-        const record = decodeScheduledRunRecord(replay);
-        if (!record || (record.state !== "claimed" && record.state !== "source_bound") || record.leaseExpiresAt !== request.leaseExpiresAt) throw new FakeFailure(err("corrupt_state"));
-        const run = this.backend.runs.get(record.runId); if (!run || run.record.attempt !== record.attempt) throw new FakeFailure(err("invalid_transition"));
-        return Result.ok(Object.freeze({ record: record as ScheduledRunLease["record"], task: run.snapshot, leaseToken: request.leaseToken }));
+        const saved = decodeScheduledRunRecord(replay);
+        if (!saved || (saved.state !== "claimed" && saved.state !== "source_bound") || saved.leaseExpiresAt !== request.leaseExpiresAt) throw new FakeFailure(err("corrupt_state"));
+        const run = this.backend.runs.get(saved.runId);
+        if (!run || run.record.state === "completed" || run.record.state === "abandoned" || run.record.attempt !== saved.attempt
+          || run.record.taskRevision !== saved.taskRevision) throw new FakeFailure(err("invalid_transition"));
+        this.validateRun(run);
+        const current = this.requireRecord(run.record);
+        if ((current.state !== "claimed" && current.state !== "source_bound") || current.workerId !== request.workerId
+          || run.tokenHash !== tokenHash(request.leaseToken)) throw new FakeFailure(err("invalid_transition"));
+        if (current.leaseExpiresAt! < request.leaseExpiresAt) throw new FakeFailure(err("corrupt_state"));
+        return Result.ok(Object.freeze({ record: current as ScheduledRunLease["record"], task: run.snapshot, leaseToken: request.leaseToken }));
       }
       const fenced = this.fence(request); if (!fenced.ok) return fenced;
       const run = fenced.value; if (request.leaseExpiresAt <= run.record.leaseExpiresAt!) return Result.err(err("invalid_request"));
@@ -350,8 +360,24 @@ export class FakeScheduledRunStore implements ScheduledRunStore {
     }));
   }
   private readRecord(id: string): ScheduledRunRecord | null {
-    const value = this.backend.runs.get(id)?.record ?? this.backend.tombstones.get(id) ?? null;
-    return value ? this.requireRecord(value) : null;
+    const run = this.backend.runs.get(id);
+    if (run) { this.validateRun(run); return this.requireRecord(run.record); }
+    const tombstone = this.backend.tombstones.get(id) ?? null;
+    return tombstone ? this.requireRecord(tombstone) : null;
+  }
+  private validateRun(run: Run): void {
+    if (run.leaseAuthorities.length !== run.record.attempt) throw new FakeFailure(err("corrupt_state"));
+    for (const [index, authority] of run.leaseAuthorities.entries()) {
+      const attempt = index + 1;
+      const valid = authority.attempt === attempt && (attempt === 1
+        ? authority.kind === "new" && authority.reconciliationRef === null
+        : run.snapshot.executionRepeatability === "agent_source"
+          ? authority.kind === "agent_reconciled_absent" && typeof authority.reconciliationRef === "string"
+          : run.snapshot.executionRepeatability === "repeatable"
+            ? authority.kind === "repeatable" && authority.reconciliationRef === null
+            : authority.kind === "reconciled_absent" && typeof authority.reconciliationRef === "string");
+      if (!valid) throw new FakeFailure(err("corrupt_state"));
+    }
   }
   private requireRecord(value: unknown): ScheduledRunRecord {
     const candidate = value && typeof value === "object" && "decisionHash" in value

@@ -3,6 +3,19 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as scheduledRunModule from "../../src/service-effects/current-piclaw/scheduled-run-store.js";
 
+function tokenShingles(source: string, width = 7): Set<string> {
+  const body = source.replace(/^import[\s\S]*?;$/gmu, "").replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gmu, "");
+  const tokens = body.match(/[A-Za-z_$][A-Za-z0-9_$]*|\d+|===|!==|=>|[{}()[\].,:?+*|&!<>-]/gu) ?? [];
+  return new Set(tokens.slice(0, Math.max(0, tokens.length - width + 1)).map((_, index) => tokens.slice(index, index + width).join(" ")));
+}
+
+function sourceSimilarity(left: string, right: string): number {
+  const a = tokenShingles(left), b = tokenShingles(right);
+  let intersection = 0;
+  for (const shingle of a) if (b.has(shingle)) intersection += 1;
+  return intersection / Math.max(1, a.size + b.size - intersection);
+}
+
 describe("EF-S07 latent import boundary", () => {
   test("fake is independent and no production scheduler or task surface activates EF-S07", () => {
     const root = join(import.meta.dir, "../..");
@@ -11,6 +24,11 @@ describe("EF-S07 latent import boundary", () => {
       expect(fake).not.toContain("bun:sqlite");
       expect(fake).not.toContain("current-piclaw/");
     }
+    const fakeValues = readFileSync(join(root, "src/service-effects/testing/fakes/fake-scheduled-run-values.ts"), "utf8");
+    const sqliteValues = readFileSync(join(root, "src/service-effects/current-piclaw/scheduled-run-values.ts"), "utf8");
+    expect(fakeValues).toContain("class ClosedInput");
+    expect(sqliteValues).not.toContain("class ClosedInput");
+    expect(sourceSimilarity(fakeValues, sqliteValues)).toBeLessThan(0.45);
     expect(Object.keys(scheduledRunModule)).not.toContain("CurrentPiclawScheduledRunStore");
     const adapter = readFileSync(join(root, "src/service-effects/current-piclaw/scheduled-run-store.ts"), "utf8");
     expect(adapter).toContain("private constructor(");
