@@ -1,0 +1,253 @@
+import type {
+  ToolAbortExpectation,
+  ToolContextField,
+  ToolEffectClass,
+  ToolReplayPolicy,
+  ToolServiceEffector,
+} from "./types.js";
+
+export type NullAuthorityKind = "query" | "local" | "process" | "harness" | "model" | "credential" | "external" | "unsupported_mixed_authority";
+
+export interface ToolPreparationPolicyEvidence {
+  readonly toolName: string;
+  readonly effectClass: ToolEffectClass;
+  readonly replay: ToolReplayPolicy;
+  readonly contextFields: readonly ToolContextField[];
+  readonly serviceEffector: ToolServiceEffector;
+  readonly abortExpectation: ToolAbortExpectation;
+  readonly safeProof: string | null;
+  readonly nullAuthorityKind: NullAuthorityKind | null;
+  readonly authorityRationale: string;
+  readonly contextRationale: string;
+  readonly idempotencyIdentity: string | null;
+  readonly certainty: string;
+  readonly activationPrerequisites: readonly string[];
+  readonly activationStatus: "latent";
+}
+
+type PolicyInput = Omit<ToolPreparationPolicyEvidence, "toolName" | "activationStatus" | "contextRationale">;
+
+const CONTEXT_RATIONALE: Readonly<Record<string, string>> = Object.freeze({
+  "": "No Piclaw execution context field is required by this catalogue or harness-local operation.",
+  env: "env selects the current Earendil execution root and process/filesystem isolation boundary.",
+  localEnv: "localEnv selects Piclaw's canonical local workspace without borrowing the remote execution root.",
+  chatJid: "chatJid scopes the bounded service/session query to the current conversation.",
+  "chatJid,operationId": "chatJid selects service authority and operationId supplies the stale-result/idempotency fence.",
+  "operationId,localEnv": "operationId fences the asynchronous effect while localEnv selects the local workspace/index boundary.",
+  "chatJid,operationId,localEnv": "chatJid selects service authority, operationId fences completion, and localEnv selects the local file/workspace boundary.",
+});
+
+function policy(toolNames: readonly string[], input: PolicyInput): readonly ToolPreparationPolicyEvidence[] {
+  return Object.freeze(toolNames.map((toolName) => Object.freeze({
+    toolName,
+    ...input,
+    contextFields: Object.freeze([...input.contextFields]),
+    contextRationale: CONTEXT_RATIONALE[input.contextFields.join(",")] ?? "The exact context vector requires source review before activation.",
+    activationPrerequisites: Object.freeze([...input.activationPrerequisites]),
+    activationStatus: "latent" as const,
+  })));
+}
+
+function servicePolicy(
+  toolNames: readonly string[],
+  input: Pick<PolicyInput, "effectClass" | "replay" | "contextFields" | "abortExpectation" | "serviceEffector" | "authorityRationale" | "idempotencyIdentity" | "certainty" | "activationPrerequisites"> & { safeProof?: string },
+): readonly ToolPreparationPolicyEvidence[] {
+  return policy(toolNames, { ...input, safeProof: input.safeProof ?? null, nullAuthorityKind: null });
+}
+
+const DIRECT_QUERY = {
+  serviceEffector: null,
+  nullAuthorityKind: "query",
+  idempotencyIdentity: null,
+  certainty: "A fresh bounded read may be discarded and repeated because it commits no mutation.",
+  activationPrerequisites: ["selected tagged Harness v3 direct-tool contract"],
+} as const;
+
+const entries = Object.freeze([
+  ...policy(["read", "grep", "find", "ls"], {
+    effectClass: "query", replay: "safe", contextFields: ["env"], abortExpectation: "must_stop",
+    ...DIRECT_QUERY,
+    safeProof: "ExecutionEnv performs a bounded filesystem read/search with no write path.",
+    authorityRationale: "Filesystem query; no Piclaw service-operation authority is mutated.",
+  }),
+  ...policy(["search_tool_output"], {
+    effectClass: "query", replay: "safe", contextFields: ["localEnv"],
+    abortExpectation: "may_finish_late", ...DIRECT_QUERY,
+    safeProof: "Bounded local output-store lookup has no mutation path.",
+    authorityRationale: "Local query; no Piclaw service-operation authority is mutated.",
+  }),
+  ...policy(["search_workspace"], {
+    effectClass: "query", replay: "safe", contextFields: ["localEnv"],
+    abortExpectation: "must_stop", ...DIRECT_QUERY,
+    safeProof: "Bounded local index lookup has no mutation path.",
+    authorityRationale: "Local query; no Piclaw service-operation authority is mutated.",
+  }),
+  ...policy(["list_tools", "list_scripts", "get_model_state", "list_models", "context_tree_query"], {
+    effectClass: "query", replay: "safe", contextFields: [], abortExpectation: "may_finish_late", ...DIRECT_QUERY,
+    safeProof: "Deterministic bounded catalogue or selected-state snapshot with no mutation path.",
+    authorityRationale: "Harness/catalogue query; no Piclaw service-operation authority is mutated.",
+  }),
+  ...policy(["introspect_sql", "session_status"], {
+    effectClass: "query", replay: "safe", contextFields: ["chatJid"], abortExpectation: "may_finish_late", ...DIRECT_QUERY,
+    safeProof: "Read-only bounded service/session snapshot; grammar and action surface reject writes.",
+    authorityRationale: "Service projection query; no service-operation authority is mutated.",
+  }),
+  ...policy(["m365_teams_chats", "m365_teams_messages", "m365_profile", "m365_people", "m365_spo_search", "m365_spo_browse", "m365_document_link_metadata"], {
+    effectClass: "query", replay: "safe", contextFields: ["localEnv"], abortExpectation: "may_finish_late", ...DIRECT_QUERY,
+    safeProof: "The exact bundled M365 action surface is constrained to Graph reads for this family.",
+    authorityRationale: "External read; no Piclaw service-operation authority is mutated.",
+  }),
+
+  ...policy(["write", "edit"], {
+    effectClass: "mutation", replay: "never", contextFields: ["env"], serviceEffector: null,
+    abortExpectation: "may_finish_late", safeProof: null, nullAuthorityKind: "local",
+    authorityRationale: "ExecutionEnv filesystem mutation is outside Piclaw service-operation stores.",
+    idempotencyIdentity: null, certainty: "A write may land before cancellation; automatic replay is forbidden.",
+    activationPrerequisites: ["selected tagged Harness v3 factories", "preserved Earendil path queue and edit diagnostics"],
+  }),
+  ...policy(["bash", "powershell", "exec_batch", "bun_run"], {
+    effectClass: "mutation", replay: "never", contextFields: ["env"], serviceEffector: null,
+    abortExpectation: "must_stop", safeProof: null, nullAuthorityKind: "process",
+    authorityRationale: "Child-process effects are outside Piclaw service-operation stores.",
+    idempotencyIdentity: null, certainty: "Abort must stop the process group; prior external effects may still be unknown.",
+    activationPrerequisites: ["selected tagged Harness v3 ExecutionEnv", "single-execution process-group abort evidence"],
+  }),
+  ...policy(["local_bash"], {
+    effectClass: "mutation", replay: "never", contextFields: ["localEnv"], serviceEffector: null,
+    abortExpectation: "must_stop", safeProof: null, nullAuthorityKind: "process",
+    authorityRationale: "Local child-process effects are outside Piclaw service-operation stores.",
+    idempotencyIdentity: null, certainty: "Abort must stop the process group; prior external effects may still be unknown.",
+    activationPrerequisites: ["selected tagged Harness v3 local ExecutionEnv", "single-execution process-group abort evidence"],
+  }),
+  ...policy(["activate_tools", "reset_active_tools", "context_prune"], {
+    effectClass: "mutation", replay: "never", contextFields: [], serviceEffector: null,
+    abortExpectation: "may_finish_late", safeProof: null, nullAuthorityKind: "harness",
+    authorityRationale: "Selected harness/lane state is not Piclaw service-operation authority.",
+    idempotencyIdentity: null, certainty: "The selected lane may change before cancellation is observed; no replay.",
+    activationPrerequisites: ["selected tagged Harness v3 constructor dependencies", "lane owner/version fence"],
+  }),
+  ...policy(["switch_model", "switch_thinking"], {
+    effectClass: "mutation", replay: "never", contextFields: [], serviceEffector: null,
+    abortExpectation: "may_finish_late", safeProof: null, nullAuthorityKind: "model",
+    authorityRationale: "Selected model/runtime state is not Piclaw service-operation authority.",
+    idempotencyIdentity: null, certainty: "The selected lane may change before cancellation is observed; no replay.",
+    activationPrerequisites: ["selected tagged Harness v3 model runtime", "lane owner/version fence"],
+  }),
+  ...policy(["env", "image_process"], {
+    effectClass: "mixed", replay: "never", contextFields: ["localEnv"], serviceEffector: null,
+    abortExpectation: "may_finish_late", safeProof: null, nullAuthorityKind: "local",
+    authorityRationale: "Workspace configuration and image/filesystem effects are outside service-operation authority.",
+    idempotencyIdentity: null, certainty: "Action-specific local mutations can finish after cancellation; no replay.",
+    activationPrerequisites: ["action split or retained conservative mixed policy", "selected tagged Harness v3 local ExecutionEnv"],
+  }),
+  ...policy(["keychain"], {
+    effectClass: "mixed", replay: "never", contextFields: ["chatJid", "operationId"], serviceEffector: null,
+    abortExpectation: "may_finish_late", safeProof: null, nullAuthorityKind: "credential",
+    authorityRationale: "CredentialStore authority is separate from Piclaw service-operation stores.",
+    idempotencyIdentity: null, certainty: "A credential mutation may commit before cancellation; no replay.",
+    activationPrerequisites: ["public CredentialStore direct contract", "protected-field observer evidence"],
+  }),
+  ...policy(["ssh"], {
+    effectClass: "mixed", replay: "never", contextFields: ["chatJid", "operationId"], serviceEffector: null,
+    abortExpectation: "may_finish_late", safeProof: null, nullAuthorityKind: "external",
+    authorityRationale: "SSH profile/connection and remote effects are not service-operation authority.",
+    idempotencyIdentity: null, certainty: "Remote connection or command effects may be unknown after disconnect; no replay.",
+    activationPrerequisites: ["selected tagged Harness v3 environment selection", "remote certainty remains conservative"],
+  }),
+  ...policy(["cdp_browser"], {
+    effectClass: "mixed", replay: "never", contextFields: ["localEnv"], serviceEffector: null,
+    abortExpectation: "may_finish_late", safeProof: null, nullAuthorityKind: "external",
+    authorityRationale: "Browser and output-file effects are external/local, not service-operation authority.",
+    idempotencyIdentity: null, certainty: "A browser action may land before abort; no replay.",
+    activationPrerequisites: ["action split or retained conservative mixed policy", "direct browser abort evidence"],
+  }),
+  ...policy(["mcp"], {
+    effectClass: "mixed", replay: "never", contextFields: ["chatJid", "operationId", "localEnv"], serviceEffector: null,
+    abortExpectation: "may_finish_late", safeProof: null, nullAuthorityKind: "external",
+    authorityRationale: "MCP discovery/auth/remote calls are external and not service-operation authority.",
+    idempotencyIdentity: null, certainty: "Remote mutation certainty may be unknown after disconnect; no replay.",
+    activationPrerequisites: ["exact selected adapter contract", "tool-specific review before any direct safe policy"],
+  }),
+  ...policy(["m365_teams_send", "m365_teams_send_rich_text", "m365_teams_send_markdown_card", "m365_teams_upload_file_card", "m365_teams_send_link_card", "m365_teams_send_file_card", "m365_onedrive_share_local_file", "m365_spo_upload", "m365_spo_sync", "m365_spo_move", "m365_spo_move_many"], {
+    effectClass: "mutation", replay: "never", contextFields: ["localEnv"], serviceEffector: null,
+    abortExpectation: "may_finish_late", safeProof: null, nullAuthorityKind: "external",
+    authorityRationale: "Graph/SharePoint mutations and local files are external to service-operation authority.",
+    idempotencyIdentity: null, certainty: "External mutation certainty may be unknown after disconnect; no replay.",
+    activationPrerequisites: ["selected tagged Harness v3", "external certainty reporting", "protected schema coverage"],
+  }),
+  ...policy(["m365_graph_query", "m365_mail", "m365_onedrive", "m365_calendar", "m365_todo", "m365_spo_download", "m365_calendar_svg"], {
+    effectClass: "mixed", replay: "never", contextFields: ["localEnv"], serviceEffector: null,
+    abortExpectation: "may_finish_late", safeProof: null, nullAuthorityKind: "external",
+    authorityRationale: "Mixed Graph/local-file actions are external to service-operation authority.",
+    idempotencyIdentity: null, certainty: "Action-specific mutations may have unknown certainty; no replay.",
+    activationPrerequisites: ["action split or retained conservative mixed policy", "external certainty reporting", "protected schema coverage"],
+  }),
+  ...policy(["messages"], {
+    effectClass: "mixed", replay: "never", contextFields: ["chatJid", "operationId"], serviceEffector: null,
+    abortExpectation: "may_finish_late", safeProof: null, nullAuthorityKind: "unsupported_mixed_authority",
+    authorityRationale: "add/post are future EF-S03 candidates; delete/move lack closed arbitrary-history authority.",
+    idempotencyIdentity: null, certainty: "Activation is blocked; no mixed action is replayed.",
+    activationPrerequisites: ["separately approved fenced administrative timeline authority or delete/move retirement"],
+  }),
+
+  ...servicePolicy(["chat"], {
+    effectClass: "mutation", replay: "never", contextFields: ["chatJid", "operationId"], abortExpectation: "may_finish_late", serviceEffector: "EF-S01",
+    authorityRationale: "ServiceWorkStore owns accepted cross-session work before wake intent.", idempotencyIdentity: "source ID plus request hash",
+    certainty: "Equal identity reconciles; changed hash conflicts; stale wake results are ignored.", activationPrerequisites: ["EF-S01 accepted-source API", "owner/version fence", "selected tagged Harness v3"],
+  }),
+  ...servicePolicy(["session_control"], {
+    effectClass: "mixed", replay: "never", contextFields: ["chatJid", "operationId"], abortExpectation: "may_finish_late", serviceEffector: "EF-S01",
+    authorityRationale: "Mutating control paths persist cancellation/queue authority in ServiceWorkStore.", idempotencyIdentity: "operation ID and owner/version plus request hash",
+    certainty: "Stale lane results fail the owner/version fence.", activationPrerequisites: ["query/mutation dispatch", "EF-S01 control API", "selected harness/lane dependency"],
+  }),
+  ...servicePolicy(["send_adaptive_card", "send_dashboard_widget"], {
+    effectClass: "mutation", replay: "never", contextFields: ["chatJid", "operationId"], abortExpectation: "may_finish_late", serviceEffector: "EF-S03",
+    authorityRationale: "TimelineDraftStore owns non-terminal operation drafts/service notices.", idempotencyIdentity: "operation ID, draft kind and revision plus payload hash",
+    certainty: "Equal draft identity reconciles; changed hash conflicts; broadcast remains outside the store.", activationPrerequisites: ["EF-S03 draft API", "post-commit broadcast driver", "selected tagged Harness v3"],
+  }),
+  ...servicePolicy(["attach_file"], {
+    effectClass: "mutation", replay: "never", contextFields: ["chatJid", "operationId", "localEnv"], abortExpectation: "may_finish_late", serviceEffector: "EF-S04",
+    authorityRationale: "OperationMediaStore owns upload metadata and operation/media binding.", idempotencyIdentity: "upload ID plus digest/request hash and operation/media/role binding",
+    certainty: "Exact upload/binding reconciles; bytes never enter traces.", activationPrerequisites: ["EF-S04 upload/bind API", "bounded local file read", "selected tagged Harness v3"],
+  }),
+  ...servicePolicy(["read_attachment"], {
+    effectClass: "query", replay: "safe", contextFields: ["chatJid", "operationId"], abortExpectation: "may_finish_late", serviceEffector: "EF-S04",
+    safeProof: "Exact bounded MediaRef lookup has no mutation path.", authorityRationale: "OperationMediaStore is the sole media metadata/bytes authority.",
+    idempotencyIdentity: "operation/media reference", certainty: "Read result can be discarded and repeated.", activationPrerequisites: ["EF-S04 bounded read API", "selected tagged Harness v3"],
+  }),
+  ...servicePolicy(["export_attachment"], {
+    effectClass: "mixed", replay: "never", contextFields: ["chatJid", "operationId", "localEnv"], abortExpectation: "may_finish_late", serviceEffector: "EF-S04",
+    authorityRationale: "OperationMediaStore supplies the sole service read before a local filesystem write.", idempotencyIdentity: "operation/media reference; local export has no replay identity",
+    certainty: "Local export may finish late; no second service store is involved and no replay occurs.", activationPrerequisites: ["EF-S04 bounded read API", "local output fence", "selected tagged Harness v3"],
+  }),
+  ...servicePolicy(["refresh_workspace_index"], {
+    effectClass: "mutation", replay: "never", contextFields: ["operationId", "localEnv"], abortExpectation: "may_finish_late", serviceEffector: "EF-S05",
+    authorityRationale: "ServiceOutboxStore owns the index-refresh effect request.", idempotencyIdentity: "effect/outbox ID plus request hash",
+    certainty: "Driver records applied, not-applied or unknown; model-visible tool is never replayed.", activationPrerequisites: ["EF-S05 enqueue API", "separate index driver", "selected tagged Harness v3"],
+  }),
+  ...servicePolicy(["open_workspace_file"], {
+    effectClass: "mutation", replay: "never", contextFields: ["chatJid", "operationId", "localEnv"], abortExpectation: "may_finish_late", serviceEffector: "EF-S05",
+    authorityRationale: "ServiceOutboxStore owns the browser UI open request.", idempotencyIdentity: "effect/outbox ID plus request hash",
+    certainty: "Driver records applied, not-applied or unknown; stale UI completion is fenced.", activationPrerequisites: ["EF-S05 enqueue API", "browser UI driver", "selected tagged Harness v3"],
+  }),
+  ...servicePolicy(["exit_process"], {
+    effectClass: "mutation", replay: "never", contextFields: ["chatJid", "operationId"], abortExpectation: "may_finish_late", serviceEffector: "EF-S05",
+    authorityRationale: "ServiceOutboxStore owns the maintenance/shutdown request before the external driver exits.", idempotencyIdentity: "effect/outbox ID plus request hash",
+    certainty: "Driver records applied, not-applied or unknown; shutdown is never replayed automatically.", activationPrerequisites: ["EF-S05 enqueue API", "external shutdown driver", "selected tagged Harness v3"],
+  }),
+  ...servicePolicy(["schedule_task"], {
+    effectClass: "mutation", replay: "never", contextFields: ["chatJid", "operationId"], abortExpectation: "may_finish_late", serviceEffector: "EF-S07",
+    authorityRationale: "ScheduledRunStore owns task/run occurrence authority.", idempotencyIdentity: "task ID plus scheduled occurrence/run ID and request hash",
+    certainty: "Lease/version and equal/conflicting completion reconcile; tool is not replayed.", activationPrerequisites: ["EF-S07 task mutation API", "lease/version fence", "selected tagged Harness v3"],
+  }),
+  ...servicePolicy(["scheduled_tasks"], {
+    effectClass: "mixed", replay: "never", contextFields: ["chatJid", "operationId"], abortExpectation: "may_finish_late", serviceEffector: "EF-S07",
+    authorityRationale: "ScheduledRunStore owns mutating task actions and bounded task snapshots.", idempotencyIdentity: "task ID plus scheduled occurrence/run ID and request hash",
+    certainty: "Mutations use lease/version fences; mixed action surface is never replayed.", activationPrerequisites: ["query/mutation dispatch", "EF-S07 task API", "selected tagged Harness v3"],
+  }),
+
+]);
+
+export const TOOL_PREPARATION_POLICY: ReadonlyMap<string, ToolPreparationPolicyEvidence> = new Map(
+  entries.map((entry) => [entry.toolName, entry]),
+);

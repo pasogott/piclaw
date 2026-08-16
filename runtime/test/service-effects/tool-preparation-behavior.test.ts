@@ -5,11 +5,15 @@ import { describe, expect, test } from "bun:test";
 import { TOOL_PREPARATION_MANIFEST } from "../../src/service-effects/tool-preparation/manifest.js";
 import {
   acceptsLateResult,
+  boundedOutputFixture,
   composeAfterSingleExecution,
+  composeCompleteOutputFixture,
   createScriptedContext,
-  metadataOnlyTrace,
+  exactEditFixture,
+  executeWithFence,
   probeUnresolvedCall,
   ScriptedDirectTool,
+  serializeWritesFixture,
 } from "./fixtures/scripted-tool-preparation.js";
 
 function spec(toolName: string) {
@@ -18,39 +22,85 @@ function spec(toolName: string) {
   return value;
 }
 
-describe("WP-3C implementation-independent recovery cases", () => {
-  test("safe query recovery executes once with a fresh four-field context", async () => {
+function behaviorKey(row: (typeof TOOL_PREPARATION_MANIFEST)[number]): string {
+  return JSON.stringify([
+    row.effectClass,
+    row.replay,
+    row.abortExpectation,
+    row.serviceEffector,
+    row.contextFields,
+  ]);
+}
+
+describe("WP-3C complete behavior combination matrix", () => {
+  test("executes one faithful recovery case for every effect/replay/abort/effector/context combination", async () => {
+    const representatives = new Map<string, (typeof TOOL_PREPARATION_MANIFEST)[number]>();
+    for (const row of TOOL_PREPARATION_MANIFEST) representatives.set(behaviorKey(row), row);
+    const covered = new Set<string>();
+    const branches = { safe: 0, never: 0, mustStop: 0, mayFinishLate: 0, service: 0, external: 0 };
+
+    for (const [key, row] of representatives) {
+      const context = createScriptedContext(`matrix-${covered.size}`, `/matrix/${covered.size}`);
+      const tool = new ScriptedDirectTool(async () => ({ content: [{ type: "text", text: row.toolName }], details: {} }));
+      const outcome = await probeUnresolvedCall(row, tool, context);
+      covered.add(key);
+      if (row.replay === "safe") {
+        branches.safe += 1;
+        expect(outcome.status).toBe("executed");
+        expect(tool.executeCount).toBe(1);
+        expect(tool.contexts[0]).toBe(context);
+      } else {
+        branches.never += 1;
+        expect(outcome.status).toBe("blocked");
+        expect(tool.executeCount).toBe(0);
+      }
+      if (row.abortExpectation === "must_stop") branches.mustStop += 1;
+      else branches.mayFinishLate += 1;
+      if (row.serviceEffector) branches.service += 1;
+      else branches.external += 1;
+      expect(row.contextFields.every((field) => Object.hasOwn(context, field))).toBeTrue();
+    }
+
+    expect(covered.size).toBe(representatives.size);
+    expect(Object.values(branches).every((count) => count > 0)).toBeTrue();
+  });
+
+  test("safe recovery uses a fresh isolated four-field context", async () => {
     const tool = new ScriptedDirectTool(async (_id, _params, _signal, _update, context) => ({
       content: [{ type: "text", text: `${context.operationId}:${context.env.cwd}` }],
       details: undefined,
     }));
     const firstContext = createScriptedContext("operation-1", "/remote/one");
     const secondContext = createScriptedContext("operation-2", "/remote/two");
-
     await tool.execute("initial-call", {}, undefined, undefined, firstContext);
     const recovered = await probeUnresolvedCall(spec("read"), tool, secondContext);
 
     expect(recovered.status).toBe("executed");
-    expect(tool.executeCount).toBe(2);
     expect(tool.contexts).toEqual([firstContext, secondContext]);
+    expect(tool.contexts[0]).not.toBe(tool.contexts[1]);
     expect(Object.keys(secondContext).sort()).toEqual(["chatJid", "env", "localEnv", "operationId"]);
   });
 
-  test("never recovery blocks a mutation without invoking it", async () => {
-    const tool = new ScriptedDirectTool(async () => {
-      throw new Error("mutation must not be replayed");
-    });
-    expect(await probeUnresolvedCall(spec("bash"), tool, createScriptedContext("operation-1", "/work"))).toEqual({ status: "blocked" });
+  test("unknown external mutations and every non-query remain non-recoverable", async () => {
+    const tool = new ScriptedDirectTool(async () => { throw new Error("must not execute"); });
+    for (const row of TOOL_PREPARATION_MANIFEST.filter((candidate) => candidate.effectClass !== "query")) {
+      expect(row.replay).toBe("never");
+      expect((await probeUnresolvedCall(row, tool, createScriptedContext(row.toolName, "/work"))).status).toBe("blocked");
+    }
     expect(tool.executeCount).toBe(0);
-  });
-
-  test("every safe row is a deterministic query and every mutation stays never", () => {
-    expect(TOOL_PREPARATION_MANIFEST.filter((row) => row.replay === "safe").every((row) => row.effectClass === "query")).toBeTrue();
-    expect(TOOL_PREPARATION_MANIFEST.filter((row) => row.effectClass !== "query").every((row) => row.replay === "never")).toBeTrue();
   });
 });
 
-describe("WP-3C abort and late-result cases", () => {
+describe("WP-3C abort, update ordering and stale-operation fences", () => {
+  test("pre-aborted execution invokes no underlying tool", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const tool = new ScriptedDirectTool(async () => ({ content: [], details: {} }));
+    const outcome = await executeWithFence(tool, createScriptedContext("pre-abort", "/work"), controller.signal, () => {});
+    expect(outcome).toEqual({ status: "aborted" });
+    expect(tool.executeCount).toBe(0);
+  });
+
   test("must_stop propagates abort and accepts no post-abort update", async () => {
     let started!: () => void;
     const observedStart = new Promise<void>((resolve) => { started = resolve; });
@@ -59,88 +109,147 @@ describe("WP-3C abort and late-result cases", () => {
       onUpdate?.({ content: [{ type: "text", text: "started" }], details: { phase: "running" } });
       started();
       return await new Promise<never>((_resolve, reject) => {
-        signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        signal?.addEventListener("abort", () => {
+          onUpdate?.({ content: [{ type: "text", text: "late" }], details: {} });
+          reject(new Error("aborted"));
+        }, { once: true });
       });
     });
     const controller = new AbortController();
-    const pending = tool.execute("abort-call", {}, controller.signal, (update) => updates.push(update), createScriptedContext("operation-1", "/work"));
+    const pending = executeWithFence(tool, createScriptedContext("must-stop", "/work"), controller.signal, (update) => updates.push(update));
     await observedStart;
     controller.abort();
-
-    await expect(pending).rejects.toThrow("aborted");
-    await Bun.sleep(0);
+    expect(await pending).toEqual({ status: "aborted" });
     expect(spec("bash").abortExpectation).toBe("must_stop");
     expect(updates).toHaveLength(1);
   });
 
-  test("may_finish_late result is rejected by the operation fence", async () => {
+  test("may_finish_late discards late result and post-abort updates", async () => {
     let release!: () => void;
     const delayed = new Promise<void>((resolve) => { release = resolve; });
+    const updates: unknown[] = [];
+    const tool = new ScriptedDirectTool(async (_id, _params, _signal, onUpdate) => {
+      onUpdate?.({ content: [{ type: "text", text: "before" }], details: {} });
+      await delayed;
+      onUpdate?.({ content: [{ type: "text", text: "after" }], details: {} });
+      return { content: [{ type: "text", text: "late" }], details: {} };
+    });
+    const controller = new AbortController();
+    const pending = executeWithFence(tool, createScriptedContext("late", "/work"), controller.signal, (update) => updates.push(update));
+    await Bun.sleep(0);
+    controller.abort();
+    release();
+    expect(await pending).toEqual({ status: "discarded" });
+    expect(updates).toHaveLength(1);
+  });
+
+  test("operation change discards stale EF result without accepting a service write", async () => {
+    let release!: () => void;
+    const delayed = new Promise<void>((resolve) => { release = resolve; });
+    let currentOperationId = "operation-old";
     let acceptedServiceWrites = 0;
     const tool = new ScriptedDirectTool(async () => {
       await delayed;
       return { content: [{ type: "text", text: "late" }], details: {} };
     });
-    const controller = new AbortController();
-    const pending = tool.execute("late-call", {}, controller.signal, undefined, createScriptedContext("operation-old", "/work"));
-    controller.abort();
+    const pending = executeWithFence(
+      tool,
+      createScriptedContext("operation-old", "/work"),
+      new AbortController().signal,
+      () => {},
+      () => currentOperationId,
+    );
+    currentOperationId = "operation-new";
     release();
-    const result = await pending;
-    if (acceptsLateResult("operation-old", "operation-new")) acceptedServiceWrites += 1;
-
-    expect(result.content).toEqual([{ type: "text", text: "late" }]);
-    expect(spec("refresh_workspace_index")).toMatchObject({
-      serviceEffector: "EF-S05",
-      abortExpectation: "may_finish_late",
-    });
+    const outcome = await pending;
+    if (outcome.status === "accepted" && acceptsLateResult("operation-old", currentOperationId)) acceptedServiceWrites += 1;
+    expect(outcome).toEqual({ status: "discarded" });
+    expect(spec("refresh_workspace_index")).toMatchObject({ serviceEffector: "EF-S05", abortExpectation: "may_finish_late" });
     expect(acceptedServiceWrites).toBe(0);
+  });
+
+  test("preserves update order and suppresses updates after terminal result", async () => {
+    const updates: string[] = [];
+    const tool = new ScriptedDirectTool(async (_id, _params, _signal, onUpdate) => {
+      onUpdate?.({ content: [{ type: "text", text: "one" }], details: {} });
+      onUpdate?.({ content: [{ type: "text", text: "two" }], details: {} });
+      setTimeout(() => onUpdate?.({ content: [{ type: "text", text: "late" }], details: {} }), 0);
+      return { content: [{ type: "text", text: "done" }], details: {} };
+    });
+    const outcome = await executeWithFence(tool, createScriptedContext("updates", "/work"), new AbortController().signal, (update) => {
+      const text = update.content[0];
+      if (text?.type === "text") updates.push(text.text);
+    });
+    await Bun.sleep(5);
+    expect(outcome.status).toBe("accepted");
+    expect(updates).toEqual(["one", "two"]);
   });
 });
 
-describe("WP-3C update, truncation, and protected-data cases", () => {
-  test("post-result persistence composes over one native execution and preserves full-output details", async () => {
-    const nativeResult = {
-      content: [{ type: "text" as const, text: "bounded preview" }],
-      details: {
-        truncation: { truncated: true, totalLines: 500 },
-        fullOutputPath: "/fixture/full-output.txt",
-      },
-    };
-    const tool = new ScriptedDirectTool(async () => nativeResult);
-    let compositionCount = 0;
-    const composed = await composeAfterSingleExecution(tool, createScriptedContext("operation-1", "/work"), async (result) => {
-      compositionCount += 1;
-      return {
-        content: [{ type: "text", text: "tool-output:fixture-handle\n\nPreview:\nbounded preview" }],
-        details: { ...(result.details as object), storedOutputId: "fixture-handle" },
-      };
-    });
-
-    expect(tool.executeCount).toBe(1);
-    expect(compositionCount).toBe(1);
-    expect(composed.details).toEqual({
-      truncation: { truncated: true, totalLines: 500 },
-      fullOutputPath: "/fixture/full-output.txt",
-      storedOutputId: "fixture-handle",
-    });
+describe("WP-3C truncation, exact edit and write-serialization cases", () => {
+  test("models independent line and byte truncation thresholds", () => {
+    const lineBounded = boundedOutputFixture("one\ntwo\nthree", 2, 100);
+    const byteBounded = boundedOutputFixture("ééé", 10, 4);
+    expect(lineBounded).toEqual({ preview: "one\ntwo", truncated: true, totalLines: 3, totalBytes: 13 });
+    expect(byteBounded).toEqual({ preview: "éé", truncated: true, totalLines: 1, totalBytes: 6 });
   });
 
-  test("post-result persistence failure fails open without reinvocation", async () => {
-    const nativeResult = { content: [{ type: "text" as const, text: "native" }], details: { fullOutputPath: "/fixture/native.txt" } };
-    const tool = new ScriptedDirectTool(async () => nativeResult);
-    const result = await composeAfterSingleExecution(tool, createScriptedContext("operation-1", "/work"), () => {
+  test("persists a complete spill copy while preserving native preview/details", async () => {
+    const full = "line-1\nline-2\nline-3\nline-4";
+    const native = {
+      content: [{ type: "text" as const, text: "line-1\nline-2" }],
+      details: { truncation: { truncated: true, totalLines: 4 }, fullOutputPath: "/fixture/full.txt" },
+    };
+    let persisted = "";
+    const composed = await composeCompleteOutputFixture(native, (path) => path === "/fixture/full.txt" ? full : undefined, (text) => {
+      persisted = text;
+      return "stored-fixture";
+    });
+    expect(persisted).toBe(full);
+    expect(composed.content).toBe(native.content);
+    expect(composed.details).toEqual({ ...native.details, storedOutputId: "stored-fixture" });
+  });
+
+  test("missing spill and persistence faults fail open to the native result", async () => {
+    const native = {
+      content: [{ type: "text" as const, text: "preview" }],
+      details: { fullOutputPath: "/missing/spill.txt" },
+    };
+    let persistCalls = 0;
+    const missing = await composeCompleteOutputFixture(native, () => undefined, () => { persistCalls += 1; return "unexpected"; });
+    const failed = await composeCompleteOutputFixture(native, () => "full", () => { throw new Error("fixture fault"); });
+    expect(missing).toBe(native);
+    expect(failed).toBe(native);
+    expect(persistCalls).toBe(0);
+  });
+
+  test("post-processes exactly one native execution and never reinvokes on persistence failure", async () => {
+    const native = { content: [{ type: "text" as const, text: "native" }], details: { fullOutputPath: "/fixture/native.txt" } };
+    const tool = new ScriptedDirectTool(async () => native);
+    let compositionCount = 0;
+    const result = await composeAfterSingleExecution(tool, createScriptedContext("single", "/work"), () => {
+      compositionCount += 1;
       throw new Error("fixture persistence fault");
     });
     expect(tool.executeCount).toBe(1);
-    expect(result).toBe(nativeResult);
+    expect(compositionCount).toBe(1);
+    expect(result).toBe(native);
   });
 
-  test("metadata-only trace excludes protected arguments and results", () => {
-    const secret = "fixture-secret-value";
-    const trace = metadataOnlyTrace(spec("keychain"));
-    const serialized = JSON.stringify({ trace, genericError: "credential operation failed" });
-    expect(spec("keychain").protectedFields).toContain("params.secret");
-    expect(serialized).not.toContain(secret);
-    expect(serialized).not.toContain("result.content");
+  test("exact edit diagnoses zero, one and multiple occurrences", () => {
+    expect(() => exactEditFixture("alpha", "missing", "x")).toThrow("found 0");
+    expect(exactEditFixture("alpha beta", "beta", "gamma")).toBe("alpha gamma");
+    expect(() => exactEditFixture("same same", "same", "x")).toThrow("found 2");
+  });
+
+  test("serializes writes in declared order despite different operation latency", async () => {
+    const events: string[] = [];
+    const results = await serializeWritesFixture([
+      async () => { await Bun.sleep(3); events.push("first"); return 1; },
+      async () => { events.push("second"); return 2; },
+      async () => { events.push("third"); return 3; },
+    ]);
+    expect(events).toEqual(["first", "second", "third"]);
+    expect(results).toEqual([1, 2, 3]);
   });
 });

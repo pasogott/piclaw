@@ -15,6 +15,45 @@ function rows(toolNames: readonly string[], shared: SharedPreparation): ToolPrep
   }));
 }
 
+const M365_PARAMETER_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  m365_teams_chats: ["top"],
+  m365_teams_messages: ["chatId", "top"],
+  m365_teams_send: ["chatId", "message", "attachmentUrl", "attachmentName", "dryRun", "confirm"],
+  m365_teams_send_rich_text: ["chatId", "markdown", "dryRun", "confirm"],
+  m365_teams_send_markdown_card: ["chatId", "markdown", "fileName", "message", "dryRun", "confirm"],
+  m365_teams_upload_file_card: ["chatId", "localPath", "fileName", "message", "folderPath", "scope", "dryRun", "confirm"],
+  m365_teams_send_link_card: ["chatId", "url", "attachmentName", "message", "scope", "dryRun", "confirm"],
+  m365_teams_send_file_card: ["chatId", "localPath", "fileName", "message", "folderPath", "scope", "dryRun", "confirm"],
+  m365_graph_query: ["path", "method", "body", "version"],
+  m365_profile: ["action"],
+  m365_mail: ["action", "query", "folder", "top", "filter", "messageId", "to", "cc", "subject", "body", "importance", "replyAll", "attachments", "flagValue", "dryRun", "dry_run", "confirm"],
+  m365_people: ["query", "top"],
+  m365_onedrive: ["action", "folderPath", "itemPath", "itemId", "query", "top", "dryRun", "confirm"],
+  m365_spo_search: ["siteUrl", "query", "top"],
+  m365_spo_browse: ["siteUrl", "folderPath"],
+  m365_spo_download: ["siteUrl", "filePath", "outFile"],
+  m365_document_link_metadata: ["url"],
+  m365_onedrive_share_local_file: ["localPath", "folderPath", "fileName", "scope", "dryRun", "confirm"],
+  m365_spo_upload: ["localPath", "driveId", "folderId", "folderUrl", "fileName", "dryRun", "confirm"],
+  m365_spo_sync: ["localDir", "driveId", "folderId", "folderUrl", "direction", "pattern", "dryRun", "confirm"],
+  m365_calendar: ["action", "date", "days", "eventId", "subject", "startDateTime", "endDateTime", "location", "body", "attendees", "isOnlineMeeting", "isAllDay", "recurrence", "response", "comment", "meetingDuration", "dryRun", "confirm"],
+  m365_calendar_svg: ["date", "startHour", "endHour", "showFree", "outPath"],
+  m365_spo_move: ["siteUrl", "filePath", "driveId", "itemId", "newName", "newParentPath", "dryRun", "confirm"],
+  m365_spo_move_many: ["items", "newParentPath", "dryRun", "continueOnError", "confirm"],
+  m365_todo: ["action", "sources", "includeCompleted", "status", "top", "search", "dueBefore", "dueAfter", "listIds"],
+});
+
+function m365Rows(toolNames: readonly string[], shared: Omit<SharedPreparation, "protectedFields">): ToolPreparationSpec[] {
+  return toolNames.flatMap((toolName) => rows([toolName], {
+    ...shared,
+    protectedFields: [
+      ...(M365_PARAMETER_FIELDS[toolName] ?? []).map((field) => `params.${field}`),
+      "result.content",
+      "result.details",
+    ],
+  }));
+}
+
 const source = {
   core: "@earendil-works/pi-coding-agent core tools; runtime/src/agent-pool/tool-factory.ts; runtime/src/extensions/ssh-core.ts",
   effectiveSearch: "effective Piclaw execution surface advertised by runtime/src/extensions/ssh.ts; no branch-local direct constructor",
@@ -136,7 +175,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     currentSource: source.attachments,
     effectClass: "mutation",
     replay: "never",
-    contextFields: ["localEnv", "chatJid", "operationId"],
+    contextFields: ["chatJid", "operationId", "localEnv"],
     serviceEffector: "EF-S04",
     abortExpectation: "may_finish_late",
     protectedFields: ["params.path", "result.content", "result.details"],
@@ -148,16 +187,16 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["chatJid", "operationId"],
     serviceEffector: "EF-S04",
     abortExpectation: "may_finish_late",
-    protectedFields: ["result.content", "result.details"],
+    protectedFields: ["params.id", "result.content", "result.details"],
   }),
   ...rows(["export_attachment"], {
     currentSource: source.attachments,
     effectClass: "mixed",
     replay: "never",
-    contextFields: ["localEnv", "chatJid", "operationId"],
+    contextFields: ["chatJid", "operationId", "localEnv"],
     serviceEffector: "EF-S04",
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.filename", "result.content", "result.details"],
+    protectedFields: ["params.id", "params.filename", "result.content", "result.details"],
   }),
   ...rows(["messages"], {
     currentSource: "runtime/src/extensions/messages-crud.ts",
@@ -166,7 +205,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["chatJid", "operationId"],
     serviceEffector: null,
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.content", "params.content_blocks", "params.pattern", "params.query", "result.content", "result.details"],
+    protectedFields: ["params.chat_jid", "params.target_chat_jid", "params.row_ids", "params.sender", "params.content", "params.content_blocks", "params.pattern", "params.query", "result.content", "result.details"],
   }),
   ...rows(["get_model_state", "list_models"], {
     currentSource: source.models,
@@ -226,7 +265,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     currentSource: source.workspace,
     effectClass: "mutation",
     replay: "never",
-    contextFields: ["localEnv", "operationId"],
+    contextFields: ["operationId", "localEnv"],
     serviceEffector: "EF-S05",
     abortExpectation: "may_finish_late",
     protectedFields: ["result.content", "result.details"],
@@ -247,7 +286,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["chatJid", "operationId"],
     serviceEffector: "EF-S01",
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.content", "params.target_address", "params.target_chat_jid", "result.content", "result.details"],
+    protectedFields: ["params.content", "params.target_address", "params.target_chat_jid", "params.target_agent_name", "params.media_ids", "params.in_reply_to", "result.content", "result.details"],
   }),
   ...rows(["session_control"], {
     currentSource: "runtime/src/extensions/session-control.ts",
@@ -256,7 +295,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["chatJid", "operationId"],
     serviceEffector: "EF-S01",
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.target_address", "params.target_chat_jid", "result.content", "result.details"],
+    protectedFields: ["params.target_address", "params.target_chat_jid", "params.target_agent_name", "result.content", "result.details"],
   }),
   ...rows(["session_status"], {
     currentSource: "runtime/src/extensions/session-status.ts",
@@ -271,7 +310,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     currentSource: "runtime/src/extensions/open-workspace-file.ts",
     effectClass: "mutation",
     replay: "never",
-    contextFields: ["localEnv", "chatJid", "operationId"],
+    contextFields: ["chatJid", "operationId", "localEnv"],
     serviceEffector: "EF-S05",
     abortExpectation: "may_finish_late",
     protectedFields: ["params.path"],
@@ -328,7 +367,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["env"],
     serviceEffector: null,
     abortExpectation: "must_stop",
-    protectedFields: ["params.args", "result.content", "result.details"],
+    protectedFields: ["params.script", "params.args", "params.cwd", "result.content", "result.details"],
   }),
   ...rows(["keychain"], {
     currentSource: "runtime/extensions/integrations/keychain/index.ts; runtime/src/extensions/keychain-tools.ts",
@@ -337,7 +376,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["chatJid", "operationId"],
     serviceEffector: null,
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.secret", "params.username", "result.content", "result.details"],
+    protectedFields: ["params.name", "params.secret", "params.username", "result.content", "result.details"],
   }),
   ...rows(["ssh"], {
     currentSource: "runtime/extensions/integrations/ssh/index.ts; runtime/src/extensions/ssh.ts; runtime/src/extensions/ssh-core.ts",
@@ -349,24 +388,24 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     protectedFields: ["params.ssh_target", "params.private_key_keychain", "params.known_hosts_keychain", "result.content", "result.details"],
   }),
   ...rows(["cdp_browser"], {
-    currentSource: "runtime/extensions/browser/cdp-browser-tool/index.ts; runtime/extensions/browser/cdp-browser/index.ts",
+    currentSource: "runtime/extensions/browser/cdp-browser-tool/index.ts production registration; runtime/extensions/browser/cdp-browser/index.ts execution module",
     effectClass: "mixed",
     replay: "never",
     contextFields: ["localEnv"],
     serviceEffector: null,
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.expr", "params.url", "params.selector", "params.headerTemplate", "params.footerTemplate", "result.content", "result.details"],
+    protectedFields: ["params.expr", "params.url", "params.selector", "params.outPath", "params.headerTemplate", "params.footerTemplate", "result.content", "result.details"],
   }),
   ...rows(["mcp"], {
-    currentSource: "package.json pi-mcp-adapter dependency and repository MCP integration metadata",
+    currentSource: "runtime/src/agent-pool/session.ts createMcpAdapter composition; package.json pi-mcp-adapter dependency",
     effectClass: "mixed",
     replay: "never",
-    contextFields: ["localEnv", "chatJid", "operationId"],
+    contextFields: ["chatJid", "operationId", "localEnv"],
     serviceEffector: null,
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.args", "params.redirectUrl", "result.content", "result.details"],
+    protectedFields: ["params.tool", "params.args", "params.server", "params.search", "params.describe", "params.instructions", "params.connect", "params.redirectUrl", "result.content", "result.details"],
   }),
-  ...rows([
+  ...m365Rows([
     "m365_teams_chats",
     "m365_teams_messages",
     "m365_profile",
@@ -381,9 +420,8 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["localEnv"],
     serviceEffector: null,
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.*", "result.*"],
   }),
-  ...rows([
+  ...m365Rows([
     "m365_teams_send",
     "m365_teams_send_rich_text",
     "m365_teams_send_markdown_card",
@@ -402,9 +440,8 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["localEnv"],
     serviceEffector: null,
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.*", "result.*"],
   }),
-  ...rows([
+  ...m365Rows([
     "m365_graph_query",
     "m365_mail",
     "m365_onedrive",
@@ -419,7 +456,6 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["localEnv"],
     serviceEffector: null,
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.*", "result.*"],
   }),
 ]);
 

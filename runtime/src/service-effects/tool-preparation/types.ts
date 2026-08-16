@@ -13,12 +13,12 @@ export type ToolContextField = keyof PiclawToolContext;
  * execution, result, update, or recovery abstraction.
  */
 export interface ToolPreparationSpec {
-  toolName: string;
-  currentSource: string;
-  effectClass: ToolEffectClass;
-  replay: ToolReplayPolicy;
-  contextFields: readonly ToolContextField[];
-  serviceEffector: ToolServiceEffector;
-  abortExpectation: ToolAbortExpectation;
-  protectedFields: readonly string[];
+  readonly toolName: string;
+  readonly currentSource: string;
+  readonly effectClass: ToolEffectClass;
+  readonly replay: ToolReplayPolicy;
+  readonly contextFields: readonly ToolContextField[];
+  readonly serviceEffector: ToolServiceEffector;
+  readonly abortExpectation: ToolAbortExpectation;
+  readonly protectedFields: readonly string[];
 }

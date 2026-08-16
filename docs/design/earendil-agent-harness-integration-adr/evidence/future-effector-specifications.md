@@ -1274,7 +1274,11 @@ WP-3C accepted preparation corrections (2026-08-16):
 - `messages` is `mixed`/`never` with `serviceEffector: null` and is activation-blocked: `add`/`post` are future EF-S03 candidates, while arbitrary-history `delete`/`move` require a separately approved fenced authority or retirement;
 - non-service filesystem, process, model, credential, add-on-owned and external effects use `serviceEffector: null`; a non-null value identifies exactly one existing Piclaw service-operation contract;
 - output persistence is post-result composition over one Earendil execution, preserving native update, truncation and full-output details and failing open without reinvocation;
-- inventory and behaviour evidence is hermetic and static; one coherent selected Harness v3 release is required before activation or compile integration.
+- exact inventory is derived as source data from production composition roots, forwarded factories, optional platform/environment entries, the service factory, core SDK tools and effective search tools; an unreferenced duplicate registration does not create a row;
+- add-on preparation reads only declared `manifest.pi.extensions` entries, never `main`, and its hermetic package-tree cases cover scoped/unscoped packages, broken links, containment, malformed manifests, duplicate declarations and missing/non-file targets;
+- MCP-direct preparation preserves global, per-server and `MCP_DIRECT_TOOLS` precedence, literal `disabled === true`, metadata-cache validity, tool/resource filters, prefix/resource normalization, built-in and first-wins collisions, stale configured-server reporting and proxy retention unless valid direct registrations make explicit suppression safe;
+- every repository row has closed effect, replay, context, authority and EF evidence; validation rejects unknown shapes, accessors, symbols, sparse arrays, proxies, non-canonical context order, unsafe selector grammar and post-input mutation before returning frozen normalized data;
+- inventory, protected-observer and behaviour evidence is hermetic and static; one coherent selected Harness v3 release is required before activation or compile integration.
 
 Core and Piclaw-specific tool cases can be specified against current behaviour now. Compile assertions wait for one coherent selected v3 type surface so the documentation does not freeze a draft execute signature.
 

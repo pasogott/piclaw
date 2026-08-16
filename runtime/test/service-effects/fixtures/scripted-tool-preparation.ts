@@ -68,3 +68,88 @@ export function metadataOnlyTrace(spec: ToolPreparationSpec): Readonly<Record<st
     serviceEffector: spec.serviceEffector,
   });
 }
+
+export async function executeWithFence(
+  tool: ScriptedDirectTool,
+  context: PiclawToolContext,
+  signal: AbortSignal,
+  onUpdate: (update: AgentToolResult<unknown>) => void,
+  currentOperationId: () => string = () => context.operationId,
+): Promise<Readonly<{ status: "accepted"; result: AgentToolResult<unknown> } | { status: "discarded" } | { status: "aborted" }>> {
+  if (signal.aborted) return Object.freeze({ status: "aborted" });
+  let terminal = false;
+  const update = (value: AgentToolResult<unknown>): void => {
+    if (!terminal && !signal.aborted && currentOperationId() === context.operationId) onUpdate(value);
+  };
+  try {
+    const result = await tool.execute("fenced-call", {}, signal, update, context);
+    terminal = true;
+    if (signal.aborted || currentOperationId() !== context.operationId) return Object.freeze({ status: "discarded" });
+    return Object.freeze({ status: "accepted", result });
+  } catch (error) {
+    terminal = true;
+    if (signal.aborted) return Object.freeze({ status: "aborted" });
+    throw error;
+  }
+}
+
+export function exactEditFixture(content: string, oldText: string, newText: string): string {
+  if (!oldText) throw new Error("oldText must not be empty");
+  let occurrences = 0;
+  let offset = 0;
+  while ((offset = content.indexOf(oldText, offset)) >= 0) {
+    occurrences += 1;
+    offset += oldText.length;
+  }
+  if (occurrences !== 1) throw new Error(`expected exactly one occurrence, found ${occurrences}`);
+  return content.replace(oldText, newText);
+}
+
+export function boundedOutputFixture(text: string, maxLines: number, maxBytes: number): Readonly<{
+  preview: string;
+  truncated: boolean;
+  totalLines: number;
+  totalBytes: number;
+}> {
+  const encoder = new TextEncoder();
+  const lines = text.split("\n");
+  let preview = lines.slice(0, maxLines).join("\n");
+  const bytes = encoder.encode(preview);
+  if (bytes.length > maxBytes) preview = new TextDecoder().decode(bytes.slice(0, maxBytes));
+  return Object.freeze({
+    preview,
+    truncated: lines.length > maxLines || encoder.encode(text).length > maxBytes,
+    totalLines: lines.length,
+    totalBytes: encoder.encode(text).length,
+  });
+}
+
+export async function composeCompleteOutputFixture(
+  nativeResult: AgentToolResult<Record<string, unknown>>,
+  readSpill: (path: string) => string | undefined,
+  persist: (fullOutput: string) => string | Promise<string>,
+): Promise<AgentToolResult<Record<string, unknown>>> {
+  const details = nativeResult.details ?? {};
+  const fullOutputPath = typeof details.fullOutputPath === "string" ? details.fullOutputPath : undefined;
+  const nativeText = nativeResult.content
+    .filter((entry): entry is { type: "text"; text: string } => entry.type === "text")
+    .map((entry) => entry.text)
+    .join("\n");
+  const fullOutput = fullOutputPath ? readSpill(fullOutputPath) : nativeText;
+  if (fullOutput === undefined) return nativeResult;
+  try {
+    const storedOutputId = await persist(fullOutput);
+    return {
+      content: nativeResult.content,
+      details: { ...details, storedOutputId },
+    };
+  } catch {
+    return nativeResult;
+  }
+}
+
+export async function serializeWritesFixture<T>(operations: readonly (() => Promise<T>)[]): Promise<readonly T[]> {
+  const results: T[] = [];
+  for (const operation of operations) results.push(await operation());
+  return Object.freeze(results);
+}
