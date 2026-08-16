@@ -23,9 +23,18 @@ export interface ToolPreparationPolicyEvidence {
   readonly certainty: string;
   readonly activationPrerequisites: readonly string[];
   readonly activationStatus: "latent";
+  readonly currentIntegration: "none";
+  readonly currentServiceEffector: null;
+  readonly currentContextSource: string;
+  readonly futureContextFields: readonly ToolContextField[];
+  readonly futureServiceEffector: ToolServiceEffector;
+  readonly futureIntegrationTarget: string;
 }
 
-type PolicyInput = Omit<ToolPreparationPolicyEvidence, "toolName" | "activationStatus" | "contextRationale">;
+type PolicyInput = Omit<
+  ToolPreparationPolicyEvidence,
+  "toolName" | "activationStatus" | "contextRationale" | "currentIntegration" | "currentServiceEffector" | "currentContextSource" | "futureContextFields" | "futureServiceEffector" | "futureIntegrationTarget"
+>;
 
 const CONTEXT_RATIONALE: Readonly<Record<string, string>> = Object.freeze({
   "": "No Piclaw execution context field is required by this catalogue or harness-local operation.",
@@ -45,6 +54,14 @@ function policy(toolNames: readonly string[], input: PolicyInput): readonly Tool
     contextRationale: CONTEXT_RATIONALE[input.contextFields.join(",")] ?? "The exact context vector requires source review before activation.",
     activationPrerequisites: Object.freeze([...input.activationPrerequisites]),
     activationStatus: "latent" as const,
+    currentIntegration: "none" as const,
+    currentServiceEffector: null,
+    currentContextSource: "Current production tools retain their existing closure/context plumbing and receive neither PiclawToolContext nor a service effector from this latent catalogue.",
+    futureContextFields: Object.freeze([...input.contextFields]),
+    futureServiceEffector: input.serviceEffector,
+    futureIntegrationTarget: input.serviceEffector
+      ? `A selected direct tool may call exactly ${input.serviceEffector} after its listed activation prerequisites pass.`
+      : "A selected direct tool may use the declared context without acquiring Piclaw service-operation authority.",
   })));
 }
 
@@ -248,6 +265,14 @@ const entries = Object.freeze([
 
 ]);
 
-export const TOOL_PREPARATION_POLICY: ReadonlyMap<string, ToolPreparationPolicyEvidence> = new Map(
-  entries.map((entry) => [entry.toolName, entry]),
-);
+const policyByToolName = new Map(entries.map((entry) => [entry.toolName, entry]));
+
+/** Closed lookup without exposing Map mutation methods. */
+export function getToolPreparationPolicy(toolName: string): ToolPreparationPolicyEvidence | undefined {
+  return policyByToolName.get(toolName);
+}
+
+/** Deeply frozen evidence snapshot for audits and tests. */
+export function listToolPreparationPolicies(): readonly ToolPreparationPolicyEvidence[] {
+  return entries;
+}

@@ -2,7 +2,7 @@ import type { AgentHarnessTool, ExecutionEnv } from "@earendil-works/pi-agent-co
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 
 import type { PiclawToolContext } from "../../../src/service-effects/contracts/execution-context-resolver.js";
-import type { ToolPreparationSpec } from "../../../src/service-effects/tool-preparation/types.js";
+import type { ToolPreparationSpec, ToolServiceEffector } from "../../../src/service-effects/tool-preparation/types.js";
 
 type DirectExecute = AgentHarnessTool<PiclawToolContext>["execute"];
 
@@ -53,6 +53,35 @@ export async function composeAfterSingleExecution(
   } catch {
     return result;
   }
+}
+
+export class ScriptedServiceAuthority {
+  private available = true;
+
+  constructor(
+    readonly effector: Exclude<ToolServiceEffector, null>,
+    readonly toolName: string,
+    readonly operationId: string,
+  ) {}
+
+  consume(spec: ToolPreparationSpec, context: PiclawToolContext): boolean {
+    if (!this.available || spec.serviceEffector === null) return false;
+    if (this.effector !== spec.serviceEffector || this.toolName !== spec.toolName || this.operationId !== context.operationId) return false;
+    this.available = false;
+    return true;
+  }
+}
+
+/** Test-only one-shot authority probe; no production tool or effector is activated. */
+export async function executeWithServiceAuthority(
+  spec: ToolPreparationSpec,
+  tool: ScriptedDirectTool,
+  context: PiclawToolContext,
+  authority: ScriptedServiceAuthority | undefined,
+): Promise<Readonly<{ status: "executed"; result: AgentToolResult<unknown> } | { status: "blocked" }>> {
+  if (!authority?.consume(spec, context)) return Object.freeze({ status: "blocked" });
+  const result = await tool.execute("authority-call", {}, undefined, undefined, context);
+  return Object.freeze({ status: "executed", result });
 }
 
 export function acceptsLateResult(expectedOperationId: string, currentOperationId: string): boolean {

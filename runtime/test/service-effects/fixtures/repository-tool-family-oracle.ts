@@ -6,10 +6,7 @@ const runtimeRoot = resolve(import.meta.dir, "../../..");
 const BUILTIN_ROOT = "src/extensions/index.ts";
 const SESSION_ROOT = "src/agent-pool/session.ts";
 const SERVICE_FACTORY_ROOT = "src/agent-pool/service-factory.ts";
-
-/** SDK/effective families are composition inputs, not extension registrations. */
-export const CORE_SDK_TOOL_FAMILIES = Object.freeze(["read", "write", "edit", "bash"]);
-export const EFFECTIVE_SEARCH_FAMILIES = Object.freeze(["grep", "find", "ls"]);
+const SDK_TOOLS_SOURCE = resolve(runtimeRoot, "../node_modules/@earendil-works/pi-coding-agent/dist/core/tools/index.js");
 
 const TOOL_NAME_CONSTANTS = new Map<string, string>([
   ["CONTEXT_PRUNE_TOOL_NAME", "context_prune"],
@@ -33,11 +30,14 @@ export interface SourceTree {
 export interface ProductionCompositionConfig {
   readonly platform?: "linux" | "win32";
   readonly enabledEnv?: ReadonlySet<string>;
+  readonly sdkToolFamilies?: readonly string[];
 }
 
 export interface RepositoryToolFamilyInventory {
   readonly names: readonly string[];
   readonly unresolvedRegistrations: readonly string[];
+  readonly sdkToolFamilies: readonly string[];
+  readonly compositionRoots: readonly string[];
   readonly productionRoots: readonly string[];
   readonly registrationSites: ReadonlyMap<string, readonly string[]>;
   readonly nonProductionDuplicateSites: ReadonlyMap<string, readonly string[]>;
@@ -63,7 +63,8 @@ export function inventoryRepositoryToolFamilies(
   config: ProductionCompositionConfig = {},
 ): RepositoryToolFamilyInventory {
   const files = tree.files;
-  const names = new Set<string>([...CORE_SDK_TOOL_FAMILIES, ...EFFECTIVE_SEARCH_FAMILIES]);
+  const sdkToolFamilies = Object.freeze([...(config.sdkToolFamilies ?? extractSdkToolFamilies(readFileSync(SDK_TOOLS_SOURCE, "utf8")))].sort());
+  const names = new Set<string>(sdkToolFamilies);
   const sites = new Map<string, Set<string>>();
   const unresolved = new Set<string>();
   const roots = new Set<string>();
@@ -73,6 +74,7 @@ export function inventoryRepositoryToolFamilies(
   if (files[SERVICE_FACTORY_ROOT]) roots.add(SERVICE_FACTORY_ROOT);
   if (containsCall(files[SESSION_ROOT] ?? "", "createMcpAdapter")) names.add("mcp");
 
+  const compositionRoots = Object.freeze([...roots].sort());
   const queue = [...roots].sort();
   const scanned = new Set<string>();
   while (queue.length > 0) {
@@ -114,10 +116,28 @@ export function inventoryRepositoryToolFamilies(
   return Object.freeze({
     names: Object.freeze([...names].sort()),
     unresolvedRegistrations: Object.freeze([...unresolved].sort()),
+    sdkToolFamilies,
+    compositionRoots,
     productionRoots: Object.freeze([...roots].sort()),
     registrationSites: readonlySiteMap(sites),
     nonProductionDuplicateSites: readonlySiteMap(duplicateSites),
   });
+}
+
+export function extractSdkToolFamilies(source: string): readonly string[] {
+  const ast = sourceFile("@earendil-works/pi-coding-agent/core/tools/index.js", source);
+  for (const statement of ast.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name) || declaration.name.text !== "allToolNames" || !declaration.initializer) continue;
+      const initializer = declaration.initializer;
+      if (!ts.isNewExpression(initializer) || calleeName(initializer.expression) !== "Set") continue;
+      const values = initializer.arguments?.[0];
+      if (!values || !ts.isArrayLiteralExpression(values) || !values.elements.every(ts.isStringLiteralLike)) continue;
+      return Object.freeze(values.elements.map((entry) => entry.text).sort());
+    }
+  }
+  throw new Error("SDK allToolNames literal was not found");
 }
 
 function parseBuiltinFactoryRoots(source: string, file: string, files: Readonly<Record<string, string>>): string[] {

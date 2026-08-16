@@ -56,7 +56,7 @@ function m365Rows(toolNames: readonly string[], shared: Omit<SharedPreparation, 
 
 const source = {
   core: "@earendil-works/pi-coding-agent core tools; runtime/src/agent-pool/tool-factory.ts; runtime/src/extensions/ssh-core.ts",
-  effectiveSearch: "effective Piclaw execution surface advertised by runtime/src/extensions/ssh.ts; no branch-local direct constructor",
+  effectiveSearch: "@earendil-works/pi-coding-agent read-only tool definitions; effective Piclaw execution surface advertised by runtime/src/extensions/ssh.ts; no branch-local direct constructor",
   context: "runtime/extensions/integrations/context-mode.ts; runtime/src/tools/context-tools.ts",
   activation: "runtime/src/extensions/tool-activation.ts",
   attachments: "runtime/src/extensions/file-attachments.ts",
@@ -160,7 +160,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: [],
     serviceEffector: null,
     abortExpectation: "may_finish_late",
-    protectedFields: ["result.content"],
+    protectedFields: ["params.query", "params.intent", "result.content"],
   }),
   ...rows(["activate_tools", "reset_active_tools"], {
     currentSource: source.activation,
@@ -178,7 +178,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["chatJid", "operationId", "localEnv"],
     serviceEffector: "EF-S04",
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.path", "result.content", "result.details"],
+    protectedFields: ["params.path", "params.name", "result.content", "result.details"],
   }),
   ...rows(["read_attachment"], {
     currentSource: source.attachments,
@@ -205,9 +205,9 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["chatJid", "operationId"],
     serviceEffector: null,
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.chat_jid", "params.target_chat_jid", "params.row_ids", "params.sender", "params.content", "params.content_blocks", "params.pattern", "params.query", "result.content", "result.details"],
+    protectedFields: ["params.chat_jid", "params.target_chat_jid", "params.row_ids", "params.sender", "params.content", "params.content_blocks", "params.content_grep", "params.media_ids", "params.pattern", "params.query", "result.content", "result.details"],
   }),
-  ...rows(["get_model_state", "list_models"], {
+  ...rows(["get_model_state"], {
     currentSource: source.models,
     effectClass: "query",
     replay: "safe",
@@ -215,6 +215,15 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     serviceEffector: null,
     abortExpectation: "may_finish_late",
     protectedFields: [],
+  }),
+  ...rows(["list_models"], {
+    currentSource: source.models,
+    effectClass: "query",
+    replay: "safe",
+    contextFields: [],
+    serviceEffector: null,
+    abortExpectation: "may_finish_late",
+    protectedFields: ["params.query"],
   }),
   ...rows(["switch_model", "switch_thinking"], {
     currentSource: source.models,
@@ -241,7 +250,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["chatJid", "operationId"],
     serviceEffector: "EF-S07",
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.prompt", "params.command", "result.content", "result.details"],
+    protectedFields: ["params.chat_jid", "params.prompt", "params.command", "params.cwd", "result.content", "result.details"],
   }),
   ...rows(["scheduled_tasks"], {
     currentSource: source.scheduling,
@@ -250,7 +259,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["chatJid", "operationId"],
     serviceEffector: "EF-S07",
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.prompt", "params.command", "result.content", "result.details"],
+    protectedFields: ["params.id", "params.chat_jid", "params.prompt", "params.command", "params.cwd", "result.content", "result.details"],
   }),
   ...rows(["search_workspace"], {
     currentSource: source.workspace,
@@ -277,7 +286,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["chatJid", "operationId"],
     serviceEffector: "EF-S03",
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.card", "params.html", "result.content", "result.details"],
+    protectedFields: ["params.card", "params.html", "params.content", "params.card_id", "params.payload", "params.chat_jid", "params.fallback_text", "params.state", "params.last_submission", "params.title", "params.open_label", "params.widget_id", "result.content", "result.details"],
   }),
   ...rows(["chat"], {
     currentSource: "runtime/src/extensions/chat-tool.ts",
@@ -286,7 +295,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["chatJid", "operationId"],
     serviceEffector: "EF-S01",
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.content", "params.target_address", "params.target_chat_jid", "params.target_agent_name", "params.media_ids", "params.in_reply_to", "result.content", "result.details"],
+    protectedFields: ["params.content", "params.target_address", "params.target_chat_jid", "params.target_agent_name", "params.media_ids", "params.idempotency_key", "params.in_reply_to", "result.content", "result.details"],
   }),
   ...rows(["session_control"], {
     currentSource: "runtime/src/extensions/session-control.ts",
@@ -295,7 +304,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["chatJid", "operationId"],
     serviceEffector: "EF-S01",
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.target_address", "params.target_chat_jid", "params.target_agent_name", "result.content", "result.details"],
+    protectedFields: ["params.target_address", "params.target_chat_jid", "params.target_agent_name", "params.instructions", "result.content", "result.details"],
   }),
   ...rows(["session_status"], {
     currentSource: "runtime/src/extensions/session-status.ts",
@@ -313,7 +322,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["chatJid", "operationId", "localEnv"],
     serviceEffector: "EF-S05",
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.path"],
+    protectedFields: ["params.path", "params.label"],
   }),
   ...rows(["env"], {
     currentSource: "runtime/src/extensions/env-tools.ts",
@@ -322,7 +331,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["localEnv"],
     serviceEffector: null,
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.value", "result.content", "result.details"],
+    protectedFields: ["params.name", "params.value", "result.content", "result.details"],
   }),
   ...rows(["exit_process"], {
     currentSource: "runtime/src/extensions/exit-process.ts",
@@ -340,7 +349,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["localEnv"],
     serviceEffector: null,
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.input", "params.output", "params.text", "result.content", "result.details"],
+    protectedFields: ["params.input", "params.output", "params.overlay", "params.text", "result.content", "result.details"],
   }),
   ...rows(["context_prune"], {
     currentSource: source.contextPrune,
@@ -385,7 +394,7 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     contextFields: ["chatJid", "operationId"],
     serviceEffector: null,
     abortExpectation: "may_finish_late",
-    protectedFields: ["params.ssh_target", "params.private_key_keychain", "params.known_hosts_keychain", "result.content", "result.details"],
+    protectedFields: ["params.chat_jid", "params.ssh_target", "params.private_key_keychain", "params.known_hosts_keychain", "result.content", "result.details"],
   }),
   ...rows(["cdp_browser"], {
     currentSource: "runtime/extensions/browser/cdp-browser-tool/index.ts production registration; runtime/extensions/browser/cdp-browser/index.ts execution module",

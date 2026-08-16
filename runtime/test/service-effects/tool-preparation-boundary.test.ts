@@ -36,14 +36,24 @@ function stringArray(source: string, constant: string): string[] {
 function moduleSpecifiers(file: string, source: string): readonly string[] {
   const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const output: string[] = [];
+  const addLiteral = (node: ts.Node | undefined): void => {
+    if (node && ts.isStringLiteralLike(node)) output.push(node.text);
+    else if (node && ts.isNoSubstitutionTemplateLiteral(node)) output.push(node.text);
+  };
   const visit = (node: ts.Node): void => {
-    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
-      output.push(node.moduleSpecifier.text);
-    }
-    if (ts.isCallExpression(node) && node.arguments.length === 1 && ts.isStringLiteralLike(node.arguments[0])) {
-      if (node.expression.kind === ts.SyntaxKind.ImportKeyword || ts.isIdentifier(node.expression) && node.expression.text === "require") {
-        output.push(node.arguments[0].text);
-      }
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) addLiteral(node.moduleSpecifier);
+    if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) addLiteral(node.moduleReference.expression);
+    if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) addLiteral(node.argument.literal);
+    if (ts.isCallExpression(node) && node.arguments.length >= 1) {
+      const expression = node.expression;
+      const isStaticLoader = expression.kind === ts.SyntaxKind.ImportKeyword
+        || ts.isIdentifier(expression) && expression.text === "require"
+        || ts.isPropertyAccessExpression(expression) && (
+          ts.isIdentifier(expression.expression) && expression.expression.text === "require" && expression.name.text === "resolve"
+          || ts.isIdentifier(expression.expression) && expression.expression.text === "module" && expression.name.text === "require"
+          || ts.isMetaProperty(expression.expression) && expression.expression.keywordToken === ts.SyntaxKind.ImportKeyword && expression.name.text === "resolve"
+        );
+      if (isStaticLoader) addLiteral(node.arguments[0]);
     }
     ts.forEachChild(node, visit);
   };
@@ -52,8 +62,11 @@ function moduleSpecifiers(file: string, source: string): readonly string[] {
 }
 
 function resolveModule(from: string, specifier: string, files: Readonly<Record<string, string>>): string | null {
-  if (!specifier.startsWith(".")) return null;
-  const raw = resolve(dirname(resolve(runtimeRoot, from)), specifier);
+  let raw: string;
+  if (specifier.startsWith(".")) raw = resolve(dirname(resolve(runtimeRoot, from)), specifier);
+  else if (specifier === "piclaw") raw = resolve(runtimeRoot, "src/index.ts");
+  else if (specifier.startsWith("piclaw/runtime/")) raw = resolve(runtimeRoot, specifier.slice("piclaw/runtime/".length));
+  else return null;
   const relativeRaw = relative(runtimeRoot, raw).replaceAll("\\", "/");
   const candidates = [
     relativeRaw,
@@ -103,6 +116,26 @@ describe("WP-3C static import graph and inert top-level boundary", () => {
     const packageJson = readFileSync(resolve(packageRoot, "package.json"), "utf8");
     expect(violations).toEqual([]);
     expect(packageJson).not.toContain("tool-preparation");
+  });
+
+  test("recognizes static ESM, TypeScript, CommonJS, dynamic and package-self import forms", () => {
+    const source = `
+      import direct from "./direct.js";
+      import equal = require("./equal.js");
+      export { value } from "./exported.js";
+      const dynamic = import("./dynamic.js", { with: { type: "json" } });
+      const resolved = require.resolve("./resolved.js");
+      const loaded = module.require("./module.js");
+      const meta = import.meta.resolve("./meta.js");
+      type Imported = import("./typed.js").Imported;
+    `;
+    expect([...moduleSpecifiers("src/forms.ts", source)].sort()).toEqual([
+      "./direct.js", "./dynamic.js", "./equal.js", "./exported.js", "./meta.js", "./module.js", "./resolved.js", "./typed.js",
+    ]);
+    const files = { "src/index.ts": "", "src/service-effects/tool-preparation/manifest.ts": "" };
+    expect(resolveModule("src/index.ts", "piclaw/runtime/src/service-effects/tool-preparation/manifest.js", files)).toBe(
+      "src/service-effects/tool-preparation/manifest.ts",
+    );
   });
 
   test("latent modules are transitively unreachable from the production entrypoint", () => {
@@ -162,6 +195,29 @@ describe("WP-3C active-composition snapshots", () => {
       "attach_file", "messages", "chat", "keychain", "exit_process", "session_status",
     ]);
     expect(stringArray(source, "WINDOWS_DEFAULT_ACTIVE_TOOL_NAMES")).toEqual(["bun_run"]);
+  });
+
+  test("actual default/effective active-tool contracts and AgentToolFactory are unchanged", async () => {
+    const [{ AgentToolFactory }, activation] = await Promise.all([
+      import("../../src/agent-pool/tool-factory.js"),
+      import("../../src/extensions/tool-activation.js"),
+    ]);
+    for (const platform of ["linux", "win32"] as const) {
+      const factory = new AgentToolFactory({ workspaceDir: "/workspace", platform });
+      expect(factory.createDefaultTools()).toEqual(activation.getDefaultActiveToolNames(platform));
+      expect(factory.createDefaultTools().some((name) => name.includes("tool-preparation"))).toBeFalse();
+    }
+
+    const tree = readRepositorySourceTree();
+    const withoutLatent = Object.freeze({
+      files: Object.freeze(Object.fromEntries(Object.entries(tree.files).filter(([file]) => !file.startsWith(latentPrefix)))),
+    });
+    const withInventory = inventoryRepositoryToolFamilies(tree);
+    const withoutInventory = inventoryRepositoryToolFamilies(withoutLatent);
+    const available = (names: readonly string[]) => names.map((name) => ({ name }));
+    expect(activation.getEffectiveDefaultActiveToolNames(available(withInventory.names))).toEqual(
+      activation.getEffectiveDefaultActiveToolNames(available(withoutInventory.names)),
+    );
   });
 
   // Six full source-as-data AST compositions are intentionally bounded above Bun's default timeout.

@@ -1,7 +1,5 @@
 import "../helpers.js";
 
-import { createHash } from "node:crypto";
-
 import { describe, expect, test } from "bun:test";
 
 import {
@@ -10,7 +8,10 @@ import {
   MESSAGES_ACTIVATION_BLOCKER,
   TOOL_PREPARATION_MANIFEST,
 } from "../../src/service-effects/tool-preparation/manifest.js";
-import { TOOL_PREPARATION_POLICY } from "../../src/service-effects/tool-preparation/policy.js";
+import {
+  getToolPreparationPolicy,
+  listToolPreparationPolicies,
+} from "../../src/service-effects/tool-preparation/policy.js";
 import {
   normalizeToolPreparationManifest,
   validateToolPreparationManifest,
@@ -32,6 +33,13 @@ const SPEC_FIELDS = [
   "serviceEffector", "abortExpectation", "protectedFields",
 ].sort();
 const TEMPLATE_NAMES = DYNAMIC_TOOL_PREPARATION_TEMPLATES.map((row) => row.toolName);
+
+function freshMcpCache(
+  serverName: string,
+  metadata: { readonly tools?: readonly Record<string, unknown>[]; readonly resources?: readonly Record<string, unknown>[] } = {},
+) {
+  return { definitionHash: `hash:${serverName}`, cachedAt: 1_000, ...metadata };
+}
 
 function fixtureSpecs(names: readonly string[]): ToolPreparationSpec[] {
   return names.map((toolName) => ({
@@ -74,11 +82,31 @@ describe("WP-3C production-root coverage oracle", () => {
     expect(TOOL_PREPARATION_MANIFEST.map((row) => row.toolName).sort()).toEqual([...inventory.names]);
     expect(inventory.registrationSites.get("cdp_browser")).toEqual(["extensions/browser/cdp-browser-tool/index.ts"]);
     expect(inventory.nonProductionDuplicateSites.get("cdp_browser")).toEqual(["extensions/browser/cdp-browser/index.ts"]);
-    expect(inventory.productionRoots).toContain("src/agent-pool/service-factory.ts");
-    expect(inventory.productionRoots).toHaveLength(116);
-    expect(createHash("sha256").update(inventory.productionRoots.join("\n")).digest("hex")).toBe(
-      "3555a9c75e095757c377f90a09039f22c049b15b8f5ca5b0c36e2efccc8d0696",
-    );
+    expect(inventory.sdkToolFamilies).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
+    const compositionCategories = {
+      builtin: inventory.compositionRoots.filter((root) => root.startsWith("src/extensions/")),
+      optional: inventory.compositionRoots.filter((root) => root.startsWith("extensions/")),
+      service: inventory.compositionRoots.filter((root) => root === "src/agent-pool/service-factory.ts"),
+    };
+    expect(Object.fromEntries(Object.entries(compositionCategories).map(([category, roots]) => [category, roots.length]))).toEqual({
+      builtin: 29,
+      optional: 9,
+      service: 1,
+    });
+    expect(inventory.compositionRoots).toHaveLength(Object.values(compositionCategories).flat().length);
+
+    const manifestByName = new Map(TOOL_PREPARATION_MANIFEST.map((row) => [row.toolName, row]));
+    expect(inventory.registrationSites.size).toBe(65);
+    for (const [toolName, sites] of inventory.registrationSites) {
+      const currentSource = manifestByName.get(toolName)?.currentSource;
+      expect(currentSource).toBeDefined();
+      for (const site of sites) expect(currentSource).toContain(`runtime/${site}`);
+    }
+    for (const toolName of inventory.sdkToolFamilies) {
+      expect(manifestByName.get(toolName)?.currentSource).toContain("@earendil-works/pi-coding-agent");
+    }
+    expect(inventory.registrationSites.has("mcp")).toBeFalse();
+    expect(manifestByName.get("mcp")?.currentSource).toContain("pi-mcp-adapter");
   });
 
   test("ignores an unreferenced registration", () => {
@@ -134,11 +162,19 @@ describe("WP-3C closed manifest policy and hostile-safe normalization", () => {
   });
 
   test("has closed rationale evidence for all 69 repository rows", () => {
-    expect(TOOL_PREPARATION_POLICY.size).toBe(69);
-    expect([...TOOL_PREPARATION_POLICY.keys()].sort()).toEqual(TOOL_PREPARATION_MANIFEST.map((row) => row.toolName).sort());
+    const policies = listToolPreparationPolicies();
+    expect(policies).toHaveLength(69);
+    expect(policies.map((policy) => policy.toolName).sort()).toEqual(TOOL_PREPARATION_MANIFEST.map((row) => row.toolName).sort());
     for (const row of TOOL_PREPARATION_MANIFEST) {
-      const policy = TOOL_PREPARATION_POLICY.get(row.toolName)!;
+      const policy = getToolPreparationPolicy(row.toolName)!;
       expect(policy.activationStatus).toBe("latent");
+      expect(policy.currentIntegration).toBe("none");
+      expect(policy.currentServiceEffector).toBeNull();
+      expect(policy.currentContextSource).toContain("neither PiclawToolContext nor a service effector");
+      expect(policy.futureContextFields).toEqual(row.contextFields);
+      expect(Object.isFrozen(policy.futureContextFields)).toBeTrue();
+      expect(policy.futureServiceEffector).toBe(row.serviceEffector);
+      expect(policy.futureIntegrationTarget).toContain(row.serviceEffector ?? "without acquiring Piclaw service-operation authority");
       expect(policy.authorityRationale.length).toBeGreaterThan(20);
       expect(policy.contextRationale.length).toBeGreaterThan(20);
       if (row.replay === "safe") expect(policy.safeProof?.length).toBeGreaterThan(20);
@@ -149,6 +185,61 @@ describe("WP-3C closed manifest policy and hostile-safe normalization", () => {
         expect(policy.nullAuthorityKind).not.toBeNull();
       }
     }
+  });
+
+  test("policy evidence has no runtime mutation surface and validation remains stable", () => {
+    const policies = listToolPreparationPolicies();
+    const readPolicy = getToolPreparationPolicy("read")!;
+    const before = normalizeToolPreparationManifest([TOOL_PREPARATION_MANIFEST.find((row) => row.toolName === "read")!]);
+    expect(Object.isFrozen(policies)).toBeTrue();
+    expect(Object.isFrozen(readPolicy)).toBeTrue();
+    expect(Object.isFrozen(readPolicy.contextFields)).toBeTrue();
+    expect(Object.isFrozen(readPolicy.futureContextFields)).toBeTrue();
+    expect(Object.isFrozen(readPolicy.activationPrerequisites)).toBeTrue();
+    expect(Reflect.set(readPolicy, "effectClass", "mutation")).toBeFalse();
+    expect(() => (policies as unknown as ToolPreparationSpec[]).push(TOOL_PREPARATION_MANIFEST[0])).toThrow();
+    expect(() => (readPolicy.contextFields as string[]).push("env")).toThrow();
+    const after = normalizeToolPreparationManifest([TOOL_PREPARATION_MANIFEST.find((row) => row.toolName === "read")!]);
+    expect(after).toEqual(before);
+  });
+
+  test("rejects hostile outer candidate and option containers without invoking getters or throwing", () => {
+    let getterCalls = 0;
+    const accessorOuter: unknown[] = [];
+    Object.defineProperty(accessorOuter, "0", { configurable: true, enumerable: true, get: () => { getterCalls += 1; return TOOL_PREPARATION_MANIFEST[0]; } });
+    accessorOuter.length = 1;
+    const sparseOuter = new Array(1);
+    const symbolOuter: unknown[] = [];
+    symbolOuter[Symbol("hidden") as unknown as number] = TOOL_PREPARATION_MANIFEST[0];
+    const propertyOuter: unknown[] & { hidden?: boolean } = [];
+    propertyOuter.hidden = true;
+    const hostileOuter = new Proxy([], { ownKeys: () => { throw new Error("hostile outer"); } });
+    const revokedOuter = Proxy.revocable([], {});
+    revokedOuter.revoke();
+    const excessiveOuter = new Array(10_001);
+
+    for (const candidate of [accessorOuter, sparseOuter, symbolOuter, propertyOuter, hostileOuter, revokedOuter.proxy, excessiveOuter]) {
+      let result: ReturnType<typeof normalizeToolPreparationManifest> | undefined;
+      expect(() => { result = normalizeToolPreparationManifest(candidate as unknown[]); }).not.toThrow();
+      expect(result?.issues).toContainEqual(expect.objectContaining({ code: "invalid_candidate_array" }));
+    }
+
+    const read = TOOL_PREPARATION_MANIFEST.find((row) => row.toolName === "read")!;
+    const accessorNames: string[] = [];
+    Object.defineProperty(accessorNames, "0", { configurable: true, enumerable: true, get: () => { getterCalls += 1; return "read"; } });
+    accessorNames.length = 1;
+    const accessorOptions = Object.defineProperty({}, "knownToolNames", {
+      enumerable: true,
+      get: () => { getterCalls += 1; return ["read"]; },
+    });
+    const revokedOptions = Proxy.revocable({}, {});
+    revokedOptions.revoke();
+    for (const options of [{ knownToolNames: accessorNames }, accessorOptions, revokedOptions.proxy]) {
+      let result: ReturnType<typeof normalizeToolPreparationManifest> | undefined;
+      expect(() => { result = normalizeToolPreparationManifest([read], options as never); }).not.toThrow();
+      expect(result?.issues).toContainEqual(expect.objectContaining({ code: "invalid_options" }));
+    }
+    expect(getterCalls).toBe(0);
   });
 
   test("snapshots mutable inputs so later mutation cannot alter normalized policy", () => {
@@ -311,8 +402,8 @@ describe("WP-3C hermetic MCP metadata oracle", () => {
       disableProxyTool: false,
       builtins: new Set(),
       servers: [
-        { name: "boolean-disabled", disabled: true, directTools: true, cache: { state: "valid", tools: [{ name: "ignored" }] } },
-        { name: "string-enabled", disabled: "true", directTools: true, cache: { state: "valid", tools: [{ name: "search" }] } },
+        { name: "boolean-disabled", disabled: true, directTools: true, cache: freshMcpCache("boolean-disabled", { tools: [{ name: "ignored" }] }) },
+        { name: "string-enabled", disabled: "true", directTools: true, cache: freshMcpCache("string-enabled", { tools: [{ name: "search" }] }) },
       ],
     });
     expect(result.directNames).toEqual(["string_enabled_search"]);
@@ -327,10 +418,10 @@ describe("WP-3C hermetic MCP metadata oracle", () => {
       servers: [
         {
           name: "demo-mcp", directTools: true, includeTools: ["demo_mcp_*"], excludeTools: ["demo_secret"],
-          cache: { state: "valid", tools: [{ name: "search" }, { name: "secret" }, {}], resources: [{ name: "Run  Book" }, { name: "123" }, {}] },
+          cache: freshMcpCache("demo-mcp", { tools: [{ name: "search" }, { name: "secret" }, {}], resources: [{ name: "Run  Book" }, { name: "123" }, {}] }),
         },
-        { name: "demo", directTools: ["search"], cache: { state: "valid", tools: [{ name: "search" }, { name: "write" }] } },
-        { name: "disabled", disabled: true, directTools: true, cache: { state: "valid", tools: [{ name: "ignored" }] } },
+        { name: "demo", directTools: ["search"], cache: freshMcpCache("demo", { tools: [{ name: "search" }, { name: "write" }] }) },
+        { name: "disabled", disabled: true, directTools: true, cache: freshMcpCache("disabled", { tools: [{ name: "ignored" }] }) },
       ],
     });
     expect(result.directNames).toEqual(["demo_search", "demo_read_run_book"]);
@@ -341,6 +432,26 @@ describe("WP-3C hermetic MCP metadata oracle", () => {
     ]));
   });
 
+  test("validates cache definition hash, timestamp, TTL expiry and exact fresh boundary", () => {
+    const result = resolveMcpMetadataFixture({
+      prefix: "server",
+      nowMs: 10_000,
+      maxCacheAgeMs: 100,
+      disableProxyTool: true,
+      builtins: new Set(),
+      servers: [
+        { name: "mismatch", directTools: true, cache: { definitionHash: "other", cachedAt: 10_000, tools: [{ name: "search" }] } },
+        { name: "zero", directTools: true, cache: { definitionHash: "hash:zero", cachedAt: 0, tools: [{ name: "search" }] } },
+        { name: "invalid", directTools: true, cache: { definitionHash: "hash:invalid", cachedAt: "10000", tools: [{ name: "search" }] } },
+        { name: "expired", directTools: true, cache: { definitionHash: "hash:expired", cachedAt: 9_899, tools: [{ name: "search" }] } },
+        { name: "boundary", directTools: true, cache: { definitionHash: "hash:boundary", cachedAt: 9_900, tools: [{ name: "search" }] } },
+      ],
+    });
+    expect(result.directNames).toEqual(["boundary_search"]);
+    expect(result.missingConfiguredServers).toEqual(["expired", "invalid", "mismatch", "zero"]);
+    expect(result.proxyRegistered).toBeTrue();
+  });
+
   test("uses per-server direct selection over the global default", () => {
     const result = resolveMcpMetadataFixture({
       prefix: "server",
@@ -348,9 +459,9 @@ describe("WP-3C hermetic MCP metadata oracle", () => {
       disableProxyTool: false,
       builtins: new Set(),
       servers: [
-        { name: "global", cache: { state: "valid", tools: [{ name: "read" }, { name: "write" }] } },
-        { name: "disabled", directTools: false, cache: { state: "valid", tools: [{ name: "ignored" }] } },
-        { name: "exact", directTools: ["read_run_book"], cache: { state: "valid", tools: [{ name: "other" }], resources: [{ name: "Run Book" }, { name: "Other" }] } },
+        { name: "global", cache: freshMcpCache("global", { tools: [{ name: "read" }, { name: "write" }] }) },
+        { name: "disabled", directTools: false, cache: freshMcpCache("disabled", { tools: [{ name: "ignored" }] }) },
+        { name: "exact", directTools: ["read_run_book"], cache: freshMcpCache("exact", { tools: [{ name: "other" }], resources: [{ name: "Run Book" }, { name: "Other" }] }) },
       ],
     });
     expect(result.directNames).toEqual(["global_read", "global_write", "exact_read_run_book"]);
@@ -365,9 +476,9 @@ describe("WP-3C hermetic MCP metadata oracle", () => {
       disableProxyTool: true,
       builtins: new Set(),
       servers: [
-        { name: "ignored-by-env", directTools: true, cache: { state: "valid", tools: [{ name: "tool" }] } },
-        { name: "selected", directTools: false, cache: { state: "valid", tools: [{ name: "other" }], resources: [{ name: "Run Book" }] } },
-        { name: "stale", directTools: false, cache: { state: "stale", tools: [{ name: "old" }] } },
+        { name: "ignored-by-env", directTools: true, cache: freshMcpCache("ignored-by-env", { tools: [{ name: "tool" }] }) },
+        { name: "selected", directTools: false, cache: freshMcpCache("selected", { tools: [{ name: "other" }], resources: [{ name: "Run Book" }] }) },
+        { name: "stale", directTools: false, cache: { definitionHash: "mismatched", cachedAt: 1_000, tools: [{ name: "old" }] } },
       ],
     });
     expect(result.directNames).toEqual(["read_run_book"]);
@@ -382,7 +493,7 @@ describe("WP-3C hermetic MCP metadata oracle", () => {
     });
     const empty = resolveMcpMetadataFixture({
       prefix: "server", disableProxyTool: true, builtins: new Set(),
-      servers: [{ name: "empty", directTools: true, cache: { state: "valid", tools: [{}] } }],
+      servers: [{ name: "empty", directTools: true, cache: freshMcpCache("empty", { tools: [{}] }) }],
     });
     expect(absent).toMatchObject({ directNames: [], missingConfiguredServers: ["missing"], proxyRegistered: true });
     expect(empty).toMatchObject({ directNames: [], missingConfiguredServers: [], proxyRegistered: true });

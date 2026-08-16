@@ -11,8 +11,10 @@ import {
   createScriptedContext,
   exactEditFixture,
   executeWithFence,
+  executeWithServiceAuthority,
   probeUnresolvedCall,
   ScriptedDirectTool,
+  ScriptedServiceAuthority,
   serializeWritesFixture,
 } from "./fixtures/scripted-tool-preparation.js";
 
@@ -88,6 +90,50 @@ describe("WP-3C complete behavior combination matrix", () => {
       expect((await probeUnresolvedCall(row, tool, createScriptedContext(row.toolName, "/work"))).status).toBe("blocked");
     }
     expect(tool.executeCount).toBe(0);
+  });
+});
+
+describe("WP-3C mapped service-effector authority", () => {
+  test("covers every non-null row with exact one-shot EF-S01/S03/S04/S05/S07 authority", async () => {
+    const expected = new Map([
+      ["attach_file", "EF-S04"],
+      ["read_attachment", "EF-S04"],
+      ["export_attachment", "EF-S04"],
+      ["schedule_task", "EF-S07"],
+      ["scheduled_tasks", "EF-S07"],
+      ["refresh_workspace_index", "EF-S05"],
+      ["send_adaptive_card", "EF-S03"],
+      ["send_dashboard_widget", "EF-S03"],
+      ["chat", "EF-S01"],
+      ["session_control", "EF-S01"],
+      ["open_workspace_file", "EF-S05"],
+      ["exit_process", "EF-S05"],
+    ] as const);
+    const mapped = TOOL_PREPARATION_MANIFEST.filter((row) => row.serviceEffector !== null);
+    expect(new Map(mapped.map((row) => [row.toolName, row.serviceEffector]))).toEqual(expected);
+
+    const effectorIds = ["EF-S01", "EF-S03", "EF-S04", "EF-S05", "EF-S07"] as const;
+    const exercised = new Set<string>();
+    for (const row of mapped) {
+      const context = createScriptedContext(`operation:${row.toolName}`, "/authority");
+      const tool = new ScriptedDirectTool(async () => ({ content: [{ type: "text", text: row.toolName }], details: undefined }));
+      const wrongEffector = effectorIds.find((candidate) => candidate !== row.serviceEffector)!;
+      expect((await executeWithServiceAuthority(row, tool, context, undefined)).status).toBe("blocked");
+      expect((await executeWithServiceAuthority(row, tool, context, new ScriptedServiceAuthority(wrongEffector, row.toolName, context.operationId))).status).toBe("blocked");
+      expect((await executeWithServiceAuthority(row, tool, context, new ScriptedServiceAuthority(row.serviceEffector!, `${row.toolName}:other`, context.operationId))).status).toBe("blocked");
+      expect((await executeWithServiceAuthority(row, tool, context, new ScriptedServiceAuthority(row.serviceEffector!, row.toolName, `${context.operationId}:stale`))).status).toBe("blocked");
+      expect(tool.executeCount).toBe(0);
+
+      const authority = new ScriptedServiceAuthority(row.serviceEffector!, row.toolName, context.operationId);
+      expect((await executeWithServiceAuthority(row, tool, context, authority)).status).toBe("executed");
+      expect((await executeWithServiceAuthority(row, tool, context, authority)).status).toBe("blocked");
+      expect(tool.executeCount).toBe(1);
+      expect(tool.contexts).toEqual([context]);
+      exercised.add(`${row.serviceEffector}:${row.toolName}`);
+    }
+
+    expect(exercised.size).toBe(expected.size);
+    expect(new Set(mapped.map((row) => row.serviceEffector))).toEqual(new Set(effectorIds));
   });
 });
 

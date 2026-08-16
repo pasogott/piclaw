@@ -9,7 +9,8 @@ export interface McpMetadataResourceFixture {
 }
 
 export interface McpServerCacheFixture {
-  readonly state: "valid" | "stale";
+  readonly definitionHash: unknown;
+  readonly cachedAt: unknown;
   readonly tools?: readonly McpMetadataToolFixture[];
   readonly resources?: readonly McpMetadataResourceFixture[];
 }
@@ -21,6 +22,7 @@ export interface McpServerFixture {
   readonly exposeResources?: boolean;
   readonly includeTools?: readonly unknown[];
   readonly excludeTools?: readonly unknown[];
+  readonly definitionHash?: string;
   readonly cache?: McpServerCacheFixture | null;
 }
 
@@ -29,6 +31,8 @@ export interface McpMetadataFixture {
   readonly globalDirectTools?: boolean;
   readonly envSelectors?: readonly string[];
   readonly disableProxyTool?: boolean;
+  readonly nowMs?: number;
+  readonly maxCacheAgeMs?: number;
   readonly builtins: ReadonlySet<string>;
   readonly servers: readonly McpServerFixture[];
 }
@@ -40,7 +44,11 @@ export interface McpMetadataResolution {
   readonly skipped: readonly string[];
 }
 
-/** Independent, in-memory model of direct metadata selection and proxy fallback. */
+/**
+ * Independent, in-memory model of direct metadata selection and proxy fallback.
+ * Inputs are compile-time test literals, never runtime MCP/config objects; malformed
+ * metadata shapes are rejected by the branches below rather than imported/executed.
+ */
 export function resolveMcpMetadataFixture(fixture: McpMetadataFixture): McpMetadataResolution {
   const directNames: string[] = [];
   const missing = new Set<string>();
@@ -52,21 +60,27 @@ export function resolveMcpMetadataFixture(fixture: McpMetadataFixture): McpMetad
     if (server.disabled === true) continue;
     const selection = directSelection(server, fixture.globalDirectTools, env);
     if (!selection) continue;
-    if (!server.cache || server.cache.state !== "valid") {
+    if (!validCache(server, fixture)) {
+      missing.add(server.name);
+      continue;
+    }
+    const cache = server.cache!;
+    if (cache.tools !== undefined && !Array.isArray(cache.tools) || cache.resources !== undefined && !Array.isArray(cache.resources)) {
+      skipped.push(`${server.name}:invalid-cache-shape`);
       missing.add(server.name);
       continue;
     }
 
-    for (const metadata of server.cache.tools ?? []) {
-      if (typeof metadata.name !== "string" || !metadata.name.trim()) {
+    for (const metadata of cache.tools ?? []) {
+      if (!metadata || typeof metadata !== "object" || typeof metadata.name !== "string" || !metadata.name.trim()) {
         skipped.push(`${server.name}:invalid-tool`);
         continue;
       }
       consider(metadata.name, "tool", server, selection, fixture, seen, directNames, skipped);
     }
     if (server.exposeResources !== false) {
-      for (const metadata of server.cache.resources ?? []) {
-        if (typeof metadata.name !== "string" || !metadata.name.trim()) {
+      for (const metadata of cache.resources ?? []) {
+        if (!metadata || typeof metadata !== "object" || typeof metadata.name !== "string" || !metadata.name.trim()) {
           skipped.push(`${server.name}:invalid-resource`);
           continue;
         }
@@ -103,6 +117,17 @@ export function resourceNameToToolName(name: string): string {
     .toLowerCase();
   if (!value || /^\d/.test(value)) value = `resource${value ? `_${value}` : ""}`;
   return value;
+}
+
+function validCache(server: McpServerFixture, fixture: McpMetadataFixture): boolean {
+  const cache = server.cache;
+  if (!cache) return false;
+  const expectedHash = server.definitionHash ?? `hash:${server.name}`;
+  if (cache.definitionHash !== expectedHash) return false;
+  if (!cache.cachedAt || typeof cache.cachedAt !== "number" || !Number.isFinite(cache.cachedAt)) return false;
+  const now = fixture.nowMs ?? 1_000;
+  const maxAge = fixture.maxCacheAgeMs ?? 1_000;
+  return maxAge <= 0 || now - cache.cachedAt <= maxAge;
 }
 
 function consider(

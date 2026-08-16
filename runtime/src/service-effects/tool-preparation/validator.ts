@@ -1,4 +1,4 @@
-import { TOOL_PREPARATION_POLICY } from "./policy.js";
+import { getToolPreparationPolicy } from "./policy.js";
 import type { ToolContextField, ToolPreparationSpec } from "./types.js";
 
 const SPEC_FIELDS = Object.freeze([
@@ -22,9 +22,13 @@ const DEFAULT_DYNAMIC_TEMPLATES = Object.freeze(["<addon-tool>", "<mcp-direct-to
 const EXACT_TOOL_NAME = /^[a-z][a-z0-9_]*$/;
 const PROTECTED_PARAM_SELECTOR = /^params\.[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 const PROTECTED_DETAILS_SELECTOR = /^result\.details(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+const MAX_MANIFEST_ENTRIES = 10_000;
+const OPTION_FIELDS = new Set(["knownToolNames", "dynamicTemplateNames", "rejectUnexpectedExactTools", "enforceAuthoritativePolicy"]);
 
 export type ToolPreparationValidationCode =
   | "invalid_spec"
+  | "invalid_candidate_array"
+  | "invalid_options"
   | "missing_field"
   | "unexpected_field"
   | "unexpected_symbol"
@@ -77,9 +81,18 @@ export function normalizeToolPreparationManifest(
   const issues: ToolPreparationValidationIssue[] = [];
   const specs: ToolPreparationSpec[] = [];
   const seenNames = new Set<string>();
-  const dynamicNames = new Set(options.dynamicTemplateNames ?? []);
+  const candidateSnapshot = snapshotDenseDataArray(
+    candidates,
+    "invalid_candidate_array",
+    null,
+    "manifest candidates",
+    MAX_MANIFEST_ENTRIES,
+    issues,
+  ) ?? [];
+  const normalizedOptions = snapshotOptions(options, issues);
+  const dynamicNames = new Set(normalizedOptions.dynamicTemplateNames ?? []);
 
-  for (const candidate of candidates) {
+  for (const candidate of candidateSnapshot) {
     const candidateIssueStart = issues.length;
     const snapshot = snapshotCandidate(candidate, issues);
     if (!snapshot) continue;
@@ -134,12 +147,12 @@ export function normalizeToolPreparationManifest(
       if (isTemplate && !isConservativeTemplate(normalized)) {
         issues.push(issue("invalid_dynamic_template", normalized.toolName, `${normalized.toolName} must remain mixed/never/null-EF/may_finish_late with params.* and result.* protected.`));
       }
-      validateAuthoritativePolicy(normalized, isTemplate, options.enforceAuthoritativePolicy !== false, issues);
+      validateAuthoritativePolicy(normalized, isTemplate, normalizedOptions.enforceAuthoritativePolicy !== false, issues);
       if (issues.length === policyIssueStart) specs.push(normalized);
     }
   }
 
-  validateCoverage(new Set(specs.map((spec) => spec.toolName)), options, dynamicNames, issues);
+  validateCoverage(new Set(specs.map((spec) => spec.toolName)), normalizedOptions, dynamicNames, issues);
   validateTemplates(specs, dynamicNames, issues);
   return Object.freeze({ specs: Object.freeze(specs), issues: Object.freeze(issues) });
 }
@@ -152,8 +165,126 @@ export function validateToolPreparationManifest(
   return normalizeToolPreparationManifest(candidates, options).issues;
 }
 
+function snapshotOptions(value: unknown, issues: ToolPreparationValidationIssue[]): ToolPreparationValidationOptions {
+  if (!value || typeof value !== "object") {
+    issues.push(issue("invalid_options", null, "Validation options must be a closed data object."));
+    return Object.freeze({});
+  }
+  let keys: readonly PropertyKey[];
+  let descriptors: PropertyDescriptorMap;
+  try {
+    keys = Reflect.ownKeys(value);
+    descriptors = Object.getOwnPropertyDescriptors(value);
+  } catch {
+    issues.push(issue("invalid_options", null, "Validation option reflection failed; hostile proxies are rejected."));
+    return Object.freeze({});
+  }
+  const snapshot: Record<string, unknown> = Object.create(null);
+  let invalid = false;
+  for (const key of keys) {
+    if (typeof key !== "string" || !OPTION_FIELDS.has(key)) {
+      issues.push(issue("invalid_options", null, "Validation options contain a symbol or unexpected field."));
+      invalid = true;
+      continue;
+    }
+    const descriptor = descriptors[key];
+    if (!descriptor || !("value" in descriptor)) {
+      issues.push(issue("invalid_options", null, `Validation option ${key} must be a data property.`));
+      invalid = true;
+      continue;
+    }
+    snapshot[key] = descriptor.value;
+  }
+  const knownToolNames = snapshotOptionNames(snapshot.knownToolNames, "knownToolNames", issues);
+  const dynamicTemplateNames = snapshotOptionNames(snapshot.dynamicTemplateNames, "dynamicTemplateNames", issues);
+  for (const field of ["rejectUnexpectedExactTools", "enforceAuthoritativePolicy"] as const) {
+    if (snapshot[field] !== undefined && typeof snapshot[field] !== "boolean") {
+      issues.push(issue("invalid_options", null, `${field} must be boolean when present.`));
+      invalid = true;
+    }
+  }
+  if (invalid) return Object.freeze({});
+  return Object.freeze({
+    knownToolNames: knownToolNames && Object.freeze(knownToolNames),
+    dynamicTemplateNames: dynamicTemplateNames && Object.freeze(dynamicTemplateNames),
+    rejectUnexpectedExactTools: snapshot.rejectUnexpectedExactTools as boolean | undefined,
+    enforceAuthoritativePolicy: snapshot.enforceAuthoritativePolicy as boolean | undefined,
+  });
+}
+
+function snapshotOptionNames(
+  value: unknown,
+  field: "knownToolNames" | "dynamicTemplateNames",
+  issues: ToolPreparationValidationIssue[],
+): string[] | undefined {
+  if (value === undefined) return undefined;
+  const snapshot = snapshotDenseDataArray(value, "invalid_options", null, field, MAX_MANIFEST_ENTRIES, issues);
+  if (!snapshot) return undefined;
+  if (snapshot.some((entry) => typeof entry !== "string")) {
+    issues.push(issue("invalid_options", null, `${field} must contain only strings.`));
+    return undefined;
+  }
+  return snapshot as string[];
+}
+
+function snapshotDenseDataArray(
+  value: unknown,
+  code: ToolPreparationValidationCode,
+  toolName: string | null,
+  label: string,
+  maximumLength: number,
+  issues: ToolPreparationValidationIssue[],
+): unknown[] | null {
+  let array: boolean;
+  try {
+    array = Array.isArray(value);
+  } catch {
+    issues.push(issue(code, toolName, `${label} type inspection failed; revoked proxies are rejected.`));
+    return null;
+  }
+  if (!array) {
+    issues.push(issue(code, toolName, `${label} must be a dense data-property array.`));
+    return null;
+  }
+  let keys: readonly PropertyKey[];
+  let descriptors: PropertyDescriptorMap;
+  try {
+    keys = Reflect.ownKeys(value as object);
+    descriptors = Object.getOwnPropertyDescriptors(value as object);
+  } catch {
+    issues.push(issue(code, toolName, `${label} reflection failed; hostile proxies are rejected.`));
+    return null;
+  }
+  const length = descriptors.length?.value;
+  if (!Number.isSafeInteger(length) || length < 0 || length > maximumLength) {
+    issues.push(issue(code, toolName, `${label} has an invalid or excessive length.`));
+    return null;
+  }
+  if (keys.some((key) => typeof key !== "string" || key !== "length" && !/^(0|[1-9]\d*)$/.test(key))) {
+    issues.push(issue(code, toolName, `${label} has symbols or non-index properties.`));
+    return null;
+  }
+  const snapshot: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = descriptors[String(index)];
+    if (!descriptor || !("value" in descriptor)) {
+      issues.push(issue(code, toolName, `${label} must use dense data-property indexes.`));
+      return null;
+    }
+    snapshot.push(descriptor.value);
+  }
+  return snapshot;
+}
+
 function snapshotCandidate(candidate: unknown, issues: ToolPreparationValidationIssue[]): Record<string, unknown> | null {
-  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+  let arrayCandidate: boolean;
+  try {
+    arrayCandidate = Array.isArray(candidate);
+  } catch {
+    issues.push(issue("invalid_spec", null, "Manifest entry type inspection failed; revoked proxies are rejected."));
+    return null;
+  }
+  if (!candidate || typeof candidate !== "object" || arrayCandidate) {
     issues.push(issue("invalid_spec", null, "Manifest entries must be non-array objects."));
     return null;
   }
@@ -195,37 +326,14 @@ function snapshotStringArray(
   toolName: string | null,
   issues: ToolPreparationValidationIssue[],
 ): string[] {
-  if (!Array.isArray(value)) {
-    issues.push(issue(field === "contextFields" ? "invalid_context_fields" : "invalid_protected_fields", toolName, `${field} must be a dense array of strings.`));
+  const code = field === "contextFields" ? "invalid_context_fields" : "invalid_protected_fields";
+  const snapshot = snapshotDenseDataArray(value, code, toolName, field, 1_000, issues);
+  if (!snapshot) return [];
+  if (snapshot.some((entry) => typeof entry !== "string")) {
+    issues.push(issue(code, toolName, `${field} must contain only strings.`));
     return [];
   }
-  let keys: readonly PropertyKey[];
-  let descriptors: PropertyDescriptorMap;
-  try {
-    keys = Reflect.ownKeys(value);
-    descriptors = Object.getOwnPropertyDescriptors(value) as unknown as PropertyDescriptorMap;
-  } catch {
-    issues.push(issue(field === "contextFields" ? "invalid_context_fields" : "invalid_protected_fields", toolName, `${field} reflection failed.`));
-    return [];
-  }
-  const length = descriptors.length?.value;
-  if (!Number.isSafeInteger(length) || length < 0) {
-    issues.push(issue(field === "contextFields" ? "invalid_context_fields" : "invalid_protected_fields", toolName, `${field} has an invalid length.`));
-    return [];
-  }
-  if (keys.some((key) => typeof key !== "string" || key !== "length" && !/^(0|[1-9]\d*)$/.test(key))) {
-    issues.push(issue(field === "contextFields" ? "invalid_context_fields" : "invalid_protected_fields", toolName, `${field} has non-index properties.`));
-  }
-  const snapshot: string[] = [];
-  for (let index = 0; index < length; index += 1) {
-    const descriptor = descriptors[String(index)];
-    if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "string") {
-      issues.push(issue(field === "contextFields" ? "invalid_context_fields" : "invalid_protected_fields", toolName, `${field} must be dense data properties containing strings.`));
-      return [];
-    }
-    snapshot.push(descriptor.value);
-  }
-  return snapshot;
+  return snapshot as string[];
 }
 
 function validateContextFields(value: readonly string[], toolName: string | null, issues: ToolPreparationValidationIssue[]): void {
@@ -265,7 +373,7 @@ function validateAuthoritativePolicy(
   issues: ToolPreparationValidationIssue[],
 ): void {
   if (!enforce || template) return;
-  const policy = TOOL_PREPARATION_POLICY.get(spec.toolName);
+  const policy = getToolPreparationPolicy(spec.toolName);
   if (!policy) {
     issues.push(issue("missing_authoritative_policy", spec.toolName, `No closed repository policy exists for ${spec.toolName}.`));
     return;
