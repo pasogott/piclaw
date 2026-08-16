@@ -989,11 +989,16 @@ and `abandon`), bounded `get`/`listRuns` reads, and the bounded
   execution-repeatability policy. Prompt and command bodies do not enter S07.
 - Every lease mutation carries `workerId`, `expectedAttempt`,
   `expectedTaskRevision`, raw token and canonical `now`. Only the token hash is
-  stored. Claim replay reconstructs the raw token deterministically from the
-  unpredictable prefix, run ID and attempt.
-- `complete` carries explicit success/error shape, duration, bounded result
-  references and complete `EnqueueOutboxRequest` values. The store computes
-  recurrence; callers cannot provide `nextRunAt`.
+  stored. Renewal appends durable before/after expiry evidence and updates the
+  effective lease in the same transaction. Claim replay reconstructs the raw
+  token only while the exact claimed attempt remains active; terminal claim
+  replay returns `invalid_transition` and never fabricates an executable lease.
+- `complete` carries an explicit closed success/error shape, duration, bounded
+  result references and complete `EnqueueOutboxRequest` values. Success requires
+  `resultRef` and forbids `errorCode`; error does the inverse. Agent evidence must
+  equal its EF-S01 binding, service-owned shell/internal evidence carries no
+  source identity, and internal or notify-disabled snapshots reject notification
+  intents. The store computes recurrence; callers cannot provide `nextRunAt`.
 - `abandon` is terminal, writes no execution log, and makes exactly one
   recurrence decision. An explicit future `retryAt` creates a new occurrence
   time.
@@ -1002,7 +1007,12 @@ and `abandon`), bounded `get`/`listRuns` reads, and the bounded
   `retained: true` for closed tombstone summaries after bounded cleanup.
 
 The concrete error set adds `invalid_request`, `not_found` and
-`corrupt_state` to the task/revision/lease/transition/storage tags. Reads are
+`corrupt_state` to the task/revision/lease/transition/storage tags. Every public
+request and nested shape is normalized once as an exact closed object; sparse
+arrays, duplicate outbox IDs, hostile accessors, non-finite arithmetic,
+non-canonical instants and non-canonical run IDs fail before effect. Durable
+occurrences, lease/renewal history, decisions, source bindings, outbox links,
+results and tombstones are decoded as equally closed projections. Reads are
 bounded, stable by `(scheduledFor, runId)`, immutable and intentionally
 untraced.
 
@@ -1030,7 +1040,7 @@ external command did not run.
 
 ### Recurrence, completion and retention
 
-One-shot runs close. Intervals advance from completion/abandonment time. Cron
+One-shot task heads are valid only when `nextRunAt === scheduleValue`; they close after execution. Intervals advance from completion/abandonment time. Cron
 uses the current pure `computeNextRun` anchored at `scheduledFor` with the
 frozen IANA timezone. Fixed vectors pin current `cron-parser` behaviour:
 spring gaps advance to its next valid local instant and fall overlaps emit the
@@ -1039,8 +1049,10 @@ first match only before the next schedule.
 Completion inserts one immutable run log, one next-occurrence decision, ordered
 EF-S05 intents, the exact task-head CAS and the terminal occurrence in one
 transaction. It uses `createServiceOutboxEnqueueInserter`; no worker or delivery
-runs in S07. Muted/internal snapshots reject notification intents. A later
-EF-S05 `unknown` delivery cannot make a completed occurrence reclaimable.
+runs in S07. Existing EF-S05 IDs, changed binding/outbox identity under one
+idempotency key, and cross-method terminal-key reuse are rejected. A later
+EF-S05 `unknown` delivery is durable but cannot make a completed occurrence
+reclaimable.
 
 Bounded cleanup first writes a minimal terminal tombstone, then deletes
 occurrence detail, logs and per-run decisions atomically. The tombstone retains
@@ -1056,11 +1068,15 @@ recurrence utility and the EF-S01/EF-S05 private composition schema. It does
 not import, edit, register or call the live scheduler, queue, task database,
 management/query API, worker, timer or executor.
 
-The shared C01-C08 contract runs against an independent map-based fake and the
-isolated SQLite adapter. R01 plus supplementary cases cover per-statement
-rollback, post-commit lost acknowledgement/restore, pause/delete/revision,
-explicit reclaim authority, recurrence/DST, hostile inputs, corruption,
-retention and the static latent-import boundary.
+The exact shared C01-C08 catalogue remains the normative acceptance list. Its
+19 shared C/S/R cases run unchanged against an independent map-based fake and
+the isolated SQLite adapter. R01/R02 plus SQLite supplementary cases cover every
+mutation checkpoint, post-commit lost acknowledgement and fresh restore after
+claim/bind/renew/terminal/retention, pause/delete/revision, explicit reclaim
+and stale-attempt fencing, completion-kind matrices, recurrence/DST and overflow,
+hostile closed-shape inputs, durable corruption, pagination/retention, trace
+redaction/observer failure, two-connection claim/reclaim/terminal races, and the
+static latent-import boundary.
 
 ## EF-S08 — projection sink
 

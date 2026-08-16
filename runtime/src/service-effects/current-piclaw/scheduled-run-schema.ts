@@ -59,7 +59,7 @@ export function installScheduledRunSchema(database: Database): void {
     ) STRICT;
 
     CREATE TABLE IF NOT EXISTS ${PREFIX}occurrences (
-      run_id TEXT PRIMARY KEY CHECK(length(run_id)=78 AND run_id GLOB 'scheduled_run:[0-9a-f]*'),
+      run_id TEXT PRIMARY KEY CHECK(length(run_id)=78 AND run_id GLOB 'scheduled_run:[0-9a-f]*' AND substr(run_id,15) NOT GLOB '*[^0-9a-f]*'),
       task_id TEXT NOT NULL CHECK(length(task_id) BETWEEN 1 AND 512),
       task_revision INTEGER NOT NULL CHECK(task_revision BETWEEN 1 AND 9007199254740991),
       scheduled_for TEXT NOT NULL CHECK(${instant("scheduled_for")}),
@@ -85,14 +85,12 @@ export function installScheduledRunSchema(database: Database): void {
       CHECK(
         (state IN ('claimed','source_bound') AND worker_id IS NOT NULL AND lease_token_hash IS NOT NULL AND lease_expires_at IS NOT NULL AND claimed_at < lease_expires_at AND result_status IS NULL AND duration_ms IS NULL AND result_ref IS NULL AND error_code IS NULL AND next_run_at IS NULL AND head_disposition='pending' AND settled_at IS NULL AND abandonment_reason_tag IS NULL)
         OR
-        (state='completed' AND worker_id IS NULL AND lease_token_hash IS NULL AND lease_expires_at IS NULL AND result_status IS NOT NULL AND duration_ms IS NOT NULL AND settled_at IS NOT NULL AND abandonment_reason_tag IS NULL AND head_disposition<>'pending')
+        (state='completed' AND worker_id IS NULL AND lease_token_hash IS NULL AND lease_expires_at IS NULL AND result_status IS NOT NULL AND duration_ms IS NOT NULL AND settled_at IS NOT NULL AND abandonment_reason_tag IS NULL AND head_disposition<>'pending' AND ((result_status='success' AND result_ref IS NOT NULL AND error_code IS NULL) OR (result_status='error' AND result_ref IS NULL AND error_code IS NOT NULL)))
         OR
         (state='abandoned' AND worker_id IS NULL AND lease_token_hash IS NULL AND lease_expires_at IS NULL AND result_status IS NULL AND duration_ms IS NULL AND result_ref IS NULL AND error_code IS NULL AND settled_at IS NOT NULL AND abandonment_reason_tag IS NOT NULL AND head_disposition<>'pending')
       ),
-      CHECK(
-        (state='source_bound' AND accepted_source_seq IS NOT NULL AND operation_id IS NOT NULL)
-        OR (state<>'source_bound')
-      )
+      CHECK((accepted_source_seq IS NULL AND operation_id IS NULL) OR (accepted_source_seq IS NOT NULL AND operation_id IS NOT NULL)),
+      CHECK(state<>'source_bound' OR accepted_source_seq IS NOT NULL)
     ) STRICT;
 
     CREATE TABLE IF NOT EXISTS ${PREFIX}leases (
@@ -106,6 +104,18 @@ export function installScheduledRunSchema(database: Database): void {
       reconciliation_ref TEXT CHECK(reconciliation_ref IS NULL OR length(reconciliation_ref) BETWEEN 1 AND 2048),
       PRIMARY KEY(run_id,attempt),
       FOREIGN KEY(run_id) REFERENCES ${PREFIX}occurrences(run_id)
+    ) STRICT;
+
+    CREATE TABLE IF NOT EXISTS ${PREFIX}lease_renewals (
+      run_id TEXT NOT NULL,
+      attempt INTEGER NOT NULL CHECK(attempt BETWEEN 1 AND 9007199254740991),
+      ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 1 AND 9007199254740991),
+      request_hash TEXT NOT NULL CHECK(${hash("request_hash")}),
+      previous_expires_at TEXT NOT NULL CHECK(${instant("previous_expires_at")}),
+      lease_expires_at TEXT NOT NULL CHECK(${instant("lease_expires_at")} AND lease_expires_at > previous_expires_at),
+      renewed_at TEXT NOT NULL CHECK(${instant("renewed_at")} AND renewed_at < lease_expires_at),
+      PRIMARY KEY(run_id,attempt,ordinal),
+      FOREIGN KEY(run_id,attempt) REFERENCES ${PREFIX}leases(run_id,attempt)
     ) STRICT;
 
     CREATE TABLE IF NOT EXISTS ${PREFIX}source_bindings (
@@ -179,7 +189,7 @@ export function installScheduledRunSchema(database: Database): void {
     ) STRICT;
 
     CREATE TABLE IF NOT EXISTS ${PREFIX}tombstones (
-      run_id TEXT PRIMARY KEY CHECK(length(run_id)=78 AND run_id GLOB 'scheduled_run:[0-9a-f]*'),
+      run_id TEXT PRIMARY KEY CHECK(length(run_id)=78 AND run_id GLOB 'scheduled_run:[0-9a-f]*' AND substr(run_id,15) NOT GLOB '*[^0-9a-f]*'),
       task_id TEXT NOT NULL CHECK(length(task_id) BETWEEN 1 AND 512),
       task_revision INTEGER NOT NULL CHECK(task_revision BETWEEN 1 AND 9007199254740991),
       scheduled_for TEXT NOT NULL CHECK(${instant("scheduled_for")}),
@@ -189,8 +199,10 @@ export function installScheduledRunSchema(database: Database): void {
       next_run_at TEXT CHECK(next_run_at IS NULL OR ${instant("next_run_at")}),
       head_disposition TEXT NOT NULL CHECK(head_disposition IN ('advanced','paused','deleted','superseded')),
       settled_at TEXT NOT NULL CHECK(${instant("settled_at")}),
+      decision_method TEXT NOT NULL CHECK(decision_method IN ('complete','abandon')),
       decision_hash TEXT NOT NULL CHECK(${hash("decision_hash")}),
-      UNIQUE(task_id,scheduled_for)
+      UNIQUE(task_id,scheduled_for),
+      CHECK((state='completed' AND decision_method='complete') OR (state='abandoned' AND decision_method='abandon'))
     ) STRICT;
 
     CREATE INDEX IF NOT EXISTS ${PREFIX}due_tasks

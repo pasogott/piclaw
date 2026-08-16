@@ -25,8 +25,13 @@ import {
   type ServiceOutboxEnqueueStatement,
 } from "./service-outbox-store.js";
 import {
+  addCanonicalDuration,
+  canonicalInstant,
   canonicalRequestHash,
   computeScheduledSuccessor,
+  decodeClaimReplayRows,
+  decodeCleanupResult,
+  decodeScheduledRunRecord,
   decodeTaskSnapshot,
   deriveScheduledLeaseToken,
   deriveScheduledRunId,
@@ -39,19 +44,21 @@ import {
   normaliseList,
   normaliseRenew,
   validateScheduledRunId,
+  validHash,
   validId,
+  validScheduledRunId,
 } from "./scheduled-run-values.js";
 
 const P = "service_effect_s07_";
 const TASKS = `${P}tasks`, REVISIONS = `${P}task_revisions`, RUNS = `${P}occurrences`;
-const LEASES = `${P}leases`, BINDINGS = `${P}source_bindings`, LOGS = `${P}run_logs`;
+const LEASES = `${P}leases`, RENEWALS = `${P}lease_renewals`, BINDINGS = `${P}source_bindings`, LOGS = `${P}run_logs`;
 const NEXT = `${P}next_decisions`, ABANDONMENTS = `${P}abandonments`, LINKS = `${P}outbox_links`;
 const DECISIONS = `${P}decisions`, TOMBSTONES = `${P}tombstones`;
 
 export type ScheduledRunMutationMethod = "claimDue" | "renew" | "bindAcceptedSource" | "complete" | "abandon" | "cleanupTerminal";
 type MutationMethod = ScheduledRunMutationMethod;
 export type ScheduledRunStatement =
-  | "occurrence_insert" | "occurrence_reclaim_update" | "lease_insert" | "lease_renew"
+  | "occurrence_insert" | "occurrence_reclaim_update" | "lease_insert" | "renewal_insert" | "lease_history_update" | "lease_renew"
   | "source_binding_insert" | "source_binding_update"
   | "next_decision_insert" | "run_log_insert" | "outbox_link_insert"
   | "task_head_update" | "occurrence_terminal_update" | "abandonment_insert"
@@ -75,7 +82,7 @@ type RunRow = {
 };
 type HeadRow = { task_id: string; current_revision: number; status: string; next_run_at: string | null };
 type RevisionRow = { snapshot_json: string; config_hash: string };
-type DecisionRow = { request_hash: string; result_json: string; run_id: string | null };
+type DecisionRow = { method: MutationMethod; request_hash: string; result_json: string; run_id: string | null };
 
 class AbortMutation extends Error {
   constructor(readonly error: ScheduledRunStoreError) { super(error._tag); }
@@ -92,7 +99,7 @@ function errorOf(
 }
 
 function verify(database: Database): void {
-  const required = [TASKS, REVISIONS, RUNS, LEASES, BINDINGS, LOGS, NEXT, ABANDONMENTS, LINKS, DECISIONS, TOMBSTONES, "service_effect_s01_sources", "service_effect_s05_outbox"];
+  const required = [TASKS, REVISIONS, RUNS, LEASES, RENEWALS, BINDINGS, LOGS, NEXT, ABANDONMENTS, LINKS, DECISIONS, TOMBSTONES, "service_effect_s01_sources", "service_effect_s05_outbox"];
   const names = new Set((database.query("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((row) => row.name));
   if (required.some((name) => !names.has(name))) throw new Error("EF-S07 composition schema is incomplete.");
   const fk = database.query("PRAGMA foreign_keys").get() as { foreign_keys?: number } | undefined;
@@ -146,7 +153,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
 
   async claimDue(input: ClaimDueRunsRequest): Promise<ResultValue<readonly ScheduledRunLease[], ScheduledRunStoreError>> {
     const request = normaliseClaim(input);
-    const effectId = request ? `claim:${hashScheduledLeaseToken(request.leaseTokenPrefix)}` : "invalid";
+    const effectId = request ? "claimDue" : "invalid";
     this.trace("claimDue", effectId, null, null, "call", null);
     if (!request) return this.failed("claimDue", effectId, null, null, errorOf("invalid_request"));
     return this.mutate("claimDue", effectId, null, null, () => this.claim(request));
@@ -185,7 +192,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
   }
 
   async get(runId: string): Promise<ResultValue<ScheduledRunRecord | null, ScheduledRunStoreError>> {
-    if (!validId(runId)) return Result.err(errorOf("invalid_request"));
+    if (!validScheduledRunId(runId)) return Result.err(errorOf("invalid_request"));
     try { return Result.ok(this.readRecord(runId)); }
     catch (error) { return Result.err(error instanceof CorruptState ? errorOf("corrupt_state") : errorOf("storage_unavailable")); }
   }
@@ -249,7 +256,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     const key = `claim:${prefixHash}`;
     const requestHash = canonicalRequestHash(request);
     const transaction = this.database.transaction(() => {
-      const replay = this.replay(key, requestHash);
+      const replay = this.replay(key, requestHash, "claimDue", null);
       if (replay !== undefined) return Result.ok(this.restoreClaimReplay(request, replay));
 
       type Candidate = { kind: "new" | "expired"; taskId: string; scheduledFor: string; runId: string | null };
@@ -276,7 +283,8 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
           const head = this.readHead(candidate.taskId);
           if (!head || head.status !== "active" || head.next_run_at !== candidate.scheduledFor) continue;
           const snapshot = this.readSnapshot(candidate.taskId, head.current_revision);
-          const expires = new Date(new Date(request.now).getTime() + request.leaseDurationMs).toISOString();
+          const expires = addCanonicalDuration(request.now, request.leaseDurationMs);
+          if (!expires) throw new AbortMutation(errorOf("invalid_request"));
           const token = deriveScheduledLeaseToken(request.leaseTokenPrefix, runId, 1);
           const tokenHash = hashScheduledLeaseToken(token);
           this.database.query(
@@ -303,7 +311,9 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
           }
           if (!authorityKind) continue;
           const attempt = run.attempt + 1;
-          const expires = new Date(new Date(request.now).getTime() + request.leaseDurationMs).toISOString();
+          if (!Number.isSafeInteger(attempt)) throw new CorruptState();
+          const expires = addCanonicalDuration(request.now, request.leaseDurationMs);
+          if (!expires) throw new AbortMutation(errorOf("invalid_request"));
           const token = deriveScheduledLeaseToken(request.leaseTokenPrefix, run.run_id, attempt);
           const tokenHash = hashScheduledLeaseToken(token);
           const changed = this.database.query(
@@ -326,27 +336,21 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
   }
 
   private restoreClaimReplay(request: ClaimDueRunsRequest, value: unknown): readonly ScheduledRunLease[] {
-    if (!Array.isArray(value)) throw new CorruptState();
-    return Object.freeze(value.map((item) => {
-      if (!item || typeof item !== "object") throw new CorruptState();
-      const { runId, attempt, state } = item as { runId?: unknown; attempt?: unknown; state?: unknown };
-      if (!validId(runId) || typeof attempt !== "number" || !Number.isSafeInteger(attempt) || (state !== "claimed" && state !== "source_bound")) throw new CorruptState();
+    const rows = decodeClaimReplayRows(value);
+    if (!rows) throw new CorruptState();
+    return Object.freeze(rows.map(({ runId, attempt, state }) => {
       const run = this.readRunRow(runId), tomb = this.readTombstone(runId);
-      if (!run && tomb) throw new AbortMutation(errorOf("invalid_transition"));
+      if ((!run && tomb) || (run && (run.state !== state || run.attempt !== attempt))) throw new AbortMutation(errorOf("invalid_transition"));
       if (!run) throw new CorruptState();
-      const leaseRow = this.database.query(`SELECT worker_id,claimed_at,lease_expires_at FROM ${LEASES} WHERE run_id=? AND attempt=?`).get(runId, attempt) as { worker_id: string; claimed_at: string; lease_expires_at: string } | undefined;
-      if (!leaseRow) throw new CorruptState();
+      const leaseRow = this.database.query(`SELECT token_hash,worker_id,claimed_at,lease_expires_at FROM ${LEASES} WHERE run_id=? AND attempt=?`).get(runId, attempt) as { token_hash: unknown; worker_id: unknown; claimed_at: unknown; lease_expires_at: unknown } | undefined;
+      const claimedAt = leaseRow && canonicalInstant(leaseRow.claimed_at), leaseExpiresAt = leaseRow && canonicalInstant(leaseRow.lease_expires_at);
+      if (!leaseRow || !claimedAt || !leaseExpiresAt || !validHash(leaseRow.token_hash) || !validId(leaseRow.worker_id)
+        || claimedAt > request.now || leaseExpiresAt !== run.lease_expires_at
+        || run.worker_id !== leaseRow.worker_id || run.lease_token_hash !== leaseRow.token_hash) throw new CorruptState();
       const snapshot = this.readSnapshot(run.task_id, run.task_revision);
-      const token = deriveScheduledLeaseToken(request.leaseTokenPrefix, runId, attempt as number);
-      const record: ScheduledRunRecord = Object.freeze({
-        ...this.recordFromRun(run), state,
-        attempt: attempt as number, workerId: leaseRow.worker_id, leaseExpiresAt: leaseRow.lease_expires_at,
-        acceptedSourceSeq: state === "source_bound" ? run.accepted_source_seq : null,
-        operationId: state === "source_bound" ? run.operation_id : null,
-        status: null, durationMs: null, resultRef: null, errorCode: null, nextRunAt: null,
-        headDisposition: "pending" as const, settledAt: null, abandonmentReasonTag: null, outboxIds: Object.freeze([]), retained: false,
-      });
-      return this.lease(record as ScheduledRunLease["record"], snapshot, token);
+      const token = deriveScheduledLeaseToken(request.leaseTokenPrefix, runId, attempt);
+      if (hashScheduledLeaseToken(token) !== leaseRow.token_hash) throw new CorruptState();
+      return this.lease(this.requireActiveRecord(this.recordFromRun(run)), snapshot, token);
     }));
   }
 
@@ -355,19 +359,29 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     const key = `renew:${request.runId}:${request.expectedAttempt}:${tokenHash}:${request.leaseExpiresAt}`;
     const requestHash = canonicalRequestHash(request);
     return this.database.transaction(() => {
-      const replay = this.replay(key, requestHash);
+      const replay = this.replay(key, requestHash, "renew", request.runId);
       if (replay !== undefined) {
-        const record = this.recordFromJson(replay);
+        const record = decodeScheduledRunRecord(replay);
+        if (!record || (record.state !== "claimed" && record.state !== "source_bound") || record.leaseExpiresAt !== request.leaseExpiresAt) throw new CorruptState();
+        const current = this.readRecord(record.runId);
+        if (!current || current.attempt !== record.attempt || current.taskRevision !== record.taskRevision) throw new AbortMutation(errorOf("invalid_transition"));
         return Result.ok(this.lease(record as ScheduledRunLease["record"], this.readSnapshot(record.taskId, record.taskRevision), request.leaseToken));
       }
       const run = this.requireFencedRun(request, tokenHash);
       if (!run.lease_expires_at || request.leaseExpiresAt <= run.lease_expires_at) throw new AbortMutation(errorOf("invalid_request"));
+      const ordinalRow = this.database.query(`SELECT COALESCE(MAX(ordinal),0)+1 AS ordinal FROM ${RENEWALS} WHERE run_id=? AND attempt=?`).get(request.runId, request.expectedAttempt) as { ordinal: number };
+      if (!Number.isSafeInteger(ordinalRow.ordinal) || ordinalRow.ordinal < 1) throw new CorruptState();
+      this.database.query(`INSERT INTO ${RENEWALS}(run_id,attempt,ordinal,request_hash,previous_expires_at,lease_expires_at,renewed_at) VALUES(?,?,?,?,?,?,?)`).run(request.runId, request.expectedAttempt, ordinalRow.ordinal, requestHash, run.lease_expires_at, request.leaseExpiresAt, request.now);
+      this.statement("renewal_insert");
+      const history = this.database.query(`UPDATE ${LEASES} SET lease_expires_at=? WHERE run_id=? AND attempt=? AND token_hash=? AND lease_expires_at=?`).run(request.leaseExpiresAt, request.runId, request.expectedAttempt, tokenHash, run.lease_expires_at);
+      if (history.changes !== 1) throw new CorruptState();
+      this.statement("lease_history_update");
       const changed = this.database.query(
-        `UPDATE ${RUNS} SET lease_expires_at=? WHERE run_id=? AND worker_id=? AND attempt=? AND task_revision=? AND lease_token_hash=? AND lease_expires_at>? AND state IN ('claimed','source_bound')`,
-      ).run(request.leaseExpiresAt, request.runId, request.workerId, request.expectedAttempt, request.expectedTaskRevision, tokenHash, request.now);
+        `UPDATE ${RUNS} SET lease_expires_at=? WHERE run_id=? AND worker_id=? AND attempt=? AND task_revision=? AND lease_token_hash=? AND lease_expires_at=? AND lease_expires_at>? AND state IN ('claimed','source_bound')`,
+      ).run(request.leaseExpiresAt, request.runId, request.workerId, request.expectedAttempt, request.expectedTaskRevision, tokenHash, run.lease_expires_at, request.now);
       if (changed.changes !== 1) throw new AbortMutation(errorOf("lease_conflict"));
       this.statement("lease_renew");
-      const record = this.readRecord(request.runId)! as ScheduledRunLease["record"];
+      const record = this.requireActiveRecord(this.readRecord(request.runId));
       const lease = this.lease(record, this.readSnapshot(run.task_id, run.task_revision), request.leaseToken);
       this.writeDecision(key, "renew", requestHash, request.runId, lease.record, request.now);
       return Result.ok(lease);
@@ -377,7 +391,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
   private bind(request: BindScheduledSourceRequest): ResultValue<ScheduledRunRecord, ScheduledRunStoreError> {
     const key = `effect:${request.effect.idempotencyKey}`;
     return this.database.transaction(() => {
-      const replay = this.replayRecordOrRetained(key, request.effect.requestHash, request.runId);
+      const replay = this.replayRecordOrRetained(key, "bindAcceptedSource", request.effect.requestHash, request.runId);
       if (replay) return Result.ok(replay);
       const run = this.requireFencedRun(request, hashScheduledLeaseToken(request.leaseToken));
       const snapshot = this.readSnapshot(run.task_id, run.task_revision);
@@ -407,7 +421,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
   private completeRun(request: CompleteScheduledRunRequest): ResultValue<ScheduledRunRecord, ScheduledRunStoreError> {
     const key = `effect:${request.effect.idempotencyKey}`;
     return this.database.transaction(() => {
-      const replay = this.replayRecordOrRetained(key, request.effect.requestHash, request.runId);
+      const replay = this.replayRecordOrRetained(key, "complete", request.effect.requestHash, request.runId);
       if (replay) return Result.ok(replay);
       const run = this.requireFencedRun(request, hashScheduledLeaseToken(request.leaseToken));
       const snapshot = this.readSnapshot(run.task_id, run.task_revision);
@@ -443,7 +457,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
   private abandonRun(request: AbandonScheduledRunRequest): ResultValue<ScheduledRunRecord, ScheduledRunStoreError> {
     const key = `effect:${request.effect.idempotencyKey}`;
     return this.database.transaction(() => {
-      const replay = this.replayRecordOrRetained(key, request.effect.requestHash, request.runId);
+      const replay = this.replayRecordOrRetained(key, "abandon", request.effect.requestHash, request.runId);
       if (replay) return Result.ok(replay);
       const run = this.requireFencedRun(request, hashScheduledLeaseToken(request.leaseToken));
       const snapshot = this.readSnapshot(run.task_id, run.task_revision);
@@ -469,8 +483,12 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     const key = `cleanupTerminal:${request.settledBefore}:${request.limit}`;
     const requestHash = canonicalRequestHash(request);
     return this.database.transaction(() => {
-      const replay = this.replay(key, requestHash);
-      if (replay !== undefined) return Result.ok(replay as CleanupScheduledRunsResult);
+      const replay = this.replay(key, requestHash, "cleanupTerminal", null);
+      if (replay !== undefined) {
+        const result = decodeCleanupResult(replay);
+        if (!result) throw new CorruptState();
+        return Result.ok(result);
+      }
       const rows = this.database.query(
         `SELECT * FROM ${RUNS} WHERE state IN ('completed','abandoned') AND settled_at<? ORDER BY settled_at,run_id LIMIT ?`,
       ).all(request.settledBefore, request.limit) as RunRow[];
@@ -479,8 +497,8 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
         const next = this.database.query(`SELECT decision_hash FROM ${NEXT} WHERE run_id=?`).get(row.run_id) as { decision_hash: string } | undefined;
         if (!next) throw new CorruptState();
         this.database.query(
-          `INSERT INTO ${TOMBSTONES}(run_id,task_id,task_revision,scheduled_for,state,attempt,status,next_run_at,head_disposition,settled_at,decision_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-        ).run(row.run_id, row.task_id, row.task_revision, row.scheduled_for, row.state, row.attempt, row.result_status, row.next_run_at, row.head_disposition, row.settled_at, next.decision_hash);
+          `INSERT INTO ${TOMBSTONES}(run_id,task_id,task_revision,scheduled_for,state,attempt,status,next_run_at,head_disposition,settled_at,decision_method,decision_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+        ).run(row.run_id, row.task_id, row.task_revision, row.scheduled_for, row.state, row.attempt, row.result_status, row.next_run_at, row.head_disposition, row.settled_at, row.state === "completed" ? "complete" : "abandon", next.decision_hash);
         this.statement("tombstone_insert");
         this.database.query(`DELETE FROM ${DECISIONS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
         this.database.query(`DELETE FROM ${LINKS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
@@ -488,6 +506,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
         this.database.query(`DELETE FROM ${LOGS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
         this.database.query(`DELETE FROM ${ABANDONMENTS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
         this.database.query(`DELETE FROM ${NEXT} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
+        this.database.query(`DELETE FROM ${RENEWALS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
         this.database.query(`DELETE FROM ${LEASES} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
         this.database.query(`DELETE FROM ${RUNS} WHERE run_id=?`).run(row.run_id); this.statement("retention_delete");
         runIds.push(row.run_id);
@@ -507,6 +526,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
       if (this.readTombstone(request.runId)) throw new AbortMutation(errorOf("invalid_transition"));
       throw new AbortMutation(errorOf("not_found"));
     }
+    this.recordFromRun(run);
     if (run.task_revision !== request.expectedTaskRevision) throw new AbortMutation(errorOf("task_revision_mismatch", "not_applied", false, { observedTaskRevision: run.task_revision }));
     if (run.state === "completed" || run.state === "abandoned") throw new AbortMutation(errorOf("invalid_transition"));
     if (run.worker_id !== request.workerId || run.attempt !== request.expectedAttempt || run.lease_token_hash !== tokenHash) {
@@ -517,6 +537,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
   }
 
   private validateCompletionShape(request: CompleteScheduledRunRequest, run: RunRow, snapshot: ScheduledTaskSnapshot): void {
+    if (request.status === "success" ? (request.resultRef === null || request.errorCode !== null) : (request.resultRef !== null || request.errorCode === null)) throw new AbortMutation(errorOf("invalid_request"));
     if (snapshot.kind === "agent") {
       if (run.state !== "source_bound" || run.accepted_source_seq === null || run.operation_id === null) throw new AbortMutation(errorOf("invalid_transition"));
       if (request.effect.operationId !== run.operation_id || request.effect.sourceSeq !== run.accepted_source_seq) throw new AbortMutation(errorOf("invalid_request"));
@@ -528,7 +549,7 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
       if (snapshot.kind === "agent") {
         if (intent.effect.operationId !== run.operation_id || intent.effect.sourceSeq !== run.accepted_source_seq) throw new AbortMutation(errorOf("invalid_request"));
       } else if (intent.effect.operationId !== null || intent.effect.sourceSeq !== null) throw new AbortMutation(errorOf("invalid_request"));
-      if ((snapshot.muted || snapshot.kind === "internal") && intent.kind === "notification") throw new AbortMutation(errorOf("invalid_request"));
+      if ((!snapshot.notifyOnComplete || snapshot.muted || snapshot.kind === "internal") && intent.kind === "notification") throw new AbortMutation(errorOf("invalid_request"));
     }
   }
 
@@ -578,45 +599,116 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
   }
   private readTombstone(runId: string): Record<string, unknown> | null {
     const row = this.database.query(`SELECT * FROM ${TOMBSTONES} WHERE run_id=?`).get(runId) as Record<string, unknown> | undefined;
-    if (row && !validateScheduledRunId(String(row.run_id), String(row.task_id), String(row.scheduled_for))) throw new CorruptState();
-    return row ?? null;
+    if (!row) return null;
+    const method = row.decision_method;
+    if ((method !== "complete" && method !== "abandon") || !validHash(row.decision_hash)) throw new CorruptState();
+    const record = decodeScheduledRunRecord({
+      runId: row.run_id, taskId: row.task_id, taskRevision: row.task_revision, scheduledFor: row.scheduled_for,
+      state: row.state, attempt: row.attempt, workerId: null, leaseExpiresAt: null, acceptedSourceSeq: null,
+      operationId: null, status: row.status, durationMs: null, resultRef: null, errorCode: null,
+      nextRunAt: row.next_run_at, headDisposition: row.head_disposition, settledAt: row.settled_at,
+      abandonmentReasonTag: null, outboxIds: [], retained: true,
+    });
+    if (!record || (record.state === "completed" ? method !== "complete" : method !== "abandon")) throw new CorruptState();
+    return { ...row, record };
   }
 
   private readRecord(runId: string): ScheduledRunRecord | null {
     const run = this.readRunRow(runId);
     if (run) return this.recordFromRun(run);
     const row = this.readTombstone(runId);
-    if (!row) return null;
-    return Object.freeze({
-      runId: row.run_id as string, taskId: row.task_id as string, taskRevision: row.task_revision as number,
-      scheduledFor: row.scheduled_for as string, state: row.state as "completed" | "abandoned", attempt: row.attempt as number,
-      workerId: null, leaseExpiresAt: null, acceptedSourceSeq: null, operationId: null,
-      status: row.status as ScheduledRunRecord["status"], durationMs: null, resultRef: null, errorCode: null,
-      nextRunAt: row.next_run_at as string | null, headDisposition: row.head_disposition as ScheduledRunHeadDisposition,
-      settledAt: row.settled_at as string, abandonmentReasonTag: null, outboxIds: Object.freeze([]), retained: true,
-    });
+    return row ? row.record as ScheduledRunRecord : null;
   }
 
   private recordFromRun(run: RunRow): ScheduledRunRecord {
     if (!validateScheduledRunId(run.run_id, run.task_id, run.scheduled_for)) throw new CorruptState();
-    const links = this.database.query(`SELECT outbox_id FROM ${LINKS} WHERE run_id=? ORDER BY ordinal`).all(run.run_id) as Array<{ outbox_id: string }>;
-    return Object.freeze({
+    const links = this.database.query(`SELECT ordinal,outbox_id FROM ${LINKS} WHERE run_id=? ORDER BY ordinal`).all(run.run_id) as Array<{ ordinal: unknown; outbox_id: unknown }>;
+    const outboxIds: string[] = [];
+    for (const [index, link] of links.entries()) {
+      if (link.ordinal !== index || !validId(link.outbox_id) || outboxIds.includes(link.outbox_id)) throw new CorruptState();
+      const target = this.database.query("SELECT outbox_id FROM service_effect_s05_outbox WHERE outbox_id=?").get(link.outbox_id) as { outbox_id: unknown } | undefined;
+      if (!target || target.outbox_id !== link.outbox_id) throw new CorruptState();
+      outboxIds.push(link.outbox_id);
+    }
+    const record = decodeScheduledRunRecord({
       runId: run.run_id, taskId: run.task_id, taskRevision: run.task_revision, scheduledFor: run.scheduled_for,
       state: run.state, attempt: run.attempt, workerId: run.worker_id, leaseExpiresAt: run.lease_expires_at,
       acceptedSourceSeq: run.accepted_source_seq, operationId: run.operation_id, status: run.result_status,
       durationMs: run.duration_ms, resultRef: run.result_ref, errorCode: run.error_code, nextRunAt: run.next_run_at,
       headDisposition: run.head_disposition, settledAt: run.settled_at, abandonmentReasonTag: run.abandonment_reason_tag,
-      outboxIds: Object.freeze(links.map((row) => row.outbox_id)), retained: false,
+      outboxIds, retained: false,
     });
+    if (!record) throw new CorruptState();
+    const snapshot = this.readSnapshot(run.task_id, run.task_revision);
+    if ((snapshot.kind !== "agent" && record.acceptedSourceSeq !== null)
+      || (snapshot.kind === "agent" && (record.state === "source_bound" || record.state === "completed") && record.acceptedSourceSeq === null)) throw new CorruptState();
+    this.validateLeaseEvidence(run, record.state === "claimed" || record.state === "source_bound");
+    if (record.acceptedSourceSeq !== null) this.validateSourceBinding(run, record);
+    if (record.state === "completed" || record.state === "abandoned") this.validateTerminalEvidence(run, record);
+    return record;
   }
 
   private recordFromJson(value: unknown): ScheduledRunRecord {
-    if (!value || typeof value !== "object") throw new CorruptState();
-    const runId = (value as { runId?: unknown }).runId;
-    if (!validId(runId)) throw new CorruptState();
-    const current = this.readRecord(runId);
-    if (!current) throw new CorruptState();
-    return current;
+    const saved = decodeScheduledRunRecord(value);
+    if (!saved) throw new CorruptState();
+    const current = this.readRecord(saved.runId);
+    if (!current || current.taskId !== saved.taskId || current.taskRevision !== saved.taskRevision
+      || current.scheduledFor !== saved.scheduledFor || current.attempt < saved.attempt) throw new CorruptState();
+    return current.retained ? current : saved;
+  }
+
+  private validateLeaseEvidence(run: RunRow, active: boolean): void {
+    const leases = this.database.query(`SELECT attempt,token_hash,worker_id,claimed_at,lease_expires_at FROM ${LEASES} WHERE run_id=? ORDER BY attempt`).all(run.run_id) as Array<Record<string, unknown>>;
+    if (leases.length !== run.attempt) throw new CorruptState();
+    for (const [index, row] of leases.entries()) {
+      const attempt = index + 1, claimedAt = canonicalInstant(row.claimed_at), leaseExpiresAt = canonicalInstant(row.lease_expires_at);
+      if (row.attempt !== attempt || !claimedAt || !leaseExpiresAt || !validHash(row.token_hash) || !validId(row.worker_id) || claimedAt >= leaseExpiresAt) throw new CorruptState();
+      const renewals = this.database.query(`SELECT ordinal,request_hash,previous_expires_at,lease_expires_at,renewed_at FROM ${RENEWALS} WHERE run_id=? AND attempt=? ORDER BY ordinal`).all(run.run_id, attempt) as Array<Record<string, unknown>>;
+      let previous: string | null = null;
+      for (const [renewalIndex, renewal] of renewals.entries()) {
+        const previousExpiresAt = canonicalInstant(renewal.previous_expires_at), renewedExpiresAt = canonicalInstant(renewal.lease_expires_at), renewedAt = canonicalInstant(renewal.renewed_at);
+        if (renewal.ordinal !== renewalIndex + 1 || !validHash(renewal.request_hash) || !previousExpiresAt || !renewedExpiresAt || !renewedAt
+          || (previous === null ? previousExpiresAt <= claimedAt : previousExpiresAt !== previous) || renewedExpiresAt <= previousExpiresAt
+          || renewedAt < claimedAt || renewedAt >= renewedExpiresAt) throw new CorruptState();
+        previous = renewedExpiresAt;
+      }
+      if (previous !== null && previous !== leaseExpiresAt) throw new CorruptState();
+      if (active && attempt === run.attempt && (row.token_hash !== run.lease_token_hash || row.worker_id !== run.worker_id
+        || claimedAt !== run.claimed_at || leaseExpiresAt !== run.lease_expires_at)) throw new CorruptState();
+    }
+  }
+
+  private validateSourceBinding(run: RunRow, record: ScheduledRunRecord): void {
+    const snapshot = this.readSnapshot(run.task_id, run.task_revision);
+    const row = this.database.query(`SELECT request_hash,idempotency_key,chat_jid,source_seq,operation_id,bound_at FROM ${BINDINGS} WHERE run_id=?`).get(run.run_id) as Record<string, unknown> | undefined;
+    if (!row || !validHash(row.request_hash) || !validId(row.idempotency_key) || row.chat_jid !== snapshot.chatJid
+      || row.source_seq !== record.acceptedSourceSeq || row.operation_id !== record.operationId || !canonicalInstant(row.bound_at)) throw new CorruptState();
+  }
+
+  private validateTerminalEvidence(run: RunRow, record: ScheduledRunRecord): void {
+    const next = this.database.query(`SELECT task_id,task_revision,scheduled_for,computed_next_run_at,effective_next_run_at,head_disposition,decided_at,decision_hash FROM ${NEXT} WHERE run_id=?`).get(run.run_id) as Record<string, unknown> | undefined;
+    if (!next || next.task_id !== run.task_id || next.task_revision !== run.task_revision || next.scheduled_for !== run.scheduled_for
+      || next.head_disposition !== run.head_disposition || next.decided_at !== record.settledAt || !validHash(next.decision_hash)
+      || (next.computed_next_run_at !== null && !canonicalInstant(next.computed_next_run_at))
+      || (next.effective_next_run_at !== null && !canonicalInstant(next.effective_next_run_at))) throw new CorruptState();
+    const expectedRecordNext = record.headDisposition === "advanced" || record.headDisposition === "paused" ? next.computed_next_run_at : null;
+    const expectedEffective = record.headDisposition === "advanced" ? next.computed_next_run_at : null;
+    if (record.nextRunAt !== expectedRecordNext || next.effective_next_run_at !== expectedEffective) throw new CorruptState();
+    const snapshot = this.readSnapshot(run.task_id, run.task_revision);
+    let retryAt: string | null = null;
+    if (record.state === "completed") {
+      const log = this.database.query(`SELECT task_id,task_revision,scheduled_for,task_kind,completed_at,duration_ms,status,result_ref,error_code FROM ${LOGS} WHERE run_id=?`).get(run.run_id) as Record<string, unknown> | undefined;
+      if (!log || log.task_id !== run.task_id || log.task_revision !== run.task_revision || log.scheduled_for !== run.scheduled_for
+        || log.task_kind !== snapshot.kind || log.completed_at !== record.settledAt || log.duration_ms !== record.durationMs
+        || log.status !== record.status || log.result_ref !== record.resultRef || log.error_code !== record.errorCode) throw new CorruptState();
+    } else {
+      const abandonment = this.database.query(`SELECT request_hash,reason_tag,abandoned_at,retry_at FROM ${ABANDONMENTS} WHERE run_id=?`).get(run.run_id) as Record<string, unknown> | undefined;
+      retryAt = abandonment?.retry_at === null ? null : canonicalInstant(abandonment?.retry_at);
+      if (!abandonment || !validHash(abandonment.request_hash) || abandonment.reason_tag !== record.abandonmentReasonTag
+        || abandonment.abandoned_at !== record.settledAt || (abandonment.retry_at !== null && !retryAt)) throw new CorruptState();
+    }
+    const computed = retryAt ?? computeScheduledSuccessor(snapshot, run.scheduled_for, record.settledAt!);
+    if ((snapshot.scheduleType !== "once" && !computed) || next.computed_next_run_at !== computed) throw new CorruptState();
   }
 
   private requireActiveRecord(record: ScheduledRunRecord | null): ScheduledRunLease["record"] {
@@ -628,20 +720,21 @@ class CurrentPiclawScheduledRunStore implements ScheduledRunStore {
     return Object.freeze({ record, task, leaseToken: token });
   }
 
-  private replay(key: string, requestHash: string): unknown | undefined {
-    const row = this.database.query(`SELECT request_hash,result_json,run_id FROM ${DECISIONS} WHERE decision_key=?`).get(key) as DecisionRow | undefined;
+  private replay(key: string, requestHash: string, method: MutationMethod, expectedRunId: string | null): unknown | undefined {
+    const row = this.database.query(`SELECT method,request_hash,result_json,run_id FROM ${DECISIONS} WHERE decision_key=?`).get(key) as DecisionRow | undefined;
     if (!row) return undefined;
-    if (row.request_hash !== requestHash) throw new AbortMutation(errorOf("idempotency_conflict"));
+    if (row.method !== method || row.request_hash !== requestHash || !validHash(row.request_hash)) throw new AbortMutation(errorOf("idempotency_conflict"));
+    if (row.run_id !== expectedRunId || (row.run_id !== null && !validScheduledRunId(row.run_id))) throw new CorruptState();
     return parseDecision(row);
   }
 
-  private replayRecordOrRetained(key: string, requestHash: string, runId: string): ScheduledRunRecord | null {
-    const replay = this.replay(key, requestHash);
+  private replayRecordOrRetained(key: string, method: "bindAcceptedSource" | "complete" | "abandon", requestHash: string, runId: string): ScheduledRunRecord | null {
+    const replay = this.replay(key, requestHash, method, runId);
     if (replay !== undefined) return this.recordFromJson(replay);
     const tombstone = this.readTombstone(runId);
     if (!tombstone) return null;
-    if (tombstone.decision_hash !== requestHash) throw new AbortMutation(errorOf("idempotency_conflict"));
-    return this.readRecord(runId);
+    if (tombstone.decision_method !== method || tombstone.decision_hash !== requestHash) throw new AbortMutation(errorOf("idempotency_conflict"));
+    return tombstone.record as ScheduledRunRecord;
   }
 
   private writeDecision(key: string, method: MutationMethod, requestHash: string, runId: string | null, result: unknown, at: string): void {

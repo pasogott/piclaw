@@ -6,9 +6,11 @@ import * as scheduledRunModule from "../../src/service-effects/current-piclaw/sc
 describe("EF-S07 latent import boundary", () => {
   test("fake is independent and no production scheduler or task surface activates EF-S07", () => {
     const root = join(import.meta.dir, "../..");
-    const fake = readFileSync(join(root, "src/service-effects/testing/fakes/fake-scheduled-run-store.ts"), "utf8");
-    expect(fake).not.toContain("bun:sqlite");
-    expect(fake).not.toContain("current-piclaw/");
+    for (const relative of ["src/service-effects/testing/fakes/fake-scheduled-run-store.ts", "src/service-effects/testing/fakes/fake-scheduled-run-values.ts"]) {
+      const fake = readFileSync(join(root, relative), "utf8");
+      expect(fake).not.toContain("bun:sqlite");
+      expect(fake).not.toContain("current-piclaw/");
+    }
     expect(Object.keys(scheduledRunModule)).not.toContain("CurrentPiclawScheduledRunStore");
     const adapter = readFileSync(join(root, "src/service-effects/current-piclaw/scheduled-run-store.ts"), "utf8");
     expect(adapter).toContain("private constructor(");

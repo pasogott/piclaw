@@ -13,14 +13,14 @@ import type {
   ScheduledTaskAuthorityInput,
   ScheduledTaskSnapshot,
   UpdateScheduledTaskAuthorityRequest,
-} from "../contracts/scheduled-run-store.js";
+} from "../../contracts/scheduled-run-store.js";
 import {
   hashCanonicalRequest,
   type CanonicalJsonValue,
   type EffectIdentity,
-} from "../contracts/common.js";
-import type { EnqueueOutboxRequest } from "../contracts/service-outbox-store.js";
-import { computeNextRun } from "../../task-scheduler-utils.js";
+} from "../../contracts/common.js";
+import type { EnqueueOutboxRequest } from "../../contracts/service-outbox-store.js";
+import { computeNextRun } from "../../../task-scheduler-utils.js";
 
 const ID = /^[^\s]{1,512}$/u;
 const REF = /^.{1,2048}$/su;

@@ -261,7 +261,7 @@ export const EFFECTOR_CASE_CATALOGUE: readonly EffectorCaseCatalogueEntry[] = Ob
       "duplicate_result", "delayed_or_late_result", "stale_owner_or_version",
       "lease_expiry", "malformed_state",
     ],
-    crashOracle: crashOracle("EF-S07", "Restore after claim, source binding, completion, abandonment, or retention preserves one occurrence identity, at most one immutable run log and one next decision; shell/internal reclaim still requires explicit repeatability or reconciled-absence authority."),
+    crashOracle: crashOracle("EF-S07", "Restore after claim, renewal, source binding, completion, abandonment, or retention preserves one occurrence identity, the effective lease plus renewal history, at most one immutable run log and one next decision; terminal claim replay is non-executable and shell/internal reclaim still requires explicit repeatability or reconciled-absence authority."),
     sharedCaseLinks: ["shared:idempotency", "shared:lease", "shared:redaction"],
   },
   {

@@ -5,10 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { hashCanonicalRequest, type CanonicalJsonValue, type NormalisedEffectTrace, type NormalisedTraceInput } from "../../src/service-effects/contracts/common.js";
+import { OUTBOX_KINDS } from "../../src/service-effects/contracts/service-outbox-store.js";
 import type { CompleteScheduledRunRequest, ScheduledRunLease, ScheduledTaskAuthorityInput } from "../../src/service-effects/contracts/scheduled-run-store.js";
 import { computeNextRun } from "../../src/task-scheduler-utils.js";
 import { createCurrentPiclawScheduledRunStore, type ScheduledRunAdapterRuntime, type ScheduledRunMutationMethod, type ScheduledRunStatement } from "../../src/service-effects/current-piclaw/scheduled-run-store.js";
-import { createServiceOutboxEnqueueInserter } from "../../src/service-effects/current-piclaw/service-outbox-store.js";
+import { createCurrentPiclawServiceOutboxStore, createServiceOutboxEnqueueInserter } from "../../src/service-effects/current-piclaw/service-outbox-store.js";
 import { installScheduledRunCompositionSchema } from "../../src/service-effects/current-piclaw/scheduled-run-schema.js";
 import { createScheduledTaskAuthority } from "../../src/service-effects/current-piclaw/scheduled-task-authority.js";
 import type { ContractSubjectFactory, ContractTestContext } from "../../src/service-effects/testing/contract-suite.js";
@@ -27,8 +28,10 @@ class Runtime implements ScheduledRunAdapterRuntime {
   readonly planned = new Map<string, Set<number>>();
   readonly counts = new Map<string, number>();
   private statementFault: ScheduledRunStatement | null = null;
+  private tracePoisoned = false;
   constructor(trace: readonly NormalisedEffectTrace[] = []) { this.trace = EffectTraceRecorder.fromSnapshot(trace); }
   failAfterStatement(statement: ScheduledRunStatement): void { this.statementFault = statement; }
+  poisonTraceObserver(): void { this.tracePoisoned = true; }
   afterStatement(statement: ScheduledRunStatement): void {
     if (this.statementFault === statement) { this.statementFault = null; throw new Error(`fault:${statement}`); }
   }
@@ -42,6 +45,7 @@ class Runtime implements ScheduledRunAdapterRuntime {
     return this.planned.get(key)?.has(occurrence) ?? false;
   }
   recordTrace(input: NormalisedTraceInput): void {
+    if (this.tracePoisoned) throw new Error("malformed trace observer");
     if (input.resultTag === "call") this.trace.recordCall(input); else this.trace.recordResult(input);
   }
 }
@@ -49,6 +53,16 @@ class Runtime implements ScheduledRunAdapterRuntime {
 function sqliteInspect(database: Database): ScheduledRunInspection {
   const count = (table: string) => (database.query(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
   return { occurrences: count("service_effect_s07_occurrences"), runLogs: count("service_effect_s07_run_logs"), nextDecisions: count("service_effect_s07_next_decisions"), outboxRows: count("service_effect_s05_outbox"), tombstones: count("service_effect_s07_tombstones") };
+}
+
+async function markSqliteOutboxUnknown(database: Database, outboxId: string): Promise<void> {
+  const built = createCurrentPiclawServiceOutboxStore(database, { hitFault() { return false; }, recordTrace() {} });
+  if (!built.ok) throw new Error("S05 fixture unavailable.");
+  const claimed = await built.value.claimNext({ kinds: OUTBOX_KINDS, workerId: "worker:s07-outbox", leaseToken: `lease:${outboxId}`, now: "2026-08-16T01:00:11.000Z", leaseExpiresAt: "2026-08-16T01:01:11.000Z" });
+  if (!claimed.ok || !claimed.value.lease || claimed.value.lease.record.outboxId !== outboxId) throw new Error("S05 fixture claim failed.");
+  const lease = claimed.value.lease;
+  const unknown = await built.value.markUnknown({ outboxId, workerId: lease.record.workerId, expectedAttempt: lease.record.attempt, leaseToken: lease.record.leaseToken, errorTag: "delivery_unknown", certainty: "unknown", observedAt: "2026-08-16T01:00:12.000Z" });
+  if (!unknown.ok || unknown.value.decision === "stale") throw new Error("S05 fixture unknown failed.");
 }
 
 function acceptSqliteSource(database: Database, input: { runId: string; chatJid: string; sourceSeq: number; operationId: string }): void {
@@ -74,6 +88,9 @@ function openSqliteSubject(path: string, root: string, trace: readonly Normalise
     database, runtime, root, path,
     peerStore() { const peer = createCurrentPiclawScheduledRunStore(database, new Runtime()); if (!peer.ok) throw new Error("peer construction failed"); return peer.value; },
     acceptAgentSource(input) { acceptSqliteSource(database, input); },
+    markOutboxUnknown(outboxId) { return markSqliteOutboxUnknown(database, outboxId); },
+    async outboxState(outboxId) { const row = database.query("SELECT state FROM service_effect_s05_outbox WHERE outbox_id=?").get(outboxId) as { state: string } | undefined; return row?.state ?? null; },
+    poisonTraceObserver() { runtime.poisonTraceObserver(); },
     inspect() { return sqliteInspect(database); },
     planFault(method, point, occurrence) { runtime.plan(method, point, occurrence); },
     dispose() { database.close(); rmSync(root, { recursive: true, force: true }); },
@@ -89,7 +106,7 @@ const sqliteFactory: ContractSubjectFactory<SqliteSubject> = {
   crashAndRestore(subject) {
     const trace = subject.runtime.trace.snapshot();
     subject.database.close();
-    return { subject: openSqliteSubject(subject.path, subject.root, trace) };
+    return { subject: openSqliteSubject(subject.path, subject.root, trace), context: context() };
   },
   inspectTrace(subject) { return subject.runtime.trace.snapshot(); },
 };
@@ -103,6 +120,9 @@ function fakeSubject(ctx: ContractTestContext, snapshot?: ReturnType<FakeSchedul
     store: fake, authority: createFakeScheduledTaskAuthority(backend), backend, fake,
     peerStore() { return new FakeScheduledRunStore(backend, ctx); },
     acceptAgentSource(input) { backend.acceptScheduledAgentSource({ sourceId: input.runId, kind: "scheduled_agent", chatJid: input.chatJid, sourceSeq: input.sourceSeq, operationId: input.operationId, primary: true }); },
+    async markOutboxUnknown(outboxId) { backend.markOutboxUnknown(outboxId); },
+    async outboxState(outboxId) { return backend.outboxStates.get(outboxId) ?? null; },
+    poisonTraceObserver() { fake.poisonTraceObserver(); },
     inspect() { return { occurrences: backend.runs.size, runLogs: [...backend.runs.values()].filter((run) => run.record.state === "completed").length, nextDecisions: [...backend.runs.values()].filter((run) => run.record.state === "completed" || run.record.state === "abandoned").length, outboxRows: backend.outboxIds.size, tombstones: backend.tombstones.size }; },
     planFault(method, point, occurrence) { fake.planFault(method, point, occurrence); },
   };
@@ -110,13 +130,13 @@ function fakeSubject(ctx: ContractTestContext, snapshot?: ReturnType<FakeSchedul
 const fakeFactory: ContractSubjectFactory<FakeSubject> = {
   name: "independent in-memory EF-S07 fake",
   create(ctx) { return fakeSubject(ctx); },
-  crashAndRestore(subject, ctx) { return { subject: fakeSubject(ctx, subject.fake.snapshot()) }; },
+  crashAndRestore(subject, ctx) { return { subject: fakeSubject(ctx, subject.fake.snapshot()), context: ctx }; },
   inspectTrace(subject) { return subject.fake.trace.snapshot(); },
 };
 
 describe("EF-S07 ScheduledRunStore shared contract", () => {
-  test("independent fake", async () => { const results = await defineScheduledRunStoreContract(fakeFactory, context); expect(results.length).toBe(10); });
-  test("isolated SQLite adapter", { timeout: 15000 }, async () => { const results = await defineScheduledRunStoreContract(sqliteFactory, context); expect(results.length).toBe(10); });
+  test("independent fake", async () => { const results = await defineScheduledRunStoreContract(fakeFactory, context); expect(results.length).toBe(19); });
+  test("isolated SQLite adapter", { timeout: 20000 }, async () => { const results = await defineScheduledRunStoreContract(sqliteFactory, context); expect(results.length).toBe(19); });
 });
 
 function authorityTask(taskId: string, overrides: Partial<ScheduledTaskAuthorityInput> = {}): ScheduledTaskAuthorityInput {
@@ -210,6 +230,26 @@ describe("EF-S07 SQLite hardening", () => {
     } finally { subject.dispose?.(); }
   });
 
+  test("renewal history and claim replay agree with the effective lease after restore", async () => {
+    const subject = isolated();
+    try {
+      subject.authority.create(authorityTask("task:renewal-history"));
+      const claimRequest = dueClaim("renewal-history"), claimed = await subject.store.claimDue(claimRequest); expect(claimed.ok).toBe(true); if (!claimed.ok) return;
+      const lease = claimed.value[0], renewal = { runId: lease.record.runId, workerId: lease.record.workerId, expectedAttempt: lease.record.attempt, expectedTaskRevision: lease.record.taskRevision, leaseToken: lease.leaseToken, now: "2026-08-16T01:00:10.000Z", leaseExpiresAt: "2026-08-16T01:02:00.000Z" };
+      const renewed = await subject.store.renew(renewal); expect(renewed.ok).toBe(true);
+      const row = subject.database.query("SELECT l.lease_expires_at,r.previous_expires_at,r.lease_expires_at AS renewed_expires_at FROM service_effect_s07_leases l JOIN service_effect_s07_lease_renewals r ON r.run_id=l.run_id AND r.attempt=l.attempt WHERE l.run_id=?").get(lease.record.runId) as { lease_expires_at: string; previous_expires_at: string; renewed_expires_at: string };
+      expect(row).toEqual({ lease_expires_at: renewal.leaseExpiresAt, previous_expires_at: lease.record.leaseExpiresAt, renewed_expires_at: renewal.leaseExpiresAt });
+      const restored = sqliteFactory.crashAndRestore ? await sqliteFactory.crashAndRestore(subject, context()) : null;
+      expect(restored).not.toBeNull(); if (!restored) return;
+      const replay = await restored.subject.store.claimDue(claimRequest);
+      expect(replay.ok && replay.value[0].record.leaseExpiresAt).toBe(renewal.leaseExpiresAt);
+      restored.subject.dispose?.();
+    } finally {
+      try { subject.database.close(); } catch { /* restored connection owns cleanup */ }
+      rmSync(subject.root, { recursive: true, force: true });
+    }
+  });
+
   test("every completion statement checkpoint rolls back and a clean retry commits once", async () => {
     const checkpoints: ScheduledRunStatement[] = ["next_decision_insert", "run_log_insert", "outbox_insert", "outbox_decision_insert", "outbox_link_insert", "task_head_update", "occurrence_terminal_update", "decision_insert"];
     for (const [index, checkpoint] of checkpoints.entries()) {
@@ -222,10 +262,12 @@ describe("EF-S07 SQLite hardening", () => {
         subject.runtime.failAfterStatement(checkpoint);
         const failed = await subject.store.complete(request);
         expect(!failed.ok && failed.error._tag).toBe("storage_unavailable");
-        expect(subject.inspect()).toMatchObject({ runLogs: 0, nextDecisions: 0, outboxRows: 0 });
-        const retry = await subject.store.complete(request);
+        const restored = await sqliteFactory.crashAndRestore!(subject, context());
+        expect(restored.subject.inspect()).toMatchObject({ runLogs: 0, nextDecisions: 0, outboxRows: 0 });
+        const retry = await restored.subject.store.complete(request);
         expect(retry.ok).toBe(true);
-        expect(subject.inspect()).toMatchObject({ runLogs: 1, nextDecisions: 1, outboxRows: 1 });
+        expect(restored.subject.inspect()).toMatchObject({ runLogs: 1, nextDecisions: 1, outboxRows: 1 });
+        restored.subject.dispose?.();
       } finally { subject.dispose?.(); }
     }
   });
@@ -255,13 +297,17 @@ describe("EF-S07 SQLite hardening", () => {
         subject.runtime.failAfterStatement(checkpoint);
         const failed = await subject.store.bindAcceptedSource(request);
         expect(!failed.ok && failed.error._tag).toBe("storage_unavailable");
-        const current = await subject.store.get(lease.record.runId);
+        const restored = await sqliteFactory.crashAndRestore!(subject, context());
+        const current = await restored.subject.store.get(lease.record.runId);
         expect(current.ok && current.value?.state).toBe("claimed");
-        expect((subject.database.query("SELECT COUNT(*) AS count FROM service_effect_s07_source_bindings").get() as { count: number }).count).toBe(0);
+        expect((restored.subject.database.query("SELECT COUNT(*) AS count FROM service_effect_s07_source_bindings").get() as { count: number }).count).toBe(0);
+        const retry = await restored.subject.store.bindAcceptedSource(request);
+        expect(retry.ok && retry.value.state).toBe("source_bound");
+        restored.subject.dispose?.();
       } finally { subject.dispose?.(); }
     }
 
-    for (const checkpoint of ["lease_renew", "decision_insert"] as ScheduledRunStatement[]) {
+    for (const checkpoint of ["renewal_insert", "lease_history_update", "lease_renew", "decision_insert"] as ScheduledRunStatement[]) {
       const subject = isolated();
       try {
         subject.authority.create(authorityTask(`task:renew-fault-${checkpoint}`));
@@ -272,6 +318,9 @@ describe("EF-S07 SQLite hardening", () => {
         expect(!failed.ok && failed.error._tag).toBe("storage_unavailable");
         const current = await subject.store.get(lease.record.runId);
         expect(current.ok && current.value?.leaseExpiresAt).toBe(expiry);
+        const history = subject.database.query("SELECT lease_expires_at FROM service_effect_s07_leases WHERE run_id=? AND attempt=?").get(lease.record.runId, lease.record.attempt) as { lease_expires_at: string };
+        expect(history.lease_expires_at).toBe(expiry);
+        expect((subject.database.query("SELECT COUNT(*) AS count FROM service_effect_s07_lease_renewals WHERE run_id=?").get(lease.record.runId) as { count: number }).count).toBe(0);
       } finally { subject.dispose?.(); }
     }
 
@@ -319,7 +368,28 @@ describe("EF-S07 SQLite hardening", () => {
       const [a, b] = await Promise.all([left.value.claimDue(dueClaim("two-left")), right.value.claimDue(dueClaim("two-right"))]);
       expect(a.ok && b.ok).toBe(true);
       expect((a.ok ? a.value.length : 0) + (b.ok ? b.value.length : 0)).toBe(1);
+      const first = a.ok && a.value.length ? a.value[0] : b.ok ? b.value[0] : null; expect(first).not.toBeNull(); if (!first) return;
       expect((leftDb.query("SELECT COUNT(*) AS count FROM service_effect_s07_occurrences").get() as { count: number }).count).toBe(1);
+      const reclaimAuthority = [{ runId: first.record.runId, expectedAttempt: 1, kind: "repeatable" as const, reconciliationRef: null }];
+      const [reclaimLeft, reclaimRight] = await Promise.all([
+        left.value.claimDue({ ...dueClaim("two-reclaim-left", "2026-08-16T01:01:01.000Z"), reclaimAuthorities: reclaimAuthority }),
+        right.value.claimDue({ ...dueClaim("two-reclaim-right", "2026-08-16T01:01:01.000Z"), reclaimAuthorities: reclaimAuthority }),
+      ]);
+      expect(reclaimLeft.ok && reclaimRight.ok).toBe(true);
+      expect((reclaimLeft.ok ? reclaimLeft.value.length : 0) + (reclaimRight.ok ? reclaimRight.value.length : 0)).toBe(1);
+      const second = reclaimLeft.ok && reclaimLeft.value.length ? reclaimLeft.value[0] : reclaimRight.ok ? reclaimRight.value[0] : null; expect(second?.record.attempt).toBe(2); if (!second) return;
+      const [terminalLeft, terminalRight] = await Promise.all([
+        left.value.complete(completion(second, "two-terminal-left", "2026-08-16T01:01:10.000Z")),
+        right.value.complete(completion(second, "two-terminal-right", "2026-08-16T01:01:10.000Z")),
+      ]);
+      expect(Number(terminalLeft.ok) + Number(terminalRight.ok)).toBe(1);
+      const loser = terminalLeft.ok ? terminalRight : terminalLeft;
+      expect(!loser.ok && loser.error._tag).toBe("invalid_transition");
+      expect((leftDb.query("SELECT COUNT(*) AS count FROM service_effect_s07_run_logs").get() as { count: number }).count).toBe(1);
+      expect((leftDb.query("SELECT COUNT(*) AS count FROM service_effect_s07_next_decisions").get() as { count: number }).count).toBe(1);
+      expect((leftDb.query("SELECT COUNT(*) AS count FROM service_effect_s07_leases WHERE run_id=?").get(first.record.runId) as { count: number }).count).toBe(2);
+      expect((await left.value.listRuns({ limit: 10 })).ok).toBe(true);
+      expect((await right.value.listRuns({ limit: 10 })).ok).toBe(true);
     } finally { rightDb.close(); leftDb.close(); rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -375,6 +445,51 @@ describe("EF-S07 SQLite hardening", () => {
       const result = await subject.store.get(claimed.value[0].record.runId);
       expect(!result.ok && result.error._tag).toBe("corrupt_state");
     } finally { subject.dispose?.(); }
+  });
+
+  test("malformed lease decision tombstone source and outbox projections are bounded corrupt_state", async () => {
+    const probes: Array<(subject: SqliteSubject, lease: ScheduledRunLease, request: CompleteScheduledRunRequest) => Promise<void> | void> = [
+      (subject, lease) => { subject.database.exec("PRAGMA ignore_check_constraints=ON"); subject.database.query("UPDATE service_effect_s07_leases SET lease_expires_at='2026-08-16T01:03:00.000Z' WHERE run_id=?").run(lease.record.runId); },
+      async (subject, _lease, request) => { const done = await subject.store.complete(request); expect(done.ok).toBe(true); subject.database.query("UPDATE service_effect_s07_decisions SET result_json='{}' WHERE decision_key=?").run(`effect:${request.effect.idempotencyKey}`); },
+      async (subject, lease, request) => { const done = await subject.store.complete(request); expect(done.ok).toBe(true); const cleanup = await subject.store.cleanupTerminal({ settledBefore: "2026-08-16T01:01:00.000Z", limit: 1 }); expect(cleanup.ok).toBe(true); subject.database.exec("PRAGMA ignore_check_constraints=ON"); subject.database.query("UPDATE service_effect_s07_tombstones SET status=NULL WHERE run_id=?").run(lease.record.runId); },
+      async (subject, lease, request) => { const intent = deliveryIntent("corrupt-link"); const composed = completion(lease, request.effect.idempotencyKey, request.completedAt, [intent]); const done = await subject.store.complete(composed); expect(done.ok).toBe(true); subject.database.exec("PRAGMA foreign_keys=OFF; PRAGMA ignore_check_constraints=ON"); subject.database.query("UPDATE service_effect_s07_outbox_links SET ordinal=9 WHERE run_id=?").run(lease.record.runId); },
+    ];
+    for (const [index, probe] of probes.entries()) {
+      const subject = isolated();
+      try {
+        subject.authority.create(authorityTask(`task:projection-corrupt-${index}`, { scheduleType: "once", scheduleValue: "2026-08-16T01:00:00.000Z" }));
+        const claimed = await subject.store.claimDue(dueClaim(`projection-corrupt-${index}`)); expect(claimed.ok).toBe(true); if (!claimed.ok) continue;
+        const lease = claimed.value[0], request = completion(lease, `projection-corrupt-${index}`);
+        await probe(subject, lease, request);
+        const result = index === 1 ? await subject.store.complete(request) : await subject.store.get(lease.record.runId);
+        expect(!result.ok && result.error._tag).toBe("corrupt_state");
+      } finally { subject.dispose?.(); }
+    }
+
+    const overflowSubject = isolated();
+    try {
+      overflowSubject.authority.create(authorityTask("task:attempt-overflow"));
+      const claimed = await overflowSubject.store.claimDue({ ...dueClaim("attempt-overflow"), leaseDurationMs: 1000 }); expect(claimed.ok).toBe(true); if (!claimed.ok) return;
+      const lease = claimed.value[0];
+      overflowSubject.database.query("UPDATE service_effect_s07_occurrences SET attempt=?,lease_expires_at=? WHERE run_id=?").run(Number.MAX_SAFE_INTEGER, "2026-08-16T01:00:01.000Z", lease.record.runId);
+      const overflow = await overflowSubject.store.claimDue({ ...dueClaim("attempt-overflow-reclaim", "2026-08-16T01:00:02.000Z"), reclaimAuthorities: [{ runId: lease.record.runId, expectedAttempt: Number.MAX_SAFE_INTEGER, kind: "repeatable", reconciliationRef: null }] });
+      expect(!overflow.ok && overflow.error._tag).toBe("corrupt_state");
+    } finally { overflowSubject.dispose?.(); }
+
+    const sourceSubject = isolated();
+    try {
+      sourceSubject.authority.create(authorityTask("task:source-corrupt", { kind: "agent", executionRepeatability: "agent_source" }));
+      const claimed = await sourceSubject.store.claimDue(dueClaim("source-corrupt")); expect(claimed.ok).toBe(true); if (!claimed.ok) return;
+      const lease = claimed.value[0], operationId = "operation:source-corrupt";
+      acceptSqliteSource(sourceSubject.database, { runId: lease.record.runId, chatJid: lease.task.chatJid, sourceSeq: 1, operationId });
+      const request = { effect: { idempotencyKey: "bind:source-corrupt", requestHash: "", operationId, sourceSeq: 1, provenanceRef: "provenance:source-corrupt", redactionClass: "private" as const }, runId: lease.record.runId, workerId: lease.record.workerId, expectedAttempt: 1, expectedTaskRevision: 1, leaseToken: lease.leaseToken, now: "2026-08-16T01:00:05.000Z", sourceSeq: 1, operationId, boundAt: "2026-08-16T01:00:05.000Z" };
+      request.effect.requestHash = hashCanonicalRequest(request as unknown as CanonicalJsonValue);
+      const bound = await sourceSubject.store.bindAcceptedSource(request); expect(bound.ok).toBe(true);
+      sourceSubject.database.exec("PRAGMA foreign_keys=OFF");
+      sourceSubject.database.query("UPDATE service_effect_s07_source_bindings SET operation_id='operation:tampered' WHERE run_id=?").run(lease.record.runId);
+      const corrupt = await sourceSubject.store.get(lease.record.runId);
+      expect(!corrupt.ok && corrupt.error._tag).toBe("corrupt_state");
+    } finally { sourceSubject.dispose?.(); }
   });
 
   test("current recurrence utility pins UTC and Lisbon DST vectors", () => {
