@@ -974,114 +974,115 @@ Persist one occurrence of a scheduled task, its lease, result, next occurrence a
 
 ### Interface
 
-```typescript
-interface ScheduledRunStore {
-  claimDue(
-    request: ClaimDueRunsRequest,
-  ): Promise<Result<readonly ScheduledRunLease[], ScheduledRunStoreError>>;
+The compile-checked concrete interface is
+`runtime/src/service-effects/contracts/scheduled-run-store.ts`. It defines the
+five lifecycle methods (`claimDue`, `renew`, `bindAcceptedSource`, `complete`
+and `abandon`), bounded `get`/`listRuns` reads, and the bounded
+`cleanupTerminal` retention mutation. The WP-3A corrections are:
 
-  renew(
-    request: RenewScheduledRunRequest,
-  ): Promise<Result<ScheduledRunLease, ScheduledRunStoreError>>;
+- `(taskId, scheduledFor)` is unique and `runId` is
+  `scheduled_run:` plus lowercase SHA-256 of that canonical tuple. A caller
+  never supplies a run ID while claiming.
+- `ScheduledTaskSnapshot` is an immutable private task revision containing
+  only body-free configuration: chat/kind, opaque `payloadRef`, model,
+  schedule/timezone, notify/mute, shell/internal settings, redaction and
+  execution-repeatability policy. Prompt and command bodies do not enter S07.
+- Every lease mutation carries `workerId`, `expectedAttempt`,
+  `expectedTaskRevision`, raw token and canonical `now`. Only the token hash is
+  stored. Renewal appends durable before/after expiry evidence and updates the
+  effective lease in the same transaction. Claim and renewal replay return raw
+  tokens only while the exact worker/token/attempt remains active; terminal,
+  retained or superseded-attempt replay returns `invalid_transition` and never
+  fabricates an executable lease.
+- `complete` carries an explicit closed success/error shape, duration, bounded
+  result references and complete `EnqueueOutboxRequest` values. Success requires
+  `resultRef` and forbids `errorCode`; error does the inverse. Agent evidence must
+  equal its EF-S01 binding, service-owned shell/internal evidence carries no
+  source identity, and internal or notify-disabled snapshots reject notification
+  intents. The store computes recurrence; callers cannot provide `nextRunAt`.
+- `abandon` is terminal, writes no execution log, and makes exactly one
+  recurrence decision. An explicit future `retryAt` creates a new occurrence
+  time.
+- Records expose the immutable occurrence decision as `nextRunAt`, distinguish
+  `advanced`, `paused`, `deleted` and `superseded` task-head outcomes, and use
+  `retained: true` for closed tombstone summaries after bounded cleanup.
 
-  bindAcceptedSource(
-    request: BindScheduledSourceRequest,
-  ): Promise<Result<ScheduledRunRecord, ScheduledRunStoreError>>;
+The concrete error set adds `invalid_request`, `not_found` and
+`corrupt_state` to the task/revision/lease/transition/storage tags. Every public
+request and nested shape is normalized once as an exact closed object; sparse
+arrays, duplicate outbox IDs, hostile accessors, non-finite arithmetic,
+non-canonical instants and non-canonical run IDs fail before effect. Durable
+occurrences, lease/renewal history, decisions, source bindings, outbox links,
+results and tombstones are decoded as equally closed projections. Reads are
+bounded, stable by `(scheduledFor, runId)`, immutable and intentionally
+untraced.
 
-  complete(
-    request: CompleteScheduledRunRequest,
-  ): Promise<Result<ScheduledRunRecord, ScheduledRunStoreError>>;
+### Private authority and state rules
 
-  abandon(
-    request: AbandonScheduledRunRequest,
-  ): Promise<Result<ScheduledRunRecord, ScheduledRunStoreError>>;
+WP-3A uses latent `service_effect_s07_tasks` heads and immutable task revisions.
+An explicit setup authority creates, revises, pauses, resumes and soft-deletes
+them in isolated tests. It does not mirror or dual-write production
+`scheduled_tasks`; task-management convergence remains a future issue.
 
-  get(
-    runId: string,
-  ): Promise<Result<ScheduledRunRecord | null, ScheduledRunStoreError>>;
-}
+`claimDue` serialises claim/reclaim under SQLite write authority and orders all
+candidates by `(scheduledFor, taskId)`. Active occurrences move through
+`claimed`, optional agent-only `source_bound`, then terminal `completed` or
+`abandoned`. Attempt, worker, token hash, revision and expiry are one CAS
+fence. A later pause does not revoke started work and holds the computed next
+run until resume. Delete settles with no successor. A newer revision settles
+the old snapshot without overwriting the new head.
 
-type ScheduledRunState =
-  | "claimed"
-  | "source_bound"
-  | "completed"
-  | "abandoned";
+Agent binding requires stable `sourceId=runId`, EF-S01 kind
+`scheduled_agent`, exact chat/source and primary operation ownership. These
+source/operation projections are revalidated on durable reads. Shell and
+internal runs never bind EF-S01. An expired agent run requires explicit
+`agent_reconciled_absent` authority for that run/attempt plus an opaque evidence
+reference; stable source identity is only the reconciliation key, not proof of
+absence. Expired shell/internal runs require explicit `repeatable` or
+`reconciled_absent` reclaim authority. Every reclaim authority and evidence
+reference is retained in lease history; lease expiry alone authorizes nothing.
 
-interface ScheduledRunRecord {
-  runId: string;
-  taskId: string;
-  taskRevision: number;
-  scheduledFor: string;
-  state: ScheduledRunState;
-  leaseToken: string | null;
-  leaseExpiresAt: string | null;
-  acceptedSourceSeq: number | null;
-  operationId: string | null;
-  resultRef: string | null;
-  errorCode: string | null;
-  nextRunAt: string | null;
-}
+### Recurrence, completion and retention
 
-interface ScheduledRunLease {
-  record: ScheduledRunRecord & { state: "claimed"; leaseToken: string };
-  task: ScheduledTaskSnapshot;
-}
+One-shot task heads are valid only when `nextRunAt === scheduleValue`; they close after execution. Intervals advance from completion/abandonment time. Cron
+uses the current pure `computeNextRun` anchored at `scheduledFor` with the
+frozen IANA timezone. Fixed vectors pin current `cron-parser` behaviour:
+spring gaps advance to its next valid local instant and fall overlaps emit the
+first match only before the next schedule.
 
-interface ClaimDueRunsRequest {
-  now: string;
-  limit: number;
-  workerId: string;
-  leaseTokenPrefix: string;
-  leaseDurationMs: number;
-}
+Completion inserts one immutable run log, one next-occurrence decision, ordered
+EF-S05 intents, the exact task-head CAS and the terminal occurrence in one
+transaction. It uses `createServiceOutboxEnqueueInserter`; no worker or delivery
+runs in S07. Durable reads revalidate every dense link against the EF-S05 enqueue
+decision, kind/idempotency/request identity and the frozen run's operation/source
+ownership. Existing EF-S05 IDs, changed binding/outbox identity under one
+idempotency key, and cross-method terminal-key reuse are rejected. A later
+EF-S05 `unknown` delivery is durable but cannot make a completed occurrence
+reclaimable.
 
-interface RenewScheduledRunRequest {
-  runId: string;
-  leaseToken: string;
-  leaseExpiresAt: string;
-}
+Bounded cleanup first writes a minimal terminal tombstone, then deletes
+occurrence detail, logs and per-run decisions atomically. The tombstone retains
+occurrence uniqueness and protected-data-free exact terminal replay. Nonterminal
+and recent runs are never cleaned.
 
-interface BindScheduledSourceRequest {
-  effect: EffectIdentity;
-  runId: string;
-  leaseToken: string;
-  sourceSeq: number;
-  operationId: string;
-}
+### Adapter evidence and boundary
 
-interface CompleteScheduledRunRequest {
-  effect: EffectIdentity;
-  runId: string;
-  leaseToken: string;
-  resultRef: string | null;
-  errorCode: string | null;
-  completedAt: string;
-  nextRunAt: string | null;
-  outboxIntents: readonly OutboxIntent[];
-}
+Current `getDueTasks()`, process-local queue deduplication, `logTaskRun()` and
+`updateTaskAfterRun()` remain behaviour evidence only: they have no durable
+claim and their writes are separate. WP-3A reuses only the reviewed pure
+recurrence utility and the EF-S01/EF-S05 private composition schema. It does
+not import, edit, register or call the live scheduler, queue, task database,
+management/query API, worker, timer or executor.
 
-interface AbandonScheduledRunRequest {
-  effect: EffectIdentity;
-  runId: string;
-  leaseToken: string;
-  reason: string;
-  retryAt: string | null;
-}
-```
-
-A run ID is stable for `(taskId, scheduledFor)`. `claimDue` creates or leases that occurrence once. `complete` verifies the lease, stores one run log and the next scheduled occurrence in one transaction. Delivery intents can use the shared outbox statement.
-
-### Adapter over current Piclaw internals
-
-Use:
-
-- `runtime/src/db/tasks.ts` for task definitions and current run-log behaviour;
-- `runtime/src/task-scheduler-utils.ts` for pure next-run calculation;
-- `runtime/src/task-scheduler.ts` as behaviour evidence for agent, shell, internal, delivery and notification outcomes.
-
-Current `getDueTasks()`, `logTaskRun()` and `updateTaskAfterRun()` are separate operations and have no run claim. The future adapter adds occurrence/lease semantics. The live scheduler need not use it during preparation.
-
-Contract cases cover two scheduler instances, pause/delete before claim, crash after each durable boundary, lease expiry, one-shot/recurring next run, agent/shell/internal result shapes, muted notification and delivery marked `unknown` without rerunning the task.
+The exact shared C01-C08 catalogue remains the normative acceptance list. Its
+21 shared C/S/R cases run unchanged against an independently parsed map-based fake and
+the isolated SQLite adapter. R01/R02 plus SQLite supplementary cases cover every
+mutation checkpoint, post-commit lost acknowledgement and fresh restore after
+claim/bind/renew/terminal/retention, pause/delete/revision, explicit reclaim
+and stale-attempt fencing, completion-kind matrices, recurrence/DST and overflow,
+hostile closed-shape inputs, durable corruption, pagination/retention, trace
+redaction/observer failure, two-connection claim/reclaim/terminal races, and the
+static latent-import boundary.
 
 ## EF-S08 — projection sink
 
