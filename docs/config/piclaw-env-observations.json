@@ -1812,7 +1812,8 @@
           "semanticReaders": 0,
           "files": [
             "runtime/extensions/experimental/m365/README.md",
-            "runtime/src/agent-pool/session.ts"
+            "runtime/src/agent-pool/session.ts",
+            "runtime/src/service-effects/tool-preparation/manifest.ts"
           ],
           "readerFiles": []
         },
@@ -1832,7 +1833,8 @@
           "helperReaders": 0,
           "semanticReaders": 0,
           "files": [
-            "runtime/src/agent-pool/session.ts"
+            "runtime/src/agent-pool/session.ts",
+            "runtime/src/service-effects/tool-preparation/manifest.ts"
           ],
           "readerFiles": []
         }

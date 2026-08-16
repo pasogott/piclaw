@@ -1257,15 +1257,30 @@ Required family rules:
 
 | Family | Selected Earendil contract | Replay | Preparation evidence |
 |---|---|---|---|
-| Read | Public `createReadTool` | `safe` | Path, image, truncation, abort and redaction cases |
-| Write/edit | Public `createWriteTool` / `createEditTool` | `never` | Mutation serialization, exact edit diagnostics and ambiguous crash cases |
-| Bash/PowerShell | Public `createBashTool` or direct `AgentHarnessTool<PiclawToolContext>` | `never` | Streaming updates, output cap/full-output reference, process group, timeout and abort |
+| Read | Root-exported `@earendil-works/pi-agent-core` `createReadTool` | `safe` | Path, image, truncation, abort and redaction cases |
+| Write/edit | Root-exported `@earendil-works/pi-agent-core` `createWriteTool` / `createEditTool` | `never` | Mutation serialization, exact edit diagnostics and ambiguous crash cases |
+| Bash/PowerShell | Root-exported `@earendil-works/pi-agent-core` `createBashTool` or direct `AgentHarnessTool<PiclawToolContext>` | `never` | Streaming updates, output cap/full-output reference, process group, timeout and abort |
 | Pure discovery | Direct `AgentHarnessTool<PiclawToolContext>` | `safe` | Snapshot consistency and no credentials |
 | Piclaw mutation | Direct selected tool calling one EF-S contract | `never` unless exact-key reconciliation proves safety | Service idempotency key and effect certainty |
 | Infrastructure/add-on | Direct selected tool | `never` by default | Query/mutation split before any `safe` classification |
 | Unknown extension | Direct selected tool only after review | `never` | Manifest completeness and protected-data check |
 
 Harness v3 resolves one `PiclawToolContext` per live or restored tool batch. A safe replay receives a fresh context. Piclaw does not retain the released-v2 closure binder once v3 generic tools are selected.
+
+WP-3C accepted preparation corrections (2026-08-16):
+
+- the manifest reuses the merged four-field `PiclawToolContext` (`chatJid`, `operationId`, `env`, `localEnv`) and does not widen or duplicate it;
+- exact rows cover repository-owned core, Piclaw and bundled optional families, including effective `grep`, `find` and `ls` source gaps; arbitrary add-on and MCP-direct families use conservative `mixed`/`never` templates that cannot satisfy exact-name coverage;
+- `messages` is `mixed`/`never` with `serviceEffector: null` and is activation-blocked: `add`/`post` are future EF-S03 candidates, while arbitrary-history `delete`/`move` require a separately approved fenced authority or retirement;
+- non-service filesystem, process, model, credential, add-on-owned and external effects use `serviceEffector: null`; a non-null value identifies exactly one existing Piclaw service-operation contract;
+- output persistence is post-result composition over one Earendil execution, preserving native update, truncation and full-output details and failing open without reinvocation;
+- exact inventory is derived as source data from production composition roots, forwarded factories, optional platform/environment entries and the service factory; SDK families come from the installed package's literal `allToolNames`; the hermetic graph resolver consumes supplied `tsconfig` `baseUrl`/`paths`, package imports/exports, and ESM/TypeScript/CommonJS/dynamic forms instead of hard-coded Piclaw aliases;
+- current add-on discovery parity is pinned separately to `getInstalledAddonExtensionPaths()` (`join` + `existsSync` + `statSync().isFile()`): it reads only declared `manifest.pi.extensions`, preserves duplicates and lexical paths, and does not enforce containment; the future direct package loader is activation-blocked until its distinct hardened policy rejects lexical/realpath escapes, duplicate real targets, unreadable targets and non-files;
+- MCP-direct preparation preserves global, per-server and `MCP_DIRECT_TOOLS` precedence while descriptor-closing booleans, filters, names and selectors; cache evidence uses the installed authority's stable SHA-256 identity field set, version-1 server-map envelope, exact TTL boundary, and immutable typed skip evidence rather than caller-supplied definition hashes;
+- every repository row separates `currentIntegration: "existing-production-wiring"` and a closed `currentAuthorityKind`/`currentAuthorityPath` from latent activation metadata: repository paths must exist, SDK/external paths use explicit package markers, and `messages` names `messages-crud.ts`; frozen future context/effector fields remain separate;
+- validation rejects unknown shapes, accessors, symbols, sparse arrays, proxies, non-canonical context order, unsafe selector grammar and post-input mutation before returning frozen normalized data;
+- source-derived repository schemas plus direct `pi-agent-core` read/write/edit/bash and effective SDK grep/find/ls schemas classify every top-level field as protected or as a rationale-bearing safe control; only five imported/spread factories retain explicit file/factory/rationale evidence, and unresolved fingerprints fail the suite;
+- inventory, protected-observer and behaviour evidence is hermetic and static; future direct root exports from `@earendil-works/pi-agent-core` cover read pre/mid abort, canonical write/edit queueing, bash pending-update abort and native result behavior; the decision oracle snapshots/restores in-progress grants as non-executable unknown outcomes and reconciles all certainties without importing live stores.
 
 Core and Piclaw-specific tool cases can be specified against current behaviour now. Compile assertions wait for one coherent selected v3 type surface so the documentation does not freeze a draft execute signature.
 
