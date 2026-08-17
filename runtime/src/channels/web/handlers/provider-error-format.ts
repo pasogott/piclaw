@@ -114,7 +114,7 @@ function isDefinitiveModelRejection(parsed: ParsedProviderError): boolean {
 }
 const OUTPUT_LIMIT_PATTERN = /finish[_ -]?reason\s*:?\s*length|stop\s*reason\s*:?\s*length|\bstopReason\s*:?\s*length|max(?:imum)? output (?:tokens?|length)|output token limit|hit (?:the )?(?:maximum )?output/i;
 const NETWORK_ERROR_PATTERN = /\bENOTFOUND\b|\bECONNREFUSED\b|\bETIMEDOUT\b|\bECONNRESET\b|getaddrinfo|dns.*failed|network.*error|connection.*(?:error|refused|reset|lost|ended|closed)|websocket.*(?:closed|ended|1006)|fetch failed|socket hang up|socket connection was closed unexpectedly/i;
-const HTML_RESPONSE_START_PATTERN = /<\s*(?:!doctype\s+html\b|html\b|head\b|body\b|title\b|meta\b|link\b|style\b|script\b|div\b|span\b|p\b|img\b|svg\b)/i;
+const HTML_RESPONSE_START_PATTERN = /<\s*(?:!doctype\s+html\b|!--|\?xml\b|html\b|head\b|body\b|title\b|meta\b|link\b|style\b|script\b|div\b|span\b|p\b|pre\b|h[1-6]\b|a\b|img\b|svg\b|main\b|section\b|header\b|footer\b|nav\b|form\b|table\b|center\b|br\b|hr\b)/i;
 const PROVIDER_ERROR_INPUT_MAX_CHARS = 65_536;
 const PROVIDER_ERROR_DETAIL_MAX_CHARS = 900;
 

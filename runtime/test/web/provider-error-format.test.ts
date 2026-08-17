@@ -80,7 +80,7 @@ test("formatProviderError parses API error status prefixes for Azure rate limits
 test("provider HTML error pages retain HTTP context without exposing markup or embedded data", () => {
   const raw = [
     "OAuth refresh failed for github-copilot: 502 Bad Gateway: ",
-    "<!DOCTYPE html><html><head><title>Unicorn! &middot; GitHub</title>",
+    "<!-- edge proxy response --><!DOCTYPE html><html><head><title>Unicorn! &middot; GitHub</title>",
     "<style>body { color: red; }</style></head><body>",
     `<img src="data:image/png;base64,${"A".repeat(2048)}">`,
     "</body></html>",
