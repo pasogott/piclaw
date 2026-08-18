@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST } from "../../src/service-effects/earendil-harness-v3-compatibility/manifest.js";
@@ -21,6 +22,26 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 function requireString(value: unknown, label: string): string {
   if (typeof value !== "string") throw new Error(`${label} must be a string.`);
   return value;
+}
+
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalValue(value[key])]));
+}
+
+function digestEvidence(value: unknown): string {
+  return new Bun.CryptoHasher("sha256").update(JSON.stringify(canonicalValue(value))).digest("hex");
+}
+
+function isLexicallyContained(root: string, target: string): boolean {
+  const path = relative(root, target);
+  return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+}
+
+function lockPackageEntry(lock: string, packageName: string): string | undefined {
+  const prefix = `    "${packageName}": ["${packageName}@`;
+  return lock.split("\n").find((line) => line.startsWith(prefix));
 }
 
 async function readPackage(name: string): Promise<Record<string, unknown>> {
@@ -66,14 +87,20 @@ describe("Earendil release churn gate", () => {
 
     const lock = await Bun.file(resolve(repositoryRoot, "bun.lock")).text();
     const candidate = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.releases[1];
-    for (const evidence of candidate.packages) expect(lock).not.toContain(`${evidence.name}@0.84.2`);
+    for (const evidence of candidate.packages) {
+      expect(lock).not.toContain(`"${evidence.name}@0.84.2"`);
+      expect(lock).not.toContain(evidence.integrity);
+    }
     for (const evidence of baseline.packages) {
-      const packageEntry = `"${evidence.name}": ["${evidence.name}@0.84.1"`;
+      const entry = lockPackageEntry(lock, evidence.name);
       if (evidence.installation === "not_installed") {
-        expect(lock).not.toContain(packageEntry);
+        expect(entry).toBeUndefined();
+        expect(lock).not.toContain(evidence.integrity);
       } else {
-        expect(lock).toContain(packageEntry);
-        expect(lock).toContain(`"${evidence.integrity}"`);
+        expect(entry).toBeDefined();
+        if (!entry) throw new Error(`Missing locked package entry for ${evidence.name}.`);
+        expect(entry.startsWith(`    "${evidence.name}": ["${evidence.name}@${evidence.version}",`)).toBe(true);
+        expect(entry).toContain(`, "${evidence.integrity}"],`);
       }
     }
   });
@@ -96,35 +123,114 @@ describe("Earendil release churn gate", () => {
     }
   });
 
-  test("matches baseline hashes only through package-declared public export targets", async () => {
+  test("matches baseline hashes only through contained package-declared public export targets", async () => {
     const baseline = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.releases[0];
     for (const fingerprint of baseline.fingerprints) {
       if (fingerprint.subpath.startsWith("audit:")) continue;
       const installed = await readPackage(fingerprint.package);
       const target = publicTarget(installed, fingerprint.subpath, fingerprint.kind);
       const packageRoot = resolve(modulesRoot, fingerprint.package);
-      expect(await sha256(resolve(packageRoot, target))).toBe(fingerprint.sha256);
+      const targetPath = resolve(packageRoot, target);
+      expect(target.startsWith("./")).toBe(true);
+      expect(isLexicallyContained(packageRoot, targetPath)).toBe(true);
+      const realPackageRoot = realpathSync(packageRoot);
+      const realTargetPath = realpathSync(targetPath);
+      expect(isLexicallyContained(realPackageRoot, realTargetPath)).toBe(true);
+      expect(await sha256(realTargetPath)).toBe(fingerprint.sha256);
+    }
+    expect(isLexicallyContained("/package", "/escape")).toBe(false);
+    expect(isLexicallyContained("/package", "/package/../escape")).toBe(false);
+
+    const temporaryRoot = mkdtempSync(resolve(tmpdir(), "earendil-export-containment-"));
+    try {
+      const packageRoot = resolve(temporaryRoot, "package");
+      const escapedTarget = resolve(temporaryRoot, "outside");
+      mkdirSync(packageRoot);
+      mkdirSync(escapedTarget);
+      const linkedTarget = resolve(packageRoot, "linked-export");
+      symlinkSync(escapedTarget, linkedTarget, "dir");
+      expect(isLexicallyContained(realpathSync(packageRoot), realpathSync(linkedTarget))).toBe(false);
+    } finally {
+      rmSync(temporaryRoot, { recursive: true, force: true });
     }
   });
 
-  test("keeps 0.84.2 coordinates and fingerprints inert as rejected source-as-data evidence", () => {
+  test("pins manifest uniqueness, canonical order, hashes, SRI, and inert candidate classifications", () => {
+    const manifest = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST;
+    const expectedPackages = [
+      "@earendil-works/pi-agent-core",
+      "@earendil-works/pi-ai",
+      "@earendil-works/pi-client",
+      "@earendil-works/pi-coding-agent",
+      "@earendil-works/pi-protocol",
+      "@earendil-works/pi-server",
+      "@earendil-works/pi-session-backend-sqlite-node",
+      "@earendil-works/pi-telemetry",
+      "@earendil-works/pi-tui",
+    ];
+    expect(manifest.authority.designCommit).toMatch(/^[0-9a-f]{40}$/);
+    expect(manifest.authority.draftEvidenceCommit).toMatch(/^[0-9a-f]{40}$/);
+    for (const release of manifest.releases) {
+      const names = release.packages.map((entry) => entry.name);
+      expect(names).toEqual(expectedPackages);
+      expect(new Set(names).size).toBe(9);
+      expect(release.commit).toMatch(/^[0-9a-f]{40}$/);
+      expect(release.conformance.catalogueSha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(release.conformance.auditedResultSha256).toMatch(/^[0-9a-f]{64}$/);
+      for (const entry of release.packages) {
+        expect(entry.shasum).toMatch(/^[0-9a-f]{40}$/);
+        expect(entry.gitHead).toMatch(/^[0-9a-f]{40}$/);
+        expect(entry.integrity.startsWith("sha512-")).toBe(true);
+        const encoded = entry.integrity.slice("sha512-".length);
+        expect(Buffer.from(encoded, "base64")).toHaveLength(64);
+        expect(Buffer.from(encoded, "base64").toString("base64")).toBe(encoded);
+      }
+      const fingerprintKeys = release.fingerprints.map((entry) => `${entry.package}\0${entry.subpath}\0${entry.kind}`);
+      expect(new Set(fingerprintKeys).size).toBe(fingerprintKeys.length);
+      expect(release.fingerprints.every((entry) => /^[0-9a-f]{64}$/.test(entry.sha256))).toBe(true);
+    }
+    expect(manifest.boundaries.map((entry) => entry.id)).toEqual(["EB-01", "EB-02", "EB-03", "EB-04", "EB-05"]);
+    expect(manifest.capabilities.map((entry) => entry.id)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `HC-${String(index + 1).padStart(3, "0")}`),
+    );
+    expect(manifest.promotionCriteria.map((entry) => entry.id)).toEqual(
+      Array.from({ length: 9 }, (_, index) => `PG-${String(index + 1).padStart(2, "0")}`),
+    );
+    const candidate = manifest.releases[1];
+    expect(candidate.execution).toBe("evidence_only");
+    expect(candidate.packages.every((entry) => entry.installation === "evidence_only")).toBe(true);
+  });
+
+  test("independently pins the audited 0.84.2 evidence aggregates", () => {
     const candidate = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.releases[1];
-    expect(candidate).toMatchObject({
-      role: "audited_candidate",
-      tag: "v0.84.2",
-      commit: "914cf1472e715297caa30db4b9535d534a9eb718",
-      execution: "evidence_only",
-    });
-    expect(candidate.packages).toHaveLength(9);
-    expect(candidate.packages.every((entry) => entry.version === "0.84.2" && entry.installation === "evidence_only")).toBe(true);
-    expect(candidate.fingerprints.every((entry) => /^[0-9a-f]{64}$/.test(entry.sha256))).toBe(true);
-    expect(candidate.conformance).toMatchObject({
-      caseCount: 30,
-      catalogueSha256: "46636aec941f7bbd5fcec6b3aec2b8e43518a0482a1b7f4fd4c1d5197e69f387",
-      resultSha256: "f2c7e067e69daf3e730da4dcab2a0ca14bba31be462c81aa70af0ac10b43e504",
-      memory: "audited_evidence_pass",
-      jsonl: "audited_evidence_pass",
-      sqlite: "unsupported",
-    });
+    const packageEvidence = candidate.packages.map((entry) => ({
+      name: entry.name,
+      version: entry.version,
+      integrity: entry.integrity,
+      shasum: entry.shasum,
+      gitHead: entry.gitHead,
+      engine: entry.engine,
+      exports: entry.exports,
+      internalDependencies: entry.internalDependencies,
+    }));
+    expect(digestEvidence(packageEvidence)).toBe("b5d1666137b44639217928a429d7bc040a6f4a2867e20c9ff333dc9f320e5aac");
+    expect(digestEvidence(candidate.fingerprints)).toBe("632a7a9847dac02ac76dcf1660b28689ad876df604eed2ebf09a35370d8a6631");
+    expect([
+      candidate.conformance.caseCount,
+      candidate.conformance.catalogueSha256,
+      candidate.conformance.auditedResultSha256,
+      candidate.conformance.memory,
+      candidate.conformance.jsonl,
+      candidate.conformance.sqlite,
+      candidate.conformance.sqliteReason,
+    ]).toEqual([
+      30,
+      "46636aec941f7bbd5fcec6b3aec2b8e43518a0482a1b7f4fd4c1d5197e69f387",
+      "f2c7e067e69daf3e730da4dcab2a0ca14bba31be462c81aa70af0ac10b43e504",
+      "audited_evidence_pass",
+      "audited_evidence_pass",
+      "unsupported",
+      "bun_node_sqlite_unavailable",
+    ]);
   });
 });

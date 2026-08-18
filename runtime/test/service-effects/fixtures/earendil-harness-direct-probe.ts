@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import { createModels, type Usage } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
 import {
@@ -66,10 +68,17 @@ function createSession(id = "wp-3b-direct-probe"): Session {
   return new Session(new InMemorySessionStorage({ id, createdAt: 1 }));
 }
 
-async function assertInstalledBaseline(): Promise<void> {
+export async function readInstalledEarendilAgentCoreVersion(): Promise<string> {
   const packageUrl = import.meta.resolve("@earendil-works/pi-agent-core/package.json");
-  const manifest: unknown = await Bun.file(packageUrl).json();
-  if (!manifest || typeof manifest !== "object" || !("version" in manifest) || manifest.version !== "0.84.1") {
+  const manifest: unknown = await Bun.file(fileURLToPath(packageUrl)).json();
+  if (!manifest || typeof manifest !== "object" || !("version" in manifest) || typeof manifest.version !== "string") {
+    throw new Error("The public @earendil-works/pi-agent-core/package.json export has no string version.");
+  }
+  return manifest.version;
+}
+
+async function assertInstalledBaseline(): Promise<void> {
+  if (await readInstalledEarendilAgentCoreVersion() !== "0.84.1") {
     throw new Error("The provisional direct probe executes only @earendil-works/pi-agent-core@0.84.1.");
   }
 }

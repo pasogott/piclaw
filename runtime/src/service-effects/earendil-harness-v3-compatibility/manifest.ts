@@ -31,7 +31,7 @@ export interface EarendilReleaseEvidence {
   readonly conformance: Readonly<{
     caseCount: number;
     catalogueSha256: string;
-    resultSha256: string;
+    auditedResultSha256: string;
     memory: "pass" | "audited_evidence_pass";
     jsonl: "pass" | "audited_evidence_pass";
     sqlite: "unsupported";
@@ -266,7 +266,7 @@ const RAW_MANIFEST = {
       conformance: {
         caseCount: 29,
         catalogueSha256: "5b95af47d991cf4011f7fe42c6229779860d4ec5a5977cc16e7cf654ba170d96",
-        resultSha256: "03558673796deb901885963ed07be1c519990969fb8711e4b595f733b5bcfd70",
+        auditedResultSha256: "03558673796deb901885963ed07be1c519990969fb8711e4b595f733b5bcfd70",
         memory: "pass",
         jsonl: "pass",
         sqlite: "unsupported",
@@ -283,7 +283,7 @@ const RAW_MANIFEST = {
       conformance: {
         caseCount: 30,
         catalogueSha256: "46636aec941f7bbd5fcec6b3aec2b8e43518a0482a1b7f4fd4c1d5197e69f387",
-        resultSha256: "f2c7e067e69daf3e730da4dcab2a0ca14bba31be462c81aa70af0ac10b43e504",
+        auditedResultSha256: "f2c7e067e69daf3e730da4dcab2a0ca14bba31be462c81aa70af0ac10b43e504",
         memory: "audited_evidence_pass",
         jsonl: "audited_evidence_pass",
         sqlite: "unsupported",

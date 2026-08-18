@@ -1367,7 +1367,7 @@ The compile fixture pins seven gaps: missing `AgentHarnessConstructor`, `Harness
 
 HC-001–HC-020 all have status `unsupported`. The direct public `0.84.1` probe observes 25 exact `HarnessNotImplemented.operation` values. Wrong operation names, arbitrary throws and unexpected success are failures. No fixture supplies Harness execution semantics, storage, usage, manual driving or an event bus.
 
-The exported unchanged `0.84.1` backend catalogue passes 29 cases on Memory and 29 on JSONL; the JSONL fixture supplies the backend-required `cwd` to `create()` and `fork()`. SQLite is unsupported because the package is absent. The audited `v0.84.2` 30-case Memory/JSONL results and Bun `node:sqlite` incompatibility are pinned as inert hashes and counts; repository tests do not install or load that release.
+The exported unchanged `0.84.1` backend catalogue passes 29 cases on Memory and 29 on JSONL; the JSONL fixture supplies the backend-required `cwd` to `create()` and `fork()`. SQLite is unsupported because the package is absent. The suite computes the `0.84.1` catalogue digest from the executed case IDs, while its result digest is explicitly retained as audited evidence rather than derived from the local run. The audited `v0.84.2` 30-case Memory/JSONL result digest and Bun `node:sqlite` incompatibility are pinned as inert source-as-data; repository tests do not install or load that release.
 
 Promotion requires a separately approved tagged dependency selection, direct positive v3 assignments, HC-001–HC-020 semantic passes, durable-backend and migration evidence, EF-S01/EF-S02/EF-S05/EF-S08 authority preservation, and the existing production gates. The provisional package cannot select a release or activate production callers.
 

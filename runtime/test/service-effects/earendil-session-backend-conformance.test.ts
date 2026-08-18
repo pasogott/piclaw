@@ -33,6 +33,16 @@ for (const [backend, factory] of BACKENDS) {
   });
 }
 
+test("keeps result digests explicitly classified as audited evidence, not local transcripts", () => {
+  const [baseline, candidate] = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.releases;
+  expect(baseline.conformance.auditedResultSha256).toBe(
+    "03558673796deb901885963ed07be1c519990969fb8711e4b595f733b5bcfd70",
+  );
+  expect(candidate.conformance.auditedResultSha256).toBe(
+    "f2c7e067e69daf3e730da4dcab2a0ca14bba31be462c81aa70af0ac10b43e504",
+  );
+});
+
 test("keeps SQLite explicitly unsupported under the repository Bun runtime", () => {
   const baseline = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.releases[0];
   const candidate = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.releases[1];
