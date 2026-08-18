@@ -1282,7 +1282,7 @@ WP-3C accepted preparation corrections (2026-08-16):
 - source-derived repository schemas plus direct `pi-agent-core` read/write/edit/bash and effective SDK grep/find/ls schemas classify every top-level field as protected or as a rationale-bearing safe control; only five imported/spread factories retain explicit file/factory/rationale evidence, and unresolved fingerprints fail the suite;
 - inventory, protected-observer and behaviour evidence is hermetic and static; future direct root exports from `@earendil-works/pi-agent-core` cover read pre/mid abort, canonical write/edit queueing, bash pending-update abort and native result behavior; the decision oracle snapshots/restores in-progress grants as non-executable unknown outcomes and reconciles all certainties without importing live stores.
 
-Core and Piclaw-specific tool cases can be specified against current behaviour now. Compile assertions wait for one coherent selected v3 type surface so the documentation does not freeze a draft execute signature.
+Core and Piclaw-specific tool cases can be specified against current behaviour now. The provisional WP-3B suite compiles direct assignments for current package-root exports and pins one negative expectation for each known v3 gap. Positive assignments to the missing v3 contracts wait for a coherent selected type surface.
 
 ### EB-03 — resources and hooks
 
@@ -1330,7 +1330,7 @@ Prompts, tool arguments/results, media bytes and secret values are prohibited at
 
 ### EB-05 — harness, session, storage and events
 
-Do not implement these against `0.84.1` or draft PR #8076 merely to create activity. PR #8076 is storage/primitives evidence, not a selected runtime. The first coherent tagged release must provide:
+Production implementation against `0.84.1` or draft PR #8076 is forbidden. The latent WP-3B suite may invoke the public `0.84.1` scaffold only to record exact unsupported outcomes. PR #8076 is storage/primitives evidence and has no selected runtime. The first coherent tagged release must provide:
 
 | Surface | Selection requirement | Piclaw preparation |
 |---|---|---|
@@ -1343,6 +1343,33 @@ Do not implement these against `0.84.1` or draft PR #8076 merely to create activ
 | Errors/results | Exported tagged expected errors and thrown fault boundary | No Piclaw renaming or second taxonomy |
 
 When these gates pass, Piclaw calls the selected contracts directly. EF-S01–EF-S08 and EF-H01 supply the Piclaw side of boundary tests.
+
+### WP-3B provisional compatibility evidence (2026-08-18)
+
+The latent suite keeps production on `0.84.1`. Tagged `v0.84.2` at `914cf1472e715297caa30db4b9535d534a9eb718` is a coherent nine-package publication, but it retains the released-v2 Harness scaffold and is evidence only. The installed executable baseline is `v0.84.1` at `53fa77ccd8a279eb87e92294ef3687b03ff80112`.
+
+`runtime/src/service-effects/earendil-harness-v3-compatibility/` contains two files with no production importer or barrel:
+
+- `manifest.ts` holds exact release coordinates, package integrities, declaration/runtime fingerprints, EB/HC outcomes and future promotion criteria. Descriptor-safe normalisation accepts only the closed evidence, rejects accessors, symbols, cycles, corruption and drift, and returns deeply frozen data.
+- `direct-assignments.ts` uses package-root public types to compile direct assignments for models, credentials, execution environment, contextual tool factories, resources, lanes, sessions, hooks, events, telemetry and results. It emits no runtime code.
+
+The compatibility matrix is provisional:
+
+| Boundary | Compile | Runtime |
+|---|---|---|
+| EB-01 models and credentials | Pass | Unsupported |
+| EB-02 tools and context | Fail | Unsupported |
+| EB-03 resources and hooks | Fail | Unsupported |
+| EB-04 telemetry | Pass | Unsupported |
+| EB-05 harness, session, storage and events | Fail | Unsupported |
+
+The compile fixture pins seven gaps: missing `AgentHarnessConstructor`, `HarnessEventBus`, `Storage`, `Transaction` and `UsageRow`; non-generic `AgentHarnessOptions`; and the incompatible `AgentHarnessTool<PiclawToolContext>`/released-v2 `HarnessTool` boundary. Package-root `createReadTool`, `createWriteTool`, `createEditTool` and `createBashTool` assignments compile directly.
+
+HC-001–HC-020 all have status `unsupported`. The direct public `0.84.1` probe observes 25 exact `HarnessNotImplemented.operation` values. Wrong operation names, arbitrary throws and unexpected success are failures. No fixture supplies Harness execution semantics, storage, usage, manual driving or an event bus.
+
+The exported unchanged `0.84.1` backend catalogue passes 29 cases on Memory and 29 on JSONL; the JSONL fixture supplies the backend-required `cwd` to `create()` and `fork()`. SQLite is unsupported because the package is absent. The suite computes the `0.84.1` catalogue digest from the executed case IDs, while its result digest is explicitly retained as audited evidence rather than derived from the local run. The audited `v0.84.2` 30-case Memory/JSONL result digest and Bun `node:sqlite` incompatibility are pinned as inert source-as-data; repository tests do not install or load that release.
+
+Promotion requires a separately approved tagged dependency selection, direct positive v3 assignments, HC-001–HC-020 semantic passes, durable-backend and migration evidence, EF-S01/EF-S02/EF-S05/EF-S08 authority preservation, and the existing production gates. The provisional package cannot select a release or activate production callers.
 
 ### Forbidden boundary abstractions
 
