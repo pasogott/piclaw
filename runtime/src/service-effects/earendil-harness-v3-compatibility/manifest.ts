@@ -1,6 +1,7 @@
 export type CompatibilityStatus = "pass" | "fail" | "unsupported";
-export type ReleaseExecution = "installed" | "evidence_only";
-export type PackageInstallation = "direct" | "transitive" | "not_installed" | "evidence_only";
+export type RuntimeSelection = "historical" | "installed";
+export type HarnessSelection = "baseline_evidence" | "rejected_evidence_only";
+export type PackageInstallation = "direct" | "transitive" | "not_installed";
 
 export interface EarendilPackageEvidence {
   readonly name: string;
@@ -22,18 +23,19 @@ export interface EarendilReleaseFingerprint {
 }
 
 export interface EarendilReleaseEvidence {
-  readonly role: "installed_baseline" | "audited_candidate";
+  readonly role: "historical_harness_baseline" | "current_runtime_harness_candidate";
   readonly tag: "v0.84.1" | "v0.84.2";
   readonly commit: string;
-  readonly execution: ReleaseExecution;
+  readonly runtimeSelection: RuntimeSelection;
+  readonly harnessSelection: HarnessSelection;
   readonly packages: readonly EarendilPackageEvidence[];
   readonly fingerprints: readonly EarendilReleaseFingerprint[];
   readonly conformance: Readonly<{
     caseCount: number;
     catalogueSha256: string;
     auditedResultSha256: string;
-    memory: "pass" | "audited_evidence_pass";
-    jsonl: "pass" | "audited_evidence_pass";
+    memory: "pass" | "historical_pass";
+    jsonl: "pass" | "historical_pass";
     sqlite: "unsupported";
     sqliteReason: "package_not_installed" | "bun_node_sqlite_unavailable";
   }>;
@@ -58,13 +60,14 @@ export interface EarendilCapabilityEvidence {
 }
 
 export interface EarendilHarnessCompatibilityManifest {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly authority: Readonly<{
-    productionVersion: "0.84.1";
-    candidateVersion: "0.84.2";
-    candidateSelection: "rejected_evidence_only";
+    currentRuntimeVersion: "0.84.2";
+    harnessBaselineVersion: "0.84.1";
+    harnessCandidateVersion: "0.84.2";
+    harnessCandidateSelection: "rejected_evidence_only";
     unsupportedCountsAsPass: false;
-    activation: "latent_only";
+    harnessActivation: "latent_only";
     designCommit: string;
     draftEvidenceCommit: string;
   }>;
@@ -163,13 +166,11 @@ function packageRows(version: "0.84.1" | "0.84.2", gitHead: string): EarendilPac
     shasum: PUBLICATION_COORDINATES[version][index][1],
     gitHead,
     engine: ">=22.19.0",
-    installation: version === "0.84.2"
-      ? "evidence_only"
-      : [0, 1, 3].includes(index)
-        ? "direct"
-        : [2, 4, 7, 8].includes(index)
-          ? "transitive"
-          : "not_installed",
+    installation: [0, 1, 3].includes(index)
+      ? "direct"
+      : [2, 4, 7, 8].includes(index)
+        ? "transitive"
+        : "not_installed",
     exports: [...EXPORTS[name]],
     internalDependencies: INTERNAL_DEPENDENCIES[name].map((dependency) => ({ name: dependency, range: `^${version}` })),
   }));
@@ -241,51 +242,54 @@ const PROMOTION_CRITERIA = [
   { id: "PG-06", requirement: "Prove open-operation migration backend faults precise rewrite and backup restore." },
   { id: "PG-07", requirement: "Preserve EF-S01 EF-S02 EF-S05 and EF-S08 Piclaw authority boundaries." },
   { id: "PG-08", requirement: "Pass PC golden scheduler mobile Abort SSE reconnect backup and rollback gates." },
-  { id: "PG-09", requirement: "Obtain separate approval for dependency selection activation callers schemas and convergence." },
+  { id: "PG-09", requirement: "Obtain separate approval for Harness activation callers schemas and convergence." },
 ] as const;
 
 const RAW_MANIFEST = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   authority: {
-    productionVersion: "0.84.1",
-    candidateVersion: "0.84.2",
-    candidateSelection: "rejected_evidence_only",
+    currentRuntimeVersion: "0.84.2",
+    harnessBaselineVersion: "0.84.1",
+    harnessCandidateVersion: "0.84.2",
+    harnessCandidateSelection: "rejected_evidence_only",
     unsupportedCountsAsPass: false,
-    activation: "latent_only",
+    harnessActivation: "latent_only",
     designCommit: "5f7195c51eac43cdf329f813a7ef020d7bd74527",
     draftEvidenceCommit: "fd389abc4677b4e0fa5dc9b2bbd2e63418f079b4",
   },
   releases: [
     {
-      role: "installed_baseline",
+      role: "historical_harness_baseline",
       tag: "v0.84.1",
       commit: "53fa77ccd8a279eb87e92294ef3687b03ff80112",
-      execution: "installed",
+      runtimeSelection: "historical",
+      harnessSelection: "baseline_evidence",
       packages: packageRows("0.84.1", "53fa77ccd8a279eb87e92294ef3687b03ff80112"),
       fingerprints: BASELINE_FINGERPRINTS,
       conformance: {
         caseCount: 29,
         catalogueSha256: "5b95af47d991cf4011f7fe42c6229779860d4ec5a5977cc16e7cf654ba170d96",
         auditedResultSha256: "03558673796deb901885963ed07be1c519990969fb8711e4b595f733b5bcfd70",
-        memory: "pass",
-        jsonl: "pass",
+        memory: "historical_pass",
+        jsonl: "historical_pass",
         sqlite: "unsupported",
         sqliteReason: "package_not_installed",
       },
     },
     {
-      role: "audited_candidate",
+      role: "current_runtime_harness_candidate",
       tag: "v0.84.2",
       commit: "914cf1472e715297caa30db4b9535d534a9eb718",
-      execution: "evidence_only",
+      runtimeSelection: "installed",
+      harnessSelection: "rejected_evidence_only",
       packages: packageRows("0.84.2", "914cf1472e715297caa30db4b9535d534a9eb718"),
       fingerprints: CANDIDATE_FINGERPRINTS,
       conformance: {
         caseCount: 30,
         catalogueSha256: "46636aec941f7bbd5fcec6b3aec2b8e43518a0482a1b7f4fd4c1d5197e69f387",
         auditedResultSha256: "f2c7e067e69daf3e730da4dcab2a0ca14bba31be462c81aa70af0ac10b43e504",
-        memory: "audited_evidence_pass",
-        jsonl: "audited_evidence_pass",
+        memory: "pass",
+        jsonl: "pass",
         sqlite: "unsupported",
         sqliteReason: "bun_node_sqlite_unavailable",
       },

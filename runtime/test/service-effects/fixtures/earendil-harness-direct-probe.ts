@@ -77,15 +77,15 @@ export async function readInstalledEarendilAgentCoreVersion(): Promise<string> {
   return manifest.version;
 }
 
-async function assertInstalledBaseline(): Promise<void> {
-  if (await readInstalledEarendilAgentCoreVersion() !== "0.84.1") {
-    throw new Error("The provisional direct probe executes only @earendil-works/pi-agent-core@0.84.1.");
+async function assertCurrentRuntime(): Promise<void> {
+  if (await readInstalledEarendilAgentCoreVersion() !== "0.84.2") {
+    throw new Error("The provisional direct probe executes only @earendil-works/pi-agent-core@0.84.2.");
   }
 }
 
 async function createHarness(session = createSession()): Promise<AgentHarness> {
   const model = getModel("google", "gemini-2.5-flash");
-  if (!model) throw new Error("Expected the public 0.84.1 compatibility model catalogue entry.");
+  if (!model) throw new Error("Expected the public 0.84.2 compatibility model catalogue entry.");
   return (await AgentHarness.create({ session, models: createModels(), model })).harness;
 }
 
@@ -111,7 +111,7 @@ async function classify(
 
 /** Exercise the installed package through public exports without adapters or simulated capabilities. */
 export async function runEarendilHarnessDirectProbe(): Promise<readonly EarendilHarnessDirectProbeRow[]> {
-  await assertInstalledBaseline();
+  await assertCurrentRuntime();
   const harness = await createHarness();
   const rows = await Promise.all([
     classify("prompt", () => harness.prompt(MESSAGE)),
