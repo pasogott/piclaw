@@ -1330,7 +1330,7 @@ Prompts, tool arguments/results, media bytes and secret values are prohibited at
 
 ### EB-05 — harness, session, storage and events
 
-Production implementation against `0.84.1` or draft PR #8076 is forbidden. The latent WP-3B suite may invoke the public `0.84.1` scaffold only to record exact unsupported outcomes. PR #8076 is storage/primitives evidence and has no selected runtime. The first coherent tagged release must provide:
+Harness production implementation against historical `0.84.1`, current-loop `0.84.2` or draft PR #8076 is forbidden. The latent WP-3B suite invokes the public `0.84.2` scaffold only to record exact unsupported outcomes. PR #8076 is storage/primitives evidence and has no selected runtime. The first coherent tagged Harness-v3 implementation must provide:
 
 | Surface | Selection requirement | Piclaw preparation |
 |---|---|---|
@@ -1346,7 +1346,7 @@ When these gates pass, Piclaw calls the selected contracts directly. EF-S01–EF
 
 ### WP-3B provisional compatibility evidence (2026-08-18)
 
-The latent suite keeps production on `0.84.1`. Tagged `v0.84.2` at `914cf1472e715297caa30db4b9535d534a9eb718` is a coherent nine-package publication, but it retains the released-v2 Harness scaffold and is evidence only. The installed executable baseline is `v0.84.1` at `53fa77ccd8a279eb87e92294ef3687b03ff80112`.
+Piclaw's existing coding-agent loop selects tagged `v0.84.2` at `914cf1472e715297caa30db4b9535d534a9eb718` as a coherent current runtime family. That release retains the released-v2 Harness scaffold and remains rejected/evidence-only for Harness v3. Tagged `v0.84.1` at `53fa77ccd8a279eb87e92294ef3687b03ff80112` remains the historical Harness baseline.
 
 `runtime/src/service-effects/earendil-harness-v3-compatibility/` contains two files with no production importer or barrel:
 
@@ -1365,11 +1365,11 @@ The compatibility matrix is provisional:
 
 The compile fixture pins seven gaps: missing `AgentHarnessConstructor`, `HarnessEventBus`, `Storage`, `Transaction` and `UsageRow`; non-generic `AgentHarnessOptions`; and the incompatible `AgentHarnessTool<PiclawToolContext>`/released-v2 `HarnessTool` boundary. Package-root `createReadTool`, `createWriteTool`, `createEditTool` and `createBashTool` assignments compile directly.
 
-HC-001–HC-020 all have status `unsupported`. The direct public `0.84.1` probe observes 25 exact `HarnessNotImplemented.operation` values. Wrong operation names, arbitrary throws and unexpected success are failures. No fixture supplies Harness execution semantics, storage, usage, manual driving or an event bus.
+HC-001–HC-020 all have status `unsupported`. The direct public `0.84.2` probe observes 25 exact `HarnessNotImplemented.operation` values. Wrong operation names, arbitrary throws and unexpected success are failures. No fixture supplies Harness execution semantics, storage, usage, manual driving or an event bus.
 
-The exported unchanged `0.84.1` backend catalogue passes 29 cases on Memory and 29 on JSONL; the JSONL fixture supplies the backend-required `cwd` to `create()` and `fork()`. SQLite is unsupported because the package is absent. The suite computes the `0.84.1` catalogue digest from the executed case IDs, while its result digest is explicitly retained as audited evidence rather than derived from the local run. The audited `v0.84.2` 30-case Memory/JSONL result digest and Bun `node:sqlite` incompatibility are pinned as inert source-as-data; repository tests do not install or load that release.
+The exported `0.84.2` backend catalogue passes 30 cases on Memory and 30 on JSONL; the JSONL fixture supplies the backend-required `cwd` to `create()` and `fork()`. The suite computes the current catalogue digest from executed case IDs and retains the independently audited result digest. SQLite remains unsupported under Bun because the backend requires unavailable `node:sqlite`; the SQLite package is not installed. Historical `0.84.1` coordinates, fingerprints and 29-case catalogue/result evidence remain pinned without executing that release.
 
-Promotion requires a separately approved tagged dependency selection, direct positive v3 assignments, HC-001–HC-020 semantic passes, durable-backend and migration evidence, EF-S01/EF-S02/EF-S05/EF-S08 authority preservation, and the existing production gates. The provisional package cannot select a release or activate production callers.
+Harness promotion requires direct positive v3 assignments, HC-001–HC-020 semantic passes, durable-backend and migration evidence, EF-S01/EF-S02/EF-S05/EF-S08 authority preservation, the existing production gates and separate activation approval. Selecting `0.84.2` for the current loop does not select a Harness implementation or activate production Harness callers.
 
 ### Forbidden boundary abstractions
 

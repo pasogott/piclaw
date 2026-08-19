@@ -73,8 +73,8 @@ async function sha256(path: string): Promise<string> {
 }
 
 describe("Earendil release churn gate", () => {
-  test("pins the repository and lockfile to the accepted coherent 0.84.1 family", async () => {
-    const baseline = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.releases[0];
+  test("pins the repository and lockfile to the selected coherent 0.84.2 current runtime", async () => {
+    const [historical, current] = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.releases;
     const rootManifest = requireRecord(await Bun.file(resolve(repositoryRoot, "package.json")).json(), "repository package.json");
     const rootDependencies = requireRecord(rootManifest.dependencies, "repository dependencies");
     for (const directName of [
@@ -82,16 +82,16 @@ describe("Earendil release churn gate", () => {
       "@earendil-works/pi-ai",
       "@earendil-works/pi-coding-agent",
     ]) {
-      expect(rootDependencies[directName]).toBe("0.84.1");
+      expect(rootDependencies[directName]).toBe("0.84.2");
     }
+    expect(rootDependencies.openai).toBe("6.40.0");
 
     const lock = await Bun.file(resolve(repositoryRoot, "bun.lock")).text();
-    const candidate = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.releases[1];
-    for (const evidence of candidate.packages) {
-      expect(lock).not.toContain(`"${evidence.name}@0.84.2"`);
+    for (const evidence of historical.packages) {
+      expect(lock).not.toContain(`"${evidence.name}@0.84.1"`);
       expect(lock).not.toContain(evidence.integrity);
     }
-    for (const evidence of baseline.packages) {
+    for (const evidence of current.packages) {
       const entry = lockPackageEntry(lock, evidence.name);
       if (evidence.installation === "not_installed") {
         expect(entry).toBeUndefined();
@@ -103,12 +103,13 @@ describe("Earendil release churn gate", () => {
         expect(entry).toContain(`, "${evidence.integrity}"],`);
       }
     }
+    expect(lockPackageEntry(lock, "openai")?.startsWith('    "openai": ["openai@6.40.0",')).toBe(true);
   });
 
   test("matches installed public package manifests, export maps, engines, and internal ranges", async () => {
-    const baseline = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.releases[0];
-    expect(baseline.packages).toHaveLength(9);
-    for (const evidence of baseline.packages) {
+    const current = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.releases[1];
+    expect(current.packages).toHaveLength(9);
+    for (const evidence of current.packages) {
       const directory = resolve(modulesRoot, evidence.name);
       if (evidence.installation === "not_installed") {
         expect(existsSync(directory)).toBe(false);
@@ -123,9 +124,9 @@ describe("Earendil release churn gate", () => {
     }
   });
 
-  test("matches baseline hashes only through contained package-declared public export targets", async () => {
-    const baseline = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.releases[0];
-    for (const fingerprint of baseline.fingerprints) {
+  test("matches current hashes only through contained package-declared public export targets", async () => {
+    const current = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.releases[1];
+    for (const fingerprint of current.fingerprints) {
       if (fingerprint.subpath.startsWith("audit:")) continue;
       const installed = await readPackage(fingerprint.package);
       const target = publicTarget(installed, fingerprint.subpath, fingerprint.kind);
@@ -196,14 +197,35 @@ describe("Earendil release churn gate", () => {
     expect(manifest.promotionCriteria.map((entry) => entry.id)).toEqual(
       Array.from({ length: 9 }, (_, index) => `PG-${String(index + 1).padStart(2, "0")}`),
     );
-    const candidate = manifest.releases[1];
-    expect(candidate.execution).toBe("evidence_only");
-    expect(candidate.packages.every((entry) => entry.installation === "evidence_only")).toBe(true);
+    const [historical, current] = manifest.releases;
+    expect([historical.role, historical.runtimeSelection, historical.harnessSelection]).toEqual([
+      "historical_harness_baseline",
+      "historical",
+      "baseline_evidence",
+    ]);
+    expect([current.role, current.runtimeSelection, current.harnessSelection]).toEqual([
+      "current_runtime_harness_candidate",
+      "installed",
+      "rejected_evidence_only",
+    ]);
+    const expectedInstallation = [
+      "direct",
+      "direct",
+      "transitive",
+      "direct",
+      "transitive",
+      "not_installed",
+      "not_installed",
+      "transitive",
+      "transitive",
+    ];
+    expect(historical.packages.map((entry) => entry.installation)).toEqual(expectedInstallation);
+    expect(current.packages.map((entry) => entry.installation)).toEqual(expectedInstallation);
   });
 
-  test("independently pins the audited 0.84.2 evidence aggregates", () => {
-    const candidate = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.releases[1];
-    const packageEvidence = candidate.packages.map((entry) => ({
+  test("independently pins the selected 0.84.2 runtime and rejected Harness evidence aggregates", () => {
+    const current = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.releases[1];
+    const packageEvidence = current.packages.map((entry) => ({
       name: entry.name,
       version: entry.version,
       integrity: entry.integrity,
@@ -214,21 +236,21 @@ describe("Earendil release churn gate", () => {
       internalDependencies: entry.internalDependencies,
     }));
     expect(digestEvidence(packageEvidence)).toBe("b5d1666137b44639217928a429d7bc040a6f4a2867e20c9ff333dc9f320e5aac");
-    expect(digestEvidence(candidate.fingerprints)).toBe("632a7a9847dac02ac76dcf1660b28689ad876df604eed2ebf09a35370d8a6631");
+    expect(digestEvidence(current.fingerprints)).toBe("632a7a9847dac02ac76dcf1660b28689ad876df604eed2ebf09a35370d8a6631");
     expect([
-      candidate.conformance.caseCount,
-      candidate.conformance.catalogueSha256,
-      candidate.conformance.auditedResultSha256,
-      candidate.conformance.memory,
-      candidate.conformance.jsonl,
-      candidate.conformance.sqlite,
-      candidate.conformance.sqliteReason,
+      current.conformance.caseCount,
+      current.conformance.catalogueSha256,
+      current.conformance.auditedResultSha256,
+      current.conformance.memory,
+      current.conformance.jsonl,
+      current.conformance.sqlite,
+      current.conformance.sqliteReason,
     ]).toEqual([
       30,
       "46636aec941f7bbd5fcec6b3aec2b8e43518a0482a1b7f4fd4c1d5197e69f387",
       "f2c7e067e69daf3e730da4dcab2a0ca14bba31be462c81aa70af0ac10b43e504",
-      "audited_evidence_pass",
-      "audited_evidence_pass",
+      "pass",
+      "pass",
       "unsupported",
       "bun_node_sqlite_unavailable",
     ]);

@@ -3,15 +3,15 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-// @ts-expect-error -- 0.84.1 has no public v3 constructor contract.
+// @ts-expect-error -- 0.84.2 has no public v3 constructor contract.
 import type { AgentHarnessConstructor } from "@earendil-works/pi-agent-core";
-// @ts-expect-error -- 0.84.1 has only the non-generic Events registry.
+// @ts-expect-error -- 0.84.2 has only the non-generic Events registry.
 import type { HarnessEventBus } from "@earendil-works/pi-agent-core";
-// @ts-expect-error -- 0.84.1 has no public harness Storage contract.
+// @ts-expect-error -- 0.84.2 has no public harness Storage contract.
 import type { Storage } from "@earendil-works/pi-agent-core";
-// @ts-expect-error -- 0.84.1 has no public harness Transaction contract.
+// @ts-expect-error -- 0.84.2 has no public harness Transaction contract.
 import type { Transaction } from "@earendil-works/pi-agent-core";
-// @ts-expect-error -- 0.84.1 has no public durable UsageRow contract.
+// @ts-expect-error -- 0.84.2 has no public durable UsageRow contract.
 import type { UsageRow } from "@earendil-works/pi-agent-core";
 import type {
   AgentHarnessOptions,
@@ -103,23 +103,29 @@ describe("latent Earendil Harness v3 compatibility evidence", () => {
     expectDeepFrozen(normalized.value);
 
     expect(normalized.value.authority).toEqual({
-      productionVersion: "0.84.1",
-      candidateVersion: "0.84.2",
-      candidateSelection: "rejected_evidence_only",
+      currentRuntimeVersion: "0.84.2",
+      harnessBaselineVersion: "0.84.1",
+      harnessCandidateVersion: "0.84.2",
+      harnessCandidateSelection: "rejected_evidence_only",
       unsupportedCountsAsPass: false,
-      activation: "latent_only",
+      harnessActivation: "latent_only",
       designCommit: "5f7195c51eac43cdf329f813a7ef020d7bd74527",
       draftEvidenceCommit: "fd389abc4677b4e0fa5dc9b2bbd2e63418f079b4",
     });
-    expect(normalized.value.releases.map((release) => [release.tag, release.commit, release.execution])).toEqual([
-      ["v0.84.1", "53fa77ccd8a279eb87e92294ef3687b03ff80112", "installed"],
-      ["v0.84.2", "914cf1472e715297caa30db4b9535d534a9eb718", "evidence_only"],
+    expect(normalized.value.releases.map((release) => [
+      release.tag,
+      release.commit,
+      release.runtimeSelection,
+      release.harnessSelection,
+    ])).toEqual([
+      ["v0.84.1", "53fa77ccd8a279eb87e92294ef3687b03ff80112", "historical", "baseline_evidence"],
+      ["v0.84.2", "914cf1472e715297caa30db4b9535d534a9eb718", "installed", "rejected_evidence_only"],
     ]);
   });
 
   test("rejects mutation, corruption, accessors, symbols, cycles, and hostile reflection", () => {
     const drifted = structuredClone(EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST);
-    Object.defineProperty(drifted.authority, "productionVersion", { value: "0.84.9", enumerable: true });
+    Object.defineProperty(drifted.authority, "currentRuntimeVersion", { value: "0.84.9", enumerable: true });
     const driftResult = normalizeEarendilHarnessCompatibilityManifest(drifted);
     expect(driftResult.ok).toBe(false);
     expect(driftResult.issues[0]?.code).toBe("manifest_drift");
@@ -218,8 +224,8 @@ describe("latent Earendil Harness v3 compatibility evidence", () => {
     expect(specifiers.every((specifier) => !specifier.includes("/dist/") && !specifier.includes("/src/"))).toBe(true);
   });
 
-  test("resolves the package-root public package.json export to the executable 0.84.1 baseline", async () => {
-    expect(await readInstalledEarendilAgentCoreVersion()).toBe("0.84.1");
+  test("resolves the package-root public package.json export to the selected 0.84.2 current runtime", async () => {
+    expect(await readInstalledEarendilAgentCoreVersion()).toBe("0.84.2");
   });
 
   test("observes the 25 exact public HarnessNotImplemented outcomes without converting them to passes", async () => {

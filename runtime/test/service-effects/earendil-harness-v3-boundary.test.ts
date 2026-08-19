@@ -132,8 +132,8 @@ describe("latent Earendil Harness v3 non-interference boundary", () => {
         if (specifier.startsWith("@earendil-works/") && !APPROVED_PUBLIC_EARENDIL_SPECIFIERS.has(specifier)) {
           findings.push(`${path}: non-public or unapproved import ${specifier}`);
         }
-        if (specifier.includes("/dist/") || specifier.includes("0.84.2")) {
-          findings.push(`${path}: private or candidate runtime import ${specifier}`);
+        if (specifier.includes("/dist/") || /0\.84\.\d/.test(specifier)) {
+          findings.push(`${path}: private or version-qualified runtime import ${specifier}`);
         }
       }
       const visit = (node: ts.Node): void => {
@@ -168,7 +168,7 @@ describe("latent Earendil Harness v3 non-interference boundary", () => {
         expect(APPROVED_PUBLIC_EARENDIL_SPECIFIERS.has(specifier)).toBe(true);
         expect(specifier).not.toContain("/dist/");
       }
-      expect(specifiers.some((specifier) => specifier.includes("0.84.2"))).toBe(false);
+      expect(specifiers.some((specifier) => /0\.84\.\d/.test(specifier))).toBe(false);
     }
   });
 });
