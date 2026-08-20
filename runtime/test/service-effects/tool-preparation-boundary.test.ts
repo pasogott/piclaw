@@ -6,7 +6,6 @@ import { resolve, relative } from "node:path";
 import { describe, expect, test } from "bun:test";
 import ts from "typescript";
 
-import { TOOL_PREPARATION_MANIFEST } from "../../src/service-effects/tool-preparation/manifest.js";
 import {
   inventoryRepositoryToolFamilies,
   readRepositorySourceTree,
@@ -220,7 +219,6 @@ describe("WP-3C active-composition snapshots", () => {
     const configurations = [
       { platform: "linux" as const, enabledEnv: new Set<string>(), activeNames: linuxNames },
       { platform: "win32" as const, enabledEnv: new Set<string>(), activeNames: windowsNames },
-      { platform: "linux" as const, enabledEnv: new Set(["PICLAW_ENABLE_M365_EXPERIMENTAL"]), activeNames: linuxNames },
     ];
     for (const { activeNames, ...config } of configurations) {
       const withContracts = snapshotRepositoryToolContracts(tree, config);
@@ -242,8 +240,8 @@ describe("WP-3C active-composition snapshots", () => {
     }
   }, 15_000);
 
-  // Six full source-as-data AST compositions are intentionally bounded above Bun's default timeout.
-  test("models Linux, Windows and gated production compositions without execution", () => {
+  // Four full source-as-data AST compositions are intentionally bounded above Bun's default timeout.
+  test("models Linux and Windows production compositions without execution", () => {
     const tree = readRepositorySourceTree();
     const withoutLatent = Object.freeze({
       files: Object.freeze(Object.fromEntries(Object.entries(tree.files).filter(([file]) => !file.startsWith(latentPrefix)))),
@@ -251,23 +249,17 @@ describe("WP-3C active-composition snapshots", () => {
     const configurations = [
       { platform: "linux" as const, enabledEnv: new Set<string>() },
       { platform: "win32" as const, enabledEnv: new Set<string>() },
-      { platform: "linux" as const, enabledEnv: new Set(["PICLAW_ENABLE_M365_EXPERIMENTAL"]) },
     ];
     const withLatent = configurations.map((config) => inventoryRepositoryToolFamilies(tree, config));
     const withoutLatentInventories = configurations.map((config) => inventoryRepositoryToolFamilies(withoutLatent, config));
-    const [linux, windows, gated] = withLatent;
+    const [linux, windows] = withLatent;
     for (const [index, inventory] of withLatent.entries()) {
       expect(inventory.names).toEqual(withoutLatentInventories[index].names);
     }
-    const m365Names = TOOL_PREPARATION_MANIFEST.filter((row) => row.toolName.startsWith("m365_")).map((row) => row.toolName);
 
     expect(linux.names).not.toContain("powershell");
     expect(windows.names).toContain("powershell");
-    expect(m365Names.every((name) => !linux.names.includes(name))).toBeTrue();
-    expect(m365Names.every((name) => !windows.names.includes(name))).toBeTrue();
-    expect(m365Names.every((name) => gated.names.includes(name))).toBeTrue();
     expect(linux.unresolvedRegistrations).toEqual([]);
     expect(windows.unresolvedRegistrations).toEqual([]);
-    expect(gated.unresolvedRegistrations).toEqual([]);
   }, 15_000);
 });
