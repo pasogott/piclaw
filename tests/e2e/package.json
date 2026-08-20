@@ -21,6 +21,6 @@
   "devDependencies": {
     "@playwright/test": "1.62.1",
     "@cucumber/cucumber": "^11.0.0",
-    "playwright-bdd": "^7.0.0"
+    "playwright-bdd": "^9.2.0"
   }
 }
