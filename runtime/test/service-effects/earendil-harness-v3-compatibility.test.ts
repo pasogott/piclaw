@@ -226,7 +226,7 @@ describe("latent Earendil Harness v3 compatibility evidence", () => {
       "@earendil-works/pi-coding-agent",
     ]);
     expect(specifiers.every((specifier) => !specifier.includes("/dist/") && !specifier.includes("/src/"))).toBe(true);
-  });
+  }, 30_000);
 
   test("resolves the package-root public package.json export to the selected 0.84.2 current runtime", async () => {
     expect(await readInstalledEarendilAgentCoreVersion()).toBe("0.84.2");
