@@ -19,13 +19,13 @@
     {
       "package_path": null,
       "output_file": "extensions/viewers/editor/vendor/codemirror.js",
-      "sha256": "b858e647a73cc5e578a6971d9ffbedbe84ef9f67630a304fc8f998937e280e97",
-      "size_bytes": 1413647
+      "sha256": "d69e940c81c2bc2cadfc6696840c9e543df9c1bf13e55d8985b33cff65d37bbd",
+      "size_bytes": 1413646
     }
   ],
   "metadata_file": "extensions/viewers/editor/vendor/codemirror.meta.json",
-  "sha256": "b858e647a73cc5e578a6971d9ffbedbe84ef9f67630a304fc8f998937e280e97",
-  "size_bytes": 1413647,
+  "sha256": "d69e940c81c2bc2cadfc6696840c9e543df9c1bf13e55d8985b33cff65d37bbd",
+  "size_bytes": 1413646,
   "build_command": [
     "bun",
     "build",
