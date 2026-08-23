@@ -3692,6 +3692,81 @@ test("runAgentPrompt does not return commentary-only output as a completed reply
   }
 });
 
+test("runAgentPrompt commits interrupted visible draft before a later text stream", async () => {
+  initDatabase();
+  class StubSession {
+    private listeners: Array<(event: any) => void> = [];
+    sessionManager = { getLeafId: () => "leaf-interrupted-draft" };
+    isStreaming = false;
+    isCompacting = false;
+    isRetrying = false;
+    subscribe(listener: (event: any) => void) {
+      this.listeners.push(listener);
+      return () => {
+        this.listeners = this.listeners.filter((entry) => entry !== listener);
+      };
+    }
+    async prompt() {
+      const signature = JSON.stringify({ phase: "final_answer" });
+      for (const listener of this.listeners) {
+        listener({
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "text_start",
+            contentIndex: 0,
+            partial: { content: [{ type: "text", textSignature: signature }] },
+          },
+        });
+        listener({
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "text_delta",
+            delta: "Visible progress before steering.",
+            contentIndex: 0,
+            partial: { content: [{ type: "text", textSignature: signature }] },
+          },
+        });
+        listener({
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "text_start",
+            contentIndex: 0,
+            partial: { content: [{ type: "text", textSignature: signature }] },
+          },
+        });
+        listener({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Final after steering.", textSignature: signature }],
+          },
+        });
+      }
+    }
+    async abort() {}
+  }
+
+  const session = new StubSession();
+  const completed: Array<{ text: string }> = [];
+  const result = await runAgentPrompt("test", "web:default", {
+    timeoutMs: 0,
+    onTurnComplete: (turn) => completed.push({ text: turn.text }),
+  }, {
+    getOrCreateRuntime: async () => createRuntime(session) as any,
+    turnCoordinator: new AgentTurnCoordinator({ takeAttachments: () => [], touchSession: () => {}, recordMessageUsage: () => {} }),
+    clearAttachments: () => {},
+    takeAttachments: () => [],
+    logsDir: createTestLogsDir(),
+    setActiveForkBaseLeaf: () => {},
+    clearActiveForkBaseLeaf: () => {},
+  });
+
+  expect(result.status).toBe("success");
+  expect(result.result).toBe("Final after steering.");
+  expect(completed).toEqual([{ text: "Visible progress before steering." }]);
+});
+
 test("runAgentPrompt uses a later final answer after a commentary-only provider error", async () => {
   initDatabase();
   class StubSession {

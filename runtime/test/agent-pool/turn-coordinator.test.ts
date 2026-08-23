@@ -344,7 +344,7 @@ test("AgentTurnCoordinator subscribes and downgrades handler failures to warning
   expect(listener).toBeNull();
 });
 
-test("AgentTurnCoordinator does not flush an incomplete turn when a new text_start arrives before message_end", () => {
+test("AgentTurnCoordinator snapshots visible final-answer draft when a new text_start interrupts it before message_end", () => {
   const completed: Array<{ text: string; attachments: AttachmentInfo[] }> = [];
   const coordinator = new AgentTurnCoordinator({
     takeAttachments: () => [],
@@ -380,8 +380,8 @@ test("AgentTurnCoordinator does not flush an incomplete turn when a new text_sta
     },
   } as any);
 
-  expect(completed).toEqual([]);
-  expect(tracker.getTurnCount()).toBe(0);
+  expect(completed).toEqual([{ text: "hello", attachments: [] }]);
+  expect(tracker.getTurnCount()).toBe(1);
 
   tracker.handleMessageUpdate({
     type: "message_end",
@@ -391,8 +391,8 @@ test("AgentTurnCoordinator does not flush an incomplete turn when a new text_sta
     },
   } as any);
 
-  expect(completed).toEqual([]);
-  expect(tracker.getTurnCount()).toBe(0);
+  expect(completed).toEqual([{ text: "hello", attachments: [] }]);
+  expect(tracker.getTurnCount()).toBe(1);
   expect(tracker.getFinalText()).toBe("fallback answer");
 });
 

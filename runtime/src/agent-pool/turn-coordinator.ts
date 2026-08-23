@@ -231,9 +231,19 @@ export class AgentTurnCoordinator {
             }
           } else if (messageHasDelta || currentTurnText || currentTurnPhase !== null) {
             // A new text stream started before the previous assistant message
-            // emitted message_end. Discard the incomplete accumulation rather
-            // than flushing it as a completed turn.
-            resetCurrentTurn();
+            // emitted message_end. If the interrupted stream was visible
+            // final-answer/unphased text, snapshot it as a completed turn so
+            // steering or provider-side response boundaries do not erase model
+            // output that already appeared in Draft. Signed commentary stays
+            // transient and is discarded as before.
+            if (currentTurnText.trim() && currentTurnPhase !== "commentary" && onTurnComplete) {
+              flushTurn();
+            } else {
+              if (currentTurnText.trim() && currentTurnPhase === "commentary") {
+                onTurnDiscard?.({ reason: "commentary_only" });
+              }
+              resetCurrentTurn();
+            }
           }
           currentTurnPhase = resolveTextPhaseFromPartial(messageEvent.partial, messageEvent.contentIndex);
 
