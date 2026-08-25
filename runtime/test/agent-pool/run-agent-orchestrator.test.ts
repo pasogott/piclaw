@@ -2953,6 +2953,81 @@ test("runAgentPrompt auto-compacts and retries when tool activity produced no te
   }
 });
 
+test("runAgentPrompt gives a protected continuation one tool-enabled retry after recovery compaction", async () => {
+  const restoreEnv = setEnv({
+    PICLAW_TURN_AUTO_RECOVERY_ENABLED: "1",
+    PICLAW_TURN_AUTO_RECOVERY_MAX_ATTEMPTS: "2",
+    PICLAW_TURN_AUTO_RECOVERY_TOTAL_BUDGET_MS: "30000",
+  });
+
+  class StubSession {
+    private listeners: Array<(event: any) => void> = [];
+    sessionManager = { getLeafId: () => `leaf-${this.promptCalls}` };
+    isStreaming = false;
+    isCompacting = false;
+    isRetrying = false;
+    promptCalls = 0;
+    promptTexts: string[] = [];
+    compactCalls = 0;
+    subscribe(listener: (event: any) => void) {
+      this.listeners.push(listener);
+      return () => { this.listeners = this.listeners.filter((entry) => entry !== listener); };
+    }
+    async prompt(text: string) {
+      this.promptCalls += 1;
+      this.promptTexts.push(text);
+      if (this.promptCalls === 1) {
+        for (const listener of this.listeners) {
+          listener({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "bash", args: { command: "make test" } });
+          listener({ type: "tool_execution_end", toolCallId: "tool-1", toolName: "bash", isError: false });
+          listener({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "maximum context length exceeded", content: [] } });
+        }
+        return;
+      }
+      for (const listener of this.listeners) {
+        listener({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Finished after protected compaction." } });
+        listener({ type: "message_end", message: createAssistantMessage("Finished after protected compaction.") });
+      }
+    }
+    async compact() { this.compactCalls += 1; }
+    async abort() {}
+  }
+
+  try {
+    const session = new StubSession();
+    const result = await runAgentPrompt("continue protected work", "web:protected-post-compaction", {
+      timeoutMs: 0,
+      protectedRecoveryContinuation: true,
+      protectedRecoveryContinuationDepth: 1,
+    }, {
+      getOrCreateRuntime: async () => createRuntime(session) as any,
+      turnCoordinator: new AgentTurnCoordinator({ takeAttachments: () => [], touchSession: () => {}, recordMessageUsage: () => {} }),
+      clearAttachments: () => {},
+      takeAttachments: () => [],
+      logsDir: createTestLogsDir(),
+      setActiveForkBaseLeaf: () => {},
+      clearActiveForkBaseLeaf: () => {},
+    });
+
+    expect(result).toMatchObject({
+      status: "success",
+      result: "Finished after protected compaction.",
+      recovery: {
+        attemptsUsed: 1,
+        recovered: true,
+        exhausted: false,
+        strategyHistory: ["compact_then_retry"],
+      },
+    });
+    expect(result.requiresToolEnabledContinuation).toBeUndefined();
+    expect(session.promptCalls).toBe(2);
+    expect(session.promptTexts[1]).toBe(RECOVERY_CONTINUATION_PROMPT);
+    expect(session.compactCalls).toBe(1);
+  } finally {
+    restoreEnv();
+  }
+});
+
 test("runAgentPrompt stops without compaction after tool-use budget exhaustion", async () => {
   initDatabase();
   const restoreEnv = setEnv({
