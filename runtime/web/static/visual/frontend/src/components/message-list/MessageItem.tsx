@@ -7,7 +7,7 @@ import { AttachmentChip } from "../AttachmentChip";
 import { DelimitedTable } from "./DelimitedTable";
 import { isDelimitedFile } from "../../utils/delimited-preview";
 import { renderMarkdown } from "../../utils/markdown-pipeline";
-import { relativeTime, getBlockKey } from "./helpers";
+import { relativeTime, getBlockKey, getTurnOutcomeMarker } from "./helpers";
 import { MessageActionBar } from "./MessageActionBar";
 import { userAvatarUrl, assistantAvatarUrl } from "../../api/identity";
 import { AvatarPopover } from "../AvatarPopover";
@@ -121,6 +121,50 @@ export function ToolCallBlock({ useBlock, resultBlock }: ToolCallBlockProps) {
               </div>
             </>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── TurnOutcomeBlock ───────────────────────────────────────────────────────
+
+function TurnOutcomeBlock({ marker }: { marker: ContentBlock }) {
+  const [open, setOpen] = useState(false);
+  const title = typeof marker.title === "string" && marker.title.trim()
+    ? marker.title.trim()
+    : "Turn outcome";
+  const detail = typeof marker.detail === "string" ? marker.detail.trim() : "";
+  const label = typeof marker.label === "string" && marker.label.trim()
+    ? marker.label.trim()
+    : marker.kind ?? "issue";
+  const safeMetadata = [
+    typeof marker.reason === "string" ? marker.reason.replaceAll("_", " ") : null,
+    marker.compaction === "succeeded" || marker.compaction === "failed"
+      ? `compaction ${marker.compaction}`
+      : null,
+    marker.tools_required === true ? "tools required" : null,
+    Number.isInteger(marker.recovery_attempts)
+      ? `${marker.recovery_attempts} recovery attempt${marker.recovery_attempts === 1 ? "" : "s"}`
+      : null,
+  ].filter((value): value is string => Boolean(value));
+
+  return (
+    <div className={`message-list__outcome message-list__outcome--${marker.severity ?? "warning"}`}>
+      <button
+        type="button"
+        className="message-list__outcome-header"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+      >
+        <span aria-hidden="true">{open ? "▾" : "▸"}</span>
+        <span>{label}</span>
+      </button>
+      {open && (
+        <div className="message-list__outcome-detail">
+          <strong>{title}</strong>
+          {detail && <span>{detail}</span>}
+          {safeMetadata.length > 0 && <small>{safeMetadata.join(" · ")}</small>}
         </div>
       )}
     </div>
@@ -269,6 +313,7 @@ export function MessageItem({
     }
   }
 
+  const outcomeMarker = getTurnOutcomeMarker(interaction.content_blocks);
   const displayName = isUser ? "You" : agentDisplayName.value;
 
   const [userImgError, setUserImgError] = useState(false);
@@ -388,6 +433,7 @@ export function MessageItem({
             />
           );
         })()}
+        {!isUser && outcomeMarker && <TurnOutcomeBlock marker={outcomeMarker} />}
         {interaction.content_blocks && extractCardBlocks(interaction.content_blocks).length > 0 && (
           <AdaptiveCardRenderer
             blocks={interaction.content_blocks}

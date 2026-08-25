@@ -72,6 +72,12 @@ import { createUuid } from "../../../utils/ids.js";
 import { createLogger, debugSuppressedError } from "../../../utils/logger.js";
 import type { AttachmentInfo } from "../../../agent-pool/attachments.js";
 import type { AgentFailureCategory } from "../../../agent-pool/contracts.js";
+import {
+  buildProtectedRecoveryHandoffMetadata,
+  formatProtectedRecoveryHandoff,
+  protectedRecoveryHandoffContentBlockFields,
+  type ProtectedRecoveryHandoffMetadata,
+} from "../../../agent-pool/protected-recovery-handoff-reason.js";
 import { classifyOpaqueAgentFailure } from "../../../agent-pool/automatic-recovery.js";
 import { cancelScheduledIdleAutoCompaction } from "../../../agent-pool/compaction.js";
 import { DEFAULT_BASE_RETRY_MS, getRetryAtIso } from "../../../queue/retry-policy.js";
@@ -188,6 +194,7 @@ function buildTurnOutcomeMarker(options: {
   nextAction?: string;
   abortCause?: string;
   abortOperation?: string;
+  protectedRecoveryHandoff?: ProtectedRecoveryHandoffMetadata;
 }): Record<string, unknown> {
   return {
     type: "turn_outcome_marker",
@@ -206,6 +213,9 @@ function buildTurnOutcomeMarker(options: {
     next_action: readTrimmedString(options.nextAction) || undefined,
     abort_cause: readTrimmedString(options.abortCause) || undefined,
     abort_operation: readTrimmedString(options.abortOperation) || undefined,
+    ...(options.protectedRecoveryHandoff
+      ? protectedRecoveryHandoffContentBlockFields(options.protectedRecoveryHandoff)
+      : {}),
   };
 }
 
@@ -223,12 +233,29 @@ function buildErrorOutcomeMarker(
     nextAction?: string;
     abortCause?: string;
     abortOperation?: string;
+    protectedRecoveryHandoff?: ProtectedRecoveryHandoffMetadata;
   } = {},
 ): Record<string, unknown> {
   const category = options.failureCategory ?? "unknown";
   const displayErrorText = sanitizeProviderErrorDetail(errorText) || "Agent error";
   const detail = displayErrorText.slice(0, 500);
   const providerError = formatProviderError(displayErrorText);
+  if (options.protectedRecoveryHandoff) {
+    const presentation = formatProtectedRecoveryHandoff(options.protectedRecoveryHandoff);
+    return buildTurnOutcomeMarker({
+      kind: "recovery",
+      label: presentation.label,
+      title: presentation.title,
+      detail: presentation.detail,
+      severity: options.severity ?? "warning",
+      draftRecovered: options.draftRecovered,
+      attemptsUsed: options.attemptsUsed,
+      classifier: options.classifier,
+      failureCategory: category,
+      nextAction: presentation.nextAction,
+      protectedRecoveryHandoff: options.protectedRecoveryHandoff,
+    });
+  }
   const common = {
     detail,
     draftRecovered: options.draftRecovered,
@@ -1555,7 +1582,8 @@ export async function processChat(
       || markerClassifier === "budget_exhausted";
     const showDiagnosticWithoutDraft = (markerType === "timeout_marker"
       && markerClassifier === "budget_exhausted")
-      || markerKind === "context";
+      || markerKind === "context"
+      || markerKind === "recovery";
     const text = buildFailureVisibleText({
       draftText,
       title,
@@ -1582,6 +1610,7 @@ export async function processChat(
         toolStepsUsed?: number;
         toolStepsBudget?: number;
         nextAction?: string;
+        protectedRecoveryHandoff?: ProtectedRecoveryHandoffMetadata;
       };
     } = {},
   ) => {
@@ -1593,7 +1622,14 @@ export async function processChat(
     const draft = channel.getBuffer(turnId, "draft");
     const draftText = typeof draft?.text === "string" ? draft.text.trim() : "";
 
-    const markerBase = reason === "timeout"
+    const markerBase = options.markerOptions?.protectedRecoveryHandoff
+      ? buildErrorOutcomeMarker(detail || "Automatic recovery paused", {
+          draftRecovered: Boolean(draftText),
+          attemptsUsed: streamState.lastRecoveryMeta?.attemptsUsed,
+          classifier: streamState.lastRecoveryMeta?.lastClassifier ?? null,
+          ...options.markerOptions,
+        })
+      : reason === "timeout"
       ? {
           type: "timeout_marker",
           timed_out: true,
@@ -1784,6 +1820,7 @@ export async function processChat(
       toolStepsUsed: output.toolStepsUsed,
       toolStepsBudget: output.toolStepsBudget,
       nextAction: output.nextAction,
+      protectedRecoveryHandoff: output.protectedRecoveryHandoff,
       abortCause: output.abortCause,
       abortOperation: output.abortOperation,
     };
@@ -1880,6 +1917,7 @@ export async function processChat(
           sourceRowId,
           threadId: continuationThreadId,
           handoffDepth: currentHandoffDepth + 1,
+          handoff: output.protectedRecoveryHandoff,
         });
         const queuedRowId = channel.enqueueQueuedFollowupItem(
           chatJid,
@@ -1945,21 +1983,42 @@ export async function processChat(
       // even when the client cannot render structured outcome blocks.
       clearCommittedDraft();
       shouldRemoveStaleProtectedContinuation = true;
-      const detail = protectedContinuation.terminalReason === "limit"
+      const terminalReason = protectedContinuation.terminalReason === "limit"
+        && !isPostCompactionProtectedRecoveryHandoff(output)
+        ? "continuation_generation_exhausted"
+        : output.protectedRecoveryHandoff?.reason
+          ?? (isPostCompactionProtectedRecoveryHandoff(output)
+            ? "post_compaction_tools_required"
+            : "continuation_generation_exhausted");
+      const terminalHandoff = buildProtectedRecoveryHandoffMetadata(terminalReason, {
+        recoveryAttempts: output.recovery?.attemptsUsed
+          ?? output.protectedRecoveryHandoff?.recoveryAttempts
+          ?? 0,
+        compaction: output.protectedRecoveryHandoff?.compaction
+          ?? (output.recovery?.strategyHistory.at(-1) === "compact_then_retry" ? "succeeded" : undefined),
+        toolsRequired: output.protectedRecoveryHandoff?.toolsRequired ?? true,
+        retryable: output.protectedRecoveryHandoff?.retryable ?? true,
+      });
+      const presentation = terminalHandoff ? formatProtectedRecoveryHandoff(terminalHandoff) : null;
+      const detail = presentation?.detail ?? (protectedContinuation.terminalReason === "limit"
         ? PROTECTED_RECOVERY_HANDOFF_LIMIT_MESSAGE
-        : "Automatic recovery could not safely start another tool-enabled continuation. The session is preserved; send “continue” to resume the unfinished work.";
+        : "Automatic recovery could not safely start another tool-enabled continuation. The session is preserved; send “continue” to resume the unfinished work.");
       const marker = buildTurnOutcomeMarker({
         kind: "recovery",
-        label: "recovery paused",
-        title: "Automatic recovery paused",
+        label: presentation?.label ?? "recovery paused",
+        title: presentation?.title ?? "Automatic recovery paused",
         detail,
         severity: "warning",
         attemptsUsed: output.recovery?.attemptsUsed,
         classifier: output.recovery?.lastClassifier ?? null,
         failureCategory: output.failureCategory,
-        nextAction: "Send “continue” to resume from the preserved session state.",
+        nextAction: presentation?.nextAction ?? "Send “continue” to resume from the preserved session state.",
+        protectedRecoveryHandoff: terminalHandoff,
       });
-      const persisted = persistTerminalOutcome(`⚠️ Automatic recovery paused\n${detail}`, marker);
+      const terminalText = presentation
+        ? `⚠️ ${presentation.title}\n${presentation.detail} ${presentation.nextAction}`
+        : `⚠️ Automatic recovery paused\n${detail}`;
+      const persisted = persistTerminalOutcome(terminalText, marker);
       if (persisted) {
         await finalizeSuccessfulRun();
       } else {
@@ -1979,16 +2038,20 @@ export async function processChat(
       // Replace that transient prose with a deterministic recovery marker while
       // the durable typed continuation resumes the work with tools restored.
       clearCommittedDraft();
+      const handoffPresentation = output.protectedRecoveryHandoff
+        ? formatProtectedRecoveryHandoff(output.protectedRecoveryHandoff)
+        : null;
       const marker = buildTurnOutcomeMarker({
         kind: "recovery",
         label: "recovery",
         title: PROTECTED_RECOVERY_CONTROL_LABEL,
-        detail: protectedRecoveryIntent
+        detail: handoffPresentation?.detail ?? (protectedRecoveryIntent
           ? "Compaction completed; continuing once more with execution tools restored."
-          : "Continuing in an ordinary turn with execution tools restored.",
+          : "Continuing in an ordinary turn with execution tools restored."),
         severity: "info",
         attemptsUsed: output.recovery?.attemptsUsed,
         classifier: output.recovery?.lastClassifier ?? null,
+        protectedRecoveryHandoff: output.protectedRecoveryHandoff,
       });
       const persisted = persistVisibleFailureOutcome(marker);
       if (persisted) {

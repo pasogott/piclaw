@@ -1750,6 +1750,7 @@ export function Post({ post, onClick, onHashtagClick, onMessageRef, onScrollToMe
     const silentRecoveryPlaceholder = Boolean(
         isAgent
         && outcomeMarker?.kind === 'recovery'
+        && outcomeMarker?.severity === 'info'
         && !shouldRenderContent
         && mediaIds.length === 0
         && directCardBlocks.length === 0

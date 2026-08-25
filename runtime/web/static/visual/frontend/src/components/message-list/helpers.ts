@@ -11,6 +11,41 @@ export function getBlockKey(block: ContentBlock, index: number): string {
   return block.id ?? `block-${index}`;
 }
 
+export function getProtectedRecoveryControlIntent(
+  blocks: ContentBlock[] | undefined,
+): ContentBlock | null {
+  if (!Array.isArray(blocks)) return null;
+  return blocks.find((block) => (
+    block.type === "control_intent"
+    && block.intent === "protected_recovery_continuation"
+    && block.schema_version === 1
+    && typeof block.source_message_id === "string"
+    && block.source_message_id.trim().length > 0
+    && Number.isInteger(block.source_row_id)
+    && Number(block.source_row_id) > 0
+    && Number.isInteger(block.thread_id)
+    && Number(block.thread_id) > 0
+    && Number.isInteger(block.handoff_depth ?? 1)
+    && Number(block.handoff_depth ?? 1) > 0
+  )) ?? null;
+}
+
+export function getTurnOutcomeMarker(
+  blocks: ContentBlock[] | undefined,
+): ContentBlock | null {
+  if (!Array.isArray(blocks)) return null;
+  return blocks.find((block) => block.type === "turn_outcome_marker") ?? null;
+}
+
+export function shouldHideTimelineInteraction(interaction: Interaction): boolean {
+  if (getProtectedRecoveryControlIntent(interaction.content_blocks)) return true;
+  const outcome = getTurnOutcomeMarker(interaction.content_blocks);
+  return interaction.type === "agent"
+    && !interaction.content.trim()
+    && outcome?.kind === "recovery"
+    && outcome.severity === "info";
+}
+
 export function normalizePost(raw: Record<string, unknown>): Interaction {
   const data =
     raw.data && typeof raw.data === "object"

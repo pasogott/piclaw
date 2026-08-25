@@ -224,6 +224,12 @@ test('Post keeps a typed protected-recovery control intent invisible', async () 
     source_message_id: 'source-123',
     source_row_id: 41,
     thread_id: 41,
+    handoff_depth: 1,
+    reason: 'post_compaction_tools_required',
+    compaction: 'succeeded',
+    tools_required: true,
+    retryable: true,
+    recovery_attempts: 2,
   }], {
     type: 'user_message',
     content: 'Recovery resumed with execution tools',
@@ -250,6 +256,29 @@ test('Post hides an empty successful protected-recovery placeholder', async () =
   expect(findByClass(host, 'post-outcome-pill')).toBeNull();
   expect(findByClass(host, 'post-outcome-chip')).toBeNull();
   expect(flattenText(host)).toBe('');
+});
+
+test('Post renders a typed terminal protected-recovery outcome with deterministic wording', async () => {
+  const host = await renderPostWithBlocks([{
+    type: 'turn_outcome_marker',
+    kind: 'recovery',
+    label: 'tools required',
+    title: 'Automatic recovery paused after successful compaction',
+    detail: 'Compaction succeeded, but the unfinished task still requires execution tools. The session is preserved.',
+    severity: 'warning',
+    reason: 'post_compaction_tools_required',
+    compaction: 'succeeded',
+    tools_required: true,
+    retryable: true,
+    recovery_attempts: 2,
+  }], {
+    type: 'agent_response',
+    content: '',
+  });
+
+  expect(findByClass(host, 'post-outcome-pill')).toBeTruthy();
+  expect(findByClass(host, 'post-outcome-chip')).toBeTruthy();
+  expect(flattenText(host)).toContain('Automatic recovery paused after successful compaction');
 });
 
 test('protected recovery requires typed control intent instead of interpreting user prose', async () => {

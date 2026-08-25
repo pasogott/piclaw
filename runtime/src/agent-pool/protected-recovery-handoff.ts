@@ -9,6 +9,10 @@
 
 import { TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT } from "./context-pressure-retry.js";
 import type { AgentOutput, RunAgentOptions, TurnOutput } from "./contracts.js";
+import {
+  buildProtectedRecoveryHandoffMetadata,
+  formatProtectedRecoveryHandoff,
+} from "./protected-recovery-handoff-reason.js";
 
 export interface ProtectedRecoveryHandoffOptions {
   /** Web persists the continuation itself before terminal run finalization. */
@@ -22,17 +26,37 @@ export const PROTECTED_RECOVERY_HANDOFF_LIMIT_MESSAGE =
 /** A successful recovery compaction made one more ordinary turn useful. */
 export function isPostCompactionProtectedRecoveryHandoff(output: AgentOutput): boolean {
   return Boolean(output.requiresToolEnabledContinuation)
-    && output.recovery?.strategyHistory.at(-1) === "compact_then_retry";
+    && (output.protectedRecoveryHandoff?.reason === "post_compaction_tools_required"
+      || (!output.protectedRecoveryHandoff
+        && output.recovery?.strategyHistory.at(-1) === "compact_then_retry"));
 }
 
 export function finishBoundedProtectedRecoveryHandoff(output: AgentOutput): AgentOutput {
   const { requiresToolEnabledContinuation: _spent, ...terminal } = output;
+  const priorHandoff = output.protectedRecoveryHandoff;
+  const reason = isPostCompactionProtectedRecoveryHandoff(output)
+    ? "post_compaction_tools_required"
+    : "continuation_generation_exhausted";
+  const protectedRecoveryHandoff = buildProtectedRecoveryHandoffMetadata(
+    reason,
+    {
+      recoveryAttempts: output.recovery?.attemptsUsed ?? priorHandoff?.recoveryAttempts ?? 0,
+      compaction: priorHandoff?.compaction,
+      toolsRequired: priorHandoff?.toolsRequired ?? true,
+      retryable: true,
+    },
+  );
+  const presentation = formatProtectedRecoveryHandoff(protectedRecoveryHandoff);
+  const terminalMessage = reason === "continuation_generation_exhausted"
+    ? PROTECTED_RECOVERY_HANDOFF_LIMIT_MESSAGE
+    : `${presentation.title}. ${presentation.detail} ${presentation.nextAction}`;
   return {
     ...terminal,
     status: "error",
-    result: PROTECTED_RECOVERY_HANDOFF_LIMIT_MESSAGE,
-    error: PROTECTED_RECOVERY_HANDOFF_LIMIT_MESSAGE,
-    nextAction: "Send “continue” to resume from the preserved session state.",
+    result: terminalMessage,
+    error: terminalMessage,
+    nextAction: presentation.nextAction,
+    protectedRecoveryHandoff,
   };
 }
 

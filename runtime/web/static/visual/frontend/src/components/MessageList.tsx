@@ -6,6 +6,7 @@ import { useTimelineStream } from "./message-list/useTimelineStream";
 import { MessageItem } from "./message-list/MessageItem";
 import { useCollapsedMessages } from "./message-list/useCollapsedMessages";
 import type { Interaction } from "./message-list/types";
+import { shouldHideTimelineInteraction } from "./message-list/helpers";
 
 export function MessageList() {
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -114,6 +115,7 @@ export function MessageList() {
       )}
 
       {[...messages].reverse().filter((msg) => {
+        if (shouldHideTimelineInteraction(msg)) return false;
         const c = msg.content ?? "";
         // Hide wizard-generated login/logout messages and their card responses
         if (c.startsWith("/login __step") || c.startsWith("/logout ")) return false;

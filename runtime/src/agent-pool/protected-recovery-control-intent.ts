@@ -1,4 +1,11 @@
 import { TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT } from "./context-pressure-retry.js";
+import {
+  isProtectedRecoveryHandoffReason,
+  protectedRecoveryHandoffContentBlockFields,
+  type ProtectedRecoveryCompactionOutcome,
+  type ProtectedRecoveryHandoffMetadata,
+  type ProtectedRecoveryHandoffReason,
+} from "./protected-recovery-handoff-reason.js";
 
 export const PROTECTED_RECOVERY_CONTROL_INTENT = "protected_recovery_continuation";
 export const PROTECTED_RECOVERY_CONTROL_LABEL = "Recovery resumed with execution tools";
@@ -13,11 +20,36 @@ export interface ProtectedRecoveryControlIntentBlock {
   thread_id: number;
   /** One-based depth of the bounded protected-recovery handoff chain. */
   handoff_depth: number;
+  reason?: ProtectedRecoveryHandoffReason;
+  compaction?: ProtectedRecoveryCompactionOutcome;
+  tools_required?: boolean;
+  retryable?: boolean;
+  recovery_attempts?: number;
 }
 
 interface MessageLike {
   content?: unknown;
   content_blocks?: unknown;
+}
+
+function readHandoffFields(block: Record<string, unknown>): Partial<ProtectedRecoveryControlIntentBlock> {
+  const compaction = block.compaction;
+  const validCompaction = compaction === "not_attempted" || compaction === "succeeded" || compaction === "failed";
+  if (!isProtectedRecoveryHandoffReason(block.reason)
+    || !validCompaction
+    || typeof block.tools_required !== "boolean"
+    || typeof block.retryable !== "boolean"
+    || !Number.isInteger(block.recovery_attempts)
+    || Number(block.recovery_attempts) < 0) {
+    return {};
+  }
+  return {
+    reason: block.reason,
+    compaction,
+    tools_required: block.tools_required,
+    retryable: block.retryable,
+    recovery_attempts: Number(block.recovery_attempts),
+  };
 }
 
 function findControlIntentBlock(contentBlocks: unknown): ProtectedRecoveryControlIntentBlock | null {
@@ -40,9 +72,16 @@ function findControlIntentBlock(contentBlocks: unknown): ProtectedRecoveryContro
   }) as Record<string, unknown> | undefined;
   if (!block) return null;
   return {
-    ...block,
+    type: "control_intent",
+    intent: PROTECTED_RECOVERY_CONTROL_INTENT,
+    schema_version: 1,
+    label: PROTECTED_RECOVERY_CONTROL_LABEL,
+    source_message_id: String(block.source_message_id),
+    source_row_id: Number(block.source_row_id),
+    thread_id: Number(block.thread_id),
     handoff_depth: Number(block.handoff_depth ?? 1),
-  } as ProtectedRecoveryControlIntentBlock;
+    ...readHandoffFields(block),
+  };
 }
 
 export function buildProtectedRecoveryControlIntentBlock(options: {
@@ -50,6 +89,7 @@ export function buildProtectedRecoveryControlIntentBlock(options: {
   sourceRowId: number;
   threadId: number;
   handoffDepth?: number;
+  handoff?: ProtectedRecoveryHandoffMetadata;
 }): ProtectedRecoveryControlIntentBlock {
   return {
     type: "control_intent",
@@ -60,6 +100,7 @@ export function buildProtectedRecoveryControlIntentBlock(options: {
     source_row_id: options.sourceRowId,
     thread_id: options.threadId,
     handoff_depth: options.handoffDepth ?? 1,
+    ...(options.handoff ? protectedRecoveryHandoffContentBlockFields(options.handoff) : {}),
   };
 }
 

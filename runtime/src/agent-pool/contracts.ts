@@ -11,6 +11,7 @@ import type {
 import type { AttachmentInfo } from "./attachments.js";
 import type { AgentAbortCause } from "./abort-provenance.js";
 import type { PiclawCredentialStore } from "./credential-store.js";
+import type { ProtectedRecoveryHandoffMetadata } from "./protected-recovery-handoff-reason.js";
 
 export type AgentFailureCategory =
   | "rate_limit"
@@ -78,6 +79,8 @@ export interface AgentOutput {
   nextAction?: string;
   /** A protected recovery ran without tools and must hand off to one ordinary tool-enabled turn. */
   requiresToolEnabledContinuation?: boolean;
+  /** Safe machine-readable reason for a bounded protected-recovery handoff. */
+  protectedRecoveryHandoff?: ProtectedRecoveryHandoffMetadata;
   abortCause?: AgentAbortCause;
   abortOperation?: string;
 }

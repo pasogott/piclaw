@@ -36,6 +36,10 @@ import { heartbeatTrackedPhase } from "../runtime/progress-watchdog.js";
 import { isRotationFallbackCompactionError } from "../session-rotation.js";
 import { rememberActiveToolSubset } from "./active-tool-subset-memory.js";
 import { logToolStateTransition } from "./tool-state-transitions.js";
+import {
+  buildProtectedRecoveryHandoffMetadata,
+  type ProtectedRecoveryHandoffReason,
+} from "./protected-recovery-handoff-reason.js";
 
 const MAX_RECOVERY_LOOP_GUARD_CHATS = 512;
 const MIN_RECOVERY_FINALIZATION_RESERVE_MS = 5_000;
@@ -430,6 +434,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
   let recoveryAttemptsUsed = 0;
   let lastClassifier: RecoveryClassifier | null = null;
   let lastRecoveryErrorText: string | null = null;
+  let lastRecoveryCompactionOutcome: "not_attempted" | "succeeded" | "failed" = "not_attempted";
   const strategyHistory: RecoveryStrategy[] = [];
   const recoveryDiagnostics: AgentRecoveryDiagnosticEntry[] = [];
   let recoveryBudgetStartedAt: number | null = null;
@@ -462,7 +467,24 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     recoveryBudgetAccumulatedMs += Math.max(0, Date.now() - recoveryBudgetStartedAt);
     recoveryBudgetStartedAt = null;
   };
-  const buildProtectedHandoff = (duration: number, detail: string, finalText: string | null = null): AgentOutput => {
+  const buildHandoffMetadata = (reason: ProtectedRecoveryHandoffReason) => buildProtectedRecoveryHandoffMetadata(reason, {
+    recoveryAttempts: recoveryAttemptsUsed,
+    compaction: lastRecoveryCompactionOutcome,
+  });
+  const inferProtectedHandoffReason = (): ProtectedRecoveryHandoffReason => {
+    const latestDiagnostic = recoveryDiagnostics.at(-1);
+    if (lastRecoveryCompactionOutcome === "failed" || latestDiagnostic?.compactionErrorMessage) return "compaction_failed";
+    if (lastRecoveryCompactionOutcome === "succeeded"
+      && strategyHistory.at(-1) === "compact_then_retry") return "post_compaction_tools_required";
+    if (latestDiagnostic?.hasUnresolvedToolExecution) return "unresolved_tool_execution";
+    return "provider_retry_exhausted";
+  };
+  const buildProtectedHandoff = (
+    duration: number,
+    detail: string,
+    finalText: string | null = null,
+    reason: ProtectedRecoveryHandoffReason = inferProtectedHandoffReason(),
+  ): AgentOutput => {
     const error = `Protected recovery cannot authoritatively complete tool-dependent work: ${detail}`;
     lastClassifier = "tool_activity";
     const recovery = buildRecoveryMetadata(
@@ -489,6 +511,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       failureCategory: "no_terminal_output",
       nextAction: "Continue automatically in one ordinary turn with the restored tool baseline.",
       requiresToolEnabledContinuation: true,
+      protectedRecoveryHandoff: buildHandoffMetadata(reason),
       recovery,
     };
   };
@@ -520,7 +543,12 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     if (recoveryAttemptsUsed > 0 && getRecoveryBudgetElapsedMs() >= recoveryConfig.totalBudgetMs) {
       const duration = Date.now() - startTime;
       if (lastAttemptWasGenericProtected) {
-        return buildProtectedHandoff(duration, lastRecoveryErrorText || "the recovery budget was exhausted");
+        return buildProtectedHandoff(
+          duration,
+          lastRecoveryErrorText || "the recovery budget was exhausted",
+          null,
+          "recovery_budget_exhausted",
+        );
       }
       const error = lastRecoveryErrorText || "Automatic recovery budget exhausted before the next attempt could start.";
       lastClassifier = "budget_exhausted";
@@ -541,7 +569,16 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
         classifier: lastClassifier,
         errorMessage: error,
       });
-      return { status: "error" as const, result: null, error, failureCategory: "timeout", recovery };
+      return {
+        status: "error" as const,
+        result: null,
+        error,
+        failureCategory: "timeout",
+        recovery,
+        protectedRecoveryHandoff: runOptions.protectedRecoveryContinuation
+          ? buildHandoffMetadata("recovery_budget_exhausted")
+          : undefined,
+      };
     }
 
     // The configured turn timeout bounds the initial attempt. Once that
@@ -830,6 +867,14 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
         attempt.output.toolStepsBudget = terminalBudgetFailure.toolStepsBudget;
         attempt.output.nextAction = terminalBudgetFailure.nextAction;
       }
+      if (runOptions.protectedRecoveryContinuation
+        && (attempt.snapshot.hadToolActivity || recoveryAttemptsUsed > 0)) {
+        attempt.output.protectedRecoveryHandoff = buildHandoffMetadata(
+          attempt.snapshot.hasUnresolvedToolExecution
+            ? "unresolved_tool_execution"
+            : "provider_retry_exhausted",
+        );
+      }
       return attempt.output;
     }
 
@@ -912,6 +957,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     if (effectiveDecision.strategy === "compact_then_retry") {
       pauseRecoveryBudget();
       const compactionResult = await runRecoveryCompaction(activeSession, chatJid, runOptions, options);
+      lastRecoveryCompactionOutcome = compactionResult.ok ? "succeeded" : "failed";
       heartbeatTrackedPhase(chatJid, "preprompt_compaction", {
         eventType: "recovery_compaction",
         attempt: recoveryAttemptsUsed,
@@ -1000,15 +1046,8 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
             status: "error",
             result: null,
             error: terminalError,
-            recovery: buildRecoveryMetadata(
-              recoveryAttemptsUsed,
-              duration,
-              false,
-              true,
-              lastClassifier,
-              strategyHistory,
-              recoveryDiagnostics,
-            ),
+            recovery: recoveryMeta,
+            protectedRecoveryHandoff: buildHandoffMetadata("compaction_failed"),
           };
         }
       } else if (compactionResult.stillOverThreshold) {

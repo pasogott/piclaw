@@ -184,6 +184,13 @@ describe("runAgentRecoveryPhase", () => {
     expect(result).toMatchObject({
       status: "error",
       requiresToolEnabledContinuation: true,
+      protectedRecoveryHandoff: {
+        reason: "provider_retry_exhausted",
+        compaction: "not_attempted",
+        toolsRequired: true,
+        retryable: true,
+        recoveryAttempts: 1,
+      },
       recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
     });
     expect(result.nextAction).toContain("ordinary turn");
@@ -294,6 +301,13 @@ describe("runAgentRecoveryPhase", () => {
     expect(result).toMatchObject({
       status: "error",
       requiresToolEnabledContinuation: true,
+      protectedRecoveryHandoff: {
+        reason: "unresolved_tool_execution",
+        compaction: "not_attempted",
+        toolsRequired: true,
+        retryable: true,
+        recoveryAttempts: 1,
+      },
       recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
     });
     expect(calls).toBe(1);
@@ -364,6 +378,13 @@ describe("runAgentRecoveryPhase", () => {
     expect(result).toMatchObject({
       status: "error",
       requiresToolEnabledContinuation: true,
+      protectedRecoveryHandoff: {
+        reason: "post_compaction_tools_required",
+        compaction: "succeeded",
+        toolsRequired: true,
+        retryable: true,
+        recoveryAttempts: 1,
+      },
       recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
     });
     expect(compactCalls).toBe(1);
@@ -614,6 +635,13 @@ describe("runAgentRecoveryPhase", () => {
     expect(result).toMatchObject({
       status: "error",
       requiresToolEnabledContinuation: true,
+      protectedRecoveryHandoff: {
+        reason: "compaction_failed",
+        compaction: "failed",
+        toolsRequired: true,
+        retryable: true,
+        recoveryAttempts: 1,
+      },
       recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
     });
     expect(rotations).toBe(1);

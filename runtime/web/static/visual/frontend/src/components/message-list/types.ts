@@ -15,6 +15,23 @@ export interface ContentBlock {
   fallback_text?: string;
   completed_at?: string;
   last_submission?: unknown;
+  // Protected-recovery control/outcome fields
+  intent?: string;
+  schema_version?: number | string;
+  label?: string;
+  title?: string;
+  detail?: string;
+  kind?: string;
+  severity?: string;
+  source_message_id?: string;
+  source_row_id?: number;
+  thread_id?: number;
+  handoff_depth?: number;
+  reason?: string;
+  compaction?: string;
+  tools_required?: boolean;
+  retryable?: boolean;
+  recovery_attempts?: number;
 }
 
 export interface Interaction {
