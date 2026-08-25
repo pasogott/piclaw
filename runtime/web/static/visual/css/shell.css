@@ -1225,8 +1225,18 @@ body {
 
 .model-picker__item__name {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.model-picker__item__meta {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-secondary, #71767b);
+  font-size: 10px;
+  line-height: 1.25;
+  white-space: normal;
 }
 
 .model-picker__item__ctx {

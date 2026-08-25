@@ -18,7 +18,7 @@ import { SESSIONS_DIR } from "../core/config.js";
 import { detectChannel } from "../router.js";
 import { executeSlashCommand } from "./slash-command.js";
 import { promptWithContextPressureRetry } from "./context-pressure-retry.js";
-import { peekProviderUsage, warmProviderUsage, type ProviderUsageSnapshot } from "./provider-usage.js";
+import { peekProviderUsage, peekProviderUsageForRuntime, warmProviderUsage, type ProviderUsageSnapshot } from "./provider-usage.js";
 import { resolveModelLabel } from "../utils/model-utils.js";
 import { resolveModelScope } from "../utils/scoped-models.js";
 import { withChatContext } from "../core/chat-context.js";
@@ -71,9 +71,9 @@ function normalizeTokenUsageModelLabel(value: string | null | undefined): string
 function formatLatestRequestedModel(provider: string | null | undefined, model: string | null | undefined): string | null {
   const modelLabel = normalizeTokenUsageModelLabel(model);
   if (!modelLabel) return null;
-  if (modelLabel.includes("/")) return modelLabel;
   const providerLabel = normalizeTokenUsageModelLabel(provider);
-  return providerLabel ? `${providerLabel}/${modelLabel}` : modelLabel;
+  if (!providerLabel || modelLabel.startsWith(`${providerLabel}/`)) return modelLabel;
+  return `${providerLabel}/${modelLabel}`;
 }
 
 type ProviderCompositionRuntime = Pick<ModelRuntime, "getProviders" | "getProviderAuthStatus" | "getRegisteredProviderConfig" | "getRegisteredNativeProvider" | "getRegisteredProviderIds" | "getCompatibilityRequestConfig" | "getError">;
@@ -222,6 +222,10 @@ function getPersistedSessionState(chatJid: string): { current: string | null; th
   return { current, thinkingLevel };
 }
 
+function modelCostRate(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
 /** Structured model option returned to the web model picker. */
 export interface AvailableModelOption {
   label: string;
@@ -229,6 +233,12 @@ export interface AvailableModelOption {
   id: string;
   name: string | null;
   context_window: number | null;
+  pricing: {
+    input_per_million: number | null;
+    output_per_million: number | null;
+    cache_read_per_million: number | null;
+    cache_write_per_million: number | null;
+  } | null;
   reasoning: boolean;
   thinking_levels: string[];
   thinking_level_labels: string[];
@@ -280,6 +290,8 @@ export interface AgentRuntimeFacadeOptions {
  * Provides session-runtime helpers that do not belong in the core prompt loop.
  */
 export class AgentRuntimeFacade {
+  // ModelRuntime auth is instance-wide, so provider id is also the credential scope here.
+  // provider-usage.ts fingerprints that credential and discards superseded refresh results.
   private readonly providerUsageRefreshInFlight = new Map<string, Promise<void>>();
   private providerUsageRefreshListener: ((event: ProviderUsageRefreshEvent) => void) | undefined;
 
@@ -330,6 +342,15 @@ export class AgentRuntimeFacade {
         context_window: typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow) && model.contextWindow > 0
           ? model.contextWindow
           : null,
+        pricing: [model.cost?.input, model.cost?.output, model.cost?.cacheRead, model.cost?.cacheWrite]
+          .some((value) => typeof value === "number" && Number.isFinite(value) && value > 0)
+          ? {
+            input_per_million: modelCostRate(model.cost?.input),
+            output_per_million: modelCostRate(model.cost?.output),
+            cache_read_per_million: modelCostRate(model.cost?.cacheRead),
+            cache_write_per_million: modelCostRate(model.cost?.cacheWrite),
+          }
+          : null,
         reasoning: Boolean(model.reasoning),
         thinking_levels: thinkingLevels,
         thinking_level_labels: thinkingLevels.map((level) => formatThinkingLevelForDisplay(level, model as Model<any>)),
@@ -350,12 +371,10 @@ export class AgentRuntimeFacade {
     const availableThinkingLevels: string[] = currentModelDescriptor
       ? getAvailableThinkingLevelsForModel(currentModelDescriptor, baseThinkingLevels)
       : baseThinkingLevels;
-    const providerUsage = session?.model?.provider
-      ? (peekProviderUsage(session.model.provider, { allowStale: true }) ?? null)
-      : currentModelOption?.provider
-        ? (peekProviderUsage(currentModelOption.provider, { allowStale: true }) ?? null)
-        : null;
     const activeProvider = session?.model?.provider ?? currentModelOption?.provider ?? null;
+    const providerUsage = activeProvider
+      ? await peekProviderUsageForRuntime(this.options.modelRuntime, activeProvider, { allowStale: true })
+      : null;
     if (activeProvider && !peekProviderUsage(activeProvider)) {
       this.warmProviderUsage(activeProvider);
     }
@@ -391,8 +410,13 @@ export class AgentRuntimeFacade {
   private warmProviderUsage(providerId: string): void {
     if (this.providerUsageRefreshInFlight.has(providerId)) return;
     const refresh = warmProviderUsage(this.options.modelRuntime, providerId, this.options.authPath)
-      .then((usage) => {
-        if (usage) this.publishProviderUsageRefresh(providerId, usage);
+      .then(async (usage) => {
+        // A rotated OpenRouter credential can supersede an older in-flight result.
+        // Re-read once so the new credential is warmed without waiting for the next UI poll.
+        const currentUsage = usage ?? (providerId === "openrouter"
+          ? await warmProviderUsage(this.options.modelRuntime, providerId, this.options.authPath)
+          : null);
+        if (currentUsage) this.publishProviderUsageRefresh(providerId, currentUsage);
       })
       .finally(() => this.providerUsageRefreshInFlight.delete(providerId));
     this.providerUsageRefreshInFlight.set(providerId, refresh);
