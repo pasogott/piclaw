@@ -17,6 +17,9 @@ const TEST_CHAT_JIDS = [
   "web:test-recovery-phase",
   "web:test-recovery-compact",
   "web:test-recovery-compact:insufficient",
+  "web:test-recovery-compact:protected:1",
+  "web:test-recovery-compact:protected:2",
+  "web:test-recovery-compact:protected:bounded",
 ];
 
 beforeEach(() => {
@@ -371,6 +374,153 @@ describe("runAgentRecoveryPhase", () => {
       expect.objectContaining({ type: "compaction_end", trigger: "recovery", willRetry: true }),
       expect.objectContaining({ type: "recovery_end", outcome: "handoff" }),
     ]));
+  });
+
+  test("each fresh protected continuation re-arms one tool-enabled retry after compaction", async () => {
+    for (const sequence of [1, 2]) {
+      const chatJid = `web:test-recovery-compact:protected:${sequence}`;
+      let compactCalls = 0;
+      let activeTools = ["read", "bash"];
+      const activeToolSets: string[][] = [];
+      const calls: Array<{ prompt: string; toolExecutionCountAtStart: number }> = [];
+      const sessionCtrl: SessionWithToolControl = {
+        getActiveToolNames: () => [...activeTools],
+        setActiveToolsByName: (names) => {
+          activeTools = [...names];
+          activeToolSets.push([...names]);
+        },
+      };
+
+      const result = await runAgentRecoveryPhase({
+        prompt: "continue protected work",
+        chatJid,
+        session: { compact: async () => { compactCalls += 1; return {}; } } as any,
+        sessionCtrl,
+        timeoutMs: 0,
+        startTime: Date.now(),
+        modelLabel: "test/model",
+        recoveryConfig: recoveryConfig(),
+        runOptions: {
+          protectedRecoveryContinuation: true,
+          protectedRecoveryContinuationDepth: 1,
+        },
+        logsDir: "/tmp/nonexistent-piclaw-test-logs",
+        clearAttachments: () => {},
+        runPromptAttempt: async (prompt, _timeoutMs, toolExecutionCountAtStart) => {
+          calls.push({ prompt, toolExecutionCountAtStart });
+          if (calls.length === 1) {
+            return attempt({
+              output: output("error", "context length exceeded"),
+              snapshot: {
+                hadToolActivity: true,
+                hadPartialOutput: true,
+                hadCompletedTurnOutput: false,
+                hadTerminalTurnOutput: false,
+                sawCompactionIntent: true,
+                canDisableToolsForRecovery: true,
+                hasUnresolvedToolExecution: false,
+                toolExecutionCount: 2,
+              },
+              promptWasPersisted: true,
+              toolExecutionCount: 2,
+            });
+          }
+          expect(activeTools).toEqual(["read", "bash"]);
+          return attempt({
+            output: output("success", undefined, `finished sequence ${sequence}`),
+            snapshot: {
+              hadToolActivity: false,
+              hadPartialOutput: false,
+              hadCompletedTurnOutput: true,
+              hadTerminalTurnOutput: true,
+              sawCompactionIntent: false,
+            },
+            promptWasPersisted: true,
+            toolExecutionCount: toolExecutionCountAtStart,
+          });
+        },
+      });
+
+      expect(result).toMatchObject({
+        status: "success",
+        result: `finished sequence ${sequence}`,
+        recovery: { attemptsUsed: 1, recovered: true, exhausted: false },
+      });
+      expect(result.requiresToolEnabledContinuation).toBeUndefined();
+      expect(compactCalls).toBe(1);
+      expect(calls).toEqual([
+        { prompt: "continue protected work", toolExecutionCountAtStart: 0 },
+        { prompt: RECOVERY_CONTINUATION_PROMPT, toolExecutionCountAtStart: 2 },
+      ]);
+      expect(activeToolSets).toEqual([]);
+    }
+  });
+
+  test("a second context-pressure failure after the protected retry hands off without a third provider call", async () => {
+    const chatJid = "web:test-recovery-compact:protected:bounded";
+    let compactCalls = 0;
+    let activeTools = ["read", "bash"];
+    const activeToolSets: string[][] = [];
+    const prompts: string[] = [];
+    const sessionCtrl: SessionWithToolControl = {
+      getActiveToolNames: () => [...activeTools],
+      setActiveToolsByName: (names) => {
+        activeTools = [...names];
+        activeToolSets.push([...names]);
+      },
+    };
+
+    const result = await runAgentRecoveryPhase({
+      prompt: "continue protected work",
+      chatJid,
+      session: { compact: async () => { compactCalls += 1; return {}; } } as any,
+      sessionCtrl,
+      timeoutMs: 0,
+      startTime: Date.now(),
+      modelLabel: "test/model",
+      recoveryConfig: recoveryConfig(),
+      runOptions: {
+        protectedRecoveryContinuation: true,
+        protectedRecoveryContinuationDepth: 1,
+      },
+      logsDir: "/tmp/nonexistent-piclaw-test-logs",
+      clearAttachments: () => {},
+      runPromptAttempt: async (prompt) => {
+        prompts.push(prompt);
+        if (prompts.length > 2) throw new Error("bounded protected recovery must not make a third provider call");
+        expect(activeTools).toEqual(["read", "bash"]);
+        return attempt({
+          output: output("error", "context length exceeded"),
+          snapshot: {
+            hadToolActivity: true,
+            hadPartialOutput: true,
+            hadCompletedTurnOutput: false,
+            hadTerminalTurnOutput: false,
+            sawCompactionIntent: true,
+            canDisableToolsForRecovery: true,
+            hasUnresolvedToolExecution: false,
+            toolExecutionCount: prompts.length,
+          },
+          promptWasPersisted: true,
+          toolExecutionCount: prompts.length,
+        });
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "error",
+      requiresToolEnabledContinuation: true,
+      recovery: {
+        attemptsUsed: 2,
+        recovered: false,
+        exhausted: true,
+        strategyHistory: ["compact_then_retry", "compact_then_retry"],
+      },
+    });
+    expect(prompts).toEqual(["continue protected work", RECOVERY_CONTINUATION_PROMPT]);
+    expect(compactCalls).toBe(2);
+    expect(activeToolSets).toEqual([]);
+    expect(activeTools).toEqual(["read", "bash"]);
   });
 
   test("hands off context-pressure recovery without requiring tool suppression support", async () => {

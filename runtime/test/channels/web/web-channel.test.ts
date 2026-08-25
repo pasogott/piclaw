@@ -2694,6 +2694,7 @@ test("processChat durably hands protected recovery to one ordinary tool-enabled 
 
   const prompts: string[] = [];
   const protectedDraft = "I cannot continue because workspace tools are unavailable.";
+  const committedToolProgress = "Validation completed with execution tools.";
   const webMod = await import("../../../src/channels/web.js");
   const web = new (webMod.WebChannel as any)({
     queue: { enqueue: () => {} },
@@ -2714,7 +2715,27 @@ test("processChat durably hands protected recovery to one ordinary tool-enabled 
             recovery: { attemptsUsed: 1, totalElapsedMs: 1000, recovered: false, exhausted: true, lastClassifier: "tool_activity", strategyHistory: ["retry"], diagnostics: [] },
           };
         }
-        return { status: "success", result: "Release completed with tools.", attachments: [] };
+        expect(options.protectedRecoveryContinuation).toBe(true);
+        expect(options.protectedRecoveryContinuationDepth).toBe(1);
+        await options.onTurnComplete?.({
+          text: committedToolProgress,
+          attachments: [],
+          followedByToolUse: true,
+        });
+        return {
+          status: "success",
+          result: "Release completed with tools.",
+          attachments: [],
+          recovery: {
+            attemptsUsed: 1,
+            totalElapsedMs: 1000,
+            recovered: true,
+            exhausted: false,
+            lastClassifier: "context_pressure",
+            strategyHistory: ["compact_then_retry"],
+            diagnostics: [],
+          },
+        };
       },
       getContextUsageForChat: async () => null,
     },
@@ -2742,6 +2763,8 @@ test("processChat durably hands protected recovery to one ordinary tool-enabled 
   await web.processChat("web:default", "default", rootRowId);
 
   expect(prompts[1]).toContain(TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT);
+  expect(db.getDb().prepare(`SELECT COUNT(*) AS count FROM messages WHERE chat_jid = ? AND is_bot_message = 0 AND content = ?`).get("web:default", PROTECTED_RECOVERY_CONTROL_LABEL) as any).toMatchObject({ count: 1 });
+  expect(db.getDb().prepare(`SELECT COUNT(*) AS count FROM messages WHERE chat_jid = ? AND is_bot_message = 1 AND content = ? AND COALESCE(is_terminal_agent_reply, 0) = 0`).get("web:default", committedToolProgress) as any).toMatchObject({ count: 1 });
   const timeline = db.getTimeline("web:default", 20);
   expect(timeline.filter((item: any) => item.data.type === "agent_response").some((item: any) => String(item.data.content).includes("Release completed with tools"))).toBe(true);
   expect(web.getQueuedFollowupItems("web:default")).toHaveLength(0);

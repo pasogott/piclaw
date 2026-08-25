@@ -424,6 +424,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
   let activeSessionCtrl = options.sessionCtrl;
   let attemptPrompt = prompt;
   let recoveryContinuationWithoutTools = false;
+  const protectedPostCompactionToolRetry = { available: Boolean(runOptions.protectedRecoveryContinuation) };
   let lastAttemptWasGenericProtected = false;
   let turnToolExecutionCount = 0;
   let recoveryAttemptsUsed = 0;
@@ -1030,6 +1031,18 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
           operation: "run_agent.recovery_compaction_emergency_rotate",
           chatJid,
           reason,
+        });
+      }
+      if (compactionResult.ok
+        && recoveryContinuationWithoutTools
+        && protectedPostCompactionToolRetry.available) {
+        recoveryContinuationWithoutTools = false;
+        protectedPostCompactionToolRetry.available = false;
+        options.onInfo?.("Re-armed one tool-enabled retry after protected recovery compaction", {
+          operation: "run_agent.protected_recovery_post_compaction_retry",
+          chatJid,
+          recoveryAttempt: recoveryAttemptsUsed,
+          ...getRunObservabilityDetails(runOptions),
         });
       }
       startRecoveryBudget();
