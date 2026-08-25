@@ -26,6 +26,13 @@ describe("session-tree add-on ownership boundary", () => {
     expect(source("web/static/visual/frontend/src/app/widgetOpen.ts")).not.toContain("session_tree");
     expect(source("web/static/visual/frontend/src/app/tabTypes.ts")).not.toContain("widgetSrc");
     expect(source("web/static/visual/frontend/src/components/WidgetPane.tsx")).not.toContain("widgetSrc");
+
+    for (const relative of [
+      "web/static/classic/css/overlays.css",
+      "web/static/visual/css/overlays.css",
+    ]) {
+      expect(source(relative), relative).not.toContain("session-tree-");
+    }
   });
 
   test("generated web bundles contain no stale core session-tree implementation", () => {
@@ -35,11 +42,12 @@ describe("session-tree add-on ownership boundary", () => {
       "web/static/classic/dist/app.bundle.css",
       "web/static/visual/dist/app.bundle.js",
       "web/static/visual/dist/app.bundle.js.map",
+      "web/static/visual/dist/app.bundle.css",
     ]) {
       const built = source(relative);
       expect(built, relative).not.toContain("/agent/session-tree");
       expect(built, relative).not.toContain("session_tree");
-      expect(built, relative).not.toContain("session-tree-widget");
+      expect(built, relative).not.toContain("session-tree-");
     }
   });
 });

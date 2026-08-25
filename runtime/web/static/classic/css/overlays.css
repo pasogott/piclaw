@@ -821,25 +821,6 @@ mark.post-highlight {
         flex: 1 1 140px;
         justify-content: center;
     }
-
-    .session-tree-toolbar {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    .session-tree-toolbar-left,
-    .session-tree-toolbar-right {
-        flex-wrap: wrap;
-    }
-
-    .session-tree-content {
-        grid-template-columns: 1fr;
-    }
-
-    .session-tree-sidebar {
-        border-left: 0;
-        border-top: 1px solid var(--border-color);
-    }
 }
 
 
