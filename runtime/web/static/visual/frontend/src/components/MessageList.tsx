@@ -120,6 +120,7 @@ export function MessageList() {
         // Hide wizard-generated login/logout messages and their card responses
         if (c.startsWith("/login __step") || c.startsWith("/logout ")) return false;
         if (msg.content_blocks?.some((b: Record<string, unknown>) => {
+          if (!b || typeof b !== "object") return false;
           const cardId = b.card_id as string ?? "";
           return cardId.startsWith("login-");
         })) return false;
