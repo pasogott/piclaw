@@ -9,7 +9,7 @@ export interface ContentBlock {
   tool_use_id?: string;
   // Adaptive card fields
   card_id?: string;
-  schema_version?: string;
+  schema_version?: string | number;
   state?: "active" | "completed" | "cancelled" | "failed";
   payload?: Record<string, unknown>;
   fallback_text?: string;
@@ -17,7 +17,6 @@ export interface ContentBlock {
   last_submission?: unknown;
   // Protected-recovery control/outcome fields
   intent?: string;
-  schema_version?: number | string;
   label?: string;
   title?: string;
   detail?: string;

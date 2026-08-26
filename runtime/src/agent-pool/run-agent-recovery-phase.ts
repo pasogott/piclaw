@@ -474,9 +474,9 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
   const inferProtectedHandoffReason = (): ProtectedRecoveryHandoffReason => {
     const latestDiagnostic = recoveryDiagnostics.at(-1);
     if (lastRecoveryCompactionOutcome === "failed" || latestDiagnostic?.compactionErrorMessage) return "compaction_failed";
+    if (latestDiagnostic?.hasUnresolvedToolExecution) return "unresolved_tool_execution";
     if (lastRecoveryCompactionOutcome === "succeeded"
       && strategyHistory.at(-1) === "compact_then_retry") return "post_compaction_tools_required";
-    if (latestDiagnostic?.hasUnresolvedToolExecution) return "unresolved_tool_execution";
     return "tools_required";
   };
   const buildProtectedHandoff = (
@@ -867,8 +867,15 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
         attempt.output.toolStepsBudget = terminalBudgetFailure.toolStepsBudget;
         attempt.output.nextAction = terminalBudgetFailure.nextAction;
       }
+      const providerRetryExhausted = recoveryAttemptsUsed > 0
+        && (attempt.output.failureCategory === "rate_limit"
+          || attempt.output.failureCategory === "network"
+          || attempt.output.failureCategory === "timeout"
+          || attempt.output.failureCategory === "provider"
+          || attempt.output.failureCategory === "provider_unavailable"
+          || attempt.output.failureCategory === "unknown");
       if (runOptions.protectedRecoveryContinuation
-        && (attempt.snapshot.hasUnresolvedToolExecution || recoveryAttemptsUsed > 0)) {
+        && (attempt.snapshot.hasUnresolvedToolExecution || providerRetryExhausted)) {
         attempt.output.protectedRecoveryHandoff = buildHandoffMetadata(
           attempt.snapshot.hasUnresolvedToolExecution
             ? "unresolved_tool_execution"

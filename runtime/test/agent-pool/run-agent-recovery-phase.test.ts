@@ -16,6 +16,7 @@ import { endTrackedPhase } from "../../src/runtime/progress-watchdog.js";
 const TEST_CHAT_JIDS = [
   "web:test-recovery-phase",
   "web:test-recovery-terminal-category",
+  "web:test-recovery-retry-terminal-category",
   "web:test-recovery-provider-exhausted",
   "web:test-recovery-budget-exhausted",
   "web:test-recovery-compact",
@@ -183,6 +184,63 @@ describe("runAgentRecoveryPhase", () => {
     });
 
     expect(calls).toBe(1);
+    expect(result.failureCategory).toBe("output_limit");
+    expect(result.protectedRecoveryHandoff).toBeUndefined();
+  });
+
+  test("preserves a known terminal category after a protected provider retry", async () => {
+    const sessionCtrl: SessionWithToolControl = {
+      getActiveToolNames: () => ["read"],
+      setActiveToolsByName: () => {},
+    };
+    let calls = 0;
+
+    const result = await runAgentRecoveryPhase({
+      prompt: "continue protected work",
+      chatJid: "web:test-recovery-retry-terminal-category",
+      session: {} as any,
+      sessionCtrl,
+      timeoutMs: 0,
+      startTime: Date.now(),
+      modelLabel: "test/model",
+      recoveryConfig: recoveryConfig({ maxAttempts: 2 }),
+      runOptions: { protectedRecoveryContinuation: true },
+      logsDir: "/tmp/nonexistent-piclaw-test-logs",
+      clearAttachments: () => {},
+      runPromptAttempt: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return attempt({
+            output: output("error", "503 temporarily unavailable"),
+            snapshot: {
+              hadToolActivity: true,
+              hadPartialOutput: false,
+              hadCompletedTurnOutput: false,
+              hadTerminalTurnOutput: false,
+              sawCompactionIntent: false,
+              canDisableToolsForRecovery: true,
+              hasUnresolvedToolExecution: false,
+            },
+            promptWasPersisted: true,
+          });
+        }
+        return attempt({
+          output: { ...output("error", "output limit reached"), failureCategory: "output_limit" },
+          snapshot: {
+            hadToolActivity: false,
+            hadPartialOutput: true,
+            hadCompletedTurnOutput: false,
+            hadTerminalTurnOutput: false,
+            sawCompactionIntent: false,
+            canDisableToolsForRecovery: true,
+            hasUnresolvedToolExecution: false,
+          },
+          promptWasPersisted: true,
+        });
+      },
+    });
+
+    expect(calls).toBe(2);
     expect(result.failureCategory).toBe("output_limit");
     expect(result.protectedRecoveryHandoff).toBeUndefined();
   });
@@ -510,7 +568,7 @@ describe("runAgentRecoveryPhase", () => {
               hadTerminalTurnOutput: false,
               sawCompactionIntent: true,
               canDisableToolsForRecovery: true,
-              hasUnresolvedToolExecution: true,
+              hasUnresolvedToolExecution: false,
               toolExecutionCount: 2,
             },
             promptWasPersisted: true,

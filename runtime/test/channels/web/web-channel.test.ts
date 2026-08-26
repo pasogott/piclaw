@@ -2780,9 +2780,12 @@ test("processChat durably hands protected recovery to one ordinary tool-enabled 
   expect(events.find((event) => event.type === "agent_followup_queued")?.data.content_blocks).toEqual([
     expect.objectContaining(typedFields),
   ]);
-  const recoveryTimelineBlock = db.getTimeline("web:default", 20)
-    .flatMap((item: any) => item.data.content_blocks ?? [])
+  const recoveryTimelineItem = db.getTimeline("web:default", 20)
+    .find((item: any) => (item.data.content_blocks ?? [])
+      .some((block: any) => block.type === "turn_outcome_marker" && block.kind === "recovery"));
+  const recoveryTimelineBlock = recoveryTimelineItem?.data.content_blocks
     .find((block: any) => block.type === "turn_outcome_marker" && block.kind === "recovery");
+  expect(recoveryTimelineItem?.data.content).toBe("");
   expect(recoveryTimelineBlock).toMatchObject({
     title: PROTECTED_RECOVERY_CONTROL_LABEL,
     ...typedFields,

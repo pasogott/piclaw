@@ -1577,13 +1577,14 @@ export async function processChat(
     const markerType = readTrimmedString(marker?.type);
     const markerKind = readTrimmedString(marker?.kind);
     const markerClassifier = readTrimmedString(marker?.classifier);
+    const markerSeverity = readTrimmedString(marker?.severity);
     const inlineDiagnostic = markerKind === "tool_budget"
       || markerClassifier === "tool_history_pressure"
       || markerClassifier === "budget_exhausted";
     const showDiagnosticWithoutDraft = (markerType === "timeout_marker"
       && markerClassifier === "budget_exhausted")
       || markerKind === "context"
-      || markerKind === "recovery";
+      || (markerKind === "recovery" && markerSeverity !== "info");
     const text = buildFailureVisibleText({
       draftText,
       title,
