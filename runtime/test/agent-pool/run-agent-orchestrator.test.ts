@@ -2048,12 +2048,12 @@ test("runAgentPrompt hands off unresolved generic failures without a provider re
     expect(result).toMatchObject({
       status: "error",
       requiresToolEnabledContinuation: true,
-      recovery: { attemptsUsed: 1, lastClassifier: "tool_activity" },
+      recovery: { attemptsUsed: 0, lastClassifier: "tool_activity" },
+      protectedRecoveryHandoff: { reason: "unresolved_tool_execution" },
     });
-    expect(result.recovery?.diagnostics[0]?.hasUnresolvedToolExecution).toBe(true);
     expect(session.promptCalls).toBe(1);
     expect(session.compactCalls).toBe(0);
-    expect(events).toEqual(["recovery_start", "recovery_end"]);
+    expect(events).toEqual(["recovery_end"]);
   } finally {
     restoreEnv();
   }
@@ -2880,7 +2880,7 @@ test("runAgentPrompt writes recovery diagnostics into the agent log", async () =
   }
 });
 
-test("runAgentPrompt auto-compacts and retries when tool activity produced no text output", async () => {
+test("runAgentPrompt terminalizes an unmatched tool start before auto-compaction", async () => {
   const restoreEnv = setEnv({
     PICLAW_TURN_AUTO_RECOVERY_ENABLED: "1",
     PICLAW_TURN_AUTO_RECOVERY_MAX_ATTEMPTS: "2",
@@ -2939,12 +2939,13 @@ test("runAgentPrompt auto-compacts and retries when tool activity produced no te
     expect(result).toMatchObject({
       status: "error",
       requiresToolEnabledContinuation: true,
-      recovery: { attemptsUsed: 1, lastClassifier: "tool_activity" },
+      recovery: { attemptsUsed: 0, lastClassifier: "tool_activity" },
+      protectedRecoveryHandoff: { reason: "unresolved_tool_execution" },
     });
     expect(result.error).not.toContain("Tool-use budget exceeded");
     expect(session.promptCalls).toBe(1);
     expect(session.promptTexts).toEqual(["hello"]);
-    expect(session.compactCalls).toBe(1);
+    expect(session.compactCalls).toBe(0);
     expect(result).not.toMatchObject({
       toolBudgetExceeded: true,
     });
