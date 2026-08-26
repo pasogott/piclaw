@@ -3320,6 +3320,13 @@ test("processChat reproduces row 52350 with actionable post-compaction handoff g
         attachments: [],
         failureCategory: "no_terminal_output",
         requiresToolEnabledContinuation: true,
+        protectedRecoveryHandoff: {
+          reason: "post_compaction_tools_required",
+          compaction: "succeeded",
+          toolsRequired: true,
+          retryable: true,
+          recoveryAttempts: 1,
+        },
         recovery: {
           attemptsUsed: 1,
           totalElapsedMs: 1000,

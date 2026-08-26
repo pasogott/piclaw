@@ -378,7 +378,7 @@ describe("runAgentRecoveryPhase", () => {
           reason: "unresolved_tool_execution",
           compaction: "succeeded",
           toolsRequired: true,
-          retryable: true,
+          retryable: false,
           recoveryAttempts: 2,
         },
       },
@@ -409,6 +409,7 @@ describe("runAgentRecoveryPhase", () => {
         reason: "unresolved_tool_execution",
         toolsRequired: true,
         compaction: "succeeded",
+        retryable: false,
         recoveryAttempts: 3,
       },
     });

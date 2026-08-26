@@ -483,6 +483,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       || reason === "post_compaction_tools_required"
       || reason === "tools_required"
       || reason === "unresolved_tool_execution",
+    retryable: protectedRecoveryHandoffContext?.retryable,
   });
   const inferProtectedHandoffReason = (): ProtectedRecoveryHandoffReason => {
     const latestDiagnostic = recoveryDiagnostics.at(-1);
