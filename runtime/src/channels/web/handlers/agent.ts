@@ -71,7 +71,7 @@ import "../../../extensions/generic-tool-status-hints.js";
 import { createUuid } from "../../../utils/ids.js";
 import { createLogger, debugSuppressedError } from "../../../utils/logger.js";
 import type { AttachmentInfo } from "../../../agent-pool/attachments.js";
-import type { AgentFailureCategory } from "../../../agent-pool/contracts.js";
+import type { AgentFailureCategory, TurnOutput } from "../../../agent-pool/contracts.js";
 import {
   buildProtectedRecoveryHandoffMetadata,
   formatProtectedRecoveryHandoff,
@@ -1712,7 +1712,7 @@ export async function processChat(
     onTurnDiscard: () => {
       clearCommittedDraft();
     },
-    onTurnComplete: (turn: { text: string; attachments: unknown[]; usage?: unknown; followedByToolUse?: boolean }) => {
+    onTurnComplete: (turn: TurnOutput) => {
       // Turn boundary: the first turn (index 0) is the original prompt's
       // response — skip placeholder consumption so it doesn't steal a
       // placeholder that belongs to a queued follow-up.
@@ -1732,6 +1732,8 @@ export async function processChat(
           threadId: resolvedThreadRootId,
           skipPlaceholder: isFirstTurn,
           timingBlock: streamRuntime.buildAgentTimingBlock(turn.usage),
+          turnKind: turn.turnKind,
+          cause: turn.cause,
           followedByToolUse: turn.followedByToolUse,
           clearCommittedDraft,
         });

@@ -4,11 +4,13 @@ const INTERNAL_CONTENT_BLOCK_TYPES = new Set([
   "self_continuation",
   "control_intent",
   "turn_outcome_marker",
+  "agent_turn_marker",
 ]);
 
 const MODEL_FORBIDDEN_CONTENT_BLOCK_TYPES = new Set([
   "control_intent",
   "turn_outcome_marker",
+  "agent_turn_marker",
 ]);
 
 /** Strip agent-owned metadata from public user-controlled content blocks. */
