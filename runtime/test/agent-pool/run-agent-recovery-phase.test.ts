@@ -526,7 +526,7 @@ describe("runAgentRecoveryPhase", () => {
     expect(activeTools).toEqual(["read", "bash"]);
   });
 
-  test("unresolved tool execution terminalizes before recovery compaction", async () => {
+  test("unresolved tool execution overrides a reported success before recovery compaction", async () => {
     let activeTools = ["read", "bash"];
     const activeToolSets: string[][] = [];
     const sessionCtrl: SessionWithToolControl = {
@@ -555,12 +555,12 @@ describe("runAgentRecoveryPhase", () => {
         calls += 1;
         if (calls === 1) {
           return attempt({
-            output: output("error", "context length exceeded"),
+            output: output("success", undefined, "reported success with an unresolved tool"),
             snapshot: {
               hadToolActivity: true,
               hadPartialOutput: false,
-              hadCompletedTurnOutput: false,
-              hadTerminalTurnOutput: false,
+              hadCompletedTurnOutput: true,
+              hadTerminalTurnOutput: true,
               sawCompactionIntent: true,
               canDisableToolsForRecovery: true,
               hasUnresolvedToolExecution: true,

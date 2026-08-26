@@ -706,6 +706,15 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       }
     }
 
+    if (protectedRecoveryHasUnresolvedToolExecution) {
+      return buildProtectedHandoff(
+        Date.now() - startTime,
+        "a tool execution did not reach a durable resolved state",
+        null,
+        "unresolved_tool_execution",
+      );
+    }
+
     // If the tool-call cap was hit, abort immediately without recovery.
     if (options.toolCallCap?.exceeded) {
       const duration = Date.now() - startTime;
@@ -857,15 +866,6 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       attempt.snapshot,
       attempt.output.failureCategory,
     ));
-
-    if (protectedRecoveryHasUnresolvedToolExecution) {
-      return buildProtectedHandoff(
-        Date.now() - startTime,
-        "a tool execution did not reach a durable resolved state",
-        null,
-        "unresolved_tool_execution",
-      );
-    }
 
     if (!effectiveDecision.recover || !effectiveDecision.strategy) {
       const duration = Date.now() - startTime;
