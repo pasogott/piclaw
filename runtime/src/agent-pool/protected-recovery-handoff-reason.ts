@@ -1,5 +1,6 @@
 export const PROTECTED_RECOVERY_HANDOFF_REASONS = [
   "post_compaction_tools_required",
+  "tools_required",
   "compaction_failed",
   "recovery_budget_exhausted",
   "unresolved_tool_execution",
@@ -37,7 +38,12 @@ const PRESENTATION: Record<ProtectedRecoveryHandoffReason, Omit<ProtectedRecover
   post_compaction_tools_required: {
     label: "tools required",
     title: "Automatic recovery paused after successful compaction",
-    detail: "The provider stopped after tool activity following successful compaction, and the unfinished task still requires execution tools. The session is preserved.",
+    detail: "After the provider stopped following tool activity, compaction succeeded, but the unfinished task still requires execution tools. The session is preserved.",
+  },
+  tools_required: {
+    label: "tools required",
+    title: "Automatic recovery requires execution tools",
+    detail: "The protected recovery path cannot authoritatively finish the unfinished task without execution tools. The session is preserved.",
   },
   compaction_failed: {
     label: "compaction failed",

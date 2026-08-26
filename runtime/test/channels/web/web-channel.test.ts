@@ -2901,7 +2901,7 @@ test("processChat chains one compacted protected continuation and completes with
       && block.reason === "post_compaction_tools_required");
   expect(postCompactionOutcome).toMatchObject({
     title: PROTECTED_RECOVERY_CONTROL_LABEL,
-    detail: expect.stringContaining("successful compaction"),
+    detail: expect.stringContaining("compaction succeeded"),
     tools_required: true,
   });
 
@@ -3216,7 +3216,7 @@ test("processChat reproduces row 52350 with actionable post-compaction handoff g
   const timeline = db.getTimeline("web:default", 10);
   const terminal = timeline.findLast((item: any) => item.data.type === "agent_response");
   expect(String(terminal?.data.content)).toContain("Automatic recovery paused after successful compaction");
-  expect(String(terminal?.data.content)).toContain("provider stopped after tool activity");
+  expect(String(terminal?.data.content)).toContain("provider stopped following tool activity");
   expect(String(terminal?.data.content)).toContain("unfinished task still requires execution tools");
   expect(String(terminal?.data.content)).toContain("session is preserved");
   expect(String(terminal?.data.content)).toContain("Send “continue”");

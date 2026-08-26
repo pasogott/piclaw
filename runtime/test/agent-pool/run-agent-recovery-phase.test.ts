@@ -15,6 +15,8 @@ import { endTrackedPhase } from "../../src/runtime/progress-watchdog.js";
 
 const TEST_CHAT_JIDS = [
   "web:test-recovery-phase",
+  "web:test-recovery-provider-exhausted",
+  "web:test-recovery-budget-exhausted",
   "web:test-recovery-compact",
   "web:test-recovery-compact:insufficient",
   "web:test-recovery-compact:protected:1",
@@ -142,6 +144,107 @@ describe("runAgentRecoveryPhase", () => {
     ]));
   });
 
+  test("classifies an actual protected provider retry exhaustion", async () => {
+    const sessionCtrl: SessionWithToolControl = {
+      getActiveToolNames: () => ["read"],
+      setActiveToolsByName: () => {},
+    };
+    let calls = 0;
+
+    const result = await runAgentRecoveryPhase({
+      prompt: "continue protected work",
+      chatJid: "web:test-recovery-provider-exhausted",
+      session: {} as any,
+      sessionCtrl,
+      timeoutMs: 0,
+      startTime: Date.now(),
+      modelLabel: "test/model",
+      recoveryConfig: recoveryConfig({ maxAttempts: 1 }),
+      runOptions: { protectedRecoveryContinuation: true },
+      logsDir: "/tmp/nonexistent-piclaw-test-logs",
+      clearAttachments: () => {},
+      runPromptAttempt: async () => {
+        calls += 1;
+        return attempt({
+          output: output("error", "503 temporarily unavailable"),
+          snapshot: {
+            hadToolActivity: calls === 1,
+            hadPartialOutput: false,
+            hadCompletedTurnOutput: false,
+            hadTerminalTurnOutput: false,
+            sawCompactionIntent: false,
+            canDisableToolsForRecovery: true,
+            hasUnresolvedToolExecution: false,
+          },
+          promptWasPersisted: true,
+        });
+      },
+    });
+
+    expect(calls).toBe(2);
+    expect(result).toMatchObject({
+      status: "error",
+      protectedRecoveryHandoff: {
+        reason: "provider_retry_exhausted",
+        compaction: "not_attempted",
+        toolsRequired: true,
+        retryable: true,
+        recoveryAttempts: 1,
+      },
+    });
+  });
+
+  test("classifies a protected recovery budget exhausted before the next provider retry", async () => {
+    const sessionCtrl: SessionWithToolControl = {
+      getActiveToolNames: () => ["read"],
+      setActiveToolsByName: () => {},
+    };
+    let calls = 0;
+
+    const result = await runAgentRecoveryPhase({
+      prompt: "continue protected work",
+      chatJid: "web:test-recovery-budget-exhausted",
+      session: {} as any,
+      sessionCtrl,
+      timeoutMs: 0,
+      startTime: Date.now(),
+      modelLabel: "test/model",
+      recoveryConfig: recoveryConfig({ totalBudgetMs: 5, baseDelayMs: 10, maxDelayMs: 10 }),
+      runOptions: { protectedRecoveryContinuation: true },
+      logsDir: "/tmp/nonexistent-piclaw-test-logs",
+      clearAttachments: () => {},
+      runPromptAttempt: async () => {
+        calls += 1;
+        return attempt({
+          output: output("error", "503 temporarily unavailable"),
+          snapshot: {
+            hadToolActivity: true,
+            hadPartialOutput: false,
+            hadCompletedTurnOutput: false,
+            hadTerminalTurnOutput: false,
+            sawCompactionIntent: false,
+            canDisableToolsForRecovery: true,
+            hasUnresolvedToolExecution: false,
+          },
+          promptWasPersisted: true,
+        });
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(result).toMatchObject({
+      status: "error",
+      failureCategory: "timeout",
+      protectedRecoveryHandoff: {
+        reason: "recovery_budget_exhausted",
+        compaction: "not_attempted",
+        toolsRequired: true,
+        retryable: true,
+        recoveryAttempts: 1,
+      },
+    });
+  });
+
   test("hands off a generic tools-disabled recovery without making a disposable provider call", async () => {
     let activeTools = ["read", "bash"];
     const sessionCtrl: SessionWithToolControl = {
@@ -185,7 +288,7 @@ describe("runAgentRecoveryPhase", () => {
       status: "error",
       requiresToolEnabledContinuation: true,
       protectedRecoveryHandoff: {
-        reason: "provider_retry_exhausted",
+        reason: "tools_required",
         compaction: "not_attempted",
         toolsRequired: true,
         retryable: true,

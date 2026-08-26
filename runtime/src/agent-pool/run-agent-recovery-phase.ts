@@ -477,7 +477,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     if (lastRecoveryCompactionOutcome === "succeeded"
       && strategyHistory.at(-1) === "compact_then_retry") return "post_compaction_tools_required";
     if (latestDiagnostic?.hasUnresolvedToolExecution) return "unresolved_tool_execution";
-    return "provider_retry_exhausted";
+    return "tools_required";
   };
   const buildProtectedHandoff = (
     duration: number,
