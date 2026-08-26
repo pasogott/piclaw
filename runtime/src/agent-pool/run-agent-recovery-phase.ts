@@ -33,7 +33,6 @@ import type { AgentFailureCategory, AgentOutput, AgentRecoveryDiagnosticEntry, A
 import { getRecoveryPolicyConfig } from "../core/config.js";
 import { writeAgentLog } from "./logging.js";
 import { heartbeatTrackedPhase } from "../runtime/progress-watchdog.js";
-import { isRotationFallbackCompactionError } from "../session-rotation.js";
 import { rememberActiveToolSubset } from "./active-tool-subset-memory.js";
 import { logToolStateTransition } from "./tool-state-transitions.js";
 import {
@@ -357,7 +356,10 @@ async function runRecoveryCompaction(
   });
   if (!compactionResult.ok) {
     const aborted = isCompactionCancellationError(compactionResult.errorMessage);
-    const benign = isRotationFallbackCompactionError(compactionResult.errorMessage);
+    const benign = [
+      "Already compacted",
+      "Nothing to compact (session too small)",
+    ].includes(compactionResult.errorMessage);
     if (!compactionResult.joined && !aborted && !benign) {
       noteCompactionFailure(chatJid, compactionResult.errorMessage);
     }
@@ -559,7 +561,9 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
           duration,
           lastRecoveryErrorText || "the recovery budget was exhausted",
           null,
-          "recovery_budget_exhausted",
+          protectedRecoveryHasUnresolvedToolExecution
+            ? "unresolved_tool_execution"
+            : "recovery_budget_exhausted",
         );
       }
       const error = lastRecoveryErrorText || "Automatic recovery budget exhausted before the next attempt could start.";
@@ -588,7 +592,9 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
         failureCategory: "timeout",
         recovery,
         protectedRecoveryHandoff: runOptions.protectedRecoveryContinuation
-          ? buildHandoffMetadata("recovery_budget_exhausted")
+          ? buildHandoffMetadata(protectedRecoveryHasUnresolvedToolExecution
+            ? "unresolved_tool_execution"
+            : "recovery_budget_exhausted")
           : undefined,
       };
     }
@@ -1070,7 +1076,9 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
             result: null,
             error: terminalError,
             recovery: recoveryMeta,
-            protectedRecoveryHandoff: buildHandoffMetadata("compaction_failed"),
+            protectedRecoveryHandoff: buildHandoffMetadata(protectedRecoveryHasUnresolvedToolExecution
+              ? "unresolved_tool_execution"
+              : "compaction_failed"),
           };
         }
       } else if (compactionResult.stillOverThreshold) {

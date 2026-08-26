@@ -87,6 +87,20 @@ test("visual timeline preserves typed terminal recovery details and legacy marke
   expect(shouldHideTimelineInteraction(legacyPlaceholder)).toBe(true);
 });
 
+test("visual timeline tolerates null public content blocks", () => {
+  const post = normalizePost({
+    id: 90,
+    type: "user",
+    content: "ordinary message",
+    content_blocks: [null],
+    created_at: "2026-08-25T00:00:00.000Z",
+  });
+
+  expect(getProtectedRecoveryControlIntent(post.content_blocks)).toBeNull();
+  expect(getTurnOutcomeMarker(post.content_blocks)).toBeNull();
+  expect(shouldHideTimelineInteraction(post)).toBe(false);
+});
+
 test("visual timeline does not grant control authority to matching plaintext", () => {
   const prose = normalizePost({
     id: 93,

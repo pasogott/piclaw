@@ -296,7 +296,7 @@ describe("runAgentRecoveryPhase", () => {
     });
   });
 
-  test("classifies a protected recovery budget exhausted before the next provider retry", async () => {
+  test("keeps unresolved tool evidence ahead of protected recovery budget exhaustion", async () => {
     const sessionCtrl: SessionWithToolControl = {
       getActiveToolNames: () => ["read"],
       setActiveToolsByName: () => {},
@@ -312,7 +312,16 @@ describe("runAgentRecoveryPhase", () => {
       startTime: Date.now(),
       modelLabel: "test/model",
       recoveryConfig: recoveryConfig({ totalBudgetMs: 5, baseDelayMs: 10, maxDelayMs: 10 }),
-      runOptions: { protectedRecoveryContinuation: true },
+      runOptions: {
+        protectedRecoveryContinuation: true,
+        protectedRecoveryHandoffContext: {
+          reason: "unresolved_tool_execution",
+          compaction: "not_attempted",
+          toolsRequired: true,
+          retryable: true,
+          recoveryAttempts: 1,
+        },
+      },
       logsDir: "/tmp/nonexistent-piclaw-test-logs",
       clearAttachments: () => {},
       runPromptAttempt: async () => {
@@ -338,11 +347,11 @@ describe("runAgentRecoveryPhase", () => {
       status: "error",
       failureCategory: "timeout",
       protectedRecoveryHandoff: {
-        reason: "recovery_budget_exhausted",
+        reason: "unresolved_tool_execution",
         compaction: "not_attempted",
         toolsRequired: true,
         retryable: true,
-        recoveryAttempts: 1,
+        recoveryAttempts: 2,
       },
     });
   });
@@ -920,10 +929,10 @@ describe("runAgentRecoveryPhase", () => {
     expect(result.toolBudgetExceeded).toBeUndefined();
   });
 
-  test("emergency-rotates and continues when recovery compaction fails", async () => {
+  test("treats a missing compaction model as failure before emergency rotation", async () => {
     let calls = 0;
     let rotations = 0;
-    const oldSession = { compact: async () => { throw new Error("Progressive compaction output invalid (stop_reason): completion stop reason was length; expected stop"); } } as any;
+    const oldSession = { compact: async () => { throw new Error("No model selected"); } } as any;
     const newSession = {} as any;
     let activeTools = ["read"];
     const sessionCtrl: SessionWithToolControl = {

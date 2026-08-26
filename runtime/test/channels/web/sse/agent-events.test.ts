@@ -363,7 +363,8 @@ describe("web SSE agent compaction events", () => {
       type: "compaction_suppressed",
       reason: "previous_failure",
       failureCount: 2,
-      errorMessage: "Compaction timed out",
+      detail: "provider body with secret-token",
+      errorMessage: "Compaction timed out with secret-token",
     } as any);
 
     expect(statuses[0]).toMatchObject({
@@ -371,7 +372,9 @@ describe("web SSE agent compaction events", () => {
       title: "Compaction temporarily suppressed",
       reason: "previous_failure",
       willRetry: false,
+      detail: "Automatic compaction is paused after 2 recent failures.",
     });
+    expect(JSON.stringify(statuses[0])).not.toContain("secret-token");
   });
 });
 

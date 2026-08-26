@@ -152,11 +152,6 @@ function modelLabelFromEventModel(value: unknown): string | null {
   return provider && id ? `${provider}/${id}` : null;
 }
 
-function truncateErrorDetail(msg: string, maxLen = 120): string {
-  const s = String(msg || "").trim();
-  return s.length <= maxLen ? s : s.slice(0, maxLen) + "…";
-}
-
 const TOOL_OUTPUT_STATUS_PREVIEW_BYTES = 12 * 1024;
 const TOOL_OUTPUT_STATUS_PREVIEW_LINES = 100;
 
@@ -982,10 +977,10 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
       const e = event as { detail?: string; compactionCount?: number; warningThreshold?: number };
       const count = typeof e.compactionCount === "number" && Number.isFinite(e.compactionCount) ? e.compactionCount : null;
       const threshold = typeof e.warningThreshold === "number" && Number.isFinite(e.warningThreshold) ? e.warningThreshold : null;
-      const detail = e.detail || [
+      const detail = [
         count != null ? `${count} successful auto-compactions in this chat` : null,
         threshold != null ? `warning threshold ${threshold}` : null,
-      ].filter(Boolean).join(" — ");
+      ].filter(Boolean).join(" — ") || "Repeated automatic compaction was detected.";
       options.emitter.status({
         ...base,
         type: "intent",
@@ -997,14 +992,11 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
     }
 
     if (customEventType === "compaction_suppressed") {
-      const e = event as { until?: string; failureCount?: number; detail?: string; errorMessage?: string };
+      const e = event as { failureCount?: number };
       const failureCount = typeof e.failureCount === "number" && Number.isFinite(e.failureCount) ? e.failureCount : null;
-      const detail = e.detail
-        || [
-          e.until ? `Skipping auto-compaction until ${e.until}` : null,
-          failureCount != null ? `${failureCount} recent failure${failureCount === 1 ? "" : "s"}` : null,
-          e.errorMessage ? `Last error: ${truncateErrorDetail(e.errorMessage)}` : null,
-        ].filter(Boolean).join(" — ");
+      const detail = failureCount != null
+        ? `Automatic compaction is paused after ${failureCount} recent failure${failureCount === 1 ? "" : "s"}.`
+        : "Automatic compaction is temporarily paused after a recent failure.";
       options.emitter.status({
         ...base,
         type: "intent",

@@ -54,7 +54,9 @@ export function getProtectedRecoveryControlIntent(
 ): ContentBlock | null {
   if (!Array.isArray(blocks)) return null;
   return blocks.find((block) => (
-    block.type === "control_intent"
+    Boolean(block)
+    && typeof block === "object"
+    && block.type === "control_intent"
     && block.intent === "protected_recovery_continuation"
     && block.schema_version === 1
     && typeof block.source_message_id === "string"
@@ -73,7 +75,11 @@ export function getTurnOutcomeMarker(
   blocks: ContentBlock[] | undefined,
 ): ContentBlock | null {
   if (!Array.isArray(blocks)) return null;
-  return blocks.find((block) => block.type === "turn_outcome_marker") ?? null;
+  return blocks.find((block) => (
+    Boolean(block)
+    && typeof block === "object"
+    && block.type === "turn_outcome_marker"
+  )) ?? null;
 }
 
 export function shouldHideTimelineInteraction(interaction: Interaction): boolean {
