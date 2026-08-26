@@ -155,6 +155,32 @@ test("unresolved tool execution never starts an automatic continuation", async (
   expect(final.protectedRecoveryHandoff?.reason).toBe("unresolved_tool_execution");
 });
 
+test("a persisted unresolved continuation terminalizes before invoking the provider", async () => {
+  let calls = 0;
+  const handoff = buildProtectedRecoveryHandoffMetadata("unresolved_tool_execution", {
+    recoveryAttempts: 2,
+    compaction: "succeeded",
+    toolsRequired: true,
+    retryable: true,
+  });
+  const final = await runWithProtectedRecoveryHandoff(
+    TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT,
+    {
+      protectedRecoveryContinuation: true,
+      protectedRecoveryContinuationDepth: 1,
+      protectedRecoveryHandoffContext: handoff,
+    },
+    async () => {
+      calls += 1;
+      return { status: "success", result: "must not run" };
+    },
+  );
+
+  expect(calls).toBe(0);
+  expect(final.protectedRecoveryHandoff).toEqual(handoff);
+  expect(final.requiresToolEnabledContinuation).toBeUndefined();
+});
+
 test("the generated ordinary continuation cannot chain an unprepared recovery", async () => {
   const prompts: string[] = [];
   const final = await runWithProtectedRecoveryHandoff(

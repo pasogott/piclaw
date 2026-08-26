@@ -75,6 +75,17 @@ export async function runWithProtectedRecoveryHandoff(
   const originalOnTurnComplete = options.onTurnComplete;
   const initialDepth = options.protectedRecoveryContinuationDepth
     ?? (options.protectedRecoveryContinuation ? 1 : 0);
+  if (options.protectedRecoveryHandoffContext?.reason === "unresolved_tool_execution") {
+    const terminal = finishBoundedProtectedRecoveryHandoff({
+      status: "error",
+      result: null,
+      error: "Automatic continuation stopped because a prior tool execution is unresolved.",
+      requiresToolEnabledContinuation: true,
+      protectedRecoveryHandoff: options.protectedRecoveryHandoffContext,
+    });
+    onOutput?.(terminal);
+    return terminal;
+  }
   const shouldBufferInitialTurns = Boolean(originalOnTurnComplete) && initialDepth === 0;
   const initialOptions = shouldBufferInitialTurns
     ? { ...options, onTurnComplete: (turn: TurnOutput) => bufferedTurns.push(turn) }
