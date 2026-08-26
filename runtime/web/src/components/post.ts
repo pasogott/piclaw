@@ -315,9 +315,11 @@ export function formatOutcomeChipTooltip(marker) {
     const title = typeof marker?.title === 'string' ? marker.title.trim() : '';
     const detail = typeof marker?.detail === 'string' ? marker.detail.trim() : '';
     const action = typeof marker?.tool_action_summary === 'string' ? marker.tool_action_summary.trim() : '';
+    const nextAction = typeof marker?.next_action === 'string' ? marker.next_action.trim() : '';
     const recoveredDraft = marker?.draft_recovered ? ' Showing recovered draft.' : '';
     const parts = [title, detail];
     if (action) parts.push(`Last action: ${action}`);
+    if (nextAction) parts.push(`Next: ${nextAction}`);
     return parts.filter(Boolean).join(' — ') + recoveredDraft;
 }
 
@@ -328,11 +330,22 @@ function OutcomePill({ marker }) {
     const title = typeof marker?.title === 'string' ? marker.title.trim() : '';
     const detail = typeof marker?.detail === 'string' ? marker.detail.trim() : '';
     const action = typeof marker?.tool_action_summary === 'string' ? marker.tool_action_summary.trim() : '';
+    const nextAction = typeof marker?.next_action === 'string' ? marker.next_action.trim() : '';
+    const reason = typeof marker?.reason === 'string' ? marker.reason.replaceAll('_', ' ') : '';
+    const compaction = marker?.compaction === 'succeeded' || marker?.compaction === 'failed'
+        ? `compaction ${marker.compaction}`
+        : '';
+    const attempts = Number.isInteger(marker?.recovery_attempts)
+        ? `${marker.recovery_attempts} recovery attempt${marker.recovery_attempts === 1 ? '' : 's'}`
+        : '';
+    const typedSummary = [reason, compaction, marker?.tools_required === true ? 'tools required' : '', attempts]
+        .filter(Boolean)
+        .join(' · ');
     const draftRecovered = marker?.draft_recovered;
     const severity = String(marker?.severity || 'warning');
     const label = action || title || String(marker?.label || marker?.kind || 'issue');
 
-    const hasDetail = Boolean(detail || (title && action));
+    const hasDetail = Boolean(detail || nextAction || typedSummary || (title && action));
 
     return html`
         <div class=${`post-outcome-pill post-outcome-pill-${severity}`}>
@@ -347,6 +360,8 @@ function OutcomePill({ marker }) {
                 <div class="post-outcome-pill-detail">
                     ${title && html`<div><strong>${title}</strong></div>`}
                     ${detail && detail !== title && html`<div>${detail}</div>`}
+                    ${nextAction && html`<div><strong>Next:</strong> ${nextAction}</div>`}
+                    ${typedSummary && html`<div class="post-outcome-pill-meta">${typedSummary}</div>`}
                 </div>
             `}
         </div>

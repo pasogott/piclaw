@@ -324,7 +324,7 @@ async function runRecoveryCompaction(
   chatJid: string,
   runOptions: RunAgentOptions,
   options: Pick<RunAgentRecoveryPhaseOptions, "onInfo" | "onWarn">,
-): Promise<{ ok: true; stillOverThreshold: boolean } | { ok: false; errorMessage: string }> {
+): Promise<{ ok: true; stillOverThreshold: boolean; compacted: boolean } | { ok: false; errorMessage: string }> {
   options.onInfo?.("Compacting before automatic recovery retry", {
     operation: "run_agent.recovery_compact",
     chatJid,
@@ -374,7 +374,7 @@ async function runRecoveryCompaction(
         aborted: false,
         willRetry: true,
       } as unknown as AgentSessionEvent);
-      return { ok: true, stillOverThreshold: false };
+      return { ok: true, stillOverThreshold: false, compacted: false };
     }
     emitAgentSessionEvent(runOptions.onEvent, {
       type: "compaction_end",
@@ -410,7 +410,7 @@ async function runRecoveryCompaction(
   });
   if (usageEvent) emitAgentSessionEvent(runOptions.onEvent, usageEvent);
   const tokenStatus = getAutoCompactionTokenStatusForSession(session, chatJid);
-  return { ok: true, stillOverThreshold: Boolean(tokenStatus?.tokenStatus.tokenLimitReached) };
+  return { ok: true, stillOverThreshold: Boolean(tokenStatus?.tokenStatus.tokenLimitReached), compacted: true };
 }
 
 export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOptions): Promise<AgentOutput> {
@@ -975,7 +975,9 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     if (effectiveDecision.strategy === "compact_then_retry") {
       pauseRecoveryBudget();
       const compactionResult = await runRecoveryCompaction(activeSession, chatJid, runOptions, options);
-      lastRecoveryCompactionOutcome = compactionResult.ok ? "succeeded" : "failed";
+      lastRecoveryCompactionOutcome = !compactionResult.ok
+        ? "failed"
+        : compactionResult.compacted ? "succeeded" : lastRecoveryCompactionOutcome;
       heartbeatTrackedPhase(chatJid, "preprompt_compaction", {
         eventType: "recovery_compaction",
         attempt: recoveryAttemptsUsed,
@@ -1091,6 +1093,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
         });
       }
       if (compactionResult.ok
+        && compactionResult.compacted
         && recoveryContinuationWithoutTools
         && protectedPostCompactionToolRetry.available) {
         recoveryContinuationWithoutTools = false;

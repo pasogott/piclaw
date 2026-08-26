@@ -135,6 +135,7 @@ function TurnOutcomeBlock({ marker }: { marker: ContentBlock }) {
     ? marker.title.trim()
     : "Turn outcome";
   const detail = typeof marker.detail === "string" ? marker.detail.trim() : "";
+  const nextAction = typeof marker.next_action === "string" ? marker.next_action.trim() : "";
   const label = typeof marker.label === "string" && marker.label.trim()
     ? marker.label.trim()
     : marker.kind ?? "issue";
@@ -164,6 +165,7 @@ function TurnOutcomeBlock({ marker }: { marker: ContentBlock }) {
         <div className="message-list__outcome-detail">
           <strong>{title}</strong>
           {detail && <span>{detail}</span>}
+          {nextAction && <span><strong>Next:</strong> {nextAction}</span>}
           {safeMetadata.length > 0 && <small>{safeMetadata.join(" · ")}</small>}
         </div>
       )}

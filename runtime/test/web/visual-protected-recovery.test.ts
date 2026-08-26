@@ -61,6 +61,7 @@ test("visual timeline preserves typed terminal recovery details and legacy marke
       label: "tools required",
       title: "Automatic recovery paused after successful compaction",
       detail: "Compaction succeeded, but the unfinished task still requires execution tools. The session is preserved.",
+      next_action: "Send “continue” to resume from the preserved session state.",
       ...typedFields,
     }],
     created_at: "2026-08-25T00:00:00.000Z",
@@ -78,7 +79,10 @@ test("visual timeline preserves typed terminal recovery details and legacy marke
     created_at: "2026-08-25T00:00:00.000Z",
   });
 
-  expect(getTurnOutcomeMarker(terminal.content_blocks)).toMatchObject(typedFields);
+  expect(getTurnOutcomeMarker(terminal.content_blocks)).toMatchObject({
+    ...typedFields,
+    next_action: "Send “continue” to resume from the preserved session state.",
+  });
   expect(shouldHideTimelineInteraction(terminal)).toBe(false);
   expect(shouldHideTimelineInteraction(legacyPlaceholder)).toBe(true);
 });

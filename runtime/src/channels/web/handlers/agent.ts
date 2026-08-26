@@ -2007,8 +2007,8 @@ export async function processChat(
           ? "post_compaction_tools_required"
           : "continuation_generation_exhausted");
       const terminalHandoff = buildProtectedRecoveryHandoffMetadata(terminalReason, {
-        recoveryAttempts: output.recovery?.attemptsUsed
-          ?? output.protectedRecoveryHandoff?.recoveryAttempts
+        recoveryAttempts: output.protectedRecoveryHandoff?.recoveryAttempts
+          ?? output.recovery?.attemptsUsed
           ?? 0,
         compaction: output.protectedRecoveryHandoff?.compaction
           ?? (output.recovery?.strategyHistory.at(-1) === "compact_then_retry" ? "succeeded" : undefined),

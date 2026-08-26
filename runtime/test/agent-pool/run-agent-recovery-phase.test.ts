@@ -594,7 +594,7 @@ describe("runAgentRecoveryPhase", () => {
     const session = {
       compact: async () => {
         compactCalls += 1;
-        throw new Error("Nothing to compact (session too small)");
+        return { tokensBefore: 16_000, estimatedTokensAfter: 8_000 };
       },
     } as any;
 

@@ -41,7 +41,7 @@ export function finishBoundedProtectedRecoveryHandoff(output: AgentOutput): Agen
   const protectedRecoveryHandoff = buildProtectedRecoveryHandoffMetadata(
     reason,
     {
-      recoveryAttempts: output.recovery?.attemptsUsed ?? priorHandoff?.recoveryAttempts ?? 0,
+      recoveryAttempts: priorHandoff?.recoveryAttempts ?? output.recovery?.attemptsUsed ?? 0,
       compaction: priorHandoff?.compaction,
       toolsRequired: priorHandoff?.toolsRequired ?? true,
       retryable: true,

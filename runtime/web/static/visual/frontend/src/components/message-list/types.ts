@@ -31,6 +31,7 @@ export interface ContentBlock {
   tools_required?: boolean;
   retryable?: boolean;
   recovery_attempts?: number;
+  next_action?: string;
 }
 
 export interface Interaction {
