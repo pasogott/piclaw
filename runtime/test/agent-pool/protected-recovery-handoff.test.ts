@@ -132,6 +132,29 @@ test("web defers protected recovery without publishing its tool-free terminal pr
   expect(final.requiresToolEnabledContinuation).toBe(true);
 });
 
+test("unresolved tool execution never starts an automatic continuation", async () => {
+  let calls = 0;
+  const final = await runWithProtectedRecoveryHandoff(
+    "finish the task",
+    {},
+    async () => {
+      calls += 1;
+      return {
+        ...protectedOutput(),
+        protectedRecoveryHandoff: buildProtectedRecoveryHandoffMetadata("unresolved_tool_execution", {
+          recoveryAttempts: 1,
+          toolsRequired: true,
+          retryable: true,
+        }),
+      };
+    },
+  );
+
+  expect(calls).toBe(1);
+  expect(final.requiresToolEnabledContinuation).toBeUndefined();
+  expect(final.protectedRecoveryHandoff?.reason).toBe("unresolved_tool_execution");
+});
+
 test("the generated ordinary continuation cannot chain an unprepared recovery", async () => {
   const prompts: string[] = [];
   const final = await runWithProtectedRecoveryHandoff(

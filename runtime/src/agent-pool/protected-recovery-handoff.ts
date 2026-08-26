@@ -94,6 +94,9 @@ export async function runWithProtectedRecoveryHandoff(
     if (turn.followedByToolUse) originalOnTurnComplete?.(turn);
   }
   if (options.deferToolEnabledContinuation) return output;
+  if (output.protectedRecoveryHandoff?.reason === "unresolved_tool_execution") {
+    return finishBoundedProtectedRecoveryHandoff(output);
+  }
 
   let handoffDepth = initialDepth;
   while (output.requiresToolEnabledContinuation) {
