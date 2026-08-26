@@ -73,14 +73,24 @@ export function isOpenRouterHttp402(errorText: string | null | undefined): boole
 
 /** Parse only OpenRouter's bounded max-token affordability sentence. */
 export function parseOpenRouterAffordabilityError(errorText: string | null | undefined): OpenRouterAffordabilityError | null {
-  const value = String(errorText || "").trim();
-  if (!isOpenRouterHttp402(value) || value.length > 16_384) return null;
+  const value = String(errorText || "").trim().slice(0, 16_384);
+  if (!isOpenRouterHttp402(value)) return null;
   const match = /This request requires more credits, or fewer max_tokens\.\s*You requested up to\s+(\d+)\s+tokens, but can only afford\s+(\d+)\b/i.exec(value);
   if (!match) return null;
   const requested = parseBoundedPositiveInteger(match[1] ?? "");
   const affordable = parseBoundedPositiveInteger(match[2] ?? "");
   if (requested === null || affordable === null) return null;
   return { requested, affordable };
+}
+
+export function sanitizeOpenRouterProviderErrorText(
+  errorText: string,
+  modelLabel: string | null,
+): string {
+  if (!modelLabel?.startsWith("openrouter/") || !isOpenRouterHttp402(errorText)) return errorText;
+  const parsed = parseOpenRouterAffordabilityError(errorText.slice(0, 16_384));
+  if (!parsed) return "OpenRouter rejected the request with HTTP 402; provider response details were omitted.";
+  return `OpenRouter output budget rejected (HTTP 402): requested ${parsed.requested} tokens; affordable ${parsed.affordable} tokens.`;
 }
 
 export function decideOpenRouterAffordabilityRetry(

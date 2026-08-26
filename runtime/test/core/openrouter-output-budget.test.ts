@@ -4,6 +4,7 @@ import {
   createOpenRouterOutputBudgetState,
   decideOpenRouterAffordabilityRetry,
   parseOpenRouterAffordabilityError,
+  sanitizeOpenRouterProviderErrorText,
 } from "../../src/core/openrouter-output-budget.js";
 
 const observedError = '402: {"message":"This request requires more credits, or fewer max_tokens. You requested up to 384000 tokens, but can only afford 71428. To increase, visit https://openrouter.ai/settings/credits"}';
@@ -77,6 +78,18 @@ test("rejects mismatched, non-reducing, and unusably small adaptive limits", () 
     preparedState(10_000),
   );
   expect(tooSmall).toMatchObject({ kind: "terminal", reason: "adaptive_limit_too_small" });
+});
+
+test("sanitizes OpenRouter 402 event and log text before recovery", () => {
+  const raw = `${observedError}${" provider-body".repeat(2_000)}`;
+  const sanitized = sanitizeOpenRouterProviderErrorText(raw, "openrouter/deepseek/test");
+  expect(sanitized).toBe("OpenRouter output budget rejected (HTTP 402): requested 384000 tokens; affordable 71428 tokens.");
+  expect(sanitized).not.toContain("https://");
+  expect(sanitized).not.toContain("provider-body");
+
+  expect(sanitizeOpenRouterProviderErrorText("HTTP 402: arbitrary upstream body https://provider.invalid", "openrouter/test"))
+    .toBe("OpenRouter rejected the request with HTTP 402; provider response details were omitted.");
+  expect(sanitizeOpenRouterProviderErrorText(observedError, "openai/test")).toBe(observedError);
 });
 
 test("does not classify other providers or non-402 failures", () => {

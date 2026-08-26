@@ -19,6 +19,7 @@ import { getAgentRuntimeConfig, getSessionStorageConfig, getToolUseBudget } from
 import {
   beginOpenRouterRequestAttempt,
   createOpenRouterOutputBudgetState,
+  sanitizeOpenRouterProviderErrorText,
   withOpenRouterOutputBudgetState,
 } from "../core/openrouter-output-budget.js";
 import { detectChannel } from "../router.js";
@@ -534,6 +535,7 @@ async function runPromptAttempt(
   });
 
   const wrappedOnEvent = (event: AgentSessionEvent) => {
+    let forwardedEvent = event;
     if (event.type === "message_update") {
       heartbeatTrackedPhase(chatJid, "streaming", { eventType: event.type, providerEventObserved: true, model: modelLabel });
     } else if (
@@ -684,6 +686,16 @@ async function runPromptAttempt(
     if (event.type === "message_end") {
       const estimateSnapshot = attemptContext.publishContextUsageUpdate("message_end", true);
       const message = (event as { message?: { role?: unknown; content?: unknown; stopReason?: unknown; errorMessage?: unknown; usage?: Record<string, unknown> } }).message;
+      const rawErrorMessage = typeof message?.errorMessage === "string" ? message.errorMessage : null;
+      const safeErrorMessage = rawErrorMessage === null
+        ? null
+        : sanitizeOpenRouterProviderErrorText(rawErrorMessage, modelLabel);
+      if (rawErrorMessage !== null && safeErrorMessage !== rawErrorMessage) {
+        forwardedEvent = {
+          ...event,
+          message: { ...(message as Record<string, unknown>), errorMessage: safeErrorMessage },
+        } as AgentSessionEvent;
+      }
       if (message?.role === "assistant") {
         const durationMs = activeModelResponse ? Math.max(0, Date.now() - activeModelResponse.startedAt) : null;
         options.onInfo?.("Assistant model response completed", {
@@ -693,7 +705,7 @@ async function runPromptAttempt(
           sequence: activeModelResponse?.sequence ?? null,
           durationMs,
           stopReason: typeof message.stopReason === "string" ? message.stopReason : null,
-          errorMessage: typeof message.errorMessage === "string" ? message.errorMessage : null,
+          errorMessage: safeErrorMessage,
           usage: message.usage ?? null,
           ...getRunObservabilityDetails(runOptions),
         });
@@ -753,7 +765,7 @@ async function runPromptAttempt(
         compactionErrorMessage = errorMessage.trim();
       }
     }
-    runOptions.onEvent?.(event);
+    runOptions.onEvent?.(forwardedEvent);
   };
 
   const unsub = options.turnCoordinator.subscribe(session, chatJid, tracker, wrappedOnEvent);

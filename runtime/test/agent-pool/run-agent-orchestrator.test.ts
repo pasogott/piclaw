@@ -754,6 +754,61 @@ test("runAgentPrompt emits turn-aware observability log metadata for turn and to
   expect(contextEvents.every((event) => event.contextWindow === 1000 && typeof event.tokens === "number")).toBe(true);
 });
 
+test("runAgentPrompt sanitizes OpenRouter affordability errors before logs and forwarded events", async () => {
+  initDatabase();
+  const rawError = `402: {"message":"This request requires more credits, or fewer max_tokens. You requested up to 32768 tokens, but can only afford 10000. https://openrouter.ai/settings/credits"}${" upstream-body".repeat(2_000)}`;
+  class StubSession {
+    private listeners: Array<(event: any) => void> = [];
+    sessionManager = { getLeafId: () => "leaf-openrouter-budget" };
+    model = { provider: "openrouter", id: "test-model", contextWindow: 128_000 };
+    isStreaming = false;
+    isCompacting = false;
+    isRetrying = false;
+    subscribe(listener: (event: any) => void) {
+      this.listeners.push(listener);
+      return () => { this.listeners = this.listeners.filter((entry) => entry !== listener); };
+    }
+    async prompt() {
+      for (const listener of this.listeners) {
+        listener({
+          type: "message_end",
+          message: { role: "assistant", stopReason: "error", errorMessage: rawError, content: [] },
+        });
+      }
+    }
+    async abort() {}
+  }
+
+  const forwardedErrors: string[] = [];
+  const logs: Array<Record<string, unknown>> = [];
+  const result = await runAgentPrompt("test", "web:openrouter-budget-sanitized", {
+    timeoutMs: 0,
+    skipPrePromptCompaction: true,
+    onEvent: (event) => {
+      if (event.type === "message_end") {
+        const errorMessage = (event as any).message?.errorMessage;
+        if (typeof errorMessage === "string") forwardedErrors.push(errorMessage);
+      }
+    },
+  }, {
+    getOrCreateRuntime: async () => createRuntime(new StubSession()) as any,
+    turnCoordinator: new AgentTurnCoordinator({ takeAttachments: () => [], touchSession: () => {}, recordMessageUsage: () => {} }),
+    clearAttachments: () => {},
+    takeAttachments: () => [],
+    logsDir: createTestLogsDir(),
+    setActiveForkBaseLeaf: () => {},
+    clearActiveForkBaseLeaf: () => {},
+    onInfo: (_message, details) => logs.push(details),
+  });
+
+  const expected = "OpenRouter output budget rejected (HTTP 402): requested 32768 tokens; affordable 10000 tokens.";
+  expect(forwardedErrors).toEqual([expected]);
+  expect(logs.find((entry) => entry.operation === "model.response.end")?.errorMessage).toBe(expected);
+  expect(JSON.stringify({ forwardedErrors, logs })).not.toContain("openrouter.ai/settings");
+  expect(JSON.stringify({ forwardedErrors, logs })).not.toContain("upstream-body");
+  expect(result.error).toContain("requested 32768 tokens; affordable 10000 tokens");
+});
+
 test("runAgentPrompt aggregates deltas and returns pending attachments", async () => {
   const attachments = getAttachmentRegistry();
   attachments.clear("web:default");
