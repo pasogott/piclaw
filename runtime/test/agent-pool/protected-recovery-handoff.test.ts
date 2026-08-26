@@ -36,6 +36,14 @@ const protectedOutput = (strategyHistory: string[] = []): AgentOutput => ({
         diagnostics: [],
       }
     : undefined,
+  protectedRecoveryHandoff: strategyHistory.at(-1) === "compact_then_retry"
+    ? buildProtectedRecoveryHandoffMetadata("post_compaction_tools_required", {
+        recoveryAttempts: 1,
+        compaction: "succeeded",
+        toolsRequired: true,
+        retryable: true,
+      })
+    : undefined,
 });
 
 test("protected recovery runs exactly one ordinary continuation at the AgentPool boundary", async () => {
@@ -141,6 +149,23 @@ test("the generated ordinary continuation cannot chain an unprepared recovery", 
   expect(final.protectedRecoveryHandoff?.reason).toBe("continuation_generation_exhausted");
 });
 
+test("legacy strategy history alone cannot prove successful compaction", async () => {
+  let calls = 0;
+  const final = await runWithProtectedRecoveryHandoff(
+    "finish the task",
+    {},
+    async () => {
+      calls += 1;
+      if (calls === 1) return protectedOutput();
+      const { protectedRecoveryHandoff: _typed, ...legacy } = protectedOutput(["compact_then_retry"]);
+      return legacy;
+    },
+  );
+
+  expect(calls).toBe(2);
+  expect(final.protectedRecoveryHandoff?.reason).toBe("continuation_generation_exhausted");
+});
+
 test("bounded handoff finalization preserves every authoritative typed cause", () => {
   for (const reason of PROTECTED_RECOVERY_HANDOFF_REASONS) {
     const final = finishBoundedProtectedRecoveryHandoff({
@@ -150,9 +175,11 @@ test("bounded handoff finalization preserves every authoritative typed cause", (
         toolsRequired: reason === "post_compaction_tools_required"
           || reason === "tools_required"
           || reason === "unresolved_tool_execution",
+        retryable: false,
       }),
     });
     expect(final.protectedRecoveryHandoff?.reason).toBe(reason);
+    expect(final.protectedRecoveryHandoff?.retryable).toBe(false);
     expect(final.requiresToolEnabledContinuation).toBeUndefined();
   }
 });

@@ -26,9 +26,8 @@ export const PROTECTED_RECOVERY_HANDOFF_LIMIT_MESSAGE =
 /** A successful recovery compaction made one more ordinary turn useful. */
 export function isPostCompactionProtectedRecoveryHandoff(output: AgentOutput): boolean {
   return Boolean(output.requiresToolEnabledContinuation)
-    && (output.protectedRecoveryHandoff?.reason === "post_compaction_tools_required"
-      || (!output.protectedRecoveryHandoff
-        && output.recovery?.strategyHistory.at(-1) === "compact_then_retry"));
+    && output.protectedRecoveryHandoff?.reason === "post_compaction_tools_required"
+    && output.protectedRecoveryHandoff.compaction === "succeeded";
 }
 
 export function finishBoundedProtectedRecoveryHandoff(output: AgentOutput): AgentOutput {
@@ -44,7 +43,7 @@ export function finishBoundedProtectedRecoveryHandoff(output: AgentOutput): Agen
       recoveryAttempts: priorHandoff?.recoveryAttempts ?? output.recovery?.attemptsUsed ?? 0,
       compaction: priorHandoff?.compaction,
       toolsRequired: priorHandoff?.toolsRequired ?? true,
-      retryable: true,
+      retryable: priorHandoff?.retryable ?? true,
     },
   );
   const presentation = formatProtectedRecoveryHandoff(protectedRecoveryHandoff);

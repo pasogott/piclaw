@@ -2010,8 +2010,7 @@ export async function processChat(
         recoveryAttempts: output.protectedRecoveryHandoff?.recoveryAttempts
           ?? output.recovery?.attemptsUsed
           ?? 0,
-        compaction: output.protectedRecoveryHandoff?.compaction
-          ?? (output.recovery?.strategyHistory.at(-1) === "compact_then_retry" ? "succeeded" : undefined),
+        compaction: output.protectedRecoveryHandoff?.compaction,
         toolsRequired: output.protectedRecoveryHandoff?.toolsRequired ?? true,
         retryable: output.protectedRecoveryHandoff?.retryable ?? true,
       });

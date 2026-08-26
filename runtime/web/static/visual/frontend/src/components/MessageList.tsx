@@ -121,7 +121,7 @@ export function MessageList() {
         if (c.startsWith("/login __step") || c.startsWith("/logout ")) return false;
         if (msg.content_blocks?.some((b: Record<string, unknown>) => {
           if (!b || typeof b !== "object") return false;
-          const cardId = b.card_id as string ?? "";
+          const cardId = typeof b.card_id === "string" ? b.card_id : "";
           return cardId.startsWith("login-");
         })) return false;
         return true;
