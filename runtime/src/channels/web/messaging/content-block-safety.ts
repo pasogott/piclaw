@@ -2,6 +2,7 @@
 const INTERNAL_CONTENT_BLOCK_TYPES = new Set([
   "restart_handoff",
   "self_continuation",
+  "control_intent",
 ]);
 
 /** Strip agent-owned metadata from public user-controlled content blocks. */

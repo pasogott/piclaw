@@ -664,6 +664,7 @@ describe("runAgentRecoveryPhase", () => {
     let calls = 0;
     let activeTools = ["read", "bash"];
     const activeToolSets: string[][] = [];
+    const events: any[] = [];
     const sessionCtrl: SessionWithToolControl = {
       getActiveToolNames: () => [...activeTools],
       setActiveToolsByName: (names) => {
@@ -685,6 +686,7 @@ describe("runAgentRecoveryPhase", () => {
       recoveryConfig: recoveryConfig(),
       runOptions: {
         protectedRecoveryContinuation: true,
+        onEvent: (event) => events.push(event),
         protectedRecoveryHandoffContext: {
           reason: "post_compaction_tools_required",
           compaction: "succeeded",
@@ -715,6 +717,11 @@ describe("runAgentRecoveryPhase", () => {
 
     expect(calls).toBe(1);
     expect(activeToolSets).toEqual([]);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "compaction_end",
+      skipped: true,
+      willRetry: false,
+    }));
     expect(result).toMatchObject({
       status: "error",
       requiresToolEnabledContinuation: true,

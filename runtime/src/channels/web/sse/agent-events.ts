@@ -99,6 +99,23 @@ function describeCompactionTokenChange(event: Record<string, unknown>): string |
   return parts.length ? parts.join(" · ") : undefined;
 }
 
+function readAllowedString(value: unknown, allowed: readonly string[]): string | null {
+  return typeof value === "string" && allowed.includes(value) ? value : null;
+}
+
+const SAFE_COMPACTION_REASONS = ["manual", "overflow", "threshold", "idle", "previous_failure"] as const;
+const SAFE_COMPACTION_TRIGGERS = ["manual", "recovery", "pre_prompt", "idle"] as const;
+const SAFE_COMPACTION_SOURCES = [
+  "automatic_recovery", "compaction_recovery", "pre_prompt", "pre_prompt_auto_compaction",
+  "idle", "manual",
+] as const;
+const SAFE_RECOVERY_CLASSIFIERS = [
+  "disabled", "budget_exhausted", "auth_config", "recovery_suppressed",
+  "stale_progress_watchdog", "session_corruption", "non_recoverable", "tool_activity",
+  "completed_turn_output", "context_pressure", "tool_history_pressure", "thinking_only_stop",
+  "length_stop", "transient", "compaction_failure", "unknown",
+] as const;
+
 function buildCompactionStatusFields(event: Record<string, unknown>): Record<string, unknown> {
   const result = readJsonRecord(event.result);
   const tokensBefore = readWidgetNumber(event.tokensBefore) ?? readWidgetNumber(result?.tokensBefore);
@@ -106,20 +123,22 @@ function buildCompactionStatusFields(event: Record<string, unknown>): Record<str
   const safetyAdjustedTokensAfter = readWidgetNumber(event.safetyAdjustedTokensAfter);
   const reductionPercent = readWidgetNumber(event.reductionPercent);
   return {
-    reason: typeof event.reason === "string" ? event.reason : null,
-    trigger: typeof event.trigger === "string" ? event.trigger : null,
-    piclawReason: typeof event.piclawReason === "string" ? event.piclawReason : (typeof event.trigger === "string" ? event.trigger : null),
+    reason: readAllowedString(event.reason, SAFE_COMPACTION_REASONS),
+    trigger: readAllowedString(event.trigger, SAFE_COMPACTION_TRIGGERS),
+    piclawReason: readAllowedString(event.piclawReason, SAFE_COMPACTION_TRIGGERS)
+      ?? readAllowedString(event.trigger, SAFE_COMPACTION_TRIGGERS),
     willRetry: event.willRetry === true,
     aborted: event.aborted === true,
-    result: event.result,
-    errorMessage: typeof event.errorMessage === "string" ? event.errorMessage : null,
-    source: typeof event.source === "string" ? event.source : null,
+    skipped: event.skipped === true,
+    source: readAllowedString(event.source, SAFE_COMPACTION_SOURCES),
     chatJid: typeof event.chatJid === "string" ? event.chatJid : null,
     ...(typeof event.targetContextWindow === "number" && Number.isFinite(event.targetContextWindow) ? { targetContextWindow: event.targetContextWindow } : {}),
     ...(typeof event.targetModelLabel === "string" ? { targetModelLabel: event.targetModelLabel } : {}),
     ...(tokensBefore !== null ? { tokensBefore } : {}),
     ...(estimatedTokensAfter !== null ? { estimatedTokensAfter } : {}),
-    ...(typeof event.estimatedTokensAfterSource === "string" ? { estimatedTokensAfterSource: event.estimatedTokensAfterSource } : {}),
+    ...(event.estimatedTokensAfterSource === "upstream" || event.estimatedTokensAfterSource === "fallback"
+      ? { estimatedTokensAfterSource: event.estimatedTokensAfterSource }
+      : {}),
     ...(safetyAdjustedTokensAfter !== null ? { safetyAdjustedTokensAfter } : {}),
     ...(reductionPercent !== null ? { reductionPercent } : {}),
   };
@@ -903,8 +922,16 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
         options.emitter.status({
           ...base,
           type: "error",
-          title: e.errorMessage,
+          title: "Compaction failed",
           detail: tokenDetail,
+          ...fields,
+        });
+      } else if (e.skipped) {
+        options.emitter.status({
+          ...base,
+          type: "intent",
+          title: "Compaction skipped",
+          detail: "The session was already compact enough to continue safely.",
           ...fields,
         });
       } else if (e.willRetry) {
@@ -991,24 +1018,25 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
     }
 
     if (customEventType === "recovery_start") {
-      const e = event as { strategy?: string; attempt?: number; maxAttempts?: number; delayMs?: number; reason?: string; errorMessage?: string; classifier?: string; failureCategory?: string };
+      const e = event as { strategy?: string; attempt?: number; maxAttempts?: number; delayMs?: number; classifier?: string; failureCategory?: string };
       const strategy = e.strategy === "compact_then_retry"
         ? "Compacting context and continuing"
         : "Recovering interrupted response";
       const delaySuffix = e.strategy === "retry" && typeof e.delayMs === "number"
         ? ` · ${Math.max(0, Math.round(e.delayMs / 1000))}s delay`
         : "";
-      const reasonOrError = e.errorMessage && e.errorMessage !== e.reason
-        ? (e.reason ? `${e.reason}` : truncateErrorDetail(e.errorMessage))
-        : (e.reason || null);
-      const detail = `Attempt ${e.attempt ?? "?"}/${e.maxAttempts ?? "?"}${delaySuffix}${reasonOrError ? ` — ${reasonOrError}` : ""}`;
+      const classifier = readAllowedString(e.classifier, SAFE_RECOVERY_CLASSIFIERS);
+      const classifierDetail = classifier ? classifier.replaceAll("_", " ") : null;
+      const detail = `Attempt ${e.attempt ?? "?"}/${e.maxAttempts ?? "?"}${delaySuffix}${classifierDetail ? ` — ${classifierDetail}` : ""}`;
       options.emitter.status({
         ...base,
         type: "intent",
         title: strategy,
         detail,
-        classifier: e.classifier ?? null,
-        failure_category: e.failureCategory ?? null,
+        classifier,
+        failure_category: typeof e.failureCategory === "string" && /^[a-z_]+$/.test(e.failureCategory)
+          ? e.failureCategory
+          : null,
         intent_key: "recovery",
         started_at: new Date().toISOString(),
       });

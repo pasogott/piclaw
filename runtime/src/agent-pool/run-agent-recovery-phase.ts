@@ -372,7 +372,8 @@ async function runRecoveryCompaction(
         ...retryEventFields,
         result: undefined,
         aborted: false,
-        willRetry: true,
+        skipped: true,
+        willRetry: false,
       } as unknown as AgentSessionEvent);
       return { ok: true, stillOverThreshold: false, compacted: false };
     }
@@ -919,10 +920,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       maxAttempts: recoveryConfig.maxAttempts,
       totalBudgetMs: recoveryConfig.totalBudgetMs,
       delayMs: retryDelayMs,
-      reason: effectiveDecision.classifier === "unknown" && errorText
-        ? `${effectiveDecision.reason} Error: ${errorText}`
-        : effectiveDecision.reason,
-      errorMessage: errorText,
+      reason: effectiveDecision.classifier,
     });
 
     if (effectiveDecision.strategy !== "compact_then_retry"
