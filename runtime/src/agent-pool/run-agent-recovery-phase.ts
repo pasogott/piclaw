@@ -525,7 +525,9 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       result: null,
       error,
       failureCategory: "no_terminal_output",
-      nextAction: "Continue automatically in one ordinary turn with the restored tool baseline.",
+      nextAction: reason === "unresolved_tool_execution"
+        ? "Review the unresolved tool side effects before explicitly continuing."
+        : "Continue automatically in one ordinary turn with the restored tool baseline.",
       requiresToolEnabledContinuation: true,
       protectedRecoveryHandoff: buildHandoffMetadata(reason),
       recovery,
@@ -855,6 +857,15 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       attempt.snapshot,
       attempt.output.failureCategory,
     ));
+
+    if (protectedRecoveryHasUnresolvedToolExecution) {
+      return buildProtectedHandoff(
+        Date.now() - startTime,
+        "a tool execution did not reach a durable resolved state",
+        null,
+        "unresolved_tool_execution",
+      );
+    }
 
     if (!effectiveDecision.recover || !effectiveDecision.strategy) {
       const duration = Date.now() - startTime;

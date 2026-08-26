@@ -1542,6 +1542,7 @@ export async function processChat(
   const preflight = await runProcessChatPreflight({
     channel, chatJid, agentId, message: { id: lastMessage.id, timestamp: lastMessage.timestamp }, prevCursor, effectiveThreadRootId: effectiveThreadRootId ?? null, turnId, runStartedAt, browserObservability,
     streamingHandler: trackedStreamingHandler, compactionState: streamState,
+    skipPrePromptCompaction: protectedRecoveryHandoffContext?.reason === "unresolved_tool_execution",
     enqueueResume: (root) => enqueueProcessChatAfterCompaction(channel, chatJid, agentId, lastMessage.id, root, browserObservability),
   });
   if (preflight === "deferred") return;

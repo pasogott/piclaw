@@ -345,13 +345,13 @@ describe("runAgentRecoveryPhase", () => {
     expect(calls).toBe(1);
     expect(result).toMatchObject({
       status: "error",
-      failureCategory: "timeout",
+      failureCategory: "no_terminal_output",
       protectedRecoveryHandoff: {
         reason: "unresolved_tool_execution",
         compaction: "not_attempted",
         toolsRequired: true,
         retryable: true,
-        recoveryAttempts: 2,
+        recoveryAttempts: 1,
       },
     });
   });
@@ -410,7 +410,7 @@ describe("runAgentRecoveryPhase", () => {
         toolsRequired: true,
         compaction: "succeeded",
         retryable: false,
-        recoveryAttempts: 3,
+        recoveryAttempts: 2,
       },
     });
   });
@@ -526,7 +526,7 @@ describe("runAgentRecoveryPhase", () => {
     expect(activeTools).toEqual(["read", "bash"]);
   });
 
-  test("successful compaction cannot re-arm a retry with unresolved tool execution", async () => {
+  test("unresolved tool execution terminalizes before recovery compaction", async () => {
     let activeTools = ["read", "bash"];
     const activeToolSets: string[][] = [];
     const sessionCtrl: SessionWithToolControl = {
@@ -577,15 +577,15 @@ describe("runAgentRecoveryPhase", () => {
       requiresToolEnabledContinuation: true,
       protectedRecoveryHandoff: {
         reason: "unresolved_tool_execution",
-        compaction: "succeeded",
+        compaction: "not_attempted",
         toolsRequired: true,
         retryable: true,
-        recoveryAttempts: 1,
+        recoveryAttempts: 0,
       },
       recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
     });
     expect(calls).toBe(1);
-    expect(compactCalls).toBe(1);
+    expect(compactCalls).toBe(0);
     expect(activeToolSets).toEqual([]);
     expect(activeTools).toEqual(["read", "bash"]);
   });
