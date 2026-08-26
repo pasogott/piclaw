@@ -22,6 +22,7 @@ export type AgentFailureCategory =
   | "tool_budget"
   | "context_pressure"
   | "output_limit"
+  | "provider_budget"
   | "provider"
   | "no_terminal_output"
   | "stalled_work"

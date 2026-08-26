@@ -16,6 +16,11 @@ import { clearLiveSshConfig } from "../extensions/ssh-core.js";
 
 import { getAutomaticRecoveryConfig } from "./automatic-recovery.js";
 import { getAgentRuntimeConfig, getSessionStorageConfig, getToolUseBudget } from "../core/config.js";
+import {
+  beginOpenRouterRequestAttempt,
+  createOpenRouterOutputBudgetState,
+  withOpenRouterOutputBudgetState,
+} from "../core/openrouter-output-budget.js";
 import { detectChannel } from "../router.js";
 import { pruneOrphanToolResults } from "./orphan-tool-results.js";
 import { writeAgentLog } from "./logging.js";
@@ -1077,7 +1082,8 @@ export async function runAgentPrompt(
       ? { ...baseRecoveryConfig, totalBudgetMs: Math.min(baseRecoveryConfig.totalBudgetMs, timeoutMs) }
       : baseRecoveryConfig;
 
-    const runResult: AgentOutput = await withChatContext(chatJid, channel, async () => await runAgentRecoveryPhase({
+    const openRouterOutputBudgetState = createOpenRouterOutputBudgetState(chatJid, runOptions.turnId);
+    const runRecoveryPhaseWithOutputBudget = async (): Promise<AgentOutput> => await runAgentRecoveryPhase({
       prompt,
       chatJid,
       session,
@@ -1088,6 +1094,7 @@ export async function runAgentPrompt(
       recoveryConfig,
       runOptions,
       logsDir: options.logsDir,
+      openRouterOutputBudgetState,
       onInfo: options.onInfo,
       onWarn: options.onWarn,
       clearAttachments: options.clearAttachments,
@@ -1136,19 +1143,27 @@ export async function runAgentPrompt(
         updateSessionModel(chatJid, modelLabel, session.thinkingLevel ?? null);
         return { ok: true, session, sessionCtrl };
       },
-      runPromptAttempt: async (attemptPrompt, attemptTimeoutMs, turnToolExecutionCount, finalizationReserveMs = 0) => await runPromptAttempt(
-        attemptPrompt,
-        chatJid,
-        session,
-        attemptTimeoutMs,
-        finalizationReserveMs,
-        runOptions,
-        options,
-        startTime,
-        modelLabel,
-        turnToolExecutionCount,
-      ),
-    }));
+      runPromptAttempt: async (attemptPrompt, attemptTimeoutMs, turnToolExecutionCount, finalizationReserveMs = 0) => {
+        beginOpenRouterRequestAttempt(openRouterOutputBudgetState);
+        return await runPromptAttempt(
+          attemptPrompt,
+          chatJid,
+          session,
+          attemptTimeoutMs,
+          finalizationReserveMs,
+          runOptions,
+          options,
+          startTime,
+          modelLabel,
+          turnToolExecutionCount,
+        );
+      },
+    });
+    const runResult: AgentOutput = await withChatContext(
+      chatJid,
+      channel,
+      async () => await withOpenRouterOutputBudgetState(openRouterOutputBudgetState, runRecoveryPhaseWithOutputBudget),
+    );
 
     if (runOptions.scheduleIdleAutoCompaction && (runResult.status === "success" || runResult.status === "tool_complete")) {
       await maybeAutoCompactSessionAfterTurn(session, chatJid, options, (event) => {

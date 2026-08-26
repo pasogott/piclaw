@@ -12,6 +12,7 @@ import { RECOVERY_CONTINUATION_PROMPT } from "../../src/agent-pool/context-press
 import type { AgentOutput } from "../../src/agent-pool/contracts.js";
 import { initDatabase } from "../../src/db.js";
 import { endTrackedPhase } from "../../src/runtime/progress-watchdog.js";
+import { createOpenRouterOutputBudgetState } from "../../src/core/openrouter-output-budget.js";
 
 const TEST_CHAT_JIDS = [
   "web:test-recovery-phase",
@@ -25,6 +26,8 @@ const TEST_CHAT_JIDS = [
   "web:test-recovery-compact:protected:1",
   "web:test-recovery-compact:protected:2",
   "web:test-recovery-compact:protected:bounded",
+  "web:test-openrouter-budget-recovery",
+  "web:test-openrouter-budget-terminal",
 ];
 
 beforeEach(() => {
@@ -1065,6 +1068,100 @@ describe("runAgentRecoveryPhase", () => {
     });
     expect(rotations).toBe(1);
     expect(calls).toBe(1);
+  });
+
+  test("OpenRouter affordability recovery changes the ceiling once and then succeeds", async () => {
+    const budgetState = createOpenRouterOutputBudgetState("web:test-openrouter-budget-recovery");
+    budgetState.requestAttempt = 1;
+    budgetState.lastAppliedLimit = 32_768;
+    budgetState.lastOriginalLimit = 384_000;
+    budgetState.lastTokenField = "max_tokens";
+    let calls = 0;
+
+    const result = await runAgentRecoveryPhase({
+      prompt: "weather",
+      chatJid: "web:test-openrouter-budget-recovery",
+      session: {} as any,
+      sessionCtrl: null,
+      timeoutMs: 0,
+      startTime: Date.now(),
+      modelLabel: "openrouter/deepseek/test",
+      recoveryConfig: recoveryConfig({ enabled: false, transientRecoveryEnabled: false }),
+      runOptions: {},
+      logsDir: "/tmp/nonexistent-piclaw-test-logs",
+      clearAttachments: () => {},
+      openRouterOutputBudgetState: budgetState,
+      runPromptAttempt: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return attempt({
+            output: output("error", "402: {\"message\":\"This request requires more credits, or fewer max_tokens. You requested up to 32768 tokens, but can only afford 10000. provider body omitted\"}"),
+            promptWasPersisted: true,
+          });
+        }
+        expect(budgetState.adaptiveLimit).toBe(9_000);
+        budgetState.requestAttempt = 2;
+        budgetState.lastAppliedLimit = budgetState.adaptiveLimit;
+        return attempt({ output: output("success", undefined, "sunny"), promptWasPersisted: true });
+      },
+    });
+
+    expect(calls).toBe(2);
+    expect(result).toMatchObject({
+      status: "success",
+      result: "sunny",
+      recovery: { attemptsUsed: 1, recovered: true, lastClassifier: "provider_budget" },
+    });
+    expect(result.recovery?.diagnostics[0]?.error).toContain("requested 32768 tokens; affordable 10000 tokens");
+    expect(result.recovery?.diagnostics[0]?.error).not.toContain("provider body omitted");
+  });
+
+  test("repeated and malformed OpenRouter 402 failures are terminal without generic retries", async () => {
+    for (const [suffix, secondError] of [
+      ["repeated", "HTTP 402: This request requires more credits, or fewer max_tokens. You requested up to 9000 tokens, but can only afford 5000."],
+      ["malformed", null],
+    ] as const) {
+      const budgetState = createOpenRouterOutputBudgetState("web:test-openrouter-budget-terminal");
+      budgetState.requestAttempt = 1;
+      budgetState.lastAppliedLimit = 32_768;
+      budgetState.lastTokenField = "max_tokens";
+      let calls = 0;
+      const result = await runAgentRecoveryPhase({
+        prompt: suffix,
+        chatJid: "web:test-openrouter-budget-terminal",
+        session: {} as any,
+        sessionCtrl: null,
+        timeoutMs: 0,
+        startTime: Date.now(),
+        modelLabel: "openrouter/test",
+        recoveryConfig: recoveryConfig(),
+        runOptions: {},
+        logsDir: "/tmp/nonexistent-piclaw-test-logs",
+        clearAttachments: () => {},
+        openRouterOutputBudgetState: budgetState,
+        runPromptAttempt: async () => {
+          calls += 1;
+          if (suffix === "malformed") {
+            return attempt({ output: output("error", "402: arbitrary payment required"), promptWasPersisted: true });
+          }
+          if (calls === 1) {
+            return attempt({
+              output: output("error", "402: This request requires more credits, or fewer max_tokens. You requested up to 32768 tokens, but can only afford 10000."),
+              promptWasPersisted: true,
+            });
+          }
+          budgetState.requestAttempt = 2;
+          budgetState.lastAppliedLimit = 9_000;
+          return attempt({ output: output("error", secondError!), promptWasPersisted: true });
+        },
+      });
+
+      expect(calls).toBe(suffix === "malformed" ? 1 : 2);
+      expect(result.status).toBe("error");
+      expect(result.failureCategory).toBe("provider_budget");
+      expect(result.error).toContain("OpenRouter");
+      expect(result.recovery?.lastClassifier).toBe("provider_budget");
+    }
   });
 
   test("buildRecoveryDiagnosticEntry preserves serializable budget fields", () => {

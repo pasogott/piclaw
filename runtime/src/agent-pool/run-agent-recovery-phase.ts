@@ -31,6 +31,10 @@ import { buildPiclawCompactionEventFields, type PiclawCompactionTriggerMetadata 
 import { RECOVERY_CONTINUATION_PROMPT } from "./context-pressure-retry.js";
 import type { AgentFailureCategory, AgentOutput, AgentRecoveryDiagnosticEntry, AgentRecoveryMetadata, RunAgentOptions } from "./contracts.js";
 import { getRecoveryPolicyConfig } from "../core/config.js";
+import {
+  decideOpenRouterAffordabilityRetry,
+  type OpenRouterOutputBudgetState,
+} from "../core/openrouter-output-budget.js";
 import { writeAgentLog } from "./logging.js";
 import { heartbeatTrackedPhase } from "../runtime/progress-watchdog.js";
 import { rememberActiveToolSubset } from "./active-tool-subset-memory.js";
@@ -84,6 +88,7 @@ export interface RunAgentRecoveryPhaseOptions {
   runOptions: RunAgentOptions;
   logsDir: string;
   runPromptAttempt: RunPromptAttemptCallback;
+  openRouterOutputBudgetState?: OpenRouterOutputBudgetState;
   onInfo?: (message: string, data: Record<string, unknown>) => void;
   onWarn?: (message: string, data: Record<string, unknown>) => void;
   clearAttachments(chatJid: string): void;
@@ -802,7 +807,17 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       return attempt.output;
     }
 
-    const errorText = attempt.output.error || "Agent error";
+    let errorText = attempt.output.error || "Agent error";
+    const openRouterBudgetDecision = decideOpenRouterAffordabilityRetry(
+      errorText,
+      modelLabel,
+      options.openRouterOutputBudgetState,
+    );
+    if (openRouterBudgetDecision.kind !== "not_applicable") {
+      errorText = openRouterBudgetDecision.detail;
+      attempt.output.error = errorText;
+      attempt.output.failureCategory = "provider_budget";
+    }
     // Runtime attempts normally carry a typed category from finalization. The
     // fallback is only for injected/legacy attempt implementations that expose
     // an opaque error string at this compatibility boundary.
@@ -812,13 +827,27 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     allowPostTimeoutRecoveryWindow = recoveryAttemptsUsed === 0
       && attempt.snapshot.hadToolActivity
       && attempt.timedOut;
-    const decision = decideAutomaticRecovery({
-      config: recoveryConfig,
-      failureCategory,
-      recoveryAttemptsUsed,
-      elapsedMs: getRecoveryDecisionElapsedMs(failureCategory, attempt.snapshot),
-      snapshot: attempt.snapshot,
-    });
+    const decision: RecoveryDecision = openRouterBudgetDecision.kind === "retry"
+      ? {
+          recover: true,
+          classifier: "provider_budget",
+          strategy: "retry",
+          reason: `OpenRouter reported ${openRouterBudgetDecision.affordable} affordable output tokens; retrying once with ${openRouterBudgetDecision.appliedLimit}.`,
+        }
+      : openRouterBudgetDecision.kind === "terminal"
+        ? {
+            recover: false,
+            classifier: "provider_budget",
+            strategy: null,
+            reason: `OpenRouter affordability retry stopped: ${openRouterBudgetDecision.reason}.`,
+          }
+        : decideAutomaticRecovery({
+            config: recoveryConfig,
+            failureCategory,
+            recoveryAttemptsUsed,
+            elapsedMs: getRecoveryDecisionElapsedMs(failureCategory, attempt.snapshot),
+            snapshot: attempt.snapshot,
+          });
 
     let effectiveDecision = decision;
     if (decision.recover && decision.strategy) {
@@ -923,7 +952,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
 
     recoveryAttemptsUsed += 1;
     strategyHistory.push(effectiveDecision.strategy);
-    const retryDelayMs = effectiveDecision.strategy === "retry"
+    const retryDelayMs = effectiveDecision.strategy === "retry" && effectiveDecision.classifier !== "provider_budget"
       ? getAutomaticRecoveryDelayMs(recoveryConfig, recoveryAttemptsUsed)
       : 0;
     heartbeatTrackedPhase(chatJid, "recovery", {
