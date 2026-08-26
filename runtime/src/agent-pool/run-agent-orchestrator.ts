@@ -52,7 +52,7 @@ import {
   type PromptAttemptResult,
 } from "./run-agent-recovery-phase.js";
 import type { AgentTurnCoordinator } from "./turn-coordinator.js";
-import type { AgentOutput, RetrySettingsProvider, RunAgentOptions } from "./contracts.js";
+import type { AgentOutput, RetrySettingsProvider, RunAgentOptions, TurnOutput } from "./contracts.js";
 import { getDefaultActiveToolNames } from "../extensions/tool-activation.js";
 import { getRememberedActiveToolSubset, rememberActiveToolSubset } from "./active-tool-subset-memory.js";
 import { logToolStateTransition } from "./tool-state-transitions.js";
@@ -491,7 +491,7 @@ async function runPromptAttempt(
 
   const originalOnTurnComplete = runOptions.onTurnComplete;
   const onTurnComplete = originalOnTurnComplete
-    ? ((turn: { text: string; attachments: AttachmentInfo[]; usage?: unknown; followedByToolUse?: boolean }) => {
+    ? ((turn: TurnOutput) => {
         const hadOutput = !!(turn.text || turn.attachments.length > 0);
         hadCompletedTurnOutput = hadCompletedTurnOutput || hadOutput;
         hadTerminalTurnOutput = hadTerminalTurnOutput || (hadOutput && !turn.followedByToolUse);

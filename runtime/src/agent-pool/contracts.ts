@@ -85,11 +85,18 @@ export interface AgentOutput {
   abortOperation?: string;
 }
 
+export type AgentTurnKind = "draft_snapshot" | "intermediate";
+export type AgentTurnCause = "interrupted_text_start" | "tool_use" | "completed_boundary";
+
 /** A single turn's output within a multi-turn agent run. */
 export interface TurnOutput {
   text: string;
   attachments: AttachmentInfo[];
   usage?: Usage;
+  /** Narrow durable classification for non-terminal assistant output. */
+  turnKind?: AgentTurnKind;
+  /** Boundary that caused this non-terminal output to be committed. */
+  cause?: AgentTurnCause;
   /** The completed assistant message committed immediately before tool dispatch. */
   followedByToolUse?: boolean;
 }

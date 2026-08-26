@@ -3824,10 +3824,10 @@ test("runAgentPrompt commits interrupted visible draft before a later text strea
   }
 
   const session = new StubSession();
-  const completed: Array<{ text: string }> = [];
+  const completed: Array<{ text: string; turnKind?: string; cause?: string }> = [];
   const result = await runAgentPrompt("test", "web:default", {
     timeoutMs: 0,
-    onTurnComplete: (turn) => completed.push({ text: turn.text }),
+    onTurnComplete: (turn) => completed.push({ text: turn.text, turnKind: turn.turnKind, cause: turn.cause }),
   }, {
     getOrCreateRuntime: async () => createRuntime(session) as any,
     turnCoordinator: new AgentTurnCoordinator({ takeAttachments: () => [], touchSession: () => {}, recordMessageUsage: () => {} }),
@@ -3840,7 +3840,11 @@ test("runAgentPrompt commits interrupted visible draft before a later text strea
 
   expect(result.status).toBe("success");
   expect(result.result).toBe("Final after steering.");
-  expect(completed).toEqual([{ text: "Visible progress before steering." }]);
+  expect(completed).toEqual([{
+    text: "Visible progress before steering.",
+    turnKind: "draft_snapshot",
+    cause: "interrupted_text_start",
+  }]);
 });
 
 test("runAgentPrompt uses a later final answer after a commentary-only provider error", async () => {
