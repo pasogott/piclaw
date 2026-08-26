@@ -441,6 +441,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
   const protectedRecoveryPriorAttempts = protectedRecoveryHandoffContext?.recoveryAttempts ?? 0;
   let lastRecoveryCompactionOutcome: "not_attempted" | "succeeded" | "failed" =
     protectedRecoveryHandoffContext?.compaction ?? "not_attempted";
+  let hasFreshSuccessfulRecoveryCompaction = false;
   let protectedRecoveryToolsRequired = protectedRecoveryHandoffContext?.toolsRequired ?? false;
   let protectedRecoveryHasUnresolvedToolExecution =
     protectedRecoveryHandoffContext?.reason === "unresolved_tool_execution";
@@ -490,8 +491,8 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     if (protectedRecoveryHasUnresolvedToolExecution
       || latestDiagnostic?.hasUnresolvedToolExecution) return "unresolved_tool_execution";
     if (lastRecoveryCompactionOutcome === "failed" || latestDiagnostic?.compactionErrorMessage) return "compaction_failed";
-    if (lastRecoveryCompactionOutcome === "succeeded"
-      && strategyHistory.at(-1) === "compact_then_retry") return "post_compaction_tools_required";
+    if (hasFreshSuccessfulRecoveryCompaction
+      && lastRecoveryCompactionOutcome === "succeeded") return "post_compaction_tools_required";
     return "tools_required";
   };
   const buildProtectedHandoff = (
@@ -985,9 +986,14 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     if (effectiveDecision.strategy === "compact_then_retry") {
       pauseRecoveryBudget();
       const compactionResult = await runRecoveryCompaction(activeSession, chatJid, runOptions, options);
+      if (compactionResult.ok && compactionResult.compacted) {
+        hasFreshSuccessfulRecoveryCompaction = true;
+      }
       lastRecoveryCompactionOutcome = !compactionResult.ok
         ? "failed"
-        : compactionResult.compacted ? "succeeded" : "not_attempted";
+        : compactionResult.compacted || hasFreshSuccessfulRecoveryCompaction
+          ? "succeeded"
+          : "not_attempted";
       heartbeatTrackedPhase(chatJid, "preprompt_compaction", {
         eventType: "recovery_compaction",
         attempt: recoveryAttemptsUsed,
