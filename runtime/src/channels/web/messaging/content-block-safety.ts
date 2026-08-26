@@ -3,6 +3,12 @@ const INTERNAL_CONTENT_BLOCK_TYPES = new Set([
   "restart_handoff",
   "self_continuation",
   "control_intent",
+  "turn_outcome_marker",
+]);
+
+const MODEL_FORBIDDEN_CONTENT_BLOCK_TYPES = new Set([
+  "control_intent",
+  "turn_outcome_marker",
 ]);
 
 /** Strip agent-owned metadata from public user-controlled content blocks. */
@@ -24,7 +30,7 @@ export function sanitizeModelPostedContentBlocks(value: unknown): unknown[] | un
     !block
     || typeof block !== "object"
     || Array.isArray(block)
-    || (block as { type?: unknown }).type !== "control_intent"
+    || !MODEL_FORBIDDEN_CONTENT_BLOCK_TYPES.has(String((block as { type?: unknown }).type ?? ""))
   ));
 }
 

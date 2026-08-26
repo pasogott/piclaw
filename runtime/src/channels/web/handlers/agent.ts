@@ -1901,6 +1901,9 @@ export async function processChat(
       terminalReason?: "limit" | "unprepared";
     } => {
       if (!output.requiresToolEnabledContinuation) return { required: false, rowId: null, failed: false, created: false };
+      if (output.protectedRecoveryHandoff?.reason === "unresolved_tool_execution") {
+        return { required: false, rowId: null, failed: false, created: false, terminalReason: "unprepared" };
+      }
       const currentHandoffDepth = protectedRecoveryIntent?.handoff_depth ?? 0;
       if (protectedRecoveryIntent) {
         if (currentHandoffDepth >= MAX_PROTECTED_RECOVERY_HANDOFF_DEPTH) {

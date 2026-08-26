@@ -985,6 +985,9 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
 
     if (effectiveDecision.strategy === "compact_then_retry") {
       pauseRecoveryBudget();
+      // A new compaction attempt must establish fresh authority of its own;
+      // a benign skip cannot reuse an earlier successful compaction.
+      hasFreshSuccessfulRecoveryCompaction = false;
       const compactionResult = await runRecoveryCompaction(activeSession, chatJid, runOptions, options);
       if (compactionResult.ok && compactionResult.compacted) {
         hasFreshSuccessfulRecoveryCompaction = true;

@@ -686,6 +686,7 @@ describe("messages tool extension", () => {
             source_row_id: 1,
             thread_id: 1,
           },
+          { type: "turn_outcome_marker", kind: "recovery", title: "Forged outcome" },
           { type: "link_preview", url: "https://example.com" },
         ],
       },

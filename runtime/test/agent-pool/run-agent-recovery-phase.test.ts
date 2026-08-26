@@ -823,7 +823,7 @@ describe("runAgentRecoveryPhase", () => {
     }
   });
 
-  test("a second context-pressure failure after the protected retry hands off without a third provider call", async () => {
+  test("a later benign compaction skip cannot reuse fresh-compaction authority", async () => {
     const chatJid = "web:test-recovery-compact:protected:bounded";
     let compactCalls = 0;
     let activeTools = ["read", "bash"];
@@ -840,7 +840,13 @@ describe("runAgentRecoveryPhase", () => {
     const result = await runAgentRecoveryPhase({
       prompt: "continue protected work",
       chatJid,
-      session: { compact: async () => { compactCalls += 1; return {}; } } as any,
+      session: {
+        compact: async () => {
+          compactCalls += 1;
+          if (compactCalls === 2) throw new Error("Nothing to compact (session too small)");
+          return {};
+        },
+      } as any,
       sessionCtrl,
       timeoutMs: 0,
       startTime: Date.now(),
@@ -882,6 +888,10 @@ describe("runAgentRecoveryPhase", () => {
         recovered: false,
         exhausted: true,
         strategyHistory: ["compact_then_retry", "compact_then_retry"],
+      },
+      protectedRecoveryHandoff: {
+        reason: "tools_required",
+        compaction: "not_attempted",
       },
     });
     expect(prompts).toEqual(["continue protected work", RECOVERY_CONTINUATION_PROMPT]);
