@@ -286,6 +286,19 @@ test('protected recovery requires typed control intent instead of interpreting u
 
   expect(getProtectedRecoveryControlIntent([])).toBeNull();
   expect(getProtectedRecoveryControlIntent('Resume this interrupted task from where it stopped.' as any)).toBeNull();
+  expect(getProtectedRecoveryControlIntent([{
+    type: 'control_intent',
+    intent: 'protected_recovery_continuation',
+    schema_version: 1,
+  }])).toBeNull();
+  expect(getProtectedRecoveryControlIntent([{
+    type: 'control_intent',
+    intent: 'protected_recovery_continuation',
+    schema_version: 2,
+    source_message_id: 'source-123',
+    source_row_id: 41,
+    thread_id: 41,
+  }])).toBeNull();
 });
 
 test('Post renders a visible recovery chip with the recovery tooltip', async () => {

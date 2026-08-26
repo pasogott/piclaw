@@ -34,9 +34,10 @@ export function isPostCompactionProtectedRecoveryHandoff(output: AgentOutput): b
 export function finishBoundedProtectedRecoveryHandoff(output: AgentOutput): AgentOutput {
   const { requiresToolEnabledContinuation: _spent, ...terminal } = output;
   const priorHandoff = output.protectedRecoveryHandoff;
-  const reason = isPostCompactionProtectedRecoveryHandoff(output)
-    ? "post_compaction_tools_required"
-    : "continuation_generation_exhausted";
+  const reason = priorHandoff?.reason
+    ?? (isPostCompactionProtectedRecoveryHandoff(output)
+      ? "post_compaction_tools_required"
+      : "continuation_generation_exhausted");
   const protectedRecoveryHandoff = buildProtectedRecoveryHandoffMetadata(
     reason,
     {

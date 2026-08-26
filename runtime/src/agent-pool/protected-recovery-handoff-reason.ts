@@ -91,7 +91,10 @@ export function buildProtectedRecoveryHandoffMetadata(
       ?? (reason === "post_compaction_tools_required"
         ? "succeeded"
         : reason === "compaction_failed" ? "failed" : "not_attempted"),
-    toolsRequired: options.toolsRequired ?? true,
+    toolsRequired: options.toolsRequired
+      ?? (reason === "post_compaction_tools_required"
+        || reason === "tools_required"
+        || reason === "unresolved_tool_execution"),
     retryable: options.retryable ?? true,
     recoveryAttempts: Math.max(0, Math.trunc(options.recoveryAttempts)),
   };

@@ -103,6 +103,15 @@ export function getProtectedRecoveryControlIntent(contentBlocks) {
             && typeof candidate === 'object'
             && candidate.type === 'control_intent'
             && candidate.intent === PROTECTED_RECOVERY_CONTROL_INTENT
+            && candidate.schema_version === 1
+            && typeof candidate.source_message_id === 'string'
+            && candidate.source_message_id.trim().length > 0
+            && Number.isInteger(candidate.source_row_id)
+            && Number(candidate.source_row_id) > 0
+            && Number.isInteger(candidate.thread_id)
+            && Number(candidate.thread_id) > 0
+            && Number.isInteger(candidate.handoff_depth ?? 1)
+            && Number(candidate.handoff_depth ?? 1) > 0
         ))
         : null;
     if (block) {

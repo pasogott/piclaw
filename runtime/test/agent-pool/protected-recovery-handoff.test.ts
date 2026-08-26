@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import { TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT } from "../../src/agent-pool/context-pressure-retry.js";
 import {
   PROTECTED_RECOVERY_HANDOFF_LIMIT_MESSAGE,
+  finishBoundedProtectedRecoveryHandoff,
   runWithProtectedRecoveryHandoff,
 } from "../../src/agent-pool/protected-recovery-handoff.js";
 import {
@@ -133,6 +134,22 @@ test("the generated ordinary continuation cannot chain an unprepared recovery", 
   expect(final.protectedRecoveryHandoff?.reason).toBe("continuation_generation_exhausted");
 });
 
+test("bounded handoff finalization preserves every authoritative typed cause", () => {
+  for (const reason of PROTECTED_RECOVERY_HANDOFF_REASONS) {
+    const final = finishBoundedProtectedRecoveryHandoff({
+      ...protectedOutput(),
+      protectedRecoveryHandoff: buildProtectedRecoveryHandoffMetadata(reason, {
+        recoveryAttempts: 2,
+        toolsRequired: reason === "post_compaction_tools_required"
+          || reason === "tools_required"
+          || reason === "unresolved_tool_execution",
+      }),
+    });
+    expect(final.protectedRecoveryHandoff?.reason).toBe(reason);
+    expect(final.requiresToolEnabledContinuation).toBeUndefined();
+  }
+});
+
 test("a compacted generated continuation receives one final tool-enabled handoff", async () => {
   const prompts: string[] = [];
   const depths: Array<number | undefined> = [];
@@ -202,7 +219,9 @@ test("all protected-recovery reasons produce safe deterministic content-block fi
       compaction: reason === "post_compaction_tools_required"
         ? "succeeded"
         : reason === "compaction_failed" ? "failed" : "not_attempted",
-      tools_required: true,
+      tools_required: reason === "post_compaction_tools_required"
+        || reason === "tools_required"
+        || reason === "unresolved_tool_execution",
       retryable: true,
       recovery_attempts: 2,
     });

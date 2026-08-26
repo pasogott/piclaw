@@ -1795,7 +1795,7 @@ export async function processChat(
       throw new Error(output.error || "Agent run is already processing");
     }
 
-    if (output.failureCategory === "provider_unavailable") {
+    if (output.failureCategory === "provider_unavailable" && !output.protectedRecoveryHandoff) {
       // Extension/provider registration races can happen right after restart.
       // Keep the message pending and let the queue retry automatically.
       rollbackInflightRun(chatJid, prevCursor);
@@ -1984,13 +1984,10 @@ export async function processChat(
       // even when the client cannot render structured outcome blocks.
       clearCommittedDraft();
       shouldRemoveStaleProtectedContinuation = true;
-      const terminalReason = protectedContinuation.terminalReason === "limit"
-        && !isPostCompactionProtectedRecoveryHandoff(output)
-        ? "continuation_generation_exhausted"
-        : output.protectedRecoveryHandoff?.reason
-          ?? (isPostCompactionProtectedRecoveryHandoff(output)
-            ? "post_compaction_tools_required"
-            : "continuation_generation_exhausted");
+      const terminalReason = output.protectedRecoveryHandoff?.reason
+        ?? (isPostCompactionProtectedRecoveryHandoff(output)
+          ? "post_compaction_tools_required"
+          : "continuation_generation_exhausted");
       const terminalHandoff = buildProtectedRecoveryHandoffMetadata(terminalReason, {
         recoveryAttempts: output.recovery?.attemptsUsed
           ?? output.protectedRecoveryHandoff?.recoveryAttempts

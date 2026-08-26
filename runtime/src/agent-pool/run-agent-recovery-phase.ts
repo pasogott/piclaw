@@ -435,6 +435,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
   let lastClassifier: RecoveryClassifier | null = null;
   let lastRecoveryErrorText: string | null = null;
   let lastRecoveryCompactionOutcome: "not_attempted" | "succeeded" | "failed" = "not_attempted";
+  let protectedRecoveryToolsRequired = false;
   const strategyHistory: RecoveryStrategy[] = [];
   const recoveryDiagnostics: AgentRecoveryDiagnosticEntry[] = [];
   let recoveryBudgetStartedAt: number | null = null;
@@ -470,6 +471,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
   const buildHandoffMetadata = (reason: ProtectedRecoveryHandoffReason) => buildProtectedRecoveryHandoffMetadata(reason, {
     recoveryAttempts: recoveryAttemptsUsed,
     compaction: lastRecoveryCompactionOutcome,
+    toolsRequired: protectedRecoveryToolsRequired,
   });
   const inferProtectedHandoffReason = (): ProtectedRecoveryHandoffReason => {
     const latestDiagnostic = recoveryDiagnostics.at(-1);
@@ -661,6 +663,9 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     try {
       attempt = await options.runPromptAttempt(attemptPrompt, attemptTimeoutMs, turnToolExecutionCount, finalizationReserveMs);
       turnToolExecutionCount = attempt.toolExecutionCount;
+      protectedRecoveryToolsRequired ||= Boolean(
+        attempt.snapshot.hadToolActivity || attempt.snapshot.hasUnresolvedToolExecution,
+      );
     } finally {
       if (recoveryOriginalSetActiveToolsByName && activeSessionCtrl) {
         activeSessionCtrl.setActiveToolsByName = recoveryOriginalSetActiveToolsByName;

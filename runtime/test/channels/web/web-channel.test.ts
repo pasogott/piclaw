@@ -2103,6 +2103,70 @@ test("processChat publishes retry metadata while providers are still initializin
   expect(retryStatus?.retry_delay_ms).toBe(5000);
 });
 
+test("processChat persists typed provider retry exhaustion instead of requeueing provider initialization", async () => {
+  const ws = createTempWorkspace("piclaw-web-channel-");
+  cleanupWorkspace = ws.cleanup;
+  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
+
+  const db = await import("../../../src/db.js");
+  db.initDatabase();
+  db.getDb().exec("DELETE FROM message_media; DELETE FROM messages; DELETE FROM chats; DELETE FROM chat_cursors;");
+  db.storeChatMetadata("web:default", new Date().toISOString(), "Web");
+  db.storeMessage({
+    id: `msg-${Math.random()}`,
+    chat_jid: "web:default",
+    sender: "user",
+    sender_name: "User",
+    content: "finish the protected retry",
+    timestamp: new Date().toISOString(),
+    is_from_me: false,
+    is_bot_message: false,
+  });
+
+  const webMod = await import("../../../src/channels/web.js");
+  const web = new (webMod.WebChannel as any)({
+    queue: { enqueue: () => {} },
+    agentPool: {
+      setSessionBinder: () => {},
+      runAgent: async () => ({
+        status: "error",
+        error: "No API provider registered for api: demo",
+        failureCategory: "provider_unavailable",
+        result: null,
+        protectedRecoveryHandoff: {
+          reason: "provider_retry_exhausted",
+          compaction: "not_attempted",
+          toolsRequired: false,
+          retryable: true,
+          recoveryAttempts: 1,
+        },
+        recovery: {
+          attemptsUsed: 1,
+          totalElapsedMs: 1000,
+          recovered: false,
+          exhausted: true,
+          lastClassifier: "provider_unavailable",
+          strategyHistory: ["retry"],
+          diagnostics: [],
+        },
+      }),
+      getContextUsageForChat: async () => null,
+    },
+  });
+
+  await expect(web.processChat("web:default", "default")).resolves.toBeUndefined();
+  const timeline = db.getTimeline("web:default", 10);
+  const terminal = timeline.findLast((item: any) => item.data.type === "agent_response");
+  expect(terminal?.data.content_blocks).toContainEqual(expect.objectContaining({
+    type: "turn_outcome_marker",
+    kind: "recovery",
+    reason: "provider_retry_exhausted",
+    tools_required: false,
+    retryable: true,
+  }));
+  expect(String(terminal?.data.content)).toContain("Provider recovery retries exhausted");
+});
+
 // --- New coverage: agent status lifecycle ---
 
 test("processChat publishes draft fallback when final result is missing", async () => {
