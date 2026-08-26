@@ -850,7 +850,9 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
           });
 
     let effectiveDecision = decision;
-    if (decision.recover && decision.strategy) {
+    // This retry is already turn-scoped, one-shot, and parameter-changing.
+    // The generic cross-turn loop guard must not suppress its first safe use.
+    if (decision.recover && decision.strategy && decision.classifier !== "provider_budget") {
       const guard = shouldSuppressRecoveryLoop({
         chatJid,
         modelLabel,
