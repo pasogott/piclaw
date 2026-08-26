@@ -15,6 +15,7 @@ import { endTrackedPhase } from "../../src/runtime/progress-watchdog.js";
 
 const TEST_CHAT_JIDS = [
   "web:test-recovery-phase",
+  "web:test-recovery-terminal-category",
   "web:test-recovery-provider-exhausted",
   "web:test-recovery-budget-exhausted",
   "web:test-recovery-compact",
@@ -142,6 +143,48 @@ describe("runAgentRecoveryPhase", () => {
       expect.objectContaining({ type: "recovery_start", attempt: 1, strategy: "retry" }),
       expect.objectContaining({ type: "recovery_end", outcome: "recovered", attemptsUsed: 1 }),
     ]));
+  });
+
+  test("preserves a first-attempt protected terminal category without inventing provider retry exhaustion", async () => {
+    const sessionCtrl: SessionWithToolControl = {
+      getActiveToolNames: () => ["read"],
+      setActiveToolsByName: () => {},
+    };
+    let calls = 0;
+
+    const result = await runAgentRecoveryPhase({
+      prompt: "continue protected work",
+      chatJid: "web:test-recovery-terminal-category",
+      session: {} as any,
+      sessionCtrl,
+      timeoutMs: 0,
+      startTime: Date.now(),
+      modelLabel: "test/model",
+      recoveryConfig: recoveryConfig(),
+      runOptions: { protectedRecoveryContinuation: true },
+      logsDir: "/tmp/nonexistent-piclaw-test-logs",
+      clearAttachments: () => {},
+      runPromptAttempt: async () => {
+        calls += 1;
+        return attempt({
+          output: { ...output("error", "output limit reached"), failureCategory: "output_limit" },
+          snapshot: {
+            hadToolActivity: true,
+            hadPartialOutput: true,
+            hadCompletedTurnOutput: false,
+            hadTerminalTurnOutput: false,
+            sawCompactionIntent: false,
+            canDisableToolsForRecovery: true,
+            hasUnresolvedToolExecution: false,
+          },
+          promptWasPersisted: true,
+        });
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(result.failureCategory).toBe("output_limit");
+    expect(result.protectedRecoveryHandoff).toBeUndefined();
   });
 
   test("classifies an actual protected provider retry exhaustion", async () => {

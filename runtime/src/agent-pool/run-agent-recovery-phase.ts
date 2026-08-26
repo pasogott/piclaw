@@ -868,7 +868,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
         attempt.output.nextAction = terminalBudgetFailure.nextAction;
       }
       if (runOptions.protectedRecoveryContinuation
-        && (attempt.snapshot.hadToolActivity || recoveryAttemptsUsed > 0)) {
+        && (attempt.snapshot.hasUnresolvedToolExecution || recoveryAttemptsUsed > 0)) {
         attempt.output.protectedRecoveryHandoff = buildHandoffMetadata(
           attempt.snapshot.hasUnresolvedToolExecution
             ? "unresolved_tool_execution"
