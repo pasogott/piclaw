@@ -1116,6 +1116,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       if (compactionResult.ok
         && compactionResult.compacted
         && recoveryContinuationWithoutTools
+        && !protectedRecoveryHasUnresolvedToolExecution
         && protectedPostCompactionToolRetry.available) {
         recoveryContinuationWithoutTools = false;
         protectedPostCompactionToolRetry.available = false;

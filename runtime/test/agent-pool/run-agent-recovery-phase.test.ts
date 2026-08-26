@@ -526,7 +526,7 @@ describe("runAgentRecoveryPhase", () => {
     expect(activeTools).toEqual(["read", "bash"]);
   });
 
-  test("skips a tools-disabled retry after unresolved tool execution and preserves tools",  async () => {
+  test("successful compaction cannot re-arm a retry with unresolved tool execution", async () => {
     let activeTools = ["read", "bash"];
     const activeToolSets: string[][] = [];
     const sessionCtrl: SessionWithToolControl = {
@@ -537,11 +537,12 @@ describe("runAgentRecoveryPhase", () => {
       },
     };
     let calls = 0;
+    let compactCalls = 0;
 
     const result = await runAgentRecoveryPhase({
       prompt: "original prompt",
       chatJid: "web:test-recovery-phase",
-      session: {} as any,
+      session: { compact: async () => { compactCalls += 1; return {}; } } as any,
       sessionCtrl,
       timeoutMs: 0,
       startTime: Date.now(),
@@ -554,13 +555,13 @@ describe("runAgentRecoveryPhase", () => {
         calls += 1;
         if (calls === 1) {
           return attempt({
-            output: output("error", "WebSocket closed 1006 Connection ended"),
+            output: output("error", "context length exceeded"),
             snapshot: {
               hadToolActivity: true,
               hadPartialOutput: false,
               hadCompletedTurnOutput: false,
               hadTerminalTurnOutput: false,
-              sawCompactionIntent: false,
+              sawCompactionIntent: true,
               canDisableToolsForRecovery: true,
               hasUnresolvedToolExecution: true,
             },
@@ -576,7 +577,7 @@ describe("runAgentRecoveryPhase", () => {
       requiresToolEnabledContinuation: true,
       protectedRecoveryHandoff: {
         reason: "unresolved_tool_execution",
-        compaction: "not_attempted",
+        compaction: "succeeded",
         toolsRequired: true,
         retryable: true,
         recoveryAttempts: 1,
@@ -584,6 +585,7 @@ describe("runAgentRecoveryPhase", () => {
       recovery: { recovered: false, exhausted: true, lastClassifier: "tool_activity" },
     });
     expect(calls).toBe(1);
+    expect(compactCalls).toBe(1);
     expect(activeToolSets).toEqual([]);
     expect(activeTools).toEqual(["read", "bash"]);
   });
