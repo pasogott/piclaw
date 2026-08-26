@@ -11,6 +11,44 @@ export function getBlockKey(block: ContentBlock, index: number): string {
   return block.id ?? `block-${index}`;
 }
 
+const PROTECTED_RECOVERY_REASONS = new Set([
+  "post_compaction_tools_required",
+  "tools_required",
+  "compaction_failed",
+  "recovery_budget_exhausted",
+  "unresolved_tool_execution",
+  "continuation_generation_exhausted",
+  "provider_retry_exhausted",
+]);
+const PROTECTED_RECOVERY_TYPED_KEYS = [
+  "reason",
+  "compaction",
+  "tools_required",
+  "retryable",
+  "recovery_attempts",
+] as const;
+
+function hasValidProtectedRecoveryHandoffFields(block: ContentBlock): boolean {
+  const record = block as Record<string, unknown>;
+  const hasTypedFields = PROTECTED_RECOVERY_TYPED_KEYS.some((key) => Object.hasOwn(record, key));
+  if (!hasTypedFields) return true;
+  const valid = PROTECTED_RECOVERY_REASONS.has(String(block.reason))
+    && (block.compaction === "not_attempted" || block.compaction === "succeeded" || block.compaction === "failed")
+    && typeof block.tools_required === "boolean"
+    && typeof block.retryable === "boolean"
+    && Number.isInteger(block.recovery_attempts)
+    && Number(block.recovery_attempts) >= 0;
+  if (!valid) return false;
+  if (block.reason === "post_compaction_tools_required") {
+    return block.compaction === "succeeded" && block.tools_required === true;
+  }
+  if (block.reason === "compaction_failed") return block.compaction === "failed";
+  if (block.reason === "tools_required" || block.reason === "unresolved_tool_execution") {
+    return block.tools_required === true;
+  }
+  return true;
+}
+
 export function getProtectedRecoveryControlIntent(
   blocks: ContentBlock[] | undefined,
 ): ContentBlock | null {
@@ -27,6 +65,7 @@ export function getProtectedRecoveryControlIntent(
     && Number(block.thread_id) > 0
     && Number.isInteger(block.handoff_depth ?? 1)
     && Number(block.handoff_depth ?? 1) > 0
+    && hasValidProtectedRecoveryHandoffFields(block)
   )) ?? null;
 }
 

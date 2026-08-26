@@ -1030,7 +1030,7 @@ export function createStreamingEventHandler(options: StreamingEventHandlerOption
           ...base,
           type: "error",
           title: "Automatic recovery exhausted",
-          detail: e.errorMessage || undefined,
+          detail: "The bounded recovery path ended without a terminal reply.",
           classifier: e.classifier ?? null,
           intent_key: "recovery",
         });

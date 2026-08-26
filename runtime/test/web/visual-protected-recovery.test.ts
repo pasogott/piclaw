@@ -106,6 +106,38 @@ test("visual timeline does not grant control authority to matching plaintext", (
     created_at: "2026-08-25T00:00:00.000Z",
   });
 
+  const envelope = {
+    type: "control_intent",
+    intent: "protected_recovery_continuation",
+    schema_version: 1,
+    source_message_id: "source-123",
+    source_row_id: 41,
+    thread_id: 41,
+  };
+  const partialTyped = normalizePost({
+    id: 95,
+    type: "user",
+    content: "Recovery resumed with execution tools",
+    content_blocks: [{ ...envelope, reason: "tools_required" }],
+    created_at: "2026-08-25T00:00:00.000Z",
+  });
+  const contradictory = normalizePost({
+    id: 96,
+    type: "user",
+    content: "Recovery resumed with execution tools",
+    content_blocks: [{
+      ...envelope,
+      reason: "post_compaction_tools_required",
+      compaction: "failed",
+      tools_required: true,
+      retryable: true,
+      recovery_attempts: 1,
+    }],
+    created_at: "2026-08-25T00:00:00.000Z",
+  });
+
   expect(shouldHideTimelineInteraction(prose)).toBe(false);
   expect(shouldHideTimelineInteraction(incomplete)).toBe(false);
+  expect(shouldHideTimelineInteraction(partialTyped)).toBe(false);
+  expect(shouldHideTimelineInteraction(contradictory)).toBe(false);
 });

@@ -439,6 +439,8 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
   let lastRecoveryCompactionOutcome: "not_attempted" | "succeeded" | "failed" =
     protectedRecoveryHandoffContext?.compaction ?? "not_attempted";
   let protectedRecoveryToolsRequired = protectedRecoveryHandoffContext?.toolsRequired ?? false;
+  let protectedRecoveryHasUnresolvedToolExecution =
+    protectedRecoveryHandoffContext?.reason === "unresolved_tool_execution";
   const strategyHistory: RecoveryStrategy[] = [];
   const recoveryDiagnostics: AgentRecoveryDiagnosticEntry[] = [];
   let recoveryBudgetStartedAt: number | null = null;
@@ -481,7 +483,8 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
   });
   const inferProtectedHandoffReason = (): ProtectedRecoveryHandoffReason => {
     const latestDiagnostic = recoveryDiagnostics.at(-1);
-    if (latestDiagnostic?.hasUnresolvedToolExecution) return "unresolved_tool_execution";
+    if (protectedRecoveryHasUnresolvedToolExecution
+      || latestDiagnostic?.hasUnresolvedToolExecution) return "unresolved_tool_execution";
     if (lastRecoveryCompactionOutcome === "failed" || latestDiagnostic?.compactionErrorMessage) return "compaction_failed";
     if (lastRecoveryCompactionOutcome === "succeeded"
       && strategyHistory.at(-1) === "compact_then_retry") return "post_compaction_tools_required";
@@ -672,6 +675,8 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       protectedRecoveryToolsRequired ||= Boolean(
         attempt.snapshot.hadToolActivity || attempt.snapshot.hasUnresolvedToolExecution,
       );
+      protectedRecoveryHasUnresolvedToolExecution ||=
+        Boolean(attempt.snapshot.hasUnresolvedToolExecution);
     } finally {
       if (recoveryOriginalSetActiveToolsByName && activeSessionCtrl) {
         activeSessionCtrl.setActiveToolsByName = recoveryOriginalSetActiveToolsByName;
@@ -886,9 +891,9 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
           || attempt.output.failureCategory === "provider_unavailable"
           || attempt.output.failureCategory === "unknown");
       if (runOptions.protectedRecoveryContinuation
-        && (attempt.snapshot.hasUnresolvedToolExecution || providerRetryExhausted)) {
+        && (protectedRecoveryHasUnresolvedToolExecution || providerRetryExhausted)) {
         attempt.output.protectedRecoveryHandoff = buildHandoffMetadata(
-          attempt.snapshot.hasUnresolvedToolExecution
+          protectedRecoveryHasUnresolvedToolExecution
             ? "unresolved_tool_execution"
             : "provider_retry_exhausted",
         );
@@ -977,7 +982,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       const compactionResult = await runRecoveryCompaction(activeSession, chatJid, runOptions, options);
       lastRecoveryCompactionOutcome = !compactionResult.ok
         ? "failed"
-        : compactionResult.compacted ? "succeeded" : lastRecoveryCompactionOutcome;
+        : compactionResult.compacted ? "succeeded" : "not_attempted";
       heartbeatTrackedPhase(chatJid, "preprompt_compaction", {
         eventType: "recovery_compaction",
         attempt: recoveryAttemptsUsed,

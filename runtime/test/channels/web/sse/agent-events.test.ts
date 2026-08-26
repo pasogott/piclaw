@@ -374,3 +374,27 @@ describe("web SSE agent compaction events", () => {
     });
   });
 });
+
+describe("web SSE recovery events", () => {
+  it("does not expose provider diagnostics when bounded recovery is exhausted", () => {
+    const { handler, statuses } = makeHandler();
+    const sensitiveDiagnostic = "provider payload: secret-token timeout stack";
+
+    handler({
+      type: "recovery_end",
+      outcome: "exhausted",
+      attemptsUsed: 2,
+      classifier: "timeout",
+      errorMessage: sensitiveDiagnostic,
+    } as any);
+
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]).toMatchObject({
+      type: "error",
+      title: "Automatic recovery exhausted",
+      detail: "The bounded recovery path ended without a terminal reply.",
+      classifier: "timeout",
+    });
+    expect(JSON.stringify(statuses[0])).not.toContain(sensitiveDiagnostic);
+  });
+});

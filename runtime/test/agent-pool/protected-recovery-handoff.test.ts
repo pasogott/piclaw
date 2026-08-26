@@ -269,6 +269,18 @@ test("protected recovery control authority requires the complete typed block", (
   expect(isProtectedRecoveryControlMessage({
     content_blocks: [{ ...block, schema_version: 2 }],
   })).toBe(false);
+  const legacyBlock = buildProtectedRecoveryControlIntentBlock({
+    sourceMessageId: "legacy-source",
+    sourceRowId: 42,
+    threadId: 42,
+  });
+  expect(isProtectedRecoveryControlMessage({ content_blocks: [legacyBlock] })).toBe(true);
+  expect(isProtectedRecoveryControlMessage({
+    content_blocks: [{ ...legacyBlock, reason: "tools_required" }],
+  })).toBe(false);
+  expect(isProtectedRecoveryControlMessage({
+    content_blocks: [{ ...block, compaction: "failed" }],
+  })).toBe(false);
 });
 
 test("matching continuation prose does not acquire one-shot control authority", async () => {

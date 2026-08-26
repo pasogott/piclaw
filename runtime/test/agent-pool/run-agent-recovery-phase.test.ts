@@ -366,7 +366,7 @@ describe("runAgentRecoveryPhase", () => {
       runOptions: {
         protectedRecoveryContinuation: true,
         protectedRecoveryHandoffContext: {
-          reason: "post_compaction_tools_required",
+          reason: "unresolved_tool_execution",
           compaction: "succeeded",
           toolsRequired: true,
           retryable: true,
@@ -397,7 +397,7 @@ describe("runAgentRecoveryPhase", () => {
     expect(result).toMatchObject({
       requiresToolEnabledContinuation: true,
       protectedRecoveryHandoff: {
-        reason: "tools_required",
+        reason: "unresolved_tool_execution",
         toolsRequired: true,
         compaction: "succeeded",
         recoveryAttempts: 3,
@@ -658,6 +658,72 @@ describe("runAgentRecoveryPhase", () => {
       expect.objectContaining({ type: "compaction_end", trigger: "recovery", willRetry: true }),
       expect.objectContaining({ type: "recovery_end", outcome: "handoff" }),
     ]));
+  });
+
+  test("a benign compaction skip does not re-arm a protected tool-enabled retry", async () => {
+    let calls = 0;
+    let activeTools = ["read", "bash"];
+    const activeToolSets: string[][] = [];
+    const sessionCtrl: SessionWithToolControl = {
+      getActiveToolNames: () => [...activeTools],
+      setActiveToolsByName: (names) => {
+        activeTools = [...names];
+        activeToolSets.push([...names]);
+      },
+    };
+
+    const result = await runAgentRecoveryPhase({
+      prompt: "continue protected work",
+      chatJid: "web:test-recovery-compact:protected:benign-skip",
+      session: {
+        compact: async () => { throw new Error("Nothing to compact (session too small)"); },
+      } as any,
+      sessionCtrl,
+      timeoutMs: 0,
+      startTime: Date.now(),
+      modelLabel: "test/model",
+      recoveryConfig: recoveryConfig(),
+      runOptions: {
+        protectedRecoveryContinuation: true,
+        protectedRecoveryHandoffContext: {
+          reason: "post_compaction_tools_required",
+          compaction: "succeeded",
+          toolsRequired: true,
+          retryable: true,
+          recoveryAttempts: 1,
+        },
+      },
+      logsDir: "/tmp/nonexistent-piclaw-test-logs",
+      clearAttachments: () => {},
+      runPromptAttempt: async () => {
+        calls += 1;
+        return attempt({
+          output: output("error", "context length exceeded"),
+          snapshot: {
+            hadToolActivity: true,
+            hadPartialOutput: false,
+            hadCompletedTurnOutput: false,
+            hadTerminalTurnOutput: false,
+            sawCompactionIntent: true,
+            toolExecutionCount: 1,
+          },
+          promptWasPersisted: true,
+          toolExecutionCount: 1,
+        });
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(activeToolSets).toEqual([]);
+    expect(result).toMatchObject({
+      status: "error",
+      requiresToolEnabledContinuation: true,
+      protectedRecoveryHandoff: {
+        reason: "tools_required",
+        compaction: "not_attempted",
+        toolsRequired: true,
+      },
+    });
   });
 
   test("each fresh protected continuation re-arms one tool-enabled retry after compaction", async () => {

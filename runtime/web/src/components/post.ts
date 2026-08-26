@@ -95,6 +95,32 @@ function FileAttachment({ mediaId, onPreview }) {
 
 const PROTECTED_RECOVERY_CONTROL_INTENT = 'protected_recovery_continuation';
 const PROTECTED_RECOVERY_CONTROL_LABEL = 'Recovery resumed with execution tools';
+const PROTECTED_RECOVERY_REASONS = new Set([
+    'post_compaction_tools_required',
+    'tools_required',
+    'compaction_failed',
+    'recovery_budget_exhausted',
+    'unresolved_tool_execution',
+    'continuation_generation_exhausted',
+    'provider_retry_exhausted',
+]);
+const PROTECTED_RECOVERY_TYPED_KEYS = ['reason', 'compaction', 'tools_required', 'retryable', 'recovery_attempts'];
+
+function hasValidProtectedRecoveryHandoffFields(block) {
+    const hasTypedFields = PROTECTED_RECOVERY_TYPED_KEYS.some(key => Object.prototype.hasOwnProperty.call(block, key));
+    if (!hasTypedFields) return true;
+    const valid = PROTECTED_RECOVERY_REASONS.has(block.reason)
+        && ['not_attempted', 'succeeded', 'failed'].includes(block.compaction)
+        && typeof block.tools_required === 'boolean'
+        && typeof block.retryable === 'boolean'
+        && Number.isInteger(block.recovery_attempts)
+        && block.recovery_attempts >= 0;
+    if (!valid) return false;
+    if (block.reason === 'post_compaction_tools_required') return block.compaction === 'succeeded' && block.tools_required;
+    if (block.reason === 'compaction_failed') return block.compaction === 'failed';
+    if (block.reason === 'tools_required' || block.reason === 'unresolved_tool_execution') return block.tools_required;
+    return true;
+}
 
 export function getProtectedRecoveryControlIntent(contentBlocks) {
     const block = Array.isArray(contentBlocks)
@@ -112,6 +138,7 @@ export function getProtectedRecoveryControlIntent(contentBlocks) {
             && Number(candidate.thread_id) > 0
             && Number.isInteger(candidate.handoff_depth ?? 1)
             && Number(candidate.handoff_depth ?? 1) > 0
+            && hasValidProtectedRecoveryHandoffFields(candidate)
         ))
         : null;
     if (block) {

@@ -32,23 +32,47 @@ interface MessageLike {
   content_blocks?: unknown;
 }
 
-function readHandoffFields(block: Record<string, unknown>): Partial<ProtectedRecoveryControlIntentBlock> {
+const HANDOFF_FIELD_KEYS = [
+  "reason",
+  "compaction",
+  "tools_required",
+  "retryable",
+  "recovery_attempts",
+] as const;
+
+function readHandoffFields(block: Record<string, unknown>): {
+  valid: boolean;
+  fields: Partial<ProtectedRecoveryControlIntentBlock>;
+} {
+  const hasTypedFields = HANDOFF_FIELD_KEYS.some((key) => Object.hasOwn(block, key));
+  if (!hasTypedFields) return { valid: true, fields: {} };
+
   const compaction = block.compaction;
   const validCompaction = compaction === "not_attempted" || compaction === "succeeded" || compaction === "failed";
-  if (!isProtectedRecoveryHandoffReason(block.reason)
-    || !validCompaction
-    || typeof block.tools_required !== "boolean"
-    || typeof block.retryable !== "boolean"
-    || !Number.isInteger(block.recovery_attempts)
-    || Number(block.recovery_attempts) < 0) {
-    return {};
-  }
+  const reason = block.reason;
+  const toolsRequired = block.tools_required;
+  const structurallyValid = isProtectedRecoveryHandoffReason(reason)
+    && validCompaction
+    && typeof toolsRequired === "boolean"
+    && typeof block.retryable === "boolean"
+    && Number.isInteger(block.recovery_attempts)
+    && Number(block.recovery_attempts) >= 0;
+  const semanticallyValid = structurallyValid
+    && (reason !== "post_compaction_tools_required" || (compaction === "succeeded" && toolsRequired === true))
+    && (reason !== "compaction_failed" || compaction === "failed")
+    && (reason !== "tools_required" || toolsRequired === true)
+    && (reason !== "unresolved_tool_execution" || toolsRequired === true);
+  if (!semanticallyValid) return { valid: false, fields: {} };
+
   return {
-    reason: block.reason,
-    compaction,
-    tools_required: block.tools_required,
-    retryable: block.retryable,
-    recovery_attempts: Number(block.recovery_attempts),
+    valid: true,
+    fields: {
+      reason,
+      compaction,
+      tools_required: toolsRequired,
+      retryable: block.retryable as boolean,
+      recovery_attempts: Number(block.recovery_attempts),
+    },
   };
 }
 
@@ -68,7 +92,8 @@ function findControlIntentBlock(contentBlocks: unknown): ProtectedRecoveryContro
       && Number.isInteger(value.thread_id)
       && Number(value.thread_id) > 0
       && Number.isInteger(handoffDepth)
-      && Number(handoffDepth) > 0;
+      && Number(handoffDepth) > 0
+      && readHandoffFields(value).valid;
   }) as Record<string, unknown> | undefined;
   if (!block) return null;
   return {
@@ -80,7 +105,7 @@ function findControlIntentBlock(contentBlocks: unknown): ProtectedRecoveryContro
     source_row_id: Number(block.source_row_id),
     thread_id: Number(block.thread_id),
     handoff_depth: Number(block.handoff_depth ?? 1),
-    ...readHandoffFields(block),
+    ...readHandoffFields(block).fields,
   };
 }
 
