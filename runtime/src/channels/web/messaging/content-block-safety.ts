@@ -17,6 +17,17 @@ export function sanitizePublicInboundContentBlocks(value: unknown): unknown[] | 
   });
 }
 
+/** Strip control authority from model-authored messages while retaining agent presentation metadata. */
+export function sanitizeModelPostedContentBlocks(value: unknown): unknown[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((block) => (
+    !block
+    || typeof block !== "object"
+    || Array.isArray(block)
+    || (block as { type?: unknown }).type !== "control_intent"
+  ));
+}
+
 /** Strict persistence validation for already-resolved service-effect blocks. */
 export function validateServiceEffectContentBlocks(
   value: unknown,

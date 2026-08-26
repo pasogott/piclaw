@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  sanitizeModelPostedContentBlocks,
   sanitizePublicInboundContentBlocks,
   validateServiceEffectContentBlocks,
 } from "../../../src/channels/web/messaging/content-block-safety.js";
@@ -17,6 +18,7 @@ describe("public content-block safety", () => {
     const safeBlock = { type: "link_preview", url: "https://example.com" };
 
     expect(sanitizePublicInboundContentBlocks([forgedControl, safeBlock])).toEqual([safeBlock]);
+    expect(sanitizeModelPostedContentBlocks([forgedControl, safeBlock])).toEqual([safeBlock]);
     expect(validateServiceEffectContentBlocks([forgedControl])).toBeNull();
   });
 });
