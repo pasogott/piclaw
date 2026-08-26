@@ -347,7 +347,7 @@ describe("runAgentRecoveryPhase", () => {
     });
   });
 
-  test("marks a deliberately protected retry as tools-required before any tool activity", async () => {
+  test("carries prior handoff evidence into a deliberately protected retry", async () => {
     const sessionCtrl: SessionWithToolControl = {
       getActiveToolNames: () => ["read"],
       setActiveToolsByName: () => {},
@@ -363,7 +363,16 @@ describe("runAgentRecoveryPhase", () => {
       startTime: Date.now(),
       modelLabel: "test/model",
       recoveryConfig: recoveryConfig({ transientRecoveryToolsEnabled: false }),
-      runOptions: {},
+      runOptions: {
+        protectedRecoveryContinuation: true,
+        protectedRecoveryHandoffContext: {
+          reason: "post_compaction_tools_required",
+          compaction: "succeeded",
+          toolsRequired: true,
+          retryable: true,
+          recoveryAttempts: 2,
+        },
+      },
       logsDir: "/tmp/nonexistent-piclaw-test-logs",
       clearAttachments: () => {},
       runPromptAttempt: async () => {
@@ -390,7 +399,8 @@ describe("runAgentRecoveryPhase", () => {
       protectedRecoveryHandoff: {
         reason: "tools_required",
         toolsRequired: true,
-        compaction: "not_attempted",
+        compaction: "succeeded",
+        recoveryAttempts: 3,
       },
     });
   });

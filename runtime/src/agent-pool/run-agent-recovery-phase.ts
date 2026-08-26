@@ -434,8 +434,11 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
   let recoveryAttemptsUsed = 0;
   let lastClassifier: RecoveryClassifier | null = null;
   let lastRecoveryErrorText: string | null = null;
-  let lastRecoveryCompactionOutcome: "not_attempted" | "succeeded" | "failed" = "not_attempted";
-  let protectedRecoveryToolsRequired = false;
+  const protectedRecoveryHandoffContext = runOptions.protectedRecoveryHandoffContext;
+  const protectedRecoveryPriorAttempts = protectedRecoveryHandoffContext?.recoveryAttempts ?? 0;
+  let lastRecoveryCompactionOutcome: "not_attempted" | "succeeded" | "failed" =
+    protectedRecoveryHandoffContext?.compaction ?? "not_attempted";
+  let protectedRecoveryToolsRequired = protectedRecoveryHandoffContext?.toolsRequired ?? false;
   const strategyHistory: RecoveryStrategy[] = [];
   const recoveryDiagnostics: AgentRecoveryDiagnosticEntry[] = [];
   let recoveryBudgetStartedAt: number | null = null;
@@ -469,7 +472,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
     recoveryBudgetStartedAt = null;
   };
   const buildHandoffMetadata = (reason: ProtectedRecoveryHandoffReason) => buildProtectedRecoveryHandoffMetadata(reason, {
-    recoveryAttempts: recoveryAttemptsUsed,
+    recoveryAttempts: protectedRecoveryPriorAttempts + recoveryAttemptsUsed,
     compaction: reason === "compaction_failed" ? "failed" : lastRecoveryCompactionOutcome,
     toolsRequired: protectedRecoveryToolsRequired
       || reason === "post_compaction_tools_required"

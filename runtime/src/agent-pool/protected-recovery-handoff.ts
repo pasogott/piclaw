@@ -104,10 +104,12 @@ export async function runWithProtectedRecoveryHandoff(
     if (!canHandoff) return finishBoundedProtectedRecoveryHandoff(output);
 
     handoffDepth += 1;
+    const protectedRecoveryHandoffContext = output.protectedRecoveryHandoff;
     output = await run(TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT, {
       ...options,
       protectedRecoveryContinuation: true,
       protectedRecoveryContinuationDepth: handoffDepth,
+      protectedRecoveryHandoffContext,
     });
     onOutput?.(output);
   }

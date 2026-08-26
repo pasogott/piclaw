@@ -2103,7 +2103,7 @@ test("processChat publishes retry metadata while providers are still initializin
   expect(retryStatus?.retry_delay_ms).toBe(5000);
 });
 
-test("processChat persists typed provider retry exhaustion instead of requeueing provider initialization", async () => {
+test("processChat persists typed provider and timeout exhaustion without raw diagnostics", async () => {
   const ws = createTempWorkspace("piclaw-web-channel-");
   cleanupWorkspace = ws.cleanup;
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
@@ -2123,33 +2123,61 @@ test("processChat persists typed provider retry exhaustion instead of requeueing
     is_bot_message: false,
   });
 
+  let calls = 0;
   const webMod = await import("../../../src/channels/web.js");
   const web = new (webMod.WebChannel as any)({
     queue: { enqueue: () => {} },
     agentPool: {
       setSessionBinder: () => {},
-      runAgent: async () => ({
-        status: "error",
-        error: "No API provider registered for api: demo",
-        failureCategory: "provider_unavailable",
-        result: null,
-        protectedRecoveryHandoff: {
-          reason: "provider_retry_exhausted",
-          compaction: "not_attempted",
-          toolsRequired: false,
-          retryable: true,
-          recoveryAttempts: 1,
-        },
-        recovery: {
-          attemptsUsed: 1,
-          totalElapsedMs: 1000,
-          recovered: false,
-          exhausted: true,
-          lastClassifier: "provider_unavailable",
-          strategyHistory: ["retry"],
-          diagnostics: [],
-        },
-      }),
+      runAgent: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            status: "error",
+            error: "No API provider registered for api: demo",
+            failureCategory: "provider_unavailable",
+            result: null,
+            protectedRecoveryHandoff: {
+              reason: "provider_retry_exhausted",
+              compaction: "not_attempted",
+              toolsRequired: false,
+              retryable: true,
+              recoveryAttempts: 1,
+            },
+            recovery: {
+              attemptsUsed: 1,
+              totalElapsedMs: 1000,
+              recovered: false,
+              exhausted: true,
+              lastClassifier: "provider_unavailable",
+              strategyHistory: ["retry"],
+              diagnostics: [],
+            },
+          };
+        }
+        return {
+          status: "error",
+          error: "provider-secret=must-not-persist raw timeout payload",
+          failureCategory: "timeout",
+          result: null,
+          protectedRecoveryHandoff: {
+            reason: "recovery_budget_exhausted",
+            compaction: "not_attempted",
+            toolsRequired: false,
+            retryable: true,
+            recoveryAttempts: 2,
+          },
+          recovery: {
+            attemptsUsed: 2,
+            totalElapsedMs: 2000,
+            recovered: false,
+            exhausted: true,
+            lastClassifier: "budget_exhausted",
+            strategyHistory: ["retry", "retry"],
+            diagnostics: [],
+          },
+        };
+      },
       getContextUsageForChat: async () => null,
     },
   });
@@ -2165,6 +2193,28 @@ test("processChat persists typed provider retry exhaustion instead of requeueing
     retryable: true,
   }));
   expect(String(terminal?.data.content)).toContain("Provider recovery retries exhausted");
+
+  db.storeMessage({
+    id: `msg-${Math.random()}`,
+    chat_jid: "web:default",
+    sender: "user",
+    sender_name: "User",
+    content: "retry once more",
+    timestamp: new Date(Date.now() + 1000).toISOString(),
+    is_from_me: false,
+    is_bot_message: false,
+  });
+  await expect(web.processChat("web:default", "default")).resolves.toBeUndefined();
+  const timeoutTerminal = db.getTimeline("web:default", 20)
+    .findLast((item: any) => item.data.type === "agent_response");
+  expect(timeoutTerminal?.data.content_blocks).toContainEqual(expect.objectContaining({
+    type: "turn_outcome_marker",
+    reason: "recovery_budget_exhausted",
+    tools_required: false,
+  }));
+  expect(String(timeoutTerminal?.data.content)).toContain("Automatic recovery budget exhausted");
+  expect(JSON.stringify(timeoutTerminal?.data)).not.toContain("provider-secret");
+  expect(JSON.stringify(timeoutTerminal?.data)).not.toContain("raw timeout payload");
 });
 
 // --- New coverage: agent status lifecycle ---
@@ -2788,6 +2838,13 @@ test("processChat durably hands protected recovery to one ordinary tool-enabled 
         }
         expect(options.protectedRecoveryContinuation).toBe(true);
         expect(options.protectedRecoveryContinuationDepth).toBe(1);
+        expect(options.protectedRecoveryHandoffContext).toMatchObject({
+          reason: "provider_retry_exhausted",
+          compaction: "not_attempted",
+          toolsRequired: true,
+          retryable: true,
+          recoveryAttempts: 1,
+        });
         await options.onTurnComplete?.({
           text: committedToolProgress,
           attachments: [],

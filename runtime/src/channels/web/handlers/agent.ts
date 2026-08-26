@@ -1504,6 +1504,20 @@ export async function processChat(
   const protectedRecoveryPrompt = protectedRecoveryIntent
     ? TOOL_ENABLED_RECOVERY_CONTINUATION_PROMPT
     : null;
+  const protectedRecoveryHandoffContext: ProtectedRecoveryHandoffMetadata | undefined =
+    protectedRecoveryIntent?.reason
+      && protectedRecoveryIntent.compaction
+      && typeof protectedRecoveryIntent.tools_required === "boolean"
+      && typeof protectedRecoveryIntent.retryable === "boolean"
+      && Number.isInteger(protectedRecoveryIntent.recovery_attempts)
+      ? {
+          reason: protectedRecoveryIntent.reason,
+          compaction: protectedRecoveryIntent.compaction,
+          toolsRequired: protectedRecoveryIntent.tools_required,
+          retryable: protectedRecoveryIntent.retryable,
+          recoveryAttempts: Number(protectedRecoveryIntent.recovery_attempts),
+        }
+      : undefined;
   const promptMessage = protectedRecoveryPrompt
     ? { ...currentMessage, content: protectedRecoveryPrompt }
     : currentMessage;
@@ -1664,7 +1678,10 @@ export async function processChat(
               ...options.markerOptions,
             });
 
-    return persistVisibleFailureOutcome(markerBase, reason === "timeout" ? detail : undefined, options);
+    const visibleDetail = reason === "timeout" && !options.markerOptions?.protectedRecoveryHandoff
+      ? detail
+      : undefined;
+    return persistVisibleFailureOutcome(markerBase, visibleDetail, options);
   };
 
   const finalizeSuccessfulRun = async () => finalizeSuccessfulProcessChatRun({
@@ -1689,6 +1706,7 @@ export async function processChat(
     deferToolEnabledContinuation: true,
     protectedRecoveryContinuation: Boolean(protectedRecoveryIntent),
     protectedRecoveryContinuationDepth: protectedRecoveryIntent?.handoff_depth,
+    protectedRecoveryHandoffContext,
     onEvent: trackedStreamingHandler,
     onTurnDiscard: () => {
       clearCommittedDraft();

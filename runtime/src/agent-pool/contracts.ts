@@ -168,6 +168,8 @@ export interface RunAgentOptions {
   protectedRecoveryContinuation?: boolean;
   /** One-based depth of the bounded protected-recovery handoff chain. */
   protectedRecoveryContinuationDepth?: number;
+  /** Validated safe evidence carried from the handoff that created this continuation. */
+  protectedRecoveryHandoffContext?: ProtectedRecoveryHandoffMetadata;
 }
 
 export interface RetrySettingsProvider {

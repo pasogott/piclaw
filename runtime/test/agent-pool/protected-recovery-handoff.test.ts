@@ -41,13 +41,20 @@ const protectedOutput = (strategyHistory: string[] = []): AgentOutput => ({
 test("protected recovery runs exactly one ordinary continuation at the AgentPool boundary", async () => {
   const prompts: string[] = [];
   const observed: AgentOutput[] = [];
+  const handoff = buildProtectedRecoveryHandoffMetadata("tools_required", {
+    recoveryAttempts: 1,
+    toolsRequired: true,
+  });
   const final = await runWithProtectedRecoveryHandoff(
     "finish the task",
     {},
-    async (prompt) => {
+    async (prompt, options) => {
       prompts.push(prompt);
+      if (prompts.length === 2) {
+        expect(options.protectedRecoveryHandoffContext).toEqual(handoff);
+      }
       return prompts.length === 1
-        ? protectedOutput()
+        ? { ...protectedOutput(), protectedRecoveryHandoff: handoff }
         : { status: "success", result: "finished with tools" };
     },
     (output) => observed.push(output),
