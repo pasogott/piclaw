@@ -72,6 +72,34 @@ describe("process chat finalization runtime", () => {
     });
   });
 
+  test("contradictory completed-boundary metadata is not persisted as authoritative", () => {
+    let storedOptions: any = null;
+    const channel: any = {
+      consumeQueuedFollowupPlaceholder: () => null,
+      storeMessage: (_chat: string, _text: string, _bot: boolean, _media: number[], options: any) => {
+        storedOptions = options;
+        return { id: 44, chat_jid: "web:test" };
+      },
+      broadcastEvent() {},
+    };
+    expect(persistIntermediateProcessChatTurn({
+      channel,
+      emitter: emitter([]) as any,
+      chatJid: "web:test",
+      text: "contradictory",
+      attachments: [],
+      channelName: "web",
+      threadId: 7,
+      skipPlaceholder: true,
+      timingBlock: { type: "agent_timing" },
+      turnKind: "intermediate",
+      cause: "completed_boundary",
+      followedByToolUse: true,
+      clearCommittedDraft: () => {},
+    })).toBe(44);
+    expect(storedOptions.contentBlocks).not.toContainEqual(expect.objectContaining({ type: "agent_turn_marker" }));
+  });
+
   test("interrupted draft persistence stores a draft snapshot marker without clearing the draft", () => {
     let storedOptions: any = null;
     const channel: any = {

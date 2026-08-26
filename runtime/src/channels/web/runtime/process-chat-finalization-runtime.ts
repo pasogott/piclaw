@@ -109,7 +109,7 @@ function buildAgentTurnMarker(options: PersistIntermediateTurnOptions): Record<s
     && options.cause === "interrupted_text_start"
     && !options.followedByToolUse;
   const validIntermediate = options.turnKind === "intermediate"
-    && (options.cause === "completed_boundary"
+    && ((options.cause === "completed_boundary" && !options.followedByToolUse)
       || (options.cause === "tool_use" && options.followedByToolUse === true));
   if (!validDraft && !validIntermediate) return null;
 
