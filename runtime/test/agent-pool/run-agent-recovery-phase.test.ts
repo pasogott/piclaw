@@ -15,6 +15,7 @@ import { endTrackedPhase } from "../../src/runtime/progress-watchdog.js";
 
 const TEST_CHAT_JIDS = [
   "web:test-recovery-phase",
+  "web:test-recovery-tools-required",
   "web:test-recovery-terminal-category",
   "web:test-recovery-retry-terminal-category",
   "web:test-recovery-provider-exhausted",
@@ -342,6 +343,54 @@ describe("runAgentRecoveryPhase", () => {
         toolsRequired: true,
         retryable: true,
         recoveryAttempts: 1,
+      },
+    });
+  });
+
+  test("marks a deliberately protected retry as tools-required before any tool activity", async () => {
+    const sessionCtrl: SessionWithToolControl = {
+      getActiveToolNames: () => ["read"],
+      setActiveToolsByName: () => {},
+    };
+    let calls = 0;
+
+    const result = await runAgentRecoveryPhase({
+      prompt: "retry safely",
+      chatJid: "web:test-recovery-tools-required",
+      session: {} as any,
+      sessionCtrl,
+      timeoutMs: 0,
+      startTime: Date.now(),
+      modelLabel: "test/model",
+      recoveryConfig: recoveryConfig({ transientRecoveryToolsEnabled: false }),
+      runOptions: {},
+      logsDir: "/tmp/nonexistent-piclaw-test-logs",
+      clearAttachments: () => {},
+      runPromptAttempt: async () => {
+        calls += 1;
+        return attempt({
+          output: output("error", "503 temporarily unavailable"),
+          snapshot: {
+            hadToolActivity: false,
+            hadPartialOutput: false,
+            hadCompletedTurnOutput: false,
+            hadTerminalTurnOutput: false,
+            sawCompactionIntent: false,
+            canDisableToolsForRecovery: true,
+            hasUnresolvedToolExecution: false,
+          },
+          promptWasPersisted: true,
+        });
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(result).toMatchObject({
+      requiresToolEnabledContinuation: true,
+      protectedRecoveryHandoff: {
+        reason: "tools_required",
+        toolsRequired: true,
+        compaction: "not_attempted",
       },
     });
   });

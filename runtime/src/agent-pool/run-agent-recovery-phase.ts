@@ -470,13 +470,16 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
   };
   const buildHandoffMetadata = (reason: ProtectedRecoveryHandoffReason) => buildProtectedRecoveryHandoffMetadata(reason, {
     recoveryAttempts: recoveryAttemptsUsed,
-    compaction: lastRecoveryCompactionOutcome,
-    toolsRequired: protectedRecoveryToolsRequired,
+    compaction: reason === "compaction_failed" ? "failed" : lastRecoveryCompactionOutcome,
+    toolsRequired: protectedRecoveryToolsRequired
+      || reason === "post_compaction_tools_required"
+      || reason === "tools_required"
+      || reason === "unresolved_tool_execution",
   });
   const inferProtectedHandoffReason = (): ProtectedRecoveryHandoffReason => {
     const latestDiagnostic = recoveryDiagnostics.at(-1);
-    if (lastRecoveryCompactionOutcome === "failed" || latestDiagnostic?.compactionErrorMessage) return "compaction_failed";
     if (latestDiagnostic?.hasUnresolvedToolExecution) return "unresolved_tool_execution";
+    if (lastRecoveryCompactionOutcome === "failed" || latestDiagnostic?.compactionErrorMessage) return "compaction_failed";
     if (lastRecoveryCompactionOutcome === "succeeded"
       && strategyHistory.at(-1) === "compact_then_retry") return "post_compaction_tools_required";
     return "tools_required";
