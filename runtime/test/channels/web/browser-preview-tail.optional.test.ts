@@ -309,6 +309,13 @@ optionalBrowserTest("bundled browser keeps authoritative Draft/Thought tails thr
   gates.continueDraft.resolve();
   await gates.finalDraftReady.promise;
 
+  // The final suffix must become visible during the live pause while the
+  // authoritative full-buffer endpoint is still blocked and before terminal.
+  await waitForPanelMarker(page, "draft", "draft-line-24");
+  const livePausedCollapsedTail = await panelText(page, "draft");
+  expect(livePausedCollapsedTail).toContain("draft-line-24");
+  expect(livePausedCollapsedTail).toContain("draft-line-16");
+
   // Restore the real full-buffer endpoint for the final throttled-delta check.
   // The unmasked local Draft/Thought state was already asserted above.
   await page.unroute(fullPreviewRequestPattern);

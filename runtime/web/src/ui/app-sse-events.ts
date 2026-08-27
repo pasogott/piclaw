@@ -64,6 +64,33 @@ interface RefBox<T> {
 // an event that was in flight.
 const dirtyPreviewResyncRefs = new WeakSet<object>();
 
+interface PreviewTrailingFlushState {
+  generation: number;
+  draftTimer: ReturnType<typeof setTimeout> | null;
+  thoughtTimer: ReturnType<typeof setTimeout> | null;
+}
+
+const previewTrailingFlushStates = new WeakMap<object, PreviewTrailingFlushState>();
+
+function previewTrailingFlushState(key: object): PreviewTrailingFlushState {
+  let state = previewTrailingFlushStates.get(key);
+  if (!state) {
+    state = { generation: 0, draftTimer: null, thoughtTimer: null };
+    previewTrailingFlushStates.set(key, state);
+  }
+  return state;
+}
+
+/** Cancel delayed preview writes when their owning chat/turn lifecycle ends. */
+export function invalidateAppPreviewTrailingFlushes(key: object): void {
+  const state = previewTrailingFlushState(key);
+  state.generation += 1;
+  if (state.draftTimer) clearTimeout(state.draftTimer);
+  if (state.thoughtTimer) clearTimeout(state.thoughtTimer);
+  state.draftTimer = null;
+  state.thoughtTimer = null;
+}
+
 export interface HandleAppSseEventDependencies {
   currentChatJid: string;
   updateAgentProfile: (payload: any) => void;
@@ -200,7 +227,41 @@ export function handleAppSseEvent(
     openEditor,
   } = deps;
 
+  const cancelPanelTrailingFlush = (panel: 'draft' | 'thought') => {
+    const state = previewTrailingFlushState(previewResyncGenerationRef);
+    const timerKey = panel === 'draft' ? 'draftTimer' : 'thoughtTimer';
+    if (state[timerKey]) clearTimeout(state[timerKey]);
+    state[timerKey] = null;
+  };
+
+  const scheduleTrailingPreviewFlush = (
+    panel: 'draft' | 'thought',
+    lastRenderedAt: number,
+    bufferRef: RefBox<string>,
+    setter: StateSetter<any>,
+  ) => {
+    const state = previewTrailingFlushState(previewResyncGenerationRef);
+    const timerKey = panel === 'draft' ? 'draftTimer' : 'thoughtTimer';
+    if (state[timerKey]) clearTimeout(state[timerKey]);
+    const generation = state.generation;
+    const targetChatJid = currentChatJid;
+    const targetTurnId = turnId || currentTurnIdRef.current;
+    const delay = Math.max(0, 100 - Math.max(0, Date.now() - lastRenderedAt));
+    state[timerKey] = setTimeout(() => {
+      state[timerKey] = null;
+      if (state.generation !== generation) return;
+      if (activeChatJidRef.current !== targetChatJid) return;
+      if (currentTurnIdRef.current !== targetTurnId) return;
+      const fullText = bufferRef.current;
+      setter((previous) => buildAuthoritativeAgentPreviewState(fullText, previous));
+      if (panel === 'draft') draftThrottleRef.current = Date.now();
+      else thoughtThrottleRef.current = Date.now();
+    }, delay);
+  };
+
   const flushAuthoritativePreviews = () => {
+    cancelPanelTrailingFlush('draft');
+    cancelPanelTrailingFlush('thought');
     if (draftBufferRef.current) {
       const fullText = draftBufferRef.current;
       setAgentDraft((previous) => buildAuthoritativeAgentPreviewState(fullText, previous));
@@ -212,6 +273,7 @@ export function handleAppSseEvent(
   };
 
   const clearPreviewState = () => {
+    invalidateAppPreviewTrailingFlushes(previewResyncGenerationRef);
     draftBufferRef.current = '';
     thoughtBufferRef.current = '';
     setAgentDraft({ text: '', totalLines: 0 });
@@ -273,6 +335,7 @@ export function handleAppSseEvent(
   }
 
   if (eventType === 'connected') {
+    invalidateAppPreviewTrailingFlushes(previewResyncGenerationRef);
     if (handleUiVersionDrift(data?.app_asset_version)) {
       return;
     }
@@ -397,6 +460,7 @@ export function handleAppSseEvent(
       if (shouldIgnoreMismatchedTurn(turnId, currentTurnIdRef.current)) {
         return;
       }
+      invalidateAppPreviewTrailingFlushes(previewResyncGenerationRef);
       flushAuthoritativePreviews();
       if (data.type === 'done') {
         notifyForFinalResponse(turnId || currentTurnIdRef.current);
@@ -432,6 +496,7 @@ export function handleAppSseEvent(
       // phases (post-tool waiting, fresh reasoning, and drafting) must preserve
       // the accumulated panes until their typed preview events update them.
       if (data.type === 'thinking' && !data.phase) {
+        invalidateAppPreviewTrailingFlushes(previewResyncGenerationRef);
         draftBufferRef.current = '';
         thoughtBufferRef.current = '';
         setAgentDraft({ text: '', totalLines: 0 });
@@ -503,10 +568,14 @@ export function handleAppSseEvent(
     noteAgentActivity({ running: true, clearSilence: true });
     draftBufferRef.current = applyDraftDeltaBuffer(draftBufferRef.current, data);
     const now = Date.now();
+    if (data.reset) invalidateAppPreviewTrailingFlushes(previewResyncGenerationRef);
     if (data.reset || !draftThrottleRef.current || now - draftThrottleRef.current >= 100) {
+      cancelPanelTrailingFlush('draft');
       draftThrottleRef.current = now;
       const fullText = draftBufferRef.current;
       setAgentDraft((previous) => buildAuthoritativeAgentPreviewState(fullText, previous));
+    } else {
+      scheduleTrailingPreviewFlush('draft', draftThrottleRef.current, draftBufferRef, setAgentDraft);
     }
     return;
   }
@@ -551,10 +620,14 @@ export function handleAppSseEvent(
     noteAgentActivity({ running: true, clearSilence: true });
     thoughtBufferRef.current = applyThoughtDeltaBuffer(thoughtBufferRef.current, data);
     const now = Date.now();
+    if (data.reset) invalidateAppPreviewTrailingFlushes(previewResyncGenerationRef);
     if (data.reset || !thoughtThrottleRef.current || now - thoughtThrottleRef.current >= 100) {
+      cancelPanelTrailingFlush('thought');
       thoughtThrottleRef.current = now;
       const fullText = thoughtBufferRef.current;
       setAgentThought((previous) => buildAuthoritativeAgentPreviewState(fullText, previous));
+    } else {
+      scheduleTrailingPreviewFlush('thought', thoughtThrottleRef.current, thoughtBufferRef, setAgentThought);
     }
     return;
   }
@@ -659,6 +732,7 @@ export function handleAppSseEvent(
   const onMainTimeline = isMainTimelineView(viewStateRef.current);
   if (eventType === 'agent_response') {
     if (!isCurrentChatEvent) return;
+    invalidateAppPreviewTrailingFlushes(previewResyncGenerationRef);
     flushAuthoritativePreviews();
     setExtensionWorkingState({ message: null, indicator: null, visible: true });
     removeStalledPost();
