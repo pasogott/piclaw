@@ -1039,10 +1039,20 @@ export async function handleAgentMessage(
       }
     }
     if (!contextUsage || contextUsage.tokens === null) return;
+    const contextUsageRecord = contextUsage as unknown as { sessionGeneration?: unknown };
+    const usageGeneration = typeof contextUsageRecord.sessionGeneration === "string"
+      ? contextUsageRecord.sessionGeneration
+      : null;
+    const activeGeneration = typeof channel.agentPool.getSessionGenerationForChat === "function"
+      ? channel.agentPool.getSessionGenerationForChat(chatJid)
+      : null;
+    if (usageGeneration && activeGeneration && usageGeneration !== activeGeneration) return;
+    const sessionGeneration = usageGeneration ?? activeGeneration;
     const persistedUsage = {
       tokens: contextUsage.tokens,
       contextWindow: contextUsage.contextWindow,
       percent: contextUsage.percent,
+      ...(sessionGeneration ? { sessionGeneration } : {}),
     };
     const statusUsage = {
       ...persistedUsage,
@@ -1196,7 +1206,25 @@ export async function handleAgentMessage(
     }
 
     const result = await channel.agentPool.applyControlCommand(chatJid, command);
-    if (result.status === "success" && (isCompactCommand || isSessionRotateCommand)) {
+    if (result.status === "success" && result.sessionGenerationChanged && result.sessionGeneration) {
+      const boundaryUsage = {
+        tokens: null,
+        contextWindow: null,
+        percent: null,
+        sessionGeneration: result.sessionGeneration,
+      };
+      channel.setContextUsage(chatJid, { ...boundaryUsage, reset: true });
+      emitCommandStatus({
+        thread_id: interaction.timestamp,
+        agent_id: agentId,
+        turn_id: commandTurnId,
+        type: "context_usage",
+        context_reset: true,
+        sessionGeneration: result.sessionGeneration,
+        context_usage: boundaryUsage,
+      });
+    }
+    if (result.status === "success" && !result.sessionGenerationChanged && (isCompactCommand || isSessionRotateCommand)) {
       await publishCommandContextUsage(result, {
         threadId: interaction.timestamp,
         turnId: commandTurnId,
