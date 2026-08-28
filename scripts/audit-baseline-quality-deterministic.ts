@@ -225,6 +225,7 @@ const groupDefinitions: GroupDefinition[] = [
         "web-response-service.test.ts",
         "web-sse-client.test.ts",
         "agent-events.test.ts",
+        "display-update-coalescer.test.ts",
         "tool-status-hints.test.ts",
         "agent-command-status-title.test.ts",
         "session-recordings-handler.test.ts",

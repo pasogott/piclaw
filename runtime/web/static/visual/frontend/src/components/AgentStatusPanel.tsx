@@ -181,6 +181,7 @@ export function AgentStatusPanel() {
     const handleDraft = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (!draftStartRef.current) draftStartRef.current = Date.now();
+      if (detail.reset) draftBufferRef.current = "";
       if (detail.delta) {
         draftBufferRef.current += detail.delta;
       } else if (detail.text !== undefined) {
@@ -194,6 +195,7 @@ export function AgentStatusPanel() {
     const handleThought = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (!thoughtStartRef.current) thoughtStartRef.current = Date.now();
+      if (detail.reset) thoughtBufferRef.current = "";
       if (detail.delta) {
         thoughtBufferRef.current += detail.delta;
       } else if (detail.text !== undefined) {
