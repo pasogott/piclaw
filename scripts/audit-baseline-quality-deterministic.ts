@@ -189,6 +189,7 @@ const groupDefinitions: GroupDefinition[] = [
         "agent-status.test.ts",
         "chat-isolation.test.ts",
         "chat-run-control.test.ts",
+        "channel-state-context-generation.test.ts",
         "followup-placeholders.test.ts",
         "interaction-broadcaster.test.ts",
         "message-write-flows.test.ts",

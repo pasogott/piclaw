@@ -306,13 +306,24 @@ export class AgentRuntimeFacade {
   async applyControlCommand(chatJid: string, command: AgentControlCommand): Promise<AgentControlResult> {
     const runtime = await this.options.getOrCreateRuntime(chatJid);
     const session = runtime.session;
+    const previousSessionGeneration = typeof session.sessionId === "string" ? session.sessionId : null;
     const channel = detectChannel(chatJid);
     const apply = this.options.applyControlCommandFn ?? applyControlCommand;
     const result = await withChatContext(chatJid, channel, () => apply(runtime, this.options.modelRegistry, command));
     if (result.refresh_runtime || runtime.session !== session) {
       await this.options.refreshRuntime(chatJid, runtime);
     }
-    return result;
+    const sessionGeneration = typeof runtime.session.sessionId === "string" ? runtime.session.sessionId : null;
+    return sessionGeneration
+      ? {
+        ...result,
+        sessionGeneration,
+        ...(result.contextUsage
+          ? { contextUsage: { ...result.contextUsage, sessionGeneration: previousSessionGeneration ?? sessionGeneration } }
+          : {}),
+        ...(sessionGeneration !== previousSessionGeneration ? { sessionGenerationChanged: true } : {}),
+      }
+      : result;
   }
 
   async getCurrentModelLabel(chatJid: string): Promise<string | null> {
@@ -437,10 +448,22 @@ export class AgentRuntimeFacade {
     tokens: number | null;
     contextWindow: number;
     percent: number | null;
+    sessionGeneration?: string;
   } | null {
     const entry = this.options.pool.get(chatJid);
     if (!entry) return null;
-    return entry.runtime.session.getContextUsage() ?? null;
+    const session = entry.runtime.session;
+    const sessionGeneration = typeof session.sessionId === "string" ? session.sessionId.trim() : "";
+    const usage = session.getContextUsage() ?? null;
+    if (!sessionGeneration) return usage;
+    return usage
+      ? { ...usage, sessionGeneration }
+      : { tokens: null, contextWindow: session.model?.contextWindow ?? 0, percent: null, sessionGeneration };
+  }
+
+  getSessionGenerationForChat(chatJid: string): string | null {
+    const sessionId = this.options.pool.get(chatJid)?.runtime.session.sessionId;
+    return typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : null;
   }
 
   getSessionTreeSummaryForChat(chatJid: string): { leafId: string | null; total: number } | null {
