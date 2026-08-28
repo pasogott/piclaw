@@ -2,14 +2,18 @@ import { expect, test } from "bun:test";
 
 import {
   MODEL_CONTEXT_OVERHEAD_TOKENS,
+  MODEL_PICKER_RENDER_LIMIT,
   MODEL_TOKEN_ESTIMATE_SAFETY_MULTIPLIER,
+  buildModelPickerProjection,
   buildModelSearchDocument,
   calculateModelContextFit,
   classifyModelIdentity,
   classifyModelVariants,
   compareModelCatalogueText,
+  describeModelContextFit,
   filterAndRankModels,
   groupModels,
+  moveModelPickerActiveKey,
   normaliseModelCatalogue,
 } from "../../web/src/ui/model-catalogue.ts";
 
@@ -113,6 +117,7 @@ test("normaliseModelCatalogue reconstructs partial structured identities without
     ],
   });
 
+  expect(entries.some((entry) => entry.current)).toBe(false);
   expect(entries.map((entry) => ({ key: entry.key, provider: entry.provider, id: entry.id, publisher: entry.publisher }))).toEqual([
     { key: "openrouter/anthropic/claude-4", provider: "openrouter", id: "anthropic/claude-4", publisher: "anthropic" },
     { key: "openrouter/google/gemini-3", provider: "openrouter", id: "google/gemini-3", publisher: "google" },
@@ -312,4 +317,108 @@ test("provider-less legacy entries use the same unknown sentinel for grouping an
   const entries = normaliseModelCatalogue({ models: ["gpt-5"] });
   expect(groupModels(entries).map((group) => group.provider)).toEqual(["unknown"]);
   expect(filterAndRankModels(entries, { providers: "unknown" })).toEqual(entries);
+});
+
+test("model picker projection deduplicates priority sections and bounds a 405-model catalogue", () => {
+  const modelOptions = Array.from({ length: 405 }, (_, index) => ({
+    provider: "openrouter",
+    id: `${["anthropic", "google", "openai", "qwen"][index % 4]}/model-${index}`,
+    name: `Model ${index}`,
+    context_window: index % 5 === 0 ? 128_000 : 200_000,
+    reasoning: index % 2 === 0,
+  }));
+  const entries = normaliseModelCatalogue({
+    current: "openrouter/anthropic/model-404",
+    model_options: modelOptions,
+  }, { currentTokens: 150_000 });
+  const projection = buildModelPickerProjection(entries);
+
+  expect(MODEL_PICKER_RENDER_LIMIT).toBe(100);
+  expect(projection.totalMatches).toBe(405);
+  expect(projection.renderedEntries).toHaveLength(100);
+  expect(new Set(projection.renderedEntries.map((entry) => entry.key)).size).toBe(100);
+  expect(projection.renderedEntries[0].key).toBe("openrouter/anthropic/model-404");
+  expect(projection.sections.find((section) => section.key === "blocked")?.collapsed).toBe(true);
+  expect(projection.sections.find((section) => section.key === "blocked")?.entries).toEqual([]);
+  expect(projection.sections.find((section) => section.key === "compatible")?.groups.map((group) => group.label)).toEqual([
+    "openrouter · anthropic",
+    "openrouter · google",
+  ]);
+});
+
+test("expanded blocked models reserve only the rows they need within the render cap", () => {
+  const entries = normaliseModelCatalogue({
+    model_options: Array.from({ length: 101 }, (_, index) => ({
+      provider: "test",
+      id: `model-${index}`,
+      context_window: index === 100 ? 128_000 : 200_000,
+    })),
+  }, { currentTokens: 150_000 });
+  const projection = buildModelPickerProjection(entries, { showBlocked: true });
+
+  expect(projection.renderedEntries).toHaveLength(100);
+  expect(projection.renderedEntries.some((entry) => entry.key === "test/model-100")).toBe(true);
+  expect(projection.renderedEntries.filter((entry) => entry.contextFit.state === "blocked")).toHaveLength(1);
+});
+
+test("expanded blocked rows cannot be starved by oversized priority sections", () => {
+  const modelOptions = Array.from({ length: 200 }, (_, index) => ({
+    provider: "test",
+    id: `model-${index}`,
+    context_window: index < 150 ? 200_000 : 128_000,
+  }));
+  const entries = normaliseModelCatalogue({ model_options: modelOptions }, {
+    currentTokens: 150_000,
+    pinnedKeys: modelOptions.slice(0, 150).map((entry) => `test/${entry.id}`),
+  });
+  const projection = buildModelPickerProjection(entries, { showBlocked: true });
+
+  expect(projection.renderedEntries).toHaveLength(100);
+  expect(projection.renderedEntries.filter((entry) => entry.contextFit.state === "blocked")).toHaveLength(50);
+  expect(projection.sections.find((section) => section.key === "pinned")?.entries).toHaveLength(50);
+});
+
+test("unknown context fit remains selectable in a neutral picker section", () => {
+  const entries = normaliseModelCatalogue({ models: ["openai/gpt-5"] });
+  const projection = buildModelPickerProjection(entries);
+
+  expect(projection.sections.find((section) => section.key === "unknown")?.label).toBe("Context limit unknown");
+  expect(moveModelPickerActiveKey(projection.renderedEntries, null, "first")).toBe("openai/gpt-5");
+});
+
+test("model picker search expands blocked matches and provides a concrete fit explanation", () => {
+  const entries = normaliseModelCatalogue({
+    model_options: [
+      { provider: "openai", id: "gpt-small", context_window: 128_000 },
+      { provider: "openai", id: "gpt-large", context_window: 200_000 },
+    ],
+  }, { currentTokens: 150_000 });
+  const projection = buildModelPickerProjection(entries, { query: "gpt-small" });
+  const blocked = projection.sections.find((section) => section.key === "blocked");
+
+  expect(blocked?.collapsed).toBe(false);
+  expect(blocked?.groups[0]?.entries.map((entry) => entry.key)).toEqual(["openai/gpt-small"]);
+  expect(describeModelContextFit(entries.find((entry) => entry.key === "openai/gpt-small")!)).toBe(
+    "Needs about 165K tokens with estimator safety; this model safely fits 124K (128K raw). Compact before switching.",
+  );
+});
+
+test("model picker navigation supports arrows, boundaries, and page movement while skipping blocked rows", () => {
+  const entries = normaliseModelCatalogue({
+    model_options: [
+      { provider: "test", id: "one", context_window: 200_000 },
+      { provider: "test", id: "two", context_window: 128_000 },
+      { provider: "test", id: "three", context_window: 200_000 },
+      { provider: "test", id: "four", context_window: 200_000 },
+    ],
+  }, { currentTokens: 150_000 });
+  const ordered = filterAndRankModels(entries, { sort: "name" });
+
+  expect(moveModelPickerActiveKey(ordered, null, "first")).toBe("test/four");
+  expect(moveModelPickerActiveKey(ordered, null, "next")).toBe("test/four");
+  expect(moveModelPickerActiveKey(ordered, null, "previous")).toBe("test/three");
+  expect(moveModelPickerActiveKey(ordered, "test/four", "next")).toBe("test/one");
+  expect(moveModelPickerActiveKey(ordered, "test/one", "next")).toBe("test/three");
+  expect(moveModelPickerActiveKey(ordered, "test/three", "last")).toBe("test/three");
+  expect(moveModelPickerActiveKey(ordered, "test/three", "page-previous", 2)).toBe("test/four");
 });

@@ -1287,6 +1287,264 @@
     cursor: not-allowed;
 }
 
+.compose-model-catalogue {
+    right: auto;
+    width: min(680px, calc(100vw - 24px));
+    max-height: min(70vh, 620px);
+    padding: 0;
+    gap: 0;
+    overflow: hidden;
+}
+
+.compose-model-catalogue-header {
+    padding: 10px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+}
+
+.compose-model-catalogue-search-label {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.compose-model-catalogue-search-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.compose-model-catalogue-search {
+    width: 100%;
+    min-height: 36px;
+    padding: 7px 34px 7px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: 12px var(--font-family-mono);
+}
+
+.compose-model-catalogue-search:focus {
+    outline: 2px solid color-mix(in srgb, var(--accent-color) 50%, transparent);
+    outline-offset: -1px;
+}
+
+.compose-model-catalogue-clear {
+    position: absolute;
+    right: 4px;
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 18px;
+}
+
+.compose-model-catalogue-clear:hover,
+.compose-model-catalogue-clear:focus-visible {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    outline: none;
+}
+
+.compose-model-catalogue-summary {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 6px;
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+
+.compose-model-catalogue .compose-model-catalogue-results {
+    flex: 1 1 auto;
+    max-height: min(48vh, 430px);
+    min-height: 110px;
+    border: 0;
+    border-radius: 0;
+}
+
+.compose-model-catalogue-section + .compose-model-catalogue-section {
+    border-top: 1px solid color-mix(in srgb, var(--border-color) 75%, transparent);
+}
+
+.compose-model-catalogue-section-heading,
+.compose-model-catalogue-group-heading {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.045em;
+    text-transform: uppercase;
+}
+
+.compose-model-catalogue-section-heading {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 7px 10px 5px;
+    background: color-mix(in srgb, var(--bg-secondary) 94%, transparent);
+    backdrop-filter: blur(8px);
+}
+
+.compose-model-catalogue-group-heading {
+    padding: 6px 10px 4px 30px;
+    background: color-mix(in srgb, var(--bg-secondary) 64%, transparent);
+}
+
+.compose-model-catalogue-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    border: 0;
+    border-left: 2px solid transparent;
+    background: transparent;
+    color: var(--text-primary);
+    text-align: left;
+    cursor: pointer;
+}
+
+.compose-model-catalogue-option:hover,
+.compose-model-catalogue-option.focused,
+.compose-model-catalogue-option:focus-visible {
+    background: var(--bg-hover);
+    outline: none;
+}
+
+.compose-model-catalogue-option.focused {
+    border-left-color: var(--accent-color);
+}
+
+.compose-model-catalogue-option.selected {
+    color: var(--accent-color);
+    background: color-mix(in srgb, var(--accent-color) 9%, transparent);
+}
+
+.compose-model-catalogue-option.blocked {
+    color: var(--text-secondary);
+    cursor: not-allowed;
+    opacity: 0.78;
+}
+
+.compose-model-catalogue-option-check {
+    width: 12px;
+    flex: 0 0 12px;
+    color: var(--accent-color);
+    text-align: center;
+}
+
+.compose-model-catalogue-option-content {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.compose-model-catalogue-option-name,
+.compose-model-catalogue-option-key {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.compose-model-catalogue-option-name {
+    font: 12px var(--font-family-mono);
+    font-weight: 650;
+}
+
+.compose-model-catalogue-option-key {
+    color: var(--text-secondary);
+    font: 10px var(--font-family-mono);
+}
+
+.compose-model-catalogue-option-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 2px;
+}
+
+.compose-model-catalogue-badge {
+    padding: 1px 5px;
+    border: 1px solid color-mix(in srgb, var(--border-color) 75%, transparent);
+    border-radius: 999px;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--bg-secondary) 78%, transparent);
+    font-size: 9px;
+    line-height: 1.4;
+}
+
+.compose-model-catalogue-option-note {
+    margin-top: 3px;
+    color: var(--warning-color);
+    font-size: 10px;
+    line-height: 1.35;
+}
+
+.compose-model-catalogue-limit-note {
+    padding: 9px 10px;
+    border-top: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 10px;
+    text-align: center;
+}
+
+.compose-model-catalogue-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+}
+
+.compose-model-catalogue-footer-start {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+@media (max-width: 639px) {
+    .compose-model-catalogue {
+        position: fixed;
+        inset: auto 8px 82px 8px;
+        width: auto;
+        max-height: min(72vh, 620px);
+        border-radius: var(--radius-md);
+    }
+
+    .compose-model-catalogue .compose-model-catalogue-results {
+        max-height: min(48vh, 420px);
+    }
+
+    .compose-model-catalogue-footer {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .compose-model-catalogue-footer-start,
+    .compose-model-catalogue-footer .compose-model-popup-btn {
+        flex: 1;
+    }
+
+    .compose-model-catalogue-footer-start .compose-model-popup-btn {
+        min-height: 34px;
+    }
+}
+
 .rename-branch-overlay {
     position: fixed;
     inset: 0;

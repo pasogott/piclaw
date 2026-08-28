@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 
 import { normaliseVisualModelPickerOptions } from "../../web/static/visual/frontend/src/components/model-context-bar/useModelPicker.ts";
 
-test("visual model picker keeps normalized current state for non-canonical backend labels", () => {
-  expect(normaliseVisualModelPickerOptions({
+test("visual model picker keeps shared normalized identity and current state for non-canonical backend labels", () => {
+  const [entry] = normaliseVisualModelPickerOptions({
     current: "gpt-5",
     models: [],
     model_options: [{
@@ -14,32 +14,42 @@ test("visual model picker keeps normalized current state for non-canonical backe
       reasoning: true,
       pricing: { input_per_million: 1, output_per_million: 2 },
     }],
-  } as any)).toEqual([{
-    id: "openai/gpt-5",
+  } as any);
+
+  expect(entry).toMatchObject({
+    key: "openai/gpt-5",
+    provider: "openai",
+    id: "gpt-5",
+    displayName: "GPT-5",
     current: true,
-    name: "GPT-5",
-    context_window: null,
     reasoning: true,
+    reasoningKnown: true,
+    contextWindow: null,
     pricing: {
-      input_per_million: 1,
-      output_per_million: 2,
-      cache_read_per_million: null,
-      cache_write_per_million: null,
+      inputPerMillion: 1,
+      outputPerMillion: 2,
+      cacheReadPerMillion: null,
+      cacheWritePerMillion: null,
     },
-  }]);
+  });
 });
 
-test("visual model picker omits unknown reasoning metadata for legacy string payloads", () => {
-  expect(normaliseVisualModelPickerOptions({
+test("visual model picker marks reasoning metadata as unknown for legacy string payloads", () => {
+  const [entry] = normaliseVisualModelPickerOptions({
     current: "openai/gpt-4.1",
     models: ["openai/gpt-4.1"],
     model_options: [],
-  } as any)).toEqual([{
-    id: "openai/gpt-4.1",
+  } as any);
+
+  expect(entry).toMatchObject({
+    key: "openai/gpt-4.1",
+    provider: "openai",
+    id: "gpt-4.1",
+    displayName: "openai/gpt-4.1",
     current: true,
-    name: null,
-    context_window: null,
-    reasoning: undefined,
+    reasoning: false,
+    reasoningKnown: false,
+    contextWindow: null,
     pricing: null,
-  }]);
+  });
 });
