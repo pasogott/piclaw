@@ -41,9 +41,10 @@ export function ModelsSection({ data: _data }: { data: SettingsData }) {
         return;
       }
       const d = await res.json() as ModelsResponse;
-      current.value = d.current ?? "";
+      const catalogue = normaliseModelCatalogue(d);
+      current.value = catalogue.find((model) => model.current)?.key ?? d.current ?? "";
       thinkingLevel.value = d.thinking_level ?? "medium";
-      models.value = normaliseModelCatalogue(d);
+      models.value = catalogue;
       loadError.value = null;
     } catch (err: any) {
       loadError.value = err?.name === "AbortError" ? "Models request timed out" : "Failed to load models";

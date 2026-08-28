@@ -93,6 +93,7 @@ export interface ModelPricing {
 
 export interface ModelEntry {
   id: string;
+  current?: boolean;
   name?: string | null;
   context_window?: number | null;
   reasoning?: boolean;

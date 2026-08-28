@@ -595,6 +595,7 @@ export function normalizeModelPickerOptions(payload) {
         contextWindow: entry.contextWindow,
         pricing: entry.pricing,
         reasoning: hasStructuredOptions ? entry.reasoning : null,
+        ...(entry.current ? { current: true } : {}),
     }));
 }
 
@@ -2921,7 +2922,7 @@ export function ComposeBox({
 
     useEffect(() => {
         if (!showModelPopup) return;
-        const activeIndex = modelOptions.findIndex((model) => model?.label === activeModel);
+        const activeIndex = modelOptions.findIndex((model) => model?.current || model?.label === activeModel);
         setModelPopupIndex(activeIndex >= 0 ? activeIndex : 0);
     }, [showModelPopup, modelOptions, activeModel]);
 
@@ -3431,7 +3432,7 @@ export function ComposeBox({
                                             key=${modelLabel}
                                             type="button"
                                             role="menuitem"
-                                            class=${`compose-model-popup-item compose-model-popup-model-item${modelPopupIndex === index ? ' active' : ''}${activeModel === modelLabel ? ' current-model' : ''}${contextLimit.blocked ? ' context-blocked' : ''}`}
+                                            class=${`compose-model-popup-item compose-model-popup-model-item${modelPopupIndex === index ? ' active' : ''}${modelOption?.current || activeModel === modelLabel ? ' current-model' : ''}${contextLimit.blocked ? ' context-blocked' : ''}`}
                                             onClick=${() => { void handleSelectModel(modelOption); }}
                                             disabled=${switchingModel || contextLimit.blocked}
                                             title=${[modelLabel, modelDisplayName, contextWindowLabel, reasoningLabel, pricingLabel, contextLimit.title].filter(Boolean).join(' • ')}
