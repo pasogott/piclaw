@@ -344,7 +344,7 @@ export function normaliseModelCatalogue(
         thinkingLevels: normalizeThinkingLevels(option),
         pricing: normalizePricing(option.pricing),
         variants: classifyModelVariants({ id: identity.id, displayName }),
-        current: identity.key === currentKey || normalizeRoutedKey(option.label) === currentKey,
+        current: Boolean(currentKey && (identity.key === currentKey || normalizeRoutedKey(option.label) === currentKey)),
         pinned: pinnedKeys.has(identity.key),
         lastUsedAt: recentValue(options.recentByKey, identity.key),
       };
@@ -523,4 +523,179 @@ export function groupModels(entries: readonly ModelCatalogueEntry[]): ModelCatal
         totalCount: providerEntries.length,
       };
     });
+}
+
+export const MODEL_PICKER_RENDER_LIMIT = 100;
+
+export interface ModelPickerProjectionGroup {
+  key: string;
+  label: string;
+  entries: ModelCatalogueEntry[];
+  totalCount: number;
+}
+
+export interface ModelPickerProjectionSection {
+  key: "current" | "pinned" | "recent" | "compatible" | "unknown" | "blocked";
+  label: string;
+  collapsed: boolean;
+  totalCount: number;
+  entries: ModelCatalogueEntry[];
+  groups: ModelPickerProjectionGroup[];
+}
+
+export interface ModelPickerProjection {
+  sections: ModelPickerProjectionSection[];
+  renderedEntries: ModelCatalogueEntry[];
+  totalMatches: number;
+  hiddenCount: number;
+  blockedCount: number;
+}
+
+export interface ModelPickerProjectionOptions {
+  query?: string;
+  showBlocked?: boolean;
+  renderLimit?: number;
+}
+
+function formatContextFitTokens(value: number | null): string {
+  if (value == null) return "unknown";
+  if (value >= 1_000_000) {
+    const millions = value / 1_000_000;
+    return `${Number.isInteger(millions) ? millions.toFixed(0) : millions.toFixed(1)}M`;
+  }
+  if (value >= 1_000) return `${Math.round(value / 1_000)}K`;
+  return String(value);
+}
+
+export function describeModelContextFit(entry: Pick<ModelCatalogueEntry, "contextWindow" | "contextFit">): string {
+  const fit = entry.contextFit;
+  if (fit.state !== "blocked") return "";
+  return `Needs about ${formatContextFitTokens(fit.safetyAdjustedTokens)} tokens with estimator safety; this model safely fits ${formatContextFitTokens(fit.effectiveContextWindow)} (${formatContextFitTokens(entry.contextWindow)} raw). Compact before switching.`;
+}
+
+function flattenProjectionGroups(entries: readonly ModelCatalogueEntry[]): ModelPickerProjectionGroup[] {
+  const groups: ModelPickerProjectionGroup[] = [];
+  for (const provider of groupModels(entries)) {
+    if (provider.entries.length > 0) {
+      groups.push({
+        key: provider.key,
+        label: provider.label,
+        entries: provider.entries,
+        totalCount: provider.entries.length,
+      });
+    }
+    for (const publisher of provider.publisherGroups) {
+      groups.push({
+        key: publisher.key,
+        label: `${provider.label} · ${publisher.label}`,
+        entries: publisher.entries,
+        totalCount: publisher.totalCount,
+      });
+    }
+  }
+  return groups;
+}
+
+export function buildModelPickerProjection(
+  entries: readonly ModelCatalogueEntry[],
+  options: ModelPickerProjectionOptions = {},
+): ModelPickerProjection {
+  const query = cleanString(options.query);
+  const matched = filterAndRankModels(entries, { query });
+  const renderLimit = Math.max(1, Math.min(MODEL_PICKER_RENDER_LIMIT, Math.floor(options.renderLimit ?? MODEL_PICKER_RENDER_LIMIT)));
+  const seen = new Set<string>();
+  let remaining = renderLimit;
+  const renderedEntries: ModelCatalogueEntry[] = [];
+  const sections: ModelPickerProjectionSection[] = [];
+
+  const addSection = (
+    key: ModelPickerProjectionSection["key"],
+    label: string,
+    candidates: ModelCatalogueEntry[],
+    grouped = false,
+    collapsed = false,
+    maxRows = renderLimit,
+  ) => {
+    const unique = candidates.filter((entry) => !seen.has(entry.key));
+    if (unique.length === 0) return;
+    const visible = collapsed ? [] : unique.slice(0, Math.min(remaining, maxRows));
+    visible.forEach((entry) => seen.add(entry.key));
+    if (!collapsed && visible.length === 0) return;
+    remaining -= visible.length;
+    renderedEntries.push(...visible);
+    const visibleKeys = new Set(visible.map((entry) => entry.key));
+    const groups = grouped
+      ? flattenProjectionGroups(unique).map((group) => ({
+        ...group,
+        entries: group.entries.filter((entry) => visibleKeys.has(entry.key)),
+      })).filter((group) => group.entries.length > 0)
+      : [];
+    sections.push({
+      key,
+      label,
+      collapsed,
+      totalCount: unique.length,
+      entries: grouped ? [] : visible,
+      groups,
+    });
+  };
+
+  const fits = matched.filter((entry) => entry.contextFit.state === "fits");
+  const unknown = matched.filter((entry) => entry.contextFit.state === "unknown");
+  const blocked = matched.filter((entry) => entry.contextFit.state === "blocked");
+  const blockedExpanded = Boolean(query || options.showBlocked);
+  const blockedTarget = blockedExpanded ? Math.min(blocked.length, Math.floor(renderLimit / 2)) : 0;
+  const unknownTarget = Math.min(unknown.length, Math.floor((renderLimit - blockedTarget) / 2));
+  let priorityBudget = Math.max(0, renderLimit - blockedTarget - unknownTarget);
+  const addPrioritySection = (
+    key: "current" | "pinned" | "recent",
+    label: string,
+    candidates: ModelCatalogueEntry[],
+  ) => {
+    const before = renderedEntries.length;
+    addSection(key, label, candidates, false, false, priorityBudget);
+    priorityBudget = Math.max(0, priorityBudget - (renderedEntries.length - before));
+  };
+
+  addPrioritySection("current", "Current", matched.filter((entry) => entry.current));
+  addPrioritySection("pinned", "Pinned", matched.filter((entry) => entry.pinned));
+  addPrioritySection("recent", "Recent", matched.filter((entry) => Boolean(entry.lastUsedAt)));
+
+  const priorityBlockedCount = renderedEntries.filter((entry) => entry.contextFit.state === "blocked").length;
+  const priorityUnknownCount = renderedEntries.filter((entry) => entry.contextFit.state === "unknown").length;
+  const blockedReserve = Math.max(0, blockedTarget - priorityBlockedCount);
+  const unknownReserve = Math.max(0, unknownTarget - priorityUnknownCount);
+  addSection("compatible", "Compatible models", fits, true, false, Math.max(0, remaining - blockedReserve - unknownReserve));
+  addSection("unknown", "Context limit unknown", unknown, true, false, Math.max(0, remaining - blockedReserve));
+  addSection("blocked", "Does not fit current context", blocked, true, !blockedExpanded);
+
+  return {
+    sections,
+    renderedEntries,
+    totalMatches: matched.length,
+    hiddenCount: Math.max(0, matched.length - renderedEntries.length),
+    blockedCount: blocked.length,
+  };
+}
+
+export type ModelPickerNavigationAction = "next" | "previous" | "first" | "last" | "page-next" | "page-previous";
+
+export function moveModelPickerActiveKey(
+  entries: readonly ModelCatalogueEntry[],
+  activeKey: string | null | undefined,
+  action: ModelPickerNavigationAction,
+  pageSize = 7,
+): string | null {
+  const selectable = entries.filter((entry) => entry.contextFit.state !== "blocked");
+  if (selectable.length === 0) return null;
+  const currentIndex = selectable.findIndex((entry) => entry.key === activeKey);
+  const page = Math.max(1, Math.floor(pageSize));
+  let nextIndex = currentIndex;
+  if (action === "first") nextIndex = 0;
+  if (action === "last") nextIndex = selectable.length - 1;
+  if (action === "next") nextIndex = currentIndex < 0 ? 0 : Math.min(selectable.length - 1, currentIndex + 1);
+  if (action === "previous") nextIndex = currentIndex < 0 ? selectable.length - 1 : Math.max(0, currentIndex - 1);
+  if (action === "page-next") nextIndex = currentIndex < 0 ? 0 : Math.min(selectable.length - 1, currentIndex + page);
+  if (action === "page-previous") nextIndex = currentIndex < 0 ? selectable.length - 1 : Math.max(0, currentIndex - page);
+  return selectable[nextIndex]?.key ?? null;
 }

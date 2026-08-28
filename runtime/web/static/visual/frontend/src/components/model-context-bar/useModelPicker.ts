@@ -1,14 +1,14 @@
 import { useCallback } from "preact/hooks";
 import { useSignal } from "@preact/signals";
 import { getMessageUrl, getChatJid } from "../../api/chat-jid";
-import type { ModelEntry, ModelInfo } from "./types";
+import type { ModelInfo, VisualModelEntry } from "./types";
 import { FALLBACK_MODELS, FALLBACK_THINKING_LEVELS } from "./types";
 import { normaliseModelCatalogue } from "../../../../../../src/ui/model-catalogue";
 
 export interface UseModelPickerResult {
   showPicker: ReturnType<typeof useSignal<boolean>>;
   showThinkingPicker: ReturnType<typeof useSignal<boolean>>;
-  models: ReturnType<typeof useSignal<ModelEntry[]>>;
+  models: ReturnType<typeof useSignal<VisualModelEntry[]>>;
   thinkingLevels: ReturnType<typeof useSignal<string[]>>;
   handleBadgeClick: (e: Event, currentModelName: string, onThinkingLevel: (l: string) => void, onCurrentModel: (m: string) => void) => Promise<void>;
   handleSelectModel: (id: string, onCurrentModel: (m: string) => void) => Promise<void>;
@@ -20,28 +20,35 @@ const flashStatus = (message: string) => {
   window.dispatchEvent(new CustomEvent("piclaw:status-flash", { detail: { message, type: "error" } }));
 };
 
-export function normaliseVisualModelPickerOptions(info: ModelInfo): ModelEntry[] {
-  const catalogue = normaliseModelCatalogue(info);
+export function normaliseVisualModelPickerOptions(info: ModelInfo): VisualModelEntry[] {
   const hasStructuredOptions = Array.isArray(info.model_options) && info.model_options.length > 0;
-  return catalogue.map((entry) => ({
-    id: entry.key,
-    current: entry.current,
-    name: entry.displayName === entry.key ? null : entry.displayName,
-    context_window: entry.contextWindow,
-    reasoning: hasStructuredOptions ? entry.reasoning : undefined,
-    pricing: entry.pricing ? {
-      input_per_million: entry.pricing.inputPerMillion,
-      output_per_million: entry.pricing.outputPerMillion,
-      cache_read_per_million: entry.pricing.cacheReadPerMillion,
-      cache_write_per_million: entry.pricing.cacheWritePerMillion,
-    } : null,
+  return normaliseModelCatalogue(info).map((entry) => ({
+    ...entry,
+    reasoningKnown: hasStructuredOptions,
   }));
+}
+
+function fallbackModelCatalogue(current: string): VisualModelEntry[] {
+  return normaliseVisualModelPickerOptions({
+    current,
+    models: [],
+    model_options: FALLBACK_MODELS.map((entry) => ({
+      provider: entry.id.split("/")[0],
+      id: entry.id.split("/").slice(1).join("/"),
+      label: entry.id,
+      context_window: entry.context_window,
+    })),
+    thinking_level: null,
+    thinking_level_label: null,
+    supports_thinking: false,
+    available_thinking_levels: [],
+  });
 }
 
 export function useModelPicker(): UseModelPickerResult {
   const showPicker = useSignal<boolean>(false);
   const showThinkingPicker = useSignal<boolean>(false);
-  const models = useSignal<ModelEntry[]>([]);
+  const models = useSignal<VisualModelEntry[]>([]);
   const thinkingLevels = useSignal<string[]>([]);
 
   const handleBadgeClick = useCallback(async (
@@ -53,14 +60,14 @@ export function useModelPicker(): UseModelPickerResult {
     e.stopPropagation();
     if (showPicker.value) { showPicker.value = false; return; }
     showPicker.value = true;
-    if (!models.value.length) models.value = FALLBACK_MODELS;
+    if (!models.value.length) models.value = fallbackModelCatalogue(currentModelName);
     try {
       const res = await fetch("/agent/models?chat_jid=" + encodeURIComponent(getChatJid()));
       if (res.ok) {
         const info = await res.json() as ModelInfo;
         const catalogue = normaliseVisualModelPickerOptions(info);
-        models.value = catalogue.length ? catalogue : FALLBACK_MODELS;
-        onCurrentModel(catalogue.find((entry) => entry.current)?.id ?? info.current ?? currentModelName);
+        if (catalogue.length) models.value = catalogue;
+        onCurrentModel(catalogue.find((entry) => entry.current)?.key ?? info.current ?? currentModelName);
         if (info.thinking_level_label || info.thinking_level) {
           onThinkingLevel(info.thinking_level_label ?? info.thinking_level!);
         }
@@ -95,7 +102,7 @@ export function useModelPicker(): UseModelPickerResult {
             const info = await r.json() as ModelInfo;
             const confirmed = normaliseVisualModelPickerOptions(info);
             if (confirmed.length) models.value = confirmed;
-            const confirmedCurrent = confirmed.find((entry) => entry.current)?.id ?? info.current;
+            const confirmedCurrent = confirmed.find((entry) => entry.current)?.key ?? info.current;
             if (confirmedCurrent) onCurrentModel(confirmedCurrent);
           }
         } catch {}

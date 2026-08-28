@@ -14,6 +14,7 @@ import { FilePill } from './file-pill.js';
 import { refreshAgentModelStateBestEffort } from './compose-model-refresh.js';
 import { renderMarkdown } from '../markdown.js';
 import { requestOpenSettingsDialog } from './settings-dialog-events.js';
+import { ClassicModelPicker } from './model-picker.ts';
 import {
     buildModelSearchDocument,
     calculateModelContextFit,
@@ -1205,7 +1206,6 @@ export function ComposeBox({
     const [hiddenSessionChatJids, setHiddenSessionChatJids] = useState(() => new Set());
     const deletingSessionChatJidsRef = useRef(new Set());
     const [modelOptions, setModelOptions] = useState([]);
-    const [modelPopupIndex, setModelPopupIndex] = useState(0);
     const [sessionPopupIndex, setSessionPopupIndex] = useState(0);
     const [loadingModels, setLoadingModels] = useState(false);
     const [rollingUpSession, setRollingUpSession] = useState(false);
@@ -2193,23 +2193,25 @@ export function ComposeBox({
         handleSpeechToggle();
     };
 
-    const handleCycleModel = async () => {
-        await runModelCommand('/cycle-model');
-    };
-
     const handleSelectModel = async (modelOption) => {
         const modelLabel = typeof modelOption === 'string'
             ? modelOption
-            : (typeof modelOption?.label === 'string' ? modelOption.label : '');
+            : (typeof modelOption?.key === 'string'
+                ? modelOption.key
+                : (typeof modelOption?.label === 'string' ? modelOption.label : ''));
         if (!modelLabel || switchingModel) return;
-        const contextLimit = getModelPickerContextLimit(modelOption, contextUsage);
+        const blocked = modelOption?.contextFit?.state === 'blocked';
+        const contextLimit = blocked ? { blocked: true, note: 'Compact context before switching to this model.' } : getModelPickerContextLimit(modelOption, contextUsage);
         if (contextLimit.blocked) {
             setSubmitError(null);
             setSubmitNotice(contextLimit.note || 'Compact context first');
             return;
         }
         const ok = await runModelCommand(`/model ${modelLabel}`);
-        if (ok) setShowModelPopup(false);
+        if (ok) {
+            setShowModelPopup(false);
+            requestAnimationFrame(() => modelHintRef.current?.focus?.());
+        }
     };
 
     const runSessionPopupEntry = (entry) => {
@@ -2246,12 +2248,22 @@ export function ComposeBox({
         }
     };
 
+    const closeModelPopup = useCallback(() => {
+        setShowModelPopup(false);
+        requestAnimationFrame(() => modelHintRef.current?.focus?.());
+    }, []);
+
     const toggleModelPopup = (event) => {
         event.preventDefault();
         event.stopPropagation();
         popupTypeaheadRef.current = { value: '', updatedAt: 0 };
         setShowSessionPopup(false);
-        setShowModelPopup((prev) => !prev);
+        setShowModelPopup((previous) => {
+            if (!previous) {
+                setModelOptions(normaliseModelCatalogue(agentModelsPayload, { contextUsage }));
+            }
+            return !previous;
+        });
     };
 
     const handleContextCompact = async () => {
@@ -2498,41 +2510,15 @@ export function ComposeBox({
         const resetPopupTypeahead = () => {
             popupTypeaheadRef.current = { value: '', updatedAt: 0 };
         };
+        if (showModelPopup && e.target?.closest?.('[data-compose-model-catalogue]')) return false;
         if (e.key === 'Escape') {
             consume();
             resetPopupTypeahead();
-            if (showModelPopup) setShowModelPopup(false);
+            if (showModelPopup) closeModelPopup();
             if (showSessionPopup) setShowSessionPopup(false);
             return true;
         }
-        if (showModelPopup) {
-            if (e.key === 'ArrowDown') {
-                consume();
-                resetPopupTypeahead();
-                if (modelOptions.length > 0) setModelPopupIndex((idx) => (idx + 1) % modelOptions.length);
-                return true;
-            }
-            if (e.key === 'ArrowUp') {
-                consume();
-                resetPopupTypeahead();
-                if (modelOptions.length > 0) setModelPopupIndex((idx) => (idx - 1 + modelOptions.length) % modelOptions.length);
-                return true;
-            }
-            if ((e.key === 'Enter' || e.key === 'Tab') && modelOptions.length > 0) {
-                consume();
-                resetPopupTypeahead();
-                void handleSelectModel(modelOptions[Math.max(0, Math.min(modelPopupIndex, modelOptions.length - 1))]);
-                return true;
-            }
-            if (isPopupTypeaheadKey(e) && modelOptions.length > 0) {
-                consume();
-                const nextBuffer = updatePopupTypeaheadBuffer(popupTypeaheadRef.current, e.key);
-                popupTypeaheadRef.current = nextBuffer;
-                const match = resolvePopupTypeaheadMatch(modelOptions, nextBuffer.value, modelPopupIndex, (item) => getModelPickerOptionSearchLabel(item));
-                if (match >= 0) setModelPopupIndex(match);
-                return true;
-            }
-        }
+        if (showModelPopup) return false;
         if (showSessionPopup) {
             if (e.key === 'ArrowDown') {
                 consume();
@@ -2566,11 +2552,9 @@ export function ComposeBox({
         searchMode,
         showModelPopup,
         showSessionPopup,
-        modelOptions,
-        modelPopupIndex,
         sessionPopupEntries,
         sessionPopupIndex,
-        handleSelectModel,
+        closeModelPopup,
     ]);
 
     const handleKeyDown = (e) => {
@@ -2884,7 +2868,7 @@ export function ComposeBox({
         setLoadingModels(true);
         getAgentModels(currentChatJid)
             .then((payload) => {
-                setModelOptions(normalizeModelPickerOptions(payload));
+                setModelOptions(normaliseModelCatalogue(payload, { contextUsage }));
                 emitModelState(payload);
             })
             .catch((error) => {
@@ -2894,7 +2878,7 @@ export function ComposeBox({
             .finally(() => {
                 setLoadingModels(false);
             });
-    }, [showModelPopup, activeModel]);
+    }, [showModelPopup, currentChatJid]);
 
     useEffect(() => {
         if (searchMode) {
@@ -2919,12 +2903,6 @@ export function ComposeBox({
             setPendingPruneChatJid(null);
         }
     }, [showSessionPopup]);
-
-    useEffect(() => {
-        if (!showModelPopup) return;
-        const activeIndex = modelOptions.findIndex((model) => model?.current || model?.label === activeModel);
-        setModelPopupIndex(activeIndex >= 0 ? activeIndex : 0);
-    }, [showModelPopup, modelOptions, activeModel]);
 
     useEffect(() => {
         if (!showSessionPopup) return;
@@ -2972,14 +2950,6 @@ export function ComposeBox({
         document.addEventListener('keydown', onKeyDown, true);
         return () => document.removeEventListener('keydown', onKeyDown, true);
     }, [searchMode, showModelPopup, showSessionPopup, handlePopupKeyboardEvent]);
-
-    useEffect(() => {
-        if (!showModelPopup) return;
-        const popup = modelPopupRef.current;
-        popup?.focus?.();
-        const active = popup?.querySelector?.('.compose-model-popup-item.active');
-        active?.scrollIntoView?.({ block: 'nearest' });
-    }, [showModelPopup, modelPopupIndex, modelOptions]);
 
     useEffect(() => {
         if (!showSessionPopup) return;
@@ -3409,54 +3379,22 @@ export function ComposeBox({
                         </div>
                     `}
                     ${showModelPopup && !searchMode && html`
-                        <div class="compose-model-popup" ref=${modelPopupRef} tabIndex="-1" onKeyDown=${handlePopupKeyboardEvent}>
-                            <div class="compose-model-popup-title">${t('compose.selectModel')}</div>
-                            <div class="compose-model-popup-menu" role="menu" aria-label=${t('compose.modelPicker')}>
-                                ${loadingModels && html`
-                                    <div class="compose-model-popup-empty">${t('compose.loadingModels')}</div>
-                                `}
-                                ${!loadingModels && modelOptions.length === 0 && html`
-                                    <div class="compose-model-popup-empty">${t('compose.noModels')}</div>
-                                `}
-                                ${!loadingModels && modelOptions.map((modelOption, index) => {
-                                    const modelLabel = typeof modelOption?.label === 'string' ? modelOption.label : '';
-                                    const contextWindowLabel = formatModelPickerContextWindow(modelOption?.contextWindow);
-                                    const modelDisplayName = modelOption?.name || null;
-                                    const reasoningLabel = modelOption?.reasoning === true
-                                        ? 'reasoning'
-                                        : modelOption?.reasoning === false ? 'no reasoning' : null;
-                                    const pricingLabel = formatModelPickerPricing(modelOption?.pricing);
-                                    const contextLimit = getModelPickerContextLimit(modelOption, contextUsage);
-                                    return html`
-                                        <button
-                                            key=${modelLabel}
-                                            type="button"
-                                            role="menuitem"
-                                            class=${`compose-model-popup-item compose-model-popup-model-item${modelPopupIndex === index ? ' active' : ''}${modelOption?.current || activeModel === modelLabel ? ' current-model' : ''}${contextLimit.blocked ? ' context-blocked' : ''}`}
-                                            onClick=${() => { void handleSelectModel(modelOption); }}
-                                            disabled=${switchingModel || contextLimit.blocked}
-                                            title=${[modelLabel, modelDisplayName, contextWindowLabel, reasoningLabel, pricingLabel, contextLimit.title].filter(Boolean).join(' • ')}
-                                        >
-                                            <span class="compose-model-popup-model-stack">
-                                                <span class="compose-model-popup-model-label">${formatModelPickerDisplayLabel(modelLabel, modelOption?.contextWindow)}${modelDisplayName ? html` <span class="compose-model-popup-model-subtitle">${modelDisplayName}</span>` : ''}</span>
-                                                <span class="compose-model-popup-model-subtitle">${[reasoningLabel, pricingLabel].filter(Boolean).join(' • ')}</span>
-                                                ${contextLimit.blocked && html`<span class="compose-model-popup-model-note">${contextLimit.note}</span>`}
-                                            </span>
-                                        </button>
-                                    `;
-                                })}
-                            </div>
-                            <div class="compose-model-popup-actions">
-                                <button
-                                    type="button"
-                                    class="compose-model-popup-btn"
-                                    onClick=${() => { void handleCycleModel(); }}
-                                    disabled=${switchingModel}
-                                >
-                                    ${t('compose.nextModel')}
-                                </button>
-                            </div>
-                        </div>
+                        <${ClassicModelPicker}
+                            entries=${modelOptions}
+                            loading=${loadingModels}
+                            switching=${switchingModel}
+                            onSelect=${(entry) => { void handleSelectModel(entry); }}
+                            onClose=${closeModelPopup}
+                            onCompact=${() => {
+                                closeModelPopup();
+                                void handleContextCompact();
+                            }}
+                            onOpenSettings=${() => {
+                                setShowModelPopup(false);
+                                requestOpenSettingsDialog({ section: 'models' });
+                            }}
+                            rootRef=${modelPopupRef}
+                        />
                     `}
                     ${showSessionPopup && !searchMode && html`
                         <div class="compose-model-popup" data-testid="session-popup" ref=${sessionPopupRef} tabIndex="-1" onKeyDown=${handlePopupKeyboardEvent}>
