@@ -68,6 +68,10 @@ interface PreviewTrailingFlushState {
   generation: number;
   draftTimer: ReturnType<typeof setTimeout> | null;
   thoughtTimer: ReturnType<typeof setTimeout> | null;
+  draftSnapshot: { text: string; totalLines: unknown } | null;
+  thoughtSnapshot: { text: string; totalLines: unknown } | null;
+  draftDeltaActive: boolean;
+  thoughtDeltaActive: boolean;
 }
 
 const previewTrailingFlushStates = new WeakMap<object, PreviewTrailingFlushState>();
@@ -75,7 +79,15 @@ const previewTrailingFlushStates = new WeakMap<object, PreviewTrailingFlushState
 function previewTrailingFlushState(key: object): PreviewTrailingFlushState {
   let state = previewTrailingFlushStates.get(key);
   if (!state) {
-    state = { generation: 0, draftTimer: null, thoughtTimer: null };
+    state = {
+      generation: 0,
+      draftTimer: null,
+      thoughtTimer: null,
+      draftSnapshot: null,
+      thoughtSnapshot: null,
+      draftDeltaActive: false,
+      thoughtDeltaActive: false,
+    };
     previewTrailingFlushStates.set(key, state);
   }
   return state;
@@ -89,6 +101,10 @@ export function invalidateAppPreviewTrailingFlushes(key: object): void {
   if (state.thoughtTimer) clearTimeout(state.thoughtTimer);
   state.draftTimer = null;
   state.thoughtTimer = null;
+  state.draftSnapshot = null;
+  state.thoughtSnapshot = null;
+  state.draftDeltaActive = false;
+  state.thoughtDeltaActive = false;
 }
 
 export interface HandleAppSseEventDependencies {
@@ -253,7 +269,12 @@ export function handleAppSseEvent(
       if (activeChatJidRef.current !== targetChatJid) return;
       if (currentTurnIdRef.current !== targetTurnId) return;
       const fullText = bufferRef.current;
-      setter((previous) => buildAuthoritativeAgentPreviewState(fullText, previous));
+      const snapshotKey = panel === 'draft' ? 'draftSnapshot' : 'thoughtSnapshot';
+      const snapshot = state[snapshotKey];
+      state[snapshotKey] = null;
+      setter((previous) => buildAuthoritativeAgentPreviewState(fullText, previous, snapshot
+        ? { previewText: snapshot.text, totalLines: snapshot.totalLines }
+        : undefined));
       if (panel === 'draft') draftThrottleRef.current = Date.now();
       else thoughtThrottleRef.current = Date.now();
     }, delay);
@@ -262,13 +283,22 @@ export function handleAppSseEvent(
   const flushAuthoritativePreviews = () => {
     cancelPanelTrailingFlush('draft');
     cancelPanelTrailingFlush('thought');
+    const trailingState = previewTrailingFlushState(previewResyncGenerationRef);
     if (draftBufferRef.current) {
       const fullText = draftBufferRef.current;
-      setAgentDraft((previous) => buildAuthoritativeAgentPreviewState(fullText, previous));
+      const snapshot = trailingState.draftSnapshot;
+      trailingState.draftSnapshot = null;
+      setAgentDraft((previous) => buildAuthoritativeAgentPreviewState(fullText, previous, snapshot
+        ? { previewText: snapshot.text, totalLines: snapshot.totalLines }
+        : undefined));
     }
     if (thoughtBufferRef.current) {
       const fullText = thoughtBufferRef.current;
-      setAgentThought((previous) => buildAuthoritativeAgentPreviewState(fullText, previous));
+      const snapshot = trailingState.thoughtSnapshot;
+      trailingState.thoughtSnapshot = null;
+      setAgentThought((previous) => buildAuthoritativeAgentPreviewState(fullText, previous, snapshot
+        ? { previewText: snapshot.text, totalLines: snapshot.totalLines }
+        : undefined));
     }
   };
 
@@ -468,8 +498,8 @@ export function handleAppSseEvent(
       if (shouldIgnoreMismatchedTurn(turnId, currentTurnIdRef.current)) {
         return;
       }
-      invalidateAppPreviewTrailingFlushes(previewResyncGenerationRef);
       flushAuthoritativePreviews();
+      invalidateAppPreviewTrailingFlushes(previewResyncGenerationRef);
       if (data.type === 'done') {
         notifyForFinalResponse(turnId || currentTurnIdRef.current);
         if (isMainTimelineView(viewStateRef.current)) {
@@ -576,12 +606,21 @@ export function handleAppSseEvent(
     noteAgentActivity({ running: true, clearSilence: true });
     draftBufferRef.current = applyDraftDeltaBuffer(draftBufferRef.current, data);
     const now = Date.now();
-    if (data.reset) invalidateAppPreviewTrailingFlushes(previewResyncGenerationRef);
+    const trailingState = previewTrailingFlushState(previewResyncGenerationRef);
+    if (data.reset) {
+      cancelPanelTrailingFlush('draft');
+      trailingState.draftSnapshot = null;
+    }
+    trailingState.draftDeltaActive = true;
     if (data.reset || !draftThrottleRef.current || now - draftThrottleRef.current >= 100) {
       cancelPanelTrailingFlush('draft');
       draftThrottleRef.current = now;
       const fullText = draftBufferRef.current;
-      setAgentDraft((previous) => buildAuthoritativeAgentPreviewState(fullText, previous));
+      const snapshot = trailingState.draftSnapshot;
+      trailingState.draftSnapshot = null;
+      setAgentDraft((previous) => buildAuthoritativeAgentPreviewState(fullText, previous, snapshot
+        ? { previewText: snapshot.text, totalLines: snapshot.totalLines }
+        : undefined));
     } else {
       scheduleTrailingPreviewFlush('draft', draftThrottleRef.current, draftBufferRef, setAgentDraft);
     }
@@ -607,8 +646,13 @@ export function handleAppSseEvent(
     if (data.kind === 'plan') {
       setAgentPlan((prev) => resolveAgentPlanText(prev, text, mode));
     } else if (!draftExpandedRef.current) {
-      const fullText = draftBufferRef.current;
-      setAgentDraft((previous) => mergeAgentPreviewSnapshot(text, data.total_lines, fullText, previous));
+      const trailingState = previewTrailingFlushState(previewResyncGenerationRef);
+      if (trailingState.draftDeltaActive) {
+        trailingState.draftSnapshot = { text, totalLines: data.total_lines };
+      } else {
+        // Snapshot-only/legacy delivery still renders immediately.
+        setAgentDraft((previous) => mergeAgentPreviewSnapshot(text, data.total_lines, '', previous));
+      }
     }
     return;
   }
@@ -628,12 +672,21 @@ export function handleAppSseEvent(
     noteAgentActivity({ running: true, clearSilence: true });
     thoughtBufferRef.current = applyThoughtDeltaBuffer(thoughtBufferRef.current, data);
     const now = Date.now();
-    if (data.reset) invalidateAppPreviewTrailingFlushes(previewResyncGenerationRef);
+    const trailingState = previewTrailingFlushState(previewResyncGenerationRef);
+    if (data.reset) {
+      cancelPanelTrailingFlush('thought');
+      trailingState.thoughtSnapshot = null;
+    }
+    trailingState.thoughtDeltaActive = true;
     if (data.reset || !thoughtThrottleRef.current || now - thoughtThrottleRef.current >= 100) {
       cancelPanelTrailingFlush('thought');
       thoughtThrottleRef.current = now;
       const fullText = thoughtBufferRef.current;
-      setAgentThought((previous) => buildAuthoritativeAgentPreviewState(fullText, previous));
+      const snapshot = trailingState.thoughtSnapshot;
+      trailingState.thoughtSnapshot = null;
+      setAgentThought((previous) => buildAuthoritativeAgentPreviewState(fullText, previous, snapshot
+        ? { previewText: snapshot.text, totalLines: snapshot.totalLines }
+        : undefined));
     } else {
       scheduleTrailingPreviewFlush('thought', thoughtThrottleRef.current, thoughtBufferRef, setAgentThought);
     }
@@ -655,8 +708,12 @@ export function handleAppSseEvent(
     noteAgentActivity({ running: true, clearSilence: true });
     const text = data.text || '';
     if (!thoughtExpandedRef.current) {
-      const fullText = thoughtBufferRef.current;
-      setAgentThought((previous) => mergeAgentPreviewSnapshot(text, data.total_lines, fullText, previous));
+      const trailingState = previewTrailingFlushState(previewResyncGenerationRef);
+      if (trailingState.thoughtDeltaActive) {
+        trailingState.thoughtSnapshot = { text, totalLines: data.total_lines };
+      } else {
+        setAgentThought((previous) => mergeAgentPreviewSnapshot(text, data.total_lines, '', previous));
+      }
     }
     return;
   }
@@ -742,8 +799,8 @@ export function handleAppSseEvent(
   const onMainTimeline = isMainTimelineView(viewStateRef.current);
   if (eventType === 'agent_response') {
     if (!isCurrentChatEvent) return;
-    invalidateAppPreviewTrailingFlushes(previewResyncGenerationRef);
     flushAuthoritativePreviews();
+    invalidateAppPreviewTrailingFlushes(previewResyncGenerationRef);
     setExtensionWorkingState({ message: null, indicator: null, visible: true });
     removeStalledPost();
     lastAgentResponseRef.current = {

@@ -139,16 +139,39 @@ export async function createProcessChatStreamingRuntime(options: {
     if (type === "recovery_end") state.lastRecoveryOutcome = typeof event.outcome === "string" ? event.outcome : null;
     baseHandler(event as never);
   };
+  const flushBefore = <T extends unknown[]>(emit: (...args: T) => void) => (...args: T) => {
+    baseHandler.flushDisplayUpdates();
+    emit(...args);
+  };
+  const lifecycleEmitter: AgentEventEmitter = {
+    ...trackedEmitter,
+    status: flushBefore(trackedEmitter.status),
+    response: flushBefore(trackedEmitter.response),
+    generatedWidgetFinal: flushBefore(trackedEmitter.generatedWidgetFinal),
+    generatedWidgetClose: flushBefore(trackedEmitter.generatedWidgetClose),
+    generatedWidgetError: flushBefore(trackedEmitter.generatedWidgetError),
+    modelChanged: flushBefore(trackedEmitter.modelChanged),
+  };
+  const persistenceEmitter: AgentEventEmitter = {
+    ...emitter,
+    status: flushBefore(emitter.status),
+    response: flushBefore(emitter.response),
+    generatedWidgetFinal: flushBefore(emitter.generatedWidgetFinal),
+    generatedWidgetClose: flushBefore(emitter.generatedWidgetClose),
+    generatedWidgetError: flushBefore(emitter.generatedWidgetError),
+    modelChanged: flushBefore(emitter.modelChanged),
+  };
   const clearCommittedDraft = () => {
+    baseHandler.flushDisplayUpdates();
     channel.updateDraftBuffer(turnId, "", 0);
     trackedEmitter.draft({ thread_id: threadId, agent_id: agentId, turn_id: turnId, text: "", total_lines: 0, kind: "draft", mode: "replace" });
     trackedEmitter.draftDelta({ thread_id: threadId, agent_id: agentId, turn_id: turnId, delta: "", reset: true });
   };
-  trackedEmitter.status({ thread_id: threadId, agent_id: agentId, type: "thinking", title: "Thinking...", turn_id: turnId });
+  lifecycleEmitter.status({ thread_id: threadId, agent_id: agentId, type: "thinking", title: "Thinking...", turn_id: turnId });
   const runtimeConfig = getAgentRuntimeConfig();
   const timeoutMs = channel.sse.clients.size > 0 ? runtimeConfig.timeoutMs : (runtimeConfig.backgroundTimeoutMs > 0 ? runtimeConfig.backgroundTimeoutMs : runtimeConfig.timeoutMs);
   return {
-    turnId, emitter, trackedEmitter, streamingHandler, clearCommittedDraft, timeoutMs, state,
+    turnId, emitter: persistenceEmitter, trackedEmitter: lifecycleEmitter, streamingHandler, clearCommittedDraft, timeoutMs, state,
     getActiveRecoveryIntent: () => {
       const status = channel.getAgentStatus(chatJid); const key = status?.intent_key ?? status?.intentKey;
       return status?.type === "intent" && (key === "compaction" || key === "recovery") ? key : null;

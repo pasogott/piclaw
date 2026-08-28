@@ -200,6 +200,44 @@ test('collapsed Thought has parity with Draft for non-empty full deltas and term
   expect(harness.getThought().text).toBe(lines.slice(0, 8).join('\n'));
 });
 
+test('bounded snapshots do not duplicate state writes once full Draft and Thought deltas are authoritative', () => {
+  const harness = createPreviewHarness();
+
+  handleAppSseEvent('agent_draft_delta', {
+    chat_jid: 'chat:preview', turn_id: 'turn-preview', reset: true, delta: 'draft-full',
+  }, harness.deps);
+  handleAppSseEvent('agent_thought_delta', {
+    chat_jid: 'chat:preview', turn_id: 'turn-preview', reset: true, delta: 'thought-full',
+  }, harness.deps);
+  const writesBeforeSnapshots = harness.getWrites().length;
+
+  for (let index = 0; index < 50; index += 1) {
+    handleAppSseEvent('agent_draft', {
+      chat_jid: 'chat:preview', turn_id: 'turn-preview', text: `draft-preview-${index}`,
+      total_lines: index + 1, kind: 'draft', mode: 'replace',
+    }, harness.deps);
+    handleAppSseEvent('agent_thought', {
+      chat_jid: 'chat:preview', turn_id: 'turn-preview', text: `thought-preview-${index}`,
+      total_lines: index + 1,
+    }, harness.deps);
+  }
+
+  expect(harness.getWrites()).toHaveLength(writesBeforeSnapshots);
+  expect(harness.getDraft().fullText).toBe('draft-full');
+  expect(harness.getThought().fullText).toBe('thought-full');
+
+  const snapshotOnly = createPreviewHarness();
+  handleAppSseEvent('agent_draft', {
+    chat_jid: 'chat:preview', turn_id: 'turn-preview', text: 'legacy draft', total_lines: 1,
+    kind: 'draft', mode: 'replace',
+  }, snapshotOnly.deps);
+  handleAppSseEvent('agent_thought', {
+    chat_jid: 'chat:preview', turn_id: 'turn-preview', text: 'legacy thought', total_lines: 1,
+  }, snapshotOnly.deps);
+  expect(snapshotOnly.getDraft()).toMatchObject({ text: 'legacy draft', totalLines: 1 });
+  expect(snapshotOnly.getThought()).toMatchObject({ text: 'legacy thought', totalLines: 1 });
+});
+
 test('sub-throttle Draft and Thought suffixes render after a bounded live pause', async () => {
   const harness = createPreviewHarness();
 
