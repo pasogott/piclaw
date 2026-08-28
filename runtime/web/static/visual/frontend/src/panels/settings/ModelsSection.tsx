@@ -3,25 +3,23 @@ import { useSignal } from "@preact/signals";
 import { getMessageUrl } from "../../api/chat-jid";
 import { type SettingsData, type SettingsSectionProps } from "./types";
 import { registerSettingsPane } from "./pane-registry";
-
-interface ModelOption {
-  label: string;
-  name: string;
-  provider: string;
-  context_window?: number;
-  reasoning?: boolean;
-}
+import {
+  buildModelSearchDocument,
+  normaliseModelCatalogue,
+  type ModelCatalogueEntry,
+} from "../../../../../../src/ui/model-catalogue";
 
 interface ModelsResponse {
   current?: string;
   thinking_level?: string;
-  model_options?: ModelOption[];
+  model_options?: unknown[];
+  models?: string[];
 }
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
 
 export function ModelsSection({ data: _data }: { data: SettingsData }) {
-  const models = useSignal<ModelOption[]>([]);
+  const models = useSignal<ModelCatalogueEntry[]>([]);
   const current = useSignal("");
   const thinkingLevel = useSignal("medium");
   const filter = useSignal("");
@@ -43,9 +41,10 @@ export function ModelsSection({ data: _data }: { data: SettingsData }) {
         return;
       }
       const d = await res.json() as ModelsResponse;
-      current.value = d.current ?? "";
+      const catalogue = normaliseModelCatalogue(d);
+      current.value = catalogue.find((model) => model.current)?.key ?? d.current ?? "";
       thinkingLevel.value = d.thinking_level ?? "medium";
-      models.value = d.model_options ?? [];
+      models.value = catalogue;
       loadError.value = null;
     } catch (err: any) {
       loadError.value = err?.name === "AbortError" ? "Models request timed out" : "Failed to load models";
@@ -99,7 +98,7 @@ export function ModelsSection({ data: _data }: { data: SettingsData }) {
   };
 
   const filtered = filter.value
-    ? models.value.filter(m => m.name.toLowerCase().includes(filter.value.toLowerCase()) || m.provider.toLowerCase().includes(filter.value.toLowerCase()))
+    ? models.value.filter((model) => buildModelSearchDocument(model).includes(filter.value.toLowerCase()))
     : models.value;
 
   return (
@@ -138,21 +137,21 @@ export function ModelsSection({ data: _data }: { data: SettingsData }) {
             </tr>
           </thead>
           <tbody>
-            {filtered.map(m => (
+            {filtered.map((model) => (
               <tr
-                key={m.label}
+                key={model.key}
                 tabIndex={0}
-                onClick={() => switchModel(m.label)}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); switchModel(m.label); } }}
-                className={`${m.label === current.value ? "settings-panel__model-table-row--active" : ""} settings-panel__model-table-row`}
+                onClick={() => switchModel(model.key)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); switchModel(model.key); } }}
+                className={`${model.key === current.value ? "settings-panel__model-table-row--active" : ""} settings-panel__model-table-row`}
               >
                 <td>
-                  <input type="radio" name="model" checked={m.label === current.value} readOnly />
+                  <input type="radio" name="model" checked={model.key === current.value} readOnly />
                 </td>
-                <td>{m.name}</td>
-                <td>{m.provider}</td>
-                <td>{m.context_window ? `${Math.round(m.context_window / 1000)}K` : "—"}</td>
-                <td>{m.reasoning ? "🧠" : "—"}</td>
+                <td>{model.displayName}</td>
+                <td>{model.provider}</td>
+                <td>{model.contextWindow ? `${Math.round(model.contextWindow / 1000)}K` : "—"}</td>
+                <td>{model.reasoning ? "🧠" : "—"}</td>
               </tr>
             ))}
           </tbody>

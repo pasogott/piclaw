@@ -9,13 +9,16 @@ interface ModelPickerProps {
 }
 
 export function ModelPicker({ models, activeModel, onSelectModel }: ModelPickerProps) {
+  const selectedModelId = models.some((entry) => entry.id === activeModel)
+    ? activeModel
+    : models.find((entry) => entry.current)?.id;
   return (
     <div
       data-model-picker
       className="model-picker"
     >
       {models.map((entry) => {
-        const isCurrent = entry.id === activeModel;
+        const isCurrent = entry.id === selectedModelId;
         const ctxK = entry.context_window ? formatTokenWindow(entry.context_window) : "";
         const reasoning = entry.reasoning === true ? "reasoning" : entry.reasoning === false ? "no reasoning" : "";
         const pricing = formatVisualModelPricing(entry.pricing);
