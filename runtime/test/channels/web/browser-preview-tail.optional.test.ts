@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, webkit, type Browser, type BrowserContext, type Page } from "playwright";
 import { startDedicatedWebTestInstance, type DedicatedWebTestInstance } from "./helpers/dedicated-instance.js";
 
 const optionalBrowserTest = process.env.PICLAW_RUN_OPTIONAL_BROWSER_TESTS === "1" ? test : test.skip;
@@ -10,7 +10,8 @@ let context: BrowserContext | null = null;
 
 beforeAll(async () => {
   if (process.env.PICLAW_RUN_OPTIONAL_BROWSER_TESTS !== "1") return;
-  browser = await chromium.launch({ headless: true });
+  const browserType = process.env.PICLAW_OPTIONAL_BROWSER === "webkit" ? webkit : chromium;
+  browser = await browserType.launch({ headless: true });
 });
 
 afterEach(async () => {
@@ -341,12 +342,14 @@ optionalBrowserTest("bundled browser keeps authoritative Draft/Thought tails thr
   expect(audit.created).toBe(1);
   expect(audit.maxActive).toBe(1);
   expect(audit.active).toBe(1);
-  expect(audit.events.agent_draft_delta).toBeGreaterThanOrEqual(24);
-  expect(audit.events.agent_thought_delta).toBeGreaterThanOrEqual(24);
+  expect(audit.events.agent_draft_delta).toBeGreaterThanOrEqual(2);
+  expect(audit.events.agent_draft_delta).toBeLessThan(12);
+  expect(audit.events.agent_thought_delta).toBeGreaterThanOrEqual(2);
+  expect(audit.events.agent_thought_delta).toBeLessThan(12);
   expect(audit.domMarks).toContainEqual({
     marker: "draft-line-24",
     draftDeltas: audit.events.agent_draft_delta,
     thoughtDeltas: audit.events.agent_thought_delta,
   });
-  expect(audit.domMarks.some((entry: any) => entry.marker === "thought-line-24" && entry.thoughtDeltas >= 24)).toBe(true);
+  expect(audit.domMarks.some((entry: any) => entry.marker === "thought-line-24" && entry.thoughtDeltas >= 2 && entry.thoughtDeltas < 12)).toBe(true);
 }, 30000);
