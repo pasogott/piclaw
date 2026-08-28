@@ -128,6 +128,25 @@ test("normaliseModelCatalogue falls back to legacy models when structured option
   }).map((entry) => entry.key)).toEqual(["openai/gpt-5"]);
 });
 
+test("normaliseModelCatalogue reconciles unique legacy current IDs and canonicalises provider casing", () => {
+  const entries = normaliseModelCatalogue({
+    current: "gpt-4o",
+    model_options: [
+      { provider: "OpenAI", id: "gpt-4o" },
+      { provider: "openai", id: "gpt-4o" },
+    ],
+  }, { pinnedKeys: ["OpenAI/gpt-4o"] });
+
+  expect(entries).toHaveLength(1);
+  expect(entries[0]).toMatchObject({
+    key: "openai/gpt-4o",
+    provider: "openai",
+    id: "gpt-4o",
+    current: true,
+    pinned: true,
+  });
+});
+
 test("classification infers encoded publishers, model families, and deterministic variants", () => {
   expect(classifyModelIdentity({ provider: "openrouter", id: "qwen/qwen3-coder", displayName: "Qwen3 Coder" })).toEqual({
     publisher: "qwen",

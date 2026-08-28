@@ -124,6 +124,12 @@ function finitePositive(value: unknown): number | null {
   return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
 }
 
+function normalizeRoutedKey(value: unknown): string {
+  const key = cleanString(value);
+  const slashIndex = key.indexOf("/");
+  return slashIndex > 0 ? `${key.slice(0, slashIndex).toLowerCase()}${key.slice(slashIndex)}` : key;
+}
+
 function slashDepth(value: string): number {
   return value.split("/").length - 1;
 }
@@ -137,7 +143,7 @@ function mostSpecificIdentityValue(values: Array<{ value: string; priority: numb
 function normalizeIdentity(labelValue: unknown, providerValue: unknown, idValue: unknown) {
   const label = cleanString(labelValue);
   const rawId = cleanString(idValue);
-  const explicitProvider = cleanString(providerValue);
+  const explicitProvider = cleanString(providerValue).toLowerCase();
   let provider = explicitProvider;
 
   if (!provider) {
@@ -146,7 +152,7 @@ function normalizeIdentity(labelValue: unknown, providerValue: unknown, idValue:
       { value: label.includes("/") ? label : "", priority: 1 },
     ]);
     const slashIndex = routedValue.indexOf("/");
-    if (slashIndex > 0) provider = routedValue.slice(0, slashIndex).trim();
+    if (slashIndex > 0) provider = routedValue.slice(0, slashIndex).trim().toLowerCase();
   }
 
   const routePrefix = provider ? `${provider}/` : "";
@@ -314,8 +320,8 @@ export function normaliseModelCatalogue(
 ): ModelCatalogueEntry[] {
   const structured = Array.isArray(payload?.model_options) ? payload.model_options : [];
   const legacy = Array.isArray(payload?.models) ? payload.models : [];
-  const currentKey = cleanString(payload?.current ?? payload?.model);
-  const pinnedKeys = new Set(Array.from(options.pinnedKeys ?? [], cleanString).filter(Boolean));
+  const currentKey = normalizeRoutedKey(payload?.current ?? payload?.model);
+  const pinnedKeys = new Set(Array.from(options.pinnedKeys ?? [], normalizeRoutedKey).filter(Boolean));
   const contextUsage = { tokens: options.contextUsage?.tokens ?? options.currentTokens };
   const seen = new Set<string>();
   const entries: ModelCatalogueEntry[] = [];
@@ -342,7 +348,7 @@ export function normaliseModelCatalogue(
         thinkingLevels: normalizeThinkingLevels(option),
         pricing: normalizePricing(option.pricing),
         variants: classifyModelVariants({ id: identity.id, displayName }),
-        current: identity.key === currentKey || cleanString(option.label) === currentKey,
+        current: identity.key === currentKey || normalizeRoutedKey(option.label) === currentKey,
         pinned: pinnedKeys.has(identity.key),
         lastUsedAt: recentValue(options.recentByKey, identity.key),
       };
@@ -352,6 +358,10 @@ export function normaliseModelCatalogue(
 
   appendItems(structured.length > 0 ? structured : legacy);
   if (entries.length === 0 && structured.length > 0) appendItems(legacy);
+  if (currentKey && !entries.some((entry) => entry.current)) {
+    const legacyCurrentMatches = entries.filter((entry) => entry.id === currentKey);
+    if (legacyCurrentMatches.length === 1) legacyCurrentMatches[0].current = true;
+  }
   entries.sort((left, right) => compareModelCatalogueText(left.key, right.key));
   return entries;
 }
