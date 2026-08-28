@@ -103,6 +103,22 @@ test("normaliseModelCatalogue supports legacy strings, missing metadata, and dup
   expect(entries[1]).toMatchObject({ key: "openai/gpt-5", current: true });
 });
 
+test("normaliseModelCatalogue reconstructs partial structured identities without dropping routed publishers", () => {
+  const entries = normaliseModelCatalogue({
+    model_options: [
+      { provider: "openrouter", label: "anthropic/claude-4", name: "Claude 4" },
+      { id: "openrouter/google/gemini-3", name: "Gemini 3" },
+      { provider: "openrouter", id: "openrouter/qwen/qwen3", name: "Qwen 3" },
+    ],
+  });
+
+  expect(entries.map((entry) => ({ key: entry.key, provider: entry.provider, id: entry.id, publisher: entry.publisher }))).toEqual([
+    { key: "openrouter/anthropic/claude-4", provider: "openrouter", id: "anthropic/claude-4", publisher: "anthropic" },
+    { key: "openrouter/google/gemini-3", provider: "openrouter", id: "google/gemini-3", publisher: "google" },
+    { key: "openrouter/qwen/qwen3", provider: "openrouter", id: "qwen/qwen3", publisher: "qwen" },
+  ]);
+});
+
 test("classification infers encoded publishers, model families, and deterministic variants", () => {
   expect(classifyModelIdentity({ provider: "openrouter", id: "qwen/qwen3-coder", displayName: "Qwen3 Coder" })).toEqual({
     publisher: "qwen",
@@ -172,6 +188,12 @@ test("search matches shared name, identity, route, publisher, family, capability
   }
   expect(filterAndRankModels([entry], { query: "google reasoning 1m" })).toEqual([entry]);
   expect(filterAndRankModels([entry], { query: "anthropic" })).toEqual([]);
+
+  const [nonReasoning] = normaliseModelCatalogue({
+    model_options: [{ provider: "openrouter", id: "google/gemini-flash", reasoning: false }],
+  });
+  expect(buildModelSearchDocument(nonReasoning)).not.toContain("reasoning");
+  expect(filterAndRankModels([nonReasoning], { query: "reasoning" })).toEqual([]);
 });
 
 test("filterAndRankModels applies compatibility and deterministic recommended ranking", () => {
@@ -198,7 +220,7 @@ test("filterAndRankModels applies compatibility and deterministic recommended ra
     "openrouter/openai/gpt-5-preview",
   ]);
   expect(filterAndRankModels(entries, { contextFit: "compatible" }).map((entry) => entry.key)).not.toContain("openrouter/openai/gpt-5-preview");
-  expect(filterAndRankModels(entries, { providers: "openrouter", variants: "stable", reasoning: false }).map((entry) => entry.key)).toEqual([
+  expect(filterAndRankModels(entries, { providers: " openrouter ", variants: " stable ", reasoning: false }).map((entry) => entry.key)).toEqual([
     "openrouter/openai/gpt-4:latest",
   ]);
 });

@@ -128,9 +128,24 @@ function normalizeIdentity(labelValue: unknown, providerValue: unknown, idValue:
   const label = cleanString(labelValue);
   let provider = cleanString(providerValue);
   let id = cleanString(idValue);
-  const slashIndex = label.indexOf("/");
-  if (!provider && slashIndex > 0) provider = label.slice(0, slashIndex).trim();
-  if (!id) id = slashIndex > 0 ? label.slice(slashIndex + 1).trim() : label;
+
+  if (provider) {
+    const routePrefix = `${provider}/`;
+    if (id.startsWith(routePrefix)) id = id.slice(routePrefix.length).trim();
+    if (!id && label) id = label.startsWith(routePrefix) ? label.slice(routePrefix.length).trim() : label;
+  } else {
+    const routedValue = label || id;
+    const slashIndex = routedValue.indexOf("/");
+    if (slashIndex > 0) {
+      provider = routedValue.slice(0, slashIndex).trim();
+      const routedId = routedValue.slice(slashIndex + 1).trim();
+      if (!id || !label || id === routedValue) id = routedId;
+      if (id.startsWith(`${provider}/`)) id = id.slice(provider.length + 1).trim();
+    } else if (!id) {
+      id = routedValue;
+    }
+  }
+
   const key = provider && id ? `${provider}/${id}` : label || id || provider;
   return { key, provider, id };
 }
@@ -343,13 +358,16 @@ export function buildModelSearchDocument(entry: ModelCatalogueEntry): string {
     entry.family,
     ...entry.variants,
     hasStableVariant(entry) ? "stable" : null,
-    entry.reasoning ? "reasoning" : "non-reasoning",
+    entry.reasoning ? "reasoning" : null,
     formatModelCatalogueContextWindow(entry.contextWindow),
   ].filter(Boolean).join(" ").toLocaleLowerCase();
 }
 
 function normalizeFilterValues(value: Iterable<string> | string | null | undefined): Set<string> {
-  if (typeof value === "string") return new Set([value.toLowerCase()]);
+  if (typeof value === "string") {
+    const normalized = cleanString(value).toLowerCase();
+    return new Set(normalized ? [normalized] : []);
+  }
   return new Set(Array.from(value ?? [], (item) => cleanString(item).toLowerCase()).filter(Boolean));
 }
 
