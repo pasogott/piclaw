@@ -72,6 +72,7 @@ function createFacade(overrides: Partial<ConstructorParameters<typeof AgentRunti
 test("AgentRuntimeFacade reports available models and context usage", async () => {
   let refreshCalls = 0;
   const session = {
+    sessionId: "session-current",
     model: { provider: "openai", id: "gpt-test", reasoning: true },
     thinkingLevel: "high",
     getContextUsage: () => ({ tokens: 10, contextWindow: 100, percent: 10 }),
@@ -126,7 +127,9 @@ test("AgentRuntimeFacade reports available models and context usage", async () =
     tokens: 10,
     contextWindow: 100,
     percent: 10,
+    sessionGeneration: "session-current",
   });
+  expect(fixture.facade.getSessionGenerationForChat("web:default")).toBe("session-current");
 });
 
 test("AgentRuntimeFacade publishes one refreshed usage payload per matching known chat", async () => {
@@ -846,6 +849,81 @@ test("AgentRuntimeFacade clears attachments around slash commands", async () => 
   expect(result).toEqual({ ok: true, chatJid: "web:default", rawText: "/tasks", refresh_runtime: true });
   expect(fixture.cleared).toEqual(["web:default", "web:default"]);
   expect(refreshCalls).toBe(1);
+});
+
+test("AgentRuntimeFacade reports control-command session generation changes", async () => {
+  const previousSession = { sessionId: "session-old" };
+  const nextSession = { sessionId: "session-new" };
+  const runtime = createRuntime(previousSession);
+  const fixture = createFacade({
+    applyControlCommandFn: async () => {
+      runtime.session = nextSession as any;
+      return { status: "success", message: "Started a new session." };
+    },
+  });
+  fixture.pool.set("web:default", { runtime, lastUsed: Date.now() });
+
+  await expect(fixture.facade.applyControlCommand("web:default", { type: "new_session", raw: "/new-session" } as any)).resolves.toEqual({
+    status: "success",
+    message: "Started a new session.",
+    sessionGeneration: "session-new",
+    sessionGenerationChanged: true,
+  });
+});
+
+test("AgentRuntimeFacade scopes command context usage to its originating session generation", async () => {
+  const session = { sessionId: "session-compact" };
+  const runtime = createRuntime(session);
+  const fixture = createFacade({
+    applyControlCommandFn: async () => ({
+      status: "success",
+      message: "Compaction complete.",
+      contextUsage: {
+        tokens: 123,
+        contextWindow: 1000,
+        percent: 12.3,
+        source: "compact_command",
+      },
+    }),
+  });
+  fixture.pool.set("web:default", { runtime, lastUsed: Date.now() });
+
+  await expect(fixture.facade.applyControlCommand("web:default", { type: "compact", raw: "/compact" } as any)).resolves.toMatchObject({
+    sessionGeneration: "session-compact",
+    contextUsage: {
+      tokens: 123,
+      contextWindow: 1000,
+      percent: 12.3,
+      source: "compact_command",
+      sessionGeneration: "session-compact",
+    },
+  });
+});
+
+test("AgentRuntimeFacade keeps slow command usage scoped to the session that produced it", async () => {
+  const previousSession = { sessionId: "session-old" };
+  const nextSession = { sessionId: "session-new" };
+  const runtime = createRuntime(previousSession);
+  const fixture = createFacade({
+    applyControlCommandFn: async () => {
+      runtime.session = nextSession as any;
+      return {
+        status: "success",
+        message: "Compaction complete.",
+        contextUsage: { tokens: 900, contextWindow: 1000, percent: 90 },
+      };
+    },
+  });
+  fixture.pool.set("web:default", { runtime, lastUsed: Date.now() });
+
+  await expect(fixture.facade.applyControlCommand("web:default", { type: "compact", raw: "/compact" } as any)).resolves.toMatchObject({
+    sessionGeneration: "session-new",
+    sessionGenerationChanged: true,
+    contextUsage: {
+      tokens: 900,
+      sessionGeneration: "session-old",
+    },
+  });
 });
 
 test("AgentRuntimeFacade refreshes runtime when a control command requests it without swapping sessions", async () => {

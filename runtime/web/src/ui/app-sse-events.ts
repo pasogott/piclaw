@@ -44,11 +44,11 @@ import {
 } from './app-sse-event-routing.js';
 import { isAppChatActivationRecent } from './app-refresh-coordination.js';
 import {
-  hasRenderableContextUsage,
+  getContextSessionGeneration,
   haveSameContextUsage,
-  mergeContextUsage,
   normalizeContextUsage,
   persistContextUsage,
+  reconcileContextUsageForChat,
 } from './app-status-refresh-orchestration.js';
 
 type StateSetter<T> = (next: T | ((prev: T) => T)) => void;
@@ -466,6 +466,12 @@ export function handleAppSseEvent(
 
   if (eventType === 'agent_status') {
     if (!isCurrentChatEvent) {
+      const eventChatJid = typeof data?.chat_jid === 'string' ? data.chat_jid.trim() : '';
+      const inactiveContextUsage = normalizeContextUsage(data?.context_usage);
+      if (eventChatJid && data?.context_reset === true && inactiveContextUsage?.sessionGeneration) {
+        const resetUsage = reconcileContextUsageForChat(eventChatJid, null, inactiveContextUsage, { reset: true });
+        persistContextUsage(eventChatJid, resetUsage);
+      }
       if (data?.type === 'done' || data?.type === 'error') {
         void refreshActiveChatAgents();
         void refreshCurrentChatBranches();
@@ -474,10 +480,12 @@ export function handleAppSseEvent(
     }
 
     const liveContextUsage = normalizeContextUsage(data.context_usage);
-    if (hasRenderableContextUsage(liveContextUsage)) {
+    if (liveContextUsage) {
       setContextUsage((prev) => {
-        const merged = mergeContextUsage(prev, liveContextUsage);
-        if (!hasRenderableContextUsage(merged) || haveSameContextUsage(prev, merged)) return prev;
+        const merged = reconcileContextUsageForChat(currentChatJid, prev, liveContextUsage, {
+          reset: data.context_reset === true,
+        });
+        if (haveSameContextUsage(prev, merged)) return prev;
         persistContextUsage(currentChatJid, merged);
         return merged;
       });
@@ -714,18 +722,20 @@ export function handleAppSseEvent(
     if (!isCurrentChatEvent) return;
     applyModelState(data);
     const targetChatJid = currentChatJid;
+    const expectedSessionGeneration = getContextSessionGeneration(targetChatJid);
     getAgentContext(targetChatJid)
       .then((contextPayload) => {
         if (activeChatJidRef.current !== targetChatJid) return;
         const nextContextUsage = normalizeContextUsage(contextPayload);
-        if (hasRenderableContextUsage(nextContextUsage)) {
-          setContextUsage((prev) => {
-            const merged = mergeContextUsage(prev, nextContextUsage);
-            if (!hasRenderableContextUsage(merged) || haveSameContextUsage(prev, merged)) return prev;
-            persistContextUsage(targetChatJid, merged);
-            return merged;
+        setContextUsage((prev) => {
+          const merged = reconcileContextUsageForChat(targetChatJid, prev, nextContextUsage, {
+            authoritative: true,
+            expectedSessionGeneration,
           });
-        }
+          if (haveSameContextUsage(prev, merged)) return prev;
+          persistContextUsage(targetChatJid, merged);
+          return merged;
+        });
       })
       .catch(() => {
         if (activeChatJidRef.current !== targetChatJid) return;
@@ -766,10 +776,10 @@ export function handleAppSseEvent(
     if (!isCurrentChatEvent) return;
 
     const extensionContextUsage = resolveExtensionUiContextUsage(eventType, data);
-    if (hasRenderableContextUsage(extensionContextUsage)) {
+    if (extensionContextUsage) {
       setContextUsage((prev) => {
-        const merged = mergeContextUsage(prev, extensionContextUsage);
-        return !hasRenderableContextUsage(merged) || haveSameContextUsage(prev, merged) ? prev : merged;
+        const merged = reconcileContextUsageForChat(currentChatJid, prev, extensionContextUsage);
+        return haveSameContextUsage(prev, merged) ? prev : merged;
       });
     }
 

@@ -124,7 +124,7 @@ describe("web SSE tool execution events", () => {
 
 describe("web SSE display update coalescing", () => {
   it("coalesces burst Draft snapshots and ordered deltas to the configured display rate", async () => {
-    const { handler, emitter } = makeHandler(undefined, false, 25);
+    const { emitter } = makeHandler(undefined, false, 25);
     const includeDraftFull = vi.fn(() => true);
     const coalescedEmitter = {
       ...emitter,
