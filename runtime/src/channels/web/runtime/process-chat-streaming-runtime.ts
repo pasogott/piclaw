@@ -56,6 +56,9 @@ export async function createProcessChatStreamingRuntime(options: {
   let pendingThinkingLines = 0;
   let pendingThinkingDurationMs = 0;
   let currentModel: string | null = null;
+  const sessionGeneration = typeof channel.agentPool.getSessionGenerationForChat === "function"
+    ? channel.agentPool.getSessionGenerationForChat(chatJid)
+    : null;
   const identity = getIdentityConfig();
   const withAgentProfile = createAgentProfileBuilder(chatJid, identity.assistantName, resolveAvatarUrl("agent", identity.assistantAvatar), identity.userName || null, resolveAvatarUrl("user", identity.userAvatar), identity.userAvatarBackground || null);
   const emitter = createAgentEventEmitter(channel, withAgentProfile);
@@ -65,6 +68,16 @@ export async function createProcessChatStreamingRuntime(options: {
       const isToolStatus = payload?.type === "tool_call" || payload?.type === "tool_status";
       const toolName = typeof payload?.tool_name === "string" ? payload.tool_name.trim() : "";
       let nextPayload = isToolStatus && toolName ? options.withResolvedToolStatusHints(chatJid, payload) : payload;
+      if (nextPayload?.type === "context_usage" && sessionGeneration) {
+        nextPayload = {
+          ...nextPayload,
+          sessionGeneration,
+          context_usage: {
+            ...(nextPayload.context_usage && typeof nextPayload.context_usage === "object" ? nextPayload.context_usage : {}),
+            sessionGeneration,
+          },
+        };
+      }
       nextPayload = options.withAgentStatusProgressMetadata(nextPayload, channel.getAgentStatus(chatJid));
       channel.updateAgentStatus(chatJid, nextPayload);
       emitter.status(nextPayload);
