@@ -132,6 +132,7 @@ test("normaliseModelCatalogue reconciles unique legacy current IDs and canonical
   const entries = normaliseModelCatalogue({
     current: "gpt-4o",
     model_options: [
+      { label: "OpenAI/gpt-4o" },
       { provider: "OpenAI", id: "gpt-4o" },
       { provider: "openai", id: "gpt-4o" },
     ],

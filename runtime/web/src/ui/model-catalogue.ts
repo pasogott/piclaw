@@ -156,18 +156,14 @@ function normalizeIdentity(labelValue: unknown, providerValue: unknown, idValue:
   }
 
   const routePrefix = provider ? `${provider}/` : "";
+  const hasRoutePrefix = (value: string) => Boolean(routePrefix && value.slice(0, routePrefix.length).toLowerCase() === routePrefix);
+  const stripRoutePrefix = (value: string) => hasRoutePrefix(value) ? value.slice(routePrefix.length).trim() : value;
   const idCandidates: Array<{ value: string; priority: number }> = [];
   if (rawId) {
-    idCandidates.push({
-      value: routePrefix && rawId.startsWith(routePrefix) ? rawId.slice(routePrefix.length).trim() : rawId,
-      priority: 2,
-    });
+    idCandidates.push({ value: stripRoutePrefix(rawId), priority: 2 });
   }
-  if (label && (explicitProvider || label.startsWith(routePrefix) || !rawId)) {
-    idCandidates.push({
-      value: routePrefix && label.startsWith(routePrefix) ? label.slice(routePrefix.length).trim() : label,
-      priority: 1,
-    });
+  if (label && (explicitProvider || hasRoutePrefix(label) || !rawId)) {
+    idCandidates.push({ value: stripRoutePrefix(label), priority: 1 });
   }
   const id = mostSpecificIdentityValue(idCandidates) || rawId || label;
   const key = provider && id ? `${provider}/${id}` : id || provider;
