@@ -15,6 +15,11 @@ import { refreshAgentModelStateBestEffort } from './compose-model-refresh.js';
 import { renderMarkdown } from '../markdown.js';
 import { requestOpenSettingsDialog } from './settings-dialog-events.js';
 import {
+    buildModelSearchDocument,
+    calculateModelContextFit,
+    normaliseModelCatalogue,
+} from '../ui/model-catalogue.ts';
+import {
     describeSpeechRecognitionError,
     extractSpeechRecognitionText,
     getSpeechInputSupport,
@@ -510,55 +515,44 @@ export function resolveComposeCacheHitMeta(contextUsage) {
     return meta?.cacheHitRate == null ? null : meta;
 }
 
-const MODEL_PICKER_CONTEXT_OVERHEAD_TOKENS = 4000;
-const MODEL_PICKER_TOKEN_ESTIMATE_SAFETY_MULTIPLIER = 1.1;
-
 function normalizeContextUsageTokens(contextUsage) {
     const tokens = Number(contextUsage?.tokens);
     return Number.isFinite(tokens) && tokens > 0 ? tokens : null;
 }
 
-function getModelPickerEffectiveContextWindow(contextWindow) {
-    return Math.max(0, Math.floor(Number(contextWindow) - MODEL_PICKER_CONTEXT_OVERHEAD_TOKENS));
-}
-
-function applyModelPickerTokenSafety(tokens) {
-    return Math.ceil((Number(tokens) * MODEL_PICKER_TOKEN_ESTIMATE_SAFETY_MULTIPLIER) - 1e-9);
-}
-
 export function getModelPickerContextLimit(modelOption, contextUsage) {
     const contextWindow = Number(modelOption?.contextWindow ?? modelOption?.context_window);
+    const normalizedContextWindow = Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : null;
     const tokens = normalizeContextUsageTokens(contextUsage);
-    if (!Number.isFinite(contextWindow) || contextWindow <= 0 || !Number.isFinite(tokens) || tokens <= 0) {
-        return {
-            blocked: false,
-            note: '',
-            title: '',
-            tokens: tokens ?? null,
-            contextWindow: Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : null,
-        };
-    }
-    const effectiveContextWindow = getModelPickerEffectiveContextWindow(contextWindow);
-    const safetyAdjustedTokens = applyModelPickerTokenSafety(tokens);
-    if (safetyAdjustedTokens <= effectiveContextWindow) {
+    if (normalizedContextWindow == null || tokens == null) {
         return {
             blocked: false,
             note: '',
             title: '',
             tokens,
-            safetyAdjustedTokens,
-            contextWindow,
-            effectiveContextWindow,
+            contextWindow: normalizedContextWindow,
+        };
+    }
+    const contextFit = calculateModelContextFit({ contextWindow: normalizedContextWindow }, { tokens });
+    if (contextFit.state !== 'blocked') {
+        return {
+            blocked: false,
+            note: '',
+            title: '',
+            tokens,
+            safetyAdjustedTokens: contextFit.safetyAdjustedTokens,
+            contextWindow: normalizedContextWindow,
+            effectiveContextWindow: contextFit.effectiveContextWindow,
         };
     }
     return {
         blocked: true,
         note: 'Compact context first',
-        title: `Current context uses ${formatK(tokens)} tokens (~${formatK(safetyAdjustedTokens)} with estimator safety) plus app/tool overhead, but this model effectively fits about ${formatK(effectiveContextWindow)} (${formatK(contextWindow)} raw). Compact context first, then switch.`,
+        title: `Current context uses ${formatK(tokens)} tokens (~${formatK(contextFit.safetyAdjustedTokens)} with estimator safety) plus app/tool overhead, but this model effectively fits about ${formatK(contextFit.effectiveContextWindow)} (${formatK(normalizedContextWindow)} raw). Compact context first, then switch.`,
         tokens,
-        safetyAdjustedTokens,
-        contextWindow,
-        effectiveContextWindow,
+        safetyAdjustedTokens: contextFit.safetyAdjustedTokens,
+        contextWindow: normalizedContextWindow,
+        effectiveContextWindow: contextFit.effectiveContextWindow,
     };
 }
 
@@ -591,73 +585,39 @@ export function formatModelPickerPricing(pricing) {
     return rates.length > 0 ? `${rates.join(' / ')} per 1M` : '';
 }
 
-function normalizeModelPickerLabel(value, provider = '', id = '') {
-    const explicit = typeof value === 'string' ? value.trim() : '';
-    if (explicit) return explicit;
-    const normalizedProvider = typeof provider === 'string' ? provider.trim() : '';
-    const normalizedId = typeof id === 'string' ? id.trim() : '';
-    if (normalizedProvider && normalizedId) return `${normalizedProvider}/${normalizedId}`;
-    return normalizedId || normalizedProvider || '';
-}
-
 export function normalizeModelPickerOptions(payload) {
-    const structured = Array.isArray(payload?.model_options) ? payload.model_options : null;
-    const legacy = Array.isArray(payload?.models) ? payload.models : [];
-    const rawItems = structured && structured.length > 0 ? structured : legacy;
-    const options = [];
-
-    for (const item of rawItems) {
-        if (typeof item === 'string') {
-            const label = item.trim();
-            if (!label) continue;
-            const slashIndex = label.indexOf('/');
-            const provider = slashIndex > 0 ? label.slice(0, slashIndex).trim() : '';
-            const id = slashIndex > 0 ? label.slice(slashIndex + 1).trim() : label;
-            options.push({
-                label,
-                provider,
-                id,
-                name: null,
-                contextWindow: null,
-                pricing: null,
-                reasoning: null,
-            });
-            continue;
-        }
-
-        if (!item || typeof item !== 'object') continue;
-        const provider = typeof item.provider === 'string' ? item.provider.trim() : '';
-        const id = typeof item.id === 'string' ? item.id.trim() : '';
-        const label = normalizeModelPickerLabel(item.label, provider, id);
-        if (!label) continue;
-        const name = typeof item.name === 'string' && item.name.trim() ? item.name.trim() : null;
-        const contextWindow = Number(item.context_window ?? item.contextWindow);
-        const pricing = item.pricing && typeof item.pricing === 'object' ? item.pricing : null;
-        options.push({
-            label,
-            provider,
-            id,
-            name,
-            contextWindow: Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : null,
-            pricing,
-            reasoning: typeof item.reasoning === 'boolean' ? item.reasoning : null,
-        });
-    }
-
-    options.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
-    return options;
+    const hasStructuredOptions = Array.isArray(payload?.model_options) && payload.model_options.length > 0;
+    return normaliseModelCatalogue(payload).map((entry) => ({
+        label: entry.key,
+        provider: entry.provider,
+        id: entry.id,
+        name: entry.displayName === entry.key ? null : entry.displayName,
+        contextWindow: entry.contextWindow,
+        pricing: entry.pricing,
+        reasoning: hasStructuredOptions ? entry.reasoning : null,
+    }));
 }
 
 export function getModelPickerOptionSearchLabel(option) {
     if (!option || typeof option !== 'object') return '';
-    return [
+    const [entry] = normaliseModelCatalogue({
+        model_options: [{
+            label: option.label,
+            provider: option.provider,
+            id: option.id,
+            name: option.name,
+            context_window: option.contextWindow,
+            pricing: option.pricing,
+            reasoning: option.reasoning,
+        }],
+    });
+    return entry ? [
         option.label,
-        option.provider,
-        option.id,
         option.name,
         formatModelPickerContextWindow(option.contextWindow),
         formatModelPickerPricing(option.pricing),
-    ].filter(Boolean).join(' ');
+        buildModelSearchDocument(entry),
+    ].filter(Boolean).join(' ') : '';
 }
 
 export function resolveComposeModelPickerState(activeModel, agentModelsPayload) {

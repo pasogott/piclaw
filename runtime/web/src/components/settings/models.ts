@@ -1,6 +1,7 @@
 import { html, useState, useEffect, useCallback } from '../../vendor/preact-htm.js';
 import { getAgentModels, sendAgentMessage } from '../../api.js';
 import { useTranslation } from '../../utils/i18n.js';
+import { buildModelSearchDocument, normaliseModelCatalogue } from '../../ui/model-catalogue.ts';
 
 const LEGACY_EFFORT_DISPLAY = { off: 'off', minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'max', max: 'max' };
 const DEFAULT_DISPLAY = { off: 'off', minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' };
@@ -128,12 +129,11 @@ export function ModelsSection({ filter = '' }) {
     }, [thinkingBusy, loadModels, chatJid]);
 
     if (!models) return html`<div class="settings-loading">${t('settings.models.loading')}</div>`;
-    const options = models.model_options || [];
-    const current = models.current;
-    const currentOption = options.find(m => m.label === current);
+    const options = normaliseModelCatalogue(models);
+    const currentOption = options.find((model) => model.current);
     const provider = currentOption?.provider || '';
     const lf = filter.toLowerCase();
-    const filtered = lf ? options.filter(m => m.label.toLowerCase().includes(lf) || (m.provider || '').toLowerCase().includes(lf)) : options;
+    const filtered = lf ? options.filter((model) => buildModelSearchDocument(model).includes(lf)) : options;
 
     return html`
         <div class="settings-models-split">
@@ -154,12 +154,12 @@ export function ModelsSection({ filter = '' }) {
                 <table class="settings-table settings-borderless settings-models-table">
                     <thead><tr><th style="width:32px"></th><th>${t('settings.models.colModel')}</th><th>${t('settings.models.colProvider')}</th><th>${t('settings.models.colContext')}</th><th style="text-align:center">${t('settings.models.colReasoning')}</th></tr></thead>
                     <tbody>
-                        ${filtered.map(m => html`
-                            <tr class=${m.label === current ? 'settings-row-active' : ''}>
-                                <td><input type="radio" name="settings-model" checked=${m.label === current} disabled=${switching} onChange=${() => switchModel(m.label)} /></td>
-                                <td>${m.name || m.label}</td><td>${m.provider}</td>
-                                <td>${m.context_window ? (m.context_window / 1000).toFixed(0) + 'K' : '\u2014'}</td>
-                                <td style="text-align:center">${m.reasoning ? '\ud83e\udde0' : '\u2014'}</td>
+                        ${filtered.map((model) => html`
+                            <tr class=${model.current ? 'settings-row-active' : ''}>
+                                <td><input type="radio" name="settings-model" checked=${model.current} disabled=${switching} onChange=${() => switchModel(model.key)} /></td>
+                                <td>${model.displayName}</td><td>${model.provider}</td>
+                                <td>${model.contextWindow ? (model.contextWindow / 1000).toFixed(0) + 'K' : '\u2014'}</td>
+                                <td style="text-align:center">${model.reasoning ? '\ud83e\udde0' : '\u2014'}</td>
                             </tr>
                         `)}
                         ${filtered.length === 0 && html`<tr><td colspan="5" class="settings-empty">${t('settings.models.noMatch', { filter })}</td></tr>`}

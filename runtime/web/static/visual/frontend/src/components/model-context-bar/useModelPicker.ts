@@ -3,6 +3,7 @@ import { useSignal } from "@preact/signals";
 import { getMessageUrl, getChatJid } from "../../api/chat-jid";
 import type { ModelEntry, ModelInfo } from "./types";
 import { FALLBACK_MODELS, FALLBACK_THINKING_LEVELS } from "./types";
+import { normaliseModelCatalogue } from "../../../../../../src/ui/model-catalogue";
 
 export interface UseModelPickerResult {
   showPicker: ReturnType<typeof useSignal<boolean>>;
@@ -39,15 +40,21 @@ export function useModelPicker(): UseModelPickerResult {
       const res = await fetch("/agent/models?chat_jid=" + encodeURIComponent(getChatJid()));
       if (res.ok) {
         const info = await res.json() as ModelInfo;
-        models.value = info.model_options?.length
-          ? info.model_options.map(o => ({
-            id: o.label ?? o.id,
-            name: o.name,
-            context_window: o.context_window,
-            reasoning: o.reasoning,
-            pricing: o.pricing,
+        const catalogue = normaliseModelCatalogue(info);
+        models.value = catalogue.length
+          ? catalogue.map((entry) => ({
+            id: entry.key,
+            name: entry.displayName === entry.key ? null : entry.displayName,
+            context_window: entry.contextWindow,
+            reasoning: entry.reasoning,
+            pricing: entry.pricing ? {
+              input_per_million: entry.pricing.inputPerMillion,
+              output_per_million: entry.pricing.outputPerMillion,
+              cache_read_per_million: entry.pricing.cacheReadPerMillion,
+              cache_write_per_million: entry.pricing.cacheWritePerMillion,
+            } : null,
           }))
-          : (info.models?.length ? info.models.map(id => ({ id })) : FALLBACK_MODELS);
+          : FALLBACK_MODELS;
         onCurrentModel(info.current ?? currentModelName);
         if (info.thinking_level_label || info.thinking_level) {
           onThinkingLevel(info.thinking_level_label ?? info.thinking_level!);
