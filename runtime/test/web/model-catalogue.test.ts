@@ -107,7 +107,8 @@ test("normaliseModelCatalogue reconstructs partial structured identities without
   const entries = normaliseModelCatalogue({
     model_options: [
       { provider: "openrouter", label: "anthropic/claude-4", name: "Claude 4" },
-      { id: "openrouter/google/gemini-3", name: "Gemini 3" },
+      { provider: "openrouter", id: "gemini-3", label: "openrouter/google/gemini-3", name: "Gemini 3" },
+      { id: "openrouter/meta/llama-3", label: "Llama 3", name: "Llama 3" },
       { provider: "openrouter", id: "openrouter/qwen/qwen3", name: "Qwen 3" },
     ],
   });
@@ -115,8 +116,16 @@ test("normaliseModelCatalogue reconstructs partial structured identities without
   expect(entries.map((entry) => ({ key: entry.key, provider: entry.provider, id: entry.id, publisher: entry.publisher }))).toEqual([
     { key: "openrouter/anthropic/claude-4", provider: "openrouter", id: "anthropic/claude-4", publisher: "anthropic" },
     { key: "openrouter/google/gemini-3", provider: "openrouter", id: "google/gemini-3", publisher: "google" },
+    { key: "openrouter/meta/llama-3", provider: "openrouter", id: "meta/llama-3", publisher: "meta" },
     { key: "openrouter/qwen/qwen3", provider: "openrouter", id: "qwen/qwen3", publisher: "qwen" },
   ]);
+});
+
+test("normaliseModelCatalogue falls back to legacy models when structured options are unusable", () => {
+  expect(normaliseModelCatalogue({
+    model_options: [null, "", {}],
+    models: ["openai/gpt-5"],
+  }).map((entry) => entry.key)).toEqual(["openai/gpt-5"]);
 });
 
 test("classification infers encoded publishers, model families, and deterministic variants", () => {
@@ -132,6 +141,11 @@ test("classification infers encoded publishers, model families, and deterministi
     publisher: null,
     family: "Qwen",
   });
+  expect([
+    classifyModelIdentity({ provider: "test", id: "claude3.5-sonnet", displayName: "" }).family,
+    classifyModelIdentity({ provider: "test", id: "gemini2.5-pro", displayName: "" }).family,
+    classifyModelIdentity({ provider: "test", id: "llama3.1-70b", displayName: "" }).family,
+  ]).toEqual(["Claude", "Gemini", "Llama"]);
   expect(classifyModelVariants({ id: "google/gemini-3-preview:free-batch", displayName: "Gemini Image Fast" })).toEqual([
     "batch",
     "free",
@@ -272,4 +286,10 @@ test("405-model catalogue remains distinct, searchable, groupable, and naturally
   expect(filterAndRankModels(entries, { contextFit: "blocked" })).toHaveLength(135);
   expect(groupModels(entries).reduce((count, group) => count + group.totalCount, 0)).toBe(405);
   expect(["model-2", "model-10", "model-1"].sort(compareModelCatalogueText)).toEqual(["model-1", "model-2", "model-10"]);
+});
+
+test("provider-less legacy entries use the same unknown sentinel for grouping and filtering", () => {
+  const entries = normaliseModelCatalogue({ models: ["gpt-5"] });
+  expect(groupModels(entries).map((group) => group.provider)).toEqual(["unknown"]);
+  expect(filterAndRankModels(entries, { providers: "unknown" })).toEqual(entries);
 });

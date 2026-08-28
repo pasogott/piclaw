@@ -124,29 +124,47 @@ function finitePositive(value: unknown): number | null {
   return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
 }
 
+function slashDepth(value: string): number {
+  return value.split("/").length - 1;
+}
+
+function mostSpecificIdentityValue(values: Array<{ value: string; priority: number }>): string {
+  return values
+    .filter((candidate) => candidate.value)
+    .sort((left, right) => slashDepth(right.value) - slashDepth(left.value) || right.priority - left.priority || right.value.length - left.value.length)[0]?.value ?? "";
+}
+
 function normalizeIdentity(labelValue: unknown, providerValue: unknown, idValue: unknown) {
   const label = cleanString(labelValue);
-  let provider = cleanString(providerValue);
-  let id = cleanString(idValue);
+  const rawId = cleanString(idValue);
+  const explicitProvider = cleanString(providerValue);
+  let provider = explicitProvider;
 
-  if (provider) {
-    const routePrefix = `${provider}/`;
-    if (id.startsWith(routePrefix)) id = id.slice(routePrefix.length).trim();
-    if (!id && label) id = label.startsWith(routePrefix) ? label.slice(routePrefix.length).trim() : label;
-  } else {
-    const routedValue = label || id;
+  if (!provider) {
+    const routedValue = mostSpecificIdentityValue([
+      { value: rawId.includes("/") ? rawId : "", priority: 2 },
+      { value: label.includes("/") ? label : "", priority: 1 },
+    ]);
     const slashIndex = routedValue.indexOf("/");
-    if (slashIndex > 0) {
-      provider = routedValue.slice(0, slashIndex).trim();
-      const routedId = routedValue.slice(slashIndex + 1).trim();
-      if (!id || !label || id === routedValue) id = routedId;
-      if (id.startsWith(`${provider}/`)) id = id.slice(provider.length + 1).trim();
-    } else if (!id) {
-      id = routedValue;
-    }
+    if (slashIndex > 0) provider = routedValue.slice(0, slashIndex).trim();
   }
 
-  const key = provider && id ? `${provider}/${id}` : label || id || provider;
+  const routePrefix = provider ? `${provider}/` : "";
+  const idCandidates: Array<{ value: string; priority: number }> = [];
+  if (rawId) {
+    idCandidates.push({
+      value: routePrefix && rawId.startsWith(routePrefix) ? rawId.slice(routePrefix.length).trim() : rawId,
+      priority: 2,
+    });
+  }
+  if (label && (explicitProvider || label.startsWith(routePrefix) || !rawId)) {
+    idCandidates.push({
+      value: routePrefix && label.startsWith(routePrefix) ? label.slice(routePrefix.length).trim() : label,
+      priority: 1,
+    });
+  }
+  const id = mostSpecificIdentityValue(idCandidates) || rawId || label;
+  const key = provider && id ? `${provider}/${id}` : id || provider;
   return { key, provider, id };
 }
 
@@ -180,13 +198,13 @@ export function compareModelCatalogueText(left: string, right: string): number {
 function classifyFamily(id: string, displayName = ""): string | null {
   const value = `${id} ${displayName}`.toLowerCase();
   const families: Array<[RegExp, string]> = [
-    [/\bclaude\b/, "Claude"],
-    [/\bgemini\b/, "Gemini"],
+    [/\bclaude(?:\d|[-_. ]|$)/, "Claude"],
+    [/\bgemini(?:\d|[-_. ]|$)/, "Gemini"],
     [/\b(?:gpt|chatgpt)\b/, "GPT"],
     [/\b(?:o1|o3|o4)(?:\b|[-_.])/, "OpenAI o-series"],
     [/\bqwen(?:\d|[-_. ]|$)/, "Qwen"],
     [/\b(?:mistral|mixtral|codestral|devstral)\b/, "Mistral"],
-    [/\bllama\b/, "Llama"],
+    [/\bllama(?:\d|[-_. ]|$)/, "Llama"],
     [/\bdeepseek\b/, "DeepSeek"],
     [/\bcommand(?:[-_. ]|$)/, "Command"],
     [/\bgrok\b/, "Grok"],
@@ -296,41 +314,44 @@ export function normaliseModelCatalogue(
 ): ModelCatalogueEntry[] {
   const structured = Array.isArray(payload?.model_options) ? payload.model_options : [];
   const legacy = Array.isArray(payload?.models) ? payload.models : [];
-  const rawItems = structured.length > 0 ? structured : legacy;
   const currentKey = cleanString(payload?.current ?? payload?.model);
   const pinnedKeys = new Set(Array.from(options.pinnedKeys ?? [], cleanString).filter(Boolean));
-  const contextUsage = options.contextUsage ?? { tokens: options.currentTokens };
+  const contextUsage = { tokens: options.contextUsage?.tokens ?? options.currentTokens };
   const seen = new Set<string>();
   const entries: ModelCatalogueEntry[] = [];
 
-  for (const rawItem of rawItems) {
-    const option: RawModelOption = typeof rawItem === "string" ? { label: rawItem } : (rawItem as RawModelOption);
-    if (!option || typeof option !== "object") continue;
-    const identity = normalizeIdentity(option.label, option.provider, option.id);
-    if (!identity.key || seen.has(identity.key)) continue;
-    seen.add(identity.key);
-    const displayName = cleanString(option.name) || identity.key;
-    const classified = classifyModelIdentity({ provider: identity.provider, id: identity.id, displayName });
-    const contextWindow = finitePositive(option.context_window ?? option.contextWindow);
-    const base = {
-      key: identity.key,
-      provider: identity.provider,
-      publisher: classified.publisher,
-      family: classified.family,
-      id: identity.id,
-      displayName,
-      contextWindow,
-      reasoning: option.reasoning === true,
-      thinkingLevels: normalizeThinkingLevels(option),
-      pricing: normalizePricing(option.pricing),
-      variants: classifyModelVariants({ id: identity.id, displayName }),
-      current: identity.key === currentKey || cleanString(option.label) === currentKey,
-      pinned: pinnedKeys.has(identity.key),
-      lastUsedAt: recentValue(options.recentByKey, identity.key),
-    };
-    entries.push({ ...base, contextFit: calculateModelContextFit(base, contextUsage) });
-  }
+  const appendItems = (rawItems: unknown[]) => {
+    for (const rawItem of rawItems) {
+      const option: RawModelOption = typeof rawItem === "string" ? { label: rawItem } : (rawItem as RawModelOption);
+      if (!option || typeof option !== "object") continue;
+      const identity = normalizeIdentity(option.label, option.provider, option.id);
+      if (!identity.key || seen.has(identity.key)) continue;
+      seen.add(identity.key);
+      const displayName = cleanString(option.name) || identity.key;
+      const classified = classifyModelIdentity({ provider: identity.provider, id: identity.id, displayName });
+      const contextWindow = finitePositive(option.context_window ?? option.contextWindow);
+      const base = {
+        key: identity.key,
+        provider: identity.provider,
+        publisher: classified.publisher,
+        family: classified.family,
+        id: identity.id,
+        displayName,
+        contextWindow,
+        reasoning: option.reasoning === true,
+        thinkingLevels: normalizeThinkingLevels(option),
+        pricing: normalizePricing(option.pricing),
+        variants: classifyModelVariants({ id: identity.id, displayName }),
+        current: identity.key === currentKey || cleanString(option.label) === currentKey,
+        pinned: pinnedKeys.has(identity.key),
+        lastUsedAt: recentValue(options.recentByKey, identity.key),
+      };
+      entries.push({ ...base, contextFit: calculateModelContextFit(base, contextUsage) });
+    }
+  };
 
+  appendItems(structured.length > 0 ? structured : legacy);
+  if (entries.length === 0 && structured.length > 0) appendItems(legacy);
   entries.sort((left, right) => compareModelCatalogueText(left.key, right.key));
   return entries;
 }
@@ -426,7 +447,7 @@ export function filterAndRankModels(
     if (state.contextFit && state.contextFit !== "all") {
       if (state.contextFit === "compatible" ? entry.contextFit.state === "blocked" : entry.contextFit.state !== state.contextFit) return false;
     }
-    if (providers.size > 0 && !providers.has(entry.provider.toLowerCase())) return false;
+    if (providers.size > 0 && !providers.has(modelProviderGroupKey(entry).toLowerCase())) return false;
     if (publishers.size > 0 && !publishers.has((entry.publisher ?? "").toLowerCase())) return false;
     if (families.size > 0 && !families.has((entry.family ?? "").toLowerCase())) return false;
     if (!matchesVariant(entry, variants)) return false;
@@ -448,10 +469,14 @@ function compatibleCount(entries: readonly ModelCatalogueEntry[]): number {
   return entries.filter((entry) => entry.contextFit.state !== "blocked").length;
 }
 
+function modelProviderGroupKey(entry: Pick<ModelCatalogueEntry, "provider">): string {
+  return entry.provider || "unknown";
+}
+
 export function groupModels(entries: readonly ModelCatalogueEntry[]): ModelCatalogueProviderGroup[] {
   const providers = new Map<string, ModelCatalogueEntry[]>();
   for (const entry of entries) {
-    const key = entry.provider || "unknown";
+    const key = modelProviderGroupKey(entry);
     const group = providers.get(key) ?? [];
     group.push(entry);
     providers.set(key, group);
