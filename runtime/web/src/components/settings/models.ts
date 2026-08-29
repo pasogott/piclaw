@@ -84,6 +84,7 @@ export function ModelsSection({ filter = '', onFilterChange = null }) {
     const [contextUsage, setContextUsage] = useState(null);
     const [preferences, setPreferences] = useState(() => readModelCataloguePreferences());
     const [filters, setFilters] = useState(() => defaultFilters(readModelCataloguePreferences().sort));
+    const [filtersExpanded, setFiltersExpanded] = useState(false);
     const [selectedKey, setSelectedKey] = useState('');
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState(null);
@@ -201,8 +202,6 @@ export function ModelsSection({ filter = '', onFilterChange = null }) {
         if (!projection.renderedEntries.some((entry) => entry.key === selectedKey)) {
             setSelectedKey(projection.renderedEntries[0]?.key ?? '');
         }
-        const node = selectedKey ? document.getElementById(settingsOptionId(selectedKey)) : null;
-        node?.scrollIntoView?.({ block: 'nearest' });
     }, [projection.renderedEntries, selectedKey]);
 
     const updateFilter = (name, value) => {
@@ -223,7 +222,12 @@ export function ModelsSection({ filter = '', onFilterChange = null }) {
         const action = actions[event.key];
         if (!action) return;
         event.preventDefault();
-        setSelectedKey(moveModelSettingsActiveKey(projection.renderedEntries, selectedKey, action));
+        const nextKey = moveModelSettingsActiveKey(projection.renderedEntries, selectedKey, action);
+        setSelectedKey(nextKey);
+        requestAnimationFrame(() => {
+            const node = nextKey ? document.getElementById(settingsOptionId(nextKey)) : null;
+            node?.scrollIntoView?.({ block: 'nearest' });
+        });
     };
 
     const switchModel = async () => {
@@ -380,15 +384,24 @@ export function ModelsSection({ filter = '', onFilterChange = null }) {
                 <span>${enabledPatterns.length ? `${enabledPatterns.join(', ')} · ${entries.length} matched` : `No enabledModels patterns · ${entries.length} models available`}</span>
             </div>
 
-            <div class="model-catalogue-settings__filters" aria-label="Model catalogue filters">
-                <select aria-label="Provider" value=${filters.provider} onChange=${(event) => updateFilter('provider', event.currentTarget.value)}><option value="">All providers</option>${facets.providers.map((value) => html`<option value=${value}>${value}</option>`)}</select>
-                <select aria-label="Publisher" value=${filters.publisher} onChange=${(event) => updateFilter('publisher', event.currentTarget.value)}><option value="">All publishers</option>${facets.publishers.map((value) => html`<option value=${value}>${value}</option>`)}</select>
-                <select aria-label="Family" value=${filters.family} onChange=${(event) => updateFilter('family', event.currentTarget.value)}><option value="">All families</option>${facets.families.map((value) => html`<option value=${value}>${value}</option>`)}</select>
-                <select aria-label="Context fit" value=${filters.contextFit} onChange=${(event) => updateFilter('contextFit', event.currentTarget.value)}><option value="all">Any context fit</option><option value="compatible">Compatible or unknown</option><option value="fits">Fits current context</option><option value="unknown">Unknown fit</option><option value="blocked">Blocked</option></select>
-                <select aria-label="Reasoning" value=${filters.reasoning} onChange=${(event) => updateFilter('reasoning', event.currentTarget.value)}><option value="all">Any reasoning</option><option value="yes">Reasoning</option><option value="no">Non-reasoning</option></select>
-                <select aria-label="Variant" value=${filters.variant} onChange=${(event) => updateFilter('variant', event.currentTarget.value)}><option value="">All variants</option>${facets.variants.map((value) => html`<option value=${value}>${value}</option>`)}</select>
-                <select aria-label="Sort models" value=${filters.sort} onChange=${(event) => updateFilter('sort', event.currentTarget.value)}><option value="recommended">Recommended</option><option value="name">Name</option><option value="context">Context window</option><option value="input-price">Input price</option><option value="output-price">Output price</option></select>
-                <button type="button" class="settings-btn" onClick=${resetFilters}>Reset filters</button>
+            <div class="model-catalogue-settings__filter-disclosure">
+                <button
+                    type="button"
+                    class="model-catalogue-settings__filter-toggle settings-btn"
+                    aria-expanded=${filtersExpanded ? 'true' : 'false'}
+                    aria-controls="classic-model-catalogue-filters"
+                    onClick=${() => setFiltersExpanded((value) => !value)}
+                >Filters and sorting</button>
+                <div id="classic-model-catalogue-filters" class=${`model-catalogue-settings__filters${filtersExpanded ? ' expanded' : ''}`} aria-label="Model catalogue filters">
+                    <select aria-label="Provider" value=${filters.provider} onChange=${(event) => updateFilter('provider', event.currentTarget.value)}><option value="">All providers</option>${facets.providers.map((value) => html`<option value=${value}>${value}</option>`)}</select>
+                    <select aria-label="Publisher" value=${filters.publisher} onChange=${(event) => updateFilter('publisher', event.currentTarget.value)}><option value="">All publishers</option>${facets.publishers.map((value) => html`<option value=${value}>${value}</option>`)}</select>
+                    <select aria-label="Family" value=${filters.family} onChange=${(event) => updateFilter('family', event.currentTarget.value)}><option value="">All families</option>${facets.families.map((value) => html`<option value=${value}>${value}</option>`)}</select>
+                    <select aria-label="Context fit" value=${filters.contextFit} onChange=${(event) => updateFilter('contextFit', event.currentTarget.value)}><option value="all">Any context fit</option><option value="compatible">Compatible or unknown</option><option value="fits">Fits current context</option><option value="unknown">Unknown fit</option><option value="blocked">Blocked</option></select>
+                    <select aria-label="Reasoning" value=${filters.reasoning} onChange=${(event) => updateFilter('reasoning', event.currentTarget.value)}><option value="all">Any reasoning</option><option value="yes">Reasoning</option><option value="no">Non-reasoning</option></select>
+                    <select aria-label="Variant" value=${filters.variant} onChange=${(event) => updateFilter('variant', event.currentTarget.value)}><option value="">All variants</option>${facets.variants.map((value) => html`<option value=${value}>${value}</option>`)}</select>
+                    <select aria-label="Sort models" value=${filters.sort} onChange=${(event) => updateFilter('sort', event.currentTarget.value)}><option value="recommended">Recommended</option><option value="name">Name</option><option value="context">Context window</option><option value="input-price">Input price</option><option value="output-price">Output price</option></select>
+                    <button type="button" class="settings-btn" onClick=${resetFilters}>Reset filters</button>
+                </div>
             </div>
 
             <div class="model-catalogue-settings__workspace">

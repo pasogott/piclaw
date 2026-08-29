@@ -23,6 +23,11 @@ test('classic and visual Settings use the shared bounded master-detail catalogue
     expect(source).toContain('enabledModels');
     expect(source).toContain('formatModelCataloguePricing');
     expect(source).toContain('model-catalogue-settings__row-mobile-meta');
+    expect(source).toContain('model-catalogue-settings__filter-disclosure');
+    expect(source).toContain('model-catalogue-settings__filter-toggle');
+    expect(source).toContain('filtersExpanded');
+    expect(source).toContain('aria-expanded');
+    expect(source).toContain('Filters and sorting');
   }
   expect(classicDialogSource).toContain('onFilterChange=${setFilter}');
   expect(classicDialogSource).toContain('aria-label=${sectionPlaceholder(activeMeta)}');
@@ -64,11 +69,33 @@ test('confirmed Settings switches synchronise badges before context refresh', ()
   expect(visualStatusSource).toContain('statusAbort.current?.abort()');
 });
 
+test('Settings only scrolls selected rows after explicit keyboard navigation', () => {
+  for (const source of [classicSource, visualSource]) {
+    expect(source).toContain('requestAnimationFrame');
+    expect(source.indexOf('requestAnimationFrame')).toBeGreaterThan(source.indexOf('const handleListKeyDown'));
+  }
+});
+
 test('Settings treats command-level model, thinking and compaction failures as errors', () => {
   for (const source of [classicSource, visualSource]) {
     expect(source).toMatch(/status === ["']error["']/);
     expect(source).toContain('Compaction request failed.');
     expect(source).toContain('The server did not confirm the model switch.');
+  }
+});
+
+test('Models Settings assigns one vertical scroll owner per layout mode', () => {
+  expect(classicCss).toContain('.settings-content:has(.model-catalogue-settings)');
+  expect(visualCss).toContain('.settings-panel__content:has(.settings-panel__section--models)');
+  for (const css of [classicCss, visualCss]) {
+    expect(css).toContain('overflow-y: auto');
+    expect(css).toContain('overflow: visible');
+    expect(css).toContain('overflow-x: hidden');
+    expect(css).toContain('order: -1');
+    expect(css).toContain('margin-bottom: 10px');
+    expect(css).toContain('position: static');
+    expect(css).not.toContain('overflow-x: hidden;\n        overflow-y: visible');
+    expect(css).not.toContain('overflow-x: hidden;\n    overflow-y: visible');
   }
 });
 
@@ -82,5 +109,6 @@ test('Settings layouts become single-column with 44px controls on phones', () =>
     expect(css).toContain('model-catalogue-settings__row-mobile-meta');
     expect(css).toContain('@container (max-width: 1080px)');
     expect(css).toContain('min-width: 610px');
+    expect(css).toContain('.model-catalogue-settings__filters:not(.expanded)');
   }
 });
