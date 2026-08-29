@@ -20,6 +20,7 @@ test("classic and visual model pickers expose the shared searchable listbox cont
     expect(source).toContain("PageDown");
     expect(source).toContain("Open Models settings");
     expect(source).toContain("Compact context");
+    expect(source).toContain("formatModelCataloguePricing");
   }
 });
 
@@ -35,4 +36,7 @@ test("classic and visual model picker styles include bounded desktop and mobile 
   expect(visualCss).toContain(".model-picker__results");
   expect(visualCss).toContain("max-height: min(48vh, 430px)");
   expect(visualCss).toContain(".model-picker__footer-start");
+  for (const css of [classicCss, visualCss]) {
+    expect(css).toContain("min-height: 44px");
+  }
 });

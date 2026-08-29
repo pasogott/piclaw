@@ -375,6 +375,20 @@ export function formatModelCatalogueContextWindow(contextWindow: number | null):
   return `${contextWindow} context`;
 }
 
+function formatCompactModelPrice(value: number): string {
+  const digits = value >= 1 ? 2 : 4;
+  return `$${value.toFixed(digits).replace(/0+$/, "").replace(/\.$/, "")}`;
+}
+
+export function formatModelCataloguePricing(pricing: ModelCataloguePricing | null): string {
+  if (!pricing) return "";
+  const parts = [
+    pricing.inputPerMillion == null ? "" : `In ${formatCompactModelPrice(pricing.inputPerMillion)}`,
+    pricing.outputPerMillion == null ? "" : `Out ${formatCompactModelPrice(pricing.outputPerMillion)}`,
+  ].filter(Boolean);
+  return parts.length ? `${parts.join(" · ")} / 1M` : "";
+}
+
 export function buildModelSearchDocument(entry: ModelCatalogueEntry): string {
   return [
     entry.displayName,

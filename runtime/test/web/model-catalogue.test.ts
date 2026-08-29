@@ -12,10 +12,16 @@ import {
   compareModelCatalogueText,
   describeModelContextFit,
   filterAndRankModels,
+  formatModelCataloguePricing,
   groupModels,
   moveModelPickerActiveKey,
   normaliseModelCatalogue,
 } from "../../web/src/ui/model-catalogue.ts";
+
+test("model catalogue formats compact input/output pricing", () => {
+  expect(formatModelCataloguePricing({ inputPerMillion: 0.15, outputPerMillion: 3, cacheReadPerMillion: null, cacheWritePerMillion: null })).toBe("In $0.15 · Out $3 / 1M");
+  expect(formatModelCataloguePricing(null)).toBe("");
+});
 
 test("normaliseModelCatalogue preserves provider/model identity and structured metadata", () => {
   const entries = normaliseModelCatalogue({

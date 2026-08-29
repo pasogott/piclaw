@@ -4,6 +4,7 @@ import {
   calculateModelContextFit,
   describeModelContextFit,
   formatModelCatalogueContextWindow,
+  formatModelCataloguePricing,
   moveModelPickerActiveKey,
 } from "../../../../../../src/ui/model-catalogue";
 import type { ModelCatalogueEntry } from "../../../../../../src/ui/model-catalogue";
@@ -133,7 +134,10 @@ export function ModelPicker({
       >
         <span class="model-picker__item__check" aria-hidden="true">{selected ? "✓" : ""}</span>
         <span class="model-picker__item__content">
-          <span class="model-picker__item__name">{entry.displayName}</span>
+          <span class="model-picker__item__primary">
+            <span class="model-picker__item__name">{entry.displayName}</span>
+            {formatModelCataloguePricing(entry.pricing) && <span class="model-picker__item__price">{formatModelCataloguePricing(entry.pricing)}</span>}
+          </span>
           {entry.displayName !== entry.key && <span class="model-picker__item__key">{entry.key}</span>}
           {badges.length > 0 && (
             <span class="model-picker__item__badges">
