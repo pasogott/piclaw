@@ -101,6 +101,7 @@ export function ModelsSection({ data: _data }: { data: SettingsData }) {
   const [contextUsage, setContextUsage] = useState<ContextResponse | null>(null);
   const [preferences, setPreferences] = useState<StoredModelCataloguePreferences>(() => readModelCataloguePreferences());
   const [filters, setFilters] = useState<FilterState>(() => defaultFilters(readModelCataloguePreferences().sort));
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState("");
   const [loading, setLoading] = useState(true);
@@ -225,7 +226,6 @@ export function ModelsSection({ data: _data }: { data: SettingsData }) {
     if (!projection.renderedEntries.some((entry) => entry.key === selectedKey)) {
       setSelectedKey(projection.renderedEntries[0]?.key ?? "");
     }
-    if (selectedKey) document.getElementById(optionId(selectedKey))?.scrollIntoView({ block: "nearest" });
   }, [projection.renderedEntries, selectedKey]);
 
   const updateFilter = <K extends keyof FilterState>(name: K, value: FilterState[K]) => {
@@ -337,7 +337,11 @@ export function ModelsSection({ data: _data }: { data: SettingsData }) {
     const action = actions[event.key as keyof typeof actions];
     if (!action) return;
     event.preventDefault();
-    setSelectedKey(moveModelSettingsActiveKey(projection.renderedEntries, selectedKey, action));
+    const nextKey = moveModelSettingsActiveKey(projection.renderedEntries, selectedKey, action);
+    setSelectedKey(nextKey ?? "");
+    requestAnimationFrame(() => {
+      if (nextKey) document.getElementById(optionId(nextKey))?.scrollIntoView({ block: "nearest" });
+    });
   };
 
   const renderEntry = (entry: ModelCatalogueEntry) => (
@@ -392,15 +396,24 @@ export function ModelsSection({ data: _data }: { data: SettingsData }) {
       </div>
 
       <input className="settings-panel__input settings-panel__model-filter" type="search" aria-label="Search model catalogue" placeholder="Search model, provider, publisher, family…" value={query} onInput={(event) => setQuery(event.currentTarget.value)} />
-      <div className="model-catalogue-settings__filters" aria-label="Model catalogue filters">
-        <select aria-label="Provider" value={filters.provider} onChange={(event) => updateFilter("provider", event.currentTarget.value)}><option value="">All providers</option>{facets.providers.map((value) => <option key={value} value={value}>{value}</option>)}</select>
-        <select aria-label="Publisher" value={filters.publisher} onChange={(event) => updateFilter("publisher", event.currentTarget.value)}><option value="">All publishers</option>{facets.publishers.map((value) => <option key={value} value={value}>{value}</option>)}</select>
-        <select aria-label="Family" value={filters.family} onChange={(event) => updateFilter("family", event.currentTarget.value)}><option value="">All families</option>{facets.families.map((value) => <option key={value} value={value}>{value}</option>)}</select>
-        <select aria-label="Context fit" value={filters.contextFit} onChange={(event) => updateFilter("contextFit", event.currentTarget.value)}><option value="all">Any context fit</option><option value="compatible">Compatible or unknown</option><option value="fits">Fits current context</option><option value="unknown">Unknown fit</option><option value="blocked">Blocked</option></select>
-        <select aria-label="Reasoning" value={filters.reasoning} onChange={(event) => updateFilter("reasoning", event.currentTarget.value)}><option value="all">Any reasoning</option><option value="yes">Reasoning</option><option value="no">Non-reasoning</option></select>
-        <select aria-label="Variant" value={filters.variant} onChange={(event) => updateFilter("variant", event.currentTarget.value)}><option value="">All variants</option>{facets.variants.map((value) => <option key={value} value={value}>{value}</option>)}</select>
-        <select aria-label="Sort models" value={filters.sort} onChange={(event) => updateFilter("sort", event.currentTarget.value as FilterState["sort"])}><option value="recommended">Recommended</option><option value="name">Name</option><option value="context">Context window</option><option value="input-price">Input price</option><option value="output-price">Output price</option></select>
-        <button type="button" className="settings-panel__provider-btn" onClick={() => { setQuery(""); setFilters(defaultFilters(preferences.sort)); }}>Reset filters</button>
+      <div className="model-catalogue-settings__filter-disclosure">
+        <button
+          type="button"
+          className="model-catalogue-settings__filter-toggle settings-panel__provider-btn"
+          aria-expanded={filtersExpanded}
+          aria-controls="visual-model-catalogue-filters"
+          onClick={() => setFiltersExpanded((value) => !value)}
+        >Filters and sorting</button>
+        <div id="visual-model-catalogue-filters" className={`model-catalogue-settings__filters${filtersExpanded ? " expanded" : ""}`} aria-label="Model catalogue filters">
+          <select aria-label="Provider" value={filters.provider} onChange={(event) => updateFilter("provider", event.currentTarget.value)}><option value="">All providers</option>{facets.providers.map((value) => <option key={value} value={value}>{value}</option>)}</select>
+          <select aria-label="Publisher" value={filters.publisher} onChange={(event) => updateFilter("publisher", event.currentTarget.value)}><option value="">All publishers</option>{facets.publishers.map((value) => <option key={value} value={value}>{value}</option>)}</select>
+          <select aria-label="Family" value={filters.family} onChange={(event) => updateFilter("family", event.currentTarget.value)}><option value="">All families</option>{facets.families.map((value) => <option key={value} value={value}>{value}</option>)}</select>
+          <select aria-label="Context fit" value={filters.contextFit} onChange={(event) => updateFilter("contextFit", event.currentTarget.value)}><option value="all">Any context fit</option><option value="compatible">Compatible or unknown</option><option value="fits">Fits current context</option><option value="unknown">Unknown fit</option><option value="blocked">Blocked</option></select>
+          <select aria-label="Reasoning" value={filters.reasoning} onChange={(event) => updateFilter("reasoning", event.currentTarget.value)}><option value="all">Any reasoning</option><option value="yes">Reasoning</option><option value="no">Non-reasoning</option></select>
+          <select aria-label="Variant" value={filters.variant} onChange={(event) => updateFilter("variant", event.currentTarget.value)}><option value="">All variants</option>{facets.variants.map((value) => <option key={value} value={value}>{value}</option>)}</select>
+          <select aria-label="Sort models" value={filters.sort} onChange={(event) => updateFilter("sort", event.currentTarget.value as FilterState["sort"])}><option value="recommended">Recommended</option><option value="name">Name</option><option value="context">Context window</option><option value="input-price">Input price</option><option value="output-price">Output price</option></select>
+          <button type="button" className="settings-panel__provider-btn" onClick={() => { setQuery(""); setFilters(defaultFilters(preferences.sort)); }}>Reset filters</button>
+        </div>
       </div>
 
       <div className="model-catalogue-settings__workspace">

@@ -1762,10 +1762,12 @@
     padding-bottom: 4px;
 }
 
-/* The settings-content needs to propagate height for the split to work */
-.settings-content:has(.settings-models-split) {
+/* Models owns its available height so the dialog and catalogue never scroll together. */
+.settings-content:has(.settings-models-split),
+.settings-content:has(.model-catalogue-settings) {
     display: flex;
     flex-direction: column;
+    min-height: 0;
     overflow: hidden;
     padding-bottom: 0;
 }
@@ -1860,6 +1862,14 @@
     align-items: center;
     gap: 7px;
     font-size: 0.82rem;
+}
+
+.model-catalogue-settings__filter-toggle {
+    display: none;
+    width: 100%;
+    min-height: 36px;
+    text-align: left;
+    font-weight: 600;
 }
 
 .model-catalogue-settings__filters {
@@ -2027,27 +2037,50 @@
 }
 
 @container (max-width: 1080px) {
-    .model-catalogue-settings__workspace { grid-template-columns: 1fr; overflow: auto; }
-    .model-catalogue-settings__list { min-height: 340px; }
-    .model-catalogue-settings__detail { overflow: visible; }
+    .model-catalogue-settings__filter-toggle { display: block; }
+    .model-catalogue-settings__filters:not(.expanded) { display: none; }
+    .model-catalogue-settings__filters.expanded { margin-top: 6px; }
+    .model-catalogue-settings__workspace {
+        grid-template-columns: 1fr;
+        overflow-x: hidden;
+        overflow-y: auto;
+    }
+    .model-catalogue-settings__list {
+        min-height: 340px;
+        overflow: visible;
+    }
+    .model-catalogue-settings__detail {
+        order: -1;
+        margin-bottom: 10px;
+        overflow: visible;
+    }
+    .model-catalogue-settings__actions { position: static; }
+    .model-catalogue-settings__detail { display: flex; flex-direction: column; }
+    .model-catalogue-settings__detail-title { order: 0; }
+    .model-catalogue-settings__actions { order: 1; }
+    .model-catalogue-settings__facts { order: 2; }
+    .model-catalogue-settings__thinking { order: 3; }
+    .model-catalogue-settings__diagnostics { order: 4; }
 }
 
 @media (max-width: 960px) {
     .model-catalogue-settings__filters { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
 }
 
-@media (max-width: 640px) {
-    .settings-header-filter { min-height: 44px; }
-    .model-catalogue-settings { height: auto; overflow: auto; }
+@container (max-width: 640px) {
     .model-catalogue-settings__header,
     .model-catalogue-settings__scope { align-items: stretch; flex-direction: column; }
     .model-catalogue-settings__filters { grid-template-columns: 1fr; }
+    .model-catalogue-settings__filter-toggle,
     .model-catalogue-settings__filters select,
     .model-catalogue-settings .settings-btn,
     .model-catalogue-settings__thinking select { min-height: 44px; }
     .model-catalogue-settings__facts { grid-template-columns: 1fr; }
     .model-catalogue-settings__workspace { display: flex; flex-direction: column; }
-    .model-catalogue-settings__list { min-height: 52dvh; overflow-x: hidden; }
+    .model-catalogue-settings__list {
+        min-height: 52dvh;
+        overflow: visible;
+    }
     .model-catalogue-settings__columns { display: none; }
     .model-catalogue-settings__provider-heading { top: 0; }
     .model-catalogue-settings__group-heading { top: 27px; padding-left: 18px; }
@@ -2076,6 +2109,11 @@
         overflow: hidden;
         text-overflow: ellipsis;
     }
+}
+
+@media (max-width: 640px) {
+    .settings-header-filter { min-height: 44px; }
+    .model-catalogue-settings { height: 100%; min-height: 0; overflow: hidden; }
 }
 
 /* Workspace header: add left padding to clear the fixed-position menu button */
