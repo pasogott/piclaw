@@ -3,6 +3,7 @@ import {
     buildModelPickerProjection,
     describeModelContextFit,
     formatModelCatalogueContextWindow,
+    formatModelCataloguePricing,
     moveModelPickerActiveKey,
 } from '../ui/model-catalogue.ts';
 
@@ -120,7 +121,10 @@ export function ClassicModelPicker({
             >
                 <span class="compose-model-catalogue-option-check" aria-hidden="true">${selected ? '✓' : ''}</span>
                 <span class="compose-model-catalogue-option-content">
-                    <span class="compose-model-catalogue-option-name">${entry.displayName}</span>
+                    <span class="compose-model-catalogue-option-primary">
+                        <span class="compose-model-catalogue-option-name">${entry.displayName}</span>
+                        ${formatModelCataloguePricing(entry.pricing) && html`<span class="compose-model-catalogue-option-price">${formatModelCataloguePricing(entry.pricing)}</span>`}
+                    </span>
                     ${entry.displayName !== entry.key && html`<span class="compose-model-catalogue-option-key">${entry.key}</span>`}
                     ${badges.length > 0 && html`
                         <span class="compose-model-catalogue-option-badges">

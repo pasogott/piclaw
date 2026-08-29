@@ -1,9 +1,15 @@
-import { useCallback } from "preact/hooks";
+import { useCallback, useEffect } from "preact/hooks";
 import { useSignal } from "@preact/signals";
 import { getMessageUrl, getChatJid } from "../../api/chat-jid";
 import type { ModelInfo, VisualModelEntry } from "./types";
 import { FALLBACK_MODELS, FALLBACK_THINKING_LEVELS } from "./types";
 import { normaliseModelCatalogue } from "../../../../../../src/ui/model-catalogue";
+import {
+  MODEL_CATALOGUE_PREFERENCES_EVENT,
+  readModelCataloguePreferences,
+  recordRecentModelKey,
+  toModelCatalogueNormalisePreferences,
+} from "../../../../../../src/ui/model-catalogue-preferences";
 
 export interface UseModelPickerResult {
   showPicker: ReturnType<typeof useSignal<boolean>>;
@@ -22,7 +28,7 @@ const flashStatus = (message: string) => {
 
 export function normaliseVisualModelPickerOptions(info: ModelInfo): VisualModelEntry[] {
   const hasStructuredOptions = Array.isArray(info.model_options) && info.model_options.length > 0;
-  return normaliseModelCatalogue(info).map((entry) => ({
+  return normaliseModelCatalogue(info, toModelCatalogueNormalisePreferences(readModelCataloguePreferences())).map((entry) => ({
     ...entry,
     reasoningKnown: hasStructuredOptions,
   }));
@@ -50,6 +56,24 @@ export function useModelPicker(): UseModelPickerResult {
   const showThinkingPicker = useSignal<boolean>(false);
   const models = useSignal<VisualModelEntry[]>([]);
   const thinkingLevels = useSignal<string[]>([]);
+
+  useEffect(() => {
+    const applyPreferences = () => {
+      const preferences = readModelCataloguePreferences();
+      const pinned = new Set(preferences.pinnedKeys);
+      models.value = models.value.map((entry) => ({
+        ...entry,
+        pinned: pinned.has(entry.key),
+        lastUsedAt: preferences.recentByKey[entry.key] ?? null,
+      }));
+    };
+    window.addEventListener(MODEL_CATALOGUE_PREFERENCES_EVENT, applyPreferences);
+    window.addEventListener("storage", applyPreferences);
+    return () => {
+      window.removeEventListener(MODEL_CATALOGUE_PREFERENCES_EVENT, applyPreferences);
+      window.removeEventListener("storage", applyPreferences);
+    };
+  }, []);
 
   const handleBadgeClick = useCallback(async (
     e: Event,
@@ -79,6 +103,7 @@ export function useModelPicker(): UseModelPickerResult {
   }, []);
 
   const handleSelectModel = useCallback(async (id: string, onCurrentModel: (m: string) => void) => {
+    const chatJid = getChatJid();
     try {
       const res = await fetch(getMessageUrl(), {
         method: "POST", credentials: "same-origin",
@@ -87,26 +112,25 @@ export function useModelPicker(): UseModelPickerResult {
       });
       if (!res.ok) { flashStatus("Model switch failed"); return; }
       const data = await res.json().catch(() => null);
-      // If the command returned immediately (e.g. error), don't update
-      if (data?.command === false || data?.error) {
-        flashStatus(data?.error ?? "Model switch failed");
+      if (data?.command === false || data?.error || data?.command?.status === "error") {
+        flashStatus(data?.error ?? data?.command?.message ?? "Model switch failed");
         return;
       }
-      onCurrentModel(id);
+      const confirmedResponse = await fetch("/agent/models?chat_jid=" + encodeURIComponent(chatJid));
+      if (!confirmedResponse.ok) { flashStatus("Could not confirm model switch"); return; }
+      const info = await confirmedResponse.json() as ModelInfo;
+      const confirmed = normaliseVisualModelPickerOptions(info);
+      const confirmedCurrent = confirmed.find((entry) => entry.current)?.key ?? info.current;
+      if (confirmedCurrent !== id) {
+        if (confirmed.length) models.value = confirmed;
+        flashStatus("Model switch was not confirmed");
+        return;
+      }
+      models.value = confirmed;
+      recordRecentModelKey(id);
+      onCurrentModel(confirmedCurrent);
       showPicker.value = false;
-      // Re-fetch models after a brief delay to confirm backend accepted
-      setTimeout(async () => {
-        try {
-          const r = await fetch("/agent/models?chat_jid=" + encodeURIComponent(getChatJid()));
-          if (r.ok) {
-            const info = await r.json() as ModelInfo;
-            const confirmed = normaliseVisualModelPickerOptions(info);
-            if (confirmed.length) models.value = confirmed;
-            const confirmedCurrent = confirmed.find((entry) => entry.current)?.key ?? info.current;
-            if (confirmedCurrent) onCurrentModel(confirmedCurrent);
-          }
-        } catch {}
-      }, 1500);
+      window.dispatchEvent(new CustomEvent("piclaw:model-state-changed", { detail: { chatJid, payload: info, source: "picker" } }));
     } catch { flashStatus("Model switch failed"); }
   }, []);
 
@@ -123,8 +147,11 @@ export function useModelPicker(): UseModelPickerResult {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: `/thinking ${level}` }),
       });
-      if (res.ok) showThinkingPicker.value = false;
-      else flashStatus("Thinking switch failed");
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.command?.status !== "error" && !data?.error) {
+        showThinkingPicker.value = false;
+        window.dispatchEvent(new CustomEvent("piclaw:model-state-changed", { detail: { chatJid: getChatJid(), source: "picker" } }));
+      } else flashStatus(data?.error ?? data?.command?.message ?? "Thinking switch failed");
     } catch { flashStatus("Thinking switch failed"); }
   }, []);
 

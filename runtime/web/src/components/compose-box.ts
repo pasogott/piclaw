@@ -21,6 +21,13 @@ import {
     normaliseModelCatalogue,
 } from '../ui/model-catalogue.ts';
 import {
+    MODEL_CATALOGUE_PREFERENCES_EVENT,
+    normalizeModelCataloguePreferenceKey,
+    readModelCataloguePreferences,
+    recordRecentModelKey,
+    toModelCatalogueNormalisePreferences,
+} from '../ui/model-catalogue-preferences.ts';
+import {
     describeSpeechRecognitionError,
     extractSpeechRecognitionText,
     getSpeechInputSupport,
@@ -584,6 +591,14 @@ export function formatModelPickerPricing(pricing) {
         return `${label} $${numeric.toFixed(numeric >= 1 ? 2 : 4).replace(/0+$/, '').replace(/\.$/, '')}`;
     }).filter(Boolean);
     return rates.length > 0 ? `${rates.join(' / ')} per 1M` : '';
+}
+
+function normaliseComposeModelCatalogue(payload, contextUsage) {
+    const preferences = readModelCataloguePreferences();
+    return normaliseModelCatalogue(payload, {
+        contextUsage,
+        ...toModelCatalogueNormalisePreferences(preferences),
+    });
 }
 
 export function normalizeModelPickerOptions(payload) {
@@ -1205,7 +1220,40 @@ export function ComposeBox({
     const [pendingPruneChatJid, setPendingPruneChatJid] = useState(null);
     const [hiddenSessionChatJids, setHiddenSessionChatJids] = useState(() => new Set());
     const deletingSessionChatJidsRef = useRef(new Set());
+    const currentChatJidRef = useRef(currentChatJid);
+    const modelCommandGenerationRef = useRef(0);
+    const modelListGenerationRef = useRef(0);
+    currentChatJidRef.current = currentChatJid;
     const [modelOptions, setModelOptions] = useState([]);
+    useEffect(() => {
+        const applyPreferences = () => setModelOptions(normaliseComposeModelCatalogue(agentModelsPayload, contextUsage));
+        window.addEventListener(MODEL_CATALOGUE_PREFERENCES_EVENT, applyPreferences);
+        window.addEventListener('storage', applyPreferences);
+        return () => {
+            window.removeEventListener(MODEL_CATALOGUE_PREFERENCES_EVENT, applyPreferences);
+            window.removeEventListener('storage', applyPreferences);
+        };
+    }, [agentModelsPayload, contextUsage]);
+    useEffect(() => {
+        const applyConfirmedModelState = (event) => {
+            const detail = event?.detail;
+            if (detail?.source === 'compose') return;
+            if (detail?.chatJid && detail.chatJid !== currentChatJid) return;
+            const payload = detail?.payload;
+            if (!payload || typeof payload !== 'object') return;
+            const modelLabel = payload.model ?? payload.current;
+            setModelOptions(normaliseComposeModelCatalogue(payload, contextUsage));
+            onModelStateChange?.({ ...payload, model: modelLabel ?? null });
+            if (modelLabel) onModelChange?.(modelLabel);
+        };
+        window.addEventListener('piclaw:model-state-changed', applyConfirmedModelState);
+        return () => window.removeEventListener('piclaw:model-state-changed', applyConfirmedModelState);
+    }, [contextUsage, currentChatJid, onModelChange, onModelStateChange]);
+    useEffect(() => {
+        modelCommandGenerationRef.current += 1;
+        modelListGenerationRef.current += 1;
+        setSwitchingModel(false);
+    }, [currentChatJid]);
     const [sessionPopupIndex, setSessionPopupIndex] = useState(0);
     const [loadingModels, setLoadingModels] = useState(false);
     const [rollingUpSession, setRollingUpSession] = useState(false);
@@ -1481,6 +1529,9 @@ export function ComposeBox({
         if (modelLabel && typeof onModelChange === 'function') {
             onModelChange(modelLabel);
         }
+        window.dispatchEvent?.(new CustomEvent('piclaw:model-state-changed', {
+            detail: { chatJid: currentChatJid, payload, source: 'compose' },
+        }));
     };
 
     const applyTextareaHeight = (textarea, height) => {
@@ -2121,33 +2172,35 @@ export function ComposeBox({
         }
     }, [applySpeechComposeValue, clearSpeechUiState, content, focusTextarea, speechSupport, stopSpeechRecognition]);
 
-    const extractCurrentModel = (response) => {
-        const fromLabel = response?.command?.model_label;
-        if (fromLabel) return fromLabel;
-        const message = response?.command?.message;
-        if (typeof message === 'string') {
-            const currentMatch = message.match(/•\s+([^\n]+?)\s+\(current\)/);
-            if (currentMatch?.[1]) return currentMatch[1].trim();
-        }
-        return null;
-    };
-
-    const runModelCommand = async (commandText) => {
+    const runModelCommand = async (commandText, expectedModel = null) => {
         if (searchMode || switchingModel) return;
 
+        const targetChatJid = currentChatJid;
+        const generation = ++modelCommandGenerationRef.current;
         setSubmitError(null);
         setSubmitNotice(null);
         setSwitchingModel(true);
         try {
-            const response = await sendAgentMessage('default', commandText, null, [], null, currentChatJid);
-            const nextModel = extractCurrentModel(response);
-            emitModelState({
-                model: nextModel ?? activeModel ?? null,
-                thinking_level: response?.command?.thinking_level,
-                thinking_level_label: response?.command?.thinking_level_label,
-                supports_thinking: response?.command?.supports_thinking,
+            const response = await sendAgentMessage('default', commandText, null, [], null, targetChatJid);
+            if (generation !== modelCommandGenerationRef.current || targetChatJid !== currentChatJidRef.current) return false;
+            if (response?.error || response?.command === false || response?.command?.status === 'error') {
+                throw new Error(response?.error || response?.command?.message || 'Model switch failed.');
+            }
+            let confirmedModel = null;
+            const refreshed = await refreshAgentModelStateBestEffort(getAgentModels, targetChatJid, (latest) => {
+                if (generation === modelCommandGenerationRef.current && targetChatJid === currentChatJidRef.current) emitModelState(latest);
+            }, (latest) => {
+                if (generation !== modelCommandGenerationRef.current || targetChatJid !== currentChatJidRef.current) return;
+                confirmedModel = normaliseModelCatalogue(latest).find((entry) => entry.current)?.key
+                    ?? normalizeModelCataloguePreferenceKey(latest?.current ?? latest?.model)
+                    ?? null;
+                setModelOptions(normaliseComposeModelCatalogue(latest, contextUsage));
             });
-            await refreshAgentModelStateBestEffort(getAgentModels, currentChatJid, emitModelState);
+            if (generation !== modelCommandGenerationRef.current || targetChatJid !== currentChatJidRef.current) return false;
+            if (!refreshed || (expectedModel && confirmedModel !== expectedModel)) {
+                throw new Error('The server did not confirm the model switch.');
+            }
+            if (expectedModel) recordRecentModelKey(expectedModel);
             setSubmitNotice(resolveUiOnlyCommandNotice(commandText, response));
             onPost?.(response);
             return true;
@@ -2156,7 +2209,7 @@ export function ComposeBox({
             alert('Failed to switch model: ' + error.message);
             return false;
         } finally {
-            setSwitchingModel(false);
+            if (generation === modelCommandGenerationRef.current) setSwitchingModel(false);
         }
     };
 
@@ -2207,7 +2260,7 @@ export function ComposeBox({
             setSubmitNotice(contextLimit.note || 'Compact context first');
             return;
         }
-        const ok = await runModelCommand(`/model ${modelLabel}`);
+        const ok = await runModelCommand(`/model ${modelLabel}`, modelLabel);
         if (ok) {
             setShowModelPopup(false);
             requestAnimationFrame(() => modelHintRef.current?.focus?.());
@@ -2260,7 +2313,7 @@ export function ComposeBox({
         setShowSessionPopup(false);
         setShowModelPopup((previous) => {
             if (!previous) {
-                setModelOptions(normaliseModelCatalogue(agentModelsPayload, { contextUsage }));
+                setModelOptions(normaliseComposeModelCatalogue(agentModelsPayload, contextUsage));
             }
             return !previous;
         });
@@ -2353,6 +2406,8 @@ export function ComposeBox({
         const capturedFolderRefs = includeFolderRefs ? [...folderRefs] : [];
         const capturedMessageRefs = includeMessageRefs ? [...messageRefs] : [];
         const baseContent = currentContent.trim();
+        const submissionChatJid = currentChatJid;
+        const submissionModelGeneration = modelCommandGenerationRef.current;
 
         // Record history synchronously
         if (recordHistory && baseContent) {
@@ -2444,17 +2499,20 @@ export function ComposeBox({
                 // The transfer status belongs only to attachment uploads. Message
                 // submission is a separate compose action with its own button state.
                 setUploadProgress(null);
-                const response = await sendAgentMessage('default', message, null, mediaIds, resolveSubmitMode(submitMode), currentChatJid);
+                const response = await sendAgentMessage('default', message, null, mediaIds, resolveSubmitMode(submitMode), submissionChatJid);
                 onMessageResponse?.(response);
 
-                if (response?.command) {
-                    emitModelState({
-                        model: response.command.model_label ?? activeModel ?? null,
-                        thinking_level: response.command.thinking_level,
-                        thinking_level_label: response.command.thinking_level_label,
-                        supports_thinking: response.command.supports_thinking,
+                if (response?.command && response.command.status !== 'error') {
+                    const recordsModelRecency = /^\/(?:model\s+\S+|cycle-model)\s*$/i.test(baseContent.trim());
+                    await refreshAgentModelStateBestEffort(getAgentModels, submissionChatJid, (latest) => {
+                        if (submissionModelGeneration === modelCommandGenerationRef.current && submissionChatJid === currentChatJidRef.current) emitModelState(latest);
+                    }, (latest) => {
+                        if (submissionModelGeneration !== modelCommandGenerationRef.current || submissionChatJid !== currentChatJidRef.current) return;
+                        const confirmedModel = normaliseModelCatalogue(latest).find((entry) => entry.current)?.key
+                            ?? normalizeModelCataloguePreferenceKey(latest?.current ?? latest?.model)
+                            ?? null;
+                        if (recordsModelRecency && confirmedModel) recordRecentModelKey(confirmedModel);
                     });
-                    await refreshAgentModelStateBestEffort(getAgentModels, currentChatJid, emitModelState);
                 }
 
                 setSubmitNotice(resolveUiOnlyCommandNotice(baseContent, response));
@@ -2864,19 +2922,23 @@ export function ComposeBox({
     useEffect(() => {
         if (!showModelPopup) return;
 
+        const targetChatJid = currentChatJid;
+        const generation = ++modelListGenerationRef.current;
         popupTypeaheadRef.current = { value: '', updatedAt: 0 };
         setLoadingModels(true);
-        getAgentModels(currentChatJid)
+        getAgentModels(targetChatJid)
             .then((payload) => {
-                setModelOptions(normaliseModelCatalogue(payload, { contextUsage }));
+                if (generation !== modelListGenerationRef.current || targetChatJid !== currentChatJidRef.current) return;
+                setModelOptions(normaliseComposeModelCatalogue(payload, contextUsage));
                 emitModelState(payload);
             })
             .catch((error) => {
+                if (generation !== modelListGenerationRef.current || targetChatJid !== currentChatJidRef.current) return;
                 console.warn('Failed to load model list:', error);
                 setModelOptions([]);
             })
             .finally(() => {
-                setLoadingModels(false);
+                if (generation === modelListGenerationRef.current) setLoadingModels(false);
             });
     }, [showModelPopup, currentChatJid]);
 

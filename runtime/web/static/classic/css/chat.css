@@ -1452,21 +1452,37 @@
     gap: 2px;
 }
 
+.compose-model-catalogue-option-primary {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    min-width: 0;
+}
+
 .compose-model-catalogue-option-name,
-.compose-model-catalogue-option-key {
+.compose-model-catalogue-option-key,
+.compose-model-catalogue-option-price {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .compose-model-catalogue-option-name {
+    min-width: 0;
     font: 12px var(--font-family-mono);
     font-weight: 650;
 }
 
-.compose-model-catalogue-option-key {
+.compose-model-catalogue-option-key,
+.compose-model-catalogue-option-price {
     color: var(--text-secondary);
     font: 10px var(--font-family-mono);
+}
+
+.compose-model-catalogue-option-price {
+    flex: 0 0 auto;
+    text-align: right;
 }
 
 .compose-model-catalogue-option-badges {
@@ -1526,8 +1542,63 @@
         border-radius: var(--radius-md);
     }
 
+    .compose-model-catalogue-header {
+        padding: 7px 8px;
+    }
+
+    .compose-model-catalogue-search-label {
+        margin-bottom: 4px;
+    }
+
+    .compose-model-catalogue-search {
+        min-height: 44px;
+    }
+
     .compose-model-catalogue .compose-model-catalogue-results {
-        max-height: min(48vh, 420px);
+        max-height: min(50vh, 420px);
+    }
+
+    .compose-model-catalogue-section-heading {
+        padding: 5px 8px 3px;
+    }
+
+    .compose-model-catalogue-group-heading {
+        padding: 4px 8px 3px 26px;
+    }
+
+    .compose-model-catalogue-option {
+        min-height: 44px;
+        padding: 5px 8px;
+        gap: 6px;
+    }
+
+    .compose-model-catalogue-option-content {
+        gap: 1px;
+    }
+
+    .compose-model-catalogue-option-primary {
+        align-items: center;
+        gap: 6px;
+    }
+
+    .compose-model-catalogue-option-name {
+        font-size: 11px;
+    }
+
+    .compose-model-catalogue-option-key,
+    .compose-model-catalogue-option-price {
+        font-size: 9px;
+    }
+
+    .compose-model-catalogue-option-badges {
+        flex-wrap: nowrap;
+        overflow: hidden;
+        margin-top: 1px;
+    }
+
+    .compose-model-catalogue-badge {
+        padding: 0 4px;
+        font-size: 8px;
     }
 
     .compose-model-catalogue-footer {
@@ -1540,8 +1611,9 @@
         flex: 1;
     }
 
+    .compose-model-catalogue-footer .compose-model-popup-btn,
     .compose-model-catalogue-footer-start .compose-model-popup-btn {
-        min-height: 34px;
+        min-height: 44px;
     }
 }
 
