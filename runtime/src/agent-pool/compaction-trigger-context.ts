@@ -29,8 +29,14 @@ export interface PiclawCompactionTriggerMetadata {
   /** Maximum deterministic work units before cooperative compaction aborts. */
   maxWorkUnits?: number;
   executionStage?: PiclawCompactionExecutionStage;
+  compactionMethod?: string;
+  compactionExecution?: string;
+  compactionInputTokens?: number;
   providerModel?: string;
   providerRequestCount?: number;
+  providerRequestStartedAtMs?: number;
+  providerFirstTokenAtMs?: number;
+  providerLastOutputAtMs?: number;
   timeToFirstTokenMs?: number;
 }
 
@@ -53,7 +59,7 @@ export function getActivePiclawCompactionTrigger(): PiclawCompactionTriggerMetad
 
 /** Remaining wall-clock budget for the active Piclaw compaction generation. */
 export function updatePiclawCompactionExecution(patch: Partial<Pick<PiclawCompactionTriggerMetadata,
-  "executionStage" | "providerModel" | "providerRequestCount" | "timeToFirstTokenMs"
+  "executionStage" | "compactionMethod" | "compactionExecution" | "compactionInputTokens" | "providerModel" | "providerRequestCount" | "providerRequestStartedAtMs" | "providerFirstTokenAtMs" | "providerLastOutputAtMs" | "timeToFirstTokenMs"
 >>): void {
   const metadata = compactionTriggerStorage.getStore()?.metadata;
   if (!metadata) return;
@@ -127,8 +133,14 @@ export function buildPiclawCompactionEventFields(
     ...(metadata.targetContextWindow !== undefined ? { targetContextWindow: metadata.targetContextWindow } : {}),
     ...(metadata.targetModelLabel !== undefined ? { targetModelLabel: metadata.targetModelLabel } : {}),
     ...(metadata.executionStage !== undefined ? { executionStage: metadata.executionStage } : {}),
+    ...(metadata.compactionMethod !== undefined ? { compactionMethod: metadata.compactionMethod } : {}),
+    ...(metadata.compactionExecution !== undefined ? { compactionExecution: metadata.compactionExecution } : {}),
+    ...(metadata.compactionInputTokens !== undefined ? { compactionInputTokens: metadata.compactionInputTokens } : {}),
     ...(metadata.providerModel !== undefined ? { providerModel: metadata.providerModel } : {}),
     ...(metadata.providerRequestCount !== undefined ? { providerRequestCount: metadata.providerRequestCount } : {}),
+    ...(metadata.providerRequestStartedAtMs !== undefined ? { providerRequestStartedAtMs: metadata.providerRequestStartedAtMs } : {}),
+    ...(metadata.providerFirstTokenAtMs !== undefined ? { providerFirstTokenAtMs: metadata.providerFirstTokenAtMs } : {}),
+    ...(metadata.providerLastOutputAtMs !== undefined ? { providerLastOutputAtMs: metadata.providerLastOutputAtMs } : {}),
     ...(metadata.timeToFirstTokenMs !== undefined ? { timeToFirstTokenMs: metadata.timeToFirstTokenMs } : {}),
   };
 }
