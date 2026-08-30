@@ -5,7 +5,7 @@ import { getAgentModels, sendAgentMessage } from '../api.js';
 import { uploadFileBatch, uploadMedia } from '../ui/upload-transfers.js';
 import { getLocalStorageItem, setLocalStorageItem } from '../utils/storage.js';
 import { buildMentionValue, filterMentionAgents, parseMentionAutocompleteQuery } from '../ui/agent-mentions.js';
-import { shouldOpenSessionSwitcherFromBlankCompose, shouldRouteComposeValueToSessionSwitcher } from '../ui/compose-session-switcher.js';
+import { filterSessionPickerChats, groupSessionPickerChats, moveSessionPickerIndex, resolveSessionPickerSearchInitialIndex, shouldOpenSessionSwitcherFromBlankCompose, shouldRouteComposeValueToSessionSwitcher } from '../ui/compose-session-switcher.js';
 import { formatBranchPickerBaseLabel, formatBranchPickerLabel, getBranchLifecycleBadges } from '../ui/branch-lifecycle.js';
 import { buildComposeStatusDotClass } from '../ui/status-dot.js';
 import { getStatusElapsedLabel, isCompactionStatus, resolveStatusPanelTitle } from '../ui/status-duration.js';
@@ -1217,6 +1217,7 @@ export function ComposeBox({
     const [switchingModel, setSwitchingModel] = useState(false);
     const [showModelPopup, setShowModelPopup] = useState(false);
     const [showSessionPopup, setShowSessionPopup] = useState(false);
+    const [sessionPopupQuery, setSessionPopupQuery] = useState('');
     const [pendingPurgeChatJid, setPendingPurgeChatJid] = useState(null);
     const [pendingPruneChatJid, setPendingPruneChatJid] = useState(null);
     const [hiddenSessionChatJids, setHiddenSessionChatJids] = useState(() => new Set());
@@ -1264,6 +1265,8 @@ export function ComposeBox({
         setSwitchingModel(false);
     }, [currentChatJid]);
     const [sessionPopupIndex, setSessionPopupIndex] = useState(0);
+    const sessionPopupIndexRef = useRef(0);
+    const sessionPopupEntriesRef = useRef([]);
     const [loadingModels, setLoadingModels] = useState(false);
     const [rollingUpSession, setRollingUpSession] = useState(false);
     const [footerWidth, setFooterWidth] = useState(0);
@@ -1470,6 +1473,9 @@ export function ComposeBox({
         return parent || null;
     })();
     const switchableChatAgents = useMemo(() => resolveSessionPopupChats(activeChatAgents, currentChatJid, hiddenSessionChatJids), [activeChatAgents, currentChatJid, hiddenSessionChatJids]);
+    const filteredSessionChats = useMemo(() => filterSessionPickerChats(switchableChatAgents, sessionPopupQuery), [switchableChatAgents, sessionPopupQuery]);
+    const sessionPopupSections = useMemo(() => groupSessionPickerChats(filteredSessionChats, currentChatJid), [filteredSessionChats, currentChatJid]);
+    const orderedSessionChats = useMemo(() => sessionPopupSections.flatMap((section) => section.items), [sessionPopupSections]);
     sessionPopupChatsRef.current = switchableChatAgents;
     const hasSwitchableChatAgents = switchableChatAgents.length > 0;
     const canSwitchSession = hasSwitchableChatAgents && typeof onSwitchChat === 'function';
@@ -1675,6 +1681,7 @@ export function ComposeBox({
         setSlashMatches([]);
         setShowMention(false);
         setMentionMatches([]);
+        setSessionPopupQuery('');
         setShowSessionPopup(true);
         return true;
     };
@@ -1807,7 +1814,7 @@ export function ComposeBox({
 
     const sessionPopupEntries = useMemo(() => {
         const entries = [];
-        for (const chat of switchableChatAgents) {
+        for (const chat of orderedSessionChats) {
             const archived = Boolean(chat?.archived_at);
             const agentName = typeof chat?.agent_name === 'string' ? chat.agent_name.trim() : '';
             const chatJid = typeof chat?.chat_jid === 'string' ? chat.chat_jid.trim() : '';
@@ -1820,13 +1827,13 @@ export function ComposeBox({
                 disabled: archived ? !canRestoreSession : !canSwitchSession,
             });
         }
-        if (canCreateSession) {
+        if (!sessionPopupQuery && canCreateSession) {
             entries.push({ type: 'action', key: 'action:new', label: 'New branch', action: 'new', disabled: false });
         }
-        if (canCreateRootSession) {
+        if (!sessionPopupQuery && canCreateRootSession) {
             entries.push({ type: 'action', key: 'action:new-root', label: 'New root session…', action: 'new-root', disabled: false });
         }
-        if (currentRollupParent?.chat_jid) {
+        if (!sessionPopupQuery && currentRollupParent?.chat_jid) {
             entries.push({
                 type: 'action',
                 key: 'action:rollup',
@@ -1835,14 +1842,21 @@ export function ComposeBox({
                 disabled: !canRollupSession,
             });
         }
-        if (canRenameSession) {
+        if (!sessionPopupQuery && canRenameSession) {
             entries.push({ type: 'action', key: 'action:rename', label: 'Rename current session', action: 'rename', disabled: renameInProgress });
         }
-        if (canDeleteSession) {
+        if (!sessionPopupQuery && canDeleteSession) {
             entries.push({ type: 'action', key: 'action:delete', label: 'Delete current session', action: 'delete', disabled: false });
         }
         return entries;
-    }, [switchableChatAgents, canRestoreSession, canSwitchSession, canCreateSession, canCreateRootSession, currentRollupParent, canRollupSession, canRenameSession, canDeleteSession, renameInProgress]);
+    }, [orderedSessionChats, sessionPopupQuery, canRestoreSession, canSwitchSession, canCreateSession, canCreateRootSession, currentRollupParent, canRollupSession, canRenameSession, canDeleteSession, renameInProgress]);
+    sessionPopupEntriesRef.current = sessionPopupEntries;
+
+    useEffect(() => {
+        const clamped = Math.max(0, Math.min(sessionPopupIndexRef.current, Math.max(0, sessionPopupEntries.length - 1)));
+        sessionPopupIndexRef.current = clamped;
+        if (clamped !== sessionPopupIndex) setSessionPopupIndex(clamped);
+    }, [sessionPopupEntries.length, sessionPopupIndex]);
 
     const handleRenameSession = async (event) => {
         if (event?.preventDefault) event.preventDefault();
@@ -2582,35 +2596,42 @@ export function ComposeBox({
             consume();
             resetPopupTypeahead();
             if (showModelPopup) closeModelPopup();
-            if (showSessionPopup) setShowSessionPopup(false);
+            if (showSessionPopup) {
+                setShowSessionPopup(false);
+                setSessionPopupQuery('');
+                requestAnimationFrame(() => sessionTriggerRef.current?.querySelector?.('button')?.focus?.());
+            }
             return true;
         }
         if (showModelPopup) return false;
         if (showSessionPopup) {
-            if (e.key === 'ArrowDown') {
+            const currentSessionPopupEntries = sessionPopupEntriesRef.current;
+            const inSessionSearch = Boolean(e.target?.classList?.contains?.('compose-session-search'));
+            if (['ArrowDown', 'ArrowUp', 'Home', 'End', 'PageDown', 'PageUp'].includes(e.key)) {
                 consume();
                 resetPopupTypeahead();
-                if (sessionPopupEntries.length > 0) setSessionPopupIndex((idx) => (idx + 1) % sessionPopupEntries.length);
+                if (currentSessionPopupEntries.length > 0) setSessionPopupIndex((idx) => {
+                    const next = moveSessionPickerIndex(idx, currentSessionPopupEntries.length, e.key);
+                    sessionPopupIndexRef.current = next;
+                    return next;
+                });
                 return true;
             }
-            if (e.key === 'ArrowUp') {
+            if ((e.key === 'Enter' || e.key === 'Tab') && currentSessionPopupEntries.length > 0) {
                 consume();
                 resetPopupTypeahead();
-                if (sessionPopupEntries.length > 0) setSessionPopupIndex((idx) => (idx - 1 + sessionPopupEntries.length) % sessionPopupEntries.length);
+                runSessionPopupEntry(currentSessionPopupEntries[Math.max(0, Math.min(sessionPopupIndexRef.current, currentSessionPopupEntries.length - 1))]);
                 return true;
             }
-            if ((e.key === 'Enter' || e.key === 'Tab') && sessionPopupEntries.length > 0) {
-                consume();
-                resetPopupTypeahead();
-                runSessionPopupEntry(sessionPopupEntries[Math.max(0, Math.min(sessionPopupIndex, sessionPopupEntries.length - 1))]);
-                return true;
-            }
-            if (isPopupTypeaheadKey(e) && sessionPopupEntries.length > 0) {
+            if (!inSessionSearch && isPopupTypeaheadKey(e) && currentSessionPopupEntries.length > 0) {
                 consume();
                 const nextBuffer = updatePopupTypeaheadBuffer(popupTypeaheadRef.current, e.key);
                 popupTypeaheadRef.current = nextBuffer;
-                const match = resolvePopupTypeaheadMatch(sessionPopupEntries, nextBuffer.value, sessionPopupIndex, (item) => item.label);
-                if (match >= 0) setSessionPopupIndex(match);
+                const match = resolvePopupTypeaheadMatch(currentSessionPopupEntries, nextBuffer.value, sessionPopupIndex, (item) => item.label);
+                if (match >= 0) {
+                    sessionPopupIndexRef.current = match;
+                    setSessionPopupIndex(match);
+                }
                 return true;
             }
         }
@@ -2972,14 +2993,17 @@ export function ComposeBox({
         if (!showSessionPopup) {
             setPendingPurgeChatJid(null);
             setPendingPruneChatJid(null);
+            setSessionPopupQuery('');
         }
     }, [showSessionPopup]);
 
     useEffect(() => {
         if (!showSessionPopup) return;
-        setSessionPopupIndex(resolveSessionPopupInitialIndex(sessionPopupEntries, currentChatJid));
+        const initialIndex = resolveSessionPopupInitialIndex(sessionPopupEntries, currentChatJid);
+        sessionPopupIndexRef.current = initialIndex;
+        setSessionPopupIndex(initialIndex);
         popupTypeaheadRef.current = { value: '', updatedAt: 0 };
-    }, [showSessionPopup, currentChatJid, sessionPopupEntries]);
+    }, [showSessionPopup, currentChatJid]);
 
     useEffect(() => {
         if (!showModelPopup) return;
@@ -3025,7 +3049,8 @@ export function ComposeBox({
     useEffect(() => {
         if (!showSessionPopup) return;
         const popup = sessionPopupRef.current;
-        popup?.focus?.();
+        const search = popup?.querySelector?.('.compose-session-search');
+        if (document.activeElement !== search) search?.focus?.();
         const active = popup?.querySelector?.('.compose-model-popup-item.active');
         active?.scrollIntoView?.({ block: 'nearest' });
     }, [showSessionPopup, sessionPopupIndex, sessionPopupEntries.length]);
@@ -3469,13 +3494,57 @@ export function ComposeBox({
                         />
                     `}
                     ${showSessionPopup && !searchMode && html`
-                        <div class="compose-model-popup" data-testid="session-popup" ref=${sessionPopupRef} tabIndex="-1" onKeyDown=${handlePopupKeyboardEvent}>
-                            <div class="compose-model-popup-title">${t('compose.manageSessions')}</div>
-                            <div class="compose-model-popup-menu" role="menu" aria-label=${t('compose.sessionsAndAgents')}>
+                        <div class="compose-model-popup compose-session-popup" data-testid="session-popup" ref=${sessionPopupRef} tabIndex="-1" onKeyDown=${handlePopupKeyboardEvent}>
+                            <div class="compose-session-popup-header">
+                                <div>
+                                    <div class="compose-model-popup-title">${t('compose.manageSessions')}</div>
+                                    <div class="compose-session-popup-count">${filteredSessionChats.length} of ${switchableChatAgents.length} sessions</div>
+                                </div>
+                                <button type="button" class="compose-session-popup-close" aria-label="Close session picker" onClick=${() => { setShowSessionPopup(false); requestAnimationFrame(() => sessionTriggerRef.current?.querySelector?.('button')?.focus?.()); }}>×</button>
+                            </div>
+                            <label class="compose-session-search-label" for="compose-session-search">Search sessions</label>
+                            <input
+                                id="compose-session-search"
+                                class="compose-session-search"
+                                type="search"
+                                value=${sessionPopupQuery}
+                                placeholder="Handle, JID, state, or model"
+                                autocomplete="off"
+                                onInput=${(event) => {
+                                    const query = event.currentTarget.value;
+                                    const nextOrderedChats = groupSessionPickerChats(
+                                        filterSessionPickerChats(switchableChatAgents, query),
+                                        currentChatJid,
+                                    ).flatMap((section) => section.items);
+                                    sessionPopupEntriesRef.current = nextOrderedChats.map((chat) => ({
+                                        type: 'session',
+                                        key: `session:${chat.chat_jid}`,
+                                        label: `@${chat.agent_name} — ${chat.chat_jid}${chat.is_active ? ' active' : ''}${chat.archived_at ? ' archived' : ''}`,
+                                        chat,
+                                        disabled: chat.archived_at ? !canRestoreSession : !canSwitchSession,
+                                    }));
+                                    const initialIndex = resolveSessionPickerSearchInitialIndex(nextOrderedChats, query);
+                                    sessionPopupIndexRef.current = initialIndex;
+                                    setSessionPopupIndex(initialIndex);
+                                    setSessionPopupQuery(query);
+                                }}
+                                onKeyDown=${handlePopupKeyboardEvent}
+                            />
+                            <div
+                                class="compose-model-popup-menu compose-session-popup-results"
+                                role="listbox"
+                                aria-label=${t('compose.sessionsAndAgents')}
+                                aria-activedescendant=${sessionPopupEntries[sessionPopupIndex]?.type === 'session' ? `compose-session-option-${encodeURIComponent(sessionPopupEntries[sessionPopupIndex].chat.chat_jid)}` : undefined}
+                            >
                                 ${!hasSwitchableChatAgents && html`
                                     <div class="compose-model-popup-empty">${t('compose.noSessions')}</div>
                                 `}
-                                ${hasSwitchableChatAgents && switchableChatAgents.map((chat, listIndex) => {
+                                ${hasSwitchableChatAgents && filteredSessionChats.length === 0 && html`
+                                    <div class="compose-model-popup-empty">No sessions match “${sessionPopupQuery}”.</div>
+                                `}
+                                ${orderedSessionChats.map((chat, listIndex) => {
+                                    const section = sessionPopupSections.find((candidate) => candidate.items.includes(chat));
+                                    const sectionStart = section?.items[0] === chat;
                                     const archived = Boolean(chat.archived_at);
                                     const isRoot = chat.chat_jid === (chat.root_chat_jid || chat.chat_jid);
                                     const canPrune = !isRoot && !chat.is_active && !archived && typeof onDeleteSession === 'function';
@@ -3486,11 +3555,17 @@ export function ComposeBox({
                                     const label = formatBranchPickerLabel(chat, { currentChatJid });
                                     const baseLabel = formatBranchPickerBaseLabel(chat);
                                     const lifecycleBadges = getBranchLifecycleBadges(chat, { currentChatJid });
+                                    const rootJid = chat.root_chat_jid || chat.chat_jid;
+                                    const modelLabel = chat.model || chat.model_label || '';
                                     return html`
+                                        ${sectionStart && html`<div class="compose-session-section-heading" role="presentation">${section.label}</div>`}
                                         <div key=${chat.chat_jid} class=${`compose-model-popup-item-row${archived ? ' archived' : ''}`}>
                                             <button
+                                                id=${`compose-session-option-${encodeURIComponent(chat.chat_jid)}`}
                                                 type="button"
-                                                role="menuitem"
+                                                role="option"
+                                                aria-selected=${sessionPopupIndex === listIndex ? 'true' : 'false'}
+                                                aria-label=${`${label}; chat ${chat.chat_jid}; root ${rootJid}; ${modelLabel ? `model ${modelLabel}; ` : ''}${lifecycleBadges.join(', ') || 'idle'}`}
                                                 class=${`compose-model-popup-item session-item${archived ? ' archived' : ''}${sessionPopupIndex === listIndex ? ' active' : ''}`}
                                                 data-testid="session-item"
                                                 onClick=${() => {
@@ -3504,7 +3579,10 @@ export function ComposeBox({
                                                 title=${archived ? `Restore archived ${label}` : `Switch to ${label}`}
                                             >
                                                 <span class="compose-session-row-content" style=${isSessionPopupChatEmphasized(chat) ? 'font-weight:700' : ''}>
-                                                    <span class="compose-session-row-label">${baseLabel}</span>
+                                                    <span class="compose-session-row-main">
+                                                        <span class="compose-session-row-label">${baseLabel}</span>
+                                                        <span class="compose-session-row-meta">${chat.chat_jid}${modelLabel ? ` · ${modelLabel}` : ''}</span>
+                                                    </span>
                                                     ${lifecycleBadges.length > 0 && html`
                                                         <span class="compose-session-row-pills" aria-label=${`Session status: ${lifecycleBadges.join(', ')}`}>
                                                             ${lifecycleBadges.map((badge) => html`
@@ -3601,7 +3679,7 @@ export function ComposeBox({
                                     `;
                                 })}
                             </div>
-                            ${(canCreateSession || canCreateRootSession || canRenameSession || canDeleteSession) && html`
+                            ${!sessionPopupQuery && (canCreateSession || canCreateRootSession || canRenameSession || canDeleteSession) && html`
                                 <div class="compose-model-popup-actions">
                                     ${canCreateSession && html`
                                         <button
