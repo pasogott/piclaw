@@ -219,7 +219,7 @@ function describeTarget(result: ChatTransportResult): string {
 /** Built-in tool for cross-session chat relay. */
 export const chatTool: ExtensionFactory = (pi: ExtensionAPI) => {
   pi.on("before_agent_start", async (event) => {
-    let hint = HINT;
+    let hint: string;
     try { hint = buildChatTransportDirectoryHint(await getChatTransportDirectories()); }
     catch { hint = `${HINT}\nRemote directory refresh failed; call chat action=directory before remote delivery.`; }
     return { systemPrompt: `${event.systemPrompt}\n\n${hint}` };
