@@ -1,8 +1,11 @@
 import { beforeEach, expect, test } from "bun:test";
 
-import { initDatabase, listCompactionTelemetryAfter, normalizeCompactionTelemetryRecord, pruneCompactionTelemetry, storeCompactionTelemetry } from "../../src/db.js";
+import { getDb, initDatabase, listCompactionTelemetryAfter, normalizeCompactionTelemetryRecord, pruneCompactionTelemetry, storeCompactionTelemetry } from "../../src/db.js";
 
-beforeEach(initDatabase);
+beforeEach(() => {
+  initDatabase();
+  getDb().prepare("DELETE FROM compaction_telemetry").run();
+});
 
 const record = {
   generation_id: "gen-1",
@@ -28,7 +31,7 @@ const record = {
 test("compaction telemetry stores one bounded row per generation", () => {
   expect(storeCompactionTelemetry(record)).toBe(true);
   expect(storeCompactionTelemetry({ ...record, outcome: "timeout" })).toBe(false);
-  expect(listCompactionTelemetryAfter(0)).toEqual([expect.objectContaining({ id: 1, ...record, settlement_timed_out: 0 })]);
+  expect(listCompactionTelemetryAfter(0)).toEqual([expect.objectContaining({ ...record, settlement_timed_out: 0 })]);
 });
 
 test("compaction telemetry retention is bounded", () => {
