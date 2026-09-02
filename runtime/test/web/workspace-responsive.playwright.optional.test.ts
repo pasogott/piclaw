@@ -67,6 +67,10 @@ optionalBrowserTest('Show workspace opens a dismissible drawer below the desktop
   for (const viewport of [{ width: 900, height: 700 }, { width: 1100, height: 1300 }]) {
     const page = await openPage(viewport);
     try {
+      const initial = await workspaceLayout(page);
+      expect(initial.workspace.display).toBe('none');
+      expect(initial.backdrop.display).toBe('none');
+
       await page.evaluate(() => (window as any).showWorkspace());
       const open = await workspaceLayout(page);
       expect(open.workspace.display).toBe('flex');
