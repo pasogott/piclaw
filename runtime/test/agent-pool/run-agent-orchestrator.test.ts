@@ -761,16 +761,23 @@ test("runAgentPrompt emits turn-aware observability log metadata for turn and to
       };
     }
     async prompt() {
-      for (const listener of this.listeners) {
-        listener({ type: "message_update", assistantMessageEvent: { type: "text_start" } });
-        listener({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "thinking..." } });
-        listener({ type: "message_end", message: { role: "assistant", content: [{ type: "toolCall", id: "tool-1", name: "read" }], stopReason: "toolUse", usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 } } });
-        listener({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: { path: "README.md" } });
-        listener({ type: "tool_execution_end", toolCallId: "tool-1", toolName: "read", isError: false, durationMs: 12 });
-        listener({ type: "message_update", assistantMessageEvent: { type: "text_start" } });
-        listener({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "done" } });
-        listener({ type: "message_end", message: createAssistantMessage("done") });
-      }
+      const emit = async (event: any) => {
+        for (const listener of this.listeners) await listener(event);
+      };
+      await emit({ type: "turn_start" });
+      await emit({ type: "message_start", message: { role: "assistant", content: [] } });
+      await emit({ type: "message_update", assistantMessageEvent: { type: "thinking_start" } });
+      await emit({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "thinking..." } });
+      await emit({ type: "message_update", assistantMessageEvent: { type: "text_start" } });
+      await emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "calling tool" } });
+      await emit({ type: "message_end", message: { role: "assistant", content: [{ type: "toolCall", id: "tool-1", name: "read" }], stopReason: "toolUse", usage: { input: 5, output: 7, reasoning: 5, totalTokens: 12 } } });
+      await emit({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: { path: "README.md" } });
+      await emit({ type: "tool_execution_end", toolCallId: "tool-1", toolName: "read", isError: false, durationMs: 12 });
+      await emit({ type: "turn_start" });
+      await emit({ type: "message_start", message: { role: "assistant", content: [] } });
+      await emit({ type: "message_update", assistantMessageEvent: { type: "text_start" } });
+      await emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "done" } });
+      await emit({ type: "message_end", message: createAssistantMessage("done") });
     }
     async abort() {}
   }
@@ -811,6 +818,26 @@ test("runAgentPrompt emits turn-aware observability log metadata for turn and to
     expect.objectContaining({ operation: "run_agent.prompt_resolved", turnId: "turn-obs-1", sessionLeafId: "leaf-obs" }),
     expect.objectContaining({ operation: "run_agent.complete", turnId: "turn-obs-1", sessionLeafId: "leaf-obs" }),
   ]));
+  expect(logs.filter((entry) => entry.operation === "model.call.start")).toEqual([
+    expect.objectContaining({ sequence: 1, model: "openai/gpt-test" }),
+    expect.objectContaining({ sequence: 2, model: "openai/gpt-test" }),
+  ]);
+  const modelEnds = logs.filter((entry) => entry.operation === "model.response.end");
+  expect(modelEnds).toHaveLength(2);
+  for (const entry of modelEnds) {
+    expect(entry).toMatchObject({
+      model: "openai/gpt-test",
+      durationMs: expect.any(Number),
+      callDurationMs: expect.any(Number),
+      responseDurationMs: expect.any(Number),
+      responseStartLatencyMs: expect.any(Number),
+      timeToFirstOutputMs: expect.any(Number),
+      timeToFirstTextMs: expect.any(Number),
+      generationDurationMs: expect.any(Number),
+      textGenerationDurationMs: expect.any(Number),
+    });
+
+  }
   expect(contextEvents.map((event) => event.phase)).toEqual(expect.arrayContaining([
     "prompt_start",
     "message_end",
