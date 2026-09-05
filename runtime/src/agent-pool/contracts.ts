@@ -100,6 +100,8 @@ export interface TurnOutput {
   cause?: AgentTurnCause;
   /** The completed assistant message committed immediately before tool dispatch. */
   followedByToolUse?: boolean;
+  /** Positive evidence of a successful terminal assistant response, not merely a persisted checkpoint. */
+  terminal?: boolean;
 }
 
 /** Result returned from a side prompt run. */
