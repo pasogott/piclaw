@@ -25,6 +25,7 @@ export interface WebAuthRuntimeConfig {
 
 /** Return true when TOTP auth is configured with a non-empty shared secret. */
 export function isTotpEnabled(config: WebAuthRuntimeConfig): boolean {
+  if (config.accessMode && config.accessMode !== "single-user") return !isPasskeyOnly(config);
   return Boolean(config.totpSecret && config.totpSecret.trim());
 }
 
@@ -92,6 +93,7 @@ export function createTotpAuthContext(
   deps: TotpAuthContextDeps
 ): TotpAuthContext {
   return {
+    accessMode: config.accessMode ?? "single-user",
     isAuthEnabled: () => isAuthEnabled(config),
     isTotpEnabled: () => isTotpEnabled(config),
     json: deps.json,
@@ -108,6 +110,7 @@ export function createWebauthnAuthContext(
   deps: WebauthnAuthContextDeps
 ): WebauthnAuthContext {
   return {
+    accessMode: config.accessMode ?? "single-user",
     isPasskeyEnabled: () => isPasskeyEnabled(config),
     json: deps.json,
     buildSessionCookie: (token, req) => buildSessionCookie(token, req, config),
