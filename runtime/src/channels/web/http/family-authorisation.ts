@@ -11,6 +11,10 @@ import { handleAuthRoutes } from "./dispatch-auth.js";
 import { handleShellRoutes, type ServeStaticAsset } from "./dispatch-shell.js";
 import { enforceRequestGuards } from "./request-guards.js";
 import { getRouteFlags } from "./route-flags.js";
+import { checkCsrfOrigin } from "./security.js";
+import { authoriseExecutionIdentity } from "../../../agent-pool/execution-identity.js";
+import { withExecutionIdentity } from "../../../core/execution-context.js";
+import { listOwnedSessionHandles } from "../../../db/session-handles.js";
 
 /** Absent selects the live home; explicit empty/duplicate selectors never fall back. */
 function selector(url: URL, key: string): string | undefined {
@@ -78,6 +82,52 @@ export async function handleFamilyRequest(channel: WebChannelLike, req: Request,
   // Packaged app assets only: no docs, dynamic avatars, manifest or service-worker state.
   if (flags.isGetOrHead && (flags.isIndex || flags.isStaticAsset)) {
     return await handleShellRoutes(channel, req, path, flags, serveStaticAsset) ?? deny();
+  }
+  if (path === "/agent/branches" && req.method === "GET") {
+    try {
+      // Family picker never falls back to runtime-global active sessions.
+      const root = selector(url, "root_chat_jid");
+      const requested = selector(url, "chat_jid");
+      if (requested !== undefined) resolveAuthorisedChat(getDb(), principal, requested, "session.read");
+      if (root !== undefined) {
+        const target = resolveAuthorisedChat(getDb(), principal, root, "session.read");
+        if (target.rootChatJid !== root) throw new ChatAccessDenied();
+      }
+      const branches = listOwnedSessionHandles(getDb(), principal).filter(branch => !root || branch.root_chat_jid === root);
+      return channel.json({ branches });
+    } catch (error) { if (error instanceof ChatAccessDenied) return deny(); throw error; }
+  }
+  if (req.method === "POST" && (path === "/agent/branch-fork" || path === "/agent/branch-rename")) {
+    // Require a browser origin; internal secrets cannot exempt these mutations.
+    if (!req.headers.get("origin") || !checkCsrfOrigin(req)) return deny();
+    const guard = await enforceRequestGuards({ json: (value, status) => channel.json(value, status), endpointContexts: channel.endpointContexts, authGateway: {
+      isAuthEnabled: () => true, isInternalSecretEnabled: () => false, verifyInternalSecret: () => false,
+      isAuthenticated: () => true,
+    } }, req, path, flags);
+    if (guard) return guard;
+    let body: Record<string, unknown>;
+    try {
+      const value = await req.json();
+      if (!value || typeof value !== "object" || Array.isArray(value)) return channel.json({ error: "Invalid JSON object" }, 400);
+      body = value;
+    } catch { return channel.json({ error: "Invalid JSON object" }, 400); }
+    try {
+      const keys = path.endsWith("-fork") ? ["chat_jid", "agent_name", "request_id"] : ["chat_jid", "agent_name"];
+      if (Object.keys(body).some(key => !keys.includes(key)) || (body.chat_jid !== undefined && typeof body.chat_jid !== "string") || typeof body.agent_name !== "string") return channel.json({ error: "Invalid branch request" }, 400);
+      const target = resolveAuthorisedChat(getDb(), principal, body.chat_jid as string | undefined, path.endsWith("-fork") ? "session.fork" : "session.rename");
+      if (path.endsWith("-fork") && (typeof body.request_id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(body.request_id))) return channel.json({ error: "Valid request_id required" }, 400);
+      const identity = authoriseExecutionIdentity(getDb(), "family-shared", target.chatJid, {
+        actorUserId: principal.userId, ownerUserId: principal.userId, chatJid: target.chatJid, kind: "interactive", authenticationSessionId: principal.authentication.sessionId ?? undefined,
+      });
+      if (!identity) throw new ChatAccessDenied();
+      const branch = await withExecutionIdentity(identity, () => path.endsWith("-fork")
+        ? channel.agentPool.createForkedChatBranch(target.chatJid, { agentName: body.agent_name as string, requestId: body.request_id as string })
+        : channel.agentPool.renameChatBranch(target.chatJid, { agentName: body.agent_name as string }));
+      return channel.json({ branch }, path.endsWith("-fork") ? 201 : 200);
+    } catch (error) {
+      if (error instanceof ChatAccessDenied) return deny();
+      return channel.json({ error: "Branch operation failed." }, 400);
+    }
   }
   const readable = req.method === "GET" && (path === "/timeline" || path === "/search" || path === "/sse/stream"
     || /^\/hashtag\/[^/]+$/.test(path) || /^\/thread\/[1-9]\d*$/.test(path));
