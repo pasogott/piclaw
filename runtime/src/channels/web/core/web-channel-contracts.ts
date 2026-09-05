@@ -141,7 +141,7 @@ export interface WebChannelLike
   serveDocsStatic(relPath: string): Promise<Response>;
   handleManifest(req: Request): Promise<Response>;
   handleAvatar(kind: "agent" | "user", req: Request): Promise<Response>;
-  handleSse(req: Request): Response;
+  handleSse(req: Request, authorisation?: import("../sse/sse.js").SseAuthorisation): Response;
   handleTerminalSession(req: Request): Response;
   handleTerminalHandoff(req: Request): Promise<Response>;
   handleVncSession(req: Request): Promise<Response>;

@@ -41,7 +41,7 @@ Usernames are trimmed, lowercased ASCII identifiers of 1–64 characters: an ini
 
 `GET /auth/me` returns the actor principal, authentication method and non-secret login ID, home destination and initial role capabilities. Responses use `Cache-Control: private, no-store` and `Vary: Cookie`. Missing credentials return 401 JSON; HEAD returns headers without a body. Client-supplied user/correlation headers and requested chat IDs cannot select the actor.
 
-With authentication disabled in single-user mode, the endpoint returns the legacy local/default principal using the current configured user display name and `auth_enabled: false`. Authenticated requests resolve the cookie's user record and reject disabled, unknown or expired accounts. Dormant non-default cookies cannot activate another account in single-user mode. The gateway holds one immutable identity snapshot per Request and rechecks the next request; long-lived stream revocation is implemented separately before family activation.
+With authentication disabled in single-user mode, the endpoint returns the legacy local/default principal using the current configured user display name and `auth_enabled: false`. Authenticated requests resolve the cookie's user record and reject disabled, unknown or expired accounts. Dormant non-default cookies cannot activate another account in single-user mode. The gateway holds one immutable identity snapshot per Request and rechecks the next request. Family SSE subscriptions revalidate the login and owned target before event delivery and on each heartbeat.
 
 Web sessions gain a random `session_id` unrelated to the bearer token/hash. Existing cookies retain their token and user handle; a missing login ID is populated on authenticated lookup. Per-user session listing excludes token material, and low-level revocation functions require both user and session IDs. Account API authorisation, service identities and connected-device revocation are subsequent #1124 work. The initial role helper denies unknown actions and does not grant administrators another owner's session content.
 
@@ -54,6 +54,27 @@ Internal provisioning helpers assign an existing root and a user's home atomical
 `resolveAuthorisedChat(database, principal, requestedChatJid, action)` checks live account status/role, root ownership and the whole stored parent chain before returning a target. Missing targets use the current owned home. Explicit empty, foreign, unknown, orphaned, cyclic or cross-root targets are denied uniformly. Admin role alone gives no access to another owner. This slice exposes the internal resolver; all route/tool/stream callers must integrate it before family mode becomes available.
 
 `assignLegacyRootOwners` takes an explicit mapping for every registered root, including archived and non-web roots. It validates all parent chains and users, rejects unregistered chats or incomplete/duplicate mappings, and applies the assignments in one transaction. It never runs automatically or changes the activation marker. Full migration preflight, non-web service scope and dependent resource/queue handling remain release prerequisites.
+
+## Read-only HTTP and SSE enforcement
+
+The family router makes a terminal decision before legacy, add-on and widget-state dispatch. Unsupported routes cannot fall through. Isolated mode returns 503 until its gateway exists. Startup still blocks both multi-user modes.
+
+| Route class | Family policy |
+|---|---|
+| GET/HEAD login page; POST TOTP verify and WebAuthn login start/finish | Existing authentication handlers and rate limits; internal-secret bypass disabled |
+| GET/HEAD login JS/CSS | Public packaged assets; source maps and other assets require login |
+| GET/HEAD `/auth/me` | Account snapshot or JSON 401 |
+| GET/HEAD index and `/static/*` | Authenticated packaged shell/assets; anonymous index serves login |
+| GET `/timeline`, `/hashtag/:tag`, `/thread/:id` | Live owned home or validated owned target |
+| GET `/search` | `current`, `root` and `all` search only authorised chats; filter before pagination |
+| GET `/sse/stream` | Server-authorised chat subscription with live revalidation |
+| All other routes and methods | JSON 401 without a browser principal; uniform 403 with one |
+
+Missing `chat_jid` selects the current stored home; explicit empty, duplicate, unknown, unowned and foreign targets receive the same denial. An explicit `root_chat_jid` must resolve to the target's root. Role alone cannot select another owner's messages. Thread IDs are looked up within the authorised chat. Responses retain existing owner-message fields; media retrieval is still denied. No response is derived from a foreign chat's message contents. Family responses use `Cache-Control: private, no-store` and `Vary: Cookie`. Browser cache/storage namespacing still needs implementation.
+
+An SSE subscription retains a non-secret login ID and target, without retaining bearer cookies. Login expiry/revocation, disabled accounts, changed roles and invalid/archived parent chains close it before the next event. Idle clients are checked every 30 seconds. Only known chat-scoped event types matching the authorised target are delivered; no global broadcast event is approved yet. The connection handshake omits global UI preferences. Cancellation and revocation clear the heartbeat and remove the client. Already delivered/queued bytes cannot be recalled.
+
+Denied surfaces include add-on ingress/config APIs, widget state/snapshots, all mutations, E2E bootstrap, factor registration, media/uploads, workspace, exports, recordings, terminal/VNC, agent controls/metadata, push and Settings. Each needs an explicit policy and target validation before being enabled. Tool/non-web boundaries, per-user browser state, device notification routing and complete route/resource inventory remain #1127 work. Single-user routing and unscoped SSE behaviour are unchanged.
 
 ## Account-factor foundation
 
