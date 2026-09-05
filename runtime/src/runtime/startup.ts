@@ -22,6 +22,7 @@ import {
 } from "../core/config.js";
 import { getChatBranchByAgentName, getChatBranchByChatJid, getChatCursor, getDb, getFailedRun, initDatabase } from "../db.js";
 import type { AgentQueue } from "../queue.js";
+import { validateAccessStartup } from "../db/access-state.js";
 import { startToolOutputCleanup } from "../tool-output.js";
 import { createUuid } from "../utils/ids.js";
 import { applyEnvironmentOverrides } from "../environment-overrides.js";
@@ -163,6 +164,7 @@ export function initializeRuntimeEnvironment(state: RuntimeState): void {
   bootstrapWorkspaceFromSkel();
 
   initDatabase();
+  validateAccessStartup(getDb());
   installAddonRuntimeApi();
   applyEnvironmentOverrides();
   const watchdogWarning = getProgressWatchdogSafetyWarning();
