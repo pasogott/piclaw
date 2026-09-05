@@ -75,7 +75,7 @@ On first use, session hydration validates live execution identity, the target an
 
 Main/cached/side hydration now requires matching live family execution identity. Family background prewarm is disabled until its queue carries durable owner provenance. The session manager rechecks identity after asynchronous waits; callers still need integration across direct model/tool entry points. Fork and rename UI workflows, process-kill crash testing, per-user deployment and activation gates remain unfinished.
 
-## Read-only HTTP and SSE enforcement
+## HTTP and SSE enforcement
 
 The family router makes a terminal decision before legacy, add-on and widget-state dispatch. Unsupported routes cannot fall through. Isolated mode returns 503 until its gateway exists. Startup still blocks both multi-user modes.
 
@@ -90,13 +90,14 @@ The family router makes a terminal decision before legacy, add-on and widget-sta
 | GET `/sse/stream` | Server-authorised chat subscription with live revalidation |
 | GET `/agent/branches` | Active owned roots/descendants only; no runtime-global fallback |
 | POST `/agent/branch-fork`, `/agent/branch-rename` | Owner-bound target, strict fields, browser Origin, cookie revalidation and branch rate limit |
+| `/admin/users`, `/account`, `/account/sessions/*`, `/account/factors/*` | Explicit account methods below; live account/login checks, own-resource scope, recent authentication and Origin on mutations |
 | All other routes and methods | JSON 401 without a browser principal; uniform 403 with one |
 
 Missing `chat_jid` selects the current stored home; explicit empty, duplicate, unknown, unowned and foreign targets receive the same denial. An explicit `root_chat_jid` must resolve to the target's root. Role alone cannot select another owner's messages. Thread IDs are looked up within the authorised chat. Responses retain existing owner-message fields; media retrieval is still denied. No response is derived from a foreign chat's message contents. Family responses use `Cache-Control: private, no-store` and `Vary: Cookie`. Browser cache/storage namespacing still needs implementation.
 
 An SSE subscription retains a non-secret login ID and target, without retaining bearer cookies. Login expiry/revocation, disabled accounts, changed roles and invalid/archived parent chains close it before the next event. Idle clients are checked every 30 seconds. Only known chat-scoped event types matching the authorised target are delivered; no global broadcast event is approved yet. The connection handshake omits global UI preferences. Cancellation and revocation clear the heartbeat and remove the client. Already delivered/queued bytes cannot be recalled.
 
-Denied surfaces include add-on ingress/config APIs, widget state/snapshots, mutations other than fork/rename, E2E bootstrap, factor registration, media/uploads, workspace, exports, recordings, terminal/VNC, other agent controls/metadata, push and Settings. Each needs an explicit policy and target validation before being enabled. Tool/non-web boundaries, per-user browser state, device notification routing and complete route/resource inventory remain #1127 work. Single-user routing and unscoped SSE behaviour are unchanged.
+Denied surfaces include add-on ingress/config APIs, widget state/snapshots, mutations other than fork/rename and the account methods below, E2E bootstrap, factor registration, media/uploads, workspace, exports, recordings, terminal/VNC, other agent controls/metadata, push and Settings. Each needs an explicit policy and target validation before being enabled. Tool/non-web boundaries, per-user browser state, device notification routing and complete route/resource inventory remain #1127 work. Single-user routing and unscoped SSE behaviour are unchanged.
 
 ## Account-factor foundation
 
@@ -108,7 +109,26 @@ Multi-user TOTP selects one normalised username, strictly validates its six-digi
 
 WebAuthn discoverable login resolves the verified credential owner and checks its user handle, account state and current credential before issuing a cookie. Multi-user ceremonies require user verification and capture the expected origin. Registration requires same-account recent authentication and origin checks; it uses the user's immutable ID/username/display name and cannot overwrite an existing credential. Legacy single-user ceremony settings remain supported.
 
-Public invitation/reset routes, recovery and last-factor safeguards, enrolment challenge/browser lifecycle hardening and Settings are unfinished. No mode is enabled by these internal methods. Back up the factor tables and bootstrap key together. Changing the bootstrap key currently requires an offline reviewed re-encryption/recovery procedure; automatic rotation and mixed-key ciphertext are unsupported.
+Public invitation/reset routes, recovery, enrolment challenge/browser lifecycle hardening and Settings are unfinished. The account service below protects factor removal, but the legacy factor-management tools still need owner-bound integration before family execution. No mode is enabled by these internal methods. Back up the factor tables and bootstrap key together. Changing the bootstrap key currently requires an offline reviewed re-encryption/recovery procedure; automatic rotation and mixed-key ciphertext are unsupported.
+
+## Family account administration
+
+All account operations re-read the login ID and enabled user/role. Mutations require a same-origin browser request, recent TOTP/passkey authentication (five minutes), and rate limiting. Internal secrets do not bypass these checks. Account responses contain profile/device/factor metadata only; no seed, public key, bearer token, token hash or conversation content is returned.
+
+| Method and path | Scope |
+|---|---|
+| GET `/admin/users` | Enabled administrator lists account metadata |
+| POST `/admin/users` | Recent administrator creates a disabled account and owned home root atomically |
+| PATCH `/admin/users/:id` | Recent administrator changes username/displayName/role/enabled; immutable identity/home fields rejected |
+| PATCH `/account` | Recent account owner changes only username/displayName |
+| GET `/account/sessions` | Current owner's login metadata, excluding bearer material |
+| DELETE `/account/sessions/:sessionId` | Revoke own device; foreign/missing IDs have the same response and no effect |
+| GET `/account/factors` | Own TOTP presence and passkey metadata |
+| DELETE `/account/factors/totp` or `/account/factors/passkey/:credentialId` | Remove an own factor only if another factor permitted by configured auth policy remains |
+
+Provisioning creates the disabled user, immutable `web:user:<id>` home, root ownership and owner-local `home` handle in one transaction. Enabling requires an active owned root and at least one currently configured factor (passkeys must match the current RP ID). Disable, enable and role transitions revoke all target logins and pending enrolments; changing profile labels leaves devices active. The last enabled administrator cannot be disabled or demoted. Factor removal rolls back if it would remove the last configured factor, and otherwise revokes all target devices/enrolments. These transactions do not grant administrators access to another user's sessions.
+
+Invitations and authentication recovery are separate work; these APIs cannot display or replace stored TOTP seeds and do not bootstrap factor enrolment. Full mode activation, migrated legacy factors, RP-specific UI inventory and stale in-memory WebAuthn ceremony invalidation need integration testing before release.
 
 ## Model identity foundation
 

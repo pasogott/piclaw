@@ -1,0 +1,50 @@
+import type { AuthenticatedPrincipal } from "../../../core/access-types.js";
+import { getDb } from "../../../db/connection.js";
+import { ChatAccessDenied } from "../../../db/session-ownership.js";
+import { listManagedAccounts, provisionFamilyAccount, updateManagedAccount, updateOwnAccount, listOwnSessions, revokeOwnSession, listOwnFactors, removeOwnFactor } from "../../../db/account-administration.js";
+import type { CreateUserInput, UpdateUserInput } from "../../../db/users.js";
+import type { WebChannelLike } from "../core/web-channel-contracts.js";
+import { checkCsrfOrigin, rateLimitResponse } from "./security.js";
+import { isRateLimited } from "./rate-limit.js";
+import { resolveWebauthnRpInfo } from "../auth/webauthn-challenges.js";
+
+/** Account-only surface: never returns conversation content, tokens or factor secrets. */
+export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Request, principal: AuthenticatedPrincipal): Promise<Response | null> {
+  const path = new URL(req.url).pathname;
+  if (path !== "/account" && !path.startsWith("/account/") && path !== "/admin/users" && !path.startsWith("/admin/users/")) return null;
+  const deny = () => channel.json({ error: "Session access denied." }, 403);
+  const method = req.method;
+  if (!["GET", "POST", "PATCH", "DELETE"].includes(method)) return deny();
+  if (method !== "GET") {
+    if (!req.headers.get("origin") || !checkCsrfOrigin(req)) return deny();
+    if (isRateLimited(req, "data/family_accounts", 60_000, 20)) return rateLimitResponse("Too many account changes. Try again later.");
+  }
+  try {
+    const db = getDb();
+    if (method === "GET") {
+      if (path === "/admin/users") return channel.json({ users: listManagedAccounts(db, principal) });
+      if (path === "/account/sessions") return channel.json({ sessions: listOwnSessions(db, principal) });
+      if (path === "/account/factors") return channel.json(listOwnFactors(db, principal));
+      return deny();
+    }
+    const policy = { totp: channel.authGateway.createTotpContext().isTotpEnabled(), passkey: channel.authGateway.createWebauthnContext().isPasskeyEnabled(), rpId: resolveWebauthnRpInfo(req).rpId };
+    if (method === "DELETE") {
+      const session = path.match(/^\/account\/sessions\/([a-zA-Z0-9_-]+)$/);
+      if (session) { revokeOwnSession(db, principal, session[1]!); return channel.json({ revoked: true }); }
+      if (path === "/account/factors/totp") { removeOwnFactor(db, principal, { kind: "totp" }, policy); return channel.json({ removed: true }); }
+      const passkey = path.match(/^\/account\/factors\/passkey\/([a-zA-Z0-9_-]+)$/);
+      if (passkey) { removeOwnFactor(db, principal, { kind: "passkey", credentialId: passkey[1] }, policy); return channel.json({ removed: true }); }
+      return deny();
+    }
+    const body = await req.json();
+    if (!body || typeof body !== "object" || Array.isArray(body)) return channel.json({ error: "Invalid account request" }, 400);
+    if (path === "/admin/users" && method === "POST") return channel.json({ user: provisionFamilyAccount(db, principal, body as CreateUserInput) }, 201);
+    const user = path.match(/^\/admin\/users\/([a-zA-Z0-9_-]+)$/);
+    if (user && method === "PATCH") return channel.json({ user: updateManagedAccount(db, principal, user[1]!, body as UpdateUserInput, policy) });
+    if (path === "/account" && method === "PATCH") return channel.json({ user: updateOwnAccount(db, principal, body) });
+    return deny();
+  } catch (error) {
+    if (error instanceof ChatAccessDenied) return deny();
+    return channel.json({ error: "Account operation failed. Check the request, authentication factors and remaining administrator." }, 400);
+  }
+}
