@@ -19,13 +19,13 @@
     {
       "package_path": null,
       "output_file": "web/static/common/js/vendor/katex.min.js",
-      "sha256": "3e79ecd69988705d1f3528680d34e5b0bacc6ef051d7159b01e8ce3c78dc50c9",
-      "size_bytes": 273965
+      "sha256": "420b6c6c16a4d734fc2f367ab67691525489d6cdf481192ec76af3058aa9058e",
+      "size_bytes": 273969
     }
   ],
   "metadata_file": "web/static/common/js/vendor/katex.meta.json",
-  "sha256": "3e79ecd69988705d1f3528680d34e5b0bacc6ef051d7159b01e8ce3c78dc50c9",
-  "size_bytes": 273965,
+  "sha256": "420b6c6c16a4d734fc2f367ab67691525489d6cdf481192ec76af3058aa9058e",
+  "size_bytes": 273969,
   "build_command": [
     "bun",
     "build",
