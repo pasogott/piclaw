@@ -1,3 +1,5 @@
+import { hrtime } from "node:process";
+
 export interface ModelCallTimingState {
   sequence: number;
   callStartedAt: number;
@@ -19,7 +21,7 @@ export interface ModelCallTimingResult {
 }
 
 function nowMs(): number {
-  return performance.now();
+  return Number(hrtime.bigint()) / 1_000_000;
 }
 
 export function createModelCallTiming(sequence: number, startedAt = nowMs()): ModelCallTimingState {
