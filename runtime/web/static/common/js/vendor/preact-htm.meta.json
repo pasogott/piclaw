@@ -22,13 +22,13 @@
     {
       "package_path": null,
       "output_file": "web/static/common/js/vendor/preact-htm.js",
-      "sha256": "ae123ffccf0daaa6e41cc6bdfe67d4b9c6e52ab60a62a8f32471f2d14ea725fb",
-      "size_bytes": 15844
+      "sha256": "455e401d1a382ddc361f20cc9b7d95a2abc7be805f3c0fc61b94c9a2e030b977",
+      "size_bytes": 15837
     }
   ],
   "metadata_file": "web/static/common/js/vendor/preact-htm.meta.json",
-  "sha256": "ae123ffccf0daaa6e41cc6bdfe67d4b9c6e52ab60a62a8f32471f2d14ea725fb",
-  "size_bytes": 15844,
+  "sha256": "455e401d1a382ddc361f20cc9b7d95a2abc7be805f3c0fc61b94c9a2e030b977",
+  "size_bytes": 15837,
   "build_command": [
     "bun",
     "build",
