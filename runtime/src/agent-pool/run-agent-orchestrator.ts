@@ -513,8 +513,7 @@ async function runPromptAttempt(
         hadCompletedTurnOutput = hadCompletedTurnOutput || hadOutput;
         hadTerminalTurnOutput = hadTerminalTurnOutput || (
           hadOutput
-          && !turn.followedByToolUse
-          && turn.cause !== "failed_boundary"
+          && turn.terminal === true
         );
         originalOnTurnComplete(turn as Parameters<NonNullable<RunAgentOptions["onTurnComplete"]>>[0]);
       })
