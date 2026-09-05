@@ -314,7 +314,22 @@ function buildErrorOutcomeMarker(
       abortOperation: options.abortOperation,
     });
   }
-  if (category === "session_corruption" || category === "context_pressure") {
+  if (category === "context_pressure") {
+    return buildTurnOutcomeMarker({
+      ...common,
+      kind: "context",
+      label: "context",
+      title: "Context limit reached",
+      detail: options.abortCause === "context_pressure"
+        ? "Piclaw paused this turn at its context threshold. Automatic continuation did not complete; the session is preserved."
+        : detail,
+      severity: options.severity ?? "warning",
+      nextAction: options.nextAction || "Ask me to continue from the saved state; if context pressure persists, run /compact first.",
+      abortCause: options.abortCause,
+      abortOperation: options.abortOperation,
+    });
+  }
+  if (category === "session_corruption") {
     return buildTurnOutcomeMarker({
       ...common,
       kind: "context",
