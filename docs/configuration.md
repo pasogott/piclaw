@@ -760,6 +760,10 @@ Search collection should stay narrow:
 
 See [runtime/docs/dream-memory.md](../runtime/docs/dream-memory.md) for the detailed file sequence and outputs.
 
+## Access mode
+
+`domains.access.mode` defaults to `single-user` on fresh or legacy single-user stores. The multi-user foundation adds strict configuration and persistent migration guards; `family-shared` and `isolated-containers` cannot run until their integration gates pass. See [Access modes](multi-user/README.md) for configuration, planned profiles and recovery constraints.
+
 ## Authentication (TOTP + passkeys)
 
 You can gate the entire web UI behind a 6-digit TOTP challenge and optionally enable WebAuthn passkeys. Static assets needed by iOS/Android webapps (manifest, icons, avatars, `/static/*`) remain public so homescreen shortcuts keep working.
