@@ -61,6 +61,13 @@ import type { AgentTurnCoordinator } from "./turn-coordinator.js";
 import type { AgentOutput, RetrySettingsProvider, RunAgentOptions, TurnOutput } from "./contracts.js";
 import { getDefaultActiveToolNames } from "../extensions/tool-activation.js";
 import { getRememberedActiveToolSubset, rememberActiveToolSubset } from "./active-tool-subset-memory.js";
+import {
+  completeModelCallTiming,
+  createModelCallTiming,
+  markModelOutputObserved,
+  markModelResponseStarted,
+  type ModelCallTimingState,
+} from "./model-call-timing.js";
 import { logToolStateTransition } from "./tool-state-transitions.js";
 import { createRunToolCeilingController, type SessionWithToolControl } from "./run-tool-ceiling.js";
 import { isPendingShutdown } from "../runtime/shutdown-registry.js";
@@ -457,7 +464,7 @@ async function runPromptAttempt(
   let assistantToolUseMessageCount = 0;
   let toolExecutionCount = toolExecutionCountAtStart;
   let modelResponseSequence = 0;
-  let activeModelResponse: { sequence: number; startedAt: number } | null = null;
+  let activeModelResponse: ModelCallTimingState | null = null;
   const sessionEntryBaseline = snapshotSessionEntryCount(session);
   const baselineLeafId = getSessionLeafId(session);
   const toolUseMessageBudget = getToolUseBudget();
@@ -613,16 +620,33 @@ async function runPromptAttempt(
       });
     }
 
+    if (event.type === "turn_start") {
+      modelResponseSequence += 1;
+      activeModelResponse = createModelCallTiming(modelResponseSequence);
+      options.onInfo?.("Assistant model call started", {
+        operation: "model.call.start",
+        chatJid,
+        model: modelLabel,
+        sequence: modelResponseSequence,
+        phase: modelResponseSequence === 1 ? "initial_prompt" : "tool_result",
+        ...getRunObservabilityDetails(runOptions),
+      });
+    }
     if (event.type === "message_start") {
       const message = (event as { message?: { role?: unknown } }).message;
-      if (message?.role === "assistant" && !activeModelResponse) {
-        modelResponseSequence += 1;
-        activeModelResponse = { sequence: modelResponseSequence, startedAt: Date.now() };
+      if (message?.role === "assistant") {
+        const now = Date.now();
+        if (!activeModelResponse) {
+          modelResponseSequence += 1;
+          activeModelResponse = createModelCallTiming(modelResponseSequence, now);
+        }
+        markModelResponseStarted(activeModelResponse, now);
         options.onInfo?.("Assistant model response started", {
           operation: "model.response.start",
           chatJid,
           model: modelLabel,
-          sequence: modelResponseSequence,
+          sequence: activeModelResponse.sequence,
+          responseStartLatencyMs: Math.max(0, now - activeModelResponse.callStartedAt),
           ...getRunObservabilityDetails(runOptions),
         });
       }
@@ -637,16 +661,22 @@ async function runPromptAttempt(
         });
       }
       if ((messageEvent?.type === "text_start" || messageEvent?.type === "thinking_start") && !activeModelResponse) {
+        const now = Date.now();
         modelResponseSequence += 1;
-        activeModelResponse = { sequence: modelResponseSequence, startedAt: Date.now() };
+        activeModelResponse = createModelCallTiming(modelResponseSequence, now);
+        markModelResponseStarted(activeModelResponse, now);
         options.onInfo?.("Assistant model response started", {
           operation: "model.response.start",
           chatJid,
           model: modelLabel,
-          sequence: modelResponseSequence,
+          sequence: activeModelResponse.sequence,
           phase: messageEvent.type,
+          responseStartLatencyMs: 0,
           ...getRunObservabilityDetails(runOptions),
         });
+      }
+      if (activeModelResponse) {
+        markModelOutputObserved(activeModelResponse, messageEvent?.type, messageEvent?.delta);
       }
       if (messageEvent?.type === "text_delta" && typeof messageEvent.delta === "string" && messageEvent.delta.length > 0) {
         hadPartialOutput = true;
@@ -701,13 +731,20 @@ async function runPromptAttempt(
         } as AgentSessionEvent;
       }
       if (message?.role === "assistant") {
-        const durationMs = activeModelResponse ? Math.max(0, Date.now() - activeModelResponse.startedAt) : null;
+        const timing = activeModelResponse ? completeModelCallTiming(activeModelResponse) : null;
         options.onInfo?.("Assistant model response completed", {
           operation: "model.response.end",
           chatJid,
           model: modelLabel,
           sequence: activeModelResponse?.sequence ?? null,
-          durationMs,
+          durationMs: timing?.responseDurationMs ?? null,
+          callDurationMs: timing?.callDurationMs ?? null,
+          responseDurationMs: timing?.responseDurationMs ?? null,
+          responseStartLatencyMs: timing?.responseStartLatencyMs ?? null,
+          timeToFirstOutputMs: timing?.timeToFirstOutputMs ?? null,
+          timeToFirstTextMs: timing?.timeToFirstTextMs ?? null,
+          generationDurationMs: timing?.generationDurationMs ?? null,
+          textGenerationDurationMs: timing?.textGenerationDurationMs ?? null,
           stopReason: typeof message.stopReason === "string" ? message.stopReason : null,
           errorMessage: safeErrorMessage,
           usage: message.usage ?? null,
