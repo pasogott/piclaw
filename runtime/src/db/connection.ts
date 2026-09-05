@@ -936,6 +936,7 @@ export function initDatabase(): void {
   installScheduledRunCompositionSchema(db);
   migrateScheduledTaskAuthorities(db);
   ensureWebSessionColumns(db);
+  ensureWebSessionIdentity(db);
   ensureFts(db);
   ensureChatCursorColumns(db);
   migrateChatCursors(db);
@@ -952,6 +953,13 @@ export function initDatabase(): void {
   if (!useMemory) {
     ensureIncrementalAutoVacuum(db);
   }
+}
+
+/** Add a non-secret login identifier without rewriting existing bearer tokens. */
+function ensureWebSessionIdentity(database: Database): void {
+  const columns = database.prepare("PRAGMA table_info(web_sessions)").all() as Array<{ name: string }>;
+  if (!columns.some(column => column.name === "session_id")) database.exec("ALTER TABLE web_sessions ADD COLUMN session_id TEXT");
+  database.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_web_sessions_session_id ON web_sessions(session_id) WHERE session_id IS NOT NULL");
 }
 
 /** Add duration_ms column to thinking_content for databases created before it was introduced. */
