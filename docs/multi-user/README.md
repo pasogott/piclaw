@@ -63,7 +63,17 @@ Internal provisioning helpers assign an existing root and a user's home atomical
 
 The owner-aware lookup/list/rename helpers validate live account and parent-chain ownership. Friendly rename updates only `agent_name` and `updated_at`; it preserves branch ID, chat JID, root, home, message references and filesystem paths. Owner-local misses never query another namespace. The legacy database lookup returns only legacy handles, and legacy ensure/rename/restore methods reject migrated rows.
 
-This storage slice does not yet wire owner-aware names into browser branch controls, live session-name synchronisation, forks, deferred seeds, warmup, mentions, chat tools, session control, schedules or peers. Some runtime consumers still have legacy active-session fallbacks; they must be replaced with owner-aware resolution before enabling family execution. Full fork/archive/restore/merge/download authorisation and crash/retry lifecycle tests remain #1128 work. Family mutations are still denied by the router.
+Family branch listing, fork and friendly rename now use owner-bound controls. AgentBranchManager handle lookup and active/known lists use execution identity and have no cross-user active-session fallback. Chat tools, session control, schedules and peer ingress still need end-to-end owner propagation. Root creation, archive, restore, merge, purge and download stay disabled in the family router; corresponding destructive branch-manager operations also deny multi-user mode.
+
+### Atomic family forks
+
+`POST /agent/branch-fork` accepts `chat_jid` (omitted means the current home), `agent_name` and an owner-scoped `request_id` of 1–128 letters, digits, underscores or hyphens. The request needs a current account cookie and matching browser Origin; internal secrets cannot bypass either. The server supplies interactive execution identity before source hydration. Active sources require a recorded stable turn boundary. Capture rechecks identity before committing.
+
+`owned_fork_operations` persists the captured JSON seed, source/target branch IDs and idempotency key in the same transaction as child chat/branch registration. The child inherits its root and namespace. Same-owner/source/key retries return the original child, including after rename; using the key with another source denies. New forks choose an available owner-local handle and an immutable UUID-based JID. Nested forks keep the same root. No filesystem branch seed is created for family forks.
+
+On first use, session hydration validates live execution identity, the target and the seed's source before replay. It applies the current stored name, persists/reopens the session, then clears the seed payload while retaining the operation identity. Failure keeps the seed for retry and disposes the broken runtime. A crash before completion may replay into a fresh session again; the seed is retained until successful persistence. Legacy file seeds are rejected for family sessions. Existing migrated children without fork-operation provenance need an explicit adoption workflow before hydration.
+
+Main/cached/side hydration now requires matching live family execution identity. Family background prewarm is disabled until its queue carries durable owner provenance. The session manager rechecks identity after asynchronous waits; callers still need integration across direct model/tool entry points. Fork and rename UI workflows, process-kill crash testing, per-user deployment and activation gates remain unfinished.
 
 ## Read-only HTTP and SSE enforcement
 
@@ -78,13 +88,15 @@ The family router makes a terminal decision before legacy, add-on and widget-sta
 | GET `/timeline`, `/hashtag/:tag`, `/thread/:id` | Live owned home or validated owned target |
 | GET `/search` | `current`, `root` and `all` search only authorised chats; filter before pagination |
 | GET `/sse/stream` | Server-authorised chat subscription with live revalidation |
+| GET `/agent/branches` | Active owned roots/descendants only; no runtime-global fallback |
+| POST `/agent/branch-fork`, `/agent/branch-rename` | Owner-bound target, strict fields, browser Origin, cookie revalidation and branch rate limit |
 | All other routes and methods | JSON 401 without a browser principal; uniform 403 with one |
 
 Missing `chat_jid` selects the current stored home; explicit empty, duplicate, unknown, unowned and foreign targets receive the same denial. An explicit `root_chat_jid` must resolve to the target's root. Role alone cannot select another owner's messages. Thread IDs are looked up within the authorised chat. Responses retain existing owner-message fields; media retrieval is still denied. No response is derived from a foreign chat's message contents. Family responses use `Cache-Control: private, no-store` and `Vary: Cookie`. Browser cache/storage namespacing still needs implementation.
 
 An SSE subscription retains a non-secret login ID and target, without retaining bearer cookies. Login expiry/revocation, disabled accounts, changed roles and invalid/archived parent chains close it before the next event. Idle clients are checked every 30 seconds. Only known chat-scoped event types matching the authorised target are delivered; no global broadcast event is approved yet. The connection handshake omits global UI preferences. Cancellation and revocation clear the heartbeat and remove the client. Already delivered/queued bytes cannot be recalled.
 
-Denied surfaces include add-on ingress/config APIs, widget state/snapshots, all mutations, E2E bootstrap, factor registration, media/uploads, workspace, exports, recordings, terminal/VNC, agent controls/metadata, push and Settings. Each needs an explicit policy and target validation before being enabled. Tool/non-web boundaries, per-user browser state, device notification routing and complete route/resource inventory remain #1127 work. Single-user routing and unscoped SSE behaviour are unchanged.
+Denied surfaces include add-on ingress/config APIs, widget state/snapshots, mutations other than fork/rename, E2E bootstrap, factor registration, media/uploads, workspace, exports, recordings, terminal/VNC, other agent controls/metadata, push and Settings. Each needs an explicit policy and target validation before being enabled. Tool/non-web boundaries, per-user browser state, device notification routing and complete route/resource inventory remain #1127 work. Single-user routing and unscoped SSE behaviour are unchanged.
 
 ## Account-factor foundation
 

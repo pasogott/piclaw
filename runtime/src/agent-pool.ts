@@ -717,7 +717,7 @@ export class AgentPool {
 
   async createForkedChatBranch(
     sourceChatJid: string,
-    options: { agentName?: string | null } = {},
+    options: { agentName?: string | null; requestId?: string } = {},
   ): Promise<ChatBranchRecord> {
     return this.branchManager.createForkedChatBranch(sourceChatJid, options);
   }
