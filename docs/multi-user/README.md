@@ -67,6 +67,14 @@ WebAuthn discoverable login resolves the verified credential owner and checks it
 
 Public invitation/reset routes, recovery and last-factor safeguards, enrolment challenge/browser lifecycle hardening and Settings are unfinished. No mode is enabled by these internal methods. Back up the factor tables and bootstrap key together. Changing the bootstrap key currently requires an offline reviewed re-encryption/recovery procedure; automatic rotation and mixed-key ciphertext are unsupported.
 
+## Model identity foundation
+
+`RunAgentOptions.executionProvenance` is a server-owned contract containing initiating actor, session owner, chat, execution kind and optional non-secret login correlation. It must never be copied from a browser/model request body. The orchestrator validates it against live account/root records before hydration and holds the projected identity in AsyncLocalStorage through the run. Interactive provenance also needs a current matching login; owner-scheduled work may survive ordinary logout but cannot run for a disabled owner. Cross-user service actors are denied until explicit service grants exist.
+
+The existing memory bootstrap hook appends runtime username, display name, actor/owner IDs, role and workspace profile to system context. It never creates a synthetic user message or emits login credentials. Personal context comes from `notes/users/<immutable-user-id>/MEMORY.md` and `preferences.md`, plus explicit shared `notes/family/MEMORY.md`. Missing files are reported as missing; another user's context or legacy global personal memory is not substituted. Paths remain on the deliberately shared filesystem.
+
+Unmodified single-user callers keep their existing prompt/memory behaviour, and clear inherited execution identity. Browser ingress, durable queue/job attribution, direct side prompts, delegates and service grants must integrate this contract before family activation. The foundation tests the scoped authoriser, concurrent contexts and prompt hook; it does not yet claim identity propagation across every entry point.
+
 ## Activation and recovery
 
 Access validation runs after database initialisation and before add-on runtime setup, background workers and listeners. This build permits only single-user configuration with a single-user activation marker. It never offers a flag to bypass the release gate.

@@ -29,6 +29,10 @@ import { createLogger, debugSuppressedError } from "../utils/logger.js";
 import { getSessionFileLineCount, getSessionFileSize, rotateSession } from "../session-rotation.js";
 import { getCompactionSuccessCount, resetCompactionSuccessCount } from "./compaction.js";
 import { withChatContext } from "../core/chat-context.js";
+import { readAccessConfig } from "../core/config-access.js";
+import { withExecutionIdentity } from "../core/execution-context.js";
+import { getDb } from "../db/connection.js";
+import { authoriseExecutionIdentity } from "./execution-identity.js";
 import {
   formatTimeoutDuration,
   resolveSessionIdleMaxWaitMs,
@@ -941,8 +945,31 @@ async function runPromptAttempt(
   };
 }
 
-/** Run a prompt against the persistent session for one chat. */
+/** Resolve identity before session hydration, compaction, model invocation or tool execution. */
 export async function runAgentPrompt(
+  prompt: string,
+  chatJid: string,
+  runOptions: RunAgentOptions,
+  options: RunAgentOrchestratorOptions,
+): Promise<AgentOutput> {
+  const mode = readAccessConfig().mode;
+  if (mode === "single-user" && runOptions.executionProvenance === undefined) {
+    return withExecutionIdentity(null, () => runAgentPromptWithIdentity(prompt, chatJid, runOptions, options));
+  }
+  let identity;
+  try {
+    identity = authoriseExecutionIdentity(getDb(), mode, chatJid, runOptions.executionProvenance);
+    if (!identity) throw new Error("Execution identity unavailable.");
+  } catch (error) {
+    options.onWarn?.("Execution identity rejected", {operation:"run_agent.identity_denied",chatJid});
+    return {status:"error",result:null,error:"Session access denied."};
+  }
+  return withExecutionIdentity(identity, () => runAgentPromptWithIdentity(prompt, chatJid, {
+    ...runOptions, userId: identity.provenance.actorUserId,
+  }, options));
+}
+
+async function runAgentPromptWithIdentity(
   prompt: string,
   chatJid: string,
   runOptions: RunAgentOptions,

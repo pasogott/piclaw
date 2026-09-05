@@ -124,6 +124,8 @@ export interface SidePromptOptions {
 
 /** Options for AgentPool.runAgent(): chatJid, messages, callbacks. */
 export interface RunAgentOptions {
+  /** Server-owned execution provenance; never accept directly from browser/model payloads. */
+  executionProvenance?: import("../core/execution-context.js").ExecutionProvenance;
   onEvent?: (event: AgentSessionEvent) => void;
   /** Called when a completed assistant message can be committed, including before tool dispatch. */
   onTurnComplete?: (turn: TurnOutput) => void;
