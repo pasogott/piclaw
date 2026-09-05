@@ -4182,6 +4182,98 @@ test("runAgentPrompt retries after persisting visible commentary from a provider
   }
 });
 
+for (const boundary of ["error", "aborted", "length", "interrupted", "commentary", "terminal"] as const) {
+  test(`runAgentPrompt preserves ${boundary} output without poisoning later context recovery`, async () => {
+    initDatabase();
+    const chatJid = `web:checkpoint-pressure-${boundary}`;
+    const restoreEnv = setEnv({
+      PICLAW_TURN_AUTO_RECOVERY_ENABLED: "1",
+      PICLAW_TURN_TRANSIENT_RECOVERY_TOOLS_ENABLED: "1",
+      PICLAW_TURN_AUTO_RECOVERY_MAX_ATTEMPTS: "2",
+      PICLAW_TURN_AUTO_RECOVERY_TOTAL_BUDGET_MS: "30000",
+    });
+    class StubSession {
+      listeners: Array<(event: any) => void> = [];
+      promptCalls = 0;
+      compactCalls = 0;
+      promptTexts: string[] = [];
+      isStreaming = false;
+      isCompacting = false;
+      isRetrying = false;
+      sessionManager = { getLeafId: () => `leaf-${this.promptCalls}` };
+      activeTools = ["bash", "read"];
+      getActiveToolNames() { return [...this.activeTools]; }
+      setActiveToolsByName(names: string[]) { this.activeTools = [...names]; }
+      subscribe(listener: (event: any) => void) {
+        this.listeners.push(listener);
+        return () => { this.listeners = this.listeners.filter((entry) => entry !== listener); };
+      }
+      emit(event: any) { for (const listener of this.listeners) listener(event); }
+      async compact() { this.compactCalls += 1; }
+      async abort() {}
+      async prompt(text: string) {
+        this.promptTexts.push(text);
+        if (++this.promptCalls > 1) {
+          this.emit({ type: "message_end", message: createAssistantMessage("Recovered final answer.") });
+          return;
+        }
+        this.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Reading gate summaries." } });
+        if (boundary !== "interrupted") {
+          this.emit({ type: "message_end", message: {
+            role: "assistant",
+            stopReason: boundary === "commentary" || boundary === "terminal" ? "stop" : boundary,
+            errorMessage: boundary === "error" ? "Connection error: WebSocket closed 1000 session_shutdown" : undefined,
+            content: [{ type: "text", text: "Reading gate summaries.",
+              ...(boundary === "commentary" ? { textSignature: JSON.stringify({ phase: "commentary" }) } : {}) }],
+          } });
+        }
+        // Provider retry/new text boundary within the SAME prompt attempt.
+        this.emit({ type: "message_update", assistantMessageEvent: { type: "text_start" } });
+        this.emit({ type: "message_end", message: { role: "assistant", stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "check", name: "bash", arguments: {} }] } });
+        this.emit({ type: "tool_execution_start", toolName: "bash", toolCallId: "check", args: {} });
+        this.emit({ type: "tool_execution_end", toolName: "bash", toolCallId: "check", isError: true });
+        recordAgentAbortCause(chatJid, "context_pressure", "run_agent.mid_turn_context_pressure");
+        this.emit({ type: "message_end", message: { role: "assistant", stopReason: "error",
+          errorMessage: "The operation was aborted.", content: [] } });
+      }
+    }
+    try {
+      const session = new StubSession();
+      const completed: string[] = [];
+      const result = await runAgentPrompt("finish release", chatJid, {
+        timeoutMs: 0,
+        skipPrePromptCompaction: true,
+        onTurnComplete: (turn) => { if (turn.text) completed.push(turn.text); },
+      }, {
+        getOrCreateRuntime: async () => createRuntime(session, { baseDelayMs: 1 }),
+        turnCoordinator: new AgentTurnCoordinator({ takeAttachments: () => [], touchSession: () => {} }),
+        clearAttachments: () => {}, takeAttachments: () => [], logsDir: createTestLogsDir(),
+        setActiveForkBaseLeaf: () => {}, clearActiveForkBaseLeaf: () => {},
+      });
+      expect(completed).toEqual(["Reading gate summaries."]);
+      if (boundary === "terminal") {
+        expect(result.recovery?.lastClassifier).toBe("completed_turn_output");
+        expect(session.compactCalls).toBe(0);
+        expect(session.promptCalls).toBe(1);
+      } else {
+        // Context recovery after tool work compacts, then hands off to the
+        // existing ordinary tool-enabled continuation. Never replay the push.
+        expect(result).toMatchObject({
+          status: "error", requiresToolEnabledContinuation: true,
+          protectedRecoveryHandoff: { reason: "post_compaction_tools_required", compaction: "succeeded" },
+        });
+        expect(result.recovery).toMatchObject({ attemptsUsed: 1, strategyHistory: ["compact_then_retry"] });
+        expect(result.recovery?.diagnostics[0]).toMatchObject({
+          hadCompletedTurnOutput: true, hadTerminalTurnOutput: false, failureCategory: "context_pressure",
+        });
+        expect(session.compactCalls).toBe(1);
+        expect(session.promptTexts).toEqual(["finish release"]);
+      }
+    } finally { restoreEnv(); }
+  });
+}
+
 test("runAgentPrompt continues with tools after a resolved side-effecting tool", async () => {
   const restoreEnv = setEnv({
     PICLAW_TURN_AUTO_RECOVERY_ENABLED: "1",
