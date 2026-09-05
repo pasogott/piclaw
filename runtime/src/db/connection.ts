@@ -19,6 +19,7 @@
 import Database from "bun:sqlite";
 import { initializeAccessSchema } from "./access-state.js";
 import { initializeSessionOwnershipSchema } from "./session-ownership.js";
+import { initializeSessionHandleSchema } from "./session-handles.js";
 import { initializeAuthFactorSchema } from "./auth-factors-schema.js";
 import fs from "fs";
 import path from "path";
@@ -173,9 +174,6 @@ function createSchema(database: Database): void {
       archived_at TEXT,
       FOREIGN KEY (chat_jid) REFERENCES chats(jid)
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_branches_agent_name_active_unique
-      ON chat_branches(agent_name)
-      WHERE archived_at IS NULL;
     CREATE INDEX IF NOT EXISTS idx_chat_branches_root_chat_jid ON chat_branches(root_chat_jid);
     CREATE INDEX IF NOT EXISTS idx_chat_branches_parent_branch_id ON chat_branches(parent_branch_id);
     CREATE INDEX IF NOT EXISTS idx_chat_branches_archived_at ON chat_branches(archived_at);
@@ -739,10 +737,8 @@ function ensureChatBranchConstraints(database: Database): void {
     })();
   }
 
+  initializeSessionHandleSchema(database);
   database.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_branches_agent_name_active_unique
-      ON chat_branches(agent_name)
-      WHERE archived_at IS NULL;
     CREATE INDEX IF NOT EXISTS idx_chat_branches_root_chat_jid ON chat_branches(root_chat_jid);
     CREATE INDEX IF NOT EXISTS idx_chat_branches_parent_branch_id ON chat_branches(parent_branch_id);
     CREATE INDEX IF NOT EXISTS idx_chat_branches_archived_at ON chat_branches(archived_at);

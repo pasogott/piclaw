@@ -55,6 +55,16 @@ Internal provisioning helpers assign an existing root and a user's home atomical
 
 `assignLegacyRootOwners` takes an explicit mapping for every registered root, including archived and non-web roots. It validates all parent chains and users, rejects unregistered chats or incomplete/duplicate mappings, and applies the assignments in one transaction. It never runs automatically or changes the activation marker. Full migration preflight, non-web service scope and dependent resource/queue handling remain release prerequisites.
 
+## Owner-local handle storage
+
+`chat_branches.handle_owner_id` separates the legacy namespace (empty string) from explicitly migrated owner namespaces. Existing single-user branches keep the empty namespace, existing names and legacy suffixing. The legacy active-name index covers only those rows. A second partial unique index enforces case-normalised `(handle_owner_id, agent_name)` uniqueness across each owner's active roots and descendants. Different owners can each claim `@research`; archive frees the name and restore must satisfy the same constraint.
+
+`migrateOwnedSessionHandles(database)` is an explicit offline transaction. It validates ownership for every registered branch, including archived branches, then adopts namespaces without changing names or IDs. Any missing/mismatched ownership or collision rolls back the migration. It does not activate a mode or run at startup. Back up the store before eventual mode migration.
+
+The owner-aware lookup/list/rename helpers validate live account and parent-chain ownership. Friendly rename updates only `agent_name` and `updated_at`; it preserves branch ID, chat JID, root, home, message references and filesystem paths. Owner-local misses never query another namespace. The legacy database lookup returns only legacy handles, and legacy ensure/rename/restore methods reject migrated rows.
+
+This storage slice does not yet wire owner-aware names into browser branch controls, live session-name synchronisation, forks, deferred seeds, warmup, mentions, chat tools, session control, schedules or peers. Some runtime consumers still have legacy active-session fallbacks; they must be replaced with owner-aware resolution before enabling family execution. Full fork/archive/restore/merge/download authorisation and crash/retry lifecycle tests remain #1128 work. Family mutations are still denied by the router.
+
 ## Read-only HTTP and SSE enforcement
 
 The family router makes a terminal decision before legacy, add-on and widget-state dispatch. Unsupported routes cannot fall through. Isolated mode returns 503 until its gateway exists. Startup still blocks both multi-user modes.
