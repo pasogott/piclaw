@@ -18,6 +18,7 @@
 
 import Database from "bun:sqlite";
 import { initializeAccessSchema } from "./access-state.js";
+import { initializeSessionOwnershipSchema } from "./session-ownership.js";
 import fs from "fs";
 import path from "path";
 
@@ -945,6 +946,7 @@ export function initDatabase(): void {
   ensureMediaCompression(db);
   ensureThinkingContentDuration(db);
   initializeAccessSchema(db);
+  initializeSessionOwnershipSchema(db);
   // The legacy live store historically runs without global FK enforcement.
   // EF-S07 uses a dedicated FK-enabled scheduler connection in production;
   // restore the caller's prior setting so unrelated legacy write paths retain

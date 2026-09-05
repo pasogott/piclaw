@@ -8,19 +8,8 @@ export const ACCESS_ACTIONS = [
   "session.read", "session.write", "session.fork", "session.rename", "session.archive",
   "instance.configure",
 ] as const;
-export type AccessAction = typeof ACCESS_ACTIONS[number];
-
-/** An authentication identity, never the inferred owner of a requested resource. */
-export interface AuthenticatedPrincipal {
-  readonly kind: "user" | "local";
-  readonly userId: string;
-  readonly username: string;
-  readonly displayName: string;
-  readonly role: "admin" | "member";
-  readonly mode: AccessMode;
-  readonly homeChatJid: string | null;
-  readonly authentication: Readonly<{ method: string; sessionId: string | null; expiresAt: string | null }>;
-}
+import type { AuthenticatedPrincipal } from "../../../core/access-types.js";
+export type { AccessAction, AuthenticatedPrincipal } from "../../../core/access-types.js";
 
 export interface PrincipalResolverDeps {
   getSession(token: string): WebSessionRecord | null;
