@@ -15,6 +15,7 @@ import type { WebauthnChallengeTracker } from "./webauthn-challenges.js";
 
 /** Runtime auth feature flags and cookie settings derived from config/env. */
 export interface WebAuthRuntimeConfig {
+  accessMode?: import("../../../core/config-access.js").AccessMode;
   passkeyMode: string;
   totpSecret: string;
   internalSecret: string;
@@ -42,7 +43,8 @@ export function isPasskeyOnly(config: WebAuthRuntimeConfig): boolean {
 
 /** Return true when either TOTP or passkey auth is active. */
 export function isAuthEnabled(config: WebAuthRuntimeConfig): boolean {
-  return isTotpEnabled(config) || isPasskeyEnabled(config);
+  return (config.accessMode !== undefined && config.accessMode !== "single-user")
+    || isTotpEnabled(config) || isPasskeyEnabled(config);
 }
 
 /** Return true when internal-secret authentication is configured. */

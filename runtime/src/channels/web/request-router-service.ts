@@ -30,6 +30,7 @@ import type { WebChannelLike } from "./core/web-channel-contracts.js";
 import { rememberWebOrigin } from "./auth/request-origin.js";
 import { handleAgentRoutes } from "./http/dispatch-agent.js";
 import { handleAuthRoutes } from "./http/dispatch-auth.js";
+import { principalResponse } from "./auth/principal.js";
 import { handleContentPrimaryRoutes, handleContentSecondaryRoutes } from "./http/dispatch-content.js";
 import { handleMediaRoutes } from "./http/dispatch-media.js";
 import { handleShellRoutes } from "./http/dispatch-shell.js";
@@ -118,6 +119,10 @@ export class RequestRouterService {
   private async route(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const pathname = url.pathname;
+
+    if (pathname === "/auth/me") {
+      return principalResponse(req, this.channel.authGateway.getPrincipal?.(req) ?? null);
+    }
 
     if (pathname.startsWith("/api/addons/")) {
       const response = await handleExternalAddonRoutes(req, pathname);

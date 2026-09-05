@@ -7,12 +7,10 @@ import {
   createWebauthnAuthContext,
   createWebauthnEnrolPageContext,
   isAuthEnabled,
-  isAuthenticated,
   isInternalSecretEnabled,
   isPasskeyEnabled,
   isPasskeyOnly,
   isTotpEnabled,
-  isTotpSession,
   verifyInternalSecret,
   type WebAuthRuntimeConfig,
 } from "./auth-runtime.js";
@@ -23,6 +21,11 @@ import type { WebauthnChallengeTracker } from "./webauthn-challenges.js";
 import { getClientKey as getRequestClientKey } from "../http/client.js";
 import { createLogger } from "../../../utils/logger.js";
 
+import { getDb, getWebSession } from "../../../db.js";
+import { getUser } from "../../../db/users.js";
+import { getIdentityConfig } from "../../../core/config.js";
+import { resolveRequestPrincipal, type AuthenticatedPrincipal, type PrincipalResolverDeps } from "./principal.js";
+
 const log = createLogger("web.auth-gateway");
 
 /** External dependencies required to construct a WebAuthGateway instance. */
@@ -31,10 +34,13 @@ export interface WebAuthGatewayDeps {
   challenges: WebauthnChallengeTracker;
   failureTracker: TotpFailureTrackerLike;
   logAuthWarning?(message: string): void;
+  principalResolver?: PrincipalResolverDeps;
 }
 
 /** Central auth capability gateway for web request guards and endpoint contexts. */
 export class WebAuthGateway {
+  private readonly principals = new WeakMap<Request, AuthenticatedPrincipal | null>();
+
   constructor(
     private readonly config: WebAuthRuntimeConfig,
     private readonly deps: WebAuthGatewayDeps
@@ -61,15 +67,29 @@ export class WebAuthGateway {
   }
 
   isTotpSession(req: Request): boolean {
-    return isTotpSession(req, this.config);
+    return this.isTotpEnabled() && this.getPrincipal(req)?.authentication.method === "totp";
   }
 
   verifyInternalSecret(req: Request): boolean {
     return verifyInternalSecret(req, this.config);
   }
 
+  getPrincipal(req: Request): AuthenticatedPrincipal | null {
+    if (this.principals.has(req)) return this.principals.get(req)!;
+    const principal = resolveRequestPrincipal(req, {
+      mode: this.config.accessMode ?? "single-user",
+      authEnabled: this.isAuthEnabled(),
+    }, this.deps.principalResolver ?? {
+      getSession: getWebSession,
+      getUser: (id) => getUser(getDb(), id),
+      getLocalDisplayName: () => getIdentityConfig().userName || "User",
+    });
+    this.principals.set(req, principal);
+    return principal;
+  }
+
   isAuthenticated(req: Request): boolean {
-    return isAuthenticated(req, this.config);
+    return this.getPrincipal(req) !== null;
   }
 
   createTotpContext(): TotpAuthContext {
