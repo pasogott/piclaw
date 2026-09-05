@@ -635,18 +635,17 @@ async function runPromptAttempt(
     if (event.type === "message_start") {
       const message = (event as { message?: { role?: unknown } }).message;
       if (message?.role === "assistant") {
-        const now = Date.now();
         if (!activeModelResponse) {
           modelResponseSequence += 1;
-          activeModelResponse = createModelCallTiming(modelResponseSequence, now);
+          activeModelResponse = createModelCallTiming(modelResponseSequence);
         }
-        markModelResponseStarted(activeModelResponse, now);
+        markModelResponseStarted(activeModelResponse);
         options.onInfo?.("Assistant model response started", {
           operation: "model.response.start",
           chatJid,
           model: modelLabel,
           sequence: activeModelResponse.sequence,
-          responseStartLatencyMs: Math.max(0, now - activeModelResponse.callStartedAt),
+          responseStartLatencyMs: Math.max(0, activeModelResponse.responseStartedAt! - activeModelResponse.callStartedAt),
           ...getRunObservabilityDetails(runOptions),
         });
       }
@@ -661,10 +660,9 @@ async function runPromptAttempt(
         });
       }
       if ((messageEvent?.type === "text_start" || messageEvent?.type === "thinking_start") && !activeModelResponse) {
-        const now = Date.now();
         modelResponseSequence += 1;
-        activeModelResponse = createModelCallTiming(modelResponseSequence, now);
-        markModelResponseStarted(activeModelResponse, now);
+        activeModelResponse = createModelCallTiming(modelResponseSequence);
+        markModelResponseStarted(activeModelResponse);
         options.onInfo?.("Assistant model response started", {
           operation: "model.response.start",
           chatJid,

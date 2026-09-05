@@ -825,18 +825,25 @@ test("runAgentPrompt emits turn-aware observability log metadata for turn and to
   const modelEnds = logs.filter((entry) => entry.operation === "model.response.end");
   expect(modelEnds).toHaveLength(2);
   for (const entry of modelEnds) {
-    expect(entry).toMatchObject({
-      model: "openai/gpt-test",
-      durationMs: expect.any(Number),
-      callDurationMs: expect.any(Number),
-      responseDurationMs: expect.any(Number),
-      responseStartLatencyMs: expect.any(Number),
-      timeToFirstOutputMs: expect.any(Number),
-      timeToFirstTextMs: expect.any(Number),
-      generationDurationMs: expect.any(Number),
-      textGenerationDurationMs: expect.any(Number),
-    });
-
+    const callDurationMs = entry.callDurationMs as number;
+    const responseDurationMs = entry.responseDurationMs as number;
+    const responseStartLatencyMs = entry.responseStartLatencyMs as number;
+    const timingValues = [
+      callDurationMs,
+      responseDurationMs,
+      responseStartLatencyMs,
+      entry.timeToFirstOutputMs,
+      entry.timeToFirstTextMs,
+      entry.generationDurationMs,
+      entry.textGenerationDurationMs,
+    ];
+    expect(timingValues.every((value) => typeof value === "number" && value >= 0 && value < 60_000)).toBe(true);
+    expect(
+      responseDurationMs <= callDurationMs
+      && responseStartLatencyMs <= callDurationMs
+      && Math.abs(responseDurationMs + responseStartLatencyMs - callDurationMs) < 0.001
+    ).toBe(true);
+    expect(entry).toMatchObject({ model: "openai/gpt-test" });
   }
   expect(contextEvents.map((event) => event.phase)).toEqual(expect.arrayContaining([
     "prompt_start",

@@ -7,6 +7,17 @@ import {
   markModelResponseStarted,
 } from "../../src/agent-pool/model-call-timing.js";
 
+test("default model-call timing clock stays finite and monotonic", () => {
+  const state = createModelCallTiming(1);
+  markModelResponseStarted(state);
+  markModelOutputObserved(state, "text_delta", "hello");
+  const timing = completeModelCallTiming(state);
+
+  expect(Object.values(timing).every((value) => value === null || Number.isFinite(value))).toBe(true);
+  expect(timing.responseDurationMs).toBeLessThanOrEqual(timing.callDurationMs);
+  expect(timing.responseStartLatencyMs).toBeLessThanOrEqual(timing.callDurationMs);
+});
+
 test("model-call timing separates call, response, first output, visible text, and generation intervals", () => {
   const state = createModelCallTiming(3, 1_000);
   markModelResponseStarted(state, 1_120);
