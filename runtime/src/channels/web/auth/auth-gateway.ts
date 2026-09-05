@@ -23,6 +23,9 @@ import { createLogger } from "../../../utils/logger.js";
 
 import { getDb, getWebSession } from "../../../db.js";
 import { getUser } from "../../../db/users.js";
+import { UserAuthFactors } from "../../../secure/user-auth-factors.js";
+import { checkCsrfOrigin } from "../http/security.js";
+import { getSessionTokenFromRequest } from "./session-auth.js";
 import { getIdentityConfig } from "../../../core/config.js";
 import { resolveRequestPrincipal, type AuthenticatedPrincipal, type PrincipalResolverDeps } from "./principal.js";
 
@@ -93,21 +96,35 @@ export class WebAuthGateway {
   }
 
   createTotpContext(): TotpAuthContext {
-    return createTotpAuthContext(this.config, {
+    const context = createTotpAuthContext(this.config, {
       json: this.deps.json,
       getClientKey: (req) => this.getClientKey(req),
       logAuthEvent: (req, event) => this.logAuthEvent(req, event),
       failureTracker: this.deps.failureTracker,
     });
+    if (this.config.accessMode && this.config.accessMode !== "single-user") {
+      context.isTotpEnabled = () => !this.isPasskeyOnly();
+      context.verifyUserTotp = (username, code) => new UserAuthFactors(getDb()).verifyLogin(username, code);
+    }
+    return context;
   }
 
   createWebauthnContext(): WebauthnAuthContext {
-    return createWebauthnAuthContext(this.config, {
+    const context = createWebauthnAuthContext(this.config, {
       json: this.deps.json,
       getClientKey: (req) => this.getClientKey(req),
       logAuthEvent: (req, event) => this.logAuthEvent(req, event),
       challenges: this.deps.challenges,
     });
+    context.authoriseEnrolment = (req, userId) => {
+      if (!checkCsrfOrigin(req)) return false;
+      const token = getSessionTokenFromRequest(req);
+      const session = token ? getWebSession(token) : null;
+      const age = session ? Date.now() - Date.parse(session.created_at) : NaN;
+      return Boolean(session && session.user_id === userId && (session.auth_method === "totp" || session.auth_method === "passkey")
+        && Number.isFinite(age) && age >= 0 && age <= 5 * 60_000 && getUser(getDb(), userId)?.enabled);
+    };
+    return context;
   }
 
   createWebauthnEnrolPageContext(): WebauthnEnrolPageContext {
