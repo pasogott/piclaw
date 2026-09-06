@@ -40,6 +40,7 @@
 | `user_passkey_registrations` | Hashed ceremony token bound to user, login, RP, origin, challenge and expiry |
 | `user_auth_attempts` | Hashed account/client rate-limit buckets and reset time |
 | `account_recovery_events` | Non-secret actor/target/reset event/time audit |
+| `account_security_events` | Administrative device/factor revocation audit: acting admin, target account, item kind/non-secret ID and time; committed with the revocation |
 | `core_schema_migrations` | Core migration ledger, including removal of obsolete core remote-interop tables |
 
 Remote Peer state belongs to the installed add-on. The obsolete core `remote_*` tables are removed by `dropObsoleteRemoteInteropSchema`; they are not a current storage API.

@@ -2,6 +2,7 @@ import type Database from "bun:sqlite";
 import type { AuthenticatedPrincipal } from "../core/access-types.js";
 import type { AccountSettings } from "../core/account-settings.js";
 import type { AdministrationSettings } from "../core/administration-settings.js";
+import type { AdminSecurity, AdminSecurityRevocation } from '../core/admin-security.js';
 import { createUuid } from "../utils/ids.js";
 import { createUser, getUser, listUsers, updateUser, type CreateUserInput, type UpdateUserInput, type UserRecord } from "./users.js";
 import { ChatAccessDenied, getRootOwnership, provisionUserHome } from "./session-ownership.js";
@@ -88,6 +89,7 @@ export function readAdministrationSettings(database: Database, principal: Authen
           invite: recent && policy.totp && !user.enabled && homeValid && !hasFactors,
           revoke_invitation: recent && Boolean(invitation),
           reset: recent && policy.totp && user.id !== principal.userId && !protectedAdmin && homeValid,
+          inspect_security: recent && user.id !== principal.userId,
         },
       };
     }) };
@@ -170,18 +172,64 @@ export function listOwnFactors(database: Database, principal: AuthenticatedPrinc
 export function removeOwnFactor(database: Database, principal: AuthenticatedPrincipal, factor: { kind: "totp" | "passkey"; credentialId?: string }, policy: FactorPolicy): void {
   database.transaction(() => {
     const user = requireAccountActor(database, principal, { recent: true });
+    removeAccountFactor(database, user.id, factor, policy);
+  }).immediate();
+}
+
+/** Called only inside an already-authorised write transaction. */
+function removeAccountFactor(database: Database, userId: string, factor: { kind: 'totp' | 'passkey'; credentialId?: string }, policy: FactorPolicy): void {
     let removed: number;
     if (factor.kind === "totp") {
-      removed = database.query("DELETE FROM user_totp_factors WHERE user_id=?").run(user.id).changes;
+      removed = database.query("DELETE FROM user_totp_factors WHERE user_id=?").run(userId).changes;
     } else if (factor.kind === "passkey" && factor.credentialId) {
-      removed = database.query("DELETE FROM webauthn_credentials WHERE user_id=? AND credential_id=?").run(user.id, factor.credentialId).changes;
+      removed = database.query("DELETE FROM webauthn_credentials WHERE user_id=? AND credential_id=?").run(userId, factor.credentialId).changes;
     } else throw new ChatAccessDenied();
     if (!removed) throw new ChatAccessDenied();
-    if (factorCount(database, user.id, policy) === 0) throw new Error("Cannot remove the last configured authentication factor.");
-    database.query("DELETE FROM web_sessions WHERE user_id=?").run(user.id);
-    database.query("DELETE FROM user_totp_enrolments WHERE user_id=?").run(user.id);
-    database.query("DELETE FROM webauthn_enrollments WHERE user_id=?").run(user.id);
-    database.query("DELETE FROM user_auth_invitations WHERE user_id=? OR issuer_user_id=?").run(user.id, user.id);
-    database.query("DELETE FROM user_passkey_registrations WHERE user_id=?").run(user.id);
+    if (factorCount(database, userId, policy) === 0) throw new Error("Cannot remove the last configured authentication factor.");
+    database.query("DELETE FROM web_sessions WHERE user_id=?").run(userId);
+    database.query("DELETE FROM user_totp_enrolments WHERE user_id=?").run(userId);
+    database.query("DELETE FROM webauthn_enrollments WHERE user_id=?").run(userId);
+    database.query("DELETE FROM user_auth_invitations WHERE user_id=? OR issuer_user_id=?").run(userId, userId);
+    database.query("DELETE FROM user_passkey_registrations WHERE user_id=?").run(userId);
+}
+
+function requireAdminSecurityTarget(database: Database, actor: AuthenticatedPrincipal, userId: string): UserRecord {
+  requireAccountActor(database, actor, { admin: true, recent: true });
+  const user = getUser(database, userId);
+  if (!user || user.id === actor.userId) throw new ChatAccessDenied();
+  return user;
+}
+
+export function readAdminSecurity(database: Database, actor: AuthenticatedPrincipal, userId: string, policy: FactorPolicy): AdminSecurity {
+  return database.transaction(() => {
+    const user = requireAdminSecurityTarget(database, actor, userId), count = factorCount(database, userId, policy);
+    const totp = Boolean(database.query('SELECT 1 FROM user_totp_factors WHERE user_id=?').get(userId));
+    const keys = database.query('SELECT credential_id,label,rp_id,created_at,last_used_at FROM webauthn_credentials WHERE user_id=? ORDER BY created_at,credential_id')
+      .all(userId) as { credential_id: string; label: string; rp_id: string; created_at: string; last_used_at: string | null }[];
+    return { user: { id: user.id, username: user.username, display_name: user.display_name, enabled: user.enabled },
+      factors: { totp: { enrolled: totp, removable: totp && count - Number(policy.totp) > 0 }, passkeys: keys.map(({ rp_id, ...key }) => {
+        const usable = policy.passkey && rp_id === policy.rpId;
+        return { ...key, usable, removable: count - Number(usable) > 0 };
+      }) },
+      sessions: database.query('SELECT session_id,label,auth_method,created_at,expires_at FROM web_sessions WHERE user_id=? AND julianday(expires_at)>julianday(?) ORDER BY created_at DESC')
+        .all(userId, new Date().toISOString()) as AdminSecurity['sessions'],
+    };
+  })();
+}
+
+/** Acting administrator stays distinct from target; never manufacture a target principal. */
+export function revokeAdminSecurity(database: Database, actor: AuthenticatedPrincipal, userId: string, input: AdminSecurityRevocation, policy: FactorPolicy): void {
+  database.transaction(() => {
+    const user = requireAdminSecurityTarget(database, actor, userId);
+    if (!input || input.confirm_username !== user.username || !['session', 'passkey', 'totp'].includes(input.kind)) throw new ChatAccessDenied();
+    if (Object.keys(input).some(key => !(input.kind === 'totp' ? ['kind', 'confirm_username'] : ['kind', 'confirm_username', 'item_id']).includes(key))) throw new ChatAccessDenied();
+    if (input.kind !== 'totp' && (typeof input.item_id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(input.item_id))) throw new ChatAccessDenied();
+    if (input.kind === 'session') {
+      const removed = database.query('DELETE FROM web_sessions WHERE user_id=? AND session_id=? RETURNING session_id').get(userId, input.item_id);
+      if (!removed) throw new ChatAccessDenied();
+      database.query('DELETE FROM user_passkey_registrations WHERE user_id=? AND session_id=?').run(userId, input.item_id);
+    } else removeAccountFactor(database, userId, input.kind === 'totp' ? { kind: 'totp' } : { kind: 'passkey', credentialId: input.item_id }, policy);
+    database.query('INSERT INTO account_security_events(id,actor_user_id,target_user_id,kind,item_id,created_at) VALUES (?,?,?,?,?,?)')
+      .run(createUuid('security'), actor.userId, userId, input.kind, input.kind === 'totp' ? null : input.item_id, new Date().toISOString());
   }).immediate();
 }

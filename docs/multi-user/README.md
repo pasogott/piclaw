@@ -36,7 +36,7 @@ Family mode is intended for trusted household members. Users with arbitrary shel
 | Sessions (#1126/#1128) | Root ownership, owner-local names, atomic forks/rename, additional roots, home selection and idle archive/restore; owned lifecycle browser controls | Merge/purge, full archive backup, process-kill recovery proof |
 | HTTP and SSE (#1127) | Terminal family HTTP policy, SQL-scoped search, own-thread reads, revocable SSE, text-only persisted message admission, selected account/fork routes, separate pinned text browser shell | Uploads and remaining derived resources/mutations, direct WebSocket/transport/tool paths, legacy-origin migration and push recipients |
 | Model identity/memory (#1129/#1131) | Server identity before hydration, scoped model context and owner/family memory paths | All direct/queued/delegate/side/Dream entry points and service grants; shared-resource policy |
-| Settings and isolation (#1130/#1132) | Own-account, owned-session lifecycle and account administration controls with server capability snapshots in the gated family shell | Individual admin factor/device revocation, home/destination assignment, shared-resource Settings, preference classification and per-user container gateway/deployment |
+| Settings and isolation (#1130/#1132) | Own-account, owned-session lifecycle and account administration controls, including individual admin security revocation, with server capability snapshots | Home/destination assignment, shared-resource Settings, preference classification and per-user container gateway/deployment |
 | Auth maintenance (#1125) | Transient-expiry loop and offline factor re-encryption helper | Coordinated rotation CLI/dual-key support, generic-keychain rotation, audit retention |
 
 Passing backend tests and merged PRs do not complete these issues or allow activation. Preserve single-user compatibility until the staged integration gates pass.
@@ -177,6 +177,8 @@ Account reads recheck the login ID and enabled user/role. Mutations require a ma
 |---|---|
 | GET `/admin/users` | Enabled administrator lists account metadata |
 | GET `/admin/users/settings` | Enabled administrator reads labels, role/enabled/invitation state and operation eligibility; no foreign home/session/factor identifiers; query selectors denied |
+| GET `/admin/users/:id/security` | Recent administrator reads explicit other-account factor/device metadata; no content, home, keys, seeds or bearer material |
+| POST `/admin/users/:id/security/revoke` | Recent administrator revokes an exact target item after exact username confirmation; actor/target audit in the same transaction |
 | POST `/admin/users` | Recent administrator creates a disabled account and owned home root atomically |
 | PATCH `/admin/users/:id` | Recent administrator changes username/displayName/role/enabled; immutable identity/home fields rejected |
 | GET `/account` | Live self-only profile/factor/device snapshot with current-policy capability hints; query selectors denied |
@@ -211,7 +213,13 @@ GET `/admin/users/settings` returns `{recent_auth,capabilities,users}` in one re
 
 The gated Family administration panel creates disabled accounts, changes role/enablement, issues/revokes invitations and resets another account. Existing-account changes require an exact username plus a checkbox. Issued links are memory-only, displayed once without automatic clipboard writes/navigation, and cleared on blur, close, refresh, expiry, session switch or navigation. A late response cannot restore them; a lost result requires explicit revocation/reissue. Admin reset authority can replace another user's authentication, but does not open their conversations or run a model as them.
 
-Restricted invitations below bootstrap a new account's TOTP factor; administrator-assisted reset is described separately. Avatar changes, individual administrator device/factor revocation, admin home/destination assignment and offline lone-administrator recovery are not implemented. Full mode activation, migrated legacy factors and legacy WebAuthn tool/ceremony isolation need integration testing before release.
+The separate GET `/admin/users/:id/security` requires recent administrator authentication even for reads, and permits only another account. It exposes names, non-secret credential/login IDs, dates, TOTP presence and current-policy removal eligibility. It never returns keys, seeds, bearer tokens, homes or conversation data. The acting administrator is never projected into a target principal or model context. Self-management uses My account.
+
+POST `/admin/users/:id/security/revoke` accepts `{kind,confirm_username,item_id?}` with `session`, `passkey` or `totp`. The item ID is required for a device/passkey and forbidden for TOTP; the stored target username must match. Session revocation removes only that account's exact login and its pending registrations. Factor removal reuses the self-service last-usable-factor guard and revokes all target logins/enrolments; current RP and auth policy determine usability. Unknown, wrong-target and already-removed items deny without new audit records. Disabled targets retain the same last-factor safeguard; full reset uses its separate explicit API.
+
+`account_security_events` records actor, target, item kind/non-secret ID and time in the revocation transaction. An audit-write failure restores the removed item and logins. The UI requires the server `inspect_security` capability, an explicit Security action, exact username and checked confirmation. Details and pending confirmation clear on close, blur, navigation and account replacement; failed writes never auto-retry. Audit retention and physical-device verification are unfinished.
+
+Restricted invitations below bootstrap a new account's TOTP factor; administrator-assisted reset is described separately. Avatar changes, admin home/destination assignment and offline lone-administrator recovery are not implemented. Full mode activation, migrated legacy factors and legacy WebAuthn tool/ceremony isolation need integration testing before release.
 
 ## Self-service authenticator enrolment
 

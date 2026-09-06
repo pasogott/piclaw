@@ -14,6 +14,7 @@ import { selectOwnedHome, readOwnedSessionSettings } from "../../../db/owned-ses
 import { FamilyTotp } from '../../../secure/family-totp.js';
 import { generateTotpQr } from '../../../utils/totp-qr.js';
 import { labelOwnSecurityItem } from '../../../db/account-security-labels.js';
+import { readAdminSecurity, revokeAdminSecurity } from '../../../db/account-administration.js';
 
 /** Account-only surface: never returns conversation content, tokens or factor secrets. */
 export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Request, principal: AuthenticatedPrincipal): Promise<Response | null> {
@@ -30,6 +31,11 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
     const db = getDb();
     const policy = { totp: channel.authGateway.createTotpContext().isTotpEnabled(), passkey: channel.authGateway.createWebauthnContext().isPasskeyEnabled(), rpId: resolveWebauthnRpInfo(req).rpId };
     if (method === "GET") {
+      const security = path.match(/^\/admin\/users\/([a-zA-Z0-9_-]+)\/security$/);
+      if (security) {
+        if (new URL(req.url).search) return deny();
+        return channel.json(readAdminSecurity(db, principal, security[1]!, policy));
+      }
       if (path === "/admin/users/settings") {
         if (new URL(req.url).search) return deny();
         return channel.json(readAdministrationSettings(db, principal, policy));
@@ -63,6 +69,12 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
     }
     const body = await req.json();
     if (!body || typeof body !== "object" || Array.isArray(body)) return channel.json({ error: "Invalid account request" }, 400);
+    const security = path.match(/^\/admin\/users\/([a-zA-Z0-9_-]+)\/security\/revoke$/);
+    if (security && method === 'POST') {
+      if (new URL(req.url).search) return deny();
+      revokeAdminSecurity(db, principal, security[1]!, body, policy);
+      return channel.json({ revoked: true });
+    }
     if (method === 'PATCH') {
       const session = path.match(/^\/account\/sessions\/([a-zA-Z0-9_-]+)$/);
       const passkey = path.match(/^\/account\/factors\/passkey\/([a-zA-Z0-9_-]+)$/);

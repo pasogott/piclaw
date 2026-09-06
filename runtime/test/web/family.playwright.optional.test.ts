@@ -319,9 +319,9 @@ browserTest('bad authenticator code retains bounded setup for manual retry; repl
 async function adminFixture(page: Page) {
   const state = await fixture(page); state.identity.principal.role = 'admin'; state.identity.capabilities.manage_users = true;
   const snapshot: AdministrationSettings = { recent_auth: true, capabilities: { create_user: true }, users: [
-    { id: 'alice', username: 'alice', display_name: 'Alice', role: 'admin', enabled: true, invitation: 'none', capabilities: { disable: false, enable: false, change_role: false, invite: false, revoke_invitation: false, reset: false } },
-    { id: 'bob', username: 'bob', display_name: 'Bob', role: 'member', enabled: true, invitation: 'none', capabilities: { disable: true, enable: false, change_role: true, invite: false, revoke_invitation: false, reset: true } },
-    { id: 'pending', username: 'pending', display_name: 'Pending', role: 'member', enabled: false, invitation: 'none', capabilities: { disable: false, enable: false, change_role: true, invite: true, revoke_invitation: false, reset: true } },
+    { id: 'alice', username: 'alice', display_name: 'Alice', role: 'admin', enabled: true, invitation: 'none', capabilities: { disable: false, enable: false, change_role: false, invite: false, revoke_invitation: false, reset: false, inspect_security: false } },
+    { id: 'bob', username: 'bob', display_name: 'Bob', role: 'member', enabled: true, invitation: 'none', capabilities: { disable: true, enable: false, change_role: true, invite: false, revoke_invitation: false, reset: true, inspect_security: true } },
+    { id: 'pending', username: 'pending', display_name: 'Pending', role: 'member', enabled: false, invitation: 'none', capabilities: { disable: false, enable: false, change_role: true, invite: true, revoke_invitation: false, reset: true, inspect_security: true } },
   ] };
   const mutations: { path: string; method: string; headers: Record<string, string>; body: any }[] = [];
   await page.route('**/admin/users/settings', route => route.fulfill({ json: snapshot }));
@@ -347,6 +347,65 @@ async function openAdministration(page: Page) {
 async function confirmAdministration(page: Page, username: string) {
   await page.locator('#administration-confirm-name').fill(username); await page.locator('#administration-confirm').check(); await page.locator('#submit-administration-action').click();
 }
+
+const adminSecurityFixture = () => ({ user: { id: 'bob', username: 'bob', display_name: 'Bob', enabled: true },
+  factors: { totp: { enrolled: true, removable: false }, passkeys: [{ credential_id: 'bob-key', label: 'Security key', created_at: 'today', last_used_at: null, usable: true, removable: true }] },
+  sessions: [{ session_id: 'bob-login', label: 'Tablet', auth_method: 'totp', created_at: 'today', expires_at: 'tomorrow' }],
+});
+
+browserTest('admin security view confirms exact target revocation without changing current conversation', async () => {
+  const page = await browser.newPage({ viewport: { width: 375, height: 740 } });
+  try {
+    await adminFixture(page); const security = adminSecurityFixture(), writes: any[] = [];
+    await page.route('**/admin/users/bob/security', route => route.fulfill({ json: security }));
+    await page.route('**/admin/users/bob/security/revoke', route => { const body = route.request().postDataJSON(); writes.push({ body, headers: route.request().headers() }); if (body.kind === 'session') security.sessions = []; else security.factors.passkeys = []; return route.fulfill({ json: { revoked: true } }); });
+    await openAdministration(page);
+    expect(await page.locator('#administration-users li').first().getByRole('button', { name: 'Security', exact: true }).isDisabled()).toBe(true);
+    const open = async () => { await page.locator('#administration-users li').nth(1).getByRole('button', { name: 'Security', exact: true }).click(); await page.waitForFunction(() => !(document.getElementById('administration-security') as HTMLElement)?.hidden); };
+    await open(); expect(await page.locator('#administration-security-items li').first().getByRole('button').isDisabled()).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.getByRole('button', { name: 'Revoke device login', exact: true }).click();
+    await page.locator('#administration-confirm').check(); expect(await page.locator('#submit-administration-action').isDisabled()).toBe(true);
+    await confirmAdministration(page, 'bob'); await page.waitForFunction(() => document.getElementById('administration-status')?.textContent === 'Account change saved.');
+    expect(writes[0].body).toEqual({ kind: 'session', item_id: 'bob-login', confirm_username: 'bob' });
+    await open(); await page.locator('#administration-security-items li').nth(1).getByRole('button', { name: 'Remove factor', exact: true }).click();
+    expect(await page.locator('#administration-action-warning').textContent()).toContain('every device'); await confirmAdministration(page, 'bob');
+    await page.waitForFunction(() => document.getElementById('administration-status')?.textContent === 'Account change saved.');
+    expect(writes[1].body).toEqual({ kind: 'passkey', item_id: 'bob-key', confirm_username: 'bob' });
+    expect(writes.every(w => w.headers['x-piclaw-account-id'] === 'alice')).toBe(true);
+    expect(await page.locator('#session-select').inputValue()).toBe('web:alice'); expect(await page.locator('#administration-security').isVisible()).toBe(false);
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('admin security late reads cannot restore metadata after blur or replacement login', async () => {
+  for (const action of ['blur', 'login']) {
+    const page = await browser.newPage();
+    try {
+      const { state } = await adminFixture(page); let release!: () => void, entered!: () => void;
+      const held = new Promise<void>(r => release = r), waiting = new Promise<void>(r => entered = r);
+      await page.route('**/admin/users/bob/security', async route => { entered(); await held; await route.fulfill({ json: adminSecurityFixture() }); });
+      await openAdministration(page); await page.locator('#administration-users li').nth(1).getByRole('button', { name: 'Security', exact: true }).click(); await waiting;
+      if (action === 'blur') await page.evaluate(() => dispatchEvent(new Event('blur'))); else state.identity = principal('bob', 'new-login');
+      release();
+      if (action === 'login') await page.waitForFunction(() => document.getElementById('family-status')?.textContent?.includes('no longer bound'));
+      else { await page.waitForTimeout(80); await page.evaluate(() => dispatchEvent(new Event('focus'))); await ready(page); }
+      expect(await page.locator('#administration-security').isVisible()).toBe(false); expect(await page.locator('#administration-security-items').textContent()).toBe('');
+    } finally { await page.close(); }
+  }
+}, 20000);
+
+browserTest('failed admin security revocation does not auto-retry or use another item', async () => {
+  const page = await browser.newPage();
+  try {
+    await adminFixture(page); let writes = 0;
+    await page.route('**/admin/users/bob/security', route => route.fulfill({ json: adminSecurityFixture() }));
+    await page.route('**/admin/users/bob/security/revoke', route => { writes++; return route.fulfill({ status: 400, json: {} }); });
+    await openAdministration(page); await page.locator('#administration-users li').nth(1).getByRole('button', { name: 'Security', exact: true }).click();
+    await page.getByRole('button', { name: 'Revoke device login', exact: true }).click(); await confirmAdministration(page, 'bob');
+    await page.waitForFunction(() => document.getElementById('administration-status')?.textContent?.includes('No automatic retry')); expect(writes).toBe(1);
+    expect(await page.locator('#refresh-administration').isDisabled()).toBe(false);
+  } finally { await page.close(); }
+}, 20000);
 
 browserTest('administration is hidden for members and requires explicit server capability for admins', async () => {
   const page = await browser.newPage();
