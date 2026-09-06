@@ -79,6 +79,8 @@ These exact routes are implemented in `http/family-authorisation.ts`, `http/fami
 | POST | `/agent/branch-rename` | Optional `chat_jid`, required `agent_name`; Origin + branch rate limit | `{branch}`; stable IDs unchanged |
 | GET | `/admin/users` | Current enabled administrator | `{users}` metadata only |
 | GET | `/admin/users/settings` | Current enabled administrator; query selectors denied | `{recent_auth,capabilities,users}`; labels/role/enabled/invitation state and eligibility, no foreign home/session/factor identifiers or grant hashes |
+| GET | `/admin/users/:id/security` | Recent administrator, explicit other account; query selectors denied | `{user,factors,sessions}`; names, non-secret credential/login IDs, usability/removal hints; no home, conversations, keys, seeds or bearer tokens |
+| POST | `/admin/users/:id/security/revoke` | Recent administrator + Origin; exact `{kind,confirm_username,item_id?}`; item ID required for session/passkey and forbidden for TOTP | `{revoked:true}`; selected target/item only, last-usable-factor guard, transactional actor/target audit; no target impersonation |
 | POST | `/admin/users` | Recent administrator; `username`, `displayName`, optional `role` | 201 `{user}`, disabled with owned home |
 | PATCH | `/admin/users/:id` | Recent administrator; username/displayName/role/enabled only | `{user}`; enablement checks usable factor/home |
 | GET | `/account` | Live self; query selectors denied | `{user,recent_auth,capabilities,factors,sessions}`; one snapshot, current-RP usability/removal hints and current-login marker, no secrets or foreign metadata |

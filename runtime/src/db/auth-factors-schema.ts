@@ -62,6 +62,14 @@ export function initializeAuthFactorSchema(database: Database): void {
       event TEXT NOT NULL CHECK (event = 'admin_reset'),
       created_at TEXT NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS account_security_events (
+      id TEXT PRIMARY KEY,
+      actor_user_id TEXT NOT NULL REFERENCES users(id),
+      target_user_id TEXT NOT NULL REFERENCES users(id),
+      kind TEXT NOT NULL CHECK (kind IN ('session','passkey','totp')),
+      item_id TEXT,
+      created_at TEXT NOT NULL
+    ) STRICT;
     CREATE TABLE IF NOT EXISTS user_auth_attempts (
       bucket TEXT PRIMARY KEY,
       count INTEGER NOT NULL,

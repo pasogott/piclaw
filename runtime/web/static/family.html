@@ -105,7 +105,12 @@
         <p id="administration-invitation-expiry"></p><button id="clear-administration-invitation" type="button">Clear link display</button>
       </section>
       <ul id="administration-users"></ul>
-      <p class="notice">Individual device/passkey revocation, administrator home/destination assignment, passkey-first invitations and offline lone-admin recovery are not available here.</p>
+      <section id="administration-security" class="account-section" aria-labelledby="administration-security-title" hidden>
+        <h3 id="administration-security-title"></h3><button id="close-administration-security" type="button">Close security details</button>
+        <p>Security metadata is available only after recent administrator authentication. Names are user-authored labels; exact IDs select items. Revocation does not reveal or open conversation content. Use My account for your own factors and devices.</p>
+        <ul id="administration-security-items"></ul>
+      </section>
+      <p class="notice">Administrator home/destination assignment, passkey-first invitations and offline lone-admin recovery are not available here.</p>
     </section>
     <section class="session-controls" aria-label="Session navigation">
       <label for="session-select">Owned session</label>
