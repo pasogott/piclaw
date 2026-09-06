@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AccessMode } from "./config-access.js";
+import type { FamilyToolPolicy } from './family-tool-restrictions.js';
 
 /** Persistable server-owned provenance. Browser/model JSON must never set this directly. */
 export interface ExecutionProvenance {
@@ -17,6 +18,8 @@ export interface ExecutionIdentity {
   readonly role: "admin" | "member";
   readonly rootChatJid: string;
   readonly mode: AccessMode;
+  /** Server-resolved once per run. Untrusted provenance cannot supply policy. */
+  readonly toolPolicy?: FamilyToolPolicy;
 }
 
 const executionContext = new AsyncLocalStorage<ExecutionIdentity | null>();

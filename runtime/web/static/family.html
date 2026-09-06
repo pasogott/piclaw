@@ -116,6 +116,16 @@
         <p>Only this account’s active owned roots can be assigned. This changes future landing and targetless requests, without opening content, transferring ownership or moving a running conversation. Use My sessions for your own home.</p>
         <ul id="administration-home-roots"></ul>
       </section>
+      <section id="administration-tools" class="account-section" aria-labelledby="administration-tools-title" hidden>
+        <h3 id="administration-tools-title"></h3><button id="close-administration-tools" type="button">Close tool restrictions</button>
+        <p>Checked tools are denied for this account’s new model runs. A running turn retains its snapshot. Clearing a denial restores only the fixed preview ceiling; it cannot enable shell, SQL, keychain or unknown tools. This does not revoke account management or isolate shared files.</p>
+        <form id="administration-tools-form">
+          <fieldset><legend>Deny tools</legend><div id="administration-tools-list"></div></fieldset>
+          <label for="administration-tools-username">Type the account username to confirm restrictions</label><input id="administration-tools-username" autocomplete="off" spellcheck="false" />
+          <label><input id="administration-tools-confirm" type="checkbox" /> I confirm this account’s next-run tool restrictions</label>
+          <button id="save-administration-tools" type="submit" disabled>Save tool restrictions</button>
+        </form>
+      </section>
       <p class="notice">Container destination assignment, passkey-first invitations and offline lone-admin recovery are not available here.</p>
     </section>
     <section id="workspace-policy" aria-labelledby="workspace-policy-heading" hidden>

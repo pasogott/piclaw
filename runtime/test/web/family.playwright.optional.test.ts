@@ -188,7 +188,7 @@ async function openAccount(page: Page) {
 function workspacePolicyFixture(): FamilyWorkspacePolicy {
   return {
     user_id: 'alice', deployment: { routing_mode: 'family-shared', configured_mode: 'family-shared', activated_mode: 'single-user', supported_startup_mode: 'single-user', activation_allowed: false, container_isolation: false },
-    tools: { policy: 'fixed-family-web-preview', configurable: false, allowed: [...FAMILY_WEB_TOOLS], scope: 'Fixed ceiling, not configurable user grants.' },
+    tools: { policy: 'fixed-family-web-preview', configurable: false, allowed: [...FAMILY_WEB_TOOLS], denied: [], revision: 0, scope: 'Fixed ceiling, not configurable user grants.' },
     resources: [{ name: 'Workspace files', scope: 'shared', detail: 'Shared filesystem, not private volumes.' }],
     operations: [{ name: 'Shell', state: 'denied', detail: 'Not enabled for admitted web turns.' }],
     settings: [{ name: 'Providers', scope: 'shared', availability: 'No editor' }],
@@ -372,9 +372,9 @@ browserTest('bad authenticator code retains bounded setup for manual retry; repl
 async function adminFixture(page: Page) {
   const state = await fixture(page); state.identity.principal.role = 'admin'; state.identity.capabilities.manage_users = true;
   const snapshot: AdministrationSettings = { recent_auth: true, capabilities: { create_user: true }, users: [
-    { id: 'alice', username: 'alice', display_name: 'Alice', role: 'admin', enabled: true, invitation: 'none', capabilities: { disable: false, enable: false, change_role: false, invite: false, revoke_invitation: false, reset: false, inspect_security: false, assign_home: false } },
-    { id: 'bob', username: 'bob', display_name: 'Bob', role: 'member', enabled: true, invitation: 'none', capabilities: { disable: true, enable: false, change_role: true, invite: false, revoke_invitation: false, reset: true, inspect_security: true, assign_home: true } },
-    { id: 'pending', username: 'pending', display_name: 'Pending', role: 'member', enabled: false, invitation: 'none', capabilities: { disable: false, enable: false, change_role: true, invite: true, revoke_invitation: false, reset: true, inspect_security: true, assign_home: true } },
+    { id: 'alice', username: 'alice', display_name: 'Alice', role: 'admin', enabled: true, invitation: 'none', capabilities: { disable: false, enable: false, change_role: false, invite: false, revoke_invitation: false, reset: false, inspect_security: false, assign_home: false, restrict_tools: true } },
+    { id: 'bob', username: 'bob', display_name: 'Bob', role: 'member', enabled: true, invitation: 'none', capabilities: { disable: true, enable: false, change_role: true, invite: false, revoke_invitation: false, reset: true, inspect_security: true, assign_home: true, restrict_tools: true } },
+    { id: 'pending', username: 'pending', display_name: 'Pending', role: 'member', enabled: false, invitation: 'none', capabilities: { disable: false, enable: false, change_role: true, invite: true, revoke_invitation: false, reset: true, inspect_security: true, assign_home: true, restrict_tools: true } },
   ] };
   const mutations: { path: string; method: string; headers: Record<string, string>; body: any }[] = [];
   await page.route('**/admin/users/settings', route => route.fulfill({ json: snapshot }));
@@ -409,6 +409,53 @@ const adminSecurityFixture = () => ({ user: { id: 'bob', username: 'bob', displa
 const adminHomeFixture = () => ({ user: { id: 'bob', username: 'bob', enabled: true }, roots: [
   { branch_id: 'bob-root', agent_name: 'home', current: true }, { branch_id: 'bob-second', agent_name: 'research', current: false },
 ] });
+
+browserTest('admin tool restrictions edit only the supplied ceiling with exact confirmation and revision', async () => {
+  const page = await browser.newPage({ viewport: { width: 375, height: 740 } });
+  try {
+    await adminFixture(page); const writes: any[] = [];
+    let denied: string[] = ['read'], revision = 1;
+    await page.route('**/admin/users/bob/tools', route => {
+      if (route.request().method() === 'PATCH') { const body = route.request().postDataJSON(); writes.push({ body, headers: route.request().headers() }); denied = body.denied_tools; revision++; return route.fulfill({ json: {} }); }
+      return route.fulfill({ json: { user: { id: 'bob', username: 'bob' }, ceiling: [...FAMILY_WEB_TOOLS], policy: { revision, denied, allowed: FAMILY_WEB_TOOLS.filter(name => !denied.includes(name)) } } });
+    });
+    await openAdministration(page); const open = () => page.locator('#administration-users li').nth(1).getByRole('button', { name: 'Tool restrictions', exact: true }).click();
+    await open(); await page.waitForFunction(() => document.querySelectorAll('#administration-tools-list input').length === 8);
+    expect(await page.getByLabel('Deny read', { exact: true }).isChecked()).toBe(true);
+    expect(await page.locator('#administration-tools-list').textContent()).not.toContain('bash');
+    await page.getByLabel('Deny messages', { exact: true }).check(); await page.locator('#administration-tools-confirm').check();
+    expect(await page.locator('#save-administration-tools').isDisabled()).toBe(true);
+    await page.locator('#administration-tools-username').fill('bob'); await page.locator('#save-administration-tools').click();
+    await page.waitForFunction(() => document.getElementById('administration-status')?.textContent === 'Account change saved.');
+    expect(writes[0].body).toEqual({ confirm_username: 'bob', expected_revision: 1, denied_tools: ['read', 'messages'] });
+    expect(writes[0].headers['x-piclaw-account-id']).toBe('alice'); expect(await page.locator('#session-select').inputValue()).toBe('web:alice');
+    await open(); await page.waitForFunction(() => document.getElementById('administration-tools-title')?.textContent?.includes('revision 2'));
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.evaluate(() => dispatchEvent(new Event('blur'))); expect(await page.locator('#administration-tools-list').textContent()).toBe('');
+    expect(await page.locator('#administration-tools-username').inputValue()).toBe('');
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('late tool policy and stale write conflict never restore another login or auto-retry', async () => {
+  const page = await browser.newPage();
+  try {
+    const { state } = await adminFixture(page); let writes = 0;
+    const value = { user: { id: 'bob', username: 'bob' }, ceiling: ['read'], policy: { revision: 0, denied: [], allowed: ['read'] } };
+    await page.route('**/admin/users/bob/tools', route => {
+      if (route.request().method() === 'PATCH') { writes++; return route.fulfill({ status: 400, json: {} }); }
+      return route.fulfill({ json: value });
+    });
+    await openAdministration(page); const open = () => page.locator('#administration-users li').nth(1).getByRole('button', { name: 'Tool restrictions', exact: true }).click();
+    await open(); await page.getByLabel('Deny read', { exact: true }).check(); await page.locator('#administration-tools-username').fill('bob'); await page.locator('#administration-tools-confirm').check(); await page.locator('#save-administration-tools').click();
+    await page.waitForFunction(() => document.getElementById('administration-status')?.textContent?.includes('No automatic retry')); expect(writes).toBe(1);
+    await page.locator('#refresh-administration').click(); await page.waitForFunction(() => !document.getElementById('administration-status')?.textContent);
+    let release!: () => void, entered!: () => void; const held = new Promise<void>(r => release = r), waiting = new Promise<void>(r => entered = r);
+    await page.route('**/admin/users/bob/tools', async route => { entered(); await held; await route.fulfill({ json: value }); });
+    await open(); await waiting; state.identity = principal('bob', 'new-login'); release();
+    await page.waitForFunction(() => document.getElementById('family-status')?.textContent?.includes('no longer bound'));
+    expect(await page.locator('#administration-tools').isVisible()).toBe(false); expect(await page.locator('#administration-tools-list').textContent()).toBe('');
+  } finally { await page.close(); }
+}, 20000);
 
 browserTest('admin home uses eligible server roots and exact confirmation without navigation or content links', async () => {
   const page = await browser.newPage({ viewport: { width: 375, height: 740 } });

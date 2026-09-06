@@ -4,11 +4,12 @@ import { initializeUserSchema, createUser } from "../../src/db/users.js";
 import { initializeSessionOwnershipSchema, provisionUserHome } from "../../src/db/session-ownership.js";
 import { authoriseExecutionIdentity } from "../../src/agent-pool/execution-identity.js";
 import { formatExecutionIdentity, getExecutionIdentity, withExecutionIdentity, type ExecutionProvenance } from "../../src/core/execution-context.js";
+import { initializeFamilyToolRestrictions } from '../../src/db/family-tool-restrictions.js';
 
 let db: Database, alice: string, bob: string;
 function proof(id=alice, chat="web:alice",kind:ExecutionProvenance["kind"]="interactive"):ExecutionProvenance{return {actorUserId:id,ownerUserId:id,chatJid:chat,kind,authenticationSessionId:`login-${id}`};}
 beforeEach(()=>{
- db=new Database(":memory:");initializeUserSchema(db);
+ db=new Database(":memory:");initializeUserSchema(db);initializeFamilyToolRestrictions(db);
  db.exec(`CREATE TABLE chats(jid TEXT PRIMARY KEY);
  CREATE TABLE chat_branches(branch_id TEXT PRIMARY KEY,chat_jid TEXT UNIQUE,root_chat_jid TEXT,parent_branch_id TEXT,archived_at TEXT);
  CREATE TABLE web_sessions(session_id TEXT PRIMARY KEY,user_id TEXT,expires_at TEXT);`);

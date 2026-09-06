@@ -58,9 +58,10 @@ export function createRunToolCeilingController(options: {
       release();
       const identity = getExecutionIdentity();
       const family = identity?.mode === 'family-shared';
+      if (family && (!identity.toolPolicy || !Array.isArray(identity.toolPolicy.allowed))) throw new Error('Family tool policy snapshot is required.');
       const requested = options.runOptions.toolCeilingFilter;
       // A caller may narrow the family ceiling but cannot omit or widen it.
-      const ceilingFilter = family ? (name: string) => isFamilyWebToolAllowed(name) && (!requested || requested(name)) : requested;
+      const ceilingFilter = family ? (name: string) => isFamilyWebToolAllowed(name) && identity.toolPolicy!.allowed.includes(name) && (!requested || requested(name)) : requested;
       if (identity && identity.mode !== 'single-user' && !family) throw new Error('Isolated tool execution is unavailable.');
       if (family && !nextOwner) throw new Error('Family execution requires active-tool controls.');
       if (!ceilingFilter || !nextOwner) return false;

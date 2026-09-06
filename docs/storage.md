@@ -42,6 +42,8 @@
 | `account_recovery_events` | Non-secret actor/target/reset event/time audit |
 | `account_security_events` | Administrative device/factor revocation audit: acting admin, target account, item kind/non-secret ID and time; committed with the revocation |
 | `account_home_events` | Administrative home-change audit: actor/target, previous home JID, new owned root branch ID and time; committed with the default change |
+| `user_tool_restrictions` | Per-account denied names within the fixed family ceiling and optimistic-concurrency revision |
+| `user_tool_restriction_events` | Acting administrator, target, old/new denial lists, revision and time; committed atomically with policy changes |
 | `core_schema_migrations` | Core migration ledger, including removal of obsolete core remote-interop tables |
 
 Remote Peer state belongs to the installed add-on. The obsolete core `remote_*` tables are removed by `dropObsoleteRemoteInteropSchema`; they are not a current storage API.
