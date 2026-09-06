@@ -10,7 +10,7 @@ import { getChatCursor, beginChatRun, rollbackChatRunWithError, getFailedRun, en
 import { resolveRequestPrincipal } from "../../../src/channels/web/auth/principal.js";
 import type { AuthenticatedPrincipal } from "../../../src/core/access-types.js";
 import { admitFamilyMessage, resolveFamilyMessageAuthority } from "../../../src/channels/web/messaging/family-message-authority.js";
-import { recoverFamilyMessage } from "../../../src/channels/web/messaging/family-message-recovery.js";
+import { recoverFamilyMessage, readFamilyRecoveryStatus } from "../../../src/channels/web/messaging/family-message-recovery.js";
 import { RequestRouterService } from "../../../src/channels/web/request-router-service.js";
 import { WebAuthGateway } from "../../../src/channels/web/auth/auth-gateway.js";
 import { TotpFailureTracker } from "../../../src/channels/web/auth/totp-failure-tracker.js";
@@ -42,6 +42,34 @@ beforeEach(() => {
   }
 });
 afterEach(() => { closeDatabase(); restore(); ws.cleanup(); });
+
+test("recovery discovery exposes only oldest owned held ID, never failure details or input text", () => {
+  expect(readFamilyRecoveryStatus(alice)).toEqual({ state: "idle" });
+  const first = input("private text", "private-text");
+  expect(readFamilyRecoveryStatus(alice)).toEqual({ state: "queued" });
+  fail(first);
+  expect(readFamilyRecoveryStatus(alice)).toEqual({ state: "held", message_rowid: first.interaction.id });
+  expect(() => readFamilyRecoveryStatus(bob, alice.homeChatJid!)).toThrow();
+  expect(readFamilyRecoveryStatus(bob)).toEqual({ state: "idle" });
+  beginChatRun(alice.homeChatJid!, first.interaction.timestamp, { prevTs: "", messageId: first.messageId, startedAt: new Date().toISOString() });
+  expect(readFamilyRecoveryStatus(alice)).toEqual({ state: "working" }); endChatRun(alice.homeChatJid!); fail(first);
+  getDb().query("UPDATE messages SET content='tampered' WHERE rowid=?").run(first.interaction.id);
+  expect(readFamilyRecoveryStatus(alice)).toEqual({ state: "blocked" });
+});
+
+test("discovery detects revoked admission after fresh login and GET validates selectors without requiring recent auth", async () => {
+  const held = input(); revokeUserWebSessions(alice.userId); alice = actor(alice.userId);
+  expect(readFamilyRecoveryStatus(alice)).toEqual({ state: "held", message_rowid: held.interaction.id });
+  getDb().query("UPDATE web_sessions SET created_at=? WHERE session_id=?").run(new Date(Date.now()-600_000).toISOString(), alice.authentication.sessionId!);
+  const json = (body: unknown, status=200) => Response.json(body, { status });
+  const authGateway = new WebAuthGateway({ accessMode: "family-shared", passkeyMode: "", totpSecret: "", internalSecret: "", sessionTtlSeconds: 3600, hasTls: true }, { json, challenges: new WebauthnChallengeTracker(), failureTracker: new TotpFailureTracker() });
+  const router = new RequestRouterService({ json, authGateway } as any, "family-shared");
+  const request = (query = "") => new Request("https://family.local/agent/message-recovery"+query, { headers: { cookie: `piclaw_session=token-${alice.userId}` } });
+  const response = await router.handle(request()); expect(response.status).toBe(200); expect(response.headers.get("cache-control")).toBe("private, no-store");
+  expect(await response.json()).toEqual({ state: "held", message_rowid: held.interaction.id });
+  for (const query of ["?chat_jid=", "?chat_jid=%20", "?chat_jid=x&chat_jid=y", `?chat_jid=${bob.homeChatJid}`]) expect((await router.handle(request(query))).status).toBe(403);
+  expect(() => recoverFamilyMessage(alice, { chatJid: alice.homeChatJid!, messageRowId: held.interaction.id, requestId: "stale-auth", action: "retry" })).toThrow();
+});
 
 test("explicit retry binds a new login without modifying original admission, and is idempotent", () => {
   const message = input(); fail(message);

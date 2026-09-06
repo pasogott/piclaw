@@ -21,7 +21,9 @@ Requests include account/login pins derived from the authenticated principal. Th
 
 Before fetching private data, the shell unregisters existing origin service workers and deletes Cache Storage entries. If a worker still controls the page, it stops and asks the user to close other tabs and reload. This cannot repair a legacy worker that serves an old shell without reaching the server; origin/cache migration and old-tab integration evidence remain release gates. The shell does not read or write localStorage/sessionStorage or promise filesystem isolation.
 
-This preview is English-only. Attachments, streaming, pagination, held-input discovery/recovery controls, lifecycle actions and account Settings remain unfinished. The following sections describe the supported **single-user** UI.
+The shell polls metadata-only recovery status for the selected owned session. It shows retry/skip only for the oldest held input, requires explicit skip confirmation and reuses request IDs for unchanged manual retries. Recovery mutations still require authentication within five minutes; changing session/login clears the controls. Status reads reveal neither failure details nor prompt text.
+
+This preview is English-only. Attachments, streaming, pagination, lifecycle actions and account Settings remain unfinished. The following sections describe the supported **single-user** UI.
 
 ## Chat and status surfaces
 

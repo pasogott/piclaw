@@ -24,6 +24,15 @@
     <p id="family-status" role="status">Loading…</p>
     <p id="family-error" role="alert" aria-live="polite"></p>
     <section id="timeline" aria-label="Conversation"></section>
+    <section id="message-recovery" aria-label="Held message recovery" hidden>
+      <p id="recovery-status" role="status"></p>
+      <div id="recovery-actions" hidden>
+        <p>Retry or skip requires a sign-in within the last five minutes. Skipping leaves the message in history but prevents execution.</p>
+        <button id="retry-message" type="button" disabled>Retry held message</button>
+        <label><input id="confirm-skip" type="checkbox" disabled /> Skip this held input without running it</label>
+        <button id="skip-message" type="button" disabled>Skip held message</button>
+      </div>
+    </section>
     <form id="compose-form">
       <label for="message-text">Message</label>
       <textarea id="message-text" rows="4" maxlength="102400" placeholder="Write a message (commands, attachments and steering are not yet available)" disabled required></textarea>

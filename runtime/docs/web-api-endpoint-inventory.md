@@ -70,6 +70,7 @@ These exact routes are implemented in `http/family-authorisation.ts`, `http/fami
 | GET | `/search` | `q`, `scope=current\|root\|all`; SQL restricted to authorised chats before pagination | Search results; `all` never means all users |
 | GET | `/sse/stream` | Authorised chat/login, rechecked before delivery and every 30s | Only approved matching-chat events; no global broadcasts |
 | POST | `/agent/:id/message` | Cookie/Origin + owned target; `{content,request_id,thread_id?}` only; 30/min | 201 new or 200 retry `{user_message,created,queued:"message"}`; immutable persisted authority |
+| GET | `/agent/message-recovery` | Live owned target or home; no recent-auth requirement | `{state}` or `{state:"held",message_rowid}`; oldest held input only, no failure/prompt/login data |
 | POST | `/agent/message-recovery` | Recent self + Origin; `{chat_jid,message_rowid,request_id,action}`; retry/skip only, 20/min, same chat lane | `{recovered:true,created,recovery_id,action,message_rowid}`; latest retry login binds dequeue; no admission rewrite |
 | GET | `/media/:id`, `/media/:id/thumbnail`, `/media/:id/info` | Stored message link to an active owned chat; ignore claimed owner/chat authority | Binary/thumbnail or safe metadata projection; private/no-store |
 | GET | `/agent/branch-download` | Explicit owned archived `chat_jid`, optional `limit` (1–500, default 200) and `before` | `piclaw.owned-transcript.v1` JSON attachment with bounded text; omits service state and media |
