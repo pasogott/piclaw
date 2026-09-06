@@ -5,9 +5,11 @@ import { ChatAccessDenied } from "../db/session-ownership.js";
 import { resolveOwnedSessionTarget } from "../agent-pool/owned-session-target.js";
 import { getSessionActivitySnapshot } from "../extensions/session-status.js";
 import type { SessionControlRequest, SessionControlResult } from "../extensions/session-control.js";
+import { requireFamilyToolAccess } from '../agent-pool/family-tool-access.js';
 
 /** Family inspection avoids hydration and mutating queue/control paths. */
 export function inspectOwnedSession(agentPool: Pick<AgentPool, "isActive" | "isStreaming">, request: SessionControlRequest): SessionControlResult {
+  requireFamilyToolAccess('session_control');
   const target = resolveOwnedSessionTarget(request.source_chat_jid, request);
   if (request.action !== "inspect" && request.action !== "assess_stuck") throw new ChatAccessDenied();
   const activity = getSessionActivitySnapshot(target.chat_jid);

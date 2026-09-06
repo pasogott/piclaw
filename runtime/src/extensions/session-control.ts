@@ -10,6 +10,7 @@ import type { AgentToolResult, ExtensionAPI, ExtensionFactory } from "@earendil-
 import { getChatJid } from "../core/chat-context.js";
 import { readAccessConfig } from "../core/config-access.js";
 import { resolveOwnedSessionTarget } from "../agent-pool/owned-session-target.js";
+import { requireFamilyToolAccess } from '../agent-pool/family-tool-access.js';
 
 export type SessionControlAction =
   | "inspect"
@@ -125,6 +126,8 @@ export const sessionControl: ExtensionFactory = (pi: ExtensionAPI) => {
     promptSnippet: "session_control: inspect/assess/compact/abort/switch_model/retry_failed/skip_failed/wake/unblock another session. Prefer target_agent_name='@alias' over raw chat/session IDs. Separate from chat relay.",
     parameters: SessionControlSchema,
     async execute(_toolCallId, params: SessionControlParams) {
+      try { requireFamilyToolAccess('session_control'); }
+      catch { return err('Session access denied.'); }
       const sourceChatJid = getChatJid("").trim();
       if (!sourceChatJid) return err("Cannot determine the source chat. session_control requires an active chat context.");
 
