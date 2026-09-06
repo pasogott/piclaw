@@ -1,7 +1,7 @@
 import type { AuthenticatedPrincipal } from "../../../core/access-types.js";
 import { getDb } from "../../../db/connection.js";
 import { ChatAccessDenied } from "../../../db/session-ownership.js";
-import { listManagedAccounts, provisionFamilyAccount, updateManagedAccount, updateOwnAccount, listOwnSessions, revokeOwnSession, listOwnFactors, removeOwnFactor, readOwnAccountSettings } from "../../../db/account-administration.js";
+import { listManagedAccounts, provisionFamilyAccount, updateManagedAccount, updateOwnAccount, listOwnSessions, revokeOwnSession, listOwnFactors, removeOwnFactor, readOwnAccountSettings, readAdministrationSettings } from "../../../db/account-administration.js";
 import type { CreateUserInput, UpdateUserInput } from "../../../db/users.js";
 import type { WebChannelLike } from "../core/web-channel-contracts.js";
 import { checkCsrfOrigin, rateLimitResponse } from "./security.js";
@@ -27,6 +27,10 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
     const db = getDb();
     const policy = { totp: channel.authGateway.createTotpContext().isTotpEnabled(), passkey: channel.authGateway.createWebauthnContext().isPasskeyEnabled(), rpId: resolveWebauthnRpInfo(req).rpId };
     if (method === "GET") {
+      if (path === "/admin/users/settings") {
+        if (new URL(req.url).search) return deny();
+        return channel.json(readAdministrationSettings(db, principal, policy));
+      }
       if (path === "/account/trees") {
         if (new URL(req.url).search) return deny();
         return channel.json(readOwnedSessionSettings(db, principal));

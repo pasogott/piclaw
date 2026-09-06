@@ -32,11 +32,11 @@ Family mode is intended for trusted household members. Users with arbitrary shel
 |---|---|---|
 | Modes and migration (#1123/#1126/#1133) | Strict config/marker checks, read-only topology preview, explicit root/handle adoption helpers | Complete migration/rollback tooling, existing-child seed adoption, activation gates |
 | Accounts and factors (#1124/#1125) | Disabled account + owned home provisioning, live/recent-login admin checks, own-device/factor APIs, TOTP and multiple passkeys | Avatar and factor/device names, self TOTP enrolment, offline lone-admin recovery, passkey-first invitations/reset, owner-aware replacement for disabled legacy factor commands |
-| Invitations/recovery (#1125) | One-use browser-bound TOTP grants, atomic enrol-and-enable, explicit other-admin reset, fragment-based invitation/QR page | Reset confirmation/admin issuance UI, physical-device and full account browser workflows |
+| Invitations/recovery (#1125) | One-use browser-bound TOTP grants, atomic enrol-and-enable, explicit other-admin reset, fragment-based invitation/QR page and gated admin issuance/reset confirmation UI | Physical-device and full account browser workflows, passkey-first invitations/reset |
 | Sessions (#1126/#1128) | Root ownership, owner-local names, atomic forks/rename, additional roots, home selection and idle archive/restore; owned lifecycle browser controls | Merge/purge, full archive backup, process-kill recovery proof |
 | HTTP and SSE (#1127) | Terminal family HTTP policy, SQL-scoped search, own-thread reads, revocable SSE, text-only persisted message admission, selected account/fork routes, separate pinned text browser shell | Uploads and remaining derived resources/mutations, direct WebSocket/transport/tool paths, legacy-origin migration and push recipients |
 | Model identity/memory (#1129/#1131) | Server identity before hydration, scoped model context and owner/family memory paths | All direct/queued/delegate/side/Dream entry points and service grants; shared-resource policy |
-| Settings and isolation (#1130/#1132) | Own-account profile, factor and device controls and owned-session lifecycle controls with server capability snapshots in the gated family shell | Administration/shared-resource Settings, preference classification and per-user container gateway/deployment |
+| Settings and isolation (#1130/#1132) | Own-account, owned-session lifecycle and account administration controls with server capability snapshots in the gated family shell | Individual admin factor/device revocation, home/destination assignment, shared-resource Settings, preference classification and per-user container gateway/deployment |
 | Auth maintenance (#1125) | Transient-expiry loop and offline factor re-encryption helper | Coordinated rotation CLI/dual-key support, generic-keychain rotation, audit retention |
 
 Passing backend tests and merged PRs do not complete these issues or allow activation. Preserve single-user compatibility until the staged integration gates pass.
@@ -176,6 +176,7 @@ Account reads recheck the login ID and enabled user/role. Mutations require a ma
 | Method and path | Scope |
 |---|---|
 | GET `/admin/users` | Enabled administrator lists account metadata |
+| GET `/admin/users/settings` | Enabled administrator reads labels, role/enabled/invitation state and operation eligibility; no foreign home/session/factor identifiers; query selectors denied |
 | POST `/admin/users` | Recent administrator creates a disabled account and owned home root atomically |
 | PATCH `/admin/users/:id` | Recent administrator changes username/displayName/role/enabled; immutable identity/home fields rejected |
 | GET `/account` | Live self-only profile/factor/device snapshot with current-policy capability hints; query selectors denied |
@@ -200,7 +201,11 @@ GET `/account/trees` returns the live home, root-creation capability and owned r
 
 My sessions uses that snapshot with explicit targets, archive/home confirmations and stable manual fork retry keys. Successful changes refresh the owned picker without changing the open conversation. Closing/backgrounding clears forms; navigation uses the explicit Open/Go home controls. Root creation has no request key; an unchanged duplicate name fails uniqueness, so inspect the list after an uncertain result before choosing a new name. Fork form closure discards its retry key and also requires inspection before a new attempt.
 
-Restricted invitations below bootstrap a new TOTP factor; administrator-assisted reset is described separately. Avatar changes, self TOTP enrolment, device/passkey labels, administration UI and offline lone-administrator recovery are not implemented. Full mode activation, migrated legacy factors and legacy WebAuthn tool/ceremony isolation need integration testing before release.
+GET `/admin/users/settings` returns `{recent_auth,capabilities,users}` in one read transaction. It requires a live administrator; recent authentication controls mutation hints. Last-enabled-admin protection, current-site factors and valid owned-home eligibility determine enabled operations. Invitation state omits grant hashes and bearer values. This snapshot exposes no foreign conversation, home or credential identifiers and grants no content access.
+
+The gated Family administration panel creates disabled accounts, changes role/enablement, issues/revokes invitations and resets another account. Existing-account changes require an exact username plus a checkbox. Issued links are memory-only, displayed once without automatic clipboard writes/navigation, and cleared on blur, close, refresh, expiry, session switch or navigation. A late response cannot restore them; a lost result requires explicit revocation/reissue. Admin reset authority can replace another user's authentication, but does not open their conversations or run a model as them.
+
+Restricted invitations below bootstrap a new TOTP factor; administrator-assisted reset is described separately. Avatar changes, self TOTP enrolment, device/passkey labels, individual administrator device/factor revocation, admin home/destination assignment and offline lone-administrator recovery are not implemented. Full mode activation, migrated legacy factors and legacy WebAuthn tool/ceremony isolation need integration testing before release.
 
 ## Restricted TOTP invitations
 
@@ -214,7 +219,7 @@ The family invitation page is `/auth/invitation#token=<grant>`. The grant belong
 
 Expiry, pagehide and back-forward restoration clear displayed secrets and disable confirmation. A fresh fragment navigated into the same tab discards the previous ceremony and reloads. Failed or lost claims require a new administrator-issued invitation rather than automatic retry. Browser network requests have a 15-second bound. The page requires HTTPS for the Secure enrolment cookie; the public shell contains no account/seed data before claim.
 
-Admin issuance/reset UI, passkey-first invitations, offline recovery and physical authenticator tests remain unfinished. Chromium tests cover fragment removal, explicit claim, confirmation/no login, errors, expiry/navigation clearing and mobile fit; API tests use real TOTP verification and QR generation. Expired records are also pruned at runtime. General factor reset cannot reuse invitations for accounts with existing factors.
+Passkey-first invitations, offline recovery and physical authenticator tests remain unfinished. Chromium tests cover gated admin issuance/revocation, grant clearing/stale responses, fragment removal, explicit claim, confirmation/no login, errors, expiry/navigation clearing and mobile fit; API tests use real TOTP verification and QR generation. Expired records are also pruned at runtime. General factor reset cannot reuse invitations for accounts with existing factors.
 
 ## Administrator-assisted recovery
 
@@ -222,7 +227,7 @@ POST `/admin/users/:id/reset` accepts exactly `{confirm_username}`. It requires 
 
 One transaction disables the target (respecting last-administrator protection), deletes all target login sessions, TOTP/passkey factors and pending ceremonies, revokes invitations it owns or issued, and creates a fresh restricted TOTP invitation. `account_recovery_events` records only actor ID, target ID, event and time, never tokens or seeds. Failure to write the invitation or audit record rolls back the reset. User ID, role, username, home, branch ownership, conversations and filesystem paths remain unchanged. The returned grant is delivered through the existing invitation flow; the target must enrol and log in again.
 
-Recovery cannot display old seeds or act as the target's conversational identity. Offline recovery for a lone administrator, passkey-first reset, audit retention and confirmation UI are unfinished. An authorised administrator can replace another user's authentication through this explicit reset; recent-auth and confirmation requirements protect against accidental use, but do not remove that administrative power.
+Recovery cannot display old seeds or act as the target's conversational identity. Offline recovery for a lone administrator, passkey-first reset and audit retention are unfinished. The gated panel requires the exact target username and a checkbox before reset. An authorised administrator can replace another user's authentication through this explicit reset; recent-auth and confirmation requirements protect against accidental use, but do not remove that administrative power.
 
 ## Multiple passkeys per account
 

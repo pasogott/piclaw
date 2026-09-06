@@ -9,6 +9,10 @@ test("identity validates family user, login, role and home without accepting a l
   for (const change of [{ kind: "local" }, { mode: "single-user" }, { role: "unknown" }, { homeChatJid: null }, { authentication: {} }]) {
     expect(() => parseFamilyIdentity({ principal: { ...value.principal, ...change } })).toThrow();
   }
+  expect(parseFamilyIdentity({ ...value, capabilities: { manage_users: true } }).manageUsers).toBe(false);
+  const admin = { ...value, principal: { ...value.principal, role: 'admin' } };
+  expect(parseFamilyIdentity(admin).manageUsers).toBe(false);
+  expect(parseFamilyIdentity({ ...admin, capabilities: { manage_users: true } }).manageUsers).toBe(true);
 });
 
 test("mode changes or revocation after response parsing invalidate instead of releasing old data", async () => {

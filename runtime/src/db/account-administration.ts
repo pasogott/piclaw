@@ -1,6 +1,7 @@
 import type Database from "bun:sqlite";
 import type { AuthenticatedPrincipal } from "../core/access-types.js";
 import type { AccountSettings } from "../core/account-settings.js";
+import type { AdministrationSettings } from "../core/administration-settings.js";
 import { createUuid } from "../utils/ids.js";
 import { createUser, getUser, listUsers, updateUser, type CreateUserInput, type UpdateUserInput, type UserRecord } from "./users.js";
 import { ChatAccessDenied, getRootOwnership, provisionUserHome } from "./session-ownership.js";
@@ -59,6 +60,38 @@ export function readOwnAccountSettings(database: Database, principal: Authentica
 export function listManagedAccounts(database: Database, principal: AuthenticatedPrincipal): UserRecord[] {
   requireAccountActor(database, principal, { admin: true });
   return listUsers(database);
+}
+
+/** Admin eligibility hints share the write-time policy, but grant no right to content. */
+export function readAdministrationSettings(database: Database, principal: AuthenticatedPrincipal, policy: FactorPolicy): AdministrationSettings {
+  return database.transaction(() => {
+    requireAccountActor(database, principal, { admin: true });
+    let recent = true;
+    try { requireAccountActor(database, principal, { admin: true, recent: true }); }
+    catch (error) { if (!(error instanceof ChatAccessDenied)) throw error; recent = false; }
+    const users = listUsers(database), admins = users.filter(user => user.enabled && user.role === 'admin').length;
+    return { recent_auth: recent, capabilities: { create_user: recent }, users: users.map((user): AdministrationSettings['users'][number] => {
+      let homeValid = false;
+      try {
+        const home = user.home_chat_jid ? getRootOwnership(database, user.home_chat_jid) : null;
+        homeValid = home?.ownerUserId === user.id && home.rootChatJid === user.home_chat_jid;
+      } catch (error) { if (!(error instanceof ChatAccessDenied)) throw error; }
+      const hasFactors = Boolean(database.query('SELECT 1 FROM user_totp_factors WHERE user_id=?').get(user.id)
+        || database.query('SELECT 1 FROM webauthn_credentials WHERE user_id=?').get(user.id));
+      const invitation = database.query('SELECT state FROM user_auth_invitations WHERE user_id=? AND expires_at>?').get(user.id, Date.now()) as { state: 'issued' | 'claimed' } | null;
+      const protectedAdmin = user.enabled && user.role === 'admin' && admins <= 1;
+      return { id: user.id, username: user.username, display_name: user.display_name, role: user.role, enabled: user.enabled,
+        invitation: invitation?.state ?? 'none', capabilities: {
+          disable: recent && user.enabled && !protectedAdmin,
+          enable: recent && !user.enabled && homeValid && factorCount(database, user.id, policy) > 0,
+          change_role: recent && !protectedAdmin,
+          invite: recent && policy.totp && !user.enabled && homeValid && !hasFactors,
+          revoke_invitation: recent && Boolean(invitation),
+          reset: recent && policy.totp && user.id !== principal.userId && !protectedAdmin && homeValid,
+        },
+      };
+    }) };
+  })();
 }
 
 /** Disabled user, stable home root and namespace appear together or not at all. */

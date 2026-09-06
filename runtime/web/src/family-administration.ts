@@ -1,0 +1,151 @@
+import type { AdministrationSettings } from '../../src/core/administration-settings.js';
+import { FamilyApi } from './family-api.js';
+
+const node = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+type User = AdministrationSettings['users'][number];
+type Action = keyof User['capabilities'];
+const labels: Record<Action, string> = { disable: 'Disable', enable: 'Reactivate', change_role: 'Change role', invite: 'Issue invitation', revoke_invitation: 'Revoke invitation', reset: 'Reset account' };
+
+/** No foreign conversation links, stored grants, automatic retries or impersonation. */
+export class FamilyAdministration {
+  private root = node<HTMLElement>('administration-settings');
+  private list = node<HTMLElement>('administration-users');
+  private status = node<HTMLElement>('administration-status');
+  private form = node<HTMLFormElement>('administration-action');
+  private confirm = node<HTMLInputElement>('administration-confirm');
+  private confirmationName = node<HTMLInputElement>('administration-confirm-name');
+  private username = node<HTMLInputElement>('new-account-username');
+  private displayName = node<HTMLInputElement>('new-account-display-name');
+  private role = node<HTMLSelectElement>('new-account-role');
+  private link = node<HTMLInputElement>('administration-invitation-link');
+  private selected: { user: User; action: Action } | null = null;
+  private opened = false;
+  private paused = false;
+  private stopped = false;
+  private busy = false;
+  private generation = 0;
+  private canCreate = false;
+  private expiry: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(private api: FamilyApi) {
+    node('open-administration').addEventListener('click', () => { this.opened = true; this.paused = false; void this.load(true); });
+    node('close-administration').addEventListener('click', () => { this.opened = false; this.clear(); node('open-administration').focus(); });
+    node('refresh-administration').addEventListener('click', () => { void this.load(); });
+    node('clear-administration-invitation').addEventListener('click', () => this.clearGrant());
+    node('cancel-administration-action').addEventListener('click', () => this.resetAction());
+    const confirmState = () => { node<HTMLButtonElement>('submit-administration-action').disabled = this.busy || !this.confirm.checked || this.confirmationName.value !== this.selected?.user.username; };
+    this.confirm.addEventListener('change', confirmState); this.confirmationName.addEventListener('input', confirmState);
+    node('create-account-form').addEventListener('submit', event => {
+      event.preventDefault(); if (!this.canCreate) return;
+      void this.mutate('/admin/users', 'POST', { username: this.username.value, displayName: this.displayName.value, role: this.role.value });
+    });
+    this.form.addEventListener('submit', event => {
+      event.preventDefault(); if (!this.selected || !this.confirm.checked || this.confirmationName.value !== this.selected.user.username) return;
+      const { user, action } = this.selected;
+      if (user.capabilities[action] !== true) return;
+      const path = `/admin/users/${encodeURIComponent(user.id)}`;
+      if (action === 'invite' || action === 'revoke_invitation') void this.mutate(path + '/invitation', action === 'invite' ? 'POST' : 'DELETE', undefined, action === 'invite');
+      else if (action === 'reset') void this.mutate(path + '/reset', 'POST', { confirm_username: user.username }, true);
+      else void this.mutate(path, 'PATCH', action === 'change_role' ? { role: user.role === 'admin' ? 'member' : 'admin' } : { enabled: action === 'enable' });
+    });
+  }
+  private visible(): boolean { return this.opened && !this.paused && !this.stopped && !document.hidden && this.api.identity.manageUsers; }
+  private clearGrant(): void {
+    if (this.expiry) clearTimeout(this.expiry); this.expiry = null; this.link.value = '';
+    node('administration-invitation').hidden = true; node('administration-invitation-expiry').textContent = '';
+  }
+  private resetAction(): void {
+    this.selected = null; this.confirm.checked = false; this.confirmationName.value = ''; this.form.hidden = true;
+    node('administration-action-title').textContent = ''; node('administration-action-warning').textContent = '';
+    node<HTMLButtonElement>('submit-administration-action').disabled = true;
+  }
+  private clear(): void {
+    this.generation++; this.clearGrant(); this.resetAction(); this.root.hidden = true; this.list.replaceChildren();
+    this.username.value = ''; this.displayName.value = ''; this.role.value = 'member'; this.status.textContent = '';
+    node('administration-auth-notice').textContent = ''; this.canCreate = false; node<HTMLButtonElement>('create-account').disabled = true;
+  }
+  suspend(): void { this.paused = true; this.clear(); node<HTMLButtonElement>('open-administration').disabled = true; }
+  resume(): void {
+    const button = node<HTMLButtonElement>('open-administration'); button.hidden = !this.api.identity.manageUsers;
+    button.disabled = this.stopped || !this.api.identity.manageUsers;
+    if (!this.api.identity.manageUsers) { this.opened = false; this.clear(); return; }
+    const wasPaused = this.paused; this.paused = false;
+    if (wasPaused && this.opened && !this.busy && !this.stopped) void this.load();
+  }
+  stop(): void { this.stopped = true; this.opened = false; this.clear(); node('open-administration').hidden = true; }
+  private choose(user: User, action: Action): void {
+    if (!this.visible() || this.busy || user.capabilities[action] !== true) return;
+    this.clearGrant(); this.resetAction(); this.selected = { user, action }; this.form.hidden = false;
+    this.confirm.disabled = this.confirmationName.disabled = false;
+    node<HTMLButtonElement>('cancel-administration-action').disabled = false;
+    node('administration-action-title').textContent = `${labels[action]} @${user.username}`;
+    node('administration-action-warning').textContent = action === 'reset'
+      ? 'Disable this account, delete all of its sign-in factors, sign out every device and issue a new authenticator invitation. History and ownership remain unchanged. You can replace this user’s authentication; this does not open their conversations.'
+      : action === 'invite' ? 'Issue a private one-use authenticator invitation. This replaces any previous grant or pending enrolment. The new link is shown once; keep it private.'
+      : action === 'revoke_invitation' ? 'Revoke this account’s current invitation and pending authenticator enrolment.'
+      : action === 'change_role' ? `Change this account to ${user.role === 'admin' ? 'member' : 'administrator'} and sign out every device. Administrators can manage accounts and reset other users’ sign-in factors.`
+      : action === 'disable' ? 'Disable this account and revoke its logins and pending enrolments. Existing data remains stored.'
+      : 'Reactivate this account using its existing usable factors and owned home. No login is issued.';
+    this.confirmationName.focus();
+  }
+  private render(snapshot: AdministrationSettings): void {
+    if (!snapshot?.capabilities || !Array.isArray(snapshot.users)) throw new Error('Invalid administration response.');
+    this.canCreate = snapshot.capabilities.create_user === true;
+    node<HTMLButtonElement>('create-account').disabled = this.username.disabled = this.displayName.disabled = this.role.disabled = !this.canCreate;
+    node('administration-auth-notice').textContent = snapshot.recent_auth === true ? 'Account changes require a sign-in within five minutes.' : 'Sign in again before changing accounts.';
+    this.list.replaceChildren();
+    for (const user of snapshot.users) {
+      const row = document.createElement('li'), title = document.createElement('p'), buttons = document.createElement('div');
+      title.textContent = `${user.display_name} (@${user.username}) · ${user.role} · ${user.enabled ? 'Enabled' : 'Disabled'} · Invitation: ${user.invitation}`;
+      for (const action of Object.keys(labels) as Action[]) {
+        const button = document.createElement('button'); button.type = 'button'; button.textContent = labels[action]; button.disabled = user.capabilities?.[action] !== true;
+        button.addEventListener('click', () => this.choose(user, action)); buttons.append(button);
+      }
+      row.append(title, buttons); this.list.append(row);
+    }
+  }
+  private async load(focus = false): Promise<void> {
+    if (!this.visible() || this.busy) return;
+    this.clear(); this.root.hidden = false; this.status.textContent = 'Loading accounts…';
+    node<HTMLButtonElement>('refresh-administration').disabled = false;
+    const generation = this.generation; if (focus) node('administration-heading').focus();
+    try {
+      const snapshot = await this.api.request('/admin/users/settings');
+      if (!this.visible() || generation !== this.generation) return;
+      this.render(snapshot); this.status.textContent = '';
+    } catch (error) { if (this.visible() && generation === this.generation) this.status.textContent = (error as Error).message; }
+  }
+  private showGrant(value: any): void {
+    if (typeof value?.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(value.token) || !Number.isFinite(value.expiresAt) || value.expiresAt <= Date.now() || value.expiresAt > Date.now() + 15 * 60_000) throw new Error('Invitation response unavailable. Revoke and reissue explicitly.');
+    this.link.value = `${location.origin}/auth/invitation#token=${value.token}`;
+    this.link.disabled = false; node<HTMLButtonElement>('clear-administration-invitation').disabled = false;
+    node('administration-invitation-expiry').textContent = `Expires ${new Date(value.expiresAt).toISOString()}`;
+    node('administration-invitation').hidden = false;
+    this.expiry = setTimeout(() => this.clearGrant(), value.expiresAt - Date.now());
+  }
+  private async mutate(path: string, method: string, body?: unknown, grant = false): Promise<void> {
+    if (!this.visible() || this.busy) return;
+    this.busy = true; this.clearGrant(); const generation = ++this.generation;
+    const enabled = Array.from(this.root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input,button,select')).filter(control => !control.disabled && control.id !== 'close-administration');
+    for (const control of enabled) control.disabled = true;
+    this.status.textContent = 'Saving…';
+    try {
+      const result = await this.api.request(path, method, body);
+      if (!this.visible() || generation !== this.generation) return;
+      const snapshot = await this.api.request('/admin/users/settings');
+      if (!this.visible() || generation !== this.generation) return;
+      this.resetAction(); this.username.value = ''; this.displayName.value = ''; this.role.value = 'member'; this.render(snapshot);
+      this.status.textContent = grant ? 'Invitation issued. Copy the link privately now; blur or close clears it.' : 'Account change saved.';
+      if (grant) this.showGrant(result);
+    } catch (error) {
+      if (this.visible() && generation === this.generation) this.status.textContent = `${(error as Error).message} No automatic retry was made. Refresh before repeating; a lost invitation response requires explicit revocation and reissue.`;
+    } finally {
+      this.busy = false;
+      if (this.visible() && generation === this.generation) {
+        // Snapshot rendering owns field/button capability state; do not re-enable stale controls.
+        node<HTMLButtonElement>('refresh-administration').disabled = false;
+        if (!this.form.hidden) { this.confirm.disabled = false; this.confirmationName.disabled = false; node<HTMLButtonElement>('cancel-administration-action').disabled = false; }
+      } else if (this.visible()) void this.load();
+    }
+  }
+}

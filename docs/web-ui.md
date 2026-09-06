@@ -3,7 +3,7 @@
 Piclaw ships with a single-user streaming web UI that combines chat, workspace,
 editor, terminal, viewers, and lightweight control surfaces in one app.
 
-This page describes the supported single-user UI. [Family-mode backend work](multi-user/README.md) includes account APIs, owned forks and multiple passkeys, but startup still rejects family and isolated modes. A restricted invitation/QR page, mode-aware login and separate text-only family shell are implemented behind that gate. Account administration, passkey labels, per-user Settings and the complete browser workflow are not yet supported. Do not treat the existing session picker or multiple browser tabs as separate user accounts.
+This page describes the supported single-user UI and gated [family development work](multi-user/README.md). Startup still rejects family and isolated modes. A restricted invitation/QR page, mode-aware login, separate text shell and personal/session/administration panels are implemented behind that gate. Passkey labels, remaining Settings and the complete browser workflow need integration before deployment is supported. Do not treat the single-user session picker or multiple browser tabs as separate user accounts.
 
 ## Login
 
@@ -11,7 +11,7 @@ The login shell loads non-secret mode/method flags before enabling credential in
 
 ## Restricted invitation setup (gated family backend)
 
-An administrator can privately deliver `/auth/invitation#token=<grant>`. The page removes the grant from history, waits for Begin, then displays the new authenticator QR/manual key and a confirmation form. Confirmation enables only the invited account and directs the user to ordinary login. No account cookie is issued. Secrets are kept in memory and cleared on success, expiry or navigation; a failed/lost claim needs a new invitation. This page does not bypass the family startup gate or provide the unfinished admin issuance UI.
+An administrator can privately deliver `/auth/invitation#token=<grant>`. The page removes the grant from history, waits for Begin, then displays the new authenticator QR/manual key and a confirmation form. Confirmation enables only the invited account and directs the user to ordinary login. No account cookie is issued. Secrets are kept in memory and cleared on success, expiry or navigation; a failed/lost claim needs a new invitation. The gated administration panel can issue/revoke these links; neither page bypasses the family startup gate.
 
 ## Family text shell (gated)
 
@@ -31,7 +31,11 @@ The panel discards account form drafts on blur, close, session switch and naviga
 
 These controls never silently navigate to a new root, fork or home. Use Open or Go home explicitly. Archiving the current conversation leaves its target selected in the URL and denies further access until it is restored or another owned session is selected. Eligibility is a snapshot; the backend independently rechecks ownership, graph, recent authentication for home selection and runtime readiness. Pending responses cannot re-enable background controls or restore cleared forms.
 
-This preview is English-only. Avatar changes, self TOTP enrolment, passkey/device labels, family administration, attachments, streaming and pagination are unfinished. Session merge, purge and full archive backup are unavailable. Shared/provider/deployment Settings and single-user classic/visual Settings are unchanged. Chromium virtual-authenticator tests cover adding two independent keys; physical authenticator/device coverage is incomplete. The following sections describe the supported **single-user** UI.
+**Family administration** appears only when the authenticated server capability permits account management. Its separate snapshot exposes account labels, enabled/role state, invitation state and action eligibility, without foreign session identifiers or factors. It supports disabled account creation, disable/reactivate, role changes, invitation issue/revoke and other-account reset through the existing backend APIs. Each existing-account change needs the exact target username and a checked confirmation. Reset explicitly disables the target, removes every factor, signs out its devices and issues a restricted authenticator invitation. It never opens a target conversation or switches the acting account.
+
+An issued invitation link appears once in a read-only field, with no automatic clipboard write or navigation. Blur, close, refresh, expiry, session switch and navigation erase it. Clearing the display does not revoke the grant. Late responses cannot restore a cleared link; lost results require explicit revocation/reissue. Server capabilities account for recent authentication, last-enabled-admin protection, owned home and current-site factor policy; writes independently recheck these conditions.
+
+This preview is English-only. Avatar changes, self TOTP enrolment, passkey/device labels, individual administrator device/factor revocation, admin home/destination assignment, attachments, streaming and pagination are unfinished. Session merge, purge and full archive backup are unavailable. Shared/provider/deployment Settings and single-user classic/visual Settings are unchanged. Chromium virtual-authenticator tests cover adding two independent keys; physical authenticator/device coverage is incomplete. The following sections describe the supported **single-user** UI.
 
 ## Chat and status surfaces
 

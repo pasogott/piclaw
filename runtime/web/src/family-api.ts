@@ -6,6 +6,7 @@ export interface FamilyIdentity {
   loginId: string;
   homeChatJid: string;
   role: "admin" | "member";
+  manageUsers: boolean;
 }
 
 export function parseFamilyIdentity(value: unknown): FamilyIdentity {
@@ -16,7 +17,8 @@ export function parseFamilyIdentity(value: unknown): FamilyIdentity {
     throw new FamilyRequestError("A family account with an owned home is required.", 409);
   }
   return Object.freeze({ userId: principal.userId, username: principal.username, displayName: principal.displayName,
-    loginId: principal.authentication.sessionId, homeChatJid: principal.homeChatJid, role: principal.role });
+    loginId: principal.authentication.sessionId, homeChatJid: principal.homeChatJid, role: principal.role,
+    manageUsers: principal.role === 'admin' && (value as any)?.capabilities?.manage_users === true });
 }
 
 export class FamilyRequestError extends Error {

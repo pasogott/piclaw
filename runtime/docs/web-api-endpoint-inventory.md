@@ -78,6 +78,7 @@ These exact routes are implemented in `http/family-authorisation.ts`, `http/fami
 | POST | `/agent/branch-fork` | Optional `chat_jid`, required `agent_name` and owner/source-bound `request_id`; Origin + branch rate limit | 201 `{branch}`; retry returns the same child |
 | POST | `/agent/branch-rename` | Optional `chat_jid`, required `agent_name`; Origin + branch rate limit | `{branch}`; stable IDs unchanged |
 | GET | `/admin/users` | Current enabled administrator | `{users}` metadata only |
+| GET | `/admin/users/settings` | Current enabled administrator; query selectors denied | `{recent_auth,capabilities,users}`; labels/role/enabled/invitation state and eligibility, no foreign home/session/factor identifiers or grant hashes |
 | POST | `/admin/users` | Recent administrator; `username`, `displayName`, optional `role` | 201 `{user}`, disabled with owned home |
 | PATCH | `/admin/users/:id` | Recent administrator; username/displayName/role/enabled only | `{user}`; enablement checks usable factor/home |
 | GET | `/account` | Live self; query selectors denied | `{user,recent_auth,capabilities,factors,sessions}`; one snapshot, current-RP usability/removal hints and current-login marker, no secrets or foreign metadata |
