@@ -109,4 +109,14 @@ A recently authenticated owner explicitly promotes a staged proposal. The target
 
 If the process writes personal memory but fails before recording the receipt, an exact retry recognises the proposal hash already at the target and records the receipt. Once a receipt exists, retries succeed only while the target still has that exact proposal hash. A later owner edit, different current generation, changed proposal/metadata or foreign account fails closed. Promotion cannot merge content or overwrite a concurrent owner change.
 
-This is still an internal gate. No model, browser, HTTP, command, scheduler or startup path receives the capability. There is no automatic retry, promotion, rollback, retention or deletion. Shared-filesystem privileged processes remain trusted. Family Dream execution and activation remain disabled.
+This is still an internal gate. No browser, HTTP, command, scheduler or startup path receives the capability. There is no automatic retry, promotion, rollback, retention or deletion. Shared-filesystem privileged processes remain trusted. Family Dream execution and activation remain disabled.
+
+## Internal no-tool Dream runner
+
+`runOwnFamilyDreamProposal` is a dependency-injected orchestration boundary for testing and later controlled admission. It accepts a server-supplied text-model callback only. The callback receives an immutable system string, one owner-labelled user string and an `AbortSignal`; it receives no tool registry, shell, session runtime, database, capability or promotion function. No production route or scheduler supplies a callback yet.
+
+The runner requires a recent owner login, exact current generation, fixed workspace/store/data and database, and no ambient model execution context. It reads only that generation's manifest, source index and date-named daily files, rejecting symlinks, malformed UTF-8/NULs and more than 8 MiB. The model timeout is 1–300 seconds (120 seconds by default); output must be non-empty Markdown up to 64 KiB. Authority and generation are checked after the model await before staging through the private proposal capability.
+
+Each owner request ID creates a durable `runs/<request-id>/start.json` before the callback. A completed run adds `complete.json` containing only owner, generation, proposal ID, source hash and timestamps. Errors, invalid output, timeout or authority loss add a similarly redacted `failed.json`. Neither receipt stores source text, prompt, output, provider errors or capability material. A complete receipt is idempotently readable without another model call; started/failed requests never replay automatically, including after process restart.
+
+The runner stages a proposal but never promotes it. Recent-owner promotion remains the separate hash-CAS operation above. Model output is untrusted and can contain false or malicious text; owner confirmation is the only path to personal memory. Retention, stale-run/operator recovery and production admission require separate review before activation.
