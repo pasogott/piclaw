@@ -11,6 +11,8 @@ export interface ExecutionProvenance {
   readonly chatJid: string;
   readonly kind: "interactive" | "scheduled" | "followup" | "side-prompt" | "dream" | "delegate";
   readonly authenticationSessionId?: string;
+  /** Non-secret durable scheduled handoff ID; authority also requires the private active dispatcher scope. */
+  readonly executionId?: string;
 }
 
 export interface ExecutionIdentity {
@@ -46,6 +48,7 @@ export function formatExecutionIdentity(identity: ExecutionIdentity): string {
     `Display name: ${quote(identity.displayName)}`,
     `Owner ID: ${quote(identity.provenance.ownerUserId)}`,
     `Initiating actor ID: ${quote(identity.provenance.actorUserId)}`,
+    ...(identity.provenance.kind === "scheduled" ? ["Execution service: scheduler; the initiating user is the task owner."] : []),
     `Role: ${identity.role}; execution: ${identity.provenance.kind}; workspace mode: ${identity.mode}.`,
     identity.mode === "family-shared"
       ? "The workspace and shared family files are shared. Apply this user's preferences; do not attribute shared content to them without evidence."

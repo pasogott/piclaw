@@ -33,6 +33,8 @@ import { readAccessConfig } from "../core/config-access.js";
 import { withExecutionIdentity } from "../core/execution-context.js";
 import { getDb } from "../db/connection.js";
 import { authoriseExecutionIdentity } from "./execution-identity.js";
+import { authoriseScheduledDispatch, beforeScheduledPrompt, enterScheduledDispatch, hasScheduledDispatch } from "./scheduled-dispatch-context.js";
+import { suppressScheduledRetries } from "./scheduled-retry-policy.js";
 import {
   formatTimeoutDuration,
   resolveSessionIdleMaxWaitMs,
@@ -845,7 +847,9 @@ async function runPromptAttempt(
   try {
     heartbeatTrackedPhase(chatJid, "prompt", { eventType: "prompt_start" });
     attemptContext.publishContextUsageUpdate("prompt_start", true);
+    if(hasScheduledDispatch())beforeScheduledPrompt(prompt,chatJid,runOptions.executionProvenance);
     await session.prompt(prompt);
+    if(hasScheduledDispatch())authoriseScheduledDispatch(chatJid,runOptions.executionProvenance);
     finishPromptTimeout();
     heartbeatTrackedPhase(chatJid, "prompt", { eventType: "prompt_resolved" });
     options.onInfo?.("session.prompt() resolved", {
@@ -952,19 +956,21 @@ export async function runAgentPrompt(
   options: RunAgentOrchestratorOptions,
 ): Promise<AgentOutput> {
   const mode = readAccessConfig().mode;
-  if (mode === "single-user" && runOptions.executionProvenance === undefined) {
+  if (mode === "single-user" && runOptions.executionProvenance === undefined && !hasScheduledDispatch()) {
     return withExecutionIdentity(null, () => runAgentPromptWithIdentity(prompt, chatJid, runOptions, options));
   }
   let identity;
   try {
     identity = authoriseExecutionIdentity(getDb(), mode, chatJid, runOptions.executionProvenance);
     if (!identity) throw new Error("Execution identity unavailable.");
+    if(hasScheduledDispatch())enterScheduledDispatch(prompt,chatJid,runOptions.executionProvenance);
   } catch (error) {
     options.onWarn?.("Execution identity rejected", {operation:"run_agent.identity_denied",chatJid});
     return {status:"error",result:null,error:"Session access denied."};
   }
   return withExecutionIdentity(identity, () => runAgentPromptWithIdentity(prompt, chatJid, {
     ...runOptions, userId: identity.provenance.actorUserId,
+    ...(hasScheduledDispatch()?{skipPrePromptCompaction:true,scheduleIdleAutoCompaction:false,onEvent:undefined,onTurnComplete:undefined}:{}),
   }, options));
 }
 
@@ -999,8 +1005,10 @@ async function runAgentPromptWithIdentity(
     }
 
     const runtime = await options.getOrCreateRuntime(chatJid);
+    if(hasScheduledDispatch())authoriseScheduledDispatch(chatJid,runOptions.executionProvenance);
     let session = runtime.session;
-    session = await maybeAutoRotateSession(session, runtime, chatJid, options);
+    if(hasScheduledDispatch()&&(session.isStreaming||session.isCompacting||session.isRetrying))throw new Error("Scheduled target is busy.");
+    if(!hasScheduledDispatch())session = await maybeAutoRotateSession(session, runtime, chatJid, options);
     // Protected recovery/finalization attempts deliberately clear tools. An
     // ordinary subsequent turn must never inherit that empty set: it is not a
     // user-selectable steady state and otherwise makes the agent appear broken
@@ -1154,6 +1162,15 @@ async function runAgentPromptWithIdentity(
 
     const channel = detectChannel(chatJid);
     const retrySettings = ((runtime.services?.settingsManager as RetrySettingsProvider | undefined)?.getRetrySettings?.()) || undefined;
+    if(hasScheduledDispatch()) {
+      // One prompt attempt only: no compaction/recovery or generated continuation.
+      const restoreRetries=suppressScheduledRetries(session.settingsManager);
+      try {
+        const attempted=await runPromptAttempt(prompt,chatJid,session,timeoutMs,0,runOptions,options,startTime,modelLabel,0);
+        authoriseScheduledDispatch(chatJid,runOptions.executionProvenance);
+        return attempted.output;
+      }finally{restoreRetries();}
+    }
     const baseRecoveryConfig = getAutomaticRecoveryConfig(retrySettings);
     const recoveryConfig = timeoutMs > 0
       ? { ...baseRecoveryConfig, totalBudgetMs: Math.min(baseRecoveryConfig.totalBudgetMs, timeoutMs) }

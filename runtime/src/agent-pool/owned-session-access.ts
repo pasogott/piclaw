@@ -4,11 +4,12 @@ import { getExecutionIdentity } from "../core/execution-context.js";
 import { getDb } from "../db/connection.js";
 import { ChatAccessDenied } from "../db/session-ownership.js";
 import { authoriseExecutionIdentity } from "./execution-identity.js";
+import { hasScheduledDispatch } from "./scheduled-dispatch-context.js";
 
 /** All multi-user hydration requires fresh server identity, including cached and side sessions. */
 export function requireOwnedSessionExecution(chatJid: string): AuthenticatedPrincipal | null {
   const mode = readAccessConfig().mode;
-  if (mode === "single-user") return null;
+  if (mode === "single-user" && !hasScheduledDispatch()) return null;
   if (mode !== "family-shared") throw new ChatAccessDenied();
   const context = getExecutionIdentity();
   if (!context || context.mode !== mode) throw new ChatAccessDenied();

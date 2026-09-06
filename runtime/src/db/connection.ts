@@ -31,6 +31,7 @@ import { initializeAccountModelDefaults } from './account-model-defaults.js';
 import { initializeFamilyScheduledGrants } from './family-scheduled-grants-schema.js';
 import { initializeFamilyScheduledOccurrences } from './family-scheduled-occurrences-schema.js';
 import { initializeFamilyScheduledExecutions } from './family-scheduled-executions-schema.js';
+import { initializeFamilyScheduledDispatch } from './family-scheduled-dispatch-schema.js';
 import { initializeFamilyScheduledPublications } from './family-scheduled-publications-schema.js';
 import fs from "fs";
 import path from "path";
@@ -966,6 +967,7 @@ export function initDatabase(): void {
   initializeFamilyScheduledGrants(db);
   initializeFamilyScheduledOccurrences(db);
   initializeFamilyScheduledExecutions(db);
+  initializeFamilyScheduledDispatch(db);
   initializeFamilyScheduledPublications(db);
   // The legacy live store historically runs without global FK enforcement.
   // EF-S07 uses a dedicated FK-enabled scheduler connection in production;

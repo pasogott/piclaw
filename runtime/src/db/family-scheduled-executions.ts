@@ -8,6 +8,9 @@ import { requireAccountActor } from "./account-administration.js";
 import { consumeFamilyScheduledOccurrence, inspectConsumedFamilyScheduledOccurrence, type FamilyScheduledLease } from "./family-scheduled-occurrences.js";
 import { ChatAccessDenied, resolveAuthorisedChat } from "./session-ownership.js";
 import { getUser } from "./users.js";
+import { readAccountPreferences } from "./account-preferences.js";
+import { readAccountModelDefaults } from "./account-model-defaults.js";
+import type { ExecutionIdentity } from "../core/execution-context.js";
 
 const TTL = 15 * 60_000;
 interface Execution {
@@ -80,17 +83,7 @@ export function beginFamilyScheduledExecution(database: Database, lease: FamilyS
 /** Durable result settlement only. Exact retries acknowledge the existing row; no external delivery. */
 export function settleFamilyScheduledExecution(database: Database, capability: FamilySettlementCapability, input: FamilyScheduledResultInput) {
   return database.transaction(() => {
-    const at = now(); exact(capability, ["execution_id", "token"]);
-    if (typeof capability.token !== "string" || !/^[\w-]{43}$/.test(capability.token)) throw new ChatAccessDenied();
-    const row = execution(database, capability.execution_id, at);
-    if (at >= row.expires_at || !timingSafeEqual(Buffer.from(hash(capability.token), "hex"),Buffer.from(row.settlement_token_hash,"hex"))) throw new ChatAccessDenied();
-    const current = inspectConsumedFamilyScheduledOccurrence(database,row.occurrence_id);
-    const branches = database.query("SELECT target_branch_id,root_branch_id FROM family_scheduled_grants WHERE id=?").get(row.grant_id) as { target_branch_id: string; root_branch_id: string } | null;
-    if (current.grantId !== row.grant_id || current.taskId !== row.task_id || current.attempt !== row.attempt || current.version !== row.occurrence_version
-      || current.ownerUserId !== row.owner_user_id || current.initiatedByUserId !== row.initiated_by_user_id || current.chatJid !== row.chat_jid
-      || current.rootChatJid !== row.root_chat_jid || current.consumedAt !== row.created_at || hash(current.prompt) !== row.prompt_hash
-      || branches?.target_branch_id !== row.target_branch_id || branches.root_branch_id !== row.root_branch_id
-      || allowedTools(row.allowed_tools).some(name => !current.allowedTools.includes(name))) throw new ChatAccessDenied();
+    const at = now(), { row } = validateCapability(database, capability, at);
     const payloadHash = resultHash(input);
     const existing = result(database,row);
     if (existing) {
@@ -101,6 +94,47 @@ export function settleFamilyScheduledExecution(database: Database, capability: F
       .run(row.id,input.status,input.text,payloadHash,at);
     database.query("INSERT INTO family_scheduled_execution_events VALUES (?,'settle',?)").run(row.id,at);
     return { execution_id: row.id, created: true };
+  }).immediate();
+}
+
+function validateCapability(database: Database, capability: FamilySettlementCapability, at: number) {
+    exact(capability, ["execution_id", "token"]);
+    if (typeof capability.token !== "string" || !/^[\w-]{43}$/.test(capability.token)) throw new ChatAccessDenied();
+    const row = execution(database, capability.execution_id, at);
+    if (at >= row.expires_at || !timingSafeEqual(Buffer.from(hash(capability.token), "hex"),Buffer.from(row.settlement_token_hash,"hex"))) throw new ChatAccessDenied();
+    const current = inspectConsumedFamilyScheduledOccurrence(database,row.occurrence_id);
+    const branches = database.query("SELECT target_branch_id,root_branch_id FROM family_scheduled_grants WHERE id=?").get(row.grant_id) as { target_branch_id: string; root_branch_id: string } | null;
+    if (current.grantId !== row.grant_id || current.taskId !== row.task_id || current.attempt !== row.attempt || current.version !== row.occurrence_version
+      || current.ownerUserId !== row.owner_user_id || current.initiatedByUserId !== row.initiated_by_user_id || current.chatJid !== row.chat_jid
+      || current.rootChatJid !== row.root_chat_jid || current.consumedAt !== row.created_at || hash(current.prompt) !== row.prompt_hash
+      || branches?.target_branch_id !== row.target_branch_id || branches.root_branch_id !== row.root_branch_id
+      || allowedTools(row.allowed_tools).some(name => !current.allowedTools.includes(name))) throw new ChatAccessDenied();
+    return { row, current };
+}
+
+/** Trusted dispatcher preflight/revalidation; the raw token never enters execution identity. */
+export function readFamilyScheduledDispatch(database: Database, capability: FamilySettlementCapability) {
+  return database.transaction(() => {
+    const { row, current } = validateCapability(database,capability,now());
+    if (result(database,row)) throw new ChatAccessDenied();
+    const user=getUser(database,row.owner_user_id)!;
+    const allowed=Object.freeze(allowedTools(row.allowed_tools));
+    const identity: ExecutionIdentity=Object.freeze({
+      mode:"family-shared",username:user.username,displayName:user.display_name,role:user.role,rootChatJid:current.rootChatJid,
+      provenance:Object.freeze({actorUserId:user.id,ownerUserId:user.id,chatJid:current.chatJid,kind:"scheduled",executionId:row.id}),
+      toolPolicy:Object.freeze({revision:current.toolPolicy.revision,allowed,denied:Object.freeze(FAMILY_WEB_TOOLS.filter(name=>!allowed.includes(name)))}),
+      preferences:readAccountPreferences(database,user.id),modelDefaults:readAccountModelDefaults(database,user.id),
+    });
+    return Object.freeze({identity,prompt:current.prompt,expiresAt:row.expires_at});
+  })();
+}
+
+/** Atomic one-time admission, before hydration. A started execution is never implicitly retried. */
+export function startFamilyScheduledDispatch(database: Database, capability: FamilySettlementCapability) {
+  return database.transaction(() => {
+    const descriptor=readFamilyScheduledDispatch(database,capability);
+    database.query("INSERT INTO family_scheduled_dispatches(execution_id,started_at) VALUES (?,?)").run(capability.execution_id,now());
+    return descriptor;
   }).immediate();
 }
 
