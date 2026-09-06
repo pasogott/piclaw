@@ -1,36 +1,28 @@
 # Web API endpoint inventory
 
-_Last updated: 2026-07-22_
+_Access/auth documentation reviewed: 2026-09-06_
 
-This document inventories the PiClaw web-channel HTTP surface, including route families, auth, CSRF checks, rate limits, and response shapes.
+This document inventories the main PiClaw web-channel HTTP route families. **Only single-user deployments can start.** Family account and ownership routes exist behind the startup gate; they are not a supported deployment or complete client API. The [access guide](../../docs/multi-user/README.md) records remaining integration. Dynamically registered add-on routes are not exhaustively enumerated here.
 
 ## Guard model
 
-For the main web-channel router (`src/channels/web/request-router-service.ts`),
-requests generally pass through this pipeline:
+For `src/channels/web/request-router-service.ts`, route order depends on access mode:
 
-1. origin tracking
-2. auth/login rate limiting
-3. authentication gate
-4. CSRF Origin checks for mutating requests
-5. data rate limiting for covered mutating routes
-6. route dispatch
-7. security headers on the response
+1. Family mode returns a terminal response from `http/family-authorisation.ts`; isolated mode returns 503. Neither can pass startup today.
+2. Single-user `/auth/me` resolves identity directly. `/api/addons/*` and widget-state routes use their own early guards.
+3. Remaining single-user requests pass auth/enrolment rate limits, optional authentication, CSRF checks and covered data limits.
+4. Auth dispatch runs before the origin is remembered and built-in content/workspace/agent/media/extension handlers run.
+5. Responses receive security and request-timing headers. Family responses additionally use `Cache-Control: private, no-store` and `Vary: Cookie`.
 
-### Important exception: remote interop
+### Separate entry points
 
-`/api/remote/*` is routed **before** the main web request-guard pipeline and is
-handled by `src/remote/service.ts`.
+- `/api/addons/<id>/*` uses package-owned registrations and protocol-specific authentication. Remote pairing/messaging lives in the [Remote Peer add-on](https://rcarmo.github.io/piclaw-addons/addons/remote-peer/); the old core `/api/remote/*` inventory is obsolete.
+- GET `/api/state` and `/api/state/events` use widget Bearer-token authentication, not browser cookies.
+- Terminal and VNC WebSocket upgrades run through `server-lifecycle-gateway-service.ts` before ordinary HTTP dispatch. They have separate authentication/Origin checks, but full family owner scope is unfinished.
 
-That is intentional rather than accidental:
+Family HTTP currently denies add-on/widget-state and terminal/VNC session routes. This does not establish complete protection for separate upgrades, tools or transports; retain the startup gate.
 
-- it is feature-flagged (`PICLAW_REMOTE_INTEROP_ENABLED`)
-- it uses its **own** nonce/replay protection
-- it uses its **own** sliding-window limiters
-- it does **not** use the normal web-session auth/cookie model
-
-So it should be treated as a separate API surface, not just another `/agent/*`
-or `/workspace/*` route family.
+The route tables below describe single-user guards unless explicitly marked family. “Authenticated” means the configured single-user authentication gate; auth-disabled single-user instances remain possible.
 
 ## Public and shell-adjacent routes
 
@@ -55,12 +47,46 @@ or `/workspace/*` route family.
 
 | Method | Path | Source | Auth model | Rate limit | Response style |
 |---|---|---|---|---|---|
+| GET/HEAD | `/auth/me` | `request-router-service.ts` / `auth/principal.ts` | Principal or 401; local default when single-user auth is disabled | none | private/no-store identity/capabilities, no bearer material |
 | POST | `/auth/verify` | request guards / auth endpoints | public login verification | auth bucket | compatibility success envelope with session cookie on success: `{ status: "ok", ok: true }` |
 | POST | `/auth/webauthn/login/start` | `dispatch-auth.ts` | public login bootstrap | auth bucket | bootstrap payload `{ token, options }` |
 | POST | `/auth/webauthn/login/finish` | `dispatch-auth.ts` | public login completion | auth bucket | compatibility success envelope with session cookie on success: `{ status: "ok", ok: true }` |
 | POST | `/auth/webauthn/register/start` | `dispatch-auth.ts` | authenticated TOTP session required for enrol flows | enrol bucket | bootstrap payload `{ token, options }` |
 | POST | `/auth/webauthn/register/finish` | `dispatch-auth.ts` | authenticated TOTP session required for enrol flows | enrol bucket | compatibility success envelope `{ status: "ok", ok: true }` |
 | GET/HEAD | `/auth/webauthn/enrol` | `dispatch-auth.ts` | authenticated TOTP session required | enrol bucket | HTML page |
+
+## Family development routes
+
+These exact routes are implemented in `http/family-authorisation.ts`, `http/family-accounts.ts` and `http/family-invitations.ts` behind disabled family startup. Identity comes from the cookie, never payload user IDs. Account mutations require recent factor authentication (five minutes), matching Origin, and a shared 20/minute account-change bucket. Invitation redemption has its own 20/five-minute client bucket; TOTP confirmation permits five guesses.
+
+| Method | Path | Authority / payload | Success |
+|---|---|---|---|
+| GET/HEAD | `/auth/me` | Cookie principal; local default identity in auth-disabled single-user mode | Principal, destination, capabilities; HEAD has no body |
+| GET | `/timeline`, `/hashtag/:tag`, `/thread/:id` | Live owned `chat_jid` or current home; thread ID scoped to that chat | Existing timeline/hashtag/thread envelope |
+| GET | `/search` | `q`, `scope=current\|root\|all`; SQL restricted to authorised chats before pagination | Search results; `all` never means all users |
+| GET | `/sse/stream` | Authorised chat/login, rechecked before delivery and every 30s | Only approved matching-chat events; no global broadcasts |
+| GET | `/agent/branches` | Owned roots/descendants; optional owned root filter and `include_archived=true` metadata | `{branches}` |
+| POST | `/agent/branch-fork` | Optional `chat_jid`, required `agent_name` and owner/source-bound `request_id`; Origin + branch rate limit | 201 `{branch}`; retry returns the same child |
+| POST | `/agent/branch-rename` | Optional `chat_jid`, required `agent_name`; Origin + branch rate limit | `{branch}`; stable IDs unchanged |
+| GET | `/admin/users` | Current enabled administrator | `{users}` metadata only |
+| POST | `/admin/users` | Recent administrator; `username`, `displayName`, optional `role` | 201 `{user}`, disabled with owned home |
+| PATCH | `/admin/users/:id` | Recent administrator; username/displayName/role/enabled only | `{user}`; enablement checks usable factor/home |
+| PATCH | `/account` | Recent self; username/displayName only | `{user}` |
+| GET | `/account/sessions` | Current self | `{sessions}` without bearer material |
+| DELETE | `/account/sessions/:sessionId` | Recent self; foreign/missing IDs have no effect | `{revoked:true}` |
+| GET | `/account/factors` | Current self | `{totp,passkeys}` metadata |
+| DELETE | `/account/factors/totp`, `/account/factors/passkey/:credentialId` | Recent self; protect last usable factor for current policy/RP | `{removed:true}`; revoke target logins/ceremonies |
+| POST | `/admin/users/:id/invitation` | Recent administrator; disabled owned-home account without factors; TOTP enabled | 201 `{token,expiresAt}`, grant returned once |
+| DELETE | `/admin/users/:id/invitation` | Recent administrator | `{revoked:true}` |
+| POST | `/admin/users/:id/reset` | Recent other-administrator; exact `{confirm_username}`; TOTP enabled | 201 `{token,expiresAt}`; atomic disable/factor reset + invite, no login |
+| POST | `/auth/invitation/claim` | `{token}`, matching Origin; no account cookie | `{enrolment_token,secret,expires_at,username}` + restricted HttpOnly cookie |
+| POST | `/auth/invitation/confirm` | `{token,enrolment_token,code}` + bound cookie/Origin | `{enrolled:true,login_required:true}`; clears restricted cookie |
+| POST | `/account/passkeys/register/start` | Recent self; `{}`, passkeys enabled | `{token,options,expires_at}`; owner/login/RP/Origin-bound |
+| POST | `/account/passkeys/register/finish` | Recent same login; `{token,credential}` | `{registered:true}`; adds a key without replacement |
+
+Family TOTP login uses `/auth/verify` with account username and code; discoverable WebAuthn login uses the credential owner. Legacy `/auth/webauthn/register/*` and `/passkey` tools are not the family registration path. Login JS/CSS are public; other packaged static assets require authentication. The owned root/home/archive/restore routes below are also implemented. Family HTTP denies normal message ingress, other mutations, media/workspace/export, add-on config, push and Settings until their policies are integrated.
+
+Missing chat selectors use the current stored home; explicit blank, duplicate, foreign, unknown or unowned read selectors deny. Ordinary anonymous data access returns JSON 401 without redirects; unauthorised targets return 403, own-chat missing threads 404, invalid operations 400, rate limits 429. Specialised endpoints may reject unsupported methods separately. Grant responses contain new one-use tokens/seeds: never log them or put them in query strings. All family responses are private/no-store.
 
 ## Content/timeline routes
 
@@ -147,7 +173,7 @@ Extension routes are registered dynamically through `src/channels/web/http/exten
 | GET/HEAD | `/editor-vendor/*` | built-in route registration | authenticated | CodeMirror vendor asset route used by the lazy editor bundle. |
 | GET/HEAD | `/csv-viewer/*` | built-in route registration | authenticated | Same-origin CSV/TSV viewer that fetches file contents from `/workspace/raw`. |
 
-See `docs/extension-routes.md` for the author-facing registration API and security notes.
+See [extension routes](extension-routes.md) for the author-facing registration API and security notes. Family HTTP currently denies these dynamically dispatched routes.
 
 ## Media routes
 
@@ -158,19 +184,14 @@ See `docs/extension-routes.md` for the author-facing registration API and securi
 | GET | `/media/:id/info` | `dispatch-media.ts` | authenticated | n/a | none | JSON metadata |
 | GET | `/media/:id` | `dispatch-media.ts` | authenticated | n/a | none | binary/media response |
 
-## Remote interop routes
+## Add-on and widget-state routes
 
-These are **not** handled by the main web request router after guards; they are
-handled directly by `src/remote/service.ts`.
+| Method | Path | Guard / availability |
+|---|---|---|
+| GET/POST (registered methods only) | `/api/addons/<id>/*` | Package-owned external routes with add-on protocol authentication; family HTTP denies |
+| GET | `/api/state`, `/api/state/events` | Widget Bearer token; family HTTP denies |
 
-| Method | Path | Auth model | Protection model | Response style |
-|---|---|---|---|---|
-| POST | `/api/remote/pair-request` | remote interop protocol | feature flag + dedicated sliding-window limiter + nonce flow | JSON |
-| POST | `/api/remote/pair-confirm` | remote interop protocol | dedicated limiter + nonce flow | JSON |
-| POST | `/api/remote/revoke` | remote interop protocol | dedicated limiter + nonce validation | JSON |
-| GET | `/api/remote/ping` | remote interop protocol | dedicated limiter + signed request validation | JSON |
-| POST | `/api/remote/proposal` | remote interop protocol | dedicated limiter + signed request validation | JSON |
-| POST | `/api/remote/execute` | remote interop protocol | dedicated limiter + execute concurrency + signed request validation | JSON/operation result |
+Pairing and remote peer messaging belong to the installed Remote Peer add-on, not a core `/api/remote/*` implementation. See the [add-on runtime API](../../docs/addon-runtime-api.md#external-routes-api-v1) for registration, limits and ownership boundaries.
 
 ## Failure and replay semantics
 
@@ -198,8 +219,9 @@ This keeps the HTTP surface small while making the message-consumption semantics
 
 ## Response format observations
 
-### Dominant pattern
-The API is already more consistent than expected:
+### Response families
+
+The existing routes use these formats:
 
 - errors are usually JSON shaped as `{ error: string }`
 - simple mutations usually return a small JSON status payload
@@ -285,12 +307,12 @@ The main router uses these controls:
 - SSE chat scoping enforced at the broadcast layer
 - terminal websocket upgrade separately auth/origin-checked
 
-### Remote interop caveat
+### Separate-entry-point caveat
 
-`/api/remote/*` is a separate security domain. It uses protocol-specific validation instead of cookie authentication and CSRF checks.
+Add-on external routes and widget-state endpoints have their own authentication in single-user operation. Direct WebSocket upgrades are outside ordinary HTTP dispatch. Family HTTP denies unsupported routes, but complete ownership enforcement across upgrades, tools, queues and transports remains a release prerequisite.
 
 ## Follow-up candidates
 
 1. Continue evolving the `extension_ui_*` browser-event bridge into a richer first-class extension UI surface if needed.
-   - ticket: `workitems/00-inbox/extension-ui-sse-client-contract-gap.md`
+   - Track remaining work in [GitHub Issues](https://github.com/rcarmo/piclaw/issues), not the archived file-based board.
 2. Keep route inventory coverage in tests so newly added mutating endpoints do not skip classification.

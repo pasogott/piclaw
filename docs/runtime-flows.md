@@ -2,7 +2,9 @@
 
 Piclaw uses the following web-first authentication, message, agent, media, and lifecycle flows. [whatsapp.md](whatsapp.md) describes the WhatsApp channel.
 
-## Authentication flow (TOTP + passkeys)
+The flows below describe supported single-user operation unless marked **gated family backend**. Family/isolated startup is disabled; branch queues, tools, WebSocket upgrades and notification delivery still need full owner-context integration.
+
+## Authentication flow (single-user TOTP + passkeys)
 
 The web UI can be gated behind TOTP with optional WebAuthn passkeys. Passkeys are enrolled via the `/passkey enrol` slash command (after signing in with TOTP). The login page attempts passkeys automatically when supported and falls back to the TOTP form if none are available.
 
@@ -13,6 +15,21 @@ The web UI can be gated behind TOTP with optional WebAuthn passkeys. Passkeys ar
 - **Login**: passkey first (conditional mediation or first input focus), then TOTP fallback
 - **Multiple passkeys** are supported per user; manage with `/passkey list` and `/passkey delete`
 - Every TOTP card submission returns explicit feedback describing validation success/failure and any changes performed
+
+## Gated family backend flows
+
+These code paths are tested behind the startup gate, not available as a family deployment or complete browser workflow:
+
+1. Resolve the request principal from its account cookie; never derive identity from `chat_jid`, an internal secret or a caller-supplied username header.
+2. Select the current owned home when a target is omitted; reject explicit foreign, unknown or malformed targets. Validate the authoritative parent chain before reads/forks.
+3. Scope search in SQL before pagination. Bind SSE to the authorised chat and login; revalidate before delivery and every 30-second heartbeat. Unknown/global events are withheld.
+4. Fork captures a stable boundary, rechecks execution identity after asynchronous reads, then commits child registry and seed atomically. First-use hydration persists/reopens before clearing the seed; friendly rename uses the current stored handle.
+5. Account administration requires live role/login checks and recent authentication for mutations. Restricted TOTP invitations enable only the invited account after possession proof; they do not issue login cookies.
+6. Each account can register multiple passkeys through login/RP/Origin-bound, expiring, one-use ceremonies. Removing a key cannot remove the final factor permitted by current policy/RP.
+7. Another recently authenticated admin can reset an account into disabled/no-factor state and issue a restricted invitation, without changing conversation ownership.
+8. Startup auth maintenance prunes transient expiry after access validation and every minute. Confirmed factors/accounts/audit records are preserved.
+
+See [Access modes](multi-user/README.md) and the [HTTP inventory](../runtime/docs/web-api-endpoint-inventory.md#family-development-routes) for exact routes and unfinished work.
 
 ## Web UI → Agent → Web UI
 
@@ -244,7 +261,9 @@ The web UI now keeps a bounded cache of recent timeline snapshots and uses nearb
 
 This cache is browser-local performance state, not backend truth. It reduces visible latency when revisiting timelines or nearby threads.
 
-## Branch JID rename behavior
+## Branch JID rename behavior (single-user maintenance)
+
+This is distinct from a friendly handle rename. Family mode denies internal JID migration, merge and purge. Its separate owner-bound root creation, home selection and archive/restore routes preserve durable IDs and do not reuse this migration path; see [owned-session lifecycle](multi-user/README.md#owned-roots-home-selection-and-archiverestore).
 
 Chat JID rename/migration now treats descendants as any JID under `oldJid + ":"`, not only legacy `:branch:` forms.
 
