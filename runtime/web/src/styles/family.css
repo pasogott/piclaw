@@ -1,5 +1,7 @@
 :root { color-scheme: light dark; --bg: #fafafa; --surface: #fff; --text: #20242b; --muted: #596273; --border: #d4dae1; --accent: #175bb5; --error: #ad1d32; }
 @media (prefers-color-scheme: dark) { :root { --bg: #101318; --surface: #191e26; --text: #e8edf3; --muted: #a9b5c5; --border: #394252; --accent: #91bafa; --error: #ff9caa; } }
+:root[data-account-theme=light] { color-scheme: light; --bg: #fafafa; --surface: #fff; --text: #20242b; --muted: #596273; --border: #d4dae1; --accent: #175bb5; --error: #ad1d32; }
+:root[data-account-theme=dark] { color-scheme: dark; --bg: #101318; --surface: #191e26; --text: #e8edf3; --muted: #a9b5c5; --border: #394252; --accent: #91bafa; --error: #ff9caa; }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -68,6 +70,10 @@ textarea { resize: vertical; width: 100%; }
 #workspace-policy h2, #workspace-policy h3 { margin: 8px 0; }
 #workspace-policy li { margin: 8px 0; }
 #workspace-policy button, #open-workspace-policy { min-height: 44px; }
+#account-preferences { border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin: 16px 0; }
+#preferences-form { display: grid; gap: 8px; }
+#preferences-status { overflow-wrap: anywhere; }
+#account-preferences button, #account-preferences select, #open-preferences { min-height: 44px; }
 #administration-tools-list { border: 1px solid var(--border); margin: 12px 0; }
 #administration-tools-list label, #administration-tools-form > label { display: block; min-height: 44px; padding: 10px 0; }
 @media (max-width: 480px) { .family-shell { padding: 12px; } .session-controls label { flex-basis: 100%; } }

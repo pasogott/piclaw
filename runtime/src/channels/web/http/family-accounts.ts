@@ -18,6 +18,7 @@ import { readAdminSecurity, revokeAdminSecurity } from '../../../db/account-admi
 import { readAdminHome, assignAdminHome } from '../../../db/admin-home.js';
 import { readFamilyWorkspacePolicy } from '../../../db/family-workspace-policy.js';
 import { readAdminToolPolicy, updateAdminToolPolicy } from '../../../db/family-tool-restrictions.js';
+import { readOwnAccountPreferences, updateOwnAccountPreferences } from '../../../db/account-preferences.js';
 
 /** Account-only surface: never returns conversation content, tokens or factor secrets. */
 export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Request, principal: AuthenticatedPrincipal): Promise<Response | null> {
@@ -34,6 +35,10 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
     const db = getDb();
     const policy = { totp: channel.authGateway.createTotpContext().isTotpEnabled(), passkey: channel.authGateway.createWebauthnContext().isPasskeyEnabled(), rpId: resolveWebauthnRpInfo(req).rpId };
     if (method === "GET") {
+      if (path === '/account/preferences') {
+        if (new URL(req.url).search) return deny();
+        return channel.json(readOwnAccountPreferences(db, principal));
+      }
       const tools = path.match(/^\/admin\/users\/([a-zA-Z0-9_-]+)\/tools$/);
       if (tools) {
         if (new URL(req.url).search) return deny();
@@ -86,6 +91,10 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
     }
     const body = await req.json();
     if (!body || typeof body !== "object" || Array.isArray(body)) return channel.json({ error: "Invalid account request" }, 400);
+    if (path === '/account/preferences' && method === 'PATCH') {
+      if (new URL(req.url).search) return deny();
+      return channel.json(updateOwnAccountPreferences(db, principal, body));
+    }
     const tools = path.match(/^\/admin\/users\/([a-zA-Z0-9_-]+)\/tools$/);
     if (tools && method === 'PATCH') {
       if (new URL(req.url).search) return deny();

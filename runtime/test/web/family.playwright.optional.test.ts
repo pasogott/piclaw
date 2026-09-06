@@ -12,6 +12,7 @@ const posts = (content = "Alice private text") => ({ posts: [{ id: 1, timestamp:
 async function fixture(page: Page) {
   const state = { identity: principal(), calls: [] as Array<{ path: string; headers: Record<string, string>; body: any }> };
   await page.route("**/auth/me", route => route.fulfill({ json: state.identity }));
+  await page.route('**/account/preferences', route => route.fulfill({ json: { user_id: state.identity.principal.userId, preferences: { revision: 0, theme: 'system', response_guidance: '' }, defaults: { theme: 'system', response_guidance: '' }, can_edit: true } }));
   await page.route("**/agent/message-recovery?**", route => route.fulfill({ json: { state: 'idle' } }));
   await page.route("**/agent/branches", route => route.fulfill({ json: { branches: [{ chat_jid: "web:alice", root_chat_jid: "web:alice", agent_name: "home" }, { chat_jid: "web:alice-two", root_chat_jid: "web:alice-two", agent_name: "second" }] } }));
   await page.route("**/timeline?**", route => { state.calls.push({ path: route.request().url(), headers: route.request().headers(), body: null }); return route.fulfill({ json: posts() }); });
@@ -184,6 +185,86 @@ async function openAccount(page: Page) {
   await page.goto(base); await ready(page); await page.locator('#open-account').click();
   await page.waitForFunction(() => !(document.getElementById('account-details') as HTMLElement)?.hidden);
 }
+
+browserTest('account preferences load/apply theme, save revisioned guidance and reset defaults without browser storage', async () => {
+  const page = await browser.newPage({ viewport: { width: 375, height: 740 }, colorScheme: 'light' });
+  try {
+    await fixture(page); const value = { user_id: 'alice', preferences: { revision: 1, theme: 'dark', response_guidance: 'British English' }, defaults: { theme: 'system', response_guidance: '' }, can_edit: true };
+    const writes: any[] = [];
+    await page.route('**/account/preferences', route => {
+      if (route.request().method() === 'PATCH') { const body = route.request().postDataJSON(); writes.push({ body, headers: route.request().headers() }); value.preferences = { revision: value.preferences.revision+1, theme: body.theme, response_guidance: body.response_guidance }; }
+      return route.fulfill({ json: value });
+    });
+    await page.goto(base); await ready(page); expect(await page.locator('html').getAttribute('data-account-theme')).toBe('dark');
+    await page.locator('#open-preferences').click(); await page.waitForFunction(() => !(document.getElementById('preferences-form') as HTMLElement)?.hidden);
+    expect(await page.locator('#preferences-guidance').inputValue()).toBe('British English');
+    await page.locator('#preferences-theme').selectOption('light'); await page.locator('#preferences-guidance').fill('  Use concise bullets.  '); await page.locator('#save-preferences').click();
+    await page.waitForFunction(() => document.getElementById('preferences-status')?.textContent?.startsWith('Preferences saved'));
+    expect(writes[0].body).toEqual({ expected_revision: 1, theme: 'light', response_guidance: 'Use concise bullets.' });
+    expect(writes[0].headers['x-piclaw-account-id']).toBe('alice'); expect(writes[0].headers['x-piclaw-login-id']).toBe('login-a');
+    expect(await page.locator('html').getAttribute('data-account-theme')).toBe('light');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.reload(); await ready(page); expect(await page.locator('html').getAttribute('data-account-theme')).toBe('light');
+    await page.locator('#open-preferences').click(); await page.waitForFunction(() => !(document.getElementById('preferences-form') as HTMLElement)?.hidden);
+    await page.locator('#reset-preferences').click(); expect(writes).toHaveLength(1); await page.locator('#save-preferences').click();
+    await page.waitForFunction(() => !document.documentElement.hasAttribute('data-account-theme'));
+    expect(writes[1].body).toEqual({ expected_revision: 2, theme: 'system', response_guidance: '' });
+    expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('preference draft and theme clear on blur; late replacement-login saves never apply', async () => {
+  const page = await browser.newPage();
+  try {
+    const state = await fixture(page); const value = { user_id: 'alice', preferences: { revision: 1, theme: 'dark', response_guidance: 'Private preference' }, defaults: { theme: 'system', response_guidance: '' }, can_edit: true };
+    await page.route('**/account/preferences', route => route.fulfill({ json: value }));
+    await page.goto(base); await ready(page); await page.locator('#open-preferences').click(); await page.waitForFunction(() => !(document.getElementById('preferences-form') as HTMLElement)?.hidden);
+    await page.locator('#preferences-guidance').fill('UNSAVED_PRIVATE'); await page.evaluate(() => dispatchEvent(new Event('blur')));
+    expect(await page.locator('#preferences-guidance').inputValue()).toBe(''); expect(await page.locator('html').getAttribute('data-account-theme')).toBeNull();
+    await page.evaluate(() => dispatchEvent(new Event('focus'))); await page.waitForFunction(() => !(document.getElementById('preferences-form') as HTMLElement)?.hidden);
+    expect(await page.locator('#preferences-guidance').inputValue()).toBe('Private preference');
+    let release!: () => void, entered!: () => void; const held = new Promise<void>(r => release = r), waiting = new Promise<void>(r => entered = r);
+    await page.route('**/account/preferences', async route => { if (route.request().method() === 'PATCH') { entered(); await held; } await route.fulfill({ json: value }); });
+    await page.locator('#save-preferences').click(); await waiting; state.identity = principal('bob', 'new-login'); release();
+    await page.waitForFunction(() => document.getElementById('family-status')?.textContent?.includes('no longer bound'));
+    expect(await page.locator('#preferences-guidance').inputValue()).toBe(''); expect(await page.locator('html').getAttribute('data-account-theme')).toBeNull();
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('stale preference save requires explicit refresh and keeps dirty form out of polling updates', async () => {
+  const page = await browser.newPage();
+  try {
+    await fixture(page); let writes = 0;
+    await page.route('**/account/preferences', route => {
+      if (route.request().method() === 'PATCH') { writes++; return route.fulfill({ status: 400, json: {} }); }
+      return route.fulfill({ json: { user_id: 'alice', preferences: { revision: 2, theme: 'system', response_guidance: 'Server guidance' }, defaults: { theme: 'system', response_guidance: '' }, can_edit: true } });
+    });
+    await page.goto(base); await ready(page); await page.locator('#open-preferences').click(); await page.waitForFunction(() => !(document.getElementById('preferences-form') as HTMLElement)?.hidden);
+    await page.locator('#preferences-guidance').fill('Dirty guidance'); await page.locator('#refresh').click(); await ready(page);
+    expect(await page.locator('#preferences-guidance').inputValue()).toBe('Dirty guidance');
+    await page.locator('#save-preferences').click(); await page.waitForFunction(() => document.getElementById('preferences-status')?.textContent?.includes('No automatic retry'));
+    expect(writes).toBe(1); expect(await page.locator('#save-preferences').isDisabled()).toBe(true);
+    await page.locator('#refresh-preferences').click(); await page.waitForFunction(() => !(document.getElementById('save-preferences') as HTMLButtonElement)?.disabled);
+    expect(await page.locator('#preferences-guidance').inputValue()).toBe('Server guidance');
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('a different account starts with its own appearance and cannot inherit former guidance after reload', async () => {
+  const page = await browser.newPage();
+  try {
+    const state = await fixture(page);
+    await page.route('**/account/preferences', route => route.fulfill({ json: {
+      user_id: state.identity.principal.userId, preferences: { revision: 1, theme: state.identity.principal.userId === 'alice' ? 'dark' : 'light', response_guidance: state.identity.principal.userId === 'alice' ? 'ALICE_ONLY' : 'BOB_ONLY' }, defaults: { theme: 'system', response_guidance: '' }, can_edit: true,
+    } }));
+    await page.goto(base); await ready(page); await page.locator('#open-preferences').click(); await page.waitForFunction(() => !(document.getElementById('preferences-form') as HTMLElement)?.hidden);
+    expect(await page.locator('#preferences-guidance').inputValue()).toBe('ALICE_ONLY');
+    state.identity = principal('bob', 'login-b');
+    await page.route('**/agent/branches', route => route.fulfill({ json: { branches: [{ chat_jid: 'web:bob', root_chat_jid: 'web:bob', agent_name: 'home' }] } }));
+    await page.reload(); await ready(page); await page.locator('#open-preferences').click(); await page.waitForFunction(() => !(document.getElementById('preferences-form') as HTMLElement)?.hidden);
+    expect(await page.locator('html').getAttribute('data-account-theme')).toBe('light'); expect(await page.locator('#preferences-guidance').inputValue()).toBe('BOB_ONLY');
+    expect(await page.locator('#preferences-guidance').inputValue()).not.toContain('ALICE_ONLY');
+  } finally { await page.close(); }
+}, 20000);
 
 function workspacePolicyFixture(): FamilyWorkspacePolicy {
   return {

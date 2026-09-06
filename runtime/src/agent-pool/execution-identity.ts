@@ -6,6 +6,7 @@ import type { AuthenticatedPrincipal } from "../core/access-types.js";
 import { getUser } from "../db/users.js";
 import { resolveAuthorisedChat, ChatAccessDenied } from "../db/session-ownership.js";
 import { readFamilyToolPolicy } from '../db/family-tool-restrictions.js';
+import { readAccountPreferences } from '../db/account-preferences.js';
 
 const KINDS = ["interactive", "scheduled", "followup", "side-prompt", "dream", "delegate"];
 
@@ -37,6 +38,6 @@ export function authoriseExecutionIdentity(
     ...(provenance.authenticationSessionId ? {authenticationSessionId:provenance.authenticationSessionId} : {}),
   });
   return Object.freeze({provenance:snapshot,username:user.username,displayName:user.display_name,role:user.role,rootChatJid:target.rootChatJid,mode,
-    ...(mode === 'family-shared' ? { toolPolicy: readFamilyToolPolicy(database, user.id) } : {}),
+    ...(mode === 'family-shared' ? { toolPolicy: readFamilyToolPolicy(database, user.id), preferences: readAccountPreferences(database, user.id) } : {}),
   });
 }
