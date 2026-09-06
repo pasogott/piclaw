@@ -7,6 +7,7 @@ import type { WebChannelLike } from "../core/web-channel-contracts.js";
 import { checkCsrfOrigin, rateLimitResponse } from "./security.js";
 import { isRateLimited } from "./rate-limit.js";
 import { resolveWebauthnRpInfo } from "../auth/webauthn-challenges.js";
+import { AccountInvitations } from "../../../secure/account-invitations.js";
 
 /** Account-only surface: never returns conversation content, tokens or factor secrets. */
 export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Request, principal: AuthenticatedPrincipal): Promise<Response | null> {
@@ -28,6 +29,12 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
       return deny();
     }
     const policy = { totp: channel.authGateway.createTotpContext().isTotpEnabled(), passkey: channel.authGateway.createWebauthnContext().isPasskeyEnabled(), rpId: resolveWebauthnRpInfo(req).rpId };
+    const invitation = path.match(/^\/admin\/users\/([a-zA-Z0-9_-]+)\/invitation$/);
+    if (invitation) {
+      if (method === "DELETE") { new AccountInvitations(db).revoke(principal, invitation[1]!); return channel.json({ revoked: true }); }
+      if (method === "POST" && policy.totp) return channel.json(new AccountInvitations(db).issue(principal, invitation[1]!), 201);
+      return deny();
+    }
     if (method === "DELETE") {
       const session = path.match(/^\/account\/sessions\/([a-zA-Z0-9_-]+)$/);
       if (session) { revokeOwnSession(db, principal, session[1]!); return channel.json({ revoked: true }); }

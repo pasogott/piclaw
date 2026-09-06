@@ -21,6 +21,18 @@ export function initializeAuthFactorSchema(database: Database): void {
       attempts INTEGER NOT NULL DEFAULT 0,
       expires_at INTEGER NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS user_auth_invitations (
+      token_hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL UNIQUE REFERENCES users(id),
+      issuer_user_id TEXT NOT NULL REFERENCES users(id),
+      expires_at INTEGER NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('issued','claimed')),
+      browser_hash TEXT,
+      enrolment_hash TEXT,
+      origin TEXT,
+      created_at TEXT NOT NULL
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS idx_user_auth_invitation_expiry ON user_auth_invitations(expires_at);
     CREATE TABLE IF NOT EXISTS user_auth_attempts (
       bucket TEXT PRIMARY KEY,
       count INTEGER NOT NULL,

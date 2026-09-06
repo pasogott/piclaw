@@ -57,7 +57,7 @@ export class UserAuthFactors {
   }
 
   /** Caller must authorise a restricted enrolment ceremony. Returns a new seed once for QR rendering. */
-  async beginEnrolment(userId: string): Promise<{ token: string; secret: string; expiresAt: number }> {
+  async beginEnrolment(userId: string, authoriseWrite?: () => void): Promise<{ token: string; secret: string; expiresAt: number }> {
     if (!this.database.query("SELECT 1 FROM users WHERE id=?").get(userId)) throw new Error("Unknown enrolment account.");
     if (this.database.query("SELECT 1 FROM user_totp_factors WHERE user_id=?").get(userId)) throw new Error("Existing factor requires explicit authenticated reset.");
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -66,6 +66,7 @@ export class UserAuthFactors {
     const encrypted = await this.encrypt(userId, secret);
     const expiresAt = this.now() + 5 * 60_000;
     this.database.transaction(() => {
+      authoriseWrite?.();
       if (!this.database.query("SELECT 1 FROM users WHERE id=?").get(userId)) throw new Error("Unknown enrolment account.");
       if (this.database.query("SELECT 1 FROM user_totp_factors WHERE user_id=?").get(userId)) throw new Error("Existing factor requires explicit authenticated reset.");
       this.database.query(`INSERT INTO user_totp_enrolments(token_hash,user_id,ciphertext,salt,nonce,expires_at)
@@ -76,7 +77,7 @@ export class UserAuthFactors {
   }
 
   /** Confirm possession and consume the token atomically; this does not enable the account. */
-  async confirmEnrolment(userId: string, token: string, code: string): Promise<boolean> {
+  async confirmEnrolment(userId: string, token: string, code: string, finalise?: () => void): Promise<boolean> {
     const tokenHash = hashToken(token);
     this.database.query("DELETE FROM user_totp_enrolments WHERE expires_at<=?").run(this.now());
     const row = this.database.query(`UPDATE user_totp_enrolments SET attempts=attempts+1
@@ -93,6 +94,8 @@ export class UserAuthFactors {
       if (consumed.changes !== 1) return false;
       this.database.query("INSERT INTO user_totp_factors(user_id,ciphertext,salt,nonce,revision,last_used_step,created_at) VALUES (?,?,?,?,?,?,?)")
         .run(userId,row.ciphertext,row.salt,row.nonce,createUuid("factor"),step,new Date(this.now()).toISOString());
+      // Optional server-owned completion runs inside the same transaction; failure restores the factor/token.
+      finalise?.();
       return true;
     }).immediate();
   }
