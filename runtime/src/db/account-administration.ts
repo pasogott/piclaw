@@ -62,10 +62,11 @@ export function updateManagedAccount(database: Database, principal: Authenticate
       }
     }
     const updated = updateUser(database, userId, patch)!;
-    if (updated.enabled !== current.enabled || updated.role !== current.role) {
+    if (patch.enabled === false || updated.enabled !== current.enabled || updated.role !== current.role) {
       database.query("DELETE FROM web_sessions WHERE user_id=?").run(userId);
       database.query("DELETE FROM user_totp_enrolments WHERE user_id=?").run(userId);
       database.query("DELETE FROM webauthn_enrollments WHERE user_id=?").run(userId);
+      database.query("DELETE FROM user_auth_invitations WHERE user_id=? OR issuer_user_id=?").run(userId, userId);
     }
     return updated;
   }).immediate();
@@ -117,5 +118,6 @@ export function removeOwnFactor(database: Database, principal: AuthenticatedPrin
     database.query("DELETE FROM web_sessions WHERE user_id=?").run(user.id);
     database.query("DELETE FROM user_totp_enrolments WHERE user_id=?").run(user.id);
     database.query("DELETE FROM webauthn_enrollments WHERE user_id=?").run(user.id);
+    database.query("DELETE FROM user_auth_invitations WHERE user_id=? OR issuer_user_id=?").run(user.id, user.id);
   }).immediate();
 }

@@ -12,6 +12,7 @@ import { handleShellRoutes, type ServeStaticAsset } from "./dispatch-shell.js";
 import { enforceRequestGuards } from "./request-guards.js";
 import { getRouteFlags } from "./route-flags.js";
 import { handleFamilyAccountRoutes } from "./family-accounts.js";
+import { handleFamilyInvitationRoutes } from "./family-invitations.js";
 import { checkCsrfOrigin } from "./security.js";
 import { authoriseExecutionIdentity } from "../../../agent-pool/execution-identity.js";
 import { withExecutionIdentity } from "../../../core/execution-context.js";
@@ -61,6 +62,8 @@ export async function handleFamilyRequest(channel: WebChannelLike, req: Request,
   const deny = () => channel.json({ error: "Session access denied." }, 403);
   if (!channel.authGateway.isAuthEnabled()) return channel.json({ error: "Family authentication unavailable." }, 503);
 
+  const invitation = await handleFamilyInvitationRoutes(channel, req);
+  if (invitation) return invitation;
   const principal = channel.authGateway.getPrincipal?.(req) ?? null;
   if (path === "/auth/me") return principalResponse(req, principal?.mode === "family-shared" ? principal : null);
 

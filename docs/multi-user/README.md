@@ -97,7 +97,7 @@ Missing `chat_jid` selects the current stored home; explicit empty, duplicate, u
 
 An SSE subscription retains a non-secret login ID and target, without retaining bearer cookies. Login expiry/revocation, disabled accounts, changed roles and invalid/archived parent chains close it before the next event. Idle clients are checked every 30 seconds. Only known chat-scoped event types matching the authorised target are delivered; no global broadcast event is approved yet. The connection handshake omits global UI preferences. Cancellation and revocation clear the heartbeat and remove the client. Already delivered/queued bytes cannot be recalled.
 
-Denied surfaces include add-on ingress/config APIs, widget state/snapshots, mutations other than fork/rename and the account methods below, E2E bootstrap, factor registration, media/uploads, workspace, exports, recordings, terminal/VNC, other agent controls/metadata, push and Settings. Each needs an explicit policy and target validation before being enabled. Tool/non-web boundaries, per-user browser state, device notification routing and complete route/resource inventory remain #1127 work. Single-user routing and unscoped SSE behaviour are unchanged.
+Denied surfaces include add-on ingress/config APIs, widget state/snapshots, mutations other than fork/rename and the account methods below, E2E bootstrap, general factor registration, media/uploads, workspace, exports, recordings, terminal/VNC, other agent controls/metadata, push and Settings. Each needs an explicit policy and target validation before being enabled. Tool/non-web boundaries, per-user browser state, device notification routing and complete route/resource inventory remain #1127 work. Single-user routing and unscoped SSE behaviour are unchanged.
 
 ## Account-factor foundation
 
@@ -109,7 +109,7 @@ Multi-user TOTP selects one normalised username, strictly validates its six-digi
 
 WebAuthn discoverable login resolves the verified credential owner and checks its user handle, account state and current credential before issuing a cookie. Multi-user ceremonies require user verification and capture the expected origin. Registration requires same-account recent authentication and origin checks; it uses the user's immutable ID/username/display name and cannot overwrite an existing credential. Legacy single-user ceremony settings remain supported.
 
-Public invitation/reset routes, recovery, enrolment challenge/browser lifecycle hardening and Settings are unfinished. The account service below protects factor removal, but the legacy factor-management tools still need owner-bound integration before family execution. No mode is enabled by these internal methods. Back up the factor tables and bootstrap key together. Changing the bootstrap key currently requires an offline reviewed re-encryption/recovery procedure; automatic rotation and mixed-key ciphertext are unsupported.
+Reset/recovery routes, general WebAuthn enrolment lifecycle hardening and Settings are unfinished. The account service below protects factor removal, but the legacy factor-management tools still need owner-bound integration before family execution. No mode is enabled by these internal methods. Back up the factor tables and bootstrap key together. Changing the bootstrap key currently requires an offline reviewed re-encryption/recovery procedure; automatic rotation and mixed-key ciphertext are unsupported.
 
 ## Family account administration
 
@@ -128,7 +128,17 @@ All account operations re-read the login ID and enabled user/role. Mutations req
 
 Provisioning creates the disabled user, immutable `web:user:<id>` home, root ownership and owner-local `home` handle in one transaction. Enabling requires an active owned root and at least one currently configured factor (passkeys must match the current RP ID). Disable, enable and role transitions revoke all target logins and pending enrolments; changing profile labels leaves devices active. The last enabled administrator cannot be disabled or demoted. Factor removal rolls back if it would remove the last configured factor, and otherwise revokes all target devices/enrolments. These transactions do not grant administrators access to another user's sessions.
 
-Invitations and authentication recovery are separate work; these APIs cannot display or replace stored TOTP seeds and do not bootstrap factor enrolment. Full mode activation, migrated legacy factors, RP-specific UI inventory and stale in-memory WebAuthn ceremony invalidation need integration testing before release.
+These account APIs cannot display or replace stored TOTP seeds. Restricted invitations below bootstrap a new factor; authentication recovery is separate work. Full mode activation, migrated legacy factors, RP-specific UI inventory and stale in-memory WebAuthn ceremony invalidation need integration testing before release.
+
+## Restricted TOTP invitations
+
+POST `/admin/users/:id/invitation` requires recent administrator authentication and creates a 15-minute random grant for a disabled account with an owned home and no factors. DELETE at the same path revokes it. Only hashes are stored. Reissue invalidates the previous grant and pending TOTP enrolment. Explicit disable (even already disabled), role transitions and factor removal revoke affected issued grants; issuer demotion/disable prevents grant use.
+
+POST `/auth/invitation/claim` accepts only `{token}`. It requires matching browser Origin and a rate-limited client, but no account cookie. It consumes the claim before cryptography, returns the new seed and enrolment token once, and sets a five-minute HttpOnly/Secure/SameSite=Strict `piclaw_enrolment` cookie restricted to `/auth/invitation`. The persisted grant binds hashes of the browser cookie and enrolment token plus the origin. A lost claim response requires an administrator to issue another invitation.
+
+POST `/auth/invitation/confirm` accepts only `{token,enrolment_token,code}` and needs that cookie and origin. Five guesses are allowed by the underlying enrolment record. Verification rechecks the grant and account after asynchronous cryptography. One transaction inserts the factor, enables the same invited account, revokes any account logins and consumes the grant; failure rolls everything back. Success clears the enrolment cookie and requires an ordinary login. The invitation grants no account-role/profile changes, factor deletion or transcript access. Responses are private/no-store. TOTP-disabled/passkey-only policy cannot issue or redeem these TOTP invitations.
+
+The API has no invitation page or QR UI yet. Passkey-first invitations, reset/recovery, periodic expiry pruning and key rotation need separate implementation. Expired records are pruned on issue/claim and factor confirmation. General factor reset cannot reuse invitations for accounts with existing factors.
 
 ## Model identity foundation
 
