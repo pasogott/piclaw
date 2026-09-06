@@ -319,9 +319,9 @@ browserTest('bad authenticator code retains bounded setup for manual retry; repl
 async function adminFixture(page: Page) {
   const state = await fixture(page); state.identity.principal.role = 'admin'; state.identity.capabilities.manage_users = true;
   const snapshot: AdministrationSettings = { recent_auth: true, capabilities: { create_user: true }, users: [
-    { id: 'alice', username: 'alice', display_name: 'Alice', role: 'admin', enabled: true, invitation: 'none', capabilities: { disable: false, enable: false, change_role: false, invite: false, revoke_invitation: false, reset: false, inspect_security: false } },
-    { id: 'bob', username: 'bob', display_name: 'Bob', role: 'member', enabled: true, invitation: 'none', capabilities: { disable: true, enable: false, change_role: true, invite: false, revoke_invitation: false, reset: true, inspect_security: true } },
-    { id: 'pending', username: 'pending', display_name: 'Pending', role: 'member', enabled: false, invitation: 'none', capabilities: { disable: false, enable: false, change_role: true, invite: true, revoke_invitation: false, reset: true, inspect_security: true } },
+    { id: 'alice', username: 'alice', display_name: 'Alice', role: 'admin', enabled: true, invitation: 'none', capabilities: { disable: false, enable: false, change_role: false, invite: false, revoke_invitation: false, reset: false, inspect_security: false, assign_home: false } },
+    { id: 'bob', username: 'bob', display_name: 'Bob', role: 'member', enabled: true, invitation: 'none', capabilities: { disable: true, enable: false, change_role: true, invite: false, revoke_invitation: false, reset: true, inspect_security: true, assign_home: true } },
+    { id: 'pending', username: 'pending', display_name: 'Pending', role: 'member', enabled: false, invitation: 'none', capabilities: { disable: false, enable: false, change_role: true, invite: true, revoke_invitation: false, reset: true, inspect_security: true, assign_home: true } },
   ] };
   const mutations: { path: string; method: string; headers: Record<string, string>; body: any }[] = [];
   await page.route('**/admin/users/settings', route => route.fulfill({ json: snapshot }));
@@ -352,6 +352,69 @@ const adminSecurityFixture = () => ({ user: { id: 'bob', username: 'bob', displa
   factors: { totp: { enrolled: true, removable: false }, passkeys: [{ credential_id: 'bob-key', label: 'Security key', created_at: 'today', last_used_at: null, usable: true, removable: true }] },
   sessions: [{ session_id: 'bob-login', label: 'Tablet', auth_method: 'totp', created_at: 'today', expires_at: 'tomorrow' }],
 });
+
+const adminHomeFixture = () => ({ user: { id: 'bob', username: 'bob', enabled: true }, roots: [
+  { branch_id: 'bob-root', agent_name: 'home', current: true }, { branch_id: 'bob-second', agent_name: 'research', current: false },
+] });
+
+browserTest('admin home uses eligible server roots and exact confirmation without navigation or content links', async () => {
+  const page = await browser.newPage({ viewport: { width: 375, height: 740 } });
+  try {
+    await adminFixture(page); const snapshot = adminHomeFixture(), writes: any[] = [];
+    await page.route('**/admin/users/bob/home', route => {
+      if (route.request().method() === 'PATCH') { writes.push({ body: route.request().postDataJSON(), headers: route.request().headers() }); for (const root of snapshot.roots) root.current = root.branch_id === writes[0].body.branch_id; return route.fulfill({ json: { changed: true } }); }
+      return route.fulfill({ json: snapshot });
+    });
+    await openAdministration(page);
+    expect(await page.locator('#administration-users li').first().getByRole('button', { name: 'Home', exact: true }).isDisabled()).toBe(true);
+    const open = () => page.locator('#administration-users li').nth(1).getByRole('button', { name: 'Home', exact: true }).click();
+    await open(); await page.waitForFunction(() => document.querySelectorAll('#administration-home-roots li').length === 2);
+    expect(await page.locator('#administration-home-roots button').first().isDisabled()).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(await page.locator('#administration-home a').count()).toBe(0);
+    await page.locator('#administration-home-roots button').nth(1).click(); await page.locator('#administration-confirm').check();
+    expect(await page.locator('#submit-administration-action').isDisabled()).toBe(true);
+    expect(await page.locator('#administration-action-warning').textContent()).toContain('active runs');
+    await confirmAdministration(page, 'bob'); await page.waitForFunction(() => document.getElementById('administration-status')?.textContent === 'Account change saved.');
+    expect(writes[0].body).toEqual({ branch_id: 'bob-second', confirm_username: 'bob' }); expect(writes[0].headers['x-piclaw-account-id']).toBe('alice');
+    expect(await page.locator('#session-select').inputValue()).toBe('web:alice');
+    await open(); await page.waitForFunction(() => document.querySelectorAll('#administration-home-roots li').length === 2);
+    expect(await page.locator('#administration-home-roots button').nth(1).isDisabled()).toBe(true);
+    await page.locator('#close-administration-home').click(); expect(await page.locator('#administration-home-roots').textContent()).toBe('');
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('admin home late reads cannot revive roots after close or account replacement', async () => {
+  for (const action of ['close', 'login']) {
+    const page = await browser.newPage();
+    try {
+      const { state } = await adminFixture(page); let release!: () => void, entered!: () => void;
+      const held = new Promise<void>(r => release = r), waiting = new Promise<void>(r => entered = r);
+      await page.route('**/admin/users/bob/home', async route => { entered(); await held; await route.fulfill({ json: adminHomeFixture() }); });
+      await openAdministration(page); await page.locator('#administration-users li').nth(1).getByRole('button', { name: 'Home', exact: true }).click(); await waiting;
+      if (action === 'close') await page.locator('#close-administration').click(); else state.identity = principal('bob', 'new-login'); release();
+      if (action === 'login') await page.waitForFunction(() => document.getElementById('family-status')?.textContent?.includes('no longer bound')); else await page.waitForTimeout(100);
+      expect(await page.locator('#administration-home').isVisible()).toBe(false); expect(await page.locator('#administration-home-roots').textContent()).toBe('');
+    } finally { await page.close(); }
+  }
+}, 20000);
+
+browserTest('admin home empty eligibility and write denial do not cause fallback or automatic retry', async () => {
+  const page = await browser.newPage();
+  try {
+    await adminFixture(page); let empty = true, writes = 0;
+    await page.route('**/admin/users/bob/home', route => {
+      if (route.request().method() === 'PATCH') { writes++; return route.fulfill({ status: 403, json: {} }); }
+      return route.fulfill({ json: { ...adminHomeFixture(), roots: empty ? [] : adminHomeFixture().roots } });
+    });
+    await openAdministration(page); const open = () => page.locator('#administration-users li').nth(1).getByRole('button', { name: 'Home', exact: true }).click();
+    await open(); await page.waitForFunction(() => document.getElementById('administration-home-roots')?.textContent?.includes('No eligible'));
+    empty = false; await open(); await page.waitForFunction(() => document.querySelectorAll('#administration-home-roots button').length === 2);
+    await page.locator('#administration-home-roots button').nth(1).click(); await confirmAdministration(page, 'bob');
+    await page.waitForFunction(() => document.getElementById('administration-status')?.textContent?.includes('No automatic retry'));
+    expect(writes).toBe(1); expect(await page.locator('#session-select').inputValue()).toBe('web:alice');
+  } finally { await page.close(); }
+}, 20000);
 
 browserTest('admin security view confirms exact target revocation without changing current conversation', async () => {
   const page = await browser.newPage({ viewport: { width: 375, height: 740 } });
