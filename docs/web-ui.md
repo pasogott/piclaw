@@ -49,6 +49,8 @@ The tool list is a ceiling, not an active-tool inventory or general role profile
 
 Administrators have a separate Tool restrictions action for each account, including their own. Checked names are denied for new model runs; clearing a denial restores only tools already inside the preview ceiling. Saving requires the exact username, a checkbox and the last-read revision, preventing one editor from overwriting another. Policy and audit commit together. Active runs retain their frozen policy through recovery; changes do not cancel them. Browser account controls are unaffected, so restricting an administrator's model tools cannot lock out administration. Form state clears on close/blur/navigation and writes never auto-retry.
 
+The messages runner, chat directory registry, session control/inspection and session-status tool also check that run snapshot on direct invocation, before accessing data or calling runtime handlers. They revalidate live account/login/source ownership while retaining next-run policy semantics. General extension registration, filesystem-tool calls and other direct model/queue paths still need integrated enforcement; the preview remains gated.
+
 This preview is English-only. Avatar changes, container destination assignment, attachments, streaming and pagination are unfinished. Session merge, purge and full archive backup are unavailable. Shared/provider/deployment editors, complete setting/add-on classification and broader role/capability profiles are unfinished; single-user classic/visual Settings are unchanged. Chromium virtual-authenticator tests cover adding two independent keys; physical authenticator/device coverage is incomplete. The following sections describe the supported **single-user** UI.
 
 ## Chat and status surfaces

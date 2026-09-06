@@ -18,6 +18,7 @@ import { Type } from "typebox";
 import { readAccessConfig } from "../core/config-access.js";
 import { getChatJid } from "../core/chat-context.js";
 import { listCurrentOwnerSessions } from "../agent-pool/owned-session-target.js";
+import { requireFamilyToolAccess } from '../agent-pool/family-tool-access.js';
 import {
   getSessionIsolationLevel,
   setSessionIsolationLevel,
@@ -152,6 +153,8 @@ export const sessionStatus: ExtensionFactory = (pi: ExtensionAPI) => {
       ])),
     }),
     async execute(_toolCallId, params, _signal, _update, ctx) {
+      try { requireFamilyToolAccess('session_status'); }
+      catch { return { content: [{ type: 'text', text: 'Session access denied.' }], details: { error: 'access_denied', available: false, safe_to_restart: false } }; }
       const level = getSessionIsolationLevel();
 
       if (level === "full") {

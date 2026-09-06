@@ -17,6 +17,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { readAccessConfig } from "../core/config-access.js";
 import { listCurrentOwnerSessions, requireOwnedSource } from "../agent-pool/owned-session-target.js";
 import { resolveAuthorisedChat, ChatAccessDenied } from "../db/session-ownership.js";
+import { requireFamilyToolAccess } from '../agent-pool/family-tool-access.js';
 
 // Internal query scope; browser/model fields cannot populate or clear it.
 const ownedReadScope = new AsyncLocalStorage<readonly string[] | null>();
@@ -1677,8 +1678,9 @@ export function runMessagesTool(
   defaultChat: string = "web:default",
   postFn?: MessagePostFn,
 ): AgentToolResult<Record<string, unknown>> {
-  if (readAccessConfig().mode === "single-user") return ownedReadScope.run(null, () => runMessagesToolUnscoped(params, defaultChat, postFn));
   try {
+    requireFamilyToolAccess('messages');
+    if (readAccessConfig().mode === "single-user") return ownedReadScope.run(null, () => runMessagesToolUnscoped(params, defaultChat, postFn));
     const actor = requireOwnedSource();
     if (!["search", "get", "grep", "extract", "diff"].includes(params.action || "search")) return deniedMessages();
     const chats = listCurrentOwnerSessions().map(branch => branch.chat_jid);
