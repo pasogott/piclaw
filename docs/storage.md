@@ -18,6 +18,9 @@
 | `family_scheduled_grant_revocations` | Append-only owner/account/task revocation; disable/role changes, task edits and deletion cannot resurrect prior grants |
 | `family_scheduled_occurrences` | One internal reservation per grant, due-time/worker/attempt/version fence and hashed expiring lease; consumed reservations cannot replay |
 | `family_scheduled_occurrence_events` | Append-only claim/reclaim/renew/consume audit without prompts or lease tokens |
+| `family_scheduled_executions` | Immutable consumed-occurrence handoff, owner/service/target and label snapshot, prompt hash, tool ceiling and hashed 15-minute settlement capability |
+| `family_scheduled_results` | One immutable bounded text result per execution; exact retries acknowledge the same record |
+| `family_scheduled_execution_events` | Append-only begin/settle audit, committed with the corresponding state |
 | `task_run_logs` | Task run history |
 | `token_usage` | Per‑assistant‑message token + cost usage (includes model/provider/api for per‑model tracking) |
 | `tool_outputs` | Stored tool output summaries |

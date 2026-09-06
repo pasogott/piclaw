@@ -78,6 +78,19 @@ function narrow(row: Occurrence, grant: Grant): string[] {
   return snapshotTools(row).filter(name => grant.toolPolicy.allowed.includes(name));
 }
 
+/** Read a terminal reservation with full live grant and audit validation; never authorises a model call. */
+export function inspectConsumedFamilyScheduledOccurrence(database: Database, occurrenceId: string) {
+  return database.transaction(() => {
+    identifier(occurrenceId);
+    const ref = database.query("SELECT grant_id FROM family_scheduled_occurrences WHERE id=?").get(occurrenceId) as { grant_id: string } | null;
+    if (!ref) throw new ChatAccessDenied();
+    const now = timestamp(), grant = inspectFamilyScheduledGrant(database, ref.grant_id), row = readOccurrence(database, grant, now);
+    if (!row || row.state !== "consumed" || row.id !== occurrenceId) throw new ChatAccessDenied();
+    return Object.freeze({ ...grant, occurrenceId: row.id, attempt: row.attempt, version: row.version, consumedAt: row.updated_at,
+      allowedTools: Object.freeze(narrow(row, grant)) });
+  })();
+}
+
 /** Trusted internal reservation API only. No user/transport route and no execution side effects. */
 export function claimFamilyScheduledOccurrence(database: Database, grantId: string, workerId: string): FamilyScheduledLease {
   return database.transaction(() => {

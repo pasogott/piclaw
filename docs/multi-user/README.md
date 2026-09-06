@@ -378,11 +378,11 @@ Owner revocation is append-only and idempotent. Account disable or role changes,
 
 #### Internal occurrence reservations
 
-The internal occurrence API can reserve one due occurrence for a valid prepared grant. It uses server time, a 60-second lease and a random token whose SHA-256 hash is stored. Worker IDs are non-secret correlation labels of at most 32 lower-case letters, digits or hyphens, starting with a letter; possession of a valid current token is required for renewal or consumption. These functions are for trusted internal callers and have no user/transport route. They do not activate the paused task or create a runnable legacy scheduler occurrence.
+See [internal reservations](scheduled-execution.md#internal-occurrence-reservations) for the due-time check, 60-second lease, token rotation, policy narrowing and terminal consumption contract. These APIs leave tasks paused and do not authorise model execution or delivery.
 
-Claim, renewal, reclaim and consumption use immediate SQLite transactions with matching row/version checks and an atomic audit event. Renewal rotates the token and increments the version. Only expired, unconsumed reservations can be reclaimed; reclaim increments the attempt and version and replaces the token. Old workers/tokens cannot renew or consume. The first claim's tool ceiling can only narrow across renewals and reclaims, and consumption intersects it with the current grant policy. Every operation revalidates the live grant, owner, target and payload. Logout alone does not revoke it; account disable, explicit revocation and task changes do.
+#### Durable handoff and owner results
 
-Consumption is terminal: it clears the stored token hash and cannot be replayed or reclaimed, even if returning the result was interrupted. It returns validated task/owner/service data for future integration, with no model, tool or delivery call. A consumed reservation is still insufficient to pass family model admission. Execution/settlement handoff, result persistence and routing, operator recovery and process-kill verification remain prerequisites for dispatch. This reservation store does not provide exactly-once external effects.
+See [durable handoff and owner results](scheduled-execution.md#durable-handoff-and-owner-results) for atomic consumption-to-execution binding, the 15-minute settlement capability, exact retries and owner-only retrieval. Dispatcher integration, recovery, external delivery and process-kill proof remain incomplete.
 
 `startSchedulerLoop`, `pollScheduledRunsOnce` and `runScheduledTask` deny family and isolated modes, invalid access configuration and stale multi-user execution context before opening the scheduler store, claiming work or reading a task. Agent, shell and internal tasks use the same restriction. Queued work and lease-renewal callbacks check again before proceeding; single-user leases still renew while waiting in the queue.
 
