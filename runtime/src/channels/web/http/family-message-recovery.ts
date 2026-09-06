@@ -3,7 +3,7 @@ import type { WebChannelLike } from "../core/web-channel-contracts.js";
 import { getDb } from "../../../db/connection.js";
 import { requireAccountActor } from "../../../db/account-administration.js";
 import { ChatAccessDenied, resolveAuthorisedChat } from "../../../db/session-ownership.js";
-import { recoverFamilyMessage, readFamilyRecoveryStatus } from "../messaging/family-message-recovery.js";
+import { recoverFamilyMessage, readFamilyRecoveryStatus, dismissLegacyInput } from "../messaging/family-message-recovery.js";
 import { checkCsrfOrigin, rateLimitResponse } from "./security.js";
 import { isRateLimited } from "./rate-limit.js";
 import { createUuid } from "../../../utils/ids.js";
@@ -23,13 +23,13 @@ export async function handleFamilyMessageRecovery(channel: WebChannelLike, req: 
     const body = await req.json();
     if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some(key => !["chat_jid", "message_rowid", "request_id", "action"].includes(key))
       || typeof body.chat_jid !== "string" || !Number.isSafeInteger(body.message_rowid) || body.message_rowid <= 0
-      || typeof body.request_id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(body.request_id) || !["retry", "skip"].includes(body.action)) return channel.json({ error: "Invalid recovery request." }, 400);
+      || typeof body.request_id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(body.request_id) || !["retry", "skip", "dismiss-legacy"].includes(body.action)) return channel.json({ error: "Invalid recovery request." }, 400);
     requireAccountActor(getDb(), actor, { recent: true });
     const target = resolveAuthorisedChat(getDb(), actor, body.chat_jid, "session.write");
     let cancelled = req.signal.aborted;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let onAbort: (() => void) | undefined;
-    const result = await new Promise<ReturnType<typeof recoverFamilyMessage>>((resolve, reject) => {
+    const result = await new Promise<ReturnType<typeof recoverFamilyMessage> | ReturnType<typeof dismissLegacyInput>>((resolve, reject) => {
       onAbort = () => { cancelled = true; reject(new Error("Recovery request cancelled.")); };
       if (cancelled) { onAbort(); return; }
       req.signal.addEventListener("abort", onAbort, { once: true });
@@ -38,7 +38,9 @@ export async function handleFamilyMessageRecovery(channel: WebChannelLike, req: 
       channel.queue.enqueue(async () => {
         try {
           if (cancelled) return;
-          const recovered = recoverFamilyMessage(actor, { chatJid: target.chatJid, messageRowId: body.message_rowid, requestId: body.request_id, action: body.action });
+          const recovered = body.action==='dismiss-legacy'
+            ? dismissLegacyInput(actor,{chatJid:target.chatJid,messageRowId:body.message_rowid,requestId:body.request_id})
+            : recoverFamilyMessage(actor, { chatJid: target.chatJid, messageRowId: body.message_rowid, requestId: body.request_id, action: body.action });
           channel.resumeChat(target.chatJid);
           resolve(recovered);
         } catch (error) { reject(error); }

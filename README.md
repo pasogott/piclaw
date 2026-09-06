@@ -135,6 +135,7 @@ See [docs/development.md](docs/development.md).
 | Area | Docs |
 |---|---|
 | Getting started | [Configuration](docs/configuration.md), [Web UI](docs/web-ui.md), [Install from repo](docs/install-from-repo.md), [Access modes and implementation status](docs/multi-user/README.md) |
+| Family preview (startup gated) | [User guide](docs/multi-user/user-guide.md), [Administrator guide](docs/multi-user/administrator-guide.md), [Troubleshooting](docs/multi-user/troubleshooting.md), [Migration runbook](docs/multi-user/migration-copy.md), [Offline recovery](docs/multi-user/operator-recovery.md) |
 | Operations | [Azure VM deployment](docs/azure/README.md), [Azure OpenAI extension](docs/azure/azure-openai-extension.md), [Reverse proxy](docs/reverse-proxy.md), [Release process](docs/release.md) |
 | Runtime internals | [Architecture](docs/architecture.md), [Add-on runtime API](docs/addon-runtime-api.md), [Pipelined smart compaction](docs/pipelined-compaction.md), [Runtime flows](docs/runtime-flows.md), [Runtime stream sessions](docs/runtime-stream-sessions.md), [Storage model](docs/storage.md), [Observability](docs/observability.md) |
 | UI extension model | [Web pane extensions](docs/web-pane-extensions.md), [Extension UI contract](docs/extension-ui-contract.md), [Vendored widget libraries](docs/vendored-widget-libraries.md) |

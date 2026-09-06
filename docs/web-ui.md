@@ -17,6 +17,8 @@ An administrator can privately deliver `/auth/invitation#token=<grant>`. The pag
 
 ## Family text shell (gated)
 
+Step-by-step instructions: [user guide](multi-user/user-guide.md), [administrator guide](multi-user/administrator-guide.md) and [troubleshooting](multi-user/troubleshooting.md). These describe the implemented preview, not a supported family activation flow.
+
 The family router serves a separate shell rather than the classic or visual app. It selects the owned home on a fresh login, offers an owned-session picker and polls the most recent 100 text messages. Explicit foreign session links fail instead of silently selecting home. Text is rendered without HTML, rich blocks, add-ons, panes or legacy browser-storage imports. Unchanged manual send retries reuse an in-memory request ID; no automatic retry is performed.
 
 Requests include account/login pins derived from the authenticated principal. The server compares them with the cookie, and the client rechecks identity before rendering each response. A changed or revoked login clears the page and draft. Background tabs mask private UI until revalidation; pagehide and back/forward-cache restoration discard it. Sign out revokes only the original pinned login and does not overwrite a replacement cookie from another tab.
@@ -24,6 +26,8 @@ Requests include account/login pins derived from the authenticated principal. Th
 Before fetching private data, the shell unregisters existing origin service workers and deletes Cache Storage entries. If a worker still controls the page, it stops and asks the user to close other tabs and reload. This cannot repair a legacy worker that serves an old shell without reaching the server; origin/cache migration and old-tab integration evidence remain release gates. The shell does not read or write localStorage/sessionStorage or promise filesystem isolation.
 
 The shell polls metadata-only recovery status for the selected owned session. It shows retry/skip only for the oldest held input, requires explicit skip confirmation and reuses request IDs for unchanged manual retries. Recovery mutations still require authentication within five minutes; changing session/login clears the controls. Status reads reveal neither failure details nor prompt text.
+
+Migrated legacy holds have no current execution authority. Their controls hide Retry and offer only **Dismiss legacy input without running**, with confirmation. Dismissal leaves the old content/author intact and unblocks later queue entries; it does not submit a prompt or prefill compose. Review the old history and send a new supported plain-text message if you want it to run. Blur and account/session changes clear confirmation; unchanged manual dismissal retries retain their idempotency key.
 
 **My account** uses a live, owner-only GET `/account` snapshot for profile fields, factor metadata, signed-in devices and capability hints. It supports username/display-name changes, adding independent passkeys, eligible factor removal and device revocation. Sensitive actions require a sign-in within five minutes. Removing a factor signs out every device; a checkbox confirms that effect. The last usable factor cannot be removed. Current-site passkey usability and the current login are identified without exposing secrets.
 

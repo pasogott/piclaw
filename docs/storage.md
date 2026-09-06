@@ -33,6 +33,8 @@
 | `owned_fork_operations` | Owner/source/idempotency binding and captured JSON seed, committed with the child; `adopted_jsonl` migration seeds retain exact hash-checked child history until SDK import/persist/reopen; seed cleared only after persistence |
 | `message_execution_authorities` | Immutable admitted message/actor/owner/login IDs, content hash, thread and owner-local request key; no bearer token |
 | `message_recovery_authorities` | Append-only explicit retry/skip records with owner, input row ID, replacement login ID and idempotency key; original admission stays unchanged |
+| `migration_input_holds` | Copy-time owner/message/timestamp/content-hash holds for legacy unconsumed inputs; no login or executable admission; original messages remain unchanged |
+| `migration_input_dismissals` | Owner/recent-login/request-ID dismissal audit for the oldest held legacy input; row-specific dequeue filtering, no timestamp cursor advance or prompt execution |
 | `user_totp_factors` | Encrypted per-user TOTP seed, revision and last-used timestep; separate from keychain injection |
 | `user_totp_enrolments` | Hashed confirmation token, encrypted pending seed, attempt count and expiry |
 | `user_totp_registrations` | Self-service TOTP reservation bound to user, login and Origin; hashed token and five-minute expiry. Login deletion removes matching pending ciphertext through triggers |

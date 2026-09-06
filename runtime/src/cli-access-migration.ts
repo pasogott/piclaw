@@ -48,7 +48,7 @@ export async function handleAccessMigration(args:string[]):Promise<void> {
     try {const stat=fstatSync(planFd);if(!stat.isFile()||stat.size>1024*1024) throw new Error('Migration plan must be a regular file up to 1 MiB.');plan=JSON.parse(readFileSync(planFd,'utf8'));}finally{closeSync(planFd);}
     const {inventory}=validateAccessMigrationPlan(db,plan);
     const factorPlan=plan as {version:number;factor_policy?:{legacy_totp:string}};
-    const importsTotp=factorPlan.version===4&&factorPlan.factor_policy?.legacy_totp==='import-default';
+    const importsTotp=factorPlan.version>=4&&factorPlan.factor_policy?.legacy_totp==='import-default';
     if(importsTotp!==values.has('--legacy-totp-file'))throw new Error('Protected TOTP input must match an explicit version-four import-default plan.');
     const legacyTotp=importsTotp?await prepareLegacyTotpFile(db,values.get('--legacy-totp-file')!):undefined;
     if(readAccessMigrationInventory(db).snapshot!==inventory.snapshot)throw new Error('Source changed during factor preparation. Review a fresh preview.');
