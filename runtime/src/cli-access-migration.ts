@@ -7,6 +7,7 @@ import { acquireRuntimeLock } from './runtime/single-instance.js';
 import { createVerifiedSqliteBackup, verifySqliteBackup } from './db/backup.js';
 import { prepareAccessMigrationCopy, readAccessMigrationInventory, validateAccessMigrationPlan } from './db/access-migration-plan.js';
 import { captureChildAdoptions } from './db/access-child-adoption.js';
+import { prepareLegacyTotpFile } from './secure/legacy-totp-migration-file.js';
 
 function destination(path:string,source:string):string {
   const parent=realpathSync(dirname(resolve(path))),stat=lstatSync(parent), target=join(parent,basename(path));
@@ -17,10 +18,10 @@ function destination(path:string,source:string):string {
 }
 
 /** Offline metadata preview and copy-only preparation; never writes source ownership or activation. */
-export function handleAccessMigration(args:string[]):void {
+export async function handleAccessMigration(args:string[]):Promise<void> {
   const [action,...flags]=args;
   if (!['preview','prepare-copy'].includes(action??'')) throw new Error('Use access-migration preview|prepare-copy.');
-  const allowed=action==='preview'?['--output']:['--plan','--destination','--writers-stopped','--backup-set-confirmed','--confirm'];
+  const allowed=action==='preview'?['--output']:['--plan','--destination','--writers-stopped','--backup-set-confirmed','--confirm','--legacy-totp-file'];
   const values=new Map<string,string>();
   for(let i=0;i<flags.length;i++) {
     const flag=flags[i]!;if(!allowed.includes(flag)||values.has(flag)) throw new Error('Unknown or duplicate migration option.');
@@ -46,6 +47,11 @@ export function handleAccessMigration(args:string[]):void {
     let plan:unknown;
     try {const stat=fstatSync(planFd);if(!stat.isFile()||stat.size>1024*1024) throw new Error('Migration plan must be a regular file up to 1 MiB.');plan=JSON.parse(readFileSync(planFd,'utf8'));}finally{closeSync(planFd);}
     const {inventory}=validateAccessMigrationPlan(db,plan);
+    const factorPlan=plan as {version:number;factor_policy?:{legacy_totp:string}};
+    const importsTotp=factorPlan.version===4&&factorPlan.factor_policy?.legacy_totp==='import-default';
+    if(importsTotp!==values.has('--legacy-totp-file'))throw new Error('Protected TOTP input must match an explicit version-four import-default plan.');
+    const legacyTotp=importsTotp?await prepareLegacyTotpFile(db,values.get('--legacy-totp-file')!):undefined;
+    if(readAccessMigrationInventory(db).snapshot!==inventory.snapshot)throw new Error('Source changed during factor preparation. Review a fresh preview.');
     const children=(plan as {child_sessions?:unknown}).child_sessions ?? [];
     const adoptions=captureChildAdoptions(db,children,getWorkspaceDir(),join(getDataDir(),'sessions'));
     const version=(db.query('PRAGMA data_version').get() as {data_version:number}).data_version;
@@ -54,7 +60,7 @@ export function handleAccessMigration(args:string[]):void {
     copy=new Database(target,{readwrite:true,create:false,strict:true});copy.exec('PRAGMA journal_mode=DELETE; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=0;');
     const rechecked=captureChildAdoptions(db,children,getWorkspaceDir(),join(getDataDir(),'sessions'));
     if(JSON.stringify(rechecked)!==JSON.stringify(adoptions)) throw new Error('Child snapshots changed during copy preparation.');
-    const result=prepareAccessMigrationCopy(copy,plan,adoptions);copy.close();copy=undefined;verifySqliteBackup(target);
+    const result=prepareAccessMigrationCopy(copy,plan,adoptions,legacyTotp);copy.close();copy=undefined;verifySqliteBackup(target);
     success=true;console.log(JSON.stringify({...result,destination:target,warning:'Prepared copy cannot start. Source unchanged; activation, factor migration and unverified children remain gated.'}));
   } finally {
     try{copy?.close();db?.close();}finally{try{if(created&&!success)rmSync(created,{force:true});}finally{lock.release();}}

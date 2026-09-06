@@ -12,6 +12,8 @@ interface Ciphertext { ciphertext: Uint8Array; salt: Uint8Array; nonce: Uint8Arr
 interface Factor extends Ciphertext { user_id: string; revision: string; last_used_step: number }
 interface Enrolment extends Ciphertext { user_id: string; expires_at: number }
 export interface VerifiedTotp { userId: string; factorRevision: string; step: number }
+/** Internal migration value; contains ciphertext only, never the plaintext seed/proof. */
+export interface PreparedLegacyTotp extends Ciphertext { step: number; expiresAt: number }
 
 /** Reserve attempts before asynchronous crypto, bounding even parallel guesses. Success does not erase a reservation. */
 export function reserveUserAuthAttempt(database: Database, username: string, clientKey: string, now = Date.now()): boolean {
@@ -54,6 +56,27 @@ export class UserAuthFactors {
 
   private async decrypt(row: Ciphertext & {user_id: string}): Promise<string> {
     return decoder.decode(await crypto.subtle.decrypt({name:"AES-GCM",iv:asBuffer(row.nonce),additionalData:encoder.encode(`piclaw:user-totp:v1:${row.user_id}`)},await this.key(row.salt),asBuffer(row.ciphertext)));
+  }
+
+  /** Offline copy migration only. Do not infer the seed from global configuration or assign it to another account. */
+  async prepareLegacyDefaultMigration(secret: string, code: string): Promise<PreparedLegacyTotp> {
+    if (!/^[A-Z2-7]{16,128}$/.test(secret) || !/^\d{6}$/.test(code)) throw new Error('Invalid legacy factor proof.');
+    if (!this.database.query("SELECT 1 FROM users WHERE id='default'").get()
+      || this.database.query("SELECT 1 FROM user_totp_factors WHERE user_id='default'").get()) throw new Error('Legacy default factor already exists or account is missing.');
+    const step = matchTotpStep(secret, code, this.now());
+    if (step === null) throw new Error('Invalid legacy factor proof.');
+    const encrypted = await this.encrypt('default', secret);
+    if (matchTotpStep(secret, code, this.now()) !== step) throw new Error('Legacy factor proof expired during encryption.');
+    return { ...encrypted, step, expiresAt: this.now()+5*60_000 };
+  }
+
+  /** Caller owns copy-only transaction and revalidated plan. No account activation, replacement or login. */
+  commitLegacyDefaultMigration(value: PreparedLegacyTotp): void {
+    if (!Number.isSafeInteger(value.step) || value.step<0 || !Number.isFinite(value.expiresAt) || value.expiresAt<=this.now()
+      || value.expiresAt>this.now()+5*60_000 || value.salt.byteLength!==16 || value.nonce.byteLength!==12 || value.ciphertext.byteLength<32
+      || !this.database.query("SELECT 1 FROM users WHERE id='default'").get()) throw new Error('Invalid or expired prepared legacy factor.');
+    this.database.query('INSERT INTO user_totp_factors(user_id,ciphertext,salt,nonce,revision,last_used_step,created_at) VALUES (?,?,?,?,?,?,?)')
+      .run('default',value.ciphertext,value.salt,value.nonce,createUuid('factor'),value.step,new Date(this.now()).toISOString());
   }
 
   /** Caller must authorise a restricted enrolment ceremony. Returns a new seed once for QR rendering. */

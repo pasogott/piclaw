@@ -57,6 +57,7 @@ Offline ownership migration preparation (source unchanged; copy cannot start):
   piclaw access-migration prepare-copy --plan <reviewed-plan.json> --destination <new-copy.sqlite>
     --writers-stopped --backup-set-confirmed --confirm "PREPARE OWNERSHIP COPY"
   Review inventory.plan and fill every owner ID explicitly. Save only that plan object for prepare-copy.
+  Version-four import-default TOTP plans also require --legacy-totp-file <private-secret-and-code.json>.
 `;
 
 /** Read the version string from package.json. */
@@ -257,7 +258,7 @@ export async function handleCliOptions(args = process.argv.slice(2)): Promise<bo
 
   const commandArgs = consumeLeadingGlobalOptions(args);
   if (commandArgs[0] === 'access-migration') {
-    try { const { handleAccessMigration } = await import('./cli-access-migration.js'); handleAccessMigration(commandArgs.slice(1)); }
+    try { const { handleAccessMigration } = await import('./cli-access-migration.js'); await handleAccessMigration(commandArgs.slice(1)); }
     catch { console.error('Migration copy preparation failed. Check offline locking, source topology, reviewed snapshot/mappings and new private destination. Source is unchanged; no activation was attempted.'); process.exitCode = 1; }
     return true;
   }
