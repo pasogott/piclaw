@@ -204,8 +204,22 @@ select.addEventListener('change', () => { void switchSession(select.value); });
 home.addEventListener('click', () => { if (api) void switchSession(api.identity.homeChatJid); });
 refresh.addEventListener('click', () => { error.textContent = ''; void loadTimeline(); });
 addEventListener('blur', () => { paused = true; mask(); });
-addEventListener('focus', () => { paused = false; void loadTimeline(); });
-document.addEventListener('visibilitychange', () => { if (document.hidden) { paused = true; mask(); } else { paused = false; void loadTimeline(); } });
+async function resumeVisiblePage(): Promise<void> {
+  paused = false;
+  if (!busy) { await loadTimeline(); return; }
+  if (!api || stopped || document.hidden) return;
+  // Cancellation must remain reachable after focus loss even while another mutation holds the shell lock.
+  // Revalidate only the account, not the busy conversation; leave all other private UI masked.
+  const expected = generation;
+  try {
+    await api.verifyIdentity();
+    if (!stopped && !paused && !document.hidden && expected === generation) results?.resume();
+  } catch (failure) {
+    if (!stopped && !paused && !document.hidden && expected === generation) error.textContent = (failure as Error).message;
+  }
+}
+addEventListener('focus', () => { void resumeVisiblePage(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { paused = true; mask(); } else { void resumeVisiblePage(); } });
 addEventListener('pagehide', invalidate);
 addEventListener('pageshow', event => { if ((event as PageTransitionEvent).persisted) invalidate(); });
 
