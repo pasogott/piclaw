@@ -49,11 +49,17 @@
         <section class="account-section" aria-labelledby="account-devices-heading">
           <h3 id="account-devices-heading">Signed-in devices</h3><ul id="account-sessions" class="account-list"></ul>
         </section>
+        <form id="account-label-form" class="account-section" hidden>
+          <h3 id="account-label-title"></h3>
+          <p>Names are personal display labels, not verified device identities. Duplicate names are allowed; the exact ID still identifies the item. Device names belong to this login and disappear when it is revoked or expires.</p>
+          <label for="account-label">Name (up to 80 characters; blank clears it)</label><input id="account-label" type="text" autocomplete="off" />
+          <button id="account-label-save" type="submit">Save name</button><button id="account-label-cancel" type="button">Cancel name change</button>
+        </form>
         <section id="account-confirmation" class="account-section" aria-label="Confirm account change" hidden>
           <p id="account-confirm-text"></p><label><input id="account-confirm-check" type="checkbox" /> I understand and confirm this change</label>
           <button id="account-confirm-action" type="button" disabled>Confirm change</button><button id="account-cancel-action" type="button">Cancel</button>
         </section>
-        <p class="notice">Avatar changes and device/passkey names are not available in this preview. Administrators have a separate account-management panel.</p>
+        <p class="notice">Avatar changes are not available in this preview. Administrators have a separate account-management panel.</p>
       </div>
     </section>
     <section id="session-settings" aria-labelledby="session-settings-heading" hidden>

@@ -31,7 +31,7 @@ Family mode is intended for trusted household members. Users with arbitrary shel
 | Area | Implemented and tested | Not yet complete |
 |---|---|---|
 | Modes and migration (#1123/#1126/#1133) | Strict config/marker checks, read-only topology preview, explicit root/handle adoption helpers | Complete migration/rollback tooling, existing-child seed adoption, activation gates |
-| Accounts and factors (#1124/#1125) | Disabled account + owned home provisioning, live/recent-login admin checks, own-device/factor APIs, login-bound self TOTP enrolment and multiple passkeys | Avatar and factor/device names, offline lone-admin recovery, passkey-first invitations/reset, owner-aware replacement for disabled legacy factor commands |
+| Accounts and factors (#1124/#1125) | Disabled account + owned home provisioning, live/recent-login admin checks, own-device/factor APIs and names, login-bound self TOTP enrolment and multiple passkeys | Avatar, offline lone-admin recovery, passkey-first invitations/reset, owner-aware replacement for disabled legacy factor commands |
 | Invitations/recovery (#1125) | One-use browser-bound TOTP grants, atomic enrol-and-enable, explicit other-admin reset, fragment-based invitation/QR page and gated admin issuance/reset confirmation UI | Physical-device and full account browser workflows, passkey-first invitations/reset |
 | Sessions (#1126/#1128) | Root ownership, owner-local names, atomic forks/rename, additional roots, home selection and idle archive/restore; owned lifecycle browser controls | Merge/purge, full archive backup, process-kill recovery proof |
 | HTTP and SSE (#1127) | Terminal family HTTP policy, SQL-scoped search, own-thread reads, revocable SSE, text-only persisted message admission, selected account/fork routes, separate pinned text browser shell | Uploads and remaining derived resources/mutations, direct WebSocket/transport/tool paths, legacy-origin migration and push recipients |
@@ -185,6 +185,7 @@ Account reads recheck the login ID and enabled user/role. Mutations require a ma
 | PATCH `/account/home` | Recent account owner selects an active owned root; no other device's explicit target is rewritten |
 | GET `/account/sessions` | Current owner's login metadata, excluding bearer material |
 | DELETE `/account/sessions/:sessionId` | Revoke own device; foreign/missing IDs have the same response and no effect |
+| PATCH `/account/sessions/:sessionId` or `/account/factors/passkey/:credentialId` | Recent self changes only `{label}` on an exact owned item; labels never select identity or authority |
 | GET `/account/factors` | Own TOTP presence and passkey metadata |
 | DELETE `/account/factors/totp` or `/account/factors/passkey/:credentialId` | Remove an own factor only if another factor permitted by configured auth policy remains |
 | POST/DELETE `/admin/users/:id/invitation` | Recent administrator issues/revokes a restricted TOTP enrolment grant |
@@ -198,6 +199,10 @@ GET `/account` returns `{user,recent_auth,capabilities,factors,sessions}` from o
 
 The gated shell's **My account** panel changes username/display name, adds independent passkeys, removes eligible factors and revokes owned logins. Destructive actions require a checked confirmation. Removing a factor signs out every account device and clears the panel through identity invalidation. Existing TOTP seeds cannot be displayed or replaced. Account form drafts are discarded on blur, close, session switch and navigation; late responses cannot restore a different login's data. Native passkey dialogs may blur the page, so registration masks the panel and revalidates the original account/login before submitting the result. Closing the panel cancels native registration.
 
+Owned passkeys and logins can be named through PATCH with exactly `{label}`. The same recent-authentication, Origin and rate-limit checks apply. Labels allow up to 80 Unicode characters before trimming, reject control/format characters and line separators, and accept empty text to clear. Duplicate labels are display-only: all updates and removals still use exact immutable credential/login IDs with owner predicates. Admin role grants no right to label another account's items. Expired login targets deny. No credential key, counter, token, timestamp or login authority is changed.
+
+Schema migration adds `label TEXT NOT NULL DEFAULT ''` to both credential and login rows transactionally, preserving existing authentication data. Own-account snapshots and factor/device lists include the label; legacy single-user credential lookup and login flows are unchanged. Labels disappear with the underlying row and require no separate cleanup. Browser Name controls use the server `label_security_item` capability and render text safely; drafts clear with account-panel lifecycle events.
+
 GET `/account/trees` returns the live home, root-creation capability and owned root/fork/archive metadata. Per-row hints permit open/fork/rename on active chains, archive only outside the home with archived descendants, restore under active parents and recent-auth home selection on active roots. Hints do not reserve runtime state or a handle: the existing write paths recheck all authority and operation predicates. No model runtime is hydrated for this read, and administrators receive only their own trees.
 
 My sessions uses that snapshot with explicit targets, archive/home confirmations and stable manual fork retry keys. Successful changes refresh the owned picker without changing the open conversation. Closing/backgrounding clears forms; navigation uses the explicit Open/Go home controls. Root creation has no request key; an unchanged duplicate name fails uniqueness, so inspect the list after an uncertain result before choosing a new name. Fork form closure discards its retry key and also requires inspection before a new attempt.
@@ -206,7 +211,7 @@ GET `/admin/users/settings` returns `{recent_auth,capabilities,users}` in one re
 
 The gated Family administration panel creates disabled accounts, changes role/enablement, issues/revokes invitations and resets another account. Existing-account changes require an exact username plus a checkbox. Issued links are memory-only, displayed once without automatic clipboard writes/navigation, and cleared on blur, close, refresh, expiry, session switch or navigation. A late response cannot restore them; a lost result requires explicit revocation/reissue. Admin reset authority can replace another user's authentication, but does not open their conversations or run a model as them.
 
-Restricted invitations below bootstrap a new account's TOTP factor; administrator-assisted reset is described separately. Avatar changes, device/passkey labels, individual administrator device/factor revocation, admin home/destination assignment and offline lone-administrator recovery are not implemented. Full mode activation, migrated legacy factors and legacy WebAuthn tool/ceremony isolation need integration testing before release.
+Restricted invitations below bootstrap a new account's TOTP factor; administrator-assisted reset is described separately. Avatar changes, individual administrator device/factor revocation, admin home/destination assignment and offline lone-administrator recovery are not implemented. Full mode activation, migrated legacy factors and legacy WebAuthn tool/ceremony isolation need integration testing before release.
 
 ## Self-service authenticator enrolment
 
@@ -246,7 +251,7 @@ POST `/account/passkeys/register/start` accepts an empty object and requires rec
 
 POST `/account/passkeys/register/finish` accepts `{token,credential}`. The same account/login/origin must consume the grant before verification; failed proofs and replay require a new ceremony. After cryptographic verification, the service rechecks current login/account status and expiry, then inserts the credential without replacement. No new login cookie is issued. Role/enable changes, own-device revocation and factor removal clear affected pending registrations. A second login on the same account cannot complete the first browser's ceremony.
 
-Tests use real P-256/COSE keys, CBOR registration attestation and signed login assertions for two credentials. Passkey-first invitations, credential-label UI, physical authenticator browser tests and offline recovery are still unfinished. Legacy single-user ceremony routes are unchanged; the family account endpoints use the separate durable flow above.
+Tests use real P-256/COSE keys, CBOR registration attestation and signed login assertions for two credentials. Passkey-first invitations, physical authenticator browser tests and offline recovery are still unfinished. Legacy single-user ceremony routes are unchanged; the family account endpoints use the separate durable flow above.
 
 ## Authentication maintenance
 

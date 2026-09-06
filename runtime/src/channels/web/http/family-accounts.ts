@@ -13,6 +13,7 @@ import { resetFamilyAccount } from "../../../secure/account-recovery.js";
 import { selectOwnedHome, readOwnedSessionSettings } from "../../../db/owned-session-lifecycle.js";
 import { FamilyTotp } from '../../../secure/family-totp.js';
 import { generateTotpQr } from '../../../utils/totp-qr.js';
+import { labelOwnSecurityItem } from '../../../db/account-security-labels.js';
 
 /** Account-only surface: never returns conversation content, tokens or factor secrets. */
 export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Request, principal: AuthenticatedPrincipal): Promise<Response | null> {
@@ -62,6 +63,14 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
     }
     const body = await req.json();
     if (!body || typeof body !== "object" || Array.isArray(body)) return channel.json({ error: "Invalid account request" }, 400);
+    if (method === 'PATCH') {
+      const session = path.match(/^\/account\/sessions\/([a-zA-Z0-9_-]+)$/);
+      const passkey = path.match(/^\/account\/factors\/passkey\/([a-zA-Z0-9_-]+)$/);
+      if (session || passkey) {
+        if (new URL(req.url).search || Object.keys(body).length !== 1 || !Object.hasOwn(body, 'label')) return deny();
+        return channel.json({ label: labelOwnSecurityItem(db, principal, session ? 'session' : 'passkey', (session ?? passkey)![1]!, body.label) });
+      }
+    }
     if (method === 'POST' && ['/account/totp/start', '/account/totp/confirm', '/account/totp/cancel'].includes(path)) {
       if (!policy.totp) return deny();
       const service = new FamilyTotp(db), origin = req.headers.get('origin')!;

@@ -3,7 +3,7 @@
 Piclaw ships with a single-user streaming web UI that combines chat, workspace,
 editor, terminal, viewers, and lightweight control surfaces in one app.
 
-This page describes the supported single-user UI and gated [family development work](multi-user/README.md). Startup still rejects family and isolated modes. A restricted invitation/QR page, mode-aware login, separate text shell and personal/session/administration panels are implemented behind that gate. Passkey labels, remaining Settings and the complete browser workflow need integration before deployment is supported. Do not treat the single-user session picker or multiple browser tabs as separate user accounts.
+This page describes the supported single-user UI and gated [family development work](multi-user/README.md). Startup still rejects family and isolated modes. A restricted invitation/QR page, mode-aware login, separate text shell and personal/session/administration panels are implemented behind that gate. Remaining Settings and the complete browser workflow need integration before deployment is supported. Do not treat the single-user session picker or multiple browser tabs as separate user accounts.
 
 ## Login
 
@@ -27,6 +27,8 @@ The shell polls metadata-only recovery status for the selected owned session. It
 
 The panel discards account form drafts on blur, close, session switch and navigation. Passkey prompts may temporarily blur it; the original login is rechecked before a credential is submitted. Native registration is cancelled on close/navigation. Failed writes are never automatically retried. Same-account label changes update the shell without changing account/login pins.
 
+Each owned passkey and signed-in device has a Name control, enabled by the server only for recent authentication. Names are plain-text display labels of up to 80 Unicode characters; whitespace is trimmed, controls/format characters are rejected, and blank clears the label. Duplicate names are allowed. Exact credential/login IDs remain visible and select every operation; labels never grant authority or verify a device's identity. A device label belongs to that login and disappears on expiry/revocation; a new login starts unnamed. Naming does not replace credentials, change counters or revoke logins.
+
 Add authenticator starts a five-minute, login-bound TOTP ceremony when permitted by server policy and no factor already exists. The new QR/manual key appears once; confirm a six-digit code from the authenticator to add it without changing existing passkeys or logins. There are at most five code attempts. Cancel deletes the pending setup. Blur, close, refresh, expiry and navigation erase displayed secrets; closing alone does not send a cancellation request. A lost start response needs a new explicit setup, which supersedes the previous pending one. No stored TOTP seed can be displayed or overwritten.
 
 **My sessions** lists owned roots, forks and archives with server-provided action eligibility. It supports root creation, fork, friendly rename, home selection, archive and restore. Archive and home changes require a checked confirmation. Archive retains history/files and requires an idle session with archived descendants; restore requires active parents and an available handle. A fork uses a stable request ID for unchanged manual retries while its form stays open. Closing or backgrounding the panel discards that form and its retry key; check the refreshed list before issuing a new operation. No writes are automatically retried.
@@ -37,7 +39,7 @@ These controls never silently navigate to a new root, fork or home. Use Open or 
 
 An issued invitation link appears once in a read-only field, with no automatic clipboard write or navigation. Blur, close, refresh, expiry, session switch and navigation erase it. Clearing the display does not revoke the grant. Late responses cannot restore a cleared link; lost results require explicit revocation/reissue. Server capabilities account for recent authentication, last-enabled-admin protection, owned home and current-site factor policy; writes independently recheck these conditions.
 
-This preview is English-only. Avatar changes, passkey/device labels, individual administrator device/factor revocation, admin home/destination assignment, attachments, streaming and pagination are unfinished. Session merge, purge and full archive backup are unavailable. Shared/provider/deployment Settings and single-user classic/visual Settings are unchanged. Chromium virtual-authenticator tests cover adding two independent keys; physical authenticator/device coverage is incomplete. The following sections describe the supported **single-user** UI.
+This preview is English-only. Avatar changes, individual administrator device/factor revocation, admin home/destination assignment, attachments, streaming and pagination are unfinished. Session merge, purge and full archive backup are unavailable. Shared/provider/deployment Settings and single-user classic/visual Settings are unchanged. Chromium virtual-authenticator tests cover adding two independent keys; physical authenticator/device coverage is incomplete. The following sections describe the supported **single-user** UI.
 
 ## Chat and status surfaces
 

@@ -38,6 +38,8 @@ textarea { resize: vertical; width: 100%; }
 #account-totp-qr { max-width: 100%; height: auto; background: white; }
 #account-totp-secret { overflow-wrap: anywhere; }
 #account-totp-form { display: grid; gap: 8px; }
+#account-label-form { display: grid; gap: 8px; }
+#account-label { width: 100%; min-width: 0; }
 #session-settings { border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin: 16px 0; }
 #session-settings h2, #session-settings h3 { margin: 8px 0; }
 #session-settings-status, #session-home { overflow-wrap: anywhere; }

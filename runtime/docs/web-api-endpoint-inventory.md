@@ -86,6 +86,7 @@ These exact routes are implemented in `http/family-authorisation.ts`, `http/fami
 | PATCH | `/account` | Recent self; username/displayName only | `{user}` |
 | GET | `/account/sessions` | Current self | `{sessions}` without bearer material |
 | DELETE | `/account/sessions/:sessionId` | Recent self; foreign/missing IDs have no effect | `{revoked:true}` |
+| PATCH | `/account/sessions/:sessionId`, `/account/factors/passkey/:credentialId` | Recent self, matching Origin; exactly `{label}`; query selectors denied | `{label}`; trim whitespace, max 80 Unicode characters, reject controls/format characters; empty clears; foreign/absent/expired login targets deny |
 | GET | `/account/factors` | Current self | `{totp,passkeys}` metadata |
 | DELETE | `/account/factors/totp`, `/account/factors/passkey/:credentialId` | Recent self; protect last usable factor for current policy/RP | `{removed:true}`; revoke target logins/ceremonies |
 | POST | `/admin/users/:id/invitation` | Recent administrator; disabled owned-home account without factors; TOTP enabled | 201 `{token,expiresAt}`, grant returned once |

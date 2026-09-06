@@ -23,6 +23,7 @@ import { initializeSessionHandleSchema } from "./session-handles.js";
 import { initializeOwnedForkSchema } from "./owned-forks.js";
 import { initializeMessageAuthoritySchema } from "./message-authority-schema.js";
 import { initializeAuthFactorSchema } from "./auth-factors-schema.js";
+import { initializeAuthLabelsSchema } from "./auth-labels-schema.js";
 import fs from "fs";
 import path from "path";
 
@@ -949,6 +950,7 @@ export function initDatabase(): void {
   initializeOwnedForkSchema(db);
   initializeMessageAuthoritySchema(db);
   initializeAuthFactorSchema(db);
+  initializeAuthLabelsSchema(db);
   // The legacy live store historically runs without global FK enforcement.
   // EF-S07 uses a dedicated FK-enabled scheduler connection in production;
   // restore the caller's prior setting so unrelated legacy write paths retain
