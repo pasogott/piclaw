@@ -1,6 +1,6 @@
 import type Database from 'bun:sqlite';
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { dirname, resolve, sep } from 'node:path';
 import type { AuthenticatedPrincipal } from '../core/access-types.js';
 import { readAccessConfig } from '../core/config-access.js';
@@ -19,6 +19,10 @@ const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
 const json=(value:unknown)=>JSON.stringify(value).replaceAll('\u2028','\\u2028').replaceAll('\u2029','\\u2029');
 interface Row {rowid:number;message_id:string;chat_jid:string;root_chat_jid:string;content:string;timestamp:string;sender_name:string;is_bot_message:number}
 export interface FamilyDreamSnapshot {owner_user_id:string;generation:string;root:string;current_path:string;message_count:number;tree_count:number;days:string[]}
+export interface FamilyDreamProposalCapability {proposal_id:string;generation:string;token:string}
+interface ProposalGrant {owner:string;generation:string;tokenHash:string;baseHash:string|null;expiresAt:number;workspace:string;store:string;data:string;database:Database}
+const proposalGrants=new Map<string,ProposalGrant>();
+function pruneProposalGrants(now=Date.now()){for(const [id,grant] of proposalGrants)if(grant.expiresAt<=now)proposalGrants.delete(id);}
 
 function ensureDirectory(path:string):void {
   mkdirSync(path,{recursive:true,mode:0o700});
@@ -34,6 +38,66 @@ function atomic(path:string,content:string,validate:()=>void):void {
   finally{rmSync(temp,{force:true});}
 }
 function day(timestamp:string):string {const date=new Date(timestamp);if(!Number.isFinite(date.getTime())||date.toISOString()!==timestamp)throw new ChatAccessDenied();return timestamp.slice(0,10);}
+function readText(path:string,max:number):string|null {if(!existsSync(path))return null;const value=readFileSync(path,'utf8');if(!wellFormed(value)||value.includes('\0')||Buffer.byteLength(value)>max)throw new ChatAccessDenied();return value;}
+function parseObject(path:string,keys:string[]):Record<string,unknown>{const text=readText(path,64*1024);if(text===null)throw new ChatAccessDenied();let value:unknown;try{value=JSON.parse(text);}catch{throw new ChatAccessDenied();}if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==keys.length||Object.keys(value).some(k=>!keys.includes(k)))throw new ChatAccessDenied();return value as Record<string,unknown>;}
+function authority(database:Database,principal:AuthenticatedPrincipal,recent=true){if(readAccessConfig().mode!=='family-shared'||getExecutionIdentity()||database!==getDb())throw new ChatAccessDenied();return requireAccountActor(database,principal,{recent});}
+function ownerRoot(workspace:string,owner:string){if(!safeId(owner))throw new ChatAccessDenied();const root=resolve(workspace,'notes','users',owner,'dream');if(!root.startsWith(resolve(workspace,'notes','users')+sep))throw new ChatAccessDenied();return root;}
+function currentGeneration(database:Database,principal:AuthenticatedPrincipal){const actor=authority(database,principal),workspace=getWorkspaceDir(),root=ownerRoot(workspace,actor.id),pointer=parseObject(resolve(root,'current.json'),['version','generation','owner_user_id','manifest_sha256','generated_at']);
+  if(pointer.version!==1||pointer.owner_user_id!==actor.id||typeof pointer.generation!=='string'||!safeId(pointer.generation)||typeof pointer.manifest_sha256!=='string'||!/^[a-f0-9]{64}$/.test(pointer.manifest_sha256))throw new ChatAccessDenied();
+  const generation=resolve(root,'generations',pointer.generation),manifest=readText(resolve(generation,'manifest.json'),64*1024);if(manifest===null||hash(manifest)!==pointer.manifest_sha256)throw new ChatAccessDenied();return {actor,workspace,root,generation:generation,generationId:pointer.generation};}
+
+/** Issue a private short-lived output capability. No bearer material is persisted. */
+export function issueOwnFamilyDreamProposalCapability(database:Database,principal:AuthenticatedPrincipal):FamilyDreamProposalCapability{
+  pruneProposalGrants();
+  const current=currentGeneration(database,principal),proposalId=randomUUID(),token=randomBytes(32).toString('base64url'),memoryPath=resolve(current.workspace,'notes','users',current.actor.id,'MEMORY.md'),base=readText(memoryPath,256*1024);
+  proposalGrants.set(proposalId,{owner:current.actor.id,generation:current.generationId,tokenHash:hash(token),baseHash:base===null?null:hash(base),expiresAt:Date.now()+15*60_000,
+    workspace:current.workspace,store:getStoreDir(),data:getDataDir(),database});
+  return Object.freeze({proposal_id:proposalId,generation:current.generationId,token});
+}
+
+/** One-use model-output sink bound to a prepared owner generation. */
+export function stageFamilyDreamProposal(database:Database,capability:FamilyDreamProposalCapability,text:string){
+  if(!capability||Object.keys(capability).length!==3||!/^[a-f0-9-]{36}$/.test(capability.proposal_id)||!safeId(capability.generation)||typeof capability.token!=='string')throw new ChatAccessDenied();
+  pruneProposalGrants();const grant=proposalGrants.get(capability.proposal_id);if(!grant||grant.generation!==capability.generation)throw new ChatAccessDenied();
+  const actual=Buffer.from(hash(capability.token),'hex'),expected=Buffer.from(grant.tokenHash,'hex');if(actual.length!==expected.length||!timingSafeEqual(actual,expected))throw new ChatAccessDenied();
+  if(typeof text!=='string'||!text.trim()||text.includes('\0')||!wellFormed(text)||Buffer.byteLength(text)>64*1024)throw new ChatAccessDenied();
+  const workspace=getWorkspaceDir(),root=ownerRoot(workspace,grant.owner);
+  const validate=()=>{if(database!==grant.database||database!==getDb()||workspace!==grant.workspace||getStoreDir()!==grant.store||getDataDir()!==grant.data||getWorkspaceDir()!==grant.workspace||readAccessConfig().mode!=='family-shared')throw new ChatAccessDenied();};validate();
+  const lockPath=resolve(root,'.lock'),lockToken=randomUUID();let lockFd:number|undefined;
+  const validateCurrent=()=>{validate();const current=parseObject(resolve(root,'current.json'),['version','generation','owner_user_id','manifest_sha256','generated_at']);if(current.owner_user_id!==grant.owner||current.generation!==grant.generation)throw new ChatAccessDenied();};
+  try{lockFd=openSync(lockPath,'wx',0o600);writeFileSync(lockFd,JSON.stringify({pid:process.pid,token:lockToken,owner_user_id:grant.owner}));validateCurrent();
+  const proposals=resolve(root,'proposals'),proposalRoot=resolve(proposals,capability.proposal_id),stageRoot=resolve(proposals,`.stage-${capability.proposal_id}-${randomUUID()}`);if(existsSync(proposalRoot))throw new ChatAccessDenied();ensureDirectory(stageRoot);
+  try{atomic(resolve(stageRoot,'proposal.md'),text,validate);
+    const record={version:1,proposal_id:capability.proposal_id,owner_user_id:grant.owner,generation:grant.generation,base_hash:grant.baseHash,proposal_hash:hash(text),created_at:new Date().toISOString()};
+    atomic(resolve(stageRoot,'proposal.json'),`${JSON.stringify(record,null,2)}\n`,validateCurrent);validateCurrent();renameSync(stageRoot,proposalRoot);proposalGrants.delete(capability.proposal_id);return {proposal_id:capability.proposal_id,owner_user_id:grant.owner,generation:grant.generation,created:true};
+  }catch(error){rmSync(stageRoot,{recursive:true,force:true});throw error;}
+  }finally{
+    if(lockFd!==undefined)try{closeSync(lockFd);}catch(error){debugSuppressedError(log,'failed to close family Dream proposal lock',error,{ownerUserId:grant.owner});}
+    try{if(existsSync(lockPath)){const lock=JSON.parse(readFileSync(lockPath,'utf8'));if(lock.token===lockToken&&lock.owner_user_id===grant.owner)rmSync(lockPath,{force:true});}}
+    catch(error){debugSuppressedError(log,'failed to release family Dream proposal lock',error,{ownerUserId:grant.owner});}
+  }
+}
+
+/** Explicit recent-owner promotion with base/output hash recovery after a commit-response gap. */
+export function promoteOwnFamilyDreamProposal(database:Database,principal:AuthenticatedPrincipal,proposalId:string,input:{confirm:true}){
+  if(!/^[a-f0-9-]{36}$/.test(proposalId)||!input||Object.keys(input).length!==1||input.confirm!==true)throw new ChatAccessDenied();const current=currentGeneration(database,principal),proposalRoot=resolve(current.root,'proposals',proposalId);
+  const lockPath=resolve(current.root,'.lock'),lockToken=randomUUID();let lockFd:number|undefined;
+  try{lockFd=openSync(lockPath,'wx',0o600);writeFileSync(lockFd,JSON.stringify({pid:process.pid,token:lockToken,owner_user_id:current.actor.id}));
+  const record=parseObject(resolve(proposalRoot,'proposal.json'),['version','proposal_id','owner_user_id','generation','base_hash','proposal_hash','created_at']);const text=readText(resolve(proposalRoot,'proposal.md'),64*1024);
+  if(text===null||record.version!==1||record.proposal_id!==proposalId||record.owner_user_id!==current.actor.id||record.generation!==current.generationId||record.proposal_hash!==hash(text)
+    ||!(record.base_hash===null||typeof record.base_hash==='string'&&/^[a-f0-9]{64}$/.test(record.base_hash as string)))throw new ChatAccessDenied();
+  const promotionPath=resolve(proposalRoot,'promotion.json'),target=resolve(current.workspace,'notes','users',current.actor.id,'MEMORY.md'),existing=readText(target,256*1024),existingHash=existing===null?null:hash(existing),proposalHash=record.proposal_hash as string;
+  if(existsSync(promotionPath)){const receipt=parseObject(promotionPath,['version','proposal_id','owner_user_id','generation','base_hash','proposal_hash','promoted_at']);if(receipt.proposal_hash!==proposalHash||receipt.base_hash!==record.base_hash||existingHash!==proposalHash)throw new ChatAccessDenied();return {proposal_id:proposalId,promoted:true,created:false,memory_path:target};}
+  if(existingHash!==record.base_hash&&existingHash!==proposalHash)throw new ChatAccessDenied();
+  if(existingHash!==proposalHash)atomic(target,text,()=>{const live=currentGeneration(database,principal),latest=readText(target,256*1024),latestHash=latest===null?null:hash(latest);if(live.generationId!==current.generationId||latestHash!==record.base_hash)throw new ChatAccessDenied();});
+  const receipt={version:1,proposal_id:proposalId,owner_user_id:current.actor.id,generation:current.generationId,base_hash:record.base_hash,proposal_hash:proposalHash,promoted_at:new Date().toISOString()};
+  atomic(promotionPath,`${JSON.stringify(receipt,null,2)}\n`,()=>{authority(database,principal);const latest=readText(target,256*1024),live=currentGeneration(database,principal);if(live.generationId!==current.generationId||latest===null||hash(latest)!==proposalHash)throw new ChatAccessDenied();});return {proposal_id:proposalId,promoted:true,created:true,memory_path:target};
+  }finally{
+    if(lockFd!==undefined)try{closeSync(lockFd);}catch(error){debugSuppressedError(log,'failed to close family Dream promotion lock',error,{ownerUserId:current.actor.id});}
+    try{if(existsSync(lockPath)){const lock=JSON.parse(readFileSync(lockPath,'utf8'));if(lock.token===lockToken&&lock.owner_user_id===current.actor.id)rmSync(lockPath,{force:true});}}
+    catch(error){debugSuppressedError(log,'failed to release family Dream promotion lock',error,{ownerUserId:current.actor.id});}
+  }
+}
 
 /**
  * Materialise one owner-only Dream source generation. This does not invoke a model,
