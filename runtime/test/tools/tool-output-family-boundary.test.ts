@@ -7,20 +7,28 @@ import * as output from "../../src/tool-output.js";
 import { createBatchExecTool, createContextBashTool, createToolOutputSearchTool } from "../../src/tools/context-tools.js";
 import { withExecutionIdentity, type ExecutionIdentity } from "../../src/core/execution-context.js";
 import { createToolOutputAccessGuard, ToolOutputAccessDenied } from "../../src/core/tool-output-access.js";
-import contextMode, { __setSemanticToolResultSummarizerForTests } from "../../extensions/integrations/context-mode.js";
 import { createFakeExtensionApi } from "../extensions/fake-extension-api.js";
+
+let contextMode: typeof import("../../extensions/integrations/context-mode.js");
+function __setSemanticToolResultSummarizerForTests(summarizer: Parameters<typeof contextMode.__setSemanticToolResultSummarizerForTests>[0]) {
+  contextMode.__setSemanticToolResultSummarizerForTests(summarizer);
+}
 
 type Mode = "single-user" | "family-shared" | "isolated-containers" | "invalid";
 const denial = "Legacy tool output requires valid single-user configuration and context.";
 const identity: ExecutionIdentity = { mode: "family-shared", username: "alice", displayName: "Alice", role: "admin", rootChatJid: "web:alice", provenance: { actorUserId: "alice", ownerUserId: "alice", chatJid: "web:alice", kind: "interactive", authenticationSessionId: "claimed-login" } };
 async function fixture(run: (configure: (mode: Mode) => void, workspace: string, data: string) => Promise<void>) {
-  await withTempWorkspaceEnv("output-boundary-", { PICLAW_TOOL_RESULT_COMPACTION_ENABLED: "1", PICLAW_TOOL_RESULT_COMPACTION_TOOLS: "bash", PICLAW_TOOL_RESULT_SEMANTIC_SUMMARY_ENABLED: "1" }, async (ws) => {
-    closeDatabase(); initDatabase(); __setSemanticToolResultSummarizerForTests(null);
+  await withTempWorkspaceEnv("output-boundary-", { PICLAW_TOOL_RESULT_COMPACTION_ENABLED: "1", PICLAW_TOOL_RESULT_COMPACTION_TOOLS: "bash", PICLAW_TOOL_RESULT_SEMANTIC_SUMMARY_ENABLED: "1", PICLAW_TOOL_OUTPUT_STORE_BYTES: "8", PICLAW_TOOL_OUTPUT_STORE_LINES: "2" }, async (ws) => {
+    closeDatabase(); initDatabase();
     mkdirSync(join(ws.workspace, ".piclaw"), { recursive: true });
     const configure = (mode: Mode) => writeFileSync(join(ws.workspace, ".piclaw/config.json"), mode === "invalid" ? "{" : JSON.stringify({ domains: { access: {
       mode, ...(mode === "isolated-containers" ? { isolation: { component: "backend", backendId: "test", ownerUserId: "alice", gatewayUrl: "https://gateway.example", verificationKeyRef: "test-key" } } : {}),
     } } }));
     configure("single-user");
+    // Context-mode captures presentation defaults on import. Load only after
+    // the fixture config, matching the existing context-mode regression suite.
+    contextMode = await import("../../extensions/integrations/context-mode.js");
+    __setSemanticToolResultSummarizerForTests(null);
     try { await run(configure, ws.workspace, ws.data); } finally { __setSemanticToolResultSummarizerForTests(null); closeDatabase(); }
   });
 }
@@ -33,7 +41,7 @@ function snapshot(data: string) {
 }
 const large = "needle output line\n".repeat(4000);
 function hooks() {
-  const fake = createFakeExtensionApi(); contextMode(fake.api);
+  const fake = createFakeExtensionApi(); contextMode.default(fake.api);
   return { result: fake.handlers.find((e) => e.event === "tool_result")!.handler, context: fake.handlers.find((e) => e.event === "context")!.handler };
 }
 const event = () => ({ toolName: "bash", content: [{ type: "text", text: large }], details: {}, input: { command: "test" }, isError: false });
