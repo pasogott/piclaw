@@ -29,6 +29,7 @@ import { initializeAccountPreferences } from './account-preferences.js';
 import { initializeAccountAvatars } from './account-avatar.js';
 import { initializeAccountModelDefaults } from './account-model-defaults.js';
 import { initializeFamilyScheduledGrants } from './family-scheduled-grants-schema.js';
+import { initializeFamilyTaskAdmission } from './family-task-admission-schema.js';
 import { initializeFamilyScheduledOccurrences } from './family-scheduled-occurrences-schema.js';
 import { initializeFamilyScheduledExecutions } from './family-scheduled-executions-schema.js';
 import { initializeFamilyScheduledDispatch } from './family-scheduled-dispatch-schema.js';
@@ -965,6 +966,7 @@ export function initDatabase(): void {
   initializeAccountAvatars(db);
   initializeAccountModelDefaults(db);
   initializeFamilyScheduledGrants(db);
+  initializeFamilyTaskAdmission(db);
   initializeFamilyScheduledOccurrences(db);
   initializeFamilyScheduledExecutions(db);
   initializeFamilyScheduledDispatch(db);

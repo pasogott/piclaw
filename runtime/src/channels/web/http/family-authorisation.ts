@@ -17,6 +17,7 @@ import { handleFamilyInvitationRoutes } from "./family-invitations.js";
 import { handleFamilyMessageIngress } from "./family-message-ingress.js";
 import { handleFamilyMessageRecovery } from "./family-message-recovery.js";
 import { handleFamilyScheduledResults } from "./family-scheduled-results.js";
+import { handleFamilyScheduledTasks } from "./family-scheduled-tasks.js";
 import { checkCsrfOrigin } from "./security.js";
 import { authoriseExecutionIdentity } from "../../../agent-pool/execution-identity.js";
 import { withExecutionIdentity } from "../../../core/execution-context.js";
@@ -114,6 +115,7 @@ export async function handleFamilyRequest(channel: WebChannelLike, req: Request,
   }
   if (path === "/agent/message-recovery") return handleFamilyMessageRecovery(channel, req, principal);
   if (path === "/agent/scheduled-results" || path.startsWith("/agent/scheduled-results/")) return handleFamilyScheduledResults(channel, req, principal);
+  if (path === "/agent/scheduled-tasks" || path.startsWith("/agent/scheduled-tasks/")) return handleFamilyScheduledTasks(channel, req, principal);
   if (/^\/agent\/[^/]+\/message$/.test(path)) return handleFamilyMessageIngress(channel, req, principal);
   const accountResponse = await handleFamilyAccountRoutes(channel, req, principal);
   if (accountResponse) return accountResponse;
