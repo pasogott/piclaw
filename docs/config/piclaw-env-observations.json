@@ -1216,7 +1216,8 @@
           "helperReaders": 0,
           "semanticReaders": 0,
           "files": [
-            "runtime/src/core/config-paths.ts"
+            "runtime/src/core/config-paths.ts",
+            "runtime/src/workspace-index-process.ts"
           ],
           "readerFiles": []
         },
@@ -1226,7 +1227,8 @@
           "helperReaders": 0,
           "semanticReaders": 0,
           "files": [
-            "runtime/src/core/config-paths.ts"
+            "runtime/src/core/config-paths.ts",
+            "runtime/src/workspace-index-process.ts"
           ],
           "readerFiles": []
         }
@@ -4896,7 +4898,8 @@
           "semanticReaders": 0,
           "files": [
             "runtime/src/core/config-paths.ts",
-            "runtime/src/db/connection.ts"
+            "runtime/src/db/connection.ts",
+            "runtime/src/workspace-index-process.ts"
           ],
           "readerFiles": []
         },
@@ -4907,7 +4910,8 @@
           "semanticReaders": 0,
           "files": [
             "runtime/src/core/config-paths.ts",
-            "runtime/src/db/connection.ts"
+            "runtime/src/db/connection.ts",
+            "runtime/src/workspace-index-process.ts"
           ],
           "readerFiles": []
         }
@@ -7346,7 +7350,8 @@
           "semanticReaders": 0,
           "files": [
             "runtime/src/core/config-paths.ts",
-            "runtime/src/db/connection.ts"
+            "runtime/src/db/connection.ts",
+            "runtime/src/workspace-index-process.ts"
           ],
           "readerFiles": []
         },
@@ -7357,7 +7362,8 @@
           "semanticReaders": 0,
           "files": [
             "runtime/src/core/config-paths.ts",
-            "runtime/src/db/connection.ts"
+            "runtime/src/db/connection.ts",
+            "runtime/src/workspace-index-process.ts"
           ],
           "readerFiles": []
         }

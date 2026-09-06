@@ -34,6 +34,8 @@
 | `tool_outputs_fts` | Full‑text index for tool output |
 | `workspace_files` | Indexed workspace files (path, size, mtime) |
 | `workspace_fts` | Full‑text index for workspace content |
+| `family_workspace_files`, `family_workspace_fts` | Separate shared-family file metadata and FTS; only explicit family notes and shared skills, never legacy index rows |
+| `family_workspace_index_status`, `family_workspace_index_generation` | Family scope freshness and transactional generation fence against source-change/refresh races |
 | `chat_cursors` | Per‑chat cursor + inflight/failed run tracking + deferred follow‑up queue |
 | `router_state` | Misc router state (auto‑compaction + web status) |
 | `keychain_entries` | Encrypted secrets for tool env injection |
