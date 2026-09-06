@@ -128,3 +128,11 @@ The runner stages a proposal but never promotes it. Recent-owner promotion remai
 After the deadline, recovery takes the owner lock and checks terminal state again. A fully staged proposal completes the run only when its owner, generation, proposal ID, exact request ID and proposal hash match the start receipt. Otherwise an unfinished run receives a redacted `failed.json`. Recovery never calls the model, reconstructs a capability, stages output or promotes personal memory. Completed and failed retries are idempotent; malformed or mismatched receipts fail closed.
 
 A model callback that returns late cannot stage after recovery: proposal publication runs under the same owner lock and checks that no failure receipt exists immediately before its directory rename. Recovery can reconcile the commit gap after proposal rename but before completion receipt. Process-killed or otherwise orphaned runs therefore have an explicit terminal path without replay. No route, scheduler or automatic timer invokes recovery yet.
+
+## Run inspection and failed-run retention
+
+The internal owner run directory returns metadata for at most 100 request directories. States are derived as `claimed`, `started`, `failed` or `completed` from strict receipts. It returns request ID, generation, state, public timestamps and completed proposal ID only. It excludes source hashes, transcript/prompt/output, provider errors, capabilities and filesystem paths. Foreign owners see only their own empty or populated directory.
+
+An explicit recent-owner retention operation deletes at most 100 strict failed runs older than both a supplied canonical cutoff and seven days. It takes the shared owner lock, validates start/failure binding and deletes oldest first. It never deletes claimed or started runs, completed evidence, a run whose expected proposal directory still exists, source generations, proposals, promotion receipts or personal memory. Corrupt/mixed terminal state fails closed before deletion.
+
+Deletion is permanent and has no automatic schedule or retry. The operation fsyncs the runs directory after each removal. Current operational policy therefore retains all evidence unless an owner explicitly invokes this internal API; no route or UI exposes it yet.
