@@ -97,4 +97,16 @@ An owner-specific `.lock` serialises preparation across that account's trees whi
 
 The API pins configured family mode, workspace/store/data, singleton database and live account/role/home/login before source selection, throughout validation/writes and before pointer publication. It rejects model execution contexts, old/non-factor logins, malformed IDs and path/symlink mismatches. Shared-filesystem privileged writers can still race or edit these files, so this coordination is not hostile-user confinement.
 
-No route, command, model pass, scheduler or startup path calls this API yet. Existing `/dream`, AutoDream, global daily-note refresh and deterministic legacy maintenance continue to reject family mode. A later slice must run an owner-scoped model with tools rooted to one generation/output policy, promote its results safely and define recovery before family Dream can be activated.
+No route, command, model pass, scheduler or startup path calls this API yet. Existing `/dream`, AutoDream, global daily-note refresh and deterministic legacy maintenance continue to reject family mode. The proposal/promotion gate below supplies a private output boundary, but an owner-scoped model runner and operational activation checks still need separate work.
+
+## Dream proposal and promotion gate
+
+The internal proposal API issues a 15-minute, 256-bit capability bound to one owner and the current source generation. Only its SHA-256 hash stays in process memory; no capability or hash is written to the database, generation, proposal or logs. The exact capability can stage one non-empty UTF-8 Markdown proposal of at most 64 KiB under `notes/users/<user-id>/dream/proposals/<proposal-id>/`. Invalid output does not consume the capability; successful staging deletes it, and process restart loses every unused capability.
+
+Staging revalidates family mode, singleton database and the unchanged current generation. It writes `proposal.md` and an immutable-style metadata record containing owner ID, generation, personal-memory base hash, proposal hash and creation time. It does not edit personal memory or source generations. Tokens cannot be replayed, widened to a new generation or used for another proposal.
+
+A recently authenticated owner explicitly promotes a staged proposal. The target is fixed to `notes/users/<immutable-user-id>/MEMORY.md`; callers cannot select another path. Promotion requires the current source generation and current personal-memory hash to equal the base captured when the capability was issued. The write uses atomic replacement. A promotion receipt is then written beside the proposal with base/output hashes and time.
+
+If the process writes personal memory but fails before recording the receipt, an exact retry recognises the proposal hash already at the target and records the receipt. Once a receipt exists, retries succeed only while the target still has that exact proposal hash. A later owner edit, different current generation, changed proposal/metadata or foreign account fails closed. Promotion cannot merge content or overwrite a concurrent owner change.
+
+This is still an internal gate. No model, browser, HTTP, command, scheduler or startup path receives the capability. There is no automatic retry, promotion, rollback, retention or deletion. Shared-filesystem privileged processes remain trusted. Family Dream execution and activation remain disabled.
