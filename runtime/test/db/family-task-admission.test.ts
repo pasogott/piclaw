@@ -18,6 +18,8 @@ import { WebauthnChallengeTracker } from "../../src/channels/web/auth/webauthn-c
 import { TotpFailureTracker } from "../../src/channels/web/auth/totp-failure-tracker.js";
 import { resetRateLimiterStateForTests } from "../../src/channels/web/http/rate-limit.js";
 import type { AuthenticatedPrincipal } from "../../src/core/access-types.js";
+import { admitOwnFamilyScheduledExecution as admitExecution } from '../../src/db/family-execution-admission.js';
+import { cancelOwnFamilyScheduledExecution,readOwnFamilyScheduledResult,recoverExpiredFamilyScheduledExecutions } from '../../src/db/family-scheduled-executions.js';
 
 let ws:ReturnType<typeof createTempWorkspace>,restore:()=>void,admin:AuthenticatedPrincipal,alice:AuthenticatedPrincipal,bob:AuthenticatedPrincipal;
 function actor(id:string):AuthenticatedPrincipal{const u=getUser(getDb(),id)!,s=createWebSession(`token-${id}`,id,3600,"passkey");return {kind:"user",mode:"family-shared",userId:id,username:u.username,displayName:u.display_name,role:u.role,homeChatJid:u.home_chat_jid,authentication:{method:"passkey",sessionId:s.session_id!,expiresAt:s.expires_at}};}
@@ -27,8 +29,123 @@ beforeEach(()=>{ws=createTempWorkspace("task-admission-");restore=setEnv({PICLAW
 afterEach(()=>{closeDatabase();resetRateLimiterStateForTests();restore();ws.cleanup();});
 const input=(request_id="request-one")=>({request_id,chat_jid:alice.homeChatJid!,prompt:"private prompt\nexact whitespace ",scheduled_for:new Date(Date.now()+60000).toISOString(),allowed_tools:["read","messages"]});
 const count=(table:string)=>(getDb().query(`SELECT count(*) n FROM ${table}`).get() as any).n;
-function router(){const json=(v:unknown,status=200)=>Response.json(v,{status});const authGateway=new WebAuthGateway({accessMode:"family-shared",passkeyMode:"",totpSecret:"",internalSecret:"",hasTls:true,sessionTtlSeconds:3600},{json,challenges:new WebauthnChallengeTracker(),failureTracker:new TotpFailureTracker()});return new RequestRouterService({json,authGateway} as any,"family-shared");}
+function router(deps:Record<string,unknown>={}){const json=(v:unknown,status=200)=>Response.json(v,{status});const authGateway=new WebAuthGateway({accessMode:"family-shared",passkeyMode:"",totpSecret:"",internalSecret:"",hasTls:true,sessionTtlSeconds:3600},{json,challenges:new WebauthnChallengeTracker(),failureTracker:new TotpFailureTracker()});return new RequestRouterService({json,authGateway,...deps} as any,"family-shared");}
 function req(path:string,method="GET",body?:BodyInit,who=alice,headers:Record<string,string>={},signal?:AbortSignal){return new Request("https://family.local"+path,{method,body,signal,headers:{cookie:`piclaw_session=token-${who.userId}`,origin:"https://family.local","x-piclaw-account-id":who.userId,"x-piclaw-login-id":who.authentication.sessionId!,...headers}});}
+
+test('execution admission consumes one due grant atomically and exact historical retries never return a capability',()=>{
+  const db=getDb(),data=input(),task=prepare(db,alice,data),real=Date.now;
+  expect(()=>admitExecution(db,alice,task.grant_id,'run-one')).toThrow();expect(count('family_execution_admissions')).toBe(0);
+  try{const at=Date.parse(data.scheduled_for);Date.now=()=>at;
+    const first=admitExecution(db,alice,task.grant_id,'run-one');expect(first.capability?.execution_id).toBe(first.receipt.execution_id);expect(first.receipt).toMatchObject({grant_id:task.grant_id,request_id:'run-one',state:'admitted',created:true});
+    const login=alice.authentication.sessionId;expect(admitExecution(db,alice,task.grant_id,'run-one')).toEqual({receipt:{...first.receipt,created:false},capability:null});
+    expect(()=>admitExecution(db,alice,task.grant_id,'run-two')).toThrow();expect(()=>admitExecution(db,bob,task.grant_id,'run-one')).toThrow();expect(()=>admitExecution(db,admin,task.grant_id,'run-one')).toThrow();
+    cancelOwnFamilyScheduledExecution(db,alice,first.receipt.execution_id);revokeFamilyScheduledGrant(db,alice,task.grant_id);
+    expect(admitExecution(db,alice,task.grant_id,'run-one').capability).toBeNull();
+    db.query('DELETE FROM web_sessions WHERE user_id=?').run(alice.userId);expect(()=>admitExecution(db,alice,task.grant_id,'run-one')).toThrow();
+    Date.now=()=>at+100;alice=actor(alice.userId);db.query('UPDATE web_sessions SET created_at=? WHERE session_id=?').run(new Date(at+100).toISOString(),alice.authentication.sessionId!);
+    expect(admitExecution(db,alice,task.grant_id,'run-one').receipt.created).toBe(false);expect(db.query('SELECT login_session_id FROM family_execution_admissions').get()).toEqual({login_session_id:login});
+    expect(count('family_scheduled_executions')).toBe(1);expect(count('family_scheduled_dispatches')).toBe(0);expect(getTaskById(task.task_id)?.status).toBe('paused');
+    expect(JSON.stringify(db.query('SELECT * FROM family_execution_admissions').all())).not.toContain(first.capability!.token);
+  }finally{Date.now=real;}
+});
+
+test('execution receipt failure rolls occurrence and handoff back; nested admission and conflicting keys deny',()=>{
+  const db=getDb(),data=input(),a=prepare(db,alice,data),b=prepare(db,alice,{...data,request_id:'second'}),real=Date.now;
+  try{Date.now=()=>Date.parse(data.scheduled_for);
+    expect(()=>db.transaction(()=>admitExecution(db,alice,a.grant_id,'run')).immediate()).toThrow();
+    db.exec("CREATE TRIGGER fail_exec_receipt BEFORE INSERT ON family_execution_admissions BEGIN SELECT RAISE(ABORT,'receipt failed'); END");
+    expect(()=>admitExecution(db,alice,a.grant_id,'run')).toThrow('receipt failed');for(const table of ['family_execution_admissions','family_scheduled_executions','family_scheduled_occurrences','family_scheduled_occurrence_events'])expect(count(table)).toBe(0);
+    db.exec('DROP TRIGGER fail_exec_receipt');const first=admitExecution(db,alice,a.grant_id,'run');expect(()=>admitExecution(db,alice,b.grant_id,'run')).toThrow();expect(count('family_scheduled_executions')).toBe(1);
+    expect(()=>db.exec('UPDATE family_execution_admissions SET request_id=\'new\'')).toThrow('immutable');expect(()=>db.exec('DELETE FROM family_execution_admissions')).toThrow('cannot be replayed');
+    Date.now=()=>Date.parse(data.scheduled_for)+900000;expect(recoverExpiredFamilyScheduledExecutions(db)).toEqual({recorded:1});expect(readOwnFamilyScheduledResult(db,alice,first.receipt.execution_id).state).toBe('expired');
+    db.query('UPDATE web_sessions SET created_at=? WHERE session_id=?').run(new Date(Date.now()).toISOString(),alice.authentication.sessionId!);
+    expect(admitExecution(db,alice,a.grant_id,'run')).toEqual({receipt:{...first.receipt,created:false},capability:null});
+  }finally{Date.now=real;}
+});
+
+test('execution admission enforces live policy/target/authentication and persists one receipt across connections and reopen',()=>{
+  const db=getDb(),data=input(),a=prepare(db,alice,data),b=prepare(db,bob,{...data,chat_jid:bob.homeChatJid!}),real=Date.now,path=join(ws.workspace,'execution-admission.sqlite');
+  try{Date.now=()=>Date.parse(data.scheduled_for);
+    for(const bad of ['',{},'a'.repeat(129)])expect(()=>admitExecution(db,alice,a.grant_id,bad as any)).toThrow();
+    updateAdminToolPolicy(db,admin,alice.userId,{confirm_username:'alice',expected_revision:0,denied_tools:['read']});
+    db.query('VACUUM INTO ?').run(path);const one=new Database(path),two=new Database(path);
+    try{one.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10');two.exec('PRAGMA busy_timeout=10');one.exec('BEGIN IMMEDIATE');try{expect(()=>admitExecution(two,alice,a.grant_id,'run')).toThrow();}finally{one.exec('ROLLBACK');}
+      const first=admitExecution(one,alice,a.grant_id,'run');expect(admitExecution(two,alice,a.grant_id,'run').capability).toBeNull();
+      expect(one.query('SELECT allowed_tools FROM family_scheduled_executions WHERE id=?').get(first.receipt.execution_id)).toEqual({allowed_tools:'["messages"]'});
+    }finally{one.close();two.close();}
+    const reopened=new Database(path);try{expect(admitExecution(reopened,alice,a.grant_id,'run').receipt.created).toBe(false);}finally{reopened.close();}
+    revokeFamilyScheduledGrant(db,bob,b.grant_id);expect(()=>admitExecution(db,bob,b.grant_id,'run')).toThrow();
+    db.query('UPDATE web_sessions SET created_at=? WHERE session_id=?').run(new Date(Date.now()-300001).toISOString(),alice.authentication.sessionId!);expect(()=>admitExecution(db,alice,a.grant_id,'run')).toThrow();
+    writeFileSync(join(ws.workspace,'.piclaw/config.json'),JSON.stringify({domains:{access:{mode:'single-user'}}}));expect(()=>admitExecution(db,alice,a.grant_id,'run')).toThrow();
+  }finally{Date.now=real;}
+});
+
+test('HTTP run admission returns only receipt, queues once, acknowledges retry without execution and observes dispatch failure',async()=>{
+  const data=input(),task=prepare(getDb(),alice,data),real=Date.now,queued:Array<()=>Promise<void>>=[];let models=0;
+  const r=router({queue:{enqueue:(fn:()=>Promise<void>)=>queued.push(fn)},agentPool:{runAgent:async()=>{models++;throw Error('fake failure');}}}),path=`/agent/scheduled-tasks/${task.grant_id}/run`,headers={'content-type':'application/json'};
+  try{Date.now=()=>Date.parse(data.scheduled_for);
+    const first=await r.handle(req(path,'POST','{"request_id":"run","confirm":true}',alice,headers));expect(first.status).toBe(202);const receipt=await first.json();expect(Object.keys(receipt).sort()).toEqual(['created','execution_id','grant_id','request_id','state']);expect(receipt.created).toBe(true);
+    expect(queued).toHaveLength(1);expect(models).toBe(0);const retry=await r.handle(req(path,'POST','{"request_id":"run","confirm":true}',alice,headers));expect(retry.status).toBe(200);expect(await retry.json()).toEqual({...receipt,created:false});expect(queued).toHaveLength(1);
+    await queued[0]!();expect(models).toBe(1);expect(readOwnFamilyScheduledResult(getDb(),alice,receipt.execution_id).state).toBe('interrupted');
+    expect((await r.handle(req(path,'POST','{"request_id":"run","confirm":true}',alice,headers))).status).toBe(200);expect(queued).toHaveLength(1);expect(count('messages')).toBe(0);expect(getTaskById(task.task_id)?.status).toBe('paused');
+  }finally{Date.now=real;}
+});
+
+test('HTTP run admission rejects unsupported payloads/binding/body/auth and missing runtime dependencies before mutation',async()=>{
+  const data=input(),task=prepare(getDb(),alice,data),real=Date.now,path=`/agent/scheduled-tasks/${task.grant_id}/run`,headers={'content-type':'application/json'};
+  const r=router({queue:{enqueue:()=>{throw Error('enqueue unavailable');}},agentPool:{runAgent:async()=>({status:'error'})}});
+  try{Date.now=()=>Date.parse(data.scheduled_for);
+    for(const body of ['{}','{"confirm":false,"request_id":"run"}','{"confirm":true,"request_id":42}','{"confirm":true,"request_id":"run","token":"x"}',' '.repeat(1025)])expect((await r.handle(req(path,'POST',body,alice,headers))).status).toBe(403);
+    for(const who of [bob,admin])expect((await r.handle(req(path,'POST','{"confirm":true,"request_id":"run"}',who,headers))).status).toBe(403);
+    for(const extra of [{'content-type':'text/plain'},{origin:'https://other.local'}])expect((await r.handle(req(path,'POST','{"confirm":true,"request_id":"run"}',alice,{...headers,...extra}))).status).toBe(403);
+    expect((await r.handle(req(path))).status).toBe(403);expect((await r.handle(req(path+'?x=1','POST','{"confirm":true,"request_id":"run"}',alice,headers))).status).toBe(403);
+    const aborted=new AbortController();aborted.abort();expect((await r.handle(req(path,'POST','{"confirm":true,"request_id":"run"}',alice,headers,aborted.signal))).status).toBe(403);
+    expect((await router().handle(req(path,'POST','{"confirm":true,"request_id":"run"}',alice,headers))).status).toBe(500);expect(count('family_execution_admissions')).toBe(0);
+    // Queue rejection after durable commit is observed, never reported as a retryable non-admission.
+    const admitted=await r.handle(req(path,'POST','{"confirm":true,"request_id":"run"}',alice,headers));expect(admitted.status).toBe(202);expect(count('family_execution_admissions')).toBe(1);expect(count('family_scheduled_dispatches')).toBe(0);
+  }finally{Date.now=real;}
+});
+
+test('run receipt never blocks ordinary unfinished retry and rejects corrupt owner/login/execution binding',()=>{
+  const db=getDb(),data=input(),task=prepare(db,alice,data),real=Date.now;
+  try{Date.now=()=>Date.parse(data.scheduled_for);
+    const first=admitExecution(db,alice,task.grant_id,'run');expect(readOwnFamilyScheduledResult(db,alice,first.receipt.execution_id).state).toBe('unsettled');
+    expect(admitExecution(db,alice,task.grant_id,'run').capability).toBeNull();
+    // Validate creation-time login ownership without making historic receipts depend on live login survival.
+    db.exec('DROP TRIGGER family_execution_admission_no_delete');db.exec('DELETE FROM family_execution_admissions');
+    const execution=db.query('SELECT created_at FROM family_scheduled_executions WHERE id=?').get(first.receipt.execution_id) as {created_at:number};
+    expect(()=>db.query('INSERT INTO family_execution_admissions VALUES (?,?,?,?,?,?)').run(alice.userId,'run',task.grant_id,first.receipt.execution_id,bob.authentication.sessionId!,execution.created_at)).toThrow('conflicts');
+    db.query('INSERT INTO family_execution_admissions VALUES (?,?,?,?,?,?)').run(alice.userId,'run',task.grant_id,first.receipt.execution_id,alice.authentication.sessionId!,execution.created_at);
+    db.exec('DROP TRIGGER family_execution_admission_immutable');db.query('UPDATE family_execution_admissions SET created_at=created_at+1').run();expect(()=>admitExecution(db,alice,task.grant_id,'run')).toThrow();
+    expect(count('family_scheduled_executions')).toBe(1);
+  }finally{Date.now=real;}
+});
+
+test('run HTTP revalidates after bounded body waits and rate-limits retries without re-enqueue',async()=>{
+  const data=input(),task=prepare(getDb(),alice,data),real=Date.now,path=`/agent/scheduled-tasks/${task.grant_id}/run`,headers={'content-type':'application/json'};
+  let queues=0;const r=router({queue:{enqueue:()=>{queues++;throw Error('unavailable');}},agentPool:{runAgent:async()=>({status:'error'})}});
+  const original=globalThis.setTimeout;let expire:(()=>void)|undefined,cancelled=false;
+  const timer=spyOn(globalThis,'setTimeout').mockImplementation(((fn:any,ms:number,...args:any[])=>{if(ms===10000){expire=fn;return {unref(){}} as any;}return original(fn,ms,...args);}) as any);
+  try{Date.now=()=>Date.parse(data.scheduled_for);
+    const timed=r.handle(req(path,'POST',new ReadableStream({cancel(){cancelled=true;}}),alice,headers));await waitFor(()=>!!expire);expire!();expect((await timed).status).toBe(403);expect(cancelled).toBe(true);
+  }finally{timer.mockRestore();}
+  try{
+    let stream!:ReadableStreamDefaultController;
+    const pending=r.handle(req(path,'POST',new ReadableStream({start(c){stream=c;}}),alice,headers));await Bun.sleep(5);
+    getDb().query('DELETE FROM web_sessions WHERE session_id=?').run(alice.authentication.sessionId!);stream.enqueue(new TextEncoder().encode('{"confirm":true,"request_id":"run"}'));stream.close();expect((await pending).status).toBe(403);expect(count('family_execution_admissions')).toBe(0);
+    alice=actor(alice.userId);getDb().query('UPDATE web_sessions SET created_at=? WHERE session_id=?').run(new Date(Date.now()).toISOString(),alice.authentication.sessionId!);resetRateLimiterStateForTests();
+    for(let i=0;i<20;i++)expect([200,202]).toContain((await r.handle(req(path,'POST','{"confirm":true,"request_id":"run"}',alice,headers))).status);
+    expect(queues).toBe(1);expect((await r.handle(req(path,'POST','{"confirm":true,"request_id":"run"}',alice,headers))).status).toBe(429);
+    expect(count('family_execution_admissions')).toBe(1);
+  }finally{Date.now=real;}
+});
+
+test('run retry cannot cross an archived target and rejects malformed access configuration',()=>{
+  const db=getDb(),data=input(),root=createOwnedRoot(db,alice,'run-archive'),task=prepare(db,alice,{...data,chat_jid:root.chat_jid}),real=Date.now;
+  try{Date.now=()=>Date.parse(data.scheduled_for);admitExecution(db,alice,task.grant_id,'run');archiveOwnedSession(db,alice,root.chat_jid);
+    expect(()=>admitExecution(db,alice,task.grant_id,'run')).toThrow();writeFileSync(join(ws.workspace,'.piclaw/config.json'),'{');expect(()=>admitExecution(db,alice,task.grant_id,'other')).toThrow();expect(count('family_execution_admissions')).toBe(1);
+  }finally{Date.now=real;}
+});
 
 test("admission creates paused task exactly once, canonicalises tool ordering, supports owner reauth and past-due retry",()=>{
   const db=getDb(),data=input(),created=prepare(db,alice,data);expect(created).toMatchObject({created:true,state:"paused"});

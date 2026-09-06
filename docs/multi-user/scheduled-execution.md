@@ -1,10 +1,10 @@
 # Scheduled execution records
 
-Piclaw supports **single-user deployments only**. Family and isolated modes cannot start. The following APIs support development testing. Owner task preparation/revocation, execution cancellation and result inspection/publication have gated HTTP routes; reservations, settlement and the one-shot dispatcher remain internal. Automatic polling and task activation are disabled. See [access modes](README.md) and the [paused task-grant foundation](README.md#paused-task-grant-foundation).
+Piclaw supports **single-user deployments only**. Family and isolated modes cannot start. The following APIs support development testing. Owner task preparation/revocation, confirmed run admission, execution cancellation and result inspection/publication have gated HTTP routes. Lease/settlement capabilities remain internal. Automatic polling and legacy task activation are disabled. See [access modes](README.md) and the [paused task-grant foundation](README.md#paused-task-grant-foundation).
 
 ## Owner task preparation API
 
-POST `/agent/scheduled-tasks` requires exactly `{confirm:true,request_id,chat_jid,prompt,scheduled_for,allowed_tools}`. The target must be explicit and actively owned. Preparation creates only a paused one-shot agent task and grant; there is no activate, run, edit or delete endpoint. Existing database activation guards and scheduler restrictions remain in force. Shell/internal tasks, model overrides and notifications cannot be requested.
+POST `/agent/scheduled-tasks` requires exactly `{confirm:true,request_id,chat_jid,prompt,scheduled_for,allowed_tools}`. The target must be explicit and actively owned. Preparation creates only a paused one-shot agent task and grant; there is no activate, edit or delete endpoint. A separate confirmed run-admission route is described below. Existing database activation guards and scheduler restrictions remain in force. Shell/internal tasks, model overrides and notifications cannot be requested.
 
 The owner cookie and both matching account/login pins are required. Writes also require matching Origin and a factor-authenticated login within five minutes. Preparation and revocation share a 20-per-minute account limit, including validated attempts/retries that fail later. Request bodies are bounded to 128 KiB for preparation or 1 KiB for revocation, with a ten-second timeout and cancellation checks. Account and target authority is rechecked after body receipt inside the write transaction.
 
@@ -18,11 +18,15 @@ GET `/agent/scheduled-tasks` returns metadata from the newest 50 owner grants, o
 
 ## Owner task panel
 
+The panel has no run button yet; preparing and inspecting remain non-executing actions.
+
 The [Prepared tasks panel](user-guide.md#prepare-or-revoke-a-paused-task) loads the owner list, active owned targets and current fixed tool allowance on open, explicit refresh or verified lifecycle resume. It never polls tasks. Target and UTC time are explicit, no tools are preselected, and confirmation is required before preparation. Both the 100 KiB UTF-8 prompt limit and 128 KiB encoded JSON limit are checked locally; the server remains authoritative.
 
 Uncertain responses retain one frozen payload and request ID until manual retry or explicit discard. Each retry needs confirmation; a success must acknowledge that request ID. Reopening an already visible panel preserves its draft. Closing, refreshing, blurring, hiding, switching sessions or navigating clears all task text and retry data, aborts pending reads and suppresses late rendering. An already-sent write may finish, so inspect saved tasks before recreating a discarded request. No task data enters browser storage. Task mutations share the shell's send/session/result mutation lock; list and detail requests do not execute work.
 
 ## Internal occurrence reservations
+
+The confirmed run route calls these APIs internally. Browsers cannot supply worker labels or lease tokens.
 
 The internal occurrence API can reserve one due occurrence for a valid prepared grant. It uses server time, a 60-second lease and a random token whose SHA-256 hash is stored. Worker IDs are non-secret correlation labels of at most 32 lower-case letters, digits or hyphens, starting with a letter; possession of a valid current token is required for renewal or consumption. These functions are for trusted internal callers. They do not activate the paused task or create a runnable legacy scheduler occurrence.
 
@@ -70,7 +74,7 @@ The **Scheduled results** panel fetches the list only when opened or refreshed. 
 
 ## Internal one-shot dispatcher
 
-`dispatchFamilyScheduledExecution` accepts a live settlement capability and trusted queue/AgentPool dependencies. It has no HTTP, model-tool or polling caller. The dispatcher uses the original chat lane, waits up to 30 seconds to start, revalidates the handoff and inserts one immutable dispatch receipt before hydration. A second start is rejected. Tokens stay in a private closure; the model sees only owner/initiating-user IDs, the scheduler service label and non-secret execution provenance.
+`dispatchFamilyScheduledExecution` accepts a live settlement capability and trusted queue/AgentPool dependencies. The confirmed owner run route invokes it internally; there is no endpoint accepting a capability, model-tool or polling caller. The dispatcher uses the original chat lane, waits up to 30 seconds to start, revalidates the handoff and inserts one immutable dispatch receipt before hydration. A second start is rejected. Tokens stay in a private closure; the model sees only owner/initiating-user IDs, the scheduler service label and non-secret execution provenance.
 
 The private scope permits one orchestrator entry with the exact stored prompt and one `session.prompt` call. Wrong prompts, mismatched targets and repeated entries invalidate that scope. Live handoff checks apply before hydration, before prompting, through the existing family tool checks, and before result settlement. Ordinary logout does not revoke the grant; disable, revocation, expiry, mode changes and removal of an issued tool deny. Profile/preferences/model-default snapshots refresh at admission; they do not widen the recorded tool allowance or switch the model of an existing conversation.
 
@@ -90,7 +94,7 @@ Recording is best effort. If mode, clock or storage prevents it, a fixed diagnos
 
 `interrupted` does not mean the provider request or tools have stopped. Timeout closes the execution scope immediately; the queue callback retains the lane until its underlying `runAgent` promise settles. The real prompt runner awaits `session.prompt()` even when its inner timer requests abort. A regression fires that inner timer first with an abort-ignoring fixture, then confirms outer-timeout fencing and lane retention. Already-issued external effects are not undone.
 
-Automatic dispatch, explicit execution controls, running-model process-kill proof and the remaining activation gates still need implementation. Stop all writers before changing modes. Raw database writers and installed code remain trusted.
+Automatic dispatch, browser run controls, remote-provider termination proof and the remaining activation gates still need implementation. Stop all writers before changing modes. Raw database writers and installed code remain trusted.
 
 ## Owner-confirmed execution cancellation
 
@@ -105,3 +109,15 @@ This cancels the execution's remaining authority, without invoking `abort` or ki
 The results panel offers **Cancel execution authority** only after validated unsettled detail with no publication receipt. A separate confirmation is required for each attempt. Its single-flight request captures the inspected execution ID and sends only `{confirm:true}`; it verifies the response execution ID, cancelled flag and created boolean. Success or uncertainty clears the selection, requiring refresh/inspection before another attempt. Terminal detail cannot cancel or publish. No cancellation data enters browser storage.
 
 Cancellation neither acquires nor releases the shell mutation lock, so a held send cannot block revocation. The results panel's own busy state still serialises inspection, cancellation and publication; publication keeps the shell lock. Blur/hidden/navigation/session changes clear private state and invalidate late responses. On focus/visibility return during a held shell mutation, the shell independently verifies the login and resumes only the results panel if the lifecycle generation still matches. Timeline and other controls remain masked/locked; identity failure invalidates the page. No task polling is added.
+
+## Owner-confirmed run admission
+
+POST `/agent/scheduled-tasks/:grant_id/run` requires `application/json` and exactly `{request_id,confirm:true}`, an owner cookie, matching account/login pins, matching Origin and authentication within five minutes. It rejects queries and alternate methods, caps the body at 1 KiB with a ten-second timeout, and uses a separate 20-per-minute account limit. The server rechecks owner, target and live grant policy inside the write transaction. The grant must be due; no request can alter its prompt, date, tools, owner, target or worker label. The task remains paused and legacy activation stays blocked.
+
+`admitOwnFamilyScheduledExecution` runs as a standalone immediate SQLite transaction; enclosing transactions deny. It claims the due occurrence as the fixed internal `owner-request` worker, consumes it into a handoff, and commits an immutable `family_execution_admissions` receipt with owner/request key, grant, execution, original approving login and handoff time. Any failure rolls back the claim, consumption, execution, audits and receipt. The key is 1–128 ASCII letters, digits, underscores or hyphens, compared exactly. Each owner/key, grant and execution can have only one receipt. Login ownership is checked on insertion without tying historical retries to that login's continued existence.
+
+The first admission returns a private capability only to its HTTP handler. The handler attaches rejection handling immediately and attempts the existing dispatcher once; the browser receives only `{request_id,grant_id,execution_id,created:true,state:"admitted"}` with HTTP 202. This acknowledges durable admission, not queue acceptance, model start or success. Inspect **Scheduled results** for the outcome and use the existing owner cancellation controls when needed. No result is published automatically.
+
+A same-owner/key/grant retry returns HTTP 200 and the original receipt with `created:false`, without a capability or another dispatch attempt. It still requires recent authentication and the active original target. It can acknowledge an unfinished, cancelled, interrupted, expired, settled or grant-revoked execution. A changed grant for the key, or a changed key for the grant, denies without replacement. Receipt and immutable execution bindings are checked; corrupt history fails closed.
+
+There is an intentional commit-to-dispatch crash window. Missing runtime dependencies reject before admission, but disappearance, queue rejection or a process crash after commit can leave an admitted handoff without a start. Repeating the HTTP request never requeues it. Cancellation and explicit expiry recovery remain available; loss after admission cannot be used to replay consumed work. Detached dispatch failures log only a fixed diagnostic and non-secret execution ID. No token enters the receipt, response or that diagnostic. No automatic polling, startup bypass, deployment or browser run button is added.

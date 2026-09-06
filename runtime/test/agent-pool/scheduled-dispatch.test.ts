@@ -21,6 +21,7 @@ import { getUser } from "../../src/db/users.js";
 import { updateAdminToolPolicy } from "../../src/db/family-tool-restrictions.js";
 import { AgentPool } from "../../src/agent-pool.js";
 import type { AuthenticatedPrincipal } from "../../src/core/access-types.js";
+import { handleFamilyScheduledTasks } from '../../src/channels/web/http/family-scheduled-tasks.js';
 
 let ws:ReturnType<typeof createTempWorkspace>,restore:()=>void,alice:AuthenticatedPrincipal,bob:AuthenticatedPrincipal,admin:AuthenticatedPrincipal;
 function actor(id:string):AuthenticatedPrincipal{const user=getUser(getDb(),id)!,login=createWebSession(`token-${id}`,id,3600,"passkey");return {kind:"user",mode:"family-shared",userId:id,username:user.username,displayName:user.display_name,role:user.role,homeChatJid:user.home_chat_jid,authentication:{method:"passkey",sessionId:login.session_id!,expiresAt:login.expires_at}};}
@@ -67,6 +68,16 @@ test("dispatcher uses exact owner prompt/system context/tool ceiling and settles
   expect(h.prompts).toBe(1);expect(h.observed[0].prompt).toBe("prompt for alice");expect(h.observed[0].system).toContain('Username: "alice"');expect(h.observed[0].system).toContain("Execution service: scheduler");expect(h.observed[0].tools).toEqual(["read","messages"]);expect(JSON.stringify(h.observed)).not.toContain(cap.token);
   expect(readOwnFamilyScheduledResult(getDb(),alice,cap.execution_id).result?.text).toBe("scheduled answer");expect(getDb().query("SELECT count(*) n FROM messages").get()).toEqual({n:0});expect(getExecutionIdentity()).toBeNull();
   await expect(dispatch(proof(cap),h.deps)).rejects.toThrow();
+});
+
+test('confirmed owner HTTP admission reaches real one-shot prompt with exact identity and retry never requeues',async()=>{
+  const real=Date.now,at=real()+5;let ids:ReturnType<typeof createFamilyScheduledTask>;
+  try{Date.now=()=>at-5;ids=createFamilyScheduledTask(getDb(),alice,alice.homeChatJid!,{prompt:'owner approved exact prompt',scheduled_for:new Date(at).toISOString(),allowed_tools:['read','messages']});}finally{Date.now=real;}
+  await Bun.sleep(6);const h=harness(),channel={...h.deps,json:(value:unknown,status=200)=>Response.json(value,{status})} as any;
+  const request=()=>new Request(`https://family.local/agent/scheduled-tasks/${ids.grant_id}/run`,{method:'POST',headers:{origin:'https://family.local','content-type':'application/json','x-piclaw-account-id':alice.userId,'x-piclaw-login-id':alice.authentication.sessionId!},body:JSON.stringify({request_id:'owner-run',confirm:true})});
+  const response=await handleFamilyScheduledTasks(channel,request(),alice);expect(response.status).toBe(202);const receipt=await response.json();expect(h.queued).toHaveLength(1);expect(h.prompts).toBe(0);
+  await h.queued[0].run();expect(h.prompts).toBe(1);expect(h.observed[0].prompt).toBe('owner approved exact prompt');expect(h.observed[0].identity?.provenance.ownerUserId).toBe(alice.userId);expect(h.observed[0].tools).toEqual(['read','messages']);
+  expect(readOwnFamilyScheduledResult(getDb(),alice,receipt.execution_id).state).toBe('settled');expect((await handleFamilyScheduledTasks(channel,request(),alice)).status).toBe(200);expect(h.queued).toHaveLength(1);expect(h.prompts).toBe(1);
 });
 
 test("raw scheduled provenance and wrong prompt cannot borrow dispatcher admission",async()=>{

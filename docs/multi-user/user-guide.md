@@ -193,6 +193,8 @@ The file excludes attachments, rich content, annotations, thread links, tasks, s
 
 Open **Prepared tasks** to see metadata from your newest 50 task grants. Archived or inaccessible targets are omitted. The panel cannot activate, run, edit or delete tasks. Both preparation and revocation need a sign-in within five minutes.
 
+A separate [development run-admission API](scheduled-execution.md#owner-confirmed-run-admission) can submit a due grant for one execution attempt. There is no run button yet, and startup remains gated. Its `admitted` response confirms a saved handoff, not that the model started or succeeded. Exact retries return the same execution without another attempt; inspect **Scheduled results** for its outcome.
+
 1. Choose the **Original conversation** explicitly. Preparing does not switch the conversation you are viewing.
 2. Enter a prompt up to 100 KiB UTF-8. The complete JSON request must fit within 128 KiB, including escaping; some prompts therefore need to be shorter.
 3. Enter a future due date and time within 366 days, in **UTC**. The control does not convert from your local time zone.
