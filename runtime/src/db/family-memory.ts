@@ -99,6 +99,19 @@ export function publishOwnFamilyMemory(database: Database, actor: AuthenticatedP
   }).immediate();
 }
 
+/** Metadata-only complete bounded owner history for uncertain-response reconciliation. */
+export function listOwnFamilyMemoryPublications(database: Database, actor: AuthenticatedPrincipal) {
+  return database.transaction(() => {
+    const user = authority(database, actor);
+    const rows = database.query(`SELECT p.publication_id,p.request_id,p.published_at,
+      EXISTS(SELECT 1 FROM family_memory_withdrawals w WHERE w.publication_id=p.publication_id) AS withdrawn
+      FROM family_memory_publications p WHERE p.owner_user_id=? ORDER BY p.published_at DESC,p.publication_id DESC LIMIT 100`)
+      .all(user.id) as { publication_id: string; request_id: string; published_at: string; withdrawn: number }[];
+    authority(database, actor);
+    return { owner_user_id: user.id, window_size: 100, items: rows.map(row => ({ ...row, withdrawn: Boolean(row.withdrawn) })) };
+  })();
+}
+
 /** Historical owner receipt remains inspectable after source archival/deletion. */
 export function readOwnFamilyMemoryPublication(database: Database, actor: AuthenticatedPrincipal, id: string) {
   return database.transaction(() => {

@@ -40,7 +40,7 @@ The legacy tables are neither erased nor migrated. This separates automatic sour
 
 ## Explicit publication ledger
 
-The internal `db/family-memory.ts` control-plane APIs copy an explicitly confirmed, verbatim message excerpt into a separate SQLite publication ledger. They require configured family mode and a live account login; preview, publication and withdrawal also require authentication within five minutes. Model execution contexts, service grants, absent identity and other modes cannot call these APIs. No HTTP route, browser control, filesystem projection, prompt injection or Dream consumer uses this ledger yet.
+The `db/family-memory.ts` control-plane APIs copy an explicitly confirmed, verbatim message excerpt into a separate SQLite publication ledger. They require configured family mode and a live account login; preview, publication and withdrawal also require authentication within five minutes. Model execution contexts, service grants, absent identity and other modes cannot call these APIs. The HTTP API below exposes explicit control-plane operations; no browser control, filesystem projection, prompt injection or Dream consumer uses this ledger yet.
 
 Preview requires an exact message row ID, message ID and active owned chat. It returns at most 100 KiB of text with a hash binding content, source metadata, branch, root and owner. Publication requires that unchanged hash, a non-empty verbatim excerpt of at most 16 KiB, a UUID request ID and `confirm: true`. Media, structured blocks and thinking content are never copied. Ownership permits selection; it does not prove the publisher authored the message or that its claims are true.
 
@@ -51,3 +51,24 @@ Shared reads return the newest 20 non-withdrawn copies, ordered by publication t
 Only a recently authenticated publisher can withdraw a copy, including after source archival or deletion. Withdrawal is append-only and idempotent, removes the copy from future shared reads and prevents publication retry from resurrecting it. It cannot retract earlier downloads, filesystem copies or provider context. Publication and withdrawal records are immutable and retained; this slice has no erasure or retention policy.
 
 Immediate SQLite transactions serialise publication/withdrawal and enforce retained-history limits of 100 copies per publisher and 1,000 globally, including withdrawn copies. Exact retries do not consume another slot; withdrawal does not free a slot. A full ledger rejects new publications until a separately reviewed retention mechanism exists. There are no concurrent shared-file edits because these APIs write no files. Legacy memory, transcripts, cursors, search indexes, timers and startup gates are unchanged. Shared filesystem/SQL-capable processes remain privileged. Per-user Dream coordination, file projection, consumer integration and browser confirmation need separate implementation and review.
+
+## Publication HTTP API
+
+The family-only dispatcher recognises these exact routes. All require a live family cookie and matching `x-piclaw-account-id` and `x-piclaw-login-id`. They accept no query parameters, including owner, chat, limit or pagination selectors. GET requires a live login; every POST also requires recent factor authentication, a matching Origin and `application/json`.
+
+| Method and path | Request / response |
+|---|---|
+| `POST /agent/family-memory/preview` | Exact `{chat_jid,message_rowid,message_id}`; returns those identifiers, owned source text and source hash without writing a record |
+| `POST /agent/family-memory` | Exact `{chat_jid,message_rowid,message_id,source_hash,text,request_id,confirm:true}`; returns publication ID, echoed request ID and `created`; 201 first publication, 200 exact receipt retry |
+| `GET /agent/family-memory/own` | Newest-first complete owner history, at most 100 entries: publication ID, request ID, time and withdrawn flag; no text/source/login metadata |
+| `GET /agent/family-memory/<publication-id>` | Owner-only copied text and historical source receipt; includes withdrawn copies and inaccessible original sources |
+| `GET /agent/family-memory/shared` | Newest 20 non-withdrawn copies with publisher attribution, without private source/login/request identifiers |
+| `POST /agent/family-memory/<publication-id>/withdraw` | Exact `{confirm:true}`; returns publication ID, `withdrawn:true` and `created`; 201 first withdrawal, 200 repeat |
+
+Preview, publication and withdrawal each have independent limits of 20 requests per minute per account, so preview/publication cannot exhaust withdrawal's allowance. The three GET routes share 60 reads per minute per account. Account limits cover all its login sessions. Rate rejection returns 429; no automatic retry is added.
+
+Body limits are 4 KiB for preview, 128 KiB for publication and 1 KiB for withdrawal, measured as encoded UTF-8 JSON. The larger publication envelope permits JSON escaping but does not increase the ledger's 16 KiB excerpt limit. Body reading has a 10-second deadline, rejects malformed UTF-8, invalid JSON, wrong shapes, overflow and aborts, and releases the reader. Account/role/login, configured mode, workspace/store/data paths and database connection are checked around every body read and before the ledger operation. An observed denial is permanent for that request; a replacement login/database cannot become its authority. Changes that occur and revert entirely between checks are not observable.
+
+The router returns 401 without a live family login, 409 for supplied stale/partial browser pins, and 403 for absent pins, denied authority or invalid route/input. Unexpected ledger failures return a generic 500 without logging their error payload. Responses are private/no-store and vary on Cookie. Publication response loss can be reconciled through the owner history and exact request ID, including after source archival/deletion; a retry acknowledges the existing receipt without republishing. Withdrawal prevents resurrection by retry. A client that loses its request ID must inspect history before creating another request.
+
+No SSE, notification, model/queue call, automatic refresh, search-index change or shared-file write follows these requests. Browser confirmation controls, consumer integration, per-user Dream and deployment activation require separate work. Shared copies are reference data and must never be interpreted as runtime identity or permission grants.
