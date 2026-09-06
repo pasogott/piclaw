@@ -16,6 +16,8 @@
 | `scheduled_tasks` | Task definitions |
 | `family_scheduled_grants` | Immutable owner/initiating-user/service, exact task revision/payload and branch binding, issued tool ceiling and non-secret login correlation; prepared tasks stay paused |
 | `family_scheduled_grant_revocations` | Append-only owner/account/task revocation; disable/role changes, task edits and deletion cannot resurrect prior grants |
+| `family_scheduled_occurrences` | One internal reservation per grant, due-time/worker/attempt/version fence and hashed expiring lease; consumed reservations cannot replay |
+| `family_scheduled_occurrence_events` | Append-only claim/reclaim/renew/consume audit without prompts or lease tokens |
 | `task_run_logs` | Task run history |
 | `token_usage` | Per‑assistant‑message token + cost usage (includes model/provider/api for per‑model tracking) |
 | `tool_outputs` | Stored tool output summaries |
