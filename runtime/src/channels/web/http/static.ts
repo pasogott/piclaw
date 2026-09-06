@@ -42,7 +42,7 @@ const MIME_TYPES: Record<string, string> = {
 const APP_ASSET_VERSION_PLACEHOLDER = "__APP_ASSET_VERSION__";
 const LOGIN_ASSET_VERSION_PLACEHOLDER = "__LOGIN_ASSET_VERSION__";
 const NOTIFICATION_SOURCE_LABELS_PLACEHOLDER = "__PICLAW_NOTIFICATION_SOURCE_LABELS_FLAG__";
-const LOGIN_VERSION_FILES = ["common/dist/login.bundle.js", "common/dist/login.bundle.css"];
+const LOGIN_VERSION_FILES = ["common/dist/login.bundle.js", "common/dist/login.bundle.css", "common/dist/invitation.bundle.js"];
 const TEXT_ASSET_CACHE = new Map<string, { mtimeMs: number; text: string }>();
 const GZIP_ASSET_CACHE = new Map<string, { mtimeMs: number; data: Uint8Array }>();
 
@@ -111,7 +111,7 @@ function renderHtmlTemplate(relPath: string, html: string): string {
   if (relPath === "visual/index.html") {
     return renderedWithSharedFlags;
   }
-  if (relPath === "login.html") {
+  if (relPath === "login.html" || relPath === "invitation.html") {
     return renderedWithSharedFlags.replaceAll(LOGIN_ASSET_VERSION_PLACEHOLDER, getLoginAssetVersion());
   }
   return renderedWithSharedFlags;

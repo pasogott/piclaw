@@ -72,7 +72,7 @@ export async function handleFamilyRequest(channel: WebChannelLike, req: Request,
   const principal = channel.authGateway.getPrincipal?.(req) ?? null;
   if (path === "/auth/me") return principalResponse(req, principal?.mode === "family-shared" ? principal : null);
 
-  const publicAsset = flags.isGetOrHead && ["/static/common/dist/login.bundle.js", "/static/common/dist/login.bundle.css"].includes(path);
+  const publicAsset = flags.isGetOrHead && ["/static/common/dist/login.bundle.js", "/static/common/dist/login.bundle.css", "/static/common/dist/invitation.bundle.js"].includes(path);
   const login = flags.isLoginPage || flags.isAuthVerify || flags.isWebauthnLoginStart || flags.isWebauthnLoginFinish;
   if (login || publicAsset || (!principal && flags.isIndex)) {
     // Internal and widget credentials cannot bypass browser account authentication.
@@ -81,7 +81,7 @@ export async function handleFamilyRequest(channel: WebChannelLike, req: Request,
       isInternalSecretEnabled: () => false,
       verifyInternalSecret: () => false,
       isAuthenticated: () => principal?.mode === "family-shared" && principal.kind === "user",
-    } }, req, path, flags);
+    } }, req, path, publicAsset ? { ...flags, isPublicStatic: true } : flags);
     if (guard) return guard;
     if (publicAsset) return channel.serveStatic(path.slice("/static/".length), req);
     return await handleAuthRoutes(channel, req, flags) ?? deny();

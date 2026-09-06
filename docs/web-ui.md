@@ -3,11 +3,15 @@
 Piclaw ships with a single-user streaming web UI that combines chat, workspace,
 editor, terminal, viewers, and lightweight control surfaces in one app.
 
-This page describes the supported single-user UI. [Family-mode backend work](multi-user/README.md) includes account APIs, owned forks and multiple passkeys, but startup still rejects family and isolated modes. Account administration, invitation/QR pages, passkey labels, per-user Settings, and browser cache/storage separation are not yet integrated into a supported family UI. Do not treat the existing session picker or multiple browser tabs as separate user accounts.
+This page describes the supported single-user UI. [Family-mode backend work](multi-user/README.md) includes account APIs, owned forks and multiple passkeys, but startup still rejects family and isolated modes. A restricted invitation/QR page and mode-aware login shell are implemented, but account administration, passkey labels, per-user Settings and browser cache/storage separation are not yet integrated into a supported family UI. Do not treat the existing session picker or multiple browser tabs as separate user accounts.
 
 ## Login
 
 The login shell loads non-secret mode/method flags before enabling credential inputs. Single-user code login remains code-only; the gated family policy adds an account username. Passkey-only and code-only policies hide unsupported controls. An explicit passkey button can replace a pending conditional prompt. Network/policy failures show retry without weakening the selected authentication method. This does not complete the family account/Settings UI or enable family startup.
+
+## Restricted invitation setup (gated family backend)
+
+An administrator can privately deliver `/auth/invitation#token=<grant>`. The page removes the grant from history, waits for Begin, then displays the new authenticator QR/manual key and a confirmation form. Confirmation enables only the invited account and directs the user to ordinary login. No account cookie is issued. Secrets are kept in memory and cleared on success, expiry or navigation; a failed/lost claim needs a new invitation. This page does not bypass the family startup gate or provide the unfinished admin issuance UI.
 
 ## Chat and status surfaces
 

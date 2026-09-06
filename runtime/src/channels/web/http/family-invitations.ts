@@ -3,10 +3,22 @@ import { AccountInvitations } from "../../../secure/account-invitations.js";
 import type { WebChannelLike } from "../core/web-channel-contracts.js";
 import { checkCsrfOrigin, rateLimitResponse } from "./security.js";
 import { isRateLimited } from "./rate-limit.js";
+import { generateTotpQr } from "../../../utils/totp-qr.js";
 
 /** Public but narrowly scoped enrolment ceremony. Successful confirmation is not a login. */
 export async function handleFamilyInvitationRoutes(channel: WebChannelLike, req: Request): Promise<Response | null> {
   const path = new URL(req.url).pathname;
+  if (path === "/auth/invitation") {
+    if ((req.method !== "GET" && req.method !== "HEAD") || !channel.authGateway.createTotpContext().isTotpEnabled()) return channel.json({ error: "Invitation page unavailable." }, 403);
+    const response = await channel.serveStatic("invitation.html", req);
+    response.headers.set("Referrer-Policy", "no-referrer");
+    response.headers.set("Cache-Control", "private, no-store");
+    if (req.method === "HEAD") {
+      await response.body?.cancel();
+      return new Response(null, { status: response.status, headers: response.headers });
+    }
+    return response;
+  }
   if (path !== "/auth/invitation/claim" && path !== "/auth/invitation/confirm") return null;
   const deny = () => channel.json({ error: "Invalid or expired invitation." }, 403);
   if (req.method !== "POST" || !req.headers.get("origin") || !checkCsrfOrigin(req)) return deny();
@@ -22,7 +34,10 @@ export async function handleFamilyInvitationRoutes(channel: WebChannelLike, req:
     const invitations = new AccountInvitations(getDb());
     if (claim) {
       const result = await invitations.claim(body.token, origin);
-      const response = channel.json({ enrolment_token: result.enrolmentToken, secret: result.secret, expires_at: result.expiresAt, username: result.username });
+      const { svg } = generateTotpQr({ secret: result.secret, issuer: "PiClaw", label: `PiClaw:${result.username}` });
+      const response = channel.json({ enrolment_token: result.enrolmentToken, secret: result.secret, expires_at: result.expiresAt, username: result.username,
+        qr_data_url: `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}` });
+      response.headers.set("Referrer-Policy", "no-referrer");
       response.headers.set("Set-Cookie", `piclaw_enrolment=${result.browserToken}; Path=/auth/invitation; HttpOnly; Secure; SameSite=Strict; Max-Age=300`);
       return response;
     }
