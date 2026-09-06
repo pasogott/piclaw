@@ -1,6 +1,7 @@
 import { beforeAll, afterAll, expect, test } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
 import { join } from "node:path";
+import type { SessionSettings } from '../../src/core/session-settings.js';
 
 const browserTest = process.env.PICLAW_RUN_OPTIONAL_BROWSER_TESTS === "1" ? test : test.skip;
 let browser: Browser, server: ReturnType<typeof Bun.serve>, base: string;
@@ -181,6 +182,149 @@ async function openAccount(page: Page) {
   await page.goto(base); await ready(page); await page.locator('#open-account').click();
   await page.waitForFunction(() => !(document.getElementById('account-details') as HTMLElement)?.hidden);
 }
+
+async function treeFixture(page: Page) {
+  const state = await fixture(page);
+  const branch = (id: string, name: string, parent: string | null = null): SessionSettings['branches'][number] => ({
+    branch_id: id, chat_jid: `web:${id}`, root_chat_jid: parent ? 'web:alice' : `web:${id}`, parent_branch_id: parent,
+    agent_name: name, archived_at: null, capabilities: { open: true, fork: true, rename: true, archive: id !== 'alice', restore: false, set_home: id !== 'alice' && !parent },
+  });
+  const snapshot: SessionSettings = { home_chat_jid: 'web:alice', capabilities: { create_root: true }, branches: [branch('alice', 'home'), branch('alice-two', 'second')] };
+  const actions: { path: string; body: any; headers: Record<string, string> }[] = [];
+  await page.route('**/account/trees', route => route.fulfill({ json: snapshot }));
+  await page.route('**/agent/branches', route => route.fulfill({ json: { branches: snapshot.branches.filter(b => b.capabilities.open) } }));
+  await page.route('**/timeline?**', route => {
+    const jid = new URL(route.request().url()).searchParams.get('chat_jid');
+    return route.fulfill(snapshot.branches.some(b => b.chat_jid === jid && b.capabilities.open) ? { json: posts() } : { status: 403, json: {} });
+  });
+  for (const path of ['/agent/root-session', '/agent/branch-fork', '/agent/branch-rename', '/agent/branch-prune', '/agent/branch-restore', '/account/home']) {
+    await page.route(`**${path}`, route => {
+      const body = route.request().postDataJSON(); actions.push({ path, body, headers: route.request().headers() });
+      let target = snapshot.branches.find(b => b.chat_jid === body.chat_jid);
+      if (path.endsWith('root-session') || path.endsWith('branch-fork')) { target = branch(`new-${actions.length}`, body.agent_name, path.endsWith('branch-fork') ? 'alice' : null); snapshot.branches.push(target); }
+      if (path.endsWith('branch-rename')) target!.agent_name = body.agent_name;
+      if (path.endsWith('branch-prune')) { target!.archived_at = 'now'; target!.capabilities = { open: false, fork: false, rename: false, archive: false, restore: true, set_home: false }; }
+      if (path.endsWith('branch-restore')) { target!.archived_at = null; target!.agent_name = body.agent_name; target!.capabilities = { open: true, fork: true, rename: true, archive: true, restore: false, set_home: !target!.parent_branch_id }; }
+      if (path.endsWith('/home')) {
+        snapshot.home_chat_jid = target!.chat_jid; state.identity.principal.homeChatJid = target!.chat_jid;
+        for (const item of snapshot.branches) { item.capabilities.set_home = !item.parent_branch_id && item.chat_jid !== target!.chat_jid; item.capabilities.archive = item.chat_jid !== target!.chat_jid; }
+      }
+      return route.fulfill({ json: { branch: target } });
+    });
+  }
+  return { state, snapshot, actions };
+}
+async function openTrees(page: Page) {
+  await page.goto(base); await ready(page); await page.locator('#open-sessions').click();
+  await page.waitForFunction(() => document.querySelectorAll('#owned-tree-list li').length > 0);
+}
+
+browserTest('owned session Settings creates, renames, selects home, archives and restores without implicit navigation', async () => {
+  const page = await browser.newPage({ viewport: { width: 768, height: 1024 } });
+  try {
+    const { actions } = await treeFixture(page); await openTrees(page);
+    const row = (name: string) => page.locator('#owned-tree-list li').filter({ has: page.locator('p', { hasText: `@${name} ·` }) });
+    expect(await row('home').getByRole('button', { name: 'Archive', exact: true }).isDisabled()).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.locator('#root-name').fill('research'); await page.locator('#create-root').click();
+    await page.waitForFunction(() => document.getElementById('session-settings-status')?.textContent?.includes('change saved'));
+    expect(actions[0]!.body).toEqual({ agent_name: 'research' }); expect(await page.locator('#session-select').inputValue()).toBe('web:alice');
+    await row('research').getByRole('button', { name: 'Rename', exact: true }).click(); await page.locator('#session-action-name').fill('renamed'); await page.locator('#submit-session-action').click();
+    await page.waitForFunction(() => document.getElementById('owned-tree-list')?.textContent?.includes('@renamed'));
+    expect(actions[1]!.body).toEqual({ chat_jid: 'web:new-1', agent_name: 'renamed' });
+    await row('second').getByRole('button', { name: 'Set home', exact: true }).click();
+    expect(await page.locator('#submit-session-action').isDisabled()).toBe(true);
+    await page.locator('#session-action-confirm').check(); await page.locator('#submit-session-action').click();
+    await page.waitForFunction(() => document.getElementById('session-home')?.textContent === 'Home: web:alice-two');
+    expect(await page.locator('#session-select').inputValue()).toBe('web:alice');
+    await row('home').getByRole('button', { name: 'Archive', exact: true }).click();
+    await page.locator('#session-action-confirm').check(); await page.locator('#submit-session-action').click();
+    await page.waitForFunction(() => document.getElementById('family-error')?.textContent?.includes('Access denied'));
+    expect(await page.locator('#send-message').isDisabled()).toBe(true); expect(await page.locator('#session-select').inputValue()).toBe('');
+    await page.evaluate(() => dispatchEvent(new Event('blur'))); await page.evaluate(() => dispatchEvent(new Event('focus')));
+    await page.waitForFunction(() => document.querySelectorAll('#owned-tree-list li').length === 3);
+    await row('home').getByRole('button', { name: 'Restore', exact: true }).click(); await page.locator('#session-action-name').fill('restored'); await page.locator('#submit-session-action').click();
+    await page.waitForFunction(() => document.getElementById('owned-tree-list')?.textContent?.includes('@restored')); await ready(page);
+    await page.locator('#go-home').click(); await page.waitForFunction(() => (document.getElementById('session-select') as HTMLSelectElement)?.value === 'web:alice-two');
+    expect(actions.every(a => a.headers['x-piclaw-account-id'] === 'alice' && a.headers['x-piclaw-login-id'] === 'login-a')).toBe(true);
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('manual fork retry preserves key without automatic replay', async () => {
+  const page = await browser.newPage();
+  try {
+    await treeFixture(page); const requests: any[] = [];
+    await page.route('**/agent/branch-fork', route => { requests.push(route.request().postDataJSON()); return route.fulfill(requests.length === 1 ? { status: 500, json: {} } : { json: { branch: {} } }); });
+    await openTrees(page);
+    await page.locator('#owned-tree-list li').first().getByRole('button', { name: 'Fork', exact: true }).click(); await page.locator('#session-action-name').fill('forked');
+    await page.locator('#submit-session-action').click(); await page.waitForFunction(() => document.getElementById('session-settings-status')?.textContent?.includes('No automatic retry'));
+    expect(requests).toHaveLength(1); expect(await page.locator('#session-action-name').inputValue()).toBe('forked');
+    await page.locator('#submit-session-action').click(); await page.waitForFunction(() => document.getElementById('session-settings-status')?.textContent?.includes('change saved'));
+    expect(requests[0].request_id).toBe(requests[1].request_id); expect(requests[0].chat_jid).toBe('web:alice');
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('tree capabilities and late replacement-login responses never reveal foreign targets', async () => {
+  const page = await browser.newPage();
+  try {
+    const { state, snapshot } = await treeFixture(page); snapshot.capabilities.create_root = false;
+    snapshot.branches[1]!.capabilities.set_home = false;
+    await openTrees(page); expect(await page.locator('#create-root').isDisabled()).toBe(true);
+    expect(await page.locator('#owned-tree-list li').nth(1).getByRole('button', { name: 'Set home', exact: true }).isDisabled()).toBe(true);
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>(r => release = r), waiting = new Promise<void>(r => entered = r);
+    await page.route('**/account/trees', async route => { entered(); await held; snapshot.branches[0]!.agent_name = 'STALE_TREE'; await route.fulfill({ json: snapshot }); });
+    await page.locator('#refresh-sessions').click(); await waiting; state.identity = principal('bob', 'login-b'); release();
+    await page.waitForFunction(() => document.getElementById('family-status')?.textContent?.includes('no longer bound'));
+    expect(await page.locator('#session-settings').isVisible()).toBe(false); expect(await page.locator('#owned-tree-list').textContent()).toBe('');
+    expect(await page.locator('body').textContent()).not.toContain('STALE_TREE');
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('failed restore preserves selection, and backgrounded mutations cannot restore drafts or enable compose', async () => {
+  const page = await browser.newPage();
+  try {
+    const { snapshot } = await treeFixture(page); const archived = snapshot.branches[1]!;
+    archived.archived_at = 'yesterday'; archived.capabilities = { open: false, fork: false, rename: false, archive: false, restore: true, set_home: false };
+    let attempts = 0;
+    await page.route('**/agent/branch-restore', route => { attempts++; return route.fulfill({ status: 400, json: {} }); });
+    await openTrees(page);
+    await page.locator('#owned-tree-list li').nth(1).getByRole('button', { name: 'Restore', exact: true }).click();
+    await page.locator('#session-action-name').fill('collision'); await page.locator('#submit-session-action').click();
+    await page.waitForFunction(() => document.getElementById('session-settings-status')?.textContent?.includes('No automatic retry'));
+    expect(attempts).toBe(1); expect(await page.locator('#session-action-name').inputValue()).toBe('collision');
+    expect(await page.locator('#session-select').inputValue()).toBe('web:alice');
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>(r => release = r), waiting = new Promise<void>(r => entered = r);
+    await page.route('**/agent/branch-restore', async route => { entered(); await held; await route.fulfill({ status: 400, json: {} }); });
+    await page.locator('#submit-session-action').click(); await waiting;
+    await page.evaluate(() => dispatchEvent(new Event('blur'))); release();
+    await page.waitForTimeout(80);
+    expect(await page.locator('#session-settings').isVisible()).toBe(false);
+    expect(await page.locator('#send-message').isDisabled()).toBe(true); expect(await page.locator('#session-action-name').inputValue()).toBe('');
+    await page.evaluate(() => dispatchEvent(new Event('focus'))); await ready(page);
+    await page.waitForFunction(() => document.querySelectorAll('#owned-tree-list li').length === 2);
+    expect(await page.locator('#session-action-form').isVisible()).toBe(false);
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('closing a pending session mutation keeps panel closed and refreshes picker after commit', async () => {
+  const page = await browser.newPage();
+  try {
+    const { snapshot } = await treeFixture(page); let release!: () => void, entered!: () => void;
+    const held = new Promise<void>(r => release = r), waiting = new Promise<void>(r => entered = r);
+    await page.route('**/agent/branch-rename', async route => { entered(); await held; snapshot.branches[1]!.agent_name = 'renamed'; await route.fulfill({ json: { branch: snapshot.branches[1] } }); });
+    await openTrees(page);
+    await page.locator('#owned-tree-list li').nth(1).getByRole('button', { name: 'Rename', exact: true }).click();
+    await page.locator('#session-action-name').fill('renamed'); await page.locator('#submit-session-action').click(); await waiting;
+    await page.locator('#close-sessions').click(); release();
+    await page.waitForFunction(() => document.getElementById('session-select')?.textContent?.includes('renamed'));
+    expect(await page.locator('#session-settings').isVisible()).toBe(false);
+    expect(await page.locator('#session-select').inputValue()).toBe('web:alice');
+    await page.locator('#open-sessions').click(); await page.waitForFunction(() => document.querySelectorAll('#owned-tree-list li').length === 2);
+    expect(await page.locator('#refresh-sessions').isDisabled()).toBe(false);
+  } finally { await page.close(); }
+}, 20000);
 
 browserTest("account profile and device controls are pinned, confirmed and accessible on mobile", async () => {
   const page = await browser.newPage({ viewport: { width: 375, height: 740 } });

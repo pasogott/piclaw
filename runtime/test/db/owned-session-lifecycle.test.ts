@@ -11,7 +11,7 @@ import { getUser } from "../../src/db/users.js";
 import { provisionFamilyAccount, updateManagedAccount } from "../../src/db/account-administration.js";
 import { resolveRequestPrincipal } from "../../src/channels/web/auth/principal.js";
 import type { AuthenticatedPrincipal } from "../../src/core/access-types.js";
-import { createOwnedRoot, selectOwnedHome, archiveOwnedSession, restoreOwnedSession, listOwnedLifecycleSessions } from "../../src/db/owned-session-lifecycle.js";
+import { createOwnedRoot, selectOwnedHome, archiveOwnedSession, restoreOwnedSession, listOwnedLifecycleSessions, readOwnedSessionSettings } from "../../src/db/owned-session-lifecycle.js";
 import { getRootOwnership, resolveAuthorisedChat } from "../../src/db/session-ownership.js";
 import { commitOwnedFork, readOwnedForkSeed } from "../../src/db/owned-forks.js";
 import { AgentBranchManager } from "../../src/agent-pool/branch-manager.js";
@@ -197,4 +197,35 @@ test("home changes need recent login and side-session activity prevents archive"
   const sidePool = new Map([[root.chat_jid, { runtime: { session: { isStreaming: true } } as any, lastUsed: Date.now() }]]);
   await expect(manager({ sidePool }).changeOwnedSessionLifecycle(alice, root.chat_jid, "archive")).rejects.toThrow("idle");
   expect(resolveAuthorisedChat(getDb(), alice, root.chat_jid, "session.read").chatJid).toBe(root.chat_jid);
+});
+
+test("tree Settings exposes only owned metadata with active-home and graph eligibility", () => {
+  const db = getDb(), root = createOwnedRoot(db, alice, 'work'), fork = child(root.chat_jid), nested = child(fork.chat_jid, 'deep');
+  let snapshot = readOwnedSessionSettings(db, alice);
+  const caps = (jid: string) => snapshot.branches.find(b => b.chat_jid === jid)!.capabilities;
+  expect(snapshot.capabilities.create_root).toBe(true); expect(snapshot.home_chat_jid).toBe(alice.homeChatJid);
+  expect(caps(alice.homeChatJid!).archive).toBe(false); expect(caps(alice.homeChatJid!).set_home).toBe(false);
+  expect(caps(root.chat_jid).set_home).toBe(true); expect(caps(fork.chat_jid).set_home).toBe(false);
+  expect(caps(root.chat_jid).archive).toBe(false); expect(caps(fork.chat_jid).archive).toBe(false); expect(caps(nested.chat_jid).archive).toBe(true);
+  expect(JSON.stringify(snapshot)).not.toContain(bob.homeChatJid!); expect(JSON.stringify(snapshot)).not.toContain('seed_json');
+  archiveOwnedSession(db, alice, nested.chat_jid); archiveOwnedSession(db, alice, fork.chat_jid); archiveOwnedSession(db, alice, root.chat_jid);
+  snapshot = readOwnedSessionSettings(db, alice);
+  expect(caps(root.chat_jid).restore).toBe(true); expect(caps(fork.chat_jid).restore).toBe(false);
+  expect(caps(root.chat_jid).open).toBe(false); expect(caps(root.chat_jid).fork).toBe(false);
+  restoreOwnedSession(db, alice, root.chat_jid); snapshot = readOwnedSessionSettings(db, alice); expect(caps(fork.chat_jid).restore).toBe(true);
+  db.query('UPDATE web_sessions SET created_at=? WHERE session_id=?').run(new Date(Date.now()-600_000).toISOString(), alice.authentication.sessionId!);
+  snapshot = readOwnedSessionSettings(db, alice); expect(caps(root.chat_jid).set_home).toBe(false); expect(caps(root.chat_jid).rename).toBe(true);
+  revokeUserWebSessions(alice.userId); expect(() => readOwnedSessionSettings(db, alice)).toThrow();
+});
+
+test("tree Settings HTTP rejects selectors and wrong pins and cannot grant admin foreign content", async () => {
+  const json = (body: unknown, status = 200) => Response.json(body, { status });
+  const authGateway = new WebAuthGateway({ accessMode: 'family-shared', passkeyMode: '', totpSecret: '', internalSecret: '', hasTls: true, sessionTtlSeconds: 3600 }, { json, challenges: new WebauthnChallengeTracker(), failureTracker: new TotpFailureTracker() });
+  const router = new RequestRouterService({ json, authGateway } as any, 'family-shared');
+  const req = (query = '', pin = alice.userId) => router.handle(new Request('https://family.local/account/trees'+query, { headers: {
+    cookie: `piclaw_session=token-${alice.userId}`, 'x-piclaw-account-id': pin, 'x-piclaw-login-id': alice.authentication.sessionId!,
+  } }));
+  const response = await req(); expect(response.status).toBe(200); expect(response.headers.get('cache-control')).toBe('private, no-store');
+  expect((await response.json()).branches.map((b: any) => b.chat_jid)).toEqual([alice.homeChatJid]);
+  expect((await req('?chat_jid='+bob.homeChatJid)).status).toBe(403); expect((await req('', bob.userId)).status).toBe(409);
 });
