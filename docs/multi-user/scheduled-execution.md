@@ -12,7 +12,15 @@ The owner cookie and both matching account/login pins are required. Writes also 
 
 The same owner/key and payload returns the original IDs, including after reauthentication or passage of the due time, while the grant still passes live preflight. A changed payload, revoked/modified/missing task, inaccessible target or revoked login denies without creating a replacement. The original login ID remains audit metadata. Each account may prepare at most 100 unrevoked grants through this API, counting existing internal grants; exact retries do not consume quota. Explicit revocation frees that allowance but never permits replay of the old key.
 
-GET `/agent/scheduled-tasks` returns metadata from the newest 50 owner grants, omitting inaccessible targets without scanning older entries. GET `/agent/scheduled-tasks/:grant_id` returns validated paused preparation data, or revoked metadata with no prompt. POST `/agent/scheduled-tasks/:grant_id/revoke` requires exactly `{confirm:true}` and permanently revokes that owner's grant; repeat revocation is idempotent. Revocation can stop future authority but cannot undo work already performed. None of these routes returns a lease or settlement token, queues execution, publishes messages or changes input cursors. There are no browser preparation controls yet; query selectors and alternate methods deny.
+Successful preparation returns `{request_id,task_id,grant_id,created,state:"paused"}`, echoing the validated request ID for client correlation on both creation and exact retry.
+
+GET `/agent/scheduled-tasks` returns metadata from the newest 50 owner grants, omitting inaccessible targets without scanning older entries. GET `/agent/scheduled-tasks/:grant_id` returns validated paused preparation data, or revoked metadata with no prompt. POST `/agent/scheduled-tasks/:grant_id/revoke` requires exactly `{confirm:true}` and permanently revokes that owner's grant; repeat revocation is idempotent. Revocation can stop future authority but cannot undo work already performed. None of these routes returns a lease or settlement token, queues execution, publishes messages or changes input cursors. Query selectors and alternate methods deny.
+
+## Owner task panel
+
+The [Prepared tasks panel](user-guide.md#prepare-or-revoke-a-paused-task) loads the owner list, active owned targets and current fixed tool allowance on open, explicit refresh or verified lifecycle resume. It never polls tasks. Target and UTC time are explicit, no tools are preselected, and confirmation is required before preparation. Both the 100 KiB UTF-8 prompt limit and 128 KiB encoded JSON limit are checked locally; the server remains authoritative.
+
+Uncertain responses retain one frozen payload and request ID until manual retry or explicit discard. Each retry needs confirmation; a success must acknowledge that request ID. Reopening an already visible panel preserves its draft. Closing, refreshing, blurring, hiding, switching sessions or navigating clears all task text and retry data, aborts pending reads and suppresses late rendering. An already-sent write may finish, so inspect saved tasks before recreating a discarded request. No task data enters browser storage. Task mutations share the shell's send/session/result mutation lock; list and detail requests do not execute work.
 
 ## Internal occurrence reservations
 

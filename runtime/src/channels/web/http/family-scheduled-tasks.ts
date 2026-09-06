@@ -41,7 +41,7 @@ export async function handleFamilyScheduledTasks(channel:WebChannelLike,req:Requ
     if(collection){
       if(Object.keys(value).length!==6||Object.keys(value).some(key=>!["confirm","request_id","chat_jid","prompt","scheduled_for","allowed_tools"].includes(key)))throw new ChatAccessDenied();
       const prepared=prepareOwnFamilyTask(getDb(),actor,{request_id:value.request_id as string,chat_jid:value.chat_jid as string,prompt:value.prompt as string,scheduled_for:value.scheduled_for as string,allowed_tools:value.allowed_tools as string[]});
-      return channel.json(prepared,prepared.created?201:200);
+      return channel.json({...prepared,request_id:value.request_id},prepared.created?201:200);
     }
     if(Object.keys(value).length!==1)throw new ChatAccessDenied();
     revokeFamilyScheduledGrant(getDb(),actor,match![1]!);

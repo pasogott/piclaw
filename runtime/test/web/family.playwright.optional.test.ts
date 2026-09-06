@@ -43,6 +43,144 @@ beforeAll(async () => {
 });
 afterAll(async () => { await browser?.close(); server?.stop(true); });
 
+async function taskFixture(page:Page) {
+  const state=await fixture(page),requests:Array<{body:any;headers:Record<string,string>}>=[];
+  const item={grant_id:'grant-one',task_id:'task-one',chat_jid:'web:alice-two',created_at:'2026-09-06T00:00:00.000Z',revoked:false};
+  const directory={owner_user_id:'alice',window_size:50,activation_available:false,items:[item]};
+  const detail={...item,activation_available:false,preparation:{prompt:'<img src=x onerror=alert(1)> PRIVATE_TASK',scheduled_for:'2026-09-07T12:00:00.000Z',allowed_tools:['read'],state:'paused'}};
+  await page.route('**/agent/scheduled-tasks',r=>{if(r.request().method()==='POST'){requests.push({body:r.request().postDataJSON(),headers:r.request().headers()});return r.fulfill({json:{request_id:r.request().postDataJSON().request_id,task_id:'task-new',grant_id:'grant-new',created:true,state:'paused'}});}return r.fulfill({json:directory});});
+  await page.route('**/agent/scheduled-tasks/grant-one',r=>r.fulfill({json:detail}));
+  await page.route('**/account/workspace',r=>r.fulfill({json:{user_id:'alice',tools:{policy:'fixed-family-web-preview',allowed:['read','messages']}}}));
+  return {state,requests,directory,detail};
+}
+async function openTasks(page:Page){await page.goto(base);await ready(page);await page.locator('#open-tasks').click();await page.waitForFunction(()=>!document.getElementById('prepare-task-form')?.hidden);}
+async function taskDraft(page:Page){await page.locator('#task-target').selectOption('web:alice-two');await page.locator('#task-prompt').fill('Exact task prompt\nline two ');const due=new Date(Date.now()+86400000).toISOString().slice(0,16);await page.locator('#task-due').fill(due);return due;}
+
+browserTest('prepared task editor uses UTC, explicit target and selected tools with pinned paused-only request',async()=>{
+  const page=await browser.newPage({viewport:{width:375,height:740},timezoneId:'America/New_York'});
+  try{const f=await taskFixture(page);await openTasks(page);expect(await page.locator('#task-target').inputValue()).toBe('');expect(await page.locator('#task-tools input:checked').count()).toBe(0);
+    const due=await taskDraft(page);await page.locator('#task-tools input[value=read]').check();expect(await page.locator('#prepare-task').isDisabled()).toBe(true);
+    await page.locator('#confirm-task-preparation').check();await page.locator('#prepare-task').click();await page.waitForFunction(()=>document.getElementById('scheduled-tasks-status')?.textContent?.includes('Prepared paused task'));
+    expect(f.requests).toHaveLength(1);expect(f.requests[0].body).toMatchObject({chat_jid:'web:alice-two',prompt:'Exact task prompt\nline two ',scheduled_for:due+':00.000Z',allowed_tools:['read'],confirm:true});expect(Object.keys(f.requests[0].body).sort()).toEqual(['allowed_tools','chat_jid','confirm','prompt','request_id','scheduled_for']);expect(f.requests[0].headers['x-piclaw-login-id']).toBe('login-a');
+    expect(await page.locator('#session-select').inputValue()).toBe('web:alice');expect(await page.locator('#task-prompt').inputValue()).toBe('');expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);expect(await page.evaluate(()=>[localStorage.length,sessionStorage.length])).toEqual([0,0]);
+  }finally{await page.close();}
+},20000);
+
+browserTest('uncertain preparation locks payload and reuses exact request ID only after manual confirmation',async()=>{
+  const page=await browser.newPage();
+  try{await taskFixture(page);const sent:any[]=[];await page.route('**/agent/scheduled-tasks',r=>{if(r.request().method()==='GET')return r.fulfill({json:{owner_user_id:'alice',window_size:50,activation_available:false,items:[]}});sent.push(r.request().postDataJSON());return r.fulfill(sent.length===1?{status:500,json:{}}:{json:{request_id:r.request().postDataJSON().request_id,task_id:'task-new',grant_id:'grant-new',state:'paused',created:false}});});
+    await openTasks(page);await taskDraft(page);await page.locator('#confirm-task-preparation').check();await page.locator('#prepare-task').click();await page.waitForFunction(()=>document.getElementById('scheduled-tasks-status')?.textContent?.includes('may have been prepared'));
+    expect(sent).toHaveLength(1);expect(await page.locator('#task-prompt').isDisabled()).toBe(true);expect(await page.locator('#task-due').isDisabled()).toBe(true);expect(await page.locator('#prepare-task').isDisabled()).toBe(true);
+    await page.locator('#open-tasks').click();expect(await page.locator('#task-prompt').inputValue()).toBe('Exact task prompt\nline two ');expect(await page.locator('#task-prompt').isDisabled()).toBe(true);
+    await page.locator('#confirm-task-preparation').check();await page.locator('#prepare-task').click();await page.waitForFunction(()=>document.getElementById('scheduled-tasks-status')?.textContent?.includes('Preparation verified'));expect(sent).toHaveLength(2);expect(sent[1]).toEqual(sent[0]);
+    await taskDraft(page);await page.locator('#confirm-task-preparation').check();await page.locator('#task-prompt').fill('Edited');expect(await page.locator('#confirm-task-preparation').isChecked()).toBe(false);
+    await page.locator('#reset-task-draft').click();expect(await page.locator('#task-prompt').inputValue()).toBe('');
+  }finally{await page.close();}
+},20000);
+
+browserTest('task preparation rejects mismatched receipt IDs and retries only the original payload',async()=>{
+  const page=await browser.newPage();
+  try{await taskFixture(page);const sent:any[]=[];
+    await page.route('**/agent/scheduled-tasks',r=>{if(r.request().method()==='GET')return r.fulfill({json:{owner_user_id:'alice',window_size:50,activation_available:false,items:[]}});const body=r.request().postDataJSON();sent.push(body);return r.fulfill({json:{request_id:sent.length===1?'another-request':body.request_id,task_id:'task-one',grant_id:'grant-one',state:'paused',created:false}});});
+    await openTasks(page);await taskDraft(page);await page.locator('#confirm-task-preparation').check();await page.locator('#prepare-task').click();
+    await page.waitForFunction(()=>document.getElementById('scheduled-tasks-status')?.textContent?.includes('Invalid task preparation response'));
+    expect(await page.locator('#task-prompt').isDisabled()).toBe(true);expect(sent).toHaveLength(1);
+    await page.locator('#confirm-task-preparation').check();await page.locator('#prepare-task').click();await page.waitForFunction(()=>document.getElementById('scheduled-tasks-status')?.textContent?.includes('Preparation verified'));
+    expect(sent).toHaveLength(2);expect(sent[1]).toEqual(sent[0]);
+  }finally{await page.close();}
+},20000);
+
+browserTest('task request size counts JSON escaping separately from UTF-8 prompt bytes before sending',async()=>{
+  const page=await browser.newPage();
+  try{const f=await taskFixture(page);await openTasks(page);await taskDraft(page);
+    for(const [prompt,error] of [['é'.repeat(51201),'100 KiB'],['"'.repeat(70000),'encoded request exceeds 128 KiB']]){
+      await page.locator('#task-prompt').fill(prompt);await page.locator('#confirm-task-preparation').check();await page.locator('#prepare-task').click();
+      await page.waitForFunction(text=>document.getElementById('scheduled-tasks-status')?.textContent?.includes(text),error);expect(f.requests).toHaveLength(0);expect(await page.locator('#task-prompt').isDisabled()).toBe(false);
+    }
+    await page.locator('#task-prompt').fill('é'.repeat(51200));await page.locator('#confirm-task-preparation').check();await page.locator('#prepare-task').click();await page.waitForFunction(()=>document.getElementById('scheduled-tasks-status')?.textContent?.includes('Prepared paused task'));expect(f.requests).toHaveLength(1);
+  }finally{await page.close();}
+},20000);
+
+browserTest('task mutation keeps one request through busy reset and cross-panel publication attempts',async()=>{
+  const page=await browser.newPage();let release:()=>void=()=>{};
+  try{const f=await taskFixture(page);let entered!:()=>void;const held=new Promise<void>(r=>release=r),waiting=new Promise<void>(r=>entered=r);let sends=0,publishes=0;
+    await page.route('**/agent/scheduled-results',r=>r.fulfill({json:resultList()}));await page.route('**/agent/scheduled-results/execution-one',r=>r.fulfill({json:resultDetail()}));
+    await page.route('**/agent/scheduled-results/execution-one/publish',r=>{publishes++;return r.fulfill({json:{execution_id:'execution-one',chat_jid:'web:alice-two',message_rowid:99,created:true}});});
+    await page.route('**/agent/scheduled-tasks',async r=>{if(r.request().method()==='GET')return r.fulfill({json:f.directory});sends++;entered();await held;await r.fulfill({status:500,json:{}});});
+    await openTasks(page);await page.locator('#open-results').click();await page.getByRole('button',{name:'Inspect result',exact:true}).click();await page.locator('#confirm-result-publication').check();
+    await taskDraft(page);await page.locator('#confirm-task-preparation').check();await page.locator('#prepare-task').click();await waiting;
+    await page.locator('#reset-task-draft').click();await page.locator('#refresh-tasks').click();await page.locator('#open-tasks').click();await page.locator('#publish-result').click();
+    expect(await page.locator('#task-prompt').inputValue()).toBe('Exact task prompt\nline two ');expect(await page.locator('#task-prompt').isDisabled()).toBe(true);expect(sends).toBe(1);expect(publishes).toBe(0);
+    release();await page.waitForFunction(()=>document.getElementById('scheduled-tasks-status')?.textContent?.includes('may have been prepared'));await page.waitForFunction(()=>!(document.getElementById('send-message') as HTMLButtonElement)?.disabled);
+    await page.locator('#publish-result').click();await page.waitForFunction(()=>document.getElementById('scheduled-results-status')?.textContent?.includes('Published'));expect(publishes).toBe(1);expect(sends).toBe(1);expect(await page.locator('#task-prompt').isDisabled()).toBe(true);
+  }finally{release();await page.close();}
+},20000);
+
+browserTest('hidden or blurred pending preparation clears private state and re-enables panel after identity check',async()=>{
+  for(const hidden of [false,true]){
+    const page=await browser.newPage();let release:()=>void=()=>{};
+    try{const f=await taskFixture(page);let entered!:()=>void;const held=new Promise<void>(r=>release=r),waiting=new Promise<void>(r=>entered=r);let sends=0;
+      await page.route('**/agent/scheduled-tasks',async r=>{if(r.request().method()==='GET')return r.fulfill({json:f.directory});sends++;entered();await held;await r.fulfill({json:{request_id:r.request().postDataJSON().request_id,task_id:'late-task',grant_id:'late-grant',created:true,state:'paused'}});});
+      await openTasks(page);await taskDraft(page);await page.locator('#confirm-task-preparation').check();await page.locator('#prepare-task').click();await waiting;
+      await page.evaluate(hidden=>{if(hidden){Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));}else dispatchEvent(new Event('blur'));},hidden);
+      expect(await page.locator('#task-prompt').inputValue()).toBe('');expect(await page.locator('#scheduled-tasks').isVisible()).toBe(false);expect(await page.locator('#open-tasks').isDisabled()).toBe(true);
+      // Return immediately, before the pending server reply: no retry or new task is sent.
+      await page.evaluate(hidden=>{if(hidden){Object.defineProperty(document,'hidden',{configurable:true,value:false});document.dispatchEvent(new Event('visibilitychange'));}else dispatchEvent(new Event('focus'));},hidden);
+      release();await page.waitForFunction(()=>!(document.getElementById('open-tasks') as HTMLButtonElement)?.disabled&&!document.getElementById('prepare-task-form')?.hidden);
+      expect(await page.locator('#task-prompt').inputValue()).toBe('');expect(await page.locator('#prepare-task').textContent()).toBe('Prepare paused task');expect(sends).toBe(1);
+      await page.locator('#close-tasks').click();await page.locator('#open-tasks').click();await page.waitForFunction(()=>!document.getElementById('prepare-task-form')?.hidden);
+    }finally{release();await page.close();}
+  }
+},20000);
+
+browserTest('uncertain and interrupted revocation require fresh inspection and never replay automatically',async()=>{
+  const page=await browser.newPage();let release:()=>void=()=>{};
+  try{await taskFixture(page);let sends=0,entered!:()=>void;const held=new Promise<void>(r=>release=r),waiting=new Promise<void>(r=>entered=r);
+    await page.route('**/agent/scheduled-tasks/grant-one/revoke',async r=>{sends++;if(sends===1)return r.fulfill({status:500,json:{}});entered();await held;await r.fulfill({json:{grant_id:'grant-one',revoked:true}});});
+    await openTasks(page);const inspect=async()=>{await page.getByRole('button',{name:'Inspect task',exact:true}).click();await page.locator('#confirm-task-revocation').check();await page.locator('#revoke-task').click();};
+    await inspect();await page.waitForFunction(()=>document.getElementById('scheduled-tasks-status')?.textContent?.includes('Revocation may have completed'));expect(await page.locator('#scheduled-task-text').textContent()).toBe('');expect(await page.locator('#revoke-task').isDisabled()).toBe(true);expect(sends).toBe(1);
+    await page.locator('#refresh-tasks').click();await inspect();await waiting;await page.evaluate(()=>dispatchEvent(new Event('blur')));await page.evaluate(()=>dispatchEvent(new Event('focus')));release();
+    await page.waitForFunction(()=>!(document.getElementById('open-tasks') as HTMLButtonElement)?.disabled&&!document.getElementById('prepare-task-form')?.hidden);expect(await page.locator('#scheduled-task-text').textContent()).toBe('');expect(await page.locator('#revoke-task').isDisabled()).toBe(true);expect(sends).toBe(2);
+  }finally{release();await page.close();}
+},20000);
+
+browserTest('task inspection renders plain text and revocation is explicit, pinned and clears details',async()=>{
+  const page=await browser.newPage();
+  try{const f=await taskFixture(page);const calls:any[]=[];await page.route('**/agent/scheduled-tasks/grant-one/revoke',r=>{calls.push({body:r.request().postDataJSON(),headers:r.request().headers()});return r.fulfill({json:{grant_id:'grant-one',revoked:true}});});
+    await openTasks(page);await page.getByRole('button',{name:'Inspect task',exact:true}).click();await page.waitForFunction(()=>document.getElementById('scheduled-task-text')?.textContent?.includes('PRIVATE_TASK'));expect(await page.locator('#scheduled-task-text img').count()).toBe(0);expect(await page.locator('#revoke-task').isDisabled()).toBe(true);
+    await page.locator('#confirm-task-revocation').check();await page.locator('#revoke-task').click();await page.waitForFunction(()=>document.getElementById('scheduled-tasks-status')?.textContent?.includes('grant revoked'));expect(calls[0].body).toEqual({confirm:true});expect(calls[0].headers['x-piclaw-account-id']).toBe('alice');expect(await page.locator('#scheduled-task-text').textContent()).toBe('');
+    f.detail.revoked=true;f.detail.preparation=null as any;await page.getByRole('button',{name:'Inspect task',exact:true}).click();await page.waitForFunction(()=>document.getElementById('scheduled-task-state')?.textContent?.includes('Grant revoked'));expect(await page.locator('#confirm-task-revocation').isDisabled()).toBe(true);
+  }finally{await page.close();}
+},20000);
+
+browserTest('task draft and inspection clear on refresh, close, blur, session switch and navigation',async()=>{
+  const page=await browser.newPage();
+  try{await taskFixture(page);await openTasks(page);const fill=async()=>{await taskDraft(page);await page.getByRole('button',{name:'Inspect task',exact:true}).click();await page.waitForFunction(()=>document.getElementById('scheduled-task-text')?.textContent?.includes('PRIVATE_TASK'));await page.locator('#confirm-task-preparation').check();};
+    await fill();await page.locator('#refresh-tasks').click();await page.waitForFunction(()=>!document.getElementById('prepare-task-form')?.hidden);expect(await page.locator('#task-prompt').inputValue()).toBe('');expect(await page.locator('#scheduled-task-text').textContent()).toBe('');
+    await fill();await page.locator('#close-tasks').click();expect(await page.locator('#task-prompt').inputValue()).toBe('');await page.locator('#open-tasks').click();await page.waitForFunction(()=>!document.getElementById('prepare-task-form')?.hidden);
+    await fill();await page.evaluate(()=>dispatchEvent(new Event('blur')));expect(await page.locator('#scheduled-task-text').textContent()).toBe('');await page.evaluate(()=>dispatchEvent(new Event('focus')));await page.waitForFunction(()=>!document.getElementById('prepare-task-form')?.hidden);
+    await fill();await page.locator('#session-select').selectOption('web:alice-two');await page.waitForFunction(()=>!document.getElementById('prepare-task-form')?.hidden);expect(await page.locator('#task-prompt').inputValue()).toBe('');
+    await fill();await page.evaluate(()=>dispatchEvent(new PageTransitionEvent('pagehide')));expect(await page.locator('#scheduled-task-text').textContent()).toBe('');expect(await page.locator('#task-prompt').inputValue()).toBe('');
+  }finally{await page.close();}
+},20000);
+
+browserTest('late preparation response cannot restore closed panel, draft or retry and releases shell lock',async()=>{
+  const page=await browser.newPage();
+  try{await taskFixture(page);let release!:()=>void,entered!:()=>void;const held=new Promise<void>(r=>release=r),waiting=new Promise<void>(r=>entered=r);
+    await page.route('**/agent/scheduled-tasks',async r=>{if(r.request().method()==='GET')return r.fulfill({json:{owner_user_id:'alice',window_size:50,activation_available:false,items:[]}});entered();await held;await r.fulfill({json:{request_id:r.request().postDataJSON().request_id,task_id:'task-late',grant_id:'grant-late',created:true,state:'paused'}});});
+    await openTasks(page);await taskDraft(page);await page.locator('#confirm-task-preparation').check();await page.locator('#prepare-task').click();await waiting;expect(await page.locator('#send-message').isDisabled()).toBe(true);await page.locator('#close-tasks').click();release();await page.waitForFunction(()=>!(document.getElementById('send-message') as HTMLButtonElement)?.disabled);
+    expect(await page.locator('#scheduled-tasks').isVisible()).toBe(false);await page.locator('#open-tasks').click();await page.waitForFunction(()=>!document.getElementById('prepare-task-form')?.hidden);expect(await page.locator('#task-prompt').inputValue()).toBe('');expect(await page.locator('#prepare-task').textContent()).toBe('Prepare paused task');
+  }finally{await page.close();}
+},20000);
+
+browserTest('account changes and target substitution fail closed before task content or controls render',async()=>{
+  const page=await browser.newPage();
+  try{const f=await taskFixture(page);await openTasks(page);f.detail.chat_jid='web:bob';await page.getByRole('button',{name:'Inspect task',exact:true}).click();await page.waitForFunction(()=>document.getElementById('scheduled-tasks-status')?.textContent?.includes('Invalid task detail'));expect(await page.locator('#scheduled-task-text').textContent()).toBe('');
+    f.detail.chat_jid='web:alice-two';let release!:()=>void,entered!:()=>void;const held=new Promise<void>(r=>release=r),waiting=new Promise<void>(r=>entered=r);
+    await page.route('**/agent/scheduled-tasks/grant-one',async r=>{entered();await held;await r.fulfill({json:f.detail});});await page.getByRole('button',{name:'Inspect task',exact:true}).click();await waiting;f.state.identity=principal('bob','login-b');release();await page.waitForFunction(()=>document.getElementById('family-status')?.textContent?.includes('no longer bound'));expect(await page.locator('#scheduled-task-text').textContent()).toBe('');expect(await page.locator('#task-prompt').inputValue()).toBe('');
+  }finally{await page.close();}
+},20000);
+
 browserTest('scheduled results load on explicit open, inspect as text and publish once with original target pins',async()=>{
   const page=await browser.newPage({viewport:{width:375,height:740}});
   try{

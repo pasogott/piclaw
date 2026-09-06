@@ -97,7 +97,8 @@ test("metadata and detail reads are owner scoped, bounded, redact revoked prompt
 test("HTTP pinned preparation/list/detail/revoke leaves tasks paused without queue or model work",async()=>{
   const r=router(),path="/agent/scheduled-tasks",data=input();
   const first=await r.handle(req(path,"POST",JSON.stringify({...data,confirm:true})));expect(first.status).toBe(201);expect(first.headers.get("cache-control")).toBe("private, no-store");const created=await first.json();
-  expect((await r.handle(req(path,"POST",JSON.stringify({...data,confirm:true})))).status).toBe(200);
+  expect(created.request_id).toBe(data.request_id);
+  const retried=await r.handle(req(path,"POST",JSON.stringify({...data,confirm:true})));expect(retried.status).toBe(200);expect(await retried.json()).toEqual({...created,created:false});
   const list=await r.handle(req(path));expect((await list.json()).items).toHaveLength(1);
   const detail=await r.handle(req(`${path}/${created.grant_id}`));expect((await detail.json()).preparation.prompt).toBe(data.prompt);
   expect((await r.handle(req(`${path}/${created.grant_id}`,"GET",undefined,bob))).status).toBe(403);
@@ -105,6 +106,15 @@ test("HTTP pinned preparation/list/detail/revoke leaves tasks paused without que
   expect((await r.handle(req(`${path}/${created.grant_id}/revoke`,"POST",'{"confirm":true}'))).status).toBe(200);
   expect((await r.handle(req(path,"POST",JSON.stringify({...data,confirm:true})))).status).toBe(403);
   expect(count("family_scheduled_occurrences")).toBe(0);expect(count("messages")).toBe(0);expect(getTaskById(created.task_id)?.status).toBe("paused");
+});
+
+test("HTTP applies the 128KiB bound to encoded JSON including escaping, with exact-boundary acceptance",async()=>{
+  const r=router(),path="/agent/scheduled-tasks",data={...input(),prompt:'"'.repeat(70000),confirm:true};
+  expect(Buffer.byteLength(data.prompt)).toBeLessThan(102400);expect(Buffer.byteLength(JSON.stringify(data))).toBeGreaterThan(128*1024);
+  expect((await r.handle(req(path,"POST",JSON.stringify(data)))).status).toBe(403);expect(count("scheduled_tasks")).toBe(0);
+  const json=JSON.stringify({...data,prompt:"bounded prompt"}),atLimit=json+" ".repeat(128*1024-Buffer.byteLength(json));
+  expect((await r.handle(req(path,"POST",atLimit))).status).toBe(201);
+  expect((await r.handle(req(path,"POST",atLimit+" "))).status).toBe(403);expect(count("scheduled_tasks")).toBe(1);
 });
 
 test("HTTP rejects missing pins/Origin, forged fields, alternate methods, selectors and stale authentication",async()=>{
