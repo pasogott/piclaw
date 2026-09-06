@@ -25,6 +25,7 @@ export function initializeFamilyScheduledExecutions(database: Database): void {
     expires_at INTEGER NOT NULL CHECK(expires_at=created_at+900000),
     CHECK(owner_user_id=initiated_by_user_id)
   ) STRICT;
+  CREATE INDEX IF NOT EXISTS family_scheduled_executions_owner_recent ON family_scheduled_executions(owner_user_id,created_at DESC,id DESC);
   CREATE TABLE IF NOT EXISTS family_scheduled_results (
     execution_id TEXT PRIMARY KEY REFERENCES family_scheduled_executions(id),
     status TEXT NOT NULL CHECK(status IN ('success','error')),

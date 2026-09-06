@@ -130,7 +130,38 @@ export function readOwnFamilyScheduledResult(database: Database, actor: Authenti
     return { execution_id: row.id, chat_jid: target.chatJid, owner_user_id: row.owner_user_id,
       initiated_by_user_id: row.initiated_by_user_id, service: "scheduler" as const,
       owner_username: row.owner_username, owner_display_name: row.owner_display_name,
+      publication_recorded: Boolean(database.query("SELECT 1 FROM family_scheduled_publications WHERE execution_id=?").get(row.id)),
       state: stored ? "settled" as const : at >= row.expires_at ? "expired-unsettled" as const : "unsettled" as const,
       result: stored ? { status: stored.status, text: stored.text, created_at: stored.created_at } : null };
+  })();
+}
+
+/** Metadata only, limited before per-target validation; never read another owner's result payload. */
+export function listOwnFamilyScheduledResults(database: Database, actor: AuthenticatedPrincipal) {
+  return database.transaction(() => {
+    const at = now(); requireAccountActor(database, actor);
+    const rows = database.query(`SELECT e.id,e.chat_jid,e.root_chat_jid,e.target_branch_id,e.root_branch_id,e.created_at,e.expires_at,
+      g.target_branch_id AS grant_target,g.root_branch_id AS grant_root,b.branch_id AS current_branch,
+      EXISTS(SELECT 1 FROM family_scheduled_results r WHERE r.execution_id=e.id) AS settled,
+      EXISTS(SELECT 1 FROM family_scheduled_publications p WHERE p.execution_id=e.id) AS published
+      FROM family_scheduled_executions e
+      LEFT JOIN family_scheduled_grants g ON g.id=e.grant_id AND g.owner_user_id=e.owner_user_id AND g.chat_jid=e.chat_jid
+      LEFT JOIN chat_branches b ON b.chat_jid=e.chat_jid
+      WHERE e.owner_user_id=? ORDER BY e.created_at DESC,e.id DESC LIMIT 50`).all(actor.userId) as Array<{
+        id:string;chat_jid:string;root_chat_jid:string;target_branch_id:string;root_branch_id:string;created_at:number;expires_at:number;
+        grant_target:string|null;grant_root:string|null;current_branch:string|null;settled:number;published:number;
+      }>;
+    const items = rows.flatMap(row => {
+      try {
+        identifier(row.id);
+        const target=resolveAuthorisedChat(database,actor,row.chat_jid,"session.read");
+        if (target.rootChatJid!==row.root_chat_jid || target.rootBranchId!==row.root_branch_id || row.grant_root!==row.root_branch_id
+          || row.grant_target!==row.target_branch_id || row.current_branch!==row.target_branch_id
+          || !Number.isSafeInteger(row.created_at) || row.created_at<0 || row.created_at>at || row.expires_at!==row.created_at+TTL) throw new ChatAccessDenied();
+        return [{execution_id:row.id,chat_jid:row.chat_jid,created_at:row.created_at,
+          state:row.settled?"settled":at>=row.expires_at?"expired-unsettled":"unsettled",publication_recorded:row.published===1}];
+      } catch(error) { if(error instanceof ChatAccessDenied)return []; throw error; }
+    });
+    return { owner_user_id:actor.userId,window_size:50,items };
   })();
 }

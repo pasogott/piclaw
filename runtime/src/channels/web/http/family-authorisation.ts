@@ -113,7 +113,7 @@ export async function handleFamilyRequest(channel: WebChannelLike, req: Request,
     return channel.json({ logged_out: true });
   }
   if (path === "/agent/message-recovery") return handleFamilyMessageRecovery(channel, req, principal);
-  if (path.startsWith("/agent/scheduled-results/")) return handleFamilyScheduledResults(channel, req, principal);
+  if (path === "/agent/scheduled-results" || path.startsWith("/agent/scheduled-results/")) return handleFamilyScheduledResults(channel, req, principal);
   if (/^\/agent\/[^/]+\/message$/.test(path)) return handleFamilyMessageIngress(channel, req, principal);
   const accountResponse = await handleFamilyAccountRoutes(channel, req, principal);
   if (accountResponse) return accountResponse;

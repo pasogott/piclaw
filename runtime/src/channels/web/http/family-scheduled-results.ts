@@ -1,7 +1,7 @@
 import type { AuthenticatedPrincipal } from "../../../core/access-types.js";
 import { getDb } from "../../../db/connection.js";
 import { requireAccountActor } from "../../../db/account-administration.js";
-import { readOwnFamilyScheduledResult } from "../../../db/family-scheduled-executions.js";
+import { listOwnFamilyScheduledResults, readOwnFamilyScheduledResult } from "../../../db/family-scheduled-executions.js";
 import { publishOwnFamilyScheduledResult } from "../../../db/family-scheduled-publications.js";
 import { ChatAccessDenied } from "../../../db/session-ownership.js";
 import type { WebChannelLike } from "../core/web-channel-contracts.js";
@@ -41,8 +41,10 @@ async function confirmation(req: Request): Promise<void> {
 export async function handleFamilyScheduledResults(channel: WebChannelLike, req: Request, actor: AuthenticatedPrincipal): Promise<Response> {
   const deny = () => channel.json({error:"Session access denied."},403);
   const url = new URL(req.url), match = url.pathname.match(/^\/agent\/scheduled-results\/([a-zA-Z0-9_-]{1,128})(\/publish)?$/);
-  if (!match || url.search || req.headers.get("x-piclaw-account-id") !== actor.userId || req.headers.get("x-piclaw-login-id") !== actor.authentication.sessionId) return deny();
+  if (url.search || req.headers.get("x-piclaw-account-id") !== actor.userId || req.headers.get("x-piclaw-login-id") !== actor.authentication.sessionId) return deny();
   try {
+    if (url.pathname === "/agent/scheduled-results" && req.method === "GET") return channel.json(listOwnFamilyScheduledResults(getDb(),actor));
+    if (!match) return deny();
     if (req.method === "GET" && !match[2]) return channel.json(readOwnFamilyScheduledResult(getDb(),actor,match[1]!));
     if (req.method !== "POST" || !match[2] || !req.headers.get("origin") || !checkCsrfOrigin(req)) return deny();
     requireAccountActor(getDb(),actor,{recent:true});
