@@ -80,7 +80,7 @@ Internal provisioning helpers assign an existing root and a user's home atomical
 
 The owner-aware lookup/list/rename helpers validate live account and parent-chain ownership. Friendly rename updates only `agent_name` and `updated_at`; it preserves branch ID, chat JID, root, home, message references and filesystem paths. Owner-local misses never query another namespace. The legacy database lookup returns only legacy handles, and legacy ensure/rename/restore methods reject migrated rows.
 
-Family branch listing, fork and friendly rename now use owner-bound controls. AgentBranchManager handle lookup and active/known lists use execution identity and have no cross-user active-session fallback. Chat tools, session control, schedules and peer ingress still need end-to-end owner propagation. Additional root creation, own-home selection, archive and restore now use explicit family lifecycle routes. Merge and purge remain denied. Archive download uses the text-only owned export described below. Legacy JID migration and unscoped destructive branch-manager methods still deny multi-user mode.
+Family branch listing, fork and friendly rename now use owner-bound controls. AgentBranchManager handle lookup and active/known lists use execution identity and have no cross-user active-session fallback. Chat discovery and read-only session control now use owner-bound resolution. Cross-session sends, mutating controls, schedules and peer ingress still need end-to-end owner propagation. Additional root creation, own-home selection, archive and restore now use explicit family lifecycle routes. Merge and purge remain denied. Archive download uses the text-only owned export described below. Legacy JID migration and unscoped destructive branch-manager methods still deny multi-user mode.
 
 ### Owned roots, home selection and archive/restore
 
@@ -229,6 +229,14 @@ The helper does not enforce process shutdown and is not a complete operator rota
 The existing memory bootstrap hook appends runtime username, display name, actor/owner IDs, role and workspace profile to system context. It never creates a synthetic user message or emits login credentials. Personal context comes from `notes/users/<immutable-user-id>/MEMORY.md` and `notes/users/<immutable-user-id>/preferences.md`, plus explicit shared `notes/family/MEMORY.md`. Missing files are reported as missing; another user's context or legacy global personal memory is not substituted. Paths remain on the deliberately shared filesystem.
 
 Unmodified single-user callers keep their existing prompt/memory behaviour, and clear inherited execution identity. Browser ingress, durable queue/job attribution, direct side prompts, delegates and service grants must integrate this contract before family activation. The foundation tests the scoped authoriser, concurrent contexts and prompt hook; it does not yet claim identity propagation across every entry point.
+
+## Owner-scoped cross-session discovery and inspection
+
+`chat action=directory` uses the current execution identity and chat context to list only active owned session aliases. It does not call installed remote/local directory providers in multi-user mode. The entries advertise no delivery modes: discovery is available, sending is not. Model hints describe this restriction rather than recommending unavailable sends.
+
+`session_control` permits only `inspect` and `assess_stuck` for an active owned target, resolved by either one exact JID or one owner-local handle. The source must match the live execution/chat context; a claimed source, missing context, revoked login, foreign target or local alias miss cannot fall back to a global registry. Inspection returns activity/failure/cursor metadata without model hydration, provider inventory, session file paths or conversation text.
+
+Cross-session sends are denied at the chat tool before attachment reads, at the transport registry before provider callbacks, and at the direct runtime relay. Mutating session-control operations (compact/abort/model switch/retry/skip/wake/unblock) are denied at both the tool and runtime handler. These writes need durable owner provenance across queues and target execution before being enabled. Legacy single-user relay and control behaviour is unchanged; family/isolated activation remains disabled.
 
 ## Activation and recovery
 
