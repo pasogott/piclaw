@@ -33,6 +33,7 @@ import { rememberWebOrigin } from "./auth/request-origin.js";
 import { handleAgentRoutes } from "./http/dispatch-agent.js";
 import { handleAuthRoutes } from "./http/dispatch-auth.js";
 import { principalResponse } from "./auth/principal.js";
+import { loginOptionsResponse } from "./auth/login-options.js";
 import { handleContentPrimaryRoutes, handleContentSecondaryRoutes } from "./http/dispatch-content.js";
 import { handleMediaRoutes } from "./http/dispatch-media.js";
 import { handleShellRoutes } from "./http/dispatch-shell.js";
@@ -125,6 +126,8 @@ export class RequestRouterService {
   private async route(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const pathname = url.pathname;
+
+    if (pathname === "/auth/options") return loginOptionsResponse(req, this.accessMode, this.channel.authGateway);
 
     // Terminal gate precedes every legacy/add-on dispatcher, including early routes.
     if (this.accessMode === "family-shared") {

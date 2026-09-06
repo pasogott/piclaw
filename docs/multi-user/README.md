@@ -1,6 +1,6 @@
 # Access modes
 
-Piclaw supports **single-user deployments only**. The development backend now includes account administration, per-user TOTP, multiple passkeys, restricted invitations, administrator-assisted recovery, owned forks, scoped reads/SSE and auth maintenance. **Family and isolated modes still cannot start.** There is no bypass flag or supported migration/Settings flow. [#1134](https://github.com/rcarmo/piclaw/issues/1134) tracks the remaining integration.
+Piclaw supports **single-user deployments only**. The development backend now includes account administration, per-user TOTP, multiple passkeys, restricted invitations, administrator-assisted recovery, owned forks, scoped reads/SSE and auth maintenance. **Family and isolated modes still cannot start.** There is no bypass flag or supported migration/Settings flow. The login shell can render family account fields from public method policy, but this does not enable a family deployment. [#1134](https://github.com/rcarmo/piclaw/issues/1134) tracks the remaining integration.
 
 This guide describes the implementation on `main`, not a deployed or released family feature. The [HTTP inventory](../../runtime/docs/web-api-endpoint-inventory.md#family-development-routes) lists exact development routes; [storage](../storage.md) lists persisted records.
 
@@ -113,6 +113,7 @@ The family router makes a terminal decision before legacy, add-on and widget-sta
 | GET/HEAD login page; POST TOTP verify and WebAuthn login start/finish | Existing authentication handlers and rate limits; internal-secret bypass disabled |
 | GET/HEAD login JS/CSS | Public packaged assets; source maps and other assets require login |
 | GET/HEAD `/auth/me` | Account snapshot or JSON 401 |
+| GET/HEAD `/auth/options` | Public mode and login-method flags only; no user/credential inventory, no-store; isolated mode returns 503 |
 | POST `/auth/invitation/claim`, `/auth/invitation/confirm` | Restricted grant, mandatory matching Origin, bound enrolment cookie on confirmation; no account login issued |
 | GET/HEAD index and `/static/*` | Authenticated packaged shell/assets; anonymous index serves login |
 | GET `/timeline`, `/hashtag/:tag`, `/thread/:id` | Live owned home or validated owned target |
@@ -156,6 +157,14 @@ Multi-user TOTP selects one normalised username, strictly validates its six-digi
 WebAuthn discoverable login resolves the verified credential owner and checks its user handle, account state and current credential before issuing a cookie. Multi-user ceremonies require user verification and capture the expected origin. Registration requires same-account recent authentication and origin checks; it uses the user's immutable ID/username/display name and cannot overwrite an existing credential. Legacy single-user ceremony settings remain supported.
 
 Offline recovery, legacy WebAuthn ceremony isolation and Settings are unfinished. The account service below protects factor removal. Legacy `/totp` and `/passkey` commands reject multi-user mode before reading shared/default factors or creating enrolment cards. Direct Adaptive Card actions (including old TOTP cards) and HTTP side-prompt service calls also reject multi-user mode before payload parsing, source lookup or model invocation. Owner-aware replacements for these disabled entry points are unfinished. No mode is enabled by these internal methods. Back up the factor tables and bootstrap key together. Changing the bootstrap key requires the coordinated offline procedure below; automatic rotation and mixed-key ciphertext are unsupported.
+
+## Mode-aware login shell
+
+The static login page fetches GET `/auth/options` before enabling inputs. The response includes only `mode`, `auth_enabled`, `totp`, `passkey` and `username_required`; it never resolves a principal or returns usernames, credentials or key material. Unknown/inconsistent policy and network failures leave credential forms disabled with an explicit retry action.
+
+Single-user TOTP submits `{code}` as before. Family TOTP shows a labelled account-username field and submits `{username,code}` with normalised username. Passkey-only policy hides the code form; code-only policy never attempts passkeys. An explicit passkey button is available when enabled. Clicking it cancels outstanding conditional mediation; code submission cancels passkey work. Failed/cancelled attempts are shown without removing enabled alternatives. Login success continues to `/`; per-user landing/compose integration is still required before activation.
+
+Unit tests cover public response projection, mode parsing and payload shape. Headless Chromium tests cover family/single-user fields, passkey-only/code-only controls, conditional/explicit cancellation, failed policy retry, network failure and mobile width. Physical authenticators, full family browser workflows and translations of the login form still need integration.
 
 ## Family account administration
 
