@@ -32,6 +32,9 @@ export function initializeAccessSchema(database: Database, legacyDisplayName = "
 }
 
 export function readAccessState(database: Database): AccessState {
+  if (database.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='access_migration_preparation'").get()) {
+    throw new Error('Prepared migration copy cannot start. Ownership preparation is incomplete; restore the untouched source or use a future integrated migration release.');
+  }
   const row = database.query("SELECT activated_mode, schema_version FROM access_state WHERE id = 1").get() as
     { activated_mode: AccessMode; schema_version: number } | null;
   if (!row || !["single-user", "family-shared", "isolated-containers"].includes(row.activated_mode) || row.schema_version !== 1) {
