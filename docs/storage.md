@@ -21,6 +21,7 @@
 | `family_scheduled_executions` | Immutable consumed-occurrence handoff, owner/service/target and label snapshot, prompt hash, tool ceiling and hashed 15-minute settlement capability |
 | `family_scheduled_results` | One immutable bounded text result per execution; exact retries acknowledge the same record |
 | `family_scheduled_execution_events` | Append-only begin/settle audit, committed with the corresponding state |
+| `family_scheduled_publications` | Immutable owner-confirmed publication receipt binding execution, original chat and exact message row/hash; prevents replay or recreation |
 | `task_run_logs` | Task run history |
 | `token_usage` | Per‑assistant‑message token + cost usage (includes model/provider/api for per‑model tracking) |
 | `tool_outputs` | Stored tool output summaries |
