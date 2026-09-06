@@ -45,6 +45,7 @@
 | `user_tool_restrictions` | Per-account denied names within the fixed family ceiling and optimistic-concurrency revision |
 | `user_tool_restriction_events` | Acting administrator, target, old/new denial lists, revision and time; committed atomically with policy changes |
 | `user_preferences` | Immutable-account-ID appearance and bounded response guidance, revision and update time; owner-only API, no global Settings or memory-file writes |
+| `user_avatars` | Immutable-account-ID 256-pixel WebP blob (at most 256 KiB), revision and update time; removal retains a null-image revision tombstone; no original upload, path or remote URL |
 | `core_schema_migrations` | Core migration ledger, including removal of obsolete core remote-interop tables |
 
 Remote Peer state belongs to the installed add-on. The obsolete core `remote_*` tables are removed by `dropObsoleteRemoteInteropSchema`; they are not a current storage API.

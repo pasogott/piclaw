@@ -40,6 +40,7 @@ export function readFamilyWorkspacePolicy(database: Database, actor: Authenticat
       ],
       settings: [
         { name: 'Account names, factors and device labels', scope: 'user', availability: 'Explicit own-account APIs; administrator operations are separate and confirmed.' },
+        { name: 'Account avatar', scope: 'user / immutable account ID', availability: 'Owner-only revisioned raster upload/read/removal. No remote URLs, shared avatar or administrator override; images are re-encoded without metadata.' },
         { name: 'Root, fork, handle and home', scope: 'session/tree and user default', availability: 'Owned lifecycle controls; changing home affects future targetless requests, never another tab’s explicit selection.' },
         { name: 'Appearance and response guidance', scope: 'user / immutable account ID', availability: 'Own revisioned preferences API; system/light/dark appearance and bounded next-run response guidance. No global Settings or memory-file edits.' },
         { name: 'Drafts and recent selections', scope: 'browser-memory', availability: 'Unsaved data stays in the current page and clears on identity changes; legacy stored preferences are not imported.' },

@@ -19,6 +19,7 @@ import { readAdminHome, assignAdminHome } from '../../../db/admin-home.js';
 import { readFamilyWorkspacePolicy } from '../../../db/family-workspace-policy.js';
 import { readAdminToolPolicy, updateAdminToolPolicy } from '../../../db/family-tool-restrictions.js';
 import { readOwnAccountPreferences, updateOwnAccountPreferences } from '../../../db/account-preferences.js';
+import { handleFamilyAvatar } from './family-avatar.js';
 
 /** Account-only surface: never returns conversation content, tokens or factor secrets. */
 export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Request, principal: AuthenticatedPrincipal): Promise<Response | null> {
@@ -33,6 +34,7 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
   }
   try {
     const db = getDb();
+    if (path === '/account/avatar' || path === '/account/avatar/image') return await handleFamilyAvatar(db, principal, req);
     const policy = { totp: channel.authGateway.createTotpContext().isTotpEnabled(), passkey: channel.authGateway.createWebauthnContext().isPasskeyEnabled(), rpId: resolveWebauthnRpInfo(req).rpId };
     if (method === "GET") {
       if (path === '/account/preferences') {

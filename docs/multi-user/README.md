@@ -184,6 +184,7 @@ Account reads recheck the login ID and enabled user/role. Mutations require a ma
 | PATCH `/admin/users/:id` | Recent administrator changes username/displayName/role/enabled; immutable identity/home fields rejected |
 | GET `/account` | Live self-only profile/factor/device snapshot with current-policy capability hints; query selectors denied |
 | GET/PATCH `/account/preferences` | Live self-only appearance/response guidance; writes use exact fields, Origin and expected revision, with no admin override or global state changes |
+| GET/POST/DELETE `/account/avatar`, GET `/account/avatar/image` | Live self-only, mandatory account/login pins; bounded raster upload and revisioned removal, no selectors/admin override; private no-store image bytes |
 | GET `/account/workspace` | Live self; read-only sharing, fixed tool ceiling, memory-selection paths and Settings scopes; configured mode and activation marker are distinct; no inventories or config values |
 | GET/PATCH `/admin/users/:id/tools` | Recent administrator reads or updates account denials within the fixed ceiling; exact username, expected revision and audited writes |
 | GET `/account/trees` | Live self-only root/fork/archive metadata and action eligibility; query selectors denied; distinct from browser-device `/account/sessions` |
@@ -229,7 +230,17 @@ PATCH at the same path accepts exactly `{branch_id,confirm_username}` with match
 
 Home changes affect future sign-ins and targetless requests only. Existing target-bound logins, conversations, runs, seeds and ownership remain unchanged, and the administrator still cannot read that root's messages. The UI uses server eligibility, exact username and checkbox confirmation, clears metadata on close/blur/navigation, and does not retry automatically. Container destination assignment is a separate #1132 gate. Audit retention is unfinished.
 
-Restricted invitations below bootstrap a new account's TOTP factor; administrator-assisted reset is described separately. Avatar changes, container destination assignment and offline lone-administrator recovery are not implemented. Full mode activation, migrated legacy factors and legacy WebAuthn tool/ceremony isolation need integration testing before release.
+Restricted invitations below bootstrap a new account's TOTP factor; administrator-assisted reset is described separately. Container destination assignment and offline lone-administrator recovery are not implemented. Full mode activation, migrated legacy factors and legacy WebAuthn tool/ceremony isolation need integration testing before release.
+
+## Personal account avatars
+
+`user_avatars` stores the owner's immutable account ID, revision, canonical WebP blob and update time. GET `/account/avatar` returns `{user_id,revision,present,can_edit}`. GET `/account/avatar/image` returns only that owner's image, or 404 when absent. Both require explicit account/login headers matching the live principal; direct image tags without those headers deny. Query selectors and other-account administrator endpoints are unavailable. Family responses are private/no-store and vary by cookie. Existing single-user `/avatar/user`, global avatar configuration and agent/PWA icons are unchanged; the family router still denies the legacy user-avatar route.
+
+POST accepts raw PNG/JPEG/WebP bytes with the exact matching Content-Type and `x-piclaw-avatar-revision` header. A matching Origin and account-change rate limit apply. Input is limited to 2 MiB while streaming, with a 15-second body-read deadline, at most 4 million decoded pixels and a five-second image-processing timeout. SVG, animated images, type mismatches and decode warnings reject. Successful decoding rotates/crops to 256×256 and re-encodes to WebP without source metadata; no original bytes, filename, URL or temporary file are persisted. The stored blob is bounded to 256 KiB. Authentication and revision are rechecked in the committing transaction after decoding; concurrent writes cannot silently replace a newer avatar.
+
+DELETE accepts exactly `{expected_revision}`. Removal clears the blob but keeps a revision tombstone to prevent stale uploads from resurrecting it; repeated removal at the current revision is a no-op. These non-sensitive self-service edits require live authentication, without a five-minute freshness requirement. They do not change logins, factors or shared configuration. SQL failure rolls back. Rename and new logins retain the avatar by immutable ID. Database backup/privileged access remains trusted; this does not provide filesystem isolation or erase historical backup copies.
+
+My account loads the saved image through pinned fetch followed by identity revalidation, then displays a memory-only blob URL. Upload is explicit; deletion requires a checkbox. The original selected file is never previewed or automatically uploaded. Blur, close, refresh, session switch and navigation clear selections, remove image sources and revoke object URLs. Generation checks discard late image responses. Failed writes require explicit refresh, without automatic replay; an already-admitted request can still complete after the panel closes. Avatars appear only in the owner's account panel in this preview. Native file-picker/physical-device behaviour and broader account-switch integration remain release gates.
 
 ## Personal account preferences
 
