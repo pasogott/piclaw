@@ -20,7 +20,7 @@ function validateText(content: string): void {
 }
 
 /** Read live immutable admission plus exact persisted payload before any message/model processing. */
-export function resolveFamilyMessageAuthority(chatJid: string, messageId: string) {
+export function readFamilyMessageAdmission(chatJid: string, messageId: string) {
   const db = getDb();
   const row = db.query(`SELECT a.*,m.content,m.thread_id AS current_thread_id,m.is_bot_message,m.is_steering_message,m.content_blocks,m.link_previews
     FROM message_execution_authorities a JOIN messages m ON m.rowid=a.message_rowid AND m.id=a.message_id AND m.chat_jid=a.chat_jid
@@ -30,8 +30,18 @@ export function resolveFamilyMessageAuthority(chatJid: string, messageId: string
     || db.query("SELECT 1 FROM message_media WHERE message_rowid=?").get(row.message_rowid)) throw new ChatAccessDenied();
   validateText(row.content);
   if (row.thread_id !== null && !getMessageByRowId(chatJid, row.thread_id)) throw new ChatAccessDenied();
+  return row;
+}
+
+/** The latest explicit retry grant supersedes its original login; skipped messages cannot execute. */
+export function resolveFamilyMessageAuthority(chatJid: string, messageId: string) {
+  const db = getDb();
+  const row = readFamilyMessageAdmission(chatJid, messageId);
+  const recovery = db.query("SELECT owner_user_id,login_session_id,action FROM message_recovery_authorities WHERE message_rowid=? ORDER BY id DESC LIMIT 1")
+    .get(row.message_rowid) as { owner_user_id: string; login_session_id: string; action: string } | null;
+  if (recovery && (recovery.owner_user_id !== row.owner_user_id || recovery.action !== "retry")) throw new ChatAccessDenied();
   const provenance: ExecutionProvenance = { actorUserId: row.actor_user_id, ownerUserId: row.owner_user_id, chatJid,
-    kind: "interactive", authenticationSessionId: row.login_session_id };
+    kind: "interactive", authenticationSessionId: recovery?.login_session_id ?? row.login_session_id };
   const identity = authoriseExecutionIdentity(db, "family-shared", chatJid, provenance);
   if (!identity) throw new ChatAccessDenied();
   return identity;

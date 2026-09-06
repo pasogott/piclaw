@@ -27,7 +27,7 @@ These code paths are tested behind the startup gate, not available as a family d
 5. Account administration requires live role/login checks and recent authentication for mutations. Restricted TOTP invitations enable only the invited account after possession proof; they do not issue login cookies.
 6. Each account can register multiple passkeys through login/RP/Origin-bound, expiring, one-use ceremonies. Removing a key cannot remove the final factor permitted by current policy/RP.
 7. Another recently authenticated admin can reset an account into disabled/no-factor state and issue a restricted invitation, without changing conversation ownership.
-8. Text-only message admission commits the user message and immutable execution authority together. Queue wakes recover that authority per persisted message before hydration; replies revalidate the current owner. Attachment/control/steering variants and special automatic followups remain disabled.
+8. Text-only message admission commits the user message and immutable execution authority together. Queue wakes recover that authority per persisted message before hydration; replies revalidate the current owner. Explicit owner retry/skip runs on the same chat lane and appends a recovery grant instead of modifying admission or silently skipping held failures. Attachment/control/steering variants and special automatic followups remain disabled.
 9. Startup auth maintenance prunes transient expiry after access validation and every minute. Confirmed factors/accounts/audit records are preserved.
 
 See [Access modes](multi-user/README.md) and the [HTTP inventory](../runtime/docs/web-api-endpoint-inventory.md#family-development-routes) for exact routes and unfinished work.

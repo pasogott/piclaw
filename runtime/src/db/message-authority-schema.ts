@@ -17,5 +17,20 @@ export function initializeMessageAuthoritySchema(database: Database): void {
   ) STRICT;
   CREATE TRIGGER IF NOT EXISTS message_execution_authority_immutable
     BEFORE UPDATE ON message_execution_authorities
-    BEGIN SELECT RAISE(ABORT, 'Message execution authority is immutable'); END;`);
+    BEGIN SELECT RAISE(ABORT, 'Message execution authority is immutable'); END;
+  CREATE TABLE IF NOT EXISTS message_recovery_authorities (
+    id INTEGER PRIMARY KEY,
+    message_rowid INTEGER NOT NULL REFERENCES message_execution_authorities(message_rowid),
+    owner_user_id TEXT NOT NULL REFERENCES users(id),
+    login_session_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    action TEXT NOT NULL CHECK(action IN ('retry','skip')),
+    failure_created_at TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(owner_user_id,request_id)
+  ) STRICT;
+  CREATE INDEX IF NOT EXISTS idx_message_recovery_latest ON message_recovery_authorities(message_rowid,id);
+  CREATE TRIGGER IF NOT EXISTS message_recovery_authority_immutable
+    BEFORE UPDATE ON message_recovery_authorities
+    BEGIN SELECT RAISE(ABORT, 'Message recovery authority is immutable'); END;`);
 }
