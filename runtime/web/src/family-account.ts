@@ -25,6 +25,8 @@ export class FamilyAccount {
   private busy = false;
   private generation = 0;
   private ceremony: AbortController | null = null;
+  private totp: { token: string; expires: number } | null = null;
+  private totpExpiry: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private api: FamilyApi) {
     node('open-account').addEventListener('click', () => { this.opened = true; this.suspended = false; void this.load(true); });
@@ -37,6 +39,13 @@ export class FamilyAccount {
       void this.mutate(() => this.api.request('/account', 'PATCH', patch), 'Profile saved.');
     });
     node('account-add-passkey').addEventListener('click', () => { void this.addPasskey(); });
+    node('account-add-totp').addEventListener('click', () => { void this.startTotp(); });
+    node('account-totp-form').addEventListener('submit', event => { event.preventDefault(); void this.confirmTotp(); });
+    node('account-totp-cancel').addEventListener('click', () => {
+      if (!this.totp || this.busy || !this.visible()) return;
+      const token = this.totp.token; this.clearTotp();
+      void this.mutate(() => this.api.request('/account/totp/cancel', 'POST', { token }), 'Authenticator setup cancelled.');
+    });
     node('account-remove-totp').addEventListener('click', () => {
       if (this.snapshot?.factors.totp.removable === true) this.ask('/account/factors/totp', true, 'Remove your authenticator? This signs out every device for your account.');
     });
@@ -50,6 +59,7 @@ export class FamilyAccount {
   }
 
   private clear(): void {
+    this.clearTotp();
     this.generation++; this.root.hidden = true; this.body.hidden = true;
     this.snapshot = null; this.username.value = ''; this.displayName.value = '';
     this.keys.replaceChildren(); this.sessions.replaceChildren(); this.message.textContent = '';
@@ -92,6 +102,7 @@ export class FamilyAccount {
     node<HTMLButtonElement>('account-add-passkey').disabled = value.capabilities.register_passkey !== true || !window.PublicKeyCredential || !navigator.credentials;
     node('account-totp-status').textContent = value.factors.totp.enrolled ? 'Authenticator enrolled' : 'No authenticator enrolled';
     node<HTMLButtonElement>('account-remove-totp').disabled = value.factors.totp.removable !== true;
+    node<HTMLButtonElement>('account-add-totp').disabled = value.capabilities.enrol_totp !== true;
     this.keys.replaceChildren(); this.sessions.replaceChildren();
     for (const key of value.factors.passkeys) {
       this.row(this.keys, `Passkey ${key.credential_id} · Added ${key.created_at} · Last used ${key.last_used_at ?? 'never'}${key.usable ? '' : ' · Not usable with current site policy'}`, 'Remove passkey', key.removable === true,
@@ -118,6 +129,7 @@ export class FamilyAccount {
   }
   private async mutate(operation: () => Promise<unknown>, success: string, endsLogin = false): Promise<void> {
     if (!this.visible() || this.busy) return;
+    this.clearTotp();
     this.busy = true; this.generation++; this.disable(); this.message.textContent = 'Saving…';
     let message = success;
     try {
@@ -128,6 +140,55 @@ export class FamilyAccount {
     } finally {
       this.busy = false;
       if (this.visible()) { await this.load(); if (this.visible()) this.message.textContent = message; }
+    }
+  }
+  private clearTotp(): void {
+    this.totp = null; if (this.totpExpiry) clearTimeout(this.totpExpiry); this.totpExpiry = null;
+    node('account-totp-setup').hidden = true; node('account-totp-secret').textContent = '';
+    node<HTMLImageElement>('account-totp-qr').removeAttribute('src'); node<HTMLInputElement>('account-totp-code').value = '';
+    node<HTMLButtonElement>('account-totp-confirm').disabled = true;
+  }
+  private async startTotp(): Promise<void> {
+    if (!this.visible() || this.busy || this.snapshot?.capabilities.enrol_totp !== true) return;
+    this.clearTotp(); this.busy = true; this.disable(); const generation = ++this.generation;
+    this.message.textContent = 'Preparing authenticator setup…';
+    try {
+      const result = await this.api.request('/account/totp/start', 'POST', {});
+      if (!this.visible() || generation !== this.generation) return;
+      if (typeof result.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(result.token) || typeof result.secret !== 'string' || !/^[A-Z2-7]{32}$/.test(result.secret)
+        || !Number.isFinite(result.expires_at) || result.expires_at <= Date.now() || result.expires_at > Date.now()+5*60_000
+        || typeof result.qr_data_url !== 'string' || !result.qr_data_url.startsWith('data:image/svg+xml;base64,')) throw new Error('Invalid authenticator setup response.');
+      this.totp = { token: result.token, expires: result.expires_at };
+      node('account-totp-secret').textContent = result.secret; node<HTMLImageElement>('account-totp-qr').src = result.qr_data_url;
+      node('account-totp-setup').hidden = false; node<HTMLInputElement>('account-totp-code').disabled = false;
+      node<HTMLButtonElement>('account-totp-confirm').disabled = false; node<HTMLButtonElement>('account-totp-cancel').disabled = false;
+      this.message.textContent = 'Scan the QR code or copy the setup key privately, then confirm a six-digit code. Leaving this panel discards the key.';
+      this.totpExpiry = setTimeout(() => { this.clearTotp(); if (this.visible()) { void this.load(); } }, result.expires_at-Date.now());
+      node('account-totp-code').focus();
+    } catch (error) { if (this.visible() && generation === this.generation) this.message.textContent = `${(error as Error).message} Refresh and start a new setup; no automatic retry was made.`; }
+    finally { this.busy = false; if (this.visible() && generation !== this.generation) void this.load(); }
+  }
+  private async confirmTotp(): Promise<void> {
+    if (!this.totp || !this.visible() || this.busy) return;
+    if (Date.now() >= this.totp.expires) { this.clearTotp(); void this.load(); return; }
+    const code = node<HTMLInputElement>('account-totp-code').value;
+    if (!/^\d{6}$/.test(code)) { this.message.textContent = 'Enter a six-digit code.'; return; }
+    const token = this.totp.token, generation = this.generation; this.busy = true;
+    let enrolled = false;
+    node<HTMLButtonElement>('account-totp-confirm').disabled = true;
+    try {
+      const result = await this.api.request('/account/totp/confirm', 'POST', { token, code });
+      if (!this.visible() || generation !== this.generation) return;
+      if (result.enrolled !== true) throw new Error('Authenticator confirmation was not accepted.');
+      enrolled = true; this.clearTotp();
+    } catch (error) {
+      if (this.visible() && generation === this.generation) this.message.textContent = `${(error as Error).message} Check the code or refresh and start again. Only five attempts are allowed; confirmation may already have completed.`;
+    } finally {
+      this.busy = false;
+      if (this.visible()) {
+        if (!this.totp || generation !== this.generation) { await this.load(); if (enrolled && this.visible()) this.message.textContent = 'Authenticator added. Existing passkeys and logins are unchanged.'; }
+        else { node<HTMLInputElement>('account-totp-code').value = ''; node<HTMLButtonElement>('account-totp-confirm').disabled = false; }
+      }
     }
   }
   private async addPasskey(): Promise<void> {

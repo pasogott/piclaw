@@ -44,7 +44,7 @@ export function readOwnAccountSettings(database: Database, principal: Authentica
     const sessions = listOwnSessions(database, principal) as Omit<AccountSettings["sessions"][number], "current">[];
     return {
       user: { id: user.id, username: user.username, display_name: user.display_name }, recent_auth: recent,
-      capabilities: { update_profile: recent, register_passkey: recent && policy.passkey, revoke_session: recent },
+      capabilities: { update_profile: recent, register_passkey: recent && policy.passkey, enrol_totp: recent && policy.totp && !totp, revoke_session: recent },
       factors: {
         totp: { enrolled: totp, removable: recent && totp && usableCount - Number(policy.totp) > 0 },
         passkeys: keys.map(({ rp_id, ...key }) => {

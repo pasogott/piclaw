@@ -57,7 +57,7 @@ export class UserAuthFactors {
   }
 
   /** Caller must authorise a restricted enrolment ceremony. Returns a new seed once for QR rendering. */
-  async beginEnrolment(userId: string, authoriseWrite?: () => void): Promise<{ token: string; secret: string; expiresAt: number }> {
+  async beginEnrolment(userId: string, authoriseWrite?: (pending: { token: string; expiresAt: number }) => void): Promise<{ token: string; secret: string; expiresAt: number }> {
     if (!this.database.query("SELECT 1 FROM users WHERE id=?").get(userId)) throw new Error("Unknown enrolment account.");
     if (this.database.query("SELECT 1 FROM user_totp_factors WHERE user_id=?").get(userId)) throw new Error("Existing factor requires explicit authenticated reset.");
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -66,11 +66,11 @@ export class UserAuthFactors {
     const encrypted = await this.encrypt(userId, secret);
     const expiresAt = this.now() + 5 * 60_000;
     this.database.transaction(() => {
-      authoriseWrite?.();
+      authoriseWrite?.({ token, expiresAt });
       if (!this.database.query("SELECT 1 FROM users WHERE id=?").get(userId)) throw new Error("Unknown enrolment account.");
       if (this.database.query("SELECT 1 FROM user_totp_factors WHERE user_id=?").get(userId)) throw new Error("Existing factor requires explicit authenticated reset.");
       this.database.query(`INSERT INTO user_totp_enrolments(token_hash,user_id,ciphertext,salt,nonce,expires_at)
-        VALUES (?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET token_hash=excluded.token_hash,ciphertext=excluded.ciphertext,salt=excluded.salt,nonce=excluded.nonce,expires_at=excluded.expires_at`)
+        VALUES (?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET token_hash=excluded.token_hash,ciphertext=excluded.ciphertext,salt=excluded.salt,nonce=excluded.nonce,expires_at=excluded.expires_at,attempts=0`)
         .run(hashToken(token),userId,encrypted.ciphertext,encrypted.salt,encrypted.nonce,expiresAt);
     }).immediate();
     return {token,secret,expiresAt};
@@ -122,7 +122,7 @@ export class UserAuthFactors {
           .run(update.encrypted.ciphertext, update.encrypted.salt, update.encrypted.nonce, createUuid("factor"), update.userId);
       }
       // Interrupted ceremonies must not finish under the old key. Re-enrol through a new grant.
-      this.database.exec("DELETE FROM user_totp_enrolments; DELETE FROM user_auth_invitations; DELETE FROM user_passkey_registrations; DELETE FROM webauthn_enrollments; DELETE FROM web_sessions;");
+      this.database.exec("DELETE FROM user_totp_registrations; DELETE FROM user_totp_enrolments; DELETE FROM user_auth_invitations; DELETE FROM user_passkey_registrations; DELETE FROM webauthn_enrollments; DELETE FROM web_sessions;");
       return { rotated: updates.length };
     }).immediate();
   }

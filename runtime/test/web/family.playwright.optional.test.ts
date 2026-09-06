@@ -168,7 +168,7 @@ browserTest("held-input controls use discovered IDs, require skip confirmation a
 function accountSnapshot(recent = true) {
   return {
     user: { id: 'alice', username: 'alice', display_name: 'Alice' }, recent_auth: recent,
-    capabilities: { update_profile: recent, register_passkey: recent, revoke_session: recent },
+    capabilities: { update_profile: recent, register_passkey: recent, enrol_totp: false, revoke_session: recent },
     factors: { totp: { enrolled: true, removable: recent }, passkeys: [
       { credential_id: 'first-key', created_at: 'today', last_used_at: null, usable: true, removable: recent },
       { credential_id: 'second-key', created_at: 'yesterday', last_used_at: 'today', usable: true, removable: recent },
@@ -183,6 +183,75 @@ async function openAccount(page: Page) {
   await page.goto(base); await ready(page); await page.locator('#open-account').click();
   await page.waitForFunction(() => !(document.getElementById('account-details') as HTMLElement)?.hidden);
 }
+
+async function totpFixture(page: Page) {
+  const state = await fixture(page), snapshot = accountSnapshot(); snapshot.factors.totp.enrolled = false; snapshot.capabilities.enrol_totp = true;
+  const calls: any[] = [];
+  const setup = { token: 't'.repeat(43), secret: 'A'.repeat(32), expires_at: Date.now()+60_000, qr_data_url: 'data:image/svg+xml;base64,'+Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>').toString('base64') };
+  await page.route('**/account', route => route.fulfill({ json: snapshot }));
+  await page.route('**/account/totp/*', route => {
+    calls.push({ path: new URL(route.request().url()).pathname, headers: route.request().headers(), body: route.request().postDataJSON() });
+    if (route.request().url().endsWith('/start')) return route.fulfill({ json: setup });
+    if (route.request().url().endsWith('/confirm')) { snapshot.factors.totp.enrolled = true; snapshot.capabilities.enrol_totp = false; return route.fulfill({ json: { enrolled: true } }); }
+    return route.fulfill({ json: { cancelled: true } });
+  });
+  return { state, snapshot, calls, setup };
+}
+
+browserTest('self authenticator setup is explicit, pinned, confirms without login changes and clears secret', async () => {
+  const page = await browser.newPage({ viewport: { width: 375, height: 740 } });
+  try {
+    const { calls } = await totpFixture(page); await openAccount(page);
+    expect(calls).toHaveLength(0); await page.locator('#account-add-totp').click();
+    await page.waitForFunction(() => document.getElementById('account-totp-secret')?.textContent?.length === 32);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(await page.locator('#account-totp-qr').getAttribute('src')).toStartWith('data:image/svg+xml;base64,');
+    await page.locator('#account-totp-code').fill('123456'); await page.locator('#account-totp-confirm').click();
+    await page.waitForFunction(() => document.getElementById('account-totp-status')?.textContent === 'Authenticator enrolled');
+    expect(calls[1].body).toEqual({ token: 't'.repeat(43), code: '123456' });
+    expect(calls.every(c => c.headers['x-piclaw-account-id'] === 'alice' && c.headers['x-piclaw-login-id'] === 'login-a')).toBe(true);
+    expect(await page.locator('#account-totp-secret').textContent()).toBe(''); expect(await page.locator('#account-totp-qr').getAttribute('src')).toBeNull();
+    expect(await page.locator('#account-add-totp').isDisabled()).toBe(true); expect(page.url()).not.toContain('token');
+    expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('authenticator cancel, blur, expiry and late start never retain setup secrets', async () => {
+  const page = await browser.newPage();
+  try {
+    const { calls, setup } = await totpFixture(page); await openAccount(page);
+    const begin = async () => { await page.locator('#account-add-totp').click(); await page.waitForFunction(() => document.getElementById('account-totp-secret')?.textContent?.length === 32); };
+    await begin(); await page.locator('#account-totp-cancel').click();
+    await page.waitForFunction(() => !(document.getElementById('account-add-totp') as HTMLButtonElement)?.disabled);
+    expect(calls[1].path).toBe('/account/totp/cancel'); expect(await page.locator('#account-totp-secret').textContent()).toBe('');
+    await begin(); await page.evaluate(() => dispatchEvent(new Event('blur')));
+    expect(await page.locator('#account-totp-secret').textContent()).toBe(''); expect(await page.locator('#account-totp-qr').getAttribute('src')).toBeNull();
+    await page.evaluate(() => dispatchEvent(new Event('focus'))); await page.waitForFunction(() => !(document.getElementById('account-add-totp') as HTMLButtonElement)?.disabled);
+    setup.expires_at = Date.now()+1000; await begin();
+    await page.waitForFunction(() => !document.getElementById('account-totp-secret')?.textContent);
+    await page.waitForFunction(() => !(document.getElementById('account-add-totp') as HTMLButtonElement)?.disabled);
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>(r => release = r), waiting = new Promise<void>(r => entered = r);
+    await page.route('**/account/totp/start', async route => { entered(); await held; await route.fulfill({ json: { ...setup, expires_at: Date.now()+60000 } }); });
+    await page.locator('#account-add-totp').click(); await waiting; await page.locator('#close-account').click(); release();
+    await page.waitForTimeout(80); expect(await page.locator('#account-totp-secret').textContent()).toBe('');
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('bad authenticator code retains bounded setup for manual retry; replaced login erases it', async () => {
+  const page = await browser.newPage();
+  try {
+    const { state } = await totpFixture(page); let attempts = 0;
+    await page.route('**/account/totp/confirm', route => { attempts++; return route.fulfill({ status: 403, json: {} }); });
+    await openAccount(page); await page.locator('#account-add-totp').click(); await page.waitForFunction(() => document.getElementById('account-totp-secret')?.textContent?.length === 32);
+    await page.locator('#account-totp-code').fill('111111'); await page.locator('#account-totp-confirm').click();
+    await page.waitForFunction(() => document.getElementById('account-status')?.textContent?.includes('Only five attempts'));
+    expect(attempts).toBe(1); expect(await page.locator('#account-totp-secret').textContent()).toHaveLength(32);
+    state.identity = principal('bob', 'new-login'); await page.locator('#refresh-account').click();
+    await page.waitForFunction(() => document.getElementById('family-status')?.textContent?.includes('no longer bound'));
+    expect(await page.locator('#account-totp-secret').textContent()).toBe(''); expect(await page.locator('#account-totp-code').inputValue()).toBe('');
+  } finally { await page.close(); }
+}, 20000);
 
 async function adminFixture(page: Page) {
   const state = await fixture(page); state.identity.principal.role = 'admin'; state.identity.capabilities.manage_users = true;

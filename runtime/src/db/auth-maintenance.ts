@@ -11,6 +11,9 @@ export function pruneExpiredAuthState(database: Database, now = Date.now()): Rec
       OR NOT EXISTS (SELECT 1 FROM users WHERE id=user_auth_invitations.user_id)
       OR NOT EXISTS (SELECT 1 FROM users WHERE id=user_auth_invitations.issuer_user_id AND enabled=1 AND role='admin')`).run(now).changes;
     counts.totpEnrolments = database.query("DELETE FROM user_totp_enrolments WHERE expires_at<=? OR NOT EXISTS (SELECT 1 FROM users WHERE id=user_totp_enrolments.user_id)").run(now).changes;
+    counts.totpRegistrations = database.query(`DELETE FROM user_totp_registrations WHERE expires_at<=?
+      OR NOT EXISTS (SELECT 1 FROM users WHERE id=user_totp_registrations.user_id AND enabled=1)
+      OR NOT EXISTS (SELECT 1 FROM web_sessions WHERE session_id=user_totp_registrations.session_id AND user_id=user_totp_registrations.user_id)`).run(now).changes;
     counts.passkeyRegistrations = database.query(`DELETE FROM user_passkey_registrations WHERE expires_at<=?
       OR NOT EXISTS (SELECT 1 FROM users WHERE id=user_passkey_registrations.user_id AND enabled=1)
       OR NOT EXISTS (SELECT 1 FROM web_sessions WHERE session_id=user_passkey_registrations.session_id AND user_id=user_passkey_registrations.user_id)`).run(now).changes;

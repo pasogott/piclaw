@@ -43,6 +43,18 @@ export function initializeAuthFactorSchema(database: Database): void {
       expires_at INTEGER NOT NULL
     ) STRICT;
     CREATE INDEX IF NOT EXISTS idx_user_passkey_registration_expiry ON user_passkey_registrations(expires_at);
+    CREATE TABLE IF NOT EXISTS user_totp_registrations (
+      user_id TEXT PRIMARY KEY REFERENCES users(id),
+      registration_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      origin TEXT NOT NULL,
+      token_hash TEXT,
+      expires_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE TRIGGER IF NOT EXISTS user_totp_registration_cleanup
+      AFTER DELETE ON user_totp_registrations BEGIN
+        DELETE FROM user_totp_enrolments WHERE user_id=OLD.user_id AND token_hash=OLD.token_hash;
+      END;
     CREATE TABLE IF NOT EXISTS account_recovery_events (
       id TEXT PRIMARY KEY,
       actor_user_id TEXT NOT NULL REFERENCES users(id),
@@ -57,4 +69,11 @@ export function initializeAuthFactorSchema(database: Database): void {
     ) STRICT;
     CREATE INDEX IF NOT EXISTS idx_user_totp_enrolment_expiry ON user_totp_enrolments(expires_at);
   `);
+  // Standalone factor tests initialise this schema without browser-session storage.
+  if (database.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='web_sessions'").get()) {
+    database.exec(`CREATE TRIGGER IF NOT EXISTS user_totp_registration_logout
+      AFTER DELETE ON web_sessions BEGIN
+        DELETE FROM user_totp_registrations WHERE user_id=OLD.user_id AND session_id=OLD.session_id;
+      END;`);
+  }
 }

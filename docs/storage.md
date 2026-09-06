@@ -35,6 +35,7 @@
 | `message_recovery_authorities` | Append-only explicit retry/skip records with owner, input row ID, replacement login ID and idempotency key; original admission stays unchanged |
 | `user_totp_factors` | Encrypted per-user TOTP seed, revision and last-used timestep; separate from keychain injection |
 | `user_totp_enrolments` | Hashed confirmation token, encrypted pending seed, attempt count and expiry |
+| `user_totp_registrations` | Self-service TOTP reservation bound to user, login and Origin; hashed token and five-minute expiry. Login deletion removes matching pending ciphertext through triggers |
 | `user_auth_invitations` | Hashed invitation/browser/enrolment tokens, target/issuer, origin and expiry |
 | `user_passkey_registrations` | Hashed ceremony token bound to user, login, RP, origin, challenge and expiry |
 | `user_auth_attempts` | Hashed account/client rate-limit buckets and reset time |

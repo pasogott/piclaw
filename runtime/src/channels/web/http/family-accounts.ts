@@ -11,6 +11,8 @@ import { AccountInvitations } from "../../../secure/account-invitations.js";
 import { FamilyPasskeys } from "../../../secure/family-passkeys.js";
 import { resetFamilyAccount } from "../../../secure/account-recovery.js";
 import { selectOwnedHome, readOwnedSessionSettings } from "../../../db/owned-session-lifecycle.js";
+import { FamilyTotp } from '../../../secure/family-totp.js';
+import { generateTotpQr } from '../../../utils/totp-qr.js';
 
 /** Account-only surface: never returns conversation content, tokens or factor secrets. */
 export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Request, principal: AuthenticatedPrincipal): Promise<Response | null> {
@@ -60,6 +62,23 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
     }
     const body = await req.json();
     if (!body || typeof body !== "object" || Array.isArray(body)) return channel.json({ error: "Invalid account request" }, 400);
+    if (method === 'POST' && ['/account/totp/start', '/account/totp/confirm', '/account/totp/cancel'].includes(path)) {
+      if (!policy.totp) return deny();
+      const service = new FamilyTotp(db), origin = req.headers.get('origin')!;
+      if (path.endsWith('/start')) {
+        if (Object.keys(body).length) return deny();
+        const result = await service.start(principal, origin);
+        const { svg } = generateTotpQr({ secret: result.secret, issuer: 'PiClaw', label: `PiClaw:${result.username}` });
+        return channel.json({ token: result.token, secret: result.secret, expires_at: result.expiresAt,
+          qr_data_url: `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}` });
+      }
+      const confirm = path.endsWith('/confirm');
+      if (Object.keys(body).some(key => !(confirm ? ['token', 'code'] : ['token']).includes(key))
+        || typeof body.token !== 'string' || !/^[a-zA-Z0-9_-]{43}$/.test(body.token)) return deny();
+      if (!confirm) { service.cancel(principal, origin, body.token); return channel.json({ cancelled: true }); }
+      if (typeof body.code !== 'string' || !/^\d{6}$/.test(body.code) || !(await service.confirm(principal, origin, body.token, body.code))) return deny();
+      return channel.json({ enrolled: true });
+    }
     if (method === "PATCH" && path === "/account/home") {
       if (Object.keys(body).length !== 1 || typeof body.chat_jid !== "string") return deny();
       return channel.json({ home_chat_jid: selectOwnedHome(db, principal, body.chat_jid) });
