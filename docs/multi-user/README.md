@@ -372,7 +372,13 @@ Unmodified single-user callers keep their existing prompt and memory behaviour, 
 
 After each asynchronous scheduler stage, a failed check stops later delivery, model/session restoration, result logging, recurrence advancement and source/claim settlement. Denial stops local lease timers without abandoning or rewriting a claim already committed. An in-flight provider, shell, Dream, delivery or store operation cannot be recalled by these checks; its internal work may finish. Stop all writers before changing modes. Task records still lack separate immutable owner and initiating-actor grants, so this restriction does not enable owner-aware scheduled work or direct Dream entry points.
 
-### Message and side-prompt entry points
+### Legacy Dream restriction
+
+The direct `runDreamAgentTurn` and `runDreamMaintenance` runners, `ensureDreamTask`, Dream workspace startup, `/dream` command and runtime Dream queue callbacks reject family and isolated modes, invalid access configuration and stale multi-user execution context. The check precedes option parsing, task lookup, backlog inspection, lock acquisition and artifact changes. Ordinary module configuration loading is unchanged. A caller-supplied agent pool cannot enable this path.
+
+Dream rechecks after asynchronous backup loading, model selection/execution, index refresh and session disposal. Once denied, an invocation cannot resume when configuration changes back. Denial prevents subsequent backup writes, deterministic fallback, memory/state updates and chat/session reaping; it still releases the lock acquired by that invocation. The lock stays held through session disposal so a second Dream run cannot start during cleanup. Earlier work and already-started model/index/disposal operations cannot be recalled. Interrupted artifacts may remain for later operator review. Per-user Dream and shared-family consolidation, direct lower-level memory helpers and service grants still need integration. Stop all writers before changing modes.
+
+### Message and side-prompt execution
 
 The exported `runSidePrompt` runner and `AgentPool.runSidePrompt` reject family and isolated modes before hydration, model selection, usage recording or output callbacks. They check the mode again after main-session hydration, side-session hydration and side synchronisation. A caller-supplied runtime or inherited execution identity cannot enable this unsupported path. HTTP side-prompt handlers also reject these modes before parsing the request. Owner-aware side admission, prompt identity and tool-policy enforcement are still required before side prompts can be enabled.
 
