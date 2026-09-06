@@ -6,11 +6,12 @@ import { authoriseExecutionIdentity } from "../../src/agent-pool/execution-ident
 import { formatExecutionIdentity, getExecutionIdentity, withExecutionIdentity, type ExecutionProvenance } from "../../src/core/execution-context.js";
 import { initializeFamilyToolRestrictions } from '../../src/db/family-tool-restrictions.js';
 import { initializeAccountPreferences } from '../../src/db/account-preferences.js';
+import { initializeAccountModelDefaults } from '../../src/db/account-model-defaults.js';
 
 let db: Database, alice: string, bob: string;
 function proof(id=alice, chat="web:alice",kind:ExecutionProvenance["kind"]="interactive"):ExecutionProvenance{return {actorUserId:id,ownerUserId:id,chatJid:chat,kind,authenticationSessionId:`login-${id}`};}
 beforeEach(()=>{
- db=new Database(":memory:");initializeUserSchema(db);initializeFamilyToolRestrictions(db);initializeAccountPreferences(db);
+ db=new Database(":memory:");initializeUserSchema(db);initializeFamilyToolRestrictions(db);initializeAccountPreferences(db);initializeAccountModelDefaults(db);
  db.exec(`CREATE TABLE chats(jid TEXT PRIMARY KEY);
  CREATE TABLE chat_branches(branch_id TEXT PRIMARY KEY,chat_jid TEXT UNIQUE,root_chat_jid TEXT,parent_branch_id TEXT,archived_at TEXT);
  CREATE TABLE web_sessions(session_id TEXT PRIMARY KEY,user_id TEXT,expires_at TEXT);`);

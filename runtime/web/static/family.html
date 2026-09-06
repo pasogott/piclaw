@@ -155,6 +155,17 @@
         <label for="preferences-guidance">Response guidance (up to 2,000 characters)</label><textarea id="preferences-guidance" rows="5" maxlength="2000" placeholder="For example: use British English and concise bullet points."></textarea>
         <button id="reset-preferences" type="button">Use defaults</button><button id="save-preferences" type="submit">Save preferences</button>
       </form>
+      <section class="account-section" aria-labelledby="model-defaults-heading">
+        <h3 id="model-defaults-heading">Model defaults for empty roots</h3>
+        <p>Applied when an empty owned root is first opened by the runtime. Existing conversations, resumed sessions and forks keep their model. Choices use the instance’s available model catalogue and scope; credentials remain shared and cannot be edited here. Unavailable explicit choices block initial creation until you change or reset them.</p>
+        <button id="refresh-model-defaults" type="button" disabled>Refresh model defaults</button>
+        <p id="model-defaults-status" role="status" aria-live="polite"></p><p id="model-defaults-effective"></p>
+        <form id="model-defaults-form" hidden>
+          <label for="default-model">Personal model default</label><select id="default-model"></select>
+          <label for="default-thinking">Thinking level for this model</label><select id="default-thinking"></select>
+          <button id="reset-model-defaults" type="button">Use instance defaults</button><button id="save-model-defaults" type="submit">Save model defaults</button>
+        </form>
+      </section>
     </section>
     <section class="session-controls" aria-label="Session navigation">
       <label for="session-select">Owned session</label>

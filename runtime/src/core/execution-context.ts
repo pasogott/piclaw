@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { AccessMode } from "./config-access.js";
 import type { FamilyToolPolicy } from './family-tool-restrictions.js';
 import type { AccountPreferences } from './account-preferences.js';
+import type { AccountModelDefaults } from './account-model-defaults.js';
 
 /** Persistable server-owned provenance. Browser/model JSON must never set this directly. */
 export interface ExecutionProvenance {
@@ -22,6 +23,7 @@ export interface ExecutionIdentity {
   /** Server-resolved once per run. Untrusted provenance cannot supply policy. */
   readonly toolPolicy?: FamilyToolPolicy;
   readonly preferences?: AccountPreferences;
+  readonly modelDefaults?: AccountModelDefaults;
 }
 
 const executionContext = new AsyncLocalStorage<ExecutionIdentity | null>();
