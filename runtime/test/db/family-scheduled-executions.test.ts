@@ -9,6 +9,9 @@ import { createFamilyScheduledTask, revokeFamilyScheduledGrant } from "../../src
 import { claimFamilyScheduledOccurrence as claim, consumeFamilyScheduledOccurrence as consume } from "../../src/db/family-scheduled-occurrences.js";
 import { beginFamilyScheduledExecution as begin, settleFamilyScheduledExecution as settle, readOwnFamilyScheduledResult as read } from "../../src/db/family-scheduled-executions.js";
 import { initializeFamilyScheduledExecutions } from "../../src/db/family-scheduled-executions-schema.js";
+import { initializeFamilyScheduledExpiry } from "../../src/db/family-scheduled-expiry-schema.js";
+import { recoverExpiredFamilyScheduledExecutions as recover, startFamilyScheduledDispatch as start, readFamilyScheduledDispatch, listOwnFamilyScheduledResults } from "../../src/db/family-scheduled-executions.js";
+import { publishOwnFamilyScheduledResult } from "../../src/db/family-scheduled-publications.js";
 import { provisionFamilyAccount, updateManagedAccount } from "../../src/db/account-administration.js";
 import { getUser } from "../../src/db/users.js";
 import { updateAdminToolPolicy } from "../../src/db/family-tool-restrictions.js";
@@ -152,3 +155,93 @@ test("settled retry after expiry fails but the owner can still read the committe
   const db=getDb(),cap=begin(db,reservation().lease);settle(db,cap,result);clock+=900000;
   expect(()=>settle(db,cap,result)).toThrow();expect(read(db,alice,cap.execution_id)).toMatchObject({state:"settled",result:{text:result.text}});
 });
+
+test("explicit expiry recovery preserves settled history and terminally records started and never-started handoffs",()=>{
+  const db=getDb(),settled=begin(db,reservation().lease);settle(db,settled,result);
+  const unstarted=begin(db,reservation().lease),started=begin(db,reservation().lease);start(db,started);
+  expect(recover(db)).toEqual({recorded:0});clock+=900000;
+  expect(recover(db)).toEqual({recorded:2});const before=db.query('SELECT * FROM family_scheduled_expiries ORDER BY execution_id').all();
+  expect(recover(db)).toEqual({recorded:0});expect(db.query('SELECT * FROM family_scheduled_expiries ORDER BY execution_id').all()).toEqual(before);
+  expect(read(db,alice,settled.execution_id).state).toBe('settled');
+  for(const cap of [unstarted,started]){
+    expect(read(db,alice,cap.execution_id)).toMatchObject({state:'expired',result:null,publication_recorded:false});
+    expect(()=>settle(db,cap,result)).toThrow();expect(()=>start(db,cap)).toThrow();expect(()=>publishOwnFamilyScheduledResult(db,alice,cap.execution_id)).toThrow();
+  }
+  const list=listOwnFamilyScheduledResults(db,alice);expect(list.items.filter(i=>i.state==='expired')).toHaveLength(2);
+  expect(JSON.stringify(list)).not.toContain('private prompt');expect(JSON.stringify(before)).not.toContain(started.token);
+  expect(db.query('SELECT count(*) n FROM messages').get()).toEqual({n:0});expect(db.query('SELECT count(*) n FROM family_scheduled_dispatches').get()).toEqual({n:1});
+  expect(db.query("SELECT count(*) n FROM scheduled_tasks WHERE status!='paused'").get()).toEqual({n:0});
+  clock-=900000;expect(()=>settle(db,unstarted,result)).toThrow();expect(()=>start(db,unstarted)).toThrow();expect(()=>read(db,alice,unstarted.execution_id)).toThrow();
+});
+
+test("expiry recording is mode-gated maintenance, not owner execution or publication authority",()=>{
+  const db=getDb(),prepared=reservation(),cap=begin(db,prepared.lease);
+  const root=createOwnedRoot(db,alice,'expired-archive'),other=begin(db,reservation(alice,root.chat_jid).lease);revokeFamilyScheduledGrant(db,alice,prepared.grant_id);
+  db.query('UPDATE users SET enabled=0 WHERE id=?').run(alice.userId);clock+=900000;
+  const config=join(ws.workspace,'.piclaw/config.json');
+  for(const mode of ['single-user','isolated-containers','invalid']){
+    writeFileSync(config,mode==='invalid'?'{':JSON.stringify({domains:{access:{mode}}}));expect(()=>recover(db)).toThrow();
+    expect(db.query('SELECT count(*) n FROM family_scheduled_expiries').get()).toEqual({n:0});
+  }
+  writeFileSync(config,JSON.stringify({domains:{access:{mode:'family-shared'}}}));expect(recover(db)).toEqual({recorded:2});
+  for(const viewer of [alice,bob,admin])expect(()=>read(db,viewer,cap.execution_id)).toThrow();
+  db.query('UPDATE users SET enabled=1 WHERE id=?').run(alice.userId);expect(read(db,alice,cap.execution_id).state).toBe('expired');
+  expect(()=>publishOwnFamilyScheduledResult(db,alice,cap.execution_id)).toThrow();
+  archiveOwnedSession(db,alice,root.chat_jid);expect(()=>read(db,alice,other.execution_id)).toThrow();expect(listOwnFamilyScheduledResults(db,alice).items.some(i=>i.execution_id===other.execution_id)).toBe(false);
+});
+
+test("expiry batches are bounded, ordered, atomic, idempotent and initialisation does not perform recovery",()=>{
+  const db=getDb(),caps=[];
+  for(let i=0;i<101;i++)caps.push(begin(db,reservation().lease));
+  clock+=900000;initializeFamilyScheduledExpiry(db);expect(db.query('SELECT count(*) n FROM family_scheduled_expiries').get()).toEqual({n:0});
+  const expected=db.query('SELECT id FROM family_scheduled_executions ORDER BY expires_at,id LIMIT 100').all() as Array<{id:string}>;
+  db.exec(`CREATE TRIGGER fail_expiry BEFORE INSERT ON family_scheduled_expiries WHEN NEW.execution_id='${expected[1]!.id}' BEGIN SELECT RAISE(ABORT,'expiry write failed'); END`);
+  expect(()=>recover(db)).toThrow('expiry write failed');expect(db.query('SELECT count(*) n FROM family_scheduled_expiries').get()).toEqual({n:0});db.exec('DROP TRIGGER fail_expiry');
+  expect(recover(db)).toEqual({recorded:100});expect(db.query('SELECT execution_id AS id FROM family_scheduled_expiries ORDER BY rowid').all()).toEqual(expected);
+  expect(recover(db)).toEqual({recorded:1});expect(recover(db)).toEqual({recorded:0});
+  expect(()=>db.exec('UPDATE family_scheduled_expiries SET created_at=created_at+1')).toThrow('immutable');expect(()=>db.exec('DELETE FROM family_scheduled_expiries')).toThrow('cannot be deleted');
+});
+
+test("SQLite write serialisation and symmetric triggers exclude result/expiry and start-after-expiry conflicts",()=>{
+  const db=getDb(),cap=begin(db,reservation().lease),other=begin(db,reservation().lease),path=join(ws.workspace,'expiry-race.sqlite');settle(db,other,result);
+  expect(()=>db.query('INSERT INTO family_scheduled_expiries VALUES (?,?)').run(cap.execution_id,clock)).toThrow();clock+=900000;
+  expect(()=>db.query('INSERT INTO family_scheduled_expiries VALUES (?,?)').run(other.execution_id,clock)).toThrow();
+  db.query('VACUUM INTO ?').run(path);const one=new Database(path),two=new Database(path);
+  try{
+    one.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10');two.exec('PRAGMA busy_timeout=10');
+    one.exec('BEGIN IMMEDIATE');try{expect(()=>recover(two)).toThrow();}finally{one.exec('ROLLBACK');}
+    expect(recover(two)).toEqual({recorded:1});expect(recover(one)).toEqual({recorded:0});
+    expect(()=>one.query('INSERT INTO family_scheduled_results VALUES (?,?,?,?,?)').run(cap.execution_id,'success','late','a'.repeat(64),clock-900000)).toThrow('terminal');
+    expect(()=>one.query('INSERT INTO family_scheduled_dispatches VALUES (?,?)').run(cap.execution_id,clock)).toThrow('terminal');
+    expect(read(one,alice,other.execution_id).result?.text).toBe(result.text);
+  }finally{one.close();two.close();}
+});
+
+test("corrupt expiry or unmatched settle audit fails closed without exposing content or committing recovery",()=>{
+  const db=getDb(),cap=begin(db,reservation().lease),other=begin(db,reservation().lease);clock+=900000;
+  db.query("INSERT INTO family_scheduled_execution_events VALUES (?,'settle',?)").run(cap.execution_id,clock-900000);
+  expect(()=>recover(db)).toThrow();expect(db.query('SELECT count(*) n FROM family_scheduled_expiries').get()).toEqual({n:0});
+  db.exec('DROP TRIGGER family_scheduled_expiry_valid');db.query('INSERT INTO family_scheduled_expiries VALUES (?,?)').run(other.execution_id,clock+1);
+  expect(()=>read(db,alice,other.execution_id)).toThrow();
+});
+
+test("SIGKILL before and after recovery commit preserves terminality after reopen without replay",async()=>{
+  const db=getDb(),unstarted=begin(db,reservation().lease),started=begin(db,reservation().lease);start(db,started);clock+=900000;
+  for(const phase of ['before-commit','after-commit']){
+    const path=join(ws.workspace,`crash-${phase}.sqlite`);db.query('VACUUM INTO ?').run(path);
+    const child=Bun.spawn([process.execPath,join(import.meta.dir,'../fixtures/family-expiry-crash.ts'),path,String(clock),phase],{env:{...process.env},stdout:'pipe',stderr:'pipe'});
+    const stderr=new Response(child.stderr).text(),reader=child.stdout.getReader();let timer:ReturnType<typeof setTimeout>|undefined;
+    try{
+      const ready=await Promise.race([reader.read(),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Error('Crash fixture did not become ready')),10000);})]);
+      expect(new TextDecoder().decode(ready.value)).toContain('EXPIRY_CRASH_READY');child.kill('SIGKILL');expect(await child.exited).not.toBe(0);
+      // Inherited test configuration may log compatibility warnings; never hide actual errors.
+      for(const line of (await stderr).trim().split('\n').filter(Boolean))expect(JSON.parse(line).level).toBe('warn');
+    }finally{clearTimeout(timer);child.kill('SIGKILL');await child.exited;reader.releaseLock();}
+    const reopened=new Database(path);
+    try{
+      expect(recover(reopened)).toEqual({recorded:phase==='before-commit'?2:0});expect(recover(reopened)).toEqual({recorded:0});
+      for(const cap of [unstarted,started]){expect(read(reopened,alice,cap.execution_id).state).toBe('expired');expect(()=>readFamilyScheduledDispatch(reopened,cap)).toThrow();expect(()=>settle(reopened,cap,result)).toThrow();}
+      expect(reopened.query('SELECT count(*) n FROM family_scheduled_results').get()).toEqual({n:0});expect(reopened.query('SELECT count(*) n FROM family_scheduled_dispatches').get()).toEqual({n:1});
+    }finally{reopened.close();}
+  }
+},30000);

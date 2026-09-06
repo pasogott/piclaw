@@ -382,7 +382,7 @@ See [internal reservations](scheduled-execution.md#internal-occurrence-reservati
 
 #### Durable handoff and owner results
 
-See [durable handoff and owner results](scheduled-execution.md#durable-handoff-and-owner-results) for atomic consumption-to-execution binding, the 15-minute settlement capability, exact retries and owner-only retrieval. Dispatcher integration, recovery, external delivery and process-kill proof remain incomplete.
+See [durable handoff and owner results](scheduled-execution.md#durable-handoff-and-owner-results) for atomic consumption-to-execution binding, the 15-minute settlement capability, exact retries and owner-only retrieval. [Explicit expiry recovery](scheduled-execution.md#explicit-expired-handoff-recovery) records terminal expired handoffs without replay. Automatic dispatch/recovery, cancellation, external delivery and running-model process-kill proof remain incomplete.
 
 `startSchedulerLoop`, `pollScheduledRunsOnce` and `runScheduledTask` deny family and isolated modes, invalid access configuration and stale multi-user execution context before opening the scheduler store, claiming work or reading a task. Agent, shell and internal tasks use the same restriction. Queued work and lease-renewal callbacks check again before proceeding; single-user leases still renew while waiting in the queue.
 

@@ -2,7 +2,7 @@ import { FamilyApi } from './family-api.js';
 
 function node<T extends HTMLElement>(id:string):T { return document.getElementById(id) as T; }
 interface ResultItem { execution_id:string;chat_jid:string;created_at:number;state:string;publication_recorded:boolean }
-const states=['unsettled','expired-unsettled','settled'];
+const states=['unsettled','expired-unsettled','expired','settled'];
 const validId=(id:unknown):id is string=>typeof id==='string'&&/^[a-zA-Z0-9_-]{1,128}$/.test(id);
 
 /** No browser storage, automatic publication, or caller-selectable result destination. */
