@@ -129,6 +129,10 @@ test("restricted HTTP grants use HttpOnly browser cookies and never mint normal 
   const cookie = response.headers.get("set-cookie")!;
   expect(cookie).toContain("HttpOnly"); expect(cookie).toContain("SameSite=Strict"); expect(cookie).toContain("Secure"); expect(cookie).not.toContain("piclaw_session=");
   const body = await response.json();
+  expect(body.qr_data_url).toStartWith("data:image/svg+xml;base64,");
+  const svg = Buffer.from(body.qr_data_url.split(",")[1], "base64").toString();
+  expect(svg).toContain("<svg"); expect(svg).not.toContain("<script");
+  expect(response.headers.get("referrer-policy")).toBe("no-referrer");
   const confirm = await post("/auth/invitation/confirm", { token: grant.token, enrolment_token: body.enrolment_token, code: generateTotp(body.secret) }, cookie.split(";")[0]!);
   expect(confirm.status).toBe(200); expect(await confirm.json()).toEqual({ enrolled: true, login_required: true });
   expect(confirm.headers.get("set-cookie")).not.toContain("piclaw_session=");

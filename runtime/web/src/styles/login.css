@@ -79,6 +79,10 @@ input {
 
 #username-field { display: flex; flex-direction: column; gap: 8px; }
 #username { text-align: left; letter-spacing: normal; }
+.enrolment-qr { display: block; width: min(100%, 260px); height: auto; margin: 0 auto 16px; }
+.enrolment-secret { display: block; overflow-wrap: anywhere; user-select: all; margin: 0 0 20px; }
+#claim-invitation { width: 100%; }
+#invitation-login { color: var(--accent); display: inline-block; margin-top: 12px; }
 label { font-size: 14px; color: var(--text); }
 input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 button:disabled { opacity: 0.6; cursor: wait; }

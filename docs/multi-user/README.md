@@ -32,7 +32,7 @@ Family mode is intended for trusted household members. Users with arbitrary shel
 |---|---|---|
 | Modes and migration (#1123/#1126/#1133) | Strict config/marker checks, read-only topology preview, explicit root/handle adoption helpers | Complete migration/rollback tooling, existing-child seed adoption, activation gates |
 | Accounts and factors (#1124/#1125) | Disabled account + owned home provisioning, live/recent-login admin checks, own-device/factor APIs, TOTP and multiple passkeys | Account UI, offline lone-admin recovery, passkey-first invitations/reset, owner-aware replacement for disabled legacy factor commands |
-| Invitations/recovery (#1125) | One-use browser-bound TOTP grants, atomic enrol-and-enable, explicit other-admin reset | Invitation/QR and reset confirmation UI, end-to-end browser workflows |
+| Invitations/recovery (#1125) | One-use browser-bound TOTP grants, atomic enrol-and-enable, explicit other-admin reset, fragment-based invitation/QR page | Reset confirmation/admin issuance UI, physical-device and full account browser workflows |
 | Sessions (#1126/#1128) | Root ownership, owner-local names, atomic forks/rename, additional roots, home selection and idle archive/restore | Merge/purge, full archive backup, browser lifecycle UX, process-kill recovery proof |
 | HTTP and SSE (#1127) | Terminal family HTTP policy, SQL-scoped search, own-thread reads, revocable SSE, text-only persisted message admission, selected account/fork routes | Uploads and remaining derived resources/mutations, direct WebSocket/transport/tool paths, browser state and push recipients |
 | Model identity/memory (#1129/#1131) | Server identity before hydration, scoped model context and owner/family memory paths | All direct/queued/delegate/side/Dream entry points and service grants; shared-resource policy |
@@ -111,7 +111,8 @@ The family router makes a terminal decision before legacy, add-on and widget-sta
 | Route class | Family policy |
 |---|---|
 | GET/HEAD login page; POST TOTP verify and WebAuthn login start/finish | Existing authentication handlers and rate limits; internal-secret bypass disabled |
-| GET/HEAD login JS/CSS | Public packaged assets; source maps and other assets require login |
+| GET/HEAD login JS/CSS and invitation JS | Public packaged assets; source maps and other assets require login |
+| GET/HEAD `/auth/invitation` | Public restricted enrolment shell when family TOTP is enabled; private/no-store and no-referrer |
 | GET/HEAD `/auth/me` | Account snapshot or JSON 401 |
 | GET/HEAD `/auth/options` | Public mode and login-method flags only; no user/credential inventory, no-store; isolated mode returns 503 |
 | POST `/auth/invitation/claim`, `/auth/invitation/confirm` | Restricted grant, mandatory matching Origin, bound enrolment cookie on confirmation; no account login issued |
@@ -193,11 +194,15 @@ These account APIs cannot display or replace stored TOTP seeds. Restricted invit
 
 POST `/admin/users/:id/invitation` requires recent administrator authentication and creates a 15-minute random grant for a disabled account with an owned home and no factors. DELETE at the same path revokes it. Only hashes are stored. Reissue invalidates the previous grant and pending TOTP enrolment. Explicit disable (even already disabled), role transitions and factor removal revoke affected issued grants; issuer demotion/disable prevents grant use.
 
-POST `/auth/invitation/claim` accepts only `{token}`. It requires matching browser Origin and a rate-limited client, but no account cookie. It consumes the claim before cryptography, returns the new seed and enrolment token once, and sets a five-minute HttpOnly/Secure/SameSite=Strict `piclaw_enrolment` cookie restricted to `/auth/invitation`. The persisted grant binds hashes of the browser cookie and enrolment token plus the origin. A lost claim response requires an administrator to issue another invitation.
+POST `/auth/invitation/claim` accepts only `{token}`. It requires matching browser Origin and a rate-limited client, but no account cookie. It consumes the claim before cryptography, returns the new seed, rendered QR data URL and enrolment token once, and sets a five-minute HttpOnly/Secure/SameSite=Strict `piclaw_enrolment` cookie restricted to `/auth/invitation`. The persisted grant binds hashes of the browser cookie and enrolment token plus the origin. A lost claim response requires an administrator to issue another invitation.
 
 POST `/auth/invitation/confirm` accepts only `{token,enrolment_token,code}` and needs that cookie and origin. Five guesses are allowed by the underlying enrolment record. Verification rechecks the grant and account after asynchronous cryptography. One transaction inserts the factor, enables the same invited account, revokes any account logins and consumes the grant; failure rolls everything back. Success clears the enrolment cookie and requires an ordinary login. The invitation grants no account-role/profile changes, factor deletion or transcript access. Responses are private/no-store. TOTP-disabled/passkey-only policy cannot issue or redeem these TOTP invitations.
 
-The API has no invitation page or QR UI yet. Passkey-first invitations and offline recovery need separate implementation. Expired records are pruned on issue/claim and factor confirmation. General factor reset cannot reuse invitations for accounts with existing factors.
+The family invitation page is `/auth/invitation#token=<grant>`. The grant belongs in the fragment, never the query string, and should be delivered privately by the administrator. The page clears fragment/query from history before making requests and waits for an explicit Begin action before consuming the one-use claim. It shows the returned QR and manual seed, then confirms with the restricted HttpOnly cookie; success clears the displayed seed/QR and links to ordinary login. It never creates a normal login session or stores credentials in local/session storage.
+
+Expiry, pagehide and back-forward restoration clear displayed secrets and disable confirmation. A fresh fragment navigated into the same tab discards the previous ceremony and reloads. Failed or lost claims require a new administrator-issued invitation rather than automatic retry. Browser network requests have a 15-second bound. The page requires HTTPS for the Secure enrolment cookie; the public shell contains no account/seed data before claim.
+
+Admin issuance/reset UI, passkey-first invitations, offline recovery and physical authenticator tests remain unfinished. Chromium tests cover fragment removal, explicit claim, confirmation/no login, errors, expiry/navigation clearing and mobile fit; API tests use real TOTP verification and QR generation. Expired records are also pruned at runtime. General factor reset cannot reuse invitations for accounts with existing factors.
 
 ## Administrator-assisted recovery
 
