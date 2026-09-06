@@ -1,6 +1,17 @@
 # Access modes
 
-Piclaw supports **single-user deployments only**. The development backend now includes account administration, per-user TOTP, multiple passkeys, restricted invitations, administrator-assisted recovery, owned forks, scoped reads/SSE and auth maintenance. **Family and isolated modes still cannot start.** There is no bypass flag or supported migration/Settings flow. The login shell can render family account fields from public method policy, but this does not enable a family deployment. [#1134](https://github.com/rcarmo/piclaw/issues/1134) tracks the remaining integration.
+Piclaw supports **single-user deployments only**. **Family and isolated modes still cannot start.** These preview guides do not provide an activation bypass; use them for controlled testing and implementation review.
+
+## Guides
+
+- [Family preview user guide](user-guide.md): sign-in, accounts, messages, sessions, preferences and privacy.
+- [Family preview administrator guide](administrator-guide.md): account onboarding, invitations, security, recovery, home and tool policies.
+- [Troubleshooting](troubleshooting.md): safe next steps for users, administrators and operators.
+- [Copy-only migration runbook](migration-copy.md) and [offline recovery runbook](operator-recovery.md): operator procedures and explicit release limits.
+
+The technical contracts and implementation status follow below. User-facing guides must be updated alongside changes to the controls they describe.
+
+The development backend includes account administration, per-user TOTP, multiple passkeys, restricted invitations, administrator-assisted recovery, owned forks, scoped reads/SSE and auth maintenance. There is no supported migration-to-deployment or activation Settings flow. The login shell can render family account fields from public method policy, but this does not enable a family deployment. [#1134](https://github.com/rcarmo/piclaw/issues/1134) tracks the remaining integration.
 
 This guide describes the implementation on `main`, not a deployed or released family feature. The [HTTP inventory](../../runtime/docs/web-api-endpoint-inventory.md#family-development-routes) lists exact development routes; [storage](../storage.md) lists persisted records.
 
@@ -370,6 +381,10 @@ POST `/agent/message-recovery` accepts exactly `{chat_jid,message_rowid,request_
 Only the oldest unconsumed admitted message is eligible. A mismatched held-failure record, foreign message, changed payload or completed/skipped input cannot be rewound. `message_recovery_authorities` appends an immutable owner/message/login/action/idempotency record. Retry retains the cursor and clears the matching hold; dequeue uses the latest retry login while leaving the original admission unchanged. Skip advances only past that input, clears the hold and prevents future execution through an old retry grant. Both actions wake the lane so the next pending input can be processed.
 
 Same-owner/request-key retries return the recorded operation without new effects; changing the target/action denies. Recovery never edits original admission or message content and does not issue a browser cookie. An expired or revoked retry login needs a new explicit recovery request. The API returns `{recovered:true,created,recovery_id,action,message_rowid}` on success; the text shell exposes it without accepting arbitrary row IDs.
+
+### Migrated legacy inputs
+
+Version-five [copy preparation](migration-copy.md#legacy-input-holds) records unconsumed legacy messages as immutable holds without creating normal execution authority. Discovery returns `{state:"legacy-held",message_rowid}` for the oldest matching dequeue input. `retry` and `skip` cannot act on these unadmitted rows. Explicit `dismiss-legacy` requires the current owner, recent authentication, matching Origin, an idle chat, the exact original hash/identity and the same serialized lane; it appends an idempotent dismissal audit without advancing the timestamp cursor. Family dequeue omits only that dismissed row, so equal-timestamp inputs remain separate. Held/dismissed originals can never execute or gain retry authority; original content and authorship stay unchanged. The owner must review history and send a new prompt if execution is wanted. Browser controls hide Retry and require dismissal confirmation; blur/identity changes clear confirmation and late responses. Non-migrated and single-user behaviour is unchanged; activation remains gated.
 
 ## Workspace and capability preview
 

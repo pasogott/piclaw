@@ -7,14 +7,16 @@ import { commitChildAdoptions, type ChildAdoptionInput, type ChildAdoptionSnapsh
 import { applyMigrationResourcePolicy, readMigrationResourceInventory, validateResourceMigration } from './access-resource-migration.js';
 import { applyMigrationFactorPolicy, readMigrationFactorInventory, validateFactorMigration, type FactorMigrationPolicy } from './access-factor-migration.js';
 import type { PreparedLegacyTotp } from '../secure/user-auth-factors.js';
+import { captureMigrationInputHolds, MIGRATION_INPUT_POLICY } from './migration-input-holds.js';
 
 export interface AccessMigrationPlan {
-  version: 1 | 2 | 3 | 4;
+  version: 1 | 2 | 3 | 4 | 5;
   snapshot: string;
   assignments: { root_chat_jid: string; owner_user_id: string | null }[];
   child_sessions?: ChildAdoptionInput[];
   resource_policy?: string;
   factor_policy?: FactorMigrationPolicy;
+  input_policy?: string;
 }
 
 /** Metadata only. Fingerprint covers every field used to validate ownership and handle adoption. */
@@ -46,12 +48,13 @@ function exact(value: unknown, keys: string[]): asserts value is Record<string,u
 
 export function validateAccessMigrationPlan(database: Database, input: unknown) {
   const version=(input as any)?.version;
-  exact(input,version===4?['version','snapshot','assignments','child_sessions','resource_policy','factor_policy']:version===3?['version','snapshot','assignments','child_sessions','resource_policy']:version===2?['version','snapshot','assignments','child_sessions']:['version','snapshot','assignments']);
-  if (![1,2,3,4].includes(version) || (version>=2&&!Array.isArray(input.child_sessions)) || typeof input.snapshot !== 'string' || !/^[0-9a-f]{64}$/.test(input.snapshot) || !Array.isArray(input.assignments)) throw new Error('Invalid migration plan.');
+  exact(input,version===5?['version','snapshot','assignments','child_sessions','resource_policy','factor_policy','input_policy']:version===4?['version','snapshot','assignments','child_sessions','resource_policy','factor_policy']:version===3?['version','snapshot','assignments','child_sessions','resource_policy']:version===2?['version','snapshot','assignments','child_sessions']:['version','snapshot','assignments']);
+  if (![1,2,3,4,5].includes(version) || (version>=2&&!Array.isArray(input.child_sessions)) || typeof input.snapshot !== 'string' || !/^[0-9a-f]{64}$/.test(input.snapshot) || !Array.isArray(input.assignments)) throw new Error('Invalid migration plan.');
   const inventory = readAccessMigrationInventory(database);
   if (inventory.snapshot !== input.snapshot) throw new Error('Migration inventory changed. Create and review a fresh preview.');
   if(version>=3)validateResourceMigration(database,input.resource_policy);
-  if(version===4)validateFactorMigration(database,input.factor_policy);
+  if(version>=4)validateFactorMigration(database,input.factor_policy);
+  if(version===5&&input.input_policy!==MIGRATION_INPUT_POLICY)throw new Error('Explicit legacy input hold policy required.');
   if (inventory.topology.quarantined.length) throw new Error('Quarantined topology/non-web resources must be resolved before copy preparation.');
   const assignments = input.assignments.map(value => {
     exact(value,['root_chat_jid','owner_user_id']);
@@ -93,8 +96,9 @@ export function prepareAccessMigrationCopy(database: Database, plan: unknown, ad
     if(requested.length!==adoptions.length||requested.some((row,index)=>row.chat_jid!==adoptions[index]?.chatJid||row.sha256!==adoptions[index]?.seed.sha256)) throw new Error('Child snapshots do not match the reviewed plan.');
     commitChildAdoptions(database,adoptions);
     if((plan as AccessMigrationPlan).version>=3)applyMigrationResourcePolicy(database,inventory.snapshot);
-    if((plan as AccessMigrationPlan).version===4)applyMigrationFactorPolicy(database,(plan as AccessMigrationPlan).factor_policy,inventory.snapshot,legacyTotp);
+    if((plan as AccessMigrationPlan).version>=4)applyMigrationFactorPolicy(database,(plan as AccessMigrationPlan).factor_policy,inventory.snapshot,legacyTotp);
     else if(legacyTotp)throw new Error('Legacy factor requires a version-four plan.');
+    if((plan as AccessMigrationPlan).version===5)captureMigrationInputHolds(database,inventory.snapshot,(plan as AccessMigrationPlan).input_policy);
     // A separate preparation marker blocks startup even though activation remains single-user.
     database.exec(`CREATE TABLE access_migration_preparation (
       id INTEGER PRIMARY KEY CHECK(id=1), source_snapshot TEXT NOT NULL,

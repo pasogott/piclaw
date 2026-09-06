@@ -17,7 +17,8 @@ const home = element<HTMLButtonElement>('go-home'), refresh = element<HTMLButton
 const recovery = element<HTMLElement>('message-recovery'), recoveryStatus = element<HTMLElement>('recovery-status'), recoveryActions = element<HTMLElement>('recovery-actions');
 const retry = element<HTMLButtonElement>('retry-message'), skip = element<HTMLButtonElement>('skip-message'), confirmSkip = element<HTMLInputElement>('confirm-skip');
 let heldRow: number | null = null;
-let recoveryRequest: { row: number; action: 'retry' | 'skip'; requestId: string } | null = null;
+let legacyHeld = false;
+let recoveryRequest: { row: number; action: 'retry' | 'skip' | 'dismiss-legacy'; requestId: string } | null = null;
 let api: FamilyApi | null = null, current = '', stopped = false, busy = false, paused = false, generation = 0;
 let settings: FamilyAccount | null = null;
 let sessionSettings: FamilySessions | null = null;
@@ -29,13 +30,15 @@ let refreshing: symbol | null = null, polling: ReturnType<typeof setInterval> | 
 let pending: { text: string; chat: string; requestId: string } | null = null;
 function controls(enabled: boolean): void {
   for (const control of [select, compose, send, home, refresh]) control.disabled = !enabled;
-  retry.disabled = !enabled || heldRow === null; confirmSkip.disabled = retry.disabled;
-  skip.disabled = retry.disabled || !confirmSkip.checked;
+  retry.disabled = !enabled || heldRow === null || legacyHeld; confirmSkip.disabled = !enabled || heldRow === null;
+  skip.disabled = !enabled || heldRow === null || !confirmSkip.checked;
 }
 function mask(): void {
   // Backgrounded tabs retain no visible conversation/draft until the cookie is revalidated.
   generation++; refreshing = null; timeline.replaceChildren(); account.textContent = ''; status.textContent = ''; error.textContent = '';
   directoryGeneration++;
+  confirmSkip.checked = false;
+  element('recovery-warning').textContent = ''; recoveryStatus.textContent = '';
   form.hidden = true; select.hidden = true; recovery.hidden = true; controls(false);
   settings?.suspend(); element<HTMLButtonElement>('open-account').disabled = true;
   sessionSettings?.suspend(); element<HTMLButtonElement>('open-sessions').disabled = true;
@@ -69,12 +72,15 @@ function renderPosts(posts: unknown): void {
   timeline.replaceChildren(fragment);
 }
 function renderRecovery(value: any): void {
-  if (!['idle', 'working', 'queued', 'held', 'blocked'].includes(value?.state)
-    || (value.state === 'held' && (!Number.isSafeInteger(value.message_rowid) || value.message_rowid <= 0))) throw new Error('Invalid recovery response.');
-  const next = value.state === 'held' ? value.message_rowid : null;
-  if (heldRow !== next) { recoveryRequest = null; confirmSkip.checked = false; }
+  if (!['idle', 'working', 'queued', 'held', 'legacy-held', 'blocked'].includes(value?.state)
+    || (['held','legacy-held'].includes(value.state) && (!Number.isSafeInteger(value.message_rowid) || value.message_rowid <= 0))) throw new Error('Invalid recovery response.');
+  const next = ['held','legacy-held'].includes(value.state) ? value.message_rowid : null;
+  if (heldRow !== next || legacyHeld !== (value.state==='legacy-held')) { recoveryRequest = null; confirmSkip.checked = false; }
+  legacyHeld = value.state==='legacy-held'; retry.hidden = legacyHeld;
+  skip.textContent = legacyHeld ? 'Dismiss legacy input without running' : 'Skip held message';
+  element('recovery-warning').textContent = legacyHeld ? 'This migrated input has no current execution authority. Dismiss it to unblock the queue; review its history and send a new plain-text prompt if you want it to run. Original content and authorship stay unchanged. A sign-in within five minutes is required.' : 'Retry or skip requires a sign-in within the last five minutes. Skipping leaves the message in history but prevents execution.';
   heldRow = next; recovery.hidden = value.state === 'idle'; recoveryActions.hidden = heldRow === null;
-  recoveryStatus.textContent = value.state === 'held' ? `Input ${heldRow} is held. Choose whether to retry or skip.`
+  recoveryStatus.textContent = legacyHeld ? `Legacy input ${heldRow} is held by migration and cannot be retried.` : value.state === 'held' ? `Input ${heldRow} is held. Choose whether to retry or skip.`
     : value.state === 'blocked' ? 'Recovery is blocked. Ask the operator to inspect the stored input.'
     : value.state === 'working' ? 'A message is running.' : value.state === 'queued' ? 'A message is queued.' : '';
 }
@@ -199,8 +205,8 @@ logout.addEventListener('click', async () => {
   finally { busy = false; if (!stopped) void loadTimeline(); }
 });
 confirmSkip.addEventListener('change', () => { skip.disabled = busy || heldRow === null || !confirmSkip.checked; });
-async function recover(action: 'retry' | 'skip'): Promise<void> {
-  if (!api || stopped || busy || paused || heldRow === null || (action === 'skip' && !confirmSkip.checked)) return;
+async function recover(action: 'retry' | 'skip' | 'dismiss-legacy'): Promise<void> {
+  if (!api || stopped || busy || paused || heldRow === null || (action !== 'retry' && !confirmSkip.checked) || (legacyHeld ? action!=='dismiss-legacy' : action==='dismiss-legacy')) return;
   if (!recoveryRequest || recoveryRequest.row !== heldRow || recoveryRequest.action !== action) recoveryRequest = { row: heldRow, action, requestId: crypto.randomUUID() };
   busy = true; generation++; controls(false);
   try {
@@ -211,5 +217,5 @@ async function recover(action: 'retry' | 'skip'): Promise<void> {
   } finally { busy = false; if (!stopped) { refreshing = null; await loadTimeline(); } }
 }
 retry.addEventListener('click', () => { void recover('retry'); });
-skip.addEventListener('click', () => { void recover('skip'); });
+skip.addEventListener('click', () => { void recover(legacyHeld?'dismiss-legacy':'skip'); });
 void start();

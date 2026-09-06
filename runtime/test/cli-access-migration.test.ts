@@ -11,6 +11,7 @@ import {readAccessState} from '../src/db/access-state.js';
 import {readAccessMigrationInventory} from '../src/db/access-migration-plan.js';
 import {adoptedJsonl} from './agent-pool/adopted-session-fixture.js';
 import {RESOURCE_MIGRATION_POLICY} from '../src/db/access-resource-migration.js';
+import {MIGRATION_INPUT_POLICY} from '../src/db/migration-input-holds.js';
 
 let ws:ReturnType<typeof createTempWorkspace>,restore:()=>void,source:string,dir:string,original:typeof console.log,logs:string[];
 beforeEach(()=>{
@@ -88,4 +89,10 @@ test('version-four protected legacy proof import is copy-only, not logged, and r
     value.factor_policy.legacy_totp='none';writeFileSync(join(dir,'plan.json'),JSON.stringify(value));await expect(handleAccessMigration([...args().map(v=>v===join(dir,'prepared.sqlite')?join(dir,'another.sqlite'):v),'--legacy-totp-file',file])).rejects.toThrow('Protected TOTP');
     expect(existsSync(file)).toBe(true);
   }finally{restoreKey();}
+});
+
+test('version-five copy records legacy holds without inventing admissions or changing source cursor/history',async()=>{
+  const sourceDb=new Database(source);sourceDb.exec("UPDATE messages SET timestamp='2026-09-06T00:00:00.000Z'");sourceDb.close();
+  const inventory=await preview(),before=digest();writeFileSync(join(dir,'plan.json'),JSON.stringify({...inventory.plan,version:5,child_sessions:[],resource_policy:RESOURCE_MIGRATION_POLICY,factor_policy:{passkeys:'preserve-immutable-handles',legacy_totp:'none'},input_policy:MIGRATION_INPUT_POLICY}));await handleAccessMigration(args());expect(digest()).toBe(before);
+  const copy=new Database(join(dir,'prepared.sqlite'),{readonly:true});try{expect(copy.query('SELECT message_id,chat_jid,owner_user_id FROM migration_input_holds').get()).toEqual({message_id:'message',chat_jid:'web:default',owner_user_id:'default'});expect(copy.query('SELECT * FROM message_execution_authorities').all()).toEqual([]);expect(copy.query('SELECT * FROM migration_input_dismissals').all()).toEqual([]);expect(()=>readAccessState(copy)).toThrow();}finally{copy.close();}
 });

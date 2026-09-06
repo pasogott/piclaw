@@ -22,6 +22,7 @@ function validateText(content: string): void {
 /** Read live immutable admission plus exact persisted payload before any message/model processing. */
 export function readFamilyMessageAdmission(chatJid: string, messageId: string) {
   const db = getDb();
+  if(db.query('SELECT 1 FROM migration_input_holds WHERE chat_jid=? AND message_id=?').get(chatJid,messageId))throw new ChatAccessDenied();
   const row = db.query(`SELECT a.*,m.content,m.thread_id AS current_thread_id,m.is_bot_message,m.is_steering_message,m.content_blocks,m.link_previews
     FROM message_execution_authorities a JOIN messages m ON m.rowid=a.message_rowid AND m.id=a.message_id AND m.chat_jid=a.chat_jid
     WHERE a.chat_jid=? AND a.message_id=?`).get(chatJid, messageId) as (Authority & { content: string; current_thread_id: number | null; is_bot_message: number; is_steering_message: number; content_blocks: string | null; link_previews: string | null }) | null;

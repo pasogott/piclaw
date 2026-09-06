@@ -179,9 +179,9 @@
     <section id="message-recovery" aria-label="Held message recovery" hidden>
       <p id="recovery-status" role="status"></p>
       <div id="recovery-actions" hidden>
-        <p>Retry or skip requires a sign-in within the last five minutes. Skipping leaves the message in history but prevents execution.</p>
+        <p id="recovery-warning">Retry or skip requires a sign-in within the last five minutes. Skipping leaves the message in history but prevents execution.</p>
         <button id="retry-message" type="button" disabled>Retry held message</button>
-        <label><input id="confirm-skip" type="checkbox" disabled /> Skip this held input without running it</label>
+        <label><input id="confirm-skip" type="checkbox" disabled /> Leave this held input in history without running it</label>
         <button id="skip-message" type="button" disabled>Skip held message</button>
       </div>
     </section>

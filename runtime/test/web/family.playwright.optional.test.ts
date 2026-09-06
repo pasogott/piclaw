@@ -184,6 +184,30 @@ function accountSnapshot(recent = true) {
     ],
   };
 }
+
+browserTest('legacy-held input offers only confirmed dismissal, preserves retry key and requires a separately submitted prompt',async()=>{
+  const page=await browser.newPage();
+  try{
+    await fixture(page);let held=true;const writes:any[]=[];
+    await page.route('**/agent/message-recovery?**',route=>route.fulfill({json:held?{state:'legacy-held',message_rowid:71}:{state:'idle'}}));
+    await page.route('**/agent/message-recovery',route=>{writes.push({body:route.request().postDataJSON(),headers:route.request().headers()});if(writes.length===1)return route.fulfill({status:500,json:{}});held=false;return route.fulfill({json:{recovered:true}});});
+    await page.goto(base);await ready(page);expect(await page.locator('#retry-message').isVisible()).toBe(false);expect(await page.locator('#skip-message').isDisabled()).toBe(true);expect(await page.locator('#recovery-warning').textContent()).toContain('send a new plain-text prompt');
+    await page.locator('#confirm-skip').check();await page.locator('#skip-message').click();await page.waitForFunction(()=>document.getElementById('family-error')?.textContent?.includes('same action'));
+    expect(writes).toHaveLength(1);expect(writes[0].body.action).toBe('dismiss-legacy');expect(writes[0].body.message_rowid).toBe(71);expect(writes[0].headers['x-piclaw-account-id']).toBe('alice');
+    await page.locator('#skip-message').click();await page.waitForFunction(()=>(document.getElementById('message-recovery') as HTMLElement)?.hidden);expect(writes).toHaveLength(2);expect(writes[1].body.request_id).toBe(writes[0].body.request_id);expect(await page.locator('#message-text').inputValue()).toBe('');
+  }finally{await page.close();}
+},20000);
+
+browserTest('legacy hold confirmation clears on blur and replacement login cannot render a late dismissal',async()=>{
+  const page=await browser.newPage();
+  try{
+    const state=await fixture(page);await page.route('**/agent/message-recovery?**',route=>route.fulfill({json:{state:'legacy-held',message_rowid:71}}));
+    await page.goto(base);await ready(page);await page.locator('#confirm-skip').check();await page.evaluate(()=>dispatchEvent(new Event('blur')));expect(await page.locator('#confirm-skip').isChecked()).toBe(false);expect(await page.locator('#recovery-status').textContent()).toBe('');
+    await page.evaluate(()=>dispatchEvent(new Event('focus')));await ready(page);expect(await page.locator('#skip-message').isDisabled()).toBe(true);
+    let release!:()=>void,entered!:()=>void;const held=new Promise<void>(r=>release=r),waiting=new Promise<void>(r=>entered=r);await page.route('**/agent/message-recovery',async route=>{entered();await held;await route.fulfill({json:{recovered:true}});});
+    await page.locator('#confirm-skip').check();await page.locator('#skip-message').click();await waiting;state.identity=principal('bob','login-b');release();await page.waitForFunction(()=>document.getElementById('family-status')?.textContent?.includes('no longer bound'));expect(await page.locator('#message-recovery').isVisible()).toBe(false);expect(await page.locator('#message-text').inputValue()).toBe('');
+  }finally{await page.close();}
+},20000);
 async function openAccount(page: Page) {
   await page.goto(base); await ready(page); await page.locator('#open-account').click();
   await page.waitForFunction(() => !(document.getElementById('account-details') as HTMLElement)?.hidden);

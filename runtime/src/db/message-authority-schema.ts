@@ -2,7 +2,21 @@ import type Database from "bun:sqlite";
 
 /** Server-owned admission record; never populated by generic message or browser metadata. */
 export function initializeMessageAuthoritySchema(database: Database): void {
-  database.exec(`CREATE TABLE IF NOT EXISTS message_execution_authorities (
+  database.exec(`CREATE TABLE IF NOT EXISTS migration_input_holds (
+    message_rowid INTEGER PRIMARY KEY, message_id TEXT NOT NULL, chat_jid TEXT NOT NULL,
+    owner_user_id TEXT NOT NULL REFERENCES users(id), message_timestamp TEXT NOT NULL,
+    content_hash TEXT NOT NULL, source_snapshot TEXT NOT NULL, created_at TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS migration_input_dismissals (
+    id INTEGER PRIMARY KEY, message_rowid INTEGER NOT NULL UNIQUE REFERENCES migration_input_holds(message_rowid),
+    owner_user_id TEXT NOT NULL REFERENCES users(id), login_session_id TEXT NOT NULL, request_id TEXT NOT NULL,
+    created_at TEXT NOT NULL, UNIQUE(owner_user_id,request_id)
+  ) STRICT;
+  CREATE TRIGGER IF NOT EXISTS migration_input_hold_immutable BEFORE UPDATE ON migration_input_holds
+    BEGIN SELECT RAISE(ABORT,'Migration input hold is immutable'); END;
+  CREATE TRIGGER IF NOT EXISTS migration_input_dismissal_immutable BEFORE UPDATE ON migration_input_dismissals
+    BEGIN SELECT RAISE(ABORT,'Migration input dismissal is immutable'); END;
+  CREATE TABLE IF NOT EXISTS message_execution_authorities (
     message_rowid INTEGER PRIMARY KEY,
     message_id TEXT NOT NULL,
     chat_jid TEXT NOT NULL,
