@@ -9,6 +9,7 @@ import {handleAccessMigration} from '../src/cli-access-migration.js';
 import {handleCliOptions} from '../src/cli.js';
 import {readAccessState} from '../src/db/access-state.js';
 import {readAccessMigrationInventory} from '../src/db/access-migration-plan.js';
+import {adoptedJsonl} from './agent-pool/adopted-session-fixture.js';
 
 let ws:ReturnType<typeof createTempWorkspace>,restore:()=>void,source:string,dir:string,original:typeof console.log,logs:string[];
 beforeEach(()=>{
@@ -43,4 +44,22 @@ test('active lock, quarantined source and failed destination migration leave no 
   expect(()=>handleAccessMigration(args())).toThrow('copy failed');expect(existsSync(join(dir,'prepared.sqlite'))).toBe(false);expect(existsSync(join(ws.store,'runtime.lock'))).toBe(false);
   const check=new Database(source,{readonly:true});try{expect(check.query('SELECT * FROM session_roots').all()).toEqual([]);expect(readAccessState(check).activatedMode).toBe('single-user');}finally{check.close();}
   expect(digest()).not.toBe(before); // Only the test's intentional trigger changed the source.
+});
+
+test('version-two plan captures a hash-checked child tree into copy provenance without changing source files or enabling startup',()=>{
+  const db=new Database(source);db.exec("INSERT INTO chats(jid,name,last_message_time) VALUES ('web:child','child','now'); INSERT INTO chat_branches(branch_id,chat_jid,root_chat_jid,parent_branch_id,agent_name,created_at,updated_at) VALUES ('child','web:child','web:default','root','child','now','now')");db.close();
+  const sessions=join(ws.data,'sessions'),parentDir=join(sessions,'web_default'),childDir=join(sessions,'web_child');mkdirSync(parentDir,{recursive:true});mkdirSync(childDir,{recursive:true});
+  const parent=join(parentDir,'parent.jsonl');writeFileSync(parent,'parent');const fixture=adoptedJsonl(ws.workspace,parent),file=join(childDir,'child.jsonl');writeFileSync(file,fixture.jsonl);
+  const inventory=preview();const plan={...inventory.plan,version:2,child_sessions:[{chat_jid:'web:child',file,sha256:fixture.sha256}]};writeFileSync(join(dir,'plan.json'),JSON.stringify(plan));const before=digest();
+  handleAccessMigration(args());expect(digest()).toBe(before);expect(readFileSync(file,'utf8')).toBe(fixture.jsonl);
+  const copy=new Database(join(dir,'prepared.sqlite'),{readonly:true});try{const row=copy.query("SELECT seed_json,materialised_at FROM owned_fork_operations WHERE target_branch_id='child'").get() as any;expect(JSON.parse(row.seed_json)).toEqual({version:1,mode:'adopted_jsonl',sha256:fixture.sha256,jsonl:fixture.jsonl});expect(row.materialised_at).toBeNull();expect(()=>readAccessState(copy)).toThrow();}finally{copy.close();}
+  expect(logs.join('\n')).not.toContain('ADOPTED_PRIVATE');
+});
+
+test('child adoption refuses hash/path/parent/pending-seed mismatches and never leaves a partial copy',()=>{
+  const db=new Database(source);db.exec("INSERT INTO chats(jid,name,last_message_time) VALUES ('web:child','child','now'); INSERT INTO chat_branches(branch_id,chat_jid,root_chat_jid,parent_branch_id,agent_name,created_at,updated_at) VALUES ('child','web:child','web:default','root','child','now','now')");db.close();
+  const parentDir=join(ws.data,'sessions','web_default'),childDir=join(ws.data,'sessions','web_child');mkdirSync(parentDir,{recursive:true});mkdirSync(childDir,{recursive:true});const parent=join(parentDir,'parent.jsonl');writeFileSync(parent,'parent');
+  const fixture=adoptedJsonl(ws.workspace,parent),file=join(childDir,'child.jsonl');writeFileSync(file,fixture.jsonl);const inventory=preview();
+  for(const entry of [{chat_jid:'web:child',file,sha256:'0'.repeat(64)},{chat_jid:'web:default',file,sha256:fixture.sha256},{chat_jid:'web:child',file:parent,sha256:fixture.sha256}]){writeFileSync(join(dir,'plan.json'),JSON.stringify({...inventory.plan,version:2,child_sessions:[entry]}));expect(()=>handleAccessMigration(args())).toThrow();expect(existsSync(join(dir,'prepared.sqlite'))).toBe(false);}
+  writeFileSync(join(dir,'plan.json'),JSON.stringify({...inventory.plan,version:2,child_sessions:[{chat_jid:'web:child',file,sha256:fixture.sha256}]}));writeFileSync(join(childDir,'.branch-seed.json'),'{}');expect(()=>handleAccessMigration(args())).toThrow('Pending legacy');
 });

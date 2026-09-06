@@ -1,11 +1,12 @@
 import Database from 'bun:sqlite';
 import { chmodSync, constants, closeSync, fsyncSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { getStoreDir } from './core/config-context.js';
+import { getStoreDir, getDataDir, getWorkspaceDir } from './core/config-context.js';
 import { readAccessConfig } from './core/config-access.js';
 import { acquireRuntimeLock } from './runtime/single-instance.js';
 import { createVerifiedSqliteBackup, verifySqliteBackup } from './db/backup.js';
 import { prepareAccessMigrationCopy, readAccessMigrationInventory, validateAccessMigrationPlan } from './db/access-migration-plan.js';
+import { captureChildAdoptions } from './db/access-child-adoption.js';
 
 function destination(path:string,source:string):string {
   const parent=realpathSync(dirname(resolve(path))),stat=lstatSync(parent), target=join(parent,basename(path));
@@ -45,12 +46,16 @@ export function handleAccessMigration(args:string[]):void {
     let plan:unknown;
     try {const stat=fstatSync(planFd);if(!stat.isFile()||stat.size>1024*1024) throw new Error('Migration plan must be a regular file up to 1 MiB.');plan=JSON.parse(readFileSync(planFd,'utf8'));}finally{closeSync(planFd);}
     const {inventory}=validateAccessMigrationPlan(db,plan);
+    const children=(plan as {child_sessions?:unknown}).child_sessions ?? [];
+    const adoptions=captureChildAdoptions(db,children,getWorkspaceDir(),join(getDataDir(),'sessions'));
     const version=(db.query('PRAGMA data_version').get() as {data_version:number}).data_version;
     createVerifiedSqliteBackup(db,source,target);created=target;chmodSync(target,0o600);
     if((db.query('PRAGMA data_version').get() as {data_version:number}).data_version!==version || readAccessMigrationInventory(db).snapshot!==inventory.snapshot) throw new Error('Source changed during snapshot. Review a new preview.');
     copy=new Database(target,{readwrite:true,create:false,strict:true});copy.exec('PRAGMA journal_mode=DELETE; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=0;');
-    const result=prepareAccessMigrationCopy(copy,plan);copy.close();copy=undefined;verifySqliteBackup(target);
-    success=true;console.log(JSON.stringify({...result,destination:target,warning:'Prepared copy cannot start. Source unchanged; activation, factor migration and child seed adoption remain gated.'}));
+    const rechecked=captureChildAdoptions(db,children,getWorkspaceDir(),join(getDataDir(),'sessions'));
+    if(JSON.stringify(rechecked)!==JSON.stringify(adoptions)) throw new Error('Child snapshots changed during copy preparation.');
+    const result=prepareAccessMigrationCopy(copy,plan,adoptions);copy.close();copy=undefined;verifySqliteBackup(target);
+    success=true;console.log(JSON.stringify({...result,destination:target,warning:'Prepared copy cannot start. Source unchanged; activation, factor migration and unverified children remain gated.'}));
   } finally {
     try{copy?.close();db?.close();}finally{try{if(created&&!success)rmSync(created,{force:true});}finally{lock.release();}}
   }
