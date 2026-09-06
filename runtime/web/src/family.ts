@@ -9,22 +9,28 @@ const account = element<HTMLElement>('account-name'), status = element<HTMLEleme
 const timeline = element<HTMLElement>('timeline'), select = element<HTMLSelectElement>('session-select');
 const form = element<HTMLFormElement>('compose-form'), compose = element<HTMLTextAreaElement>('message-text'), send = element<HTMLButtonElement>('send-message');
 const home = element<HTMLButtonElement>('go-home'), refresh = element<HTMLButtonElement>('refresh'), logout = element<HTMLButtonElement>('sign-out');
+const recovery = element<HTMLElement>('message-recovery'), recoveryStatus = element<HTMLElement>('recovery-status'), recoveryActions = element<HTMLElement>('recovery-actions');
+const retry = element<HTMLButtonElement>('retry-message'), skip = element<HTMLButtonElement>('skip-message'), confirmSkip = element<HTMLInputElement>('confirm-skip');
+let heldRow: number | null = null;
+let recoveryRequest: { row: number; action: 'retry' | 'skip'; requestId: string } | null = null;
 let api: FamilyApi | null = null, current = '', stopped = false, busy = false, paused = false, generation = 0;
 let refreshing: symbol | null = null, polling: ReturnType<typeof setInterval> | undefined;
 let pending: { text: string; chat: string; requestId: string } | null = null;
 function controls(enabled: boolean): void {
   for (const control of [select, compose, send, home, refresh]) control.disabled = !enabled;
+  retry.disabled = !enabled || heldRow === null; confirmSkip.disabled = retry.disabled;
+  skip.disabled = retry.disabled || !confirmSkip.checked;
 }
 function mask(): void {
   // Backgrounded tabs retain no visible conversation/draft until the cookie is revalidated.
   generation++; refreshing = null; timeline.replaceChildren(); account.textContent = ''; status.textContent = ''; error.textContent = '';
-  form.hidden = true; select.hidden = true; controls(false);
+  form.hidden = true; select.hidden = true; recovery.hidden = true; controls(false);
 }
 function invalidate(): void {
   if (stopped) return;
   stopped = true; mask(); api?.stop();
   if (polling) clearInterval(polling);
-  select.replaceChildren(); compose.value = ''; pending = null; logout.disabled = true;
+  select.replaceChildren(); compose.value = ''; pending = null; heldRow = null; recoveryRequest = null; confirmSkip.checked = false; recoveryStatus.textContent = ''; logout.disabled = true;
   status.textContent = 'This page is no longer bound to its original account.';
   error.textContent = 'Sign in again or reload. No previous conversation or draft is retained.';
 }
@@ -40,13 +46,26 @@ function renderPosts(posts: unknown): void {
   }
   timeline.replaceChildren(fragment);
 }
+function renderRecovery(value: any): void {
+  if (!['idle', 'working', 'queued', 'held', 'blocked'].includes(value?.state)
+    || (value.state === 'held' && (!Number.isSafeInteger(value.message_rowid) || value.message_rowid <= 0))) throw new Error('Invalid recovery response.');
+  const next = value.state === 'held' ? value.message_rowid : null;
+  if (heldRow !== next) { recoveryRequest = null; confirmSkip.checked = false; }
+  heldRow = next; recovery.hidden = value.state === 'idle'; recoveryActions.hidden = heldRow === null;
+  recoveryStatus.textContent = value.state === 'held' ? `Input ${heldRow} is held. Choose whether to retry or skip.`
+    : value.state === 'blocked' ? 'Recovery is blocked. Ask the operator to inspect the stored input.'
+    : value.state === 'working' ? 'A message is running.' : value.state === 'queued' ? 'A message is queued.' : '';
+}
 async function loadTimeline(): Promise<void> {
   if (!api || stopped || !current || refreshing || busy || paused || document.hidden) return;
   const flight = Symbol(), expected = ++generation, target = current; refreshing = flight;
   try {
-    const result = await api.request(`/timeline?chat_jid=${encodeURIComponent(target)}&limit=100`);
+    const [result, recoveryState] = await Promise.all([
+      api.request(`/timeline?chat_jid=${encodeURIComponent(target)}&limit=100`),
+      api.request(`/agent/message-recovery?chat_jid=${encodeURIComponent(target)}`),
+    ]);
     if (stopped || expected !== generation || current !== target || paused || document.hidden) return;
-    renderPosts(result.posts); status.textContent = `Session: ${target}${result.has_more ? ' · Showing the most recent messages' : ''}`;
+    renderPosts(result.posts); renderRecovery(recoveryState); status.textContent = `Session: ${target}${result.has_more ? ' · Showing the most recent messages' : ''}`;
     account.textContent = `${api.identity.displayName} (@${api.identity.username})`;
     form.hidden = false; select.hidden = false; controls(!busy);
   } catch (failure) {
@@ -58,7 +77,7 @@ async function loadTimeline(): Promise<void> {
 }
 async function switchSession(chat: string): Promise<void> {
   if (stopped || busy || !api) return;
-  mask(); current = chat; pending = null; compose.value = ''; error.textContent = '';
+  mask(); current = chat; pending = null; heldRow = null; recoveryRequest = null; confirmSkip.checked = false; compose.value = ''; error.textContent = '';
   const url = new URL(location.href); url.search = ''; url.searchParams.set('chat_jid', chat); url.hash = '';
   history.replaceState(null, '', url.pathname + url.search); select.value = chat;
   await loadTimeline();
@@ -115,4 +134,18 @@ logout.addEventListener('click', async () => {
   } catch (failure) { if (!stopped) { error.textContent = (failure as Error).message; logout.disabled = false; } }
   finally { busy = false; if (!stopped) void loadTimeline(); }
 });
+confirmSkip.addEventListener('change', () => { skip.disabled = busy || heldRow === null || !confirmSkip.checked; });
+async function recover(action: 'retry' | 'skip'): Promise<void> {
+  if (!api || stopped || busy || paused || heldRow === null || (action === 'skip' && !confirmSkip.checked)) return;
+  if (!recoveryRequest || recoveryRequest.row !== heldRow || recoveryRequest.action !== action) recoveryRequest = { row: heldRow, action, requestId: crypto.randomUUID() };
+  busy = true; generation++; controls(false);
+  try {
+    await api.request('/agent/message-recovery', 'POST', { chat_jid: current, message_rowid: heldRow, action, request_id: recoveryRequest.requestId });
+    if (!stopped) { recoveryRequest = null; confirmSkip.checked = false; error.textContent = ''; }
+  } catch (failure) {
+    if (!stopped) error.textContent = `${(failure as Error).message} Retry the same action to reuse its request ID; refresh before choosing another input.`;
+  } finally { busy = false; if (!stopped) { refreshing = null; await loadTimeline(); } }
+}
+retry.addEventListener('click', () => { void recover('retry'); });
+skip.addEventListener('click', () => { void recover('skip'); });
 void start();

@@ -3,7 +3,7 @@ import type { WebChannelLike } from "../core/web-channel-contracts.js";
 import { getDb } from "../../../db/connection.js";
 import { requireAccountActor } from "../../../db/account-administration.js";
 import { ChatAccessDenied, resolveAuthorisedChat } from "../../../db/session-ownership.js";
-import { recoverFamilyMessage } from "../messaging/family-message-recovery.js";
+import { recoverFamilyMessage, readFamilyRecoveryStatus } from "../messaging/family-message-recovery.js";
 import { checkCsrfOrigin, rateLimitResponse } from "./security.js";
 import { isRateLimited } from "./rate-limit.js";
 import { createUuid } from "../../../utils/ids.js";
@@ -11,6 +11,12 @@ import { createUuid } from "../../../utils/ids.js";
 /** Serialize recovery on the processing lane, without hydrating or aborting a target. */
 export async function handleFamilyMessageRecovery(channel: WebChannelLike, req: Request, actor: AuthenticatedPrincipal): Promise<Response> {
   const deny = () => channel.json({ error: "Session access denied." }, 403);
+  if (req.method === "GET") {
+    const values = new URL(req.url).searchParams.getAll("chat_jid");
+    if (values.length > 1 || (values.length === 1 && !values[0]?.trim())) return deny();
+    try { return channel.json(readFamilyRecoveryStatus(actor, values[0])); }
+    catch (error) { if (error instanceof ChatAccessDenied) return deny(); throw error; }
+  }
   if (req.method !== "POST" || !req.headers.get("origin") || !checkCsrfOrigin(req)) return deny();
   if (isRateLimited(req, "data/family_recovery", 60_000, 20)) return rateLimitResponse("Too many recovery requests.");
   try {

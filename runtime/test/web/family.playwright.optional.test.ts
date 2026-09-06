@@ -9,6 +9,7 @@ const posts = (content = "Alice private text") => ({ posts: [{ id: 1, timestamp:
 async function fixture(page: Page) {
   const state = { identity: principal(), calls: [] as Array<{ path: string; headers: Record<string, string>; body: any }> };
   await page.route("**/auth/me", route => route.fulfill({ json: state.identity }));
+  await page.route("**/agent/message-recovery?**", route => route.fulfill({ json: { state: 'idle' } }));
   await page.route("**/agent/branches", route => route.fulfill({ json: { branches: [{ chat_jid: "web:alice", root_chat_jid: "web:alice", agent_name: "home" }, { chat_jid: "web:alice-two", root_chat_jid: "web:alice-two", agent_name: "second" }] } }));
   await page.route("**/timeline?**", route => { state.calls.push({ path: route.request().url(), headers: route.request().headers(), body: null }); return route.fulfill({ json: posts() }); });
   return state;
@@ -134,5 +135,30 @@ browserTest("sign out sends the original pins, clears UI and navigates to login"
     await page.route("**/auth/logout", route => { headers = route.request().headers(); return route.fulfill({ json: { logged_out: true } }); });
     await page.goto(base); await ready(page); await page.locator("#sign-out").click(); await page.waitForURL(base + "/login");
     expect(headers["x-piclaw-account-id"]).toBe("alice"); expect(headers["x-piclaw-login-id"]).toBe("login-a");
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest("held-input controls use discovered IDs, require skip confirmation and reuse failed retry key", async () => {
+  const page = await browser.newPage();
+  try {
+    await fixture(page); let held = true; const actions: any[] = [];
+    await page.route("**/agent/message-recovery?**", route => route.fulfill({ json: held ? { state: "held", message_rowid: 42 } : { state: "idle" } }));
+    await page.route("**/agent/message-recovery", route => {
+      actions.push(route.request().postDataJSON());
+      if (actions.length === 1) return route.fulfill({ status: 500, json: {} });
+      if (actions.at(-1).action === "skip") held = false;
+      return route.fulfill({ json: { recovered: true } });
+    });
+    await page.goto(base); await ready(page);
+    expect(await page.locator("#recovery-status").textContent()).toContain("42");
+    expect(await page.locator("#skip-message").isDisabled()).toBe(true);
+    await page.locator("#retry-message").click();
+    await page.waitForFunction(() => document.getElementById("family-error")?.textContent?.includes("same action"));
+    await page.locator("#retry-message").click();
+    await page.waitForFunction(() => !document.getElementById("family-error")?.textContent);
+    expect(actions).toHaveLength(2); expect(actions[0].request_id).toBe(actions[1].request_id); expect(actions[0].message_rowid).toBe(42);
+    await page.locator("#confirm-skip").check(); await page.locator("#skip-message").click();
+    await page.waitForFunction(() => (document.getElementById("message-recovery") as HTMLElement)?.hidden);
+    expect(actions[2].action).toBe("skip"); expect(actions[2].request_id).not.toBe(actions[1].request_id);
   } finally { await page.close(); }
 }, 20000);
