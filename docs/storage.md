@@ -1,6 +1,6 @@
 # Storage model
 
-`piclaw` stores state in SQLite at `/workspace/.piclaw/store/messages.db`. The database is the source of truth for chat history, media, tasks, and token usage.
+`piclaw` stores state in SQLite at `/workspace/.piclaw/store/messages.db`. The database is the source of truth for chat history, media, tasks, token usage, account/factor records and session ownership. Additive multi-user tables do not enable a multi-user deployment: [startup still permits only single-user mode](multi-user/README.md).
 
 **Never delete this file.** Only repair or migrate it.
 
@@ -23,20 +23,41 @@
 | `chat_cursors` | Per‑chat cursor + inflight/failed run tracking + deferred follow‑up queue |
 | `router_state` | Misc router state (auto‑compaction + web status) |
 | `keychain_entries` | Encrypted secrets for tool env injection |
-| `webauthn_credentials` | Stored passkeys (credential public keys + counters) |
-| `webauthn_enrollments` | One‑time enrolment tokens for passkey registration |
-| `web_sessions` | Persistent web UI sessions (TOTP + passkey logins) |
-| `chat_branches` | Branch/session registry for parallel web chat sessions |
-| `remote_peers` | Cross-instance interop peer registry |
-| `remote_pair_requests` | Pending pairing requests for cross-instance interop |
-| `remote_requests` | Tracked cross-instance request state |
-| `remote_audit_logs` | Audit trail for cross-instance operations |
+| `webauthn_credentials` | Independent passkeys per user/RP (credential public keys + counters); multiple keys per account |
+| `webauthn_enrollments` | Legacy single-user passkey enrolment tokens |
+| `web_sessions` | Hashed bearer tokens, non-secret `session_id`, user ID, auth method and expiry |
+| `chat_branches` | Stable branch/chat/root/parent IDs, friendly handle and explicit owner-handle namespace |
+| `users` | Immutable account ID, normalised username, display name, role, enabled state and home |
+| `access_state` | Activated access mode and access schema version; protects against configuration loss/downgrade |
+| `session_roots` | Immutable owner and private policy for a stable root branch |
+| `owned_fork_operations` | Owner/source/idempotency binding and captured JSON seed, committed with the child; seed cleared after persistence |
+| `user_totp_factors` | Encrypted per-user TOTP seed, revision and last-used timestep; separate from keychain injection |
+| `user_totp_enrolments` | Hashed confirmation token, encrypted pending seed, attempt count and expiry |
+| `user_auth_invitations` | Hashed invitation/browser/enrolment tokens, target/issuer, origin and expiry |
+| `user_passkey_registrations` | Hashed ceremony token bound to user, login, RP, origin, challenge and expiry |
+| `user_auth_attempts` | Hashed account/client rate-limit buckets and reset time |
+| `account_recovery_events` | Non-secret actor/target/reset event/time audit |
+| `core_schema_migrations` | Core migration ledger, including removal of obsolete core remote-interop tables |
+
+Remote Peer state belongs to the installed add-on. The obsolete core `remote_*` tables are removed by `dropObsoleteRemoteInteropSchema`; they are not a current storage API.
 
 Attachment binaries and metadata live in `media`, with message links in `message_media`. Message records use `content_blocks` for structured file/image metadata, Adaptive Cards, and `adaptive_card_submission` receipts; `link_previews` stores preview JSON separately. Token usage rows include `model`, `provider`, and `api` for per-model tracking.
 
 The browser keeps local UI memory that should not become shared backend state out of SQLite. That includes dismissal and seen state for the context compaction affordance. The backend decides whether the underlying context condition currently applies; the browser stores only lightweight local UI state.
 
+## Access-state invariants
+
+Schema initialisation preserves the legacy `default` account and `web:default` mapping. Low-level user creation is disabled/no-home; the family admin API atomically creates a disabled account with an owned home. Neither assigns existing roots to users automatically or changes the activation marker. Root/handle adoption is an explicit offline operation.
+
+Legacy active handles use the empty `handle_owner_id` namespace. Adopted handles use a case-normalised `(handle_owner_id, agent_name)` unique index across active roots and descendants; different owners can each use `research`. A family fork commits chat/branch/namespace/seed in one transaction. Its JSONL session is materialised later; failed or interrupted replay retains the seed. Replaying after a process crash is not yet proven exactly once.
+
+Confirmed TOTP factors are encrypted; passkey public keys and non-secret challenges are not secrets requiring that encryption. Web session bearer tokens and new ceremony grants are hashed at rest, while legacy passkey enrolment tokens retain their older format. Preserve all tables, session JSONL, configuration and bootstrap key in coordinated backups.
+
+The minute-based [auth maintenance loop](multi-user/README.md#authentication-maintenance) removes expired transient state; it does not delete accounts, confirmed factors or recovery audit records. Browser cache/storage namespacing and complete derived-resource ownership are still unfinished.
+
 ## Entity map
+
+The diagram below covers the older message/task core; the account/ownership/authentication tables are listed above.
 
 ```mermaid
 erDiagram
@@ -207,6 +228,7 @@ erDiagram
   }
   WEB_SESSIONS {
     text token
+    text session_id
     text user_id
     text auth_method
     text created_at
@@ -243,15 +265,21 @@ erDiagram
 - `webauthn_credentials(user_id)` and `webauthn_credentials(rp_id)` for passkey queries
 - `webauthn_enrollments(expires_at)` for enrolment cleanup
 - `web_sessions(expires_at)` for session cleanup
+- `users(username COLLATE NOCASE)` for account-name uniqueness
+- `session_roots(owner_user_id)` for owned-root lookup
+- Partial active-handle indexes for the legacy namespace and `(handle_owner_id, lower(agent_name))`
+- Expiry indexes on TOTP enrolments, invitations and passkey registrations
 
 ## Data paths
 
 - `/workspace/.piclaw/store/messages.db` — SQLite database
 - `/workspace/.piclaw/data/sessions/` — `pi` session JSONL history
 - `/workspace/.piclaw/data/ipc/` — IPC messages and scheduled task files
-- `/workspace/.piclaw/data/chats.json` — Known chat JIDs
+- Known chat JIDs and branches live in SQLite (`chats`, `chat_branches`); do not use an old `chats.json` export as the source of truth
 
 ## Backups
+
+Back up configuration, SQLite (including all auth/access tables), session files and bootstrap key together. Use a verified SQLite backup or stop writers before copying; do not copy only an active `messages.db` while omitting WAL changes. Restore key material through a protected path, not a timeline or log. Do not remove `access_state` to make a newer store boot in an older mode/binary. See [activation and recovery constraints](multi-user/README.md#activation-and-recovery).
 
 Restic snapshots are stored in the configured repository. The backup script lives at:
 

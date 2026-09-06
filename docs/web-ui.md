@@ -3,7 +3,7 @@
 Piclaw ships with a single-user streaming web UI that combines chat, workspace,
 editor, terminal, viewers, and lightweight control surfaces in one app.
 
-This page is a compact feature tour.
+This page describes the supported single-user UI. [Family-mode backend work](multi-user/README.md) includes account APIs, owned forks and multiple passkeys, but startup still rejects family and isolated modes. Account administration, invitation/QR pages, passkey labels, per-user Settings, and browser cache/storage separation are not yet integrated into a supported family UI. Do not treat the existing session picker or multiple browser tabs as separate user accounts.
 
 ## Chat and status surfaces
 
@@ -82,8 +82,8 @@ Configuration details live in [configuration.md](configuration.md).
 
 ## Viewers and panes
 
-- **Draw.io** — self-hosted editor with SVG/PNG/XML export back to workspace
-- **Office documents** — `.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp`
+- **Draw.io add-on** — optional self-hosted editor with SVG/PNG/XML export back to workspace
+- **Office viewer add-on** — `.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp`; backend supplied by the optional Office add-on
 - **CSV/TSV** — dedicated table viewer
 - **PDF, images, video** — inline viewers
 - **Text/code attachments** — timeline preview modal for common code/config
