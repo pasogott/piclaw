@@ -42,6 +42,7 @@ test('workspace policy distinguishes routing/config/activation and shared filesy
   expect(value.operations.find(row => row.name === 'Account management')?.state).toBe('owner-scoped');
   expect(readFamilyWorkspacePolicy(db, admin).operations.find(row => row.name === 'Account management')?.state).toBe('admin-metadata');
   expect(value.resources.find(row => row.name === 'Workspace files')?.scope).toBe('shared');
+  expect(value.resources.find(row => row.name === 'Workspace search index')?.detail).toContain('notes/family and .pi/skills only');
   for (const secret of ['PRIVATE_KEY', 'private-key-id', 'token-', alice.homeChatJid!]) expect(JSON.stringify(value)).not.toContain(secret);
   expect(() => validateAccessStartup(db)).toThrow();
   for (const name of ['bash', 'introspect_sql', 'keychain', 'addon-arbitrary', '', 'Read', 'constructor', '__proto__']) expect(isFamilyWebToolAllowed(name)).toBe(false);

@@ -21,7 +21,7 @@ export function readFamilyWorkspacePolicy(database: Database, actor: Authenticat
       resources: [
         { name: 'Workspace files', scope: 'shared', detail: 'One workspace and OS identity. File reads are shared; application ownership checks do not confine filesystem access.' },
         { name: 'Skills and add-ons', scope: 'shared', detail: 'Installed skills, add-ons and their global configuration are shared. Per-user installation and arbitrary add-on APIs are unavailable in this preview.' },
-        { name: 'Workspace search index', scope: 'shared', detail: 'One workspace index; it is not a private conversation index. The family browser does not expose workspace search.' },
+        { name: 'Workspace search index', scope: 'shared', detail: 'Separate shared-family index of notes/family and .pi/skills only. Personal notes/users, legacy notes and configured extra roots are excluded. No family browser or model search capability is enabled; explicit file access remains shared.' },
         { name: 'Providers and tool credentials', scope: 'shared', detail: 'Provider credentials/configuration and permitted integrations belong to the instance. The preview exposes no provider login, generic keychain or environment editor.' },
         { name: 'Conversation trees', scope: 'account-private', detail: 'HTTP/store-tool reads are checked against active root ownership. Administrators manage metadata, not another owner’s transcript.' },
         { name: 'Authentication factors', scope: 'account-private', detail: 'TOTP ciphertext and enrolment grants use dedicated authentication tables, outside generic keychain listing/injection. Shared-machine privileged processes remain trusted.' },
