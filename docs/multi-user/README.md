@@ -34,7 +34,7 @@ Family mode is intended for trusted household members. Users with arbitrary shel
 | Accounts and factors (#1124/#1125) | Disabled account + owned home provisioning, live/recent-login admin checks, own-device/factor APIs, TOTP and multiple passkeys | Account UI, offline lone-admin recovery, passkey-first invitations/reset, owner-aware replacement for disabled legacy factor commands |
 | Invitations/recovery (#1125) | One-use browser-bound TOTP grants, atomic enrol-and-enable, explicit other-admin reset | Invitation/QR and reset confirmation UI, end-to-end browser workflows |
 | Sessions (#1126/#1128) | Root ownership, owner-local names, atomic forks/rename, additional roots, home selection and idle archive/restore | Merge/purge, full archive backup, browser lifecycle UX, process-kill recovery proof |
-| HTTP and SSE (#1127) | Terminal family HTTP policy, SQL-scoped search, own-thread reads, revocable SSE, selected account/fork routes | Uploads and remaining derived resources/mutations, direct WebSocket/transport/tool paths, browser state and push recipients |
+| HTTP and SSE (#1127) | Terminal family HTTP policy, SQL-scoped search, own-thread reads, revocable SSE, text-only persisted message admission, selected account/fork routes | Uploads and remaining derived resources/mutations, direct WebSocket/transport/tool paths, browser state and push recipients |
 | Model identity/memory (#1129/#1131) | Server identity before hydration, scoped model context and owner/family memory paths | All direct/queued/delegate/side/Dream entry points and service grants; shared-resource policy |
 | Settings and isolation (#1130/#1132) | Reserved profile/config contracts | Capability-aware Settings and per-user container gateway/deployment |
 | Auth maintenance (#1125) | Transient-expiry loop and offline factor re-encryption helper | Coordinated rotation CLI/dual-key support, generic-keychain rotation, audit retention |
@@ -118,6 +118,7 @@ The family router makes a terminal decision before legacy, add-on and widget-sta
 | GET `/timeline`, `/hashtag/:tag`, `/thread/:id` | Live owned home or validated owned target |
 | GET `/search` | `current`, `root` and `all` search only authorised chats; filter before pagination |
 | GET `/sse/stream` | Server-authorised chat subscription with live revalidation |
+| POST `/agent/:id/message` | Text-only owned admission with idempotency key; persisted execution authority, no steering/commands/attachments |
 | GET `/media/:id`, `/media/:id/thumbnail`, `/media/:id/info` | Require a stored message link to an active owned session; metadata is projected |
 | GET `/agent/branch-download` | Bounded text-only export of one owned archived conversation; not the legacy full-state dump |
 | GET `/agent/branches` | Owned roots/descendants; optional `include_archived=true` metadata, no runtime-global fallback |
@@ -228,7 +229,17 @@ The helper does not enforce process shutdown and is not a complete operator rota
 
 The existing memory bootstrap hook appends runtime username, display name, actor/owner IDs, role and workspace profile to system context. It never creates a synthetic user message or emits login credentials. Personal context comes from `notes/users/<immutable-user-id>/MEMORY.md` and `notes/users/<immutable-user-id>/preferences.md`, plus explicit shared `notes/family/MEMORY.md`. Missing files are reported as missing; another user's context or legacy global personal memory is not substituted. Paths remain on the deliberately shared filesystem.
 
-Unmodified single-user callers keep their existing prompt/memory behaviour, and clear inherited execution identity. Browser ingress, durable queue/job attribution, direct side prompts, delegates and service grants must integrate this contract before family activation. The foundation tests the scoped authoriser, concurrent contexts and prompt hook; it does not yet claim identity propagation across every entry point.
+Unmodified single-user callers keep their existing prompt/memory behaviour, and clear inherited execution identity. Text-only browser admission and per-message dequeue attribution now use this contract. Other durable queue/job paths, direct side prompts, delegates and service grants must integrate it before family activation. The foundation tests the scoped authoriser, concurrent contexts and prompt hook; it does not yet claim identity propagation across every entry point.
+
+## Text-only family message admission
+
+POST `/agent/:id/message?chat_jid=...` accepts `{content,request_id,thread_id?}`. A missing chat selects the live owned home; explicit blank, duplicate, unknown or foreign targets deny. Matching Origin and account cookie are required, with a 30/minute message bucket. Thread references must exist in the same chat. Payload identity fields, attachments/structured blocks, steering/mode, leading slash commands and `@` mentions are rejected in this initial path. Text is capped at 100 KiB of string length. `request_id` is an owner-local 1–128 character alphanumeric/underscore/hyphen idempotency key.
+
+The message and `message_execution_authorities` record commit atomically. The record binds immutable actor/owner/login IDs, exact chat/message identity, content hash and thread reference. A retry returns the same interaction only for the same payload/target; it cannot transfer admission to another login after revocation. No bearer token is stored in the authority record. The normal per-chat queue receives only a wake signal; every dequeue re-resolves authority from the selected persisted message before hydration. Current username/display name comes from the live account.
+
+The full processing handler runs inside execution/chat context and passes the recovered provenance to the model orchestrator. Generic/direct family user writes and legacy non-web processing are denied; reply persistence requires current owner identity. The initial tool ceiling allows only `read`, `ls`, `find`, `grep`, owner-scoped `messages`, `session_status`, read-only `session_control` and discovery-only `chat`. Shared filesystem reads are still part of the accepted family trust boundary.
+
+Family idle/background compaction, legacy deferred-followup materialisation, automatic special recovery continuations and stored-reply Web Push are disabled. Persisted plain-text messages drain one at a time. Revocation before dequeue blocks execution; revocation before reply persistence prevents commit. Failed runs are held without the legacy stale-failure skip path. Owner-authorised retry/skip, attachments, steering, broader tools, push routing, process-kill replay proof and compatible browser compose UI still need integration. Startup continues to reject family mode.
 
 ## Owner-scoped cross-session discovery and inspection
 

@@ -21,6 +21,7 @@ import { initializeAccessSchema } from "./access-state.js";
 import { initializeSessionOwnershipSchema } from "./session-ownership.js";
 import { initializeSessionHandleSchema } from "./session-handles.js";
 import { initializeOwnedForkSchema } from "./owned-forks.js";
+import { initializeMessageAuthoritySchema } from "./message-authority-schema.js";
 import { initializeAuthFactorSchema } from "./auth-factors-schema.js";
 import fs from "fs";
 import path from "path";
@@ -946,6 +947,7 @@ export function initDatabase(): void {
   initializeAccessSchema(db);
   initializeSessionOwnershipSchema(db);
   initializeOwnedForkSchema(db);
+  initializeMessageAuthoritySchema(db);
   initializeAuthFactorSchema(db);
   // The legacy live store historically runs without global FK enforcement.
   // EF-S07 uses a dedicated FK-enabled scheduler connection in production;
