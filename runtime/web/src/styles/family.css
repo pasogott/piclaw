@@ -84,6 +84,12 @@ textarea { resize: vertical; width: 100%; }
 #scheduled-results button, #open-results { min-height: 44px; }
 #scheduled-result-text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; max-height: 28rem; overflow-y: auto; }
 #scheduled-result-detail label { display: block; padding: 12px 0; }
+#scheduled-tasks { border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin: 16px 0; overflow-wrap: anywhere; }
+#prepare-task-form { display: grid; gap: 8px; }
+#task-due { width: 100%; min-width: 0; }
+#scheduled-tasks button, #open-tasks { min-height: 44px; }
+#task-tools label, #scheduled-task-detail label { display: block; padding: 10px 0; }
+#scheduled-task-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 28rem; overflow-y: auto; font: inherit; }
 #account-preferences button, #account-preferences select, #open-preferences { min-height: 44px; }
 #administration-tools-list { border: 1px solid var(--border); margin: 12px 0; }
 #administration-tools-list label, #administration-tools-form > label { display: block; min-height: 44px; padding: 10px 0; }

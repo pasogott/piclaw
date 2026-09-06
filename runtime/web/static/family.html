@@ -15,6 +15,7 @@
       <button id="open-preferences" type="button" disabled>My preferences</button>
       <button id="open-sessions" type="button" disabled>My sessions</button>
       <button id="open-results" type="button" disabled>Scheduled results</button>
+      <button id="open-tasks" type="button" disabled>Prepared tasks</button>
       <button id="open-administration" type="button" hidden disabled>Family administration</button>
       <button id="open-workspace-policy" type="button" disabled>Workspace and security</button>
       <button id="sign-out" type="button" disabled>Sign out</button>
@@ -102,6 +103,28 @@
         <p>Close, blur, refresh or changing session discards prepared text. A file already downloaded cannot be recalled by signing out.</p>
       </section>
       <p class="notice">Eligibility is checked again on every write. Archive/restore require an idle session; forks require a stable turn boundary. Merge, purge and full archive backup are not available.</p>
+    </section>
+    <section id="scheduled-tasks" aria-labelledby="scheduled-tasks-heading" hidden>
+      <header><h2 id="scheduled-tasks-heading" tabindex="-1">Prepared tasks</h2><button id="close-tasks" type="button">Close tasks</button></header>
+      <p class="notice">Development preview: tasks stay paused. This panel cannot activate, run or delete tasks. Preparing requires a sign-in within five minutes.</p>
+      <p>Drafts, retry payloads and inspected text clear on close, refresh, blur, session switch or navigation. A request already sent may finish. Inspect the task list before recreating an uncertain request.</p>
+      <button id="refresh-tasks" type="button">Refresh tasks</button><p id="scheduled-tasks-status" role="status" aria-live="polite"></p>
+      <form id="prepare-task-form" class="account-section" hidden>
+        <label for="task-target">Original conversation</label><select id="task-target" required></select>
+        <label for="task-prompt">Task prompt (up to 100 KiB UTF-8)</label><textarea id="task-prompt" rows="4" maxlength="102400" required></textarea>
+        <p>The complete encoded request must fit within 128 KiB, including JSON escaping.</p>
+        <label for="task-due">Due date and time (UTC, not local time)</label><input id="task-due" type="datetime-local" step="60" required />
+        <fieldset><legend>Allowed tools (none selected by default)</legend><div id="task-tools"></div></fieldset>
+        <p>No model override, shell commands, recurrence or notifications. At most 100 unrevoked grants can be prepared per account.</p>
+        <label><input id="confirm-task-preparation" type="checkbox" /> I confirm this task will remain paused and will not run</label>
+        <button id="prepare-task" type="submit" disabled>Prepare paused task</button><button id="reset-task-draft" type="button">Discard task draft</button>
+      </form>
+      <ul id="scheduled-task-list" class="account-list"></ul>
+      <section id="scheduled-task-detail" class="account-section" hidden>
+        <h3 id="scheduled-task-detail-heading" tabindex="-1">Inspect prepared task</h3><p id="scheduled-task-target"></p><p id="scheduled-task-state"></p><pre id="scheduled-task-text"></pre>
+        <p>Revocation permanently removes this grant's future authority. It cannot undo work already performed, delete history or recreate the same preparation request.</p>
+        <label><input id="confirm-task-revocation" type="checkbox" disabled /> I confirm permanent revocation of this task grant</label><button id="revoke-task" type="button" disabled>Revoke task grant</button>
+      </section>
     </section>
     <section id="scheduled-results" aria-labelledby="scheduled-results-heading" hidden>
       <header><h2 id="scheduled-results-heading" tabindex="-1">Scheduled results</h2><button id="close-results" type="button">Close results</button></header>

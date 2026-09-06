@@ -189,6 +189,24 @@ The file excludes attachments, rich content, annotations, thread links, tasks, s
 
 **Cancel transcript**, closing or refreshing **My sessions**, losing tab focus, switching sessions or navigating away discards prepared text and cancels pending requests. This leaves the stored conversation unchanged. Prepare the transcript again if needed. A downloaded file stays on your device; signing out cannot recall it. Protect it as private conversation data.
 
+## Prepare or revoke a paused task
+
+Open **Prepared tasks** to see metadata from your newest 50 task grants. Archived or inaccessible targets are omitted. The panel cannot activate, run, edit or delete tasks. Both preparation and revocation need a sign-in within five minutes.
+
+1. Choose the **Original conversation** explicitly. Preparing does not switch the conversation you are viewing.
+2. Enter a prompt up to 100 KiB UTF-8. The complete JSON request must fit within 128 KiB, including escaping; some prompts therefore need to be shorter.
+3. Enter a future due date and time within 366 days, in **UTC**. The control does not convert from your local time zone.
+4. Select any required tools from the current allowance. None are selected by default; leaving them unchecked requests no tools.
+5. Check the paused-task confirmation and choose **Prepare paused task**. Wait for acknowledgement, then use **Refresh tasks** and **Inspect task** to check the saved prompt, target, time and effective tools.
+
+Preparation never queues execution. Shell commands, model overrides, recurring schedules and notifications are unavailable. Each account can have at most 100 unrevoked grants.
+
+An uncertain response locks the exact request, including its ID. Confirm again and choose **Retry same preparation** to send that same request manually. There is no automatic retry. Clicking **Prepared tasks** again leaves the retry intact. **Discard task draft** deliberately clears it and unlocks a new draft; check the list for an earlier successful preparation before recreating it.
+
+For permanent revocation, choose **Inspect task**, check the exact grant and original conversation, check the revocation confirmation, then choose **Revoke task grant**. Revocation removes future grant authority but cannot undo earlier effects or delete history. A revoked grant cannot be restored by replaying the old preparation. After an uncertain revocation, refresh and inspect before confirming again.
+
+**Refresh tasks**, **Close tasks**, losing focus, hiding the tab, switching sessions or navigating away clears draft, retry payload and inspected text. A request already sent may still finish; clearing the form does not cancel or delete a saved task. Inspect the list before creating another. These controls store no task data in browser storage and never enable execution.
+
 ## Inspect scheduled results
 
 Open **Scheduled results** to see metadata from the newest 50 execution records belonging to your account. Inaccessible or archived targets are omitted, so the list may contain fewer than 50 entries. Family scheduling and automatic execution are still disabled; this panel only exposes results prepared during development testing.
@@ -219,6 +237,6 @@ Administrators may deny tools within the fixed preview set. A new run sees the n
 
 The preview cannot start a supported family or isolated deployment, promote a migration copy or start in recovery-only mode. It has no per-user containers or complete equivalent of the classic and visual apps.
 
-Unsupported user actions include attachments, steering and commands; switching a running session's model; provider login and generic add-on panes; shell, terminal and VNC access; family scheduling, Dream and push notifications; cross-account sharing; and session merge or purge.
+Unsupported user actions include attachments, steering and commands; switching a running session's model; provider login and generic add-on panes; shell, terminal and VNC access; family task activation/execution, Dream and push notifications; cross-account sharing; and session merge or purge.
 
 Consult [troubleshooting](troubleshooting.md) before retrying an uncertain operation. Contact your account administrator for invitations, factor resets or account policy. Contact the host operator for certificates, old browser caches, backups, migration quarantine, prepared-copy errors and unavailable startup modes. Send only the minimum diagnostic information requested; never include setup keys, invitation links, cookies, private transcripts or credential files.

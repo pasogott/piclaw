@@ -48,6 +48,13 @@ Conversations and saved settings persist on the server. Profile, preference and 
 - **Uncertain send/recovery response:** refresh first. An unchanged manual retry in the same page/action keeps its request ID; reloading or changing the action may not. No automatic retry is performed.
 - **Missing rich content:** the family shell displays recent plain text only. Classic/visual add-on, attachment, terminal and rich-rendering instructions do not apply to this preview.
 
+## Prepared tasks
+
+- **Uncertain preparation:** while the original draft stays open, confirm **Retry same preparation** to reuse the exact request ID. No automatic retry occurs. After discard, refresh, close, focus loss or navigation, inspect the saved list before recreating it; the original write may have committed.
+- **Prompt accepted but encoded request too large:** JSON escaping counts towards 128 KiB independently of the 100 KiB prompt limit. Shorten the prompt before confirming again.
+- **Preparation or revocation denied:** check recent sign-in, active target, live tool restrictions and the 100-unrevoked-grant allowance. Wait when rate-limited. Refresh and inspect before another change.
+- **No Run control:** expected. Tasks remain paused; this preview cannot activate or execute them. Revocation removes authority without deleting history or undoing prior work.
+
 ## Old browser caches and private UI
 
 If an old service worker still controls the page, the shell stops before fetching family data and asks you to close other PiClaw tabs and reload. Follow that notice. If it persists, ask the operator to inspect the old installation/PWA and origin migration; do not disable checks or assume a reload cleared every cache.
