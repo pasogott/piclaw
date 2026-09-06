@@ -121,6 +121,16 @@ Each owner request ID first claims a durable `runs/<request-id>/` directory. Sou
 
 The runner stages a proposal but never promotes it. Recent-owner promotion remains the separate hash-CAS operation above. Model output is untrusted and can contain false or malicious text; owner confirmation is the only path to personal memory. Retention and production admission require separate review before activation.
 
+## Internal production-model admission
+
+`admitOwnFamilyDreamRun` creates a durable owner-local admission bound to one request ID, the current Dream source generation and the owner's exact model-default revision, provider/model and thinking level. It requires recent authentication and selects only one model from the current scoped, locally available catalogue. A null, unavailable or incompatible default denies; admission never silently falls back to another model.
+
+First admission returns one private 256-bit dispatch capability. Only its hash is stored in the owner admission record. An exact retry returns the original metadata without the capability, so a lost first response cannot create a second provider call. Changes to request binding or model defaults deny.
+
+`dispatchOwnFamilyDreamRun` validates the private capability, current account/model revision and scoped model availability, then writes a durable consumed receipt before any provider request. Consumed authority is never replayed, including provider failure or a crash after consumption. It calls the existing process model runtime once with the no-tool runner's system/user context, selected thinking level, no cache retention and its AbortSignal. Text output is passed to the reviewed private proposal sink; promotion remains separate.
+
+This is an internal admission/dispatch pair. No route, browser control, command, scheduler or startup path can create or dispatch an admission. It does not activate family Dream. Provider credential/budget use, concurrency limits and operator controls still require integrated acceptance before a public caller is added.
+
 ## Stale-run recovery
 
 `recoverOwnFamilyDreamRun` is an internal recent-owner operation for nonreplayable runs. Start receipts persist a fixed recovery deadline one minute beyond the requested model timeout and the expected proposal ID. Before that deadline, while the same process still marks the request active, or while the owner-wide lock is held, recovery denies.
