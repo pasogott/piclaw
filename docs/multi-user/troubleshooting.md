@@ -34,8 +34,10 @@ Never include invitation links, QR codes, manual setup keys, bearer cookies or f
 | Fork/rename/restore fails | Name collision, unstable turn boundary, inactive parent or stale state | Refresh the list, wait for idle/stable state and choose an available handle. Check for an already-created fork before retrying. |
 | Archive is denied | Current home, active turn/disposal or unarchived descendants | Select another home if needed, wait for idle and archive descendants first. There is no cascading archive. |
 | Last factor/admin cannot be removed | Removal would eliminate the configured recovery path | Add and verify an alternative or use another administrator's explicit reset. Never delete factor rows manually. |
+| Transcript exceeds the limit | More than 2,000 messages or 8 MiB of formatted text | No partial file is prepared. Ask the operator about a complete backup; do not edit history to fit the download. |
+| Prepared transcript disappeared or save was denied | Panel cleared, login changed or archive restored | Refresh **My sessions**, check the archive and prepare it again. Closing the panel does not delete stored history. |
 
-Profile, preference and security forms clear when the tab loses focus or the panel closes. Unsaved forms and the compose area are not saved drafts. Clearing a form does not undo a request already sent.
+Conversations and saved settings persist on the server. Profile, preference and security form edits clear when the tab loses focus or the panel closes. Unsent messages and unsaved forms are temporary browser state. Clearing a form does not undo a request already sent or delete saved data.
 
 ## Messages and recovery
 

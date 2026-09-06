@@ -88,6 +88,7 @@ export function readOwnedSessionSettings(database: Database, actor: Authenticate
         return { branch_id: branch.branch_id, chat_jid: branch.chat_jid, root_chat_jid: branch.root_chat_jid,
           parent_branch_id: branch.parent_branch_id, agent_name: branch.agent_name, archived_at: branch.archived_at,
           capabilities: { open: active, fork: active, rename: active,
+            download_transcript: Boolean(branch.archived_at),
             archive: active && user.home_chat_jid !== branch.chat_jid && !hasActiveDescendant(database, branch.branch_id),
             restore: Boolean(branch.archived_at) && (!branch.parent_branch_id || Boolean(parent && readable(parent.chat_jid))),
             set_home: recent && active && !branch.parent_branch_id && branch.chat_jid === branch.root_chat_jid && branch.chat_jid !== user.home_chat_jid,

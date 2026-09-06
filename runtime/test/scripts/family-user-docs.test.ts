@@ -26,6 +26,11 @@ test('family guides cover user controls, destructive effects and gated operator 
   for(const label of ['My account','My preferences','My sessions','Sign out','Sign in with a passkey','Verify code','Begin authenticator setup','Create account passkey','Save profile','Save avatar','Add another passkey','Confirm authenticator','Save preferences','Save model defaults','Create root','Save session change','Set home','Archive','Restore','Retry held message','Dismiss legacy input without running']){
     expect(user).toContain(`**${label}**`);expect(source).toContain(label);
   }
+  for(const label of ['Download transcript','Prepare transcript','Save text file','Cancel transcript']){
+    expect(user).toContain(`**${label}**`);expect(source).toContain(label);
+  }
+  expect(user).toContain('Conversations and saved settings persist on the server');
+  for(const term of ['2,000 messages','8 MiB','32,000 characters','partial file','atomic database snapshot'])expect(user).toContain(term);
   for(const label of ['Family administration','Create account','Issue invitation','Issue passkey invitation','Revoke invitation','Reset account','Reset to passkey','Security','Assign home','Tool restrictions','Save tool restrictions']){
     expect(admin).toContain(`**${label}**`);expect(source).toContain(label);
   }

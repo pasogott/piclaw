@@ -1,5 +1,6 @@
 import type { SessionSettings } from '../../src/core/session-settings.js';
 import { FamilyApi } from './family-api.js';
+import { FamilyTranscript } from './family-transcript.js';
 
 const node = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 type Branch = SessionSettings['branches'][number];
@@ -24,8 +25,10 @@ export class FamilySessions {
   private busy = false;
   private generation = 0;
   private canCreate = false;
+  private transcript:FamilyTranscript;
 
   constructor(private api: FamilyApi, private hooks: { lock: (busy: boolean) => boolean; changed: () => Promise<void>; navigate: (jid: string) => Promise<void> }) {
+    this.transcript=new FamilyTranscript(api);
     node('open-sessions').addEventListener('click', () => { this.opened = true; this.paused = false; void this.load(true); });
     node('close-sessions').addEventListener('click', () => { this.opened = false; this.clear(); node('open-sessions').focus(); });
     node('refresh-sessions').addEventListener('click', () => { void this.load(); });
@@ -55,6 +58,7 @@ export class FamilySessions {
     this.editor.hidden = true; node('session-action-title').textContent = ''; node('session-action-warning').textContent = '';
   }
   private clear(): void {
+    this.transcript.clear();
     this.generation++; this.root.hidden = true; this.list.replaceChildren(); this.status.textContent = '';
     this.createName.value = ''; this.canCreate = false; this.resetAction(); node('session-home').textContent = '';
     node<HTMLButtonElement>('create-root').disabled = true;
@@ -64,6 +68,7 @@ export class FamilySessions {
   stop(): void { this.stopped = true; this.opened = false; this.clear(); }
   private choose(branch: Branch, action: Action): void {
     if (!this.visible() || this.busy || branch.capabilities[action] !== true) return;
+    this.transcript.clear();
     this.resetAction(); this.selected = { branch, action }; this.editor.hidden = false;
     node('session-action-title').textContent = `${labels[action]} @${branch.agent_name}`;
     const named = ['fork', 'rename', 'restore'].includes(action), confirmed = ['archive', 'set_home'].includes(action);
@@ -91,6 +96,9 @@ export class FamilySessions {
         button.addEventListener('click', callback); buttons.append(button);
       };
       add('Open', branch.capabilities?.open === true, () => { if (!this.busy && this.visible()) void this.hooks.navigate(branch.chat_jid); });
+      add('Download transcript', branch.capabilities?.download_transcript === true && Boolean(branch.archived_at), () => {
+        if (!this.busy && this.visible()) { this.resetAction(); this.transcript.choose(branch); }
+      });
       for (const action of Object.keys(labels) as Action[]) add(labels[action], branch.capabilities?.[action] === true, () => this.choose(branch, action));
       row.append(title, buttons); this.list.append(row);
     }
@@ -110,6 +118,7 @@ export class FamilySessions {
   }
   private async mutate(path: string, method: string, body: Record<string, string>): Promise<void> {
     if (!this.visible() || this.busy || !this.hooks.lock(true)) return;
+    this.transcript.clear();
     this.busy = true; const generation = ++this.generation;
     const disabled = Array.from(this.root.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input,button')).filter(control => !control.disabled && !['close-sessions'].includes(control.id));
     for (const control of disabled) control.disabled = true;

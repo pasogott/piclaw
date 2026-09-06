@@ -54,15 +54,15 @@ export class FamilyApi {
   private headers(): Record<string, string> {
     return { "x-piclaw-account-id": this.identity.userId, "x-piclaw-login-id": this.identity.loginId };
   }
-  private signal(): AbortSignal { return AbortSignal.any([this.controller.signal, AbortSignal.timeout(15_000)]); }
+  private signal(signal?: AbortSignal): AbortSignal { return AbortSignal.any([this.controller.signal, AbortSignal.timeout(15_000), ...(signal ? [signal] : [])]); }
   private invalidate(): never {
     this.stop(); this.onInvalidated();
     throw new FamilyRequestError("Your account or login changed. Sign in again.", 409);
   }
-  async verifyIdentity(): Promise<void> {
+  async verifyIdentity(signal?: AbortSignal): Promise<void> {
     if (this.controller.signal.aborted) throw new Error("This page is no longer active.");
     let identity: FamilyIdentity;
-    try { identity = await fetchFamilyIdentity(this.signal(), this.headers()); }
+    try { identity = await fetchFamilyIdentity(this.signal(signal), this.headers()); }
     catch (error) {
       if (error instanceof FamilyRequestError && [401, 409].includes(error.status)) this.invalidate();
       throw error;
@@ -71,9 +71,9 @@ export class FamilyApi {
     if (identity.userId !== this.identity.userId || identity.loginId !== this.identity.loginId) this.invalidate();
     this.currentIdentity = identity;
   }
-  private async response(path: string, method: string, body?: unknown, headers?: Record<string, string>): Promise<Response> {
+  private async response(path: string, method: string, body?: unknown, headers?: Record<string, string>, signal?: AbortSignal): Promise<Response> {
     if (this.controller.signal.aborted) throw new Error("This page is no longer active.");
-    const response = await fetch(path, { method, cache: "no-store", credentials: "same-origin", signal: this.signal(),
+    const response = await fetch(path, { method, cache: "no-store", credentials: "same-origin", signal: this.signal(signal),
       headers: { ...this.headers(), ...(body === undefined ? {} : { "Content-Type": body instanceof Blob ? body.type : "application/json" }), ...headers },
       ...(body === undefined ? {} : { body: body instanceof Blob ? body : JSON.stringify(body) }),
     });
@@ -81,11 +81,11 @@ export class FamilyApi {
     if (!response.ok) throw new FamilyRequestError(response.status === 403 ? "Access denied. Select an owned session or sign in again if fresh authentication is required." : "The request failed. Try again.", response.status);
     return response;
   }
-  async request(path: string, method = "GET", body?: unknown): Promise<any> {
-    const response = await this.response(path, method, body);
+  async request(path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<any> {
+    const response = await this.response(path, method, body, undefined, signal);
     const value = await response.json();
     // A response admitted under the old cookie must not render after a different login took over.
-    await this.verifyIdentity();
+    await this.verifyIdentity(signal);
     return value;
   }
   async avatarImage(): Promise<Blob> {

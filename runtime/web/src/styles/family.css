@@ -54,6 +54,8 @@ textarea { resize: vertical; width: 100%; }
 #session-settings button, #session-settings input:not([type=checkbox]), #open-sessions { min-height: 44px; }
 #session-settings input:not([type=checkbox]) { width: 100%; min-width: 0; margin: 8px 0; }
 #session-action-confirm-field { display: block; padding: 12px 0; }
+#transcript-export label { display: block; padding: 12px 0; }
+#transcript-target, #transcript-status { overflow-wrap: anywhere; }
 #administration-settings { border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin: 16px 0; }
 #administration-settings h2, #administration-settings h3 { margin: 8px 0; }
 #administration-status, #administration-users { overflow-wrap: anywhere; }

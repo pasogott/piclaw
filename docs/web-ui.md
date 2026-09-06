@@ -19,6 +19,10 @@ An administrator can privately deliver `/auth/invitation#token=<grant>`. The pag
 
 Step-by-step instructions: [user guide](multi-user/user-guide.md), [administrator guide](multi-user/administrator-guide.md) and [troubleshooting](multi-user/troubleshooting.md). These describe the implemented preview, not a supported family activation flow.
 
+Conversations and saved settings persist on the server. Browser memory holds only temporary display state, unsent messages, unsaved edits and prepared transcript text. Closing a tab does not delete saved sessions or preferences.
+
+In **My sessions**, **Download transcript** opens a confirmation for an owned archive. **Prepare transcript** reads up to 2,000 messages and 8 MiB of formatted UTF-8 text; overflow fails without a partial file. **Save text file** checks the login and archive again before downloading. Long messages are marked at the 32,000-character limit. Media, rich blocks, tasks, settings and session files are excluded; use a complete backup for restoration. Cancel, loss of focus, closing or refreshing My sessions, session switch and navigation discard prepared text without changing stored history. Downloaded files remain on the device after logout.
+
 The family router serves a separate shell rather than the classic or visual app. It selects the owned home on a fresh login, offers an owned-session picker and polls the most recent 100 text messages. Explicit foreign session links fail instead of silently selecting home. Text is rendered without HTML, rich blocks, add-ons, panes or legacy browser-storage imports. Unchanged manual send retries reuse an in-memory request ID; no automatic retry is performed.
 
 Requests include account/login pins derived from the authenticated principal. The server compares them with the cookie, and the client rechecks identity before rendering each response. A changed or revoked login clears the page and draft. Background tabs mask private UI until revalidation; pagehide and back/forward-cache restoration discard it. Sign out revokes only the original pinned login and does not overwrite a replacement cookie from another tab.
