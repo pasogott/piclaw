@@ -9,7 +9,11 @@ export function pruneExpiredAuthState(database: Database, now = Date.now()): Rec
     counts.sessions = database.query("DELETE FROM web_sessions WHERE julianday(expires_at) IS NULL OR julianday(expires_at)<=julianday(?)").run(iso).changes;
     counts.invitations = database.query(`DELETE FROM user_auth_invitations WHERE expires_at<=?
       OR NOT EXISTS (SELECT 1 FROM users WHERE id=user_auth_invitations.user_id)
-      OR NOT EXISTS (SELECT 1 FROM users WHERE id=user_auth_invitations.issuer_user_id AND enabled=1 AND role='admin')`).run(now).changes;
+      OR (recovery_event_id IS NULL AND NOT EXISTS (SELECT 1 FROM users WHERE id=user_auth_invitations.issuer_user_id AND enabled=1 AND role='admin'))
+      OR (recovery_event_id IS NOT NULL AND (issuer_user_id<>user_id
+        OR NOT EXISTS (SELECT 1 FROM users WHERE id=user_auth_invitations.user_id AND role='admin')
+        OR NOT EXISTS (SELECT 1 FROM operator_recovery_events e WHERE e.id=user_auth_invitations.recovery_event_id
+          AND e.target_user_id=user_auth_invitations.user_id AND e.method=user_auth_invitations.method AND e.origin=user_auth_invitations.expected_origin)))`).run(now).changes;
     counts.totpEnrolments = database.query("DELETE FROM user_totp_enrolments WHERE expires_at<=? OR NOT EXISTS (SELECT 1 FROM users WHERE id=user_totp_enrolments.user_id)").run(now).changes;
     counts.totpRegistrations = database.query(`DELETE FROM user_totp_registrations WHERE expires_at<=?
       OR NOT EXISTS (SELECT 1 FROM users WHERE id=user_totp_registrations.user_id AND enabled=1)

@@ -31,8 +31,8 @@ Family mode is intended for trusted household members. Users with arbitrary shel
 | Area | Implemented and tested | Not yet complete |
 |---|---|---|
 | Modes and migration (#1123/#1126/#1133) | Strict config/marker checks, read-only topology preview, explicit root/handle adoption helpers | Complete migration/rollback tooling, existing-child seed adoption, activation gates |
-| Accounts and factors (#1124/#1125) | Disabled account + owned home provisioning, live/recent-login admin checks, own-device/factor APIs and names, owner avatars, login-bound self TOTP enrolment and multiple passkeys | Offline lone-admin recovery, owner-aware replacement for disabled legacy factor commands |
-| Invitations/recovery (#1125) | One-use browser-bound TOTP/passkey grants, atomic enrol-and-enable, explicit other-admin reset by method, fragment-based invitation/QR/native-passkey page and gated admin confirmation UI | Physical-device and full account browser workflows, offline recovery |
+| Accounts and factors (#1124/#1125) | Disabled account + owned home provisioning, live/recent-login admin checks, own-device/factor APIs and names, owner avatars, login-bound self TOTP enrolment and multiple passkeys | Recovery startup integration, owner-aware replacement for disabled legacy factor commands |
+| Invitations/recovery (#1125) | One-use browser-bound TOTP/passkey grants, atomic enrol-and-enable, other-admin reset, offline operator grant preparation with backup/lock/audit, fragment invitation page and admin confirmation UI | Physical-device and full account browser workflows, recovery startup/listener integration |
 | Sessions (#1126/#1128) | Root ownership, owner-local names, atomic forks/rename, additional roots, home selection and idle archive/restore; owned lifecycle browser controls | Merge/purge, full archive backup, process-kill recovery proof |
 | HTTP and SSE (#1127) | Terminal family HTTP policy, SQL-scoped search, own-thread reads, revocable SSE, text-only persisted message admission, selected account/fork routes, separate pinned text browser shell | Uploads and remaining derived resources/mutations, direct WebSocket/transport/tool paths, legacy-origin migration and push recipients |
 | Model identity/memory (#1129/#1131) | Server identity before hydration, scoped model context and owner/family memory paths; mandatory fixed family run-tool ceiling narrowed by revisioned account denials | All direct/queued/delegate/side/Dream entry points and service grants; broader role/capability profiles and shared-resource policy |
@@ -160,7 +160,7 @@ Multi-user TOTP selects one normalised username, strictly validates its six-digi
 
 WebAuthn discoverable login resolves the verified credential owner and checks its user handle, account state and current credential before issuing a cookie. Multi-user ceremonies require user verification and capture the expected origin. Registration requires same-account recent authentication and origin checks; it uses the user's immutable ID/username/display name and cannot overwrite an existing credential. Legacy single-user ceremony settings remain supported.
 
-Offline recovery, legacy WebAuthn ceremony isolation and Settings are unfinished. The account service below protects factor removal. Legacy `/totp` and `/passkey` commands reject multi-user mode before reading shared/default factors or creating enrolment cards. Direct Adaptive Card actions (including old TOTP cards) and HTTP side-prompt service calls also reject multi-user mode before payload parsing, source lookup or model invocation. Owner-aware replacements for these disabled entry points are unfinished. No mode is enabled by these internal methods. Back up the factor tables and bootstrap key together. Changing the bootstrap key requires the coordinated offline procedure below; automatic rotation and mixed-key ciphertext are unsupported.
+Recovery startup integration, legacy WebAuthn ceremony isolation and remaining Settings are unfinished. The account service below protects factor removal. Legacy `/totp` and `/passkey` commands reject multi-user mode before reading shared/default factors or creating enrolment cards. Direct Adaptive Card actions (including old TOTP cards) and HTTP side-prompt service calls also reject multi-user mode before payload parsing, source lookup or model invocation. Owner-aware replacements for these disabled entry points are unfinished. No mode is enabled by these internal methods. Back up the factor tables and bootstrap key together. Changing the bootstrap key requires the coordinated offline procedure below; automatic rotation and mixed-key ciphertext are unsupported.
 
 ## Mode-aware login shell
 
@@ -233,7 +233,7 @@ PATCH at the same path accepts exactly `{branch_id,confirm_username}` with match
 
 Home changes affect future sign-ins and targetless requests only. Existing target-bound logins, conversations, runs, seeds and ownership remain unchanged, and the administrator still cannot read that root's messages. The UI uses server eligibility, exact username and checkbox confirmation, clears metadata on close/blur/navigation, and does not retry automatically. Container destination assignment is a separate #1132 gate. Audit retention is unfinished.
 
-Restricted invitations below bootstrap a new account's TOTP factor or passkey; administrator-assisted reset is described separately. Container destination assignment and offline lone-administrator recovery are not implemented. Full mode activation, migrated legacy factors and legacy WebAuthn tool/ceremony isolation need integration testing before release.
+Restricted invitations below bootstrap a new account's TOTP factor or passkey; administrator-assisted reset and offline grant preparation are described separately. Container destination assignment and recovery startup integration are not implemented. Full mode activation, migrated legacy factors and legacy WebAuthn tool/ceremony isolation need integration testing before release.
 
 ## Personal account avatars
 
@@ -283,7 +283,7 @@ The family invitation page is `/auth/invitation#token=<grant>`. The grant belong
 
 Expiry, pagehide and back-forward restoration clear displayed secrets and disable confirmation. A fresh fragment navigated into the same tab discards the previous ceremony and reloads. Failed or lost claims require a new administrator-issued invitation rather than automatic retry. Browser network requests have a 15-second bound. The page requires HTTPS for the Secure enrolment cookie; the public shell contains no account/seed data before claim.
 
-Offline recovery and physical authenticator tests remain unfinished. Chromium tests cover gated admin issuance/revocation, grant clearing/stale responses, fragment removal, explicit claim, confirmation/no login, errors, expiry/navigation clearing and mobile fit; API tests use real TOTP verification and QR generation. Expired records are also pruned at runtime. General factor reset cannot reuse invitations for accounts with existing factors.
+Recovery startup integration and physical authenticator tests remain unfinished. Chromium tests cover gated admin issuance/revocation, grant clearing/stale responses, fragment removal, explicit claim, confirmation/no login, errors, expiry/navigation clearing and mobile fit; API tests use real TOTP verification and QR generation. Expired records are also pruned at runtime. General factor reset cannot reuse invitations for accounts with existing factors.
 
 ## Restricted passkey invitations
 
@@ -301,7 +301,15 @@ POST `/admin/users/:id/reset` accepts exactly `{confirm_username}`. It requires 
 
 One transaction disables the target (respecting last-administrator protection), deletes all target login sessions, TOTP/passkey factors and pending ceremonies, revokes invitations it owns or issued, and creates a restricted invitation for the selected method. `account_recovery_events` records only actor ID, target ID, event and time, never tokens or seeds. Failure to write the invitation or audit record rolls back the reset. User ID, role, username, home, branch ownership, conversations and filesystem paths remain unchanged. The returned grant is delivered through its method-specific invitation flow; the target must enrol and log in again.
 
-Recovery cannot display old seeds or act as the target's conversational identity. Offline recovery for a lone administrator and audit retention are unfinished. The gated panel requires the exact target username and a checkbox before either reset method. An authorised administrator can replace another user's authentication through this explicit reset; recent-auth and confirmation requirements protect against accidental use, but do not remove that administrative power.
+Recovery cannot display old seeds or act as the target's conversational identity. Offline grant preparation is available below; recovery startup integration and audit retention are unfinished. The gated panel requires the exact target username and a checkbox before either reset method. An authorised administrator can replace another user's authentication through this explicit reset; recent-auth and confirmation requirements protect against accidental use, but do not remove that administrative power.
+
+## Offline operator recovery preparation
+
+The [operator recovery runbook](operator-recovery.md) documents `piclaw account-recovery preview|issue`. It requires a configured, already-migrated family store and an existing administrator with an owned home; it never activates or migrates a store. Issue requires exact account/username/method/HTTPS origin, writer-stop and key-backup acknowledgements, typed confirmation, the workspace maintenance lock, a verified SQLite backup and a protected `0600` output file in a `0700` directory. A competing SQLite writer or changed backup snapshot aborts the operation. No grant is printed to stdout.
+
+Only this offline path can replace a final administrator's lost factors with an audited restricted invitation. `operator_recovery_events` records target, method, exact origin and time without a synthetic actor or secret. The grant references that audit row; redemption permits its disabled administrator issuer only while audit, target role, method, origin, home and ordinary one-use proof conditions match. Normal admin issuance clears operator fields; neither web requests nor tools can issue this grant. Revocation, reissue and audit mismatch deny redemption. A successful proof enables the same administrator without creating a login.
+
+The CLI opens the existing database without schema migration, starts no listener and changes no configuration, ownership or conversation content. File/SQL errors roll back; a crash can leave uncertain output, so operators must inspect/reissue rather than assume success or rollback. The command is not a complete deployed recovery path: the unchanged startup guard still rejects family mode and zero enabled administrators. Recovery-only startup/listener integration and physical-device proof must pass before release. No live recovery, restart or activation was performed.
 
 ## Multiple passkeys per account
 
@@ -311,7 +319,7 @@ POST `/account/passkeys/register/start` accepts an empty object and requires rec
 
 POST `/account/passkeys/register/finish` accepts `{token,credential}`. The same account/login/origin must consume the grant before verification; failed proofs and replay require a new ceremony. After cryptographic verification, the service rechecks current login/account status and expiry, then inserts the credential without replacement. No new login cookie is issued. Role/enable changes, own-device revocation and factor removal clear affected pending registrations. A second login on the same account cannot complete the first browser's ceremony.
 
-Tests use real P-256/COSE keys, CBOR registration attestation and signed login assertions for two credentials. Physical authenticator browser tests and offline recovery are still unfinished. Legacy single-user ceremony routes are unchanged; the family account endpoints use the separate durable flow above.
+Tests use real P-256/COSE keys, CBOR registration attestation and signed login assertions for two credentials. Physical authenticator browser tests and recovery startup integration are still unfinished. Legacy single-user ceremony routes are unchanged; the family account endpoints use the separate durable flow above.
 
 ## Authentication maintenance
 
@@ -327,7 +335,7 @@ Before an operator uses it:
 4. Change the configured bootstrap key only after every dependent store has been re-encrypted. Verify authentication with the new key before restarting for users.
 5. If any part fails, restore the coordinated database/key backup while services remain stopped. Changing only the configured key can make stored credentials unreadable.
 
-The helper does not enforce process shutdown and is not a complete operator rotation command: the operator must stop every writer and coordinate all dependent stores. This slice has no automatic key selection, dual-key runtime, standalone rotation CLI or offline lone-administrator recovery. Those operational entry points require a reviewed runbook before release. No live key rotation was performed during implementation.
+The helper does not enforce process shutdown and is not a complete operator rotation command: the operator must stop every writer and coordinate all dependent stores. Automatic key selection, dual-key runtime and a standalone rotation CLI are unavailable. The separate offline recovery command replaces lost factors; it does not rotate encryption keys. No live key rotation was performed during implementation.
 
 ## Model identity foundation
 

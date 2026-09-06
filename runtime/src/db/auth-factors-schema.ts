@@ -82,6 +82,12 @@ export function initializeAuthFactorSchema(database: Database): void {
     if (!columns.has('method')) database.exec("ALTER TABLE user_auth_invitations ADD COLUMN method TEXT NOT NULL DEFAULT 'totp' CHECK(method IN ('totp','passkey'))");
     if (!columns.has('rp_id')) database.exec('ALTER TABLE user_auth_invitations ADD COLUMN rp_id TEXT');
     if (!columns.has('challenge')) database.exec('ALTER TABLE user_auth_invitations ADD COLUMN challenge TEXT');
+    if (!columns.has('recovery_event_id')) database.exec('ALTER TABLE user_auth_invitations ADD COLUMN recovery_event_id TEXT');
+    if (!columns.has('expected_origin')) database.exec('ALTER TABLE user_auth_invitations ADD COLUMN expected_origin TEXT');
+    database.exec(`CREATE TABLE IF NOT EXISTS operator_recovery_events (
+      id TEXT PRIMARY KEY, target_user_id TEXT NOT NULL REFERENCES users(id),
+      method TEXT NOT NULL CHECK(method IN ('totp','passkey')), origin TEXT NOT NULL, created_at TEXT NOT NULL
+    ) STRICT;`);
   }).immediate();
   // Standalone factor tests initialise this schema without browser-session storage.
   if (database.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='web_sessions'").get()) {
