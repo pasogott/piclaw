@@ -24,6 +24,8 @@ import { getChatBranchByAgentName, getChatBranchByChatJid, getChatCursor, getDb,
 import type { AgentQueue } from "../queue.js";
 import { validateAccessStartup } from "../db/access-state.js";
 import { startAuthMaintenance } from "./auth-maintenance.js";
+import { readAccessConfig } from "../core/config-access.js";
+import { inspectOwnedSession } from "./owned-session-control.js";
 import { startToolOutputCleanup } from "../tool-output.js";
 import { createUuid } from "../utils/ids.js";
 import { applyEnvironmentOverrides } from "../environment-overrides.js";
@@ -397,6 +399,7 @@ function resolveSessionControlTarget(agentPool: AgentPool, request: SessionContr
 function registerSessionControlHandler(agentPool: AgentPool, web: WebChannel): void {
   setSessionControlHandler(async (request): Promise<SessionControlResult> => {
     if (getSessionIsolationLevel() === "full") throw new Error("Session isolation is full; session_control is disabled.");
+    if (readAccessConfig().mode !== "single-user") return inspectOwnedSession(agentPool, request);
     const target = resolveSessionControlTarget(agentPool, request);
     const base = {
       action: request.action,

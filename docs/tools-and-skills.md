@@ -573,7 +573,7 @@ See [extension-ui-contract.md](extension-ui-contract.md) and [web-pane-extension
 
 ## Access-mode scope
 
-The commands/tools below describe supported single-user operation. Gated family account APIs use separate principal-bound routes; legacy `/totp` and `/passkey` commands explicitly reject multi-user mode. Arbitrary `messages`, `chat`, scheduling and session-control tools are not substitutes for account-bound APIs. Owner propagation across all tool/transport entry points is unfinished, so family startup remains disabled. Multiple passkeys are supported per account in the [family backend](multi-user/README.md#multiple-passkeys-per-account).
+The commands/tools below describe supported single-user operation. Gated family account APIs use separate principal-bound routes; legacy `/totp` and `/passkey` commands explicitly reject multi-user mode. Family `chat` supports owner-local discovery only (no sends or remote directory callbacks), and `session_control` supports only owner-local read-only inspection/assessment. Arbitrary `messages`, scheduling and other tool calls are not substitutes for account-bound APIs; write/delivery integration is unfinished. Owner propagation across all tool/transport entry points is unfinished, so family startup remains disabled. Multiple passkeys are supported per account in the [family backend](multi-user/README.md#multiple-passkeys-per-account).
 
 ## Slash commands
 
