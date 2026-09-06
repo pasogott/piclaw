@@ -43,11 +43,11 @@ test("pruning removes only expired/orphaned transient auth state, preserving fac
   getDb().query("INSERT INTO user_passkey_registrations(token_hash,user_id,session_id,rp_id,origin,challenge,expires_at) VALUES ('orphan',?,'missing','local','https://local','challenge',?)").run(alice, clock+10000);
   getDb().exec("INSERT INTO webauthn_enrollments(token,user_id,created_at,expires_at) VALUES ('bad','default','now','invalid')");
   getDb().query("INSERT INTO user_auth_attempts(bucket,count,reset_at) VALUES ('old',1,?),('live',1,?)").run(clock-1, clock+10000);
-  expect(pruneExpiredAuthState(getDb(), clock)).toEqual({ sessions: 1, invitations: 1, totpEnrolments: 1, passkeyRegistrations: 1, legacyEnrolments: 1, attempts: 1 });
+  expect(pruneExpiredAuthState(getDb(), clock)).toEqual({ sessions: 1, invitations: 1, totpEnrolments: 1, totpRegistrations: 0, passkeyRegistrations: 1, legacyEnrolments: 1, attempts: 1 });
   expect((getDb().query("SELECT count(*) n FROM user_totp_factors").get() as any).n).toBe(1);
   expect((getDb().query("SELECT count(*) n FROM users").get() as any).n).toBe(3);
   expect((getDb().query("SELECT count(*) n FROM web_sessions").get() as any).n).toBe(1);
-  expect(Object.values(pruneExpiredAuthState(getDb(), clock))).toEqual([0,0,0,0,0,0]);
+  expect(Object.values(pruneExpiredAuthState(getDb(), clock))).toEqual([0,0,0,0,0,0,0]);
   expect(() => pruneExpiredAuthState(getDb(), NaN)).toThrow();
 });
 

@@ -36,6 +36,14 @@
           <h3 id="account-factors-heading">Sign-in factors</h3>
           <p>Several passkeys can belong to one account. Removing a factor signs out every device; the last usable factor cannot be removed.</p>
           <p id="account-totp-status"></p><button id="account-remove-totp" type="button">Remove authenticator</button>
+          <button id="account-add-totp" type="button" disabled>Add authenticator</button>
+          <section id="account-totp-setup" aria-label="New authenticator setup" hidden>
+            <p>Keep this new setup key private. It is displayed once and cleared on blur, close or navigation. Cancel revokes the pending setup; closing only clears the display. A new setup replaces the previous pending one. Existing factors cannot be overwritten.</p>
+            <img id="account-totp-qr" alt="New authenticator QR code" width="240" height="240" />
+            <p>Manual setup key: <code id="account-totp-secret"></code></p>
+            <form id="account-totp-form"><label for="account-totp-code">Authenticator confirmation code</label><input id="account-totp-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required /><button id="account-totp-confirm" type="submit" disabled>Confirm authenticator</button></form>
+            <button id="account-totp-cancel" type="button">Cancel authenticator setup</button>
+          </section>
           <ul id="account-passkeys" class="account-list"></ul><button id="account-add-passkey" type="button">Add another passkey</button>
         </section>
         <section class="account-section" aria-labelledby="account-devices-heading">
@@ -45,7 +53,7 @@
           <p id="account-confirm-text"></p><label><input id="account-confirm-check" type="checkbox" /> I understand and confirm this change</label>
           <button id="account-confirm-action" type="button" disabled>Confirm change</button><button id="account-cancel-action" type="button">Cancel</button>
         </section>
-        <p class="notice">Avatar changes, authenticator enrolment and device/passkey names are not available in this preview. Administrators have a separate account-management panel.</p>
+        <p class="notice">Avatar changes and device/passkey names are not available in this preview. Administrators have a separate account-management panel.</p>
       </div>
     </section>
     <section id="session-settings" aria-labelledby="session-settings-heading" hidden>

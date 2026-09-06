@@ -155,7 +155,7 @@ test("account snapshot is owner-only, policy-aware, metadata-only and distinguis
   const other = createWebSession("alice-other", alice.userId, 3600, "passkey");
   let snapshot = readOwnAccountSettings(db, alice, policy);
   expect(snapshot.user.id).toBe(alice.userId);
-  expect(snapshot.capabilities).toEqual({ update_profile: true, register_passkey: true, revoke_session: true });
+  expect(snapshot.capabilities).toEqual({ update_profile: true, register_passkey: true, enrol_totp: true, revoke_session: true });
   expect(snapshot.sessions.filter(s => s.current).map(s => s.session_id)).toEqual([alice.authentication.sessionId!]);
   expect(snapshot.sessions.find(s => s.session_id === other.session_id)?.current).toBe(false);
   expect(snapshot.factors.passkeys[0]?.removable).toBe(false);
