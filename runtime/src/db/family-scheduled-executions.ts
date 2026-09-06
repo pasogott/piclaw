@@ -101,7 +101,7 @@ function validateCapability(database: Database, capability: FamilySettlementCapa
     exact(capability, ["execution_id", "token"]);
     if (typeof capability.token !== "string" || !/^[\w-]{43}$/.test(capability.token)) throw new ChatAccessDenied();
     const row = execution(database, capability.execution_id, at);
-    if (expiry(database,row,at) || interruption(database,row,at)) throw new ChatAccessDenied();
+    if (cancellation(database,row,at) || expiry(database,row,at) || interruption(database,row,at)) throw new ChatAccessDenied();
     if (at >= row.expires_at || !timingSafeEqual(Buffer.from(hash(capability.token), "hex"),Buffer.from(row.settlement_token_hash,"hex"))) throw new ChatAccessDenied();
     const current = inspectConsumedFamilyScheduledOccurrence(database,row.occurrence_id);
     const branches = database.query("SELECT target_branch_id,root_branch_id FROM family_scheduled_grants WHERE id=?").get(row.grant_id) as { target_branch_id: string; root_branch_id: string } | null;
@@ -147,7 +147,7 @@ export function startFamilyScheduledDispatch(database: Database, capability: Fam
     const at=now(),row=execution(database,id,at);
     const start=database.query("SELECT started_at FROM family_scheduled_dispatches WHERE execution_id=?").get(id) as {started_at:number}|null;
     if(start?.started_at!==startedAt || startedAt<row.created_at || startedAt>=row.expires_at || at<startedAt)throw new ChatAccessDenied();
-    if(interruption(database,row,at) || expiry(database,row,at) || result(database,row))return;
+    if(cancellation(database,row,at) || interruption(database,row,at) || expiry(database,row,at) || result(database,row))return;
     database.query("INSERT INTO family_scheduled_interruptions(execution_id,started_at,created_at) VALUES (?,?,?)").run(id,startedAt,at);
   }).immediate();
   return Object.freeze({...descriptor,markInterrupted});
@@ -184,6 +184,34 @@ function interruption(database: Database, row: Execution, at: number): boolean {
   return true;
 }
 
+function cancellation(database: Database, row: Execution, at: number): boolean {
+  const receipt=database.query("SELECT owner_user_id,login_session_id,created_at FROM family_scheduled_cancellations WHERE execution_id=?").get(row.id) as {owner_user_id:string;login_session_id:string;created_at:number}|null;
+  if(!receipt)return false;
+  identifier(receipt.login_session_id);
+  if(receipt.owner_user_id!==row.owner_user_id || !Number.isSafeInteger(receipt.created_at)
+    || receipt.created_at<row.created_at || receipt.created_at>=row.expires_at || receipt.created_at>at
+    || database.query("SELECT 1 FROM family_scheduled_results WHERE execution_id=?").get(row.id)
+    || database.query("SELECT 1 FROM family_scheduled_expiries WHERE execution_id=?").get(row.id)
+    || database.query("SELECT 1 FROM family_scheduled_interruptions WHERE execution_id=?").get(row.id)
+    || database.query("SELECT 1 FROM family_scheduled_execution_events WHERE execution_id=? AND kind='settle'").get(row.id))throw new ChatAccessDenied();
+  return true;
+}
+
+/** Recent owner confirmation revokes future authority outside the busy chat lane. Never invokes abort or a model. */
+export function cancelOwnFamilyScheduledExecution(database: Database, actor: AuthenticatedPrincipal, executionId: string) {
+  return database.transaction(()=>{
+    requireAccountActor(database,actor,{recent:true});
+    const source=readOwnFamilyScheduledResult(database,actor,executionId),at=now();
+    if(source.state==='cancelled')return {execution_id:executionId,cancelled:true as const,created:false};
+    const row=execution(database,executionId,at);
+    if(source.state!=='unsettled' || at>=row.expires_at)throw new ChatAccessDenied();
+    identifier(actor.authentication.sessionId);
+    database.query("INSERT INTO family_scheduled_cancellations(execution_id,owner_user_id,login_session_id,created_at) VALUES (?,?,?,?)")
+      .run(executionId,actor.userId,actor.authentication.sessionId,at);
+    return {execution_id:executionId,cancelled:true as const,created:true};
+  }).immediate();
+}
+
 /** Explicit trusted maintenance: record at most 100 expired handoffs. Never retries, runs or publishes work. */
 export function recoverExpiredFamilyScheduledExecutions(database: Database) {
   return database.transaction(() => {
@@ -192,6 +220,7 @@ export function recoverExpiredFamilyScheduledExecutions(database: Database) {
       WHERE e.expires_at<=? AND NOT EXISTS(SELECT 1 FROM family_scheduled_results r WHERE r.execution_id=e.id)
       AND NOT EXISTS(SELECT 1 FROM family_scheduled_expiries x WHERE x.execution_id=e.id)
       AND NOT EXISTS(SELECT 1 FROM family_scheduled_interruptions i WHERE i.execution_id=e.id)
+      AND NOT EXISTS(SELECT 1 FROM family_scheduled_cancellations c WHERE c.execution_id=e.id)
       ORDER BY e.expires_at,e.id LIMIT 100`).all(at) as Array<{id:string}>;
     for (const {id} of rows) {
       const row=execution(database,id,at);
@@ -214,13 +243,13 @@ export function readOwnFamilyScheduledResult(database: Database, actor: Authenti
       { root_branch_id: string; target_branch_id: string; branch_id: string } | null;
     if (target.rootChatJid !== row.root_chat_jid || target.rootBranchId !== row.root_branch_id || binding?.root_branch_id !== row.root_branch_id
       || binding.target_branch_id !== row.target_branch_id || binding.branch_id !== row.target_branch_id) throw new ChatAccessDenied();
-    const interrupted = interruption(database,row,at), expired = expiry(database,row,at), stored = result(database,row);
+    const cancelled = cancellation(database,row,at), interrupted = interruption(database,row,at), expired = expiry(database,row,at), stored = result(database,row);
     if (stored && stored.created_at > at) throw new ChatAccessDenied();
     return { execution_id: row.id, chat_jid: target.chatJid, owner_user_id: row.owner_user_id,
       initiated_by_user_id: row.initiated_by_user_id, service: "scheduler" as const,
       owner_username: row.owner_username, owner_display_name: row.owner_display_name,
       publication_recorded: Boolean(database.query("SELECT 1 FROM family_scheduled_publications WHERE execution_id=?").get(row.id)),
-      state: stored ? "settled" as const : interrupted ? "interrupted" as const : expired ? "expired" as const : at >= row.expires_at ? "expired-unsettled" as const : "unsettled" as const,
+      state: stored ? "settled" as const : cancelled ? "cancelled" as const : interrupted ? "interrupted" as const : expired ? "expired" as const : at >= row.expires_at ? "expired-unsettled" as const : "unsettled" as const,
       result: stored ? { status: stored.status, text: stored.text, created_at: stored.created_at } : null };
   })();
 }
@@ -234,13 +263,14 @@ export function listOwnFamilyScheduledResults(database: Database, actor: Authent
       EXISTS(SELECT 1 FROM family_scheduled_results r WHERE r.execution_id=e.id) AS settled,
       EXISTS(SELECT 1 FROM family_scheduled_expiries x WHERE x.execution_id=e.id) AS expired,
       EXISTS(SELECT 1 FROM family_scheduled_interruptions i WHERE i.execution_id=e.id) AS interrupted,
+      EXISTS(SELECT 1 FROM family_scheduled_cancellations c WHERE c.execution_id=e.id) AS cancelled,
       EXISTS(SELECT 1 FROM family_scheduled_publications p WHERE p.execution_id=e.id) AS published
       FROM family_scheduled_executions e
       LEFT JOIN family_scheduled_grants g ON g.id=e.grant_id AND g.owner_user_id=e.owner_user_id AND g.chat_jid=e.chat_jid
       LEFT JOIN chat_branches b ON b.chat_jid=e.chat_jid
       WHERE e.owner_user_id=? ORDER BY e.created_at DESC,e.id DESC LIMIT 50`).all(actor.userId) as Array<{
         id:string;chat_jid:string;root_chat_jid:string;target_branch_id:string;root_branch_id:string;created_at:number;expires_at:number;
-        grant_target:string|null;grant_root:string|null;current_branch:string|null;settled:number;expired:number;interrupted:number;published:number;
+        grant_target:string|null;grant_root:string|null;current_branch:string|null;settled:number;expired:number;interrupted:number;cancelled:number;published:number;
       }>;
     const items = rows.flatMap(row => {
       try {
@@ -250,7 +280,7 @@ export function listOwnFamilyScheduledResults(database: Database, actor: Authent
           || row.grant_target!==row.target_branch_id || row.current_branch!==row.target_branch_id
           || !Number.isSafeInteger(row.created_at) || row.created_at<0 || row.created_at>at || row.expires_at!==row.created_at+TTL) throw new ChatAccessDenied();
         return [{execution_id:row.id,chat_jid:row.chat_jid,created_at:row.created_at,
-          state:row.settled?"settled":row.interrupted?"interrupted":row.expired?"expired":at>=row.expires_at?"expired-unsettled":"unsettled",publication_recorded:row.published===1}];
+          state:row.settled?"settled":row.cancelled?"cancelled":row.interrupted?"interrupted":row.expired?"expired":at>=row.expires_at?"expired-unsettled":"unsettled",publication_recorded:row.published===1}];
       } catch(error) { if(error instanceof ChatAccessDenied)return []; throw error; }
     });
     return { owner_user_id:actor.userId,window_size:50,items };

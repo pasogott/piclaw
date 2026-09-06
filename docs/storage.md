@@ -25,6 +25,7 @@
 | `family_scheduled_dispatches` | Immutable one-start-per-handoff admission receipt; no capability token and no automatic retry |
 | `family_scheduled_expiries` | Immutable terminal expiry receipt for a handoff without a result; explicit bounded recovery only, mutually exclusive with settlement |
 | `family_scheduled_interruptions` | Immutable admitted execution/start/recording-time receipt; no error payload, no replay and no result publication |
+| `family_scheduled_cancellations` | Immutable owner-confirmed execution cancellation, original approving login and time; revokes remaining authority without erasing history or proving provider termination |
 | `family_scheduled_publications` | Immutable owner-confirmed publication receipt binding execution, original chat and exact message row/hash; prevents replay or recreation |
 | `task_run_logs` | Task run history |
 | `token_usage` | Per‑assistant‑message token + cost usage (includes model/provider/api for per‑model tracking) |
