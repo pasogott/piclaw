@@ -1,4 +1,5 @@
 import { FamilyApi, fetchFamilyIdentity, prepareFamilyBrowser } from './family-api.js';
+import { FamilyAccount } from './family-account.js';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -14,6 +15,7 @@ const retry = element<HTMLButtonElement>('retry-message'), skip = element<HTMLBu
 let heldRow: number | null = null;
 let recoveryRequest: { row: number; action: 'retry' | 'skip'; requestId: string } | null = null;
 let api: FamilyApi | null = null, current = '', stopped = false, busy = false, paused = false, generation = 0;
+let settings: FamilyAccount | null = null;
 let refreshing: symbol | null = null, polling: ReturnType<typeof setInterval> | undefined;
 let pending: { text: string; chat: string; requestId: string } | null = null;
 function controls(enabled: boolean): void {
@@ -25,10 +27,12 @@ function mask(): void {
   // Backgrounded tabs retain no visible conversation/draft until the cookie is revalidated.
   generation++; refreshing = null; timeline.replaceChildren(); account.textContent = ''; status.textContent = ''; error.textContent = '';
   form.hidden = true; select.hidden = true; recovery.hidden = true; controls(false);
+  settings?.suspend(); element<HTMLButtonElement>('open-account').disabled = true;
 }
 function invalidate(): void {
   if (stopped) return;
   stopped = true; mask(); api?.stop();
+  settings?.stop();
   if (polling) clearInterval(polling);
   select.replaceChildren(); compose.value = ''; pending = null; heldRow = null; recoveryRequest = null; confirmSkip.checked = false; recoveryStatus.textContent = ''; logout.disabled = true;
   status.textContent = 'This page is no longer bound to its original account.';
@@ -67,6 +71,7 @@ async function loadTimeline(): Promise<void> {
     if (stopped || expected !== generation || current !== target || paused || document.hidden) return;
     renderPosts(result.posts); renderRecovery(recoveryState); status.textContent = `Session: ${target}${result.has_more ? ' · Showing the most recent messages' : ''}`;
     account.textContent = `${api.identity.displayName} (@${api.identity.username})`;
+    element<HTMLButtonElement>('open-account').disabled = false; settings?.resume();
     form.hidden = false; select.hidden = false; controls(!busy);
   } catch (failure) {
     if (!stopped && expected === generation) {
@@ -89,6 +94,7 @@ async function start(): Promise<void> {
     const identity = await fetchFamilyIdentity(AbortSignal.timeout(15_000));
     if (stopped) return;
     api = new FamilyApi(identity, invalidate); logout.disabled = false;
+    settings = new FamilyAccount(api);
     const requested = new URL(location.href).searchParams.getAll('chat_jid');
     if (requested.length > 1 || (requested.length === 1 && !requested[0]?.trim())) throw new Error('Invalid session selection. Use Go home.');
     const directory = await api.request('/agent/branches');

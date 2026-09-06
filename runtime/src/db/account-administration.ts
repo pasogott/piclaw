@@ -1,5 +1,6 @@
 import type Database from "bun:sqlite";
 import type { AuthenticatedPrincipal } from "../core/access-types.js";
+import type { AccountSettings } from "../core/account-settings.js";
 import { createUuid } from "../utils/ids.js";
 import { createUser, getUser, listUsers, updateUser, type CreateUserInput, type UpdateUserInput, type UserRecord } from "./users.js";
 import { ChatAccessDenied, getRootOwnership, provisionUserHome } from "./session-ownership.js";
@@ -26,6 +27,33 @@ function factorCount(database: Database, userId: string, policy: FactorPolicy): 
   const totp = policy.totp ? (database.query("SELECT count(*) AS n FROM user_totp_factors WHERE user_id=?").get(userId) as { n: number }).n : 0;
   const passkeys = policy.passkey ? (database.query("SELECT count(*) AS n FROM webauthn_credentials WHERE user_id=? AND rp_id=?").get(userId, policy.rpId) as { n: number }).n : 0;
   return totp + passkeys;
+}
+
+/** One consistent snapshot of this account; no selector, secrets or other-user inventory. */
+export function readOwnAccountSettings(database: Database, principal: AuthenticatedPrincipal, policy: FactorPolicy): AccountSettings {
+  return database.transaction(() => {
+    const user = requireAccountActor(database, principal);
+    let recent = true;
+    try { requireAccountActor(database, principal, { recent: true }); }
+    catch (error) { if (!(error instanceof ChatAccessDenied)) throw error; recent = false; }
+    const usableCount = factorCount(database, user.id, policy);
+    const totp = Boolean(database.query("SELECT 1 FROM user_totp_factors WHERE user_id=?").get(user.id));
+    const keys = database.query("SELECT credential_id,rp_id,created_at,last_used_at FROM webauthn_credentials WHERE user_id=? ORDER BY created_at,credential_id")
+      .all(user.id) as { credential_id: string; rp_id: string; created_at: string; last_used_at: string | null }[];
+    const sessions = listOwnSessions(database, principal) as Omit<AccountSettings["sessions"][number], "current">[];
+    return {
+      user: { id: user.id, username: user.username, display_name: user.display_name }, recent_auth: recent,
+      capabilities: { update_profile: recent, register_passkey: recent && policy.passkey, revoke_session: recent },
+      factors: {
+        totp: { enrolled: totp, removable: recent && totp && usableCount - Number(policy.totp) > 0 },
+        passkeys: keys.map(({ rp_id, ...key }) => {
+          const usable = policy.passkey && rp_id === policy.rpId;
+          return { ...key, usable, removable: recent && usableCount - Number(usable) > 0 };
+        }),
+      },
+      sessions: sessions.map(session => ({ ...session, current: session.session_id === principal.authentication.sessionId })),
+    };
+  })();
 }
 
 export function listManagedAccounts(database: Database, principal: AuthenticatedPrincipal): UserRecord[] {

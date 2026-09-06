@@ -25,7 +25,7 @@ beforeAll(async () => {
     if (path === "/login" || path === "/blank") return new Response("<!doctype html><p>Sign in</p>", { headers: { "Content-Type": "text/html" } });
     if (path === "/old-sw.js") return new Response("self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));", { headers: { "Content-Type": "text/javascript" } });
     return new Response("not found", { status: 404 });
-  } }); base = `http://127.0.0.1:${server.port}`;
+  } }); base = `http://localhost:${server.port}`;
 });
 afterAll(async () => { await browser?.close(); server?.stop(true); });
 
@@ -161,4 +161,173 @@ browserTest("held-input controls use discovered IDs, require skip confirmation a
     await page.waitForFunction(() => (document.getElementById("message-recovery") as HTMLElement)?.hidden);
     expect(actions[2].action).toBe("skip"); expect(actions[2].request_id).not.toBe(actions[1].request_id);
   } finally { await page.close(); }
+}, 20000);
+
+function accountSnapshot(recent = true) {
+  return {
+    user: { id: 'alice', username: 'alice', display_name: 'Alice' }, recent_auth: recent,
+    capabilities: { update_profile: recent, register_passkey: recent, revoke_session: recent },
+    factors: { totp: { enrolled: true, removable: recent }, passkeys: [
+      { credential_id: 'first-key', created_at: 'today', last_used_at: null, usable: true, removable: recent },
+      { credential_id: 'second-key', created_at: 'yesterday', last_used_at: 'today', usable: true, removable: recent },
+    ] },
+    sessions: [
+      { session_id: 'login-a', current: true, auth_method: 'passkey', created_at: 'today', expires_at: 'tomorrow' },
+      { session_id: 'other-login', current: false, auth_method: 'totp', created_at: 'yesterday', expires_at: 'tomorrow' },
+    ],
+  };
+}
+async function openAccount(page: Page) {
+  await page.goto(base); await ready(page); await page.locator('#open-account').click();
+  await page.waitForFunction(() => !(document.getElementById('account-details') as HTMLElement)?.hidden);
+}
+
+browserTest("account profile and device controls are pinned, confirmed and accessible on mobile", async () => {
+  const page = await browser.newPage({ viewport: { width: 375, height: 740 } });
+  try {
+    const state = await fixture(page), snapshot = accountSnapshot(); const mutations: any[] = [];
+    await page.route('**/account', route => {
+      if (route.request().method() === 'PATCH') {
+        const body = route.request().postDataJSON(); mutations.push({ body, headers: route.request().headers() });
+        snapshot.user.display_name = body.displayName; state.identity.principal.displayName = body.displayName;
+      }
+      return route.fulfill({ json: snapshot });
+    });
+    await page.route('**/account/sessions/*', route => { mutations.push(route.request().url()); return route.fulfill({ json: { revoked: true } }); });
+    await openAccount(page);
+    expect(await page.locator('#account-passkeys li').count()).toBe(2);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect((await page.locator('#account-save-profile').boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await page.getByLabel('Display name', { exact: true }).fill('Updated name');
+    await page.locator('#account-save-profile').click();
+    await page.waitForFunction(() => document.getElementById('account-status')?.textContent === 'Profile saved.');
+    expect(mutations[0].body).toEqual({ username: 'alice', displayName: 'Updated name' });
+    expect(mutations[0].headers['x-piclaw-login-id']).toBe('login-a');
+    await page.locator('#refresh').click(); await page.waitForFunction(() => document.getElementById('account-name')?.textContent?.includes('Updated name'));
+    await page.locator('#account-sessions button').nth(1).click();
+    expect(await page.locator('#account-confirm-action').isDisabled()).toBe(true);
+    await page.locator('#account-confirm-check').check(); await page.locator('#account-confirm-action').click();
+    await page.waitForFunction(() => document.getElementById('account-status')?.textContent === 'Device signed out.');
+    expect(mutations[1]).toContain('/account/sessions/other-login');
+    // A previous mutation must not leave confirmation controls permanently disabled.
+    await page.locator('#account-passkeys button').first().click();
+    expect(await page.locator('#account-confirm-check').isDisabled()).toBe(false);
+    expect(await page.locator('#account-confirm-text').textContent()).toContain('every device');
+    await page.locator('#account-cancel-action').click();
+    expect(await page.locator('#account-confirmation').isVisible()).toBe(false);
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest("server capabilities disable stale-auth and last-factor actions; errors do not auto-retry", async () => {
+  const page = await browser.newPage();
+  try {
+    await fixture(page); let snapshot = accountSnapshot(false), writes = 0;
+    await page.route('**/account', route => {
+      if (route.request().method() !== 'GET') { writes++; return route.fulfill({ status: 403, json: {} }); }
+      return route.fulfill({ json: snapshot });
+    });
+    await openAccount(page);
+    for (const selector of ['#account-save-profile', '#account-add-passkey', '#account-remove-totp', '#account-passkeys button', '#account-sessions button']) expect(await page.locator(selector).first().isDisabled()).toBe(true);
+    snapshot = accountSnapshot(); snapshot.factors.passkeys[0]!.removable = false; snapshot.factors.totp.removable = false;
+    await page.locator('#refresh-account').click(); await page.waitForFunction(() => !(document.getElementById('account-save-profile') as HTMLButtonElement)?.disabled);
+    expect(await page.locator('#account-passkeys button').first().isDisabled()).toBe(true);
+    await page.locator('#account-save-profile').click();
+    await page.waitForFunction(() => document.getElementById('account-status')?.textContent?.includes('Refresh before trying'));
+    expect(writes).toBe(1);
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest("late account response and background drafts cannot survive replacement login", async () => {
+  const page = await browser.newPage();
+  try {
+    const state = await fixture(page);
+    await page.route('**/account', route => route.fulfill({ json: accountSnapshot() }));
+    await openAccount(page); await page.locator('#account-display-name').fill('PRIVATE_DRAFT');
+    await page.evaluate(() => dispatchEvent(new Event('blur')));
+    expect(await page.locator('#account-settings').isVisible()).toBe(false);
+    expect(await page.locator('#account-display-name').inputValue()).toBe('');
+    await page.evaluate(() => dispatchEvent(new Event('focus'))); await page.waitForFunction(() => !(document.getElementById('account-details') as HTMLElement)?.hidden);
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>(r => release = r), waiting = new Promise<void>(r => entered = r);
+    await page.route('**/account', async route => { entered(); await held; const snapshot = accountSnapshot(); snapshot.user.display_name = 'OLD_PRIVATE'; await route.fulfill({ json: snapshot }); });
+    await page.locator('#refresh-account').click(); await waiting; state.identity = principal('bob', 'login-b'); release();
+    await page.waitForFunction(() => document.getElementById('family-status')?.textContent?.includes('no longer bound'));
+    expect(await page.locator('#account-settings').isVisible()).toBe(false);
+    expect(await page.locator('body').textContent()).not.toContain('OLD_PRIVATE');
+    expect(await page.locator('#account-display-name').inputValue()).toBe('');
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest("removing a factor confirms all-device sign-out and clears account state on revocation", async () => {
+  const page = await browser.newPage();
+  try {
+    await fixture(page); let revoked = false;
+    await page.route('**/auth/me', route => route.fulfill(revoked ? { status: 401, json: {} } : { json: principal() }));
+    await page.route('**/account', route => route.fulfill({ json: accountSnapshot() }));
+    await page.route('**/account/factors/passkey/first-key', route => { revoked = true; return route.fulfill({ json: { removed: true } }); });
+    await openAccount(page); await page.locator('#account-passkeys button').first().click();
+    await page.locator('#account-confirm-check').check(); await page.locator('#account-confirm-action').click();
+    await page.waitForFunction(() => document.getElementById('family-status')?.textContent?.includes('no longer bound'));
+    expect(revoked).toBe(true); expect(await page.locator('#account-passkeys').textContent()).toBe('');
+    expect(await page.locator('#account-display-name').inputValue()).toBe('');
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest("passkey creation uses native registration twice without replacement and survives authenticator blur", async () => {
+  const page = await browser.newPage();
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    await cdp.send('WebAuthn.enable');
+    const options = { protocol: 'ctap2' as const, transport: 'internal' as const, hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true };
+    let authenticator = await cdp.send('WebAuthn.addVirtualAuthenticator', { options });
+    await fixture(page); const snapshot = accountSnapshot(), finishes: any[] = [];
+    await page.route('**/account', route => route.fulfill({ json: snapshot }));
+    await page.route('**/account/passkeys/register/start', route => route.fulfill({ json: { token: 'ceremony-token', options: {
+      challenge: Buffer.from(crypto.randomUUID()).toString('base64url'), rp: { id: 'localhost', name: 'PiClaw' },
+      user: { id: Buffer.from('alice').toString('base64url'), name: 'alice', displayName: 'Alice' },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }], authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+      excludeCredentials: finishes.map(f => ({ id: f.credential.id, type: 'public-key' })),
+    } } }));
+    await page.route('**/account/passkeys/register/finish', route => { const body = route.request().postDataJSON(); finishes.push(body); snapshot.factors.passkeys.push({ credential_id: body.credential.id, created_at: 'now', last_used_at: null, usable: true, removable: true }); return route.fulfill({ json: { registered: true } }); });
+    await page.addInitScript(() => {
+      const create = navigator.credentials.create.bind(navigator.credentials);
+      navigator.credentials.create = async options => { dispatchEvent(new Event('blur')); try { return await create(options); } finally { dispatchEvent(new Event('focus')); } };
+    });
+    await openAccount(page);
+    for (let i = 0; i < 2; i++) {
+      if (i) { await cdp.send('WebAuthn.removeVirtualAuthenticator', authenticator); authenticator = await cdp.send('WebAuthn.addVirtualAuthenticator', { options }); }
+      await page.locator('#account-add-passkey').click();
+      await page.waitForFunction(count => document.querySelectorAll('#account-passkeys li').length === count, 3 + i, { timeout: 6000 });
+    }
+    expect(finishes).toHaveLength(2); expect(finishes[0].credential.id).not.toBe(finishes[1].credential.id);
+    expect(finishes[0].credential.response.attestationObject.length).toBeGreaterThan(0);
+    expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
+  } finally { await cdp.detach(); await page.close(); }
+}, 20000);
+
+browserTest("closing or changing login during native registration never submits a late credential", async () => {
+  for (const action of ['close', 'switch']) {
+    const page = await browser.newPage();
+    try {
+      const state = await fixture(page); let finishes = 0;
+      await page.route('**/account', route => route.fulfill({ json: accountSnapshot() }));
+      await page.route('**/account/passkeys/register/start', route => route.fulfill({ json: { token: 'ceremony-token', options: {
+        challenge: 'YQ', user: { id: 'YQ' }, excludeCredentials: [],
+      } } }));
+      await page.route('**/account/passkeys/register/finish', route => { finishes++; return route.fulfill({ json: {} }); });
+      await page.addInitScript(() => {
+        navigator.credentials.create = () => new Promise(resolve => {
+          (window as any).releaseRegistration = () => resolve({ id: 'late', rawId: new ArrayBuffer(1), type: 'public-key', response: { clientDataJSON: new ArrayBuffer(1), attestationObject: new ArrayBuffer(1) }, getClientExtensionResults: () => ({}) } as any);
+        });
+      });
+      await openAccount(page); await page.locator('#account-add-passkey').click();
+      await page.waitForFunction(() => typeof (window as any).releaseRegistration === 'function');
+      if (action === 'close') await page.locator('#close-account').click();
+      else state.identity = principal('bob', 'login-b');
+      await page.evaluate(() => (window as any).releaseRegistration());
+      if (action === 'switch') await page.waitForFunction(() => document.getElementById('family-status')?.textContent?.includes('no longer bound'));
+      else { await page.locator('#open-account').click(); await page.waitForFunction(() => !(document.getElementById('account-details') as HTMLElement)?.hidden); }
+      expect(finishes).toBe(0);
+    } finally { await page.close(); }
+  }
 }, 20000);

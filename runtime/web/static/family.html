@@ -11,10 +11,41 @@
   <main class="family-shell">
     <header>
       <h1>PiClaw</h1><span id="account-name">Checking account…</span>
+      <button id="open-account" type="button" disabled>My account</button>
       <button id="sign-out" type="button" disabled>Sign out</button>
       <a href="/login">Sign in</a>
     </header>
     <p class="notice">Family preview: text conversations only. Shared workspace files are not private between tool-capable users.</p>
+    <section id="account-settings" aria-labelledby="account-heading" hidden>
+      <header><h2 id="account-heading" tabindex="-1">My account</h2><button id="close-account" type="button">Close account settings</button></header>
+      <p class="notice">Personal profile and sign-in security. Workspace files, skills, providers and add-ons are shared; these controls do not change them.</p>
+      <p>Account settings drafts are discarded when this tab loses focus. Sign in changes the browser account; the owned-session picker only changes the conversation.</p>
+      <button id="refresh-account" type="button">Refresh account</button>
+      <p id="account-status" role="status" aria-live="polite"></p>
+      <div id="account-details" hidden>
+        <p id="account-auth-notice"></p>
+        <form id="account-profile" class="account-section">
+          <h3>Profile</h3>
+          <label for="account-username">Username</label><input id="account-username" required maxlength="64" pattern="[a-z0-9][a-z0-9_-]{0,63}" autocomplete="username" autocapitalize="none" spellcheck="false" />
+          <label for="account-display-name">Display name</label><input id="account-display-name" required maxlength="128" autocomplete="name" />
+          <button id="account-save-profile" type="submit">Save profile</button>
+        </form>
+        <section class="account-section" aria-labelledby="account-factors-heading">
+          <h3 id="account-factors-heading">Sign-in factors</h3>
+          <p>Several passkeys can belong to one account. Removing a factor signs out every device; the last usable factor cannot be removed.</p>
+          <p id="account-totp-status"></p><button id="account-remove-totp" type="button">Remove authenticator</button>
+          <ul id="account-passkeys" class="account-list"></ul><button id="account-add-passkey" type="button">Add another passkey</button>
+        </section>
+        <section class="account-section" aria-labelledby="account-devices-heading">
+          <h3 id="account-devices-heading">Signed-in devices</h3><ul id="account-sessions" class="account-list"></ul>
+        </section>
+        <section id="account-confirmation" class="account-section" aria-label="Confirm account change" hidden>
+          <p id="account-confirm-text"></p><label><input id="account-confirm-check" type="checkbox" /> I understand and confirm this change</label>
+          <button id="account-confirm-action" type="button" disabled>Confirm change</button><button id="account-cancel-action" type="button">Cancel</button>
+        </section>
+        <p class="notice">Avatar changes, authenticator enrolment, device/passkey names and family administration are not available in this preview.</p>
+      </div>
+    </section>
     <section class="session-controls" aria-label="Session navigation">
       <label for="session-select">Owned session</label>
       <select id="session-select" disabled></select>
