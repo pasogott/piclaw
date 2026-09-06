@@ -211,7 +211,7 @@ For permanent revocation, choose **Inspect task**, check the exact grant and ori
 
 Open **Scheduled results** to see metadata from the newest 50 execution records belonging to your account. Inaccessible or archived targets are omitted, so the list may contain fewer than 50 entries. Family scheduling and automatic execution are still disabled; this panel only exposes results prepared during development testing.
 
-Choose **Inspect result** to load the stored result as plain text. Check the **Original conversation** and execution ID. An unsettled or expired-unsettled record cannot be published. “Publication receipt recorded” means a receipt exists; confirming publication verifies the actual message before acknowledging a retry.
+Choose **Inspect result** to load the stored result as plain text. Check the **Original conversation** and execution ID. An unsettled, expired-unsettled or expired record cannot be published. `expired-unsettled` means the settlement deadline passed without a result; `expired` means internal maintenance recorded terminal expiry. Neither state retries the model or cancels external work already performed. “Publication receipt recorded” means a receipt exists; confirming publication verifies the actual message before acknowledging a retry.
 
 To publish a settled result, check the confirmation and choose **Publish result**. A sign-in within five minutes is required. The server adds one service-labelled message to the original conversation; it does not switch your selected conversation, run an agent or send a notification. Publication does not change the result's original owner labels. Use the normal session picker to view a different original conversation.
 
