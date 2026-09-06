@@ -100,6 +100,33 @@ export class UserAuthFactors {
     }).immediate();
   }
 
+  /**
+   * Offline confirmed-factor re-encryption. Stop all writers and back up the store/key first.
+   * This does not rotate the generic keychain or change the configured bootstrap key.
+   */
+  async rotateFactorEncryption(readNewKeyMaterial: () => string): Promise<{ rotated: number }> {
+    const material = readNewKeyMaterial();
+    if (!material || material === this.readKeyMaterial()) throw new Error("A distinct non-empty replacement key is required.");
+    const target = new UserAuthFactors(this.database, () => material, this.now);
+    const snapshot = this.database.query("SELECT * FROM user_totp_factors ORDER BY user_id").all() as Factor[];
+    const fingerprint = JSON.stringify(snapshot);
+    const updates: Array<{ userId: string; encrypted: Ciphertext }> = [];
+    // Decrypt/verify every row before writing any ciphertext. A wrong old key cannot partially rotate.
+    for (const row of snapshot) updates.push({ userId: row.user_id, encrypted: await target.encrypt(row.user_id, await this.decrypt(row)) });
+    return this.database.transaction(() => {
+      if (JSON.stringify(this.database.query("SELECT * FROM user_totp_factors ORDER BY user_id").all()) !== fingerprint) {
+        throw new Error("Authentication factors changed during offline rotation.");
+      }
+      for (const update of updates) {
+        this.database.query("UPDATE user_totp_factors SET ciphertext=?,salt=?,nonce=?,revision=? WHERE user_id=?")
+          .run(update.encrypted.ciphertext, update.encrypted.salt, update.encrypted.nonce, createUuid("factor"), update.userId);
+      }
+      // Interrupted ceremonies must not finish under the old key. Re-enrol through a new grant.
+      this.database.exec("DELETE FROM user_totp_enrolments; DELETE FROM user_auth_invitations; DELETE FROM user_passkey_registrations; DELETE FROM webauthn_enrollments; DELETE FROM web_sessions;");
+      return { rotated: updates.length };
+    }).immediate();
+  }
+
   /** Verify one selected account; never enumerate seeds to identify a user from a six-digit code. */
   async verifyLogin(username: string, code: string): Promise<VerifiedTotp | null> {
     const user = this.database.query("SELECT id FROM users WHERE username=? COLLATE NOCASE AND enabled=1 AND home_chat_jid IS NOT NULL")

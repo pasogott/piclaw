@@ -103,13 +103,13 @@ Denied surfaces include add-on ingress/config APIs, widget state/snapshots, muta
 
 Per-user TOTP factors and pending enrolments use dedicated `user_totp_factors` and `user_totp_enrolments` tables. They are absent from generic keychain listing and shell secret injection. Seeds use AES-256-GCM with a per-record salt/nonce, PBKDF2-SHA256 (150,000 iterations), bootstrap key material and user-bound associated data. Sharing the machine still permits a sufficiently privileged process to read state and keys; this separation prevents accidental tool exposure.
 
-The internal enrolment service returns a newly generated seed once for a future QR ceremony; stores only encrypted seed and hashed token; expires tokens after five minutes; reserves at most five confirmation attempts; and consumes token plus confirmed factor atomically. Confirmation does not enable an account or assign its home. An existing factor cannot be overwritten through enrolment. Expired pending records are pruned during confirmation; periodic retention and account reset are subsequent lifecycle work.
+The internal enrolment service returns a newly generated seed once for a future QR ceremony; stores only encrypted seed and hashed token; expires tokens after five minutes; reserves at most five confirmation attempts; and consumes token plus confirmed factor atomically. Confirmation does not enable an account or assign its home. An existing factor cannot be overwritten through enrolment. Expired pending records are pruned during confirmation and by the runtime maintenance loop; account reset is described below.
 
 Multi-user TOTP selects one normalised username, strictly validates its six-digit code, and atomically consumes the accepted 30-second step. Login reserves a persistent five-attempt account / twenty-attempt IP budget per five minutes before asynchronous cryptography. Reservations include successful and in-flight attempts and are not cleared by another concurrent success. Unknown/disabled accounts perform equivalent KDF work and receive the same invalid-code response. Cookie issuance rechecks current account enablement, home and verified factor revision. Legacy single-user verification behaviour is unchanged.
 
 WebAuthn discoverable login resolves the verified credential owner and checks its user handle, account state and current credential before issuing a cookie. Multi-user ceremonies require user verification and capture the expected origin. Registration requires same-account recent authentication and origin checks; it uses the user's immutable ID/username/display name and cannot overwrite an existing credential. Legacy single-user ceremony settings remain supported.
 
-Reset/recovery routes, general WebAuthn enrolment lifecycle hardening and Settings are unfinished. The account service below protects factor removal, but the legacy factor-management tools still need owner-bound integration before family execution. No mode is enabled by these internal methods. Back up the factor tables and bootstrap key together. Changing the bootstrap key currently requires an offline reviewed re-encryption/recovery procedure; automatic rotation and mixed-key ciphertext are unsupported.
+Offline recovery, legacy WebAuthn ceremony isolation and Settings are unfinished. The account service below protects factor removal, but the legacy factor-management tools still need owner-bound integration before family execution. No mode is enabled by these internal methods. Back up the factor tables and bootstrap key together. Changing the bootstrap key requires the coordinated offline procedure below; automatic rotation and mixed-key ciphertext are unsupported.
 
 ## Family account administration
 
@@ -138,7 +138,7 @@ POST `/auth/invitation/claim` accepts only `{token}`. It requires matching brows
 
 POST `/auth/invitation/confirm` accepts only `{token,enrolment_token,code}` and needs that cookie and origin. Five guesses are allowed by the underlying enrolment record. Verification rechecks the grant and account after asynchronous cryptography. One transaction inserts the factor, enables the same invited account, revokes any account logins and consumes the grant; failure rolls everything back. Success clears the enrolment cookie and requires an ordinary login. The invitation grants no account-role/profile changes, factor deletion or transcript access. Responses are private/no-store. TOTP-disabled/passkey-only policy cannot issue or redeem these TOTP invitations.
 
-The API has no invitation page or QR UI yet. Passkey-first invitations, offline recovery, periodic expiry pruning and key rotation need separate implementation. Expired records are pruned on issue/claim and factor confirmation. General factor reset cannot reuse invitations for accounts with existing factors.
+The API has no invitation page or QR UI yet. Passkey-first invitations and offline recovery need separate implementation. Expired records are pruned on issue/claim and factor confirmation. General factor reset cannot reuse invitations for accounts with existing factors.
 
 ## Administrator-assisted recovery
 
@@ -157,6 +157,22 @@ POST `/account/passkeys/register/start` accepts an empty object and requires rec
 POST `/account/passkeys/register/finish` accepts `{token,credential}`. The same account/login/origin must consume the grant before verification; failed proofs and replay require a new ceremony. After cryptographic verification, the service rechecks current login/account status and expiry, then inserts the credential without replacement. No new login cookie is issued. Role/enable changes, own-device revocation and factor removal clear affected pending registrations. A second login on the same account cannot complete the first browser's ceremony.
 
 Tests use real P-256/COSE keys, CBOR registration attestation and signed login assertions for two credentials. Passkey-first invitations, credential-label UI, physical authenticator browser tests and offline recovery are still unfinished. Legacy single-user ceremony routes are unchanged; the family account endpoints use the separate durable flow above.
+
+## Authentication maintenance
+
+After access validation, startup immediately prunes expired transient authentication records and starts one unreferenced 60-second timer. Shutdown stops it. Cleanup deletes expired/invalid login sessions, expired invitations and enrolments, expired attempt budgets, and pending passkey ceremonies whose user/login no longer exists. It preserves confirmed factors, accounts and recovery audit records. Cleanup failure is logged and retried on the next interval; request-time expiry checks still enforce access independently.
+
+`UserAuthFactors.rotateFactorEncryption(readNewKeyMaterial)` is an internal **offline confirmed-TOTP-factor re-encryption helper**, not an HTTP/tool action or live master-key switch. It decrypts and prepares every confirmed factor before any write, then checks the complete factor snapshot inside a write transaction. Wrong keys, concurrent factor changes or write errors abort without partial rotation. Success changes ciphertext/salt/nonce/revision, preserves the secret and last-used timestep, and revokes all logins/pending authentication ceremonies. It returns only the number of rotated factors.
+
+Before an operator uses it:
+
+1. Stop all runtime and authentication writers. Back up the full database and existing bootstrap key together; verify the backup can be opened.
+2. Prepare the new key through a protected keychain/file reference. Do not put either key on a command line or in logs.
+3. Re-encrypt confirmed factors with the helper. Separately re-encrypt any generic-keychain/other stores using the same bootstrap material; this helper does not modify them.
+4. Change the configured bootstrap key only after every dependent store has been re-encrypted. Verify authentication with the new key before restarting for users.
+5. If any part fails, restore the coordinated database/key backup while services remain stopped. Changing only the configured key can make stored credentials unreadable.
+
+This slice has no automatic key selection, dual-key runtime, standalone rotation CLI or offline lone-administrator recovery. Those operational entry points require a reviewed runbook before release. No live key rotation was performed during implementation.
 
 ## Model identity foundation
 

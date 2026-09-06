@@ -23,6 +23,7 @@ import {
 import { getChatBranchByAgentName, getChatBranchByChatJid, getChatCursor, getDb, getFailedRun, initDatabase } from "../db.js";
 import type { AgentQueue } from "../queue.js";
 import { validateAccessStartup } from "../db/access-state.js";
+import { startAuthMaintenance } from "./auth-maintenance.js";
 import { startToolOutputCleanup } from "../tool-output.js";
 import { createUuid } from "../utils/ids.js";
 import { applyEnvironmentOverrides } from "../environment-overrides.js";
@@ -165,6 +166,7 @@ export function initializeRuntimeEnvironment(state: RuntimeState): void {
 
   initDatabase();
   validateAccessStartup(getDb());
+  startAuthMaintenance();
   installAddonRuntimeApi();
   applyEnvironmentOverrides();
   const watchdogWarning = getProgressWatchdogSafetyWarning();
