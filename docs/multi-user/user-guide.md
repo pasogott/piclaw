@@ -191,9 +191,9 @@ The file excludes attachments, rich content, annotations, thread links, tasks, s
 
 ## Prepare or revoke a paused task
 
-Open **Prepared tasks** to see metadata from your newest 50 task grants. Archived or inaccessible targets are omitted. The panel cannot activate, run, edit or delete tasks. Both preparation and revocation need a sign-in within five minutes.
+Open **Prepared tasks** to see metadata from your newest 50 task grants. Archived or inaccessible targets are omitted. The panel can prepare, inspect, revoke and explicitly request one run of a due grant. It cannot enable automatic scheduling, edit or delete tasks. Writes need a sign-in within five minutes.
 
-A separate [development run-admission API](scheduled-execution.md#owner-confirmed-run-admission) can submit a due grant for one execution attempt. There is no run button yet, and startup remains gated. Its `admitted` response confirms a saved handoff, not that the model started or succeeded. Exact retries return the same execution without another attempt; inspect **Scheduled results** for its outcome.
+The [development run-admission API](scheduled-execution.md#owner-confirmed-run-admission) backs **Run once**, described below. Startup remains gated. Its `admitted` response confirms a saved handoff, not that the model started or succeeded. Exact retries return the same execution without another attempt; inspect **Scheduled results** for its outcome.
 
 1. Choose the **Original conversation** explicitly. Preparing does not switch the conversation you are viewing.
 2. Enter a prompt up to 100 KiB UTF-8. The complete JSON request must fit within 128 KiB, including escaping; some prompts therefore need to be shorter.
@@ -207,7 +207,15 @@ An uncertain response locks the exact request, including its ID. Confirm again a
 
 For permanent revocation, choose **Inspect task**, check the exact grant and original conversation, check the revocation confirmation, then choose **Revoke task grant**. Revocation removes future grant authority but cannot undo earlier effects or delete history. A revoked grant cannot be restored by replaying the old preparation. After an uncertain revocation, refresh and inspect before confirming again.
 
-**Refresh tasks**, **Close tasks**, losing focus, hiding the tab, switching sessions or navigating away clears draft, retry payload and inspected text. A request already sent may still finish; clearing the form does not cancel or delete a saved task. Inspect the list before creating another. These controls store no task data in browser storage and never enable execution.
+**Refresh tasks**, **Close tasks**, losing focus, hiding the tab, switching sessions or navigating away clears draft, retry payload and inspected text. A request already sent may still finish; clearing the form does not cancel or delete a saved task. Inspect the list before creating another. These controls store no task data in browser storage and never enable automatic scheduling.
+
+### Run an inspected due task once
+
+Choose **Inspect task** and review the original conversation, exact prompt, UTC due time and currently allowed tools. **Run once** appears only when the inspected grant is due according to the browser clock; the server rechecks its own clock and authority. If it is not due, inspect again after the due time. There is no automatic countdown or polling.
+
+Check the separate execution confirmation, then choose **Run once**. This may call the model and permitted tools. Preparation confirmation alone never authorises a run. Each grant can have only one admitted execution. The task remains paused for automatic scheduling; the response displays an execution ID and acknowledges admission only, not model start or success. Nothing is published automatically. Use **Scheduled results** to inspect the execution or cancel its remaining authority.
+
+An uncertain response offers **Retry same run request**, requiring confirmation again and reusing the exact original request ID. This verifies an existing admission without queuing another run. Refresh, reinspection, close, focus loss, session switch or navigation discards the retry key; inspect **Scheduled results** before another request. The server refuses a new key for an already-admitted grant. A held send or another shell mutation disables and clears run confirmation; execution cancellation also clears an armed run. No run occurs without another explicit confirmation.
 
 ## Inspect scheduled results
 

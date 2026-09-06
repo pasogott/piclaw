@@ -56,6 +56,97 @@ async function taskFixture(page:Page) {
 async function openTasks(page:Page){await page.goto(base);await ready(page);await page.locator('#open-tasks').click();await page.waitForFunction(()=>!document.getElementById('prepare-task-form')?.hidden);}
 async function taskDraft(page:Page){await page.locator('#task-target').selectOption('web:alice-two');await page.locator('#task-prompt').fill('Exact task prompt\nline two ');const due=new Date(Date.now()+86400000).toISOString().slice(0,16);await page.locator('#task-due').fill(due);return due;}
 
+async function runFixture(page:Page){
+  const f=await taskFixture(page),runs:any[]=[];f.detail.preparation.scheduled_for=new Date(Date.now()-60000).toISOString();
+  await page.route('**/agent/scheduled-tasks/grant-one/run',r=>{const body=r.request().postDataJSON();runs.push({body,headers:r.request().headers()});return r.fulfill({json:{grant_id:'grant-one',execution_id:'execution-one',request_id:body.request_id,state:'admitted',created:true}});});
+  return {...f,runs};
+}
+async function inspectRun(page:Page){await page.getByRole('button',{name:'Inspect task',exact:true}).click();await page.waitForFunction(()=>!document.getElementById('scheduled-task-detail')?.hidden);}
+
+browserTest('due task run requires separate confirmation, exact pinned request and displays admission without success claim',async()=>{
+  const page=await browser.newPage({viewport:{width:375,height:740}});
+  try{const f=await runFixture(page);await openTasks(page);expect(f.runs).toHaveLength(0);expect(await page.locator('#scheduled-task-run').isVisible()).toBe(false);
+    await inspectRun(page);expect(await page.locator('#run-task').isDisabled()).toBe(true);expect(await page.locator('#confirm-task-run').isChecked()).toBe(false);expect(await page.locator('#scheduled-task-text').textContent()).toContain('PRIVATE_TASK');
+    await page.locator('#confirm-task-run').check();await page.locator('#run-task').click();await page.waitForFunction(()=>document.getElementById('scheduled-tasks-status')?.textContent?.includes('Execution admitted: execution-one'));
+    expect(f.runs).toHaveLength(1);expect(Object.keys(f.runs[0].body).sort()).toEqual(['confirm','request_id']);expect(f.runs[0].body.confirm).toBe(true);expect(f.runs[0].headers).toMatchObject({'x-piclaw-account-id':'alice','x-piclaw-login-id':'login-a','content-type':'application/json'});
+    expect(await page.locator('#scheduled-tasks-status').textContent()).toContain('does not confirm model start or success');expect(await page.locator('#confirm-task-run').isDisabled()).toBe(true);expect(await page.locator('#run-task').isDisabled()).toBe(true);
+    expect(await page.locator('#session-select').inputValue()).toBe('web:alice');expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);expect(await page.evaluate(()=>[localStorage.length,sessionStorage.length])).toEqual([0,0]);
+  }finally{await page.close();}
+},20000);
+
+browserTest('not-due, revoked, malformed and wrong-target details cannot authorise a run',async()=>{
+  const page=await browser.newPage();
+  try{const f=await runFixture(page);f.detail.preparation.scheduled_for=new Date(Date.now()+86400000).toISOString();await openTasks(page);await inspectRun(page);expect(await page.locator('#scheduled-task-run').isVisible()).toBe(false);
+    f.detail.preparation.scheduled_for='invalid';await page.getByRole('button',{name:'Inspect task',exact:true}).click();await page.waitForFunction(()=>document.getElementById('scheduled-tasks-status')?.textContent==='Invalid task detail.');expect(await page.locator('#run-task').isDisabled()).toBe(true);
+    f.detail.preparation.scheduled_for=new Date(Date.now()-60000).toISOString();f.detail.chat_jid='web:bob';await page.getByRole('button',{name:'Inspect task',exact:true}).click();await page.waitForFunction(()=>document.getElementById('scheduled-tasks-status')?.textContent==='Invalid task detail.');
+    f.detail.chat_jid='web:alice-two';f.detail.revoked=true;f.detail.preparation=null as any;await inspectRun(page);expect(await page.locator('#confirm-task-run').isDisabled()).toBe(true);expect(f.runs).toHaveLength(0);
+  }finally{await page.close();}
+},20000);
+
+browserTest('uncertain and mismatched run receipts preserve exact retry ID and require manual reconfirmation',async()=>{
+  const page=await browser.newPage();
+  try{await runFixture(page);const sent:any[]=[];
+    await page.route('**/agent/scheduled-tasks/grant-one/run',r=>{const body=r.request().postDataJSON();sent.push(body);return r.fulfill(sent.length===1?{status:500,json:{}}:sent.length===2?{json:{request_id:'different',grant_id:'grant-one',execution_id:'execution-one',created:true,state:'admitted'}}:{json:{request_id:body.request_id,grant_id:'grant-one',execution_id:'execution-one',created:false,state:'admitted'}});});
+    await openTasks(page);await inspectRun(page);
+    for(let i=1;i<=3;i++){
+      await page.locator('#confirm-task-run').check();await page.locator('#run-task').click();await page.waitForFunction(()=>!(document.getElementById('send-message') as HTMLButtonElement).disabled);
+      expect(sent).toHaveLength(i);expect(await page.locator('#run-task').isDisabled()).toBe(true);
+      if(i<3){expect(await page.locator('#run-task').textContent()).toBe('Retry same run request');expect(await page.locator('#scheduled-tasks-status').textContent()).toContain('Admission may have completed');await page.locator('#open-tasks').click();}
+    }
+    expect(sent[1]).toEqual(sent[0]);expect(sent[2]).toEqual(sent[0]);expect(await page.locator('#scheduled-tasks-status').textContent()).toContain('Admission verified: execution-one');
+  }finally{await page.close();}
+},20000);
+
+browserTest('run confirmation and retry clear on inspection, refresh, close, blur, session change and navigation',async()=>{
+  const page=await browser.newPage();
+  try{await runFixture(page);const sent:any[]=[];await page.route('**/agent/scheduled-tasks/grant-one/run',r=>{sent.push(r.request().postDataJSON());return r.fulfill({status:500,json:{}});});await openTasks(page);await inspectRun(page);
+    for(const action of ['inspect','refresh','close','blur','session','navigation']){
+      await page.locator('#confirm-task-run').check();await page.locator('#run-task').click();await page.waitForFunction(()=>document.getElementById('run-task')?.textContent==='Retry same run request');await page.waitForFunction(()=>!(document.getElementById('send-message') as HTMLButtonElement).disabled);
+      if(action==='inspect')await inspectRun(page);
+      if(action==='refresh'){await page.locator('#refresh-tasks').click();await inspectRun(page);}
+      if(action==='close'){await page.locator('#close-tasks').click();await page.locator('#open-tasks').click();await inspectRun(page);}
+      if(action==='blur'){await page.evaluate(()=>dispatchEvent(new Event('blur')));await page.evaluate(()=>dispatchEvent(new Event('focus')));await ready(page);await inspectRun(page);}
+      if(action==='session'){await page.locator('#session-select').selectOption('web:alice-two');await ready(page);await inspectRun(page);}
+      if(action==='navigation')await page.evaluate(()=>dispatchEvent(new PageTransitionEvent('pagehide')));
+      expect(await page.locator('#confirm-task-run').isChecked()).toBe(false);expect(await page.locator('#run-task').isDisabled()).toBe(true);expect(await page.locator('#run-task').textContent()).toBe('Run once');
+    }
+    expect(new Set(sent.map(x=>x.request_id)).size).toBe(sent.length);
+  }finally{await page.close();}
+},20000);
+
+browserTest('pending run is single-flight, respects shell lock and late response cannot restore a closed panel',async()=>{
+  const page=await browser.newPage();let release:()=>void=()=>{};
+  try{const f=await runFixture(page);let entered!:()=>void;const held=new Promise<void>(r=>release=r),waiting=new Promise<void>(r=>entered=r);let sends=0;
+    await page.route('**/agent/scheduled-tasks/grant-one/run',async r=>{sends++;entered();await held;await r.fulfill({json:{request_id:r.request().postDataJSON().request_id,grant_id:'grant-one',execution_id:'execution-one',created:true,state:'admitted'}});});
+    await openTasks(page);await inspectRun(page);await page.locator('#confirm-task-run').check();await page.locator('#run-task').click();await waiting;
+    expect(await page.locator('#send-message').isDisabled()).toBe(true);expect(await page.locator('#confirm-task-run').isDisabled()).toBe(true);await page.locator('#refresh-tasks').click();expect(sends).toBe(1);await page.locator('#close-tasks').click();release();
+    await page.waitForFunction(()=>!(document.getElementById('send-message') as HTMLButtonElement).disabled);expect(await page.locator('#scheduled-tasks').isVisible()).toBe(false);await page.locator('#open-tasks').click();await inspectRun(page);expect(await page.locator('#confirm-task-run').isChecked()).toBe(false);expect(sends).toBe(1);expect(f.runs).toHaveLength(0);
+  }finally{release();await page.close();}
+},20000);
+
+browserTest('changed login during run admission invalidates draft/detail and never displays a receipt',async()=>{
+  const page=await browser.newPage();let release:()=>void=()=>{};
+  try{const f=await runFixture(page);let entered!:()=>void;const held=new Promise<void>(r=>release=r),waiting=new Promise<void>(r=>entered=r);
+    await page.route('**/agent/scheduled-tasks/grant-one/run',async r=>{entered();await held;await r.fulfill({json:{request_id:r.request().postDataJSON().request_id,grant_id:'grant-one',execution_id:'private-execution',created:true,state:'admitted'}});});
+    await openTasks(page);await inspectRun(page);await page.locator('#confirm-task-run').check();await page.locator('#run-task').click();await waiting;f.state.identity=principal('bob','login-b');release();
+    await page.waitForFunction(()=>document.getElementById('family-status')?.textContent?.includes('no longer bound'));expect(await page.locator('#scheduled-task-text').textContent()).toBe('');expect(await page.locator('#scheduled-tasks-status').textContent()).not.toContain('private-execution');expect(await page.locator('#run-task').isDisabled()).toBe(true);
+  }finally{release();await page.close();}
+},20000);
+
+browserTest('held send disables and disarms run; cancellation also clears an armed run without acquiring the shell lock',async()=>{
+  const page=await browser.newPage();let release:()=>void=()=>{};
+  try{const f=await runFixture(page);let entered!:()=>void;const held=new Promise<void>(r=>release=r),waiting=new Promise<void>(r=>entered=r);
+    await page.route('**/agent/default/message?**',async r=>{entered();await held;await r.fulfill({json:{ok:true}});});
+    await page.route('**/agent/scheduled-results',r=>r.fulfill({json:resultList([{execution_id:'other-execution',chat_jid:'web:alice-two',created_at:1780000000000,state:'unsettled',publication_recorded:false}])}));
+    await page.route('**/agent/scheduled-results/other-execution',r=>r.fulfill({json:{...resultDetail('other-execution'),state:'unsettled',result:null}}));
+    await page.route('**/agent/scheduled-results/other-execution/cancel',r=>r.fulfill({json:{execution_id:'other-execution',cancelled:true,created:true}}));
+    await openTasks(page);await inspectRun(page);await page.locator('#confirm-task-run').check();await page.locator('#message-text').fill('held');await page.locator('#send-message').click();await waiting;
+    expect(await page.locator('#confirm-task-run').isChecked()).toBe(false);expect(await page.locator('#confirm-task-run').isDisabled()).toBe(true);expect(await page.locator('#run-task').isDisabled()).toBe(true);
+    release();await page.waitForFunction(()=>!(document.getElementById('send-message') as HTMLButtonElement).disabled);await page.locator('#confirm-task-run').check();await page.locator('#open-results').click();await page.getByRole('button',{name:'Inspect result',exact:true}).click();await page.locator('#confirm-execution-cancellation').check();await page.locator('#cancel-execution').click();
+    await page.waitForFunction(()=>document.getElementById('scheduled-results-status')?.textContent?.includes('Execution authority cancelled'));expect(await page.locator('#confirm-task-run').isChecked()).toBe(false);expect(await page.locator('#run-task').isDisabled()).toBe(true);expect(f.runs).toHaveLength(0);
+  }finally{release();await page.close();}
+},20000);
+
 async function cancelFixture(page:Page) {
   const state=await fixture(page),detail={...resultDetail(),state:'unsettled',result:null as any},calls:any[]=[];
   await page.route('**/agent/scheduled-results',r=>r.fulfill({json:resultList([{execution_id:'execution-one',chat_jid:'web:alice-two',created_at:1780000000000,state:'unsettled',publication_recorded:false}])}));

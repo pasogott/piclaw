@@ -37,6 +37,7 @@ test('family guides cover user controls, destructive effects and gated operator 
     expect(user).toContain(`**${label}**`);expect(source).toContain(label);
   }
   for(const term of ['UTC','128 KiB','100 unrevoked grants','request ID'])expect(user).toContain(term);
+  for(const label of ['Run once','Retry same run request']){expect(user).toContain(`**${label}**`);expect(source).toContain(label);}
   for(const term of ['2,000 messages','8 MiB','32,000 characters','partial file','atomic database snapshot'])expect(user).toContain(term);
   for(const label of ['Family administration','Create account','Issue invitation','Issue passkey invitation','Revoke invitation','Reset account','Reset to passkey','Security','Assign home','Tool restrictions','Save tool restrictions']){
     expect(admin).toContain(`**${label}**`);expect(source).toContain(label);

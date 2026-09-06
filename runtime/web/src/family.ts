@@ -33,6 +33,7 @@ let directoryGeneration = 0;
 let refreshing: symbol | null = null, polling: ReturnType<typeof setInterval> | undefined;
 let pending: { text: string; chat: string; requestId: string } | null = null;
 function controls(enabled: boolean): void {
+  tasks?.setExecutionBlocked(busy);
   for (const control of [select, compose, send, home, refresh]) control.disabled = !enabled;
   retry.disabled = !enabled || heldRow === null || legacyHeld; confirmSkip.disabled = !enabled || heldRow === null;
   skip.disabled = !enabled || heldRow === null || !confirmSkip.checked;
@@ -172,6 +173,7 @@ async function start(): Promise<void> {
       changed: async () => { await loadTimeline(); },
     });
     results = new FamilyResults(api, {
+      beforeCancel: () => { tasks?.disarmRun(); },
       lock: value => {
         if (value && (busy || paused || stopped)) return false;
         busy = value; generation++; refreshing = null; controls(false); return true;

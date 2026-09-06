@@ -7,13 +7,15 @@ const validChat=(chat:unknown):chat is string=>typeof chat==='string'&&!!chat.tr
 interface TaskItem {grant_id:string;task_id:string;chat_jid:string;created_at:string;revoked:boolean}
 interface Preparation {request_id:string;chat_jid:string;prompt:string;scheduled_for:string;allowed_tools:string[];confirm:true}
 
-/** Drafts and exact retry payloads live only while this panel is active. No activation or execution controls. */
+/** Temporary drafts and exact retries; explicit run admission never enables automatic scheduling. */
 export class FamilyTasks {
   private root=node('scheduled-tasks');private list=node('scheduled-task-list');private status=node('scheduled-tasks-status');
   private editor=node<HTMLFormElement>('prepare-task-form');private target=node<HTMLSelectElement>('task-target');
   private prompt=node<HTMLTextAreaElement>('task-prompt');private due=node<HTMLInputElement>('task-due');private tools=node('task-tools');
   private confirm=node<HTMLInputElement>('confirm-task-preparation');private submit=node<HTMLButtonElement>('prepare-task');
   private detail=node('scheduled-task-detail');private revokeConfirm=node<HTMLInputElement>('confirm-task-revocation');private revoke=node<HTMLButtonElement>('revoke-task');
+  private runConfirm=node<HTMLInputElement>('confirm-task-run');private run=node<HTMLButtonElement>('run-task');
+  private runDue:number|null=null;private runRetry:{grant:string;request_id:string}|null=null;private executionBlocked=false;
   private opened=false;private paused=false;private stopped=false;private busy=false;private generation=0;private controller:AbortController|null=null;
   private retry:Preparation|null=null;private selected:TaskItem|null=null;private targets=new Set<string>();private allowed:string[]=[];
   constructor(private api:FamilyApi,private hooks:{lock:(value:boolean)=>boolean;changed:()=>Promise<void>}) {
@@ -26,10 +28,18 @@ export class FamilyTasks {
     this.editor.addEventListener('submit',event=>{event.preventDefault();void this.prepare();});
     for(const field of [this.target,this.prompt,this.due,this.tools])field.addEventListener('input',()=>{if(!this.busy){this.confirm.checked=false;this.submit.disabled=true;}});
     this.revoke.addEventListener('click',()=>{void this.revokeSelected();});
+    this.runConfirm.addEventListener('change',()=>{this.run.disabled=this.busy||this.executionBlocked||this.runDue===null||!this.selected||!this.runConfirm.checked;});
+    this.run.addEventListener('click',()=>{void this.runSelected();});
   }
   private visible():boolean{return this.opened&&!this.paused&&!this.stopped&&!document.hidden;}
+  disarmRun():void {this.runConfirm.checked=false;this.run.disabled=true;}
+  setExecutionBlocked(value:boolean):void {
+    this.executionBlocked=value;if(value)this.disarmRun();
+    this.runConfirm.disabled=value||this.busy||this.runDue===null||!this.selected||!this.visible();
+  }
   private resetDetail():void {
     this.selected=null;this.detail.hidden=true;this.revokeConfirm.checked=false;this.revokeConfirm.disabled=true;this.revoke.disabled=true;
+    this.runDue=null;this.runRetry=null;this.runConfirm.checked=false;this.runConfirm.disabled=true;this.run.disabled=true;this.run.textContent='Run once';node('scheduled-task-run').hidden=true;
     for(const id of ['scheduled-task-target','scheduled-task-state','scheduled-task-text'])node(id).textContent='';
   }
   private resetDraft():void {
@@ -75,11 +85,14 @@ export class FamilyTasks {
     try{const value=await this.api.request(`/agent/scheduled-tasks/${encodeURIComponent(item.grant_id)}`,'GET',undefined,request.signal);if(!this.active(request.generation))return;
       const p=value?.preparation;
       if(value?.grant_id!==item.grant_id||value.task_id!==item.task_id||value.chat_jid!==item.chat_jid||value.activation_available!==false||typeof value.revoked!=='boolean'
-        ||(value.revoked?p!==null:(!p||p.state!=='paused'||typeof p.prompt!=='string'||new TextEncoder().encode(p.prompt).byteLength>102400||typeof p.scheduled_for!=='string'||!Array.isArray(p.allowed_tools)||p.allowed_tools.some((name:unknown)=>!(FAMILY_WEB_TOOLS as readonly unknown[]).includes(name)))))throw Error('Invalid task detail.');
+        ||(value.revoked?p!==null:(!p||p.state!=='paused'||typeof p.prompt!=='string'||new TextEncoder().encode(p.prompt).byteLength>102400||typeof p.scheduled_for!=='string'||!Number.isFinite(Date.parse(p.scheduled_for))||new Date(p.scheduled_for).toISOString()!==p.scheduled_for||!Array.isArray(p.allowed_tools)||p.allowed_tools.some((name:unknown)=>!(FAMILY_WEB_TOOLS as readonly unknown[]).includes(name)))))throw Error('Invalid task detail.');
       this.detail.hidden=false;node('scheduled-task-target').textContent=`Original conversation: ${item.chat_jid} · Grant: ${item.grant_id}`;
       node('scheduled-task-state').textContent=value.revoked?'Grant revoked. It cannot run.':`Paused · Due (UTC): ${p.scheduled_for} · Currently allowed: ${p.allowed_tools.join(', ')||'none'}`;
       node('scheduled-task-text').textContent=p?.prompt??'';this.status.textContent='';
-      if(!value.revoked){this.selected=item;this.revokeConfirm.disabled=false;}node('scheduled-task-detail-heading').focus();
+      if(!value.revoked){this.selected=item;this.revokeConfirm.disabled=false;
+        if(Date.parse(p.scheduled_for)<=Date.now()){this.runDue=Date.parse(p.scheduled_for);this.runConfirm.disabled=this.executionBlocked;node('scheduled-task-run').hidden=false;}
+        else this.status.textContent='Not due yet. Inspect again after the UTC due time; the server checks its own clock.';
+      }node('scheduled-task-detail-heading').focus();
     }catch(error){if(this.active(request.generation)){this.resetDetail();this.status.textContent=(error as Error).message;}}
   }
   private newPreparation():Preparation {
@@ -110,5 +123,23 @@ export class FamilyTasks {
       if(value?.grant_id!==target.grant_id||value.revoked!==true)throw Error('Invalid revocation response.');this.resetDetail();this.status.textContent='Task grant revoked. Refresh tasks to inspect the saved state.';
     }catch(error){if(this.active(request.generation)){this.resetDetail();this.status.textContent=`${(error as Error).message} Revocation may have completed. Refresh and inspect before confirming again.`;}}
     finally{this.busy=false;this.hooks.lock(false);if(!this.stopped)await this.hooks.changed();if(this.visible()&&this.root.hidden)void this.load();}
+  }
+  private async runSelected():Promise<void>{
+    if(!this.visible()||this.busy||this.executionBlocked||!this.selected||this.runDue===null||!this.runConfirm.checked||this.runDue>Date.now())return;
+    if(!this.hooks.lock(true))return;
+    const target=this.runRetry??{grant:this.selected.grant_id,request_id:crypto.randomUUID()};
+    this.runRetry=target;this.busy=true;this.runConfirm.checked=false;this.runConfirm.disabled=true;this.run.disabled=true;
+    const request=this.startRequest();this.status.textContent='Requesting one execution attempt…';
+    try{
+      const value=await this.api.request(`/agent/scheduled-tasks/${encodeURIComponent(target.grant)}/run`,'POST',{request_id:target.request_id,confirm:true},request.signal);
+      if(!this.active(request.generation))return;
+      if(value?.request_id!==target.request_id||value.grant_id!==target.grant||!validId(value.execution_id)||typeof value.created!=='boolean'||value.state!=='admitted')throw Error('Invalid execution admission response.');
+      this.resetDetail();this.status.textContent=`${value.created?'Execution admitted':'Admission verified'}: ${value.execution_id}. This does not confirm model start or success. Open Scheduled results to inspect or cancel; nothing is published automatically.`;
+    }catch(error){if(this.active(request.generation)){
+      this.run.textContent='Retry same run request';this.status.textContent=`${(error as Error).message} Admission may have completed. Confirm again to retry the same request ID without requeuing. Refresh, reinspection or leaving this panel discards the retry key; inspect Scheduled results before another request.`;
+    }}finally{
+      this.busy=false;if(this.active(request.generation))this.runConfirm.disabled=this.runDue===null||!this.selected;
+      this.hooks.lock(false);if(!this.stopped)await this.hooks.changed();if(this.visible()&&this.root.hidden)void this.load();
+    }
   }
 }

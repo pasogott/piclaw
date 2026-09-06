@@ -24,7 +24,7 @@ export class FamilyResults {
   private selected:{id:string;chat:string}|null=null;
   private cancelTarget:string|null=null;
 
-  constructor(private api:FamilyApi,private hooks:{lock:(value:boolean)=>boolean;changed:()=>Promise<void>}) {
+  constructor(private api:FamilyApi,private hooks:{lock:(value:boolean)=>boolean;changed:()=>Promise<void>;beforeCancel?:()=>void}) {
     node('open-results').addEventListener('click',()=>{if(this.paused||this.stopped||this.busy)return;this.opened=true;void this.load(true);});
     node('close-results').addEventListener('click',()=>{this.opened=false;this.clear();node('open-results').focus();});
     node('refresh-results').addEventListener('click',()=>{void this.load();});
@@ -105,6 +105,7 @@ export class FamilyResults {
   }
   private async cancelSelected():Promise<void> {
     if(!this.visible()||this.busy||!this.cancelTarget||!this.cancelConfirm.checked)return;
+    this.hooks.beforeCancel?.();
     // Do not acquire or release the shell mutation lock: revocation must not wait behind a busy send.
     const target=this.cancelTarget;this.busy=true;this.cancelConfirm.checked=false;this.cancelConfirm.disabled=true;this.cancel.disabled=true;
     const request=this.startRequest();this.status.textContent='Cancelling execution authority…';
