@@ -6,7 +6,7 @@
 
 This is one stage of migration, not a supported deployment conversion. The prepared database retains its `single-user` activation value and gains an `access_migration_preparation` marker. Current access-state reads reject the marker before startup can proceed. Do not remove it or edit activation values. Older releases may not recognise preparation markers; never run any older binary against the copy.
 
-The command adopts `session_roots` ownership and `chat_branches.handle_owner_id` through the existing transactional helpers. Version-two plans can also capture explicitly verified child JSONL files as pending import seeds. Version-three plans add the fixed authentication/task/media disposition below. All versions preserve message content, names, IDs, archive state, account roles/enabled state and homes. The command does not create users/homes, rename colliding handles, convert confirmed factors, map non-web services, execute/rewrite queued messages, promote session directories or retire browser caches.
+The command adopts `session_roots` ownership and `chat_branches.handle_owner_id` through the existing transactional helpers. Version-two plans can also capture explicitly verified child JSONL files as pending import seeds. Version-three plans add the fixed authentication/task/media disposition below; version four adds explicit factor preservation and optional default-account TOTP import. All versions preserve message content, names, IDs, archive state, account roles/enabled state and homes. The command does not create users/homes, rename colliding handles, overwrite confirmed factors, map non-web services, execute/rewrite queued messages, promote session directories or retire browser caches.
 
 Unregistered chats, broken/cyclic/cross-root parent chains and non-web roots are quarantined in the preview and block preparation. This command cannot override quarantine. All registered roots, including archives, need an explicit existing owner. Existing ownership cannot be transferred. Account homes must remain active roots owned by that account; enabled accounts need a home. Handle collisions are checked case-insensitively within each owner's active namespace; resolve them explicitly before reviewing another preview.
 
@@ -63,6 +63,29 @@ Preparation refuses in-flight/preflight/compaction cursor markers, queued follow
 Unconsumed legacy user messages are counted but retained without new execution grants or cursor movement. Their disposition remains a release gate. Shared keychain/provider credentials, filesystem push subscriptions/recordings, generic add-on state, tool-output files and ambiguous thinking records are excluded. The command does not enumerate their secrets or promise that every indirect media reference is classified. Raw content blocks may contain historical references; the implemented family media endpoint still enforces quarantine by ID. Full derived-resource and notification-recipient migration remains unfinished.
 
 Any disposition failure rolls back ownership, seed capture, revocation, task pausing and quarantine together in the copy; CLI cleanup removes only the new failed destination. The live source remains unchanged. Paused tasks and quarantined media must not be re-enabled by manually editing the marker or records.
+
+## Factor preservation and optional legacy TOTP import
+
+Use `version: 4`, retain the version-three resource policy and `child_sessions`, and add exactly:
+
+```json
+"factor_policy": {
+  "passkeys": "preserve-immutable-handles",
+  "legacy_totp": "none"
+}
+```
+
+This validates known credential owners, canonical base64url credential/public-key storage, RP metadata, non-negative counters, transports and confirmed TOTP record shape. It leaves every existing passkey byte, user ID, RP ID, signature counter, label and timestamp unchanged. The immutable legacy WebAuthn user handle remains `default`; renaming that account never transfers credentials. Unknown owners or malformed factor metadata fail rather than being assigned or repaired automatically. The preview exposes factor counts and an opaque fingerprint, not credential IDs, public keys, ciphertext or seed hashes. Changes to factor bytes/counters invalidate a reviewed plan.
+
+Existing confirmed TOTP factors remain encrypted under their original bootstrap material, including replay state. This stage validates record shape but does not prove that the supplied bootstrap key decrypts every existing factor. Verify restored credentials separately before any future activation; coordinated key rotation remains a different operation.
+
+If the old single-user authenticator seed must be retained, set `legacy_totp` to `import-default` and provide `--legacy-totp-file /private/path/legacy-factor.json`. The file must be a regular non-symlink file owned by the invoking user, with no group/other permissions, at most 4 KiB. Its JSON must contain only `secret` (uppercase base32, 16–128 characters) and `code` (current six-digit authenticator proof). Keep both values out of the reviewed plan, command-line arguments, stdout, transcripts and logs. Create the file through a protected operator workflow, never a shell command containing the plaintext seed. The CLI does not infer it from global config or keychain listings, and does not delete the operator's input file automatically.
+
+Import is allowed only for the immutable `default` account when it has no confirmed per-user TOTP factor. The command requires TOTP-enabled policy and the existing bootstrap encryption key. It verifies the code with bounded skew, encrypts using the existing user-bound AES-GCM/PBKDF2 format, rechecks the proof after encryption and supplies ciphertext to the copy transaction. The confirmed factor consumes the proof timestep, expires if preparation takes too long, and cannot replace a pre-existing factor. No account is enabled and no login is issued. The same-step proof cannot immediately authenticate; use a subsequent code after eventual integrated activation.
+
+Missing/unexpected secret files, wrong/expired codes, malformed records, missing key material, concurrent source changes or SQL failure abort without a partial destination. Raw input buffers are cleared and parsed secret references dropped after encryption; JavaScript strings cannot promise secure memory erasure. Protect the process and original input file accordingly. The destination transaction includes resource dispositions, optional import and an `access_factor_migration` count-only report. Source configuration and its old global TOTP seed are not removed or rewritten.
+
+The prepared copy remains non-startable. This is not a factor reset, credential transfer, recovery listener or key-rotation command. Physical authenticator proof, complete legacy browser/service migration and activation remain release gates.
 
 ## Explicit child-session capture
 

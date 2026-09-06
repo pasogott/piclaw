@@ -30,7 +30,7 @@ Family mode is intended for trusted household members. Users with arbitrary shel
 
 | Area | Implemented and tested | Not yet complete |
 |---|---|---|
-| Modes and migration (#1123/#1126/#1133) | Strict config/marker checks, copy-only ownership/child preparation, explicit copied-login revocation/task pausing/media quarantine | Promotion/rollback, confirmed-factor and remaining resource migration, activation gates |
+| Modes and migration (#1123/#1126/#1133) | Strict config/marker checks, copy-only ownership/child/resource preparation, immutable factor preservation and proof-checked default TOTP import | Promotion/rollback, physical factor proof and remaining resource migration, activation gates |
 | Accounts and factors (#1124/#1125) | Disabled account + owned home provisioning, live/recent-login admin checks, own-device/factor APIs and names, owner avatars, login-bound self TOTP enrolment and multiple passkeys | Recovery startup integration, owner-aware replacement for disabled legacy factor commands |
 | Invitations/recovery (#1125) | One-use browser-bound TOTP/passkey grants, atomic enrol-and-enable, other-admin reset, offline operator grant preparation with backup/lock/audit, fragment invitation page and admin confirmation UI | Physical-device and full account browser workflows, recovery startup/listener integration |
 | Sessions (#1126/#1128) | Root ownership, owner-local names, atomic forks/rename, additional roots, home selection and idle archive/restore; owned lifecycle browser controls | Merge/purge, full archive backup, process-kill recovery proof |
@@ -155,6 +155,8 @@ GET `/agent/branch-download?chat_jid=...` requires an owned archived branch and 
 The export contains the selected branch's safe identity fields and message text/time/sender/bot metadata. It omits media, structured content blocks, previews, annotations, thread links, tasks, service configs, extension state and session files. It is not a full backup or the legacy `piclaw.archived-session.v1` single-user export. Text may naturally contain private information from that owner's conversation; no content redaction is implied. Archived media must be restored into an active owned conversation before normal media access. Cross-user/unknown/active targets deny; no default-home fallback is used for export.
 
 ## Account-factor foundation
+
+Version-four [copy preparation](migration-copy.md#factor-preservation-and-optional-legacy-totp-import) explicitly preserves existing passkey/user-handle bytes and confirmed TOTP ciphertext. Optional legacy TOTP import reads a protected seed/code file, targets only immutable `default`, consumes the verified timestep and encrypts under the existing bootstrap key. It cannot overwrite factors, transfer credentials, enable an account or issue a login. Factor fingerprints fence stale plans without exposing authentication material. Prepared copies remain blocked; runtime factor recovery, physical-device proof and complete activation integration are separate gates.
 
 Per-user TOTP factors and pending enrolments use dedicated `user_totp_factors` and `user_totp_enrolments` tables. They are absent from generic keychain listing and shell secret injection. Seeds use AES-256-GCM with a per-record salt/nonce, PBKDF2-SHA256 (150,000 iterations), bootstrap key material and user-bound associated data. Sharing the machine still permits a sufficiently privileged process to read state and keys; this separation prevents accidental tool exposure.
 
