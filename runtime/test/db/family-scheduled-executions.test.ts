@@ -11,6 +11,7 @@ import { beginFamilyScheduledExecution as begin, settleFamilyScheduledExecution 
 import { initializeFamilyScheduledExecutions } from "../../src/db/family-scheduled-executions-schema.js";
 import { initializeFamilyScheduledExpiry } from "../../src/db/family-scheduled-expiry-schema.js";
 import { initializeFamilyScheduledInterruptions } from "../../src/db/family-scheduled-interruptions-schema.js";
+import { cancelOwnFamilyScheduledExecution as cancel } from "../../src/db/family-scheduled-executions.js";
 import { recoverExpiredFamilyScheduledExecutions as recover, startFamilyScheduledDispatch as start, readFamilyScheduledDispatch, listOwnFamilyScheduledResults } from "../../src/db/family-scheduled-executions.js";
 import { publishOwnFamilyScheduledResult } from "../../src/db/family-scheduled-publications.js";
 import { provisionFamilyAccount, updateManagedAccount } from "../../src/db/account-administration.js";
@@ -48,6 +49,57 @@ function snapshot(database=getDb()) {
   return JSON.stringify(["family_scheduled_occurrences","family_scheduled_occurrence_events","family_scheduled_executions","family_scheduled_results","family_scheduled_execution_events"].map(name=>database.query(`SELECT * FROM ${name} ORDER BY rowid`).all()));
 }
 const result = {status:"success" as const,text:"private result\nwith exact formatting"};
+
+test('owner cancellation is immutable and idempotent, blocks all future authority and preserves original approving login',()=>{
+  const db=getDb(),cap=begin(db,reservation().lease),initialLogin=alice.authentication.sessionId;
+  for(const viewer of [bob,admin])expect(()=>cancel(db,viewer,cap.execution_id)).toThrow();
+  expect(cancel(db,alice,cap.execution_id)).toEqual({execution_id:cap.execution_id,cancelled:true,created:true});
+  expect(cancel(db,alice,cap.execution_id).created).toBe(false);expect(read(db,alice,cap.execution_id)).toMatchObject({state:'cancelled',result:null});
+  expect(listOwnFamilyScheduledResults(db,alice).items[0]!.state).toBe('cancelled');
+  for(const attempt of [()=>start(db,cap),()=>settle(db,cap,result),()=>publishOwnFamilyScheduledResult(db,alice,cap.execution_id)])expect(attempt).toThrow();
+  db.query('DELETE FROM web_sessions WHERE user_id=?').run(alice.userId);expect(()=>cancel(db,alice,cap.execution_id)).toThrow();
+  alice=actor(alice.userId);expect(cancel(db,alice,cap.execution_id).created).toBe(false);expect(db.query('SELECT login_session_id FROM family_scheduled_cancellations').get()).toEqual({login_session_id:initialLogin});
+  clock+=900000;expect(recover(db)).toEqual({recorded:0});expect(read(db,alice,cap.execution_id).state).toBe('cancelled');
+  db.query('UPDATE web_sessions SET created_at=? WHERE session_id=?').run(new Date(clock).toISOString(),alice.authentication.sessionId!);
+  expect(cancel(db,alice,cap.execution_id).created).toBe(false);expect(db.query('SELECT login_session_id FROM family_scheduled_cancellations').get()).toEqual({login_session_id:initialLogin});
+  expect(()=>db.exec('UPDATE family_scheduled_cancellations SET created_at=created_at+1')).toThrow('immutable');expect(()=>db.exec('DELETE FROM family_scheduled_cancellations')).toThrow('cannot be deleted');
+  expect(()=>db.query('INSERT INTO family_scheduled_expiries VALUES (?,?)').run(cap.execution_id,clock)).toThrow('cancelled');
+});
+
+test('cancellation requires recent live owner and active target, never overwrites other terminal outcomes',()=>{
+  const db=getDb(),done=begin(db,reservation().lease);settle(db,done,result);
+  const interrupted=begin(db,reservation().lease);start(db,interrupted).markInterrupted();
+  const cap=begin(db,reservation().lease),root=createOwnedRoot(db,alice,'cancel-archive'),archived=begin(db,reservation(alice,root.chat_jid).lease);archiveOwnedSession(db,alice,root.chat_jid);
+  for(const entry of [done,interrupted,archived])expect(()=>cancel(db,alice,entry.execution_id)).toThrow();
+  clock+=300001;expect(()=>cancel(db,alice,cap.execution_id)).toThrow();clock-=300001;
+  db.query('UPDATE users SET enabled=0 WHERE id=?').run(alice.userId);expect(()=>cancel(db,alice,cap.execution_id)).toThrow();db.query('UPDATE users SET enabled=1 WHERE id=?').run(alice.userId);
+  // Owner cancellation may remove remaining authority even if the grant is already revoked.
+  expect(cancel(db,alice,cap.execution_id).created).toBe(true);
+  expect(db.query('SELECT count(*) n FROM family_scheduled_cancellations').get()).toEqual({n:1});
+});
+
+test('cancellation races serially with settlement, rolls back on storage failure, and survives reopen',()=>{
+  const db=getDb(),cap=begin(db,reservation().lease),admitted=start(db,cap),path=join(ws.workspace,'cancel.sqlite');
+  db.exec("CREATE TRIGGER fail_cancel BEFORE INSERT ON family_scheduled_cancellations BEGIN SELECT RAISE(ABORT,'cancel failed'); END");expect(()=>cancel(db,alice,cap.execution_id)).toThrow('cancel failed');
+  expect(read(db,alice,cap.execution_id).state).toBe('unsettled');db.exec('DROP TRIGGER fail_cancel');db.query('VACUUM INTO ?').run(path);
+  const one=new Database(path),two=new Database(path);
+  try{one.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10');two.exec('PRAGMA busy_timeout=10');one.exec('BEGIN IMMEDIATE');
+    try{cancel(one,alice,cap.execution_id);expect(()=>settle(two,cap,result)).toThrow();}finally{one.exec('COMMIT');}
+    expect(()=>settle(two,cap,result)).toThrow();expect(cancel(two,alice,cap.execution_id).created).toBe(false);
+  }finally{one.close();two.close();}
+  const reopened=new Database(path);try{expect(read(reopened,alice,cap.execution_id).state).toBe('cancelled');expect(()=>start(reopened,cap)).toThrow();}finally{reopened.close();}
+  cancel(db,alice,cap.execution_id);admitted.markInterrupted();expect(db.query('SELECT count(*) n FROM family_scheduled_interruptions').get()).toEqual({n:0});
+  expect(()=>db.query("INSERT INTO family_scheduled_execution_events VALUES (?,'settle',?)").run(cap.execution_id,clock)).toThrow('cancelled');
+});
+
+test('cancellation exact expiry and clock rollback boundaries fail closed without reviving authority',()=>{
+  const db=getDb(),cap=begin(db,reservation().lease),at=clock;
+  // Refresh fixture authentication timestamps in-place only to isolate the expiry predicate.
+  db.query('UPDATE web_sessions SET created_at=? WHERE session_id=?').run(new Date(at+900000).toISOString(),alice.authentication.sessionId!);
+  clock=at+900000;expect(()=>cancel(db,alice,cap.execution_id)).toThrow();clock=at;
+  db.query('UPDATE web_sessions SET created_at=? WHERE session_id=?').run(new Date(at).toISOString(),alice.authentication.sessionId!);
+  clock++;cancel(db,alice,cap.execution_id);clock=at;expect(()=>read(db,alice,cap.execution_id)).toThrow();expect(()=>settle(db,cap,result)).toThrow();
+});
 
 test('only a committed admission returns interruption closure; exact retries retain receipt and deny model or result authority',()=>{
   const db=getDb(),cap=begin(db,reservation().lease);expect(readFamilyScheduledDispatch(db,cap)).not.toHaveProperty('markInterrupted');

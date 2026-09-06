@@ -6,7 +6,7 @@ import { closeDatabase,getDb,initDatabase } from "../../src/db/connection.js";
 import { createWebSession } from "../../src/db/web-sessions.js";
 import { createFamilyScheduledTask,revokeFamilyScheduledGrant } from "../../src/db/family-scheduled-grants.js";
 import { claimFamilyScheduledOccurrence } from "../../src/db/family-scheduled-occurrences.js";
-import { beginFamilyScheduledExecution,readOwnFamilyScheduledResult,recoverExpiredFamilyScheduledExecutions } from "../../src/db/family-scheduled-executions.js";
+import { beginFamilyScheduledExecution,readOwnFamilyScheduledResult,recoverExpiredFamilyScheduledExecutions,cancelOwnFamilyScheduledExecution } from "../../src/db/family-scheduled-executions.js";
 import { dispatchFamilyScheduledExecution as dispatch } from "../../src/agent-pool/scheduled-dispatch.js";
 import { authoriseExecutionIdentity } from "../../src/agent-pool/execution-identity.js";
 import { runAgentPrompt,type RunAgentOrchestratorOptions } from "../../src/agent-pool/run-agent-orchestrator.js";
@@ -34,6 +34,17 @@ async function handoff(owner=alice){const real=Date.now,at=Date.now()+5;let resu
   try{Date.now=()=>at-5;const grant=createFamilyScheduledTask(getDb(),owner,owner.homeChatJid!,{prompt:`prompt for ${owner.username}`,scheduled_for:new Date(at).toISOString(),allowed_tools:["read","messages"]});Date.now=()=>at;result={...beginFamilyScheduledExecution(getDb(),claimFamilyScheduledOccurrence(getDb(),grant.grant_id,"worker")),grantId:grant.grant_id};}finally{Date.now=real;}await Bun.sleep(6);return result!;}
 const proof=(h:Awaited<ReturnType<typeof handoff>>)=>({execution_id:h.execution_id,token:h.token});
 const failureOf=(p:Promise<unknown>)=>p.then(()=>null,error=>error);
+
+test('owner cancellation fences queued and in-flight scheduled work without early lane release or result',async()=>{
+  const cap=await handoff(),h=harness();const queued=failureOf(dispatch(proof(cap),h.deps));cancelOwnFamilyScheduledExecution(getDb(),alice,cap.execution_id);await h.queued[0].run();expect(await queued).toBeInstanceOf(Error);expect(h.prompts).toBe(0);
+  const next=await handoff(),release=Promise.withResolvers<void>();let entered=false,done=false;
+  const other=harness(async()=>{entered=true;await release.promise;expect(()=>requireFamilyToolAccess('read')).toThrow();});
+  const pending=failureOf(dispatch(proof(next),other.deps)),lane=other.queued[0].run().then(()=>{done=true;});
+  try{await waitFor(()=>entered);expect(cancelOwnFamilyScheduledExecution(getDb(),alice,next.execution_id).created).toBe(true);expect(done).toBe(false);
+    expect(readOwnFamilyScheduledResult(getDb(),alice,next.execution_id).state).toBe('cancelled');release.resolve();await lane;expect(await pending).toBeInstanceOf(Error);expect(done).toBe(true);
+    expect(getDb().query('SELECT count(*) n FROM family_scheduled_results').get()).toEqual({n:0});expect(getDb().query('SELECT count(*) n FROM family_scheduled_interruptions').get()).toEqual({n:0});
+  }finally{release.resolve();await lane;}
+});
 function harness(onPrompt?:(session:any,prompt:string)=>Promise<void>|void,onHydrate?:()=>Promise<void>|void){
   const observed:{identity:ExecutionIdentity|null;prompt:string;system:string;tools:string[]}[]=[],queued:{run:()=>Promise<void>;lane:string}[]=[];
   let memory:any;workspaceMemoryBootstrap({on:(name:string,fn:any)=>{if(name==="before_agent_start")memory=fn;}} as any);
