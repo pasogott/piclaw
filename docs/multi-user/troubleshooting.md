@@ -1,6 +1,6 @@
 # Family preview troubleshooting
 
-Family and isolated startup remain disabled in supported Piclaw deployments. If you are not in an authorised preview test environment, stop at the availability warning and use the supported single-user app. Do not change mode markers to make a test guide work.
+Family and isolated startup are disabled. Outside an authorised preview test environment, use the supported single-user app. Do not change mode markers to bypass the restriction.
 
 Use the [user guide](user-guide.md) for everyday actions, the [administrator guide](administrator-guide.md) for account management and the [operator recovery](operator-recovery.md) or [migration](migration-copy.md) runbook for offline state work.
 
@@ -9,7 +9,7 @@ Use the [user guide](user-guide.md) for everyday actions, the [administrator gui
 | Symptom | Likely condition | Safe next step |
 |---|---|---|
 | Sign-in options cannot be loaded | Network/server policy discovery failed | Use **Retry loading sign-in options** before entering credentials. Do not submit to another site. |
-| No authenticator form or no passkey button | The site's factor policy disables that method | Use an enabled method or ask the administrator. Hidden controls are not an invitation to bypass policy. |
+| No authenticator form or no passkey button | The site's factor policy disables that method | Use an enabled method or ask the administrator. Do not bypass the site's authentication policy. |
 | Authenticator code rejected | Wrong account/code, clock skew, expired setup or an already-used timestep | Check the username and device clock; wait for a fresh code. Stop after repeated failures and follow the retry notice. |
 | Too many attempts | Account/client rate limit | Wait before retrying; do not cycle usernames or keep submitting the same code. |
 | Passkey unavailable or cancelled | Browser/secure-origin support, wrong site/credential, or device cancellation | Check the trusted HTTPS address and select the intended account's credential. Try an enabled alternative or contact the operator. |
@@ -24,18 +24,18 @@ Never include invitation links, QR codes, manual setup keys, bearer cookies or f
 
 | Symptom | Meaning | Safe next step |
 |---|---|---|
-| This page is no longer bound to its original account | Login/account changed or was revoked | Sign in again or reload. The old page's conversation/draft is deliberately cleared. |
+| This page is no longer bound to its original account | The login or account changed or was revoked | Sign in again or reload. Piclaw clears the old page's conversation and draft. |
 | Another tab changed account | Tabs share the browser profile's cookie | Use separate browser profiles for concurrent account testing; sign out on shared devices. |
 | Sensitive control is disabled | Recent authentication, policy, item eligibility or browser support is missing | Read the panel notice. Sign out/in if asked, then refresh the panel. |
 | Save asks for refresh or reports a revision conflict | Another save changed the server revision, or the result is uncertain | Refresh and inspect the saved state before re-entering a change. Do not repeatedly click Save. |
 | Avatar rejected | Unsupported/animated image, oversize file/pixels, bad decode or stale revision | Use a static PNG/JPEG/WebP within the displayed limits, then refresh and try explicitly. |
 | Saved model unavailable | Catalogue/scope/auth availability changed | Choose another offered model or save **Use instance defaults**. This does not switch an existing conversation. |
-| Conversation URL denied | Unknown, foreign, archived or otherwise inaccessible target | Use **Go home** deliberately, or restore an eligible owned session. No automatic fallback is performed. |
+| Conversation URL denied | Unknown, foreign, archived or otherwise inaccessible target | Choose **Go home**, or restore an eligible owned session. Piclaw will not select another conversation automatically. |
 | Fork/rename/restore fails | Name collision, unstable turn boundary, inactive parent or stale state | Refresh the list, wait for idle/stable state and choose an available handle. Check for an already-created fork before retrying. |
 | Archive is denied | Current home, active turn/disposal or unarchived descendants | Select another home if needed, wait for idle and archive descendants first. There is no cascading archive. |
 | Last factor/admin cannot be removed | Removal would eliminate the configured recovery path | Add and verify an alternative or use another administrator's explicit reset. Never delete factor rows manually. |
 
-Profile/preference/security forms intentionally clear when the tab loses focus or the panel closes. Do not rely on an unsaved form or compose area as durable storage. A cleared form does not undo a request already sent.
+Profile, preference and security forms clear when the tab loses focus or the panel closes. Unsaved forms and the compose area are not saved drafts. Clearing a form does not undo a request already sent.
 
 ## Messages and recovery
 
@@ -68,10 +68,10 @@ Only the host operator should run these commands on an offline, backed-up worksp
 | Unresolved durable work blocks preparation | Resolve it through the relevant supported queue/outbox workflow before another preview. Stopped processes do not prove work is safe to discard. |
 | Recovery command returned no success | Inspect private output and database before retrying; a crash/lost output can leave commit status uncertain. Use fresh paths and the runbook. |
 
-Copy preparation does not alter the live source or activate a mode. Offline administrator recovery prepares a restricted grant, but recovery-only startup/listener integration is still gated. Keep coordinated database, configuration, original key and session-file backups; neither command is a complete key-rotation or deployment tool.
+Copy preparation leaves the live source unchanged and cannot activate a mode. Offline administrator recovery can prepare a restricted grant. Piclaw cannot yet start in recovery-only mode to redeem it. Back up the database, configuration, original key and session files together. Neither command rotates keys or installs a deployment.
 
 ## Report a problem safely
 
-Provide the installed version, browser/OS, trusted site hostname if appropriate, the exact control used, approximate time, visible error text and whether the operation may already have completed. Mention whether this is a preview fixture or a supported single-user deployment. Include a minimal redacted reproduction, not a full conversation/database export.
+Provide the installed version, browser and operating system, trusted site hostname if appropriate, the control used, approximate time, visible error text and whether the operation may already have completed. State whether this is a preview fixture or a supported single-user deployment. Include the shortest redacted reproduction you can; do not send a full conversation or database export.
 
 Do not include seeds, invitation URLs, cookies, key material, private transcripts, unredacted logs/screenshots or the protected recovery/factor input files. Ask the operator to collect narrowly scoped diagnostics when a message ID or audit reference is needed.

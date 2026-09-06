@@ -1,6 +1,6 @@
 # Access modes
 
-Piclaw supports **single-user deployments only**. **Family and isolated modes still cannot start.** These preview guides do not provide an activation bypass; use them for controlled testing and implementation review.
+Piclaw supports **single-user deployments only**. **Family and isolated modes cannot start.** Use these preview guides for controlled testing and implementation review. Do not bypass the startup checks.
 
 ## Guides
 
@@ -9,11 +9,9 @@ Piclaw supports **single-user deployments only**. **Family and isolated modes st
 - [Troubleshooting](troubleshooting.md): safe next steps for users, administrators and operators.
 - [Copy-only migration runbook](migration-copy.md) and [offline recovery runbook](operator-recovery.md): operator procedures and explicit release limits.
 
-The technical contracts and implementation status follow below. User-facing guides must be updated alongside changes to the controls they describe.
+The development backend includes account administration, per-user TOTP, multiple passkeys, restricted invitations, administrator-assisted recovery, owned forks, ownership-checked reads and server-sent events (SSE), and authentication maintenance. The login page uses the site's public authentication policy to show the available methods. Migration-copy promotion and activation through Settings are not implemented. [#1134](https://github.com/rcarmo/piclaw/issues/1134) tracks the remaining integration.
 
-The development backend includes account administration, per-user TOTP, multiple passkeys, restricted invitations, administrator-assisted recovery, owned forks, scoped reads/SSE and auth maintenance. There is no supported migration-to-deployment or activation Settings flow. The login shell can render family account fields from public method policy, but this does not enable a family deployment. [#1134](https://github.com/rcarmo/piclaw/issues/1134) tracks the remaining integration.
-
-This guide describes the implementation on `main`, not a deployed or released family feature. The [HTTP inventory](../../runtime/docs/web-api-endpoint-inventory.md#family-development-routes) lists exact development routes; [storage](../storage.md) lists persisted records.
+The [HTTP inventory](../../runtime/docs/web-api-endpoint-inventory.md#family-development-routes) lists development routes; [storage](../storage.md) lists persisted records. Update user-facing guides whenever their controls change.
 
 ```json
 {
@@ -360,7 +358,7 @@ The helper does not enforce process shutdown and is not a complete operator rota
 
 The existing memory bootstrap hook appends runtime username, display name, actor/owner IDs, role and workspace profile to system context. It never creates a synthetic user message or emits login credentials. Personal context comes from `notes/users/<immutable-user-id>/MEMORY.md` and `notes/users/<immutable-user-id>/preferences.md`, plus explicit shared `notes/family/MEMORY.md`. Missing files are reported as missing; another user's context or legacy global personal memory is not substituted. Paths remain on the deliberately shared filesystem.
 
-Unmodified single-user callers keep their existing prompt/memory behaviour, and clear inherited execution identity. Text-only browser admission and per-message dequeue attribution now use this contract. Other durable queue/job paths, direct side prompts, delegates and service grants must integrate it before family activation. The foundation tests the scoped authoriser, concurrent contexts and prompt hook; it does not yet claim identity propagation across every entry point.
+Unmodified single-user callers keep their existing prompt and memory behaviour, and clear inherited execution identity. Text-only browser admission and per-message dequeue attribution use this contract. Other durable queue and job paths, direct side prompts, delegates and service grants must integrate it before family activation. The foundation tests the scoped authoriser, concurrent contexts and prompt hook. Identity propagation across every entry point has not been verified.
 
 ## Text-only family message admission
 
