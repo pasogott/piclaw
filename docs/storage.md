@@ -14,6 +14,8 @@
 | `media` | Attachment blobs |
 | `message_media` | Message ↔ media join |
 | `scheduled_tasks` | Task definitions |
+| `family_scheduled_grants` | Immutable owner/initiating-user/service, exact task revision/payload and branch binding, issued tool ceiling and non-secret login correlation; prepared tasks stay paused |
+| `family_scheduled_grant_revocations` | Append-only owner/account/task revocation; disable/role changes, task edits and deletion cannot resurrect prior grants |
 | `task_run_logs` | Task run history |
 | `token_usage` | Per‑assistant‑message token + cost usage (includes model/provider/api for per‑model tracking) |
 | `tool_outputs` | Stored tool output summaries |

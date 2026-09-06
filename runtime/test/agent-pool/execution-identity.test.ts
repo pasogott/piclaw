@@ -45,11 +45,11 @@ test("foreign owner, mismatched chat, revoked login and absent provenance are de
  expect(()=>authoriseExecutionIdentity(db,"family-shared","web:alice",proof())).toThrow();
 });
 
-test("background owner execution survives logout but not account disable",()=>{
+test("background provenance cannot authorise execution without integrated grant and occurrence admission",()=>{
  db.exec("DELETE FROM web_sessions");
  for(const kind of ["scheduled","followup","side-prompt","dream","delegate"] as const){
   const p=proof(alice,"web:alice",kind);delete (p as any).authenticationSessionId;
-  expect(authoriseExecutionIdentity(db,"family-shared","web:alice",p)?.username).toBe("alice");
+  expect(()=>authoriseExecutionIdentity(db,"family-shared","web:alice",p)).toThrow("Session access denied");
  }
  db.query("UPDATE users SET enabled=0 WHERE id=?").run(alice);
  expect(()=>authoriseExecutionIdentity(db,"family-shared","web:alice",proof(alice,"web:alice","scheduled"))).toThrow();

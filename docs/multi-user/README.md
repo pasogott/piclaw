@@ -358,7 +358,7 @@ The helper does not enforce process shutdown and is not a complete operator rota
 
 ## Model identity foundation
 
-`RunAgentOptions.executionProvenance` is a server-owned contract containing initiating actor, session owner, chat, execution kind and optional non-secret login correlation. It must never be copied from a browser/model request body. The orchestrator validates it against live account/root records before hydration and holds the projected identity in AsyncLocalStorage through the run. Interactive provenance also needs a current matching login; owner-scheduled work may survive ordinary logout but cannot run for a disabled owner. Cross-user service actors are denied until explicit service grants exist.
+`RunAgentOptions.executionProvenance` is a server-owned contract containing initiating actor, session owner, chat, execution kind and optional non-secret login correlation. It must never be copied from a browser/model request body. The orchestrator validates it against live account/root records before hydration and holds the projected identity in AsyncLocalStorage through the run. Family execution currently accepts only interactive provenance with a current matching login. Owner-labelled background kinds and isolated execution deny before hydration. A prepared task grant does not authorise a model run; occurrence admission and dispatch must be integrated first.
 
 The existing memory bootstrap hook appends runtime username, display name, actor/owner IDs, role and workspace profile to system context. It never creates a synthetic user message or emits login credentials. Personal context comes from `notes/users/<immutable-user-id>/MEMORY.md` and `notes/users/<immutable-user-id>/preferences.md`, plus explicit shared `notes/family/MEMORY.md`. Missing files are reported as missing; another user's context or legacy global personal memory is not substituted. Paths remain on the deliberately shared filesystem.
 
@@ -368,9 +368,17 @@ Unmodified single-user callers keep their existing prompt and memory behaviour, 
 
 ### Legacy scheduler restriction
 
+#### Paused task-grant foundation
+
+The internal `createFamilyScheduledTask` API requires a recent authenticated family owner and an active owned target. It atomically creates a paused one-shot agent task, its durable revision and an immutable grant. Input is exactly `{prompt,scheduled_for,allowed_tools}`: non-empty prompt up to 100 KiB UTF-8, canonical UTC timestamp within the next 366 days, and unique tool names within both the fixed family ceiling and current owner allowance. IDs are generated server-side. Shell/internal work, model overrides, notification delivery, recurring schedules and adoption of legacy tasks are unavailable.
+
+The grant binds immutable owner and initiating-user IDs separately from the `scheduler` execution service, exact target/root branch IDs, task revision, actual payload hash, durable configuration hash and issued tool ceiling. It retains only the non-secret login ID as issuance correlation. Preflight survives logout and profile renaming; it intersects the issued tools with current policy and rechecks the owner, branches, payload and paused durable task head. Preflight is an internal record check, with no due-time, occurrence-claim, replay or delivery authority.
+
+Owner revocation is append-only and idempotent. Account disable or role changes, task edits and task deletion permanently revoke existing grants. Restoring account state or the old prompt cannot restore the grant. Task/head activation is blocked by database triggers, including in single-user mode; existing ungranted single-user tasks are unchanged. There are no browser routes or controls for these APIs yet. Worker dispatch, service actors acting for other owners, occurrence/retry fencing and grant-aware migration remain release prerequisites.
+
 `startSchedulerLoop`, `pollScheduledRunsOnce` and `runScheduledTask` deny family and isolated modes, invalid access configuration and stale multi-user execution context before opening the scheduler store, claiming work or reading a task. Agent, shell and internal tasks use the same restriction. Queued work and lease-renewal callbacks check again before proceeding; single-user leases still renew while waiting in the queue.
 
-After each asynchronous scheduler stage, a failed check stops later delivery, model/session restoration, result logging, recurrence advancement and source/claim settlement. Denial stops local lease timers without abandoning or rewriting a claim already committed. An in-flight provider, shell, Dream, delivery or store operation cannot be recalled by these checks; its internal work may finish. Stop all writers before changing modes. Task records still lack separate immutable owner and initiating-actor grants, so this restriction does not enable owner-aware scheduled work or direct Dream entry points.
+After each asynchronous scheduler stage, a failed check stops later delivery, model/session restoration, result logging, recurrence advancement and source/claim settlement. Denial stops local lease timers without abandoning or rewriting a claim already committed. An in-flight provider, shell, Dream, delivery or store operation cannot be recalled by these checks; its internal work may finish. Stop all writers before changing modes. Legacy tasks have no owner grants, and the prepared-grant APIs above do not enable owner-aware scheduling or direct Dream execution.
 
 ### Legacy Dream restriction
 
