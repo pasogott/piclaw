@@ -33,6 +33,7 @@ export class FamilyWorkspace {
       || !['single-user', 'family-shared', 'isolated-containers'].includes(value.deployment.configured_mode)
       || !['single-user', 'family-shared', 'isolated-containers'].includes(value.deployment.activated_mode)
       || value.tools?.policy !== 'fixed-family-web-preview' || value.tools.configurable !== false
+      || !Array.isArray(value.tools.denied) || !Number.isSafeInteger(value.tools.revision) || value.tools.revision < 0
       || !Array.isArray(value.tools.allowed) || !Array.isArray(value.resources) || !Array.isArray(value.operations) || !Array.isArray(value.settings)
       || !Array.isArray(value.memory?.personal)) throw new Error('Unsupported workspace policy response. Refresh before using this preview.');
     const section = (title: string, lines: string[]) => {
@@ -50,7 +51,7 @@ export class FamilyWorkspace {
     ]);
     section('Family workspace', value.resources.map(row => `${row.name} — ${row.scope}: ${row.detail}`));
     section('Security and capabilities', value.operations.map(row => `${row.name} — ${row.state}: ${row.detail}`));
-    section('Admitted web-turn tool ceiling', [value.tools.allowed.join(', '), value.tools.scope, 'Unknown tools deny. This list is read-only and does not grant access to other owners.']);
+    section('Admitted web-turn tool ceiling', [`Allowed: ${value.tools.allowed.join(', ') || 'none'}`, `Denied: ${value.tools.denied.join(', ') || 'none'}; policy revision ${value.tools.revision}`, value.tools.scope, 'Unknown tools deny. This list is read-only and does not grant access to other owners.']);
     section('Memory selection (not file confinement)', [...value.memory.personal, `Shared family memory: ${value.memory.family}`, 'These are selection paths, not private volume boundaries; this panel does not read the files.']);
     section('Settings scopes', value.settings.map(row => `${row.name} — ${row.scope}: ${row.availability}`));
   }

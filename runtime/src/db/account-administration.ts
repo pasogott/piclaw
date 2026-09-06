@@ -91,6 +91,7 @@ export function readAdministrationSettings(database: Database, principal: Authen
           reset: recent && policy.totp && user.id !== principal.userId && !protectedAdmin && homeValid,
           inspect_security: recent && user.id !== principal.userId,
           assign_home: recent && user.id !== principal.userId,
+          restrict_tools: recent,
         },
       };
     }) };

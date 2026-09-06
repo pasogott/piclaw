@@ -68,4 +68,6 @@ textarea { resize: vertical; width: 100%; }
 #workspace-policy h2, #workspace-policy h3 { margin: 8px 0; }
 #workspace-policy li { margin: 8px 0; }
 #workspace-policy button, #open-workspace-policy { min-height: 44px; }
+#administration-tools-list { border: 1px solid var(--border); margin: 12px 0; }
+#administration-tools-list label, #administration-tools-form > label { display: block; min-height: 44px; padding: 10px 0; }
 @media (max-width: 480px) { .family-shell { padding: 12px; } .session-controls label { flex-basis: 100%; } }

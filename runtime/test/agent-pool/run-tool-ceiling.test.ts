@@ -104,6 +104,7 @@ test("run tool ceiling rejects owners without complete tool controls", () => {
 
 test('family ceiling is mandatory, intersects narrower callers and survives reactivation/replacement', () => {
   const identity: ExecutionIdentity = { mode: 'family-shared', username: 'alice', displayName: 'Alice', role: 'admin', rootChatJid: 'web:alice',
+    toolPolicy: { revision: 0, allowed: FAMILY_WEB_TOOLS, denied: [] },
     provenance: { kind: 'interactive', actorUserId: 'alice', ownerUserId: 'alice', chatJid: 'web:alice', authenticationSessionId: 'login' } };
   withExecutionIdentity(identity, () => {
     for (const filter of [undefined, () => true, (name: string) => name === 'read']) {

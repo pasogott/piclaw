@@ -1,11 +1,12 @@
 import type { AdministrationSettings } from '../../src/core/administration-settings.js';
 import type { AdminSecurity, AdminSecurityRevocation } from '../../src/core/admin-security.js';
 import type { AdminHome } from '../../src/core/admin-home.js';
+import type { AdminToolPolicy } from '../../src/core/family-tool-restrictions.js';
 import { FamilyApi } from './family-api.js';
 
 const node = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 type User = AdministrationSettings['users'][number];
-type Action = Exclude<keyof User['capabilities'], 'inspect_security' | 'assign_home'>;
+type Action = Exclude<keyof User['capabilities'], 'inspect_security' | 'assign_home' | 'restrict_tools'>;
 const labels: Record<Action, string> = { disable: 'Disable', enable: 'Reactivate', change_role: 'Change role', invite: 'Issue invitation', revoke_invitation: 'Revoke invitation', reset: 'Reset account' };
 
 /** No foreign conversation links, stored grants, automatic retries or impersonation. */
@@ -28,6 +29,7 @@ export class FamilyAdministration {
   private generation = 0;
   private canCreate = false;
   private expiry: ReturnType<typeof setTimeout> | null = null;
+  private toolPolicy: AdminToolPolicy | null = null;
 
   constructor(private api: FamilyApi) {
     node('open-administration').addEventListener('click', () => { this.opened = true; this.paused = false; void this.load(true); });
@@ -35,6 +37,18 @@ export class FamilyAdministration {
     node('refresh-administration').addEventListener('click', () => { void this.load(); });
     node('close-administration-security').addEventListener('click', () => { this.generation++; this.clearSecurity(); this.resetAction(); });
     node('close-administration-home').addEventListener('click', () => { this.generation++; this.clearHome(); this.resetAction(); });
+    node('close-administration-tools').addEventListener('click', () => { this.generation++; this.clearTools(); });
+    const toolConfirmState = () => { node<HTMLButtonElement>('save-administration-tools').disabled = this.busy || !this.toolPolicy
+      || !node<HTMLInputElement>('administration-tools-confirm').checked || node<HTMLInputElement>('administration-tools-username').value !== this.toolPolicy.user.username; };
+    node('administration-tools-confirm').addEventListener('change', toolConfirmState);
+    node('administration-tools-username').addEventListener('input', toolConfirmState);
+    node('administration-tools-form').addEventListener('submit', event => {
+      event.preventDefault();
+      if (!this.toolPolicy || this.busy || !this.visible() || node<HTMLButtonElement>('save-administration-tools').disabled) return;
+      const policy = this.toolPolicy;
+      const denied = Array.from(node('administration-tools-list').querySelectorAll<HTMLInputElement>('input:checked')).map(input => input.value);
+      void this.mutate(`/admin/users/${encodeURIComponent(policy.user.id)}/tools`, 'PATCH', { confirm_username: policy.user.username, expected_revision: policy.policy.revision, denied_tools: denied });
+    });
     node('clear-administration-invitation').addEventListener('click', () => this.clearGrant());
     node('cancel-administration-action').addEventListener('click', () => this.resetAction());
     const confirmState = () => { node<HTMLButtonElement>('submit-administration-action').disabled = this.busy || !this.confirm.checked || this.confirmationName.value !== this.selected?.user.username; };
@@ -72,6 +86,7 @@ export class FamilyAdministration {
     node<HTMLButtonElement>('submit-administration-action').disabled = true;
   }
   private clear(): void {
+    this.clearTools();
     this.clearHome();
     this.clearSecurity();
     this.generation++; this.clearGrant(); this.resetAction(); this.root.hidden = true; this.list.replaceChildren();
@@ -90,6 +105,7 @@ export class FamilyAdministration {
   private choose(user: User, action: Action): void {
     if (!this.visible() || this.busy || user.capabilities[action] !== true) return;
     this.generation++; this.clearSecurity();
+    this.clearTools();
     this.clearHome();
     this.clearGrant(); this.resetAction(); this.selected = { user, action }; this.form.hidden = false;
     this.confirm.disabled = this.confirmationName.disabled = false;
@@ -122,6 +138,8 @@ export class FamilyAdministration {
       security.addEventListener('click', () => { void this.loadSecurity(user); }); buttons.append(security);
       const home = document.createElement('button'); home.type = 'button'; home.textContent = 'Home'; home.disabled = user.capabilities.assign_home !== true;
       home.addEventListener('click', () => { void this.loadHome(user); }); buttons.append(home);
+      const tools = document.createElement('button'); tools.type = 'button'; tools.textContent = 'Tool restrictions'; tools.disabled = user.capabilities.restrict_tools !== true;
+      tools.addEventListener('click', () => { void this.loadTools(user); }); buttons.append(tools);
       row.append(title, buttons); this.list.append(row);
     }
   }
@@ -132,8 +150,33 @@ export class FamilyAdministration {
   private clearHome(): void {
     node('administration-home').hidden = true; node('administration-home-title').textContent = ''; node('administration-home-roots').replaceChildren();
   }
+  private clearTools(): void {
+    this.toolPolicy = null; node('administration-tools').hidden = true; node('administration-tools-title').textContent = '';
+    node('administration-tools-list').replaceChildren(); node<HTMLInputElement>('administration-tools-username').value = '';
+    node<HTMLInputElement>('administration-tools-confirm').checked = false; node<HTMLButtonElement>('save-administration-tools').disabled = true;
+  }
+  private async loadTools(user: User): Promise<void> {
+    if (!this.visible() || this.busy || user.capabilities.restrict_tools !== true) return;
+    this.clearTools(); this.clearHome(); this.clearSecurity(); this.clearGrant(); this.resetAction(); const generation = ++this.generation;
+    this.status.textContent = 'Loading tool restrictions…';
+    try {
+      const value: AdminToolPolicy = await this.api.request(`/admin/users/${encodeURIComponent(user.id)}/tools`);
+      if (!this.visible() || generation !== this.generation) return;
+      if (value?.user?.id !== user.id || value.user.username !== user.username || !Array.isArray(value.ceiling) || !Array.isArray(value.policy?.denied)
+        || !Number.isSafeInteger(value.policy.revision) || value.policy.revision < 0) throw new Error('Invalid tool policy. Refresh before continuing.');
+      this.toolPolicy = value; node('administration-tools').hidden = false;
+      node('administration-tools-title').textContent = `Tool restrictions for @${user.username} · revision ${value.policy.revision}`;
+      for (const name of value.ceiling) {
+        const label = document.createElement('label'), input = document.createElement('input'); input.type = 'checkbox'; input.value = name; input.checked = value.policy.denied.includes(name);
+        label.append(input, document.createTextNode(` Deny ${name}`)); node('administration-tools-list').append(label);
+      }
+      node<HTMLInputElement>('administration-tools-username').disabled = false; node<HTMLInputElement>('administration-tools-confirm').disabled = false;
+      node<HTMLButtonElement>('close-administration-tools').disabled = false; this.status.textContent = '';
+    } catch (error) { if (this.visible() && generation === this.generation) this.status.textContent = (error as Error).message; }
+  }
   private async loadHome(user: User): Promise<void> {
     if (!this.visible() || this.busy || user.capabilities.assign_home !== true) return;
+    this.clearTools();
     this.clearHome(); this.clearSecurity(); this.clearGrant(); this.resetAction(); const generation = ++this.generation;
     this.status.textContent = 'Loading eligible home roots…';
     try {
@@ -163,6 +206,7 @@ export class FamilyAdministration {
   }
   private async loadSecurity(user: User): Promise<void> {
     if (!this.visible() || this.busy || user.capabilities.inspect_security !== true) return;
+    this.clearTools();
     this.clearHome();
     this.clearGrant(); this.clearSecurity(); this.resetAction(); const generation = ++this.generation;
     this.status.textContent = 'Loading account security…';
@@ -223,7 +267,7 @@ export class FamilyAdministration {
       if (!this.visible() || generation !== this.generation) return;
       const snapshot = await this.api.request('/admin/users/settings');
       if (!this.visible() || generation !== this.generation) return;
-      this.resetAction(); this.clearSecurity(); this.clearHome(); this.username.value = ''; this.displayName.value = ''; this.role.value = 'member'; this.render(snapshot);
+      this.resetAction(); this.clearSecurity(); this.clearHome(); this.clearTools(); this.username.value = ''; this.displayName.value = ''; this.role.value = 'member'; this.render(snapshot);
       this.status.textContent = grant ? 'Invitation issued. Copy the link privately now; blur or close clears it.' : 'Account change saved.';
       if (grant) this.showGrant(result);
     } catch (error) {
