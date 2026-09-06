@@ -10,6 +10,7 @@ import {handleCliOptions} from '../src/cli.js';
 import {readAccessState} from '../src/db/access-state.js';
 import {readAccessMigrationInventory} from '../src/db/access-migration-plan.js';
 import {adoptedJsonl} from './agent-pool/adopted-session-fixture.js';
+import {RESOURCE_MIGRATION_POLICY} from '../src/db/access-resource-migration.js';
 
 let ws:ReturnType<typeof createTempWorkspace>,restore:()=>void,source:string,dir:string,original:typeof console.log,logs:string[];
 beforeEach(()=>{
@@ -62,4 +63,12 @@ test('child adoption refuses hash/path/parent/pending-seed mismatches and never 
   const fixture=adoptedJsonl(ws.workspace,parent),file=join(childDir,'child.jsonl');writeFileSync(file,fixture.jsonl);const inventory=preview();
   for(const entry of [{chat_jid:'web:child',file,sha256:'0'.repeat(64)},{chat_jid:'web:default',file,sha256:fixture.sha256},{chat_jid:'web:child',file:parent,sha256:fixture.sha256}]){writeFileSync(join(dir,'plan.json'),JSON.stringify({...inventory.plan,version:2,child_sessions:[entry]}));expect(()=>handleAccessMigration(args())).toThrow();expect(existsSync(join(dir,'prepared.sqlite'))).toBe(false);}
   writeFileSync(join(dir,'plan.json'),JSON.stringify({...inventory.plan,version:2,child_sessions:[{chat_jid:'web:child',file,sha256:fixture.sha256}]}));writeFileSync(join(childDir,'.branch-seed.json'),'{}');expect(()=>handleAccessMigration(args())).toThrow('Pending legacy');
+});
+
+test('version-three copy revokes only copied login state and quarantines media without changing source',()=>{
+  const db=new Database(source);db.query("INSERT INTO web_sessions(token,user_id,created_at,expires_at,session_id) VALUES ('SOURCE_SECRET','default','now','later','source-login')").run();db.query("INSERT INTO media(filename,content_type,data) VALUES ('private.png','image/png',?)").run(new Uint8Array([1]));db.close();
+  const inventory=preview(),before=digest();writeFileSync(join(dir,'plan.json'),JSON.stringify({...inventory.plan,version:3,child_sessions:[],resource_policy:RESOURCE_MIGRATION_POLICY}));handleAccessMigration(args());expect(digest()).toBe(before);
+  const copy=new Database(join(dir,'prepared.sqlite'),{readonly:true}),originalDb=new Database(source,{readonly:true});
+  try {expect(copy.query('SELECT count(*) n FROM web_sessions').get()).toEqual({n:0});expect(originalDb.query('SELECT count(*) n FROM web_sessions').get()).toEqual({n:1});expect(copy.query('SELECT reason FROM migration_media_quarantine').get()).toEqual({reason:'unlinked'});expect(()=>readAccessState(copy)).toThrow();}finally{copy.close();originalDb.close();}
+  expect(logs.join('\n')).not.toContain('SOURCE_SECRET');expect(readFileSync(join(dir,'inventory.json'),'utf8')).not.toContain('SOURCE_SECRET');
 });
