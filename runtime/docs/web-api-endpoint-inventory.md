@@ -18,9 +18,9 @@ For `src/channels/web/request-router-service.ts`, route order depends on access 
 
 - `/api/addons/<id>/*` uses package-owned registrations and protocol-specific authentication. Remote pairing/messaging lives in the [Remote Peer add-on](https://rcarmo.github.io/piclaw-addons/addons/remote-peer/); the old core `/api/remote/*` inventory is obsolete.
 - GET `/api/state` and `/api/state/events` use widget Bearer-token authentication, not browser cookies.
-- Terminal and VNC WebSocket upgrades run through `server-lifecycle-gateway-service.ts` before ordinary HTTP dispatch. They have separate authentication/Origin checks, but full family owner scope is unfinished.
+- Terminal and VNC WebSocket upgrades run through `server-lifecycle-gateway-service.ts` before ordinary HTTP dispatch. They retain single-user authentication/Origin checks and explicitly reject family/isolated mode before target resolution or upgrade; owner-scoped remote sessions are not enabled.
 
-Family HTTP currently denies add-on/widget-state and terminal/VNC session routes. This does not establish complete protection for separate upgrades, tools or transports; retain the startup gate.
+Family HTTP currently denies add-on/widget-state and terminal/VNC session routes. Separate WebSocket methods also deny multi-user mode. Direct card and HTTP side-prompt handlers deny before parsing payloads, so an old TOTP card cannot mutate shared auth state through that service. Other tool/transport boundaries still require integration; retain the startup gate.
 
 The route tables below describe single-user guards unless explicitly marked family. “Authenticated” means the configured single-user authentication gate; auth-disabled single-user instances remain possible.
 
@@ -311,7 +311,7 @@ The main router uses these controls:
 
 ### Separate-entry-point caveat
 
-Add-on external routes and widget-state endpoints have their own authentication in single-user operation. Direct WebSocket upgrades are outside ordinary HTTP dispatch. Family HTTP denies unsupported routes, but complete ownership enforcement across upgrades, tools, queues and transports remains a release prerequisite.
+Add-on external routes and widget-state endpoints have their own authentication in single-user operation. Direct WebSocket upgrades are outside ordinary HTTP dispatch and reject multi-user mode explicitly. Family HTTP and direct card/side-prompt services deny unsupported routes; complete owner-aware replacements and enforcement across tools, queues and transports remain release prerequisites.
 
 ## Follow-up candidates
 
