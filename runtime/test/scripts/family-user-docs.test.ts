@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 const root=join(import.meta.dir,'../../..');
-const paths=['docs/multi-user/user-guide.md','docs/multi-user/administrator-guide.md','docs/multi-user/troubleshooting.md','docs/multi-user/migration-copy.md','docs/multi-user/operator-recovery.md','docs/multi-user/README.md'];
+const paths=['docs/multi-user/user-guide.md','docs/multi-user/administrator-guide.md','docs/multi-user/troubleshooting.md','docs/multi-user/migration-copy.md','docs/multi-user/operator-recovery.md','docs/multi-user/README.md','docs/multi-user/scheduled-execution.md'];
 const read=(path:string)=>readFileSync(resolve(root,path),'utf8');
 const stripCode=(text:string)=>text.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm,'');
 function headings(text:string):string[]{return [...stripCode(text).matchAll(/^#{1,6} (.+)$/gm)].map(m=>m[1]!.toLowerCase().replace(/<[^>]*>/g,'').replace(/[^\p{L}\p{N}\s_-]/gu,'').replace(/\s/g,'-'));}
