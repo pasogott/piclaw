@@ -205,6 +205,7 @@ test("tree Settings exposes only owned metadata with active-home and graph eligi
   const caps = (jid: string) => snapshot.branches.find(b => b.chat_jid === jid)!.capabilities;
   expect(snapshot.capabilities.create_root).toBe(true); expect(snapshot.home_chat_jid).toBe(alice.homeChatJid);
   expect(caps(alice.homeChatJid!).archive).toBe(false); expect(caps(alice.homeChatJid!).set_home).toBe(false);
+  expect(caps(alice.homeChatJid!).download_transcript).toBe(false);
   expect(caps(root.chat_jid).set_home).toBe(true); expect(caps(fork.chat_jid).set_home).toBe(false);
   expect(caps(root.chat_jid).archive).toBe(false); expect(caps(fork.chat_jid).archive).toBe(false); expect(caps(nested.chat_jid).archive).toBe(true);
   expect(JSON.stringify(snapshot)).not.toContain(bob.homeChatJid!); expect(JSON.stringify(snapshot)).not.toContain('seed_json');
@@ -212,6 +213,7 @@ test("tree Settings exposes only owned metadata with active-home and graph eligi
   snapshot = readOwnedSessionSettings(db, alice);
   expect(caps(root.chat_jid).restore).toBe(true); expect(caps(fork.chat_jid).restore).toBe(false);
   expect(caps(root.chat_jid).open).toBe(false); expect(caps(root.chat_jid).fork).toBe(false);
+  expect(caps(root.chat_jid).download_transcript).toBe(true); expect(caps(fork.chat_jid).download_transcript).toBe(true);
   restoreOwnedSession(db, alice, root.chat_jid); snapshot = readOwnedSessionSettings(db, alice); expect(caps(fork.chat_jid).restore).toBe(true);
   db.query('UPDATE web_sessions SET created_at=? WHERE session_id=?').run(new Date(Date.now()-600_000).toISOString(), alice.authentication.sessionId!);
   snapshot = readOwnedSessionSettings(db, alice); expect(caps(root.chat_jid).set_home).toBe(false); expect(caps(root.chat_jid).rename).toBe(true);

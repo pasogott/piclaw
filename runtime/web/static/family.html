@@ -90,6 +90,16 @@
         <button id="submit-session-action" type="submit">Save session change</button><button id="cancel-session-action" type="button">Cancel</button>
       </form>
       <ul id="owned-tree-list"></ul>
+      <section id="transcript-export" class="account-section" aria-labelledby="transcript-heading" hidden>
+        <h3 id="transcript-heading" tabindex="-1">Archived text transcript</h3><p id="transcript-target"></p>
+        <p>This download contains private conversation text. It excludes attachments, rich blocks, annotations, tasks, settings and session files. It is not a full backup or an atomic database snapshot. Each message is limited to 32,000 characters; truncation is marked. Maximum: 2,000 messages and 8 MiB; larger exports fail without a partial file.</p>
+        <label><input id="transcript-confirm" type="checkbox" /> I understand the limits and will protect the downloaded file</label>
+        <button id="prepare-transcript" type="button" disabled>Prepare transcript</button>
+        <button id="save-transcript" type="button" disabled>Save text file</button>
+        <button id="cancel-transcript" type="button">Cancel transcript</button>
+        <p id="transcript-status" role="status" aria-live="polite"></p>
+        <p>Close, blur, refresh or changing session discards prepared text. A file already downloaded cannot be recalled by signing out.</p>
+      </section>
       <p class="notice">Eligibility is checked again on every write. Archive/restore require an idle session; forks require a stable turn boundary. Merge, purge and full archive backup are not available.</p>
     </section>
     <section id="administration-settings" aria-labelledby="administration-heading" hidden>

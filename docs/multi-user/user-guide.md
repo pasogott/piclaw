@@ -174,11 +174,26 @@ Choose **Archive**, review the warning and confirm. The session must be idle, ca
 
 Archiving retains history, files and ownership but removes normal active access. Choose **Restore** under an active parent to bring it back. If its old handle is taken, supply another name and save. Restore does not automatically open or execute the session.
 
-Merge, purge/delete and full archive backup are not available in this panel. The developer API offers a bounded text-only archived transcript export; it is not a full backup or a family UI download feature.
+Merge, purge/delete and full archive backup are not available in this panel.
+
+### Download an archived transcript
+
+1. Open **My sessions** and choose **Download transcript** beside one of your archived sessions.
+2. Check the session name and read the privacy and size limits. Check the confirmation.
+3. Choose **Prepare transcript** and wait. This reads the pages into browser memory; it has not saved a file yet.
+4. Choose **Save text file** to request the download. Piclaw checks your login and the archive again before saving.
+
+The text file contains up to 2,000 messages and is limited to 8 MiB, including headings. Each message is limited to 32,000 characters; shortened messages are marked. Larger exports fail without preparing a partial file. Empty archives can be downloaded.
+
+The file excludes attachments, rich content, annotations, thread links, tasks, settings, add-on state and session files. Pages are read separately, so the result is not an atomic database snapshot. Use the operator's backup procedure for a complete backup.
+
+**Cancel transcript**, closing or refreshing **My sessions**, losing tab focus, switching sessions or navigating away discards prepared text and cancels pending requests. This leaves the stored conversation unchanged. Prepare the transcript again if needed. A downloaded file stays on your device; signing out cannot recall it. Protect it as private conversation data.
 
 ## Browser state and privacy
 
-The family shell keeps choices and drafts in page memory. It does not save them in browser local or session storage. Closing or reloading the page can lose unsaved work. Account and session settings clear when the tab loses focus, a panel closes, you switch sessions or you navigate away. The page hides private UI while it checks your identity again. Sign out before leaving a shared device.
+**Conversations and saved settings persist on the server.** Closing a tab does not delete messages, session names, ownership, forks, archives, saved preferences or avatars. After signing in again, you can reopen your owned sessions.
+
+The browser keeps unsent messages, unsaved form edits and prepared transcripts in page memory. It does not save these in local storage or session storage. Reloading, navigating away or invalidating the account clears unsent messages. Unsaved account and session forms also clear when a panel closes or the tab loses focus. The page hides private UI while it checks your identity again. Sign out before leaving a shared device.
 
 A request already sent may finish after you close its panel or tab. On return, refresh the relevant list to see what happened before repeating a change. Late responses from a different login are not allowed to repopulate the old account's UI.
 

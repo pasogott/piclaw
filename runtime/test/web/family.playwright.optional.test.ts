@@ -1,6 +1,7 @@
 import { beforeAll, afterAll, expect, test } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
 import { join } from "node:path";
+import { readFileSync } from 'node:fs';
 import sharp from 'sharp';
 import type { SessionSettings } from '../../src/core/session-settings.js';
 import type { AdministrationSettings } from '../../src/core/administration-settings.js';
@@ -990,6 +991,141 @@ async function openTrees(page: Page) {
   await page.goto(base); await ready(page); await page.locator('#open-sessions').click();
   await page.waitForFunction(() => document.querySelectorAll('#owned-tree-list li').length > 0);
 }
+
+async function transcriptFixture(page:Page) {
+  const fixture=await treeFixture(page),branch=fixture.snapshot.branches[1]!;
+  branch.archived_at='2026-09-06T00:00:00.000Z';branch.capabilities={open:false,fork:false,rename:false,archive:false,restore:true,set_home:false,download_transcript:true};
+  const response=(ids:number[],hasMore=false)=>({schema:'piclaw.owned-transcript.v1',branch:{...branch},messages:ids.map(id=>({id,timestamp:'2026-09-06T00:00:00.000Z',sender_name:'Alice',is_bot_message:0,content:`TEXT_${id}`,content_truncated:id===1?1:0})),page:{limit:100,has_more:hasMore,next_before:hasMore?ids[0]:null},omitted:['media','tasks']});
+  const calls:Array<{url:string;headers:Record<string,string>}>=[];
+  await page.route('**/agent/branch-download?**',route=>{calls.push({url:route.request().url(),headers:route.request().headers()});return route.fulfill({json:new URL(route.request().url()).searchParams.has('before')?response([1,2]):response([3,4],true)});});
+  return {...fixture,branch,response,calls};
+}
+async function startTranscript(page:Page) {
+  await openTrees(page);await page.locator('#owned-tree-list li').nth(1).getByRole('button',{name:'Download transcript',exact:true}).click();
+  await page.locator('#transcript-confirm').check();await page.locator('#prepare-transcript').click();
+}
+
+browserTest('archived transcript prepares pinned ordered pages, explicitly downloads plain text and revokes private blob URLs',async()=>{
+  const page=await browser.newPage({viewport:{width:375,height:740}});let downloads=0;page.on('download',()=>downloads++);
+  try {
+    const fixture=await transcriptFixture(page);
+    await page.addInitScript(()=>{const revoke=URL.revokeObjectURL;(window as any).revoked=[];URL.revokeObjectURL=url=>{(window as any).revoked.push(url);revoke(url);};});
+    await openTrees(page);expect(await page.locator('#owned-tree-list li').first().getByRole('button',{name:'Download transcript',exact:true}).isDisabled()).toBe(true);
+    await page.locator('#owned-tree-list li').nth(1).getByRole('button',{name:'Download transcript',exact:true}).click();expect(fixture.calls).toHaveLength(0);expect(await page.locator('#prepare-transcript').isDisabled()).toBe(true);
+    await page.locator('#transcript-confirm').check();await page.locator('#prepare-transcript').click();await page.waitForFunction(()=>!(document.getElementById('save-transcript') as HTMLButtonElement)?.disabled);
+    expect(downloads).toBe(0);expect(fixture.calls).toHaveLength(2);expect(fixture.calls[1]!.url).toContain('before=3');expect(fixture.calls.every(c=>c.headers['x-piclaw-account-id']==='alice'&&c.headers['x-piclaw-login-id']==='login-a')).toBe(true);
+    expect(await page.locator('#transcript-status').textContent()).toContain('Prepared 4 messages (1 truncated)');expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    const download=page.waitForEvent('download');await page.locator('#save-transcript').click();const file=await download;expect(file.suggestedFilename()).toBe('piclaw-transcript-alice-two.txt');
+    const text=readFileSync((await file.path())!,'utf8');expect(text).toContain('not a full backup');expect(text).toContain('[Message truncated by export]');expect(text.indexOf('TEXT_1')).toBeLessThan(text.indexOf('TEXT_2'));expect(text.indexOf('TEXT_2')).toBeLessThan(text.indexOf('TEXT_3'));expect(text.indexOf('TEXT_3')).toBeLessThan(text.indexOf('TEXT_4'));
+    expect(await page.locator('#session-select').inputValue()).toBe('web:alice');expect(await page.evaluate(()=>[localStorage.length,sessionStorage.length])).toEqual([0,0]);
+    await page.locator('#cancel-transcript').click();expect(await page.evaluate(()=>(window as any).revoked.length)).toBe(1);expect(await page.locator('#transcript-status').textContent()).toBe('');await file.delete();
+  }finally{await page.close();}
+},20000);
+
+browserTest('transcript cancellation/blur/close discards held pages and prevents late download readiness',async()=>{
+  for(const action of ['cancel','blur','close']){
+    const page=await browser.newPage();let downloaded=false;page.on('download',()=>downloaded=true);
+    try {
+      const fixture=await transcriptFixture(page);let entered!:()=>void,release!:()=>void;const waiting=new Promise<void>(r=>entered=r),held=new Promise<void>(r=>release=r);
+      await page.route('**/agent/branch-download?**',async route=>{entered();await held;await route.fulfill({json:fixture.response([1])});});
+      await startTranscript(page);await waiting;
+      if(action==='cancel')await page.locator('#cancel-transcript').click();else if(action==='close')await page.locator('#close-sessions').click();else await page.evaluate(()=>dispatchEvent(new Event('blur')));
+      release();await page.waitForTimeout(100);expect(downloaded).toBe(false);expect(await page.locator('#save-transcript').isDisabled()).toBe(true);expect(await page.locator('#transcript-export').isVisible()).toBe(false);expect(await page.locator('#transcript-status').textContent()).toBe('');
+    }finally{await page.close();}
+  }
+},20000);
+
+browserTest('archive restoration and replaced login prevent saving an already prepared transcript',async()=>{
+  for(const change of ['restore','login']){
+    const page=await browser.newPage();let downloaded=false;page.on('download',()=>downloaded=true);
+    try{
+      const fixture=await transcriptFixture(page);await startTranscript(page);await page.waitForFunction(()=>!(document.getElementById('save-transcript') as HTMLButtonElement)?.disabled);
+      if(change==='restore'){fixture.branch.archived_at=null;fixture.branch.capabilities.download_transcript=false;}else fixture.state.identity=principal('bob','login-b');
+      await page.locator('#save-transcript').click();
+      if(change==='restore')await page.waitForFunction(()=>document.getElementById('transcript-status')?.textContent?.includes('Nothing was downloaded'));else await page.waitForFunction(()=>document.getElementById('family-status')?.textContent?.includes('no longer bound'));
+      expect(downloaded).toBe(false);expect(await page.locator('#save-transcript').isDisabled()).toBe(true);
+    }finally{await page.close();}
+  }
+},20000);
+
+browserTest('transcript malformed pages, duplicate pagination and message cap fail without partial file',async()=>{
+  for(const kind of ['foreign','cursor','limit','empty']){
+    const page=await browser.newPage();let count=0,downloads=0;page.on('download',()=>downloads++);
+    try {
+      const fixture=await transcriptFixture(page);await page.route('**/agent/branch-download?**',route=>{
+        count++;const value=kind==='limit'?fixture.response(Array.from({length:100},(_,i)=>3000-count*100+i),true):fixture.response(kind==='empty'?[]:[1],kind==='cursor');
+        if(kind==='foreign')value.branch.chat_jid='web:bob';if(kind==='cursor')value.page.next_before=2;
+        return route.fulfill({json:value});
+      });
+      await startTranscript(page);
+      if(kind==='empty'){await page.waitForFunction(()=>!(document.getElementById('save-transcript') as HTMLButtonElement)?.disabled);expect(await page.locator('#transcript-status').textContent()).toContain('Prepared 0 messages');}
+      else {await page.waitForFunction(()=>document.getElementById('transcript-status')?.textContent?.includes('Close and refresh'));expect(await page.locator('#save-transcript').isDisabled()).toBe(true);}
+      expect(downloads).toBe(0);expect(count).toBe(kind==='limit'?20:1);
+    }finally{await page.close();}
+  }
+},30000);
+
+browserTest('transcript accepts exactly 2000 messages and enforces UTF-8 byte bounds including empty-export headers',async()=>{
+  for(const kind of ['exact-count','utf8-limit','header-limit']){
+    const page=await browser.newPage();let pages=0,downloads=0;page.on('download',()=>downloads++);
+    try {
+      const fixture=await transcriptFixture(page);
+      if(kind==='header-limit')fixture.branch.agent_name='x'.repeat(8*1024*1024);
+      await page.route('**/agent/branch-download?**',route=>{
+        pages++;const ids=kind==='header-limit'?[]:Array.from({length:100},(_,i)=>2001-pages*100+i);
+        const value=fixture.response(ids,kind==='exact-count'?pages<20:kind==='utf8-limit');
+        if(kind==='utf8-limit')for(const message of value.messages)message.content='😀'.repeat(32000);
+        return route.fulfill({json:value});
+      });
+      await startTranscript(page);
+      if(kind==='exact-count'){
+        await page.waitForFunction(()=>!(document.getElementById('save-transcript') as HTMLButtonElement)?.disabled);
+        expect(await page.locator('#transcript-status').textContent()).toContain('Prepared 2000 messages');expect(pages).toBe(20);
+        const downloading=page.waitForEvent('download');await page.locator('#save-transcript').click();const file=await downloading;
+        const text=readFileSync((await file.path())!,'utf8');expect(text.match(/^--- Message /gm)).toHaveLength(2000);
+        expect(text.indexOf('TEXT_1\n')).toBeLessThan(text.indexOf('TEXT_2000\n'));await file.delete();
+      }else{
+        await page.waitForFunction(()=>document.getElementById('transcript-status')?.textContent?.includes('8 MiB limit'));
+        expect(await page.locator('#save-transcript').isDisabled()).toBe(true);expect(downloads).toBe(0);expect(pages).toBe(kind==='header-limit'?0:1);
+      }
+    }finally{await page.close();}
+  }
+},30000);
+
+browserTest('prepared transcript is discarded by focus loss, session refresh, navigation and target replacement',async()=>{
+  for(const action of ['blur','refresh','switch','close','navigate','replace']){
+    const page=await browser.newPage();let downloads=0;page.on('download',()=>downloads++);
+    try{
+      const fixture=await transcriptFixture(page);
+      fixture.snapshot.branches.push({...fixture.snapshot.branches[0]!,branch_id:'alice-third',chat_jid:'web:alice-third',root_chat_jid:'web:alice-third',agent_name:'third'});
+      await startTranscript(page);await page.waitForFunction(()=>!(document.getElementById('save-transcript') as HTMLButtonElement)?.disabled);
+      if(action==='blur')await page.evaluate(()=>dispatchEvent(new Event('blur')));
+      else if(action==='refresh')await page.locator('#refresh-sessions').click();
+      else if(action==='switch')await page.locator('#session-select').selectOption('web:alice-third');
+      else if(action==='close')await page.locator('#close-sessions').click();
+      else if(action==='navigate')await page.goto(base+'/blank');
+      else await page.locator('#owned-tree-list li').nth(1).getByRole('button',{name:'Download transcript',exact:true}).click();
+      if(action!=='navigate'){
+        expect(await page.locator('#save-transcript').isDisabled()).toBe(true);expect(await page.locator('#transcript-status').textContent()).toBe('');
+        expect(await page.locator('#transcript-confirm').isChecked()).toBe(false);
+      }
+      expect(downloads).toBe(0);
+    }finally{await page.close();}
+  }
+},30000);
+
+browserTest('transcript cancellation during save-time archive check cannot create a late blob or download',async()=>{
+  const page=await browser.newPage();let downloads=0;page.on('download',()=>downloads++);
+  try{
+    const fixture=await transcriptFixture(page);await startTranscript(page);await page.waitForFunction(()=>!(document.getElementById('save-transcript') as HTMLButtonElement)?.disabled);
+    await page.evaluate(()=>{const create=URL.createObjectURL;(window as any).blobs=0;URL.createObjectURL=blob=>{(window as any).blobs++;return create(blob);};});
+    let entered!:()=>void,release!:()=>void;const waiting=new Promise<void>(r=>entered=r),held=new Promise<void>(r=>release=r);
+    await page.route('**/account/trees',async route=>{entered();await held;await route.fulfill({json:fixture.snapshot});});
+    await page.locator('#save-transcript').click();await waiting;await page.locator('#cancel-transcript').click();release();await page.waitForTimeout(100);
+    expect(downloads).toBe(0);expect(await page.evaluate(()=>(window as any).blobs)).toBe(0);
+    expect(await page.locator('#save-transcript').isDisabled()).toBe(true);expect(await page.locator('#transcript-status').textContent()).toBe('');
+  }finally{await page.close();}
+},20000);
 
 browserTest('owned session Settings creates, renames, selects home, archives and restores without implicit navigation', async () => {
   const page = await browser.newPage({ viewport: { width: 768, height: 1024 } });

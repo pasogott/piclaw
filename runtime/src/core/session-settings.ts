@@ -5,6 +5,6 @@ export interface SessionSettings {
   branches: {
     branch_id: string; chat_jid: string; root_chat_jid: string; parent_branch_id: string | null;
     agent_name: string; archived_at: string | null;
-    capabilities: { open: boolean; fork: boolean; rename: boolean; archive: boolean; restore: boolean; set_home: boolean };
+    capabilities: { open: boolean; fork: boolean; rename: boolean; archive: boolean; restore: boolean; set_home: boolean; download_transcript?: boolean };
   }[];
 }
