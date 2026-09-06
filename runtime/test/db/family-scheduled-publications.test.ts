@@ -7,7 +7,7 @@ import { closeDatabase, getDb, initDatabase } from "../../src/db/connection.js";
 import { createWebSession } from "../../src/db/web-sessions.js";
 import { createFamilyScheduledTask, revokeFamilyScheduledGrant } from "../../src/db/family-scheduled-grants.js";
 import { claimFamilyScheduledOccurrence } from "../../src/db/family-scheduled-occurrences.js";
-import { beginFamilyScheduledExecution, settleFamilyScheduledExecution } from "../../src/db/family-scheduled-executions.js";
+import { beginFamilyScheduledExecution, settleFamilyScheduledExecution, listOwnFamilyScheduledResults } from "../../src/db/family-scheduled-executions.js";
 import { publishOwnFamilyScheduledResult as publish } from "../../src/db/family-scheduled-publications.js";
 import { provisionFamilyAccount, updateManagedAccount } from "../../src/db/account-administration.js";
 import { createOwnedRoot, archiveOwnedSession } from "../../src/db/owned-session-lifecycle.js";
@@ -172,4 +172,36 @@ test("HTTP persistence failures return retryable server error without a partial 
   const response=await r.handle(request(path,alice,"POST",'{"confirm":true}'));expect(response.status).toBe(500);expect(JSON.stringify(await response.json())).not.toContain("fixture storage");
   expect(db.query("SELECT count(*) n FROM messages").get()).toEqual({n:0});db.exec("DROP TRIGGER fail_http_publication");
   expect((await r.handle(request(path,alice,"POST",'{"confirm":true}'))).status).toBe(201);
+});
+
+test("result directory filters by owner and active original target before returning metadata only",async()=>{
+  const db=getDb(),owned=await ready(),pending=await ready('',alice.homeChatJid!,'success',false);
+  const root=createOwnedRoot(db,alice,'hidden-result'),archived=await ready('archive secret',root.chat_jid);archiveOwnedSession(db,alice,root.chat_jid);
+  const savedAlice=alice;alice=bob;const foreign=await ready('foreign secret');alice=savedAlice;
+  publish(db,alice,owned.execution_id);
+  const directory=listOwnFamilyScheduledResults(db,alice),text=JSON.stringify(directory);
+  expect(directory).toMatchObject({owner_user_id:alice.userId,window_size:50});expect(directory.items).toHaveLength(2);
+  expect(directory.items.find(row=>row.execution_id===owned.execution_id)).toMatchObject({state:'settled',publication_recorded:true});
+  expect(directory.items.find(row=>row.execution_id===pending.execution_id)?.state).toBe('unsettled');
+  for(const excluded of [archived.execution_id,foreign.execution_id,'private output','archive secret','foreign secret','settlement_token_hash','prompt'])expect(text).not.toContain(excluded);
+  expect(listOwnFamilyScheduledResults(db,admin).items).toEqual([]);
+  db.query('DELETE FROM web_sessions WHERE session_id=?').run(alice.authentication.sessionId!);expect(()=>listOwnFamilyScheduledResults(db,alice)).toThrow();
+});
+
+test("result directory has a bounded deterministic newest-owner window and does not parse result bodies",async()=>{
+  const db=getDb(),ids:string[]=[];
+  for(let i=0;i<51;i++)ids.push((await ready(`result-${i}`)).execution_id);
+  const list=listOwnFamilyScheduledResults(db,alice);expect(list.items).toHaveLength(50);expect(list.items.some(row=>row.execution_id===ids[0])).toBe(false);
+  expect(list.items[0].execution_id).toBe(ids.at(-1)!);
+  db.exec('DROP TRIGGER family_scheduled_result_immutable');db.query("UPDATE family_scheduled_results SET text='corrupt body' WHERE execution_id=?").run(ids.at(-1)!);
+  expect(listOwnFamilyScheduledResults(db,alice).items).toEqual(list.items);
+  const r=router();expect((await r.handle(request(`/agent/scheduled-results/${ids.at(-1)}`))).status).toBe(403);
+});
+
+test("directory HTTP is pinned GET-only with no caller-selected scope or pagination",async()=>{
+  await ready();const r=router(),path='/agent/scheduled-results';
+  const response=await r.handle(request(path));expect(response.status).toBe(200);expect(response.headers.get('cache-control')).toBe('private, no-store');expect((await response.json()).items).toHaveLength(1);
+  for(const suffix of ['?owner=bob','?chat_jid=web:bob','?limit=100','?before=1'])expect((await r.handle(request(path+suffix))).status).toBe(403);
+  expect((await r.handle(request(path,alice,'POST','{}'))).status).toBe(403);
+  const unpinned=request(path);unpinned.headers.delete('x-piclaw-account-id');unpinned.headers.delete('x-piclaw-login-id');expect((await r.handle(unpinned)).status).toBe(403);
 });

@@ -14,6 +14,7 @@
       <button id="open-account" type="button" disabled>My account</button>
       <button id="open-preferences" type="button" disabled>My preferences</button>
       <button id="open-sessions" type="button" disabled>My sessions</button>
+      <button id="open-results" type="button" disabled>Scheduled results</button>
       <button id="open-administration" type="button" hidden disabled>Family administration</button>
       <button id="open-workspace-policy" type="button" disabled>Workspace and security</button>
       <button id="sign-out" type="button" disabled>Sign out</button>
@@ -101,6 +102,20 @@
         <p>Close, blur, refresh or changing session discards prepared text. A file already downloaded cannot be recalled by signing out.</p>
       </section>
       <p class="notice">Eligibility is checked again on every write. Archive/restore require an idle session; forks require a stable turn boundary. Merge, purge and full archive backup are not available.</p>
+    </section>
+    <section id="scheduled-results" aria-labelledby="scheduled-results-heading" hidden>
+      <header><h2 id="scheduled-results-heading" tabindex="-1">Scheduled results</h2><button id="close-results" type="button">Close results</button></header>
+      <p class="notice">Development results only. Scheduling and automatic execution are not enabled. This panel does not create or run tasks.</p>
+      <p>Only metadata from the newest 50 owned execution records is listed; inaccessible targets are omitted. Inspect to load private result text. Closing, refreshing, switching sessions or losing focus clears text and confirmation.</p>
+      <button id="refresh-results" type="button">Refresh results</button><p id="scheduled-results-status" role="status" aria-live="polite"></p>
+      <ul id="scheduled-result-list" class="account-list"></ul>
+      <section id="scheduled-result-detail" class="account-section" hidden>
+        <h3 id="scheduled-result-detail-heading" tabindex="-1">Inspect scheduled result</h3>
+        <p id="scheduled-result-target"></p><p id="scheduled-result-state"></p><pre id="scheduled-result-text"></pre>
+        <p>Publishing adds one service-labelled message to the original conversation. It does not switch conversations, run an agent or send notifications. A sign-in within five minutes is required. A sent request may finish after you close this panel; refresh before retrying.</p>
+        <label><input id="confirm-result-publication" type="checkbox" disabled /> I confirm publication to the original conversation</label>
+        <button id="publish-result" type="button" disabled>Publish result</button>
+      </section>
     </section>
     <section id="administration-settings" aria-labelledby="administration-heading" hidden>
       <header><h2 id="administration-heading" tabindex="-1">Family administration</h2><button id="close-administration" type="button">Close administration</button></header>

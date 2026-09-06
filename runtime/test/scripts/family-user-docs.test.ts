@@ -22,11 +22,14 @@ test('family user/operator documentation links and anchors resolve without dupli
 
 test('family guides cover user controls, destructive effects and gated operator workflows',()=>{
   const user=read(paths[0]!),admin=read(paths[1]!),help=read(paths[2]!);
-  const source=['runtime/web/static/family.html','runtime/web/static/login.html','runtime/web/static/invitation.html','runtime/web/src/family-sessions.ts','runtime/web/src/family-administration.ts','runtime/web/src/family-account.ts','runtime/web/src/family.ts'].map(read).join('\n');
+  const source=['runtime/web/static/family.html','runtime/web/static/login.html','runtime/web/static/invitation.html','runtime/web/src/family-sessions.ts','runtime/web/src/family-administration.ts','runtime/web/src/family-account.ts','runtime/web/src/family-results.ts','runtime/web/src/family.ts'].map(read).join('\n');
   for(const label of ['My account','My preferences','My sessions','Sign out','Sign in with a passkey','Verify code','Begin authenticator setup','Create account passkey','Save profile','Save avatar','Add another passkey','Confirm authenticator','Save preferences','Save model defaults','Create root','Save session change','Set home','Archive','Restore','Retry held message','Dismiss legacy input without running']){
     expect(user).toContain(`**${label}**`);expect(source).toContain(label);
   }
   for(const label of ['Download transcript','Prepare transcript','Save text file','Cancel transcript']){
+    expect(user).toContain(`**${label}**`);expect(source).toContain(label);
+  }
+  for(const label of ['Scheduled results','Inspect result','Publish result','Refresh results','Close results']){
     expect(user).toContain(`**${label}**`);expect(source).toContain(label);
   }
   expect(user).toContain('Conversations and saved settings persist on the server');

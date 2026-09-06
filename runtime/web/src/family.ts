@@ -4,6 +4,7 @@ import { FamilySessions } from './family-sessions.js';
 import { FamilyAdministration } from './family-administration.js';
 import { FamilyWorkspace } from './family-workspace.js';
 import { FamilyPreferences } from './family-preferences.js';
+import { FamilyResults } from './family-results.js';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -25,6 +26,7 @@ let sessionSettings: FamilySessions | null = null;
 let administration: FamilyAdministration | null = null;
 let workspacePolicy: FamilyWorkspace | null = null;
 let preferences: FamilyPreferences | null = null;
+let results: FamilyResults | null = null;
 let directoryGeneration = 0;
 let refreshing: symbol | null = null, polling: ReturnType<typeof setInterval> | undefined;
 let pending: { text: string; chat: string; requestId: string } | null = null;
@@ -45,6 +47,7 @@ function mask(): void {
   administration?.suspend();
   workspacePolicy?.suspend();
   preferences?.suspend();
+  results?.suspend();
 }
 function invalidate(): void {
   if (stopped) return;
@@ -54,6 +57,7 @@ function invalidate(): void {
   administration?.stop();
   workspacePolicy?.stop();
   preferences?.stop();
+  results?.stop();
   if (polling) clearInterval(polling);
   select.replaceChildren(); compose.value = ''; pending = null; heldRow = null; recoveryRequest = null; confirmSkip.checked = false; recoveryStatus.textContent = ''; logout.disabled = true;
   status.textContent = 'This page is no longer bound to its original account.';
@@ -100,6 +104,7 @@ async function loadTimeline(): Promise<void> {
     element<HTMLButtonElement>('open-sessions').disabled = false; sessionSettings?.resume();
     administration?.resume();
     workspacePolicy?.resume();
+    results?.resume();
     preferences?.resume(); preferences?.applyAppearance(preferenceState);
     form.hidden = false; select.hidden = false; controls(!busy);
   } catch (failure) {
@@ -115,6 +120,7 @@ async function loadTimeline(): Promise<void> {
           element<HTMLButtonElement>('open-sessions').disabled = false; sessionSettings?.resume();
           administration?.resume();
           workspacePolicy?.resume();
+          results?.resume();
           preferences?.resume(); preferences?.applyAppearance(preferenceState);
         }
       } catch { /* Identity invalidation clears the page; network errors keep controls masked. */ }
@@ -152,6 +158,13 @@ async function start(): Promise<void> {
     administration = new FamilyAdministration(api);
     workspacePolicy = new FamilyWorkspace(api);
     preferences = new FamilyPreferences(api);
+    results = new FamilyResults(api, {
+      lock: value => {
+        if (value && (busy || paused || stopped)) return false;
+        busy = value; generation++; refreshing = null; controls(false); return true;
+      },
+      changed: async () => { await loadTimeline(); },
+    });
     sessionSettings = new FamilySessions(api, {
       lock: value => {
         if (value && (busy || paused || stopped)) return false;

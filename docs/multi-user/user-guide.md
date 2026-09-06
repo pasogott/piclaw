@@ -189,6 +189,16 @@ The file excludes attachments, rich content, annotations, thread links, tasks, s
 
 **Cancel transcript**, closing or refreshing **My sessions**, losing tab focus, switching sessions or navigating away discards prepared text and cancels pending requests. This leaves the stored conversation unchanged. Prepare the transcript again if needed. A downloaded file stays on your device; signing out cannot recall it. Protect it as private conversation data.
 
+## Inspect scheduled results
+
+Open **Scheduled results** to see metadata from the newest 50 execution records belonging to your account. Inaccessible or archived targets are omitted, so the list may contain fewer than 50 entries. Family scheduling and automatic execution are still disabled; this panel only exposes results prepared during development testing.
+
+Choose **Inspect result** to load the stored result as plain text. Check the **Original conversation** and execution ID. An unsettled or expired-unsettled record cannot be published. “Publication receipt recorded” means a receipt exists; confirming publication verifies the actual message before acknowledging a retry.
+
+To publish a settled result, check the confirmation and choose **Publish result**. A sign-in within five minutes is required. The server adds one service-labelled message to the original conversation; it does not switch your selected conversation, run an agent or send a notification. Publication does not change the result's original owner labels. Use the normal session picker to view a different original conversation.
+
+**Refresh results**, **Close results**, losing focus, switching sessions or navigating away clears inspected text and confirmation. No result text is saved in browser storage. A request already sent may still finish. After an uncertain response, refresh and inspect again before confirming; the server verifies the existing publication rather than duplicating it. There is no automatic retry, task creation or result deletion in this panel.
+
 ## Browser state and privacy
 
 **Conversations and saved settings persist on the server.** Closing a tab does not delete messages, session names, ownership, forks, archives, saved preferences or avatars. After signing in again, you can reopen your owned sessions.

@@ -23,6 +23,12 @@ async function fixture(page: Page) {
   return state;
 }
 async function ready(page: Page) { await page.waitForFunction(() => document.getElementById("timeline")?.textContent?.includes("Alice private text")); }
+function resultList(items: any[] = [{execution_id:'execution-one',chat_jid:'web:alice-two',created_at:1780000000000,state:'settled',publication_recorded:false}]) {
+  return {owner_user_id:'alice',window_size:50,items};
+}
+function resultDetail(id='execution-one',chat='web:alice-two',text='<img src=x onerror=alert(1)> PRIVATE_RESULT') {
+  return {execution_id:id,chat_jid:chat,owner_user_id:'alice',state:'settled',publication_recorded:false,result:{status:'success',text,created_at:1780000000000}};
+}
 beforeAll(async () => {
   if (process.env.PICLAW_RUN_OPTIONAL_BROWSER_TESTS !== "1") return;
   browser = await chromium.launch({ headless: true });
@@ -36,6 +42,102 @@ beforeAll(async () => {
   } }); base = `http://localhost:${server.port}`;
 });
 afterAll(async () => { await browser?.close(); server?.stop(true); });
+
+browserTest('scheduled results load on explicit open, inspect as text and publish once with original target pins',async()=>{
+  const page=await browser.newPage({viewport:{width:375,height:740}});
+  try{
+    await fixture(page);let lists=0,reads=0;const publications:any[]=[];
+    await page.route('**/agent/scheduled-results',route=>{lists++;return route.fulfill({json:resultList()});});
+    await page.route('**/agent/scheduled-results/execution-one',route=>{reads++;return route.fulfill({json:resultDetail()});});
+    await page.route('**/agent/scheduled-results/execution-one/publish',async route=>{publications.push({body:route.request().postDataJSON(),headers:route.request().headers()});await new Promise(resolve=>setTimeout(resolve,50));return route.fulfill({json:{execution_id:'execution-one',chat_jid:'web:alice-two',message_rowid:99,created:true}});});
+    await page.goto(base);await ready(page);expect(lists).toBe(0);await page.locator('#open-results').click();await page.getByRole('button',{name:'Inspect result',exact:true}).click();
+    await page.waitForFunction(()=>document.getElementById('scheduled-result-text')?.textContent?.includes('PRIVATE_RESULT'));
+    expect(reads).toBe(1);expect(await page.locator('#scheduled-result-text img').count()).toBe(0);expect(await page.locator('#publish-result').isDisabled()).toBe(true);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await page.locator('#confirm-result-publication').check();await page.locator('#publish-result').click();
+    await page.waitForFunction(()=>document.getElementById('scheduled-results-status')?.textContent?.includes('Published as message 99'));
+    expect(publications).toHaveLength(1);expect(publications[0].body).toEqual({confirm:true});expect(publications[0].headers['x-piclaw-account-id']).toBe('alice');expect(publications[0].headers['x-piclaw-login-id']).toBe('login-a');
+    expect(await page.locator('#session-select').inputValue()).toBe('web:alice');expect(await page.locator('#scheduled-result-text').textContent()).toBe('');
+  }finally{await page.close();}
+},20000);
+
+browserTest('result detail and confirmation clear on refresh, close, blur, session switch and navigation',async()=>{
+  const page=await browser.newPage();
+  try{
+    await fixture(page);await page.route('**/agent/scheduled-results',r=>r.fulfill({json:resultList()}));await page.route('**/agent/scheduled-results/execution-one',r=>r.fulfill({json:resultDetail()}));
+    await page.goto(base);await ready(page);await page.locator('#open-results').click();
+    const inspect=async()=>{await page.getByRole('button',{name:'Inspect result',exact:true}).click();await page.waitForFunction(()=>document.getElementById('scheduled-result-text')?.textContent?.includes('PRIVATE_RESULT'));await page.locator('#confirm-result-publication').check();};
+    await inspect();await page.locator('#refresh-results').click();expect(await page.locator('#scheduled-result-text').textContent()).toBe('');expect(await page.locator('#confirm-result-publication').isChecked()).toBe(false);
+    await inspect();await page.locator('#close-results').click();expect(await page.locator('#scheduled-result-text').textContent()).toBe('');await page.locator('#open-results').click();
+    await inspect();await page.evaluate(()=>dispatchEvent(new Event('blur')));expect(await page.locator('#scheduled-result-text').textContent()).toBe('');await page.evaluate(()=>dispatchEvent(new Event('focus')));await ready(page);
+    await inspect();await page.locator('#session-select').selectOption('web:alice-two');await ready(page);expect(await page.locator('#scheduled-result-text').textContent()).toBe('');
+    await inspect();await page.evaluate(()=>dispatchEvent(new PageTransitionEvent('pagehide')));expect(await page.locator('#scheduled-result-text').textContent()).toBe('');expect(await page.locator('#publish-result').isDisabled()).toBe(true);
+  }finally{await page.close();}
+},20000);
+
+browserTest('late result response cannot repopulate a closed panel or changed account',async()=>{
+  const page=await browser.newPage();
+  try{
+    const state=await fixture(page);await page.route('**/agent/scheduled-results',r=>r.fulfill({json:resultList()}));
+    let release!:()=>void,entered!:()=>void;let held=new Promise<void>(r=>release=r),waiting=new Promise<void>(r=>entered=r);
+    await page.route('**/agent/scheduled-results/execution-one',async r=>{entered();await held;await r.fulfill({json:resultDetail()});});
+    await page.goto(base);await ready(page);await page.locator('#open-results').click();await page.getByRole('button',{name:'Inspect result',exact:true}).click();await waiting;await page.locator('#close-results').click();release();await page.waitForTimeout(100);expect(await page.locator('#scheduled-result-text').textContent()).toBe('');
+    held=new Promise<void>(r=>release=r);waiting=new Promise<void>(r=>entered=r);await page.locator('#open-results').click();await page.getByRole('button',{name:'Inspect result',exact:true}).click();await waiting;
+    state.identity=principal('bob','login-b');release();await page.waitForFunction(()=>document.getElementById('family-status')?.textContent?.includes('no longer bound'));expect(await page.locator('#scheduled-result-text').textContent()).toBe('');
+  }finally{await page.close();}
+},20000);
+
+browserTest('failed publication is not replayed automatically and requires fresh inspection and confirmation',async()=>{
+  const page=await browser.newPage();
+  try{
+    await fixture(page);let sends=0;await page.route('**/agent/scheduled-results',r=>r.fulfill({json:resultList()}));await page.route('**/agent/scheduled-results/execution-one',r=>r.fulfill({json:resultDetail()}));
+    await page.route('**/agent/scheduled-results/execution-one/publish',r=>{sends++;return r.fulfill(sends===1?{status:500,json:{}}:{json:{execution_id:'execution-one',chat_jid:'web:alice-two',message_rowid:99,created:false}});});
+    await page.goto(base);await ready(page);await page.locator('#open-results').click();await page.getByRole('button',{name:'Inspect result',exact:true}).click();await page.locator('#confirm-result-publication').check();await page.locator('#publish-result').click();
+    await page.waitForFunction(()=>document.getElementById('scheduled-results-status')?.textContent?.includes('may have completed'));expect(sends).toBe(1);expect(await page.locator('#publish-result').isDisabled()).toBe(true);
+    await page.locator('#refresh-results').click();await page.getByRole('button',{name:'Inspect result',exact:true}).click();expect(await page.locator('#confirm-result-publication').isChecked()).toBe(false);await page.locator('#confirm-result-publication').check();await page.locator('#publish-result').click();
+    await page.waitForFunction(()=>document.getElementById('scheduled-results-status')?.textContent?.includes('Publication verified'));expect(sends).toBe(2);
+  }finally{await page.close();}
+},20000);
+
+browserTest('unsettled result cannot publish and foreign detail payload fails closed',async()=>{
+  const page=await browser.newPage();
+  try{
+    await fixture(page);await page.route('**/agent/scheduled-results',r=>r.fulfill({json:resultList()}));let foreign=false;
+    await page.route('**/agent/scheduled-results/execution-one',r=>r.fulfill({json:foreign?{...resultDetail(),owner_user_id:'bob'}:{...resultDetail(),state:'expired-unsettled',result:null}}));
+    await page.goto(base);await ready(page);await page.locator('#open-results').click();await page.getByRole('button',{name:'Inspect result',exact:true}).click();await page.waitForFunction(()=>document.getElementById('scheduled-result-state')?.textContent?.includes('expired-unsettled'));expect(await page.locator('#confirm-result-publication').isDisabled()).toBe(true);
+    foreign=true;await page.getByRole('button',{name:'Inspect result',exact:true}).click();await page.waitForFunction(()=>document.getElementById('scheduled-results-status')?.textContent?.includes('Invalid result response'));expect(await page.locator('#scheduled-result-text').textContent()).toBe('');
+  }finally{await page.close();}
+},20000);
+
+browserTest('closing during publication clears detail and late success cannot reopen it or leave shell locked',async()=>{
+  const page=await browser.newPage();
+  try{
+    await fixture(page);await page.route('**/agent/scheduled-results',r=>r.fulfill({json:resultList()}));await page.route('**/agent/scheduled-results/execution-one',r=>r.fulfill({json:resultDetail()}));
+    let release!:()=>void,entered!:()=>void;const held=new Promise<void>(r=>release=r),waiting=new Promise<void>(r=>entered=r);let sends=0;
+    await page.route('**/agent/scheduled-results/execution-one/publish',async r=>{sends++;entered();await held;await r.fulfill({json:{execution_id:'execution-one',chat_jid:'web:alice-two',message_rowid:99,created:true}});});
+    await page.goto(base);await ready(page);await page.locator('#open-results').click();await page.getByRole('button',{name:'Inspect result',exact:true}).click();await page.locator('#confirm-result-publication').check();await page.locator('#publish-result').click();await waiting;
+    expect(await page.locator('#send-message').isDisabled()).toBe(true);await page.locator('#close-results').click();release();
+    await page.waitForFunction(()=>!(document.getElementById('send-message') as HTMLButtonElement)?.disabled);
+    expect(await page.locator('#scheduled-results').isVisible()).toBe(false);expect(await page.locator('#scheduled-result-text').textContent()).toBe('');expect(sends).toBe(1);
+    await page.locator('#open-results').click();expect(await page.locator('#confirm-result-publication').isChecked()).toBe(false);
+  }finally{await page.close();}
+},20000);
+
+browserTest('new result selection wins over an older delayed detail and does not carry confirmation',async()=>{
+  const page=await browser.newPage();
+  try{
+    await fixture(page);await page.route('**/agent/scheduled-results',r=>r.fulfill({json:resultList([
+      {execution_id:'execution-one',chat_jid:'web:alice-two',created_at:1780000000000,state:'settled',publication_recorded:false},
+      {execution_id:'execution-two',chat_jid:'web:alice',created_at:1780000000001,state:'settled',publication_recorded:false},
+    ])}));
+    let release!:()=>void,entered!:()=>void;const held=new Promise<void>(r=>release=r),waiting=new Promise<void>(r=>entered=r);
+    await page.route('**/agent/scheduled-results/execution-one',async r=>{entered();await held;await r.fulfill({json:resultDetail()});});
+    await page.route('**/agent/scheduled-results/execution-two',r=>r.fulfill({json:resultDetail('execution-two','web:alice','LATEST_DETAIL')}));
+    await page.goto(base);await ready(page);await page.locator('#open-results').click();await page.getByRole('button',{name:'Inspect result',exact:true}).nth(0).click();await waiting;
+    await page.getByRole('button',{name:'Inspect result',exact:true}).nth(1).click();await page.waitForFunction(()=>document.getElementById('scheduled-result-text')?.textContent==='LATEST_DETAIL');release();await page.waitForTimeout(80);
+    expect(await page.locator('#scheduled-result-text').textContent()).toBe('LATEST_DETAIL');expect(await page.locator('#confirm-result-publication').isChecked()).toBe(false);
+  }finally{await page.close();}
+},20000);
 
 browserTest("fresh login ignores legacy browser state, uses home and sends pinned text with stable retry ID", async () => {
   const page = await browser.newPage({ viewport: { width: 375, height: 740 } });

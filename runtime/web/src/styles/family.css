@@ -80,6 +80,10 @@ textarea { resize: vertical; width: 100%; }
 #model-defaults-form { display: grid; gap: 8px; }
 #model-defaults-effective, #model-defaults-status { overflow-wrap: anywhere; }
 #preferences-status { overflow-wrap: anywhere; }
+#scheduled-results { border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin: 16px 0; overflow-wrap: anywhere; }
+#scheduled-results button, #open-results { min-height: 44px; }
+#scheduled-result-text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; max-height: 28rem; overflow-y: auto; }
+#scheduled-result-detail label { display: block; padding: 12px 0; }
 #account-preferences button, #account-preferences select, #open-preferences { min-height: 44px; }
 #administration-tools-list { border: 1px solid var(--border); margin: 12px 0; }
 #administration-tools-list label, #administration-tools-form > label { display: block; min-height: 44px; padding: 10px 0; }
