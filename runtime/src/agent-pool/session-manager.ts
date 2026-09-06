@@ -111,6 +111,13 @@ export class AgentSessionManager {
     };
   }
 
+  /** Lifecycle callers must not archive while a run, hydration or disposal is in flight. */
+  hasPendingSessionWork(chatJid: string): boolean {
+    return this.createInFlight.has(chatJid) || this.createSideInFlight.has(chatJid)
+      || this.branchSeedRealizationInFlight.has(chatJid) || this.evictionProtectionCounts.has(chatJid)
+      || this.idleMainDisposalsInFlight.has(chatJid) || this.idleSideDisposalsInFlight.has(chatJid);
+  }
+
   private getEvictionProtectedChatJids(explicit: string[] = []): string[] {
     return [...new Set([...explicit, ...this.evictionProtectionCounts.keys()])];
   }

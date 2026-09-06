@@ -117,6 +117,7 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     isActive: (chatJid) => runtimeFacade.isActive(chatJid),
     scheduleSessionWarmup: (chatJid) => sessionManager.prewarm(chatJid),
     cancelSessionWarmup: (chatJid) => sessionManager.cancelPrewarm(chatJid),
+    hasPendingSessionWork: (chatJid) => sessionManager.hasPendingSessionWork(chatJid),
     onWarn: options.onWarn,
   });
   sessionManager = new AgentSessionManager({

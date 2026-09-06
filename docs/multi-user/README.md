@@ -33,7 +33,7 @@ Family mode is intended for trusted household members. Users with arbitrary shel
 | Modes and migration (#1123/#1126/#1133) | Strict config/marker checks, read-only topology preview, explicit root/handle adoption helpers | Complete migration/rollback tooling, existing-child seed adoption, activation gates |
 | Accounts and factors (#1124/#1125) | Disabled account + owned home provisioning, live/recent-login admin checks, own-device/factor APIs, TOTP and multiple passkeys | Account UI, offline lone-admin recovery, passkey-first invitations/reset, legacy factor-tool isolation |
 | Invitations/recovery (#1125) | One-use browser-bound TOTP grants, atomic enrol-and-enable, explicit other-admin reset | Invitation/QR and reset confirmation UI, end-to-end browser workflows |
-| Sessions (#1126/#1128) | Authoritative root ownership, owner-local names, active branch listing, atomic fork/retry and friendly rename | Additional root creation, public home selection, archive/restore/merge/purge/download, process-kill recovery proof |
+| Sessions (#1126/#1128) | Root ownership, owner-local names, atomic forks/rename, additional roots, home selection and idle archive/restore | Merge/purge/download, browser lifecycle UX, process-kill recovery proof |
 | HTTP and SSE (#1127) | Terminal family HTTP policy, SQL-scoped search, own-thread reads, revocable SSE, selected account/fork routes | Media/derived resources, remaining mutations, direct WebSocket/transport/tool paths, browser state and push recipients |
 | Model identity/memory (#1129/#1131) | Server identity before hydration, scoped model context and owner/family memory paths | All direct/queued/delegate/side/Dream entry points and service grants; shared-resource policy |
 | Settings and isolation (#1130/#1132) | Reserved profile/config contracts | Capability-aware Settings and per-user container gateway/deployment |
@@ -80,7 +80,19 @@ Internal provisioning helpers assign an existing root and a user's home atomical
 
 The owner-aware lookup/list/rename helpers validate live account and parent-chain ownership. Friendly rename updates only `agent_name` and `updated_at`; it preserves branch ID, chat JID, root, home, message references and filesystem paths. Owner-local misses never query another namespace. The legacy database lookup returns only legacy handles, and legacy ensure/rename/restore methods reject migrated rows.
 
-Family branch listing, fork and friendly rename now use owner-bound controls. AgentBranchManager handle lookup and active/known lists use execution identity and have no cross-user active-session fallback. Chat tools, session control, schedules and peer ingress still need end-to-end owner propagation. Root creation, archive, restore, merge, purge and download stay disabled in the family router; corresponding destructive branch-manager operations also deny multi-user mode.
+Family branch listing, fork and friendly rename now use owner-bound controls. AgentBranchManager handle lookup and active/known lists use execution identity and have no cross-user active-session fallback. Chat tools, session control, schedules and peer ingress still need end-to-end owner propagation. Additional root creation, own-home selection, archive and restore now use explicit family lifecycle routes. Merge, purge and download remain denied. Legacy JID migration and unscoped destructive branch-manager methods still deny multi-user mode.
+
+### Owned roots, home selection and archive/restore
+
+POST `/agent/root-session` accepts exactly `{agent_name}`. Current family policy allows an enabled authenticated user to create additional private roots. Chat, branch, owner and handle are committed atomically; duplicate active owner-local names roll back creation. A UUID-based JID stays independent of the friendly name. Creation does not change the current home or prewarm a model session.
+
+PATCH `/account/home` accepts exactly `{chat_jid}` and requires recent authentication. Only an active owned root can become home; a fork, archive or foreign root is rejected. The change affects future targetless requests and fresh logins, never an existing device's explicit authorised target.
+
+POST `/agent/branch-prune` accepts exactly `{chat_jid}` and archives one session. It rejects the current home, active main/side turns, in-flight hydration/protected runs and any unarchived descendant. Archive descendants bottom-up; no cascade is implicit. The archive commits before caches are detached and runtimes disposed. Restore of that target is blocked until disposal finishes. Database seeds, messages, ownership and filesystem artifacts remain intact; SSE revalidation closes archived subscriptions before the next delivery or heartbeat.
+
+POST `/agent/branch-restore` accepts `{chat_jid,agent_name?}`. It requires active parents and an available owner-local handle; collision leaves the archive untouched. An explicit alternate name resolves a collision without changing branch/chat IDs. Restore is metadata-only: the next authorised use performs hydration. GET `/agent/branches?include_archived=true` can list owned archived metadata and filter an owned root; it cannot read archived messages. All mutation routes require matching Origin and their existing rate limits.
+
+These backend operations do not complete browser lifecycle UX, process-kill race verification, merge/purge/download, or adoption of legacy child sessions without fork provenance.
 
 ### Atomic family forks
 
@@ -106,8 +118,10 @@ The family router makes a terminal decision before legacy, add-on and widget-sta
 | GET `/timeline`, `/hashtag/:tag`, `/thread/:id` | Live owned home or validated owned target |
 | GET `/search` | `current`, `root` and `all` search only authorised chats; filter before pagination |
 | GET `/sse/stream` | Server-authorised chat subscription with live revalidation |
-| GET `/agent/branches` | Active owned roots/descendants only; no runtime-global fallback |
+| GET `/agent/branches` | Owned roots/descendants; optional `include_archived=true` metadata, no runtime-global fallback |
 | POST `/agent/branch-fork`, `/agent/branch-rename` | Owner-bound target, strict fields, browser Origin, cookie revalidation and branch rate limit |
+| POST `/agent/root-session`, `/agent/branch-prune`, `/agent/branch-restore` | Owned root creation and idle metadata lifecycle; no implicit cascading or hydration |
+| PATCH `/account/home` | Recent self authentication, active owned root only; future targetless requests |
 | `/admin/users/*`, `/account`, `/account/sessions/*`, `/account/factors/*`, `/account/passkeys/register/*` | Only the exact methods below; live account/login checks, own-resource scope, recent authentication and Origin on mutations |
 | Other routes/methods reaching ordinary family dispatch | JSON 401 without a browser principal; 403 with one. Specialised auth/account endpoints may return validation errors or 405 for `/auth/me` |
 
@@ -115,7 +129,7 @@ Missing `chat_jid` selects the current stored home; explicit empty, duplicate, u
 
 An SSE subscription retains a non-secret login ID and target, without retaining bearer cookies. Login expiry/revocation, disabled accounts, changed roles and invalid/archived parent chains close it before the next event. Idle clients are checked every 30 seconds. Only known chat-scoped event types matching the authorised target are delivered; no global broadcast event is approved yet. The connection handshake omits global UI preferences. Cancellation and revocation clear the heartbeat and remove the client. Already delivered/queued bytes cannot be recalled.
 
-Denied surfaces include add-on ingress/config APIs, widget state/snapshots, mutations other than fork/rename and the account methods below, E2E bootstrap, general factor registration, media/uploads, workspace, exports, recordings, terminal/VNC, other agent controls/metadata, push and Settings. Each needs an explicit policy and target validation before being enabled. Tool/non-web boundaries, per-user browser state, device notification routing and complete route/resource inventory remain #1127 work. Single-user routing and unscoped SSE behaviour are unchanged. Terminal/VNC WebSocket upgrades are handled separately from `RequestRouterService`; their existing auth/Origin checks are not full family ownership enforcement. Direct tools/transports and background workers also require separate integration. The startup gate is essential until these paths are verified.
+Denied surfaces include add-on ingress/config APIs, widget state/snapshots, mutations other than the listed owned-session and account methods, E2E bootstrap, general factor registration, media/uploads, workspace, exports, recordings, terminal/VNC, other agent controls/metadata, push and Settings. Each needs an explicit policy and target validation before being enabled. Tool/non-web boundaries, per-user browser state, device notification routing and complete route/resource inventory remain #1127 work. Single-user routing and unscoped SSE behaviour are unchanged. Terminal/VNC WebSocket upgrades are handled separately from `RequestRouterService`; their existing auth/Origin checks are not full family ownership enforcement. Direct tools/transports and background workers also require separate integration. The startup gate is essential until these paths are verified.
 
 ## Account-factor foundation
 
@@ -139,6 +153,7 @@ Account reads recheck the login ID and enabled user/role. Mutations require a ma
 | POST `/admin/users` | Recent administrator creates a disabled account and owned home root atomically |
 | PATCH `/admin/users/:id` | Recent administrator changes username/displayName/role/enabled; immutable identity/home fields rejected |
 | PATCH `/account` | Recent account owner changes only username/displayName |
+| PATCH `/account/home` | Recent account owner selects an active owned root; no other device's explicit target is rewritten |
 | GET `/account/sessions` | Current owner's login metadata, excluding bearer material |
 | DELETE `/account/sessions/:sessionId` | Revoke own device; foreign/missing IDs have the same response and no effect |
 | GET `/account/factors` | Own TOTP presence and passkey metadata |

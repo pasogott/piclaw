@@ -10,6 +10,7 @@ import { resolveWebauthnRpInfo } from "../auth/webauthn-challenges.js";
 import { AccountInvitations } from "../../../secure/account-invitations.js";
 import { FamilyPasskeys } from "../../../secure/family-passkeys.js";
 import { resetFamilyAccount } from "../../../secure/account-recovery.js";
+import { selectOwnedHome } from "../../../db/owned-session-lifecycle.js";
 
 /** Account-only surface: never returns conversation content, tokens or factor secrets. */
 export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Request, principal: AuthenticatedPrincipal): Promise<Response | null> {
@@ -47,6 +48,10 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
     }
     const body = await req.json();
     if (!body || typeof body !== "object" || Array.isArray(body)) return channel.json({ error: "Invalid account request" }, 400);
+    if (method === "PATCH" && path === "/account/home") {
+      if (Object.keys(body).length !== 1 || typeof body.chat_jid !== "string") return deny();
+      return channel.json({ home_chat_jid: selectOwnedHome(db, principal, body.chat_jid) });
+    }
     const reset = path.match(/^\/admin\/users\/([a-zA-Z0-9_-]+)\/reset$/);
     if (reset && method === "POST") {
       if (!policy.totp || Object.keys(body).length !== 1 || typeof body.confirm_username !== "string") return deny();

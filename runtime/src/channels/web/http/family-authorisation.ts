@@ -16,7 +16,7 @@ import { handleFamilyInvitationRoutes } from "./family-invitations.js";
 import { checkCsrfOrigin } from "./security.js";
 import { authoriseExecutionIdentity } from "../../../agent-pool/execution-identity.js";
 import { withExecutionIdentity } from "../../../core/execution-context.js";
-import { listOwnedSessionHandles } from "../../../db/session-handles.js";
+import { createOwnedRoot, listOwnedLifecycleSessions } from "../../../db/owned-session-lifecycle.js";
 
 /** Absent selects the live home; explicit empty/duplicate selectors never fall back. */
 function selector(url: URL, key: string): string | undefined {
@@ -95,13 +95,34 @@ export async function handleFamilyRequest(channel: WebChannelLike, req: Request,
       const root = selector(url, "root_chat_jid");
       const requested = selector(url, "chat_jid");
       if (requested !== undefined) resolveAuthorisedChat(getDb(), principal, requested, "session.read");
-      if (root !== undefined) {
-        const target = resolveAuthorisedChat(getDb(), principal, root, "session.read");
-        if (target.rootChatJid !== root) throw new ChatAccessDenied();
-      }
-      const branches = listOwnedSessionHandles(getDb(), principal).filter(branch => !root || branch.root_chat_jid === root);
+      const archiveFlag = selector(url, "include_archived");
+      if (archiveFlag !== undefined && !["true", "false", "1", "0"].includes(archiveFlag)) throw new ChatAccessDenied();
+      const branches = listOwnedLifecycleSessions(getDb(), principal, root, archiveFlag === "true" || archiveFlag === "1");
       return channel.json({ branches });
     } catch (error) { if (error instanceof ChatAccessDenied) return deny(); throw error; }
+  }
+  if (req.method === "POST" && ["/agent/root-session", "/agent/branch-prune", "/agent/branch-restore"].includes(path)) {
+    if (!req.headers.get("origin") || !checkCsrfOrigin(req)) return deny();
+    const guard = await enforceRequestGuards({ json: (value, status) => channel.json(value, status), endpointContexts: channel.endpointContexts, authGateway: {
+      isAuthEnabled: () => true, isInternalSecretEnabled: () => false, verifyInternalSecret: () => false, isAuthenticated: () => true,
+    } }, req, path, flags);
+    if (guard) return guard;
+    try {
+      const body = await req.json();
+      if (!body || typeof body !== "object" || Array.isArray(body)) return channel.json({ error: "Invalid lifecycle request" }, 400);
+      if (path === "/agent/root-session") {
+        if (Object.keys(body).length !== 1 || typeof body.agent_name !== "string") return channel.json({ error: "Invalid root request" }, 400);
+        return channel.json({ branch: { ...createOwnedRoot(getDb(), principal, body.agent_name), display_name: null } }, 201);
+      }
+      const allowed = path.endsWith("-restore") ? ["chat_jid", "agent_name"] : ["chat_jid"];
+      if (Object.keys(body).some(key => !allowed.includes(key)) || typeof body.chat_jid !== "string"
+        || (body.agent_name !== undefined && typeof body.agent_name !== "string")) return channel.json({ error: "Invalid lifecycle request" }, 400);
+      const branch = await channel.agentPool.changeOwnedSessionLifecycle(principal, body.chat_jid, path.endsWith("-restore") ? "restore" : "archive", body.agent_name);
+      return channel.json({ branch });
+    } catch (error) {
+      if (error instanceof ChatAccessDenied) return deny();
+      return channel.json({ error: "Session lifecycle operation failed." }, 400);
+    }
   }
   if (req.method === "POST" && (path === "/agent/branch-fork" || path === "/agent/branch-rename")) {
     // Require a browser origin; internal secrets cannot exempt these mutations.

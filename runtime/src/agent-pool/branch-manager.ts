@@ -35,6 +35,8 @@ import { getExecutionIdentity } from "../core/execution-context.js";
 import { requireOwnedSessionExecution } from "./owned-session-access.js";
 import { resolveOwnedSessionHandle, listOwnedSessionHandles, renameOwnedSessionHandle } from "../db/session-handles.js";
 import { ChatAccessDenied } from "../db/session-ownership.js";
+import type { AuthenticatedPrincipal } from "../core/access-types.js";
+import { archiveOwnedSession, restoreOwnedSession, resolveOwnedLifecycleSession } from "../db/owned-session-lifecycle.js";
 import type { PoolEntry } from "./session-manager.js";
 
 /** Active/known chat metadata surfaced by AgentPool. */
@@ -73,6 +75,7 @@ export interface AgentBranchManagerOptions {
   isActive: (chatJid: string) => boolean;
   scheduleSessionWarmup?: (chatJid: string) => void;
   cancelSessionWarmup?: (chatJid: string) => void;
+  hasPendingSessionWork?: (chatJid: string) => boolean;
   onWarn?: (message: string, details: Record<string, unknown>) => void;
 }
 
@@ -244,6 +247,8 @@ export function removeSessionArtifacts(chatJid: string): string[] {
 }
 
 export class AgentBranchManager {
+  private readonly ownedLifecycleInFlight = new Set<string>();
+
   constructor(private readonly options: AgentBranchManagerOptions) {}
 
   ensureBranchRegistration(chatJid: string, session?: AgentSession | null): ChatBranchRecord {
@@ -441,6 +446,37 @@ export class AgentBranchManager {
       });
     }
     return result;
+  }
+
+  /** Browser lifecycle does not hydrate an archived target or impersonate its owner. */
+  async changeOwnedSessionLifecycle(actor: AuthenticatedPrincipal, chatJid: string, action: "archive" | "restore", agentName?: string): Promise<ChatBranchRecord> {
+    if (readAccessConfig().mode !== "family-shared") throw new ChatAccessDenied();
+    resolveOwnedLifecycleSession(getDb(), actor, chatJid);
+    const sideSession = this.options.sidePool.get(chatJid)?.runtime.session;
+    if (this.ownedLifecycleInFlight.has(chatJid) || this.options.hasPendingSessionWork?.(chatJid)
+      || this.options.isActive(chatJid) || (sideSession && isSessionActive(sideSession))) {
+      throw new Error("Session lifecycle operation requires an idle session.");
+    }
+    this.ownedLifecycleInFlight.add(chatJid);
+    try {
+      const branch = action === "archive" ? archiveOwnedSession(getDb(), actor, chatJid) : restoreOwnedSession(getDb(), actor, chatJid, agentName);
+      if (action === "archive") {
+        // Archive commits before any await; detach caches so readers cannot acquire the old runtime.
+        const main = this.options.pool.get(chatJid);
+        const side = this.options.sidePool.get(chatJid);
+        this.options.pool.delete(chatJid);
+        this.options.sidePool.delete(chatJid);
+        this.options.activeForkBaseLeafByChat.delete(chatJid);
+        this.options.cancelSessionWarmup?.(chatJid);
+        for (const entry of new Set([main, side])) {
+          if (!entry) continue;
+          try { await entry.runtime.dispose(); }
+          catch (error) { this.options.onWarn?.("Archived session runtime disposal failed", { operation: "owned_session.archive.dispose", chatJid, error }); }
+        }
+      }
+      // Restore is metadata-only; first use hydrates under its own current identity.
+      return { ...branch, display_name: null };
+    } finally { this.ownedLifecycleInFlight.delete(chatJid); }
   }
 
   async pruneChatBranch(chatJid: string): Promise<ChatBranchRecord> {

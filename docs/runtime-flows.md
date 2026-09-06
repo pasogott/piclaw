@@ -263,7 +263,7 @@ This cache is browser-local performance state, not backend truth. It reduces vis
 
 ## Branch JID rename behavior (single-user maintenance)
 
-This is distinct from a friendly handle rename. Family mode denies internal JID migration, archive/restore/merge/purge and new-root controls until their owner-bound workflows are implemented.
+This is distinct from a friendly handle rename. Family mode denies internal JID migration, merge and purge. Its separate owner-bound root creation, home selection and archive/restore routes preserve durable IDs and do not reuse this migration path; see [owned-session lifecycle](multi-user/README.md#owned-roots-home-selection-and-archiverestore).
 
 Chat JID rename/migration now treats descendants as any JID under `oldJid + ":"`, not only legacy `:branch:` forms.
 
