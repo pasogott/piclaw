@@ -28,6 +28,7 @@ Usage:
   piclaw [options]
   piclaw --post <chat_jid> <message>
   piclaw keychain <command> [args]
+  piclaw account-recovery preview|issue [args]
 
 Options:
   -h, --help                 Show this help
@@ -43,6 +44,12 @@ Keychain commands:
   piclaw keychain get <name>
   piclaw keychain list
   piclaw keychain delete <name>
+
+Offline family administrator recovery (no activation or restart):
+  piclaw account-recovery preview --user-id <id> --username <name> --method totp|passkey --origin https://host
+  piclaw account-recovery issue --user-id <id> --username <name> --method totp|passkey --origin https://host
+    --backup <new.sqlite> --output <new.json> --writers-stopped --key-backup-confirmed --confirm "RECOVER <name>"
+  Backup/output parents must exist with permissions 0700. Stop all writers first; retain the original bootstrap key.
 `;
 
 /** Read the version string from package.json. */
@@ -64,7 +71,7 @@ function getFlagValue(args: string[], flag: string): string | undefined {
   return value;
 }
 
-const CLI_SUBCOMMANDS = new Set(["keychain"]);
+const CLI_SUBCOMMANDS = new Set(["keychain", "account-recovery"]);
 const RUNTIME_FLAGS_WITH_VALUES = new Set([
   "-w",
   "--workspace",
@@ -242,6 +249,11 @@ export async function handleCliOptions(args = process.argv.slice(2)): Promise<bo
   }
 
   const commandArgs = consumeLeadingGlobalOptions(args);
+  if (commandArgs[0] === 'account-recovery') {
+    try { const { handleOperatorRecovery } = await import('./cli-operator-recovery.js'); handleOperatorRecovery(commandArgs.slice(1)); }
+    catch { console.error('Offline recovery failed. Check the stopped runtime, migrated family store, exact target, factor policy, protected output paths and confirmations. No grant is printed; inspect the protected outputs before retrying.'); process.exitCode = 1; }
+    return true;
+  }
   if (commandArgs[0] === "--post") {
     try {
       await handlePostCommand(commandArgs.slice(1));

@@ -40,6 +40,7 @@
 | `user_passkey_registrations` | Hashed ceremony token bound to user, login, RP, origin, challenge and expiry |
 | `user_auth_attempts` | Hashed account/client rate-limit buckets and reset time |
 | `account_recovery_events` | Non-secret actor/target/reset event/time audit |
+| `operator_recovery_events` | Offline recovery audit: ID, target administrator, selected factor method, exact HTTPS origin and time; no token, seed or synthetic user actor |
 | `account_security_events` | Administrative device/factor revocation audit: acting admin, target account, item kind/non-secret ID and time; committed with the revocation |
 | `account_home_events` | Administrative home-change audit: actor/target, previous home JID, new owned root branch ID and time; committed with the default change |
 | `user_tool_restrictions` | Per-account denied names within the fixed family ceiling and optimistic-concurrency revision |

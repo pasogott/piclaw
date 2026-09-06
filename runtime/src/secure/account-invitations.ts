@@ -8,7 +8,7 @@ import { UserAuthFactors } from "./user-auth-factors.js";
 import type { RegistrationResponseJSON } from '@simplewebauthn/server';
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
-interface Invitation { token_hash: string; user_id: string; issuer_user_id: string; expires_at: number; state: string; browser_hash: string | null; enrolment_hash: string | null; origin: string | null; method: 'totp' | 'passkey'; rp_id: string | null; challenge: string | null }
+interface Invitation { token_hash: string; user_id: string; issuer_user_id: string; expires_at: number; state: string; browser_hash: string | null; enrolment_hash: string | null; origin: string | null; method: 'totp' | 'passkey'; rp_id: string | null; challenge: string | null; recovery_event_id: string | null; expected_origin: string | null }
 
 /** Restricted enrolment grants. Never become account cookies or carry role/home changes. */
 export class AccountInvitations {
@@ -33,7 +33,7 @@ export class AccountInvitations {
       const expiresAt = this.now() + 15 * 60_000;
       this.database.query(`INSERT INTO user_auth_invitations(token_hash,user_id,issuer_user_id,expires_at,state,created_at,method)
         VALUES (?,?,?,?,'issued',?,?) ON CONFLICT(user_id) DO UPDATE SET token_hash=excluded.token_hash,issuer_user_id=excluded.issuer_user_id,
-        expires_at=excluded.expires_at,state='issued',browser_hash=NULL,enrolment_hash=NULL,origin=NULL,rp_id=NULL,challenge=NULL,method=excluded.method,created_at=excluded.created_at`)
+        expires_at=excluded.expires_at,state='issued',browser_hash=NULL,enrolment_hash=NULL,origin=NULL,rp_id=NULL,challenge=NULL,recovery_event_id=NULL,expected_origin=NULL,method=excluded.method,created_at=excluded.created_at`)
         .run(hash(token), userId, actor.userId, expiresAt, new Date(this.now()).toISOString(), method);
       return { token, expiresAt, method };
     }).immediate();
@@ -47,11 +47,21 @@ export class AccountInvitations {
     }).immediate();
   }
 
+  private validIssuer(row: Invitation, origin?: string): boolean {
+    if (row.recovery_event_id) {
+      return row.issuer_user_id === row.user_id && row.expected_origin === origin
+        && getUser(this.database, row.user_id)?.role === 'admin'
+        && Boolean(this.database.query('SELECT 1 FROM operator_recovery_events WHERE id=? AND target_user_id=? AND method=? AND origin=?')
+          .get(row.recovery_event_id, row.user_id, row.method, origin!));
+    }
+    const issuer = getUser(this.database, row.issuer_user_id);
+    return Boolean(issuer?.enabled && issuer.role === 'admin' && !row.expected_origin);
+  }
+
   private valid(token: string, browser?: string, origin?: string, method: 'totp' | 'passkey' = 'totp'): Invitation {
     const row = this.database.query("SELECT * FROM user_auth_invitations WHERE token_hash=? AND expires_at>?").get(hash(token), this.now()) as Invitation | null;
     if (!row || row.method !== method) throw new ChatAccessDenied();
-    const issuer = getUser(this.database, row.issuer_user_id);
-    if (!issuer?.enabled || issuer.role !== "admin") throw new ChatAccessDenied();
+    if (!this.validIssuer(row, origin)) throw new ChatAccessDenied();
     this.eligible(row.user_id);
     if (browser !== undefined && (row.state !== "claimed" || row.browser_hash !== hash(browser) || row.origin !== origin)) throw new ChatAccessDenied();
     return row;
@@ -61,7 +71,7 @@ export class AccountInvitations {
     this.prune();
     const browserToken = randomBytes(32).toString("base64url");
     const userId = this.database.transaction(() => {
-      const row = this.valid(token);
+      const row = this.valid(token, undefined, origin);
       if (row.state !== "issued") throw new ChatAccessDenied();
       const expiresAt = Math.min(row.expires_at, this.now() + 5 * 60_000);
       this.database.query("UPDATE user_auth_invitations SET state='claimed',browser_hash=?,origin=?,expires_at=? WHERE token_hash=?")
@@ -83,10 +93,9 @@ export class AccountInvitations {
       const grant = this.database.query("SELECT * FROM user_auth_invitations WHERE token_hash=? AND expires_at>?")
         .get(hash(token), this.now()) as Invitation | null;
       const user = getUser(this.database, row.user_id);
-      const issuer = getUser(this.database, row.issuer_user_id);
       const home = user?.home_chat_jid ? getRootOwnership(this.database, user.home_chat_jid) : null;
       if (!grant || grant.method !== 'totp' || grant.user_id !== row.user_id || grant.state !== "claimed" || grant.browser_hash !== hash(browser) || grant.enrolment_hash !== hash(enrolmentToken) || grant.origin !== origin
-        || !user || user.enabled || !issuer?.enabled || issuer.role !== "admin" || home?.ownerUserId !== user.id || home.rootChatJid !== user.home_chat_jid) throw new ChatAccessDenied();
+        || !user || user.enabled || !this.validIssuer(grant, origin) || home?.ownerUserId !== user.id || home.rootChatJid !== user.home_chat_jid) throw new ChatAccessDenied();
       updateUser(this.database, user.id, { enabled: true });
       this.database.query("DELETE FROM user_auth_invitations WHERE token_hash=?").run(grant.token_hash);
       this.database.query("DELETE FROM web_sessions WHERE user_id=?").run(user.id);
@@ -97,7 +106,7 @@ export class AccountInvitations {
     this.prune();
     const browserToken = randomBytes(32).toString('base64url'), enrolmentToken = randomBytes(32).toString('base64url');
     const userId = this.database.transaction(() => {
-      const row = this.valid(token, undefined, undefined, 'passkey');
+      const row = this.valid(token, undefined, origin, 'passkey');
       if (row.state !== 'issued') throw new ChatAccessDenied();
       this.database.query("UPDATE user_auth_invitations SET state='claimed',browser_hash=?,origin=?,rp_id=?,expires_at=? WHERE token_hash=?")
         .run(hash(browserToken), origin, rpId, Math.min(row.expires_at, this.now()+5*60_000), row.token_hash);
