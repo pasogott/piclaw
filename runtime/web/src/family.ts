@@ -3,6 +3,7 @@ import { FamilyAccount } from './family-account.js';
 import { FamilySessions } from './family-sessions.js';
 import { FamilyAdministration } from './family-administration.js';
 import { FamilyWorkspace } from './family-workspace.js';
+import { FamilyPreferences } from './family-preferences.js';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -22,6 +23,7 @@ let settings: FamilyAccount | null = null;
 let sessionSettings: FamilySessions | null = null;
 let administration: FamilyAdministration | null = null;
 let workspacePolicy: FamilyWorkspace | null = null;
+let preferences: FamilyPreferences | null = null;
 let directoryGeneration = 0;
 let refreshing: symbol | null = null, polling: ReturnType<typeof setInterval> | undefined;
 let pending: { text: string; chat: string; requestId: string } | null = null;
@@ -39,6 +41,7 @@ function mask(): void {
   sessionSettings?.suspend(); element<HTMLButtonElement>('open-sessions').disabled = true;
   administration?.suspend();
   workspacePolicy?.suspend();
+  preferences?.suspend();
 }
 function invalidate(): void {
   if (stopped) return;
@@ -47,6 +50,7 @@ function invalidate(): void {
   sessionSettings?.stop();
   administration?.stop();
   workspacePolicy?.stop();
+  preferences?.stop();
   if (polling) clearInterval(polling);
   select.replaceChildren(); compose.value = ''; pending = null; heldRow = null; recoveryRequest = null; confirmSkip.checked = false; recoveryStatus.textContent = ''; logout.disabled = true;
   status.textContent = 'This page is no longer bound to its original account.';
@@ -78,9 +82,10 @@ async function loadTimeline(): Promise<void> {
   if (!api || stopped || !current || refreshing || busy || paused || document.hidden) return;
   const flight = Symbol(), expected = ++generation, target = current; refreshing = flight;
   try {
-    const [result, recoveryState] = await Promise.all([
+    const [result, recoveryState, preferenceState] = await Promise.all([
       api.request(`/timeline?chat_jid=${encodeURIComponent(target)}&limit=100`),
       api.request(`/agent/message-recovery?chat_jid=${encodeURIComponent(target)}`),
+      api.request('/account/preferences'),
     ]);
     if (stopped || expected !== generation || current !== target || paused || document.hidden) return;
     renderPosts(result.posts); renderRecovery(recoveryState); status.textContent = `Session: ${target}${result.has_more ? ' · Showing the most recent messages' : ''}`;
@@ -89,6 +94,7 @@ async function loadTimeline(): Promise<void> {
     element<HTMLButtonElement>('open-sessions').disabled = false; sessionSettings?.resume();
     administration?.resume();
     workspacePolicy?.resume();
+    preferences?.resume(); preferences?.applyAppearance(preferenceState);
     form.hidden = false; select.hidden = false; controls(!busy);
   } catch (failure) {
     if (!stopped && expected === generation) {
@@ -97,12 +103,13 @@ async function loadTimeline(): Promise<void> {
       // An archived/foreign conversation must not prevent own-account or restore controls.
       // Revalidate independently; a denied target response has not verified the cookie.
       try {
-        await api.verifyIdentity();
+        const preferenceState = await api.request('/account/preferences');
         if (!stopped && expected === generation && !paused && !document.hidden) {
           element<HTMLButtonElement>('open-account').disabled = false; settings?.resume();
           element<HTMLButtonElement>('open-sessions').disabled = false; sessionSettings?.resume();
           administration?.resume();
           workspacePolicy?.resume();
+          preferences?.resume(); preferences?.applyAppearance(preferenceState);
         }
       } catch { /* Identity invalidation clears the page; network errors keep controls masked. */ }
     }
@@ -138,6 +145,7 @@ async function start(): Promise<void> {
     settings = new FamilyAccount(api);
     administration = new FamilyAdministration(api);
     workspacePolicy = new FamilyWorkspace(api);
+    preferences = new FamilyPreferences(api);
     sessionSettings = new FamilySessions(api, {
       lock: value => {
         if (value && (busy || paused || stopped)) return false;

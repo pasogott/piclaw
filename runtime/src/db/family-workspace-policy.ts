@@ -41,7 +41,8 @@ export function readFamilyWorkspacePolicy(database: Database, actor: Authenticat
       settings: [
         { name: 'Account names, factors and device labels', scope: 'user', availability: 'Explicit own-account APIs; administrator operations are separate and confirmed.' },
         { name: 'Root, fork, handle and home', scope: 'session/tree and user default', availability: 'Owned lifecycle controls; changing home affects future targetless requests, never another tab’s explicit selection.' },
-        { name: 'Appearance, drafts and recent selections', scope: 'browser-local', availability: 'Family preview uses system theme and memory-only drafts; legacy stored preferences are not imported.' },
+        { name: 'Appearance and response guidance', scope: 'user / immutable account ID', availability: 'Own revisioned preferences API; system/light/dark appearance and bounded next-run response guidance. No global Settings or memory-file edits.' },
+        { name: 'Drafts and recent selections', scope: 'browser-memory', availability: 'Unsaved data stays in the current page and clears on identity changes; legacy stored preferences are not imported.' },
         { name: 'Model/thinking defaults and compaction', scope: 'shared runtime defaults with session state', availability: 'No personal editor in this preview; global/session legacy controls are unavailable.' },
         { name: 'Tool activation and capability profile', scope: 'fixed ceiling plus per-account denials', availability: 'Recent administrators can deny/restore only tools inside the preview ceiling. Changes affect new runs; broader grants and role profiles remain unavailable.' },
         { name: 'Provider login/OAuth, environment and generic keychain', scope: 'shared instance / operator', availability: 'No family Settings editor or slash-command bridge.' },

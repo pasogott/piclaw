@@ -44,6 +44,7 @@
 | `account_home_events` | Administrative home-change audit: actor/target, previous home JID, new owned root branch ID and time; committed with the default change |
 | `user_tool_restrictions` | Per-account denied names within the fixed family ceiling and optimistic-concurrency revision |
 | `user_tool_restriction_events` | Acting administrator, target, old/new denial lists, revision and time; committed atomically with policy changes |
+| `user_preferences` | Immutable-account-ID appearance and bounded response guidance, revision and update time; owner-only API, no global Settings or memory-file writes |
 | `core_schema_migrations` | Core migration ledger, including removal of obsolete core remote-interop tables |
 
 Remote Peer state belongs to the installed add-on. The obsolete core `remote_*` tables are removed by `dropObsoleteRemoteInteropSchema`; they are not a current storage API.

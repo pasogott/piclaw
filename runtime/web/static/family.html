@@ -12,6 +12,7 @@
     <header>
       <h1>PiClaw</h1><span id="account-name">Checking account…</span>
       <button id="open-account" type="button" disabled>My account</button>
+      <button id="open-preferences" type="button" disabled>My preferences</button>
       <button id="open-sessions" type="button" disabled>My sessions</button>
       <button id="open-administration" type="button" hidden disabled>Family administration</button>
       <button id="open-workspace-policy" type="button" disabled>Workspace and security</button>
@@ -134,6 +135,16 @@
       <button id="refresh-workspace-policy" type="button">Refresh workspace policy</button>
       <p id="workspace-policy-status" role="status" aria-live="polite"></p>
       <div id="workspace-policy-details"></div>
+    </section>
+    <section id="account-preferences" aria-labelledby="preferences-heading" hidden>
+      <header><h2 id="preferences-heading" tabindex="-1">My preferences</h2><button id="close-preferences" type="button">Close preferences</button></header>
+      <p>These preferences belong to your account across devices. They do not edit global Settings or shared memory files. Unsaved edits clear on blur, close, session switch or navigation. Guidance applies only to new model runs and grants no permissions.</p>
+      <button id="refresh-preferences" type="button">Refresh preferences</button><p id="preferences-status" role="status" aria-live="polite"></p>
+      <form id="preferences-form" hidden>
+        <label for="preferences-theme">Appearance</label><select id="preferences-theme"><option value="system">System (default)</option><option value="light">Light</option><option value="dark">Dark</option></select>
+        <label for="preferences-guidance">Response guidance (up to 2,000 characters)</label><textarea id="preferences-guidance" rows="5" maxlength="2000" placeholder="For example: use British English and concise bullet points."></textarea>
+        <button id="reset-preferences" type="button">Use defaults</button><button id="save-preferences" type="submit">Save preferences</button>
+      </form>
     </section>
     <section class="session-controls" aria-label="Session navigation">
       <label for="session-select">Owned session</label>

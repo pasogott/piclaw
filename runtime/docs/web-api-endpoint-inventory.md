@@ -89,6 +89,8 @@ These exact routes are implemented in `http/family-authorisation.ts`, `http/fami
 | PATCH | `/admin/users/:id` | Recent administrator; username/displayName/role/enabled only | `{user}`; enablement checks usable factor/home |
 | GET | `/account` | Live self; query selectors denied | `{user,recent_auth,capabilities,factors,sessions}`; one snapshot, current-RP usability/removal hints and current-login marker, no secrets or foreign metadata |
 | GET | `/account/workspace` | Live family self; query selectors and writes denied | Read-only deployment/config/marker distinction, fixed tool ceiling, sharing/Settings scopes and owner memory paths; no config values, inventories, grants or activation |
+| GET | `/account/preferences` | Live family self; query selectors denied | `{user_id,preferences,defaults,can_edit}`; revision, system/light/dark theme and bounded response guidance |
+| PATCH | `/account/preferences` | Live self + Origin and account rate limit; exactly `{expected_revision,theme,response_guidance}` | Updated own snapshot; stale revision denies, no global writes or admin override; recent authentication not required for these non-sensitive fields |
 | GET | `/account/trees` | Live self; query selectors denied | `{home_chat_jid,capabilities,branches}`; owned root/fork/archive metadata with graph/recent-auth eligibility hints; runtime readiness and handle collisions rechecked by mutations |
 | PATCH | `/account` | Recent self; username/displayName only | `{user}` |
 | GET | `/account/sessions` | Current self | `{sessions}` without bearer material |
