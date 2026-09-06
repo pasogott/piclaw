@@ -34,6 +34,16 @@
           <label for="account-display-name">Display name</label><input id="account-display-name" required maxlength="128" autocomplete="name" />
           <button id="account-save-profile" type="submit">Save profile</button>
         </form>
+        <section id="account-avatar" class="account-section" aria-labelledby="account-avatar-heading">
+          <h3 id="account-avatar-heading">Account avatar</h3>
+          <p>Static PNG, JPEG or WebP, up to 2 MiB and 4 million pixels. Saved as a 256-pixel square without metadata. Only your account can read it; no shared avatar or agent icon changes. File selections clear on blur or close.</p>
+          <img id="account-avatar-image" alt="Your saved account avatar" width="96" height="96" hidden />
+          <p id="account-avatar-status" role="status" aria-live="polite"></p>
+          <button id="refresh-account-avatar" type="button" disabled>Refresh avatar</button>
+          <form id="account-avatar-form"><label for="account-avatar-file">New avatar image</label><input id="account-avatar-file" type="file" accept="image/png,image/jpeg,image/webp" disabled /><button id="save-account-avatar" type="submit" disabled>Save avatar</button></form>
+          <label><input id="account-avatar-confirm" type="checkbox" disabled /> Remove my saved avatar</label>
+          <button id="remove-account-avatar" type="button" disabled>Confirm avatar removal</button>
+        </section>
         <section class="account-section" aria-labelledby="account-factors-heading">
           <h3 id="account-factors-heading">Sign-in factors</h3>
           <p>Several passkeys can belong to one account. Removing a factor signs out every device; the last usable factor cannot be removed.</p>
@@ -61,7 +71,7 @@
           <p id="account-confirm-text"></p><label><input id="account-confirm-check" type="checkbox" /> I understand and confirm this change</label>
           <button id="account-confirm-action" type="button" disabled>Confirm change</button><button id="account-cancel-action" type="button">Cancel</button>
         </section>
-        <p class="notice">Avatar changes are not available in this preview. Administrators have a separate account-management panel.</p>
+        <p class="notice">Administrators have a separate account-management panel, without access to another account’s avatar.</p>
       </div>
     </section>
     <section id="session-settings" aria-labelledby="session-settings-heading" hidden>

@@ -1,6 +1,7 @@
 import { beforeAll, afterAll, expect, test } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
 import { join } from "node:path";
+import sharp from 'sharp';
 import type { SessionSettings } from '../../src/core/session-settings.js';
 import type { AdministrationSettings } from '../../src/core/administration-settings.js';
 import { FAMILY_WEB_TOOLS, type FamilyWorkspacePolicy } from '../../src/core/family-workspace-policy.js';
@@ -12,6 +13,7 @@ const posts = (content = "Alice private text") => ({ posts: [{ id: 1, timestamp:
 async function fixture(page: Page) {
   const state = { identity: principal(), calls: [] as Array<{ path: string; headers: Record<string, string>; body: any }> };
   await page.route("**/auth/me", route => route.fulfill({ json: state.identity }));
+  await page.route('**/account/avatar', route => route.fulfill({ json: { user_id: state.identity.principal.userId, revision: 0, present: false, can_edit: true } }));
   await page.route('**/account/preferences', route => route.fulfill({ json: { user_id: state.identity.principal.userId, preferences: { revision: 0, theme: 'system', response_guidance: '' }, defaults: { theme: 'system', response_guidance: '' }, can_edit: true } }));
   await page.route("**/agent/message-recovery?**", route => route.fulfill({ json: { state: 'idle' } }));
   await page.route("**/agent/branches", route => route.fulfill({ json: { branches: [{ chat_jid: "web:alice", root_chat_jid: "web:alice", agent_name: "home" }, { chat_jid: "web:alice-two", root_chat_jid: "web:alice-two", agent_name: "second" }] } }));
@@ -185,6 +187,71 @@ async function openAccount(page: Page) {
   await page.goto(base); await ready(page); await page.locator('#open-account').click();
   await page.waitForFunction(() => !(document.getElementById('account-details') as HTMLElement)?.hidden);
 }
+
+browserTest('account avatar uploads pinned raster bytes, confirms deletion and releases blob URLs/drafts without storage', async () => {
+  const page = await browser.newPage({ viewport: { width: 375, height: 740 } });
+  try {
+    await fixture(page); await page.route('**/account', route => route.fulfill({ json: accountSnapshot() }));
+    const bytes = await sharp({ create: { width: 2, height: 2, channels: 4, background: 'blue' } }).webp().toBuffer();
+    let value = { user_id: 'alice', revision: 0, present: false, can_edit: true }; const writes: any[] = [], reads: any[] = [];
+    await page.addInitScript(() => { const revoke = URL.revokeObjectURL; (window as any).revoked = []; URL.revokeObjectURL = url => { (window as any).revoked.push(url); revoke(url); }; });
+    await page.route('**/account/avatar', route => {
+      const method = route.request().method();
+      if (method !== 'GET') { writes.push({ method, headers: route.request().headers(), body: route.request().postDataBuffer() }); value = { ...value, revision: value.revision+1, present: method === 'POST' }; }
+      return route.fulfill({ json: value });
+    });
+    await page.route('**/account/avatar/image', route => { reads.push(route.request().headers()); return route.fulfill({ contentType: 'image/webp', body: bytes }); });
+    await openAccount(page); await page.waitForFunction(() => !(document.getElementById('account-avatar-file') as HTMLInputElement)?.disabled);
+    await page.locator('#account-avatar-file').setInputFiles({ name: 'private.webp', mimeType: 'image/webp', buffer: bytes });
+    expect(writes).toHaveLength(0); expect(await page.locator('#account-avatar-image').getAttribute('src')).toBeNull();
+    await page.locator('#save-account-avatar').click(); await page.waitForFunction(() => document.getElementById('account-avatar-status')?.textContent === 'Avatar saved.');
+    expect(writes[0].headers['x-piclaw-account-id']).toBe('alice'); expect(writes[0].headers['x-piclaw-login-id']).toBe('login-a'); expect(writes[0].headers['x-piclaw-avatar-revision']).toBe('0'); expect(writes[0].body).toEqual(bytes);
+    expect(reads[0]['x-piclaw-login-id']).toBe('login-a'); const url = await page.locator('#account-avatar-image').getAttribute('src'); expect(url?.startsWith('blob:')).toBe(true);
+    expect(await page.locator('#remove-account-avatar').isDisabled()).toBe(true);
+    await page.locator('#account-avatar-file').setInputFiles({ name: 'unsaved.webp', mimeType: 'image/webp', buffer: bytes });
+    await page.evaluate(() => dispatchEvent(new Event('blur')));
+    expect(await page.locator('#account-avatar-image').getAttribute('src')).toBeNull(); expect(await page.locator('#account-avatar-file').inputValue()).toBe('');
+    expect(await page.evaluate(() => (window as any).revoked)).toContain(url);
+    await page.evaluate(() => dispatchEvent(new Event('focus'))); await page.waitForFunction(() => !(document.getElementById('account-avatar-confirm') as HTMLInputElement)?.disabled);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.locator('#account-avatar-confirm').check(); await page.locator('#remove-account-avatar').click(); await page.waitForFunction(() => document.getElementById('account-avatar-status')?.textContent === 'Avatar removed.');
+    expect(JSON.parse(writes[1].body.toString())).toEqual({ expected_revision: 1 }); expect(await page.locator('#account-avatar-image').getAttribute('src')).toBeNull();
+    expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('avatar images admitted before close or login replacement never reappear and always recheck identity', async () => {
+  const page = await browser.newPage();
+  try {
+    const state = await fixture(page); await page.route('**/account', route => route.fulfill({ json: accountSnapshot() }));
+    await page.route('**/account/avatar', route => route.fulfill({ json: { user_id: 'alice', revision: 1, present: true, can_edit: true } }));
+    const bytes = await sharp({ create: { width: 2, height: 2, channels: 4, background: 'blue' } }).webp().toBuffer();
+    let release!: () => void, entered!: () => void; let held = new Promise<void>(r => release = r), waiting = new Promise<void>(r => entered = r);
+    await page.route('**/account/avatar/image', async route => { entered(); await held; await route.fulfill({ contentType: 'image/webp', body: bytes }); });
+    await openAccount(page); await waiting; await page.locator('#close-account').click(); release();
+    await page.waitForTimeout(100); expect(await page.locator('#account-avatar-image').getAttribute('src')).toBeNull();
+    held = new Promise<void>(r => release = r); waiting = new Promise<void>(r => entered = r);
+    await page.locator('#open-account').click(); await waiting; state.identity = principal('bob', 'login-b'); release();
+    await page.waitForFunction(() => document.getElementById('family-status')?.textContent?.includes('no longer bound'));
+    expect(await page.locator('#account-avatar-image').getAttribute('src')).toBeNull(); expect(await page.locator('#account-avatar-file').inputValue()).toBe('');
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('avatar validation/capabilities fail closed and failed writes require explicit refresh without retries', async () => {
+  const page = await browser.newPage();
+  try {
+    await fixture(page); await page.route('**/account', route => route.fulfill({ json: accountSnapshot() })); let editable: any = undefined, writes = 0;
+    await page.route('**/account/avatar', route => { if (route.request().method() === 'POST') { writes++; return route.fulfill({ status: 400, json: {} }); } return route.fulfill({ json: { user_id: 'alice', revision: 0, present: false, can_edit: editable } }); });
+    await openAccount(page); await page.waitForFunction(() => document.getElementById('account-avatar-status')?.textContent === 'No account avatar.');
+    expect(await page.locator('#account-avatar-file').isDisabled()).toBe(true); editable = true; await page.locator('#refresh-account-avatar').click(); await page.waitForFunction(() => !(document.getElementById('account-avatar-file') as HTMLInputElement)?.disabled);
+    await page.locator('#account-avatar-file').setInputFiles({ name: 'evil.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg/>') }); expect(await page.locator('#account-avatar-file').inputValue()).toBe(''); expect(await page.locator('#save-account-avatar').isDisabled()).toBe(true);
+    await page.locator('#account-avatar-file').setInputFiles({ name: 'big.png', mimeType: 'image/png', buffer: Buffer.alloc(2*1024*1024+1) }); expect(await page.locator('#account-avatar-file').inputValue()).toBe('');
+    await page.locator('#account-avatar-file').setInputFiles({ name: 'test.png', mimeType: 'image/png', buffer: Buffer.from('server validates bytes') }); await page.locator('#save-account-avatar').click();
+    await page.waitForFunction(() => document.getElementById('account-avatar-status')?.textContent?.includes('Refresh before trying again'));
+    expect(writes).toBe(1); expect(await page.locator('#save-account-avatar').isDisabled()).toBe(true); expect(await page.locator('#account-avatar-file').isDisabled()).toBe(true);
+    await page.locator('#refresh-account-avatar').click(); await page.waitForFunction(() => !(document.getElementById('account-avatar-file') as HTMLInputElement)?.disabled); expect(writes).toBe(1);
+  } finally { await page.close(); }
+}, 20000);
 
 browserTest('account preferences load/apply theme, save revisioned guidance and reset defaults without browser storage', async () => {
   const page = await browser.newPage({ viewport: { width: 375, height: 740 }, colorScheme: 'light' });

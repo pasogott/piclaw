@@ -1,4 +1,5 @@
 /** Family requests are pinned to one authenticated account/login for this page. */
+import { ACCOUNT_AVATAR_STORED_BYTES } from '../../src/core/account-avatar.js';
 export interface FamilyIdentity {
   userId: string;
   username: string;
@@ -70,16 +71,34 @@ export class FamilyApi {
     if (identity.userId !== this.identity.userId || identity.loginId !== this.identity.loginId) this.invalidate();
     this.currentIdentity = identity;
   }
-  async request(path: string, method = "GET", body?: unknown): Promise<any> {
+  private async response(path: string, method: string, body?: unknown, headers?: Record<string, string>): Promise<Response> {
     if (this.controller.signal.aborted) throw new Error("This page is no longer active.");
     const response = await fetch(path, { method, cache: "no-store", credentials: "same-origin", signal: this.signal(),
-      headers: { ...this.headers(), ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      headers: { ...this.headers(), ...(body === undefined ? {} : { "Content-Type": body instanceof Blob ? body.type : "application/json" }), ...headers },
+      ...(body === undefined ? {} : { body: body instanceof Blob ? body : JSON.stringify(body) }),
     });
     if (response.status === 401 || response.status === 409) this.invalidate();
     if (!response.ok) throw new FamilyRequestError(response.status === 403 ? "Access denied. Select an owned session or sign in again if fresh authentication is required." : "The request failed. Try again.", response.status);
+    return response;
+  }
+  async request(path: string, method = "GET", body?: unknown): Promise<any> {
+    const response = await this.response(path, method, body);
     const value = await response.json();
     // A response admitted under the old cookie must not render after a different login took over.
+    await this.verifyIdentity();
+    return value;
+  }
+  async avatarImage(): Promise<Blob> {
+    const response = await this.response('/account/avatar/image', 'GET');
+    if (response.headers.get('content-type') !== 'image/webp') throw new Error('Invalid avatar response.');
+    const blob = await response.blob();
+    if (!blob.size || blob.size > ACCOUNT_AVATAR_STORED_BYTES) throw new Error('Invalid avatar response.');
+    await this.verifyIdentity();
+    return blob;
+  }
+  async uploadAvatar(file: File, revision: number): Promise<any> {
+    const response = await this.response('/account/avatar', 'POST', file, { 'x-piclaw-avatar-revision': String(revision) });
+    const value = await response.json();
     await this.verifyIdentity();
     return value;
   }

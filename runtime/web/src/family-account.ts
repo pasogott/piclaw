@@ -1,5 +1,6 @@
 import type { AccountSettings } from '../../src/core/account-settings.js';
 import { FamilyApi } from './family-api.js';
+import { FamilyAvatar } from './family-avatar.js';
 
 const node = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const decode = (value: string) => Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
@@ -28,8 +29,10 @@ export class FamilyAccount {
   private totp: { token: string; expires: number } | null = null;
   private totpExpiry: ReturnType<typeof setTimeout> | null = null;
   private labelTarget: { path: string } | null = null;
+  private avatar: FamilyAvatar;
 
   constructor(private api: FamilyApi) {
+    this.avatar = new FamilyAvatar(api);
     node('open-account').addEventListener('click', () => { this.opened = true; this.suspended = false; void this.load(true); });
     node('close-account').addEventListener('click', () => { this.opened = false; this.clear(); this.ceremony?.abort(); node('open-account').focus(); });
     node('refresh-account').addEventListener('click', () => { void this.load(); });
@@ -68,6 +71,7 @@ export class FamilyAccount {
   }
 
   private clear(): void {
+    this.avatar.clear();
     this.clearTotp();
     this.clearLabel();
     this.generation++; this.root.hidden = true; this.body.hidden = true;
@@ -95,6 +99,7 @@ export class FamilyAccount {
     node('account-confirm-text').textContent = text; this.confirmation.hidden = false; this.confirm.focus();
   }
   private disable(): void {
+    this.avatar.clear();
     for (const control of this.body.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button')) control.disabled = true;
   }
   private row(parent: HTMLElement, text: string, label: string, enabled: boolean, action: () => void): HTMLElement {
@@ -124,6 +129,7 @@ export class FamilyAccount {
     if (value?.user?.id !== this.api.identity.userId || typeof value.user.username !== 'string' || typeof value.user.display_name !== 'string'
       || !value.capabilities || !value.factors?.totp || !Array.isArray(value.factors.passkeys) || !Array.isArray(value.sessions)) throw new Error('Invalid account response.');
     this.snapshot = value; this.body.hidden = false;
+    void this.avatar.load();
     this.username.value = value.user.username; this.displayName.value = value.user.display_name;
     this.username.disabled = this.displayName.disabled = node<HTMLButtonElement>('account-save-profile').disabled = value.capabilities.update_profile !== true;
     node('account-auth-notice').textContent = value.recent_auth === true ? 'Sensitive changes require a sign-in within the last five minutes.' : 'Sign in again to change your profile, factors or signed-in devices.';

@@ -32,6 +32,9 @@ textarea { resize: vertical; width: 100%; }
 .account-section { border-top: 1px solid var(--border); padding: 12px 0; }
 #account-profile { display: grid; gap: 8px; }
 #account-profile input { width: 100%; min-width: 0; }
+#account-avatar-form { display: grid; gap: 8px; margin: 12px 0; }
+#account-avatar-file { width: 100%; min-width: 0; }
+#account-avatar-image { border-radius: 12px; }
 .account-list { list-style: none; padding: 0; }
 .account-list li { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
 .account-list span { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
