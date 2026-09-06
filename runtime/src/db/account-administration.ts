@@ -67,6 +67,7 @@ export function updateManagedAccount(database: Database, principal: Authenticate
       database.query("DELETE FROM user_totp_enrolments WHERE user_id=?").run(userId);
       database.query("DELETE FROM webauthn_enrollments WHERE user_id=?").run(userId);
       database.query("DELETE FROM user_auth_invitations WHERE user_id=? OR issuer_user_id=?").run(userId, userId);
+      database.query("DELETE FROM user_passkey_registrations WHERE user_id=?").run(userId);
     }
     return updated;
   }).immediate();
@@ -91,6 +92,7 @@ export function revokeOwnSession(database: Database, principal: AuthenticatedPri
     requireAccountActor(database, principal, { recent: true });
     // Same response for absent/foreign devices; never disclose their owner.
     database.query("DELETE FROM web_sessions WHERE user_id=? AND session_id=?").run(principal.userId, sessionId);
+    database.query("DELETE FROM user_passkey_registrations WHERE user_id=? AND session_id=?").run(principal.userId, sessionId);
   }).immediate();
 }
 
@@ -119,5 +121,6 @@ export function removeOwnFactor(database: Database, principal: AuthenticatedPrin
     database.query("DELETE FROM user_totp_enrolments WHERE user_id=?").run(user.id);
     database.query("DELETE FROM webauthn_enrollments WHERE user_id=?").run(user.id);
     database.query("DELETE FROM user_auth_invitations WHERE user_id=? OR issuer_user_id=?").run(user.id, user.id);
+    database.query("DELETE FROM user_passkey_registrations WHERE user_id=?").run(user.id);
   }).immediate();
 }
