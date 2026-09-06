@@ -3,6 +3,7 @@ import { chromium, type Browser, type Page } from "playwright";
 import { join } from "node:path";
 import type { SessionSettings } from '../../src/core/session-settings.js';
 import type { AdministrationSettings } from '../../src/core/administration-settings.js';
+import { FAMILY_WEB_TOOLS, type FamilyWorkspacePolicy } from '../../src/core/family-workspace-policy.js';
 
 const browserTest = process.env.PICLAW_RUN_OPTIONAL_BROWSER_TESTS === "1" ? test : test.skip;
 let browser: Browser, server: ReturnType<typeof Bun.serve>, base: string;
@@ -183,6 +184,58 @@ async function openAccount(page: Page) {
   await page.goto(base); await ready(page); await page.locator('#open-account').click();
   await page.waitForFunction(() => !(document.getElementById('account-details') as HTMLElement)?.hidden);
 }
+
+function workspacePolicyFixture(): FamilyWorkspacePolicy {
+  return {
+    user_id: 'alice', deployment: { routing_mode: 'family-shared', configured_mode: 'family-shared', activated_mode: 'single-user', supported_startup_mode: 'single-user', activation_allowed: false, container_isolation: false },
+    tools: { policy: 'fixed-family-web-preview', configurable: false, allowed: [...FAMILY_WEB_TOOLS], scope: 'Fixed ceiling, not configurable user grants.' },
+    resources: [{ name: 'Workspace files', scope: 'shared', detail: 'Shared filesystem, not private volumes.' }],
+    operations: [{ name: 'Shell', state: 'denied', detail: 'Not enabled for admitted web turns.' }],
+    settings: [{ name: 'Providers', scope: 'shared', availability: 'No editor' }],
+    memory: { personal: ['notes/users/alice/MEMORY.md', 'notes/users/alice/preferences.md'], family: 'notes/family/MEMORY.md' },
+  };
+}
+async function openWorkspacePolicy(page: Page) {
+  await page.goto(base); await ready(page); await page.locator('#open-workspace-policy').click();
+  await page.waitForFunction(() => Boolean(document.getElementById('workspace-policy-details')?.textContent));
+}
+
+browserTest('workspace policy distinguishes gated modes, shared resources and tool ceiling without offering writes', async () => {
+  const page = await browser.newPage({ viewport: { width: 375, height: 740 } });
+  try {
+    await fixture(page); const calls: any[] = [];
+    await page.route('**/account/workspace', route => { calls.push({ method: route.request().method(), headers: route.request().headers() }); return route.fulfill({ json: workspacePolicyFixture() }); });
+    await openWorkspacePolicy(page);
+    const text = await page.locator('#workspace-policy-details').textContent();
+    expect(text).toContain('configured mode: family-shared'); expect(text).toContain('stored activation marker: single-user'); expect(text).toContain('not container isolation');
+    expect(text).toContain('read, ls, find, grep'); expect(text).toContain('notes/users/alice/MEMORY.md'); expect(text).toContain('Shell — denied');
+    expect(await page.locator('#workspace-policy-details input, #workspace-policy-details button, #workspace-policy-details a').count()).toBe(0);
+    expect(calls.every(c => c.method === 'GET' && c.headers['x-piclaw-account-id'] === 'alice' && c.headers['x-piclaw-login-id'] === 'login-a')).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect((await page.locator('#refresh-workspace-policy').boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('workspace policy clears on blur/navigation and rejects late former-account or malformed activation responses', async () => {
+  const page = await browser.newPage();
+  try {
+    const state = await fixture(page);
+    await page.route('**/account/workspace', route => route.fulfill({ json: workspacePolicyFixture() }));
+    await openWorkspacePolicy(page); await page.evaluate(() => dispatchEvent(new Event('blur')));
+    expect(await page.locator('#workspace-policy-details').textContent()).toBe('');
+    await page.evaluate(() => dispatchEvent(new Event('focus'))); await page.waitForFunction(() => Boolean(document.getElementById('workspace-policy-details')?.textContent));
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>(r => release = r), waiting = new Promise<void>(r => entered = r);
+    await page.route('**/account/workspace', async route => { entered(); await held; const value = workspacePolicyFixture(); value.memory.personal = ['STALE_PATH']; await route.fulfill({ json: value }); });
+    await page.locator('#refresh-workspace-policy').click(); await waiting; state.identity = principal('bob', 'new-login'); release();
+    await page.waitForFunction(() => document.getElementById('family-status')?.textContent?.includes('no longer bound'));
+    expect(await page.locator('#workspace-policy-details').textContent()).toBe('');
+    state.identity = principal(); await page.route('**/account/workspace', route => route.fulfill({ json: { ...workspacePolicyFixture(), deployment: { ...workspacePolicyFixture().deployment, activation_allowed: true } } }));
+    await page.reload(); await ready(page); await page.locator('#open-workspace-policy').click();
+    await page.waitForFunction(() => document.getElementById('workspace-policy-status')?.textContent?.includes('Unsupported'));
+    expect(await page.locator('#workspace-policy-details').textContent()).toBe('');
+  } finally { await page.close(); }
+}, 20000);
 
 browserTest('security item names are owner-pinned, plain text, clearable and distinct from revoke actions', async () => {
   const page = await browser.newPage({ viewport: { width: 375, height: 740 } });

@@ -10,6 +10,7 @@
 
 import type { WebChannelLike } from "../core/web-channel-contracts.js";
 import { readAccessConfig } from "../../../core/config-access.js";
+import { isFamilyWebToolAllowed } from '../../../core/family-workspace-policy.js';
 import { withExecutionIdentity, type ExecutionIdentity } from "../../../core/execution-context.js";
 import { withChatContext } from "../../../core/chat-context.js";
 import { ChatAccessDenied } from "../../../db/session-ownership.js";
@@ -1795,7 +1796,7 @@ async function processAuthorisedChat(
     ...(identity ? {
       executionProvenance: identity.provenance,
       // Narrow initial family conversation tools; global mutators lack owner-scoped entry points.
-      toolCeilingFilter: (name: string) => ["read", "ls", "find", "grep", "messages", "session_status", "session_control", "chat"].includes(name),
+      toolCeilingFilter: isFamilyWebToolAllowed,
     } : {}),
     timeoutMs,
     turnId,

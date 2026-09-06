@@ -14,6 +14,7 @@
       <button id="open-account" type="button" disabled>My account</button>
       <button id="open-sessions" type="button" disabled>My sessions</button>
       <button id="open-administration" type="button" hidden disabled>Family administration</button>
+      <button id="open-workspace-policy" type="button" disabled>Workspace and security</button>
       <button id="sign-out" type="button" disabled>Sign out</button>
       <a href="/login">Sign in</a>
     </header>
@@ -116,6 +117,13 @@
         <ul id="administration-home-roots"></ul>
       </section>
       <p class="notice">Container destination assignment, passkey-first invitations and offline lone-admin recovery are not available here.</p>
+    </section>
+    <section id="workspace-policy" aria-labelledby="workspace-policy-heading" hidden>
+      <header><h2 id="workspace-policy-heading" tabindex="-1">Workspace and security</h2><button id="close-workspace-policy" type="button">Close workspace policy</button></header>
+      <p class="notice">Development preview only. This page reports policy and sharing boundaries; it cannot enable family mode, change grants or restart the service.</p>
+      <button id="refresh-workspace-policy" type="button">Refresh workspace policy</button>
+      <p id="workspace-policy-status" role="status" aria-live="polite"></p>
+      <div id="workspace-policy-details"></div>
     </section>
     <section class="session-controls" aria-label="Session navigation">
       <label for="session-select">Owned session</label>

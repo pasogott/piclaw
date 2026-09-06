@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runAgentPrompt } from "../../src/agent-pool/run-agent-orchestrator.js";
 import { AgentTurnCoordinator } from "../../src/agent-pool/turn-coordinator.js";
-import { getDb, initDatabase } from "../../src/db/connection.js";
+import { getDb, initDatabase, closeDatabase } from "../../src/db/connection.js";
 import { storeChatMetadata } from "../../src/db/messages.js";
 import { ensureChatBranch } from "../../src/db/chat-branches.js";
 import { provisionUserHome } from "../../src/db/session-ownership.js";
@@ -26,4 +26,20 @@ test("orchestrator rejects mismatched provenance before hydration and carries va
   const valid=await runAgentPrompt("prompt","web:default",{skipPrePromptCompaction:true,executionProvenance:{actorUserId:"default",ownerUserId:"default",chatJid:"web:default",kind:"scheduled"}},options);
   expect(valid.error).toContain("fixture stop");expect(hydrated).toBe(1);expect(observed).toBe("default");expect(getExecutionIdentity()).toBeNull();
  } finally {restore();rmSync(workspace,{recursive:true,force:true});}
+});
+
+test('family orchestrator rejects a session without tool controls before calling prompt', async () => {
+ const workspace=mkdtempSync(join(tmpdir(),'piclaw-family-ceiling-'));
+ const restore=setEnv({PICLAW_WORKSPACE:workspace,PICLAW_STORE:join(workspace,'store'),PICLAW_DATA:join(workspace,'data')});
+ try {
+  mkdirSync(join(workspace,'.piclaw')); writeFileSync(join(workspace,'.piclaw/config.json'),JSON.stringify({domains:{access:{mode:'family-shared'}}}));
+  closeDatabase(); initDatabase(); storeChatMetadata('web:default',new Date().toISOString(),'root'); ensureChatBranch({chat_jid:'web:default'}); provisionUserHome(getDb(),'default','web:default');
+  let prompts=0;
+  const session={sessionManager:{getLeafId:()=>null},model:null,isStreaming:false,isCompacting:false,isRetrying:false,prompt:async()=>{prompts++;},subscribe:()=>()=>{}};
+  const result=await runAgentPrompt('hello','web:default',{skipPrePromptCompaction:true,executionProvenance:{actorUserId:'default',ownerUserId:'default',chatJid:'web:default',kind:'scheduled'}},{
+   getOrCreateRuntime:async()=>({session,services:{},dispose:async()=>{}} as any),turnCoordinator:new AgentTurnCoordinator({takeAttachments:()=>[],touchSession:()=>{},recordMessageUsage:()=>{}}),
+   clearAttachments:()=>{},takeAttachments:()=>[],logsDir:join(workspace,'logs'),setActiveForkBaseLeaf:()=>{},clearActiveForkBaseLeaf:()=>{},
+  });
+  expect(result.status).toBe('error'); expect(result.error).toContain('requires active-tool controls'); expect(prompts).toBe(0);
+ } finally { closeDatabase(); restore(); rmSync(workspace,{recursive:true,force:true}); }
 });
