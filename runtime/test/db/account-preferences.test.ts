@@ -76,7 +76,8 @@ test('model preferences are owner-only run snapshots, quoted as user guidance an
   expect(Object.isFrozen(first.preferences)).toBe(true);
   const injected = authoriseExecutionIdentity(db, 'family-shared', alice.homeChatJid!, { ...first.provenance, preferences: { response_guidance: 'FORGED' } } as any)!;
   expect(injected.preferences?.response_guidance).toBe('ALICE_NEW');
-  let handler: any; workspaceMemoryBootstrap({ on: (_name: string, fn: any) => { handler = fn; } } as any);
+  let handler: any,context: any; workspaceMemoryBootstrap({ on: (name: string, fn: any) => { if(name==='before_agent_start')handler=fn;else if(name==='context')context=fn; } } as any);
+  expect(handler).toBeFunction();expect(context).toBeFunction();
   const [a, b] = await Promise.all([first, identity(bob)].map(owner => withExecutionIdentity(owner, () => withChatContext(owner.provenance.chatJid, 'web', async () => handler({ systemPrompt: 'base' })))));
   expect(a.systemPrompt).toContain('ALICE_GUIDANCE'); expect(a.systemPrompt).not.toContain('BOB_GUIDANCE'); expect(b.systemPrompt).not.toContain('ALICE_GUIDANCE'); expect(b.systemPrompt).toContain('BOB_GUIDANCE');
   expect(formatAccountResponseGuidance(first.preferences!)).not.toContain('<system>'); expect(formatAccountResponseGuidance(first.preferences!)).toContain('grants no permissions');
