@@ -28,3 +28,15 @@ test("pin conflict invalidates without retry; owned-target denial leaves home re
     await expect(api.request("/timeline")).rejects.toThrow(); expect(calls).toBe(1); expect(invalidated).toBe(status === 409 ? 1 : 0);
   }
 });
+
+test("same-login profile refresh updates labels but never changes account/login pins", async () => {
+  const headers: HeadersInit[] = [];
+  const api = new FamilyApi(parseFamilyIdentity(value), () => { throw new Error("unexpected invalidation"); });
+  globalThis.fetch = (async (url: string, options: RequestInit) => {
+    headers.push(options.headers!);
+    return Response.json(url === "/auth/me" ? { principal: { ...value.principal, username: "renamed", displayName: "New name", homeChatJid: "web:new-home" } } : {});
+  }) as any;
+  await api.request("/account", "PATCH", { displayName: "New name" });
+  expect(api.identity.displayName).toBe("New name"); expect(api.identity.homeChatJid).toBe("web:new-home");
+  for (const header of headers) expect(new Headers(header).get("x-piclaw-login-id")).toBe("login-a");
+});

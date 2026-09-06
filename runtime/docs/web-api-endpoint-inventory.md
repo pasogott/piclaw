@@ -80,6 +80,7 @@ These exact routes are implemented in `http/family-authorisation.ts`, `http/fami
 | GET | `/admin/users` | Current enabled administrator | `{users}` metadata only |
 | POST | `/admin/users` | Recent administrator; `username`, `displayName`, optional `role` | 201 `{user}`, disabled with owned home |
 | PATCH | `/admin/users/:id` | Recent administrator; username/displayName/role/enabled only | `{user}`; enablement checks usable factor/home |
+| GET | `/account` | Live self; query selectors denied | `{user,recent_auth,capabilities,factors,sessions}`; one snapshot, current-RP usability/removal hints and current-login marker, no secrets or foreign metadata |
 | PATCH | `/account` | Recent self; username/displayName only | `{user}` |
 | GET | `/account/sessions` | Current self | `{sessions}` without bearer material |
 | DELETE | `/account/sessions/:sessionId` | Recent self; foreign/missing IDs have no effect | `{revoked:true}` |

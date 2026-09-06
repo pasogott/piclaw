@@ -24,4 +24,15 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
 #compose-form { display: flex; flex-direction: column; gap: 8px; margin-top: 22px; }
 textarea { resize: vertical; width: 100%; }
 #send-message { align-self: flex-end; }
+#account-settings { border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin: 16px 0; }
+#account-settings h2, #account-settings h3 { margin: 8px 0; }
+#account-status { color: var(--muted); overflow-wrap: anywhere; }
+.account-section { border-top: 1px solid var(--border); padding: 12px 0; }
+#account-profile { display: grid; gap: 8px; }
+#account-profile input { width: 100%; min-width: 0; }
+.account-list { list-style: none; padding: 0; }
+.account-list li { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+.account-list span { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+#account-settings button, #account-settings input:not([type=checkbox]), #open-account { min-height: 44px; }
+#account-confirmation label { display: block; padding: 12px 0; }
 @media (max-width: 480px) { .family-shell { padding: 12px; } .session-controls label { flex-basis: 100%; } }

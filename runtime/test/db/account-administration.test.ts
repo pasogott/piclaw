@@ -3,7 +3,7 @@ import "../helpers.js";
 import { closeDatabase, getDb, initDatabase } from "../../src/db/connection.js";
 import { getUser } from "../../src/db/users.js";
 import { createWebSession } from "../../src/db/web-sessions.js";
-import { listManagedAccounts, provisionFamilyAccount, updateManagedAccount, updateOwnAccount, listOwnSessions, revokeOwnSession, listOwnFactors, removeOwnFactor } from "../../src/db/account-administration.js";
+import { listManagedAccounts, provisionFamilyAccount, updateManagedAccount, updateOwnAccount, listOwnSessions, revokeOwnSession, listOwnFactors, removeOwnFactor, readOwnAccountSettings } from "../../src/db/account-administration.js";
 import { getRootOwnership } from "../../src/db/session-ownership.js";
 import { resolveRequestPrincipal } from "../../src/channels/web/auth/principal.js";
 import type { AuthenticatedPrincipal } from "../../src/core/access-types.js";
@@ -148,4 +148,53 @@ test("a passkey for another RP cannot satisfy enablement or last-factor policy",
   getDb().exec("UPDATE webauthn_credentials SET rp_id='other.local' WHERE credential_id='other-key'");
   expect(() => removeOwnFactor(getDb(), alice, { kind: "passkey", credentialId: `cred-${user.id}` }, policy)).toThrow("last configured");
   expect(listOwnFactors(getDb(), alice).passkeys).toHaveLength(2);
+});
+
+test("account snapshot is owner-only, policy-aware, metadata-only and distinguishes current login", () => {
+  const alice = member(), bob = member("bob"), db = getDb();
+  const other = createWebSession("alice-other", alice.userId, 3600, "passkey");
+  let snapshot = readOwnAccountSettings(db, alice, policy);
+  expect(snapshot.user.id).toBe(alice.userId);
+  expect(snapshot.capabilities).toEqual({ update_profile: true, register_passkey: true, revoke_session: true });
+  expect(snapshot.sessions.filter(s => s.current).map(s => s.session_id)).toEqual([alice.authentication.sessionId!]);
+  expect(snapshot.sessions.find(s => s.session_id === other.session_id)?.current).toBe(false);
+  expect(snapshot.factors.passkeys[0]?.removable).toBe(false);
+  const json = JSON.stringify(snapshot);
+  for (const secret of [bob.userId, "alice-other", "public_key", "token", "ciphertext", "home_chat_jid"]) expect(json).not.toContain(secret);
+  passkey(alice.userId, "second"); passkey(alice.userId, "other-rp");
+  db.exec("UPDATE webauthn_credentials SET rp_id='other.local' WHERE credential_id='other-rp'");
+  snapshot = readOwnAccountSettings(db, alice, policy);
+  expect(snapshot.factors.passkeys.every(k => k.removable)).toBe(true);
+  expect(snapshot.factors.passkeys.find(k => k.credential_id === "other-rp")?.usable).toBe(false);
+  const disabled = readOwnAccountSettings(db, alice, { ...policy, passkey: false });
+  expect(disabled.capabilities.register_passkey).toBe(false);
+  expect(disabled.factors.passkeys.every(k => !k.removable && !k.usable)).toBe(true);
+  db.query("UPDATE web_sessions SET created_at=? WHERE session_id=?").run(new Date(Date.now()-600_000).toISOString(), alice.authentication.sessionId!);
+  snapshot = readOwnAccountSettings(db, alice, policy);
+  expect(snapshot.recent_auth).toBe(false);
+  expect(Object.values(snapshot.capabilities).every(v => !v)).toBe(true);
+  expect(snapshot.factors.passkeys.every(k => !k.removable)).toBe(true);
+  expect(() => updateOwnAccount(db, alice, { displayName: "stale write" })).toThrow();
+  db.query("DELETE FROM web_sessions WHERE session_id=?").run(alice.authentication.sessionId!);
+  expect(() => readOwnAccountSettings(db, alice, policy)).toThrow();
+});
+
+test("account snapshot matches TOTP last-factor policy and serves pinned no-store HTTP without selectors", async () => {
+  const alice = member(), db = getDb();
+  db.query("INSERT INTO user_totp_factors(user_id,ciphertext,salt,nonce,revision,last_used_step,created_at) VALUES (?,?,?,?,?,-1,?)")
+    .run(alice.userId, new Uint8Array([1]), new Uint8Array([2]), new Uint8Array([3]), "revision", new Date().toISOString());
+  expect(readOwnAccountSettings(db, alice, policy).factors.totp.removable).toBe(true);
+  expect(readOwnAccountSettings(db, alice, { ...policy, passkey: false }).factors.totp.removable).toBe(false);
+  const json = (value: unknown, status = 200) => Response.json(value, { status });
+  const gateway = new WebAuthGateway({ accessMode: "family-shared", passkeyMode: "", totpSecret: "", internalSecret: "", sessionTtlSeconds: 3600, hasTls: true }, {
+    json, challenges: new WebauthnChallengeTracker(), failureTracker: new TotpFailureTracker(),
+  });
+  const router = new RequestRouterService({ json, authGateway: gateway } as any, "family-shared");
+  const request = (query = "", pin = alice.userId) => router.handle(new Request("https://family.local/account"+query, { headers: {
+    cookie: `piclaw_session=token-${alice.userId}`, "x-piclaw-account-id": pin, "x-piclaw-login-id": alice.authentication.sessionId!,
+  } }));
+  const response = await request(); expect(response.status).toBe(200); expect(response.headers.get("cache-control")).toBe("private, no-store");
+  expect(response.headers.get("vary")).toContain("Cookie"); expect((await response.json()).user.id).toBe(alice.userId);
+  expect((await request("?user_id=default")).status).toBe(403);
+  expect((await request("", "default")).status).toBe(409);
 });

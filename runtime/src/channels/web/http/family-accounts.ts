@@ -1,7 +1,7 @@
 import type { AuthenticatedPrincipal } from "../../../core/access-types.js";
 import { getDb } from "../../../db/connection.js";
 import { ChatAccessDenied } from "../../../db/session-ownership.js";
-import { listManagedAccounts, provisionFamilyAccount, updateManagedAccount, updateOwnAccount, listOwnSessions, revokeOwnSession, listOwnFactors, removeOwnFactor } from "../../../db/account-administration.js";
+import { listManagedAccounts, provisionFamilyAccount, updateManagedAccount, updateOwnAccount, listOwnSessions, revokeOwnSession, listOwnFactors, removeOwnFactor, readOwnAccountSettings } from "../../../db/account-administration.js";
 import type { CreateUserInput, UpdateUserInput } from "../../../db/users.js";
 import type { WebChannelLike } from "../core/web-channel-contracts.js";
 import { checkCsrfOrigin, rateLimitResponse } from "./security.js";
@@ -25,13 +25,17 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
   }
   try {
     const db = getDb();
+    const policy = { totp: channel.authGateway.createTotpContext().isTotpEnabled(), passkey: channel.authGateway.createWebauthnContext().isPasskeyEnabled(), rpId: resolveWebauthnRpInfo(req).rpId };
     if (method === "GET") {
+      if (path === "/account") {
+        if (new URL(req.url).search) return deny();
+        return channel.json(readOwnAccountSettings(db, principal, policy));
+      }
       if (path === "/admin/users") return channel.json({ users: listManagedAccounts(db, principal) });
       if (path === "/account/sessions") return channel.json({ sessions: listOwnSessions(db, principal) });
       if (path === "/account/factors") return channel.json(listOwnFactors(db, principal));
       return deny();
     }
-    const policy = { totp: channel.authGateway.createTotpContext().isTotpEnabled(), passkey: channel.authGateway.createWebauthnContext().isPasskeyEnabled(), rpId: resolveWebauthnRpInfo(req).rpId };
     const invitation = path.match(/^\/admin\/users\/([a-zA-Z0-9_-]+)\/invitation$/);
     if (invitation) {
       if (method === "DELETE") { new AccountInvitations(db).revoke(principal, invitation[1]!); return channel.json({ revoked: true }); }

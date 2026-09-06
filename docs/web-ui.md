@@ -23,7 +23,11 @@ Before fetching private data, the shell unregisters existing origin service work
 
 The shell polls metadata-only recovery status for the selected owned session. It shows retry/skip only for the oldest held input, requires explicit skip confirmation and reuses request IDs for unchanged manual retries. Recovery mutations still require authentication within five minutes; changing session/login clears the controls. Status reads reveal neither failure details nor prompt text.
 
-This preview is English-only. Attachments, streaming, pagination, lifecycle actions and account Settings remain unfinished. The following sections describe the supported **single-user** UI.
+**My account** uses a live, owner-only GET `/account` snapshot for profile fields, factor metadata, signed-in devices and capability hints. It supports username/display-name changes, adding independent passkeys, eligible factor removal and device revocation. Sensitive actions require a sign-in within five minutes. Removing a factor signs out every device; a checkbox confirms that effect. The last usable factor cannot be removed. Current-site passkey usability and the current login are identified without exposing secrets.
+
+The panel discards account form drafts on blur, close, session switch and navigation. Passkey prompts may temporarily blur it; the original login is rechecked before a credential is submitted. Native registration is cancelled on close/navigation. Failed writes are never automatically retried. Same-account label changes update the shell without changing account/login pins.
+
+This preview is English-only. Avatar changes, self TOTP enrolment, passkey/device labels, family administration, attachments, streaming, pagination and session lifecycle controls are unfinished. Shared/provider/deployment Settings and single-user classic/visual Settings are unchanged. Chromium virtual-authenticator tests cover adding two independent keys; physical authenticator/device coverage is incomplete. The following sections describe the supported **single-user** UI.
 
 ## Chat and status surfaces
 

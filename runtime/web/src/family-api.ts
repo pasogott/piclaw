@@ -45,7 +45,8 @@ export async function prepareFamilyBrowser(): Promise<void> {
 
 export class FamilyApi {
   private readonly controller = new AbortController();
-  constructor(readonly identity: FamilyIdentity, private readonly onInvalidated: () => void) {}
+  constructor(private currentIdentity: FamilyIdentity, private readonly onInvalidated: () => void) {}
+  get identity(): FamilyIdentity { return this.currentIdentity; }
   stop(): void { this.controller.abort(); }
   private headers(): Record<string, string> {
     return { "x-piclaw-account-id": this.identity.userId, "x-piclaw-login-id": this.identity.loginId };
@@ -65,6 +66,7 @@ export class FamilyApi {
     }
     if (this.controller.signal.aborted) throw new Error("This page is no longer active.");
     if (identity.userId !== this.identity.userId || identity.loginId !== this.identity.loginId) this.invalidate();
+    this.currentIdentity = identity;
   }
   async request(path: string, method = "GET", body?: unknown): Promise<any> {
     if (this.controller.signal.aborted) throw new Error("This page is no longer active.");
