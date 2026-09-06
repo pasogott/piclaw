@@ -70,6 +70,14 @@ test("dispatcher uses exact owner prompt/system context/tool ceiling and settles
   await expect(dispatch(proof(cap),h.deps)).rejects.toThrow();
 });
 
+test('scheduled bootstrap loads only admitted owner memory and shared reference after logout',async()=>{
+  for(const owner of [alice,bob]){const dir=join(ws.workspace,'notes/users',owner.userId);mkdirSync(dir,{recursive:true});writeFileSync(join(dir,'MEMORY.md'),`${owner.username}_MEMORY_ONLY`);}
+  mkdirSync(join(ws.workspace,'notes/family'),{recursive:true});writeFileSync(join(ws.workspace,'notes/family/MEMORY.md'),'SHARED_MEMORY_REFERENCE');
+  const cap=await handoff(),h=harness();getDb().query('DELETE FROM web_sessions WHERE user_id=?').run(alice.userId);
+  const pending=dispatch(proof(cap),h.deps);await h.queued[0].run();await pending;
+  expect(h.observed[0].system).toContain('alice_MEMORY_ONLY');expect(h.observed[0].system).toContain('SHARED_MEMORY_REFERENCE');expect(h.observed[0].system).not.toContain('bob_MEMORY_ONLY');
+});
+
 test('confirmed owner HTTP admission reaches real one-shot prompt with exact identity and retry never requeues',async()=>{
   const real=Date.now,at=real()+5;let ids:ReturnType<typeof createFamilyScheduledTask>;
   try{Date.now=()=>at-5;ids=createFamilyScheduledTask(getDb(),alice,alice.homeChatJid!,{prompt:'owner approved exact prompt',scheduled_for:new Date(at).toISOString(),allowed_tools:['read','messages']});}finally{Date.now=real;}
