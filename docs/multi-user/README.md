@@ -366,6 +366,14 @@ Unmodified single-user callers keep their existing prompt and memory behaviour, 
 
 ## Text-only family message admission
 
+### Legacy scheduler restriction
+
+`startSchedulerLoop`, `pollScheduledRunsOnce` and `runScheduledTask` deny family and isolated modes, invalid access configuration and stale multi-user execution context before opening the scheduler store, claiming work or reading a task. Agent, shell and internal tasks use the same restriction. Queued work and lease-renewal callbacks check again before proceeding; single-user leases still renew while waiting in the queue.
+
+After each asynchronous scheduler stage, a failed check stops later delivery, model/session restoration, result logging, recurrence advancement and source/claim settlement. Denial stops local lease timers without abandoning or rewriting a claim already committed. An in-flight provider, shell, Dream, delivery or store operation cannot be recalled by these checks; its internal work may finish. Stop all writers before changing modes. Task records still lack separate immutable owner and initiating-actor grants, so this restriction does not enable owner-aware scheduled work or direct Dream entry points.
+
+### Message and side-prompt entry points
+
 The exported `runSidePrompt` runner and `AgentPool.runSidePrompt` reject family and isolated modes before hydration, model selection, usage recording or output callbacks. They check the mode again after main-session hydration, side-session hydration and side synchronisation. A caller-supplied runtime or inherited execution identity cannot enable this unsupported path. HTTP side-prompt handlers also reject these modes before parsing the request. Owner-aware side admission, prompt identity and tool-policy enforcement are still required before side prompts can be enabled.
 
 The bundled direct-model executor returned by `getRuntimeModelExecutor` also rejects family and isolated modes. Each `streamSimple` or `completeSimple` call checks the current mode before reading provider methods or composing options, including calls through a retained reference. A multi-user execution context cannot use this path after the configuration changes to single-user. Invalid access configuration throws. Single-user callbacks and payload sanitisation are unchanged. This check does not cancel an already-started request or govern arbitrary provider calls made by installed extensions. The current bundled caller, semantic tool-output summarisation, catches the denial and falls back to a preview; its shared output store and process-wide cache still need ownership integration before multi-user activation.
