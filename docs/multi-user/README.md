@@ -33,10 +33,10 @@ Family mode is intended for trusted household members. Users with arbitrary shel
 | Modes and migration (#1123/#1126/#1133) | Strict config/marker checks, read-only topology preview, explicit root/handle adoption helpers | Complete migration/rollback tooling, existing-child seed adoption, activation gates |
 | Accounts and factors (#1124/#1125) | Disabled account + owned home provisioning, live/recent-login admin checks, own-device/factor APIs, TOTP and multiple passkeys | Avatar and factor/device names, self TOTP enrolment, offline lone-admin recovery, passkey-first invitations/reset, owner-aware replacement for disabled legacy factor commands |
 | Invitations/recovery (#1125) | One-use browser-bound TOTP grants, atomic enrol-and-enable, explicit other-admin reset, fragment-based invitation/QR page | Reset confirmation/admin issuance UI, physical-device and full account browser workflows |
-| Sessions (#1126/#1128) | Root ownership, owner-local names, atomic forks/rename, additional roots, home selection and idle archive/restore | Merge/purge, full archive backup, browser lifecycle UX, process-kill recovery proof |
+| Sessions (#1126/#1128) | Root ownership, owner-local names, atomic forks/rename, additional roots, home selection and idle archive/restore; owned lifecycle browser controls | Merge/purge, full archive backup, process-kill recovery proof |
 | HTTP and SSE (#1127) | Terminal family HTTP policy, SQL-scoped search, own-thread reads, revocable SSE, text-only persisted message admission, selected account/fork routes, separate pinned text browser shell | Uploads and remaining derived resources/mutations, direct WebSocket/transport/tool paths, legacy-origin migration and push recipients |
 | Model identity/memory (#1129/#1131) | Server identity before hydration, scoped model context and owner/family memory paths | All direct/queued/delegate/side/Dream entry points and service grants; shared-resource policy |
-| Settings and isolation (#1130/#1132) | Own-account profile, factor and device controls with server capability snapshot in the gated family shell | Administration/lifecycle/shared-resource Settings, preference classification and per-user container gateway/deployment |
+| Settings and isolation (#1130/#1132) | Own-account profile, factor and device controls and owned-session lifecycle controls with server capability snapshots in the gated family shell | Administration/shared-resource Settings, preference classification and per-user container gateway/deployment |
 | Auth maintenance (#1125) | Transient-expiry loop and offline factor re-encryption helper | Coordinated rotation CLI/dual-key support, generic-keychain rotation, audit retention |
 
 Passing backend tests and merged PRs do not complete these issues or allow activation. Preserve single-user compatibility until the staged integration gates pass.
@@ -102,7 +102,7 @@ These backend operations do not complete browser lifecycle UX, process-kill race
 
 On first use, session hydration validates live execution identity, the target and the seed's source before replay. It applies the current stored name, persists/reopens the session, then clears the seed payload while retaining the operation identity. Failure keeps the seed for retry and disposes the broken runtime. A crash before completion may replay into a fresh session again; the seed is retained until successful persistence. Legacy file seeds are rejected for family sessions. Existing migrated children without fork-operation provenance need an explicit adoption workflow before hydration.
 
-Main/cached/side hydration now requires matching live family execution identity. Family background prewarm is disabled until its queue carries durable owner provenance. The session manager rechecks identity after asynchronous waits; callers still need integration across direct model/tool entry points. Fork and rename UI workflows, process-kill crash testing, per-user deployment and activation gates remain unfinished.
+Main/cached/side hydration now requires matching live family execution identity. Family background prewarm is disabled until its queue carries durable owner provenance. The session manager rechecks identity after asynchronous waits; callers still need integration across direct model/tool entry points. The gated My sessions panel exposes fork, rename and lifecycle operations. Process-kill crash testing, per-user deployment and activation gates remain unfinished.
 
 ## HTTP and SSE enforcement
 
@@ -179,6 +179,7 @@ Account reads recheck the login ID and enabled user/role. Mutations require a ma
 | POST `/admin/users` | Recent administrator creates a disabled account and owned home root atomically |
 | PATCH `/admin/users/:id` | Recent administrator changes username/displayName/role/enabled; immutable identity/home fields rejected |
 | GET `/account` | Live self-only profile/factor/device snapshot with current-policy capability hints; query selectors denied |
+| GET `/account/trees` | Live self-only root/fork/archive metadata and action eligibility; query selectors denied; distinct from browser-device `/account/sessions` |
 | PATCH `/account` | Recent account owner changes only username/displayName |
 | PATCH `/account/home` | Recent account owner selects an active owned root; no other device's explicit target is rewritten |
 | GET `/account/sessions` | Current owner's login metadata, excluding bearer material |
@@ -194,6 +195,10 @@ Provisioning creates the disabled user, immutable `web:user:<id>` home, root own
 GET `/account` returns `{user,recent_auth,capabilities,factors,sessions}` from one read transaction. `user` contains only ID, username and display name. Factor metadata marks current-site usability and removal eligibility; login metadata marks the current device without returning bearer tokens. The same five-minute check used by mutations controls profile, registration and revocation hints. A stale snapshot never authorises a write: mutations recheck authentication, policy and last-factor protection independently.
 
 The gated shell's **My account** panel changes username/display name, adds independent passkeys, removes eligible factors and revokes owned logins. Destructive actions require a checked confirmation. Removing a factor signs out every account device and clears the panel through identity invalidation. Existing TOTP seeds cannot be displayed or replaced. Account form drafts are discarded on blur, close, session switch and navigation; late responses cannot restore a different login's data. Native passkey dialogs may blur the page, so registration masks the panel and revalidates the original account/login before submitting the result. Closing the panel cancels native registration.
+
+GET `/account/trees` returns the live home, root-creation capability and owned root/fork/archive metadata. Per-row hints permit open/fork/rename on active chains, archive only outside the home with archived descendants, restore under active parents and recent-auth home selection on active roots. Hints do not reserve runtime state or a handle: the existing write paths recheck all authority and operation predicates. No model runtime is hydrated for this read, and administrators receive only their own trees.
+
+My sessions uses that snapshot with explicit targets, archive/home confirmations and stable manual fork retry keys. Successful changes refresh the owned picker without changing the open conversation. Closing/backgrounding clears forms; navigation uses the explicit Open/Go home controls. Root creation has no request key; an unchanged duplicate name fails uniqueness, so inspect the list after an uncertain result before choosing a new name. Fork form closure discards its retry key and also requires inspection before a new attempt.
 
 Restricted invitations below bootstrap a new TOTP factor; administrator-assisted reset is described separately. Avatar changes, self TOTP enrolment, device/passkey labels, administration UI and offline lone-administrator recovery are not implemented. Full mode activation, migrated legacy factors and legacy WebAuthn tool/ceremony isolation need integration testing before release.
 

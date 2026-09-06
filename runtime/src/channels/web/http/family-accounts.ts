@@ -10,7 +10,7 @@ import { resolveWebauthnRpInfo } from "../auth/webauthn-challenges.js";
 import { AccountInvitations } from "../../../secure/account-invitations.js";
 import { FamilyPasskeys } from "../../../secure/family-passkeys.js";
 import { resetFamilyAccount } from "../../../secure/account-recovery.js";
-import { selectOwnedHome } from "../../../db/owned-session-lifecycle.js";
+import { selectOwnedHome, readOwnedSessionSettings } from "../../../db/owned-session-lifecycle.js";
 
 /** Account-only surface: never returns conversation content, tokens or factor secrets. */
 export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Request, principal: AuthenticatedPrincipal): Promise<Response | null> {
@@ -27,6 +27,10 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
     const db = getDb();
     const policy = { totp: channel.authGateway.createTotpContext().isTotpEnabled(), passkey: channel.authGateway.createWebauthnContext().isPasskeyEnabled(), rpId: resolveWebauthnRpInfo(req).rpId };
     if (method === "GET") {
+      if (path === "/account/trees") {
+        if (new URL(req.url).search) return deny();
+        return channel.json(readOwnedSessionSettings(db, principal));
+      }
       if (path === "/account") {
         if (new URL(req.url).search) return deny();
         return channel.json(readOwnAccountSettings(db, principal, policy));

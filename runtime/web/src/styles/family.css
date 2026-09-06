@@ -35,4 +35,13 @@ textarea { resize: vertical; width: 100%; }
 .account-list span { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
 #account-settings button, #account-settings input:not([type=checkbox]), #open-account { min-height: 44px; }
 #account-confirmation label { display: block; padding: 12px 0; }
+#session-settings { border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin: 16px 0; }
+#session-settings h2, #session-settings h3 { margin: 8px 0; }
+#session-settings-status, #session-home { overflow-wrap: anywhere; }
+#owned-tree-list { list-style: none; padding: 0; }
+#owned-tree-list li { border-top: 1px solid var(--border); padding: 12px 0; overflow-wrap: anywhere; }
+#owned-tree-list li div { display: flex; flex-wrap: wrap; gap: 8px; }
+#session-settings button, #session-settings input:not([type=checkbox]), #open-sessions { min-height: 44px; }
+#session-settings input:not([type=checkbox]) { width: 100%; min-width: 0; margin: 8px 0; }
+#session-action-confirm-field { display: block; padding: 12px 0; }
 @media (max-width: 480px) { .family-shell { padding: 12px; } .session-controls label { flex-basis: 100%; } }

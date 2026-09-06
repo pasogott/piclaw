@@ -1,5 +1,6 @@
 import { FamilyApi, fetchFamilyIdentity, prepareFamilyBrowser } from './family-api.js';
 import { FamilyAccount } from './family-account.js';
+import { FamilySessions } from './family-sessions.js';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -16,6 +17,8 @@ let heldRow: number | null = null;
 let recoveryRequest: { row: number; action: 'retry' | 'skip'; requestId: string } | null = null;
 let api: FamilyApi | null = null, current = '', stopped = false, busy = false, paused = false, generation = 0;
 let settings: FamilyAccount | null = null;
+let sessionSettings: FamilySessions | null = null;
+let directoryGeneration = 0;
 let refreshing: symbol | null = null, polling: ReturnType<typeof setInterval> | undefined;
 let pending: { text: string; chat: string; requestId: string } | null = null;
 function controls(enabled: boolean): void {
@@ -26,13 +29,16 @@ function controls(enabled: boolean): void {
 function mask(): void {
   // Backgrounded tabs retain no visible conversation/draft until the cookie is revalidated.
   generation++; refreshing = null; timeline.replaceChildren(); account.textContent = ''; status.textContent = ''; error.textContent = '';
+  directoryGeneration++;
   form.hidden = true; select.hidden = true; recovery.hidden = true; controls(false);
   settings?.suspend(); element<HTMLButtonElement>('open-account').disabled = true;
+  sessionSettings?.suspend(); element<HTMLButtonElement>('open-sessions').disabled = true;
 }
 function invalidate(): void {
   if (stopped) return;
   stopped = true; mask(); api?.stop();
   settings?.stop();
+  sessionSettings?.stop();
   if (polling) clearInterval(polling);
   select.replaceChildren(); compose.value = ''; pending = null; heldRow = null; recoveryRequest = null; confirmSkip.checked = false; recoveryStatus.textContent = ''; logout.disabled = true;
   status.textContent = 'This page is no longer bound to its original account.';
@@ -72,11 +78,21 @@ async function loadTimeline(): Promise<void> {
     renderPosts(result.posts); renderRecovery(recoveryState); status.textContent = `Session: ${target}${result.has_more ? ' · Showing the most recent messages' : ''}`;
     account.textContent = `${api.identity.displayName} (@${api.identity.username})`;
     element<HTMLButtonElement>('open-account').disabled = false; settings?.resume();
+    element<HTMLButtonElement>('open-sessions').disabled = false; sessionSettings?.resume();
     form.hidden = false; select.hidden = false; controls(!busy);
   } catch (failure) {
     if (!stopped && expected === generation) {
       timeline.replaceChildren(); controls(false); home.disabled = false; refresh.disabled = false;
       error.textContent = (failure as Error).message;
+      // An archived/foreign conversation must not prevent own-account or restore controls.
+      // Revalidate independently; a denied target response has not verified the cookie.
+      try {
+        await api.verifyIdentity();
+        if (!stopped && expected === generation && !paused && !document.hidden) {
+          element<HTMLButtonElement>('open-account').disabled = false; settings?.resume();
+          element<HTMLButtonElement>('open-sessions').disabled = false; sessionSettings?.resume();
+        }
+      } catch { /* Identity invalidation clears the page; network errors keep controls masked. */ }
     }
   } finally { if (refreshing === flight) refreshing = null; }
 }
@@ -88,6 +104,19 @@ async function switchSession(chat: string): Promise<void> {
   await loadTimeline();
 }
 
+async function refreshDirectory(): Promise<void> {
+  if (!api || stopped || paused || document.hidden) return;
+  const expected = ++directoryGeneration;
+  const directory = await api.request('/agent/branches');
+  if (stopped || paused || document.hidden || expected !== directoryGeneration) return;
+  if (!Array.isArray(directory.branches)) throw new Error('Invalid session directory.');
+  select.replaceChildren();
+  for (const branch of directory.branches) {
+    const option = document.createElement('option'); option.value = branch.chat_jid; option.textContent = `${branch.agent_name} · ${branch.root_chat_jid}`; select.append(option);
+  }
+  select.value = current;
+}
+
 async function start(): Promise<void> {
   try {
     await prepareFamilyBrowser();
@@ -95,14 +124,21 @@ async function start(): Promise<void> {
     if (stopped) return;
     api = new FamilyApi(identity, invalidate); logout.disabled = false;
     settings = new FamilyAccount(api);
+    sessionSettings = new FamilySessions(api, {
+      lock: value => {
+        if (value && (busy || paused || stopped)) return false;
+        busy = value; generation++; refreshing = null; controls(false); return true;
+      },
+      navigate: switchSession,
+      changed: async () => {
+        try { await refreshDirectory(); await loadTimeline(); }
+        catch (failure) { if (!stopped && !paused) error.textContent = (failure as Error).message; }
+      },
+    });
     const requested = new URL(location.href).searchParams.getAll('chat_jid');
     if (requested.length > 1 || (requested.length === 1 && !requested[0]?.trim())) throw new Error('Invalid session selection. Use Go home.');
-    const directory = await api.request('/agent/branches');
-    if (!Array.isArray(directory.branches)) throw new Error('Invalid session directory.');
-    for (const branch of directory.branches) {
-      const option = document.createElement('option'); option.value = branch.chat_jid; option.textContent = `${branch.agent_name} · ${branch.root_chat_jid}`; select.append(option);
-    }
     current = requested[0] ?? identity.homeChatJid;
+    await refreshDirectory();
     // An explicit inaccessible URL is tested by the server, never silently rewritten to home.
     select.value = current; home.disabled = false; refresh.disabled = false; select.disabled = false;
     await loadTimeline();

@@ -4,6 +4,7 @@ import { createUuid } from "../utils/ids.js";
 import { requireAccountActor } from "./account-administration.js";
 import { assignRootOwner, ChatAccessDenied, getRootOwnership, provisionUserHome, resolveAuthorisedChat } from "./session-ownership.js";
 import type { OwnedForkRecord } from "./owned-forks.js";
+import type { SessionSettings } from "../core/session-settings.js";
 
 function handle(value: string): string {
   const name = value.trim().replace(/^@/, "").toLowerCase();
@@ -69,6 +70,41 @@ export function listOwnedLifecycleSessions(database: Database, actor: Authentica
   });
 }
 
+/** Read-only eligibility hints. Mutation paths still recheck ownership, graph and runtime state. */
+export function readOwnedSessionSettings(database: Database, actor: AuthenticatedPrincipal): SessionSettings {
+  return database.transaction(() => {
+    const user = requireAccountActor(database, actor);
+    let recent = true;
+    try { requireAccountActor(database, actor, { recent: true }); }
+    catch (error) { if (!(error instanceof ChatAccessDenied)) throw error; recent = false; }
+    const readable = (jid: string) => {
+      try { resolveAuthorisedChat(database, actor, jid, "session.read"); return true; }
+      catch (error) { if (!(error instanceof ChatAccessDenied)) throw error; return false; }
+    };
+    return { home_chat_jid: user.home_chat_jid, capabilities: { create_root: true },
+      branches: listOwnedLifecycleSessions(database, actor, undefined, true).map(branch => {
+        const active = readable(branch.chat_jid);
+        const parent = branch.parent_branch_id ? database.query("SELECT chat_jid FROM chat_branches WHERE branch_id=?").get(branch.parent_branch_id) as { chat_jid: string } | null : null;
+        return { branch_id: branch.branch_id, chat_jid: branch.chat_jid, root_chat_jid: branch.root_chat_jid,
+          parent_branch_id: branch.parent_branch_id, agent_name: branch.agent_name, archived_at: branch.archived_at,
+          capabilities: { open: active, fork: active, rename: active,
+            archive: active && user.home_chat_jid !== branch.chat_jid && !hasActiveDescendant(database, branch.branch_id),
+            restore: Boolean(branch.archived_at) && (!branch.parent_branch_id || Boolean(parent && readable(parent.chat_jid))),
+            set_home: recent && active && !branch.parent_branch_id && branch.chat_jid === branch.root_chat_jid && branch.chat_jid !== user.home_chat_jid,
+          },
+        };
+      }),
+    };
+  })();
+}
+
+function hasActiveDescendant(database: Database, branchId: string): boolean {
+  return Boolean(database.query(`WITH RECURSIVE descendants(branch_id) AS (
+    SELECT branch_id FROM chat_branches WHERE parent_branch_id=?
+    UNION SELECT b.branch_id FROM chat_branches b JOIN descendants d ON b.parent_branch_id=d.branch_id
+  ) SELECT 1 FROM descendants d JOIN chat_branches b ON b.branch_id=d.branch_id WHERE b.archived_at IS NULL LIMIT 1`).get(branchId));
+}
+
 /** No cascading archive: every descendant must already be archived. Retain seeds and files. */
 export function archiveOwnedSession(database: Database, actor: AuthenticatedPrincipal, chatJid: string): OwnedForkRecord {
   return database.transaction(() => {
@@ -77,11 +113,7 @@ export function archiveOwnedSession(database: Database, actor: AuthenticatedPrin
     if (user.home_chat_jid === chatJid) throw new Error("Select another owned home before archiving this root.");
     if (target.archived_at) return target;
     resolveAuthorisedChat(database, actor, chatJid, "session.archive");
-    const activeDescendant = database.query(`WITH RECURSIVE descendants(branch_id) AS (
-      SELECT branch_id FROM chat_branches WHERE parent_branch_id=?
-      UNION SELECT b.branch_id FROM chat_branches b JOIN descendants d ON b.parent_branch_id=d.branch_id
-    ) SELECT 1 FROM descendants d JOIN chat_branches b ON b.branch_id=d.branch_id WHERE b.archived_at IS NULL LIMIT 1`).get(target.branch_id);
-    if (activeDescendant) throw new Error("Archive active descendants first.");
+    if (hasActiveDescendant(database, target.branch_id)) throw new Error("Archive active descendants first.");
     const now = new Date().toISOString();
     database.query("UPDATE chat_branches SET archived_at=?,updated_at=? WHERE branch_id=?").run(now, now, target.branch_id);
     return resolveOwnedLifecycleSession(database, actor, chatJid);

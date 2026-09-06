@@ -12,6 +12,7 @@
     <header>
       <h1>PiClaw</h1><span id="account-name">Checking account…</span>
       <button id="open-account" type="button" disabled>My account</button>
+      <button id="open-sessions" type="button" disabled>My sessions</button>
       <button id="sign-out" type="button" disabled>Sign out</button>
       <a href="/login">Sign in</a>
     </header>
@@ -45,6 +46,24 @@
         </section>
         <p class="notice">Avatar changes, authenticator enrolment, device/passkey names and family administration are not available in this preview.</p>
       </div>
+    </section>
+    <section id="session-settings" aria-labelledby="session-settings-heading" hidden>
+      <header><h2 id="session-settings-heading" tabindex="-1">My sessions</h2><button id="close-sessions" type="button">Close session settings</button></header>
+      <p>Only your roots and forks appear here. Archive retains history and files. Home changes affect future landing, not conversations already open. Form drafts are discarded on blur or close.</p>
+      <p id="session-home"></p><button id="refresh-sessions" type="button">Refresh owned sessions</button>
+      <p id="session-settings-status" role="status" aria-live="polite"></p>
+      <form id="create-root-form" class="account-section">
+        <label for="root-name">New root handle</label><input id="root-name" required maxlength="64" pattern="[a-z0-9_-]{1,64}" autocapitalize="none" spellcheck="false" />
+        <button id="create-root" type="submit" disabled>Create root</button>
+      </form>
+      <form id="session-action-form" class="account-section" hidden>
+        <h3 id="session-action-title"></h3><p id="session-action-warning"></p>
+        <div id="session-action-name-field"><label for="session-action-name">Handle</label><input id="session-action-name" maxlength="64" pattern="[a-z0-9_-]{1,64}" autocapitalize="none" spellcheck="false" /></div>
+        <label id="session-action-confirm-field"><input id="session-action-confirm" type="checkbox" /> I understand and confirm this session change</label>
+        <button id="submit-session-action" type="submit">Save session change</button><button id="cancel-session-action" type="button">Cancel</button>
+      </form>
+      <ul id="owned-tree-list"></ul>
+      <p class="notice">Eligibility is checked again on every write. Archive/restore require an idle session; forks require a stable turn boundary. Merge, purge and full archive backup are not available.</p>
     </section>
     <section class="session-controls" aria-label="Session navigation">
       <label for="session-select">Owned session</label>
