@@ -56,6 +56,15 @@ async function taskFixture(page:Page) {
 async function openTasks(page:Page){await page.goto(base);await ready(page);await page.locator('#open-tasks').click();await page.waitForFunction(()=>!document.getElementById('prepare-task-form')?.hidden);}
 async function taskDraft(page:Page){await page.locator('#task-target').selectOption('web:alice-two');await page.locator('#task-prompt').fill('Exact task prompt\nline two ');const due=new Date(Date.now()+86400000).toISOString().slice(0,16);await page.locator('#task-due').fill(due);return due;}
 
+browserTest('terminal interrupted scheduled result renders without text or publication controls',async()=>{
+  const page=await browser.newPage();
+  try{await fixture(page);await page.route('**/agent/scheduled-results',r=>r.fulfill({json:resultList([{execution_id:'execution-one',chat_jid:'web:alice-two',created_at:1780000000000,state:'interrupted',publication_recorded:false}])}));
+    await page.route('**/agent/scheduled-results/execution-one',r=>r.fulfill({json:{...resultDetail(),state:'interrupted',result:null}}));
+    await page.goto(base);await ready(page);await page.locator('#open-results').click();await page.getByRole('button',{name:'Inspect result',exact:true}).click();
+    await page.waitForFunction(()=>document.getElementById('scheduled-result-state')?.textContent==='interrupted');expect(await page.locator('#scheduled-result-text').textContent()).toBe('');expect(await page.locator('#publish-result').isDisabled()).toBe(true);expect(await page.locator('#confirm-result-publication').isDisabled()).toBe(true);
+  }finally{await page.close();}
+},20000);
+
 browserTest('terminal expired scheduled result renders without text or publication controls',async()=>{
   const page=await browser.newPage();
   try{await fixture(page);await page.route('**/agent/scheduled-results',r=>r.fulfill({json:resultList([{execution_id:'execution-one',chat_jid:'web:alice-two',created_at:1780000000000,state:'expired',publication_recorded:false}])}));
