@@ -43,6 +43,13 @@ export function initializeAuthFactorSchema(database: Database): void {
       expires_at INTEGER NOT NULL
     ) STRICT;
     CREATE INDEX IF NOT EXISTS idx_user_passkey_registration_expiry ON user_passkey_registrations(expires_at);
+    CREATE TABLE IF NOT EXISTS account_recovery_events (
+      id TEXT PRIMARY KEY,
+      actor_user_id TEXT NOT NULL REFERENCES users(id),
+      target_user_id TEXT NOT NULL REFERENCES users(id),
+      event TEXT NOT NULL CHECK (event = 'admin_reset'),
+      created_at TEXT NOT NULL
+    ) STRICT;
     CREATE TABLE IF NOT EXISTS user_auth_attempts (
       bucket TEXT PRIMARY KEY,
       count INTEGER NOT NULL,
