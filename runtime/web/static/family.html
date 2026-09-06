@@ -106,7 +106,7 @@
     </section>
     <section id="scheduled-tasks" aria-labelledby="scheduled-tasks-heading" hidden>
       <header><h2 id="scheduled-tasks-heading" tabindex="-1">Prepared tasks</h2><button id="close-tasks" type="button">Close tasks</button></header>
-      <p class="notice">Development preview: tasks stay paused. This panel cannot activate, run or delete tasks. Preparing requires a sign-in within five minutes.</p>
+      <p class="notice">Development preview: preparing leaves tasks paused. An inspected due task can request one run with separate confirmation. Automatic scheduling and deletion are unavailable. Writes require a sign-in within five minutes.</p>
       <p>Drafts, retry payloads and inspected text clear on close, refresh, blur, session switch or navigation. A request already sent may finish. Inspect the task list before recreating an uncertain request.</p>
       <button id="refresh-tasks" type="button">Refresh tasks</button><p id="scheduled-tasks-status" role="status" aria-live="polite"></p>
       <form id="prepare-task-form" class="account-section" hidden>
@@ -122,6 +122,13 @@
       <ul id="scheduled-task-list" class="account-list"></ul>
       <section id="scheduled-task-detail" class="account-section" hidden>
         <h3 id="scheduled-task-detail-heading" tabindex="-1">Inspect prepared task</h3><p id="scheduled-task-target"></p><p id="scheduled-task-state"></p><pre id="scheduled-task-text"></pre>
+        <section id="scheduled-task-run" class="account-section" aria-labelledby="task-run-heading" hidden>
+          <h4 id="task-run-heading">Request one execution attempt</h4>
+          <p>Review the original conversation, exact prompt, UTC due time and allowed tools above. Run once may call the model and permitted tools. Each grant can have only one admitted execution; check Scheduled results before requesting an already-admitted task.</p>
+          <label><input id="confirm-task-run" type="checkbox" disabled /> I approve one execution attempt with the inspected prompt, target and allowed tools</label>
+          <button id="run-task" type="button" disabled>Run once</button>
+          <p>An admission receipt does not prove the model started or succeeded. Nothing is published automatically. Close, refresh, reinspection, focus loss or navigation clears this confirmation and retry key, but cannot undo a sent request. Use Scheduled results to inspect or cancel remaining authority.</p>
+        </section>
         <p>Revocation permanently removes this grant's future authority. It cannot undo work already performed, delete history or recreate the same preparation request.</p>
         <label><input id="confirm-task-revocation" type="checkbox" disabled /> I confirm permanent revocation of this task grant</label><button id="revoke-task" type="button" disabled>Revoke task grant</button>
       </section>

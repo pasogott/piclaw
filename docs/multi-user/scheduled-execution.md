@@ -18,7 +18,7 @@ GET `/agent/scheduled-tasks` returns metadata from the newest 50 owner grants, o
 
 ## Owner task panel
 
-The panel has no run button yet; preparing and inspecting remain non-executing actions.
+Preparing and inspecting remain non-executing actions. A separate **Run once** confirmation can admit a due grant as described below.
 
 The [Prepared tasks panel](user-guide.md#prepare-or-revoke-a-paused-task) loads the owner list, active owned targets and current fixed tool allowance on open, explicit refresh or verified lifecycle resume. It never polls tasks. Target and UTC time are explicit, no tools are preselected, and confirmation is required before preparation. Both the 100 KiB UTF-8 prompt limit and 128 KiB encoded JSON limit are checked locally; the server remains authoritative.
 
@@ -94,7 +94,7 @@ Recording is best effort. If mode, clock or storage prevents it, a fixed diagnos
 
 `interrupted` does not mean the provider request or tools have stopped. Timeout closes the execution scope immediately; the queue callback retains the lane until its underlying `runAgent` promise settles. The real prompt runner awaits `session.prompt()` even when its inner timer requests abort. A regression fires that inner timer first with an abort-ignoring fixture, then confirms outer-timeout fencing and lane retention. Already-issued external effects are not undone.
 
-Automatic dispatch, browser run controls, remote-provider termination proof and the remaining activation gates still need implementation. Stop all writers before changing modes. Raw database writers and installed code remain trusted.
+Automatic dispatch, remote-provider termination proof and the remaining activation gates still need implementation. Stop all writers before changing modes. Raw database writers and installed code remain trusted.
 
 ## Owner-confirmed execution cancellation
 
@@ -120,4 +120,6 @@ The first admission returns a private capability only to its HTTP handler. The h
 
 A same-owner/key/grant retry returns HTTP 200 and the original receipt with `created:false`, without a capability or another dispatch attempt. It still requires recent authentication and the active original target. It can acknowledge an unfinished, cancelled, interrupted, expired, settled or grant-revoked execution. A changed grant for the key, or a changed key for the grant, denies without replacement. Receipt and immutable execution bindings are checked; corrupt history fails closed.
 
-There is an intentional commit-to-dispatch crash window. Missing runtime dependencies reject before admission, but disappearance, queue rejection or a process crash after commit can leave an admitted handoff without a start. Repeating the HTTP request never requeues it. Cancellation and explicit expiry recovery remain available; loss after admission cannot be used to replay consumed work. Detached dispatch failures log only a fixed diagnostic and non-secret execution ID. No token enters the receipt, response or that diagnostic. No automatic polling, startup bypass, deployment or browser run button is added.
+There is an intentional commit-to-dispatch crash window. Missing runtime dependencies reject before admission, but disappearance, queue rejection or a process crash after commit can leave an admitted handoff without a start. Repeating the HTTP request never requeues it. Cancellation and explicit expiry recovery remain available; loss after admission cannot be used to replay consumed work. Detached dispatch failures log only a fixed diagnostic and non-secret execution ID. No token enters the receipt, response or that diagnostic. No automatic polling, startup bypass or deployment is added.
+
+The [Run once control](user-guide.md#run-an-inspected-due-task-once) requires validated due nonrevoked detail, a separate execution checkbox and the shell mutation lock. The browser validates canonical UTC time and rechecks it on click; the server remains authoritative. It sends only a generated request ID and confirmation. Uncertain responses retain the same grant/key for a manually confirmed retry; success requires matching request/grant IDs, a valid execution ID, `admitted` state and boolean creation flag. The receipt cannot be interpreted as model success. Reinspection and privacy lifecycle clearing erase the key; visible warnings direct the owner to result history, and unique-grant server receipts prevent duplicate admission. Other shell mutations disarm and disable the run control; cancellation disarms it without taking the shell lock. No draft, key or result is written to browser storage.
