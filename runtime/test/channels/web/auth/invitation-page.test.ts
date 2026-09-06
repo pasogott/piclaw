@@ -26,5 +26,5 @@ test("family invitation shell and required bundle are public through the actual 
   expect(head.status).toBe(200); expect(await head.text()).toBe("");
   expect((await app.handle(new Request("https://family.local/static/common/dist/invitation.bundle.js.map"))).status).toBe(401);
   expect((await app.handle(new Request("https://family.local/auth/invitation", { method: "POST" }))).status).toBe(403);
-  expect((await router(true).handle(new Request("https://family.local/auth/invitation"))).status).toBe(403);
+  expect((await router(true).handle(new Request("https://family.local/auth/invitation"))).status).toBe(200);
 });

@@ -12,6 +12,12 @@
       <h1>Set up your account</h1>
       <p id="invitation-status" role="status">Checking invitation…</p>
       <button id="claim-invitation" type="button" hidden>Begin authenticator setup</button>
+      <section id="passkey-enrolment" hidden aria-label="Passkey setup">
+        <p id="passkey-enrolment-account"></p>
+        <p>Create a discoverable passkey for this account. Device verification is required. This setup does not sign you in; use the sign-in page afterward. Cancel or leaving this page discards the one-use setup.</p>
+        <button id="create-invitation-passkey" type="button" disabled>Create account passkey</button>
+        <button id="cancel-invitation-passkey" type="button">Cancel setup</button>
+      </section>
       <section id="enrolment" hidden aria-label="Authenticator setup">
         <p id="enrolment-account"></p>
         <img id="enrolment-qr" class="enrolment-qr" alt="Scan this QR code with your authenticator app" />

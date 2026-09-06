@@ -77,6 +77,12 @@ export function initializeAuthFactorSchema(database: Database): void {
     ) STRICT;
     CREATE INDEX IF NOT EXISTS idx_user_totp_enrolment_expiry ON user_totp_enrolments(expires_at);
   `);
+  database.transaction(() => {
+    const columns = new Set((database.query('PRAGMA table_info(user_auth_invitations)').all() as { name: string }[]).map(row => row.name));
+    if (!columns.has('method')) database.exec("ALTER TABLE user_auth_invitations ADD COLUMN method TEXT NOT NULL DEFAULT 'totp' CHECK(method IN ('totp','passkey'))");
+    if (!columns.has('rp_id')) database.exec('ALTER TABLE user_auth_invitations ADD COLUMN rp_id TEXT');
+    if (!columns.has('challenge')) database.exec('ALTER TABLE user_auth_invitations ADD COLUMN challenge TEXT');
+  }).immediate();
   // Standalone factor tests initialise this schema without browser-session storage.
   if (database.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='web_sessions'").get()) {
     database.exec(`CREATE TRIGGER IF NOT EXISTS user_totp_registration_logout
