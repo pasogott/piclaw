@@ -28,6 +28,8 @@
 | `family_scheduled_interruptions` | Immutable admitted execution/start/recording-time receipt; no error payload, no replay and no result publication |
 | `family_scheduled_cancellations` | Immutable owner-confirmed execution cancellation, original approving login and time; revokes remaining authority without erasing history or proving provider termination |
 | `family_scheduled_publications` | Immutable owner-confirmed publication receipt binding execution, original chat and exact message row/hash; prevents replay or recreation |
+| `family_memory_publications` | Immutable explicit message-excerpt copies with publisher attribution and owner-private source/login/request provenance; no automatic file or prompt projection |
+| `family_memory_withdrawals` | Append-only publisher withdrawal receipts; exclude copies from future shared ledger reads without erasing publication history |
 | `task_run_logs` | Task run history |
 | `token_usage` | Per‑assistant‑message token + cost usage (includes model/provider/api for per‑model tracking) |
 | `tool_outputs` | Stored tool output summaries |
