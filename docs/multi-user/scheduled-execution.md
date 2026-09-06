@@ -1,6 +1,18 @@
 # Scheduled execution records
 
-Piclaw supports **single-user deployments only**. Family and isolated modes cannot start. The following APIs support development testing. Grant creation, reservation, settlement and the one-shot dispatcher remain internal; only result inspection and explicit owner publication have the gated HTTP routes below. Automatic polling and task activation are disabled. See [access modes](README.md) and the [paused task-grant foundation](README.md#paused-task-grant-foundation).
+Piclaw supports **single-user deployments only**. Family and isolated modes cannot start. The following APIs support development testing. Owner task preparation/revocation and result inspection/publication have gated HTTP routes; reservations, settlement and the one-shot dispatcher remain internal. Automatic polling and task activation are disabled. See [access modes](README.md) and the [paused task-grant foundation](README.md#paused-task-grant-foundation).
+
+## Owner task preparation API
+
+POST `/agent/scheduled-tasks` requires exactly `{confirm:true,request_id,chat_jid,prompt,scheduled_for,allowed_tools}`. The target must be explicit and actively owned. Preparation creates only a paused one-shot agent task and grant; there is no activate, run, edit or delete endpoint. Existing database activation guards and scheduler restrictions remain in force. Shell/internal tasks, model overrides and notifications cannot be requested.
+
+The owner cookie and both matching account/login pins are required. Writes also require matching Origin and a factor-authenticated login within five minutes. Preparation and revocation share a 20-per-minute account limit, including validated attempts/retries that fail later. Request bodies are bounded to 128 KiB for preparation or 1 KiB for revocation, with a ten-second timeout and cancellation checks. Account and target authority is rechecked after body receipt inside the write transaction.
+
+`request_id` is 1–128 ASCII letters, digits, underscores or hyphens, unique within the owner's namespace. The immutable receipt hashes exact chat, prompt and canonical UTC timestamp strings plus tool names sorted into the fixed ceiling order. Prompt bytes are not trimmed or Unicode-normalised. Duplicate tools, omitted/null fields and extra fields deny. Existing prompt/tool limits apply; new due dates must be in the future and within 366 days. The receipt, paused task, revision and grant commit together.
+
+The same owner/key and payload returns the original IDs, including after reauthentication or passage of the due time, while the grant still passes live preflight. A changed payload, revoked/modified/missing task, inaccessible target or revoked login denies without creating a replacement. The original login ID remains audit metadata. Each account may prepare at most 100 unrevoked grants through this API, counting existing internal grants; exact retries do not consume quota. Explicit revocation frees that allowance but never permits replay of the old key.
+
+GET `/agent/scheduled-tasks` returns metadata from the newest 50 owner grants, omitting inaccessible targets without scanning older entries. GET `/agent/scheduled-tasks/:grant_id` returns validated paused preparation data, or revoked metadata with no prompt. POST `/agent/scheduled-tasks/:grant_id/revoke` requires exactly `{confirm:true}` and permanently revokes that owner's grant; repeat revocation is idempotent. Revocation can stop future authority but cannot undo work already performed. None of these routes returns a lease or settlement token, queues execution, publishes messages or changes input cursors. There are no browser preparation controls yet; query selectors and alternate methods deny.
 
 ## Internal occurrence reservations
 
