@@ -64,4 +64,8 @@ textarea { resize: vertical; width: 100%; }
 #administration-home-roots { list-style: none; padding: 0; }
 #administration-home-roots li { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0; }
 #administration-home-roots span { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+#workspace-policy { border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin: 16px 0; overflow-wrap: anywhere; }
+#workspace-policy h2, #workspace-policy h3 { margin: 8px 0; }
+#workspace-policy li { margin: 8px 0; }
+#workspace-policy button, #open-workspace-policy { min-height: 44px; }
 @media (max-width: 480px) { .family-shell { padding: 12px; } .session-controls label { flex-basis: 100%; } }

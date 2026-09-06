@@ -16,6 +16,7 @@ import { generateTotpQr } from '../../../utils/totp-qr.js';
 import { labelOwnSecurityItem } from '../../../db/account-security-labels.js';
 import { readAdminSecurity, revokeAdminSecurity } from '../../../db/account-administration.js';
 import { readAdminHome, assignAdminHome } from '../../../db/admin-home.js';
+import { readFamilyWorkspacePolicy } from '../../../db/family-workspace-policy.js';
 
 /** Account-only surface: never returns conversation content, tokens or factor secrets. */
 export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Request, principal: AuthenticatedPrincipal): Promise<Response | null> {
@@ -32,6 +33,10 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
     const db = getDb();
     const policy = { totp: channel.authGateway.createTotpContext().isTotpEnabled(), passkey: channel.authGateway.createWebauthnContext().isPasskeyEnabled(), rpId: resolveWebauthnRpInfo(req).rpId };
     if (method === "GET") {
+      if (path === '/account/workspace') {
+        if (new URL(req.url).search) return deny();
+        return channel.json(readFamilyWorkspacePolicy(db, principal));
+      }
       const home = path.match(/^\/admin\/users\/([a-zA-Z0-9_-]+)\/home$/);
       if (home) {
         if (new URL(req.url).search) return deny();
