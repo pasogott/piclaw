@@ -4,6 +4,7 @@ import { getDb } from "../../../db/connection.js";
 import { ChatAccessDenied, resolveAuthorisedChat } from "../../../db/session-ownership.js";
 import type { WebChannelLike } from "../core/web-channel-contracts.js";
 import { principalResponse } from "../auth/principal.js";
+import { enforceBrowserBinding } from "../auth/browser-binding.js";
 import { rememberWebOrigin } from "../auth/request-origin.js";
 import { getHashtagResponse, getSearchResponse, getThreadResponse, getTimelineResponse } from "../timeline-service.js";
 import type { SseAuthorisation } from "../sse/sse.js";
@@ -22,6 +23,7 @@ import { createOwnedRoot, listOwnedLifecycleSessions } from "../../../db/owned-s
 import { authoriseOwnedMedia, readOwnedMediaInfo, exportOwnedArchivedTranscript } from "../../../db/owned-resource-reads.js";
 import { handleMedia } from "../handlers/media.js";
 import { buildContentDisposition } from "./content-disposition.js";
+import { requireAccountActor } from "../../../db/account-administration.js";
 
 /** Absent selects the live home; explicit empty/duplicate selectors never fall back. */
 function selector(url: URL, key: string): string | undefined {
@@ -70,7 +72,13 @@ export async function handleFamilyRequest(channel: WebChannelLike, req: Request,
   const invitation = await handleFamilyInvitationRoutes(channel, req);
   if (invitation) return invitation;
   const principal = channel.authGateway.getPrincipal?.(req) ?? null;
-  if (path === "/auth/me") return principalResponse(req, principal?.mode === "family-shared" ? principal : null);
+  if (path === "/auth/me") {
+    if (principal?.mode === "family-shared") {
+      const failure = enforceBrowserBinding(req, principal);
+      if (failure) return failure;
+    }
+    return principalResponse(req, principal?.mode === "family-shared" ? principal : null);
+  }
 
   const publicAsset = flags.isGetOrHead && ["/static/common/dist/login.bundle.js", "/static/common/dist/login.bundle.css", "/static/common/dist/invitation.bundle.js"].includes(path);
   const login = flags.isLoginPage || flags.isAuthVerify || flags.isWebauthnLoginStart || flags.isWebauthnLoginFinish;
@@ -88,13 +96,35 @@ export async function handleFamilyRequest(channel: WebChannelLike, req: Request,
   }
 
   if (!principal || principal.mode !== "family-shared" || principal.kind !== "user") return channel.json({ error: "Unauthorized" }, 401);
+  const bindingFailure = enforceBrowserBinding(req, principal);
+  if (bindingFailure) return bindingFailure;
+  if (path === "/auth/logout") {
+    // Logout always pins the login; a stale tab must not revoke a replacement account.
+    if (req.method !== "POST" || !req.headers.has("x-piclaw-account-id") || !req.headers.has("x-piclaw-login-id")
+      || !req.headers.get("origin") || !checkCsrfOrigin(req)) return deny();
+    const database = getDb();
+    database.transaction(() => {
+      requireAccountActor(database, principal);
+      database.query("DELETE FROM web_sessions WHERE user_id = ? AND session_id = ?").run(principal.userId, principal.authentication.sessionId!);
+      database.query("DELETE FROM user_passkey_registrations WHERE user_id = ? AND session_id = ?").run(principal.userId, principal.authentication.sessionId!);
+    }).immediate();
+    // Do not expire the shared cookie: an in-flight login may already have replaced it.
+    return channel.json({ logged_out: true });
+  }
   if (path === "/agent/message-recovery") return handleFamilyMessageRecovery(channel, req, principal);
   if (/^\/agent\/[^/]+\/message$/.test(path)) return handleFamilyMessageIngress(channel, req, principal);
   const accountResponse = await handleFamilyAccountRoutes(channel, req, principal);
   if (accountResponse) return accountResponse;
-  // Packaged app assets only: no docs, dynamic avatars, manifest or service-worker state.
-  if (flags.isGetOrHead && (flags.isIndex || flags.isStaticAsset)) {
-    return await handleShellRoutes(channel, req, path, flags, serveStaticAsset) ?? deny();
+  // The family shell never loads the legacy app, add-ons, panes, vendor scripts or maps.
+  if (flags.isIndex) {
+    const response = await channel.serveStatic("family.html", req);
+    if (req.method === "HEAD") { await response.body?.cancel(); return new Response(null, { status: response.status, headers: response.headers }); }
+    return response;
+  }
+  if (flags.isGetOrHead && ["/static/common/dist/family.bundle.js", "/static/common/dist/family.bundle.css"].includes(path)) {
+    const response = await handleShellRoutes(channel, req, path, flags, serveStaticAsset) ?? deny();
+    if (req.method === "HEAD") { await response.body?.cancel(); return new Response(null, { status: response.status, headers: response.headers }); }
+    return response;
   }
   const media = path.match(/^\/media\/([1-9]\d*)(?:\/(thumbnail|info))?$/);
   if (req.method === "GET" && media) {

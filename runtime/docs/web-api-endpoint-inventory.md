@@ -58,12 +58,14 @@ The route tables below describe single-user guards unless explicitly marked fami
 
 ## Family development routes
 
-These exact routes are implemented in `http/family-authorisation.ts`, `http/family-accounts.ts` and `http/family-invitations.ts` behind disabled family startup. Identity comes from the cookie, never payload user IDs. Account mutations require recent factor authentication (five minutes), matching Origin, and a shared 20/minute account-change bucket. Invitation redemption has its own 20/five-minute client bucket; TOTP confirmation permits five guesses.
+These exact routes are implemented in `http/family-authorisation.ts`, `http/family-accounts.ts` and `http/family-invitations.ts` behind disabled family startup. Identity comes from the cookie, never payload user IDs. The text shell sends `x-piclaw-account-id` and `x-piclaw-login-id` as stale-tab pins. When supplied, both must match or return 409 `account_changed` before private dispatch, including `/auth/me`; these non-secret headers grant no authority. Account mutations require recent factor authentication (five minutes), matching Origin, and a shared 20/minute account-change bucket. Invitation redemption has its own 20/five-minute client bucket; TOTP confirmation permits five guesses.
 
 | Method | Path | Authority / payload | Success |
 |---|---|---|---|
 | GET/HEAD | `/auth/me` | Cookie principal; local default identity in auth-disabled single-user mode | Principal, destination, capabilities; HEAD has no body |
 | GET/HEAD | `/auth/options` | No cookie required; no account lookup | Mode/auth/TOTP/passkey/username-required flags only; isolated mode 503 |
+| GET/HEAD | `/`, `/index.html`, `/static/common/dist/family.bundle.js`, `/static/common/dist/family.bundle.css` | Cookie principal; separate text shell, no legacy app/static fallback | HTML/JS/CSS, private/no-store; HEAD empty |
+| POST | `/auth/logout` | Current cookie + both matching account/login headers + Origin; no recent-auth requirement | `{logged_out:true}`; original login and its pending passkey grants revoked; no Set-Cookie race with newer login |
 | GET | `/timeline`, `/hashtag/:tag`, `/thread/:id` | Live owned `chat_jid` or current home; thread ID scoped to that chat | Existing timeline/hashtag/thread envelope |
 | GET | `/search` | `q`, `scope=current\|root\|all`; SQL restricted to authorised chats before pagination | Search results; `all` never means all users |
 | GET | `/sse/stream` | Authorised chat/login, rechecked before delivery and every 30s | Only approved matching-chat events; no global broadcasts |
