@@ -9,6 +9,7 @@ import { isRateLimited } from "./rate-limit.js";
 import { resolveWebauthnRpInfo } from "../auth/webauthn-challenges.js";
 import { AccountInvitations } from "../../../secure/account-invitations.js";
 import { FamilyPasskeys } from "../../../secure/family-passkeys.js";
+import { resetFamilyAccount } from "../../../secure/account-recovery.js";
 
 /** Account-only surface: never returns conversation content, tokens or factor secrets. */
 export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Request, principal: AuthenticatedPrincipal): Promise<Response | null> {
@@ -46,6 +47,11 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
     }
     const body = await req.json();
     if (!body || typeof body !== "object" || Array.isArray(body)) return channel.json({ error: "Invalid account request" }, 400);
+    const reset = path.match(/^\/admin\/users\/([a-zA-Z0-9_-]+)\/reset$/);
+    if (reset && method === "POST") {
+      if (!policy.totp || Object.keys(body).length !== 1 || typeof body.confirm_username !== "string") return deny();
+      return channel.json(resetFamilyAccount(db, principal, reset[1]!, body.confirm_username), 201);
+    }
     if (method === "POST" && path === "/account/passkeys/register/start") {
       if (!policy.passkey || Object.keys(body).length) return deny();
       const { rpId, origin } = resolveWebauthnRpInfo(req);

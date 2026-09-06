@@ -138,7 +138,15 @@ POST `/auth/invitation/claim` accepts only `{token}`. It requires matching brows
 
 POST `/auth/invitation/confirm` accepts only `{token,enrolment_token,code}` and needs that cookie and origin. Five guesses are allowed by the underlying enrolment record. Verification rechecks the grant and account after asynchronous cryptography. One transaction inserts the factor, enables the same invited account, revokes any account logins and consumes the grant; failure rolls everything back. Success clears the enrolment cookie and requires an ordinary login. The invitation grants no account-role/profile changes, factor deletion or transcript access. Responses are private/no-store. TOTP-disabled/passkey-only policy cannot issue or redeem these TOTP invitations.
 
-The API has no invitation page or QR UI yet. Passkey-first invitations, reset/recovery, periodic expiry pruning and key rotation need separate implementation. Expired records are pruned on issue/claim and factor confirmation. General factor reset cannot reuse invitations for accounts with existing factors.
+The API has no invitation page or QR UI yet. Passkey-first invitations, offline recovery, periodic expiry pruning and key rotation need separate implementation. Expired records are pruned on issue/claim and factor confirmation. General factor reset cannot reuse invitations for accounts with existing factors.
+
+## Administrator-assisted recovery
+
+POST `/admin/users/:id/reset` accepts exactly `{confirm_username}`. It requires another enabled administrator, recent TOTP/passkey authentication, matching browser Origin and account rate limits. The confirmation must match the stored username. Self-reset is denied. TOTP-disabled policy is denied until passkey-first recovery exists.
+
+One transaction disables the target (respecting last-administrator protection), deletes all target login sessions, TOTP/passkey factors and pending ceremonies, revokes invitations it owns or issued, and creates a fresh restricted TOTP invitation. `account_recovery_events` records only actor ID, target ID, event and time, never tokens or seeds. Failure to write the invitation or audit record rolls back the reset. User ID, role, username, home, branch ownership, conversations and filesystem paths remain unchanged. The returned grant is delivered through the existing invitation flow; the target must enrol and log in again.
+
+Recovery cannot display old seeds or act as the target's conversational identity. Offline recovery for a lone administrator, passkey-first reset, audit retention and confirmation UI are unfinished. An authorised administrator can replace another user's authentication through this explicit reset; recent-auth and confirmation requirements protect against accidental use, but do not remove that administrative power.
 
 ## Multiple passkeys per account
 
