@@ -76,6 +76,20 @@ or `/workspace/*` route family.
 | DELETE | `/post/:id` | `dispatch-content.ts` | authenticated | yes | `data/delete_post` | status JSON |
 | POST | `/internal/post` | `dispatch-content.ts` | internal secret, not cookie auth | internal-only | no normal data bucket | internal bridge route |
 
+## Owned-session lifecycle (gated family backend)
+
+Family mode remains startup-disabled. These backend routes require a live account cookie and matching browser Origin on mutations; internal secrets confer no owner authority. Existing branch/account rate limits apply. Legacy single-user behaviour is unchanged.
+
+| Method | Path | Payload / semantics |
+|---|---|---|
+| POST | `/agent/root-session` | `{agent_name}`; atomically create a private owned root, no home change or eager hydration |
+| PATCH | `/account/home` | `{chat_jid}`; recent authentication, active owned root only; affects future targetless requests |
+| GET | `/agent/branches` | Optional owned `root_chat_jid`, `include_archived=true` for metadata; no foreign roots or messages |
+| POST | `/agent/branch-prune` | `{chat_jid}`; no current home, active/pending runtime or unarchived descendant; preserve seeds/files |
+| POST | `/agent/branch-restore` | `{chat_jid,agent_name?}`; active parents required, owner-name uniqueness enforced; no hydration |
+
+Unknown/foreign selectors deny. Mutation validation/lifecycle conflicts return 400; authorisation denial returns 403. Read access to archived conversations remains denied. See [Access modes](../../docs/multi-user/README.md#owned-roots-home-selection-and-archiverestore) for identity, collision and cache-disposal constraints.
+
 ## Agent routes
 
 | Method | Path | Source | Auth | CSRF | Data rate limit | Response style |

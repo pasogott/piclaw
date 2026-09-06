@@ -687,6 +687,10 @@ export class AgentPool {
     return this.branchManager.renameChatBranch(chatJid, options);
   }
 
+  async changeOwnedSessionLifecycle(actor: import("./core/access-types.js").AuthenticatedPrincipal, chatJid: string, action: "archive" | "restore", agentName?: string): Promise<ChatBranchRecord> {
+    return this.branchManager.changeOwnedSessionLifecycle(actor, chatJid, action, agentName);
+  }
+
   async pruneChatBranch(chatJid: string): Promise<ChatBranchRecord> {
     return this.branchManager.pruneChatBranch(chatJid);
   }
