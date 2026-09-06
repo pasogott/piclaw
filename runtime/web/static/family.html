@@ -13,6 +13,7 @@
       <h1>PiClaw</h1><span id="account-name">Checking account…</span>
       <button id="open-account" type="button" disabled>My account</button>
       <button id="open-sessions" type="button" disabled>My sessions</button>
+      <button id="open-administration" type="button" hidden disabled>Family administration</button>
       <button id="sign-out" type="button" disabled>Sign out</button>
       <a href="/login">Sign in</a>
     </header>
@@ -44,7 +45,7 @@
           <p id="account-confirm-text"></p><label><input id="account-confirm-check" type="checkbox" /> I understand and confirm this change</label>
           <button id="account-confirm-action" type="button" disabled>Confirm change</button><button id="account-cancel-action" type="button">Cancel</button>
         </section>
-        <p class="notice">Avatar changes, authenticator enrolment, device/passkey names and family administration are not available in this preview.</p>
+        <p class="notice">Avatar changes, authenticator enrolment and device/passkey names are not available in this preview. Administrators have a separate account-management panel.</p>
       </div>
     </section>
     <section id="session-settings" aria-labelledby="session-settings-heading" hidden>
@@ -64,6 +65,33 @@
       </form>
       <ul id="owned-tree-list"></ul>
       <p class="notice">Eligibility is checked again on every write. Archive/restore require an idle session; forks require a stable turn boundary. Merge, purge and full archive backup are not available.</p>
+    </section>
+    <section id="administration-settings" aria-labelledby="administration-heading" hidden>
+      <header><h2 id="administration-heading" tabindex="-1">Family administration</h2><button id="close-administration" type="button">Close administration</button></header>
+      <p class="notice">Account management never opens another user’s conversations. Reset replaces another account’s sign-in factors. Shared workspace files have a separate trust boundary.</p>
+      <p>Forms and invitation links are cleared on blur, close, session switch and navigation. A request already sent may still complete. Refresh to inspect the result before repeating it.</p>
+      <p id="administration-auth-notice"></p><button id="refresh-administration" type="button">Refresh accounts</button>
+      <p id="administration-status" role="status" aria-live="polite"></p>
+      <form id="create-account-form" class="account-section">
+        <h3>Create disabled account</h3>
+        <label for="new-account-username">Account username</label><input id="new-account-username" required maxlength="64" pattern="[a-z0-9][a-z0-9_-]{0,63}" autocapitalize="none" spellcheck="false" />
+        <label for="new-account-display-name">Account display name</label><input id="new-account-display-name" required maxlength="128" />
+        <label for="new-account-role">Role</label><select id="new-account-role"><option value="member">Member</option><option value="admin">Administrator</option></select>
+        <button id="create-account" type="submit" disabled>Create account</button>
+      </form>
+      <form id="administration-action" class="account-section" hidden>
+        <h3 id="administration-action-title"></h3><p id="administration-action-warning"></p>
+        <label for="administration-confirm-name">Type the account username to confirm</label><input id="administration-confirm-name" autocomplete="off" spellcheck="false" />
+        <label><input id="administration-confirm" type="checkbox" /> I understand and confirm this account change</label>
+        <button id="submit-administration-action" type="submit" disabled>Confirm account change</button><button id="cancel-administration-action" type="button">Cancel</button>
+      </form>
+      <section id="administration-invitation" class="account-section" aria-label="Private invitation link" hidden>
+        <p>This one-use link allows authenticator enrolment. Share only with the intended person; it does not sign you in as them. Clearing this display does not revoke the invitation.</p>
+        <label for="administration-invitation-link">Private invitation link</label><input id="administration-invitation-link" readonly autocomplete="off" spellcheck="false" />
+        <p id="administration-invitation-expiry"></p><button id="clear-administration-invitation" type="button">Clear link display</button>
+      </section>
+      <ul id="administration-users"></ul>
+      <p class="notice">Individual device/passkey revocation, administrator home/destination assignment, passkey-first invitations and offline lone-admin recovery are not available here.</p>
     </section>
     <section class="session-controls" aria-label="Session navigation">
       <label for="session-select">Owned session</label>

@@ -3,7 +3,7 @@ import "../helpers.js";
 import { closeDatabase, getDb, initDatabase } from "../../src/db/connection.js";
 import { getUser } from "../../src/db/users.js";
 import { createWebSession } from "../../src/db/web-sessions.js";
-import { listManagedAccounts, provisionFamilyAccount, updateManagedAccount, updateOwnAccount, listOwnSessions, revokeOwnSession, listOwnFactors, removeOwnFactor, readOwnAccountSettings } from "../../src/db/account-administration.js";
+import { listManagedAccounts, provisionFamilyAccount, updateManagedAccount, updateOwnAccount, listOwnSessions, revokeOwnSession, listOwnFactors, removeOwnFactor, readOwnAccountSettings, readAdministrationSettings } from "../../src/db/account-administration.js";
 import { getRootOwnership } from "../../src/db/session-ownership.js";
 import { resolveRequestPrincipal } from "../../src/channels/web/auth/principal.js";
 import type { AuthenticatedPrincipal } from "../../src/core/access-types.js";
@@ -197,4 +197,45 @@ test("account snapshot matches TOTP last-factor policy and serves pinned no-stor
   expect(response.headers.get("vary")).toContain("Cookie"); expect((await response.json()).user.id).toBe(alice.userId);
   expect((await request("?user_id=default")).status).toBe(403);
   expect((await request("", "default")).status).toBe(409);
+});
+
+test('administration snapshot protects last admin, invitation eligibility and current-site factors without content', () => {
+  const db = getDb(), alice = member();
+  const pending = provisionFamilyAccount(db, admin, { username: 'pending', displayName: 'Pending' });
+  let snapshot = readAdministrationSettings(db, admin, policy);
+  const caps = (id: string) => snapshot.users.find(u => u.id === id)!.capabilities;
+  expect(snapshot.capabilities.create_user).toBe(true);
+  expect(caps('default').disable).toBe(false); expect(caps('default').change_role).toBe(false); expect(caps('default').reset).toBe(false);
+  expect(caps(alice.userId).disable).toBe(true); expect(caps(alice.userId).reset).toBe(true); expect(caps(alice.userId).invite).toBe(false);
+  expect(caps(pending.id).enable).toBe(false); expect(caps(pending.id).invite).toBe(true);
+  for (const field of ['home_chat_jid', 'credential_id', 'session_id', 'public_key', 'token', 'ciphertext']) expect(JSON.stringify(snapshot)).not.toContain(field);
+  db.query("INSERT INTO user_auth_invitations(token_hash,user_id,issuer_user_id,expires_at,state,created_at) VALUES ('private-hash',?,?,?,'issued',?)").run(pending.id, admin.userId, Date.now()+60_000, new Date().toISOString());
+  snapshot = readAdministrationSettings(db, admin, policy);
+  expect(snapshot.users.find(u => u.id === pending.id)?.invitation).toBe('issued'); expect(caps(pending.id).revoke_invitation).toBe(true);
+  expect(JSON.stringify(snapshot)).not.toContain('private-hash');
+  passkey(pending.id); snapshot = readAdministrationSettings(db, admin, policy);
+  expect(caps(pending.id).invite).toBe(false); expect(caps(pending.id).enable).toBe(true);
+  snapshot = readAdministrationSettings(db, admin, { ...policy, rpId: 'other.local', totp: false });
+  expect(caps(pending.id).enable).toBe(false); expect(caps(pending.id).invite).toBe(false); expect(caps(alice.userId).reset).toBe(false);
+  expect(() => readAdministrationSettings(db, alice, policy)).toThrow();
+  db.query('UPDATE web_sessions SET created_at=? WHERE session_id=?').run(new Date(Date.now()-600_000).toISOString(), admin.authentication.sessionId!);
+  snapshot = readAdministrationSettings(db, admin, policy); expect(snapshot.recent_auth).toBe(false); expect(snapshot.capabilities.create_user).toBe(false);
+  expect(snapshot.users.every(u => Object.values(u.capabilities).every(value => !value))).toBe(true);
+  db.query('DELETE FROM web_sessions WHERE session_id=?').run(admin.authentication.sessionId!);
+  expect(() => readAdministrationSettings(db, admin, policy)).toThrow();
+});
+
+test('administration snapshot route is pinned, no-store, selector-free and admin-only', async () => {
+  const alice = member(), db = getDb();
+  const json = (value: unknown, status=200) => Response.json(value, { status });
+  const authGateway = new WebAuthGateway({ accessMode: 'family-shared', passkeyMode: '', totpSecret: '', internalSecret: '', hasTls: true, sessionTtlSeconds: 3600 }, { json, challenges: new WebauthnChallengeTracker(), failureTracker: new TotpFailureTracker() });
+  const router = new RequestRouterService({ json, authGateway } as any, 'family-shared');
+  const req = (who = admin, query = '', pin = who.userId) => router.handle(new Request('https://family.local/admin/users/settings'+query, { headers: { cookie: `piclaw_session=token-${who.userId}`, 'x-piclaw-account-id': pin, 'x-piclaw-login-id': who.authentication.sessionId! } }));
+  const response = await req(); expect(response.status).toBe(200); expect(response.headers.get('cache-control')).toBe('private, no-store'); expect(response.headers.get('vary')).toContain('Cookie');
+  expect((await response.json()).users.map((u: any) => u.id)).toContain(alice.userId);
+  expect((await req(alice)).status).toBe(403); expect((await req(admin, '?user_id='+alice.userId)).status).toBe(403); expect((await req(admin, '', alice.userId)).status).toBe(409);
+  // Metadata visibility does not grant conversation authority.
+  const timeline = await router.handle(new Request('https://family.local/timeline?chat_jid='+alice.homeChatJid, { headers: { cookie: 'piclaw_session=token-default' } }));
+  expect(timeline.status).toBe(403);
+  db.query("UPDATE users SET role='member' WHERE id='default'").run(); expect((await req()).status).toBe(403);
 });

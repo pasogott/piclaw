@@ -2,10 +2,11 @@ import { beforeAll, afterAll, expect, test } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
 import { join } from "node:path";
 import type { SessionSettings } from '../../src/core/session-settings.js';
+import type { AdministrationSettings } from '../../src/core/administration-settings.js';
 
 const browserTest = process.env.PICLAW_RUN_OPTIONAL_BROWSER_TESTS === "1" ? test : test.skip;
 let browser: Browser, server: ReturnType<typeof Bun.serve>, base: string;
-const principal = (name = "alice", login = "login-a") => ({ principal: { kind: "user", mode: "family-shared", role: "member", userId: name, username: name, displayName: name, homeChatJid: `web:${name}`, authentication: { sessionId: login } } });
+const principal = (name = "alice", login = "login-a") => ({ principal: { kind: "user", mode: "family-shared", role: "member", userId: name, username: name, displayName: name, homeChatJid: `web:${name}`, authentication: { sessionId: login } }, capabilities: { manage_users: false } });
 const posts = (content = "Alice private text") => ({ posts: [{ id: 1, timestamp: "today", data: { content, sender_name: "Alice" } }], has_more: false });
 async function fixture(page: Page) {
   const state = { identity: principal(), calls: [] as Array<{ path: string; headers: Record<string, string>; body: any }> };
@@ -182,6 +183,165 @@ async function openAccount(page: Page) {
   await page.goto(base); await ready(page); await page.locator('#open-account').click();
   await page.waitForFunction(() => !(document.getElementById('account-details') as HTMLElement)?.hidden);
 }
+
+async function adminFixture(page: Page) {
+  const state = await fixture(page); state.identity.principal.role = 'admin'; state.identity.capabilities.manage_users = true;
+  const snapshot: AdministrationSettings = { recent_auth: true, capabilities: { create_user: true }, users: [
+    { id: 'alice', username: 'alice', display_name: 'Alice', role: 'admin', enabled: true, invitation: 'none', capabilities: { disable: false, enable: false, change_role: false, invite: false, revoke_invitation: false, reset: false } },
+    { id: 'bob', username: 'bob', display_name: 'Bob', role: 'member', enabled: true, invitation: 'none', capabilities: { disable: true, enable: false, change_role: true, invite: false, revoke_invitation: false, reset: true } },
+    { id: 'pending', username: 'pending', display_name: 'Pending', role: 'member', enabled: false, invitation: 'none', capabilities: { disable: false, enable: false, change_role: true, invite: true, revoke_invitation: false, reset: true } },
+  ] };
+  const mutations: { path: string; method: string; headers: Record<string, string>; body: any }[] = [];
+  await page.route('**/admin/users/settings', route => route.fulfill({ json: snapshot }));
+  await page.route(/\/admin\/users(?:\/(alice|bob|pending))?(?:\/(invitation|reset))?$/, route => {
+    const path = new URL(route.request().url()).pathname, method = route.request().method(), body = route.request().postData() ? route.request().postDataJSON() : null;
+    mutations.push({ path, method, body, headers: route.request().headers() });
+    if (path === '/admin/users') snapshot.users.push({ ...snapshot.users[2]!, id: 'created', username: body.username, display_name: body.displayName, role: body.role });
+    else {
+      const user = snapshot.users.find(u => path.split('/')[3] === u.id)!;
+      if (method === 'PATCH') { Object.assign(user, body); user.capabilities.disable = user.enabled; user.capabilities.enable = !user.enabled; }
+      if (path.endsWith('invitation')) { user.invitation = method === 'DELETE' ? 'none' : 'issued'; user.capabilities.revoke_invitation = method !== 'DELETE'; }
+      if (path.endsWith('reset')) { user.enabled = false; user.invitation = 'issued'; user.capabilities.invite = user.capabilities.revoke_invitation = true; }
+      if (method === 'POST') return route.fulfill({ json: { token: 'g'.repeat(43), expiresAt: Date.now()+60_000 } });
+    }
+    return route.fulfill({ json: {} });
+  });
+  return { state, snapshot, mutations };
+}
+async function openAdministration(page: Page) {
+  await page.goto(base); await ready(page); await page.locator('#open-administration').click();
+  await page.waitForFunction(() => document.querySelectorAll('#administration-users li').length > 0);
+}
+async function confirmAdministration(page: Page, username: string) {
+  await page.locator('#administration-confirm-name').fill(username); await page.locator('#administration-confirm').check(); await page.locator('#submit-administration-action').click();
+}
+
+browserTest('administration is hidden for members and requires explicit server capability for admins', async () => {
+  const page = await browser.newPage();
+  try {
+    const state = await fixture(page); let calls = 0;
+    await page.route('**/admin/users/settings', route => { calls++; return route.fulfill({ status: 403, json: {} }); });
+    await page.goto(base); await ready(page); expect(await page.locator('#open-administration').isVisible()).toBe(false);
+    state.identity.principal.role = 'admin'; await page.reload(); await ready(page);
+    expect(await page.locator('#open-administration').isVisible()).toBe(false); expect(calls).toBe(0);
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('administration creates disabled accounts and confirms disable/reactivate/role changes without foreign navigation', async () => {
+  const page = await browser.newPage({ viewport: { width: 375, height: 740 } });
+  try {
+    const { mutations } = await adminFixture(page); await openAdministration(page);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(await page.locator('#administration-users li').first().getByRole('button', { name: 'Disable', exact: true }).isDisabled()).toBe(true);
+    await page.locator('#new-account-username').fill('new-user'); await page.locator('#new-account-display-name').fill('New person'); await page.locator('#create-account').click();
+    await page.waitForFunction(() => document.getElementById('administration-status')?.textContent === 'Account change saved.');
+    expect(mutations[0]!.body).toEqual({ username: 'new-user', displayName: 'New person', role: 'member' });
+    const bob = () => page.locator('#administration-users li').filter({ has: page.locator('p', { hasText: '(@bob)' }) });
+    for (const label of ['Disable', 'Reactivate', 'Change role']) {
+      await bob().getByRole('button', { name: label, exact: true }).click();
+      await page.locator('#administration-confirm').check(); expect(await page.locator('#submit-administration-action').isDisabled()).toBe(true);
+      await page.locator('#administration-confirm-name').fill('wrong'); expect(await page.locator('#submit-administration-action').isDisabled()).toBe(true);
+      await confirmAdministration(page, 'bob'); await page.waitForFunction(() => document.getElementById('administration-status')?.textContent === 'Account change saved.');
+    }
+    expect(mutations.slice(1).map(m => m.body)).toEqual([{ enabled: false }, { enabled: true }, { role: 'admin' }]);
+    expect(mutations.every(m => m.headers['x-piclaw-account-id'] === 'alice' && m.headers['x-piclaw-login-id'] === 'login-a')).toBe(true);
+    expect(await page.locator('#session-select').inputValue()).toBe('web:alice');
+    expect(await page.locator('#administration-users a').count()).toBe(0);
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('invitation links are shown once, never stored or navigated, and cleared on blur and expiry', async () => {
+  const page = await browser.newPage();
+  try {
+    const { mutations } = await adminFixture(page); await openAdministration(page);
+    const pending = () => page.locator('#administration-users li').filter({ has: page.locator('p', { hasText: '(@pending)' }) });
+    await pending().getByRole('button', { name: 'Issue invitation', exact: true }).click(); await confirmAdministration(page, 'pending');
+    await page.waitForFunction(() => Boolean((document.getElementById('administration-invitation-link') as HTMLInputElement)?.value));
+    expect(await page.locator('#administration-invitation-link').inputValue()).toBe(`${base}/auth/invitation#token=${'g'.repeat(43)}`);
+    expect(await page.locator('#administration-invitation-link').isDisabled()).toBe(false); expect(page.url()).not.toContain('token');
+    expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
+    await page.evaluate(() => dispatchEvent(new Event('blur'))); expect(await page.locator('#administration-invitation-link').inputValue()).toBe('');
+    await page.evaluate(() => dispatchEvent(new Event('focus'))); await page.waitForFunction(() => document.querySelectorAll('#administration-users li').length > 0);
+    expect(await page.locator('#administration-invitation').isVisible()).toBe(false);
+    await pending().getByRole('button', { name: 'Revoke invitation', exact: true }).click(); await confirmAdministration(page, 'pending');
+    await page.waitForFunction(() => document.getElementById('administration-status')?.textContent === 'Account change saved.');
+    expect(mutations.at(-1)?.method).toBe('DELETE');
+    await page.route('**/admin/users/pending/invitation', route => route.fulfill({ json: { token: 'e'.repeat(43), expiresAt: Date.now()+500 } }));
+    await pending().getByRole('button', { name: 'Issue invitation', exact: true }).click(); await confirmAdministration(page, 'pending');
+    await page.waitForFunction(() => (document.getElementById('administration-invitation-link') as HTMLInputElement)?.value.includes('eeeee'));
+    await page.waitForFunction(() => !(document.getElementById('administration-invitation-link') as HTMLInputElement)?.value);
+    expect(await page.locator('#administration-invitation').isVisible()).toBe(false);
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('reset requires exact username and stale/closed grant responses cannot reappear', async () => {
+  for (const change of ['close', 'login']) {
+    const page = await browser.newPage();
+    try {
+      const { state } = await adminFixture(page); let release!: () => void, entered!: () => void, body: any;
+      const held = new Promise<void>(r => release = r), waiting = new Promise<void>(r => entered = r);
+      await page.route('**/admin/users/bob/reset', async route => { body = route.request().postDataJSON(); entered(); await held; await route.fulfill({ json: { token: 's'.repeat(43), expiresAt: Date.now()+60_000 } }); });
+      await openAdministration(page);
+      await page.locator('#administration-users li').nth(1).getByRole('button', { name: 'Reset account', exact: true }).click();
+      expect(await page.locator('#administration-action-warning').textContent()).toContain('delete all');
+      await confirmAdministration(page, 'bob'); await waiting; expect(body).toEqual({ confirm_username: 'bob' });
+      if (change === 'close') await page.locator('#close-administration').click(); else state.identity = principal('bob', 'login-b');
+      release();
+      if (change === 'login') await page.waitForFunction(() => document.getElementById('family-status')?.textContent?.includes('no longer bound'));
+      else { await page.waitForTimeout(80); await page.locator('#open-administration').click(); await page.waitForFunction(() => document.querySelectorAll('#administration-users li').length > 0); }
+      expect(await page.locator('#administration-invitation-link').inputValue()).toBe(''); expect(await page.locator('body').textContent()).not.toContain('s'.repeat(43));
+    } finally { await page.close(); }
+  }
+}, 20000);
+
+browserTest('stale administration capabilities disable changes and failed writes are not retried automatically', async () => {
+  const page = await browser.newPage();
+  try {
+    const { snapshot } = await adminFixture(page); snapshot.recent_auth = false; snapshot.capabilities.create_user = false;
+    for (const user of snapshot.users) for (const key of Object.keys(user.capabilities) as (keyof typeof user.capabilities)[]) user.capabilities[key] = false;
+    await openAdministration(page); expect(await page.locator('#create-account').isDisabled()).toBe(true);
+    for (const button of await page.locator('#administration-users button').all()) expect(await button.isDisabled()).toBe(true);
+    snapshot.capabilities.create_user = true; let writes = 0;
+    await page.route('**/admin/users', route => { writes++; return route.fulfill({ status: 500, json: {} }); });
+    await page.locator('#refresh-administration').click(); await page.waitForFunction(() => !(document.getElementById('create-account') as HTMLButtonElement)?.disabled);
+    await page.locator('#new-account-username').fill('new-user'); await page.locator('#new-account-display-name').fill('New user'); await page.locator('#create-account').click();
+    await page.waitForFunction(() => document.getElementById('administration-status')?.textContent?.includes('No automatic retry'));
+    expect(writes).toBe(1); expect(await page.locator('#refresh-administration').isDisabled()).toBe(false);
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('successful reset returns a restricted invitation without impersonation and pagehide erases it', async () => {
+  const page = await browser.newPage();
+  try {
+    const { mutations } = await adminFixture(page); await openAdministration(page);
+    await page.locator('#administration-users li').nth(1).getByRole('button', { name: 'Reset account', exact: true }).click();
+    await confirmAdministration(page, 'bob');
+    await page.waitForFunction(() => Boolean((document.getElementById('administration-invitation-link') as HTMLInputElement)?.value));
+    expect(mutations[0]!.body).toEqual({ confirm_username: 'bob' });
+    expect(await page.locator('#administration-users li').nth(1).textContent()).toContain('Disabled');
+    expect(await page.locator('#session-select').inputValue()).toBe('web:alice');
+    expect(await page.locator('#account-name').textContent()).toContain('alice');
+    await page.evaluate(() => dispatchEvent(new PageTransitionEvent('pagehide')));
+    expect(await page.locator('#administration-invitation-link').inputValue()).toBe('');
+    expect(await page.locator('#administration-users').textContent()).toBe('');
+    expect(await page.locator('#open-administration').isVisible()).toBe(false);
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('blur during invitation issuance drops the late secret and never repeats issuance on focus', async () => {
+  const page = await browser.newPage();
+  try {
+    await adminFixture(page); let release!: () => void, entered!: () => void, calls = 0;
+    const held = new Promise<void>(r => release = r), waiting = new Promise<void>(r => entered = r);
+    await page.route('**/admin/users/pending/invitation', async route => { calls++; entered(); await held; await route.fulfill({ json: { token: 'z'.repeat(43), expiresAt: Date.now()+60_000 } }); });
+    await openAdministration(page); await page.locator('#administration-users li').nth(2).getByRole('button', { name: 'Issue invitation', exact: true }).click();
+    await confirmAdministration(page, 'pending'); await waiting;
+    await page.evaluate(() => dispatchEvent(new Event('blur'))); release(); await page.waitForTimeout(80);
+    await page.evaluate(() => dispatchEvent(new Event('focus'))); await page.waitForFunction(() => document.querySelectorAll('#administration-users li').length > 0);
+    expect(await page.locator('#administration-invitation-link').inputValue()).toBe(''); expect(calls).toBe(1);
+    expect(await page.locator('#refresh-administration').isDisabled()).toBe(false);
+  } finally { await page.close(); }
+}, 20000);
 
 async function treeFixture(page: Page) {
   const state = await fixture(page);
