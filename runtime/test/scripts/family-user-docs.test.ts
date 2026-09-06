@@ -29,7 +29,7 @@ test('family guides cover user controls, destructive effects and gated operator 
   for(const label of ['Download transcript','Prepare transcript','Save text file','Cancel transcript']){
     expect(user).toContain(`**${label}**`);expect(source).toContain(label);
   }
-  for(const label of ['Scheduled results','Inspect result','Publish result','Refresh results','Close results']){
+  for(const label of ['Scheduled results','Inspect result','Publish result','Refresh results','Close results','Cancel execution authority']){
     expect(user).toContain(`**${label}**`);expect(source).toContain(label);
   }
   expect(user).toContain('Conversations and saved settings persist on the server');

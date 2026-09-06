@@ -56,6 +56,141 @@ async function taskFixture(page:Page) {
 async function openTasks(page:Page){await page.goto(base);await ready(page);await page.locator('#open-tasks').click();await page.waitForFunction(()=>!document.getElementById('prepare-task-form')?.hidden);}
 async function taskDraft(page:Page){await page.locator('#task-target').selectOption('web:alice-two');await page.locator('#task-prompt').fill('Exact task prompt\nline two ');const due=new Date(Date.now()+86400000).toISOString().slice(0,16);await page.locator('#task-due').fill(due);return due;}
 
+async function cancelFixture(page:Page) {
+  const state=await fixture(page),detail={...resultDetail(),state:'unsettled',result:null as any},calls:any[]=[];
+  await page.route('**/agent/scheduled-results',r=>r.fulfill({json:resultList([{execution_id:'execution-one',chat_jid:'web:alice-two',created_at:1780000000000,state:'unsettled',publication_recorded:false}])}));
+  await page.route('**/agent/scheduled-results/execution-one',r=>r.fulfill({json:detail}));
+  await page.route('**/agent/scheduled-results/execution-one/cancel',r=>{calls.push({body:r.request().postDataJSON(),headers:r.request().headers()});detail.state='cancelled';return r.fulfill({json:{execution_id:'execution-one',cancelled:true,created:true}});});
+  return {state,detail,calls};
+}
+async function inspectCancellation(page:Page){await page.getByRole('button',{name:'Inspect result',exact:true}).click();await page.waitForFunction(()=>!document.getElementById('scheduled-result-detail')?.hidden);}
+async function openCancellation(page:Page){await page.goto(base);await ready(page);await page.locator('#open-results').click();await inspectCancellation(page);}
+
+browserTest('cancellation panel requires fresh detail and explicit confirmation and sends only pinned exact confirmation',async()=>{
+  const page=await browser.newPage({viewport:{width:375,height:740}});
+  try{const f=await cancelFixture(page);await openCancellation(page);expect(await page.locator('#cancel-execution').isDisabled()).toBe(true);expect(f.calls).toHaveLength(0);
+    expect(await page.locator('#scheduled-result-target').textContent()).toContain('web:alice-two');expect(await page.locator('#scheduled-execution-cancellation').textContent()).toContain('cannot undo earlier effects');
+    await page.locator('#confirm-execution-cancellation').check();await page.locator('#cancel-execution').click();await page.waitForFunction(()=>document.getElementById('scheduled-results-status')?.textContent?.includes('Execution authority cancelled'));
+    expect(f.calls).toHaveLength(1);expect(f.calls[0].body).toEqual({confirm:true});expect(f.calls[0].headers).toMatchObject({'x-piclaw-account-id':'alice','x-piclaw-login-id':'login-a','content-type':'application/json'});
+    expect(await page.locator('#session-select').inputValue()).toBe('web:alice');expect(await page.locator('#confirm-execution-cancellation').isChecked()).toBe(false);
+    await page.locator('#refresh-results').click();await inspectCancellation(page);expect(await page.locator('#scheduled-execution-cancellation').isVisible()).toBe(false);expect(await page.locator('#publish-result').isDisabled()).toBe(true);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);expect(await page.evaluate(()=>[localStorage.length,sessionStorage.length])).toEqual([0,0]);
+  }finally{await page.close();}
+},20000);
+
+browserTest('terminal and forged result details never enable cancellation',async()=>{
+  const page=await browser.newPage();
+  try{const f=await cancelFixture(page);await openCancellation(page);
+    for(const state of ['settled','expired-unsettled','expired','interrupted','cancelled']){
+      f.detail.state=state;f.detail.result=state==='settled'?resultDetail().result:null;await inspectCancellation(page);expect(await page.locator('#cancel-execution').isDisabled()).toBe(true);expect(await page.locator('#scheduled-execution-cancellation').isVisible()).toBe(false);
+    }
+    f.detail.state='unsettled';f.detail.result=null;f.detail.chat_jid='web:bob';await page.getByRole('button',{name:'Inspect result',exact:true}).click();await page.waitForFunction(()=>document.getElementById('scheduled-results-status')?.textContent?.includes('Invalid result response'));
+    expect(await page.locator('#confirm-execution-cancellation').isDisabled()).toBe(true);expect(f.calls).toHaveLength(0);
+  }finally{await page.close();}
+},20000);
+
+browserTest('uncertain, denied and mismatched cancellations clear confirmation and never replay automatically',async()=>{
+  const page=await browser.newPage();
+  try{await cancelFixture(page);let sends=0;await page.route('**/agent/scheduled-results/execution-one/cancel',r=>{sends++;return r.fulfill(sends===1?{status:500,json:{}}:sends===2?{status:403,json:{}}:sends===3?{json:{execution_id:'another',cancelled:true,created:true}}:{json:{execution_id:'execution-one',cancelled:true,created:false}});});
+    await openCancellation(page);
+    for(let i=1;i<=4;i++){
+      await page.locator('#confirm-execution-cancellation').check();await page.locator('#cancel-execution').click();await page.waitForFunction(()=>document.getElementById('scheduled-result-detail')?.hidden);
+      expect(sends).toBe(i);expect(await page.locator('#confirm-execution-cancellation').isChecked()).toBe(false);expect(await page.locator('#cancel-execution').isDisabled()).toBe(true);
+      expect(await page.locator('#scheduled-results-status').textContent()).toContain(i===4?'Cancellation verified':'Cancellation may have completed');
+      if(i<4){await page.locator('#refresh-results').click();await inspectCancellation(page);expect(await page.locator('#cancel-execution').isDisabled()).toBe(true);}
+    }
+  }finally{await page.close();}
+},20000);
+
+browserTest('cancellation clears on close, refresh, blur, hidden tab, session switch and navigation',async()=>{
+  const page=await browser.newPage();
+  try{await cancelFixture(page);await openCancellation(page);
+    for(const action of ['refresh','close','blur','hidden','session','navigation']){
+      await page.locator('#confirm-execution-cancellation').check();
+      if(action==='refresh')await page.locator('#refresh-results').click();
+      if(action==='close'){await page.locator('#close-results').click();await page.locator('#open-results').click();}
+      if(action==='blur'){await page.evaluate(()=>dispatchEvent(new Event('blur')));await page.evaluate(()=>dispatchEvent(new Event('focus')));await ready(page);}
+      if(action==='hidden'){await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));});await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:false});document.dispatchEvent(new Event('visibilitychange'));});await ready(page);}
+      if(action==='session'){await page.locator('#session-select').selectOption('web:alice-two');await ready(page);}
+      if(action==='navigation')await page.evaluate(()=>dispatchEvent(new PageTransitionEvent('pagehide')));
+      expect(await page.locator('#confirm-execution-cancellation').isChecked()).toBe(false);expect(await page.locator('#cancel-execution').isDisabled()).toBe(true);
+      if(action!=='navigation')await inspectCancellation(page);
+    }
+  }finally{await page.close();}
+},20000);
+
+browserTest('cancellation can run while a send is pending and cannot release the send lock',async()=>{
+  const page=await browser.newPage();let release:()=>void=()=>{};
+  try{const f=await cancelFixture(page);let entered!:()=>void;const held=new Promise<void>(r=>release=r),waiting=new Promise<void>(r=>entered=r);
+    await page.route('**/agent/default/message?**',async r=>{entered();await held;await r.fulfill({json:{ok:true}});});
+    await openCancellation(page);await page.locator('#message-text').fill('held send');await page.locator('#send-message').click();await waiting;
+    expect(await page.locator('#send-message').isDisabled()).toBe(true);await page.locator('#confirm-execution-cancellation').check();await page.locator('#cancel-execution').click();await page.waitForFunction(()=>document.getElementById('scheduled-results-status')?.textContent?.includes('Execution authority cancelled'));
+    expect(f.calls).toHaveLength(1);expect(await page.locator('#send-message').isDisabled()).toBe(true);expect(await page.locator('#session-select').isDisabled()).toBe(true);
+    release();await page.waitForFunction(()=>!(document.getElementById('send-message') as HTMLButtonElement).disabled);
+  }finally{release();await page.close();}
+},20000);
+
+browserTest('pending cancellation is single-flight and lifecycle return never restores the old confirmation',async()=>{
+  for(const action of ['close','blur']){
+    const page=await browser.newPage();let release:()=>void=()=>{};
+    try{await cancelFixture(page);let sends=0,entered!:()=>void;const held=new Promise<void>(r=>release=r),waiting=new Promise<void>(r=>entered=r);
+      await page.route('**/agent/scheduled-results/execution-one/cancel',async r=>{sends++;entered();await held;await r.fulfill({json:{execution_id:'execution-one',cancelled:true,created:true}});});
+      await openCancellation(page);await page.locator('#confirm-execution-cancellation').check();await page.locator('#cancel-execution').click();await waiting;
+      await page.locator('#refresh-results').click();expect(await page.locator('#cancel-execution').isDisabled()).toBe(true);expect(sends).toBe(1);
+      if(action==='close')await page.locator('#close-results').click();else{await page.evaluate(()=>dispatchEvent(new Event('blur')));await page.evaluate(()=>dispatchEvent(new Event('focus')));}
+      release();await page.waitForFunction(()=>!(document.getElementById('open-results') as HTMLButtonElement).disabled);
+      if(action==='close'){expect(await page.locator('#scheduled-results').isVisible()).toBe(false);await page.locator('#open-results').click();}
+      await inspectCancellation(page);expect(await page.locator('#confirm-execution-cancellation').isChecked()).toBe(false);expect(sends).toBe(1);
+    }finally{release();await page.close();}
+  }
+},20000);
+
+browserTest('focus and visibility return during held send independently reverify identity and restore cancellation only',async()=>{
+  for(const action of ['blur','hidden']){
+    const page=await browser.newPage();let release:()=>void=()=>{};
+    try{const f=await cancelFixture(page);let entered!:()=>void;const held=new Promise<void>(r=>release=r),waiting=new Promise<void>(r=>entered=r);
+      await page.route('**/agent/default/message?**',async r=>{entered();await held;await r.fulfill({json:{ok:true}});});
+      await openCancellation(page);await page.locator('#message-text').fill('held send');await page.locator('#send-message').click();await waiting;
+      await page.evaluate(action=>{if(action==='hidden'){Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));}else dispatchEvent(new Event('blur'));},action);
+      expect(await page.locator('#scheduled-result-target').textContent()).toBe('');
+      await page.evaluate(action=>{if(action==='hidden'){Object.defineProperty(document,'hidden',{configurable:true,value:false});document.dispatchEvent(new Event('visibilitychange'));}else dispatchEvent(new Event('focus'));},action);
+      await page.waitForFunction(()=>!(document.getElementById('open-results') as HTMLButtonElement).disabled);await inspectCancellation(page);
+      expect(await page.locator('#timeline').textContent()).toBe('');expect(await page.locator('#send-message').isDisabled()).toBe(true);expect(await page.locator('#open-tasks').isDisabled()).toBe(true);
+      await page.locator('#confirm-execution-cancellation').check();await page.locator('#cancel-execution').click();await page.waitForFunction(()=>document.getElementById('scheduled-results-status')?.textContent?.includes('Execution authority cancelled'));
+      expect(f.calls).toHaveLength(1);expect(await page.locator('#send-message').isDisabled()).toBe(true);release();await ready(page);
+    }finally{release();await page.close();}
+  }
+},20000);
+
+browserTest('stale independent focus verification cannot unmask results after another blur or login change',async()=>{
+  const page=await browser.newPage();let releaseSend:()=>void=()=>{},releaseIdentity:()=>void=()=>{};
+  try{const f=await cancelFixture(page);let sent!:()=>void,checking!:()=>void;const sendHeld=new Promise<void>(r=>releaseSend=r),sentWait=new Promise<void>(r=>sent=r),identityHeld=new Promise<void>(r=>releaseIdentity=r),checkWait=new Promise<void>(r=>checking=r);
+    await page.route('**/agent/default/message?**',async r=>{sent();await sendHeld;await r.fulfill({json:{ok:true}});});
+    await openCancellation(page);await page.locator('#message-text').fill('held');await page.locator('#send-message').click();await sentWait;
+    await page.route('**/auth/me',async r=>{checking();await identityHeld;await r.fulfill({json:f.state.identity});});
+    await page.evaluate(()=>{dispatchEvent(new Event('blur'));dispatchEvent(new Event('focus'));});await checkWait;await page.evaluate(()=>dispatchEvent(new Event('blur')));releaseIdentity();
+    await page.waitForTimeout(60);expect(await page.locator('#open-results').isDisabled()).toBe(true);expect(await page.locator('#scheduled-results').isVisible()).toBe(false);
+    f.state.identity=principal('bob','login-b');await page.evaluate(()=>dispatchEvent(new Event('focus')));await page.waitForFunction(()=>document.getElementById('family-status')?.textContent?.includes('no longer bound'));
+    expect(await page.locator('#cancel-execution').isDisabled()).toBe(true);expect(f.calls).toHaveLength(0);
+  }finally{releaseIdentity();releaseSend();await page.close();}
+},20000);
+
+browserTest('invalid result timestamps fail closed before list actions render',async()=>{
+  const page=await browser.newPage();
+  try{await cancelFixture(page);await page.route('**/agent/scheduled-results',r=>r.fulfill({json:resultList([{execution_id:'execution-one',chat_jid:'web:alice-two',created_at:Number.MAX_SAFE_INTEGER,state:'unsettled',publication_recorded:false}])}));
+    await page.goto(base);await ready(page);await page.locator('#open-results').click();await page.waitForFunction(()=>document.getElementById('scheduled-results-status')?.textContent==='Invalid result metadata.');expect(await page.getByRole('button',{name:'Inspect result',exact:true}).count()).toBe(0);expect(await page.locator('#cancel-execution').isDisabled()).toBe(true);
+  }finally{await page.close();}
+},20000);
+
+browserTest('changed login during cancellation response invalidates private UI without restoring controls',async()=>{
+  const page=await browser.newPage();let release:()=>void=()=>{};
+  try{const f=await cancelFixture(page);let entered!:()=>void;const held=new Promise<void>(r=>release=r),waiting=new Promise<void>(r=>entered=r);
+    await page.route('**/agent/scheduled-results/execution-one/cancel',async r=>{entered();await held;await r.fulfill({json:{execution_id:'execution-one',cancelled:true,created:true}});});
+    await openCancellation(page);await page.locator('#confirm-execution-cancellation').check();await page.locator('#cancel-execution').click();await waiting;f.state.identity=principal('bob','login-b');release();
+    await page.waitForFunction(()=>document.getElementById('family-status')?.textContent?.includes('no longer bound'));expect(await page.locator('#scheduled-result-target').textContent()).toBe('');expect(await page.locator('#cancel-execution').isDisabled()).toBe(true);expect(await page.locator('#scheduled-results').isVisible()).toBe(false);
+  }finally{release();await page.close();}
+},20000);
+
 browserTest('terminal cancelled scheduled result renders without text or publication controls',async()=>{
   const page=await browser.newPage();
   try{await fixture(page);await page.route('**/agent/scheduled-results',r=>r.fulfill({json:resultList([{execution_id:'execution-one',chat_jid:'web:alice-two',created_at:1780000000000,state:'cancelled',publication_recorded:false}])}));

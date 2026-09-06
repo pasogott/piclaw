@@ -135,6 +135,13 @@
       <section id="scheduled-result-detail" class="account-section" hidden>
         <h3 id="scheduled-result-detail-heading" tabindex="-1">Inspect scheduled result</h3>
         <p id="scheduled-result-target"></p><p id="scheduled-result-state"></p><pre id="scheduled-result-text"></pre>
+        <section id="scheduled-execution-cancellation" class="account-section" aria-labelledby="cancel-execution-heading" hidden>
+          <h4 id="cancel-execution-heading">Cancel remaining execution authority</h4>
+          <p>Check the original conversation and execution ID above. Cancellation is permanent and requires a sign-in within five minutes. It prevents future guarded work and result settlement, but cannot undo earlier effects or guarantee that a provider request or tool has stopped. It does not delete the task or its history.</p>
+          <label><input id="confirm-execution-cancellation" type="checkbox" disabled /> I confirm permanent cancellation of this execution's remaining authority</label>
+          <button id="cancel-execution" type="button" disabled>Cancel execution authority</button>
+          <p>Closing, refreshing, losing focus or changing sessions clears this confirmation. A request already sent may finish. Refresh and inspect after an uncertain response; cancellation is never retried automatically.</p>
+        </section>
         <p>Publishing adds one service-labelled message to the original conversation. It does not switch conversations, run an agent or send notifications. A sign-in within five minutes is required. A sent request may finish after you close this panel; refresh before retrying.</p>
         <label><input id="confirm-result-publication" type="checkbox" disabled /> I confirm publication to the original conversation</label>
         <button id="publish-result" type="button" disabled>Publish result</button>

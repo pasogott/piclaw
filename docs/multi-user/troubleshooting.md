@@ -50,6 +50,8 @@ Conversations and saved settings persist on the server. Profile, preference and 
 
 ## Prepared tasks
 
+- **Uncertain execution cancellation:** use **Refresh results**, inspect the same execution and confirm again only if it is still unsettled. `cancelled` revokes remaining authority; it cannot undo effects or prove provider/tool termination. A held send does not block cancellation after the page rechecks your login.
+
 - **Uncertain preparation:** while the original draft stays open, confirm **Retry same preparation** to reuse the exact request ID. No automatic retry occurs. After discard, refresh, close, focus loss or navigation, inspect the saved list before recreating it; the original write may have committed.
 - **Prompt accepted but encoded request too large:** JSON escaping counts towards 128 KiB independently of the 100 KiB prompt limit. Shorten the prompt before confirming again.
 - **Preparation or revocation denied:** check recent sign-in, active target, live tool restrictions and the 100-unrevoked-grant allowance. Wait when rate-limited. Refresh and inspect before another change.
