@@ -17,6 +17,9 @@ import { checkCsrfOrigin } from "./security.js";
 import { authoriseExecutionIdentity } from "../../../agent-pool/execution-identity.js";
 import { withExecutionIdentity } from "../../../core/execution-context.js";
 import { createOwnedRoot, listOwnedLifecycleSessions } from "../../../db/owned-session-lifecycle.js";
+import { authoriseOwnedMedia, readOwnedMediaInfo, exportOwnedArchivedTranscript } from "../../../db/owned-resource-reads.js";
+import { handleMedia } from "../handlers/media.js";
+import { buildContentDisposition } from "./content-disposition.js";
 
 /** Absent selects the live home; explicit empty/duplicate selectors never fall back. */
 function selector(url: URL, key: string): string | undefined {
@@ -88,6 +91,31 @@ export async function handleFamilyRequest(channel: WebChannelLike, req: Request,
   // Packaged app assets only: no docs, dynamic avatars, manifest or service-worker state.
   if (flags.isGetOrHead && (flags.isIndex || flags.isStaticAsset)) {
     return await handleShellRoutes(channel, req, path, flags, serveStaticAsset) ?? deny();
+  }
+  const media = path.match(/^\/media\/([1-9]\d*)(?:\/(thumbnail|info))?$/);
+  if (req.method === "GET" && media) {
+    try {
+      const id = Number(media[1]);
+      // Deliberately ignore caller-selected chat/owner parameters; resolve stored message links.
+      authoriseOwnedMedia(getDb(), principal, id);
+      if (media[2] === "info") return channel.json(readOwnedMediaInfo(getDb(), principal, id));
+      return handleMedia(channel, id, media[2] === "thumbnail");
+    } catch (error) { if (error instanceof ChatAccessDenied) return deny(); throw error; }
+  }
+  if (req.method === "GET" && path === "/agent/branch-download") {
+    try {
+      const chatJid = selector(url, "chat_jid");
+      if (chatJid === undefined) throw new ChatAccessDenied();
+      const limit = selector(url, "limit"), before = selector(url, "before");
+      const result = exportOwnedArchivedTranscript(getDb(), principal, chatJid, limit === undefined ? 200 : Number(limit), before === undefined ? undefined : Number(before));
+      return new Response(JSON.stringify(result, null, 2) + "\n", { headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Disposition": buildContentDisposition("attachment", `piclaw-transcript-${result.branch.branch_id}.json`),
+      } });
+    } catch (error) {
+      if (error instanceof ChatAccessDenied) return deny();
+      return channel.json({ error: "Transcript export failed." }, 400);
+    }
   }
   if (path === "/agent/branches" && req.method === "GET") {
     try {
