@@ -10,6 +10,7 @@ import { claimFamilyScheduledOccurrence as claim, consumeFamilyScheduledOccurren
 import { beginFamilyScheduledExecution as begin, settleFamilyScheduledExecution as settle, readOwnFamilyScheduledResult as read } from "../../src/db/family-scheduled-executions.js";
 import { initializeFamilyScheduledExecutions } from "../../src/db/family-scheduled-executions-schema.js";
 import { initializeFamilyScheduledExpiry } from "../../src/db/family-scheduled-expiry-schema.js";
+import { initializeFamilyScheduledInterruptions } from "../../src/db/family-scheduled-interruptions-schema.js";
 import { recoverExpiredFamilyScheduledExecutions as recover, startFamilyScheduledDispatch as start, readFamilyScheduledDispatch, listOwnFamilyScheduledResults } from "../../src/db/family-scheduled-executions.js";
 import { publishOwnFamilyScheduledResult } from "../../src/db/family-scheduled-publications.js";
 import { provisionFamilyAccount, updateManagedAccount } from "../../src/db/account-administration.js";
@@ -47,6 +48,66 @@ function snapshot(database=getDb()) {
   return JSON.stringify(["family_scheduled_occurrences","family_scheduled_occurrence_events","family_scheduled_executions","family_scheduled_results","family_scheduled_execution_events"].map(name=>database.query(`SELECT * FROM ${name} ORDER BY rowid`).all()));
 }
 const result = {status:"success" as const,text:"private result\nwith exact formatting"};
+
+test('only a committed admission returns interruption closure; exact retries retain receipt and deny model or result authority',()=>{
+  const db=getDb(),cap=begin(db,reservation().lease);expect(readFamilyScheduledDispatch(db,cap)).not.toHaveProperty('markInterrupted');
+  db.exec("CREATE TRIGGER fail_start BEFORE INSERT ON family_scheduled_dispatches BEGIN SELECT RAISE(ABORT,'no start'); END");expect(()=>start(db,cap)).toThrow('no start');
+  expect(db.query('SELECT count(*) n FROM family_scheduled_interruptions').get()).toEqual({n:0});db.exec('DROP TRIGGER fail_start');
+  const admitted=start(db,cap);expect(admitted.identity).not.toHaveProperty('markInterrupted');expect(admitted.identity.provenance).not.toHaveProperty('token');
+  clock++;admitted.markInterrupted();const receipt=db.query('SELECT * FROM family_scheduled_interruptions').get();clock++;admitted.markInterrupted();expect(db.query('SELECT * FROM family_scheduled_interruptions').get()).toEqual(receipt);
+  expect(read(db,alice,cap.execution_id)).toMatchObject({state:'interrupted',result:null});expect(listOwnFamilyScheduledResults(db,alice).items[0]!.state).toBe('interrupted');
+  for(const viewer of [bob,admin])expect(()=>read(db,viewer,cap.execution_id)).toThrow();
+  expect(()=>readFamilyScheduledDispatch(db,cap)).toThrow();expect(()=>start(db,cap)).toThrow();expect(()=>settle(db,cap,result)).toThrow();expect(()=>publishOwnFamilyScheduledResult(db,alice,cap.execution_id)).toThrow();
+  clock+=900000;expect(recover(db)).toEqual({recorded:0});admitted.markInterrupted();
+  clock-=900001;expect(()=>readFamilyScheduledDispatch(db,cap)).toThrow();
+});
+
+test('interruption recording survives revoked account/grant authority but not mode or invalid clock; owner access stays live',()=>{
+  const db=getDb(),prepared=reservation(),cap=begin(db,prepared.lease),admitted=start(db,cap),at=clock;
+  revokeFamilyScheduledGrant(db,alice,prepared.grant_id);db.query('UPDATE users SET enabled=0 WHERE id=?').run(alice.userId);
+  const config=join(ws.workspace,'.piclaw/config.json');
+  for(const text of ['{',JSON.stringify({domains:{access:{mode:'single-user'}}}),JSON.stringify({domains:{access:{mode:'isolated-containers'}}})]){writeFileSync(config,text);expect(()=>admitted.markInterrupted()).toThrow();}
+  writeFileSync(config,JSON.stringify({domains:{access:{mode:'family-shared'}}}));
+  for(const invalid of [at-1,NaN,Infinity]){clock=invalid;expect(()=>admitted.markInterrupted()).toThrow();}
+  clock=at+900000;admitted.markInterrupted();expect(()=>read(db,alice,cap.execution_id)).toThrow();
+  db.query('UPDATE users SET enabled=1 WHERE id=?').run(alice.userId);expect(read(db,alice,cap.execution_id).state).toBe('interrupted');
+  expect(()=>settle(db,cap,result)).toThrow();expect(recover(db)).toEqual({recorded:0});
+});
+
+test('interruption never overwrites settled or expired history and raw conflicts are fenced',()=>{
+  const db=getDb(),complete=begin(db,reservation().lease),a=start(db,complete);settle(db,complete,result);
+  const expire=begin(db,reservation().lease),b=start(db,expire),stop=begin(db,reservation().lease),c=start(db,stop);c.markInterrupted();
+  a.markInterrupted();clock+=900000;expect(recover(db)).toEqual({recorded:1});b.markInterrupted();
+  expect(db.query('SELECT execution_id FROM family_scheduled_interruptions').all()).toEqual([{execution_id:stop.execution_id}]);
+  expect(read(db,alice,complete.execution_id).result?.text).toBe(result.text);expect(read(db,alice,expire.execution_id).state).toBe('expired');
+  expect(()=>db.query('INSERT INTO family_scheduled_expiries VALUES (?,?)').run(stop.execution_id,clock)).toThrow('terminal');
+  expect(()=>db.query('INSERT INTO family_scheduled_results VALUES (?,?,?,?,?)').run(stop.execution_id,'error','x','a'.repeat(64),clock)).toThrow('terminal');
+  expect(()=>db.query("INSERT INTO family_scheduled_execution_events VALUES (?,'settle',?)").run(stop.execution_id,clock)).toThrow('terminal');
+  expect(()=>db.exec('UPDATE family_scheduled_interruptions SET created_at=created_at+1')).toThrow('immutable');expect(()=>db.exec('DELETE FROM family_scheduled_interruptions')).toThrow('cannot be deleted');
+  for(const id of [complete.execution_id,expire.execution_id])expect(()=>db.query('INSERT INTO family_scheduled_interruptions SELECT execution_id,started_at,? FROM family_scheduled_dispatches WHERE execution_id=?').run(clock,id)).toThrow();
+});
+
+test('interruption receipt rollback, start binding and reopened terminality without closure persistence',()=>{
+  const db=getDb(),cap=begin(db,reservation().lease),admitted=start(db,cap),path=join(ws.workspace,'interrupted.sqlite');
+  db.exec("CREATE TRIGGER fail_interruption BEFORE INSERT ON family_scheduled_interruptions BEGIN SELECT RAISE(ABORT,'record failed'); END");expect(()=>admitted.markInterrupted()).toThrow('record failed');
+  expect(read(db,alice,cap.execution_id).state).toBe('unsettled');db.exec('DROP TRIGGER fail_interruption');
+  expect(()=>db.query('INSERT INTO family_scheduled_interruptions VALUES (?,?,?)').run(cap.execution_id,clock+1,clock+1)).toThrow();
+  initializeFamilyScheduledInterruptions(db);expect(db.query('SELECT count(*) n FROM family_scheduled_interruptions').get()).toEqual({n:0});
+  admitted.markInterrupted();db.query('VACUUM INTO ?').run(path);const reopened=new Database(path);
+  try{initializeFamilyScheduledInterruptions(reopened);expect(read(reopened,alice,cap.execution_id).state).toBe('interrupted');expect(()=>start(reopened,cap)).toThrow();expect(()=>settle(reopened,cap,result)).toThrow();}finally{reopened.close();}
+  db.exec('DROP TRIGGER family_scheduled_interruption_immutable');db.query('UPDATE family_scheduled_interruptions SET created_at=?').run(clock+1);expect(()=>read(db,alice,cap.execution_id)).toThrow();expect(()=>admitted.markInterrupted()).toThrow();
+});
+
+test('SQLite concurrent result writer fences interruption and nested admission cannot mint authority before commit',()=>{
+  const db=getDb(),cap=begin(db,reservation().lease),path=join(ws.workspace,'interruption-race.sqlite');
+  let escaped:ReturnType<typeof start>|undefined;
+  expect(()=>db.transaction(()=>{escaped=start(db,cap);}).immediate()).toThrow('Session access denied');
+  expect(escaped).toBeUndefined();expect(db.query('SELECT count(*) n FROM family_scheduled_dispatches').get()).toEqual({n:0});db.query('VACUUM INTO ?').run(path);const one=new Database(path),two=new Database(path);
+  try{one.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=10');two.exec('PRAGMA busy_timeout=10');const admitted=start(one,cap);
+    two.exec('BEGIN IMMEDIATE');try{settle(two,cap,result);expect(()=>admitted.markInterrupted()).toThrow();}finally{two.exec('COMMIT');}
+    admitted.markInterrupted();expect(one.query('SELECT count(*) n FROM family_scheduled_interruptions').get()).toEqual({n:0});expect(read(one,alice,cap.execution_id).state).toBe('settled');
+  }finally{one.close();two.close();}
+});
 
 test("handoff atomically consumes reservation and creates token-free durable binding, without model authority",()=>{
   const db=getDb(), prepared=reservation(), cap=begin(db,prepared.lease);

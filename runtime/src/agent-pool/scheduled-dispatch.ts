@@ -31,9 +31,10 @@ export async function dispatchFamilyScheduledExecution(capability:FamilySettleme
       deps.queue.enqueue(async()=>{
         if(cancelled)return;
         clearTimeout(timer);
-        let outstanding:Promise<AgentOutput>|undefined,expired=false;
+        let outstanding:Promise<AgentOutput>|undefined,expired=false,markInterrupted:(()=>void)|undefined;
         try {
           const descriptor=startFamilyScheduledDispatch(getDb(),proof),identity=descriptor.identity,chat=identity.provenance.chatJid;
+          markInterrupted=descriptor.markInterrupted;
           const timeoutMs=Math.min(60000,descriptor.expiresAt-Date.now());
           if(timeoutMs<=0)throw new ChatAccessDenied();
           const deadline=performance.now()+timeoutMs;let valid=true;
@@ -61,6 +62,10 @@ export async function dispatchFamilyScheduledExecution(capability:FamilySettleme
           settleFamilyScheduledExecution(getDb(),proof,{status:output.status==="error"?"error":"success",text});
           resolve({execution_id:proof.execution_id,settled:true});
         }catch(error){
+          try{markInterrupted?.();}catch{
+            // No exception payload: a storage failure must not leak tokens or replace the original dispatch error.
+            log.warn("Scheduled interruption could not be recorded; expiry recovery remains available",{operation:"scheduled_dispatch.interruption_failed"});
+          }
           reject(error);
           // A timed-out SDK call may ignore abort. Keep its lane occupied until
           // it settles; the closed scope fences later tools and discards output.
