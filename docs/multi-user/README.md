@@ -33,8 +33,8 @@ Family mode is intended for trusted household members. Users with arbitrary shel
 | Modes and migration (#1123/#1126/#1133) | Strict config/marker checks, read-only topology preview, explicit root/handle adoption helpers | Complete migration/rollback tooling, existing-child seed adoption, activation gates |
 | Accounts and factors (#1124/#1125) | Disabled account + owned home provisioning, live/recent-login admin checks, own-device/factor APIs, TOTP and multiple passkeys | Account UI, offline lone-admin recovery, passkey-first invitations/reset, legacy factor-tool isolation |
 | Invitations/recovery (#1125) | One-use browser-bound TOTP grants, atomic enrol-and-enable, explicit other-admin reset | Invitation/QR and reset confirmation UI, end-to-end browser workflows |
-| Sessions (#1126/#1128) | Root ownership, owner-local names, atomic forks/rename, additional roots, home selection and idle archive/restore | Merge/purge/download, browser lifecycle UX, process-kill recovery proof |
-| HTTP and SSE (#1127) | Terminal family HTTP policy, SQL-scoped search, own-thread reads, revocable SSE, selected account/fork routes | Media/derived resources, remaining mutations, direct WebSocket/transport/tool paths, browser state and push recipients |
+| Sessions (#1126/#1128) | Root ownership, owner-local names, atomic forks/rename, additional roots, home selection and idle archive/restore | Merge/purge, full archive backup, browser lifecycle UX, process-kill recovery proof |
+| HTTP and SSE (#1127) | Terminal family HTTP policy, SQL-scoped search, own-thread reads, revocable SSE, selected account/fork routes | Uploads and remaining derived resources/mutations, direct WebSocket/transport/tool paths, browser state and push recipients |
 | Model identity/memory (#1129/#1131) | Server identity before hydration, scoped model context and owner/family memory paths | All direct/queued/delegate/side/Dream entry points and service grants; shared-resource policy |
 | Settings and isolation (#1130/#1132) | Reserved profile/config contracts | Capability-aware Settings and per-user container gateway/deployment |
 | Auth maintenance (#1125) | Transient-expiry loop and offline factor re-encryption helper | Coordinated rotation CLI/dual-key support, generic-keychain rotation, audit retention |
@@ -80,7 +80,7 @@ Internal provisioning helpers assign an existing root and a user's home atomical
 
 The owner-aware lookup/list/rename helpers validate live account and parent-chain ownership. Friendly rename updates only `agent_name` and `updated_at`; it preserves branch ID, chat JID, root, home, message references and filesystem paths. Owner-local misses never query another namespace. The legacy database lookup returns only legacy handles, and legacy ensure/rename/restore methods reject migrated rows.
 
-Family branch listing, fork and friendly rename now use owner-bound controls. AgentBranchManager handle lookup and active/known lists use execution identity and have no cross-user active-session fallback. Chat tools, session control, schedules and peer ingress still need end-to-end owner propagation. Additional root creation, own-home selection, archive and restore now use explicit family lifecycle routes. Merge, purge and download remain denied. Legacy JID migration and unscoped destructive branch-manager methods still deny multi-user mode.
+Family branch listing, fork and friendly rename now use owner-bound controls. AgentBranchManager handle lookup and active/known lists use execution identity and have no cross-user active-session fallback. Chat tools, session control, schedules and peer ingress still need end-to-end owner propagation. Additional root creation, own-home selection, archive and restore now use explicit family lifecycle routes. Merge and purge remain denied. Archive download uses the text-only owned export described below. Legacy JID migration and unscoped destructive branch-manager methods still deny multi-user mode.
 
 ### Owned roots, home selection and archive/restore
 
@@ -92,7 +92,7 @@ POST `/agent/branch-prune` accepts exactly `{chat_jid}` and archives one session
 
 POST `/agent/branch-restore` accepts `{chat_jid,agent_name?}`. It requires active parents and an available owner-local handle; collision leaves the archive untouched. An explicit alternate name resolves a collision without changing branch/chat IDs. Restore is metadata-only: the next authorised use performs hydration. GET `/agent/branches?include_archived=true` can list owned archived metadata and filter an owned root; it cannot read archived messages. All mutation routes require matching Origin and their existing rate limits.
 
-These backend operations do not complete browser lifecycle UX, process-kill race verification, merge/purge/download, or adoption of legacy child sessions without fork provenance.
+These backend operations do not complete browser lifecycle UX, process-kill race verification, merge/purge, full backups or adoption of legacy child sessions without fork provenance.
 
 ### Atomic family forks
 
@@ -118,6 +118,8 @@ The family router makes a terminal decision before legacy, add-on and widget-sta
 | GET `/timeline`, `/hashtag/:tag`, `/thread/:id` | Live owned home or validated owned target |
 | GET `/search` | `current`, `root` and `all` search only authorised chats; filter before pagination |
 | GET `/sse/stream` | Server-authorised chat subscription with live revalidation |
+| GET `/media/:id`, `/media/:id/thumbnail`, `/media/:id/info` | Require a stored message link to an active owned session; metadata is projected |
+| GET `/agent/branch-download` | Bounded text-only export of one owned archived conversation; not the legacy full-state dump |
 | GET `/agent/branches` | Owned roots/descendants; optional `include_archived=true` metadata, no runtime-global fallback |
 | POST `/agent/branch-fork`, `/agent/branch-rename` | Owner-bound target, strict fields, browser Origin, cookie revalidation and branch rate limit |
 | POST `/agent/root-session`, `/agent/branch-prune`, `/agent/branch-restore` | Owned root creation and idle metadata lifecycle; no implicit cascading or hydration |
@@ -125,11 +127,21 @@ The family router makes a terminal decision before legacy, add-on and widget-sta
 | `/admin/users/*`, `/account`, `/account/sessions/*`, `/account/factors/*`, `/account/passkeys/register/*` | Only the exact methods below; live account/login checks, own-resource scope, recent authentication and Origin on mutations |
 | Other routes/methods reaching ordinary family dispatch | JSON 401 without a browser principal; 403 with one. Specialised auth/account endpoints may return validation errors or 405 for `/auth/me` |
 
-Missing `chat_jid` selects the current stored home; explicit empty, duplicate, unknown, unowned and foreign targets receive the same denial. An explicit `root_chat_jid` must resolve to the target's root. Role alone cannot select another owner's messages. Thread IDs are looked up within the authorised chat. Responses retain existing owner-message fields; media retrieval is still denied. No response is derived from a foreign chat's message contents. Family responses use `Cache-Control: private, no-store` and `Vary: Cookie`. Browser cache/storage namespacing still needs implementation.
+Missing `chat_jid` selects the current stored home; explicit empty, duplicate, unknown, unowned and foreign targets receive the same denial. An explicit `root_chat_jid` must resolve to the target's root. Role alone cannot select another owner's messages. Thread IDs are looked up within the authorised chat. Timeline responses retain existing owner-message fields. Media retrieval separately validates stored message links; caller-supplied chat/owner query parameters cannot authorise a media ID. No response is derived from a foreign chat's message contents. Family responses use `Cache-Control: private, no-store` and `Vary: Cookie`. Browser cache/storage namespacing still needs implementation.
 
 An SSE subscription retains a non-secret login ID and target, without retaining bearer cookies. Login expiry/revocation, disabled accounts, changed roles and invalid/archived parent chains close it before the next event. Idle clients are checked every 30 seconds. Only known chat-scoped event types matching the authorised target are delivered; no global broadcast event is approved yet. The connection handshake omits global UI preferences. Cancellation and revocation clear the heartbeat and remove the client. Already delivered/queued bytes cannot be recalled.
 
-Denied surfaces include add-on ingress/config APIs, widget state/snapshots, mutations other than the listed owned-session and account methods, E2E bootstrap, general factor registration, media/uploads, workspace, exports, recordings, terminal/VNC, other agent controls/metadata, push and Settings. Each needs an explicit policy and target validation before being enabled. Tool/non-web boundaries, per-user browser state, device notification routing and complete route/resource inventory remain #1127 work. Single-user routing and unscoped SSE behaviour are unchanged. Terminal/VNC WebSocket upgrades are handled separately from `RequestRouterService`; their existing auth/Origin checks are not full family ownership enforcement. Direct tools/transports and background workers also require separate integration. The startup gate is essential until these paths are verified.
+Denied surfaces include add-on ingress/config APIs, widget state/snapshots, mutations other than the listed owned-session and account methods, E2E bootstrap, general factor registration, uploads, workspace, full-state/timeline exports, recordings, terminal/VNC, other agent controls/metadata, push and Settings. Each needs an explicit policy and target validation before being enabled. Tool/non-web boundaries, per-user browser state, device notification routing and complete route/resource inventory remain #1127 work. Single-user routing and unscoped SSE behaviour are unchanged. Terminal/VNC WebSocket upgrades are handled separately from `RequestRouterService`; their existing auth/Origin checks are not full family ownership enforcement. Direct tools/transports and background workers also require separate integration. The startup gate is essential until these paths are verified.
+
+## Owned media and archive transcript reads
+
+GET `/media/:id`, `/media/:id/thumbnail` and `/media/:id/info` authorise through `message_media` → `messages` → the current root/parent chain. At least one linked conversation must be active and owned by the requester. Foreign, missing, orphaned and archived-only links receive the same denial. A blob deliberately linked to both owners' conversations is readable by either; duplicate query parameters or supplied `chat_jid` do not establish authority. Uploads are still denied.
+
+Binary reads retain the existing non-image `Content-Disposition: attachment` and security headers. Metadata returns only ID, filename, content type and creation time; arbitrary stored metadata, paths and binary data are omitted. Responses use private/no-store caching.
+
+GET `/agent/branch-download?chat_jid=...` requires an owned archived branch and returns `piclaw.owned-transcript.v1` as a JSON attachment. `limit` defaults to 200 and is capped at 500; follow `page.next_before` while `page.has_more` is true. Each page is chronological, selected from newest backwards. Message content is capped at 32,000 characters in SQL and carries `content_truncated`; sender display names are capped at 128 characters.
+
+The export contains the selected branch's safe identity fields and message text/time/sender/bot metadata. It omits media, structured content blocks, previews, annotations, thread links, tasks, service configs, extension state and session files. It is not a full backup or the legacy `piclaw.archived-session.v1` single-user export. Text may naturally contain private information from that owner's conversation; no content redaction is implied. Archived media must be restored into an active owned conversation before normal media access. Cross-user/unknown/active targets deny; no default-home fallback is used for export.
 
 ## Account-factor foundation
 

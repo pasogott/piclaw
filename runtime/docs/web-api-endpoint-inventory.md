@@ -65,6 +65,8 @@ These exact routes are implemented in `http/family-authorisation.ts`, `http/fami
 | GET | `/timeline`, `/hashtag/:tag`, `/thread/:id` | Live owned `chat_jid` or current home; thread ID scoped to that chat | Existing timeline/hashtag/thread envelope |
 | GET | `/search` | `q`, `scope=current\|root\|all`; SQL restricted to authorised chats before pagination | Search results; `all` never means all users |
 | GET | `/sse/stream` | Authorised chat/login, rechecked before delivery and every 30s | Only approved matching-chat events; no global broadcasts |
+| GET | `/media/:id`, `/media/:id/thumbnail`, `/media/:id/info` | Stored message link to an active owned chat; ignore claimed owner/chat authority | Binary/thumbnail or safe metadata projection; private/no-store |
+| GET | `/agent/branch-download` | Explicit owned archived `chat_jid`, optional `limit` (1–500, default 200) and `before` | `piclaw.owned-transcript.v1` JSON attachment with bounded text; omits service state and media |
 | GET | `/agent/branches` | Owned roots/descendants; optional owned root filter and `include_archived=true` metadata | `{branches}` |
 | POST | `/agent/branch-fork` | Optional `chat_jid`, required `agent_name` and owner/source-bound `request_id`; Origin + branch rate limit | 201 `{branch}`; retry returns the same child |
 | POST | `/agent/branch-rename` | Optional `chat_jid`, required `agent_name`; Origin + branch rate limit | `{branch}`; stable IDs unchanged |
@@ -84,7 +86,7 @@ These exact routes are implemented in `http/family-authorisation.ts`, `http/fami
 | POST | `/account/passkeys/register/start` | Recent self; `{}`, passkeys enabled | `{token,options,expires_at}`; owner/login/RP/Origin-bound |
 | POST | `/account/passkeys/register/finish` | Recent same login; `{token,credential}` | `{registered:true}`; adds a key without replacement |
 
-Family TOTP login uses `/auth/verify` with account username and code; discoverable WebAuthn login uses the credential owner. Legacy `/auth/webauthn/register/*` and `/passkey` tools are not the family registration path. Login JS/CSS are public; other packaged static assets require authentication. The owned root/home/archive/restore routes below are also implemented. Family HTTP denies normal message ingress, other mutations, media/workspace/export, add-on config, push and Settings until their policies are integrated.
+Family TOTP login uses `/auth/verify` with account username and code; discoverable WebAuthn login uses the credential owner. Legacy `/auth/webauthn/register/*` and `/passkey` tools are not the family registration path. Login JS/CSS are public; other packaged static assets require authentication. The owned root/home/archive/restore routes below are also implemented. Family HTTP denies normal message ingress, other mutations/uploads, workspace/full-state export, add-on config, push and Settings until their policies are integrated.
 
 Missing chat selectors use the current stored home; explicit blank, duplicate, foreign, unknown or unowned read selectors deny. Ordinary anonymous data access returns JSON 401 without redirects; unauthorised targets return 403, own-chat missing threads 404, invalid operations 400, rate limits 429. Specialised endpoints may reject unsupported methods separately. Grant responses contain new one-use tokens/seeds: never log them or put them in query strings. All family responses are private/no-store.
 
