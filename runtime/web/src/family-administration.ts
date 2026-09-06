@@ -1,10 +1,11 @@
 import type { AdministrationSettings } from '../../src/core/administration-settings.js';
 import type { AdminSecurity, AdminSecurityRevocation } from '../../src/core/admin-security.js';
+import type { AdminHome } from '../../src/core/admin-home.js';
 import { FamilyApi } from './family-api.js';
 
 const node = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 type User = AdministrationSettings['users'][number];
-type Action = Exclude<keyof User['capabilities'], 'inspect_security'>;
+type Action = Exclude<keyof User['capabilities'], 'inspect_security' | 'assign_home'>;
 const labels: Record<Action, string> = { disable: 'Disable', enable: 'Reactivate', change_role: 'Change role', invite: 'Issue invitation', revoke_invitation: 'Revoke invitation', reset: 'Reset account' };
 
 /** No foreign conversation links, stored grants, automatic retries or impersonation. */
@@ -19,7 +20,7 @@ export class FamilyAdministration {
   private displayName = node<HTMLInputElement>('new-account-display-name');
   private role = node<HTMLSelectElement>('new-account-role');
   private link = node<HTMLInputElement>('administration-invitation-link');
-  private selected: { user: User; action: Action } | { user: User; action: 'revoke_security'; input: AdminSecurityRevocation } | null = null;
+  private selected: { user: User; action: Action } | { user: User; action: 'revoke_security'; input: AdminSecurityRevocation } | { user: User; action: 'assign_home'; branchId: string } | null = null;
   private opened = false;
   private paused = false;
   private stopped = false;
@@ -33,6 +34,7 @@ export class FamilyAdministration {
     node('close-administration').addEventListener('click', () => { this.opened = false; this.clear(); node('open-administration').focus(); });
     node('refresh-administration').addEventListener('click', () => { void this.load(); });
     node('close-administration-security').addEventListener('click', () => { this.generation++; this.clearSecurity(); this.resetAction(); });
+    node('close-administration-home').addEventListener('click', () => { this.generation++; this.clearHome(); this.resetAction(); });
     node('clear-administration-invitation').addEventListener('click', () => this.clearGrant());
     node('cancel-administration-action').addEventListener('click', () => this.resetAction());
     const confirmState = () => { node<HTMLButtonElement>('submit-administration-action').disabled = this.busy || !this.confirm.checked || this.confirmationName.value !== this.selected?.user.username; };
@@ -43,6 +45,10 @@ export class FamilyAdministration {
     });
     this.form.addEventListener('submit', event => {
       event.preventDefault(); if (!this.selected || !this.confirm.checked || this.confirmationName.value !== this.selected.user.username) return;
+      if (this.selected.action === 'assign_home') {
+        if (this.selected.user.capabilities.assign_home !== true) return;
+        void this.mutate(`/admin/users/${encodeURIComponent(this.selected.user.id)}/home`, 'PATCH', { branch_id: this.selected.branchId, confirm_username: this.selected.user.username }); return;
+      }
       if (this.selected.action === 'revoke_security') {
         if (this.selected.user.capabilities.inspect_security !== true) return;
         void this.mutate(`/admin/users/${encodeURIComponent(this.selected.user.id)}/security/revoke`, 'POST', this.selected.input); return;
@@ -66,6 +72,7 @@ export class FamilyAdministration {
     node<HTMLButtonElement>('submit-administration-action').disabled = true;
   }
   private clear(): void {
+    this.clearHome();
     this.clearSecurity();
     this.generation++; this.clearGrant(); this.resetAction(); this.root.hidden = true; this.list.replaceChildren();
     this.username.value = ''; this.displayName.value = ''; this.role.value = 'member'; this.status.textContent = '';
@@ -83,6 +90,7 @@ export class FamilyAdministration {
   private choose(user: User, action: Action): void {
     if (!this.visible() || this.busy || user.capabilities[action] !== true) return;
     this.generation++; this.clearSecurity();
+    this.clearHome();
     this.clearGrant(); this.resetAction(); this.selected = { user, action }; this.form.hidden = false;
     this.confirm.disabled = this.confirmationName.disabled = false;
     node<HTMLButtonElement>('cancel-administration-action').disabled = false;
@@ -112,6 +120,8 @@ export class FamilyAdministration {
       const security = document.createElement('button'); security.type = 'button'; security.textContent = 'Security';
       security.disabled = user.capabilities.inspect_security !== true;
       security.addEventListener('click', () => { void this.loadSecurity(user); }); buttons.append(security);
+      const home = document.createElement('button'); home.type = 'button'; home.textContent = 'Home'; home.disabled = user.capabilities.assign_home !== true;
+      home.addEventListener('click', () => { void this.loadHome(user); }); buttons.append(home);
       row.append(title, buttons); this.list.append(row);
     }
   }
@@ -119,8 +129,41 @@ export class FamilyAdministration {
     node('administration-security').hidden = true; node('administration-security-title').textContent = '';
     node('administration-security-items').replaceChildren();
   }
+  private clearHome(): void {
+    node('administration-home').hidden = true; node('administration-home-title').textContent = ''; node('administration-home-roots').replaceChildren();
+  }
+  private async loadHome(user: User): Promise<void> {
+    if (!this.visible() || this.busy || user.capabilities.assign_home !== true) return;
+    this.clearHome(); this.clearSecurity(); this.clearGrant(); this.resetAction(); const generation = ++this.generation;
+    this.status.textContent = 'Loading eligible home roots…';
+    try {
+      const value: AdminHome = await this.api.request(`/admin/users/${encodeURIComponent(user.id)}/home`);
+      if (!this.visible() || generation !== this.generation) return;
+      if (value?.user?.id !== user.id || value.user.username !== user.username || !Array.isArray(value.roots)) throw new Error('Account changed. Refresh before continuing.');
+      node('administration-home').hidden = false; node('administration-home-title').textContent = `Home for @${user.username}`;
+      node<HTMLButtonElement>('close-administration-home').disabled = false;
+      const list = node('administration-home-roots');
+      for (const root of value.roots) {
+        const item = document.createElement('li'), label = document.createElement('span'), button = document.createElement('button');
+        label.textContent = `@${root.agent_name} · ${root.branch_id}${root.current ? ' · Current home' : ''}`;
+        button.type = 'button'; button.textContent = 'Assign home'; button.disabled = root.current === true;
+        button.addEventListener('click', () => {
+          if (!this.visible() || this.busy) return;
+          this.resetAction(); this.selected = { user, action: 'assign_home', branchId: root.branch_id }; this.form.hidden = false;
+          this.confirm.disabled = this.confirmationName.disabled = false; node<HTMLButtonElement>('cancel-administration-action').disabled = false;
+          node('administration-action-title').textContent = `Assign home for @${user.username}`;
+          node('administration-action-warning').textContent = `Use @${root.agent_name} (${root.branch_id}) for future sign-ins and targetless requests. Existing conversations, active runs, ownership and logins remain unchanged. This does not open the target account or change its container destination.`;
+          this.confirmationName.focus();
+        });
+        item.append(label, button); list.append(item);
+      }
+      if (!value.roots.length) list.textContent = 'No eligible owned roots. Provision or repair ownership before assigning a home.';
+      this.status.textContent = '';
+    } catch (error) { if (this.visible() && generation === this.generation) this.status.textContent = (error as Error).message; }
+  }
   private async loadSecurity(user: User): Promise<void> {
     if (!this.visible() || this.busy || user.capabilities.inspect_security !== true) return;
+    this.clearHome();
     this.clearGrant(); this.clearSecurity(); this.resetAction(); const generation = ++this.generation;
     this.status.textContent = 'Loading account security…';
     try {
@@ -180,7 +223,7 @@ export class FamilyAdministration {
       if (!this.visible() || generation !== this.generation) return;
       const snapshot = await this.api.request('/admin/users/settings');
       if (!this.visible() || generation !== this.generation) return;
-      this.resetAction(); this.clearSecurity(); this.username.value = ''; this.displayName.value = ''; this.role.value = 'member'; this.render(snapshot);
+      this.resetAction(); this.clearSecurity(); this.clearHome(); this.username.value = ''; this.displayName.value = ''; this.role.value = 'member'; this.render(snapshot);
       this.status.textContent = grant ? 'Invitation issued. Copy the link privately now; blur or close clears it.' : 'Account change saved.';
       if (grant) this.showGrant(result);
     } catch (error) {

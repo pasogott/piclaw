@@ -36,7 +36,7 @@ Family mode is intended for trusted household members. Users with arbitrary shel
 | Sessions (#1126/#1128) | Root ownership, owner-local names, atomic forks/rename, additional roots, home selection and idle archive/restore; owned lifecycle browser controls | Merge/purge, full archive backup, process-kill recovery proof |
 | HTTP and SSE (#1127) | Terminal family HTTP policy, SQL-scoped search, own-thread reads, revocable SSE, text-only persisted message admission, selected account/fork routes, separate pinned text browser shell | Uploads and remaining derived resources/mutations, direct WebSocket/transport/tool paths, legacy-origin migration and push recipients |
 | Model identity/memory (#1129/#1131) | Server identity before hydration, scoped model context and owner/family memory paths | All direct/queued/delegate/side/Dream entry points and service grants; shared-resource policy |
-| Settings and isolation (#1130/#1132) | Own-account, owned-session lifecycle and account administration controls, including individual admin security revocation, with server capability snapshots | Home/destination assignment, shared-resource Settings, preference classification and per-user container gateway/deployment |
+| Settings and isolation (#1130/#1132) | Own-account, owned-session lifecycle and account administration controls, including individual admin security revocation and home assignment, with server capability snapshots | Container destination assignment, shared-resource Settings, preference classification and per-user container gateway/deployment |
 | Auth maintenance (#1125) | Transient-expiry loop and offline factor re-encryption helper | Coordinated rotation CLI/dual-key support, generic-keychain rotation, audit retention |
 
 Passing backend tests and merged PRs do not complete these issues or allow activation. Preserve single-user compatibility until the staged integration gates pass.
@@ -179,6 +179,7 @@ Account reads recheck the login ID and enabled user/role. Mutations require a ma
 | GET `/admin/users/settings` | Enabled administrator reads labels, role/enabled/invitation state and operation eligibility; no foreign home/session/factor identifiers; query selectors denied |
 | GET `/admin/users/:id/security` | Recent administrator reads explicit other-account factor/device metadata; no content, home, keys, seeds or bearer material |
 | POST `/admin/users/:id/security/revoke` | Recent administrator revokes an exact target item after exact username confirmation; actor/target audit in the same transaction |
+| GET/PATCH `/admin/users/:id/home` | Recent administrator lists eligible already-owned active roots or assigns one after exact username confirmation; no content access or ownership transfer |
 | POST `/admin/users` | Recent administrator creates a disabled account and owned home root atomically |
 | PATCH `/admin/users/:id` | Recent administrator changes username/displayName/role/enabled; immutable identity/home fields rejected |
 | GET `/account` | Live self-only profile/factor/device snapshot with current-policy capability hints; query selectors denied |
@@ -219,7 +220,13 @@ POST `/admin/users/:id/security/revoke` accepts `{kind,confirm_username,item_id?
 
 `account_security_events` records actor, target, item kind/non-secret ID and time in the revocation transaction. An audit-write failure restores the removed item and logins. The UI requires the server `inspect_security` capability, an explicit Security action, exact username and checked confirmation. Details and pending confirmation clear on close, blur, navigation and account replacement; failed writes never auto-retry. Audit retention and physical-device verification are unfinished.
 
-Restricted invitations below bootstrap a new account's TOTP factor; administrator-assisted reset is described separately. Avatar changes, admin home/destination assignment and offline lone-administrator recovery are not implemented. Full mode activation, migrated legacy factors and legacy WebAuthn tool/ceremony isolation need integration testing before release.
+GET `/admin/users/:id/home` requires recent administrator authentication and returns only another account's eligible active owned root branch IDs, handles and current-home markers. It omits chat JIDs, descendants, content and runtime paths. The read validates ownership and handle namespace and never hydrates a model. Self-home selection stays in My sessions.
+
+PATCH at the same path accepts exactly `{branch_id,confirm_username}` with matching Origin and account rate limits. In one write transaction it rechecks the acting admin, target username and root ownership/namespace/active state, then changes the target's home and inserts an `account_home_events` audit row. The target may be disabled, but assignment cannot enable it. Foreign, archived, child, unowned and malformed roots deny; no implicit adoption is performed. Assigning the already-current root returns `{changed:false}` without another audit event. Audit failure rolls back the default change.
+
+Home changes affect future sign-ins and targetless requests only. Existing target-bound logins, conversations, runs, seeds and ownership remain unchanged, and the administrator still cannot read that root's messages. The UI uses server eligibility, exact username and checkbox confirmation, clears metadata on close/blur/navigation, and does not retry automatically. Container destination assignment is a separate #1132 gate. Audit retention is unfinished.
+
+Restricted invitations below bootstrap a new account's TOTP factor; administrator-assisted reset is described separately. Avatar changes, container destination assignment and offline lone-administrator recovery are not implemented. Full mode activation, migrated legacy factors and legacy WebAuthn tool/ceremony isolation need integration testing before release.
 
 ## Self-service authenticator enrolment
 

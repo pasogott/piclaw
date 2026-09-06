@@ -110,7 +110,12 @@
         <p>Security metadata is available only after recent administrator authentication. Names are user-authored labels; exact IDs select items. Revocation does not reveal or open conversation content. Use My account for your own factors and devices.</p>
         <ul id="administration-security-items"></ul>
       </section>
-      <p class="notice">Administrator home/destination assignment, passkey-first invitations and offline lone-admin recovery are not available here.</p>
+      <section id="administration-home" class="account-section" aria-labelledby="administration-home-title" hidden>
+        <h3 id="administration-home-title"></h3><button id="close-administration-home" type="button">Close home details</button>
+        <p>Only this account’s active owned roots can be assigned. This changes future landing and targetless requests, without opening content, transferring ownership or moving a running conversation. Use My sessions for your own home.</p>
+        <ul id="administration-home-roots"></ul>
+      </section>
+      <p class="notice">Container destination assignment, passkey-first invitations and offline lone-admin recovery are not available here.</p>
     </section>
     <section class="session-controls" aria-label="Session navigation">
       <label for="session-select">Owned session</label>

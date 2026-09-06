@@ -90,6 +90,7 @@ export function readAdministrationSettings(database: Database, principal: Authen
           revoke_invitation: recent && Boolean(invitation),
           reset: recent && policy.totp && user.id !== principal.userId && !protectedAdmin && homeValid,
           inspect_security: recent && user.id !== principal.userId,
+          assign_home: recent && user.id !== principal.userId,
         },
       };
     }) };

@@ -61,4 +61,7 @@ textarea { resize: vertical; width: 100%; }
 #administration-security-items { list-style: none; padding: 0; }
 #administration-security-items li { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0; }
 #administration-security-items span { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+#administration-home-roots { list-style: none; padding: 0; }
+#administration-home-roots li { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0; }
+#administration-home-roots span { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
 @media (max-width: 480px) { .family-shell { padding: 12px; } .session-controls label { flex-basis: 100%; } }
