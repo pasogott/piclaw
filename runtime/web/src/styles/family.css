@@ -1,0 +1,27 @@
+:root { color-scheme: light dark; --bg: #fafafa; --surface: #fff; --text: #20242b; --muted: #596273; --border: #d4dae1; --accent: #175bb5; --error: #ad1d32; }
+@media (prefers-color-scheme: dark) { :root { --bg: #101318; --surface: #191e26; --text: #e8edf3; --muted: #a9b5c5; --border: #394252; --accent: #91bafa; --error: #ff9caa; } }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.family-shell { max-width: 920px; margin: auto; padding: 20px; }
+header { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+h1 { font-size: 24px; margin: 0; }
+header a { margin-left: auto; }
+a { color: var(--accent); }
+.notice { font-size: 14px; color: var(--muted); border-left: 3px solid var(--border); padding-left: 12px; }
+.session-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+select { min-width: 0; max-width: 100%; flex: 1 1 180px; }
+button, select, input, textarea { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+button { cursor: pointer; }
+button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .55; cursor: not-allowed; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+#family-status { color: var(--muted); font-size: 14px; }
+#family-error { color: var(--error); min-height: 24px; overflow-wrap: anywhere; }
+#timeline { min-height: 100px; }
+.post { border: 1px solid var(--border); background: var(--surface); border-radius: 10px; padding: 14px; margin: 12px 0; }
+.post-meta { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.post-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+#compose-form { display: flex; flex-direction: column; gap: 8px; margin-top: 22px; }
+textarea { resize: vertical; width: 100%; }
+#send-message { align-self: flex-end; }
+@media (max-width: 480px) { .family-shell { padding: 12px; } .session-controls label { flex-basis: 100%; } }

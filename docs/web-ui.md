@@ -3,7 +3,7 @@
 Piclaw ships with a single-user streaming web UI that combines chat, workspace,
 editor, terminal, viewers, and lightweight control surfaces in one app.
 
-This page describes the supported single-user UI. [Family-mode backend work](multi-user/README.md) includes account APIs, owned forks and multiple passkeys, but startup still rejects family and isolated modes. A restricted invitation/QR page and mode-aware login shell are implemented, but account administration, passkey labels, per-user Settings and browser cache/storage separation are not yet integrated into a supported family UI. Do not treat the existing session picker or multiple browser tabs as separate user accounts.
+This page describes the supported single-user UI. [Family-mode backend work](multi-user/README.md) includes account APIs, owned forks and multiple passkeys, but startup still rejects family and isolated modes. A restricted invitation/QR page, mode-aware login and separate text-only family shell are implemented behind that gate. Account administration, passkey labels, per-user Settings and the complete browser workflow are not yet supported. Do not treat the existing session picker or multiple browser tabs as separate user accounts.
 
 ## Login
 
@@ -12,6 +12,16 @@ The login shell loads non-secret mode/method flags before enabling credential in
 ## Restricted invitation setup (gated family backend)
 
 An administrator can privately deliver `/auth/invitation#token=<grant>`. The page removes the grant from history, waits for Begin, then displays the new authenticator QR/manual key and a confirmation form. Confirmation enables only the invited account and directs the user to ordinary login. No account cookie is issued. Secrets are kept in memory and cleared on success, expiry or navigation; a failed/lost claim needs a new invitation. This page does not bypass the family startup gate or provide the unfinished admin issuance UI.
+
+## Family text shell (gated)
+
+The family router serves a separate shell rather than the classic or visual app. It selects the owned home on a fresh login, offers an owned-session picker and polls the most recent 100 text messages. Explicit foreign session links fail instead of silently selecting home. Text is rendered without HTML, rich blocks, add-ons, panes or legacy browser-storage imports. Unchanged manual send retries reuse an in-memory request ID; no automatic retry is performed.
+
+Requests include account/login pins derived from the authenticated principal. The server compares them with the cookie, and the client rechecks identity before rendering each response. A changed or revoked login clears the page and draft. Background tabs mask private UI until revalidation; pagehide and back/forward-cache restoration discard it. Sign out revokes only the original pinned login and does not overwrite a replacement cookie from another tab.
+
+Before fetching private data, the shell unregisters existing origin service workers and deletes Cache Storage entries. If a worker still controls the page, it stops and asks the user to close other tabs and reload. This cannot repair a legacy worker that serves an old shell without reaching the server; origin/cache migration and old-tab integration evidence remain release gates. The shell does not read or write localStorage/sessionStorage or promise filesystem isolation.
+
+This preview is English-only. Attachments, streaming, pagination, held-input discovery/recovery controls, lifecycle actions and account Settings remain unfinished. The following sections describe the supported **single-user** UI.
 
 ## Chat and status surfaces
 

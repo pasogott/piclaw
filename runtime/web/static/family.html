@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
+  <title>PiClaw family workspace</title>
+  <link rel="stylesheet" href="/static/common/dist/family.bundle.css?v=__FAMILY_ASSET_VERSION__" />
+</head>
+<body>
+  <main class="family-shell">
+    <header>
+      <h1>PiClaw</h1><span id="account-name">Checking account…</span>
+      <button id="sign-out" type="button" disabled>Sign out</button>
+      <a href="/login">Sign in</a>
+    </header>
+    <p class="notice">Family preview: text conversations only. Shared workspace files are not private between tool-capable users.</p>
+    <section class="session-controls" aria-label="Session navigation">
+      <label for="session-select">Owned session</label>
+      <select id="session-select" disabled></select>
+      <button id="go-home" type="button" disabled>Go home</button>
+      <button id="refresh" type="button" disabled>Refresh</button>
+    </section>
+    <p id="family-status" role="status">Loading…</p>
+    <p id="family-error" role="alert" aria-live="polite"></p>
+    <section id="timeline" aria-label="Conversation"></section>
+    <form id="compose-form">
+      <label for="message-text">Message</label>
+      <textarea id="message-text" rows="4" maxlength="102400" placeholder="Write a message (commands, attachments and steering are not yet available)" disabled required></textarea>
+      <button id="send-message" type="submit" disabled>Send</button>
+    </form>
+  </main>
+  <script type="module" src="/static/common/dist/family.bundle.js?v=__FAMILY_ASSET_VERSION__"></script>
+</body>
+</html>

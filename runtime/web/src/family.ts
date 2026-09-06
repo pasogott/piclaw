@@ -1,0 +1,118 @@
+import { FamilyApi, fetchFamilyIdentity, prepareFamilyBrowser } from './family-api.js';
+
+function element<T extends HTMLElement>(id: string): T {
+  const value = document.getElementById(id);
+  if (!value) throw new Error(`Missing family shell element: ${id}`);
+  return value as T;
+}
+const account = element<HTMLElement>('account-name'), status = element<HTMLElement>('family-status'), error = element<HTMLElement>('family-error');
+const timeline = element<HTMLElement>('timeline'), select = element<HTMLSelectElement>('session-select');
+const form = element<HTMLFormElement>('compose-form'), compose = element<HTMLTextAreaElement>('message-text'), send = element<HTMLButtonElement>('send-message');
+const home = element<HTMLButtonElement>('go-home'), refresh = element<HTMLButtonElement>('refresh'), logout = element<HTMLButtonElement>('sign-out');
+let api: FamilyApi | null = null, current = '', stopped = false, busy = false, paused = false, generation = 0;
+let refreshing: symbol | null = null, polling: ReturnType<typeof setInterval> | undefined;
+let pending: { text: string; chat: string; requestId: string } | null = null;
+function controls(enabled: boolean): void {
+  for (const control of [select, compose, send, home, refresh]) control.disabled = !enabled;
+}
+function mask(): void {
+  // Backgrounded tabs retain no visible conversation/draft until the cookie is revalidated.
+  generation++; refreshing = null; timeline.replaceChildren(); account.textContent = ''; status.textContent = ''; error.textContent = '';
+  form.hidden = true; select.hidden = true; controls(false);
+}
+function invalidate(): void {
+  if (stopped) return;
+  stopped = true; mask(); api?.stop();
+  if (polling) clearInterval(polling);
+  select.replaceChildren(); compose.value = ''; pending = null; logout.disabled = true;
+  status.textContent = 'This page is no longer bound to its original account.';
+  error.textContent = 'Sign in again or reload. No previous conversation or draft is retained.';
+}
+function renderPosts(posts: unknown): void {
+  if (!Array.isArray(posts)) throw new Error('Invalid conversation response.');
+  const fragment = document.createDocumentFragment();
+  for (const post of posts) {
+    const article = document.createElement('article'); article.className = 'post';
+    const meta = document.createElement('div'); meta.className = 'post-meta';
+    meta.textContent = `${post.id} · ${post.data?.sender_name ?? (post.data?.is_bot_message ? 'Assistant' : 'User')} · ${post.timestamp ?? ''}`;
+    const text = document.createElement('div'); text.className = 'post-text'; text.textContent = typeof post.data?.content === 'string' ? post.data.content : '';
+    article.append(meta, text); fragment.append(article);
+  }
+  timeline.replaceChildren(fragment);
+}
+async function loadTimeline(): Promise<void> {
+  if (!api || stopped || !current || refreshing || busy || paused || document.hidden) return;
+  const flight = Symbol(), expected = ++generation, target = current; refreshing = flight;
+  try {
+    const result = await api.request(`/timeline?chat_jid=${encodeURIComponent(target)}&limit=100`);
+    if (stopped || expected !== generation || current !== target || paused || document.hidden) return;
+    renderPosts(result.posts); status.textContent = `Session: ${target}${result.has_more ? ' · Showing the most recent messages' : ''}`;
+    account.textContent = `${api.identity.displayName} (@${api.identity.username})`;
+    form.hidden = false; select.hidden = false; controls(!busy);
+  } catch (failure) {
+    if (!stopped && expected === generation) {
+      timeline.replaceChildren(); controls(false); home.disabled = false; refresh.disabled = false;
+      error.textContent = (failure as Error).message;
+    }
+  } finally { if (refreshing === flight) refreshing = null; }
+}
+async function switchSession(chat: string): Promise<void> {
+  if (stopped || busy || !api) return;
+  mask(); current = chat; pending = null; compose.value = ''; error.textContent = '';
+  const url = new URL(location.href); url.search = ''; url.searchParams.set('chat_jid', chat); url.hash = '';
+  history.replaceState(null, '', url.pathname + url.search); select.value = chat;
+  await loadTimeline();
+}
+
+async function start(): Promise<void> {
+  try {
+    await prepareFamilyBrowser();
+    const identity = await fetchFamilyIdentity(AbortSignal.timeout(15_000));
+    if (stopped) return;
+    api = new FamilyApi(identity, invalidate); logout.disabled = false;
+    const requested = new URL(location.href).searchParams.getAll('chat_jid');
+    if (requested.length > 1 || (requested.length === 1 && !requested[0]?.trim())) throw new Error('Invalid session selection. Use Go home.');
+    const directory = await api.request('/agent/branches');
+    if (!Array.isArray(directory.branches)) throw new Error('Invalid session directory.');
+    for (const branch of directory.branches) {
+      const option = document.createElement('option'); option.value = branch.chat_jid; option.textContent = `${branch.agent_name} · ${branch.root_chat_jid}`; select.append(option);
+    }
+    current = requested[0] ?? identity.homeChatJid;
+    // An explicit inaccessible URL is tested by the server, never silently rewritten to home.
+    select.value = current; home.disabled = false; refresh.disabled = false; select.disabled = false;
+    await loadTimeline();
+    polling = setInterval(() => { void loadTimeline(); }, 5000);
+  } catch (failure) { if (!stopped) { error.textContent = (failure as Error).message; status.textContent = 'Unable to open this session.'; if (api) home.disabled = false; } }
+}
+
+select.addEventListener('change', () => { void switchSession(select.value); });
+home.addEventListener('click', () => { if (api) void switchSession(api.identity.homeChatJid); });
+refresh.addEventListener('click', () => { error.textContent = ''; void loadTimeline(); });
+addEventListener('blur', () => { paused = true; mask(); });
+addEventListener('focus', () => { paused = false; void loadTimeline(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { paused = true; mask(); } else { paused = false; void loadTimeline(); } });
+addEventListener('pagehide', invalidate);
+addEventListener('pageshow', event => { if ((event as PageTransitionEvent).persisted) invalidate(); });
+
+form.addEventListener('submit', async event => {
+  event.preventDefault(); if (!api || stopped || busy || send.disabled || !current) return;
+  const text = compose.value;
+  if (!text.trim() || /^[\s]*[/@]/.test(text)) { error.textContent = 'Enter plain text; commands and mentions are not yet supported.'; return; }
+  if (!pending || pending.text !== text || pending.chat !== current) pending = { text, chat: current, requestId: crypto.randomUUID() };
+  busy = true; generation++; controls(false);
+  try {
+    await api.request(`/agent/default/message?chat_jid=${encodeURIComponent(current)}`, 'POST', { content: text, request_id: pending.requestId });
+    if (stopped) return;
+    pending = null; compose.value = ''; error.textContent = ''; status.textContent = 'Message queued.';
+  } catch (failure) { if (!stopped) error.textContent = `${(failure as Error).message} Resend unchanged text to reuse the request ID; do not assume it was rejected.`; }
+  finally { busy = false; if (!stopped) { refreshing = null; await loadTimeline(); } }
+});
+logout.addEventListener('click', async () => {
+  if (!api || stopped || busy) return;
+  busy = true; controls(false); logout.disabled = true;
+  try {
+    await api.logout(); invalidate(); location.replace('/login');
+  } catch (failure) { if (!stopped) { error.textContent = (failure as Error).message; logout.disabled = false; } }
+  finally { busy = false; if (!stopped) void loadTimeline(); }
+});
+void start();
