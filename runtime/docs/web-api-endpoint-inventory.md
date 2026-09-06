@@ -9,7 +9,7 @@ This document inventories the main PiClaw web-channel HTTP route families. **Onl
 For `src/channels/web/request-router-service.ts`, route order depends on access mode:
 
 1. Family mode returns a terminal response from `http/family-authorisation.ts`; isolated mode returns 503. Neither can pass startup today.
-2. Single-user `/auth/me` resolves identity directly. `/api/addons/*` and widget-state routes use their own early guards.
+2. Public `/auth/options` returns only mode/method flags (GET/HEAD, no-store; isolated 503). Single-user `/auth/me` resolves identity directly. `/api/addons/*` and widget-state routes use their own early guards.
 3. Remaining single-user requests pass auth/enrolment rate limits, optional authentication, CSRF checks and covered data limits.
 4. Auth dispatch runs before the origin is remembered and built-in content/workspace/agent/media/extension handlers run.
 5. Responses receive security and request-timing headers. Family responses additionally use `Cache-Control: private, no-store` and `Vary: Cookie`.
@@ -47,6 +47,7 @@ The route tables below describe single-user guards unless explicitly marked fami
 
 | Method | Path | Source | Auth model | Rate limit | Response style |
 |---|---|---|---|---|---|
+| GET/HEAD | `/auth/options` | `auth/login-options.ts` | public mode/method flags only | none | `{mode,auth_enabled,totp,passkey,username_required}`, no-store; HEAD empty, unsupported methods 405 |
 | GET/HEAD | `/auth/me` | `request-router-service.ts` / `auth/principal.ts` | Principal or 401; local default when single-user auth is disabled | none | private/no-store identity/capabilities, no bearer material |
 | POST | `/auth/verify` | request guards / auth endpoints | public login verification | auth bucket | compatibility success envelope with session cookie on success: `{ status: "ok", ok: true }` |
 | POST | `/auth/webauthn/login/start` | `dispatch-auth.ts` | public login bootstrap | auth bucket | bootstrap payload `{ token, options }` |
@@ -62,6 +63,7 @@ These exact routes are implemented in `http/family-authorisation.ts`, `http/fami
 | Method | Path | Authority / payload | Success |
 |---|---|---|---|
 | GET/HEAD | `/auth/me` | Cookie principal; local default identity in auth-disabled single-user mode | Principal, destination, capabilities; HEAD has no body |
+| GET/HEAD | `/auth/options` | No cookie required; no account lookup | Mode/auth/TOTP/passkey/username-required flags only; isolated mode 503 |
 | GET | `/timeline`, `/hashtag/:tag`, `/thread/:id` | Live owned `chat_jid` or current home; thread ID scoped to that chat | Existing timeline/hashtag/thread envelope |
 | GET | `/search` | `q`, `scope=current\|root\|all`; SQL restricted to authorised chats before pagination | Search results; `all` never means all users |
 | GET | `/sse/stream` | Authorised chat/login, rechecked before delivery and every 30s | Only approved matching-chat events; no global broadcasts |

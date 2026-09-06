@@ -776,7 +776,7 @@ The planned family profile shares workspace files, tools, skills, add-ons and pr
 
 The setup below applies to supported **single-user deployments**. A 6-digit TOTP challenge can gate the UI, with optional WebAuthn passkeys. The manifest, service worker, agent avatar/icons, fonts, login bundles and static images have explicit public exceptions; arbitrary `/static/*` assets and app bundles are not all public. See `runtime/src/channels/web/http/route-flags.ts` for the classification.
 
-The gated family backend uses per-account TOTP, multiple independent passkeys, restricted invitations, device revocation and administrator-assisted reset. It does not use the shared `/totp` seed or legacy `/passkey enrol` flow as a multi-user setup procedure. Its account/passkey mutations require a matching Origin and recent authentication; its public asset exceptions are narrower. The [family API inventory](../runtime/docs/web-api-endpoint-inventory.md#family-development-routes) describes the implemented endpoints, not an available deployment option.
+The login shell discovers enabled methods through public `/auth/options`, displays a username field only when family TOTP requires it, and offers an explicit passkey action. A failed policy fetch leaves credential entry disabled until retry. The gated family backend uses per-account TOTP, multiple independent passkeys, restricted invitations, device revocation and administrator-assisted reset. It does not use the shared `/totp` seed or legacy `/passkey enrol` flow as a multi-user setup procedure. Its account/passkey mutations require a matching Origin and recent authentication; its public asset exceptions are narrower. The [family API inventory](../runtime/docs/web-api-endpoint-inventory.md#family-development-routes) describes the implemented endpoints, not an available deployment option.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -828,7 +828,7 @@ You can either preconfigure `PICLAW_WEB_TOTP_SECRET` yourself or initialize it f
 
 - Multiple passkeys are supported per user; use `/passkey list` to review and `/passkey delete` to revoke.
 - Passkeys are bound to the hostname used during enrolment (RP ID).
-- Login attempts automatically try passkeys first when supported; TOTP remains as fallback unless you set `PICLAW_WEB_PASSKEY_MODE=passkey-only`.
+- The login page offers an explicit passkey button and optional conditional mediation when passkeys are enabled. TOTP remains available only when configured; passkey-only mode hides the code form, and totp-only mode makes no passkey attempt.
 - `/passkey enrol` still requires a TOTP-authenticated session. Passkeys are a login factor; TOTP remains the enrollment/bootstrap factor.
 - All auth endpoints (`/auth/verify`, WebAuthn login, and enrol) are rate-limited per IP (10–20 attempts per 5 minutes).
 - After five failed TOTP attempts in five minutes, the IP is temporarily locked out for five minutes (with audit logs emitted on failures).

@@ -5,6 +5,10 @@ editor, terminal, viewers, and lightweight control surfaces in one app.
 
 This page describes the supported single-user UI. [Family-mode backend work](multi-user/README.md) includes account APIs, owned forks and multiple passkeys, but startup still rejects family and isolated modes. Account administration, invitation/QR pages, passkey labels, per-user Settings, and browser cache/storage separation are not yet integrated into a supported family UI. Do not treat the existing session picker or multiple browser tabs as separate user accounts.
 
+## Login
+
+The login shell loads non-secret mode/method flags before enabling credential inputs. Single-user code login remains code-only; the gated family policy adds an account username. Passkey-only and code-only policies hide unsupported controls. An explicit passkey button can replace a pending conditional prompt. Network/policy failures show retry without weakening the selected authentication method. This does not complete the family account/Settings UI or enable family startup.
+
 ## Chat and status surfaces
 
 ### Streaming chat
