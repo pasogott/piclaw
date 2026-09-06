@@ -1,6 +1,6 @@
 # Scheduled execution records
 
-Piclaw supports **single-user deployments only**. Family and isolated modes cannot start. The following APIs support development testing. Grant creation, reservation and settlement remain internal; only result inspection and explicit owner publication have the gated HTTP routes below. No model dispatcher is enabled. See [access modes](README.md) and the [paused task-grant foundation](README.md#paused-task-grant-foundation).
+Piclaw supports **single-user deployments only**. Family and isolated modes cannot start. The following APIs support development testing. Grant creation, reservation, settlement and the one-shot dispatcher remain internal; only result inspection and explicit owner publication have the gated HTTP routes below. Automatic polling and task activation are disabled. See [access modes](README.md) and the [paused task-grant foundation](README.md#paused-task-grant-foundation).
 
 ## Internal occurrence reservations
 
@@ -8,7 +8,7 @@ The internal occurrence API can reserve one due occurrence for a valid prepared 
 
 Claim, renewal, reclaim and consumption use immediate SQLite transactions with matching row/version checks and an atomic audit event. Renewal rotates the token and increments the version. Only expired, unconsumed reservations can be reclaimed; reclaim increments the attempt and version and replaces the token. Old workers/tokens cannot renew or consume. The first claim's tool ceiling can only narrow across renewals and reclaims, and consumption intersects it with the current grant policy. Every operation revalidates the live grant, owner, target and payload. Logout alone does not revoke it; account disable, explicit revocation and task changes do.
 
-Consumption is terminal: it clears the stored token hash and cannot be replayed or reclaimed, even if returning the result was interrupted. It returns validated task/owner/service data for future integration, with no model, tool or delivery call. A consumed reservation is still insufficient to pass family model admission. This reservation store does not provide exactly-once external effects.
+Consumption is terminal: it clears the stored token hash and cannot be replayed or reclaimed, even if returning the result was interrupted. It returns validated task/owner/service data with no model, tool or delivery call. A consumed reservation alone is insufficient to pass family model admission. This reservation store does not provide exactly-once external effects.
 
 ## Durable handoff and owner results
 
@@ -32,4 +32,14 @@ GET `/agent/scheduled-results` requires a live owner login and both account/logi
 
 The **Scheduled results** panel fetches the list only when opened or refreshed. **Inspect result** loads plain text through the pinned detail API. Explicit confirmation enables **Publish result**; unsettled records cannot publish. Text, selection and confirmation clear on close, blur, refresh, session changes and navigation. Late responses cannot restore cleared state. Failed or uncertain publication requires fresh inspection/confirmation, with no automatic replay. Publication uses the original result target and does not navigate the current conversation. No task creation, scheduling activation or automatic execution control is provided.
 
-Dispatcher integration, execution policy, recovery and process-kill proof still need implementation. Stop all writers before changing modes. Raw database writers and installed code remain trusted.
+## Internal one-shot dispatcher
+
+`dispatchFamilyScheduledExecution` accepts a live settlement capability and trusted queue/AgentPool dependencies. It has no HTTP, model-tool or polling caller. The dispatcher uses the original chat lane, waits up to 30 seconds to start, revalidates the handoff and inserts one immutable dispatch receipt before hydration. A second start is rejected. Tokens stay in a private closure; the model sees only owner/initiating-user IDs, the scheduler service label and non-secret execution provenance.
+
+The private scope permits one orchestrator entry with the exact stored prompt and one `session.prompt` call. Wrong prompts, mismatched targets and repeated entries invalidate that scope. Live handoff checks apply before hydration, before prompting, through the existing family tool checks, and before result settlement. Ordinary logout does not revoke the grant; disable, revocation, expiry, mode changes and removal of an issued tool deny. Profile/preferences/model-default snapshots refresh at admission; they do not widen the recorded tool allowance or switch the model of an existing conversation.
+
+The scheduled path skips rotation, pre-prompt/idle compaction, Piclaw recovery and generated continuations. It temporarily disables the SDK retry-settings getter only inside scheduled scopes and restores it after the last overlapping holder releases it; ordinary runs sharing that manager retain their settings. It does not write settings. The timeout is at most 60 seconds and cannot exceed the settlement capability's remaining lifetime. A timeout closes the scope and rejects the caller. If the SDK call is still running, the queue callback keeps its chat lane until that call settles; late output is discarded. An unresponsive SDK may therefore keep the lane occupied and need operator intervention. This is not cancellation of network requests, ongoing tools or arbitrary installed extension code.
+
+A valid bounded text outcome is settled without timeline publication, push or input-cursor movement. Provider errors may settle as errors after the one prompt attempt. Pre-prompt failures, timeout, revocation, invalid output or protocol violations leave an admitted handoff without a result; the existing owner view eventually shows expired-unsettled. The start receipt is retained, with no automatic replay or crash recovery. Model sessions may still persist their ordinary SDK history and usage; no claim of transactional rollback of those effects is made. The global scheduler remains restricted to single-user mode and prepared tasks remain paused.
+
+Automatic dispatch, cancellation/recovery, physical process-kill proof and the remaining activation gates still need implementation. Stop all writers before changing modes. Raw database writers and installed code remain trusted.

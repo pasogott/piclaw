@@ -8,6 +8,7 @@ import { resolveAuthorisedChat, ChatAccessDenied } from "../db/session-ownership
 import { readFamilyToolPolicy } from '../db/family-tool-restrictions.js';
 import { readAccountPreferences } from '../db/account-preferences.js';
 import { readAccountModelDefaults } from '../db/account-model-defaults.js';
+import { authoriseScheduledDispatch, hasScheduledDispatch } from './scheduled-dispatch-context.js';
 
 const KINDS = ["interactive", "scheduled", "followup", "side-prompt", "dream", "delegate"];
 
@@ -18,9 +19,12 @@ export function authoriseExecutionIdentity(
   chatJid: string,
   provenance: ExecutionProvenance | undefined,
 ): ExecutionIdentity | null {
+  if(hasScheduledDispatch()) {
+    return authoriseScheduledDispatch(chatJid,mode==="family-shared"?provenance:undefined);
+  }
   if (mode === "single-user" && provenance === undefined) return null;
-  // A durable grant preflight is not an occurrence/lease authorisation. Until
-  // dispatch integrates that contract, only live interactive family runs enter.
+  // A durable ID alone is not admission. Scheduled work requires the active
+  // one-shot dispatcher scope above; ordinary callers need a live login.
   if (mode !== "single-user" && (mode !== "family-shared" || provenance?.kind !== "interactive")) throw new ChatAccessDenied();
   if (!provenance || provenance.chatJid !== chatJid || provenance.actorUserId !== provenance.ownerUserId || !KINDS.includes(provenance.kind)) throw new ChatAccessDenied();
   if (mode === "single-user" && provenance.ownerUserId !== "default") throw new ChatAccessDenied();
