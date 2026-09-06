@@ -238,6 +238,14 @@ Unmodified single-user callers keep their existing prompt/memory behaviour, and 
 
 Cross-session sends are denied at the chat tool before attachment reads, at the transport registry before provider callbacks, and at the direct runtime relay. Mutating session-control operations (compact/abort/model switch/retry/skip/wake/unblock) are denied at both the tool and runtime handler. These writes need durable owner provenance across queues and target execution before being enabled. Legacy single-user relay and control behaviour is unchanged; family/isolated activation remains disabled.
 
+## Owner-scoped store tools
+
+In family execution, `messages` permits only search/get/grep/extract/diff. A private per-call query scope restricts all SQL read paths—including wildcard, hashtag, FTS, fallback LIKE, row-ID lookup and surrounding context—to active owned conversations before pagination. `chat_jid=all` or `*` never means other users. Omitted search/grep/extract/diff targets use the active source; omitted get targets may select owned row IDs across roots. Explicit foreign/unknown/archived/blank targets deny. Missing execution context and stale login identity cannot use global defaults.
+
+Message add/post/delete/move and the direct post helper deny multi-user mode until write/attachment/delivery authority is integrated. Raw `introspect_sql` also denies before preparing any SQL; a read-only SQL statement is not an account boundary. `scheduled_tasks`, `schedule_task`, `/tasks` and `/scheduled` deny until task ownership and durable queued provenance exist.
+
+`session_status` filters activity to the current owner's sessions and omits tool arguments even under the legacy `none` isolation setting. The full-isolation setting still disables visibility entirely. Owner-only `check` never reports an instance restart as safe, because it does not inspect other users' work. These tool-level checks do not restrict arbitrary shared-filesystem/shell access and do not enable the gated access modes.
+
 ## Activation and recovery
 
 Access validation runs after database initialisation and before add-on runtime setup, background workers and listeners. This build permits only single-user configuration with a single-user activation marker. It never offers a flag to bypass the release gate.
