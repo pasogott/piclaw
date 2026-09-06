@@ -30,7 +30,7 @@ Family mode is intended for trusted household members. Users with arbitrary shel
 
 | Area | Implemented and tested | Not yet complete |
 |---|---|---|
-| Modes and migration (#1123/#1126/#1133) | Strict config/marker checks, topology inventory, copy-only offline ownership/handle preparation with reviewed snapshot and backup | Promotion/rollback and remaining resource migration, existing-child seed adoption, activation gates |
+| Modes and migration (#1123/#1126/#1133) | Strict config/marker checks, topology inventory, copy-only ownership/handle preparation, explicit hash-checked v3 child-session capture | Promotion/rollback, unsupported child histories and remaining resource migration, activation gates |
 | Accounts and factors (#1124/#1125) | Disabled account + owned home provisioning, live/recent-login admin checks, own-device/factor APIs and names, owner avatars, login-bound self TOTP enrolment and multiple passkeys | Recovery startup integration, owner-aware replacement for disabled legacy factor commands |
 | Invitations/recovery (#1125) | One-use browser-bound TOTP/passkey grants, atomic enrol-and-enable, other-admin reset, offline operator grant preparation with backup/lock/audit, fragment invitation page and admin confirmation UI | Physical-device and full account browser workflows, recovery startup/listener integration |
 | Sessions (#1126/#1128) | Root ownership, owner-local names, atomic forks/rename, additional roots, home selection and idle archive/restore; owned lifecycle browser controls | Merge/purge, full archive backup, process-kill recovery proof |
@@ -94,7 +94,7 @@ POST `/agent/branch-prune` accepts exactly `{chat_jid}` and archives one session
 
 POST `/agent/branch-restore` accepts `{chat_jid,agent_name?}`. It requires active parents and an available owner-local handle; collision leaves the archive untouched. An explicit alternate name resolves a collision without changing branch/chat IDs. Restore is metadata-only: the next authorised use performs hydration. GET `/agent/branches?include_archived=true` can list owned archived metadata and filter an owned root; it cannot read archived messages. All mutation routes require matching Origin and their existing rate limits.
 
-These backend operations do not complete browser lifecycle UX, process-kill race verification, merge/purge, full backups or adoption of legacy child sessions without fork provenance.
+These backend operations do not complete process-kill race verification, merge/purge, full backups or adoption of unsupported legacy child histories. Reviewed version-two copy plans can capture complete v3 child JSONL into pending import provenance as described in the migration runbook.
 
 ### Atomic family forks
 
@@ -102,7 +102,7 @@ These backend operations do not complete browser lifecycle UX, process-kill race
 
 `owned_fork_operations` persists the captured JSON seed, source/target branch IDs and idempotency key in the same transaction as child chat/branch registration. The child inherits its root and namespace. Same-owner/source/key retries return the original child, including after rename; using the key with another source denies. New forks choose an available owner-local handle and an immutable UUID-based JID. Nested forks keep the same root. No filesystem branch seed is created for family forks.
 
-On first use, session hydration validates live execution identity, the target and the seed's source before replay. It applies the current stored name, persists/reopens the session, then clears the seed payload while retaining the operation identity. Failure keeps the seed for retry and disposes the broken runtime. A crash before completion may replay into a fresh session again; the seed is retained until successful persistence. Legacy file seeds are rejected for family sessions. Existing migrated children without fork-operation provenance need an explicit adoption workflow before hydration.
+On first use, session hydration validates live execution identity, the target and the seed's source before replay. It applies the current stored name, persists/reopens the session, then clears the seed payload while retaining the operation identity. Failure keeps the seed for retry and disposes the broken runtime. A crash before completion may replay into a fresh session again; the seed is retained until successful persistence. Legacy file seeds are rejected for family sessions. Version-two migration plans can explicitly capture complete v3 child JSONL as an `adopted_jsonl` seed; the runtime imports the exact captured tree rather than reconstructing messages or loading the unverified source file first. Unadopted children remain blocked. See [child-session capture](migration-copy.md#explicit-child-session-capture) for bounds, parent/hash checks and unsupported histories.
 
 Main/cached/side hydration now requires matching live family execution identity. Family background prewarm is disabled until its queue carries durable owner provenance. The session manager rechecks identity after asynchronous waits; callers still need integration across direct model/tool entry points. The gated My sessions panel exposes fork, rename and lifecycle operations. Process-kill crash testing, per-user deployment and activation gates remain unfinished.
 

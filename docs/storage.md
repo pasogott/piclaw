@@ -30,7 +30,7 @@
 | `users` | Immutable account ID, normalised username, display name, role, enabled state and home |
 | `access_state` | Activated access mode and access schema version; protects against configuration loss/downgrade |
 | `session_roots` | Immutable owner and private policy for a stable root branch |
-| `owned_fork_operations` | Owner/source/idempotency binding and captured JSON seed, committed with the child; seed cleared after persistence |
+| `owned_fork_operations` | Owner/source/idempotency binding and captured JSON seed, committed with the child; `adopted_jsonl` migration seeds retain exact hash-checked child history until SDK import/persist/reopen; seed cleared only after persistence |
 | `message_execution_authorities` | Immutable admitted message/actor/owner/login IDs, content hash, thread and owner-local request key; no bearer token |
 | `message_recovery_authorities` | Append-only explicit retry/skip records with owner, input row ID, replacement login ID and idempotency key; original admission stays unchanged |
 | `user_totp_factors` | Encrypted per-user TOTP seed, revision and last-used timestep; separate from keychain injection |

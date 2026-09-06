@@ -22,6 +22,7 @@ import { readAccessConfig } from "../core/config-access.js";
 import { ChatAccessDenied } from "../db/session-ownership.js";
 import { readOwnedForkSeed, finishOwnedForkSeed } from "../db/owned-forks.js";
 import { requireOwnedSessionExecution } from "./owned-session-access.js";
+import { importAdoptedSession } from './adopted-session-import.js';
 import { createDefaultSession, createSessionInDir, ensureNamedSessionDir, ensureSessionDir, lightweightPrewarmSession } from "./session.js";
 import { forcePersistSessionFile, seedRotatedSession } from "../session-rotation.js";
 import { getSessionPersistencePort } from "./session-persistence.js";
@@ -648,7 +649,7 @@ export class AgentSessionManager {
           const json = readOwnedForkSeed(getDb(), owner, chatJid);
           if (hasDeferredBranchSeed(chatJid)) throw new ChatAccessDenied();
           seed = json === null ? null : JSON.parse(json);
-          if (seed && (seed.version !== 1 || !["stable_branch", "rotated_context"].includes(seed.mode))) throw new ChatAccessDenied();
+          if (seed && (seed.version !== 1 || !["stable_branch", "rotated_context", "adopted_jsonl"].includes(seed.mode))) throw new ChatAccessDenied();
         } else {
           seed = claimDeferredBranchSeed(chatJid);
         }
@@ -664,7 +665,9 @@ export class AgentSessionManager {
       if (!seed) return false;
 
       try {
-        const result = await runtime.newSession({
+        const result = owner && seed.mode === 'adopted_jsonl'
+          ? (await importAdoptedSession(runtime,chatJid,seed), {cancelled:false})
+          : await runtime.newSession({
           ...(seed.parentSession ? { parentSession: seed.parentSession } : {}),
           setup: async (sessionManager) => {
             requireOwnedSessionExecution(chatJid);

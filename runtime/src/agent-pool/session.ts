@@ -41,6 +41,8 @@ import { createBuiltinExtensionFactories } from "../extensions/index.js";
 import { readAccessConfig } from '../core/config-access.js';
 import { requireOwnedSessionExecution } from './owned-session-access.js';
 import { familySessionModelOptions } from './family-model-defaults.js';
+import { getDb } from '../db/connection.js';
+import { readOwnedForkSeed } from '../db/owned-forks.js';
 import { createFamilyBuiltinTools, createFamilyToolCallGuard } from './family-builtin-tools.js';
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { sanitizePersistedSessionMessage } from "../extensions/persisted-tool-result-sanitizer.js";
@@ -601,8 +603,14 @@ export async function createSessionInDir(
   const additionalExtensionPaths = getBundledExtensionPaths(options.chatJid);
 
   const workspaceDir = getWorkspaceDir();
-  await sanitizePersistedSessionFileBeforeLoad(sessionDir);
-  trimPreCompactionEntries(sessionDir);
+  const owner = mode === 'family-shared' ? requireOwnedSessionExecution(options.chatJid!) : null;
+  const pendingSeed = owner ? readOwnedForkSeed(getDb(), owner, options.chatJid!) : null;
+  const pendingAdoption = pendingSeed !== null && JSON.parse(pendingSeed).mode === 'adopted_jsonl';
+  // Do not load or mutate an unverified legacy file before importing the captured adoption snapshot.
+  if (!pendingAdoption) {
+    await sanitizePersistedSessionFileBeforeLoad(sessionDir);
+    trimPreCompactionEntries(sessionDir);
+  }
 
   const createRuntime = async ({
     cwd,
@@ -698,7 +706,7 @@ export async function createSessionInDir(
   return await createAgentSessionRuntime(createRuntime as any, {
     cwd: workspaceDir,
     agentDir: AGENT_DIR,
-    sessionManager: SessionManager.continueRecent(workspaceDir, sessionDir),
+    sessionManager: pendingAdoption ? SessionManager.create(workspaceDir, sessionDir) : SessionManager.continueRecent(workspaceDir, sessionDir),
   });
 }
 
