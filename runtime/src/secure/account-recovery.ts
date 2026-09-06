@@ -7,7 +7,7 @@ import { createUuid } from "../utils/ids.js";
 import { AccountInvitations } from "./account-invitations.js";
 
 /** Reset another account without reading its factors or changing its session ownership. */
-export function resetFamilyAccount(database: Database, actor: AuthenticatedPrincipal, targetId: string, confirmation: string): { token: string; expiresAt: number } {
+export function resetFamilyAccount(database: Database, actor: AuthenticatedPrincipal, targetId: string, confirmation: string, method: 'totp' | 'passkey' = 'totp'): { token: string; expiresAt: number; method: 'totp' | 'passkey' } {
   return database.transaction(() => {
     requireAccountActor(database, actor, { admin: true, recent: true });
     const target = getUser(database, targetId);
@@ -23,7 +23,7 @@ export function resetFamilyAccount(database: Database, actor: AuthenticatedPrinc
     database.query("DELETE FROM webauthn_enrollments WHERE user_id=?").run(targetId);
     database.query("DELETE FROM user_passkey_registrations WHERE user_id=?").run(targetId);
     database.query("DELETE FROM user_auth_invitations WHERE user_id=? OR issuer_user_id=?").run(targetId, targetId);
-    const grant = new AccountInvitations(database).issue(actor, targetId);
+    const grant = new AccountInvitations(database).issue(actor, targetId, method);
     database.query("INSERT INTO account_recovery_events(id,actor_user_id,target_user_id,event,created_at) VALUES (?,?,?,'admin_reset',?)")
       .run(createUuid("recovery"), actor.userId, targetId, new Date().toISOString());
     return grant;

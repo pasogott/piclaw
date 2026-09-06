@@ -821,6 +821,23 @@ browserTest('administration creates disabled accounts and confirms disable/react
   } finally { await page.close(); }
 }, 20000);
 
+browserTest('passkey invitation/reset require explicit capabilities and exact user confirmation, then show a method-pinned private link', async () => {
+  const page = await browser.newPage();
+  try {
+    const {snapshot} = await adminFixture(page);
+    snapshot.users[2]!.capabilities.invite_passkey=true; snapshot.users[1]!.capabilities.reset_passkey=true;
+    const writes:any[]=[];
+    for(const [id,operation] of [['pending','passkey-invitation'],['bob','reset-passkey']]) await page.route(`**/admin/users/${id}/${operation}`,route=>{ writes.push({path:route.request().url(),body:route.request().postDataJSON()}); return route.fulfill({json:{token:'p'.repeat(43),expiresAt:Date.now()+60_000,method:'passkey'}}); });
+    await openAdministration(page);
+    await page.locator('#administration-users li').nth(2).getByRole('button',{name:'Issue passkey invitation',exact:true}).click(); await confirmAdministration(page,'pending');
+    await page.waitForFunction(()=>(document.getElementById('administration-invitation-link') as HTMLInputElement)?.value.includes('method=passkey'));
+    expect(writes[0].body).toEqual({confirm_username:'pending'}); expect(await page.locator('#administration-invitation-link').inputValue()).toBe(`${base}/auth/invitation#token=${'p'.repeat(43)}&method=passkey`);
+    await page.locator('#administration-users li').nth(1).getByRole('button',{name:'Reset to passkey',exact:true}).click(); expect(await page.locator('#administration-action-warning').textContent()).toContain('delete every'); await confirmAdministration(page,'bob');
+    await page.waitForFunction(()=>document.getElementById('administration-status')?.textContent?.includes('Invitation issued')); expect(writes[1].body).toEqual({confirm_username:'bob'});
+    await page.evaluate(()=>dispatchEvent(new Event('blur'))); expect(await page.locator('#administration-invitation-link').inputValue()).toBe(''); expect(page.url()).not.toContain('token=');
+  } finally { await page.close(); }
+},20000);
+
 browserTest('invitation links are shown once, never stored or navigated, and cleared on blur and expiry', async () => {
   const page = await browser.newPage();
   try {

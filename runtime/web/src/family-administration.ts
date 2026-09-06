@@ -7,7 +7,7 @@ import { FamilyApi } from './family-api.js';
 const node = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 type User = AdministrationSettings['users'][number];
 type Action = Exclude<keyof User['capabilities'], 'inspect_security' | 'assign_home' | 'restrict_tools'>;
-const labels: Record<Action, string> = { disable: 'Disable', enable: 'Reactivate', change_role: 'Change role', invite: 'Issue invitation', revoke_invitation: 'Revoke invitation', reset: 'Reset account' };
+const labels: Record<Action, string> = { disable: 'Disable', enable: 'Reactivate', change_role: 'Change role', invite: 'Issue invitation', invite_passkey: 'Issue passkey invitation', revoke_invitation: 'Revoke invitation', reset: 'Reset account', reset_passkey: 'Reset to passkey' };
 
 /** No foreign conversation links, stored grants, automatic retries or impersonation. */
 export class FamilyAdministration {
@@ -70,6 +70,7 @@ export class FamilyAdministration {
       const { user, action } = this.selected;
       if (user.capabilities[action] !== true) return;
       const path = `/admin/users/${encodeURIComponent(user.id)}`;
+      if (action === 'invite_passkey' || action === 'reset_passkey') { void this.mutate(path + (action === 'invite_passkey' ? '/passkey-invitation' : '/reset-passkey'), 'POST', { confirm_username: user.username }, true); return; }
       if (action === 'invite' || action === 'revoke_invitation') void this.mutate(path + '/invitation', action === 'invite' ? 'POST' : 'DELETE', undefined, action === 'invite');
       else if (action === 'reset') void this.mutate(path + '/reset', 'POST', { confirm_username: user.username }, true);
       else void this.mutate(path, 'PATCH', action === 'change_role' ? { role: user.role === 'admin' ? 'member' : 'admin' } : { enabled: action === 'enable' });
@@ -111,10 +112,13 @@ export class FamilyAdministration {
     this.confirm.disabled = this.confirmationName.disabled = false;
     node<HTMLButtonElement>('cancel-administration-action').disabled = false;
     node('administration-action-title').textContent = `${labels[action]} @${user.username}`;
-    node('administration-action-warning').textContent = action === 'reset'
+    node('administration-action-warning').textContent = action === 'reset_passkey'
+      ? 'Disable this account, delete every sign-in factor, sign out every device and issue a passkey-only invitation. History and ownership remain unchanged. Setup must prove possession; no normal login is issued.'
+      : action === 'invite_passkey' ? 'Issue a private one-use passkey invitation. It replaces any previous invitation or pending authenticator setup. The recipient must create and verify a discoverable passkey within five minutes; no TOTP is required.'
+      : action === 'reset'
       ? 'Disable this account, delete all of its sign-in factors, sign out every device and issue a new authenticator invitation. History and ownership remain unchanged. You can replace this user’s authentication; this does not open their conversations.'
       : action === 'invite' ? 'Issue a private one-use authenticator invitation. This replaces any previous grant or pending enrolment. The new link is shown once; keep it private.'
-      : action === 'revoke_invitation' ? 'Revoke this account’s current invitation and pending authenticator enrolment.'
+      : action === 'revoke_invitation' ? 'Revoke this account’s current invitation and pending authenticator or passkey enrolment.'
       : action === 'change_role' ? `Change this account to ${user.role === 'admin' ? 'member' : 'administrator'} and sign out every device. Administrators can manage accounts and reset other users’ sign-in factors.`
       : action === 'disable' ? 'Disable this account and revoke its logins and pending enrolments. Existing data remains stored.'
       : 'Reactivate this account using its existing usable factors and owned home. No login is issued.';
@@ -250,7 +254,8 @@ export class FamilyAdministration {
   }
   private showGrant(value: any): void {
     if (typeof value?.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(value.token) || !Number.isFinite(value.expiresAt) || value.expiresAt <= Date.now() || value.expiresAt > Date.now() + 15 * 60_000) throw new Error('Invitation response unavailable. Revoke and reissue explicitly.');
-    this.link.value = `${location.origin}/auth/invitation#token=${value.token}`;
+    if (value.method !== undefined && !['totp','passkey'].includes(value.method)) throw new Error('Invalid invitation method.');
+    this.link.value = `${location.origin}/auth/invitation#token=${value.token}${value.method === 'passkey' ? '&method=passkey' : ''}`;
     this.link.disabled = false; node<HTMLButtonElement>('clear-administration-invitation').disabled = false;
     node('administration-invitation-expiry').textContent = `Expires ${new Date(value.expiresAt).toISOString()}`;
     node('administration-invitation').hidden = false;

@@ -97,6 +97,15 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
     }
     const body = await req.json();
     if (!body || typeof body !== "object" || Array.isArray(body)) return channel.json({ error: "Invalid account request" }, 400);
+    const passkeyInvite = path.match(/^\/admin\/users\/([a-zA-Z0-9_-]+)\/(passkey-invitation|reset-passkey)$/);
+    if (passkeyInvite && method === 'POST') {
+      if (!policy.passkey || new URL(req.url).search || Object.keys(body).length !== 1 || typeof body.confirm_username !== 'string') return deny();
+      if (passkeyInvite[2] === 'reset-passkey') return channel.json(resetFamilyAccount(db, principal, passkeyInvite[1]!, body.confirm_username, 'passkey'), 201);
+      // Confirmation is checked with the live target, not the UI snapshot.
+      const target = db.query('SELECT username FROM users WHERE id=?').get(passkeyInvite[1]!) as { username: string } | null;
+      if (target?.username !== body.confirm_username) return deny();
+      return channel.json(new AccountInvitations(db).issue(principal, passkeyInvite[1]!, 'passkey'), 201);
+    }
     if (path === '/account/model-defaults' && method === 'PATCH') {
       if (new URL(req.url).search) return deny();
       return channel.json(channel.agentPool.accountModelDefaults(principal, body));

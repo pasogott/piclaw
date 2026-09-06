@@ -104,12 +104,17 @@ These exact routes are implemented in `http/family-authorisation.ts`, `http/fami
 | PATCH | `/account/sessions/:sessionId`, `/account/factors/passkey/:credentialId` | Recent self, matching Origin; exactly `{label}`; query selectors denied | `{label}`; trim whitespace, max 80 Unicode characters, reject controls/format characters; empty clears; foreign/absent/expired login targets deny |
 | GET | `/account/factors` | Current self | `{totp,passkeys}` metadata |
 | DELETE | `/account/factors/totp`, `/account/factors/passkey/:credentialId` | Recent self; protect last usable factor for current policy/RP | `{removed:true}`; revoke target logins/ceremonies |
-| POST | `/admin/users/:id/invitation` | Recent administrator; disabled owned-home account without factors; TOTP enabled | 201 `{token,expiresAt}`, grant returned once |
-| DELETE | `/admin/users/:id/invitation` | Recent administrator | `{revoked:true}` |
-| POST | `/admin/users/:id/reset` | Recent other-administrator; exact `{confirm_username}`; TOTP enabled | 201 `{token,expiresAt}`; atomic disable/factor reset + invite, no login |
-| GET/HEAD | `/auth/invitation` | Public shell, TOTP-enabled family only; grant stays in URL fragment and is cleared client-side | HTML; no-store/no-referrer, empty HEAD body |
+| POST | `/admin/users/:id/invitation` | Recent administrator; disabled owned-home account without factors; TOTP enabled | 201 `{token,expiresAt,method:'totp'}`, grant returned once |
+| POST | `/admin/users/:id/passkey-invitation` | Recent administrator, passkeys enabled; exact `{confirm_username}`, disabled owned-home account without factors | 201 `{token,expiresAt,method:'passkey'}`; replaces old grant, no TOTP requirement |
+| POST | `/admin/users/:id/reset-passkey` | Recent other-administrator, passkeys enabled; exact `{confirm_username}` | Atomic disable/factor and login removal/new passkey invitation + recovery audit; no target impersonation or normal login |
+| DELETE | `/admin/users/:id/invitation` | Recent administrator | `{revoked:true}`; revokes either invitation method |
+| POST | `/admin/users/:id/reset` | Recent other-administrator; exact `{confirm_username}`; TOTP enabled | 201 `{token,expiresAt,method:'totp'}`; atomic disable/factor reset + invite, no login |
+| GET/HEAD | `/auth/invitation` | Public shell, family with TOTP or passkeys enabled; grant/method in fragment and cleared client-side | HTML; no-store/no-referrer, empty HEAD body |
 | POST | `/auth/invitation/claim` | `{token}`, matching Origin; no account cookie | `{enrolment_token,secret,qr_data_url,expires_at,username}` + restricted HttpOnly cookie |
 | POST | `/auth/invitation/confirm` | `{token,enrolment_token,code}` + bound cookie/Origin | `{enrolled:true,login_required:true}`; clears restricted cookie |
+| POST | `/auth/invitation/passkey/claim` | Passkeys enabled, `{token}`, matching Origin/client rate limit, passkey-method grant | `{enrolment_token,options,expires_at,username,user_id}` + restricted HttpOnly cookie; immutable user handle, UV/resident key required; no seed/login |
+| POST | `/auth/invitation/passkey/check` | `{token,enrolment_token}` + bound cookie/Origin/RP and passkey policy | `{valid:true}`; post-native-prompt restricted-ceremony recheck, no extension of expiry |
+| POST | `/auth/invitation/passkey/confirm` | `{token,enrolment_token,credential}` + bound cookie/Origin/RP and passkey policy | One proof attempt, real WebAuthn verification, grant/issuer/eligibility recheck at atomic enrol+enable; `{enrolled:true,login_required:true}` and clears restricted cookie |
 | POST | `/account/passkeys/register/start` | Recent self; `{}`, passkeys enabled | `{token,options,expires_at}`; owner/login/RP/Origin-bound |
 | POST | `/account/passkeys/register/finish` | Recent same login; `{token,credential}` | `{registered:true}`; adds a key without replacement |
 | POST | `/account/totp/start` | Recent self, matching Origin, TOTP enabled, `{}`, no existing factor | New `{token,secret,qr_data_url,expires_at}` once; user/login/Origin-bound reservation; no cookie |

@@ -112,7 +112,7 @@
         <button id="submit-administration-action" type="submit" disabled>Confirm account change</button><button id="cancel-administration-action" type="button">Cancel</button>
       </form>
       <section id="administration-invitation" class="account-section" aria-label="Private invitation link" hidden>
-        <p>This one-use link allows authenticator enrolment. Share only with the intended person; it does not sign you in as them. Clearing this display does not revoke the invitation.</p>
+        <p>This one-use link allows the selected authenticator or passkey enrolment. Share only with the intended person; it does not sign you in as them. Clearing this display does not revoke the invitation.</p>
         <label for="administration-invitation-link">Private invitation link</label><input id="administration-invitation-link" readonly autocomplete="off" spellcheck="false" />
         <p id="administration-invitation-expiry"></p><button id="clear-administration-invitation" type="button">Clear link display</button>
       </section>
@@ -137,7 +137,7 @@
           <button id="save-administration-tools" type="submit" disabled>Save tool restrictions</button>
         </form>
       </section>
-      <p class="notice">Container destination assignment, passkey-first invitations and offline lone-admin recovery are not available here.</p>
+      <p class="notice">Container destination assignment and offline lone-admin recovery are not available here. Reset account uses an authenticator; Reset to passkey uses a new passkey invitation.</p>
     </section>
     <section id="workspace-policy" aria-labelledby="workspace-policy-heading" hidden>
       <header><h2 id="workspace-policy-heading" tabindex="-1">Workspace and security</h2><button id="close-workspace-policy" type="button">Close workspace policy</button></header>

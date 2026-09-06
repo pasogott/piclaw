@@ -31,8 +31,8 @@ Family mode is intended for trusted household members. Users with arbitrary shel
 | Area | Implemented and tested | Not yet complete |
 |---|---|---|
 | Modes and migration (#1123/#1126/#1133) | Strict config/marker checks, read-only topology preview, explicit root/handle adoption helpers | Complete migration/rollback tooling, existing-child seed adoption, activation gates |
-| Accounts and factors (#1124/#1125) | Disabled account + owned home provisioning, live/recent-login admin checks, own-device/factor APIs and names, login-bound self TOTP enrolment and multiple passkeys | Avatar, offline lone-admin recovery, passkey-first invitations/reset, owner-aware replacement for disabled legacy factor commands |
-| Invitations/recovery (#1125) | One-use browser-bound TOTP grants, atomic enrol-and-enable, explicit other-admin reset, fragment-based invitation/QR page and gated admin issuance/reset confirmation UI | Physical-device and full account browser workflows, passkey-first invitations/reset |
+| Accounts and factors (#1124/#1125) | Disabled account + owned home provisioning, live/recent-login admin checks, own-device/factor APIs and names, owner avatars, login-bound self TOTP enrolment and multiple passkeys | Offline lone-admin recovery, owner-aware replacement for disabled legacy factor commands |
+| Invitations/recovery (#1125) | One-use browser-bound TOTP/passkey grants, atomic enrol-and-enable, explicit other-admin reset by method, fragment-based invitation/QR/native-passkey page and gated admin confirmation UI | Physical-device and full account browser workflows, offline recovery |
 | Sessions (#1126/#1128) | Root ownership, owner-local names, atomic forks/rename, additional roots, home selection and idle archive/restore; owned lifecycle browser controls | Merge/purge, full archive backup, process-kill recovery proof |
 | HTTP and SSE (#1127) | Terminal family HTTP policy, SQL-scoped search, own-thread reads, revocable SSE, text-only persisted message admission, selected account/fork routes, separate pinned text browser shell | Uploads and remaining derived resources/mutations, direct WebSocket/transport/tool paths, legacy-origin migration and push recipients |
 | Model identity/memory (#1129/#1131) | Server identity before hydration, scoped model context and owner/family memory paths; mandatory fixed family run-tool ceiling narrowed by revisioned account denials | All direct/queued/delegate/side/Dream entry points and service grants; broader role/capability profiles and shared-resource policy |
@@ -112,10 +112,11 @@ The family router makes a terminal decision before legacy, add-on and widget-sta
 |---|---|
 | GET/HEAD login page; POST TOTP verify and WebAuthn login start/finish | Existing authentication handlers and rate limits; internal-secret bypass disabled |
 | GET/HEAD login JS/CSS and invitation JS | Public packaged assets; source maps and other assets require login |
-| GET/HEAD `/auth/invitation` | Public restricted enrolment shell when family TOTP is enabled; private/no-store and no-referrer |
+| GET/HEAD `/auth/invitation` | Public restricted enrolment shell when family TOTP or passkeys are enabled; private/no-store and no-referrer |
 | GET/HEAD `/auth/me` | Account snapshot or JSON 401 |
 | GET/HEAD `/auth/options` | Public mode and login-method flags only; no user/credential inventory, no-store; isolated mode returns 503 |
 | POST `/auth/invitation/claim`, `/auth/invitation/confirm` | Restricted grant, mandatory matching Origin, bound enrolment cookie on confirmation; no account login issued |
+| POST `/auth/invitation/passkey/claim`, `/check`, `/confirm` | Explicit passkey-method grant, Origin/client rate limit, restricted browser cookie + RP/challenge/intent binding; no normal login or TOTP fallback |
 | GET/HEAD index and family JS/CSS | Separate authenticated text shell and its two bundles only; legacy app/vendor/source-map assets denied; anonymous index serves login |
 | POST `/auth/logout` | Matching account/login headers and Origin; revoke original login without clearing a potentially replaced cookie |
 | GET `/timeline`, `/hashtag/:tag`, `/thread/:id` | Live owned home or validated owned target |
@@ -198,6 +199,7 @@ Account reads recheck the login ID and enabled user/role. Mutations require a ma
 | DELETE `/account/factors/totp` or `/account/factors/passkey/:credentialId` | Remove an own factor only if another factor permitted by configured auth policy remains |
 | POST/DELETE `/admin/users/:id/invitation` | Recent administrator issues/revokes a restricted TOTP enrolment grant |
 | POST `/admin/users/:id/reset` | Recent other-administrator reset with exact username confirmation; TOTP-capable recovery only |
+| POST `/admin/users/:id/passkey-invitation`, `/reset-passkey` | Recent administrator with exact username confirmation and passkeys enabled; first-factor invitation or other-account atomic reset-to-passkey |
 | POST `/account/passkeys/register/start`, `/account/passkeys/register/finish` | Same account/login/Origin ceremony for an additional independent passkey |
 | POST `/account/totp/start`, `/account/totp/confirm`, `/account/totp/cancel` | Recent self and matching Origin; add a missing TOTP factor with a login-bound reservation, never replace one |
 
@@ -231,7 +233,7 @@ PATCH at the same path accepts exactly `{branch_id,confirm_username}` with match
 
 Home changes affect future sign-ins and targetless requests only. Existing target-bound logins, conversations, runs, seeds and ownership remain unchanged, and the administrator still cannot read that root's messages. The UI uses server eligibility, exact username and checkbox confirmation, clears metadata on close/blur/navigation, and does not retry automatically. Container destination assignment is a separate #1132 gate. Audit retention is unfinished.
 
-Restricted invitations below bootstrap a new account's TOTP factor; administrator-assisted reset is described separately. Container destination assignment and offline lone-administrator recovery are not implemented. Full mode activation, migrated legacy factors and legacy WebAuthn tool/ceremony isolation need integration testing before release.
+Restricted invitations below bootstrap a new account's TOTP factor or passkey; administrator-assisted reset is described separately. Container destination assignment and offline lone-administrator recovery are not implemented. Full mode activation, migrated legacy factors and legacy WebAuthn tool/ceremony isolation need integration testing before release.
 
 ## Personal account avatars
 
@@ -281,15 +283,25 @@ The family invitation page is `/auth/invitation#token=<grant>`. The grant belong
 
 Expiry, pagehide and back-forward restoration clear displayed secrets and disable confirmation. A fresh fragment navigated into the same tab discards the previous ceremony and reloads. Failed or lost claims require a new administrator-issued invitation rather than automatic retry. Browser network requests have a 15-second bound. The page requires HTTPS for the Secure enrolment cookie; the public shell contains no account/seed data before claim.
 
-Passkey-first invitations, offline recovery and physical authenticator tests remain unfinished. Chromium tests cover gated admin issuance/revocation, grant clearing/stale responses, fragment removal, explicit claim, confirmation/no login, errors, expiry/navigation clearing and mobile fit; API tests use real TOTP verification and QR generation. Expired records are also pruned at runtime. General factor reset cannot reuse invitations for accounts with existing factors.
+Offline recovery and physical authenticator tests remain unfinished. Chromium tests cover gated admin issuance/revocation, grant clearing/stale responses, fragment removal, explicit claim, confirmation/no login, errors, expiry/navigation clearing and mobile fit; API tests use real TOTP verification and QR generation. Expired records are also pruned at runtime. General factor reset cannot reuse invitations for accounts with existing factors.
+
+## Restricted passkey invitations
+
+POST `/admin/users/:id/passkey-invitation` accepts exactly `{confirm_username}` with recent administrator authentication, matching Origin, account rate limiting and passkeys enabled. It issues a 15-minute grant for a disabled account with an active owned home and no factors. The stored `method` is explicit; additive migration assigns existing grants `totp`. Reissue replaces any previous grant, clears pending TOTP seed material and resets browser/challenge state. DELETE `/admin/users/:id/invitation` revokes either method. TOTP endpoints cannot redeem a passkey grant and passkey endpoints cannot redeem a TOTP grant.
+
+The private link uses `/auth/invitation#token=<grant>&method=passkey`. Fragment selection chooses the page flow only; server grant method and configured factor policy remain authoritative. POST `/auth/invitation/passkey/claim` consumes the claim before asynchronous option generation, binds a hashed restricted browser cookie, Origin and RP, and narrows expiry to five minutes. Options require a discoverable resident credential and user verification with the immutable account ID as user handle. The returned enrolment token is hashed in storage; there is no TOTP seed or normal login session.
+
+POST `/auth/invitation/passkey/check` verifies `{token,enrolment_token}` against the current restricted cookie, grant, Origin, RP, issuer and target eligibility after the native prompt. POST `/auth/invitation/passkey/confirm` also accepts `credential`. It consumes the one proof attempt before real WebAuthn verification, then rechecks grant/issuer/target/home/expiry in the committing transaction. Plain credential INSERT never replaces another key. One transaction inserts the first factor, enables the target, removes any target logins and deletes the grant. Failed verification requires a new invitation; failed SQL rolls back credential insertion and enablement while the proof stays consumed. Revocation/reissue during verification prevents commit. Responses remain private/no-store; success clears the restricted cookie and requires ordinary login.
+
+The browser claims only on Begin and invokes native registration only on Create account passkey. It clears fragment/query immediately, keeps ceremony values in memory, uses bounded requests/native prompts, and rechecks the restricted grant before sending proof. Ordinary blur, cancel, expiry and navigation clear state; a native prompt may blur the page but cannot skip the post-prompt check. Closing does not revoke the server grant. A replaced enrolment cookie, cancelled prompt or stale response cannot complete through this page. No automatic proof retry occurs. Tests use real P-256 proofs and a Chromium virtual authenticator; physical-device and complete multi-tab migration testing are still release gates.
 
 ## Administrator-assisted recovery
 
-POST `/admin/users/:id/reset` accepts exactly `{confirm_username}`. It requires another enabled administrator, recent TOTP/passkey authentication, matching browser Origin and account rate limits. The confirmation must match the stored username. Self-reset is denied. TOTP-disabled policy is denied until passkey-first recovery exists.
+POST `/admin/users/:id/reset` accepts exactly `{confirm_username}`. It requires another enabled administrator, recent TOTP/passkey authentication, matching browser Origin and account rate limits. The confirmation must match the stored username. Self-reset is denied. This endpoint requires TOTP policy; the separate `/reset-passkey` endpoint requires passkeys and selects a passkey invitation, including under passkey-only policy.
 
-One transaction disables the target (respecting last-administrator protection), deletes all target login sessions, TOTP/passkey factors and pending ceremonies, revokes invitations it owns or issued, and creates a fresh restricted TOTP invitation. `account_recovery_events` records only actor ID, target ID, event and time, never tokens or seeds. Failure to write the invitation or audit record rolls back the reset. User ID, role, username, home, branch ownership, conversations and filesystem paths remain unchanged. The returned grant is delivered through the existing invitation flow; the target must enrol and log in again.
+One transaction disables the target (respecting last-administrator protection), deletes all target login sessions, TOTP/passkey factors and pending ceremonies, revokes invitations it owns or issued, and creates a restricted invitation for the selected method. `account_recovery_events` records only actor ID, target ID, event and time, never tokens or seeds. Failure to write the invitation or audit record rolls back the reset. User ID, role, username, home, branch ownership, conversations and filesystem paths remain unchanged. The returned grant is delivered through its method-specific invitation flow; the target must enrol and log in again.
 
-Recovery cannot display old seeds or act as the target's conversational identity. Offline recovery for a lone administrator, passkey-first reset and audit retention are unfinished. The gated panel requires the exact target username and a checkbox before reset. An authorised administrator can replace another user's authentication through this explicit reset; recent-auth and confirmation requirements protect against accidental use, but do not remove that administrative power.
+Recovery cannot display old seeds or act as the target's conversational identity. Offline recovery for a lone administrator and audit retention are unfinished. The gated panel requires the exact target username and a checkbox before either reset method. An authorised administrator can replace another user's authentication through this explicit reset; recent-auth and confirmation requirements protect against accidental use, but do not remove that administrative power.
 
 ## Multiple passkeys per account
 
@@ -299,7 +311,7 @@ POST `/account/passkeys/register/start` accepts an empty object and requires rec
 
 POST `/account/passkeys/register/finish` accepts `{token,credential}`. The same account/login/origin must consume the grant before verification; failed proofs and replay require a new ceremony. After cryptographic verification, the service rechecks current login/account status and expiry, then inserts the credential without replacement. No new login cookie is issued. Role/enable changes, own-device revocation and factor removal clear affected pending registrations. A second login on the same account cannot complete the first browser's ceremony.
 
-Tests use real P-256/COSE keys, CBOR registration attestation and signed login assertions for two credentials. Passkey-first invitations, physical authenticator browser tests and offline recovery are still unfinished. Legacy single-user ceremony routes are unchanged; the family account endpoints use the separate durable flow above.
+Tests use real P-256/COSE keys, CBOR registration attestation and signed login assertions for two credentials. Physical authenticator browser tests and offline recovery are still unfinished. Legacy single-user ceremony routes are unchanged; the family account endpoints use the separate durable flow above.
 
 ## Authentication maintenance
 
