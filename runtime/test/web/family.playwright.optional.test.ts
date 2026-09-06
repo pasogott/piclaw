@@ -168,14 +168,14 @@ browserTest("held-input controls use discovered IDs, require skip confirmation a
 function accountSnapshot(recent = true) {
   return {
     user: { id: 'alice', username: 'alice', display_name: 'Alice' }, recent_auth: recent,
-    capabilities: { update_profile: recent, register_passkey: recent, enrol_totp: false, revoke_session: recent },
+    capabilities: { update_profile: recent, register_passkey: recent, enrol_totp: false, revoke_session: recent, label_security_item: recent },
     factors: { totp: { enrolled: true, removable: recent }, passkeys: [
-      { credential_id: 'first-key', created_at: 'today', last_used_at: null, usable: true, removable: recent },
-      { credential_id: 'second-key', created_at: 'yesterday', last_used_at: 'today', usable: true, removable: recent },
+      { credential_id: 'first-key', label: '', created_at: 'today', last_used_at: null, usable: true, removable: recent },
+      { credential_id: 'second-key', label: '', created_at: 'yesterday', last_used_at: 'today', usable: true, removable: recent },
     ] },
     sessions: [
-      { session_id: 'login-a', current: true, auth_method: 'passkey', created_at: 'today', expires_at: 'tomorrow' },
-      { session_id: 'other-login', current: false, auth_method: 'totp', created_at: 'yesterday', expires_at: 'tomorrow' },
+      { session_id: 'login-a', label: '', current: true, auth_method: 'passkey', created_at: 'today', expires_at: 'tomorrow' },
+      { session_id: 'other-login', label: '', current: false, auth_method: 'totp', created_at: 'yesterday', expires_at: 'tomorrow' },
     ],
   };
 }
@@ -183,6 +183,69 @@ async function openAccount(page: Page) {
   await page.goto(base); await ready(page); await page.locator('#open-account').click();
   await page.waitForFunction(() => !(document.getElementById('account-details') as HTMLElement)?.hidden);
 }
+
+browserTest('security item names are owner-pinned, plain text, clearable and distinct from revoke actions', async () => {
+  const page = await browser.newPage({ viewport: { width: 375, height: 740 } });
+  try {
+    await fixture(page); const snapshot = accountSnapshot(), writes: any[] = [];
+    await page.route('**/account', route => route.fulfill({ json: snapshot }));
+    await page.route(/\/account\/(factors\/passkey\/first-key|sessions\/other-login)$/, route => {
+      const label = route.request().postDataJSON().label.trim(); writes.push({ label, path: route.request().url(), method: route.request().method(), headers: route.request().headers() });
+      if (route.request().url().includes('passkey')) snapshot.factors.passkeys[0]!.label = label; else snapshot.sessions[1]!.label = label;
+      return route.fulfill({ json: { label } });
+    });
+    await openAccount(page);
+    await page.getByRole('button', { name: 'Name passkey first-key', exact: true }).click();
+    await page.locator('#account-label').fill('<b>Hardware key</b>'); await page.locator('#account-label-save').click();
+    await page.waitForFunction(() => document.getElementById('account-status')?.textContent?.startsWith('Name saved'));
+    expect(await page.locator('#account-passkeys').textContent()).toContain('<b>Hardware key</b>'); expect(await page.locator('#account-passkeys b').count()).toBe(0);
+    await page.getByRole('button', { name: 'Name device login other-login', exact: true }).click();
+    await page.locator('#account-label').fill('Tablet'); await page.locator('#account-label-save').click();
+    await page.waitForFunction(() => document.getElementById('account-sessions')?.textContent?.includes('Tablet'));
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.getByRole('button', { name: 'Name passkey first-key', exact: true }).click(); await page.locator('#account-label').fill(''); await page.locator('#account-label-save').click();
+    await page.waitForFunction(() => !document.getElementById('account-passkeys')?.textContent?.includes('Hardware key'));
+    expect(writes.map(w => w.label)).toEqual(['<b>Hardware key</b>', 'Tablet', '']);
+    expect(writes.every(w => w.method === 'PATCH' && w.headers['x-piclaw-account-id'] === 'alice' && w.headers['x-piclaw-login-id'] === 'login-a')).toBe(true);
+    expect(await page.locator('#account-passkeys li').count()).toBe(2); expect(await page.locator('#account-sessions li').count()).toBe(2);
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('label capabilities fail closed and draft/late response cannot survive login replacement', async () => {
+  const page = await browser.newPage();
+  try {
+    const state = await fixture(page); let snapshot = accountSnapshot(false);
+    await page.route('**/account', route => route.fulfill({ json: snapshot }));
+    await openAccount(page); expect(await page.getByRole('button', { name: 'Name passkey first-key', exact: true }).isDisabled()).toBe(true);
+    snapshot = accountSnapshot(); await page.locator('#refresh-account').click();
+    await page.waitForFunction(() => !(document.querySelector('[aria-label="Name passkey first-key"]') as HTMLButtonElement)?.disabled);
+    await page.getByRole('button', { name: 'Name passkey first-key', exact: true }).click(); await page.locator('#account-label').fill('PRIVATE_NAME');
+    await page.evaluate(() => dispatchEvent(new Event('blur'))); expect(await page.locator('#account-label').inputValue()).toBe('');
+    await page.evaluate(() => dispatchEvent(new Event('focus'))); await page.waitForFunction(() => !(document.getElementById('account-details') as HTMLElement)?.hidden);
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>(r => release = r), waiting = new Promise<void>(r => entered = r);
+    await page.route('**/account/factors/passkey/first-key', async route => { entered(); await held; await route.fulfill({ json: { label: 'STALE_NAME' } }); });
+    await page.getByRole('button', { name: 'Name passkey first-key', exact: true }).click(); await page.locator('#account-label').fill('STALE_NAME'); await page.locator('#account-label-save').click(); await waiting;
+    state.identity = principal('bob', 'new-login'); release();
+    await page.waitForFunction(() => document.getElementById('family-status')?.textContent?.includes('no longer bound'));
+    expect(await page.locator('#account-label').inputValue()).toBe(''); expect(await page.locator('#account-label-form').isVisible()).toBe(false);
+    expect(await page.locator('body').textContent()).not.toContain('STALE_NAME');
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('label length errors prevent writes and server failures never trigger automatic retry', async () => {
+  const page = await browser.newPage();
+  try {
+    await fixture(page); let writes = 0;
+    await page.route('**/account', route => route.fulfill({ json: accountSnapshot() }));
+    await page.route('**/account/factors/passkey/first-key', route => { writes++; return route.fulfill({ status: 500, json: {} }); });
+    await openAccount(page); await page.getByRole('button', { name: 'Name passkey first-key', exact: true }).click();
+    await page.locator('#account-label').fill('a'.repeat(81)); await page.locator('#account-label-save').click();
+    await page.waitForFunction(() => document.getElementById('account-status')?.textContent?.includes('80 characters')); expect(writes).toBe(0);
+    await page.locator('#account-label').fill('Valid'); await page.locator('#account-label-save').click();
+    await page.waitForFunction(() => document.getElementById('account-status')?.textContent?.includes('Refresh before trying')); expect(writes).toBe(1);
+  } finally { await page.close(); }
+}, 20000);
 
 async function totpFixture(page: Page) {
   const state = await fixture(page), snapshot = accountSnapshot(); snapshot.factors.totp.enrolled = false; snapshot.capabilities.enrol_totp = true;
@@ -577,7 +640,7 @@ browserTest("account profile and device controls are pinned, confirmed and acces
     expect(mutations[0].body).toEqual({ username: 'alice', displayName: 'Updated name' });
     expect(mutations[0].headers['x-piclaw-login-id']).toBe('login-a');
     await page.locator('#refresh').click(); await page.waitForFunction(() => document.getElementById('account-name')?.textContent?.includes('Updated name'));
-    await page.locator('#account-sessions button').nth(1).click();
+    await page.locator('#account-sessions').getByRole('button', { name: 'Sign out device', exact: true }).nth(1).click();
     expect(await page.locator('#account-confirm-action').isDisabled()).toBe(true);
     await page.locator('#account-confirm-check').check(); await page.locator('#account-confirm-action').click();
     await page.waitForFunction(() => document.getElementById('account-status')?.textContent === 'Device signed out.');
@@ -661,7 +724,7 @@ browserTest("passkey creation uses native registration twice without replacement
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }], authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
       excludeCredentials: finishes.map(f => ({ id: f.credential.id, type: 'public-key' })),
     } } }));
-    await page.route('**/account/passkeys/register/finish', route => { const body = route.request().postDataJSON(); finishes.push(body); snapshot.factors.passkeys.push({ credential_id: body.credential.id, created_at: 'now', last_used_at: null, usable: true, removable: true }); return route.fulfill({ json: { registered: true } }); });
+    await page.route('**/account/passkeys/register/finish', route => { const body = route.request().postDataJSON(); finishes.push(body); snapshot.factors.passkeys.push({ credential_id: body.credential.id, label: '', created_at: 'now', last_used_at: null, usable: true, removable: true }); return route.fulfill({ json: { registered: true } }); });
     await page.addInitScript(() => {
       const create = navigator.credentials.create.bind(navigator.credentials);
       navigator.credentials.create = async options => { dispatchEvent(new Event('blur')); try { return await create(options); } finally { dispatchEvent(new Event('focus')); } };

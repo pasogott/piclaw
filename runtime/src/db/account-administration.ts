@@ -39,12 +39,12 @@ export function readOwnAccountSettings(database: Database, principal: Authentica
     catch (error) { if (!(error instanceof ChatAccessDenied)) throw error; recent = false; }
     const usableCount = factorCount(database, user.id, policy);
     const totp = Boolean(database.query("SELECT 1 FROM user_totp_factors WHERE user_id=?").get(user.id));
-    const keys = database.query("SELECT credential_id,rp_id,created_at,last_used_at FROM webauthn_credentials WHERE user_id=? ORDER BY created_at,credential_id")
-      .all(user.id) as { credential_id: string; rp_id: string; created_at: string; last_used_at: string | null }[];
+    const keys = database.query("SELECT credential_id,label,rp_id,created_at,last_used_at FROM webauthn_credentials WHERE user_id=? ORDER BY created_at,credential_id")
+      .all(user.id) as { credential_id: string; label: string; rp_id: string; created_at: string; last_used_at: string | null }[];
     const sessions = listOwnSessions(database, principal) as Omit<AccountSettings["sessions"][number], "current">[];
     return {
       user: { id: user.id, username: user.username, display_name: user.display_name }, recent_auth: recent,
-      capabilities: { update_profile: recent, register_passkey: recent && policy.passkey, enrol_totp: recent && policy.totp && !totp, revoke_session: recent },
+      capabilities: { update_profile: recent, register_passkey: recent && policy.passkey, enrol_totp: recent && policy.totp && !totp, revoke_session: recent, label_security_item: recent },
       factors: {
         totp: { enrolled: totp, removable: recent && totp && usableCount - Number(policy.totp) > 0 },
         passkeys: keys.map(({ rp_id, ...key }) => {
@@ -144,7 +144,7 @@ export function updateOwnAccount(database: Database, principal: AuthenticatedPri
 
 export function listOwnSessions(database: Database, principal: AuthenticatedPrincipal): unknown[] {
   requireAccountActor(database, principal);
-  return database.query("SELECT session_id,auth_method,created_at,expires_at FROM web_sessions WHERE user_id=? AND expires_at>? ORDER BY created_at DESC")
+  return database.query("SELECT session_id,label,auth_method,created_at,expires_at FROM web_sessions WHERE user_id=? AND expires_at>? ORDER BY created_at DESC")
     .all(principal.userId, new Date().toISOString());
 }
 
@@ -162,7 +162,7 @@ export function listOwnFactors(database: Database, principal: AuthenticatedPrinc
   requireAccountActor(database, principal);
   return {
     totp: Boolean(database.query("SELECT 1 FROM user_totp_factors WHERE user_id=?").get(principal.userId)),
-    passkeys: database.query("SELECT credential_id,created_at,last_used_at FROM webauthn_credentials WHERE user_id=? ORDER BY created_at").all(principal.userId),
+    passkeys: database.query("SELECT credential_id,label,created_at,last_used_at FROM webauthn_credentials WHERE user_id=? ORDER BY created_at").all(principal.userId),
   };
 }
 

@@ -23,9 +23,9 @@
 | `chat_cursors` | Per‑chat cursor + inflight/failed run tracking + deferred follow‑up queue |
 | `router_state` | Misc router state (auto‑compaction + web status) |
 | `keychain_entries` | Encrypted secrets for tool env injection |
-| `webauthn_credentials` | Independent passkeys per user/RP (credential public keys + counters); multiple keys per account |
+| `webauthn_credentials` | Independent passkeys per user/RP (credential public keys + counters); multiple keys per account and optional owner-authored label |
 | `webauthn_enrollments` | Legacy single-user passkey enrolment tokens |
-| `web_sessions` | Hashed bearer tokens, non-secret `session_id`, user ID, auth method and expiry |
+| `web_sessions` | Hashed bearer tokens, non-secret `session_id`, user ID, auth method, expiry and optional owner-authored login label |
 | `chat_branches` | Stable branch/chat/root/parent IDs, friendly handle and explicit owner-handle namespace |
 | `users` | Immutable account ID, normalised username, display name, role, enabled state and home |
 | `access_state` | Activated access mode and access schema version; protects against configuration loss/downgrade |

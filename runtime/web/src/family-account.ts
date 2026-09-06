@@ -27,6 +27,7 @@ export class FamilyAccount {
   private ceremony: AbortController | null = null;
   private totp: { token: string; expires: number } | null = null;
   private totpExpiry: ReturnType<typeof setTimeout> | null = null;
+  private labelTarget: { path: string } | null = null;
 
   constructor(private api: FamilyApi) {
     node('open-account').addEventListener('click', () => { this.opened = true; this.suspended = false; void this.load(true); });
@@ -39,6 +40,14 @@ export class FamilyAccount {
       void this.mutate(() => this.api.request('/account', 'PATCH', patch), 'Profile saved.');
     });
     node('account-add-passkey').addEventListener('click', () => { void this.addPasskey(); });
+    node('account-label-form').addEventListener('submit', event => {
+      event.preventDefault();
+      if (!this.labelTarget || this.snapshot?.capabilities.label_security_item !== true || !this.visible() || this.busy) return;
+      const path = this.labelTarget.path, label = node<HTMLInputElement>('account-label').value;
+      if (Array.from(label).length > 80 || /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(label)) { this.message.textContent = 'Use at most 80 characters without control characters.'; return; }
+      void this.mutate(() => this.api.request(path, 'PATCH', { label }), 'Name saved. Authentication and ownership are unchanged.');
+    });
+    node('account-label-cancel').addEventListener('click', () => this.clearLabel());
     node('account-add-totp').addEventListener('click', () => { void this.startTotp(); });
     node('account-totp-form').addEventListener('submit', event => { event.preventDefault(); void this.confirmTotp(); });
     node('account-totp-cancel').addEventListener('click', () => {
@@ -60,6 +69,7 @@ export class FamilyAccount {
 
   private clear(): void {
     this.clearTotp();
+    this.clearLabel();
     this.generation++; this.root.hidden = true; this.body.hidden = true;
     this.snapshot = null; this.username.value = ''; this.displayName.value = '';
     this.keys.replaceChildren(); this.sessions.replaceChildren(); this.message.textContent = '';
@@ -79,6 +89,7 @@ export class FamilyAccount {
   }
   private ask(path: string, endsLogin: boolean, text: string): void {
     if (this.busy || !this.visible()) return;
+    this.clearLabel();
     this.action = { path, endsLogin }; this.confirm.checked = false; this.confirmButton.disabled = true;
     this.confirm.disabled = false; node<HTMLButtonElement>('account-cancel-action').disabled = false;
     node('account-confirm-text').textContent = text; this.confirmation.hidden = false; this.confirm.focus();
@@ -86,10 +97,27 @@ export class FamilyAccount {
   private disable(): void {
     for (const control of this.body.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button')) control.disabled = true;
   }
-  private row(parent: HTMLElement, text: string, label: string, enabled: boolean, action: () => void): void {
+  private row(parent: HTMLElement, text: string, label: string, enabled: boolean, action: () => void): HTMLElement {
     const item = document.createElement('li'), description = document.createElement('span'), button = document.createElement('button');
     description.textContent = text; button.type = 'button'; button.textContent = label; button.disabled = !enabled;
     button.addEventListener('click', action); item.append(description, button); parent.append(item);
+    return item;
+  }
+  private clearLabel(): void {
+    this.labelTarget = null; node('account-label-form').hidden = true; node<HTMLInputElement>('account-label').value = '';
+    node('account-label-title').textContent = '';
+  }
+  private labelButton(row: HTMLElement, path: string, title: string, label: string, enabled: boolean): void {
+    const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Name'; button.disabled = !enabled;
+    button.setAttribute('aria-label', `Name ${title}`);
+    button.addEventListener('click', () => {
+      if (!this.visible() || this.busy || this.snapshot?.capabilities.label_security_item !== true) return;
+      this.cancelConfirmation(); this.clearLabel(); this.labelTarget = { path }; node('account-label-form').hidden = false;
+      node('account-label-title').textContent = `Name ${title}`;
+      const input = node<HTMLInputElement>('account-label'); input.value = label; input.disabled = false;
+      node<HTMLButtonElement>('account-label-save').disabled = false; node<HTMLButtonElement>('account-label-cancel').disabled = false; input.focus();
+    });
+    row.append(button);
   }
   private render(value: AccountSettings): void {
     // Malformed capabilities never enable a control. Identity remains pinned independently.
@@ -105,13 +133,17 @@ export class FamilyAccount {
     node<HTMLButtonElement>('account-add-totp').disabled = value.capabilities.enrol_totp !== true;
     this.keys.replaceChildren(); this.sessions.replaceChildren();
     for (const key of value.factors.passkeys) {
-      this.row(this.keys, `Passkey ${key.credential_id} · Added ${key.created_at} · Last used ${key.last_used_at ?? 'never'}${key.usable ? '' : ' · Not usable with current site policy'}`, 'Remove passkey', key.removable === true,
-        () => this.ask(`/account/factors/passkey/${encodeURIComponent(key.credential_id)}`, true, `Remove passkey ${key.credential_id}? This signs out every device for your account.`));
+      const path = `/account/factors/passkey/${encodeURIComponent(key.credential_id)}`;
+      const row = this.row(this.keys, `${key.label || 'Unnamed passkey'} · ${key.credential_id} · Added ${key.created_at} · Last used ${key.last_used_at ?? 'never'}${key.usable ? '' : ' · Not usable with current site policy'}`, 'Remove passkey', key.removable === true,
+        () => this.ask(path, true, `Remove passkey ${key.label ? `${key.label} (${key.credential_id})` : key.credential_id}? This signs out every device for your account.`));
+      this.labelButton(row, path, `passkey ${key.credential_id}`, key.label || '', value.capabilities.label_security_item === true);
     }
     if (!value.factors.passkeys.length) this.keys.textContent = 'No passkeys enrolled.';
     for (const session of value.sessions) {
-      this.row(this.sessions, `${session.current ? 'This login' : 'Other login'} · ${session.auth_method} · Signed in ${session.created_at} · Expires ${session.expires_at} · ${session.session_id}`, 'Sign out device', value.capabilities.revoke_session === true,
-        () => this.ask(`/account/sessions/${encodeURIComponent(session.session_id)}`, session.current, `Sign out ${session.current ? 'this' : 'the selected'} device (${session.session_id})?`));
+      const path = `/account/sessions/${encodeURIComponent(session.session_id)}`;
+      const row = this.row(this.sessions, `${session.label || 'Unnamed device login'} · ${session.current ? 'This login' : 'Other login'} · ${session.auth_method} · Signed in ${session.created_at} · Expires ${session.expires_at} · ${session.session_id}`, 'Sign out device', value.capabilities.revoke_session === true,
+        () => this.ask(path, session.current, `Sign out ${session.label || (session.current ? 'this device' : 'the selected device')} (${session.session_id})?`));
+      this.labelButton(row, path, `device login ${session.session_id}`, session.label || '', value.capabilities.label_security_item === true);
     }
   }
   private async load(focus = false): Promise<void> {
