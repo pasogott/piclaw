@@ -1,5 +1,6 @@
 import { validateAccountPreferenceValues, type OwnAccountPreferences } from '../../src/core/account-preferences.js';
 import { FamilyApi } from './family-api.js';
+import { FamilyModelDefaults } from './family-model-defaults.js';
 
 const node = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 /** Own preferences only; no localStorage, instance Settings or provider configuration. */
@@ -16,7 +17,9 @@ export class FamilyPreferences {
   private busy = false;
   private generation = 0;
   private appliedRevision = -1;
+  private modelDefaults: FamilyModelDefaults;
   constructor(private api: FamilyApi) {
+    this.modelDefaults = new FamilyModelDefaults(api);
     node('open-preferences').addEventListener('click', () => { this.opened = true; this.paused = false; void this.load(true); });
     node('close-preferences').addEventListener('click', () => { this.opened = false; this.clear(); node('open-preferences').focus(); });
     node('refresh-preferences').addEventListener('click', () => { void this.load(); });
@@ -42,6 +45,7 @@ export class FamilyPreferences {
     else document.documentElement.dataset.accountTheme = value.preferences.theme;
   }
   private clear(): void {
+    this.modelDefaults.clear();
     this.generation++; this.root.hidden = true; this.form.hidden = true; this.snapshot = null;
     this.theme.value = 'system'; this.guidance.value = ''; this.status.textContent = '';
   }
@@ -66,6 +70,7 @@ export class FamilyPreferences {
   private async load(focus = false): Promise<void> {
     if (!this.visible() || this.busy) return;
     this.clear(); this.root.hidden = false; this.status.textContent = 'Loading preferences…'; const generation = this.generation;
+    void this.modelDefaults.load();
     if (focus) node('preferences-heading').focus();
     try {
       const value = await this.api.request('/account/preferences');

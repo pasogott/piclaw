@@ -37,6 +37,10 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
     if (path === '/account/avatar' || path === '/account/avatar/image') return await handleFamilyAvatar(db, principal, req);
     const policy = { totp: channel.authGateway.createTotpContext().isTotpEnabled(), passkey: channel.authGateway.createWebauthnContext().isPasskeyEnabled(), rpId: resolveWebauthnRpInfo(req).rpId };
     if (method === "GET") {
+      if (path === '/account/model-defaults') {
+        if (new URL(req.url).search) return deny();
+        return channel.json(channel.agentPool.accountModelDefaults(principal));
+      }
       if (path === '/account/preferences') {
         if (new URL(req.url).search) return deny();
         return channel.json(readOwnAccountPreferences(db, principal));
@@ -93,6 +97,10 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
     }
     const body = await req.json();
     if (!body || typeof body !== "object" || Array.isArray(body)) return channel.json({ error: "Invalid account request" }, 400);
+    if (path === '/account/model-defaults' && method === 'PATCH') {
+      if (new URL(req.url).search) return deny();
+      return channel.json(channel.agentPool.accountModelDefaults(principal, body));
+    }
     if (path === '/account/preferences' && method === 'PATCH') {
       if (new URL(req.url).search) return deny();
       return channel.json(updateOwnAccountPreferences(db, principal, body));

@@ -40,6 +40,7 @@ import { detectChannel } from "../router.js";
 import { createBuiltinExtensionFactories } from "../extensions/index.js";
 import { readAccessConfig } from '../core/config-access.js';
 import { requireOwnedSessionExecution } from './owned-session-access.js';
+import { familySessionModelOptions } from './family-model-defaults.js';
 import { createFamilyBuiltinTools, createFamilyToolCallGuard } from './family-builtin-tools.js';
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { sanitizePersistedSessionMessage } from "../extensions/persisted-tool-result-sanitizer.js";
@@ -651,6 +652,7 @@ export async function createSessionInDir(
       services,
       sessionManager,
       sessionStartEvent,
+      ...(mode === 'family-shared' ? familySessionModelOptions(options.chatJid!, sessionManager, options.modelRuntime, options.settingsManager) : {}),
       // Do not pass `tools` here — pi-coding-agent ≥0.68 treats it as an
       // allowlist that silently blocks every extension tool not listed.
       // The tool-activation extension sets the correct default-active set

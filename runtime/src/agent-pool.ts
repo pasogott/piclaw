@@ -54,6 +54,7 @@ import { rotateSession, type SessionRotationResult } from "./session-rotation.js
 import { type AgentRuntimeFacade, type AvailableModelsResult } from "./agent-pool/runtime-facade.js";
 import { createAgentPoolServices, type AgentPoolServices } from "./agent-pool/service-factory.js";
 import { type AgentSessionManagerInstrumentationSnapshot, type PoolEntry } from "./agent-pool/session-manager.js";
+import { ownAccountModelDefaults } from './agent-pool/family-model-defaults.js';
 import type { PiclawCredentialStore } from "./agent-pool/credential-store.js";
 import { installLegacySessionAffinityCompatibility } from "./agent-pool/session-affinity-compat.js";
 import {
@@ -64,6 +65,7 @@ import {
   type SshConfigClearResult,
   type SshConfigSetResult,
   deleteSshConfig,
+  getDb,
   getSshConfig,
   listRecentChatJids,
   pruneOldTokenUsage,
@@ -513,6 +515,10 @@ export class AgentPool {
   /** Return available model labels and current model for a chat session. */
   async getAvailableModels(chatJid: string): Promise<AvailableModelsResult> {
     return this.runtimeFacade.getAvailableModels(chatJid);
+  }
+
+  accountModelDefaults(actor: import('./core/access-types.js').AuthenticatedPrincipal, input?: unknown) {
+    return ownAccountModelDefaults(getDb(), actor, this.modelRuntime, this.settingsManager, input);
   }
 
   setProviderUsageRefreshListener(

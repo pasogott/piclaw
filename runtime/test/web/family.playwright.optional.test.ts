@@ -14,6 +14,7 @@ async function fixture(page: Page) {
   const state = { identity: principal(), calls: [] as Array<{ path: string; headers: Record<string, string>; body: any }> };
   await page.route("**/auth/me", route => route.fulfill({ json: state.identity }));
   await page.route('**/account/avatar', route => route.fulfill({ json: { user_id: state.identity.principal.userId, revision: 0, present: false, can_edit: true } }));
+  await page.route('**/account/model-defaults', route => route.fulfill({ json: modelDefaultsSnapshot() }));
   await page.route('**/account/preferences', route => route.fulfill({ json: { user_id: state.identity.principal.userId, preferences: { revision: 0, theme: 'system', response_guidance: '' }, defaults: { theme: 'system', response_guidance: '' }, can_edit: true } }));
   await page.route("**/agent/message-recovery?**", route => route.fulfill({ json: { state: 'idle' } }));
   await page.route("**/agent/branches", route => route.fulfill({ json: { branches: [{ chat_jid: "web:alice", root_chat_jid: "web:alice", agent_name: "home" }, { chat_jid: "web:alice-two", root_chat_jid: "web:alice-two", agent_name: "second" }] } }));
@@ -187,6 +188,74 @@ async function openAccount(page: Page) {
   await page.goto(base); await ready(page); await page.locator('#open-account').click();
   await page.waitForFunction(() => !(document.getElementById('account-details') as HTMLElement)?.hidden);
 }
+
+function modelDefaultsSnapshot() {
+  return { user_id: 'alice', preferences: { revision: 0, model: null as string | null, thinking_level: null as string | null }, can_edit: true,
+    models: [{ label: 'test/reasoning', name: '<script>Reasoning</script>', thinking_levels: ['off','low','high'] }, { label: 'test/plain', name: 'Plain', thinking_levels: ['off'] }],
+    effective: { model: 'test/plain', thinking_level: 'off' as string | null, source: 'instance', available: true } };
+}
+async function openModelDefaults(page: Page) {
+  await page.goto(base); await ready(page); await page.locator('#open-preferences').click();
+  await page.waitForFunction(() => !(document.getElementById('model-defaults-form') as HTMLElement)?.hidden);
+}
+
+browserTest('model defaults use supplied catalogue/levels, exact revisions and reset without switching sessions or shared settings', async () => {
+  const page = await browser.newPage({ viewport: { width: 375, height: 740 } });
+  try {
+    await fixture(page); let value = modelDefaultsSnapshot(); const writes: any[] = [];
+    await page.route('**/account/model-defaults', route => {
+      if (route.request().method() === 'PATCH') {
+        const body = route.request().postDataJSON(); writes.push({ body, headers: route.request().headers() });
+        value = { ...value, preferences: { revision: value.preferences.revision+1, model: body.model, thinking_level: body.thinking_level }, effective: { model: body.model ?? 'test/plain', thinking_level: body.thinking_level ?? 'off', source: body.model ? 'account' : 'instance', available: true } };
+      }
+      return route.fulfill({ json: value });
+    });
+    await openModelDefaults(page); const url = page.url(); expect(await page.locator('#default-thinking').isDisabled()).toBe(true);
+    expect(await page.locator('#default-model option').allTextContents()).toContain('<script>Reasoning</script> · test/reasoning'); expect(await page.locator('#model-defaults-form script').count()).toBe(0);
+    await page.locator('#default-model').selectOption('test/reasoning'); await page.locator('#default-thinking').selectOption('high'); await page.locator('#save-model-defaults').click();
+    await page.waitForFunction(() => document.getElementById('model-defaults-status')?.textContent?.startsWith('Model defaults saved'));
+    expect(writes[0].body).toEqual({ expected_revision: 0, model: 'test/reasoning', thinking_level: 'high' }); expect(writes[0].headers['x-piclaw-account-id']).toBe('alice'); expect(writes[0].headers['x-piclaw-login-id']).toBe('login-a');
+    expect(await page.locator('#model-defaults-effective').textContent()).toContain('Configured account default: test/reasoning');
+    await page.locator('#default-model').selectOption('test/plain'); expect(await page.locator('#default-thinking option').allTextContents()).toEqual(['Use instance thinking default', 'off']);
+    await page.locator('#reset-model-defaults').click(); expect(writes).toHaveLength(1); await page.locator('#save-model-defaults').click(); await page.waitForFunction(() => document.getElementById('model-defaults-status')?.textContent?.startsWith('Model defaults saved'));
+    expect(writes[1].body).toEqual({ expected_revision: 1, model: null, thinking_level: null }); expect(page.url()).toBe(url);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); expect(await page.evaluate(() => [localStorage.length,sessionStorage.length])).toEqual([0,0]);
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('unavailable defaults remain visible/resettable; server errors disable writes until refresh, malformed capabilities fail closed', async () => {
+  const page = await browser.newPage();
+  try {
+    await fixture(page); const value = modelDefaultsSnapshot(); value.preferences = { revision: 2, model: 'test/missing', thinking_level: 'high' }; value.effective = { model: 'test/missing', thinking_level: null, source: 'account', available: false }; let writes = 0;
+    await page.route('**/account/model-defaults', route => {
+      if (route.request().method() === 'PATCH') { writes++; return route.fulfill({ status: 400, json: {} }); }
+      return route.fulfill({ json: value });
+    });
+    await openModelDefaults(page); expect(await page.locator('#default-model').inputValue()).toBe('test/missing'); expect(await page.locator('#model-defaults-effective').textContent()).toContain('unavailable');
+    await page.locator('#reset-model-defaults').click(); await page.locator('#save-model-defaults').click(); await page.waitForFunction(() => document.getElementById('model-defaults-status')?.textContent?.includes('No automatic retry'));
+    expect(writes).toBe(1); expect(await page.locator('#save-model-defaults').isDisabled()).toBe(true);
+    await page.locator('#refresh-model-defaults').click(); await page.waitForFunction(() => !(document.getElementById('save-model-defaults') as HTMLButtonElement)?.disabled);
+    value.can_edit = undefined as any; await page.locator('#refresh-model-defaults').click(); await page.waitForFunction(() => !(document.getElementById('model-defaults-form') as HTMLElement)?.hidden); expect(await page.locator('#save-model-defaults').isDisabled()).toBe(true);
+    value.models[0]!.thinking_levels = ['unsafe']; await page.locator('#refresh-model-defaults').click(); await page.waitForFunction(() => document.getElementById('model-defaults-status')?.textContent === 'Invalid model choices.'); expect(await page.locator('#model-defaults-form').isVisible()).toBe(false);
+  } finally { await page.close(); }
+}, 20000);
+
+browserTest('model draft clears on blur/close and delayed former-login save cannot restore choices', async () => {
+  const page = await browser.newPage();
+  try {
+    const state = await fixture(page); await openModelDefaults(page);
+    await page.locator('#default-model').selectOption('test/reasoning'); await page.locator('#default-thinking').selectOption('high');
+    await page.evaluate(() => dispatchEvent(new Event('blur'))); expect(await page.locator('#default-model option').count()).toBe(0); expect(await page.locator('#model-defaults-effective').textContent()).toBe('');
+    await page.evaluate(() => dispatchEvent(new Event('focus'))); await page.waitForFunction(() => !(document.getElementById('model-defaults-form') as HTMLElement)?.hidden);
+    expect(await page.locator('#default-model').inputValue()).toBe('');
+    let release!: () => void, entered!: () => void; const held = new Promise<void>(r => release = r), waiting = new Promise<void>(r => entered = r);
+    await page.route('**/account/model-defaults', async route => { if (route.request().method() === 'PATCH') { entered(); await held; } await route.fulfill({ json: modelDefaultsSnapshot() }); });
+    await page.locator('#default-model').selectOption('test/reasoning'); await page.locator('#save-model-defaults').click(); await waiting;
+    await page.locator('#close-preferences').click(); expect(await page.locator('#default-model option').count()).toBe(0);
+    state.identity = principal('bob','new-login'); release(); await page.waitForFunction(() => document.getElementById('family-status')?.textContent?.includes('no longer bound'));
+    expect(await page.locator('#default-model option').count()).toBe(0); expect(await page.locator('#model-defaults-form').isVisible()).toBe(false);
+  } finally { await page.close(); }
+}, 20000);
 
 browserTest('account avatar uploads pinned raster bytes, confirms deletion and releases blob URLs/drafts without storage', async () => {
   const page = await browser.newPage({ viewport: { width: 375, height: 740 } });

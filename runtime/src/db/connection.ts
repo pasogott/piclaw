@@ -27,6 +27,7 @@ import { initializeAuthLabelsSchema } from "./auth-labels-schema.js";
 import { initializeFamilyToolRestrictions } from './family-tool-restrictions.js';
 import { initializeAccountPreferences } from './account-preferences.js';
 import { initializeAccountAvatars } from './account-avatar.js';
+import { initializeAccountModelDefaults } from './account-model-defaults.js';
 import fs from "fs";
 import path from "path";
 
@@ -957,6 +958,7 @@ export function initDatabase(): void {
   initializeFamilyToolRestrictions(db);
   initializeAccountPreferences(db);
   initializeAccountAvatars(db);
+  initializeAccountModelDefaults(db);
   // The legacy live store historically runs without global FK enforcement.
   // EF-S07 uses a dedicated FK-enabled scheduler connection in production;
   // restore the caller's prior setting so unrelated legacy write paths retain
