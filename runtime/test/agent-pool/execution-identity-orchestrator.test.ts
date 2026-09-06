@@ -10,6 +10,7 @@ import { ensureChatBranch } from "../../src/db/chat-branches.js";
 import { provisionUserHome } from "../../src/db/session-ownership.js";
 import { getExecutionIdentity } from "../../src/core/execution-context.js";
 import { setEnv } from "../helpers.js";
+import { createWebSession } from "../../src/db/web-sessions.js";
 
 test("orchestrator rejects mismatched provenance before hydration and carries valid owner into hydration",async()=>{
  const workspace=mkdtempSync(join(tmpdir(),"piclaw-run-owner-"));
@@ -23,7 +24,10 @@ test("orchestrator rejects mismatched provenance before hydration and carries va
   expect(missing.status).toBe("error");expect(hydrated).toBe(0);
   const denied=await runAgentPrompt("prompt","web:default",{skipPrePromptCompaction:true,executionProvenance:{actorUserId:"foreign",ownerUserId:"default",chatJid:"web:default",kind:"scheduled"}},options);
   expect(denied.status).toBe("error");expect(hydrated).toBe(0);
-  const valid=await runAgentPrompt("prompt","web:default",{skipPrePromptCompaction:true,executionProvenance:{actorUserId:"default",ownerUserId:"default",chatJid:"web:default",kind:"scheduled"}},options);
+  const unsupported=await runAgentPrompt("prompt","web:default",{skipPrePromptCompaction:true,executionProvenance:{actorUserId:"default",ownerUserId:"default",chatJid:"web:default",kind:"scheduled"}},options);
+  expect(unsupported.error).toBe("Session access denied.");expect(hydrated).toBe(0);
+  const login=createWebSession('orchestrator-owner-login','default',3600,'passkey');
+  const valid=await runAgentPrompt("prompt","web:default",{skipPrePromptCompaction:true,executionProvenance:{actorUserId:"default",ownerUserId:"default",chatJid:"web:default",kind:"interactive",authenticationSessionId:login.session_id!}},options);
   expect(valid.error).toContain("fixture stop");expect(hydrated).toBe(1);expect(observed).toBe("default");expect(getExecutionIdentity()).toBeNull();
  } finally {restore();rmSync(workspace,{recursive:true,force:true});}
 });
@@ -36,7 +40,8 @@ test('family orchestrator rejects a session without tool controls before calling
   closeDatabase(); initDatabase(); storeChatMetadata('web:default',new Date().toISOString(),'root'); ensureChatBranch({chat_jid:'web:default'}); provisionUserHome(getDb(),'default','web:default');
   let prompts=0;
   const session={sessionManager:{getLeafId:()=>null},model:null,isStreaming:false,isCompacting:false,isRetrying:false,prompt:async()=>{prompts++;},subscribe:()=>()=>{}};
-  const result=await runAgentPrompt('hello','web:default',{skipPrePromptCompaction:true,executionProvenance:{actorUserId:'default',ownerUserId:'default',chatJid:'web:default',kind:'scheduled'}},{
+  const login=createWebSession('orchestrator-ceiling-login','default',3600,'passkey');
+  const result=await runAgentPrompt('hello','web:default',{skipPrePromptCompaction:true,executionProvenance:{actorUserId:'default',ownerUserId:'default',chatJid:'web:default',kind:'interactive',authenticationSessionId:login.session_id!}},{
    getOrCreateRuntime:async()=>({session,services:{},dispose:async()=>{}} as any),turnCoordinator:new AgentTurnCoordinator({takeAttachments:()=>[],touchSession:()=>{},recordMessageUsage:()=>{}}),
    clearAttachments:()=>{},takeAttachments:()=>[],logsDir:join(workspace,'logs'),setActiveForkBaseLeaf:()=>{},clearActiveForkBaseLeaf:()=>{},
   });

@@ -19,6 +19,9 @@ export function authoriseExecutionIdentity(
   provenance: ExecutionProvenance | undefined,
 ): ExecutionIdentity | null {
   if (mode === "single-user" && provenance === undefined) return null;
+  // A durable grant preflight is not an occurrence/lease authorisation. Until
+  // dispatch integrates that contract, only live interactive family runs enter.
+  if (mode !== "single-user" && (mode !== "family-shared" || provenance?.kind !== "interactive")) throw new ChatAccessDenied();
   if (!provenance || provenance.chatJid !== chatJid || provenance.actorUserId !== provenance.ownerUserId || !KINDS.includes(provenance.kind)) throw new ChatAccessDenied();
   if (mode === "single-user" && provenance.ownerUserId !== "default") throw new ChatAccessDenied();
   const user = getUser(database, provenance.ownerUserId);
