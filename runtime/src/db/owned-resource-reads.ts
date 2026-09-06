@@ -8,6 +8,8 @@ import { resolveOwnedLifecycleSession } from "./owned-session-lifecycle.js";
 export function authoriseOwnedMedia(database: Database, actor: AuthenticatedPrincipal, mediaId: number): void {
   requireAccountActor(database, actor);
   if (!Number.isSafeInteger(mediaId) || mediaId <= 0) throw new ChatAccessDenied();
+  if (database.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='migration_media_quarantine'").get()
+    && database.query('SELECT 1 FROM migration_media_quarantine WHERE media_id=?').get(mediaId)) throw new ChatAccessDenied();
   const candidates = database.query(`SELECT DISTINCT m.chat_jid FROM message_media mm
     JOIN messages m ON m.rowid=mm.message_rowid
     JOIN chat_branches b ON b.chat_jid=m.chat_jid

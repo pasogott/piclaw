@@ -30,7 +30,7 @@ Family mode is intended for trusted household members. Users with arbitrary shel
 
 | Area | Implemented and tested | Not yet complete |
 |---|---|---|
-| Modes and migration (#1123/#1126/#1133) | Strict config/marker checks, topology inventory, copy-only ownership/handle preparation, explicit hash-checked v3 child-session capture | Promotion/rollback, unsupported child histories and remaining resource migration, activation gates |
+| Modes and migration (#1123/#1126/#1133) | Strict config/marker checks, copy-only ownership/child preparation, explicit copied-login revocation/task pausing/media quarantine | Promotion/rollback, confirmed-factor and remaining resource migration, activation gates |
 | Accounts and factors (#1124/#1125) | Disabled account + owned home provisioning, live/recent-login admin checks, own-device/factor APIs and names, owner avatars, login-bound self TOTP enrolment and multiple passkeys | Recovery startup integration, owner-aware replacement for disabled legacy factor commands |
 | Invitations/recovery (#1125) | One-use browser-bound TOTP/passkey grants, atomic enrol-and-enable, other-admin reset, offline operator grant preparation with backup/lock/audit, fragment invitation page and admin confirmation UI | Physical-device and full account browser workflows, recovery startup/listener integration |
 | Sessions (#1126/#1128) | Root ownership, owner-local names, atomic forks/rename, additional roots, home selection and idle archive/restore; owned lifecycle browser controls | Merge/purge, full archive backup, process-kill recovery proof |
@@ -145,6 +145,8 @@ Denied surfaces include add-on ingress/config APIs, widget state/snapshots, muta
 ## Owned media and archive transcript reads
 
 GET `/media/:id`, `/media/:id/thumbnail` and `/media/:id/info` authorise through `message_media` → `messages` → the current root/parent chain. At least one linked conversation must be active and owned by the requester. Foreign, missing, orphaned and archived-only links receive the same denial. A blob deliberately linked to both owners' conversations is readable by either; duplicate query parameters or supplied `chat_jid` do not establish authority. Uploads are still denied.
+
+Version-three [copy preparation](migration-copy.md#authentication-tasks-and-media-disposition) quarantines ambiguous legacy media instead of assuming shared links were deliberate. `migration_media_quarantine` blocks every family read for marked media, including after later linking to an owned message. The copy retains bytes/links; no unquarantine writer is exposed. The same transaction revokes copied logins/enrolments and pauses active task payloads and authority heads. In-flight/durable queued work and invalid thread/task relationships block this stage; unconsumed legacy messages remain counted without new authority. Confirmed factors, shared credentials, filesystem notifications/recordings and broader resource migration remain release work. Prepared copies still cannot start.
 
 Binary reads retain the existing non-image `Content-Disposition: attachment` and security headers. Metadata returns only ID, filename, content type and creation time; arbitrary stored metadata, paths and binary data are omitted. Responses use private/no-store caching.
 

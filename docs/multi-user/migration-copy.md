@@ -6,7 +6,7 @@
 
 This is one stage of migration, not a supported deployment conversion. The prepared database retains its `single-user` activation value and gains an `access_migration_preparation` marker. Current access-state reads reject the marker before startup can proceed. Do not remove it or edit activation values. Older releases may not recognise preparation markers; never run any older binary against the copy.
 
-The command adopts `session_roots` ownership and `chat_branches.handle_owner_id` through the existing transactional helpers. Version-two plans can also capture explicitly verified child JSONL files as pending import seeds. It preserves message content, names, IDs, archive state, account roles/enabled state and homes. It does not create users/homes, rename colliding handles, migrate factors or grants, map non-web services, rewrite queues, promote session directories, retire browser caches or migrate derived resources.
+The command adopts `session_roots` ownership and `chat_branches.handle_owner_id` through the existing transactional helpers. Version-two plans can also capture explicitly verified child JSONL files as pending import seeds. Version-three plans add the fixed authentication/task/media disposition below. All versions preserve message content, names, IDs, archive state, account roles/enabled state and homes. The command does not create users/homes, rename colliding handles, convert confirmed factors, map non-web services, execute/rewrite queued messages, promote session directories or retire browser caches.
 
 Unregistered chats, broken/cyclic/cross-root parent chains and non-web roots are quarantined in the preview and block preparation. This command cannot override quarantine. All registered roots, including archives, need an explicit existing owner. Existing ownership cannot be transferred. Account homes must remain active roots owned by that account; enabled accounts need a home. Handle collisions are checked case-insensitively within each owner's active namespace; resolve them explicitly before reviewing another preview.
 
@@ -39,7 +39,30 @@ The command acquires the workspace maintenance lock even when the runtime-lock e
 
 ## After preparation
 
-Keep the copy for review/testing only. Do not point the service at it or replace `messages.db`. Children omitted from a version-two adoption list, or all children under a version-one plan, remain pending without fork-provenance records. Credentials and queued work copied into the snapshot retain their old semantics and must be handled by later migration stages. The preparation marker prevents current code from treating this incomplete state as either a single-user runtime or an activated family deployment.
+Keep the copy for review/testing only. Do not point the service at it or replace `messages.db`. Children omitted from an adoption list, or all children under a version-one plan, remain pending without fork-provenance records. Version-one/two copies retain old authentication and task state; version three applies only the dispositions below. Confirmed credentials and queued message semantics still need later migration work. The preparation marker prevents current code from treating this incomplete state as either a single-user runtime or an activated family deployment.
+
+## Authentication, tasks and media disposition
+
+For this additional copy-only stage use `version: 3`, keep `child_sessions` (an empty array is valid), and add exactly:
+
+```json
+"resource_policy": "revoke-logins-pause-tasks-quarantine-media-v1"
+```
+
+This literal selects one fixed policy; individual dispositions cannot be disabled. Review the `resources` counts/fingerprint in a fresh preview before approving it. The snapshot includes message/thread/media links, scheduler statuses/revisions, cursor state and transient-auth counts/metadata. It does not export message contents, queued payloads, bearer tokens, media metadata or provider keys. The fingerprint detects relevant same-count link/status changes, but is not a complete content digest.
+
+In the destination transaction:
+
+- Delete all copied browser logins, pending TOTP/self-TOTP/passkey ceremonies, invitations and legacy WebAuthn enrolments. Preserve confirmed TOTP ciphertext/replay state and passkey credentials/handles unchanged; legacy-factor conversion and key coordination remain separate requirements.
+- Pause every active scheduled task in both `scheduled_tasks` and the durable scheduler authority head. Preserve task payload, revision, next-run time, completed history and already-paused/completed status. This does not assign a user owner or permit resumption in family mode.
+- Insert `migration_media_quarantine` rows for unlinked blobs, unresolved stored message links and blobs linked across mapped owners. Preserve bytes and links, including for quarantined media. Same-owner links across roots remain usable after normal ownership checks. The family media authoriser denies a quarantined ID even if a new owned link is added; there is no automatic unquarantine API.
+- Record policy, source snapshot, counts and excluded surfaces in `access_resource_migration`. Keep the non-startable preparation marker intact.
+
+Preparation refuses in-flight/preflight/compaction cursor markers, queued follow-up payloads, unresolved durable scheduler runs, active operations/wakes/sources/queued inputs, pending/started/unknown outbox deliveries and failed deliveries with a scheduled retry. It also refuses unregistered message chats, invalid/cross-chat thread references and mismatched/orphan scheduler heads. It never guesses that stopped processes mean queued work may be discarded. Resolve those states through their supported workflows before taking another preview.
+
+Unconsumed legacy user messages are counted but retained without new execution grants or cursor movement. Their disposition remains a release gate. Shared keychain/provider credentials, filesystem push subscriptions/recordings, generic add-on state, tool-output files and ambiguous thinking records are excluded. The command does not enumerate their secrets or promise that every indirect media reference is classified. Raw content blocks may contain historical references; the implemented family media endpoint still enforces quarantine by ID. Full derived-resource and notification-recipient migration remains unfinished.
+
+Any disposition failure rolls back ownership, seed capture, revocation, task pausing and quarantine together in the copy; CLI cleanup removes only the new failed destination. The live source remains unchanged. Paused tasks and quarantined media must not be re-enabled by manually editing the marker or records.
 
 ## Explicit child-session capture
 

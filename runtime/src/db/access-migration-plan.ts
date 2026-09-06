@@ -4,12 +4,14 @@ import { previewAccessMigration, readAccessState } from './access-state.js';
 import { assignLegacyRootOwners } from './session-ownership.js';
 import { migrateOwnedSessionHandles } from './session-handles.js';
 import { commitChildAdoptions, type ChildAdoptionInput, type ChildAdoptionSnapshot } from './access-child-adoption.js';
+import { applyMigrationResourcePolicy, readMigrationResourceInventory, validateResourceMigration } from './access-resource-migration.js';
 
 export interface AccessMigrationPlan {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   snapshot: string;
   assignments: { root_chat_jid: string; owner_user_id: string | null }[];
   child_sessions?: ChildAdoptionInput[];
+  resource_policy?: string;
 }
 
 /** Metadata only. Fingerprint covers every field used to validate ownership and handle adoption. */
@@ -22,13 +24,14 @@ export function readAccessMigrationInventory(database: Database) {
     const branches = database.query('SELECT branch_id,chat_jid,root_chat_jid,parent_branch_id,agent_name,handle_owner_id,archived_at FROM chat_branches ORDER BY branch_id').all() as {branch_id:string;chat_jid:string;root_chat_jid:string;parent_branch_id:string|null;agent_name:string;handle_owner_id:string;archived_at:string|null}[];
     const owners = database.query('SELECT root_branch_id,owner_user_id,policy FROM session_roots ORDER BY root_branch_id').all() as {root_branch_id:string;owner_user_id:string;policy:string}[];
     const schema = database.query('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').all();
-    const snapshot = createHash('sha256').update(JSON.stringify({state,topology,users,branches,owners,schema})).digest('hex');
+    const resources = readMigrationResourceInventory(database);
+    const snapshot = createHash('sha256').update(JSON.stringify({state,topology,users,branches,owners,schema,resources})).digest('hex');
     const assignments = topology.roots.map(root => {
       const branch = branches.find(branch => branch.chat_jid === root.chatJid)!;
       const existing = owners.find(owner => owner.root_branch_id === branch.branch_id);
       return {root_chat_jid:root.chatJid,owner_user_id:existing?.owner_user_id ?? null};
     });
-    return { snapshot, users, branches, owners, topology, plan: {version:1,snapshot,assignments} as AccessMigrationPlan,
+    return { snapshot, users, branches, owners, topology, resources, plan: {version:1,snapshot,assignments} as AccessMigrationPlan,
       warning:'Review and fill every owner ID explicitly. This prepares a non-startable copy only; no source writes, activation or child seed adoption.' };
   })();
 }
@@ -39,10 +42,11 @@ function exact(value: unknown, keys: string[]): asserts value is Record<string,u
 
 export function validateAccessMigrationPlan(database: Database, input: unknown) {
   const version=(input as any)?.version;
-  exact(input,version===2?['version','snapshot','assignments','child_sessions']:['version','snapshot','assignments']);
-  if (![1,2].includes(version) || (version===2&&!Array.isArray(input.child_sessions)) || typeof input.snapshot !== 'string' || !/^[0-9a-f]{64}$/.test(input.snapshot) || !Array.isArray(input.assignments)) throw new Error('Invalid migration plan.');
+  exact(input,version===3?['version','snapshot','assignments','child_sessions','resource_policy']:version===2?['version','snapshot','assignments','child_sessions']:['version','snapshot','assignments']);
+  if (![1,2,3].includes(version) || (version>=2&&!Array.isArray(input.child_sessions)) || typeof input.snapshot !== 'string' || !/^[0-9a-f]{64}$/.test(input.snapshot) || !Array.isArray(input.assignments)) throw new Error('Invalid migration plan.');
   const inventory = readAccessMigrationInventory(database);
   if (inventory.snapshot !== input.snapshot) throw new Error('Migration inventory changed. Create and review a fresh preview.');
+  if(version===3)validateResourceMigration(database,input.resource_policy);
   if (inventory.topology.quarantined.length) throw new Error('Quarantined topology/non-web resources must be resolved before copy preparation.');
   const assignments = input.assignments.map(value => {
     exact(value,['root_chat_jid','owner_user_id']);
@@ -83,6 +87,7 @@ export function prepareAccessMigrationCopy(database: Database, plan: unknown, ad
     const requested=(plan as AccessMigrationPlan).child_sessions ?? [];
     if(requested.length!==adoptions.length||requested.some((row,index)=>row.chat_jid!==adoptions[index]?.chatJid||row.sha256!==adoptions[index]?.seed.sha256)) throw new Error('Child snapshots do not match the reviewed plan.');
     commitChildAdoptions(database,adoptions);
+    if((plan as AccessMigrationPlan).version===3)applyMigrationResourcePolicy(database,inventory.snapshot);
     // A separate preparation marker blocks startup even though activation remains single-user.
     database.exec(`CREATE TABLE access_migration_preparation (
       id INTEGER PRIMARY KEY CHECK(id=1), source_snapshot TEXT NOT NULL,
