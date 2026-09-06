@@ -8,6 +8,7 @@ import { checkCsrfOrigin, rateLimitResponse } from "./security.js";
 import { isRateLimited } from "./rate-limit.js";
 import { resolveWebauthnRpInfo } from "../auth/webauthn-challenges.js";
 import { AccountInvitations } from "../../../secure/account-invitations.js";
+import { FamilyPasskeys } from "../../../secure/family-passkeys.js";
 
 /** Account-only surface: never returns conversation content, tokens or factor secrets. */
 export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Request, principal: AuthenticatedPrincipal): Promise<Response | null> {
@@ -45,6 +46,17 @@ export async function handleFamilyAccountRoutes(channel: WebChannelLike, req: Re
     }
     const body = await req.json();
     if (!body || typeof body !== "object" || Array.isArray(body)) return channel.json({ error: "Invalid account request" }, 400);
+    if (method === "POST" && path === "/account/passkeys/register/start") {
+      if (!policy.passkey || Object.keys(body).length) return deny();
+      const { rpId, origin } = resolveWebauthnRpInfo(req);
+      return channel.json(await new FamilyPasskeys(db).start(principal, rpId, origin));
+    }
+    if (method === "POST" && path === "/account/passkeys/register/finish") {
+      if (!policy.passkey || Object.keys(body).some(key => !["token", "credential"].includes(key))
+        || typeof body.token !== "string" || !/^[a-zA-Z0-9_-]{43}$/.test(body.token) || !body.credential || typeof body.credential !== "object") return deny();
+      await new FamilyPasskeys(db).finish(principal, body.token, resolveWebauthnRpInfo(req).origin, body.credential);
+      return channel.json({ registered: true });
+    }
     if (path === "/admin/users" && method === "POST") return channel.json({ user: provisionFamilyAccount(db, principal, body as CreateUserInput) }, 201);
     const user = path.match(/^\/admin\/users\/([a-zA-Z0-9_-]+)$/);
     if (user && method === "PATCH") return channel.json({ user: updateManagedAccount(db, principal, user[1]!, body as UpdateUserInput, policy) });

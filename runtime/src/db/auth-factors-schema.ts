@@ -33,6 +33,16 @@ export function initializeAuthFactorSchema(database: Database): void {
       created_at TEXT NOT NULL
     ) STRICT;
     CREATE INDEX IF NOT EXISTS idx_user_auth_invitation_expiry ON user_auth_invitations(expires_at);
+    CREATE TABLE IF NOT EXISTS user_passkey_registrations (
+      token_hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id),
+      session_id TEXT NOT NULL,
+      rp_id TEXT NOT NULL,
+      origin TEXT NOT NULL,
+      challenge TEXT NOT NULL,
+      expires_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS idx_user_passkey_registration_expiry ON user_passkey_registrations(expires_at);
     CREATE TABLE IF NOT EXISTS user_auth_attempts (
       bucket TEXT PRIMARY KEY,
       count INTEGER NOT NULL,

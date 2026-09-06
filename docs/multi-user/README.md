@@ -128,7 +128,7 @@ All account operations re-read the login ID and enabled user/role. Mutations req
 
 Provisioning creates the disabled user, immutable `web:user:<id>` home, root ownership and owner-local `home` handle in one transaction. Enabling requires an active owned root and at least one currently configured factor (passkeys must match the current RP ID). Disable, enable and role transitions revoke all target logins and pending enrolments; changing profile labels leaves devices active. The last enabled administrator cannot be disabled or demoted. Factor removal rolls back if it would remove the last configured factor, and otherwise revokes all target devices/enrolments. These transactions do not grant administrators access to another user's sessions.
 
-These account APIs cannot display or replace stored TOTP seeds. Restricted invitations below bootstrap a new factor; authentication recovery is separate work. Full mode activation, migrated legacy factors, RP-specific UI inventory and stale in-memory WebAuthn ceremony invalidation need integration testing before release.
+These account APIs cannot display or replace stored TOTP seeds. Restricted invitations below bootstrap a new factor; authentication recovery is separate work. Full mode activation, migrated legacy factors, RP-specific UI inventory and legacy WebAuthn tool/ceremony isolation need integration testing before release.
 
 ## Restricted TOTP invitations
 
@@ -139,6 +139,16 @@ POST `/auth/invitation/claim` accepts only `{token}`. It requires matching brows
 POST `/auth/invitation/confirm` accepts only `{token,enrolment_token,code}` and needs that cookie and origin. Five guesses are allowed by the underlying enrolment record. Verification rechecks the grant and account after asynchronous cryptography. One transaction inserts the factor, enables the same invited account, revokes any account logins and consumes the grant; failure rolls everything back. Success clears the enrolment cookie and requires an ordinary login. The invitation grants no account-role/profile changes, factor deletion or transcript access. Responses are private/no-store. TOTP-disabled/passkey-only policy cannot issue or redeem these TOTP invitations.
 
 The API has no invitation page or QR UI yet. Passkey-first invitations, reset/recovery, periodic expiry pruning and key rotation need separate implementation. Expired records are pruned on issue/claim and factor confirmation. General factor reset cannot reuse invitations for accounts with existing factors.
+
+## Multiple passkeys per account
+
+Each account can register multiple passkeys; adding one never replaces an existing credential. GET `/account/factors` lists each key separately, and the own-factor DELETE route removes one credential while retaining the last usable-factor protection. Counts used by removal/enablement are restricted to the current RP ID and configured auth methods.
+
+POST `/account/passkeys/register/start` accepts an empty object and requires recent TOTP/passkey authentication, matching browser Origin and account mutation rate limits. It returns WebAuthn options with required resident key/user verification, plus a random ceremony token. Existing credentials for that user and RP are excluded from registration options. `user_passkey_registrations` stores the token hash, immutable user ID, initiating login ID, RP, origin, challenge and five-minute expiry. At most five pending ceremonies per user are allowed; this does not limit registered keys to one.
+
+POST `/account/passkeys/register/finish` accepts `{token,credential}`. The same account/login/origin must consume the grant before verification; failed proofs and replay require a new ceremony. After cryptographic verification, the service rechecks current login/account status and expiry, then inserts the credential without replacement. No new login cookie is issued. Role/enable changes, own-device revocation and factor removal clear affected pending registrations. A second login on the same account cannot complete the first browser's ceremony.
+
+Tests use real P-256/COSE keys, CBOR registration attestation and signed login assertions for two credentials. Passkey-first invitations, credential-label UI, physical authenticator browser tests and offline recovery are still unfinished. Legacy single-user ceremony routes are unchanged; the family account endpoints use the separate durable flow above.
 
 ## Model identity foundation
 
