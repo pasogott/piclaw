@@ -1,0 +1,21 @@
+import type Database from "bun:sqlite";
+
+/** Server-owned admission record; never populated by generic message or browser metadata. */
+export function initializeMessageAuthoritySchema(database: Database): void {
+  database.exec(`CREATE TABLE IF NOT EXISTS message_execution_authorities (
+    message_rowid INTEGER PRIMARY KEY,
+    message_id TEXT NOT NULL,
+    chat_jid TEXT NOT NULL,
+    owner_user_id TEXT NOT NULL REFERENCES users(id),
+    actor_user_id TEXT NOT NULL REFERENCES users(id),
+    login_session_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    thread_id INTEGER,
+    created_at TEXT NOT NULL,
+    UNIQUE(owner_user_id, request_id)
+  ) STRICT;
+  CREATE TRIGGER IF NOT EXISTS message_execution_authority_immutable
+    BEFORE UPDATE ON message_execution_authorities
+    BEGIN SELECT RAISE(ABORT, 'Message execution authority is immutable'); END;`);
+}

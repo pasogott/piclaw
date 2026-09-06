@@ -13,6 +13,7 @@ import { enforceRequestGuards } from "./request-guards.js";
 import { getRouteFlags } from "./route-flags.js";
 import { handleFamilyAccountRoutes } from "./family-accounts.js";
 import { handleFamilyInvitationRoutes } from "./family-invitations.js";
+import { handleFamilyMessageIngress } from "./family-message-ingress.js";
 import { checkCsrfOrigin } from "./security.js";
 import { authoriseExecutionIdentity } from "../../../agent-pool/execution-identity.js";
 import { withExecutionIdentity } from "../../../core/execution-context.js";
@@ -86,6 +87,7 @@ export async function handleFamilyRequest(channel: WebChannelLike, req: Request,
   }
 
   if (!principal || principal.mode !== "family-shared" || principal.kind !== "user") return channel.json({ error: "Unauthorized" }, 401);
+  if (/^\/agent\/[^/]+\/message$/.test(path)) return handleFamilyMessageIngress(channel, req, principal);
   const accountResponse = await handleFamilyAccountRoutes(channel, req, principal);
   if (accountResponse) return accountResponse;
   // Packaged app assets only: no docs, dynamic avatars, manifest or service-worker state.

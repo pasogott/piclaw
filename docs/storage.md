@@ -31,6 +31,7 @@
 | `access_state` | Activated access mode and access schema version; protects against configuration loss/downgrade |
 | `session_roots` | Immutable owner and private policy for a stable root branch |
 | `owned_fork_operations` | Owner/source/idempotency binding and captured JSON seed, committed with the child; seed cleared after persistence |
+| `message_execution_authorities` | Immutable admitted message/actor/owner/login IDs, content hash, thread and owner-local request key; no bearer token |
 | `user_totp_factors` | Encrypted per-user TOTP seed, revision and last-used timestep; separate from keychain injection |
 | `user_totp_enrolments` | Hashed confirmation token, encrypted pending seed, attempt count and expiry |
 | `user_auth_invitations` | Hashed invitation/browser/enrolment tokens, target/issuer, origin and expiry |
