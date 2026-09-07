@@ -32,8 +32,8 @@
 | `family_memory_withdrawals` | Append-only publisher withdrawal receipts; exclude copies from future shared ledger reads without erasing publication history |
 | `task_run_logs` | Task run history |
 | `token_usage` | Per‑assistant‑message token + cost usage (includes model/provider/api for per‑model tracking) |
-| `tool_outputs` | Stored tool output summaries |
-| `tool_outputs_fts` | Full‑text index for tool output |
+| `tool_outputs` | Stored tool output summaries; family rows bind owner, stable root/source branch, creation-time chat JID and execution kind; legacy null-scope rows stay single-user-only |
+| `tool_outputs_fts` | Full‑text chunks keyed by opaque output ID; family reads first prove the matching scoped metadata row |
 | `workspace_files` | Indexed workspace files (path, size, mtime) |
 | `workspace_fts` | Full‑text index for workspace content |
 | `family_workspace_files`, `family_workspace_fts` | Separate shared-family file metadata and FTS; only explicit family notes and shared skills, never legacy index rows |
@@ -292,7 +292,7 @@ erDiagram
 - `chats(last_message_time)` for recent chat ordering
 - `scheduled_tasks(next_run)`, `scheduled_tasks(status)`, `scheduled_tasks(created_at)`, and `scheduled_tasks(last_run)` for the scheduler
 - `task_run_logs(task_id, run_at)` for audit history
-- `tool_outputs(created_at)` for recent tool output
+- `tool_outputs(created_at)` and `tool_outputs(owner_user_id, created_at)` for legacy and owner-scoped retention
 - `media(created_at)` for attachment timelines
 - `message_media(message_rowid)` and `message_media(media_id)` for joins
 - `messages_fts`, `tool_outputs_fts`, and `workspace_fts` for full-text search

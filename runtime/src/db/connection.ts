@@ -40,6 +40,7 @@ import { initializeFamilyExecutionAdmission } from './family-execution-admission
 import { initializeFamilyWorkspaceIndex } from './family-workspace-index-schema.js';
 import { initializeFamilyMemory } from './family-memory-schema.js';
 import { initializeFamilyScheduledPublications } from './family-scheduled-publications-schema.js';
+import { initializeToolOutputOwnership } from './tool-output-ownership-schema.js';
 import fs from "fs";
 import path from "path";
 
@@ -313,7 +314,12 @@ function createSchema(database: Database): void {
       size_bytes INTEGER,
       line_count INTEGER,
       summary TEXT,
-      path TEXT
+      path TEXT,
+      owner_user_id TEXT,
+      root_branch_id TEXT,
+      source_branch_id TEXT,
+      chat_jid TEXT,
+      execution_kind TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_tool_outputs_created_at ON tool_outputs(created_at);
 
@@ -963,6 +969,7 @@ export function initDatabase(): void {
   ensureThinkingContentDuration(db);
   initializeAccessSchema(db);
   initializeSessionOwnershipSchema(db);
+  initializeToolOutputOwnership(db);
   initializeOwnedForkSchema(db);
   initializeMessageAuthoritySchema(db);
   initializeAuthFactorSchema(db);
