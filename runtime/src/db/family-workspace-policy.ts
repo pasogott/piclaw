@@ -5,6 +5,7 @@ import type { FamilyWorkspacePolicy } from '../core/family-workspace-policy.js';
 import { requireAccountActor } from './account-administration.js';
 import { readAccessState } from './access-state.js';
 import { readFamilyToolPolicy } from './family-tool-restrictions.js';
+import { readFamilySkillProvenance } from '../core/family-skill-provenance.js';
 
 /** Own identity + non-secret policy metadata only; no file, provider, add-on or keychain enumeration. */
 export function readFamilyWorkspacePolicy(database: Database, actor: AuthenticatedPrincipal): FamilyWorkspacePolicy {
@@ -47,12 +48,13 @@ export function readFamilyWorkspacePolicy(database: Database, actor: Authenticat
         { name: 'Model/thinking defaults and compaction', scope: 'personal empty-root defaults; existing session state; shared compaction', availability: 'Own model-defaults editor selects from the available scoped catalogue for empty owned roots. Resumed/fork selections win; no shared Settings, credentials, live model switch or compaction editor.' },
         { name: 'Tool activation and capability profile', scope: 'fixed ceiling plus per-account denials', availability: 'Recent administrators can deny/restore only tools inside the preview ceiling. Changes affect new runs; broader grants and role profiles remain unavailable.' },
         { name: 'Provider login/OAuth, environment and generic keychain', scope: 'shared instance / operator', availability: 'No family Settings editor or slash-command bridge.' },
-        { name: 'Skills, workspace search and add-on panes', scope: 'shared-family / operator', availability: 'Installed inventory and configuration are not enumerated here; pane-by-pane scope classification remains a release prerequisite.' },
+        { name: 'Skills, workspace search and add-on panes', scope: 'shared-family / operator', availability: 'Bounded skill provenance metadata is listed below. Skill bodies, add-on inventory/configuration and pane access are not exposed; pane-by-pane classification remains a release prerequisite.' },
         { name: 'Recordings, Dream and notifications', scope: 'owner-scoped integration required', availability: 'Family entry points are unavailable until source and recipient ownership are integrated.' },
         { name: 'Account administration', scope: 'admin metadata', availability: 'Explicit APIs and confirmations; role is not content authority.' },
         { name: 'Access mode and container destinations', scope: 'deployment / operator', availability: 'Read-only preview; migration and isolated-container gates must pass before any activation or managed restart.' },
       ],
       memory: { personal: [`notes/users/${user.id}/MEMORY.md`, `notes/users/${user.id}/preferences.md`], family: 'notes/family/MEMORY.md' },
+      skills: { precedence: 'packaged-first', entries: configured.mode === 'family-shared' ? readFamilySkillProvenance() : [] },
     };
   })();
 }
