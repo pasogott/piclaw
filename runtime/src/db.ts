@@ -82,8 +82,10 @@ export {
 } from "./db/ssh-configs.js";
 export {
   storeToolOutput,
+  storeToolOutputWithChunks,
   insertToolOutputChunk,
   getToolOutputById,
+  deleteToolOutputById,
   deleteToolOutputsBefore,
   searchToolOutputSnippets,
 } from "./db/tool-outputs.js";
