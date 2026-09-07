@@ -2,7 +2,7 @@ import {afterEach,beforeEach,expect,test} from 'bun:test';
 import Database from 'bun:sqlite';
 import {existsSync,linkSync,mkdirSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {createTempWorkspace,importFresh,setEnv} from '../helpers.js';
+import {createTempWorkspace,setEnv} from '../helpers.js';
 import {closeDatabase,getDb,initDatabase,insertToolOutputChunk,storeToolOutput} from '../../src/db.js';
 import {getUser} from '../../src/db/users.js';
 import {createWebSession} from '../../src/db/web-sessions.js';
@@ -14,9 +14,8 @@ import {withExecutionIdentity,type ExecutionIdentity} from '../../src/core/execu
 import {withChatContext} from '../../src/core/chat-context.js';
 import {getRootOwnership} from '../../src/db/session-ownership.js';
 import {updateAdminToolPolicy} from '../../src/db/family-tool-restrictions.js';
-import {createToolOutputSearchTool} from '../../src/tools/context-tools.js';
+import {requireFamilyToolAccess} from '../../src/agent-pool/family-tool-access.js';
 import * as outputs from '../../src/tool-output.js';
-import {createFakeExtensionApi} from '../extensions/fake-extension-api.js';
 import {initializeToolOutputOwnership} from '../../src/db/tool-output-ownership-schema.js';
 import {renameChatJid} from '../../src/db/chat-branches.js';
 
@@ -41,7 +40,7 @@ test('owner pruning denies tampered paths and symlinked directories without dele
 
 test('scope-specific pruning removes only current chat records and never traverses another shard',async()=>{const old=new Date(Date.now()-2*60*60*1000).toISOString(),a=identity(alice),b=identity(bob),aliceOutput=await run(a,()=>outputs.saveToolOutput('alice old',{createdAt:old})),bobOutput=await run(b,()=>outputs.saveToolOutput('bob old',{createdAt:old}));expect(await run(a,()=>outputs.pruneToolOutputs(60*60*1000))).toBe(1);expect(existsSync(aliceOutput.path)).toBe(false);expect(existsSync(bobOutput.path)).toBe(true);expect(await run(b,()=>outputs.getToolOutput(bobOutput.id))).toBeDefined();});
 
-test('live login and policy revocation deny search without exposing handle existence',async()=>{const a=identity(alice),saved=await run(a,()=>outputs.saveToolOutput('search me',{source:'read'})),tool=createToolOutputSearchTool();expect((await run(a,()=>tool.execute('x',{handle:saved.id,query:'search'}))).content[0].text).toContain('Matches');updateAdminToolPolicy(getDb(),admin,alice.userId,{confirm_username:'alice',expected_revision:0,denied_tools:['search_tool_output']});const next=identity(alice);await expect(run(next,()=>tool.execute('x',{handle:saved.id,query:'search'}))).rejects.toThrow();getDb().query('DELETE FROM web_sessions WHERE session_id=?').run(alice.authentication.sessionId);await expect(run(a,()=>outputs.searchToolOutput(saved.id,'search'))).rejects.toThrow('Tool output access denied');});
+test('live login and policy revocation deny search without exposing handle existence',async()=>{const a=identity(alice),saved=await run(a,()=>outputs.saveToolOutput('search me',{source:'read'}));expect(await run(a,()=>{requireFamilyToolAccess('search_tool_output');return outputs.searchToolOutput(saved.id,'search');})).toHaveLength(1);updateAdminToolPolicy(getDb(),admin,alice.userId,{confirm_username:'alice',expected_revision:0,denied_tools:['search_tool_output']});const next=identity(alice);await expect(run(next,()=>requireFamilyToolAccess('search_tool_output'))).rejects.toThrow();getDb().query('DELETE FROM web_sessions WHERE session_id=?').run(alice.authentication.sessionId);await expect(run(a,()=>outputs.searchToolOutput(saved.id,'search'))).rejects.toThrow('Tool output access denied');});
 
 test('scoped FTS corruption fails closed rather than reporting no match',async()=>{const a=identity(alice),saved=await run(a,()=>outputs.saveToolOutput('needle'));getDb().exec('DROP TABLE tool_outputs_fts');await expect(run(a,()=>outputs.searchToolOutput(saved.id,'needle'))).rejects.toThrow();});
 
@@ -49,4 +48,4 @@ test('scope revocation during indexed storage rolls back metadata, FTS, file and
 
 test('additive scope schema preserves legacy rows as unowned and rejects partial new scope',()=>{const db=new Database(':memory:');try{db.exec(`CREATE TABLE tool_outputs(id TEXT PRIMARY KEY,created_at TEXT NOT NULL,source TEXT,size_bytes INTEGER,line_count INTEGER,summary TEXT,path TEXT);INSERT INTO tool_outputs VALUES('legacy','now','read',1,1,'summary',NULL);`);initializeToolOutputOwnership(db);expect(db.query('SELECT owner_user_id,root_branch_id,source_branch_id,chat_jid,execution_kind FROM tool_outputs').get()).toEqual({owner_user_id:null,root_branch_id:null,source_branch_id:null,chat_jid:null,execution_kind:null});expect(()=>db.query("INSERT INTO tool_outputs(id,created_at,owner_user_id) VALUES('bad','now','owner')").run()).toThrow();}finally{db.close();}});
 
-test('semantic cache is partitioned by owner scope and never exposes paths or reuses another owner handle',async()=>{const mod=await importFresh<typeof import('../../extensions/integrations/context-mode.js')>('../../extensions/integrations/context-mode.js',import.meta.url),fake=createFakeExtensionApi();mod.default(fake.api);mod.__setSemanticToolResultSummarizerForTests(async()=>null);const handler=fake.handlers.find(v=>v.event==='tool_result')!.handler,event={toolName:'bash',content:[{type:'text',text:'shared marker\n'.repeat(500)}],details:{},input:{command:'echo'},isError:false};const first=await run(identity(alice),()=>handler(event,{})),second=await run(identity(bob),()=>handler(event,{}));expect(first.details.storedOutputId).not.toBe(second.details.storedOutputId);expect(first.details.storedOutputPath).toBeUndefined();expect(JSON.stringify(first)).not.toContain(ws.data);expect(getDb().query('SELECT owner_user_id,count(*) n FROM tool_outputs GROUP BY owner_user_id ORDER BY owner_user_id').all()).toEqual([{owner_user_id:alice.userId,n:1},{owner_user_id:bob.userId,n:1}].sort((a,b)=>a.owner_user_id.localeCompare(b.owner_user_id)));mod.__setSemanticToolResultSummarizerForTests(null);});
+test('semantic cache is partitioned by owner scope without contaminating shared config modules',async()=>{const fixturePath=new URL('../fixtures/tool-output-owner-cache.ts',import.meta.url).pathname,child=Bun.spawn([process.execPath,'--no-env-file','-e',`import { runOwnerCacheScenario } from ${JSON.stringify(fixturePath)}; await runOwnerCacheScenario();`],{env:{...process.env,PICLAW_WORKSPACE:ws.workspace,PICLAW_STORE:ws.store,PICLAW_DATA:ws.data,PICLAW_DB_IN_MEMORY:'1',PICLAW_TOOL_RESULT_COMPACTION_ENABLED:'1',PICLAW_TOOL_RESULT_COMPACTION_TOOLS:'bash',PICLAW_TOOL_OUTPUT_STORE_BYTES:'8',PICLAW_TOOL_OUTPUT_STORE_LINES:'2'},stdout:'pipe',stderr:'pipe'});const[code,stdout,stderr]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);expect(code,stderr||stdout).toBe(0);expect(stdout).toContain('OWNER_CACHE_OK');});
