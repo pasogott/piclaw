@@ -52,7 +52,7 @@ export function createOperatorRecoveryRequestHandler(database:Database,options:O
 }
 
 export async function serveOperatorRecovery(options:OperatorRecoveryServerOptions,deps:OperatorRecoveryServerDeps={}):Promise<void>{
-  let source:string|undefined;if(!deps.database){const requested=join(getStoreDir(),'messages.db'),requestedStat=lstatSync(requested);if(!requestedStat.isFile()||requestedStat.isSymbolicLink())throw new Error('Existing regular, non-symlink database required.');source=realpathSync(requested);}
+  let source:string|undefined;if(!deps.database){const requested=join(getStoreDir(),'messages.db'),requestedStat=lstatSync(requested);if(!requestedStat.isFile()||requestedStat.isSymbolicLink())throw new Error('Existing regular, non-symlink database required.');source=realpathSync(requested);if(source!==requested)throw new Error('Existing regular, non-symlink database required.');}
   const lock=acquireRuntimeLock({lockPath:join(getStoreDir(),'runtime.lock'),disabled:false,maintenance:true});let database:Database|undefined,server:ReturnType<typeof Bun.serve>|undefined,timer:ReturnType<typeof setTimeout>|undefined,watchdog:ReturnType<typeof setInterval>|undefined;
   let stop:()=>void=()=>{},active=0,stopping=false,finish:()=>void=()=>{};
   try{database=deps.database??new Database(source!,{readwrite:true,create:false,strict:true});database.exec('PRAGMA busy_timeout=0; PRAGMA foreign_keys=ON');const grant=inspect(database,options),web=deps.serverConfig??getWebServerConfig();
