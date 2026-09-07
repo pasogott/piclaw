@@ -87,6 +87,14 @@ The hook pins configured family mode, workspace, execution identity and the data
 
 This consumer performs no model call itself and writes no file, index, ledger, Dream state, timeline, cursor or notification. The SDK may still continue a turn if it catches a denied extension hook, as described above. Family startup and automatic Dream remain gated.
 
+## Shared skill provenance
+
+The family workspace policy includes a bounded metadata inventory for packaged runtime skills and shared workspace skills under `.pi/skills`. Each entry contains the declared skill name and description, provenance (`packaged` or `shared-workspace`), path relative to its provenance root, SHA-256 of `SKILL.md`, selection state and collision sources. It exposes no skill body or absolute path and performs no installation or execution.
+
+Precedence is deterministic and matches Pi's first-found rule: packaged roots are scanned first, then the workspace-shared root. If names collide, the first packaged entry is selected and every later entry is reported as unselected with its collision peers. Workspace files cannot silently shadow packaged skills in this policy. This metadata does not grant a family model skill discovery or execution authority.
+
+The inventory is limited to 2,000 directory entries, 500 discovered skills, five directory levels and 64 KiB per skill file. It mirrors Pi's `SKILL.md`, direct root Markdown, YAML frontmatter and missing-name fallback discovery rules while bounding names to 64 characters and descriptions to 1,024 characters. Paths and entries are sorted. Symlinked roots, directories or files deny the policy read. Mode and workspace are revalidated throughout; malformed/description-less skill files are ignored consistently with Pi loading, while unsafe filesystem structure fails closed. Installed skill code remains shared writable code in family mode and can affect all users when an operator enables it; application provenance is not filesystem isolation.
+
 ## Per-owner Dream source generations
 
 The internal `prepareOwnFamilyDreamSnapshot` API provides non-activating groundwork for family Dream. A recently authenticated owner can materialise transcript evidence only from session roots assigned to that immutable user ID. The query includes the owner's active and archived branches, excludes temporary `dream:` chats, and never uses JID prefixes as ownership. It reads at most 5,000 messages from the requested 1–31 day window, rejects individual content over 100 KiB and rejects a generation above 8 MiB of message text.

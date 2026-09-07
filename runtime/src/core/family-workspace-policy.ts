@@ -16,4 +16,5 @@ export interface FamilyWorkspacePolicy {
   operations: { name: string; state: 'owner-scoped' | 'admin-metadata' | 'shared-read' | 'denied'; detail: string }[];
   settings: { name: string; scope: string; availability: string }[];
   memory: { personal: string[]; family: string };
+  skills: { precedence: 'packaged-first'; entries: import('./family-skill-provenance.js').FamilySkillProvenance[] };
 }
