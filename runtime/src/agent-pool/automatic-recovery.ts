@@ -348,12 +348,21 @@ export function decideAutomaticRecovery(input: RecoveryDecisionInput): RecoveryD
         reason: "A terminal side-effect tool completed after another tool failed; preserve the mixed outcome instead of converting it to recovery success.",
       };
     }
-    if (failureCategory === "context_pressure" || input.snapshot.sawCompactionIntent) {
+    const canSafelyCompactTimedOutToolWork = input.recoveryAttemptsUsed === 0
+      && failureCategory === "timeout"
+      && input.snapshot.hasUnresolvedToolExecution === false
+      && input.snapshot.hadToolFailure === false
+      && input.snapshot.sawTerminalSideEffectToolActivity !== true
+      && input.snapshot.toolUseBudgetExceeded !== true
+      && input.snapshot.canDisableToolsForRecovery === true;
+    if (failureCategory === "context_pressure" || canSafelyCompactTimedOutToolWork || input.snapshot.sawCompactionIntent) {
       return {
         recover: true,
         classifier: "context_pressure",
         strategy: "compact_then_retry",
-        reason: "Failure looks context-related despite tool activity; compacting before retrying.",
+        reason: canSafelyCompactTimedOutToolWork
+          ? "Tool-dependent turn timed out with resolved tool state; compacting before one bounded tools-enabled continuation."
+          : "Failure looks context-related despite tool activity; compacting before retrying.",
       };
     }
     if (toolHistoryPressure) {

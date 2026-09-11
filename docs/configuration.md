@@ -399,6 +399,7 @@ Notes:
 - Blank or no-terminal-output turns are not considered successful consumption. Automatic recovery still runs first; if no terminal assistant reply is persisted, the cursor is rewound and the failed run is held for explicit retry or skip resolution.
 - `domains.recovery.automaticRecoveryTotalBudgetMs` controls the total bounded recovery window. `0` (the default) derives one-third of the effective turn timeout, bounded to 6–60 minutes and never above a positive turn timeout. A positive value remains an explicit cap; with timeout disabled, automatic mode uses 6 minutes.
 - Timeout recovery exhaustion is reported separately from provider retry exhaustion, preserving timeout as the primary cause in protected handoff metadata.
+- A first tool-dependent timeout or context-pressure failure may compact and run one tools-enabled continuation automatically. This one-use path requires explicitly resolved tool state, no tool failure, no terminal side-effect mix, no exhausted tool budget, available tool control, a successful non-skipped compaction, remaining recovery time/attempts, and an available source generation. It resumes the persisted session with a neutral continuation prompt; it never replays the original instruction.
 
 ### Smart-compaction processing method
 

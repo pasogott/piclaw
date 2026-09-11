@@ -470,7 +470,6 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
   let activeSessionCtrl = options.sessionCtrl;
   let attemptPrompt = prompt;
   let recoveryContinuationWithoutTools = false;
-  const protectedPostCompactionToolRetry = { available: Boolean(runOptions.protectedRecoveryContinuation) };
   let lastAttemptWasGenericProtected = false;
   let turnToolExecutionCount = 0;
   let recoveryAttemptsUsed = 0;
@@ -491,6 +490,14 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       ?? protectedRecoveryHandoffContext?.recoveryGeneration
       ?? 0,
   ));
+  // One successful recovery compaction may re-arm one tools-enabled attempt.
+  // The token is turn-local, consumed once, and unavailable after the final
+  // recovery generation; unresolved execution and failed/skipped compaction
+  // remain terminal.
+  const postCompactionToolRetry = {
+    available: recoveryGeneration + 1 < MAX_RECOVERY_GENERATIONS_PER_SOURCE,
+  };
+  let safeResolvedToolRetryCandidate = false;
   let protectedRecoveryToolsRequired = protectedRecoveryHandoffContext?.toolsRequired ?? false;
   let protectedRecoveryPrimaryFailure: ProtectedRecoveryPrimaryFailure | undefined = protectedRecoveryHandoffContext?.primaryFailure;
   let protectedRecoveryHasUnresolvedToolExecution =
@@ -918,6 +925,15 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
             snapshot: attempt.snapshot,
           });
 
+    safeResolvedToolRetryCandidate = recoveryAttemptsUsed === 0
+      && decision.classifier === "context_pressure"
+      && attempt.snapshot.hadToolActivity === true
+      && attempt.snapshot.hasUnresolvedToolExecution === false
+      && attempt.snapshot.hadToolFailure === false
+      && attempt.snapshot.sawTerminalSideEffectToolActivity !== true
+      && attempt.snapshot.toolUseBudgetExceeded !== true
+      && attempt.snapshot.canDisableToolsForRecovery === true;
+
     let effectiveDecision = decision;
     if (shouldAdvanceRecoveryGeneration({
       recoveryGeneration,
@@ -1256,9 +1272,10 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
         && compactionResult.compacted
         && recoveryContinuationWithoutTools
         && !protectedRecoveryHasUnresolvedToolExecution
-        && protectedPostCompactionToolRetry.available) {
+        && postCompactionToolRetry.available
+        && (runOptions.protectedRecoveryContinuation || safeResolvedToolRetryCandidate)) {
         recoveryContinuationWithoutTools = false;
-        protectedPostCompactionToolRetry.available = false;
+        postCompactionToolRetry.available = false;
         options.onInfo?.("Re-armed one tool-enabled retry after protected recovery compaction", {
           operation: "run_agent.protected_recovery_post_compaction_retry",
           chatJid,
