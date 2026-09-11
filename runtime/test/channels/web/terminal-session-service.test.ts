@@ -9,6 +9,7 @@ import {
   TerminalSessionService,
   buildShellArgs,
   findExecutable,
+  isExplicitExecutablePath,
   resolveLinuxTerminalBackend,
   resolveTerminalShell,
   spawnBunNativePty,
@@ -80,6 +81,17 @@ test("terminal shell and backend selection prefer explicit native-capable paths"
   expect(resolveLinuxTerminalBackend({ bunTerminalAvailable: false, setsidPath: null, scriptPath: null })).toBe("unavailable");
 });
 
+test("explicit executable path detection is platform-aware", () => {
+  expect(isExplicitExecutablePath("C:\\Windows\\System32\\cmd.exe", "win32")).toBeTrue();
+  expect(isExplicitExecutablePath("C:/Windows/System32/cmd.exe", "win32")).toBeTrue();
+  expect(isExplicitExecutablePath("\\\\server\\share\\pwsh.exe", "win32")).toBeTrue();
+  expect(isExplicitExecutablePath("pwsh.exe", "win32")).toBeFalse();
+  expect(isExplicitExecutablePath("/bin/bash", "linux")).toBeTrue();
+  expect(isExplicitExecutablePath("bin/bash", "linux")).toBeTrue();
+  expect(isExplicitExecutablePath("bash", "linux")).toBeFalse();
+  expect(isExplicitExecutablePath("C:\\Windows\\System32\\cmd.exe", "linux")).toBeFalse();
+});
+
 test("Windows executable discovery uses semicolon PATH entries and PATHEXT", () => {
   const root = mkdtempSync(join(tmpdir(), "piclaw-win-path-"));
   try {
@@ -93,6 +105,8 @@ test("Windows executable discovery uses semicolon PATH entries and PATHEXT", () 
     const env = { PATH: `${first};${second}`, PATHEXT: ".EXE;.CMD" };
     expect(findExecutable("pwsh", env, "win32")?.toLowerCase()).toBe(executable.toLowerCase());
     expect(resolveTerminalShell({ ...env, PICLAW_TERMINAL_SHELL: "pwsh" }, null, "win32").toLowerCase()).toBe(executable.toLowerCase());
+    expect(resolveTerminalShell({ ...env, PICLAW_TERMINAL_SHELL: join(first, "missing.exe"), COMSPEC: executable }, null, "win32").toLowerCase()).toBe(executable.toLowerCase());
+    expect(resolveTerminalShell({ PATH: first, PATHEXT: ".EXE;.CMD", COMSPEC: executable }, null, "win32").toLowerCase()).toBe(executable.toLowerCase());
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

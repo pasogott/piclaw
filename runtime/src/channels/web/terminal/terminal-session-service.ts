@@ -1,6 +1,6 @@
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { openSync, closeSync, readlinkSync, readdirSync, readFileSync, accessSync, existsSync, statSync, constants, read as fsRead, write as fsWrite } from "node:fs";
-import { delimiter, dirname, extname, isAbsolute, join } from "node:path";
+import { delimiter, dirname, extname, join, posix, win32 } from "node:path";
 import { FFIType, dlopen, ptr } from "bun:ffi";
 import type { ServerWebSocket } from "bun";
 
@@ -383,10 +383,15 @@ export function findExecutable(name: string, env: NodeJS.ProcessEnv = process.en
   return null;
 }
 
+export function isExplicitExecutablePath(value: string, platform = process.platform): boolean {
+  if (platform === "win32") return win32.isAbsolute(value) || value.includes("/") || value.includes("\\");
+  return posix.isAbsolute(value) || value.includes("/");
+}
+
 function resolveExecutableCandidate(value: string | null | undefined, env: NodeJS.ProcessEnv, platform = process.platform): string | null {
   const candidate = String(value || "").trim();
   if (!candidate) return null;
-  if (!isAbsolute(candidate) && !candidate.includes("/") && !candidate.includes("\\")) return findExecutable(candidate, env, platform);
+  if (!isExplicitExecutablePath(candidate, platform)) return findExecutable(candidate, env, platform);
   try {
     accessSync(candidate, constants.X_OK);
     return candidate;
