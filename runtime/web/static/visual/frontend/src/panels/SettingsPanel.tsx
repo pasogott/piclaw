@@ -157,9 +157,8 @@ export function SettingsPanel() {
     );
   }
 
-  // Split panes: built-in (order < 100) vs addon (order >= 100)
-  const builtinPanes = allPanes.filter(p => (p.order ?? 500) < 100);
-  const addonPanes = allPanes.filter(p => (p.order ?? 500) >= 100);
+  const builtinPanes = allPanes.filter(p => p.source !== "addon");
+  const addonPanes = allPanes.filter(p => p.source === "addon");
 
   const activePane = allPanes.find(p => p.id === activeCategory.value)
     ?? allPanes[0];
