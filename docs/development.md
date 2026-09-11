@@ -53,7 +53,9 @@ Before pushing a feature/fix branch or opening a pull request:
 3. run relevant package/static/workflow-contract checks;
 4. run `make ci-fast` on the final candidate.
 
-Do not add temporary/per-feature workflows, manually dispatch Actions, or repeatedly push speculative fixes to use hosted CI as an iterative or ad-hoc test runner. Once local validation is complete, push the immutable candidate and use the existing automatic PR check as final hosted evidence.
+Do not add temporary/per-feature workflows, manually dispatch Actions, or repeatedly push speculative fixes to use hosted CI as an iterative or ad-hoc test runner. Once local validation is complete, push the immutable candidate; the existing automatic PR check provides supplementary hosted evidence.
+
+For repository-owned PRs authored and validated by the project, explicit merge authorization plus passing required local gates is sufficient. Merge without waiting for hosted CI. External/untrusted contributions, or behavior that cannot be reproduced locally (for example a platform-specific runtime path), may still require hosted evidence before merge. Automatic PR/main checks may finish after an authorized merge; investigate and remediate failures without making that wait the default gate for locally validated project PRs.
 
 Manual workflow dispatch remains available only for explicitly authorized procedures already documented under release or operations (for example a required release-candidate UX run). It must not be used to bypass local feature validation.
 
