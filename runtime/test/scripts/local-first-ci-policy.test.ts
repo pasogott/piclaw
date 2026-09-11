@@ -13,9 +13,23 @@ test("repository policy requires local completion before hosted PR validation", 
     expect(text).toContain("make ci-fast");
     expect(text).toMatch(/locally complete|local validation is complete/);
     expect(text).toContain("existing automatic pr check");
+    expect(text).toContain("supplementary hosted evidence");
     expect(text).toMatch(/hosted ci|github actions/);
     expect(text).toContain("iterative");
     expect(text).toMatch(/not .*development loop|not .*iterative|do not .*iterative/);
+  }
+});
+
+test("repository-owned locally validated PRs merge without waiting for hosted CI", () => {
+  for (const policy of [agents, development]) {
+    const text = normalize(policy);
+    expect(text).toMatch(/repository-owned prs?/);
+    expect(text).toMatch(/explicit .*merge authorization|explicit merge authorization/);
+    expect(text).toMatch(/passing .*local gates|passing required local gates/);
+    expect(text).toContain("merge without waiting for hosted ci");
+    expect(text).toMatch(/external\/untrusted|external or untrusted/);
+    expect(text).toContain("platform-specific");
+    expect(text).toMatch(/checks may finish after an authorized merge/);
   }
 });
 

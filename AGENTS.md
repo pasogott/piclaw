@@ -32,7 +32,10 @@
 - Complete iterative validation locally: use focused tests through the isolated launcher, host-independent fixtures for platform/policy variants, relevant package tests, static/workflow-contract checks, and `make ci-fast` before pushing.
 - Do **not** add temporary or per-feature GitHub Actions workflows to obtain development evidence that can be produced locally.
 - Do **not** dispatch GitHub Actions manually or use hosted CI as an iterative/ad-hoc test runner.
-- Push/open a PR only after the candidate is locally complete. Use the repository's existing automatic PR check as final hosted evidence, not as the development loop.
+- Push/open a PR only after the candidate is locally complete. The repository's existing automatic PR check is supplementary hosted evidence, not the development loop.
+- For repository-owned PRs that we authored and validated locally, explicit user merge authorization plus passing required local gates is sufficient: merge without waiting for hosted CI.
+- External/untrusted PRs, or changes whose defining behavior could not be reproduced locally (for example platform-specific behavior), may still require hosted checks before merge.
+- Automatic PR/main checks may finish after an authorized merge; inspect failures and remediate them, but do not make waiting for them the default gate for our own locally validated PRs.
 - Manual workflow dispatch is reserved for explicitly authorized, documented release or operational procedures; it is not an exception for feature testing.
 
 ## Release process
