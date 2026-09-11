@@ -56,7 +56,7 @@ import { writeMergedSessionArchive } from "../session-archive.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const { createMcpAdapter } = require("pi-mcp-adapter") as {
-  createMcpAdapter(options: { config: unknown }): ExtensionFactory;
+  createMcpAdapter(options: { config: unknown; initializeOnLoad?: boolean }): ExtensionFactory;
 };
 const AGENT_DIR = getPiclawAgentDir();
 const EMPTY_STRING_ARRAY: string[] = [];
@@ -631,7 +631,9 @@ export async function createSessionInDir(
         modelRuntime: options.modelRuntime,
         chatJid: options.chatJid,
       }),
-      createMcpAdapter({ config: getPreparedMcpConfig() }),
+      // Piclaw synchronously emits the initial session_start event. Let that
+      // session own eager servers instead of spawning a superseded load-time owner.
+      createMcpAdapter({ config: getPreparedMcpConfig(), initializeOnLoad: false }),
     ];
     const resourceLoader = new DefaultResourceLoader({
       cwd,
