@@ -39,7 +39,7 @@ describe("web agent status helpers", () => {
       chat_jid: "web:default",
       data: null,
       extension_working: null,
-      addon_api: { degraded: false, entries: [] },
+      addon_api: { degraded: false, entries: [], transportCounts: { direct_handler: 0, legacy_slash_command: 0 } },
       mcp_startup: { degraded: false, servers: [] },
     });
   });
@@ -85,7 +85,7 @@ describe("web agent status helpers", () => {
       chat_jid: "web:ux",
       data: null,
       extension_working: null,
-      addon_api: { degraded: false, entries: [] },
+      addon_api: { degraded: false, entries: [], transportCounts: { direct_handler: 0, legacy_slash_command: 0 } },
       mcp_startup: { degraded: false, servers: [] },
     });
   });
