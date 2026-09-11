@@ -1027,19 +1027,22 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
         attempt.output.toolStepsBudget = terminalBudgetFailure.toolStepsBudget;
         attempt.output.nextAction = terminalBudgetFailure.nextAction;
       }
+      const timeoutRecoveryExhausted = recoveryAttemptsUsed > 0
+        && attempt.output.failureCategory === "timeout";
       const providerRetryExhausted = recoveryAttemptsUsed > 0
         && (attempt.output.failureCategory === "rate_limit"
           || attempt.output.failureCategory === "network"
-          || attempt.output.failureCategory === "timeout"
           || attempt.output.failureCategory === "provider"
           || attempt.output.failureCategory === "provider_unavailable"
           || attempt.output.failureCategory === "unknown");
       if (runOptions.protectedRecoveryContinuation
-        && (protectedRecoveryHasUnresolvedToolExecution || providerRetryExhausted)) {
+        && (protectedRecoveryHasUnresolvedToolExecution || timeoutRecoveryExhausted || providerRetryExhausted)) {
         attempt.output.protectedRecoveryHandoff = buildHandoffMetadata(
           protectedRecoveryHasUnresolvedToolExecution
             ? "unresolved_tool_execution"
-            : "provider_retry_exhausted",
+            : timeoutRecoveryExhausted
+              ? "timeout_recovery_exhausted"
+              : "provider_retry_exhausted",
         );
       }
       return attempt.output;

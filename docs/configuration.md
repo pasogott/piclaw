@@ -397,6 +397,8 @@ Notes:
 - In pressure mode, the main-session pool clamps to `PICLAW_MAIN_SESSION_PRESSURE_POOL_MAX_SIZE` (default `1`) and uses the shorter `PICLAW_MAIN_SESSION_PRESSURE_IDLE_TTL_MS` (default `60000`).
 - Oversized persisted `toolResult` payloads are sanitized before session resume and at append-time so inline image/blob payloads do not keep re-accumulating inside session files.
 - Blank or no-terminal-output turns are not considered successful consumption. Automatic recovery still runs first; if no terminal assistant reply is persisted, the cursor is rewound and the failed run is held for explicit retry or skip resolution.
+- `domains.recovery.automaticRecoveryTotalBudgetMs` controls the total bounded recovery window. `0` (the default) derives one-third of the effective turn timeout, bounded to 6–60 minutes and never above a positive turn timeout. A positive value remains an explicit cap; with timeout disabled, automatic mode uses 6 minutes.
+- Timeout recovery exhaustion is reported separately from provider retry exhaustion, preserving timeout as the primary cause in protected handoff metadata.
 
 ### Smart-compaction processing method
 

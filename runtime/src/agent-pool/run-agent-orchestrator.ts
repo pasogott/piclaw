@@ -1177,10 +1177,7 @@ async function runAgentPromptWithIdentity(
         return attempted.output;
       }finally{restoreRetries();}
     }
-    const baseRecoveryConfig = getAutomaticRecoveryConfig(retrySettings);
-    const recoveryConfig = timeoutMs > 0
-      ? { ...baseRecoveryConfig, totalBudgetMs: Math.min(baseRecoveryConfig.totalBudgetMs, timeoutMs) }
-      : baseRecoveryConfig;
+    const recoveryConfig = getAutomaticRecoveryConfig(retrySettings, timeoutMs);
 
     const openRouterOutputBudgetState = createOpenRouterOutputBudgetState(chatJid, runOptions.turnId);
     const runRecoveryPhaseWithOutputBudget = async (): Promise<AgentOutput> => await runAgentRecoveryPhase({
