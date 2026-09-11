@@ -21,7 +21,12 @@ import { getWorkspaceDir as getConfiguredWorkspaceDir } from "../../../core/conf
 import { requestGracefulShutdown } from "../../../runtime/shutdown-registry.js";
 import { createLogger } from "../../../utils/logger.js";
 import { handleRegisteredAddonConfigApiRequest } from "./addon-config-api.js";
-import { recordAddonApiFailure, recordAddonApiSuccess } from "../../../addons/addon-api-health.js";
+import {
+  recordAddonApiFailure,
+  recordAddonApiSuccess,
+  recordAddonApiTransportSelection,
+  type AddonConfigApiTransport,
+} from "../../../addons/addon-api-health.js";
 
 const DEFAULT_CATALOG_URL = "https://raw.githubusercontent.com/rcarmo/piclaw-addons/main/catalog.json";
 const DEFAULT_CATALOG_URLS = [DEFAULT_CATALOG_URL] as const;
@@ -799,6 +804,8 @@ export async function handleAddonConfigApiRequest(
   const method = req.method.toUpperCase();
   const directResponse = await handleRegisteredAddonConfigApiRequest(req, parsed.addonId, parsed.action, json);
   if (directResponse) {
+    const transport: AddonConfigApiTransport = "direct_handler";
+    recordAddonApiTransportSelection({ addonId: parsed.addonId, action: parsed.action, chatJid, method, path: pathname, transport });
     if (directResponse.status >= 400) {
       recordAddonApiFailure({
         addonId: parsed.addonId,
@@ -806,14 +813,18 @@ export async function handleAddonConfigApiRequest(
         chatJid,
         method,
         path: pathname,
+        transport,
         status: directResponse.status,
         error: `HTTP ${directResponse.status}`,
       });
     } else {
-      recordAddonApiSuccess({ addonId: parsed.addonId, action: parsed.action, chatJid, method, path: pathname });
+      recordAddonApiSuccess({ addonId: parsed.addonId, action: parsed.action, chatJid, method, path: pathname, transport });
     }
     return directResponse;
   }
+
+  const transport: AddonConfigApiTransport = "legacy_slash_command";
+  recordAddonApiTransportSelection({ addonId: parsed.addonId, action: parsed.action, chatJid, method, path: pathname, transport });
 
   const fail = (body: unknown, status: number, error: unknown): Response => {
     recordAddonApiFailure({
@@ -822,6 +833,7 @@ export async function handleAddonConfigApiRequest(
       chatJid,
       method,
       path: pathname,
+      transport,
       status,
       error,
     });
@@ -841,7 +853,7 @@ export async function handleAddonConfigApiRequest(
 
   try {
     const payloadJson = parseAddonCommandJsonPayload(parsed.addonId, result);
-    recordAddonApiSuccess({ addonId: parsed.addonId, action: parsed.action, chatJid, method, path: pathname });
+    recordAddonApiSuccess({ addonId: parsed.addonId, action: parsed.action, chatJid, method, path: pathname, transport });
     return json(payloadJson);
   } catch (error) {
     return fail({ error: String((error as Error)?.message || error) }, 502, error);

@@ -178,6 +178,8 @@ registerAddonConfigApi?.("my-addon", "config", {
 
 The runtime lazily loads installed add-on extension entries on first config request, so the settings API works without routing through extension slash commands.
 
+`/agent/status` reports add-on config API transport use under `addon_api.transportCounts`, split into `direct_handler` and `legacy_slash_command`. Degraded endpoint entries include the selected `transport`. Structured `addon_api.transport_selected` logs contain only the add-on ID, action, chat ID, HTTP method, route path and transport; request payloads and configuration values are excluded.
+
 ### SettingsPaneDefinition
 
 | Field | Type | Required | Description |
