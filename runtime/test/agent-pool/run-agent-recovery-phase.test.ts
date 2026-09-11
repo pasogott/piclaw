@@ -859,6 +859,164 @@ describe("runAgentRecoveryPhase", () => {
     ]));
   });
 
+  for (const scenario of [
+    { name: "timeout", failureCategory: "timeout" as const, error: "provider timed out before finalization", sawCompactionIntent: false },
+    { name: "context pressure", failureCategory: "context_pressure" as const, error: "maximum context length exceeded", sawCompactionIntent: true },
+  ]) {
+    test(`initial ${scenario.name} recovery compacts then runs one tools-enabled continuation`, async () => {
+      let activeTools = ["read", "bash"];
+      const activeToolSets: string[][] = [];
+      const calls: Array<{ prompt: string; activeTools: string[] }> = [];
+      let compactCalls = 0;
+      const sessionCtrl: SessionWithToolControl = {
+        getActiveToolNames: () => [...activeTools],
+        setActiveToolsByName: (names) => {
+          activeTools = [...names];
+          activeToolSets.push([...names]);
+        },
+      };
+
+      const result = await runAgentRecoveryPhase({
+        prompt: "finish the tool-dependent task",
+        chatJid: `web:test-initial-${scenario.name.replace(/\s+/g, "-")}`,
+        session: { compact: async () => { compactCalls += 1; return {}; } } as any,
+        sessionCtrl,
+        timeoutMs: 0,
+        startTime: Date.now(),
+        modelLabel: "test/model",
+        recoveryConfig: recoveryConfig(),
+        runOptions: { recoveryGeneration: 0, recoverySourceId: `source-${scenario.name}` },
+        logsDir: "/tmp/nonexistent-piclaw-test-logs",
+        clearAttachments: () => {},
+        runPromptAttempt: async (prompt) => {
+          calls.push({ prompt, activeTools: [...activeTools] });
+          if (calls.length === 1) {
+            return attempt({
+              output: { ...output("error", scenario.error), failureCategory: scenario.failureCategory },
+              snapshot: {
+                hadToolActivity: true,
+                hadPartialOutput: true,
+                hadCompletedTurnOutput: false,
+                hadTerminalTurnOutput: false,
+                sawCompactionIntent: scenario.sawCompactionIntent,
+                canDisableToolsForRecovery: true,
+                hasUnresolvedToolExecution: false,
+                hadToolFailure: false,
+                sawTerminalSideEffectToolActivity: false,
+                toolUseBudgetExceeded: false,
+                toolExecutionCount: 2,
+              },
+              promptWasPersisted: true,
+              timedOut: scenario.failureCategory === "timeout",
+              toolExecutionCount: 2,
+            });
+          }
+          return attempt({
+            output: output("success", undefined, "finished automatically"),
+            snapshot: {
+              hadToolActivity: false,
+              hadPartialOutput: false,
+              hadCompletedTurnOutput: true,
+              hadTerminalTurnOutput: true,
+              sawCompactionIntent: false,
+            },
+            promptWasPersisted: true,
+            toolExecutionCount: 2,
+          });
+        },
+      });
+
+      expect(result).toMatchObject({ status: "success", result: "finished automatically", recovery: { attemptsUsed: 1, recovered: true } });
+      expect(compactCalls).toBe(1);
+      expect(calls).toEqual([
+        { prompt: "finish the tool-dependent task", activeTools: ["read", "bash"] },
+        { prompt: RECOVERY_CONTINUATION_PROMPT, activeTools: ["read", "bash"] },
+      ]);
+      expect(activeToolSets).toEqual([]);
+    });
+  }
+
+  for (const unsafe of [
+    { name: "unresolved execution", snapshot: { hasUnresolvedToolExecution: true, hadToolFailure: false, sawTerminalSideEffectToolActivity: false, toolUseBudgetExceeded: false, canDisableToolsForRecovery: true } },
+    { name: "tool failure", snapshot: { hasUnresolvedToolExecution: false, hadToolFailure: true, sawTerminalSideEffectToolActivity: false, toolUseBudgetExceeded: false, canDisableToolsForRecovery: true } },
+    { name: "terminal side effect", snapshot: { hasUnresolvedToolExecution: false, hadToolFailure: false, sawTerminalSideEffectToolActivity: true, toolUseBudgetExceeded: false, canDisableToolsForRecovery: true } },
+    { name: "tool budget exhaustion", snapshot: { hasUnresolvedToolExecution: false, hadToolFailure: false, sawTerminalSideEffectToolActivity: false, toolUseBudgetExceeded: true, canDisableToolsForRecovery: true } },
+    { name: "missing tool control", snapshot: { hasUnresolvedToolExecution: false, hadToolFailure: false, sawTerminalSideEffectToolActivity: false, toolUseBudgetExceeded: false, canDisableToolsForRecovery: false } },
+  ]) {
+    test(`does not auto re-arm tools after ${unsafe.name}`, async () => {
+      let calls = 0;
+      const result = await runAgentRecoveryPhase({
+        prompt: "finish bounded work",
+        chatJid: `web:test-unsafe-${unsafe.name.replace(/\s+/g, "-")}`,
+        session: { compact: async () => ({}) } as any,
+        sessionCtrl: { getActiveToolNames: () => ["read"], setActiveToolsByName: () => {} },
+        timeoutMs: 0,
+        startTime: Date.now(),
+        modelLabel: "test/model",
+        recoveryConfig: recoveryConfig(),
+        runOptions: {},
+        logsDir: "/tmp/nonexistent-piclaw-test-logs",
+        clearAttachments: () => {},
+        runPromptAttempt: async () => {
+          calls += 1;
+          return attempt({
+            output: { ...output("error", "maximum context length exceeded"), failureCategory: "context_pressure" },
+            snapshot: {
+              hadToolActivity: true,
+              hadPartialOutput: true,
+              hadCompletedTurnOutput: false,
+              hadTerminalTurnOutput: false,
+              sawCompactionIntent: true,
+              toolExecutionCount: 1,
+              ...unsafe.snapshot,
+            },
+            promptWasPersisted: true,
+            toolExecutionCount: 1,
+          });
+        },
+      });
+      expect(calls).toBe(1);
+      expect(result).toMatchObject({ status: "error", requiresToolEnabledContinuation: true });
+    });
+  }
+
+  test("final recovery generation cannot re-arm an initial tools-enabled continuation", async () => {
+    let calls = 0;
+    const result = await runAgentRecoveryPhase({
+      prompt: "finish bounded work",
+      chatJid: "web:test-initial-generation-exhausted",
+      session: { compact: async () => ({}) } as any,
+      sessionCtrl: { getActiveToolNames: () => ["read"], setActiveToolsByName: () => {} },
+      timeoutMs: 0,
+      startTime: Date.now(),
+      modelLabel: "test/model",
+      recoveryConfig: recoveryConfig(),
+      runOptions: { recoveryGeneration: MAX_RECOVERY_GENERATIONS_PER_SOURCE - 1 },
+      logsDir: "/tmp/nonexistent-piclaw-test-logs",
+      clearAttachments: () => {},
+      runPromptAttempt: async () => {
+        calls += 1;
+        return attempt({
+          output: { ...output("error", "maximum context length exceeded"), failureCategory: "context_pressure" },
+          snapshot: {
+            hadToolActivity: true,
+            hadPartialOutput: true,
+            hadCompletedTurnOutput: false,
+            hadTerminalTurnOutput: false,
+            sawCompactionIntent: true,
+            hasUnresolvedToolExecution: false,
+            toolExecutionCount: 1,
+          },
+          promptWasPersisted: true,
+          toolExecutionCount: 1,
+        });
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(result).toMatchObject({ status: "error", requiresToolEnabledContinuation: true });
+  });
+
   test("a benign compaction skip does not re-arm a protected tool-enabled retry", async () => {
     let calls = 0;
     let activeTools = ["read", "bash"];
