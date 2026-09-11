@@ -186,11 +186,11 @@ The runtime lazily loads installed add-on extension entries on first config requ
 | `label` | string | yes | Nav label |
 | `icon` | VNode | yes | SVG icon (preact html template) |
 | `component` | Component | yes | Preact component `(props: { filter?: string }) => VNode` |
-| `order` | number | no | Sort order (default 500; built-in 10-90) |
+| `order` | number | no | Deprecated compatibility field; ignored for add-on navigation |
 | `searchable` | boolean | no | Show filter in title bar |
 | `searchPlaceholder` | string | no | Filter placeholder text |
 
-Panes self-register on import. The dialog discovers them via `getRegisteredSettingsPanes()` and merges them with built-in panes sorted by order.
+Panes self-register on import. Both web skins list add-on panes alphabetically by label, using `id` to break ties; letter case does not affect either comparison. Core settings sections retain their fixed built-in order. The `order` field remains accepted so existing add-on bundles keep loading, but it does not control add-on navigation.
 
 ## Add-on Management
 
