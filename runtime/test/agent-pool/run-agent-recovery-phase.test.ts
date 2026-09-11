@@ -362,6 +362,51 @@ describe("runAgentRecoveryPhase", () => {
     });
   });
 
+  test("classifies protected timeout exhaustion separately from provider retries", async () => {
+    let calls = 0;
+    const result = await runAgentRecoveryPhase({
+      prompt: "continue protected work",
+      chatJid: "web:test-recovery-timeout-exhausted",
+      session: {} as any,
+      sessionCtrl: { getActiveToolNames: () => ["read"], setActiveToolsByName: () => {} },
+      timeoutMs: 0,
+      startTime: Date.now(),
+      modelLabel: "test/model",
+      recoveryConfig: recoveryConfig({ maxAttempts: 1 }),
+      runOptions: { protectedRecoveryContinuation: true },
+      logsDir: "/tmp/nonexistent-piclaw-test-logs",
+      clearAttachments: () => {},
+      runPromptAttempt: async () => {
+        calls += 1;
+        return attempt({
+          output: { ...output("error", "provider timed out before finalization"), failureCategory: "timeout" },
+          snapshot: {
+            hadToolActivity: false,
+            hadPartialOutput: true,
+            hadCompletedTurnOutput: false,
+            hadTerminalTurnOutput: false,
+            sawCompactionIntent: false,
+            canDisableToolsForRecovery: true,
+            hasUnresolvedToolExecution: false,
+          },
+          promptWasPersisted: true,
+        });
+      },
+    });
+
+    expect(calls).toBe(2);
+    expect(result).toMatchObject({
+      status: "error",
+      failureCategory: "timeout",
+      protectedRecoveryHandoff: {
+        reason: "timeout_recovery_exhausted",
+        compaction: "not_attempted",
+        retryable: true,
+        recoveryAttempts: 1,
+      },
+    });
+  });
+
   test("keeps unresolved tool evidence ahead of protected recovery budget exhaustion", async () => {
     const sessionCtrl: SessionWithToolControl = {
       getActiveToolNames: () => ["read"],
