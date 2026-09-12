@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getDataDir, getWorkspaceDir as getConfiguredWorkspaceDir } from "../core/config.js";
@@ -14,6 +14,11 @@ import {
   type ChatTransport,
 } from "../extensions/chat-transport-registry.js";
 import { resetRuntimeStreamSessionsForTests, runtimeStreamSessions } from "./runtime-stream-sessions.js";
+import {
+  listInstalledAddonPackageDirs,
+  readInstalledAddonPackage,
+  resolveAddonPackageEntries,
+} from "./package-entries.js";
 import {
   freezeExternalAddonRoutes,
   registerExternalAddonRoute,
@@ -119,7 +124,7 @@ export interface PiclawRuntimeAddonApi {
   streamSessions: typeof runtimeStreamSessions;
 }
 
-type AddonPackageManifest = {
+type RuntimeAddonPackageManifest = {
   name?: string;
   pi?: {
     runtime?: {
@@ -183,23 +188,6 @@ function getWorkspaceDir(): string {
   return getConfiguredWorkspaceDir();
 }
 
-function listAddonPackageDirs(addonsNodeModulesDir: string): string[] {
-  if (!existsSync(addonsNodeModulesDir)) return [];
-  const results: string[] = [];
-  for (const entry of readdirSync(addonsNodeModulesDir, { withFileTypes: true })) {
-    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-    const entryPath = join(addonsNodeModulesDir, entry.name);
-    if (entry.name.startsWith("@")) {
-      for (const scoped of readdirSync(entryPath, { withFileTypes: true })) {
-        if (scoped.isDirectory() || scoped.isSymbolicLink()) results.push(join(entryPath, scoped.name));
-      }
-      continue;
-    }
-    results.push(entryPath);
-  }
-  return results;
-}
-
 export type AddonRuntimeEntryLoad = "lazy" | "startup";
 
 export interface InstalledAddonRuntimeEntry {
@@ -212,31 +200,17 @@ export function getInstalledAddonRuntimeEntries(workspaceDir = getWorkspaceDir()
   const addonsNodeModulesDir = join(workspaceDir, ".pi", "extensions", "node_modules");
   const runtimeEntries: InstalledAddonRuntimeEntry[] = [];
 
-  for (const packageDir of listAddonPackageDirs(addonsNodeModulesDir)) {
-    const packageJsonPath = join(packageDir, "package.json");
-    if (!existsSync(packageJsonPath)) continue;
-
-    try {
-      const manifest = JSON.parse(readFileSync(packageJsonPath, "utf8")) as AddonPackageManifest;
-      const declared = Array.isArray(manifest?.pi?.runtime?.entries)
-        ? manifest.pi.runtime.entries.filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
-        : [];
-      const load: AddonRuntimeEntryLoad = manifest?.pi?.runtime?.load === "startup" ? "startup" : "lazy";
-      const realPackageDir = realpathSync(packageDir);
-      for (const relativePath of declared) {
-        const fullPath = resolve(packageDir, relativePath);
-        if (fullPath !== packageDir && !fullPath.startsWith(`${packageDir}${sep}`)) continue;
-        if (!existsSync(fullPath) || !statSync(fullPath).isFile()) continue;
-        const realEntryPath = realpathSync(fullPath);
-        if (realEntryPath !== realPackageDir && !realEntryPath.startsWith(`${realPackageDir}${sep}`)) continue;
-        runtimeEntries.push({
-            packageName: typeof manifest.name === "string" && manifest.name.trim() ? manifest.name.trim() : packageDir.split(/[\\/]/).pop() || "unknown",
-            path: fullPath,
-            load,
-          });
-      }
-    } catch {
-      continue;
+  for (const packageDir of listInstalledAddonPackageDirs(addonsNodeModulesDir)) {
+    const addonPackage = readInstalledAddonPackage(packageDir);
+    if (!addonPackage) continue;
+    const manifest = addonPackage.manifest as RuntimeAddonPackageManifest;
+    const load: AddonRuntimeEntryLoad = manifest.pi?.runtime?.load === "startup" ? "startup" : "lazy";
+    for (const entryPath of resolveAddonPackageEntries(packageDir, manifest.pi?.runtime?.entries)) {
+      runtimeEntries.push({
+        packageName: typeof manifest.name === "string" && manifest.name.trim() ? manifest.name.trim() : packageDir.split(/[\\/]/).pop() || "unknown",
+        path: entryPath,
+        load,
+      });
     }
   }
 

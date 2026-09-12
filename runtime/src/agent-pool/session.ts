@@ -52,6 +52,11 @@ import { createLogger, debugSuppressedError } from "../utils/logger.js";
 import type { CompactionStreamFn } from "../extensions/smart-compaction/stream-complete.js";
 import { normalizeLlmContext } from "./llm-context-normalizer.js";
 import { writeMergedSessionArchive } from "../session-archive.js";
+import {
+  listInstalledAddonPackageDirs,
+  readInstalledAddonPackage,
+  resolveAddonPackageEntries,
+} from "../addons/package-entries.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -196,56 +201,13 @@ function ensureWorkspaceExtensionNodeModulesLink(nodeModulesDir: string | null):
   ensuredWorkspaceExtensionLinkKey = ensureKey;
 }
 
-type AddonPackageManifest = {
-  name?: string;
-  main?: string;
-  pi?: {
-    extensions?: string[];
-  };
-};
-
-function listAddonPackageDirs(addonsNodeModulesDir: string): string[] {
-  if (!existsSync(addonsNodeModulesDir)) return EMPTY_STRING_ARRAY;
-  const results: string[] = [];
-  for (const entry of readdirSync(addonsNodeModulesDir, { withFileTypes: true })) {
-    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-    const entryPath = join(addonsNodeModulesDir, entry.name);
-    if (!existsSync(entryPath)) continue; // broken symlink
-    if (entry.name.startsWith("@")) {
-      try {
-        for (const scoped of readdirSync(entryPath, { withFileTypes: true })) {
-          if (!scoped.isDirectory() && !scoped.isSymbolicLink()) continue;
-          const scopedPath = join(entryPath, scoped.name);
-          if (existsSync(scopedPath)) results.push(scopedPath);
-        }
-      } catch (error) {
-        debugSuppressedError(log, "Skipping unreadable scoped directory during extension scan.", error, { scopedDir: entryPath });
-      }
-      continue;
-    }
-    results.push(entryPath);
-  }
-  return results;
-}
-
 export function getInstalledAddonExtensionPaths(workspaceDir = getWorkspaceDir()): string[] {
   const addonsNodeModulesDir = join(workspaceDir, ".pi", "extensions", "node_modules");
   const extensionPaths: string[] = [];
-  for (const packageDir of listAddonPackageDirs(addonsNodeModulesDir)) {
-    const packageJsonPath = join(packageDir, "package.json");
-    if (!existsSync(packageJsonPath)) continue;
-    try {
-      const manifest = JSON.parse(readFileSync(packageJsonPath, "utf8")) as AddonPackageManifest;
-      const declared = Array.isArray(manifest?.pi?.extensions) && manifest.pi?.extensions?.length
-        ? manifest.pi.extensions
-        : [];
-      for (const relativePath of declared) {
-        const fullPath = join(packageDir, relativePath);
-        if (existsSync(fullPath) && statSync(fullPath).isFile()) extensionPaths.push(fullPath);
-      }
-    } catch {
-      continue;
-    }
+  for (const packageDir of listInstalledAddonPackageDirs(addonsNodeModulesDir)) {
+    const addonPackage = readInstalledAddonPackage(packageDir);
+    if (!addonPackage) continue;
+    extensionPaths.push(...resolveAddonPackageEntries(packageDir, addonPackage.manifest.pi?.extensions));
   }
   return extensionPaths;
 }

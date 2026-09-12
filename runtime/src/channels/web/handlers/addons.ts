@@ -22,6 +22,11 @@ import { requestGracefulShutdown } from "../../../runtime/shutdown-registry.js";
 import { createLogger } from "../../../utils/logger.js";
 import { handleRegisteredAddonConfigApiRequest } from "./addon-config-api.js";
 import {
+  listInstalledAddonPackageDirs,
+  readInstalledAddonPackage,
+  resolveAddonPackageEntries,
+} from "../../../addons/package-entries.js";
+import {
   recordAddonApiFailure,
   recordAddonApiSuccess,
   recordAddonApiTransportSelection,
@@ -206,23 +211,6 @@ function getInstalledVersion(packageName: string): string | null {
   return null;
 }
 
-function listAddonPackageDirs(addonsNodeModulesDir: string): string[] {
-  if (!existsSync(addonsNodeModulesDir)) return [];
-  const results: string[] = [];
-  for (const entry of readdirSync(addonsNodeModulesDir, { withFileTypes: true })) {
-    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-    const entryPath = join(addonsNodeModulesDir, entry.name);
-    if (entry.name.startsWith('@')) {
-      for (const scoped of readdirSync(entryPath, { withFileTypes: true })) {
-        if (scoped.isDirectory() || scoped.isSymbolicLink()) results.push(join(entryPath, scoped.name));
-      }
-      continue;
-    }
-    results.push(entryPath);
-  }
-  return results;
-}
-
 function getInstalledAddonPackageDir(packageName: string, workspaceDir = getWorkspaceDir()): string | null {
   const addonsNodeModulesDir = join(workspaceDir, '.pi', 'extensions', 'node_modules');
   const packageDir = join(addonsNodeModulesDir, packageName);
@@ -232,28 +220,19 @@ function getInstalledAddonPackageDir(packageName: string, workspaceDir = getWork
 export function getInstalledAddonWebEntries(workspaceDir = getWorkspaceDir()): InstalledAddonWebEntry[] {
   const addonsNodeModulesDir = join(workspaceDir, '.pi', 'extensions', 'node_modules');
   const entries: InstalledAddonWebEntry[] = [];
-  for (const packageDir of listAddonPackageDirs(addonsNodeModulesDir)) {
-    const packageJsonPath = join(packageDir, 'package.json');
-    if (!existsSync(packageJsonPath)) continue;
-    try {
-      const manifest = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as AddonPackageManifest;
-      const packageName = typeof manifest.name === 'string' ? manifest.name.trim() : '';
-      const webEntries = Array.isArray(manifest?.pi?.web?.entries)
-        ? manifest.pi.web.entries.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
-        : [];
-      if (!packageName || webEntries.length === 0) continue;
-      for (const entry of webEntries) {
-        const normalizedEntry = entry.replace(/^\.\//, '');
-        const fullPath = join(packageDir, normalizedEntry);
-        if (!existsSync(fullPath)) continue;
-        entries.push({
-          packageName,
-          entry: normalizedEntry,
-          url: `/agent/addons/assets/${encodeURIComponent(packageName)}/${normalizedEntry.split('/').map((segment) => encodeURIComponent(segment)).join('/')}`,
-        });
-      }
-    } catch {
-      continue;
+  for (const packageDir of listInstalledAddonPackageDirs(addonsNodeModulesDir)) {
+    const addonPackage = readInstalledAddonPackage(packageDir);
+    if (!addonPackage) continue;
+    const manifest = addonPackage.manifest as AddonPackageManifest;
+    const packageName = typeof manifest.name === 'string' ? manifest.name.trim() : '';
+    if (!packageName) continue;
+    for (const fullPath of resolveAddonPackageEntries(packageDir, manifest.pi?.web?.entries)) {
+      const normalizedEntry = fullPath.slice(packageDir.length + 1).split('\\').join('/');
+      entries.push({
+        packageName,
+        entry: normalizedEntry,
+        url: `/agent/addons/assets/${encodeURIComponent(packageName)}/${normalizedEntry.split('/').map((segment) => encodeURIComponent(segment)).join('/')}`,
+      });
     }
   }
   return entries;

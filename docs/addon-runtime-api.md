@@ -28,7 +28,7 @@ Declare runtime entries in the package manifest:
 - `"startup"` loads after Piclaw has started its WebChannel and wired the runtime messaging handlers, before chat warmup and crash recovery resume work. Use it for chat transports and other process-wide services that must exist before the first agent session.
 - `"lazy"` loads when a status panel, config action or Adaptive Card intent first needs runtime contributions. It is the default when `load` is omitted and preserves existing add-on behaviour.
 
-Entry paths must resolve to files inside the installed add-on package. Piclaw rejects lexical path traversal and symlinks that escape the package.
+Piclaw applies the same package-entry policy to `pi.extensions`, `pi.web.entries` and `pi.runtime.entries`. Each declaration must be a non-empty relative string that resolves to a regular file inside both the lexical package directory and its realpath. Package-directory symlinks and file symlinks that stay inside the resolved package are supported. Absolute paths, traversal, missing files, directories and symlink escapes are ignored. Package roots are processed deterministically; declaration order and duplicate entries within each field are preserved.
 
 Runtime entry registration lasts for the Piclaw process. Installing or uninstalling an add-on requires the normal Piclaw restart; the process rebuilds the registry from currently installed packages.
 
