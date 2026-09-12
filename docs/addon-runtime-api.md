@@ -155,6 +155,8 @@ The add-on remains responsible for protocol authentication, signatures, nonce/re
 
 Unknown paths within `/api/addons/` return JSON 404 without redirecting to browser login. Generic extension routes registered through `__piclaw_registerRoute` remain browser-authenticated and CSRF-protected.
 
+Generic extension routes preserve registration order. For overlapping prefixes, dispatch calls matching handlers in that order until one returns a `Response`; returning `null` allows fall-through. Cross-owner exact and nested overlaps produce `web_extension_routes.register_conflict` warnings and appear in the registry freeze diagnostic, but registration is not rejected. External add-on routes use the stricter `/api/addons/<id>/...` registry and reject overlaps.
+
 The unregister callback is idempotent. Add-on install/uninstall already requires a Piclaw restart; the registry is rebuilt from installed startup entries on the new process.
 
 ## Scoped data directory
