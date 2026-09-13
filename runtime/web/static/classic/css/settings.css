@@ -277,6 +277,53 @@
     background: color-mix(in srgb, var(--accent-color) 15%, var(--bg-primary));
 }
 
+/* Dense forms opt into stable label, control, and help columns. */
+.settings-dense-row {
+    --settings-dense-label-width: 220px;
+    --settings-dense-control-width: 190px;
+    display: grid;
+    grid-template-columns: var(--settings-dense-label-width) var(--settings-dense-control-width) minmax(0, 1fr);
+    align-items: center;
+    column-gap: 12px;
+}
+
+.settings-dense-row > label {
+    min-width: 0;
+}
+
+.settings-dense-row > .settings-hint {
+    min-width: 0;
+    margin: 0;
+}
+
+.settings-dense-row > select {
+    width: 100%;
+    min-width: 0;
+}
+
+.settings-dense-row > input[type="checkbox"] {
+    justify-self: start;
+    margin: 0;
+}
+
+.settings-dense-row > .settings-number-stepper {
+    justify-self: start;
+}
+
+.settings-dense-row-checkbox {
+    grid-template-columns: var(--settings-dense-label-width) var(--settings-dense-control-width) minmax(0, 1fr);
+}
+
+.settings-dense-row-compound {
+    align-items: start;
+}
+
+.settings-dense-row-compound > .settings-hint,
+.settings-dense-row-compound > .compaction-model-probe-result,
+.settings-dense-row-compound > .compaction-latency-estimate {
+    grid-column: 2 / -1;
+}
+
 .compaction-model-picker {
     align-items: flex-start;
     flex-wrap: wrap;
@@ -1215,6 +1262,27 @@
     .settings-row textarea,
     .settings-number-input { max-width: 100%; }
     .settings-number-stepper { width: 100%; }
+
+    .settings-dense-row,
+    .settings-dense-row-checkbox {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 6px;
+    }
+    .settings-dense-row > *,
+    .settings-dense-row-compound > .settings-hint,
+    .settings-dense-row-compound > .compaction-model-probe-result,
+    .settings-dense-row-compound > .compaction-latency-estimate {
+        grid-column: 1;
+        min-width: 0;
+        max-width: 100%;
+    }
+    .settings-dense-row > select,
+    .settings-dense-row > .settings-number-stepper,
+    .settings-dense-row-compound > div {
+        width: 100%;
+        max-width: 100%;
+    }
 
     .settings-model-filter { margin-bottom: 6px; }
     .settings-filter-input { font-size: 0.84em; padding: 6px 10px; }

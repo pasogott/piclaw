@@ -346,7 +346,7 @@ ${H.title||""}`))return;T(!0);try{await ns(H.id),t?.(n("settings.recordings.dele
             `}
         </div>
     `}var ai=ee(()=>{ce();ue();Te()});function we(e){return typeof e==="string"?e.trim():""}function Rt(e){if(e==null||e===""||typeof e==="boolean")return null;let t=Number(e);return Number.isFinite(t)&&t>=0?t:null}function hi(e){if(e==null||e===""||typeof e==="boolean")return null;let t=Number(e);return Number.isFinite(t)&&t>0?t:null}function ms(e){let t=we(e),n=t.indexOf("/");return n>0?`${t.slice(0,n).toLowerCase()}${t.slice(n)}`:t}function ci(e){return e.split("/").length-1}function li(e){return e.filter((t)=>t.value).sort((t,n)=>ci(n.value)-ci(t.value)||n.priority-t.priority||n.value.length-t.value.length)[0]?.value??""}function nl(e,t,n){let s=we(e),o=we(n),i=we(t).toLowerCase(),r=i;if(!r){let f=li([{value:o.includes("/")?o:"",priority:2},{value:s.includes("/")?s:"",priority:1}]),b=f.indexOf("/");if(b>0)r=f.slice(0,b).trim().toLowerCase()}let a=r?`${r}/`:"",g=(f)=>Boolean(a&&f.slice(0,a.length).toLowerCase()===a),l=(f)=>g(f)?f.slice(a.length).trim():f,u=[];if(o)u.push({value:l(o),priority:2});if(s&&(i||g(s)||!o))u.push({value:l(s),priority:1});let _=li(u)||o||s;return{key:r&&_?`${r}/${_}`:_||r,provider:r,id:_}}function di(e){return e.toLowerCase().match(/\d+|\D+/g)??[]}function Pe(e,t){let n=di(e),s=di(t),o=Math.max(n.length,s.length);for(let i=0;i<o;i+=1){let r=n[i],a=s[i];if(r==null)return-1;if(a==null)return 1;if(r===a)continue;let g=/^\d+$/.test(r),l=/^\d+$/.test(a);if(g&&l){let u=Number(r)-Number(a);if(u!==0)return u;if(r.length!==a.length)return r.length-a.length;continue}return r<a?-1:1}return e<t?-1:e>t?1:0}function sl(e,t=""){let n=`${e} ${t}`.toLowerCase();return[[/\bclaude(?:\d|[-_. ]|$)/,"Claude"],[/\bgemini(?:\d|[-_. ]|$)/,"Gemini"],[/\b(?:gpt|chatgpt)\b/,"GPT"],[/\b(?:o1|o3|o4)(?:\b|[-_.])/,"OpenAI o-series"],[/\bqwen(?:\d|[-_. ]|$)/,"Qwen"],[/\b(?:mistral|mixtral|codestral|devstral)\b/,"Mistral"],[/\bllama(?:\d|[-_. ]|$)/,"Llama"],[/\bdeepseek\b/,"DeepSeek"],[/\bcommand(?:[-_. ]|$)/,"Command"],[/\bgrok\b/,"Grok"],[/\bphi(?:[-_. ]|$)/,"Phi"],[/\bnova(?:[-_. ]|$)/,"Nova"],[/\b(?:kimi|moonshot)\b/,"Kimi"],[/\bminimax\b/,"MiniMax"],[/\b(?:glm|chatglm)\b/,"GLM"],[/\bnemotron\b/,"Nemotron"]].find(([o])=>o.test(n))?.[1]??null}function ol(e){let t=we(e.id),n=t.indexOf("/");return{publisher:n>0?t.slice(0,n).trim().toLowerCase()||null:null,family:sl(t,we(e.displayName))}}function il(e){let t=`${we(e.id)} ${we(e.displayName)}`.toLowerCase(),n=new Set;if(/(?:^|[\s/:._-])latest(?:$|[\s/:._-])/.test(t))n.add("alias");if(/(?:^|[\s/:._-])batch(?:$|[\s/:._-])/.test(t))n.add("batch");if(/(?:^|[\s/:._-])free(?:$|[\s/:._-])/.test(t))n.add("free");if(/(?:^|[\s/:._-])(?:preview|experimental|beta)(?:$|[\s/:._-])/.test(t))n.add("preview");if(/(?:^|[\s/:._-])(?:fast|turbo)(?:$|[\s/:._-])/.test(t))n.add("fast");if(/(?:^|[\s/:._-])(?:image|vision)(?:$|[\s/:._-])/.test(t))n.add("image");if(/(?:^|[\s/:._-])(?:audio|speech|voice)(?:$|[\s/:._-])/.test(t))n.add("audio");return tl.filter((s)=>n.has(s))}function rl(e,t){let n=hi("contextWindow"in e?e.contextWindow:e.context_window),s=t&&typeof t==="object"&&"tokens"in t?t.tokens:t,o=Rt(s),i=n==null?null:Math.max(0,Math.floor(n-4000));if(o==null||i==null)return{state:"unknown",currentTokens:o,safetyAdjustedTokens:o==null?null:Math.ceil(o*1.1-0.000000001),effectiveContextWindow:i};let r=Math.ceil(o*1.1-0.000000001);return{state:r<=i?"fits":"blocked",currentTokens:o,safetyAdjustedTokens:r,effectiveContextWindow:i}}function al(e){if(!e||typeof e!=="object")return null;let t=e,n={inputPerMillion:Rt(t.input_per_million??t.inputPerMillion),outputPerMillion:Rt(t.output_per_million??t.outputPerMillion),cacheReadPerMillion:Rt(t.cache_read_per_million??t.cacheReadPerMillion),cacheWritePerMillion:Rt(t.cache_write_per_million??t.cacheWritePerMillion)};return Object.values(n).some((s)=>s!=null)?n:null}function cl(e){let t=Array.isArray(e.thinking_levels)?e.thinking_levels:Array.isArray(e.thinkingLevels)?e.thinkingLevels:[],n=Array.isArray(e.thinking_level_labels)?e.thinking_level_labels:Array.isArray(e.thinkingLevelLabels)?e.thinkingLevelLabels:[],s=new Set,o=[];return t.forEach((i,r)=>{let a=we(i);if(!a||s.has(a))return;s.add(a),o.push({id:a,label:we(n[r])||a})}),o}function ll(e,t){let n=e instanceof Map?e.get(t):e?.[t];return we(n)||null}function ut(e,t={}){let n=Array.isArray(e?.model_options)?e.model_options:[],s=Array.isArray(e?.models)?e.models:[],o=ms(e?.current??e?.model),i=new Set(Array.from(t.pinnedKeys??[],ms).filter(Boolean)),r={tokens:t.contextUsage?.tokens??t.currentTokens},a=new Set,g=[],l=(u)=>{for(let _ of u){let d=typeof _==="string"?{label:_}:_;if(!d||typeof d!=="object")continue;let f=nl(d.label,d.provider,d.id);if(!f.key||a.has(f.key))continue;a.add(f.key);let b=we(d.name)||f.key,k=ol({provider:f.provider,id:f.id,displayName:b}),T=hi(d.context_window??d.contextWindow),h={key:f.key,provider:f.provider,publisher:k.publisher,family:k.family,id:f.id,displayName:b,contextWindow:T,reasoning:d.reasoning===!0,thinkingLevels:cl(d),pricing:al(d.pricing),variants:il({id:f.id,displayName:b}),current:Boolean(o&&(f.key===o||ms(d.label)===o)),pinned:i.has(f.key),lastUsedAt:ll(t.recentByKey,f.key)};g.push({...h,contextFit:rl(h,r)})}};if(l(n.length>0?n:s),g.length===0&&n.length>0)l(s);if(o&&!g.some((u)=>u.current)){let u=g.filter((_)=>_.id===o);if(u.length===1)u[0].current=!0}return g.sort((u,_)=>Pe(u.key,_.key)),g}function Qe(e){if(e==null)return"";if(e>=1e6){let t=e/1e6;return`${Number.isInteger(t)?t.toFixed(0):t.toFixed(1)}M context`}if(e>=1000)return`${Math.round(e/1000)}K context`;return`${e} context`}function gi(e){let t=e>=1?2:4;return`$${e.toFixed(t).replace(/0+$/,"").replace(/\.$/,"")}`}function vs(e){if(!e)return"";let t=[e.inputPerMillion==null?"":`In ${gi(e.inputPerMillion)}`,e.outputPerMillion==null?"":`Out ${gi(e.outputPerMillion)}`].filter(Boolean);return t.length?`${t.join(" · ")} / 1M`:""}function dl(e){return[e.displayName,e.key,e.id,e.provider,e.publisher,e.family,...e.variants,fi(e)?"stable":null,e.reasoning?"reasoning":null,Qe(e.contextWindow)].filter(Boolean).join(" ").toLocaleLowerCase()}function dn(e){if(typeof e==="string"){let t=we(e).toLowerCase();return new Set(t?[t]:[])}return new Set(Array.from(e??[],(t)=>we(t).toLowerCase()).filter(Boolean))}function fi(e){return!e.variants.some((t)=>["preview","batch","free","fast"].includes(t))}function gl(e,t){if(t.size===0)return!0;if(t.has("stable")&&fi(e))return!0;return e.variants.some((n)=>t.has(n))}function ui(e){if(e.variants.includes("batch"))return 4;if(e.variants.includes("preview"))return 3;if(e.variants.includes("free")||e.variants.includes("fast"))return 2;if(e.variants.includes("alias"))return 0;return 1}function hs(e,t,n=!1){if(e==null&&t==null)return 0;if(e==null)return 1;if(t==null)return-1;return n?t-e:e-t}function ul(e,t){if(e.current!==t.current)return e.current?-1:1;if(e.pinned!==t.pinned)return e.pinned?-1:1;let n=Date.parse(e.lastUsedAt??""),s=Date.parse(t.lastUsedAt??""),o=Number.isFinite(n),i=Number.isFinite(s);if(o!==i)return o?-1:1;if(o&&i&&n!==s)return s-n;return ui(e)-ui(t)||Pe(e.key,t.key)}function ys(e,t={}){let n=we(t.query).toLocaleLowerCase().split(/\s+/).filter(Boolean),s=dn(t.providers),o=dn(t.publishers),i=dn(t.families),r=dn(t.variants),a=e.filter((l)=>{if(n.length>0){let u=dl(l);if(!n.every((_)=>u.includes(_)))return!1}if(t.contextFit&&t.contextFit!=="all"){if(t.contextFit==="compatible"?l.contextFit.state==="blocked":l.contextFit.state!==t.contextFit)return!1}if(s.size>0&&!s.has(vi(l).toLowerCase()))return!1;if(o.size>0&&!o.has((l.publisher??"").toLowerCase()))return!1;if(i.size>0&&!i.has((l.family??"").toLowerCase()))return!1;if(!gl(l,r))return!1;if(typeof t.reasoning==="boolean"&&l.reasoning!==t.reasoning)return!1;return!0}),g=t.sort??"recommended";return a.sort((l,u)=>{if(g==="name")return Pe(l.displayName,u.displayName)||Pe(l.key,u.key);if(g==="context")return hs(l.contextWindow,u.contextWindow,!0)||Pe(l.key,u.key);if(g==="input-price")return hs(l.pricing?.inputPerMillion??null,u.pricing?.inputPerMillion??null)||Pe(l.key,u.key);if(g==="output-price")return hs(l.pricing?.outputPerMillion??null,u.pricing?.outputPerMillion??null)||Pe(l.key,u.key);return ul(l,u)})}function pi(e){return e.filter((t)=>t.contextFit.state!=="blocked").length}function vi(e){return e.provider||"unknown"}function ks(e){let t=new Map;for(let n of e){let s=vi(n),o=t.get(s)??[];o.push(n),t.set(s,o)}return Array.from(t.entries()).sort(([n],[s])=>Pe(n,s)).map(([n,s])=>{let o=[],i=new Map;for(let a of s){if(!a.publisher){o.push(a);continue}let g=i.get(a.publisher)??[];g.push(a),i.set(a.publisher,g)}let r=Array.from(i.entries()).sort(([a],[g])=>Pe(a,g)).map(([a,g])=>({key:`${n}/${a}`,label:a,provider:n,publisher:a,entries:[...g],compatibleCount:pi(g),totalCount:g.length}));return{key:n,label:n,provider:n,entries:o,publisherGroups:r,compatibleCount:pi(s),totalCount:s.length}})}function fs(e){if(e==null)return"unknown";if(e>=1e6){let t=e/1e6;return`${Number.isInteger(t)?t.toFixed(0):t.toFixed(1)}M`}if(e>=1000)return`${Math.round(e/1000)}K`;return String(e)}function bs(e){let t=e.contextFit;if(t.state!=="blocked")return"";return`Needs about ${fs(t.safetyAdjustedTokens)} tokens with estimator safety; this model safely fits ${fs(t.effectiveContextWindow)} (${fs(e.contextWindow)} raw). Compact before switching.`}function pl(e){let t=[];for(let n of ks(e)){if(n.entries.length>0)t.push({key:n.key,label:n.label,entries:n.entries,totalCount:n.entries.length});for(let s of n.publisherGroups)t.push({key:s.key,label:`${n.label} · ${s.label}`,entries:s.entries,totalCount:s.totalCount})}return t}function Kg(e,t={}){let n=we(t.query),s=ys(e,{query:n}),o=Math.max(1,Math.min(mi,Math.floor(t.renderLimit??mi))),i=new Set,r=o,a=[],g=[],l=(x,y,A,F=!1,m=!1,P=o)=>{let v=A.filter((O)=>!i.has(O.key));if(v.length===0)return;let N=m?[]:v.slice(0,Math.min(r,P));if(N.forEach((O)=>i.add(O.key)),!m&&N.length===0)return;r-=N.length,a.push(...N);let K=new Set(N.map((O)=>O.key)),S=F?pl(v).map((O)=>({...O,entries:O.entries.filter((q)=>K.has(q.key))})).filter((O)=>O.entries.length>0):[];g.push({key:x,label:y,collapsed:m,totalCount:v.length,entries:F?[]:N,groups:S})},u=s.filter((x)=>x.contextFit.state==="fits"),_=s.filter((x)=>x.contextFit.state==="unknown"),d=s.filter((x)=>x.contextFit.state==="blocked"),f=Boolean(n||t.showBlocked),b=f?Math.min(d.length,Math.floor(o/2)):0,k=Math.min(_.length,Math.floor((o-b)/2)),T=Math.max(0,o-b-k),h=(x,y,A)=>{let F=a.length;l(x,y,A,!1,!1,T),T=Math.max(0,T-(a.length-F))};h("current","Current",s.filter((x)=>x.current)),h("pinned","Pinned",s.filter((x)=>x.pinned)),h("recent","Recent",s.filter((x)=>Boolean(x.lastUsedAt)));let C=a.filter((x)=>x.contextFit.state==="blocked").length,L=a.filter((x)=>x.contextFit.state==="unknown").length,I=Math.max(0,b-C),R=Math.max(0,k-L);return l("compatible","Compatible models",u,!0,!1,Math.max(0,r-I-R)),l("unknown","Context limit unknown",_,!0,!1,Math.max(0,r-I)),l("blocked","Does not fit current context",d,!0,!f),{sections:g,renderedEntries:a,totalMatches:s.length,hiddenCount:Math.max(0,s.length-a.length),blockedCount:d.length}}function zg(e,t,n,s=7){let o=e.filter((g)=>g.contextFit.state!=="blocked");if(o.length===0)return null;let i=o.findIndex((g)=>g.key===t),r=Math.max(1,Math.floor(s)),a=i;if(n==="first")a=0;if(n==="last")a=o.length-1;if(n==="next")a=i<0?0:Math.min(o.length-1,i+1);if(n==="previous")a=i<0?o.length-1:Math.max(0,i-1);if(n==="page-next")a=i<0?0:Math.min(o.length-1,i+r);if(n==="page-previous")a=i<0?o.length-1:Math.max(0,i-r);return o[a]?.key??null}var tl,mi=100;var gn=ee(()=>{tl=["alias","batch","free","preview","fast","image","audio"]});function yi(e){let t=String(e??"").trim().toLowerCase().replace(/[\s-]+/g,"_");return t==="pipelined"||t==="traditional_pipelined"?"pipelined":"selective"}function ml(e={}){return{autoCompactionEnabled:Boolean(e.autoCompactionEnabled??!0),smartCompactionMethod:yi(e.smartCompactionMethod),compactionModel:String(e.compactionModel??"").trim(),compactionLatencyEstimate:e.compactionLatencyEstimate&&typeof e.compactionLatencyEstimate==="object"?e.compactionLatencyEstimate:null,remoteCompactionEnabled:Boolean(e.remoteCompactionEnabled??!1),remoteCompactionTimeoutSec:e.remoteCompactionTimeoutSec??300,remoteCompactionSupportedProviders:Array.isArray(e.remoteCompactionSupportedProviders)?e.remoteCompactionSupportedProviders:["openai","openai-codex"],compactionTimeoutSec:e.compactionTimeoutSec??300,compactionBackoffBaseMin:e.compactionBackoffBaseMin??15,compactionBackoffMaxMin:e.compactionBackoffMaxMin??360,compactionThresholdPercent:e.compactionThresholdPercent??80,compactionBackoffDecayFactor:e.compactionBackoffDecayFactor??0.5,toolResultCompactionEnabled:Boolean(e.toolResultCompactionEnabled??!0),toolResultSemanticSummaryEnabled:Boolean(e.toolResultSemanticSummaryEnabled??!0),toolResultSemanticSummaryMaxInputChars:e.toolResultSemanticSummaryMaxInputChars??12000,toolResultSemanticSummaryMaxTokens:e.toolResultSemanticSummaryMaxTokens??320,toolResultSemanticSummaryTimeoutSec:e.toolResultSemanticSummaryTimeoutSec??12,progressWatchdogEnabled:Boolean(e.progressWatchdogEnabled??!1),progressWatchdogTimeoutSec:e.progressWatchdogTimeoutSec??300,compactionBackoffs:Array.isArray(e.compactionBackoffs)?e.compactionBackoffs:[],progressWatchdogPhases:Array.isArray(e.progressWatchdogPhases)?e.progressWatchdogPhases:[]}}function un(e){let t=String(e||"").trim();if(!t)return"—";let n=new Date(t);if(Number.isNaN(n.getTime()))return t;return n.toLocaleString()}function hl({settingsData:e,setStatus:t,mergeSettingsData:n}){let{t:s}=Z(),[o,i]=p(!0),[r,a]=p("selective"),[g,l]=p(""),[u,_]=p(null),[d,f]=p(null),[b,k]=p(!1),[T,h]=p(null),[C,L]=p(!1),[I,R]=p(300),[x,y]=p(["openai","openai-codex"]),[A,F]=p(300),[m,P]=p(15),[v,N]=p(360),[K,S]=p(80),[O,q]=p(0.5),[re,Q]=p(!0),[D,me]=p(!0),[_e,ye]=p(12000),[ke,Me]=p(320),[Ce,H]=p(12),[ne,J]=p(!1),[X,M]=p(300),[W,le]=p([]),[he,fe]=p([]),[w,V]=p(!1),te=Y(""),se=Y(null),ge=Y(!0);B(()=>(ge.current=!0,()=>{ge.current=!1}),[]);let Se=E((U)=>{let z=ml(U);i(z.autoCompactionEnabled),a(z.smartCompactionMethod),l(z.compactionModel),_(z.compactionLatencyEstimate),L(z.remoteCompactionEnabled),R(z.remoteCompactionTimeoutSec),y(z.remoteCompactionSupportedProviders),F(z.compactionTimeoutSec),P(z.compactionBackoffBaseMin),N(z.compactionBackoffMaxMin),S(z.compactionThresholdPercent),q(z.compactionBackoffDecayFactor),Q(z.toolResultCompactionEnabled),me(z.toolResultSemanticSummaryEnabled),ye(z.toolResultSemanticSummaryMaxInputChars),Me(z.toolResultSemanticSummaryMaxTokens),H(z.toolResultSemanticSummaryTimeoutSec),J(z.progressWatchdogEnabled),M(z.progressWatchdogTimeoutSec),le(z.compactionBackoffs),fe(z.progressWatchdogPhases),te.current=JSON.stringify({autoCompactionEnabled:z.autoCompactionEnabled,smartCompactionMethod:z.smartCompactionMethod,compactionModel:z.compactionModel,remoteCompactionEnabled:z.remoteCompactionEnabled,remoteCompactionTimeoutSec:z.remoteCompactionTimeoutSec,compactionTimeoutSec:z.compactionTimeoutSec,compactionBackoffBaseMin:z.compactionBackoffBaseMin,compactionBackoffMaxMin:z.compactionBackoffMaxMin,compactionThresholdPercent:z.compactionThresholdPercent,compactionBackoffDecayFactor:z.compactionBackoffDecayFactor,toolResultCompactionEnabled:z.toolResultCompactionEnabled,toolResultSemanticSummaryEnabled:z.toolResultSemanticSummaryEnabled,toolResultSemanticSummaryMaxInputChars:z.toolResultSemanticSummaryMaxInputChars,toolResultSemanticSummaryMaxTokens:z.toolResultSemanticSummaryMaxTokens,toolResultSemanticSummaryTimeoutSec:z.toolResultSemanticSummaryTimeoutSec,progressWatchdogEnabled:z.progressWatchdogEnabled,progressWatchdogTimeoutSec:z.progressWatchdogTimeoutSec})},[]);B(()=>{Se(e||{})},[e,Se]),B(()=>{let U=!0;return lt().then((z)=>{if(U)f(z)}).catch(()=>{if(U)f({models:[],model_options:[]})}),()=>{U=!1}},[]);let de=G(()=>ut(d||{}),[d]),He=G(()=>new Map((d?.provider_diagnostics?.providers||[]).map((U)=>[U.provider,Boolean(U.auth_configured)])),[d]),et=Boolean(g&&!de.some((U)=>U.key===g)),tt=g||d?.current||"",Yr=E(async()=>{if(!tt||b)return;k(!0),h(null);try{let z=await(await fetch("/agent/settings/compaction/probe",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:tt})})).json().catch(()=>({}));h(z)}catch(U){h({ok:!1,model:tt,error:U instanceof Error?U.message:String(U)})}finally{k(!1)}},[tt,b]),Ut=G(()=>JSON.stringify({autoCompactionEnabled:o,smartCompactionMethod:r,compactionModel:g,remoteCompactionEnabled:C,remoteCompactionTimeoutSec:I,compactionTimeoutSec:A,compactionBackoffBaseMin:m,compactionBackoffMaxMin:v,compactionThresholdPercent:K,compactionBackoffDecayFactor:O,toolResultCompactionEnabled:re,toolResultSemanticSummaryEnabled:D,toolResultSemanticSummaryMaxInputChars:_e,toolResultSemanticSummaryMaxTokens:ke,toolResultSemanticSummaryTimeoutSec:Ce,progressWatchdogEnabled:ne,progressWatchdogTimeoutSec:X}),[o,r,g,C,I,A,m,v,K,O,re,D,_e,ke,Ce,ne,X]);B(()=>{if(Ut===te.current)return;if(se.current)clearTimeout(se.current);return se.current=setTimeout(async()=>{if(!ge.current)return;try{t?.(s("settings.compaction.saving"),"info");let U=await fetch("/agent/settings/compaction",{method:"POST",headers:{"Content-Type":"application/json"},body:Ut}),z=await U.json().catch(()=>({}));if(!ge.current)return;if(!U.ok||!z?.ok||!z?.settings){t?.(z?.error||s("settings.compaction.saveFailed"),"error");return}te.current=Ut,n?.(z.settings),Se({...e||{},...z.settings||{}}),t?.(s("settings.compaction.saved"),"success"),V(!0),setTimeout(()=>{if(ge.current)V(!1),t?.(null)},4000)}catch(U){if(console.warn("[settings/compaction] Failed to persist compaction settings.",U),ge.current)t?.(s("settings.compaction.saveFailed"),"error")}},800),()=>{if(se.current)clearTimeout(se.current)}},[Ut,n,t,Se,e]);let Zr=E(async(U)=>{try{t?.(s("settings.compaction.clearing",{chat:U}),"info");let z=await fetch("/agent/settings/compaction/reset-backoff",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({chatJid:U})}),St=await z.json().catch(()=>({}));if(!z.ok||!St?.ok||!St?.settings){t?.(St?.error||s("settings.compaction.clearFailed"),"error");return}n?.(St.settings),Se({...e||{},...St.settings||{}}),t?.(s("settings.compaction.cleared",{chat:U}),"success")}catch(z){console.warn("[settings/compaction] Failed to clear compaction suppression.",z),t?.(s("settings.compaction.clearFailed"),"error")}},[Se,n,t,e]);return c`
-        <div class="settings-section">
+        <div class="settings-section settings-dense-form">
             ${w&&c`
                 <div class="settings-general-applied-notice" role="status" aria-live="polite">
                     ${s("settings.compaction.appliedNotice")}
@@ -354,14 +354,12 @@ ${H.title||""}`))return;T(!0);try{await ns(H.id),t?.(n("settings.recordings.dele
             `}
 
             <h3>${s("settings.compaction.autoHeading")}</h3>
-            <div class="settings-row">
+            <div class="settings-row settings-dense-row settings-dense-row-checkbox">
                 <label>${s("settings.compaction.enableAutomatic")}</label>
-                <div style="display:flex; align-items:center; gap:10px;">
-                    <input type="checkbox" checked=${o} onChange=${(U)=>i(Boolean(U.target.checked))} />
-                    <span class="settings-hint" style="margin:0">${s("settings.compaction.enableAutomaticHint")}</span>
-                </div>
+                <input type="checkbox" checked=${o} onChange=${(U)=>i(Boolean(U.target.checked))} />
+                <span class="settings-hint">${s("settings.compaction.enableAutomaticHint")}</span>
             </div>
-            <div class="settings-row">
+            <div class="settings-row settings-dense-row">
                 <label>${s("settings.compaction.processingMethod")}</label>
                 <select id="smartCompactionMethod" value=${r} onChange=${(U)=>a(yi(U.target.value))}>
                     <option value="selective">${s("settings.compaction.methodSelective")}</option>
@@ -371,7 +369,7 @@ ${H.title||""}`))return;T(!0);try{await ns(H.id),t?.(n("settings.recordings.dele
                     ${r==="pipelined"?s("settings.compaction.methodPipelinedHint"):s("settings.compaction.methodSelectiveHint")}
                 </span>
             </div>
-            <div class="settings-row compaction-model-picker">
+            <div class="settings-row settings-dense-row settings-dense-row-compound compaction-model-picker">
                 <label for="compactionModel">${s("settings.compaction.model")}</label>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; min-width:0;">
                     <select id="compactionModel" value=${g} onChange=${(U)=>{l(U.target.value),h(null)}} aria-describedby="compactionModelHint">
@@ -390,16 +388,14 @@ ${H.title||""}`))return;T(!0);try{await ns(H.id),t?.(n("settings.recordings.dele
                     Observed ${Math.round(u.medianDurationMs/1000)}–${Math.round(u.p90DurationMs/1000)}s across ${u.sampleCount} recent comparable samples (${u.inputBucketMin.toLocaleString()}–${(u.inputBucketMax-1).toLocaleString()} input tokens; newest ${un(u.newestSampleAt)}). ${u.warningText||"The conservative estimate is within the configured deadline."}
                 </div>`}
             </div>
-            <div class="settings-row">
-                <label>${s("settings.compaction.remoteNative")}</label>
-                <div style="display:flex; align-items:center; gap:10px;">
-                    <input id="remoteCompactionEnabled" type="checkbox" checked=${C} onChange=${(U)=>L(Boolean(U.target.checked))} />
-                    <span class="settings-hint" style="margin:0">
-                        ${s("settings.compaction.remoteNativeHint",{providers:x.join(", ")})}
-                    </span>
-                </div>
+            <div class="settings-row settings-dense-row settings-dense-row-checkbox">
+                <label for="remoteCompactionEnabled">${s("settings.compaction.remoteNative")}</label>
+                <input id="remoteCompactionEnabled" type="checkbox" checked=${C} onChange=${(U)=>L(Boolean(U.target.checked))} />
+                <span class="settings-hint">
+                    ${s("settings.compaction.remoteNativeHint",{providers:x.join(", ")})}
+                </span>
             </div>
-            <div class="settings-row">
+            <div class="settings-row settings-dense-row">
                 <label>${s("settings.compaction.remoteTimeout")}</label>
                 <${ie}
                     label=${s("settings.compaction.remoteTimeoutAria")}
@@ -413,21 +409,17 @@ ${H.title||""}`))return;T(!0);try{await ns(H.id),t?.(n("settings.recordings.dele
                 />
                 <span class="settings-hint" style="margin:0">${s("settings.compaction.remoteTimeoutHint")}</span>
             </div>
-            <div class="settings-row">
+            <div class="settings-row settings-dense-row settings-dense-row-checkbox">
                 <label>${s("settings.compaction.enableToolResult")}</label>
-                <div style="display:flex; align-items:center; gap:10px;">
-                    <input type="checkbox" checked=${re} onChange=${(U)=>Q(Boolean(U.target.checked))} />
-                    <span class="settings-hint" style="margin:0">${s("settings.compaction.enableToolResultHint")}</span>
-                </div>
+                <input type="checkbox" checked=${re} onChange=${(U)=>Q(Boolean(U.target.checked))} />
+                <span class="settings-hint">${s("settings.compaction.enableToolResultHint")}</span>
             </div>
-            <div class="settings-row">
+            <div class="settings-row settings-dense-row settings-dense-row-checkbox">
                 <label>${s("settings.compaction.semanticSummaries")}</label>
-                <div style="display:flex; align-items:center; gap:10px;">
-                    <input type="checkbox" checked=${D} onChange=${(U)=>me(Boolean(U.target.checked))} />
-                    <span class="settings-hint" style="margin:0">${s("settings.compaction.semanticSummariesHint")}</span>
-                </div>
+                <input type="checkbox" checked=${D} onChange=${(U)=>me(Boolean(U.target.checked))} />
+                <span class="settings-hint">${s("settings.compaction.semanticSummariesHint")}</span>
             </div>
-            <div class="settings-row">
+            <div class="settings-row settings-dense-row">
                 <label>${s("settings.compaction.inputLimit")}</label>
                 <${ie}
                     label=${s("settings.compaction.inputLimitAria")}
@@ -441,7 +433,7 @@ ${H.title||""}`))return;T(!0);try{await ns(H.id),t?.(n("settings.recordings.dele
                 />
                 <span class="settings-hint" style="margin:0">${s("settings.compaction.inputLimitHint")}</span>
             </div>
-            <div class="settings-row">
+            <div class="settings-row settings-dense-row">
                 <label>${s("settings.compaction.maxTokens")}</label>
                 <${ie}
                     label=${s("settings.compaction.maxTokensAria")}
@@ -455,7 +447,7 @@ ${H.title||""}`))return;T(!0);try{await ns(H.id),t?.(n("settings.recordings.dele
                 />
                 <span class="settings-hint" style="margin:0">${s("settings.compaction.maxTokensHint")}</span>
             </div>
-            <div class="settings-row">
+            <div class="settings-row settings-dense-row">
                 <label>${s("settings.compaction.summaryTimeout")}</label>
                 <${ie}
                     label=${s("settings.compaction.summaryTimeoutAria")}
@@ -469,7 +461,7 @@ ${H.title||""}`))return;T(!0);try{await ns(H.id),t?.(n("settings.recordings.dele
                 />
                 <span class="settings-hint" style="margin:0">${s("settings.compaction.summaryTimeoutHint")}</span>
             </div>
-            <div class="settings-row">
+            <div class="settings-row settings-dense-row">
                 <label>${s("settings.compaction.threshold")}</label>
                 <${ie}
                     label=${s("settings.compaction.thresholdAria")}
@@ -482,7 +474,7 @@ ${H.title||""}`))return;T(!0);try{await ns(H.id),t?.(n("settings.recordings.dele
                 />
                 <span class="settings-hint" style="margin:0">${s("settings.compaction.thresholdHint")}</span>
             </div>
-            <div class="settings-row">
+            <div class="settings-row settings-dense-row">
                 <label>${s("settings.compaction.timeout")}</label>
                 <${ie}
                     label=${s("settings.compaction.timeoutAria")}
@@ -495,7 +487,7 @@ ${H.title||""}`))return;T(!0);try{await ns(H.id),t?.(n("settings.recordings.dele
                 />
                 <span class="settings-hint" style="margin:0">${s("settings.compaction.timeoutHint")}</span>
             </div>
-            <div class="settings-row">
+            <div class="settings-row settings-dense-row">
                 <label>${s("settings.compaction.backoffBase")}</label>
                 <${ie}
                     label=${s("settings.compaction.backoffBaseAria")}
@@ -508,7 +500,7 @@ ${H.title||""}`))return;T(!0);try{await ns(H.id),t?.(n("settings.recordings.dele
                 />
                 <span class="settings-hint" style="margin:0">${s("settings.compaction.backoffBaseHint")}</span>
             </div>
-            <div class="settings-row">
+            <div class="settings-row settings-dense-row">
                 <label>${s("settings.compaction.backoffMax")}</label>
                 <${ie}
                     label=${s("settings.compaction.backoffMaxAria")}
@@ -522,7 +514,7 @@ ${H.title||""}`))return;T(!0);try{await ns(H.id),t?.(n("settings.recordings.dele
                 <span class="settings-hint" style="margin:0">${s("settings.compaction.backoffMaxHint")}</span>
             </div>
 
-            <div class="settings-row">
+            <div class="settings-row settings-dense-row">
                 <label>${s("settings.compaction.decayFactor")}</label>
                 <${ie}
                     label=${s("settings.compaction.decayFactorAria")}
@@ -537,14 +529,12 @@ ${H.title||""}`))return;T(!0);try{await ns(H.id),t?.(n("settings.recordings.dele
             </div>
 
             <h3 style="margin-top:20px">${s("settings.compaction.watchdogHeading")}</h3>
-            <div class="settings-row">
+            <div class="settings-row settings-dense-row settings-dense-row-checkbox">
                 <label>${s("settings.compaction.enableWatchdog")}</label>
-                <div style="display:flex; align-items:center; gap:10px;">
-                    <input type="checkbox" checked=${ne} onChange=${(U)=>J(Boolean(U.target.checked))} />
-                    <span class="settings-hint" style="margin:0">${s("settings.compaction.enableWatchdogHint")}</span>
-                </div>
+                <input type="checkbox" checked=${ne} onChange=${(U)=>J(Boolean(U.target.checked))} />
+                <span class="settings-hint">${s("settings.compaction.enableWatchdogHint")}</span>
             </div>
-            <div class="settings-row">
+            <div class="settings-row settings-dense-row">
                 <label>${s("settings.compaction.watchdogTimeout")}</label>
                 <${ie}
                     label=${s("settings.compaction.watchdogTimeoutAria")}
@@ -1866,5 +1856,5 @@ ${K}`;if(!window.confirm(S))return;if(N&&!window.confirm(n("settings.tasks.confi
     </div>
   `}function Zd(){Jd(),Gd(),Qd();let e=new URLSearchParams(window.location.search);Qr(e.get("section")||"general");let t=document.getElementById("settings-widget-fixture-root")||document.body.appendChild(document.createElement("div"));t.id="settings-widget-fixture-root",st(c`<${Yd} />`,t),window.piclawWidget?.ready?.({title:"Settings fixture",mockMode:_t})}Zd();
 
-//# debugId=EC4BE726B962E27464756E2164756E21
+//# debugId=8433176B1C2E4CCE64756E2164756E21
 //# sourceMappingURL=settings-widget-fixture.bundle.js.map
