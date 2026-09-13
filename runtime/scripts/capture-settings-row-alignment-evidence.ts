@@ -6,9 +6,14 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const runtimeRoot = join(import.meta.dir, "..");
-const outputDir = process.env.PICLAW_SETTINGS_ALIGNMENT_OUT
-  || join(runtimeRoot, "generated", "settings-row-alignment-evidence");
-const phase = process.env.PICLAW_SETTINGS_ALIGNMENT_PHASE || "current";
+const args = process.argv.slice(2);
+const option = (name: string): string | undefined => {
+  const index = args.indexOf(name);
+  return index >= 0 ? args[index + 1] : undefined;
+};
+const outputDir = option("--out") || join(runtimeRoot, "generated", "settings-row-alignment-evidence");
+const phase = option("--phase") || "current";
+if (!/^[a-z0-9-]+$/i.test(phase)) throw new Error(`Invalid --phase: ${phase}`);
 await mkdir(outputDir, { recursive: true });
 
 const buildDir = await mkdtemp(join(tmpdir(), "piclaw-settings-row-alignment-"));
