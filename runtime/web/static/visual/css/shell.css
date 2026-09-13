@@ -5053,6 +5053,76 @@ body {
   margin-top: 8px;
 }
 
+.settings-panel__keyboard-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.settings-panel__keyboard-header > div { min-width: 0; }
+.settings-panel__keyboard-header .settings-panel__section-title { margin-bottom: 8px; }
+.settings-panel__keyboard-header .settings-panel__description { margin: 4px 0 0; }
+.settings-panel__keyboard-filter {
+  width: 100%;
+  max-width: 300px;
+  margin-bottom: 12px;
+}
+.settings-panel__keyboard-status {
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.settings-panel__keyboard-status--success { color: var(--accent); }
+.settings-panel__keyboard-status--error { color: var(--error, #f38ba8); }
+.settings-panel__shortcut-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-panel__shortcut-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+}
+.settings-panel__shortcut-copy,
+.settings-panel__shortcut-controls { min-width: 0; }
+.settings-panel__shortcut-title {
+  display: block;
+  color: var(--text-primary, #e7e9ea);
+  font-size: 13px;
+  font-weight: 600;
+}
+.settings-panel__shortcut-description { margin: 4px 0 0; }
+.settings-panel__shortcut-default {
+  margin: 8px 0 0;
+  color: var(--text-secondary, #71767b);
+  font-size: 11px;
+}
+.settings-panel__shortcut-default code,
+.settings-panel__keyboard-header code {
+  font-family: var(--font-mono);
+  color: var(--text-primary, #e7e9ea);
+}
+.settings-panel__shortcut-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-panel__shortcut-input {
+  width: 100%;
+  max-width: none;
+  font-family: var(--font-mono);
+}
+.settings-panel__shortcut-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .settings-panel__tools-filter {
   width: 100%;
   margin-bottom: 12px;
@@ -7256,6 +7326,16 @@ pre.frontmatter-block {
   .settings-panel__content {
     padding: 12px 10px;
   }
+  .settings-panel__keyboard-header,
+  .settings-panel__shortcut-card {
+    display: flex;
+    flex-direction: column;
+  }
+  .settings-panel__keyboard-header .settings-panel__provider-btn {
+    align-self: flex-start;
+  }
+  .settings-panel__shortcut-controls { width: 100%; }
+  .settings-panel__shortcut-actions { justify-content: flex-start; }
 
   /* Compose bar full-width */
   .chat__compose {
