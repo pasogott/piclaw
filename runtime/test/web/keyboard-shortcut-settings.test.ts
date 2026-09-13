@@ -8,8 +8,13 @@ import {
 } from "../../web/src/ui/keyboard-shortcut-settings.js";
 import { resetKeyboardShortcutBindings } from "../../web/src/ui/keyboard-shortcuts.js";
 
-const originalWindow = globalThis.window;
-const originalLocalStorage = globalThis.localStorage;
+const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+
+function restoreGlobal(name: "window" | "localStorage", descriptor: PropertyDescriptor | undefined) {
+  if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+  else delete (globalThis as any)[name];
+}
 
 function installStorage() {
   const values = new Map<string, string>();
@@ -18,13 +23,13 @@ function installStorage() {
     setItem: (key: string, value: string) => values.set(key, String(value)),
     removeItem: (key: string) => values.delete(key),
   } as Storage;
-  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: localStorage });
-  Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage, dispatchEvent() {} } });
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, writable: true, value: localStorage });
+  Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: { localStorage, dispatchEvent() {} } });
 }
 
 afterEach(() => {
-  Object.defineProperty(globalThis, "window", { configurable: true, value: originalWindow });
-  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: originalLocalStorage });
+  restoreGlobal("window", originalWindowDescriptor);
+  restoreGlobal("localStorage", originalLocalStorageDescriptor);
 });
 
 describe("shared keyboard shortcut settings model", () => {
