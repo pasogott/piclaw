@@ -1,48 +1,40 @@
-Feature: Compose submission instant visibility
-  As a user sending messages
-  I want my submitted text to appear instantly in the timeline
-  So that I have immediate confirmation my message was received
+@classic @source-reviewed
+Feature: Classic accepted message visibility
+  Source: runtime/web/src/components/compose-box.ts and UI timeline refresh paths.
+  Network latency is not a product-level one-second delivery guarantee.
 
-  Background:
-    Given I am authenticated and on the main chat
-    And the timeline is visible
+  @ux-compose-007
+  Scenario: Display an accepted text submission
+    Given the composer contains a non-empty text draft
+    When I submit it and the message API accepts it
+    Then the post-response path is notified
+    And the selected chat's timeline refresh can display the stored message
 
-  Scenario: Typed message appears in timeline after pressing Enter
-    When I type "Hello from E2E test" in the compose box
-    And I press Enter
-    Then the message "Hello from E2E test" should appear in the timeline
-    And the timeline should scroll to show the new message
-    And the compose box should be empty
+  @ux-compose-008
+  Scenario: Serialize text and references into one submission
+    Given the draft contains multiline text and file, folder and message references
+    When I submit it
+    Then the outgoing content contains the trimmed text and the corresponding reference blocks
+    And selecting references alone is sufficient to create a non-empty submission
 
-  Scenario: Message appears within 1 second of submission
-    When I type "Timing test" in the compose box
-    And I note the current time
-    And I press Enter
-    Then the message should be visible in the timeline within 1000ms
+  @ux-compose-009
+  Scenario: Preserve the association between uploaded files and media identifiers
+    Given a submitted draft has multiple attachments
+    When the upload batch succeeds
+    Then each returned media identifier stays paired with its source filename
+    And the message request includes those identifiers and attachment references
 
-  Scenario: Multiple rapid submissions all appear in order
-    When I send "First message" and immediately send "Second message"
-    Then both messages should appear in the timeline
-    And "First message" should appear before "Second message"
+  @ux-compose-010
+  Scenario: Do not erase newer typing after send completes
+    Given a captured draft has already cleared from the composer
+    And I have started another draft
+    When the earlier background send completes
+    Then completion does not clear the newly entered text as a second submission reset
 
-  Scenario: Long multi-line message appears completely
-    When I type a 5-line message in the compose box
-    And I press Enter
-    Then the full message should appear in the timeline
-    And no text should be truncated
-
-  Scenario: Message with file attachment appears with attachment indicator
-    When I paste an image and type "See attached"
-    And I press Enter
-    Then the message should appear with an attachment indicator or thumbnail
-
-  Scenario: Compose box clears after successful submission
-    When I type "Clear test" and press Enter
-    Then the compose box should be completely empty
-    And the compose box should be focused and ready for input
-
-  Scenario: Timeline scrolls to bottom on new message
-    Given the timeline has enough messages to scroll
-    And I scroll up in the timeline
-    When I type "Scroll test" and press Enter
-    Then the timeline should auto-scroll to show my new message at the bottom
+  @ux-compose-011
+  Scenario: Reconcile visible messages through timeline state
+    Given a submitted message is returned by the server or a later timeline refresh
+    When the timeline updates its post collection
+    Then the current chat's message records drive visible posts
+    And scrolling uses the current near-bottom and user-scroll policy
+    # Always scrolling to bottom would discard the user's history-reading position.

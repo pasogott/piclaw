@@ -7,39 +7,48 @@ Feature: Editor pane
     Given I am authenticated and on the main chat
     And the workspace explorer is visible
 
-  # Regression: fix(editor): stop editor flicker caused by unstable callback deps
-  Scenario: Switching files does not cause visible flicker
-    Given I have file "notes/a.md" open in the editor
-    When I click on "notes/b.md" in the workspace explorer
-    Then the editor should transition smoothly to the new file
-    And no flash of blank content should occur
+  Rule: Editor tabs stay stable while switching and closing
 
-  # Regression: fix(editor): confirm before closing dirty tabs in all close paths
-  Scenario: Closing an unsaved tab shows confirmation
-    Given I have a file open in the editor
-    And I have made unsaved changes
-    When I click the close button on the tab
-    Then a confirmation dialog should appear
-    And choosing "Don't save" should close without saving
-    And choosing "Cancel" should keep the tab open
+    @ux-editor-001
 
-  # Regression: fix(web): activate editor tabs on press
-  Scenario: Clicking a tab activates it immediately
-    Given I have two files open in editor tabs
-    When I mouse-down on the inactive tab
-    Then the tab should activate immediately (not wait for mouse-up)
-    And the editor content should switch to that file
+    Scenario: Switching files does not cause visible flicker
+      Given I have two files open in editor tabs
+      When I switch from one editor tab to the other
+      Then the editor pane should remain visible
+      And the editor should not show a loading placeholder
 
-  # Regression: fix(editor): stop preview flicker + add resizable splitter
-  Scenario: Markdown preview is stable during splitter resize
-    Given I have a markdown file open with preview enabled
-    When I drag the splitter between editor and preview
-    Then neither pane should flicker or go blank during drag
-    And the split ratio should persist after release
+    @ux-editor-002
 
-  # Regression: fix(zen): eliminate CPU spike from hover-reveal
-  Scenario: Zen mode does not spike CPU on hover
-    Given I am in zen mode editing a file
-    When I move my mouse across the editor area
-    Then CPU usage should not spike above baseline + 10%
-    And no layout thrashing should occur
+    Scenario: Closing an unsaved tab shows confirmation
+      Given I have a dirty editor tab
+      When I attempt to close the tab
+      Then the browser should show a confirmation dialog
+      And dismissing the dialog should keep the tab open
+
+    @ux-editor-003
+
+    Scenario: Clicking a tab activates it immediately
+      Given I have two files open in editor tabs
+      When I press the primary mouse button on an inactive tab
+      Then that tab should become active before mouse-up
+      And the editor content should switch to that file
+
+  Rule: Markdown preview and zen mode stay stable
+
+    @ux-editor-004
+
+    Scenario: Markdown preview is stable during splitter resize
+      Given I have a markdown file open with preview enabled
+      When I drag the preview splitter
+      Then the preview pane should remain visible
+      And the preview pane should keep rendered content
+      And the preview height should persist after release
+
+    @ux-editor-005
+
+    Scenario: Zen mode keeps editor content visible while other shell panes are hidden
+      Given I have a file open in the editor
+      When I enter zen mode
+      Then the workspace sidebar should be hidden
+      And the chat container should be hidden
+      And the editor pane should remain visible

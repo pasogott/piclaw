@@ -1,50 +1,55 @@
-Feature: Session swipe navigation independence
-  As a mobile user
-  I want to swipe between sessions regardless of which UI elements are visible
-  So that session navigation works consistently no matter what pane is open
+@classic @touch @source-reviewed
+Feature: Classic session swipe target rules
+  Source: runtime/web/src/ui/chat-swipe-navigation.ts.
+  Eligibility depends on the gesture target and active selection, not merely which panes are visible.
 
-  Background:
-    Given I am authenticated and on the main chat on a touch device
-    And I have at least two chat sessions
+  @ux-mobile-001
+  Scenario: Swipe on eligible timeline space
+    Given at least two non-archived swipe candidates exist
+    And the touch starts on an eligible noninteractive timeline target
+    And no active text selection blocks navigation
+    When the gesture satisfies the horizontal swipe thresholds
+    Then navigation selects the adjacent candidate and wraps at the candidate-list end
 
-  Scenario: Swipe works on the timeline area
-    When I perform a horizontal finger swipe on the timeline
-    Then the session should switch to the adjacent session
+  @ux-mobile-002
+  Scenario Outline: Ignore gestures originating in excluded controls
+    Given a gesture starts inside <surface>
+    When the target is checked for swipe eligibility
+    Then it is excluded from ordinary chat swipe navigation
 
-  Scenario: Swipe works when workspace explorer is visible
-    Given the workspace explorer is open
-    When I perform a horizontal finger swipe on the timeline area
-    Then the session should switch (explorer visibility does not block)
+    Examples:
+      | surface                      |
+      | composer input               |
+      | workspace explorer           |
+      | editor pane container        |
+      | terminal content or dock     |
+      | attachment preview modal     |
+      | Adaptive Card controls       |
+      | model or session popup       |
 
-  Scenario: Swipe works when editor pane is visible
-    Given a file is open in the editor pane
-    When I perform a horizontal finger swipe on the timeline area
-    Then the session should switch (editor visibility does not block)
+  @ux-mobile-003
+  Scenario: Permit designated thinking and status panel targets
+    Given an interactive target has a thinking, status-panel or thinking-intent passthrough ancestor
+    When swipe target eligibility is evaluated
+    Then that ancestor permits the target through the interactive-target exclusion
+    And gesture direction and selection guards still apply
 
-  Scenario: Swipe works when terminal dock is visible
-    Given the terminal dock is open below the editor
-    When I perform a horizontal finger swipe on the timeline area
-    Then the session should switch
+  @ux-mobile-004
+  Scenario: Keep swipe order stable as the selected chat changes
+    Given candidate sessions have active and archived metadata
+    When swipe candidates are resolved
+    Then archived and duplicate identifiers are omitted
+    And active sessions sort first followed by chat-identifier alphabetical order
+    And changing the selected chat does not otherwise reorder that carousel
 
-  Scenario: Swipe is blocked only by active text inputs
-    Given I am focused in the compose box (typing)
-    When I perform a horizontal swipe gesture
-    Then the session should NOT switch (compose is interactive)
+  @ux-mobile-005
+  Scenario: Do not treat primarily vertical movement as chat navigation
+    Given an eligible touch gesture has started
+    When movement exceeds the vertical cancellation threshold and is primarily vertical
+    Then that gesture is cancelled for horizontal chat navigation
 
-  Scenario: Swipe is blocked inside the editor content area
-    Given I am focused in the editor content area
-    When I perform a horizontal swipe on the editor
-    Then the session should NOT switch (editor handles its own gestures)
-
-  Scenario: Swipe works on agent thinking panels
-    Given the agent thinking panel is showing
-    When I perform a horizontal finger swipe on the thinking panel
-    Then the session should switch (thinking panels pass through)
-
-  Scenario: Swipe indicator appears during gesture
-    When I start a horizontal swipe gesture
-    Then a visual swipe indicator should appear
-    And it should show the adjacent session name
-    When I complete the swipe past the threshold
-    Then the session should switch
-    And the indicator should fade out
+  @ux-mobile-006
+  Scenario: Limit horizontal wheel navigation to the supported Safari path
+    Given the browser is not desktop Safari or is iOS
+    When a horizontal wheel event arrives
+    Then the Safari wheel-navigation path does not switch chats

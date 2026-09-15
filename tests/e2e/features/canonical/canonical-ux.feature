@@ -1,341 +1,298 @@
-@canonical @piclaw-baseline
-Feature: Piclaw-compatible interaction model
-  Both ports expose the same observable user flows as Piclaw through native UI and APIs.
-  Unsupported capabilities fail their tagged scenario rather than being simulated.
-  Safety deviations are explicit and require alignment instead of weakening safeguards.
+@canonical @piclaw-baseline @classic @source-reviewed
+Feature: Classic Piclaw interaction model
+  The coded Classic web client is the reference for this specification.
+  Visual differences and optional add-on behavior are not implied to be identical.
+  Source-review evidence and remaining validation gaps are indexed in COMPLETION.md.
 
   Background:
-    Given an isolated canonical database
-    And the canonical current session "main"
-    And a second session "research"
-    And deterministic native assets and registry data
-    And all actions are performed through visible enabled controls
+    Given Piclaw is in single-user mode in an isolated workspace
+    And the Classic client has selected session "main"
+    And session "research" is available
 
-  @shell @pointer @keyboard
-  Scenario Outline: Open and dismiss the workspace menu
+  @ux-original-001 @shell @pointer @keyboard
+  Scenario: Open and dismiss the workspace menu
     Given the workspace menu is closed
-    When I open the workspace menu using <input>
-    Then the workspace menu is open exactly once
-    And focus can reach each enabled menu item
-    When I dismiss the workspace menu using <dismissal>
-    Then the workspace menu is closed
-    And no underlying control is activated
-    And focus returns to a usable shell control
+    When I activate the workspace menu trigger
+    Then the workspace menu is shown
+    When I click outside the menu or press Escape
+    Then the workspace menu closes
 
-    Examples:
-      | input    | dismissal      |
-      | pointer  | outside pointer|
-      | keyboard | Escape         |
+  @ux-original-002 @shell @workspace
+  Scenario: Toggle workspace visibility without submitting the draft
+    Given the composer contains unsent text
+    When I choose the workspace visibility action
+    Then the workspace visibility changes
+    And the action does not submit the composer
+    When I choose the visibility action again
+    Then the previous workspace visibility is restored
 
-  @shell @workspace @responsive
-  Scenario: Show and hide the native workspace
-    Given the composer contains canonical unsent content
-    When I choose "Show workspace" from the workspace menu
-    Then the native workspace tree is visible
-    And the workspace menu is closed
-    When I hide the workspace
-    Then the current session and composer content are unchanged
-    And on narrow layouts the drawer backdrop activates no Plan or composer control
-
-  @quick-actions @typeahead @keyboard
-  Scenario: Type on the idle timeline to open Quick actions
-    Given focus is on noninteractive timeline content
-    And no modal, session picker, model picker, workspace editor or composer control is active
+  @ux-original-003 @quick-actions @typeahead @keyboard
+  Scenario: Open Quick Actions by typing outside interactive controls
+    Given the key event target is eligible noninteractive timeline content
+    And no modal or popup exclusion applies
     When I type one printable non-whitespace character without Control, Meta or Alt
-    Then Quick actions opens exactly once
-    And its search field has focus
-    And the typed character is the initial query
-    And matching sessions, workspace actions and supported slash commands are grouped in native order
-    And the highlighted result prefers exact title, then title prefix, then the first result
+    Then Quick Actions opens with that character as its query
+    And its input is focused when the open effect runs
+    And results use the enabled Agents, Workspace and Slash commands groups
+    And the initial selection prefers an exact title then a title prefix then the first result
     When I press ArrowDown or ArrowUp
-    Then the highlight wraps through the filtered results
-    When I press Enter
-    Then the highlighted action runs exactly once
-    And Quick actions closes without erasing the composer draft
+    Then selection wraps through the filtered results
+    When I press Enter with a selected result
+    Then the selected action handler runs and the palette closes
 
-  @quick-actions @typeahead @focus @failure
-  Scenario Outline: Do not steal typing from an interactive surface
-    Given focus is inside <surface>
+  @ux-original-004 @quick-actions @focus
+  Scenario Outline: Do not open timeline typeahead from excluded targets
+    Given the key event target is within <surface>
     When I type a printable character
-    Then Quick actions remains closed
-    And the surface receives the character normally
+    Then that event does not open Quick Actions
 
     Examples:
-      | surface                  |
-      | composer textarea        |
-      | input or select          |
-      | button or link           |
-      | contenteditable editor   |
-      | workspace sidebar        |
-      | open modal dialog        |
-      | session or model picker  |
+      | surface                               |
+      | textarea or input                     |
+      | select, button or link                |
+      | contenteditable or textbox            |
+      | composer or CodeMirror editor         |
+      | workspace pane or sidebar             |
+      | dialog, listbox or open popup         |
 
-  @quick-actions @typeahead @ime
-  Scenario: Ignore consumed, modified and composing keys
-    Given focus is on noninteractive timeline content
-    When a key event is already prevented, repeated, composing, whitespace, Control-modified, Meta-modified or Alt-modified
-    Then Quick actions remains closed
-    And no action is activated
+  @ux-original-005 @quick-actions @ime
+  Scenario: Ignore consumed and modified typeahead events
+    Given a timeline key event meets an exclusion for prevented, repeated, composing, whitespace or modified input
+    When the timeline typeahead guard evaluates it
+    Then Quick Actions does not open from that event
 
-  @quick-actions @dismissal @scope
-  Scenario Outline: Dismiss Quick actions without side effects
-    Given Quick actions was opened from a connected visible trigger
-    And its search query has not activated an action
-    When I dismiss it using <dismissal>
-    Then Quick actions is closed
-    And focus returns to the connected opening trigger when applicable
-    And the current session, composer draft, media and references are unchanged
+  @ux-original-006 @quick-actions @dismissal
+  Scenario: Dismiss Quick Actions without executing a result
+    Given Quick Actions is open
+    When I press Escape or click its outside area
+    Then Quick Actions closes and clears its query
+    And no result action is executed
 
-    Examples:
-      | dismissal       |
-      | Escape          |
-      | outside pointer |
-      | close control   |
+  @ux-original-007 @quick-actions @commands
+  Scenario: Insert a Quick Actions command into the composer
+    Given a supported slash command is present in Quick Actions
+    And the composer already contains text
+    When I select that slash command
+    Then the client requests compose prefill with the command followed by a space
+    And the composer replaces its text with that prefill
+    And the text area is focused with its cursor at the end
+    And prefill does not submit the command
+    And the palette closes
 
-  @quick-actions @scope @race @failure
-  Scenario: Activate only current supported Quick actions
-    Given command and session results are scoped to session "main"
-    When I change to session "research" while an older catalogue or activation is pending
-    Then the older result cannot replace or activate an action in "research"
-    And failed activation keeps Quick actions open with recoverable input and an error
-    And unsupported commands and workspace actions are absent rather than simulated
-    And command insertion preserves the existing composer draft and does not submit it
+  @ux-original-008 @quick-actions @skills
+  Scenario: Discover loaded skills in the command catalogue
+    Given the selected session resource loader exposes named skills
+    When the server builds the session command catalogue
+    Then loaded skills are exposed with the "/skill:<name>" command namespace and descriptions
+    And Quick Actions presents those commands in the Slash commands group
+    And no separate Skills group is created by Quick Actions
+    When I select a skill command
+    Then its command text is inserted by the same compose-prefill path as other slash commands
 
-  @quick-actions @skills @commands @scope
-  Scenario: Discover loaded skills through canonical slash commands
-    Given session "main" has two loaded skills with distinct names and descriptions
-    When Quick actions loads the authoritative command catalogue
-    Then each loaded skill appears exactly once as "/skill:<name>"
-    And skill commands are searchable by name and description in the Slash commands group
-    And no separate Skills group or synthetic skill action is added
-    When I activate one skill command
-    Then "/skill:<name> " is inserted without submitting or erasing the existing composer draft
-    And execution expands only the skill loaded by the captured session
-    And an unknown or stale skill command fails recoverably without invoking another skill
+  @ux-original-009 @plan @addon-dependent
+  Scenario: Save Markdown through the Plan sidebar add-on
+    Given the Plan sidebar add-on is installed and its browser entry is loaded
+    And its editor has loaded the selected chat's Markdown
+    When I edit the Markdown and activate Save
+    Then the add-on posts the chat identifier and Markdown to its plan API
+    And a successful response updates its saved timestamp
+    And the dirty flag clears only if the editor still contains the submitted text
+    And newer edits are retained as unsaved changes
 
-  @plan @pointer @keyboard
-  Scenario Outline: Open Plan and edit the loaded revision
-    Given session "main" has the canonical Plan at revision 1
-    When I open Plan using <input>
-    Then its editor and real checklist progress are visible
-    When I edit the Plan and save revision 1
-    Then the native Plan tool reads the saved text at revision 2
-    And a reload preserves that text and revision
+  @ux-original-010 @plan @addon-dependent
+  Scenario: Keep dirty Plan text when a remote update arrives
+    Given the Plan sidebar add-on editor contains unsaved edits
+    When a plan-update event for the same chat is received
+    Then the add-on retains the local text and displays its remote-change warning
+    When I explicitly activate Refresh
+    Then the add-on requests the stored plan without the automatic dirty-preservation option
+    And an applicable response replaces the displayed Markdown
+    # Refresh is not specified as a compare-and-swap revision operation or discard confirmation.
 
-    Examples:
-      | input    |
-      | pointer  |
-      | keyboard |
+  @ux-original-011 @plan @addon-dependent
+  Scenario: Save a Plan before submitting it to the model
+    Given the Plan sidebar add-on is open
+    When I activate Submit to model
+    Then the add-on first saves the editor Markdown for the captured chat
+    And it does not submit if saving fails, the chat changes or the saved plan is empty
+    And otherwise it posts the saved checklist prompt in auto mode to that chat's message endpoint
+    And a submission error is displayed in the Plan sidebar
 
-  @plan @race @failure
-  Scenario: Preserve a dirty Plan across a remote update
-    Given the open Plan editor has unsaved local text
-    When the native Plan tool writes different text with the loaded revision
-    Then the remote text is stored and emits a session-scoped update
-    And the editor retains its local text
-    And the UI reports that refresh is required
-    When I refresh the dirty Plan
-    Then I must confirm before discarding local text
+  @ux-original-012 @plan @addon-dependent
+  Scenario: Represent checklist progress using the Plan add-on
+    Given the Plan sidebar add-on is installed with its model tool available
+    And the selected chat's plan contains pending, in-progress and completed checklist items
+    Then the sidebar interprets "- [ ]", "- [-]" and "- [x]" as checklist states
+    And headings and other Markdown remain editor content
+    And the progress display derives from parsed checklist items
+    When the session-scoped "plan" tool reads or writes the plan
+    Then it addresses the selected chat's stored Markdown
+    # Tool activation policy still decides whether the tool is model-visible.
 
-  @plan @scope @submit
-  Scenario: Submit Plan to the captured session
-    Given Plan and composer both contain unsent content
-    When I choose "Submit to model"
-    Then Plan is saved before it is sent
-    And normal send or queue policy targets session "main"
-    And composer text, media and references remain unchanged
-    And switching sessions cannot retarget the pending submission
+  @ux-original-013 @session-picker @keyboard
+  Scenario: Open and dismiss the Classic session picker
+    When I activate the session picker
+    Then its search field receives focus when the popup is mounted
+    And session entries are organised by the current picker grouping rules
+    When I press Escape
+    Then the popup closes without selecting a different session
+    And the session-trigger control is focused
 
-  @plan @tool @model @truthful-ui
-  Scenario: Expose canonical Plan Markdown and the native Plan tool to the model
-    Given session "main" has checklist items in pending, in-progress and completed states
-    Then Plan renders them as "- [ ]", "- [-]" and "- [x]" Markdown
-    And headings and non-checklist Markdown remain editable without fabricated progress
-    And the model tool catalogue contains one session-scoped "plan" tool
-    When the model reads and updates Plan through that tool
-    Then the sidebar and tool return the same canonical Markdown and revision
-    And another session's Plan is unchanged
+  @ux-original-014 @session-picker @scope
+  Scenario: Select another session through the picker
+    Given the session picker contains session "research"
+    When I activate that session entry
+    Then the client requests selection of its chat identifier
+    And chat-scoped timeline and queue refresh paths use the new selection
+    And their stale-response guards reject responses for a superseded selection
 
-  @session-picker @pointer @keyboard
-  Scenario Outline: Open, search and dismiss the session picker
-    When I open the session picker using <input>
-    Then search has focus before the first visible paint
-    And the popup remains anchored to its native composer target
-    And sessions "main" and "research" are present by native identifier
-    When I dismiss it with Escape
-    Then no session changes
-    And focus returns to the session-picker trigger
+  @ux-original-015 @session-picker @capability
+  Scenario: Use the session actions actually supplied by the client
+    Given the session picker displays a session
+    Then its action controls depend on the session entry and supplied callbacks
+    And pinning, renaming, archiving and restoring use their respective client action paths
+    And a failed mutation reports an error instead of declaring success
+    # This does not assert that every skin offers delete or child creation in this popup.
 
-    Examples:
-      | input    |
-      | pointer  |
-      | keyboard |
+  @ux-original-016 @queue
+  Scenario: Display queued follow-ups during a busy turn
+    Given the selected chat has an active turn
+    When accepted composer submissions are queued by the server
+    Then the follow-up stack displays the returned queue entries for that chat
+    And subsequent queue refreshes reconcile the stack with server state
 
-  @session-picker @scope @race
-  Scenario: Select one coherent session view
-    Given delayed responses exist for session "main"
-    When I select session "research" using keyboard navigation
-    Then timeline, queue, model, context and composer all show "research"
-    And a late "main" response replaces none of them
+  @ux-original-017 @queue @return
+  Scenario: Return a queued follow-up to the Classic editor
+    Given a queued follow-up contains serialised text and references
+    When I activate its return-to-editor action
+    Then the client reconstructs the text and file, folder and message references
+    And it replaces the composer text and references with the reconstructed draft
+    And it clears the composer's media list and submission notices
+    And it schedules focus and cursor placement at the end of the restored text
+    And it schedules the queued-item removal callback
+    # The current client does not persist a merged recovery draft before removal.
 
-  @session-picker @capability
-  Scenario: Expose only supported session mutations
-    Then pin, archive, restore, rename, delete and child-session creation are enabled only when implemented by the native API
-    And running or unknown-count sessions cannot be deleted
-    And a failed mutation keeps the picker and selection recoverable
+  @ux-original-018 @queue @remove @reorder
+  Scenario: Reorder and remove queued follow-ups with reconciliation
+    Given the follow-up stack contains multiple entries
+    When I move an entry
+    Then the client optimistically changes the local order and sends the indices with the chat identifier
+    And a reorder failure triggers a queue refresh
+    When I remove a queued entry
+    Then the client optimistically hides that row and requests server removal
+    And a failure clears its dismissal marker, shows a warning and refreshes the queue
 
-  @queue @fifo
-  Scenario: Queue two follow-ups exactly once
-    Given session "main" has an active turn
-    When I send two canonical follow-ups
-    Then both native queue IDs are visible in FIFO order
-    And their text, media and references are stored once
-    And session "research" is unchanged
+  @ux-original-019 @queue @steer @current-behavior
+  Scenario: Steer a queued item using the backend-authoritative action
+    Given the Classic follow-up stack offers Steer for a queued item
+    When I activate Steer
+    Then the client optimistically hides the item and calls the steer endpoint with its row and chat identifiers
+    And the backend determines whether to steer an active run or send immediately after the stream ends
+    And a failure shows a warning and refreshes queue state
+    # The input PR's @safety-deviation proposed disabling idle Steer.
+    # That proposal is not the current Classic behavior and is not implemented by this specification.
 
-  @queue @return @race @failure
-  Scenario: Return a queued item to the latest editor draft
-    Given the composer draft changes while return-to-editor is pending
-    When I return the selected queue item to the editor
-    Then its recovery record and merged origin-session draft persist before DELETE
-    And the latest concurrent draft text is retained
-    And media and references are retained
-    And retrying a partial failure creates no duplicate
-    And a storage failure prevents DELETE
+  @ux-original-020 @model-picker
+  Scenario: Select a model for the selected chat
+    Given the model catalogue provides selectable entries
+    When I open the model picker and select an entry
+    Then the client requests that provider and model for the captured chat
+    And accepted model data updates the displayed model and context information
+    And a rejected request reports failure
+    And selecting a model does not submit the composer draft
 
-  @queue @remove @reorder @scope
-  Scenario: Reorder and remove by durable identity
-    When I move one queued item by one adjacent position
-    Then only that target group's persisted FIFO order changes
-    When native removal rejects the selected queue ID
-    Then the selected row remains or reconciles to authoritative consumed state
-    And no other session or composer draft changes
+  @ux-original-021 @session-picker @model-picker @keyboard
+  Scenario: Navigate the Classic picker lists
+    Given a Classic session or model popup is open
+    When I enter a search query
+    Then its own query matcher filters the available entries
+    When I navigate with arrows or supported paging keys outside text-editing behavior
+    Then its keyboard handler moves the highlighted entry within the filtered list
+    And the model picker requires Control or Meta with Home and End while its search input has focus
+    When I press Enter with a highlighted entry
+    Then that entry is activated
+    When I press Escape
+    Then the popup closes
+    # Search fields and searchable metadata differ between the two picker implementations.
 
-  @queue @steer @safety-deviation
-  Scenario: Steer only a matching active run
-    Given activity is idle or unknown
-    Then Steer is disabled and sends no request
-    Given session "main" has a matching active run and queued item
-    When I activate Steer twice
-    Then the original queued ID is consumed at most once
-    And delivery targets only that run and session
-    And failure leaves the item queued
-    # Piclaw currently enables idle Steer. Both ports must converge on this safer outcome;
-    # visual equality must not be achieved by enabling an unsafe action.
+  @ux-original-022 @model-picker @capability
+  Scenario: Render model capabilities without inventing values
+    Given the catalogue or model response omits optional capability information
+    When the model UI renders it
+    Then capability controls use the reported model metadata
+    And unavailable context information is not treated as an authoritative measured token count
+    And a model response for a superseded chat is rejected by the model-state guard
 
-  @model-picker @pointer @keyboard
-  Scenario Outline: Search and select a model authoritatively
-    Given two real registry models with explicit capabilities
-    And the composer has unsent text and references
-    When I open the model picker using <input>
-    And I search for and select the second model
-    Then the accepted native mutation updates the session model and context window
-    And reload preserves the selected model only for session "main"
-    And composer content is unchanged
+  @ux-original-023 @turn @reconnect
+  Scenario: Refresh active-turn state after reconnect and request stop
+    Given the client reconnects its SSE channel
+    When reconnect refresh handlers run
+    Then chat data, agent status and queue state are refreshed
+    When I activate the visible stop control
+    Then the client requests cancellation through its selected-chat control path
+    And stale turn events are filtered by the turn-state guards
+    # Cancellation is a request; the UI must await subsequent authoritative state.
 
-    Examples:
-      | input    |
-      | pointer  |
-      | keyboard |
+  @ux-original-024 @timeline @copy @delete
+  Scenario: Copy and delete messages using their actual controls
+    Given a post renders Markdown containing a fenced code block
+    When I use the post copy action
+    Then the clipboard receives the post's source Markdown
+    When I use the code block copy action
+    Then the clipboard receives code text
+    When I request deletion of a message with replies
+    Then the client follows the cascade confirmation path
+    And cancelling the confirmation preserves the message
+    And accepted deletion removes the targeted message and confirmed replies
 
-  @session-picker @model-picker @typeahead @keyboard @capability
-  Scenario Outline: Find and activate picker entries without changing unsupported state
-    Given the <picker> contains multiple authoritative entries with similar names
-    When I search by native identifier, display name or capability metadata
-    Then only matching entries remain in native grouped order
-    When focus leaves the search field and I type a printable unmodified prefix
-    Then incremental typeahead highlights the prefix match before substring matches
-    And Arrow keys, Home, End, PageUp and PageDown move within enabled results
-    And Enter activates the highlighted enabled entry exactly once
-    And Escape closes the picker and restores focus without changing selection
-    And unavailable mutations or models remain absent or disabled rather than simulated
+  @ux-original-025 @messages @model-facing
+  Scenario: Retrieve explicit message IDs and bounded row windows
+    Given the messages tool is available in an authorised session
+    When the model requests multiple explicit message IDs with surrounding context
+    Then the tool returns bounded message results and reports missing_row_ids
+    When the model supplies an after_row or before_row window and a limit
+    Then the tool applies that window and limit to the selected chat scope
+    And in single-user mode an explicit permitted chat or all-chat scope may be requested
+    And family mode restricts reads to authorised owned sessions
+    # Message results are model-facing data, not a guarantee about how a model interprets text.
 
-    Examples:
-      | picker         |
-      | session picker |
-      | model picker   |
+  @ux-original-026 @attachments
+  Scenario: Keep attachment upload state separate from message submission
+    Given the composer has selected an attachment
+    When upload succeeds
+    Then the returned media identifier is available to the message submission path
+    When upload fails
+    Then the client reports the upload error
+    And it does not treat that failed file as a successfully uploaded attachment
+    # This does not promise server deduplication across upload retries or source deletion.
 
-  @model-picker @failure @race @truthful-ui
-  Scenario: Reject stale or unsupported model state
-    Given a model switch is pending for session "main"
-    When I switch to session "research"
-    Then the late response cannot change the "research" model label
-    And a rejected switch retains the prior model and composer draft
-    And thinking appears only for advertised support
-    And unknown context remains unavailable
-    And local token estimates are labelled estimates
-    And compaction is actionable only when natively supported
+  @ux-original-027 @tools @pane @timer
+  Scenario: Display Classic tool execution status
+    Given tool status includes a call identity, state and available timing data
+    When the Classic status panel renders it
+    Then it displays the tool name, available preview and matching status presentation
+    And elapsed display updates on the client's one-second interval while applicable
+    And completed status uses its terminal timing data when supplied
+    And status-event routing distinguishes calls by identity rather than display name alone
+    # Full pane lifecycle reconstruction after reload and reduced-motion parity require separate evidence.
 
-  @turn @reconnect @scope
-  Scenario: Cancel the captured active turn across reconnect
-    Given a busy turn has captured session, turn and runtime owner
-    When SSE disconnects and reconnects
-    Then busy state is refreshed without changing ownership
-    When I activate the distinct stop control
-    Then only that captured turn is cancelled
-    And composer and queue are preserved
-    And a stale terminal event cannot stop a newer turn
+  @ux-original-028 @copy @speech @capability
+  Scenario: Copy code and transfer post speech ownership
+    Given the browser exposes supported speech synthesis and the post has speakable text
+    When I start reading an assistant post aloud
+    Then the speech controller owns that post's utterance
+    When I start another post
+    Then prior speech is cancelled and ownership transfers
+    And stale callbacks cannot clear the newer speech owner
+    When I copy a code block
+    Then the copy path uses code text instead of highlighted HTML
 
-  @timeline @copy @delete @pointer @keyboard @failure
-  Scenario: Copy and delete timeline messages through native actions
-    Given the timeline contains user and assistant Markdown with a code block
-    Then each deletable message exposes an accessible Delete message action
-    And each copyable message exposes an accessible Copy message action
-    And each code block exposes its own Copy code action
-    When I copy the message or code block
-    Then the clipboard receives original stored Markdown or code rather than rendered HTML
-    And success or failure glyphs are announced and return to idle after the native timeout
-    When native deletion rejects or accepts the captured message ID
-    Then only that message remains or is removed according to the authoritative response
-    And no other session, message reference or composer draft changes
-
-  @messages @model @range @scope @failure
-  Scenario: Let the model identify bounded ranges of persisted messages
-    Given session "main" contains ordered persisted messages with durable numeric IDs
-    When the model requests multiple explicit message IDs with context before and after
-    Then the native messages tool returns them in timeline order with bounded surrounding rows
-    And missing IDs are reported without substituting another session's content
-    When the model requests an after-row or before-row window with a bounded limit
-    Then only messages inside that current-session window are returned
-    And content and result counts are bounded and pagination metadata is truthful
-    And quoted message content is data rather than new instructions
-
-  @attachments @failure
-  Scenario: Retry attachment delivery without duplication
-    Given upload or paste shows one native progress control
-    When I cancel and retry the selected file
-    Then cancellation prevents send and retains the draft
-    And retry delivers one durable media item to the active destination
-    And it survives reload and source removal
-
-  @tools @pane @glyph @timer @reconnect @accessibility
-  Scenario: Present tool execution lifecycle in the native tool pane
-    Given the captured turn emits a tool call with a durable tool-call ID and start time
-    When I open its tool pane using pointer or keyboard
-    Then focus reaches the pane and its disclosure state is announced
-    And the running glyph, tool name, arguments and elapsed timer are visible
-    And the elapsed label advances from the authoritative start time at the native cadence
-    When the matching result succeeds, fails or is cancelled
-    Then the corresponding terminal glyph and accessible label replace the running glyph
-    And the timer freezes at the authoritative terminal duration
-    And stale or duplicate events cannot alter a newer tool call with the same display name
-    And reconnect or reload reconstructs the same lifecycle from persisted events
-    And closing the pane restores usable focus without activating underlying controls
-    And reduced-motion mode preserves state meaning without requiring animation
-
-  @timeline @svg @security @accessibility
-  Scenario: Render model-generated SVG inline without page privileges
-    Given an assistant message contains a fenced "svg" block with safe vector geometry
-    Then the timeline renders it inline as an accessible image that fits the message width
-    And ordinary raw HTML remains escaped
-    When the SVG also contains scripts, event handlers, foreign objects or external references
-    Then unsafe elements and attributes are removed before rendering
-    And the SVG cannot execute code, navigate, fetch external resources or inspect the page DOM
-    And malformed or oversized SVG remains visible as inert source rather than trusted markup
-
-  @copy @speech @capability
-  Scenario: Copy and read assistant content truthfully
-    When I copy an assistant code block
-    Then the clipboard receives original stored text rather than highlighted HTML
-    And read aloud is shown only when the browser and assistant text support it
-    And starting another post transfers speech ownership
-    And stale completion callbacks do nothing
+  @ux-original-029 @svg @markdown @current-behavior
+  Scenario: Keep model-generated fenced SVG as source code
+    Given a post contains an SVG fenced code block
+    When the Classic Markdown renderer processes the post
+    Then the SVG remains code text in a code block
+    And the normal code-copy action can copy its source
+    And the renderer does not turn that fence into an inline SVG diagram
+    # Upstream 3f8ee0d2f requested safe accessible inline SVG rendering.
+    # That rendering path and its size/fallback policy are absent at this code baseline.

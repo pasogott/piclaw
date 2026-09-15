@@ -1,46 +1,53 @@
-Feature: Timeline rendering
+Feature: Timeline rendering and post actions
   As a user
-  I want messages to render correctly and consistently
-  So that I can read content without layout glitches
+  I want rendered posts and post-level actions to match the implemented classic timeline behavior
+  So that visual affordances stay trustworthy
 
   Background:
     Given I am authenticated and on the main chat
 
-  # Regression: fix(web): prevent first-column collapse in markdown tables
-  Scenario: Markdown tables render with proper column widths
+  @ux-timeline-023
+
+  Scenario: Markdown tables render as full-width tables with automatic layout
     Given the agent has posted a message containing a markdown table
-    Then all table columns should have a minimum visible width
-    And the first column should not collapse to zero width
+    Then the rendered table should use table display
+    And the table should span the post width with automatic column layout
 
-  # Regression: fix(web): fix bunched table columns
-  Scenario: Multi-column tables use proper table layout
-    Given the agent has posted a message with a 4-column table
-    Then the table should use display:table layout
-    And columns should distribute width proportionally
+  @ux-timeline-024
 
-  # Regression: fix(web): pin code copy control to code block corner
-  Scenario: Code blocks have a copy button in the corner
+  Scenario: Code blocks expose a copy button in the top-right corner
     Given the agent has posted a message with a code block
-    When I hover over the code block
-    Then a copy button should appear in the top-right corner
-    When I click the copy button
-    Then the code content should be in my clipboard
+    Then the code block should render a copy button in its top-right corner
+    When I click the code copy button
+    Then the code block text should be copied to my clipboard
 
-  # Regression: fix(web): open external links in new tab
-  Scenario: External links open in new tab
-    Given the agent has posted a message with an external URL
-    When I click the external link
-    Then a new tab should open with that URL
-    And the current tab should remain on PiClaw
+  @ux-timeline-025
 
-  # Regression: fix(web): render response outcome pills after timestamps
-  Scenario: Outcome pills appear after timestamps
-    Given the agent has completed a turn
-    Then the outcome pill should render after the timestamp
-    And they should be on the same line
+  Scenario: Resource links and link previews open in a new tab
+    Given the agent has posted a resource link or link preview with a remote URL
+    When I activate that rendered link
+    Then it should open in a new browser tab
+    And it should use noopener noreferrer isolation
 
-  # Regression: fix(web): remove duplicate module import that caused double timeline render
-  Scenario: Timeline renders exactly once on initial load
-    Given I load the app fresh
-    Then the timeline should contain each message exactly once
-    And no visual flicker should occur during load
+  @ux-timeline-026
+
+  Scenario: Outcome chips render after the timestamp in post metadata
+    Given the agent has completed a turn with an outcome marker
+    Then the post metadata should show the timestamp first
+    And the outcome chip should render after the timestamp on the same metadata row
+
+  @ux-timeline-027
+
+  Scenario: Read aloud appears only when browser speech support and speakable text both exist
+    Given an agent post has speakable text
+    When the browser supports speech synthesis
+    Then the post should show a Read aloud action
+    But without speech synthesis support the Read aloud action should not be shown
+
+  @ux-timeline-028
+
+  Scenario: Starting read aloud on another post transfers playback ownership
+    Given one agent post is already being read aloud
+    When I start Read aloud on a different agent post
+    Then the earlier speech playback should be cancelled
+    And the new post should become the active speaking post

@@ -1,47 +1,49 @@
-Feature: Session switching
-  As a user
-  I want to switch between chat sessions reliably
-  So that I never see messages from the wrong session
+@classic @source-reviewed
+Feature: Classic session selection
+  Source: runtime/web/src/ui/compose-session-switcher.ts and chat-scoped refresh orchestration.
 
-  Background:
-    Given I am authenticated and on the main chat
-    And I have at least two chat sessions
+  @ux-session-001
+  Scenario: Show the selected chat's timeline
+    Given sessions "main" and "research" contain different posts
+    When I choose "research" through the session switcher
+    Then the client changes the current chat identifier
+    And the selected-chat timeline refresh uses "research"
+    And responses guarded by a superseded chat generation are ignored
 
-  # Regression: fix(web): clear posts on session switch to prevent cross-session timeline merge
-  Scenario: Switching sessions shows only target session messages
-    Given I am viewing session "Alpha" with messages
-    When I switch to session "Beta"
-    Then the timeline should show only messages from "Beta"
-    And no messages from "Alpha" should be visible
+  @ux-session-002
+  Scenario: Group picker entries using the current session metadata
+    Given the session catalogue has current, pinned, active, tree, other and archived entries
+    When the Classic picker groups them
+    Then it uses those native groups rather than a single flat alphabetical list
+    And the current session remains distinguishable in the picker
 
-  # Regression: fix(web): block session swipe on message content
-  Scenario: Horizontal swipe on message text does not switch session
-    When I perform a horizontal swipe gesture on a message bubble
-    Then the session should not change
-    And the message content should not scroll horizontally
+  @ux-session-003
+  Scenario: Filter session entries using their search metadata
+    Given the Classic session picker is open
+    When I enter a search query
+    Then the session matchers filter its entries
+    And keyboard navigation operates on that filtered result list
 
-  # Regression: fix(web): exclude Apple Pencil from chat swipe navigation
-  @ipad
-  Scenario: Apple Pencil does not trigger session swipe
-    When I perform a horizontal stroke with Apple Pencil on the timeline
-    Then the session should not change
+  @ux-session-004
+  Scenario: Use archive and restore actions supplied for session entries
+    Given a session entry offers its archive or restore action
+    When I activate the action
+    Then the corresponding branch action callback receives that session identifier
+    And accepted changes are followed by a catalogue refresh
+    And failures report the branch action error
 
-  # Regression: fix(web): restore session swipe on iPad
-  @ipad
-  Scenario: Finger swipe switches sessions on iPad
-    When I perform a horizontal finger swipe on the timeline edge
-    Then the session should switch to the adjacent session
+  @ux-session-005
+  Scenario: Keep touch swipe eligibility independent of picker grouping
+    Given chat swipe navigation is enabled
+    When candidates for a swipe are resolved
+    Then archived candidates are excluded
+    And the swipe carousel uses active-first and chat-identifier order
+    And interactive target and text-selection exclusions still apply
 
-  # Regression: fix(web): sort session popup alphabetically, active session first
-  Scenario: Session popup shows active session first, then alphabetical
-    When I open the session switcher popup
-    Then the first item should be the current active session
-    And the remaining items should be sorted alphabetically
-
-  # Regression: fix(web): allow archiving non-default root sessions
-  Scenario: Non-default sessions can be archived
-    Given I have a session named "Temporary"
-    When I open the context menu for "Temporary"
-    Then the archive option should be available
-    When I click archive
-    Then "Temporary" should move to the archived section
+  @ux-session-006
+  Scenario: Dismiss the session picker without choosing an entry
+    Given the Classic session picker is open
+    When I press Escape
+    Then the picker closes and clears its query/typeahead state
+    And focus is restored to its trigger
+    And no new session entry is activated

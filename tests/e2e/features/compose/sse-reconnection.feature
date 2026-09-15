@@ -1,48 +1,40 @@
-Feature: SSE reconnection and recovery
-  As a user
-  I want the app to recover gracefully from network interruptions
-  So that I never lose messages or see stale state
+@classic @source-reviewed
+Feature: Classic SSE reconnection and refresh
+  Source: runtime/web/src/ui/app-connection-lifecycle.ts.
 
-  Background:
-    Given I am authenticated and on the main chat
+  @ux-reconnect-001
+  Scenario: Clear transient agent displays while disconnected
+    Given the client connection changes to a state other than connected
+    When the connection lifecycle handler runs
+    Then agent status, agent draft, agent plan and thought previews are cleared
+    And pending-request and agent-run state are reset
+    # Agent previews here are distinct from the user's composer draft.
 
-  # Regression: fix(web): force SSE reconnect after iOS resume (#65)
-  @mobile
-  Scenario: App reconnects after iOS background/foreground cycle
-    Given the app is connected via SSE
-    When the app is backgrounded for 30 seconds
-    And the app is foregrounded
-    Then the SSE connection should re-establish within 5 seconds
-    And the agent status indicator should show correct state
+  @ux-reconnect-002
+  Scenario: Refresh authoritative chat state after reconnect
+    Given the client has previously connected
+    When its connection state becomes connected again
+    Then the client refreshes agent status, follow-up queue and context usage
+    And it refreshes the main timeline when no hashtag or search view is active
 
-  # Regression: fix(web): resync after SSE reconnect before replaying deltas (#115)
-  Scenario: Messages sent during disconnect appear after reconnect
-    Given the app is connected via SSE
-    And the agent is processing a turn
-    When the SSE connection drops
-    And the agent completes the turn while disconnected
-    And the SSE connection re-establishes
-    Then the completed response should appear in the timeline
-    And no duplicate messages should exist
+  @ux-reconnect-003
+  Scenario: Avoid replacing an active search with main-timeline refresh
+    Given a hashtag or search view is active
+    When the connection becomes connected
+    Then the general reconnect path does not refresh the main timeline over that view
+    And status, queue and context refresh still run
 
-  # Regression: fix(web): disable auto-reload on version drift
-  Scenario: Version drift shows notice but does not auto-reload
-    Given the app is connected via SSE
-    When the server broadcasts a version change event
-    Then a version update notice should appear
-    But the page should NOT automatically reload
-    And no reload loop should occur
+  @ux-reconnect-004
+  Scenario: Show version drift without automatically reloading
+    Given the server advertises a different UI asset version
+    When the client receives that version for the first time
+    Then it shows the New UI available warning with a manual reload instruction
+    And it does not automatically reload even when editors and composer are clean
+    And repeated notices for the same version are suppressed by the version guard
 
-  # Regression: fix(web): restore active status on reconnect
-  Scenario: Agent status indicator correct after reconnect
-    Given the agent is idle
-    And the SSE connection drops and recovers
-    Then the agent status should show "idle" not "connecting"
-    And the compose box should be interactive
-
-  # Regression: fix(web): refresh queue state on SSE reconnect
-  Scenario: Queue state refreshes after reconnect
-    Given I have messages in the steering queue
-    And the SSE connection drops and recovers
-    Then the queue should display the correct pending messages
-    And no stale queue items should be visible
+  @ux-reconnect-005
+  Scenario: Avoid duplicate initial refresh after recent chat activation
+    Given the first connected event follows a recent chat activation
+    When initial-connection cleanup finishes
+    Then the recent-activation guard may skip redundant refresh calls
+    # This does not specify a fixed reconnect duration or exactly-once event delivery.

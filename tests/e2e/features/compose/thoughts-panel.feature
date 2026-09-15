@@ -1,45 +1,38 @@
-Feature: Thoughts panel expand and scroll
-  As a user monitoring agent reasoning
-  I want the thoughts panel to become scrollable when expanded
-  And revert to collapsed (non-scrollable) when I close it
-  So that I can read long reasoning without losing my place
+@classic @source-reviewed
+Feature: Classic thought and draft panel disclosure
+  Source: runtime/web/src/components/status.ts and Classic agent-status CSS.
 
-  Background:
-    Given I am authenticated and on the main chat
-    And the agent is producing thinking output
+  @ux-thoughts-001
+  Scenario: Render collapsed thought content with disclosure state
+    Given thought content is available and its panel is collapsed
+    When the status panel renders
+    Then it exposes the collapsed data-expanded state
+    And the collapsed height and overflow follow the panel's CSS
 
-  Scenario: Collapsed thoughts panel is not scrollable
-    Given the agent has produced more than 8 lines of thought
-    Then the thoughts panel should show "N more lines" button
-    And the thoughts panel body should have overflow-y hidden
-    And the thoughts panel body max-height should be clamped
+  @ux-thoughts-002
+  Scenario: Continue updating content independently of disclosure
+    Given a thought panel is collapsed
+    When accepted thought updates change its content
+    Then the rendered thought content updates without requiring the panel to be expanded
 
-  Scenario: Collapsed thoughts continue receiving streamed content
-    Given the thoughts panel is collapsed
-    When more thinking output arrives
-    Then the new thought content should be present
-    And the panel data-expanded attribute should remain "false"
+  @ux-thoughts-003
+  Scenario: Toggle thought panel expansion
+    Given thought content has a disclosure control
+    When I activate that control
+    Then the panel's expansion state toggles
+    And the supplied panel-toggle callback is used when provided
+    And otherwise the component manages its own expansion set
 
-  Scenario: Clicking "more lines" expands and enables scrolling
-    Given the thoughts panel shows "N more lines"
-    When I click the "more lines" button
-    Then the panel data-expanded attribute should be "true"
-    And the thoughts panel body should have overflow-y auto
-    And the thoughts panel body max-height should be constrained (52vh or 34rem)
-    And the panel should be scrollable (scrollHeight > clientHeight when content is long)
+  @ux-thoughts-004
+  Scenario: Collapse an expanded status panel with Escape
+    Given an expanded status panel can be resolved
+    And the Escape event is unmodified and does not target an editable field
+    When I press Escape
+    Then that panel is collapsed through the panel-toggle path
 
-  Scenario: Clicking "show less" collapses and disables scrolling
-    Given the thoughts panel is expanded and scrollable
-    When I click the "show less" button
-    Then the panel data-expanded attribute should be "false"
-    And the thoughts panel body should have overflow-y hidden
-    And the thoughts panel body max-height should be clamped to collapsed lines
-
-  Scenario: Expand/collapse round-trip preserves content
-    Given the thoughts panel has content
-    When I expand the panel
-    And I scroll down in the panel
-    And I collapse the panel
-    And I expand the panel again
-    Then the content should still be present
-    And the scroll position should be at the top
+  @ux-thoughts-005
+  Scenario: Preserve text when changing disclosure state
+    Given a status panel contains streamed text
+    When I expand and collapse the panel
+    Then changing disclosure does not itself replace the stored thought or draft text
+    And scroll behavior follows the component's content and expansion effects

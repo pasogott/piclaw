@@ -1,44 +1,37 @@
-Feature: Lightbox dismissal
-  As a user viewing attachments in the lightbox
-  I want to dismiss it by any key press, click, or tap
-  So that I can quickly return to the conversation without hunting for a close button
+Feature: Image lightbox dismissal
+  As a user viewing an image in the lightbox
+  I want the modal to close through the supported dismissal gestures
+  So that I can return to the timeline quickly
 
   Background:
     Given I am authenticated and on the main chat
     And a message with an image attachment is visible in the timeline
 
-  Scenario: Escape key dismisses lightbox
+  @ux-timeline-013
+
+  Scenario: Escape key dismisses the lightbox
     Given the lightbox is open showing an image
     When I press Escape
     Then the lightbox should close
     And the timeline should be visible again
 
-  Scenario: Any key press dismisses lightbox
+  @ux-timeline-014
+
+  Scenario: Non-Escape keys do not dismiss the lightbox
     Given the lightbox is open showing an image
-    When I press any key (Space, Enter, letter, arrow)
+    When I press Space, Enter, a letter, or an arrow key
+    Then the lightbox should remain open
+
+  @ux-timeline-015
+
+  Scenario: Clicking anywhere inside the modal dismisses the lightbox
+    Given the lightbox is open showing an image
+    When I click the backdrop or the image
     Then the lightbox should close
 
-  Scenario: Click on backdrop dismisses lightbox
-    Given the lightbox is open showing an image
-    When I click on the dark backdrop area
-    Then the lightbox should close
+  @ux-timeline-016
 
-  Scenario: Click on the image itself dismisses lightbox
-    Given the lightbox is open showing an image
-    When I click directly on the image
-    Then the lightbox should close
-
-  Scenario: Tap anywhere on touch device dismisses lightbox
+  Scenario: Tapping the modal surface on a touch device dismisses the lightbox
     Given the lightbox is open showing an image on a touch device
-    When I tap anywhere on the screen
+    When I tap the modal surface
     Then the lightbox should close
-
-  Scenario: Close button still works
-    Given the lightbox is open
-    When I click the Close button
-    Then the lightbox should close
-
-  Scenario: Lightbox does not reopen after dismissal
-    Given I dismissed the lightbox by pressing a key
-    Then the lightbox should remain closed
-    And no flicker or re-render should occur

@@ -1,59 +1,60 @@
-Feature: Compaction indicator and model switching
-  As a user monitoring context usage
-  I want the compaction indicator to update instantly during and after compaction
-  And I want to switch to a smaller context model immediately after compaction
+@classic @source-reviewed
+Feature: Classic compaction and model controls
+  Source: compose-box ContextPie, model-picker, app-agent-turn-events and model-state helpers.
 
-  Background:
-    Given I am authenticated and on the main chat
+  @ux-compaction-001
+  Scenario: Render compaction using supplied status state
+    Given a non-empty compaction elapsed label and title are supplied to the composer
+    When the context pie renders
+    Then its compacting style and elapsed label are visible
+    And its accessible label includes the compaction title
 
-  # ── Compaction indicator ──
+  @ux-compaction-002
+  Scenario: Reconcile compaction events with client status
+    Given a compaction event is accepted by the current turn's event guards
+    When the event updates agent state
+    Then the composer renders the resulting compaction status
+    And completion updates follow the accepted terminal event and usage refresh
+    # No fixed SSE delivery deadline or immediate atomic refresh is promised.
 
-  Scenario: Context pie shows compaction label when compacting
-    Given the agent is performing a compaction
-    Then the context pie button should have the "is-compacting" class
-    And the context pie should show an elapsed timer (e.g. "0:05")
-    And the context pie aria-label should mention "Smart compaction"
+  @ux-compaction-003
+  Scenario: Request stop through the visible compaction control
+    Given the composer renders a stop control for active work
+    When I activate stop while compaction is active
+    Then the client sends the supported cancellation request
+    And the displayed outcome follows later status updates
 
-  Scenario: Compaction status updates in real-time via SSE
-    Given a compaction_start SSE event is received
-    Then the compose bar should show the compaction title
-    And the elapsed timer should start counting
-    When a compaction_end SSE event is received
-    Then the compaction indicator should clear
-    And the compose bar should return to normal state
+  @ux-compaction-004
+  Scenario: Use refreshed usage rather than assume compaction always shrinks context
+    Given compaction completes
+    When the context usage request succeeds
+    Then the meter renders the returned usage values
+    And no assertion requires the new percentage to be smaller than its previous value
 
-  Scenario: Abort button shows compacting spinner during compaction
-    Given the agent is compacting
-    Then the abort/stop button should be in "compacting" mode
-    And the button should show a compacting spinner
-    And clicking abort should cancel the compaction
+  @ux-compaction-005
+  Scenario: Display temporary compaction suppression
+    Given the client receives a supported compaction-suppressed notification
+    When that notification is handled
+    Then the status notice identifies temporary suppression
+    And available retry or failure detail is displayed
 
-  Scenario: Context pie usage updates after compaction completes
-    Given the context was at N% usage before compaction
-    When compaction completes successfully
-    Then the context pie should show a percentage <= N
-    And the pie title should contain the updated "Context: XK / YK tokens (Z%)"
+  @ux-compaction-006
+  Scenario: Check model context compatibility before switching
+    Given the picker has model metadata and current context usage
+    When I select an entry whose context-fit state is blocked
+    Then the model picker's selection handler does not switch to it
+    And compatible entries still use the normal model mutation path
 
-  Scenario: Compaction suppressed shows backoff notice
-    Given compaction has failed recently
-    When a compaction_suppressed event is received
-    Then the status notice should show "Compaction temporarily suppressed"
-    And the detail should include failure count or retry timing
+  @ux-compaction-007
+  Scenario: Refresh model information after an accepted switch
+    Given a selectable model exists in the configured catalogue
+    When the server accepts selecting that model for the current chat
+    Then displayed model state updates from the accepted result
+    And context information follows the refreshed model and usage data
 
-  # ── Model switching after compaction ──
-
-  Scenario: Model switcher is responsive immediately after compaction
-    Given compaction has just completed
-    Then the model button in the compose bar should NOT be disabled
-    And the context pie should show the updated compacted usage value
-
-  Scenario: Switch to a different model updates label and context window
-    When I open the model switcher
-    And I select a different model
-    Then the compose bar should show the new model name
-    And the context pie title should reflect the new model's context window
-
-  Scenario: Model switch via /model command works during idle
-    When I type "/model opencode/gpt-4.1-nano" and press Enter
-    Then the compose bar model label should update to the new model
-    And no error should appear in the timeline
+  @ux-compaction-008
+  Scenario: Handle a model command using the configured provider catalogue
+    Given the configured catalogue contains a usable model
+    When I submit its supported model command while idle
+    Then the command is resolved by the native model command handler
+    And an unknown or unusable model produces a command error instead of a fabricated selection

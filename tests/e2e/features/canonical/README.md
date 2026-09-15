@@ -1,21 +1,25 @@
-# Canonical cross-port UX contract
+# Code-faithful UX specifications
 
-`canonical-ux.feature` is the vetted observable compatibility contract shared by Piclaw, Tau, and Vibes.
+These Gherkin files describe the inspected Piclaw implementation. Classic is authoritative when skin behaviour differs. They are specifications, not automatically bound browser tests or accepted Tau/Vibes parity contracts.
 
-Piclaw behavior is the baseline except where a scenario is explicitly tagged `@safety-deviation`. Those scenarios document a safer result that every port, including Piclaw, should converge on rather than preserving a known defect.
+Start with [COMPLETION.md](COMPLETION.md) for all 24 feature files and 241 scenario IDs. The index includes the original PR scenarios, adjacent regression features and added auth, Settings, workspace and interaction flows.
 
-The feature file is a specification, not a claim that `playwright-bdd` automatically binds every sentence to a step definition. Repository-owned Bun and Playwright tests provide executable evidence for individual behaviors. `runtime/test/features/canonical-ux-contract.test.ts` prevents the canonical specification from drifting or silently losing required topics.
+## Evidence and limits
 
-## Piclaw owns default behavior
+- [Original audit](audit/original.md) traces the original 28 scenarios and the later SVG contribution.
+- [Skin differences](audit/differences.md) separates Classic, Visual, family access and optional add-on capabilities.
+- [Independent review](audit/review.md) records bounded source reviews and the disposition of each finding.
+- [Validation](audit/validation.md) separates passing local gates from the failing immutable contract oracle. No browser suite was run.
 
-When an observable default is unspecified or differs across ports, this contract asks Piclaw maintainers to complete the decision in Piclaw first: choose the intended safe default, state it explicitly in Gherkin, and add executable Piclaw evidence. Tau and Vibes should then converge on that formalized behavior. Accidental implementation differences, missing assertions, renderer quirks, and unsupported capabilities must not silently become defaults.
+`runtime/test/features/canonical-ux-contract.test.ts` pins the input feature's hash and required wording. The audit leaves that executable test unchanged and reports its failure. Its aspirational idle-Steer and inline-SVG expectations are recorded as gaps; Gherkin corrections do not implement them.
 
-Key conventions include:
+## Coded boundaries
 
-- loaded skills are exposed as authoritative `/skill:<name>` slash commands and appear in Quick Actions under **Slash commands**;
-- no synthetic Skills group is invented;
-- Plan uses canonical Markdown checklist markers and a session-scoped model tool;
-- session and model pickers provide search and keyboard typeahead;
-- timeline copy/delete operations use durable message identity;
-- the model-facing messages tool supports explicit IDs and bounded row windows;
-- tool execution panes preserve lifecycle identity, glyph meaning, elapsed-time behavior, reconnect state, focus, and accessibility.
+- Loaded skills appear as `/skill:<name>` entries in the Slash commands group.
+- Command prefill replaces the compose text without submitting it.
+- Plan requires its external add-on; save guards use timestamps and request state, not a revision API.
+- Returning a queued item replaces text/references, clears media and schedules removal. Idle Steer may send immediately after a turn ends.
+- Picker, queue and model operations use their specific selection and reconciliation paths; no atomic whole-shell or exactly-once guarantee is asserted.
+- Message reads support explicit IDs and bounded windows subject to access scope.
+- Classic fenced SVG remains code text. No generic inline-SVG conversion contract is implemented at this baseline.
+- Missing per-clause executable evidence and browser runs stay explicit in the completion matrix.

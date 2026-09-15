@@ -1,62 +1,67 @@
-Feature: Hamburger menu items and workspace state
-  As a user
-  I want the hamburger menu to show the right items with correct enabled/disabled state
-  So that I can access workspace actions that are actually available
+@classic @source-reviewed
+Feature: Classic workspace menu and layout controls
+  Source: runtime/web/src/components/timeline-menu.ts and components/tab-strip.ts.
+  Inline-code styling is in runtime/extensions/viewers/editor/markdown/theme.ts (.cm-md-inline-code).
+  Classic controls and stored scale settings are not a guarantee of Visual parity.
 
-  Background:
-    Given I am authenticated and on the main chat
+  Rule: Workspace menu actions
+    Background:
+      Given the Classic workspace menu is open
 
-  Scenario: Menu contains New file, Refresh tree, Reindex workspace
-    When I open the hamburger menu
-    Then the menu should contain "New file"
-    And the menu should contain "Refresh tree"
-    And the menu should contain "Reindex workspace"
+    @ux-shell-001
+    Scenario: Menu contains New file, Refresh tree, Reindex workspace
+      Given the workspace is visible
+      Then New file, Refresh tree and Reindex workspace actions are enabled
+      When I activate one of these actions
+      Then the matching workspace action is dispatched
+      And the menu closes
 
-  Scenario: Menu contains hidden files toggle
-    When I open the hamburger menu
-    Then the menu should contain a hidden files toggle
+    @ux-shell-002
+    Scenario: Menu contains hidden files toggle
+      Given the workspace is visible
+      When I activate the hidden files toggle
+      Then the stored workspaceShowHidden setting changes
+      And the client dispatches the hidden-files change event
 
-  Scenario: Workspace items disabled in chat-only mode
-    Given no workspace is open
-    When I open the hamburger menu
-    Then "New file", "Refresh tree", "Reindex workspace" should be disabled
+    @ux-shell-003
+    Scenario: Workspace items disabled in chat-only mode
+      Given the workspace is not visible
+      Then the New file, Refresh tree, Reindex workspace and hidden-files actions are disabled
 
-  Scenario: Terminal dock toggle hidden when editor not open
-    Given no file is open in the editor
-    When I open the hamburger menu
-    Then the terminal dock toggle should not appear
+    @ux-shell-004
+    Scenario: Terminal and VNC menu controls depend on callbacks
+      Given the client supplies terminal or VNC opening callbacks
+      Then the corresponding menu actions are offered
+      And activating an action invokes its callback
+      # Actual connection availability is checked by its service, not by workspace visibility alone.
 
-  Scenario: Terminal and VNC items enabled when workspace available
-    When I open the hamburger menu
-    Then terminal and VNC items should be enabled (not greyed out)
+  Rule: Shell layout
+    @ux-shell-005
+    Scenario: Compose box spans full width
+      Given the Classic chat surface is displayed
+      Then the compose wrapper occupies the available chat-column width
 
+    @ux-shell-006
+    Scenario: Hamburger button visible and above safe area
+      Given the Classic composer is rendered in a supported mobile viewport
+      Then the menu trigger remains within the composer layout
+      And safe-area padding follows the shipped CSS variables
 
-Feature: Safe area and layout fixes
-  As a PWA user on a device with a notch or status bar
-  I want the UI to respect safe area insets
-  So that controls are not hidden behind the notch
+    @ux-shell-007
+    Scenario: Tab close does not activate tab
+      Given multiple workspace tabs are open
+      When I activate a tab's close control
+      Then that click is handled by the close action without also activating the tab
 
-  Scenario: Compose box spans full width
-    Then the compose surface should be at least 80% of viewport width
+  Rule: Display scale
+    @ux-shell-008
+    Scenario: Menu contains display scale control
+      Given the Classic workspace menu is open
+      Then the display scale control reflects the stored client scale setting
+      When I choose another supported scale
+      Then the client applies and stores that scale
 
-  Scenario: Hamburger button visible and above safe area
-    Then the hamburger button should be within viewport bounds
-
-  Scenario: Tab close does not activate tab
-    Given I have two editor tabs open
-    When I click the close button on the inactive tab
-    Then the previously active tab should remain active
-
-
-Feature: PWA display scale
-  As a mobile user
-  I want to adjust the display scale from the menu
-  So that text is readable at my preferred size
-
-  Scenario: Menu contains display scale control
-    When I open the hamburger menu
-    Then a zoom/scale control should be visible
-
-  Scenario: Inline code in editor preview is monospaced
-    Given an editor preview is showing markdown with inline code
-    Then inline code should render in a monospace font
+    @ux-shell-009
+    Scenario: Inline code in editor preview is monospaced
+      Given an editor Markdown preview contains inline code
+      Then the preview styles inline code with the code font family
