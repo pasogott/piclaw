@@ -2,7 +2,7 @@
 
 Baseline: core `f1a9d979d4ad5bb9c740b1ddf69f8c6c4ff245b4`; original specification
 `9607cc4911f3a2a96566af2ddf127f5fabbfe16e`. Classic is authoritative on doubt.
-All rows refer to `../canonical-ux.feature`; IDs preserve original scenario order.
+All rows refer to `../../classic/canonical/canonical-ux.feature`; IDs preserve original scenario order.
 `corrected` means source reconciled, not browser-executed or independently approved.
 Paths beginning `runtime/` are relative to the Piclaw repository root.
 

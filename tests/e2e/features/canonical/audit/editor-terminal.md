@@ -2,7 +2,7 @@
 
 Classic source inspected: `runtime/web/src/components/tab-strip.ts`, `runtime/web/src/components/markdown-preview.ts`, `runtime/web/src/ui/use-editor-state.ts`, `runtime/web/src/ui/app-browser-events.ts`, `runtime/web/src/ui/use-splitters.ts`, `runtime/web/src/ui/app-pane-runtime-orchestration.ts`, `runtime/web/src/ui/app-main-shell-render.ts`, `runtime/web/src/panes/terminal-pane.ts`, `runtime/web/src/panes/terminal-theme-runtime.ts`.
 
-## tests/e2e/features/editor/editor-stability.feature
+## tests/e2e/features/classic/editor/editor-stability.feature
 
 | Scenario | Evidence | Status | Notes |
 | --- | --- | --- | --- |
@@ -12,7 +12,7 @@ Classic source inspected: `runtime/web/src/components/tab-strip.ts`, `runtime/we
 | Markdown preview is stable during splitter resize | `runtime/web/src/components/markdown-preview.ts`; `tests/e2e/steps/us04-editor.spec.ts` | source+test | Corrected “split ratio” to stored preview height; source writes preview panel height after drag. |
 | Zen mode does not spike CPU on hover | `runtime/web/src/ui/app-browser-events.ts`; `runtime/web/src/ui/app-main-shell-render.ts`; `tests/e2e/steps/us04-editor.spec.ts` | source+test | Removed unsupported CPU baseline / layout-thrashing magic values; kept zen shell visibility assertions only. |
 
-## tests/e2e/features/panes/terminal.feature
+## tests/e2e/features/classic/panes/terminal.feature
 
 | Scenario | Evidence | Status | Notes |
 | --- | --- | --- | --- |
@@ -40,25 +40,25 @@ IDs below refer to the source/correction tables above by feature and current tit
 
 | ID | Current scenario | Feature |
 |---|---|---|
-| ux-editor-001 | Switching files does not cause visible flicker | [editor/editor-stability.feature](../../editor/editor-stability.feature#L14) |
-| ux-editor-002 | Closing an unsaved tab shows confirmation | [editor/editor-stability.feature](../../editor/editor-stability.feature#L22) |
-| ux-editor-003 | Clicking a tab activates it immediately | [editor/editor-stability.feature](../../editor/editor-stability.feature#L30) |
-| ux-editor-004 | Markdown preview is stable during splitter resize | [editor/editor-stability.feature](../../editor/editor-stability.feature#L40) |
-| ux-editor-005 | Zen mode keeps editor content visible while other shell panes are hidden | [editor/editor-stability.feature](../../editor/editor-stability.feature#L49) |
-| ux-terminal-001 | Open terminal standalone without garbled output | [panes/terminal.feature](../../panes/terminal.feature#L12) |
-| ux-terminal-002 | Execute ls -al in terminal | [panes/terminal.feature](../../panes/terminal.feature#L20) |
-| ux-terminal-003 | Terminal opens clean without IME active | [panes/terminal.feature](../../panes/terminal.feature#L28) |
-| ux-terminal-004 | Close terminal via tab close button (click) | [panes/terminal.feature](../../panes/terminal.feature#L35) |
-| ux-terminal-005 | Close terminal via tab close button (tap) | [panes/terminal.feature](../../panes/terminal.feature#L43) |
-| ux-terminal-006 | Pop out terminal to new window (desktop) | [panes/terminal.feature](../../panes/terminal.feature#L50) |
-| ux-terminal-007 | Terminal theme matches UI theme | [panes/terminal.feature](../../panes/terminal.feature#L57) |
-| ux-terminal-008 | Toggle terminal dock via keyboard shortcut | [panes/terminal.feature](../../panes/terminal.feature#L70) |
-| ux-terminal-009 | Toggle terminal dock via tab strip button | [panes/terminal.feature](../../panes/terminal.feature#L79) |
-| ux-terminal-010 | Dock splitter resizes terminal height | [panes/terminal.feature](../../panes/terminal.feature#L87) |
-| ux-terminal-011 | Terminal dock is interactive alongside editor | [panes/terminal.feature](../../panes/terminal.feature#L98) |
-| ux-terminal-012 | Dock hidden in zen mode | [panes/terminal.feature](../../panes/terminal.feature#L107) |
-| ux-terminal-013 | Zen mode hides all chrome except the terminal/editor | [panes/terminal.feature](../../panes/terminal.feature#L119) |
-| ux-terminal-014 | Zen mode has a hover-discoverable exit control | [panes/terminal.feature](../../panes/terminal.feature#L127) |
-| ux-terminal-015 | Clicking zen exit indicator reverts to normal layout | [panes/terminal.feature](../../panes/terminal.feature#L135) |
-| ux-terminal-016 | Escape key exits zen mode | [panes/terminal.feature](../../panes/terminal.feature#L144) |
-| ux-terminal-017 | Hover-reveal tab strip in zen mode | [panes/terminal.feature](../../panes/terminal.feature#L152) |
+| ux-editor-001 | Switching files does not cause visible flicker | [classic/editor/editor-stability.feature](../../classic/editor/editor-stability.feature#L14) |
+| ux-editor-002 | Closing an unsaved tab shows confirmation | [classic/editor/editor-stability.feature](../../classic/editor/editor-stability.feature#L22) |
+| ux-editor-003 | Clicking a tab activates it immediately | [classic/editor/editor-stability.feature](../../classic/editor/editor-stability.feature#L30) |
+| ux-editor-004 | Markdown preview is stable during splitter resize | [classic/editor/editor-stability.feature](../../classic/editor/editor-stability.feature#L40) |
+| ux-editor-005 | Zen mode keeps editor content visible while other shell panes are hidden | [classic/editor/editor-stability.feature](../../classic/editor/editor-stability.feature#L49) |
+| ux-terminal-001 | Open terminal standalone without garbled output | [classic/panes/terminal.feature](../../classic/panes/terminal.feature#L12) |
+| ux-terminal-002 | Execute ls -al in terminal | [classic/panes/terminal.feature](../../classic/panes/terminal.feature#L20) |
+| ux-terminal-003 | Terminal opens clean without IME active | [classic/panes/terminal.feature](../../classic/panes/terminal.feature#L28) |
+| ux-terminal-004 | Close terminal via tab close button (click) | [classic/panes/terminal.feature](../../classic/panes/terminal.feature#L35) |
+| ux-terminal-005 | Close terminal via tab close button (tap) | [classic/panes/terminal.feature](../../classic/panes/terminal.feature#L43) |
+| ux-terminal-006 | Pop out terminal to new window (desktop) | [classic/panes/terminal.feature](../../classic/panes/terminal.feature#L50) |
+| ux-terminal-007 | Terminal theme matches UI theme | [classic/panes/terminal.feature](../../classic/panes/terminal.feature#L57) |
+| ux-terminal-008 | Toggle terminal dock via keyboard shortcut | [classic/panes/terminal.feature](../../classic/panes/terminal.feature#L70) |
+| ux-terminal-009 | Toggle terminal dock via tab strip button | [classic/panes/terminal.feature](../../classic/panes/terminal.feature#L79) |
+| ux-terminal-010 | Dock splitter resizes terminal height | [classic/panes/terminal.feature](../../classic/panes/terminal.feature#L87) |
+| ux-terminal-011 | Terminal dock is interactive alongside editor | [classic/panes/terminal.feature](../../classic/panes/terminal.feature#L98) |
+| ux-terminal-012 | Dock hidden in zen mode | [classic/panes/terminal.feature](../../classic/panes/terminal.feature#L107) |
+| ux-terminal-013 | Zen mode hides all chrome except the terminal/editor | [classic/panes/terminal.feature](../../classic/panes/terminal.feature#L119) |
+| ux-terminal-014 | Zen mode has a hover-discoverable exit control | [classic/panes/terminal.feature](../../classic/panes/terminal.feature#L127) |
+| ux-terminal-015 | Clicking zen exit indicator reverts to normal layout | [classic/panes/terminal.feature](../../classic/panes/terminal.feature#L135) |
+| ux-terminal-016 | Escape key exits zen mode | [classic/panes/terminal.feature](../../classic/panes/terminal.feature#L144) |
+| ux-terminal-017 | Hover-reveal tab strip in zen mode | [classic/panes/terminal.feature](../../classic/panes/terminal.feature#L152) |

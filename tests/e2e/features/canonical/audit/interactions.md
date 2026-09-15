@@ -1,6 +1,6 @@
 # Additional interaction evidence
 
-Each ID maps to the current feature text in [core-interactions.feature](../core-interactions.feature). All paths below are relative to the repository root. Coordinator source inspection and independent bounded review are complete; browser execution is absent.
+Each ID maps to the current [Classic interactions](../../classic/canonical/core-interactions.feature) or [Visual interactions](../../visual/core-interactions.feature). All paths below are relative to the repository root. Coordinator source inspection and independent bounded review are complete; browser execution is absent.
 
 | IDs | Source and symbols | Existing related executable evidence |
 |---|---|---|

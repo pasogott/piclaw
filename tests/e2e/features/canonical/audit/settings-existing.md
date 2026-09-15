@@ -1,7 +1,7 @@
 # Existing Settings and theme/tint feature audit
 
 Scope notes:
-- Focus: `tests/e2e/features/compose/theme-tint.feature`, `tests/e2e/features/settings/settings-dialog.feature`, and `tests/e2e/features/settings/settings-layering.feature`.
+- Focus: `tests/e2e/features/classic/compose/theme-tint.feature`, `tests/e2e/features/classic/settings/settings-dialog.feature`, and `tests/e2e/features/classic/settings/settings-layering.feature`.
 - Surface: Classic web shell only.
 - Evidence basis: reviewed Classic source and existing tests only; no browser run is claimed here.
 
@@ -38,27 +38,27 @@ IDs below refer to the source/correction tables above by feature and current tit
 
 | ID | Current scenario | Feature |
 |---|---|---|
-| ux-theme-001 | /theme with no arguments shows available themes | [compose/theme-tint.feature](../../compose/theme-tint.feature#L11) |
-| ux-theme-002 | /theme ristretto applies dark theme visually | [compose/theme-tint.feature](../../compose/theme-tint.feature#L17) |
-| ux-theme-003 | /theme default restores from ristretto visually | [compose/theme-tint.feature](../../compose/theme-tint.feature#L30) |
-| ux-theme-004 | /theme dark returns error — not a valid theme name | [compose/theme-tint.feature](../../compose/theme-tint.feature#L41) |
-| ux-theme-005 | /theme survives page refresh | [compose/theme-tint.feature](../../compose/theme-tint.feature#L48) |
-| ux-theme-006 | /tint hex changes accent and background on default theme | [compose/theme-tint.feature](../../compose/theme-tint.feature#L56) |
-| ux-theme-007 | /tint named color works on default theme | [compose/theme-tint.feature](../../compose/theme-tint.feature#L68) |
-| ux-theme-008 | Switching tints visibly changes accent color | [compose/theme-tint.feature](../../compose/theme-tint.feature#L78) |
-| ux-theme-009 | /tint off clears tint and restores vanilla default | [compose/theme-tint.feature](../../compose/theme-tint.feature#L86) |
-| ux-theme-010 | /tint with no args shows usage | [compose/theme-tint.feature](../../compose/theme-tint.feature#L96) |
-| ux-theme-011 | /tint invalid value returns error | [compose/theme-tint.feature](../../compose/theme-tint.feature#L102) |
-| ux-theme-012 | /tint survives page refresh | [compose/theme-tint.feature](../../compose/theme-tint.feature#L109) |
-| ux-theme-013 | Tint on default, switch to ristretto, switch back | [compose/theme-tint.feature](../../compose/theme-tint.feature#L117) |
-| ux-theme-014 | /tint on ristretto switches to default+tint | [compose/theme-tint.feature](../../compose/theme-tint.feature#L127) |
-| ux-theme-015 | Round-trip visual consistency | [compose/theme-tint.feature](../../compose/theme-tint.feature#L135) |
-| ux-settings-dialog-001 | Rapid shortcut presses open exactly one settings dialog | [settings/settings-dialog.feature](../../settings/settings-dialog.feature#L11) |
-| ux-settings-dialog-002 | Second settings open is instant | [settings/settings-dialog.feature](../../settings/settings-dialog.feature#L18) |
-| ux-settings-dialog-003 | Settings shows loading shell then content | [settings/settings-dialog.feature](../../settings/settings-dialog.feature#L27) |
-| ux-settings-dialog-004 | User can type a number in stepper fields | [settings/settings-dialog.feature](../../settings/settings-dialog.feature#L35) |
-| ux-settings-dialog-005 | Non-General panes load only on click | [settings/settings-dialog.feature](../../settings/settings-dialog.feature#L43) |
-| ux-settings-layering-001 | Settings backdrop covers workspace pane | [settings/settings-layering.feature](../../settings/settings-layering.feature#L11) |
-| ux-settings-layering-002 | Settings dialog is above all other elements | [settings/settings-layering.feature](../../settings/settings-layering.feature#L19) |
-| ux-settings-layering-003 | Backdrop is partially opaque (not fully transparent or opaque) | [settings/settings-layering.feature](../../settings/settings-layering.feature#L28) |
-| ux-settings-layering-004 | Only settings dialog is interactive above the backdrop | [settings/settings-layering.feature](../../settings/settings-layering.feature#L35) |
+| ux-theme-001 | /theme with no arguments shows available themes | [classic/compose/theme-tint.feature](../../classic/compose/theme-tint.feature#L11) |
+| ux-theme-002 | /theme ristretto applies dark theme visually | [classic/compose/theme-tint.feature](../../classic/compose/theme-tint.feature#L17) |
+| ux-theme-003 | /theme default restores from ristretto visually | [classic/compose/theme-tint.feature](../../classic/compose/theme-tint.feature#L30) |
+| ux-theme-004 | /theme dark returns error — not a valid theme name | [classic/compose/theme-tint.feature](../../classic/compose/theme-tint.feature#L41) |
+| ux-theme-005 | /theme survives page refresh | [classic/compose/theme-tint.feature](../../classic/compose/theme-tint.feature#L48) |
+| ux-theme-006 | /tint hex changes accent and background on default theme | [classic/compose/theme-tint.feature](../../classic/compose/theme-tint.feature#L56) |
+| ux-theme-007 | /tint named color works on default theme | [classic/compose/theme-tint.feature](../../classic/compose/theme-tint.feature#L68) |
+| ux-theme-008 | Switching tints visibly changes accent color | [classic/compose/theme-tint.feature](../../classic/compose/theme-tint.feature#L78) |
+| ux-theme-009 | /tint off clears tint and restores vanilla default | [classic/compose/theme-tint.feature](../../classic/compose/theme-tint.feature#L86) |
+| ux-theme-010 | /tint with no args shows usage | [classic/compose/theme-tint.feature](../../classic/compose/theme-tint.feature#L96) |
+| ux-theme-011 | /tint invalid value returns error | [classic/compose/theme-tint.feature](../../classic/compose/theme-tint.feature#L102) |
+| ux-theme-012 | /tint survives page refresh | [classic/compose/theme-tint.feature](../../classic/compose/theme-tint.feature#L109) |
+| ux-theme-013 | Tint on default, switch to ristretto, switch back | [classic/compose/theme-tint.feature](../../classic/compose/theme-tint.feature#L117) |
+| ux-theme-014 | /tint on ristretto switches to default+tint | [classic/compose/theme-tint.feature](../../classic/compose/theme-tint.feature#L127) |
+| ux-theme-015 | Round-trip visual consistency | [classic/compose/theme-tint.feature](../../classic/compose/theme-tint.feature#L135) |
+| ux-settings-dialog-001 | Rapid shortcut presses open exactly one settings dialog | [classic/settings/settings-dialog.feature](../../classic/settings/settings-dialog.feature#L11) |
+| ux-settings-dialog-002 | Second settings open is instant | [classic/settings/settings-dialog.feature](../../classic/settings/settings-dialog.feature#L18) |
+| ux-settings-dialog-003 | Settings shows loading shell then content | [classic/settings/settings-dialog.feature](../../classic/settings/settings-dialog.feature#L27) |
+| ux-settings-dialog-004 | User can type a number in stepper fields | [classic/settings/settings-dialog.feature](../../classic/settings/settings-dialog.feature#L35) |
+| ux-settings-dialog-005 | Non-General panes load only on click | [classic/settings/settings-dialog.feature](../../classic/settings/settings-dialog.feature#L43) |
+| ux-settings-layering-001 | Settings backdrop covers workspace pane | [classic/settings/settings-layering.feature](../../classic/settings/settings-layering.feature#L11) |
+| ux-settings-layering-002 | Settings dialog is above all other elements | [classic/settings/settings-layering.feature](../../classic/settings/settings-layering.feature#L19) |
+| ux-settings-layering-003 | Backdrop is partially opaque (not fully transparent or opaque) | [classic/settings/settings-layering.feature](../../classic/settings/settings-layering.feature#L28) |
+| ux-settings-layering-004 | Only settings dialog is interactive above the backdrop | [classic/settings/settings-layering.feature](../../classic/settings/settings-layering.feature#L35) |

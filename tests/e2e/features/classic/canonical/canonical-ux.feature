@@ -2,7 +2,7 @@
 Feature: Classic Piclaw interaction model
   The coded Classic web client is the reference for this specification.
   Visual differences and optional add-on behavior are not implied to be identical.
-  Source-review evidence and remaining validation gaps are indexed in COMPLETION.md.
+  Source-review evidence and remaining validation gaps are indexed in ../../canonical/COMPLETION.md.
 
   Background:
     Given Piclaw is in single-user mode in an isolated workspace
