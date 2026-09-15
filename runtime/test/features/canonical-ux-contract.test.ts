@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const contractPath = resolve(import.meta.dir, "../../../tests/e2e/features/canonical/canonical-ux.feature");
-const expectedHash = "a3bad9d5df6f75f85d7b367989be7345175e137a5e10a9234d38a295c1c26d83";
+const expectedHash = "a08a623880c6f327bc051edc51bb2bbff2959aed86421b5227e61d5a92fc2441";
 
 test("canonical cross-port UX contract retains the vetted source and required topics", () => {
   const contract = readFileSync(contractPath, "utf8");
@@ -24,6 +24,8 @@ test("canonical cross-port UX contract retains the vetted source and required to
     "terminal glyph",
     "elapsed timer",
     "reduced-motion mode",
+    "Render model-generated SVG inline",
+    "unsafe elements and attributes are removed",
   ]) {
     expect(contract).toContain(topic);
   }

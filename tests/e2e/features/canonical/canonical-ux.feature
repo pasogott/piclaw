@@ -322,6 +322,16 @@ Feature: Piclaw-compatible interaction model
     And closing the pane restores usable focus without activating underlying controls
     And reduced-motion mode preserves state meaning without requiring animation
 
+  @timeline @svg @security @accessibility
+  Scenario: Render model-generated SVG inline without page privileges
+    Given an assistant message contains a fenced "svg" block with safe vector geometry
+    Then the timeline renders it inline as an accessible image that fits the message width
+    And ordinary raw HTML remains escaped
+    When the SVG also contains scripts, event handlers, foreign objects or external references
+    Then unsafe elements and attributes are removed before rendering
+    And the SVG cannot execute code, navigate, fetch external resources or inspect the page DOM
+    And malformed or oversized SVG remains visible as inert source rather than trusted markup
+
   @copy @speech @capability
   Scenario: Copy and read assistant content truthfully
     When I copy an assistant code block
