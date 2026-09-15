@@ -24,7 +24,7 @@ The audit covers **24 feature files, 241 scenarios/outlines and 25 example rows*
 - [x] Validate Gherkin syntax, stable IDs, source paths, Markdown links and allowed-file scope.
 - [x] Run local runtime/feature/build gates and type checking; record exact outcomes.
 - [x] Run the untouched canonical contract test separately and retain its failure.
-- [ ] Commit and publish audit changes to PR #1323; delivery receipt will record the commit.
+- [x] Commit and publish audit changes to PR #1323; [delivery receipt](audit/delivery.md) records commit `cd65da9f1` and confirmed publication.
 
 ## Acceptance limits
 
