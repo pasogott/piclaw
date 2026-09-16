@@ -28,14 +28,14 @@ The Linux runner creates a private network namespace and a separate X display, d
 | Runtime, scripts, settings and pane typechecks | Passed |
 | Focused VNC/protocol/history/HTTP/family authorization suite | 92 passed |
 | Full fast runtime test partition | 5,331 passed, 4 skipped, 0 failed across 752 files |
-| Fast feature partition | 23 passed |
+| Fast feature partition | 25 passed, including the current structural Gherkin contract |
 | Web build, Classic/common and Visual | Passed; 9 build tests passed |
 | Real x11vnc Chromium cases | 7 passed, 35 assertions |
 | Changed-file lint | Passed |
 | Dependency pins, pack hygiene, stale dist, environment inventory, local test entrypoints | Passed |
 | Canonical workspace Gherkin | 19 scenarios parsed; dedicated VNC acceptance file adds 7 scenarios |
 
-The broad `make ci-fast` call exceeded the tool wait while its runtime child continued; the child finished with zero failures. The remaining feature/build phases were run separately. This is not reported as one uninterrupted `make ci-fast` success. Repository-wide lint reports 20 pre-existing diagnostics in untouched files; changed-file lint passes. The historical immutable `canonical-ux-contract.test.ts` references an absent `tests/e2e/features/canonical/canonical-ux.feature`; it is not included in the fast feature runner and is not changed here.
+The broad `make ci-fast` call exceeded the tool wait while its runtime child continued; the child finished with zero failures. The remaining feature/build phases were run separately. This is not reported as one uninterrupted `make ci-fast` success. Repository-wide lint reports 20 pre-existing diagnostics in untouched files; changed-file lint passes. After merging current `main`, the fast feature runner includes the structural Gherkin contract. Its initial CI failure identified missing stable IDs on the seven VNC scenarios; `@ux-vnc-001` through `@ux-vnc-007` fix that omission. All 25 feature checks now pass.
 
 ## Real-browser coverage and limits
 
