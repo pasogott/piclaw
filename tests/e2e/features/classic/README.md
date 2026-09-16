@@ -1,6 +1,8 @@
 # Classic UX specifications
 
-Import `tests/e2e/features/classic/**/*.feature`: 24 feature files, 236 scenarios/outlines and 25 example rows.
+The requested SVG image contract (`ux-original-029`) is [planned separately](../planned/svg-images.feature), not a permanent source-only requirement.
+
+Import `tests/e2e/features/classic/**/*.feature`: 24 feature files, 235 scenarios/outlines and 25 example rows.
 
 Topic subfolders retain their previous names. `canonical/` contains the original interaction contract and the added auth, Settings, workspace and Classic interaction specifications. Optional add-on, family-access and browser-capability prerequisites remain in each scenario.
 

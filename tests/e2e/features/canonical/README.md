@@ -1,17 +1,17 @@
 # Code-faithful UX specifications
 
-These Gherkin files describe the inspected Piclaw implementation. Classic is authoritative when skin behaviour differs. They are specifications, not automatically bound browser tests or accepted Tau/Vibes parity contracts.
+The Classic/Visual Gherkin roots describe the inspected Piclaw implementation; `planned/` contains desired, unimplemented contracts. Classic is authoritative for audited skin differences. Specifications are not automatically bound browser tests or accepted Tau/Vibes parity contracts.
 
-Import the [Classic](../classic/README.md) or [Visual](../visual/README.md) folders. Start with [COMPLETION.md](COMPLETION.md) for all 25 feature files and 241 scenario IDs. The index includes the original PR scenarios, adjacent regression features and added auth, Settings, workspace and interaction flows. This directory contains documentation only.
+Import the [Classic](../classic/README.md) or [Visual](../visual/README.md) folders for current behaviour, and [planned](../planned/README.md) separately for future acceptance. Start with [COMPLETION.md](COMPLETION.md) for all 26 feature files and 248 scenario IDs: 240 current-behaviour cases and eight planned SVG-image cases. The index includes the original PR scenarios, adjacent regression features and added auth, Settings, workspace and interaction flows. This directory contains documentation only.
 
 ## Evidence and limits
 
 - [Original audit](audit/original.md) traces the original 28 scenarios and the later SVG contribution.
 - [Skin differences](audit/differences.md) separates Classic, Visual, family access and optional add-on capabilities.
 - [Independent review](audit/review.md) records bounded source reviews and the disposition of each finding.
-- [Validation](audit/validation.md) separates passing local gates from the failing immutable contract oracle. No browser suite was run.
+- Historical [#1323 validation](audit/validation.md) separates its passing local gates from the then-failing immutable oracle. No browser suite was run in that audit; [#1324 follow-up evidence](audit/svg-images.md) records the later baseline browser checks.
 
-`runtime/test/features/canonical-ux-contract.test.ts` pins the input feature's hash, required wording and old path. The audit leaves that executable test unchanged: it failed on the hash before reorganisation and now fails with `ENOENT` at the old path. Its aspirational idle-Steer and inline-SVG expectations are recorded as gaps; Gherkin corrections do not implement them. See [import and test boundaries](../README.md#import-and-test-boundaries).
+The original #1323 audit left the legacy hash/path oracle unchanged and recorded its failure. Follow-up #1324 repairs it with structural checks and separates the desired SVG contract from current behaviour. Historical validation records remain in [validation.md](audit/validation.md); [SVG evidence](audit/svg-images.md) describes the new checks and the still-open renderer gap #1325. Idle-Steer behaviour is unchanged. See [import and test boundaries](../README.md#import-and-test-boundaries).
 
 ## Coded boundaries
 
@@ -21,5 +21,5 @@ Import the [Classic](../classic/README.md) or [Visual](../visual/README.md) fold
 - Returning a queued item replaces text/references, clears media and schedules removal. Idle Steer may send immediately after a turn ends.
 - Picker, queue and model operations use their specific selection and reconciliation paths; no atomic whole-shell or exactly-once guarantee is asserted.
 - Message reads support explicit IDs and bounded windows subject to access scope.
-- Classic fenced SVG remains code text. No generic inline-SVG conversion contract is implemented at this baseline.
+- At baseline `70d33bc93`, Classic fenced SVG remains code text. [The desired SVG-image contract](../planned/svg-images.feature) is planned under #1325; absence of implementation is not a product prohibition.
 - Missing per-clause executable evidence and browser runs stay explicit in the completion matrix.

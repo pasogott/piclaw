@@ -1,5 +1,7 @@
 # Visual UX specifications
 
+[Planned SVG image acceptance](../planned/svg-images.feature) also targets Visual; it does not assert that Visual already implements the feature.
+
 Import `tests/e2e/features/visual/**/*.feature`: one feature file and five scenarios.
 
 [core-interactions.feature](core-interactions.feature) contains:

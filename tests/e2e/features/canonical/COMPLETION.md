@@ -1,8 +1,15 @@
 # UX specification completion matrix
 
-The audit covers **25 feature files, 241 scenarios/outlines and 25 example rows**. All scenarios have stable IDs and a source-evidence packet. Gherkin syntax, evidence paths and the audit-only change scope pass validation. Independent source reviews are recorded separately from executable tests and browser runs.
+The #1323 audit covered **25 feature files, 241 scenarios/outlines and 25 example rows**. Follow-up #1324 separates the desired SVG-image contract from that baseline: the current inventory has **26 files, 248 scenarios/outlines and 44 example rows**, including eight explicitly planned cases. Structural validity is separate from implementation and browser acceptance.
 
-## Baselines and scope
+## SVG follow-up (#1324 / #1325)
+
+- `ux-original-029` now retains the desired SVG-image scope in `planned/svg-images.feature`; 70d33bc93 source-only behaviour remains dated evidence.
+- The obsolete hash/path oracle is replaced by structural checks, not a claim that planned features pass.
+- Browser baseline coverage and commands are recorded in [SVG evidence](audit/svg-images.md).
+- [ ] Implement and browser-validate the desired renderer in both skins (#1325).
+
+## Historical #1323 baselines and scope
 
 - PR: [#1323](https://github.com/rcarmo/piclaw/pull/1323).
 - Production source baseline: `f1a9d979d4ad5bb9c740b1ddf69f8c6c4ff245b4`.
@@ -28,14 +35,14 @@ The audit covers **25 feature files, 241 scenarios/outlines and 25 example rows*
 - [x] Run the untouched canonical contract test separately and retain its failure.
 - [x] Commit and publish audit changes to PR #1323; [delivery receipt](audit/delivery.md) records commit `cd65da9f1` and confirmed publication.
 
-## Acceptance limits
+## Historical #1323 acceptance limits
 
-- [ ] The immutable contract oracle passes. It pins the old path and aspirational input wording/hash. After relocation it fails with `ENOENT`; before relocation it failed the hash. Editing it is outside scope.
+- The legacy oracle failed the old path/hash during #1323. It is replaced by structural checks in #1324; that repair does not fulfil the future renderer acceptance.
 - [ ] Every clause has a direct executable assertion. Related test paths are evidence leads, not per-clause coverage.
 - [ ] Browser scenarios are executed. No browser suite was run in this audit.
 - [ ] Full cross-skin/port parity is verified. Only the bounded differences in the linked packet were source checked.
 
-These acceptance limits do not authorise changing production behaviour, tests, merging or reloading. [Validation](audit/validation.md) records the passing fast gate separately from the failing immutable oracle.
+These historical acceptance limits do not describe #1324 validation or authorise production changes, merging or reloading. [Validation](audit/validation.md) records the passing fast gate separately from the failing immutable oracle.
 
 ## Core surface inventory
 
@@ -59,10 +66,11 @@ These acceptance limits do not authorise changing production behaviour, tests, m
 
 | Skin | Import glob | Feature files | Scenarios/outlines | Example rows |
 |---|---|---:|---:|---:|
-| Classic | `tests/e2e/features/classic/**/*.feature` | 24 | 236 | 25 |
-| Visual | `tests/e2e/features/visual/**/*.feature` | 1 | 5 | 0 |
+| Classic (current) | `tests/e2e/features/classic/**/*.feature` | 24 | 235 | 25 |
+| Visual (current) | `tests/e2e/features/visual/**/*.feature` | 1 | 5 | 0 |
+| Planned (both skins, not implemented) | `tests/e2e/features/planned/**/*.feature` | 1 | 8 | 19 |
 
-The mixed interactions file was split at Rule boundaries. Scenario IDs, steps, examples, rule names and backgrounds are unchanged. The five Visual scenarios are extra-006–010; Classic coverage has not been copied into Visual. The audit documents remain here, outside both import roots. [Import guidance](../README.md) describes the old-path test dependency.
+The #1323 mixed-interaction split preserved scenario semantics. #1324 changes only the original SVG scenario scope and adds seven planned acceptance cases. The five current Visual scenarios remain extra-006–010. Audit documents stay outside all three import roots. [Import guidance](../README.md) explains the planned/current split and structural test limits.
 
 ## Feature inventory
 
@@ -70,7 +78,8 @@ Paths are relative to `tests/e2e/features/`. Source review and bounded independe
 
 | Feature | Scenarios / outlines | Example rows | Source packet |
 |---|---:|---:|---|
-| [classic/canonical/canonical-ux.feature](../classic/canonical/canonical-ux.feature) | 29 | 6 | [original](audit/original.md) |
+| [classic/canonical/canonical-ux.feature](../classic/canonical/canonical-ux.feature) | 28 | 6 | [original](audit/original.md) |
+| [planned/svg-images.feature](../planned/svg-images.feature) | 8 | 19 | [planned SVG / gap](audit/svg-images.md) |
 | [classic/canonical/core-auth.feature](../classic/canonical/core-auth.feature) | 14 | 8 | [core-auth](audit/core-auth.md) |
 | [classic/canonical/core-interactions.feature](../classic/canonical/core-interactions.feature) | 8 | 0 | [interactions](audit/interactions.md) |
 | [classic/canonical/core-settings.feature](../classic/canonical/core-settings.feature) | 32 | 0 | [core-settings](audit/core-settings.md) |
@@ -130,7 +139,14 @@ Each link names the exact scenario line. Stable IDs retain their evidence packet
 | ux-original-026 | Keep attachment upload state separate from message submission | [classic/canonical/canonical-ux.feature:260](../classic/canonical/canonical-ux.feature#L260) | [original](audit/original.md) |
 | ux-original-027 | Display Classic tool execution status | [classic/canonical/canonical-ux.feature:270](../classic/canonical/canonical-ux.feature#L270) | [original](audit/original.md) |
 | ux-original-028 | Copy code and transfer post speech ownership | [classic/canonical/canonical-ux.feature:280](../classic/canonical/canonical-ux.feature#L280) | [original](audit/original.md) |
-| ux-original-029 | Keep model-generated fenced SVG as source code | [classic/canonical/canonical-ux.feature:291](../classic/canonical/canonical-ux.feature#L291) | [original](audit/original.md) |
+| ux-original-029 | Render a safe SVG fence as an inert image | [planned/svg-images.feature:14](../planned/svg-images.feature#L14) | [planned, not implemented](audit/svg-images.md) |
+| ux-svg-001 | Do not expand the SVG feature into other content paths | [planned/svg-images.feature:24](../planned/svg-images.feature#L24) | [planned, not implemented](audit/svg-images.md) |
+| ux-svg-002 | Remove or reject active and externally referencing content | [planned/svg-images.feature:38](../planned/svg-images.feature#L38) | [planned, not implemented](audit/svg-images.md) |
+| ux-svg-003 | Enforce a finite resource boundary before publishing an image | [planned/svg-images.feature:60](../planned/svg-images.feature#L60) | [planned, not implemented](audit/svg-images.md) |
+| ux-svg-004 | Preserve source when a diagram cannot be rendered | [planned/svg-images.feature:76](../planned/svg-images.feature#L76) | [planned, not implemented](audit/svg-images.md) |
+| ux-svg-005 | Keep diagram labels and layout accessible | [planned/svg-images.feature:92](../planned/svg-images.feature#L92) | [planned, not implemented](audit/svg-images.md) |
+| ux-svg-006 | Copy original source after successful sanitisation | [planned/svg-images.feature:102](../planned/svg-images.feature#L102) | [planned, not implemented](audit/svg-images.md) |
+| ux-svg-007 | Reconcile streamed and reloaded SVG without duplicates | [planned/svg-images.feature:111](../planned/svg-images.feature#L111) | [planned, not implemented](audit/svg-images.md) |
 | ux-auth-001 | Family-shared code sign-in requires and normalizes the account username | [classic/canonical/core-auth.feature:11](../classic/canonical/core-auth.feature#L11) | [core-auth](audit/core-auth.md) |
 | ux-auth-002 | Single-user code sign-in omits the username field and submits only the code | [classic/canonical/core-auth.feature:22](../classic/canonical/core-auth.feature#L22) | [core-auth](audit/core-auth.md) |
 | ux-auth-003 | Single-user passkey-only mode hides the TOTP form | [classic/canonical/core-auth.feature:31](../classic/canonical/core-auth.feature#L31) | [core-auth](audit/core-auth.md) |
