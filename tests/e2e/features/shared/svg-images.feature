@@ -1,18 +1,18 @@
-@planned @not-implemented @svg @security @accessibility @issue-1325
+@shared @implemented @browser-verified @svg @security @accessibility @issue-1325
 Feature: Render bounded model-generated SVG as an image within a message
-  This is the desired Piclaw contract tracked by #1325, not current behaviour.
-  It applies to Classic and Visual after implementation and direct browser validation.
+  This shared contract is implemented by #1325 and exercised in Chromium and WebKit.
+  The same fixtures run against the actual Classic and Visual renderers and copy handlers.
   A data-URL image displays SVG without inserting model-controlled SVG into the page DOM.
 
   Background:
     Given the acceptance fixture runs every case in both Classic and Visual
     And it observes script execution, navigation, external requests and focus changes
     And the host DOM contains a fixture-only sentinel with a known initial value
-    And the renderer has documented finite byte, node-count and nesting-depth limits
+    And SVG is limited to 262144 UTF-8 bytes, 2048 XML nodes and 32 element levels
 
   @ux-original-029
   Scenario: Render a safe SVG fence as an inert image
-    Given an assistant message contains a complete fenced "svg" block with safe vector geometry below all limits
+    Given an assistant message contains a complete top-level fenced "svg" block with safe vector geometry below all limits
     When the timeline renders the message
     Then a sanitised SVG data-URL image displays the geometry within the message width
     And no model-controlled SVG elements are inserted into the page DOM
@@ -64,7 +64,7 @@ Feature: Render bounded model-generated SVG as an image within a message
     And the over-limit fixture is rejected before image publication and remains inert original source
     And it publishes no partial image or trusted markup
     # Parser/sanitizer unit tests must enforce byte rejection before parsing and
-    # stop structural validation at the first over-limit node; see planned/README.md.
+    # stop structural validation at the first over-limit node; see shared/README.md.
 
     Examples:
       | limit         |

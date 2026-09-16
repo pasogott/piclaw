@@ -1,5 +1,6 @@
 import { highlightCodeToHtml } from './utils/code-highlighting.js';
 import { getThemeMode } from './ui/theme.js';
+import { renderSvgFences, escapeSvgSource, encodeSvgSource } from './utils/svg-images.js';
 
 declare const katex: { renderToString: (tex: string, options?: Record<string, unknown>) => string };
 declare const marked: { parse: (text: string, options?: Record<string, unknown>) => string };
@@ -250,7 +251,6 @@ function sanitizeHtml(html, options: MarkdownOptions = {}) {
             continue;
         }
 
-        const allowedAttrs = TAG_ALLOWED_ATTRS[tag] || new Set();
         for (const attr of Array.from(el.attributes)) {
             const name = attr.name.toLowerCase();
             const value = attr.value;
@@ -712,6 +712,11 @@ function transformAdmonitions(html: string): string {
 /** Render markdown text to sanitised HTML with syntax highlighting. */
 export function renderMarkdown(text, onHashtagClick, options: MarkdownOptions = {}) {
     if (!text) return '';
+    return renderSvgFences(text, (part) => renderMarkdownBody(part, options),
+        (source) => `<pre><code class="language-svg" data-svg-source="${encodeSvgSource(source)}">${escapeSvgSource(source)}</code></pre>`);
+}
+
+function renderMarkdownBody(text: string, options: MarkdownOptions): string {
 
     const { safeHtml, mermaidBlocks } = prepareMarkdownSource(text);
 

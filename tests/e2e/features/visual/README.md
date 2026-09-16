@@ -1,6 +1,6 @@
 # Visual UX specifications
 
-[Planned SVG image acceptance](../planned/svg-images.feature) also targets Visual; it does not assert that Visual already implements the feature.
+Import [shared SVG image acceptance](../shared/svg-images.feature) alongside this root. Both skins use the same bounded image helper and browser fixtures.
 
 Import `tests/e2e/features/visual/**/*.feature`: one feature file and five scenarios.
 
