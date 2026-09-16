@@ -3,7 +3,8 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
 // Specification structure only. Browser behaviour is tested separately; no text/hash
-// oracle can establish that the planned renderer exists. See issue #1325.
+// oracle establishes implementation. Real browser assertions for shared SVG live
+// in test/web/svg-images.optional.test.ts (Chromium and WebKit in CI).
 const featuresRoot = resolve(import.meta.dir, "../../../tests/e2e/features");
 
 function featureFiles(dir: string): string[] {
@@ -26,7 +27,7 @@ test("current and planned specifications have disjoint stable scenario identitie
   const allIds: string[] = [];
   for (const file of files) {
     const path = relative(featuresRoot, file).replaceAll("\\", "/");
-    expect(["classic", "visual", "planned"]).toContain(path.split("/")[0]);
+    expect(["classic", "visual", "shared", "planned"]).toContain(path.split("/")[0]);
     const source = readFileSync(file, "utf8");
     const ids = stableIds(source);
     const scenarios = source.match(/^\s*Scenario(?: Outline)?:/gm) ?? [];
@@ -39,6 +40,11 @@ test("current and planned specifications have disjoint stable scenario identitie
       expect(featureTags).not.toContain("@source-reviewed");
       expect(featureTags).not.toContain("@current-behavior");
     } else {
+      if (path.startsWith("shared/")) {
+        expect(featureTags).toContain("@shared");
+        expect(featureTags).toContain("@implemented");
+        expect(featureTags).toContain("@browser-verified");
+      }
       expect(featureTags).not.toContain("@planned");
       expect(featureTags).not.toContain("@not-implemented");
     }
@@ -47,9 +53,9 @@ test("current and planned specifications have disjoint stable scenario identitie
   expect(existsSync(join(featuresRoot, "canonical/canonical-ux.feature"))).toBe(false);
 });
 
-test("the original SVG identity belongs to desired acceptance, not a permanent source-only rule", () => {
+test("the original SVG identity belongs to shared image acceptance, not a source-only rule", () => {
   const classic = sourceFor("classic/canonical/canonical-ux.feature");
-  const planned = sourceFor("planned/svg-images.feature");
+  const planned = sourceFor("shared/svg-images.feature");
   expect(stableIds(classic)).toEqual(Array.from({ length: 28 }, (_, i) => `@ux-original-${String(i + 1).padStart(3, "0")}`));
   expect(stableIds(planned)).toEqual([
     "@ux-original-029",
