@@ -287,5 +287,5 @@ Feature: Classic Piclaw interaction model
     When I copy a code block
     Then the copy path uses code text instead of highlighted HTML
 
-  # ux-original-029 is the desired SVG-image contract in ../../planned/svg-images.feature.
+  # ux-original-029 is the desired SVG-image contract in ../../shared/svg-images.feature.
   # Source-only behaviour at 70d33bc93 is dated evidence in the audit packet, not a product ban.

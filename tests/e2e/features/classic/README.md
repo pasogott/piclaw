@@ -1,6 +1,6 @@
 # Classic UX specifications
 
-The requested SVG image contract (`ux-original-029`) is [planned separately](../planned/svg-images.feature), not a permanent source-only requirement.
+Import [shared SVG image acceptance](../shared/svg-images.feature) alongside this root. The feature is implemented in both skins; the old source-only rule is historical.
 
 Import `tests/e2e/features/classic/**/*.feature`: 24 feature files, 235 scenarios/outlines and 25 example rows.
 

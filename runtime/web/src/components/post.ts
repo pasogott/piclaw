@@ -2,6 +2,7 @@ import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { useTranslation } from '../utils/i18n.js';
 import { getMediaInfo, getMediaUrl, getThumbnailUrl, submitAdaptiveCardAction } from '../api.js';
 import { renderMarkdown, renderMermaidDiagrams, renderThinkingMarkdown, sanitizeUrl } from '../markdown.js';
+import { decodeSvgSource } from '../utils/svg-images.js';
 import { formatCount, formatFileSize, formatTime, formatTimestamp } from '../utils/format.js';
 import { buildPostMarkdownCopyPayload } from '../utils/post-copy-markdown.js';
 import { DEFAULT_AGENT_NAME, getAvatarInfo } from '../ui/agent-utils.js';
@@ -1185,7 +1186,9 @@ function enhanceCodeBlocks(container) {
             event.preventDefault();
             event.stopPropagation();
             const code = pre.querySelector('code');
-            const text = code?.textContent || '';
+            const text = code?.hasAttribute('data-svg-source')
+                ? decodeSvgSource(code.getAttribute('data-svg-source') || '')
+                : code?.textContent || '';
             const ok = await copyTextToClipboard(text);
             setButtonState(button, ok ? 'success' : 'error');
             const existingTimer = resetTimers.get(button);
