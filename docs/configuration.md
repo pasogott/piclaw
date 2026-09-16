@@ -124,9 +124,11 @@ export PICLAW_WEB_VNC_TARGETS='[{"id":"lab","host":"192.168.1.50","port":5901,"r
 export PICLAW_WEB_VNC_TARGETS='{ "lab": { "id": "lab", "host": "192.168.1.50", "port": 5901 }, "pi": { "host": "192.168.1.20", "port": 5900 } }'
 ```
 
-When direct-connect is allowed, the VNC target picker starts at `localhost:5901`. After a valid direct target is selected, the browser stores its host and port under `piclaw:vnc-direct-target` for the next viewer. Invalid or unavailable browser storage falls back to `localhost:5901`.
+The Classic VNC connection manager starts new direct connections at `localhost:5901`. Configured targets and successful connection history are separate lists. History is local to this browser, account and instance; it records only target reference, label, last-success time and pin state after the first framebuffer is painted. It keeps up to ten unpinned recents and ten pins, deduplicates targets, and ignores corrupt or blocked storage. Clear recent history preserves pins. Old unscoped direct-target preferences are not imported into this history.
 
-The VNC password stays in JavaScript memory for the loaded page and is reused by in-page viewers and reconnects. Submitting an empty password clears it. A full reload or closed tab clears it; host and port remain. The existing pop-out flow can copy the password through its one-time, 60-second handoff record. Piclaw does not add the password to direct-target storage, URLs, cookies or logs. Same-origin code can access page memory while the viewer is loaded.
+Connected Classic sessions show only the framebuffer. Hover at the top centre for a reveal chevron, or tap/swipe down there on touch devices. `Ctrl+Alt+Shift+V` opens controls; Escape closes them. Open details or local keyboard focus retains controls. Connections & history preserves the active session until another target is selected. Disconnect closes it and cancels retries. Visual does not yet host this pane. See [VNC viewer setup](../runtime/skills/integrations/vnc-viewer-setup/SKILL.md) for configuration and isolated real-desktop tests.
+
+The VNC password stays in JavaScript memory for the loaded page and is reused by in-page viewers and reconnects. Submitting an empty password clears it. A full reload or closed tab clears it; successful target metadata remains in scoped history. The existing pop-out flow can copy the password through its one-time, 60-second handoff record. Piclaw does not add the password to direct-target storage, URLs, cookies or logs. Same-origin code can access page memory while the viewer is loaded.
 
 Direct-connect is enabled by default on Linux, macOS, and Windows. Disable it explicitly with:
 

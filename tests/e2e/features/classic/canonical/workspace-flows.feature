@@ -146,12 +146,21 @@ Feature: Classic workspace flows
     Given the Classic VNC pane is mounted
     When there are no saved targets and direct connect is disabled on the host
     Then the pane shows a configuration-oriented empty state instead of a live session
+    And configured targets are separate from successful account-and-instance-scoped browser history
+    And a new direct connection starts at localhost on port 5901
+    When a target paints its first framebuffer
+    Then the viewer has no permanent session toolbar
+    And top-centre hover, touch, or Control Alt Shift V reveals temporary local controls
+    And controls remain open during keyboard interaction or an open details section
+    And opening connections preserves the session until another target is selected
+    And explicit disconnect releases input and cancels reconnect work
     When the resolved target is read-only
     Then send-clipboard controls render disabled
     And pointer and keyboard handlers are not attached for interactive input
     And clipboard send returns immediately in read-only mode
     When the VNC proxy, display protocol, or session load fails
-    Then the pane reports proxy, protocol, or session-load error text in its status and display chrome
+    Then the pane reports proxy, protocol, or session-load error text with retry or a return to connections
+    And failed or disallowed connections are not recorded in history
 
   @ux-workspace-016 @editor @save
   Scenario: Save changed editor content

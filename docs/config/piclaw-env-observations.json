@@ -1781,6 +1781,7 @@
             "runtime/scripts/playwright/vnc-harness-report.ts",
             "runtime/scripts/test-filesystem-isolation.ts",
             "runtime/scripts/test-target.ts",
+            "runtime/scripts/test-vnc-disposable.sh",
             "runtime/scripts/vnc-harness-standalone.ts"
           ],
           "readerFiles": [
@@ -3860,6 +3861,7 @@
           "helperReaders": 0,
           "semanticReaders": 0,
           "files": [
+            "runtime/scripts/test-vnc-disposable.sh",
             "scripts/audit-session-turn-management-regression.sh"
           ],
           "readerFiles": []
