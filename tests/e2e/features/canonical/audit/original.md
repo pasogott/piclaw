@@ -2,7 +2,7 @@
 
 Baseline: core `f1a9d979d4ad5bb9c740b1ddf69f8c6c4ff245b4`; original specification
 `9607cc4911f3a2a96566af2ddf127f5fabbfe16e`. Classic is authoritative on doubt.
-All rows refer to `../../classic/canonical/canonical-ux.feature`; IDs preserve original scenario order.
+Original scenarios 001–028 refer to `../../classic/canonical/canonical-ux.feature`. Follow-up #1324 restores 029 to its desired SVG-image scope in `../../planned/svg-images.feature`; see the dated evidence below.
 `corrected` means source reconciled, not browser-executed or independently approved.
 Paths beginning `runtime/` are relative to the Piclaw repository root.
 
@@ -52,7 +52,7 @@ No secret or live configuration values were needed for this audit.
 
 | ID | Scope | Source | Disposition |
 |---|---|---|---|
-| ux-original-029 | Upstream safe-inline-SVG request in 3f8ee0d2f | `runtime/web/src/markdown.ts` — renderMarkdown, highlightCodeToHtml pipeline; `runtime/web/src/components/post.ts` — enhanceCodeBlocks | Corrected to fenced source-code display. No SVG-fence conversion, accessibility-wrapper contract or bounded malformed-SVG fallback exists at this baseline. |
+| ux-original-029 | Upstream SVG-image request in 3f8ee0d2f; desired acceptance restored by #1324 | `runtime/web/src/markdown.ts` — renderMarkdown, highlightCodeToHtml pipeline; `runtime/web/src/components/post.ts` — enhanceCodeBlocks | At 70d33bc93 fences remain source: no SVG-fence conversion or bounded fallback policy exists. This is dated implementation-gap evidence, not a ban. Desired acceptance is [planned](../../planned/svg-images.feature); implementation #1325 and [SVG evidence](svg-images.md) track follow-up. |
 
 The PR head advanced to `3f8ee0d2f9eddab3828f9a5d4f626716469636d8` during the audit. Its feature contribution and upstream test edit were adopted by fast-forward before audit changes. The audit changes no executable test.
 

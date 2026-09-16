@@ -287,12 +287,5 @@ Feature: Classic Piclaw interaction model
     When I copy a code block
     Then the copy path uses code text instead of highlighted HTML
 
-  @ux-original-029 @svg @markdown @current-behavior
-  Scenario: Keep model-generated fenced SVG as source code
-    Given a post contains an SVG fenced code block
-    When the Classic Markdown renderer processes the post
-    Then the SVG remains code text in a code block
-    And the normal code-copy action can copy its source
-    And the renderer does not turn that fence into an inline SVG diagram
-    # Upstream 3f8ee0d2f requested safe accessible inline SVG rendering.
-    # That rendering path and its size/fallback policy are absent at this code baseline.
+  # ux-original-029 is the desired SVG-image contract in ../../planned/svg-images.feature.
+  # Source-only behaviour at 70d33bc93 is dated evidence in the audit packet, not a product ban.
