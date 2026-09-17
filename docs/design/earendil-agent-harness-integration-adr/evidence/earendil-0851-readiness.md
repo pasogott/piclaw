@@ -1,0 +1,82 @@
+# Earendil 0.85.1 candidate readiness
+
+The current-runtime migration is implemented and passes local runtime, type, package and Linux portable gates. **It is not approved for merge or deployment.** Raw Storage conformance, complete HC promotion, non-Linux execution and the disposable upgrade/rollback canary are incomplete.
+
+## Scope and coordinates
+
+- Main/source baseline: `ad922bdaac40b3a5119aa3017a10ee63897e318b`.
+- PR A: [#1330](https://github.com/rcarmo/piclaw/pull/1330), `83b42a1be1950241da43ec2f05bb2a54f3c737b7`. Corrected admission/catalogue evidence; no live pin changes.
+- PR B is stacked on PR A and selects exact `0.85.1` for pi-agent-core, pi-ai and pi-coding-agent, with the coherent lockfile. Release gitHead: `d981de1229ef899957bbe968bc8dcda02a21f477`.
+- MCP adapter remains `715843cd574923880c6a82e30641a0c2dc01c96a`.
+- Add-on archive baseline: `6374ed3c85627c590794e44828d13b08587ba46b`; changes to its test peers were disposable only.
+- Host: Smith, LXC, user-systemd. Canonical `/workspace`, `/workspace/.pi` and `/workspace/.piclaw` are unchanged. Production source and installed runtime remain on the baseline with Earendil 0.84.4.
+
+## Implemented migration
+
+Every filesystem/shell operation uses the released trailing Context, with cancellation from `context.abortSignal`. The adapters, local/SSH factories, independent fake, shared contract and tool tests moved together. Six-argument tool tests preserve Piclaw authority separately from Harness operation/invocation/turn identity, awaited memo writes/deletes and rejection of expired capabilities.
+
+Shell execution uses bounded capture, source updates and metadata-only results. The adapter validates snapshots, output fragments, cumulative replay, byte/line limits and Unicode slide boundaries; it rejects post-cleanup admission and late updates. Rejected environment candidates are cleaned with their receiver. Cleanup is idempotent and safe against synchronous re-entry. Fake process waits settle on timeout, abort and cleanup without a test-only release.
+
+Review findings were fixed and regression-tested, including valid upstream head truncation when both the first line and line count overflow. Final bounded adapter review found no remaining blockers in that scope.
+
+The three-file latent compatibility allowlist and AST/module-graph no-production-import guard remain enforced. Available preparation types are aliases to released public exports. No production AgentHarness constructor, registration, activation flag, watchSession call or pi-server dependency was introduced.
+
+## Executed local gates
+
+Counts in separate rows overlap. They are executions from specific commands, not an additive unique-test total.
+
+| Gate | Result |
+|---|---|
+| `bun run typecheck` | Pass: runtime, scripts, web Settings and panes |
+| `make ci-fast` final repeat | 5,339 runtime passes, four existing skips; 25 feature passes; both frontend builds; nine web-build passes |
+| Entire service-effects directory | 369 pass, zero fail, 35 files |
+| Real public repository conformance | Memory 17 + JSONL 15 case executions; two catalogue/count checks; 34 tests pass |
+| Real public Harness constructor semantics | Nine tests pass; bounded HC sub-boundaries only |
+| Core read/write/edit/bash factories | Nine tests pass with six-argument calls |
+| New offline provider payload/terminal contracts | Four tests pass / 59 assertions: explicit 30m cache payload, legacy 24h, short/disabled caching, EOF Codex response.done |
+| MCP/provider/sanitizer/watchdog/portable-script slice | 38 passes across six actually executed files |
+| Session manager/compaction/model state/watchdog slice | 68 passes across five actually executed files |
+| Affinity/reasoning/cache/token usage/model state/watchdog slice | 29 passes across six actually executed files |
+| Add-on compatibility | 125 passes across ten files; compatibility/M365/Remote Peer typechecks pass |
+| Codex-conversion standalone import | Pass in a separately installed tree containing its declared dependencies and selected peers |
+| `make pack` | Pass; no global install |
+| Linux x64 and linux-x64-baseline portable builds | Pass; both extract, launch Piclaw 3.1.2 and Pi 0.85.1, and import coding-agent root using bundled Bun 1.4.1 |
+| Fresh coding-agent-only consumer | PR A evidence: Bun 1.4.1, real Node 22.19.0 minimum and Node 26.7.0 pass; no pi-server; source-only imports rejected |
+| `make lint` | Fails with the same 20 errors on PR A and PR B; zero new diagnostics after fixing one introduced unused import |
+| `git diff --check` | Pass |
+
+Two full-gate failures were retained and investigated: the candidate's token-usage migration subprocess timed out under load, then passed alone and in repeated full gates; PR A hosted run `35162736970` failed an unchanged queued-lease timing assertion, then passed in three isolated local reruns. Hosted failure is not relabelled as success. No ad-hoc Actions rerun was dispatched.
+
+Some initial focused commands named obsolete files which Bun ignored. Only actually executed file/count results above are evidence. Full ci-fast independently discovers its runtime set.
+
+## Historical and selected evidence
+
+The versioned manifest preserves the previous 0.84.1/0.84.4 object under `historical`, including package/fingerprint/conformance hashes and all unsupported HC rows. [Historical negative receipt](earendil-0844-historical-negatives.json) records the seven compiler incompatibilities and 25 HarnessNotImplemented results against their original version; they are not executed or relabelled against 0.85.1.
+
+The selected record contains six-package metadata and contained public-export fingerprints. HC rows keep their original requirements and are labelled `partial` or `unverified`, never full pass. Executed sub-boundaries cover admission-before-effect, terminal results, tool Context/authority/memos, parallel source-order results, queues/cancellation, abort/late writes, lane isolation, accepted-open restoration, hook order/lane snapshots and explicit usage totals. Crash replay, exhaustive retry/deferred restoration, all compaction variants and event-buffer race proofs are not complete.
+
+`watchSession` has a public `Promise<WatchHandle<SessionSnapshot>>` contract; the runtime declaration is `Promise<never>` and its implementation throws `SliceNotImplemented`. It is not called by these tests or production.
+
+### Raw Storage export gate
+
+The public package exports MemorySessionRepo and JsonlSessionRepo, but not MemoryStorage or JsonlStorage. `createStorageConformance` requires an existing Storage fixture; no public helper constructs either built-in Storage. Public Session does not expose its private storage.
+
+A preliminary delegated fixture reached through a private session field and obtained 42 raw-storage executions. That fixture was removed and those results are **withdrawn as admission evidence**. The final suite runs only 32 public repository cases. The JSONL 15-case selection matches the exact pinned upstream `packages/agent/test/harness/jsonl-session-repo-conformance.test.ts`; its two destination-reservation races are not counted as passes.
+
+Planner independently confirmed the export limitation at both the release and pinned tip. Required decision: accept downstream SessionRepo plus Piclaw boundary tests as the selected integration scope, or wait for supported upstream Storage constructors/testing factories. No private import, property access, copied implementation or declaration trick is an acceptable substitute.
+
+### SQLite boundary
+
+Bun 1.4.1 successfully imports `node:sqlite` and executes an in-memory `SELECT 1`. The selected public session package exports no SQLite backend, and no SQLite backend conformance was run. The historical `bun_node_sqlite_unavailable` label remains history only; it is not the selected-runtime result.
+
+## Approval and execution gaps
+
+- Raw Storage acceptance decision and remaining HC semantic evidence. No full Harness promotion.
+- Windows, macOS and other native architectures: launcher-generation tests only; no native artifact execution. Current portable builder runs on its host platform, with an additional Linux baseline target.
+- All-add-on standalone matrix: only the targeted compatibility suite and standalone codex-conversion import were run.
+- [Disposable canary upgrade/rollback](earendil-0851-canary.md): prepared, not executed; no canary install/restart authority was supplied.
+- Full integration/browser gate is not run without an authorised disposable target.
+- Baseline lint remediation or explicit gate disposition; PR A hosted timing failure is still recorded.
+- Explicit approval before merge, deployment, restart, paid-provider calls or production-data migration. No spending allowance exists.
+
+`@planner`'s tip assessment is accepted as planning evidence only. No tip-only openTextLineReader, maxAgentDelayMs, forced SystemMessage replacement, streaming-fork helpers, strict sampling, per-model compaction override or ModelRegistry streaming API was adopted.
