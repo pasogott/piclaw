@@ -83,8 +83,8 @@ export function admitAddonOperation(record: OperationRecord): {
         executionKind: "background",
       });
       db.query(
-        `INSERT INTO addon_operations(id,addon_id,principal_id,idempotency_key,input_hash,target,text,grant_json,chat_jid,work_id,status,sequence,created_at,updated_at,output,reason)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO addon_operations(id,addon_id,principal_id,idempotency_key,input_hash,target,text,input_bytes,grant_json,chat_jid,work_id,status,sequence,created_at,updated_at,output,reason)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       ).run(
         record.id,
         record.addonId,
@@ -93,6 +93,7 @@ export function admitAddonOperation(record: OperationRecord): {
         record.inputHash,
         record.target,
         record.text,
+        Buffer.byteLength(record.text),
         JSON.stringify(record.grant),
         record.chatJid,
         record.workId,
@@ -261,15 +262,29 @@ export function appendOperationInput(
     .transaction(() => {
       const previous = readAddonOperation(id);
       if (!previous || previous.status !== "input_required") return null;
-      const combined =
-        previous.text + "\n\nFollow-up input (untrusted data):\n" + text;
-      if (Buffer.byteLength(combined) > 32 * 1024)
-        throw new Error("Operation input limit.");
-      db.query("UPDATE addon_operations SET text=? WHERE id=?").run(
-        combined,
-        id,
-      );
+      const row = db
+        .query("SELECT input_bytes FROM addon_operations WHERE id=?")
+        .get(id) as { input_bytes: number };
+      const bytes = row.input_bytes + Buffer.byteLength(text);
+      if (bytes > 32 * 1024) throw new Error("Operation input limit.");
+      // The persistent session already contains prior input. Send only this turn,
+      // retaining the aggregate byte count without replaying earlier instructions.
+      db.query(
+        "UPDATE addon_operations SET text=?,input_bytes=? WHERE id=?",
+      ).run(text, bytes, id);
       return transitionAddonOperation(id, ["input_required"], "queued");
     })
     .immediate();
+}
+
+/** Resume without resubmitting input already present in the SDK session history. */
+export function markAddonOperationInputCommitted(id: string): void {
+  getDb()
+    .query(
+      "UPDATE addon_operations SET text=? WHERE id=? AND status IN ('working','cancel_requested')",
+    )
+    .run(
+      "Continue the current operation from the input already in this session. Do not repeat completed actions.",
+      id,
+    );
 }

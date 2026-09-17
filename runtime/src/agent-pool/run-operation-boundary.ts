@@ -20,6 +20,9 @@ export function createOperationModelBoundary(options: RunAgentOptions) {
         context,
         streamOptions,
       ) => {
+        // The SDK persisted/built this prompt before reaching the model stream.
+        // Record that boundary even when policy/budget now pauses the request.
+        options.onOperationInputCommitted?.();
         options.abortSignal?.throwIfAborted();
         streamOptions?.signal?.throwIfAborted();
         if (

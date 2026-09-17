@@ -1,6 +1,6 @@
 # Add-on operation foundation validation
 
-Validated 17 September 2026 on Bun 1.4.1/Linux in the isolated `feat/addon-operations` worktree, based on `ad922bdaa`. No credentials, live runtime configuration, production services or model providers were used.
+Validated 17 September 2026 on Bun 1.4.1/Linux in the isolated `feat/addon-operations` worktree, initially based on `ad922bdaa`, then merged with `a1a8bdcac` (Earendil 0.85.1) for the final review. No credentials, live runtime configuration, production services or model providers were used.
 
 | Gate | Result |
 |---|---|
@@ -8,9 +8,11 @@ Validated 17 September 2026 on Bun 1.4.1/Linux in the isolated `feat/addon-opera
 | Focused operation, orchestration, resource, startup and add-on regression suite | 140 passed, 3 existing skips |
 | Actual SDK session construction | Passed: fixed prompt, only granted `read`, no ambient extension factories/context |
 | Two-process SQLite restart fixture | Passed: uncertain active work is not replayed; duplicate admission recovers same ID |
-| Complete `make ci-fast` rerun | Passed: 5,360 runtime tests, 4 skips; 25 feature checks; 9 build tests |
+| Complete `make ci-fast` rerun | Passed: 5,380 runtime tests, 4 skips; 25 feature checks; 9 build tests |
 | Environment inventory, circular dependencies, entrypoint preloads, silent catches, pack hygiene, whitespace | Passed |
 | New operation modules and tests lint | Passed |
+
+The final review also fixes input replay: a continuation submits only the new input while preserving cumulative byte limits, and a budget-blocked model boundary marks input already committed to the SDK session. Resume uses a bounded continuation instruction instead of repeating the prior request. Targeted tests verify both behaviours; full CI passes on Earendil 0.85.1.
 
 The first fast-CI run had a pre-existing token-usage migration subprocess exceed its five-second timeout; its focused rerun and the complete gate rerun passed. Changed-file lint also reports two pre-existing diagnostics in untouched lines of the modified orchestrator/recovery files (`no-unused-vars` catch parameter and `no-useless-assignment`). Their bytes match the base; no unrelated cleanup is included.
 

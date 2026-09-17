@@ -64,7 +64,7 @@ Merge into `.piclaw/config.json`; do not replace other domains. No configuration
 }
 ```
 
-The target is a publication/grant alias, not an operator chat ID. Each operation uses a new reserved `operation:<UUID>` session and `operation:<UUID>` budget work identity. Existing operator conversations are never reused. Continuations keep the same identity.
+The target is a publication/grant alias, not an operator chat ID. Each operation uses a new reserved `operation:<UUID>` session and `operation:<UUID>` budget work identity. Existing operator conversations are never reused. Continuations keep the same identity and submit only the new user turn. Cumulative input bytes remain bounded independently of the stored current prompt. If a model boundary pauses after the SDK has accepted a turn, resume sends a continuation instruction rather than replaying prior input.
 
 Grants allow only implemented SDK built-ins (`read`, `grep`, `find`, `ls`, `write`, `edit`, `bash`, `powershell`); unavailable platform tools still fail rather than falling back. Empty tools means text-only. A tool-enabled grant must set a positive cap. Changes to grant revision or contents cannot silently widen already-admitted work: new model/tool boundaries recheck policy, queued work with changed grants is rejected, and paused work requires operator reconciliation.
 

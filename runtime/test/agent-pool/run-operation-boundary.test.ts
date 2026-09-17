@@ -58,3 +58,30 @@ test("required model boundary fails closed, transfers owner and honours caller a
   guard.release();
   expect(second.agent.streamFunction).toBe(replacement);
 });
+
+test("operation input is recorded as consumed before a blocked model boundary", async () => {
+  let committed = 0,
+    called = 0;
+  const session = {
+    agent: {
+      streamFunction: async () => {
+        called++;
+        return {} as never;
+      },
+    },
+  } as any;
+  const guard = createOperationModelBoundary({
+    requireToolCeiling: true,
+    onOperationInputCommitted: () => {
+      committed++;
+    },
+    budgetBeforeModelCall: async () => "exhausted",
+  });
+  guard.apply(session);
+  await expect(
+    session.agent.streamFunction({ provider: "fixture" }, {}, {}),
+  ).rejects.toThrow("BUDGET-BLOCKED");
+  expect(committed).toBe(1);
+  expect(called).toBe(0);
+  guard.release();
+});

@@ -136,7 +136,10 @@ test("input continuation remains in one operation and budget work, requires none
   await service.waitForIdle();
   const final = await client.get(receipt.operation!.id);
   expect(final.workId).toBe(receipt.operation!.workId);
-  expect(final.output).toContain("supplied value");
+  expect(final.output).toBe("supplied value");
+  expect(readAddonOperation(receipt.operation!.id)?.text).toBe(
+    "supplied value",
+  );
   expect(count).toBe(2);
   expect((await client.continue(receipt.operation!.id, "late")).resumed).toBe(
     false,
@@ -194,4 +197,42 @@ test("concurrent active-work quota is enforced inside admission transaction", as
   for (const r of results)
     if (r.status === "fulfilled") await client.cancel(r.value.operation!.id);
   await service.waitForIdle();
+});
+
+test("resume after committed model input uses continuation instruction instead of replaying the last user request", async () => {
+  const { markAddonOperationInputCommitted } =
+    await import("../../src/db/addon-operations.js");
+  const prompts: string[] = [];
+  handler = async (input) => {
+    prompts.push(input.text);
+    if (prompts.length === 1) {
+      markAddonOperationInputCommitted(input.operationId);
+      return { status: "budget_blocked", reason: "budget_boundary" };
+    }
+    return { status: "completed" };
+  };
+  const client = service.bind(principal);
+  const first = await client.admit(request("resume-committed"));
+  await service.waitForIdle();
+  await client.resume(first.operation!.id);
+  await service.waitForIdle();
+  expect(prompts[0]).toBe("external data");
+  expect(prompts[1]).not.toContain("external data");
+  expect(prompts[1]).toContain("already in this session");
+});
+
+test("cumulative input quota survives replacement of previous continuation text", async () => {
+  handler = async () => ({ status: "input_required" });
+  const client = service.bind(principal);
+  const first = await client.admit({
+    ...request("quota-continuation"),
+    text: "a".repeat(16000),
+  });
+  await service.waitForIdle();
+  await client.continue(first.operation!.id, "b".repeat(16000));
+  await service.waitForIdle();
+  expect(readAddonOperation(first.operation!.id)?.text).toBe("b".repeat(16000));
+  await expect(
+    client.continue(first.operation!.id, "c".repeat(1000)),
+  ).rejects.toThrow("input limit");
 });

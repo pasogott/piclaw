@@ -1,3 +1,4 @@
+import { markAddonOperationInputCommitted } from "../db/addon-operations.js";
 import type { AgentOutput, RunAgentOptions } from "../agent-pool/contracts.js";
 import { readAccessConfig } from "../core/config-access.js";
 import { readOperationsConfig } from "../core/config-operations.js";
@@ -72,6 +73,7 @@ export function createOperationHost(
         maxToolCalls: input.grant.maxToolCalls,
         toolCeilingFilter: (name) => input.grant.allowedTools.includes(name),
         requireToolCeiling: true,
+        onOperationInputCommitted: () => markAddonOperationInputCommitted(input.operationId),
         abortSignal: input.signal,
         skipPrePromptCompaction: true,
         scheduleIdleAutoCompaction: false,
