@@ -14,6 +14,8 @@ import {
   CODING_AGENT_PACKAGE,
   FAMILY_PACKAGES,
   assertProbeRuntime,
+  assertSourceOnlyRejection,
+  probeProgram,
   inspectInstalledConsumer,
   parseAdmissionArgs,
 } from "../../../scripts/check-earendil-package-admission.ts";
@@ -54,6 +56,31 @@ describe("Earendil package admission checker", () => {
     expect(() => assertProbeRuntime("bun", bun)).not.toThrow();
     expect(() => assertProbeRuntime("node", bun)).toThrow("real Node");
     expect(() => assertProbeRuntime("bun", node)).toThrow("requires Bun");
+  });
+
+  test("source-only rejection requires export resolution rather than a module evaluation failure", () => {
+    for (const kind of ["node", "bun"] as const) {
+      const receipt = { specifier: `${CODING_AGENT_PACKAGE}/client`, status: "rejected" as const, phase: "resolution" as const,
+        error: { name: "Error", code: kind === "node" ? "ERR_PACKAGE_PATH_NOT_EXPORTED" : "ERR_MODULE_NOT_FOUND", message: "excluded" } };
+      expect(() => assertSourceOnlyRejection(kind, receipt)).not.toThrow();
+      expect(() => assertSourceOnlyRejection(kind, { ...receipt, phase: undefined })).toThrow("export resolution");
+      expect(() => assertSourceOnlyRejection(kind, { ...receipt, error: { ...receipt.error, code: "SyntaxError" } })).toThrow("export resolution");
+    }
+    const consumerRoot = materializeConsumer();
+    const code = probeProgram();
+    const excluded = Bun.spawnSync([process.execPath, "--eval", code], { cwd: consumerRoot, stdout: "pipe", stderr: "pipe" });
+    expect(excluded.exitCode).toBe(0);
+    const parse = (stdout: Buffer) => JSON.parse(stdout.toString().trim().split("\n").at(-1)!.slice("EAR_ENDIL_PACKAGE_ADMISSION=".length));
+    const denied = parse(excluded.stdout);
+    expect(denied.sourceOnlyDeepPaths.every((entry: { phase: string }) => entry.phase === "resolution")).toBe(true);
+    updateJson(manifestPath(consumerRoot, CODING_AGENT_PACKAGE), (manifest) => {
+      manifest.exports["./client"] = { import: "./src/client/index.ts" };
+    });
+    writeFileSync(join(consumerRoot, "node_modules", ...CODING_AGENT_PACKAGE.split("/"), "src/client/index.ts"), 'throw new Error("evaluation-must-not-run");');
+    const exposed = Bun.spawnSync([process.execPath, "--eval", code], { cwd: consumerRoot, stdout: "pipe", stderr: "pipe" });
+    expect(exposed.exitCode).toBe(0);
+    expect(parse(exposed.stdout).sourceOnlyDeepPaths[0].status).toBe("resolved");
+    expect(exposed.stderr.toString()).not.toContain("evaluation-must-not-run");
   });
 
   test("parses exact release metadata and caller-provided runtime paths", () => {
