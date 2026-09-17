@@ -170,11 +170,12 @@ describe("latent Earendil Harness v3 non-interference boundary", () => {
     }
   });
 
-  test("keeps both test fixtures on declared public exports and outside production source", async () => {
+  test("keeps Harness and repository test fixtures on declared public exports and outside production source", async () => {
     const runtimeRoot = resolve(import.meta.dir, "../..");
     const fixtureNames = [
       "earendil-harness-direct-probe.ts",
       "earendil-session-backend-fixtures.ts",
+      "earendil-jsonl-process-loss.ts",
     ];
     for (const fixtureName of fixtureNames) {
       const path = resolve(runtimeRoot, "test/service-effects/fixtures", fixtureName);

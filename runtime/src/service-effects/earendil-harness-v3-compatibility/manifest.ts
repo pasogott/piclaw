@@ -583,15 +583,15 @@ const SELECTED_RELEASE = {
       "id": "HC-004",
       "name": "safe replay",
       "requirement": "Restore re-executes effect_pending only when persisted and current declarations both say safe.",
-      "status": "unverified",
-      "evidence": "No selected-release complete semantic proof yet; historical unsupported result is not promoted."
+      "status": "partial",
+      "evidence": "Public JSONL process loss at effect_pending after awaited memo writes: four persisted/current safe-never combinations; safe-safe preserves invocation/turn/operation identity, memo deletion and reserved result ID; settled third-process drive repeats neither fixture invocation nor provider call. Other crash boundaries unproved."
     },
     {
       "id": "HC-005",
       "name": "never replay",
       "requirement": "Restore settles a never-replay tool under its reserved result ID without re-execution.",
-      "status": "unverified",
-      "evidence": "No selected-release complete semantic proof yet; historical unsupported result is not promoted."
+      "status": "partial",
+      "evidence": "Public JSONL process loss: persisted-never or current-never prevents fixture replay, publishes one interrupted tool result at the reserved ID, and remains settled after a third-process drive. Other effects and crash points unproved."
     },
     {
       "id": "HC-006",
@@ -653,8 +653,8 @@ const SELECTED_RELEASE = {
       "id": "HC-014",
       "name": "corruption",
       "requirement": "Invalid current-register and reference combinations fail without silent repair.",
-      "status": "unverified",
-      "evidence": "No selected-release complete semantic proof yet; historical unsupported result is not promoted."
+      "status": "partial",
+      "evidence": "Public Session writes an incomplete lane register set referencing a missing operation; real constructor rejects while the register remains unchanged and the branch still exists. Other corruption variants unproved."
     },
     {
       "id": "HC-015",
@@ -674,15 +674,15 @@ const SELECTED_RELEASE = {
       "id": "HC-017",
       "name": "manual drive",
       "requirement": "Manual and automatic drive yield identical durable state while one action advances at a time.",
-      "status": "unverified",
-      "evidence": "No selected-release complete semantic proof yet; historical unsupported result is not promoted."
+      "status": "partial",
+      "evidence": "Public prompt versus accept-drive for one deterministic turn produces equal role/content transcript, completed result kind/status, empty queues and one provider call. Full boundary-by-boundary state equality remains unproved."
     },
     {
       "id": "HC-018",
       "name": "hooks events and watch",
       "requirement": "Typed hooks obey settlement barriers and snapshot-first buffered event ordering.",
       "status": "partial",
-      "evidence": "before_run hook registration order, lane watch initial snapshot and resnapshot; buffering/interleaving proof incomplete; watchSession stub remains unsupported"
+      "evidence": "before_run registration order, lane snapshot/resnapshot, entry committed before watch.start delivered from buffer, and blocked before_run_end hook delaying drive settlement/run_end; other interleavings unproved and watchSession stub remains unsupported"
     },
     {
       "id": "HC-019",

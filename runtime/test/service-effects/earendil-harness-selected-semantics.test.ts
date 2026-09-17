@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { Type } from "typebox";
 import { BACKGROUND_CONTEXT, createContextKey, withContextValue } from "@earendil-works/pi-agent-core/harness/context";
 import type { AgentHarnessTool, AgentHarnessToolInvocation, AgentLane } from "@earendil-works/pi-agent-core";
+import { MemorySessionRepo, laneState } from "@earendil-works/pi-agent-core/harness/session";
 import type { PiclawToolContext } from "../../src/service-effects/contracts/execution-context-resolver.js";
 import { FakeExecutionEnv } from "../../src/service-effects/testing/fakes/fake-execution-env.js";
 import {
@@ -197,27 +198,45 @@ describe("selected 0.85.1 public Harness semantics (inactive evidence only)", ()
     } finally { await f.harness.close(ctx); await f.repo.close(ctx); }
   });
 
-  test("HC-018 lane watch snapshot/resnapshot and hook registration order are preserved", async () => {
+  test("HC-018 lane watch buffers pre-start events and awaits terminal hook completion", async () => {
     const f = await createSelectedHarnessFixture({ responses: [fauxAssistantMessage("done")] });
     try {
       const lane = await f.harness.lane("main", ctx);
       const hookCalls: string[] = [];
+      const terminalHookStarted = gate(), releaseTerminalHook = gate();
       f.harness.hooks.on("before_run", () => { hookCalls.push("first"); }, { id: "first" });
       f.harness.hooks.on("before_run", async () => { await Promise.resolve(); hookCalls.push("second"); }, { id: "second" });
+      f.harness.hooks.on("before_run_end", async () => {
+        terminalHookStarted.release();
+        await releaseTerminalHook.promise;
+        hookCalls.push("terminal-complete");
+      });
       const watch = await lane.watch(ctx);
       expect(watch.snapshot.operation).toBeNull();
       const events: string[] = [];
       try {
+        await lane.appendMessage({ role: "user", content: [{ type: "text", text: "before watch.start" }], timestamp: 1 }, ctx);
+        // This entry is already committed before the listener starts: delivery
+        // must come from the watch buffer, not later drive events.
+        const buffered = gate();
+        watch.start((event) => { events.push(event.type); if (event.type === "entry_added") buffered.release(); });
+        await buffered.promise;
+        expect(events).toContain("entry_added");
         const accepted = await lane.accept({ kind: "prompt", operationId: OPERATION, prompt: "watch" }, ctx);
         expect(accepted.ok).toBe(true);
-        watch.start((event) => { events.push(event.type); });
-        expect((await lane.drive({ operationId: OPERATION }, ctx)).ok).toBe(true);
-        expect(hookCalls).toEqual(["first", "second"]);
+        let settled = false;
+        const driving = lane.drive({ operationId: OPERATION }, ctx).then((result) => { settled = true; return result; });
+        await terminalHookStarted.promise;
+        expect(settled).toBe(false);
+        expect(events).not.toContain("run_end");
+        releaseTerminalHook.release();
+        expect((await driving).ok).toBe(true);
+        expect(hookCalls).toEqual(["first", "second", "terminal-complete"]);
         expect(events).toContain("run_start");
         expect(events).toContain("run_end");
         expect(events.indexOf("run_start")).toBeLessThan(events.indexOf("run_end"));
         expect((await watch.resnapshot(ctx)).operation).toBeNull();
-      } finally { watch.unsubscribe(); }
+      } finally { releaseTerminalHook.release(); watch.unsubscribe(); }
     } finally { await f.harness.close(ctx); await f.repo.close(ctx); }
   });
 
@@ -235,6 +254,47 @@ describe("selected 0.85.1 public Harness semantics (inactive evidence only)", ()
       expect(again.stats).toEqual(before.stats);
       expect((await f.session.getStats(ctx)).usage.totalTokens).toBe(14);
     } finally { await f.harness.close(ctx); await f.repo.close(ctx); }
+  });
+
+
+  test("HC-014 public incomplete lane state fails construction without repair", async () => {
+    const repo = new MemorySessionRepo();
+    const session = await repo.create({ id: "corrupt-fixture" }, ctx);
+    try {
+      await session.createBranch("main", null, ctx);
+      await session.setValue(laneState("main"), { currentOperationId: OPERATION, lastOperationId: null, inbox: [] }, ctx);
+      const before = await session.getValue(laneState("main"), ctx);
+      await expect(createSelectedHarnessFixture({ repo, session })).rejects.toBeDefined();
+      expect(await session.getValue(laneState("main"), ctx)).toEqual(before);
+      expect(await session.branch("main", ctx)).toBeDefined();
+    } finally { await session.close(ctx); await repo.close(ctx); }
+  });
+
+  test("HC-017 public prompt and accept-drive agree for one deterministic settled turn", async () => {
+    const automatic = await createSelectedHarnessFixture({ responses: [fauxAssistantMessage("same-output")] });
+    const manual = await createSelectedHarnessFixture({ responses: [fauxAssistantMessage("same-output")] });
+    try {
+      const autoLane = await automatic.harness.lane("main", ctx), manualLane = await manual.harness.lane("main", ctx);
+      const message = { role: "user" as const, content: [{ type: "text" as const, text: "same-input" }], timestamp: 1 };
+      const autoResult = await autoLane.prompt(message, ctx);
+      expect(autoResult.ok).toBe(true);
+      expect((await manualLane.accept({ kind: "prompt", prompt: message, operationId: OPERATION }, ctx)).ok).toBe(true);
+      expect(manual.faux.state.callCount).toBe(0);
+      const manualResult = await manualLane.drive({ operationId: OPERATION }, ctx);
+      expect(manualResult.ok && manualResult.value.kind).toBe("settled");
+      const a = await snapshot(autoLane), b = await snapshot(manualLane);
+      const messages = (state: typeof a) => state.transcript.flatMap((entry) => entry.type === "message" ? [{ role: entry.message.role, content: entry.message.content }] : []);
+      expect(messages(a)).toEqual(messages(b));
+      expect(a.lastResult?.status).toBe("completed");
+      expect(b.lastResult?.status).toBe(a.lastResult?.status);
+      expect(b.lastResult?.kind).toBe(a.lastResult?.kind);
+      expect(a.operation).toBeNull(); expect(b.operation).toBeNull();
+      expect(a.queues).toEqual([]); expect(b.queues).toEqual([]);
+      expect(automatic.faux.state.callCount).toBe(1); expect(manual.faux.state.callCount).toBe(1);
+    } finally {
+      await automatic.harness.close(ctx); await automatic.repo.close(ctx);
+      await manual.harness.close(ctx); await manual.repo.close(ctx);
+    }
   });
 
 });

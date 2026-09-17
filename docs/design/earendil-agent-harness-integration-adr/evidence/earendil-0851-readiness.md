@@ -1,6 +1,6 @@
 # Earendil 0.85.1 candidate readiness
 
-The current-runtime migration is implemented and passes local runtime, type, package and Linux portable gates. **It is not approved for merge or deployment.** Raw Storage conformance, complete HC promotion, non-Linux execution and the disposable upgrade/rollback canary are incomplete.
+The current-runtime migration is implemented and passes the executed local runtime, type, package and Linux portable gates listed below. **It is not approved for merge or deployment.** Raw Storage conformance, complete HC promotion, non-Linux execution and the disposable upgrade/rollback canary are incomplete.
 
 ## Scope and coordinates
 
@@ -13,7 +13,7 @@ The current-runtime migration is implemented and passes local runtime, type, pac
 
 ## Implemented migration
 
-Every filesystem/shell operation uses the released trailing Context, with cancellation from `context.abortSignal`. The adapters, local/SSH factories, independent fake, shared contract and tool tests moved together. Six-argument tool tests preserve Piclaw authority separately from Harness operation/invocation/turn identity, awaited memo writes/deletes and rejection of expired capabilities.
+Every migrated Harness filesystem/shell adapter operation uses the released trailing Context, with cancellation from `context.abortSignal`. The adapters, local/SSH factories, independent fake, shared contract and tool tests moved together. Six-argument tool tests preserve Piclaw authority separately from Harness operation/invocation/turn identity, awaited memo writes/deletes and rejection of expired capabilities.
 
 Shell execution uses bounded capture, source updates and metadata-only results. The adapter validates snapshots, output fragments, cumulative replay, byte/line limits and Unicode slide boundaries; it rejects post-cleanup admission and late updates. Rejected environment candidates are cleaned with their receiver. Cleanup is idempotent and safe against synchronous re-entry. Fake process waits settle on timeout, abort and cleanup without a test-only release.
 
@@ -28,24 +28,29 @@ Counts in separate rows overlap. They are executions from specific commands, not
 | Gate | Result |
 |---|---|
 | `bun run typecheck` | Pass: runtime, scripts, web Settings and panes |
-| `make ci-fast` final repeat | 5,339 runtime passes, four existing skips; 25 feature passes; both frontend builds; nine web-build passes |
-| Entire service-effects directory | 369 pass, zero fail, 35 files |
+| `make ci-fast` follow-up | 5,345 runtime passes, four existing skips; 25 feature passes; both frontend builds; nine web-build passes |
+| Entire service-effects directory | 375 pass, zero fail, 36 files |
 | Real public repository conformance | Memory 17 + JSONL 15 case executions; two catalogue/count checks; 34 tests pass |
-| Real public Harness constructor semantics | Nine tests pass; bounded HC sub-boundaries only |
+| Real public Harness constructor semantics | Eleven tests pass; bounded HC sub-boundaries only |
+| JSONL process-loss replay | Four persisted/current safe-never combinations pass across twelve child processes; public SessionRepo/Harness, one specific effect_pending crash point |
 | Core read/write/edit/bash factories | Nine tests pass with six-argument calls |
 | New offline provider payload/terminal contracts | Four tests pass / 59 assertions: explicit 30m cache payload, legacy 24h, short/disabled caching, EOF Codex response.done |
 | MCP/provider/sanitizer/watchdog/portable-script slice | 38 passes across six actually executed files |
 | Session manager/compaction/model state/watchdog slice | 68 passes across five actually executed files |
 | Affinity/reasoning/cache/token usage/model state/watchdog slice | 29 passes across six actually executed files |
-| Add-on compatibility | 125 passes across ten files; compatibility/M365/Remote Peer typechecks pass |
-| Codex-conversion standalone import | Pass in a separately installed tree containing its declared dependencies and selected peers |
-| `make pack` | Pass; no global install |
-| Linux x64 and linux-x64-baseline portable builds | Pass; both extract, launch Piclaw 3.1.2 and Pi 0.85.1, and import coding-agent root using bundled Bun 1.4.1 |
+| Add-on compatibility | 125 passes across ten files; compatibility/M365/Remote Peer typechecks pass with all runtime peers and pi-tui at 0.85.1 |
+| Standalone add-on import smoke | [46-package matrix](earendil-0851-addon-matrix.md): 42 package-root imports pass; four no-main skill packages have their declared paths present; Linux/Bun only |
+| `make pack` | Pass at runtime migration commit `da9098fcf`; no global install |
+| Linux x64 and linux-x64-baseline portable builds | Pass at `da9098fcf`; both extract, launch Piclaw 3.1.2 and Pi 0.85.1, and import coding-agent root using bundled Bun 1.4.1. The subsequent import/process-loss evidence change is limited to inactive manifest data, tests and documentation; `da9098fcf` remains the tested artifact revision |
 | Fresh coding-agent-only consumer | PR A evidence: Bun 1.4.1, real Node 22.19.0 minimum and Node 26.7.0 pass; no pi-server; source-only imports rejected |
 | `make lint` | Fails with the same 20 errors on PR A and PR B; zero new diagnostics after fixing one introduced unused import |
 | `git diff --check` | Pass |
 
 Two full-gate failures were retained and investigated: the candidate's token-usage migration subprocess timed out under load, then passed alone and in repeated full gates; PR A hosted run `35162736970` failed an unchanged queued-lease timing assertion, then passed in three isolated local reruns. Hosted failure is not relabelled as success. No ad-hoc Actions rerun was dispatched.
+
+PR B's automatic hosted check on `da9098fcf` also passed (run `35171352736`). This does not replace the incomplete approval gates.
+
+The disposable add-on compatibility tree initially retained a direct pi-tui 0.84.4 development peer. It was corrected to 0.85.1 and all 125 tests and three typechecks were rerun successfully. The all-package smoke matrix verifies root/nested family versions and entry-point ESM peer provenance separately.
 
 Some initial focused commands named obsolete files which Bun ignored. Only actually executed file/count results above are evidence. Full ci-fast independently discovers its runtime set.
 
@@ -53,7 +58,11 @@ Some initial focused commands named obsolete files which Bun ignored. Only actua
 
 The versioned manifest preserves the previous 0.84.1/0.84.4 object under `historical`, including package/fingerprint/conformance hashes and all unsupported HC rows. [Historical negative receipt](earendil-0844-historical-negatives.json) records the seven compiler incompatibilities and 25 HarnessNotImplemented results against their original version; they are not executed or relabelled against 0.85.1.
 
-The selected record contains six-package metadata and contained public-export fingerprints. HC rows keep their original requirements and are labelled `partial` or `unverified`, never full pass. Executed sub-boundaries cover admission-before-effect, terminal results, tool Context/authority/memos, parallel source-order results, queues/cancellation, abort/late writes, lane isolation, accepted-open restoration, hook order/lane snapshots and explicit usage totals. Crash replay, exhaustive retry/deferred restoration, all compaction variants and event-buffer race proofs are not complete.
+The selected record contains six-package metadata and contained public-export fingerprints. HC rows keep their original requirements and are labelled `partial` or `unverified`, never full pass. Executed sub-boundaries cover admission-before-effect, terminal results, tool Context/authority/memos, parallel source-order results, queues/cancellation, abort/late writes, lane isolation, accepted-open restoration, hook order/lane snapshots and explicit usage totals.
+
+The follow-up adds real JSONL child-process loss inside an effect_pending tool after awaited memo writes/deletion. Only safe→safe replays; the three other persisted/current combinations publish one interrupted result without invoking the fixture tool again. Tests assert the reserved result ID, stable operation/turn/invocation identity, recovered memos/content, and a third settled process with no repeated fixture invocation or faux-provider call. This covers one defined crash boundary, not arbitrary external exactly-once effects.
+
+Lane-watch coverage now commits an entry before watch.start and waits for buffered delivery; a blocked before_run_end hook prevents drive settlement/run_end until released. Further tests reject an incomplete lane register without changing that register, and compare prompt versus accept-drive transcript/result/queue outcomes for one deterministic turn. Exhaustive crash points, retry/deferred restoration, all compaction variants and other event interleavings remain incomplete.
 
 `watchSession` has a public `Promise<WatchHandle<SessionSnapshot>>` contract; the runtime declaration is `Promise<never>` and its implementation throws `SliceNotImplemented`. It is not called by these tests or production.
 
@@ -73,7 +82,7 @@ Bun 1.4.1 successfully imports `node:sqlite` and executes an in-memory `SELECT 1
 
 - Raw Storage acceptance decision and remaining HC semantic evidence. No full Harness promotion.
 - Windows, macOS and other native architectures: launcher-generation tests only; no native artifact execution. Current portable builder runs on its host platform, with an additional Linux baseline target.
-- All-add-on standalone matrix: only the targeted compatibility suite and standalone codex-conversion import were run.
+- The 46-package Linux/Bun package-root import/path smoke matrix is complete (42 imports, four no-main path checks); full add-on runtime/browser/native functionality and non-Linux standalone execution are not covered by import receipts.
 - [Disposable canary upgrade/rollback](earendil-0851-canary.md): prepared, not executed; no canary install/restart authority was supplied.
 - Full integration/browser gate is not run without an authorised disposable target.
 - Baseline lint remediation or explicit gate disposition; PR A hosted timing failure is still recorded.
