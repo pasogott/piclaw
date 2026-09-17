@@ -51,6 +51,10 @@ The assessment covers the complete lifecycle of agent work:
 
 The assessment produced this ADR, its evidence tables and a proposed semantic contract suite. Published `0.84.4` still exposes the incomplete released-v2 Harness scaffold. Earendil `dev` now has a concrete v3 constructor and complete public lane drive; source selection, session-wide watch scope, storage/fork stability and Piclaw acceptance remain. This ADR does not activate the production runner, change persistence or deploy a service.
 
+## Published 0.85.1 admission follow-up
+
+[Package admission and corrected catalogue evidence](evidence/earendil-0851-admission.md) supersedes the old requirement that pi-server become transitive. Fresh supported root imports pass in Bun and real Node, including the minimum declared Node version. Production pins remain 0.84.4; Harness activation is a separate approval. Historical negative evidence below is preserved.
+
 ## Chapters and evidence
 
 - [Assessment method and quality bar](01-assessment-method.md)

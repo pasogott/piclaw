@@ -231,8 +231,10 @@ export interface EarendilV3SelectionGateShape {
   readonly productionVersion: "0.84.4";
   readonly assessedVersion: "0.85.0";
   readonly assessedReleaseCommit: "107d79f11072bbc8a3a757ed7fd69596bee7d68c";
-  readonly nextCandidate: "corrected_0.85.1_or_later";
-  readonly packageClosure: "fresh_coding_agent_root_import_must_resolve_pi_server_transitively";
+  readonly nextCandidate: "published_0.85.1";
+  readonly candidateReleaseCommit: "d981de1229ef899957bbe968bc8dcda02a21f477";
+  readonly packageClosure: "fresh_supported_coding_agent_root_imports_in_bun_and_supported_node_without_workarounds";
+  readonly sourceOnlyExperimentalExports: "not_admitted";
   readonly directPiServerWorkaround: "forbidden";
   readonly watchSession: "must_be_implemented_or_explicitly_excluded";
   readonly harnessActivation: "blocked";

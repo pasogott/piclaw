@@ -179,7 +179,7 @@ describe("latent corrected-0.85.x Harness v3 preparation contract", () => {
     expect(envelope.watchGeneration).toBe(2);
   });
 
-  test("keeps 0.85.0, watchSession, and Harness activation blocked", () => {
+  test("preserves historical 0.85.0 rejection and requires supported 0.85.1 closure without activation", () => {
     type Watch = EarendilV3HarnessActivationBlockShape["watchSession"];
     type Gate = EarendilV3SelectionGateShape;
     expect(assignable<
@@ -190,8 +190,10 @@ describe("latent corrected-0.85.x Harness v3 preparation contract", () => {
       productionVersion: "0.84.4",
       assessedVersion: "0.85.0",
       assessedReleaseCommit: "107d79f11072bbc8a3a757ed7fd69596bee7d68c",
-      nextCandidate: "corrected_0.85.1_or_later",
-      packageClosure: "fresh_coding_agent_root_import_must_resolve_pi_server_transitively",
+      nextCandidate: "published_0.85.1",
+      candidateReleaseCommit: "d981de1229ef899957bbe968bc8dcda02a21f477",
+      packageClosure: "fresh_supported_coding_agent_root_imports_in_bun_and_supported_node_without_workarounds",
+      sourceOnlyExperimentalExports: "not_admitted",
       directPiServerWorkaround: "forbidden",
       watchSession: "must_be_implemented_or_explicitly_excluded",
       harnessActivation: "blocked",
@@ -201,8 +203,10 @@ describe("latent corrected-0.85.x Harness v3 preparation contract", () => {
       productionVersion: "0.84.4",
       assessedVersion: "0.85.0",
       assessedReleaseCommit: "107d79f11072bbc8a3a757ed7fd69596bee7d68c",
-      nextCandidate: "corrected_0.85.1_or_later",
-      packageClosure: "fresh_coding_agent_root_import_must_resolve_pi_server_transitively",
+      nextCandidate: "published_0.85.1",
+      candidateReleaseCommit: "d981de1229ef899957bbe968bc8dcda02a21f477",
+      packageClosure: "fresh_supported_coding_agent_root_imports_in_bun_and_supported_node_without_workarounds",
+      sourceOnlyExperimentalExports: "not_admitted",
       directPiServerWorkaround: "forbidden",
       watchSession: "must_be_implemented_or_explicitly_excluded",
       harnessActivation: "blocked",
