@@ -8,7 +8,7 @@
 | [Admission and catalogue](earendil-0851-admission.md) | Bun/real Node public closure, source-only exclusions, 15 total API moves with +107/-43 gross entries; no pi-server workaround |
 | [Candidate readiness](earendil-0851-readiness.md) | Executed local gates and partial HC evidence; no merge/deployment approval |
 | [All-package import/path smoke](earendil-0851-addon-matrix.md) | 42 Linux/Bun package-root imports and four no-main path checks; no runtime/browser activation |
-| [Canary procedure](earendil-0851-canary.md) | Prepared only; authorised upgrade/restart/rollback required before B merge |
+| [Canary procedure](earendil-0851-canary.md) and [executed receipt](earendil-0851-canary-result.md) | Authorised piclaw-test upgrade/rollback and targeted browser checks executed; baseline abort-endpoint defect #1334 reproduced; guest snapshot restored stopped; no merge/deploy approval |
 | [0.84.4 negative receipt](earendil-0844-historical-negatives.json) | Preserves seven negative compiler checks and 25 unsupported outcomes; never promoted to selected-release success |
 
 ## Historical assessment register

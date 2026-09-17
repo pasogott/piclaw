@@ -1,6 +1,6 @@
 # Earendil 0.85.1 candidate readiness
 
-The current-runtime migration is implemented and passes the executed local runtime, type, package and Linux portable gates listed below. **It is not approved for merge or deployment.** Raw Storage conformance, complete HC promotion, non-Linux execution and the disposable upgrade/rollback canary are incomplete.
+The current-runtime migration is implemented and passes the executed local runtime, type, package and Linux portable gates listed below. **It is not approved for merge or deployment.** Rui accepted public SessionRepo coverage for B; the authorised piclaw-test upgrade/rollback and targeted browser canary passed with a separately tracked baseline abort-endpoint defect. Complete HC promotion, non-Linux execution and full-suite acceptance remain separate.
 
 ## Scope and coordinates
 
@@ -15,7 +15,7 @@ The current-runtime migration is implemented and passes the executed local runti
 
 The [A/B/C/D sequence](earendil-0851-work-sequence.md) keeps PR B focused on the atomic current-loop migration, selected-release assignments/basic positive compatibility and public Memory/JSONL SessionRepo conformance. Already-tested partial HC cases stay in B; no history rewrite or removal of evidence is required.
 
-[PR C work](https://github.com/rcarmo/piclaw/issues/1332) owns broader deterministic real-Harness HC completion. [PR D work](https://github.com/rcarmo/piclaw/issues/1333) reassesses tip-only changes after a later coherent release. Scheduling C does not mark its cases passed or grant Harness activation. Full HC promotion remains separate from B's migration proof; B still needs its reviewed evidence-scope disposition and authorised canary before merge.
+[PR C work](https://github.com/rcarmo/piclaw/issues/1332) owns broader deterministic real-Harness HC completion. [PR D work](https://github.com/rcarmo/piclaw/issues/1333) reassesses tip-only changes after a later coherent release. Scheduling C does not mark its cases passed or grant Harness activation. Full HC promotion remains separate from B's migration proof. Rui accepted the SessionRepo evidence scope and authorised the [executed canary](earendil-0851-canary-result.md); the resulting bounded receipt and remaining limitations are now available for the merge decision.
 
 ## Implemented migration
 
@@ -51,6 +51,7 @@ Counts in separate rows overlap. They are executions from specific commands, not
 | Fresh coding-agent-only consumer | PR A evidence: Bun 1.4.1, real Node 22.19.0 minimum and Node 26.7.0 pass; no pi-server; source-only imports rejected |
 | `make lint` | Fails with the same 20 errors on PR A and PR B; zero new diagnostics after fixing one introduced unused import |
 | `git diff --check` | Pass |
+| Authorised piclaw-test canary | Exact 0.84.4→0.85.1→0.84.4 with baseline-checkpoint equality, queued follow-up recovery, tool/usage/model preservation, timeout/UI abort, managed compaction and four Classic/Visual browser smoke checks. Original guest restored stopped; see bounded [receipt](earendil-0851-canary-result.md) |
 
 Two full-gate failures were retained and investigated: the candidate's token-usage migration subprocess timed out under load, then passed alone and in repeated full gates; PR A hosted run `35162736970` failed an unchanged queued-lease timing assertion, then passed in three isolated local reruns. Hosted failure is not relabelled as success. No ad-hoc Actions rerun was dispatched.
 
@@ -78,7 +79,7 @@ The public package exports MemorySessionRepo and JsonlSessionRepo, but not Memor
 
 A preliminary delegated fixture reached through a private session field and obtained 42 raw-storage executions. That fixture was removed and those results are **withdrawn as admission evidence**. The final suite runs only 32 public repository cases. The JSONL 15-case selection matches the exact pinned upstream `packages/agent/test/harness/jsonl-session-repo-conformance.test.ts`; its two destination-reservation races are not counted as passes.
 
-Planner independently confirmed the export limitation at both the release and pinned tip. Required decision: accept downstream SessionRepo plus Piclaw boundary tests as the selected integration scope, or wait for supported upstream Storage constructors/testing factories. No private import, property access, copied implementation or declaration trick is an acceptable substitute.
+Planner independently confirmed the export limitation at both the release and pinned tip. Rui accepted downstream SessionRepo plus Piclaw boundary tests for PR B on 2026-09-17 at 06:58 UTC. Built-in raw Storage conformance remains an upstream export/fixture limitation, not an unresolved B scope decision. No private import, property access, copied implementation or declaration trick is an acceptable substitute.
 
 ### SQLite boundary
 
@@ -86,11 +87,11 @@ Bun 1.4.1 successfully imports `node:sqlite` and executes an in-memory `SELECT 1
 
 ## Approval and execution gaps
 
-- Raw Storage evidence-scope decision for B remains explicit. Broader remaining HC completion is tracked in PR C; no full Harness promotion or activation is claimed.
+- Public SessionRepo scope for B is accepted. Raw Storage export limitations remain explicit; broader HC completion is PR C, without promotion or activation.
 - Windows, macOS and other native architectures: launcher-generation tests only; no native artifact execution. Current portable builder runs on its host platform, with an additional Linux baseline target.
 - The 46-package Linux/Bun package-root import/path smoke matrix is complete (42 imports, four no-main path checks); full add-on runtime/browser/native functionality and non-Linux standalone execution are not covered by import receipts.
-- [Disposable canary upgrade/restart/rollback](earendil-0851-canary.md): required before B merge, prepared but not executed; no canary install/restart authority was supplied. Rollback restores the exact baseline 0.84.4 runtime/dependency set as one atomic change; no production schema migration or session rewrite is intended.
-- Full integration/browser gate is not run without an authorised disposable target.
+- [Canary upgrade/restart/rollback](earendil-0851-canary-result.md) was authorised and executed on piclaw-test. Exact baseline restoration passed; candidate-written-state downgrade compatibility is not claimed. No production schema migration or session rewrite occurred.
+- Targeted Classic/Visual browser smoke passed; the full integration/E2E suite and explicit guest UI-prompt/MCP/branch-switch scenarios were not run. The run-abort endpoint defect reproduces on both versions and is filed as #1334.
 - Baseline lint remediation or explicit gate disposition; PR A hosted timing failure is still recorded.
 - Explicit approval before merge, deployment, restart, paid-provider calls or production-data migration. No spending allowance exists.
 

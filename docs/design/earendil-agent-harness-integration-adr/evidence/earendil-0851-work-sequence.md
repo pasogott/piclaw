@@ -43,11 +43,11 @@ Historical `fiveArgumentExecution`, seven negative compiler checks, 25 `HarnessN
 
 ## PR B merge and rollback gates
 
-Before B merges, require its reviewed atomic migration, current-loop compatibility and public Memory/JSONL evidence, plus an **authorised disposable microVM upgrade/restart/rollback receipt**. The [canary procedure](earendil-0851-canary.md) is prepared, not executed. Request target/access/restart and any provider authority; do not infer it from this work sequence.
+Before B merges, require its reviewed atomic migration, current-loop compatibility and public Memory/JSONL evidence, plus an **authorised disposable microVM upgrade/restart/rollback receipt**. Rui subsequently authorised piclaw-test and accepted public SessionRepo scope on 17 September 2026. The [targeted canary receipt](earendil-0851-canary-result.md) records the executed upgrade/restart/rollback, exact checkpoint restoration, passing browser/tool checks and remaining limits. Future runs must revalidate target/use and authority; none is inferred from this work sequence.
 
 Rollback restores the exact baseline 0.84.4 runtime/dependency set as one atomic change. No production schema migration or session rewrite is intended. Synthetic candidate-written test state must be handled according to the explicit canary rollback strategy; do not assume downgrade readability. Production `.piclaw` state is never a disposable fixture.
 
-The [readiness record](earendil-0851-readiness.md) retains raw Storage export/scope limitations, baseline lint/hosted failures, non-Linux coverage and remaining approval gates. No merge, deploy/restart, paid-provider call, data migration or spending allowance is granted. The adoption goal stays stopped at those gates; this refinement does not mark it complete.
+The [readiness record](earendil-0851-readiness.md) retains raw Storage export/scope limitations, baseline lint/hosted failures, non-Linux coverage and remaining approval gates. No merge, deploy/restart, paid-provider call, data migration or spending allowance is granted. The canary approval did not grant merge or production deployment authority. The remaining acceptance decisions stay explicit; this sequence does not mark full adoption complete.
 
 ## Historical reading guidance
 

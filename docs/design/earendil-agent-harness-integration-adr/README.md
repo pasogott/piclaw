@@ -65,7 +65,7 @@ The original assessment produced this ADR, evidence tables and a proposed semant
 - [Acceptance plan and open questions](06-acceptance-plan.md)
 - [Published 0.85.1 A/B/C/D work sequence](evidence/earendil-0851-work-sequence.md)
 - [Current candidate readiness](evidence/earendil-0851-readiness.md)
-- [Prepared canary and rollback gate](evidence/earendil-0851-canary.md)
+- [Canary procedure](evidence/earendil-0851-canary.md) and [executed piclaw-test receipt](evidence/earendil-0851-canary-result.md)
 - [Evidence register](evidence/README.md)
   - [Piclaw v2.13.2 capability matrix](evidence/current-capability-matrix.md)
   - [Agent lifecycle regression corpus](evidence/regression-corpus.md)

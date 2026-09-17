@@ -1,14 +1,14 @@
 # Disposable 0.85.1 upgrade and rollback gate
 
-**Prepared, not executed.** No microVM access, deployment, restart, UI mutation or provider call was made for this gate. Local portable extraction/CLI probes are recorded separately in [candidate readiness](earendil-0851-readiness.md).
+**Executed on piclaw-test after Rui's 17 September approval.** The targeted baseline→candidate→exact-baseline rollback and browser smoke receipt is in [canary results](earendil-0851-canary-result.md). The original guest snapshot was restored and the VM returned to its stopped state. Full-suite and unrun scenarios remain explicit; no production merge/deployment follows automatically.
 
 The authorised upgrade/restart/rollback receipt is a prerequisite for PR B merge. Its rollback unit is the exact baseline 0.84.4 runtime/dependency set, restored as one coherent change rather than isolated package downgrades. No production schema migration or session rewrite is intended. Broader inactive HC completion is tracked separately as PR C and does not waive this canary gate.
 
-## Approval needed
+## Recorded approval
 
-Approve one identified disposable target, its access method, service restart and test-data mutation. Confirm nobody else is using it. VM 900 / piclaw-test / 192.168.1.78 appears in local test notes, but those coordinates must be revalidated; they are not authority to modify a guest. No production credentials or Smith state may be copied into it. Use the keychain-backed Proxmox/SSH tools; do not inline credentials or reuse another host's service paths.
+Rui approved public SessionRepo coverage for B and the disposable test with “Yes. Use piclaw-test” at 2026-09-17 06:58:17 UTC. Live checks found VM 900 stopped on radxax4; its current address was 192.168.1.236, not the historical 192.168.1.78. The test used synthetic state, a local deterministic provider and a separate service/profile with egress restrictions. No production credentials or Smith state were copied.
 
-Specify whether a deterministic fake-provider fixture is sufficient. Any paid-provider smoke call needs separate approval and a bounded allowance; none is currently granted.
+Any future canary run must recheck guest identity/use. Paid-provider calls, production deployment and merge remain unauthorised.
 
 ## Preparation (before touching the target)
 
@@ -45,4 +45,4 @@ Do not silently open a candidate-written store in the old runtime if backward co
 - Passed/failed/skipped scenarios, with browser execution distinct from source/unit evidence.
 - Final target state and owner hand-back.
 
-Until this receipt exists, upgrade/rollback and browser-canary acceptance are unchecked. No merge, production deployment or rollout follows automatically from a successful canary.
+The [executed receipt](earendil-0851-canary-result.md) records the passing bounded checks, baseline abort-endpoint defect and unrun coverage. It closes the missing upgrade/rollback execution evidence; acceptance of remaining platform/lint/full-suite limits and final merge/deployment are separate decisions.
