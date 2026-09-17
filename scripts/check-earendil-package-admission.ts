@@ -395,7 +395,7 @@ function createProbeEnvironment(scratch: string, executable: string): Record<str
   };
 }
 
-function probeProgram(): string {
+export function probeProgram(): string {
   return `
 const serializeError = (error) => ({
   name: error instanceof Error ? error.name : "UnknownError",
@@ -421,10 +421,12 @@ try {
 }
 for (const specifier of ${JSON.stringify(SOURCE_ONLY_DEEP_PATHS.map((subpath) => `${CODING_AGENT_PACKAGE}${subpath.slice(1)}`))}) {
   try {
-    await import(specifier);
+    // A resolved source-only path is a failure even if evaluating its module
+    // would throw. Never execute the unsupported surface to classify it.
+    import.meta.resolve(specifier);
     receipt.sourceOnlyDeepPaths.push({ specifier, status: "resolved" });
   } catch (error) {
-    receipt.sourceOnlyDeepPaths.push({ specifier, status: "rejected", error: serializeError(error) });
+    receipt.sourceOnlyDeepPaths.push({ specifier, status: "rejected", phase: "resolution", error: serializeError(error) });
   }
 }
 console.log(${JSON.stringify(PROBE_MARKER)} + JSON.stringify(receipt));
@@ -438,6 +440,7 @@ type RawProbeReceipt = {
   sourceOnlyDeepPaths?: Array<{
     specifier?: string;
     status?: "resolved" | "rejected";
+    phase?: "resolution";
     error?: { name?: string; code?: string; message?: string };
   }>;
 };
@@ -447,6 +450,13 @@ export function assertProbeRuntime(kind: "node" | "bun", runtime: RuntimeProbeRe
     throw new Error("Node admission requires real Node, not a Bun compatibility wrapper");
   }
   if (kind === "bun" && !runtime.bun) throw new Error("Bun admission requires Bun");
+}
+
+export function assertSourceOnlyRejection(kind: "node" | "bun", entry: NonNullable<RawProbeReceipt["sourceOnlyDeepPaths"]>[number]): void {
+  const expectedCode = kind === "node" ? "ERR_PACKAGE_PATH_NOT_EXPORTED" : "ERR_MODULE_NOT_FOUND";
+  if (entry.status !== "rejected" || entry.phase !== "resolution" || entry.error?.code !== expectedCode) {
+    throw new Error(`${kind} source-only path was not excluded by export resolution: ${String(entry.specifier)}`);
+  }
 }
 
 function runRuntimeProbe(kind: "node" | "bun", executableInput: string, consumerRoot: string, scratch: string): RuntimeProbeReceipt {
@@ -479,7 +489,9 @@ function runRuntimeProbe(kind: "node" | "bun", executableInput: string, consumer
   if (deepPaths.length !== SOURCE_ONLY_DEEP_PATHS.length) throw new Error(`${kind} import probe returned incomplete source-only deep-path results`);
   const admitted = deepPaths.find((entry) => entry.status !== "rejected");
   if (admitted) throw new Error(`${kind} unexpectedly resolved source-only deep path ${String(admitted.specifier)}`);
-  const sourceOnlyDeepPaths = deepPaths.map((entry) => {
+  const sourceOnlyDeepPaths = deepPaths.map((entry, index) => {
+    if (entry.specifier !== `${CODING_AGENT_PACKAGE}${SOURCE_ONLY_DEEP_PATHS[index].slice(1)}`) throw new Error(`${kind} unexpected source-only path receipt`);
+    assertSourceOnlyRejection(kind, entry);
     if (!entry.specifier || !entry.error?.name || !entry.error.message) throw new Error(`${kind} deep-path rejection receipt is incomplete`);
     return {
       specifier: entry.specifier,
