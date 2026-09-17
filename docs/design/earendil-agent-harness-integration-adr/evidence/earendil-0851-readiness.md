@@ -11,6 +11,12 @@ The current-runtime migration is implemented and passes the executed local runti
 - Add-on archive baseline: `6374ed3c85627c590794e44828d13b08587ba46b`; changes to its test peers were disposable only.
 - Host: Smith, LXC, user-systemd. Canonical `/workspace`, `/workspace/.pi` and `/workspace/.piclaw` are unchanged. Production source and installed runtime remain on the baseline with Earendil 0.84.4.
 
+## PR scope refinement
+
+The [A/B/C/D sequence](earendil-0851-work-sequence.md) keeps PR B focused on the atomic current-loop migration, selected-release assignments/basic positive compatibility and public Memory/JSONL SessionRepo conformance. Already-tested partial HC cases stay in B; no history rewrite or removal of evidence is required.
+
+[PR C work](https://github.com/rcarmo/piclaw/issues/1332) owns broader deterministic real-Harness HC completion. [PR D work](https://github.com/rcarmo/piclaw/issues/1333) reassesses tip-only changes after a later coherent release. Scheduling C does not mark its cases passed or grant Harness activation. Full HC promotion remains separate from B's migration proof; B still needs its reviewed evidence-scope disposition and authorised canary before merge.
+
 ## Implemented migration
 
 Every migrated Harness filesystem/shell adapter operation uses the released trailing Context, with cancellation from `context.abortSignal`. The adapters, local/SSH factories, independent fake, shared contract and tool tests moved together. Six-argument tool tests preserve Piclaw authority separately from Harness operation/invocation/turn identity, awaited memo writes/deletes and rejection of expired capabilities.
@@ -80,10 +86,10 @@ Bun 1.4.1 successfully imports `node:sqlite` and executes an in-memory `SELECT 1
 
 ## Approval and execution gaps
 
-- Raw Storage acceptance decision and remaining HC semantic evidence. No full Harness promotion.
+- Raw Storage evidence-scope decision for B remains explicit. Broader remaining HC completion is tracked in PR C; no full Harness promotion or activation is claimed.
 - Windows, macOS and other native architectures: launcher-generation tests only; no native artifact execution. Current portable builder runs on its host platform, with an additional Linux baseline target.
 - The 46-package Linux/Bun package-root import/path smoke matrix is complete (42 imports, four no-main path checks); full add-on runtime/browser/native functionality and non-Linux standalone execution are not covered by import receipts.
-- [Disposable canary upgrade/rollback](earendil-0851-canary.md): prepared, not executed; no canary install/restart authority was supplied.
+- [Disposable canary upgrade/restart/rollback](earendil-0851-canary.md): required before B merge, prepared but not executed; no canary install/restart authority was supplied. Rollback restores the exact baseline 0.84.4 runtime/dependency set as one atomic change; no production schema migration or session rewrite is intended.
 - Full integration/browser gate is not run without an authorised disposable target.
 - Baseline lint remediation or explicit gate disposition; PR A hosted timing failure is still recorded.
 - Explicit approval before merge, deployment, restart, paid-provider calls or production-data migration. No spending allowance exists.

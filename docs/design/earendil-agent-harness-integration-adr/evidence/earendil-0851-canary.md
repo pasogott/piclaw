@@ -2,6 +2,8 @@
 
 **Prepared, not executed.** No microVM access, deployment, restart, UI mutation or provider call was made for this gate. Local portable extraction/CLI probes are recorded separately in [candidate readiness](earendil-0851-readiness.md).
 
+The authorised upgrade/restart/rollback receipt is a prerequisite for PR B merge. Its rollback unit is the exact baseline 0.84.4 runtime/dependency set, restored as one coherent change rather than isolated package downgrades. No production schema migration or session rewrite is intended. Broader inactive HC completion is tracked separately as PR C and does not waive this canary gate.
+
 ## Approval needed
 
 Approve one identified disposable target, its access method, service restart and test-data mutation. Confirm nobody else is using it. VM 900 / piclaw-test / 192.168.1.78 appears in local test notes, but those coordinates must be revalidated; they are not authority to modify a guest. No production credentials or Smith state may be copied into it. Use the keychain-backed Proxmox/SSH tools; do not inline credentials or reuse another host's service paths.
