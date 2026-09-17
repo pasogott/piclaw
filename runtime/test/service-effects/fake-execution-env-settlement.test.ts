@@ -110,6 +110,27 @@ describe("FakeExecutionEnv direct settlement", () => {
     expect(env.ownedGroups.size).toBe(0);
   });
 
+  for (const fault of ["started", "release"] as const) {
+    test(`hostile wait ${fault} settles as a typed error and retires its owned group`, async () => {
+      const env = new FakeExecutionEnv("/repo");
+      const release = Promise.withResolvers<void>();
+      env.script({
+        _tag: "wait_for_stop",
+        started() { if (fault === "started") throw new Error("started fault"); release.reject(new Error("release fault")); },
+        release: release.promise,
+      });
+      const result = await settlesWithin(env.exec("wait", { timeout: 0.03 }, BACKGROUND_CONTEXT));
+      expect(!result.ok && result.error.code).toBe("unknown");
+      expect(!result.ok && result.error).toBeInstanceOf(ExecutionError);
+      expect(env.ownedGroups.size).toBe(0);
+      expect(env.killedGroups).toEqual([1]);
+      await env.cleanup(BACKGROUND_CONTEXT);
+      await Bun.sleep(50);
+      expect(env.killedGroups).toEqual([1]);
+      expect(env.cleanupCalls).toBe(1);
+    });
+  }
+
   test("throwCleanup remains an intentional hostile-only rejection and later cleanup is idempotent", async () => {
     const env = new FakeExecutionEnv("/repo");
     env.throwCleanup = true;

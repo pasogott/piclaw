@@ -185,6 +185,9 @@ export class PiclawExecutionEnv implements ExecutionEnv {
     if (normalized.ok && !matchesCaptureLimits(normalized.value, limits)) {
       return executionFailure("unknown", "Shell result exceeds admitted capture limits.");
     }
+    if (normalized.ok && outputView && !sameShellMetadata(normalized.value, outputView)) {
+      return executionFailure("unknown", "Shell result disagrees with the final output metadata.");
+    }
     return normalized;
   }
 
@@ -350,6 +353,12 @@ function snapshotTempOptions(value: unknown): { prefix?: string; suffix?: string
   if ((prefix !== undefined && typeof prefix !== "string") || (suffix !== undefined && typeof suffix !== "string")) throw new TypeError("Invalid temp options.");
   return Object.freeze({ ...(prefix === undefined ? {} : { prefix }), ...(suffix === undefined ? {} : { suffix }) });
 }
+function sameShellMetadata(left: ShellOutputMetadata, right: ShellOutputMetadata): boolean {
+  return left.spillPath === right.spillPath && left.lastLineBytes === right.lastLineBytes
+    && (Object.keys(left.truncation) as Array<keyof ShellOutputMetadata["truncation"]>)
+      .every((key) => left.truncation[key] === right.truncation[key]);
+}
+
 function matchesCaptureLimits(metadata: ShellOutputMetadata, limits: { maxBytes: number; maxLines: number }): boolean {
   const t = metadata.truncation;
   return t.maxBytes === limits.maxBytes && t.maxLines === limits.maxLines

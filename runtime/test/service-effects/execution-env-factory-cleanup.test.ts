@@ -7,11 +7,13 @@ import { CurrentPiclawExecutionContextResolver } from "../../src/service-effects
 import { CurrentPiclawLocalExecutionEnvFactory } from "../../src/service-effects/current-piclaw/local-execution-env.js";
 import { CurrentPiclawSshExecutionEnvFactory } from "../../src/service-effects/current-piclaw/ssh-execution-env.js";
 import { FakeExecutionEnv } from "../../src/service-effects/testing/fakes/fake-execution-env.js";
+import { FakeExecutionContextResolver } from "../../src/service-effects/testing/fakes/fake-execution-context-resolver.js";
 
 describe("execution environment factory rejection cleanup", () => {
+  for (const fake of [false, true]) describe(fake ? "independent fake resolver" : "current resolver", () => {
   test("resolver cleans hostile environment candidates once with the cleanup receiver and background context", async () => {
     for (const candidate of [changingCwdCandidate("/local"), changingMethodCandidate("/local")]) {
-      const result = await resolver(() => Result.ok(candidate)).resolve(request());
+      const result = await resolver(() => Result.ok(candidate), fake).resolve(request());
       expect(result.ok).toBeFalse();
       expectCleanup(candidate);
     }
@@ -23,7 +25,7 @@ describe("execution environment factory rejection cleanup", () => {
     const okResult = await resolver(() => ({
       get ok() { return okReads++ === 0 ? true : false; },
       value: unstableOk,
-    }) as never).resolve(request());
+    }) as never, fake).resolve(request());
     expect(okResult.ok).toBeFalse();
     expect(okReads).toBe(2);
     expectCleanup(unstableOk);
@@ -34,11 +36,13 @@ describe("execution environment factory rejection cleanup", () => {
     const valueResult = await resolver(() => ({
       ok: true,
       get value() { return valueReads++ === 0 ? first : second; },
-    }) as never).resolve(request());
+    }) as never, fake).resolve(request());
     expect(valueResult.ok).toBeFalse();
     expect(valueReads).toBe(2);
     expectCleanup(first);
     expectCleanup(second);
+  });
+
   });
 
   test("local factory cleans a captured delegate when adapter construction throws", async () => {
@@ -132,8 +136,9 @@ function expectCleanup(candidate: TrackedCandidate): void {
   expect(candidate.cleanupContexts).toEqual([BACKGROUND_CONTEXT]);
 }
 
-function resolver(createLocalEnv: () => never): CurrentPiclawExecutionContextResolver {
-  return new CurrentPiclawExecutionContextResolver(
+function resolver(createLocalEnv: () => never, fake = false) {
+  const Resolver = fake ? FakeExecutionContextResolver : CurrentPiclawExecutionContextResolver;
+  return new Resolver(
     { getOperationSnapshot: () => ({ chatJid: "chat", operationId: "operation", version: 1 }) },
     { getCurrentRoute: () => ({ kind: "local" }) },
     { getSshProfile: () => null },

@@ -1,6 +1,6 @@
 import "../helpers.js";
 import { expect, test } from "bun:test";
-import { Result, truncateTail, type ShellOutputUpdate } from "@earendil-works/pi-agent-core";
+import { Result, truncateTail, type ShellOutputMetadata, type ShellOutputUpdate } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/harness/env/nodejs";
 import { createTempWorkspace } from "../helpers.js";
 import { BACKGROUND_CONTEXT } from "@earendil-works/pi-agent-core/harness/context";
@@ -13,11 +13,16 @@ function metadata(text: string) {
   const { content: _content, ...truncation } = truncateTail(text, limits);
   return { truncation };
 }
-function controlled(updates: ShellOutputUpdate[]) {
+function controlled(updates: ShellOutputUpdate[], completion?: ShellOutputMetadata) {
   const raw = new FakeExecutionEnv("/test");
   raw.exec = async (_command, options, context) => {
-    for (const update of updates) options?.onUpdate?.(update, context);
-    return Result.ok({ exitCode: 0, ...metadata("") });
+    let final: ShellOutputMetadata = metadata("");
+    for (const update of updates) {
+      options?.onUpdate?.(update, context);
+      const source = update.kind === "replace" ? update.output : update.metadata;
+      final = { truncation: source.truncation, ...(source.spillPath === undefined ? {} : { spillPath: source.spillPath }), ...(source.lastLineBytes === undefined ? {} : { lastLineBytes: source.lastLineBytes }) };
+    }
+    return Result.ok({ exitCode: 0, ...(completion ?? final) });
   };
   return new PiclawExecutionEnv(raw, () => ({}));
 }
@@ -82,6 +87,22 @@ test("accepts bounded replace, append, slide and metadata updates in order", asy
   expect(result.ok).toBe(true);
   expect(seen.map((update) => update.kind)).toEqual(["replace", "append", "slide", "metadata"]);
   await env.cleanup(ctx);
+});
+
+test("completion cannot contradict the final output truncation, spill or partial-line metadata", async () => {
+  const captured: ShellOutputMetadata = { ...metadata("0123456789abcdef"), spillPath: "/test/full.log", lastLineBytes: 16 };
+  const update: ShellOutputUpdate = { kind: "replace", output: { text: "89abcdef", ...captured } };
+  for (const end of [metadata("89abcdef"), { ...captured, spillPath: undefined }, { ...captured, lastLineBytes: 15 }]) {
+    const env = controlled([update], end);
+    let calls = 0;
+    const result = await env.exec("fixture", { capture: { limits }, onUpdate: () => { calls++; } }, ctx);
+    expect(calls).toBe(1);
+    expect(!result.ok && result.error.code).toBe("unknown");
+    await env.cleanup(ctx);
+  }
+  const matching = controlled([update], captured);
+  expect((await matching.exec("fixture", { capture: { limits }, onUpdate() {} }, ctx)).ok).toBe(true);
+  await matching.cleanup(ctx);
 });
 
 test("cleanup publishes its shared promise before a delegate can re-enter", async () => {

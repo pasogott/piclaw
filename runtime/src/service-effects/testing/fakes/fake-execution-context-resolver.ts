@@ -62,15 +62,45 @@ export class FakeExecutionContextResolver implements ExecutionContextResolver {
   }
 
   private async create(factory: () => unknown): Promise<ResultValue<ExecutionEnv, ExecutionContextError>> {
+    let result: unknown;
+    let cleanupRequired = false;
+    let inspectedValue = false;
+    const candidates = new Set<unknown>();
+    const inspectValue = () => {
+      inspectedValue = true;
+      if (!record(result)) return CHANGED;
+      let first: unknown;
+      try { first = result.value; candidates.add(first); } catch { return CHANGED; }
+      try { const second = result.value; candidates.add(second); return first === second ? first : CHANGED; }
+      catch { return CHANGED; }
+    };
     try {
-      const result = await Promise.resolve(factory());
+      result = await Promise.resolve(factory());
       if (!record(result)) return Result.err(failure("environment_unavailable", true));
+      cleanupRequired = true;
       const ok = once(result, "ok");
-      if (ok === false) return Result.err(normaliseFailure(once(result, "error")));
-      if (ok !== true) return Result.err(failure("environment_unavailable", true));
-      const captured = captureEnvironment(once(result, "value"));
-      return captured ? Result.ok(captured) : Result.err(failure("environment_unavailable", true));
+      if (ok === false) {
+        cleanupRequired = false;
+        return Result.err(normaliseFailure(once(result, "error")));
+      }
+      const value = inspectValue();
+      const captured = ok === true && value !== CHANGED ? captureEnvironment(value) : null;
+      if (!captured) return Result.err(failure("environment_unavailable", true));
+      cleanupRequired = false;
+      return Result.ok(captured);
     } catch { return Result.err(failure("environment_unavailable", true)); }
+    finally {
+      if (cleanupRequired) {
+        if (!inspectedValue) inspectValue();
+        for (const candidate of candidates) {
+          if (!record(candidate)) continue;
+          try {
+            const release = once(candidate, "cleanup");
+            if (typeof release === "function") await release.call(candidate, BACKGROUND_CONTEXT);
+          } catch (error) { void error; /* rejected owned candidates require best-effort cleanup */ }
+        }
+      }
+    }
   }
 }
 

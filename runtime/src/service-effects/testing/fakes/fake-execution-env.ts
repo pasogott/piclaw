@@ -157,7 +157,15 @@ export class FakeExecutionEnv implements ExecutionEnv {
         return Result.err(new ExecutionError("callback_error", cause.message, cause));
       }
       return Result.ok({ exitCode: step.exitCode, ...view.metadata });
-    } finally { context.abortSignal?.removeEventListener("abort", onAbort); }
+    } catch (error) {
+      stop();
+      const cause = error instanceof Error ? error : new Error(String(error));
+      return Result.err(new ExecutionError("unknown", "Scripted execution failed.", cause));
+    } finally {
+      context.abortSignal?.removeEventListener("abort", onAbort);
+      this.ownedGroups.delete(group);
+      this.ownedGroupStops.delete(group);
+    }
   }
 
   async cleanup(context: Context): Promise<void> {
