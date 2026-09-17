@@ -19,7 +19,9 @@ const receipt = await client.admit({
 });
 ```
 
-Registration captures the owning package slug from the host's startup import context. It does not accept an add-on slug from request data. The caller identity is still the trusted add-on's responsibility: `forPrincipal()` is not an authentication service. The host then checks that exact principal/target against persisted operator grants. Installing an add-on grants no execution permission.
+Registration captures the owning package slug from the host's startup import context. It does not accept an add-on slug from request data. The startup adapter also exposes `admitOutbound()`: it derives the current work/chat from the runtime AsyncLocalStorage context, checks live work status and applicable caps, persists blocking decisions and returns the verified work ID. There is no caller-supplied work ID or fabricated remote billing value. Adapters must recheck this before outbound requests.
+
+The caller identity is still the trusted add-on's responsibility: `forPrincipal()` is not an authentication service. The host then checks that exact principal/target against persisted operator grants. Installing an add-on grants no execution permission.
 
 | Method | Behaviour |
 |---|---|
