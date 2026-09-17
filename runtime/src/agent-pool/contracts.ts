@@ -177,6 +177,12 @@ export interface RunAgentOptions {
    * LLM-driven self-escalation beyond the ceiling.
    */
   toolCeilingFilter?: (toolName: string) => boolean;
+  /** Host-owned restricted operations must fail closed when tool controls are unavailable. */
+  requireToolCeiling?: boolean;
+  /** Caller cancellation bound to this run, not a session-wide external abort API. */
+  abortSignal?: AbortSignal;
+  /** Host-owned revocation check, evaluated before each budget/model admission boundary. */
+  executionAdmissionCheck?: () => Promise<boolean> | boolean;
   /**
    * Let the caller durably persist a protected-recovery continuation instead
    * of running it inline. Web uses this to order queue intent before terminal

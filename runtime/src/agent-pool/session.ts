@@ -1,3 +1,4 @@
+import { operationSessionProfile, operationSessionTools } from "./operation-session-profile.js";
 /**
  * agent-pool/session.ts – pi-agent session creation and directory management.
  *
@@ -560,9 +561,10 @@ export async function createSessionInDir(
     requireOwnedSessionExecution(options.chatJid);
   }
   ensureValidProcessCwd();
-  const channelSystemPromptAppendix = getChannelSystemPromptAppendix(options.chatJid);
+  const operationProfile = operationSessionProfile(options.chatJid);
+  const channelSystemPromptAppendix = operationProfile ? '' : getChannelSystemPromptAppendix(options.chatJid);
   const appendSystemPromptOverride = getAppendSystemPromptOverride(channelSystemPromptAppendix);
-  const additionalExtensionPaths = getBundledExtensionPaths(options.chatJid);
+  const additionalExtensionPaths = operationProfile ? [] : getBundledExtensionPaths(options.chatJid);
 
   const workspaceDir = getWorkspaceDir();
   const owner = mode === 'family-shared' ? requireOwnedSessionExecution(options.chatJid!) : null;
@@ -586,7 +588,7 @@ export async function createSessionInDir(
     sessionStartEvent?: SessionStartEvent;
   }) => {
     if (mode === 'family-shared' && !requireOwnedSessionExecution(options.chatJid!)) throw new Error('Owned family session identity is required.');
-    const builtinExtensionFactories = [
+    const builtinExtensionFactories = operationProfile ? [] : [
       ...(mode === 'family-shared' ? [createFamilyToolCallGuard(options.chatJid!)] : []),
       ...createBuiltinExtensionFactories({
         compactionStreamFn: createCompactionStreamFn(options.modelRuntime, options.settingsManager),
@@ -606,6 +608,7 @@ export async function createSessionInDir(
         : builtinExtensionFactories,
       additionalExtensionPaths,
       ...(appendSystemPromptOverride ? { appendSystemPromptOverride } : {}),
+      ...operationProfile,
     });
     await resourceLoader.reload();
     if (mode === 'family-shared' && !requireOwnedSessionExecution(options.chatJid!)) throw new Error('Owned family session identity is required.');
@@ -629,7 +632,8 @@ export async function createSessionInDir(
       // allowlist that silently blocks every extension tool not listed.
       // The tool-activation extension sets the correct default-active set
       // via its session_start handler instead.
-      customTools: mode === 'family-shared'
+      ...(operationProfile ? { tools: operationSessionTools(options.chatJid!) } : {}),
+      customTools: operationProfile ? [] : mode === 'family-shared'
         ? createFamilyBuiltinTools(cwd, options.chatJid!, (options.customTools ?? []) as ToolDefinition[])
         : options.customTools as any,
     });

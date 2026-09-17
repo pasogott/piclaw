@@ -19,6 +19,10 @@ This page lists Piclaw's environment variables, config files, secrets, authentic
 [External workspace](#using-an-external-workspace) ·
 [Cross-instance interop](#remote-peer-add-on)
 
+## External add-on operations
+
+`domains.operations` controls generic principal-scoped background work for runtime add-ons. It defaults to disabled with no grants. The [operation API and configuration guide](addon-operations.md) describes explicit principal/target grants, text-only defaults, budget lineage, cancellation, persistence and tool authority. This does not enable A2A or expose a network endpoint.
+
 ## Configuration surface policy
 
 Piclaw keeps `PICLAW_*` environment variables for immutable deployment bootstrap, secrets, and compatibility aliases. Runtime code should read ordinary settings through typed config helpers instead of open-coded `process.env.PICLAW_*` expressions.
