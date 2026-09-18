@@ -1793,7 +1793,7 @@ ${K}`;if(!window.confirm(S))return;if(N&&!window.confirm(n("settings.tasks.confi
                                 </button>
                             `})}
                     </nav>
-                    <main class="settings-content">
+                    <main class=${`settings-content${F?.isExtension?" settings-addon-pane":""}`}>
                         ${K?Sn(C("settings.loading")):N()}
                     </main>
                 </div>
@@ -1856,5 +1856,5 @@ ${K}`;if(!window.confirm(S))return;if(N&&!window.confirm(n("settings.tasks.confi
     </div>
   `}function Zd(){Jd(),Gd(),Qd();let e=new URLSearchParams(window.location.search);Qr(e.get("section")||"general");let t=document.getElementById("settings-widget-fixture-root")||document.body.appendChild(document.createElement("div"));t.id="settings-widget-fixture-root",st(c`<${Yd} />`,t),window.piclawWidget?.ready?.({title:"Settings fixture",mockMode:_t})}Zd();
 
-//# debugId=8433176B1C2E4CCE64756E2164756E21
+//# debugId=379D9ABCB2A3E8B164756E2164756E21
 //# sourceMappingURL=settings-widget-fixture.bundle.js.map

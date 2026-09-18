@@ -195,7 +195,7 @@ export function SettingsPanel() {
       </nav>
 
       {/* Right content */}
-      <div className="settings-panel__content">
+      <div className={`settings-panel__content${activePane?.source === "addon" ? " settings-addon-pane" : ""}`}>
         {error.value && (
           <div className="settings-panel__error">{error.value}</div>
         )}
