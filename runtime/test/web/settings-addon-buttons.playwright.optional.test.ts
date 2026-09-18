@@ -52,11 +52,61 @@ async function open(skin: string, theme: string, width = 1280): Promise<Page> {
 }
 
 async function style(page: Page, id: string) {
-  return page.locator(`#${id}`).evaluate((el) => {
+  return page.locator(id.startsWith(".") ? id : `#${id}`).evaluate((el) => {
     const s = getComputedStyle(el);
     return { padding: s.padding, radius: s.borderRadius, border: s.border, background: s.backgroundColor,
-      color: s.color, font: s.font, height: s.height, cursor: s.cursor, opacity: s.opacity, outline: s.outlineStyle };
+      color: s.color, font: s.font, height: s.height, cursor: s.cursor, opacity: s.opacity, outline: s.outlineStyle,
+      minWidth: s.minWidth, minHeight: s.minHeight, whiteSpace: s.whiteSpace, transition: s.transition };
   });
+}
+
+async function forceHover(page: Page, selector: string) {
+  // General's token row can extend beyond the phone viewport. Force only its
+  // hover pseudo-state so we measure its real CSS without changing its layout.
+  const session = await page.context().newCDPSession(page);
+  try {
+    await session.send("DOM.enable");
+    await session.send("CSS.enable");
+    const { root } = await session.send("DOM.getDocument");
+    const { nodeId } = await session.send("DOM.querySelector", { nodeId: root.nodeId, selector });
+    await session.send("CSS.forcePseudoState", { nodeId, forcedPseudoClasses: ["hover"] });
+    return session;
+  } catch (error) {
+    await session.detach();
+    throw error;
+  }
+}
+
+for (const theme of ["light", "dark"]) {
+  for (const width of [1280, 390]) {
+    browserTest(`Classic ${theme} buttons match the real widget-token Regenerate at ${width}px`, async () => {
+      const page = await open("classic", theme, width);
+      try {
+        await page.evaluate(() => window.dispatchEvent(new CustomEvent("piclaw:open-settings", { detail: { section: "general" } })));
+        const regenerate = page.locator(".settings-widget-token-regenerate");
+        await regenerate.waitFor();
+        await page.mouse.move(0, 0);
+        const reference = await style(page, ".settings-widget-token-regenerate");
+        const referenceState = await forceHover(page, ".settings-widget-token-regenerate");
+        const referenceHover = await style(page, ".settings-widget-token-regenerate");
+        await referenceState.detach();
+        // No token regeneration: compare the disabled appearance without executing it.
+        await regenerate.evaluate((el: HTMLButtonElement) => { el.disabled = true; });
+        await page.mouse.move(0, 0);
+        const referenceDisabled = await style(page, ".settings-widget-token-regenerate");
+        await page.evaluate(() => window.dispatchEvent(new CustomEvent("piclaw:open-settings", { detail: { section: "buttons" } })));
+        await page.locator("#plain").evaluate(el => { el.textContent = "Regenerate"; });
+        await page.mouse.move(0, 0);
+        expect(await style(page, "plain")).toEqual(reference);
+        const addonState = await forceHover(page, "#plain");
+        expect(await style(page, "plain")).toEqual(referenceHover);
+        await addonState.detach();
+        await page.locator("#plain").evaluate((el: HTMLButtonElement) => { el.disabled = true; });
+        await page.mouse.move(0, 0);
+        expect(await style(page, "plain")).toEqual(referenceDisabled);
+      } finally { await page.close(); }
+    });
+  }
 }
 
 for (const skin of ["classic", "visual"]) {
@@ -68,8 +118,8 @@ for (const skin of ["classic", "visual"]) {
           const plain = await style(page, "plain");
           for (const id of ["row", "inline", "telegram"]) expect(await style(page, id)).toEqual(plain);
           expect(plain.radius).toBe("6px");
-          expect(parseFloat(plain.height)).toBeGreaterThanOrEqual(32);
-          expect(await page.locator("#telegram span").evaluate(el => getComputedStyle(el).fontSize)).toBe("13px");
+          expect(parseFloat(plain.height)).toBeGreaterThanOrEqual(skin === "classic" ? 26 : 32);
+          expect(await page.locator("#telegram span").evaluate(el => getComputedStyle(el).fontSize)).toBe(skin === "classic" ? (width <= 640 ? "10.584px" : "12.6px") : "13px");
           expect((await style(page, "outside")).padding).toBe("1px");
           expect((await style(page, "custom")).padding).toBe("1px");
           expect((await style(page, "tab")).padding).toBe("2px");
@@ -91,8 +141,8 @@ for (const skin of ["classic", "visual"]) {
         expect((await style(page, "row")).outline).toBe("solid");
         for (const id of ["disabled", "aria-disabled"]) {
           const before = await style(page, id);
-          expect(before.opacity).toBe("0.55");
-          expect(before.cursor).toBe("not-allowed");
+          expect(before.opacity).toBe(skin === "classic" ? "0.5" : "0.55");
+          expect(before.cursor).toBe(skin === "classic" ? "pointer" : "not-allowed");
           await page.locator(`#${id}`).hover({ force: true });
           expect((await style(page, id)).background).toBe(before.background);
         }

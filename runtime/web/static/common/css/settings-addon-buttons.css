@@ -7,20 +7,21 @@
 .settings-addon-pane :where(button:not(.settings-number-step-btn):not(.settings-panel__stepper-btn):not([role="tab"]):not([role="switch"]):not([data-settings-button="unstyled"])) {
     appearance: none !important;
     box-sizing: border-box !important;
-    min-height: 32px !important;
-    min-width: 0 !important;
+    min-height: var(--settings-addon-button-min-height, 32px) !important;
+    min-width: var(--settings-addon-button-min-width, 0px) !important;
     padding: 6px 14px !important;
     border: 1px solid var(--border-color, var(--border)) !important;
     border-radius: 6px !important;
     background: var(--bg-hover, var(--bg-secondary)) !important;
     color: var(--text-primary) !important;
     font-family: var(--font-family, system-ui, sans-serif) !important;
-    font-size: 13px !important;
-    font-weight: 500 !important;
-    line-height: 18px !important;
+    font-size: var(--settings-addon-button-font-size, 13px) !important;
+    font-weight: var(--settings-addon-button-font-weight, 500) !important;
+    line-height: var(--settings-addon-button-line-height, 18px) !important;
+    white-space: var(--settings-addon-button-white-space, normal) !important;
     text-decoration: none !important;
     cursor: pointer !important;
-    transition: background-color 0.15s, border-color 0.15s, color 0.15s !important;
+    transition: var(--settings-addon-button-transition, background-color 0.15s, border-color 0.15s, color 0.15s) !important;
 }
 
 /* Keep Visual's generic span typography from changing button labels. */
@@ -30,7 +31,7 @@
 
 .settings-addon-pane :where(button:not(.settings-number-step-btn):not(.settings-panel__stepper-btn):not([role="tab"]):not([role="switch"]):not([data-settings-button="unstyled"])):hover:not(:disabled):not([aria-disabled="true"]) {
     background: color-mix(in srgb, var(--accent-color) 15%, var(--bg-primary)) !important;
-    border-color: var(--accent-color) !important;
+    border-color: var(--settings-addon-button-hover-border, var(--accent-color)) !important;
 }
 
 .settings-addon-pane button:not([data-settings-button="unstyled"]):focus-visible {
@@ -39,8 +40,8 @@
 }
 
 .settings-addon-pane button:not([data-settings-button="unstyled"]):is(:disabled, [aria-disabled="true"]) {
-    opacity: 0.55 !important;
-    cursor: not-allowed !important;
+    opacity: var(--settings-addon-button-disabled-opacity, 0.55) !important;
+    cursor: var(--settings-addon-button-disabled-cursor, not-allowed) !important;
 }
 
 .settings-addon-pane button:is(.primary, [data-settings-button="primary"]):not([data-settings-button="unstyled"]) {
@@ -70,6 +71,6 @@
 
 @media (prefers-reduced-motion: reduce) {
     .settings-addon-pane button:not([data-settings-button="unstyled"]) {
-        transition: none !important;
+        transition: var(--settings-addon-button-transition, none) !important;
     }
 }

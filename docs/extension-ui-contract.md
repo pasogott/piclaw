@@ -64,9 +64,10 @@ Do **not** treat add-on settings panes as slash-command clients. The slash-comma
 
 ### Settings buttons
 
-Classic and Visual apply the same host-owned button styles inside registered
-add-on panes. Plain `<button>` elements need no class. The host normalises
-typography, padding, borders, colours, hover, keyboard focus and disabled states,
+Classic and Visual apply host-owned button styles inside registered add-on
+panes. Classic matches General's **Widget bearer token → Regenerate** button;
+Visual uses its own shared defaults. Plain `<button>` elements need no class.
+The host normalises typography, padding, borders, colours, hover, keyboard focus and disabled states,
 including older add-ons with inline button styles. Pane layout and event handlers
 remain add-on-owned; controls outside Settings are unaffected.
 
