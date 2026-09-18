@@ -1,3 +1,7 @@
+import { AddonOperationService } from "./operation-service.js";
+import { admitAddonOutboundWork } from './operation-outbound-admission.js';
+import type { OperationHost } from "./operation-contracts.js";
+import { getCurrentAddonRegistrationOwner } from "./external-routes.js";
 import { mkdirSync, realpathSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -107,6 +111,12 @@ export interface PiclawRuntimeExternalRoutesApiV1 {
   register(registration: ExternalAddonRouteRegistration): () => void;
 }
 
+export interface PiclawRuntimeOperationsApiV1 {
+  version: 1;
+  /** Register only during an owning startup import; verified principals bind later. */
+  register(): { forPrincipal(principalId: string): ReturnType<AddonOperationService["bind"]>; admitOutbound(): ReturnType<typeof admitAddonOutboundWork> };
+}
+
 export interface PiclawRuntimeAddonApi {
   lifecycle: {
     version: 1;
@@ -118,6 +128,7 @@ export interface PiclawRuntimeAddonApi {
   enqueueAgentMessage: AddonAgentMessageEnqueuer;
   messaging: PiclawRuntimeMessagingApiV1;
   externalRoutes: PiclawRuntimeExternalRoutesApiV1;
+  operations: PiclawRuntimeOperationsApiV1;
   createMedia: typeof createMedia;
   getMediaById: typeof getMediaById;
   postMessage: typeof postMessagesToolMessage;
@@ -317,6 +328,20 @@ async function enqueueAgentMessageViaRuntime(request: RuntimeAgentMessageRequest
   return await agentMessageEnqueuer(request);
 }
 
+let operationService: AddonOperationService | null = null;
+export function setAddonOperationHost(host: OperationHost): void {
+  if (operationService) throw new Error("Operation host already installed.");
+  operationService = new AddonOperationService(host);
+  registerAddonRuntimeShutdownHandler(() => operationService?.shutdown());
+  operationService.recover();
+}
+function registerOperations() {
+  const owner = getCurrentAddonRegistrationOwner();
+  if (!owner || !operationService) throw new Error("Operations require an owning startup import and a ready host.");
+  const service = operationService;
+  return Object.freeze({ forPrincipal: (principalId: string) => service.bind({ addonId: owner.addonId, principalId }), admitOutbound: () => admitAddonOutboundWork(owner.addonId) });
+}
+
 export function installAddonRuntimeApi(): PiclawRuntimeAddonApi {
   if (!addonRuntimeShutdownHookRegistered) {
     addonRuntimeShutdownHookRegistered = true;
@@ -344,6 +369,7 @@ export function installAddonRuntimeApi(): PiclawRuntimeAddonApi {
       version: 1,
       register: registerExternalAddonRoute,
     },
+    operations: { version: 1, register: registerOperations },
     createMedia,
     getMediaById,
     postMessage: postMessagesToolMessage,
@@ -444,6 +470,8 @@ export async function shutdownAddonRuntimeContributionsForTests(): Promise<void>
 }
 
 export function resetAddonRuntimeContributionsForTests(): void {
+  operationService?.shutdown();
+  operationService = null;
   statusPanelProviders.clear();
   adaptiveCardIntentHandlers.clear();
   for (const unregister of [...addonChatTransportUnregisters]) unregister();

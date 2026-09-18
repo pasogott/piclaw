@@ -595,6 +595,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
   };
 
   while (true) {
+    if (options.runOptions.abortSignal?.aborted) return { status: "error", result: null, error: "Caller cancelled operation.", failureCategory: "aborted" };
     // Yield to the event loop on every iteration. Prevents synchronous-
     // throw + catch + retry from starving the event loop when the error
     // path never reaches an await that actually suspends.
@@ -779,6 +780,7 @@ export async function runAgentRecoveryPhase(options: RunAgentRecoveryPhaseOption
       );
     }
 
+    if (options.runOptions.abortSignal?.aborted) return { status: "error", result: null, error: "Caller cancelled operation.", failureCategory: "aborted" };
     // If the tool-call cap was hit, abort immediately without recovery.
     if (options.toolCallCap?.exceeded) {
       const duration = Date.now() - startTime;
