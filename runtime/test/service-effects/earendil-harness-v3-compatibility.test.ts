@@ -90,25 +90,68 @@ function expectDeepFrozen(value: unknown): void {
 function activeTestNames(path: string, source: string): readonly string[] {
   const parsed = parseTypeScriptSource(path, source);
   const names: string[] = [];
-  const baseName = (node: syntax.Node | null | undefined): string | null => {
-    if (syntax.isIdentifier(node) && (node.name === "test" || node.name === "it")) return node.name;
+  type RegistrationRoot = "describe" | "it" | "test";
+  interface RegistrationModifier {
+    readonly name: string;
+    readonly arguments?: syntax.CallExpression["arguments"];
+  }
+  interface RegistrationChain {
+    readonly root: RegistrationRoot;
+    readonly modifiers: readonly RegistrationModifier[];
+  }
+  const registrationChain = (node: syntax.Node | null | undefined): RegistrationChain | null => {
+    if (syntax.isIdentifier(node) && (node.name === "test" || node.name === "it" || node.name === "describe")) {
+      return { root: node.name, modifiers: [] };
+    }
+    if (syntax.isMemberExpression(node) && !node.computed) {
+      const chain = registrationChain(node.object);
+      const name = propertyKeyName(node.property);
+      return chain && name ? { ...chain, modifiers: [...chain.modifiers, { name }] } : null;
+    }
+    if (syntax.isCallExpression(node)) {
+      const chain = registrationChain(node.callee);
+      if (!chain || chain.modifiers.length === 0) return chain;
+      const modifiers = [...chain.modifiers];
+      const last = modifiers.at(-1);
+      if (!last || last.arguments) throw new SyntaxError(`Ambiguous registration modifier call: ${path}`);
+      modifiers[modifiers.length - 1] = { ...last, arguments: node.arguments };
+      return { ...chain, modifiers };
+    }
+    if (syntax.isTaggedTemplateExpression(node)) {
+      const chain = registrationChain(node.tag);
+      if (!chain || chain.modifiers.length === 0) return chain;
+      const modifiers = [...chain.modifiers];
+      const last = modifiers.at(-1);
+      if (!last || last.arguments) throw new SyntaxError(`Ambiguous registration modifier template: ${path}`);
+      modifiers[modifiers.length - 1] = { ...last, arguments: [] };
+      return { ...chain, modifiers };
+    }
     return null;
   };
-  const member = (node: syntax.Node | null | undefined): { base: string; property: string } | null => {
-    if (!syntax.isMemberExpression(node) || node.computed) return null;
-    const base = baseName(node.object);
-    const property = propertyKeyName(node.property);
-    return base && property ? { base, property } : null;
+  const staticBoolean = (modifier: RegistrationModifier): boolean => {
+    const value = modifier.arguments?.[0];
+    if (value && value.type !== "SpreadElement" && value.type !== "ArgumentPlaceholder"
+      && syntax.isBooleanLiteral(value)) return value.value;
+    throw new SyntaxError(`Dynamic ${modifier.name} registration is not closed evidence: ${path}`);
   };
-  const registration = (node: syntax.CallExpression): "active" | "disabled" | null => {
-    if (baseName(node.callee)) return "active";
-    const direct = member(node.callee);
-    if (direct?.property === "skip" || direct?.property === "todo") return "disabled";
-    if (direct?.property === "only") throw new SyntaxError(`Focused test registration is not closed evidence: ${path}`);
-    if (direct?.property === "each") return "active";
-    if (syntax.isCallExpression(node.callee) && member(node.callee.callee)?.property === "each") return "active";
-    if (syntax.isTaggedTemplateExpression(node.callee) && member(node.callee.tag)?.property === "each") return "active";
-    return null;
+  const registration = (node: syntax.CallExpression): { root: RegistrationRoot; disabled: boolean } | null => {
+    const chain = registrationChain(node.callee);
+    if (!chain) return null;
+    const last = chain.modifiers.at(-1);
+    if (last && ["each", "if", "onlyIf", "skipIf", "todoIf"].includes(last.name) && !last.arguments) return null;
+    let disabled = false;
+    for (const modifier of chain.modifiers) {
+      if (modifier.name === "only" || modifier.name === "onlyIf") {
+        throw new SyntaxError(`Focused ${chain.root} registration is not closed evidence: ${path}`);
+      }
+      if (modifier.name === "skip" || modifier.name === "todo") disabled = true;
+      else if (modifier.name === "skipIf" || modifier.name === "todoIf") disabled ||= staticBoolean(modifier);
+      else if (modifier.name === "if") disabled ||= !staticBoolean(modifier);
+      else if (modifier.name !== "each") {
+        throw new SyntaxError(`Unknown ${chain.root}.${modifier.name} registration modifier: ${path}`);
+      }
+    }
+    return { root: chain.root, disabled };
   };
   const registrationName = (node: syntax.Node): string | null => {
     const literal = literalString(node);
@@ -120,26 +163,17 @@ function activeTestNames(path: string, source: string): readonly string[] {
       return expression ? `${text}\${${syntaxText(parsed, expression)}}` : text;
     }).join("");
   };
-  const disabledContainer = (node: syntax.Node): boolean => {
-    if (!syntax.isCallExpression(node) || !syntax.isMemberExpression(node.callee) || node.callee.computed
-      || !syntax.isIdentifier(node.callee.object, { name: "describe" })) return false;
-    const property = propertyKeyName(node.callee.property);
-    if (property === "only") throw new SyntaxError(`Focused describe registration is not closed evidence: ${path}`);
-    return property === "skip" || property === "todo";
-  };
   const visit = (node: syntax.Node, disabled: boolean): void => {
-    if (syntax.isCallExpression(node)) {
-      const kind = registration(node);
-      if (kind && !disabled && kind === "active" && node.arguments.length > 0) {
-        const first = node.arguments[0];
-        if (first.type !== "SpreadElement" && first.type !== "ArgumentPlaceholder") {
-          const name = registrationName(first);
-          if (name !== null) names.push(name);
-        }
+    const currentCall = syntax.isCallExpression(node) ? node : null;
+    const current = currentCall ? registration(currentCall) : null;
+    if (current && current.root !== "describe" && !current.disabled && !disabled && currentCall && currentCall.arguments.length > 0) {
+      const first = currentCall.arguments[0];
+      if (first.type !== "SpreadElement" && first.type !== "ArgumentPlaceholder") {
+        const name = registrationName(first);
+        if (name !== null) names.push(name);
       }
     }
-    const childDisabled = disabled || disabledContainer(node)
-      || (syntax.isCallExpression(node) && registration(node) === "disabled");
+    const childDisabled = disabled || current?.disabled === true;
     forEachSyntaxChild(node, (child) => visit(child, childDisabled));
   };
   visit(parsed.program, false);
@@ -298,6 +332,9 @@ describe("latent Earendil Harness v3 compatibility evidence", () => {
       'test.skip("skipped evidence", () => {});',
       'it.todo("todo evidence", () => {});',
       'describe.skip("disabled", () => { test("nested disabled evidence", () => {}); });',
+      'describe.skip.each([[1]])("disabled %s", () => { test("nested skipped-each evidence", () => {}); });',
+      'describe.skipIf(true)("conditional disabled", () => { test("nested skip-if evidence", () => {}); });',
+      'describe.skipIf(false)("conditional active", () => { test("nested conditional active evidence", () => {}); });',
       'test.skip("disabled callback", () => { test("nested skipped-test evidence", () => {}); });',
       'test("active evidence", () => {});',
       'test(`active template ${value}`, () => {});',
@@ -305,13 +342,16 @@ describe("latent Earendil Harness v3 compatibility evidence", () => {
       'test.each`value\\n${1}`("active tagged parameterized %s", () => {});',
     ].join("\n");
     expect(activeTestNames("synthetic-evidence.test.ts", source)).toEqual([
+      "nested conditional active evidence",
       "active evidence",
       'active template ${value}',
       "active parameterized $value",
       "active tagged parameterized %s",
     ]);
     expect(() => activeTestNames("focused-test.ts", 'test.only("focused", () => {});')).toThrow(/Focused test/);
-    expect(() => activeTestNames("focused-describe.ts", 'describe.only("focused", () => { test("nested", () => {}); });')).toThrow(/Focused describe/);
+    expect(() => activeTestNames("focused-chain.ts", 'test.only.each([[1]])("focused %s", () => {});')).toThrow(/Focused test/);
+    expect(() => activeTestNames("focused-describe.ts", 'describe.each([[1]]).only("focused %s", () => { test("nested", () => {}); });')).toThrow(/Focused describe/);
+    expect(() => activeTestNames("dynamic-skip.ts", 'describe.skipIf(flag)("ambiguous", () => { test("nested", () => {}); });')).toThrow(/Dynamic skipIf/);
   });
 
   test("selected-release partial HC coverage never counts as full promotion", () => {
