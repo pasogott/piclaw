@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { rmSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,6 +19,7 @@ import {
   EARENDIL_HARNESS_DIRECT_OPERATIONS,
   readInstalledEarendilAgentCoreVersion,
 } from "./fixtures/earendil-harness-direct-probe.js";
+import { SELECTED_HARNESS_EVIDENCE_LINKS } from "./fixtures/earendil-harness-selected-catalogue.js";
 
 type _PublicSelectedContracts = [AgentHarnessConstructor, Events, Storage, SessionMutation, UsageRow, AgentHarnessOptions<PiclawToolContext>, AgentHarnessTool<PiclawToolContext>];
 type _CompileOnlyDirectAssignments = EarendilDirectAssignments;
@@ -200,11 +201,39 @@ describe("latent Earendil Harness v3 compatibility evidence", () => {
     expect(await readInstalledEarendilAgentCoreVersion()).toBe("0.85.1");
   });
 
+  test("maps every selected HC row and status to exact executing public evidence", () => {
+    const evidenceFiles = [
+      "earendil-harness-selected-semantics.test.ts",
+      "earendil-harness-broader-semantics.test.ts",
+      "earendil-jsonl-process-loss.test.ts",
+      "earendil-session-backend-conformance.test.ts",
+    ];
+    const evidence = evidenceFiles.map((name) => readFileSync(resolve(import.meta.dir, name), "utf8")).join("\n");
+    const selected = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.selected.capabilities;
+    expect(SELECTED_HARNESS_EVIDENCE_LINKS.map((link) => [link.id, link.status])).toEqual(
+      selected.map((capability) => [capability.id, capability.status]),
+    );
+    for (const link of SELECTED_HARNESS_EVIDENCE_LINKS) {
+      expect(link.tests.length).toBeGreaterThan(0);
+      for (const testName of link.tests) expect(evidence).toContain(testName);
+    }
+    expect(readdirSync(resolve(import.meta.dir, "fixtures")).filter((name) => name.startsWith("earendil-")).sort()).toContain(
+      "earendil-harness-deterministic-controls.ts",
+    );
+  });
+
   test("selected-release partial HC coverage never counts as full promotion", () => {
     const selected = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.selected;
     expect(selected.version).toBe("0.85.1");
-    expect(selected.capabilities).toHaveLength(20);
-    expect(selected.capabilities.every((c) => c.status === "partial" || c.status === "unverified")).toBe(true);
+    const selectedIds: readonly string[] = selected.capabilities.map((capability) => capability.id);
+    expect(selectedIds).toEqual(
+      Array.from({ length: 25 }, (_, index) => `HC-${String(index + 1).padStart(3, "0")}`),
+    );
+    expect(selected.capabilities).toHaveLength(25);
+    expect(selected.capabilities.filter((capability) => capability.status === "partial")).toHaveLength(24);
+    expect(selected.capabilities.filter((capability) => capability.status === "unsupported").map((capability) => capability.id)).toEqual(["HC-024"]);
+    const statuses: readonly string[] = selected.capabilities.map((capability) => capability.status);
+    expect(statuses).not.toContain("pass");
     expect(selected.productionActivation).toBe(false);
     expect(selected.watchSession.status).toBe("unsupported");
   });
