@@ -87,7 +87,7 @@
       "semanticReaderOccurrences": 69
     },
     "docsDeploy": {
-      "referencedNames": 128,
+      "referencedNames": 129,
       "directReaderNames": 16,
       "directReaderOccurrences": 32,
       "helperReaderNames": 0,
@@ -4454,6 +4454,21 @@
           "readerFiles": [
             "scripts/backfill-token-usage.ts"
           ]
+        }
+      }
+    },
+    {
+      "name": "PICLAW_SETTINGS_ADDONS_ROOT",
+      "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "docs/settings-control-contract.md"
+          ],
+          "readerFiles": []
         }
       }
     },
