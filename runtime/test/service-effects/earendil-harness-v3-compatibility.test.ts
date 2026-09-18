@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import * as syntax from "@babel/types";
 import { basename, dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,7 +15,14 @@ import {
 } from "../../src/service-effects/earendil-harness-v3-compatibility/manifest.js";
 import type { PiclawToolContext } from "../../src/service-effects/contracts/execution-context-resolver.js";
 import { ensureTypeScriptCompilerExecutable } from "../../scripts/repo-dev-command.js";
-import { collectModuleSpecifiers } from "./fixtures/typescript-syntax-oracle.js";
+import {
+  collectModuleSpecifiers,
+  forEachSyntaxChild,
+  literalString,
+  parseTypeScriptSource,
+  propertyKeyName,
+  syntaxText,
+} from "./fixtures/typescript-syntax-oracle.js";
 import {
   EARENDIL_HARNESS_DIRECT_OPERATIONS,
   readInstalledEarendilAgentCoreVersion,
@@ -77,6 +85,65 @@ function expectDeepFrozen(value: unknown): void {
   if (!value || typeof value !== "object") return;
   expect(Object.isFrozen(value)).toBe(true);
   for (const child of Object.values(value)) expectDeepFrozen(child);
+}
+
+function activeTestNames(path: string, source: string): readonly string[] {
+  const parsed = parseTypeScriptSource(path, source);
+  const names: string[] = [];
+  const baseName = (node: syntax.Node | null | undefined): string | null => {
+    if (syntax.isIdentifier(node) && (node.name === "test" || node.name === "it")) return node.name;
+    return null;
+  };
+  const member = (node: syntax.Node | null | undefined): { base: string; property: string } | null => {
+    if (!syntax.isMemberExpression(node) || node.computed) return null;
+    const base = baseName(node.object);
+    const property = propertyKeyName(node.property);
+    return base && property ? { base, property } : null;
+  };
+  const registration = (node: syntax.CallExpression): "active" | "disabled" | null => {
+    if (baseName(node.callee)) return "active";
+    const direct = member(node.callee);
+    if (direct?.property === "skip" || direct?.property === "todo") return "disabled";
+    if (direct?.property === "only") throw new SyntaxError(`Focused test registration is not closed evidence: ${path}`);
+    if (direct?.property === "each") return "active";
+    if (syntax.isCallExpression(node.callee) && member(node.callee.callee)?.property === "each") return "active";
+    if (syntax.isTaggedTemplateExpression(node.callee) && member(node.callee.tag)?.property === "each") return "active";
+    return null;
+  };
+  const registrationName = (node: syntax.Node): string | null => {
+    const literal = literalString(node);
+    if (literal !== null) return literal;
+    if (!syntax.isTemplateLiteral(node)) return null;
+    return node.quasis.map((quasi, index) => {
+      const text = quasi.value.cooked ?? quasi.value.raw;
+      const expression = node.expressions[index];
+      return expression ? `${text}\${${syntaxText(parsed, expression)}}` : text;
+    }).join("");
+  };
+  const disabledContainer = (node: syntax.Node): boolean => {
+    if (!syntax.isCallExpression(node) || !syntax.isMemberExpression(node.callee) || node.callee.computed
+      || !syntax.isIdentifier(node.callee.object, { name: "describe" })) return false;
+    const property = propertyKeyName(node.callee.property);
+    if (property === "only") throw new SyntaxError(`Focused describe registration is not closed evidence: ${path}`);
+    return property === "skip" || property === "todo";
+  };
+  const visit = (node: syntax.Node, disabled: boolean): void => {
+    if (syntax.isCallExpression(node)) {
+      const kind = registration(node);
+      if (kind && !disabled && kind === "active" && node.arguments.length > 0) {
+        const first = node.arguments[0];
+        if (first.type !== "SpreadElement" && first.type !== "ArgumentPlaceholder") {
+          const name = registrationName(first);
+          if (name !== null) names.push(name);
+        }
+      }
+    }
+    const childDisabled = disabled || disabledContainer(node)
+      || (syntax.isCallExpression(node) && registration(node) === "disabled");
+    forEachSyntaxChild(node, (child) => visit(child, childDisabled));
+  };
+  visit(parsed.program, false);
+  return Object.freeze(names);
 }
 
 describe("latent Earendil Harness v3 compatibility evidence", () => {
@@ -201,25 +268,50 @@ describe("latent Earendil Harness v3 compatibility evidence", () => {
     expect(await readInstalledEarendilAgentCoreVersion()).toBe("0.85.1");
   });
 
-  test("maps every selected HC row and status to exact executing public evidence", () => {
+  test("maps every selected HC row and status to exact active public test registrations", () => {
     const evidenceFiles = [
       "earendil-harness-selected-semantics.test.ts",
       "earendil-harness-broader-semantics.test.ts",
       "earendil-jsonl-process-loss.test.ts",
       "earendil-session-backend-conformance.test.ts",
     ];
-    const evidence = evidenceFiles.map((name) => readFileSync(resolve(import.meta.dir, name), "utf8")).join("\n");
+    const registered = evidenceFiles.flatMap((name) => {
+      const path = resolve(import.meta.dir, name);
+      return activeTestNames(path, readFileSync(path, "utf8"));
+    });
     const selected = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.selected.capabilities;
     expect(SELECTED_HARNESS_EVIDENCE_LINKS.map((link) => [link.id, link.status])).toEqual(
       selected.map((capability) => [capability.id, capability.status]),
     );
     for (const link of SELECTED_HARNESS_EVIDENCE_LINKS) {
       expect(link.tests.length).toBeGreaterThan(0);
-      for (const testName of link.tests) expect(evidence).toContain(testName);
+      for (const testName of link.tests) expect(registered.filter((name) => name === testName)).toHaveLength(1);
     }
     expect(readdirSync(resolve(import.meta.dir, "fixtures")).filter((name) => name.startsWith("earendil-")).sort()).toContain(
       "earendil-harness-deterministic-controls.ts",
     );
+  });
+
+  test("active test extraction rejects textual and disabled evidence while retaining templates", () => {
+    const source = [
+      '// test("comment-only evidence", () => {});',
+      'test.skip("skipped evidence", () => {});',
+      'it.todo("todo evidence", () => {});',
+      'describe.skip("disabled", () => { test("nested disabled evidence", () => {}); });',
+      'test.skip("disabled callback", () => { test("nested skipped-test evidence", () => {}); });',
+      'test("active evidence", () => {});',
+      'test(`active template ${value}`, () => {});',
+      'test.each([[1]])("active parameterized $value", () => {});',
+      'test.each`value\\n${1}`("active tagged parameterized %s", () => {});',
+    ].join("\n");
+    expect(activeTestNames("synthetic-evidence.test.ts", source)).toEqual([
+      "active evidence",
+      'active template ${value}',
+      "active parameterized $value",
+      "active tagged parameterized %s",
+    ]);
+    expect(() => activeTestNames("focused-test.ts", 'test.only("focused", () => {});')).toThrow(/Focused test/);
+    expect(() => activeTestNames("focused-describe.ts", 'describe.only("focused", () => { test("nested", () => {}); });')).toThrow(/Focused describe/);
   });
 
   test("selected-release partial HC coverage never counts as full promotion", () => {

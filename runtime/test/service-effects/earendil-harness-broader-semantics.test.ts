@@ -106,7 +106,9 @@ describe("selected 0.85.1 broader public Harness semantics (inactive evidence on
   test("HC-011 retry wait survives reattachment with captured policy", async () => {
     const fixture = await createSelectedHarnessFixture({
       responses: [fauxAssistantMessage([], { stopReason: "error", errorMessage: "network timeout" })],
-      retry: { enabled: true, maxRetries: 1, baseDelayMs: 60_000 },
+      // No public clock injection exists. Keep this deadline longer than the
+      // test runner timeout so reattachment cannot validly advance it.
+      retry: { enabled: true, maxRetries: 1, baseDelayMs: 3_600_000 },
     });
     const scheduled = new DeterministicHarnessEventLog();
     const unsubscribe = fixture.harness.events.on("retry_scheduled", scheduled.listener);
@@ -179,6 +181,7 @@ describe("selected 0.85.1 broader public Harness semantics (inactive evidence on
       expect(prompt.ok).toBeTrue();
       if (!prompt.ok || prompt.value.status !== "suspended") throw new Error("Expected suspended run.");
       const operationId = prompt.value.operationId;
+      const deferredHandle = structuredClone(prompt.value.deferred);
       expect(fixture.faux.state).toMatchObject({ callCount: 1, deferredFetchCount: 0 });
       await fixture.harness.close(ctx);
 
@@ -188,8 +191,11 @@ describe("selected 0.85.1 broader public Harness semantics (inactive evidence on
         expect(first.open).toEqual([expect.objectContaining({ operationId, kind: "run" })]);
         const resumed = await (await first.harness.lane("main", ctx)).resume(ctx);
         expect(resumed.ok).toBeTrue();
-        if (!resumed.ok || !("status" in resumed.value)) throw new Error("Expected repeated suspension.");
-        expect(resumed.value).toMatchObject({ operationId, status: "suspended" });
+        if (!resumed.ok || resumed.value.status !== "suspended") throw new Error("Expected repeated suspension.");
+        expect(resumed.value.operationId).toBe(operationId);
+        expect(resumed.value.deferred).toEqual(deferredHandle);
+        const firstSnapshot = await laneSnapshot(await first.harness.lane("main", ctx));
+        expect(firstSnapshot.operation?.deferred?.handle).toEqual(deferredHandle);
         expect(fixture.faux.state).toMatchObject({ callCount: 1, deferredFetchCount: 1 });
       } finally { await first.harness.close(ctx); }
 
@@ -197,7 +203,10 @@ describe("selected 0.85.1 broader public Harness semantics (inactive evidence on
       const second = await createSelectedHarnessFixture({ repo: fixture.repo, session: secondSession, faux: fixture.faux });
       try {
         expect(second.open).toEqual([expect.objectContaining({ operationId, kind: "run" })]);
-        const resumed = await (await second.harness.lane("main", ctx)).resume(ctx);
+        const secondLane = await second.harness.lane("main", ctx);
+        const secondSnapshot = await laneSnapshot(secondLane);
+        expect(secondSnapshot.operation?.deferred?.handle).toEqual(deferredHandle);
+        const resumed = await secondLane.resume(ctx);
         expect(resumed.ok).toBeTrue();
         if (!resumed.ok || resumed.value.status === "suspended") throw new Error("Expected terminal record.");
         expect(resumed.value).toMatchObject({ operationId, status: "completed" });
