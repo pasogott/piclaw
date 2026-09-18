@@ -8,7 +8,7 @@ Validated 17 September 2026 on Bun 1.4.1/Linux in the isolated `feat/addon-opera
 | Focused operation, orchestration, resource, startup and add-on regression suite | 140 passed, 3 existing skips |
 | Actual SDK session construction | Passed: fixed prompt, only granted `read`, no ambient extension factories/context |
 | Two-process SQLite restart fixture | Passed: uncertain active work is not replayed; duplicate admission recovers same ID |
-| Complete `make ci-fast` rerun | Passed: 5,380 runtime tests, 4 skips; 25 feature checks; 9 build tests |
+| Complete `make ci-fast` rerun | Passed: 5,382 runtime tests, 4 skips; 25 feature checks; 9 build tests |
 | Environment inventory, circular dependencies, entrypoint preloads, silent catches, pack hygiene, whitespace | Passed |
 | New operation modules and tests lint | Passed |
 
@@ -30,4 +30,4 @@ The first fast-CI run had a pre-existing token-usage migration subprocess exceed
 
 The core exports protocol-neutral admission, status, results, list/event subscription, cancel and continuation. It stores bounded public final text; it does not expose private attachment paths or hidden reasoning. A2A message/part/artifact conversion and independently authenticated retrieval remain add-on work. Subscriptions poll durable state at 100 ms and require the caller's AbortSignal for prompt idle cleanup. This is single-process operation ownership, not distributed leasing.
 
-Grants are operator-configured capabilities. Tool allowlisting does not sandbox filesystem/process access; text-only is the initial safe profile. Actual model/tool execution is provider-free in these tests. Independent A2A peers, authenticated HTTP/SSE, add-on task persistence, operator settings and the release pilot are separate epic gates and have not been completed here.
+Grants are operator-configured capabilities. Tool allowlisting does not sandbox filesystem/process access; text-only is the initial safe profile. Actual model/tool execution is provider-free in these tests. The separately recorded A2A deployment canary on 18 September exercised this packaged core through actual HTTP, operations, AgentPool and a loopback-only deterministic model; dedup, cancel, crash/restart and persisted results passed. VM900 was restored stopped; Smith production was not changed. The add-on PR includes the detailed receipt and actual-host captures.
