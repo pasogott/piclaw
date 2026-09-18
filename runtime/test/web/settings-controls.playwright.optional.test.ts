@@ -20,12 +20,6 @@ beforeAll(async () => {
   const build = await Bun.build({ entrypoints: [join(import.meta.dir, "fixtures/settings-controls-fixture.ts")], outdir: workspace.base, target: "browser" });
   if (!build.success) throw new Error(String(build.logs));
   const script = await build.outputs[0].text();
-  const addonScripts = new Map<string, string>();
-  if (addonsRoot) for (const slug of ["sample-addon", "delegate"]) {
-    const addon = await Bun.build({ entrypoints: [join(addonsRoot, "addons", slug, "web/index.ts")], outdir: join(workspace.base, slug), target: "browser" });
-    if (!addon.success) throw new Error(String(addon.logs));
-    addonScripts.set(`/addon/${slug}.js`, await addon.outputs[0].text());
-  }
   await mkdir(evidence, { recursive: true });
   browser = await chromium.launch({ headless: true });
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
@@ -36,7 +30,16 @@ beforeAll(async () => {
       return new Response(`<!doctype html><html class="${light ? "light" : ""}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/${skin}/css/styles.css"><style>html,body,#app{margin:0;width:100%;height:100%;overflow:hidden}</style></head><body class="${light ? "light" : ""}"><div id="app"></div><script type="module" src="/fixture.js"></script></body></html>`, { headers: { "content-type": "text/html" } });
     }
     if (url.pathname === "/fixture.js") return new Response(script, { headers: { "content-type": "text/javascript" } });
-    if (addonScripts.has(url.pathname)) return new Response(addonScripts.get(url.pathname), { headers: { "content-type": "text/javascript" } });
+    // Match the real asset route: exact filename, per-file transpilation, NOT a
+    // bundler that silently resolves missing .js imports to .ts sources.
+    const addonAsset = url.pathname.match(/^\/addon\/(sample-addon|delegate)\/([\w-]+\.(?:ts|js))$/);
+    if (addonsRoot && addonAsset) {
+      const file = Bun.file(join(addonsRoot, "addons", addonAsset[1], "web", addonAsset[2]));
+      if (!await file.exists()) return new Response(null, { status: 404 });
+      const source = await file.text();
+      const code = new Bun.Transpiler({ loader: addonAsset[2].endsWith(".ts") ? "ts" : "js" }).transformSync(source);
+      return new Response(code, { headers: { "content-type": "text/javascript" } });
+    }
     if (!url.pathname.startsWith("/static/") || url.pathname.includes("..")) return new Response(null, { status: 404 });
     const file = Bun.file(join(runtimeRoot, "web", url.pathname));
     return await file.exists() ? new Response(file) : new Response(null, { status: 404 });

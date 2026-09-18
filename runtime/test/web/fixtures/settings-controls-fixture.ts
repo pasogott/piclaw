@@ -65,7 +65,7 @@ if (skin === "classic") {
   registerSettingsPane({ id: "contract", label: "Contract", component: () => html`<${Controls} addon />`, icon: null });
   if (["sample-addon", "delegate"].includes(section)) {
     Object.assign(globalThis, { __piclawPreactHtm: vendor, __piclawSettingsPaneRegistry: { registerSettingsPane, notifySettingsPanesChanged() {} } });
-    const entry = `/addon/${section}.js`;
+    const entry = `/addon/${section}/index.ts`;
     await import(entry);
   }
   requestOpenSettingsDialog({ section });
@@ -80,7 +80,7 @@ if (skin === "classic") {
   if (["sample-addon", "delegate"].includes(section)) {
     const hooks = await import("preact/hooks");
     Object.assign(globalThis, { __piclawPreactHtm: { ...preact, ...hooks, html }, __piclawSettingsPaneRegistry: { registerSettingsPane: registerAddonSettingsPane, notifySettingsPanesChanged() {} } });
-    const entry = `/addon/${section}.js`;
+    const entry = `/addon/${section}/index.ts`;
     await import(entry);
   }
   localStorage.setItem("piclaw-settings-category", section);

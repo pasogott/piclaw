@@ -116,3 +116,6 @@ when invoking the isolated test launcher. The additional 16 cases mount both
 real hosts at all four widths, retain Delegate's bounded lists and check the
 root disappears when returning to General. Without that explicit checkout these
 cases are skipped; synthetic controls alone do not certify add-on integration.
+Entries are served as exact-path, individually transpiled modules, like the
+production asset handler. Do not bundle them for this acceptance check: bundlers
+can hide an invalid `./styles.js` import when only `styles.ts` exists in a package.

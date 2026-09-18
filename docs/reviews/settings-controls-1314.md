@@ -2,6 +2,9 @@
 
 Baseline: `060b72e6b5aa9e7c14ee392a9b0cc2a547958517`.
 Companion add-ons: `5e6a98c` (Sample Addon 0.1.11, Delegate 0.2.10).
+The initial bundled integration receipt at that head is superseded for asset
+loading by the per-file regression described below; the add-on import repair
+must land before these packages can be approved.
 
 ## Scope
 
@@ -63,6 +66,17 @@ The independent model delegate timed out and is **not** counted as approval.
 independent execution of browser tests.
 
 ## Evidence boundaries
+
+### Unbundled asset correction
+
+Companion PR135's hosted full-server tests exposed an import failure: the new
+entries imported `./styles.js`, but only `styles.ts` was shipped. The bundled
+fixture had resolved that mismatch automatically. The core fixture now follows
+the real exact-filename/per-file transpilation behavior. It reproduced the old
+failure (0 pass/1 fail), then passed **66/66, 622 assertions** against the add-on
+working-tree repair importing `./styles.ts`. This follow-up changes only the
+test fixture/docs, not core production code. A pinned repaired add-on head and
+full-server verification remain required before merge recommendation.
 
 - Chromium on Linux, local disposable HTTP servers and stub data only; no live
   keychain/config writes, providers, callbacks, delegates or deployments.
