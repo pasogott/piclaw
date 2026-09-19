@@ -181,9 +181,15 @@ test("queued single-user leases still renew, but denial before or after renewal 
   await fixture(async (configure) => {
     const timers: Array<() => Promise<void>> = [];
     const original = globalThis.setTimeout;
-    const originalNow = Date.now;
-    let clock = originalNow();
-    Date.now = () => clock;
+    const originalDate = globalThis.Date;
+    let clock = originalDate.now();
+    class ClockDate extends originalDate {
+      constructor(...args: any[]) {
+        super(...(args.length ? args : [clock]));
+      }
+      static now() { return clock; }
+    }
+    globalThis.Date = ClockDate as DateConstructor;
     const timerSpy = spyOn(globalThis, "setTimeout").mockImplementation(((fn: any, ms: number, ...args: any[]) => {
       if (ms === 20_000) { timers.push(fn); return { unref() {} } as any; }
       return original(fn, ms, ...args);
@@ -202,7 +208,7 @@ test("queued single-user leases still renew, but denial before or after renewal 
       configure("single-user"); task(); const next = harness(); await pollScheduledRunsOnce(next.deps, wrapped);
       expect(timers).toHaveLength(1); const before = snapshot(); configure("invalid"); clock += 20_000; await timers.shift()!();
       expect(renewals).toBe(2); expect(timers).toHaveLength(0); expect(snapshot()).toBe(before);
-    } finally { Date.now = originalNow; timerSpy.mockRestore(); }
+    } finally { globalThis.Date = originalDate; timerSpy.mockRestore(); }
   });
 });
 
