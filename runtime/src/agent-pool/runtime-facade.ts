@@ -16,6 +16,7 @@ import { formatThinkingLevelForDisplay, getAvailableThinkingLevelsForModel, reso
 import { buildSessionTreeSnapshot } from "../agent-control/session-tree-snapshot.js";
 import { getLatestTokenUsageModel } from "../db.js";
 import { requireOwnedSessionExecution } from "./owned-session-access.js";
+import { getSessionThinkingPolicy } from './thinking-policy.js';
 
 import { SESSIONS_DIR } from "../core/config.js";
 import { detectChannel } from "../router.js";
@@ -259,6 +260,7 @@ export interface AvailableModelOption {
 
 /** Shape returned by available-model inspection. */
 export interface AvailableModelsResult {
+  thinking_policy?: ReturnType<typeof getSessionThinkingPolicy>;
   current: string | null;
   models: string[];
   model_options: AvailableModelOption[];
@@ -479,6 +481,7 @@ export class AgentRuntimeFacade {
       model_options: modelOptions,
       thinking_level: thinkingLevel,
       thinking_level_label: thinkingLevelLabel,
+      thinking_policy: session ? getSessionThinkingPolicy(session) : null,
       supports_thinking: supportsThinking,
       available_thinking_levels: availableThinkingLevels,
       available_thinking_level_labels: availableThinkingLevelLabels,
