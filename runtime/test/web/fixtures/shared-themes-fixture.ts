@@ -18,7 +18,16 @@ const data = {
     mode: t.mode,
     colors: t.dark || t.light,
   })),
-  colorKeys: ["bgPrimary", "textPrimary", "accent"],
+  colorKeys: [
+    "bgPrimary",
+    "bgSecondary",
+    "textPrimary",
+    "textSecondary",
+    "borderColor",
+    "accent",
+    "danger",
+    "success",
+  ],
 };
 window.fetch = async () => Response.json(data);
 Object.assign(window, {
@@ -52,7 +61,14 @@ if (skin === "classic") {
       />
     </div>`;
   }
-  render(html`<${Fixture} />`, root);
+  if (new URLSearchParams(location.search).get("host") === "dialog") {
+    const { requestOpenSettingsDialog } =
+      await import("../../../web/src/components/settings-dialog-events.js");
+    const { SettingsDialogContent } =
+      await import("../../../web/src/components/settings-dialog.js");
+    requestOpenSettingsDialog({ section: "theme" });
+    render(html`<${SettingsDialogContent} onClose=${() => {}} />`, root);
+  } else render(html`<${Fixture} />`, root);
 } else {
   const { h, render } = await import("preact");
   const { ThemeProvider } =

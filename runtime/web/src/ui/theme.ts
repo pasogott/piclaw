@@ -5,7 +5,6 @@ import { getLocalStorageItem, setLocalStorageItem } from '../utils/storage.js';
 const THEME_STORAGE_KEY = 'piclaw_theme';
 const TINT_STORAGE_KEY = 'piclaw_tint';
 const MODE_STORAGE_KEY = 'piclaw_theme_mode';
-const GLOW_STORAGE_KEY = 'piclaw_synthwave_glow';
 let themeSkin: 'classic' | 'visual' = 'classic';
 let appliedKeys = new Set<string>();
 
@@ -333,7 +332,7 @@ function applyThemeState(nextTheme: Partial<ThemeState>, options: { persist?: bo
     }
 
     applyCssVariables(palette, mode);
-    root.dataset.synthwaveGlow = themeName === 'synthwave-84' && getLocalStorageItem(GLOW_STORAGE_KEY) !== 'off' ? 'on' : 'off';
+    root.dataset.synthwaveGlow = themeName === 'synthwave-84' ? 'on' : 'off';
 
     syncDocumentBackground(palette.bgPrimary);
     updateMetaColor(palette.bgPrimary, mode);
@@ -428,11 +427,6 @@ export function setThemeModePreference(mode: 'auto' | 'light' | 'dark'): void {
     reapplyStoredTheme();
 }
 export function getThemeModePreference(): string {return getLocalStorageItem(MODE_STORAGE_KEY) || 'auto';}
-export function setSynthwaveGlow(enabled: boolean): void {
-    setLocalStorageItem(GLOW_STORAGE_KEY, enabled ? 'on' : 'off');
-    reapplyStoredTheme();
-}
-export function getSynthwaveGlow(): boolean {return getLocalStorageItem(GLOW_STORAGE_KEY) !== 'off';}
 export function selectLocalTheme(id:string):void {
     if (typeof document !== 'undefined') { document.documentElement.dataset.customTheme='false'; document.getElementById('piclaw-theme-override')?.remove(); }
     applyThemeState({theme:id,tint:null});

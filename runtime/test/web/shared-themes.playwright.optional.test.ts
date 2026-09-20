@@ -143,7 +143,7 @@ for (const engine of ["chromium", "webkit"])
       30000,
     );
     browserTest(
-      `${engine} ${skin}: actual Appearance controls select distinct Monokais and optional SynthWave glow`,
+      `${engine} ${skin}: actual Appearance selects Monokais and intrinsic SynthWave glow`,
       async () => {
         const { page, errors } = await open(engine, skin, 390);
         try {
@@ -169,6 +169,10 @@ for (const engine of ["chromium", "webkit"])
                 getComputedStyle(e).getPropertyValue("--accent-color").trim(),
               ),
           ).toBe("#ff6188");
+          // Legacy local opt-out must never suppress intrinsic SynthWave glow.
+          await page.evaluate(() =>
+            localStorage.setItem("piclaw_synthwave_glow", "off"),
+          );
           await select(page, skin, "SynthWave ’84");
           expect(
             await page
@@ -186,17 +190,11 @@ for (const engine of ["chromium", "webkit"])
               .locator("#theme-prose")
               .evaluate((e) => getComputedStyle(e).textShadow),
           ).toBe("none");
-          await page
-            .getByRole("checkbox", { name: "SynthWave glow (this browser)" })
-            .uncheck();
           expect(
             await page
-              .locator(".token.keyword")
-              .evaluate((e) => getComputedStyle(e).textShadow),
-          ).toBe("none");
-          await page
-            .getByRole("checkbox", { name: "SynthWave glow (this browser)" })
-            .check();
+              .getByRole("checkbox", { name: /SynthWave glow/i })
+              .count(),
+          ).toBe(0);
           expect(
             await page
               .locator(".token.keyword")
@@ -269,13 +267,11 @@ for (const engine of ["chromium", "webkit"])
             focusBorder: "#8b355b",
           },
         };
-        await page
-          .locator('input[type=file][accept=".json"]')
-          .setInputFiles({
-            name: "fixture.json",
-            mimeType: "application/json",
-            buffer: Buffer.from(JSON.stringify(themeFile)),
-          });
+        await page.locator('input[type=file][accept=".json"]').setInputFiles({
+          name: "fixture.json",
+          mimeType: "application/json",
+          buffer: Buffer.from(JSON.stringify(themeFile)),
+        });
         await page.waitForFunction(
           () => document.documentElement.dataset.customTheme === "true",
         );
@@ -289,13 +285,11 @@ for (const engine of ["chromium", "webkit"])
         expect(
           await page.locator("html").getAttribute("data-color-theme"),
         ).toBe("monokai-pro");
-        await page
-          .locator('input[type=file][accept=".json"]')
-          .setInputFiles({
-            name: "fixture.json",
-            mimeType: "application/json",
-            buffer: Buffer.from(JSON.stringify(themeFile)),
-          });
+        await page.locator('input[type=file][accept=".json"]').setInputFiles({
+          name: "fixture.json",
+          mimeType: "application/json",
+          buffer: Buffer.from(JSON.stringify(themeFile)),
+        });
         await page.getByRole("button", { name: "Apply", exact: true }).click();
         await page.reload();
         await page.waitForFunction(
@@ -394,3 +388,112 @@ for (const engine of ["chromium", "webkit"])
     },
     20000,
   );
+
+for (const engine of ["chromium", "webkit"])
+  for (const width of [1366, 820, 520, 390]) {
+    browserTest(
+      `${engine}: real Classic Appearance dialog has aligned compact theme columns at ${width}px`,
+      async () => {
+        const page = await browsers[engine].newPage({
+          viewport: { width, height: 900 },
+          colorScheme: "dark",
+        });
+        try {
+          await page.goto(`${base}/?skin=classic&host=dialog`);
+          await page
+            .locator(".settings-theme-table tbody tr")
+            .first()
+            .waitFor();
+          const geometry = await page.evaluate(() => {
+            const content = document.querySelector(
+              ".settings-content",
+            ) as HTMLElement;
+            const table = document.querySelector(
+              ".settings-theme-table",
+            ) as HTMLElement;
+            const root = content.getBoundingClientRect();
+            const rows = [...table.querySelectorAll("tr")].map((row) =>
+              [...row.children].map((cell) => {
+                const r = cell.getBoundingClientRect();
+                return { left: r.left, right: r.right, width: r.width };
+              }),
+            );
+            const first = rows[0];
+            const drift = rows.flatMap((row) =>
+              row.map((cell, i) => Math.abs(cell.left - first[i].left)),
+            );
+            const swatches = [
+              ...table.querySelectorAll(".settings-theme-palette"),
+            ].map((el) => ({
+              width: el.getBoundingClientRect().width,
+              visible: getComputedStyle(el).display !== "none",
+              colours: el.children.length,
+            }));
+            const select = document
+              .querySelector("#appearance-mode")!
+              .getBoundingClientRect();
+            const label = document
+              .querySelector('label[for="appearance-mode"]')!
+              .getBoundingClientRect();
+            return {
+              columns: first.length,
+              drift: Math.max(...drift),
+              overflow: content.scrollWidth - content.clientWidth,
+              tableWidth: table.getBoundingClientRect().width,
+              contentWidth: content.clientWidth,
+              swatches,
+              modeOutside: select.left < root.left || select.right > root.right,
+              labelWidth: label.width,
+              nameWidths: rows.slice(1).map((r) => r[1].width),
+            };
+          });
+          expect(geometry.columns).toBe(4);
+          expect(geometry.drift).toBeLessThanOrEqual(1);
+          expect(geometry.overflow).toBeLessThanOrEqual(1);
+          expect(geometry.tableWidth).toBeLessThanOrEqual(
+            geometry.contentWidth,
+          );
+          expect(Math.min(...geometry.nameWidths)).toBeGreaterThanOrEqual(
+            width <= 390 ? 115 : 140,
+          );
+          expect(geometry.modeOutside).toBe(false);
+          expect(geometry.labelWidth).toBeGreaterThanOrEqual(170);
+          expect(geometry.swatches.length).toBe(44);
+          expect(
+            geometry.swatches.every(
+              (s) => s.visible && s.width >= 75 && s.colours === 8,
+            ),
+          ).toBe(true);
+          expect(
+            await page.getByRole("columnheader").allTextContents(),
+          ).toEqual(["Selected", "Theme", "Mode", "Palette"]);
+          expect(
+            await page
+              .getByRole("checkbox", { name: /SynthWave glow/i })
+              .count(),
+          ).toBe(0);
+          await page
+            .getByRole("radio", { name: "Monokai Pro", exact: true })
+            .check();
+          expect(
+            await page.locator("html").getAttribute("data-color-theme"),
+          ).toBe("monokai-pro");
+          await page.locator(".settings-content").evaluate((e) => {
+            e.scrollTop = 0;
+          });
+          await mkdir(join(root, "../.artifacts/appearance-correction"), {
+            recursive: true,
+          });
+          await page.screenshot({
+            path: join(
+              root,
+              `../.artifacts/appearance-correction/${engine}-classic-${width}.png`,
+            ),
+          });
+        } finally {
+          await page.close();
+        }
+      },
+      20000,
+    );
+  }

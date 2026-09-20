@@ -1,4 +1,4 @@
-import { applyThemeFromEvent, selectLocalTheme, setSynthwaveGlow, getSynthwaveGlow, getThemeModePreference, setThemeModePreference } from '../../../../../../src/ui/theme';
+import { applyThemeFromEvent, selectLocalTheme, getThemeModePreference, setThemeModePreference } from '../../../../../../src/ui/theme';
 import { useSignal } from "@preact/signals";
 import { useRef, useEffect } from "preact/hooks";
 import { type SettingsData, type SettingsSectionProps } from "./types";
@@ -30,7 +30,6 @@ export function AppearanceSection({
   const activeThemeName = useSignal<string | null>(
     Object.keys(getSavedThemeVars()).length ? safeGetItem(LS_NAME_KEY) : BUNDLED_THEMES.find(t => t.id === (document.documentElement.dataset.colorTheme || data.uiTheme))?.name || null
   );
-  const glow = useSignal(getSynthwaveGlow());
   const mode = useSignal(getThemeModePreference());
 
   useEffect(() => {
@@ -39,7 +38,6 @@ export function AppearanceSection({
       activeThemeName.value = BUNDLED_THEMES.find(t=>t.id === document.documentElement.dataset.colorTheme)?.name || null;
       uiTint.value = document.documentElement.dataset.tint || '';
       mode.value = getThemeModePreference();
-      glow.value = getSynthwaveGlow();
     };
     window.addEventListener('piclaw-theme-change',sync);
     return () => window.removeEventListener('piclaw-theme-change',sync);
@@ -167,11 +165,9 @@ export function AppearanceSection({
       </div>
 
       <div className="settings-panel__field">
-        <label className="settings-panel__label" htmlFor="appearance-mode">Automatic theme mode (this browser)</label>
+        <label className="settings-panel__label" htmlFor="appearance-mode">Automatic theme mode</label>
         <select id="appearance-mode" className="settings-panel__select" value={mode.value} onChange={e => { mode.value=e.currentTarget.value; setThemeModePreference(mode.value as 'auto'|'light'|'dark'); }}><option value="auto">Follow system</option><option value="light">Light</option><option value="dark">Dark</option></select>
-        <p className="settings-panel__description">Applies to Default, Solarized and GitHub automatic pairs. Named Light/Dark variants keep their explicit mode.</p>
-        <label><input type="checkbox" checked={glow.value} onChange={e => { glow.value=e.currentTarget.checked; setSynthwaveGlow(glow.value); }} /> SynthWave glow (this browser)</label>
-        <p className="settings-panel__description">Static syntax/accent glow only; disabled in forced-colours mode.</p>
+        <p className="settings-panel__description">For Default, Solarized and GitHub in this browser. Named Light/Dark themes keep their mode.</p>
       </div>
       {/* Tint color — Default only; named palettes keep their authored accents. */}
       <div className="settings-panel__field">

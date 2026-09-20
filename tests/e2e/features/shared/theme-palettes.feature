@@ -21,6 +21,7 @@ Feature: Shared palette identities with skin-specific interfaces
     When I choose Monokai Pro through Appearance
     Then the theme identity is monokai-pro with its softer pink accent
     And the labels and palette identities are consistent across both skins
+    And the Classic dialog has aligned Theme, Mode and Palette columns at desktop and phone widths
 
   @ux-themes-003
   Scenario: Honour explicit variants and browser-local automatic mode
@@ -31,12 +32,14 @@ Feature: Shared palette identities with skin-specific interfaces
     Then its declared mode wins over the system colour scheme
 
   @ux-themes-004
-  Scenario: Keep SynthWave glow optional and decorative
+  Scenario: Keep SynthWave glow intrinsic and decorative
     Given SynthWave 84 is selected
     Then syntax tokens and selected accents have static glow
     And ordinary prose does not glow
-    When I disable glow or enable forced colours
-    Then the glow disappears
+    And there is no separate glow control
+    And an old browser opt-out cannot disable the theme's glow
+    When I enable forced colours
+    Then decorative shadows disappear
     When I select a different palette
     Then no SynthWave glow remains
 
