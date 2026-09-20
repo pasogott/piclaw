@@ -204,6 +204,7 @@ export async function updateScheduledTask(action, id, options: ApiOptions = {}) 
             ...(options?.budgetUsd !== undefined ? { budget_usd: options.budgetUsd } : {}),
             ...(options?.enabled !== undefined ? { enabled: options.enabled } : {}),
             ...(options?.confirmRevision !== undefined ? { confirm_revision: options.confirmRevision } : {}),
+            ...(options?.confirmZeroBudget === true ? { confirm_zero_budget: true } : {}),
         }),
     });
 }
