@@ -227,12 +227,19 @@ export function paletteVariables(
   };
   for (const [key, value] of Object.entries(ansi)) {
     vars[`--term-${key}`] = readableThemeColor(
-      value,
+      p.terminal?.[key] || value,
       text,
       [panel],
       key === "black" ? 3 : 4.5,
     );
-    vars[`--term-bright-${key}`] = mix(vars[`--term-${key}`], text, 0.18);
+    vars[`--term-bright-${key}`] = p.terminal?.[`bright-${key}`]
+      ? readableThemeColor(
+          p.terminal[`bright-${key}`],
+          text,
+          [panel],
+          key === "black" ? 3 : 4.5,
+        )
+      : mix(vars[`--term-${key}`], text, 0.18);
   }
   for (const n of [35, 40, 50, 85])
     vars[`--overlay-black-${n}`] = themeAlpha(

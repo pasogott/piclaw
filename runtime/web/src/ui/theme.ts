@@ -332,7 +332,8 @@ function applyThemeState(nextTheme: Partial<ThemeState>, options: { persist?: bo
     }
 
     applyCssVariables(palette, mode);
-    root.dataset.synthwaveGlow = themeName === 'synthwave-84' ? 'on' : 'off';
+    root.dataset.synthwaveGlow = preset.glow ? 'on' : 'off';
+    updateThemeVisibility();
 
     syncDocumentBackground(palette.bgPrimary);
     updateMetaColor(palette.bgPrimary, mode);
@@ -362,11 +363,19 @@ export function reapplyStoredTheme() {
     applyThemeState({ theme: storedTheme, tint: storedTint }, { persist: false });
 }
 
+/** Event-driven only: no timer/RAF is needed to pause CSS effects in a hidden tab. */
+function updateThemeVisibility() {
+    if (typeof document === 'undefined') return;
+    document.documentElement.dataset.themeMotion = document.hidden ? 'paused' : 'running';
+}
+
 export function initTheme(options: {skin?: 'classic' | 'visual'} = {}) {
     if (options.skin) themeSkin = options.skin;
     if (typeof window === 'undefined') return () => {};
 
     reapplyStoredTheme();
+    updateThemeVisibility();
+    document.addEventListener('visibilitychange', updateThemeVisibility);
 
     if (window.matchMedia && !mediaListenerAttached) {
         const media = window.matchMedia('(prefers-color-scheme: dark)');
@@ -383,10 +392,11 @@ export function initTheme(options: {skin?: 'classic' | 'visual'} = {}) {
                 media.removeListener(handleSystemThemeChange);
             }
             mediaListenerAttached = false;
+            document.removeEventListener('visibilitychange', updateThemeVisibility);
         };
     }
 
-    return () => {};
+    return () => document.removeEventListener('visibilitychange', updateThemeVisibility);
 }
 
 export function applyThemeFromEvent(payload: any) {

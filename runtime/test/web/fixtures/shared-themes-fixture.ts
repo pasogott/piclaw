@@ -97,7 +97,7 @@ realCode.id = "theme-real-code";
 realCode.innerHTML =
   "<code>" +
   highlightCodeToHtml(
-    'const greeting = \"hello\"; let count = 3;',
+    'async function launchNeon(city) {\n  const greeting = "Welcome to the grid";\n  const power = 84;\n  const ready = true;\n  await city.connect({ power, ready });\n  return greeting;\n}',
     "javascript",
   ) +
   "</code>";

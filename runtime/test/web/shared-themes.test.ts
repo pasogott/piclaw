@@ -50,6 +50,13 @@ test("both skin catalogues share all identities and distinguish Monokai Original
     expect(normaliseWebThemeId(id)).toBe(id);
   expect(normaliseWebThemeId("monokai-original")).toBe("monokai");
   expect(normaliseWebThemeId("synthwave")).toBe("synthwave-84");
+  expect(normaliseWebThemeId("synthwave-full")).toBe("synthwave-84-full");
+  const normal = WEB_THEME_PRESETS.find((t) => t.id === "synthwave-84")!;
+  const full = WEB_THEME_PRESETS.find((t) => t.id === "synthwave-84-full")!;
+  expect(normal.label).toBe("SynthWave ’84");
+  expect(full.label).toBe("SynthWave ’84 Full");
+  expect(full.dark).toEqual(normal.dark);
+  expect(full.glow).toBe(true);
   expect(normaliseWebThemeId("solarized-light")).toBe("solarized-light");
   expect(normaliseWebThemeId("not-a-theme")).toBeNull();
 });
@@ -102,4 +109,43 @@ test("accent foreground maximises black/white contrast, including vivid Monokai 
   expect(themeForeground("#f92672")).toBe("#000000");
   expect(themeForeground("#ffffff")).toBe("#000000");
   expect(themeForeground("#000000")).toBe("#ffffff");
+});
+
+test("requested catalogue families retain explicit source identity, mode and ANSI roles", () => {
+  const ids = [
+    "turbo-pascal",
+    "tokyo",
+    "tokyo-night-storm",
+    "tokyo-night-light",
+    "noctis",
+    "noctis-lux",
+    "bearded-arc",
+    "catppuccin",
+    "catppuccin-latte",
+    "catppuccin-frappe",
+    "catppuccin-macchiato",
+    "nord",
+    "as400",
+    "lumon",
+  ];
+  for (const id of ids)
+    expect(WEB_THEME_PRESETS.find((t) => t.id === id)).toBeTruthy();
+  expect(normaliseWebThemeId("catpuccin")).toBe("catppuccin");
+  expect(normaliseWebThemeId("bearded")).toBe("bearded-arc");
+  expect(normaliseWebThemeId("as400-green-screen")).toBe("as400");
+  const turbo = WEB_THEME_PRESETS.find((t) => t.id === "turbo-pascal")!;
+  expect(turbo.mode).toBe("dark");
+  expect(turbo.dark?.bgPrimary).toBe("#000088");
+  expect(
+    WEB_THEME_PRESETS.find((t) => t.id === "tokyo-night-light")!.mode,
+  ).toBe("light");
+  const as400 = WEB_THEME_PRESETS.find((t) => t.id === "as400")!;
+  const vars = paletteVariables(as400.dark!, "dark");
+  expect(vars["--text-primary"]).toBe("#00ff00");
+  expect(vars["--term-green"]).toBe("#00ff00");
+  expect(vars["--term-bright-green"]).toBe("#33ff33");
+  expect(vars["--danger-color"]).toBe("#ff5555");
+  expect(WEB_THEME_PRESETS.find((t) => t.id === "lumon")!.dark?.bgPrimary).toBe(
+    "#1b2d40",
+  );
 });
