@@ -82,7 +82,7 @@
       "catalogueStatus": 200,
       "licence": "MIT",
       "licenceFile": "docs/licenses/theme-palettes.txt",
-      "adaptation": "Source-derived palette/syntax/ANSI roles with declared Piclaw action accent and foreground contrast guards. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
+      "adaptation": "User-requested strict phosphor green adaptation: replace source red/yellow/cyan and mixed-green syntax with green/black, including all ANSI roles and overlays. Labels/icons/intensity retain status meaning. Contrast guards preserve hue."
     },
     {
       "id": "noctis",

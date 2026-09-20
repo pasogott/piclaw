@@ -730,14 +730,12 @@ for (const engine of ["chromium", "webkit"])
                 recursive: true,
               });
               await page.locator("#theme-probes").scrollIntoViewIfNeeded();
-              await page
-                .locator("#theme-probes")
-                .screenshot({
-                  path: join(
-                    root,
-                    `../.artifacts/requested-themes/${skin}-${id}.png`,
-                  ),
-                });
+              await page.locator("#theme-probes").screenshot({
+                path: join(
+                  root,
+                  `../.artifacts/requested-themes/${skin}-${id}.png`,
+                ),
+              });
             }
           }
           expect(errors).toEqual([]);
@@ -746,5 +744,90 @@ for (const engine of ["chromium", "webkit"])
         }
       },
       60000,
+    );
+  }
+
+for (const engine of ["chromium", "webkit"])
+  for (const skin of ["classic", "visual"]) {
+    browserTest(
+      `${engine} ${skin}: AS400 renders syntax, statuses, overlays and ANSI without red or blue`,
+      async () => {
+        const { page, errors } = await open(engine, skin, 820);
+        try {
+          await select(page, skin, "AS/400 Green Screen (5250)");
+          const colors = await page.evaluate(() => {
+            const root = getComputedStyle(document.documentElement);
+            const probe = document.getElementById("theme-probes")!;
+            const status = document.createElement("p");
+            status.id = "as400-status-colors";
+            for (const [name, key] of [
+              ["✓ Ready", "--success-color"],
+              ["△ Warning", "--warning-color"],
+              ["× Error", "--danger-color"],
+            ]) {
+              const span = document.createElement("span");
+              span.textContent = name + "  ";
+              span.style.color = `var(${key})`;
+              status.append(span);
+            }
+            probe.append(status);
+            const overlay = document.createElement("div");
+            overlay.id = "as400-overlay";
+            overlay.textContent = "Hover / selected surface";
+            overlay.style.background = "var(--overlay-white-15)";
+            probe.append(overlay);
+            const swatches = Array.from(
+              probe.querySelectorAll(
+                "#theme-real-code span, #theme-prose, #as400-status-colors span, #as400-overlay",
+              ),
+            ).map((el) => ({
+              label: el.textContent,
+              color: getComputedStyle(el).color,
+              background: getComputedStyle(el).backgroundColor,
+            }));
+            return {
+              swatches,
+              terminal: (window as any).themeFixture.terminalThemeFromCss(),
+              tints: ["--tint-red-13", "--tint-blue-13", "--tint-green-13"].map(
+                (k) => root.getPropertyValue(k).trim(),
+              ),
+            };
+          });
+          function monochrome(color: string) {
+            if (color.startsWith("#")) {
+              expect(color).toMatch(/^#00[\da-f]{2}00$/i);
+              return;
+            }
+            const match = /^rgba?\(\s*(\d+)[, ]+\s*(\d+)[, ]+\s*(\d+)/.exec(
+              color,
+            );
+            expect(match).not.toBeNull();
+            expect(Number(match![1])).toBe(0);
+            expect(Number(match![3])).toBe(0);
+          }
+          for (const sample of colors.swatches) {
+            monochrome(sample.color);
+            monochrome(sample.background);
+          }
+          for (const color of Object.values(colors.terminal))
+            monochrome(String(color));
+          for (const color of colors.tints) monochrome(color);
+          await mkdir(join(root, "../.artifacts/as400-green"), {
+            recursive: true,
+          });
+          await page
+            .locator("#theme-probes")
+            .screenshot({
+              path: join(
+                root,
+                `../.artifacts/as400-green/${engine}-${skin}.png`,
+              ),
+            });
+          expect(errors).toEqual([]);
+        } finally {
+          await page.close();
+        }
+      },
+      20000,
     );
   }

@@ -39,7 +39,8 @@
     .token.function, .hljs-title, .tok-function, .tok-definition, .tok-propertyName,
     .tok-bool, .tok-atom, .hljs-literal, .tok-inserted, .tok-deleted, .tok-invalid, .hljs-deletion
 ) {
-    color: var(--synth-core);
+    /* Match the real .post-content/.cm-editor syntax rules, which use !important. */
+    color: var(--synth-core) !important;
     text-shadow: 0 0 2px var(--synth-edge),
         0 0 5px color-mix(in srgb, var(--synth-halo) 85%, transparent),
         0 0 12px color-mix(in srgb, var(--synth-halo) 70%, transparent),

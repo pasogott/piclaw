@@ -10,7 +10,7 @@ Implemented in an isolated branch from `3ebb5fc91`, following the user's request
 - Bearded Arc: immutable MIT snapshot `01455843a944ec51216b373a13bd620fbea92e5a`; current upstream GPL licensing is documented and not silently copied.
 - Catppuccin: Latte/Mocha retained, Frappé/Macchiato added from official palette 1.8.0. `catpuccin` spelling alias supported.
 - Nord: existing ID retained with source-derived palette roles.
-- AS/400 Green Screen (5250): the exact `jordan-diaz-dev.as400-cursor` entry, including green ANSI overrides and a distinguishable error role.
+- AS/400 Green Screen (5250): the exact `jordan-diaz-dev.as400-cursor` entry, adapted to strictly green/black syntax, status, overlays and all ANSI roles. Error/warning meaning uses labels/icons/intensity rather than source red/yellow accents.
 - Lumon: the exact trending `oldjobobo.lumon-theme` publisher, not another similarly named extension.
 - SynthWave ’84 Normal remains steady; **SynthWave ’84 Full** has bright cores/layered halos, slow pulsing syntax and animated accent lighting. See [Full evidence](synthwave-full.md).
 
@@ -18,9 +18,9 @@ Total: 56 shared IDs/variants. Mode inconsistencies in source JSON are explicitl
 
 ## Validation
 
-- **28 Chromium/WebKit browser cases passed, 2,060 assertions.** Both real Appearance components, all 56 palette applications, twelve requested variants selected by accessible UI names, normal/full effects and actual highlighted code, reduced motion, forced colours, simulated hidden-document pause, switching/import/reset and mounted xterm.
-- **41 focused tests passed, 1,635 assertions:** all catalogue roles/contrast, source identity/mode/aliases, explicit ANSI overrides plus existing theme/terminal/command coverage.
-- **Full `make ci-fast` passed:** 5,452 runtime tests, 4 skipped, zero failures; 25 feature tests and 9 build tests.
+- **32 Chromium/WebKit browser cases passed, 3,224 assertions.** Both real Appearance components, all 56 palette applications, twelve requested variants selected by accessible UI names, normal/full effects and actual highlighted code, reduced motion, forced colours, simulated hidden-document pause, switching/import/reset and mounted xterm.
+- **42 focused tests passed, 1,940 assertions:** all catalogue roles/contrast, source identity/mode/aliases, explicit ANSI overrides plus existing theme/terminal/command coverage.
+- **Full `make ci-fast` passed:** 5,453 runtime tests, 4 skipped, zero failures; 25 feature tests and 9 build tests.
 - Repository typechecks, scoped lint, environment inventory, package hygiene, stale-dist and diff checks passed.
 - Independent delegate review timed out and is not counted as approval. No physical Apple/Windows, native hidden-tab or OS CPU/battery measurements are claimed. Full motion is intentional and can increase visible paint/compositing work; no browser-loop regression claim follows merely from CSS-only implementation.
 
@@ -31,4 +31,4 @@ Total: 56 shared IDs/variants. Mode inconsistencies in source JSON are explicitl
 - [Lumon](requested-themes/lumon.png)
 - [Bearded Arc](requested-themes/bearded-arc.png)
 
-These are browser-rendered theme/highlighter fixtures, not live user content. The complete browser matrix includes both skins and desktop/phone Appearance geometry. Source websites are used only at authoring time; there is no runtime theme download.
+These are browser-rendered theme/highlighter fixtures, not live user content. Following the AS/400 correction, the probes use the actual `.post-content` syntax cascade instead of inheriting standalone fallback token colours. AS/400 regression checks require zero red/blue channels in rendered syntax/status/overlay/terminal values; Full's bright cores are also checked inside this real scope. The complete browser matrix includes both skins and desktop/phone Appearance geometry. Source websites are used only at authoring time; there is no runtime theme download.

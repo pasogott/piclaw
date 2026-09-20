@@ -116,7 +116,7 @@ export function paletteVariables(
     raised = p.bgHover || panel;
   const text = readableThemeColor(
     p.textPrimary,
-    mode === "dark" ? "#ffffff" : "#000000",
+    p.monochrome ? p.textPrimary : mode === "dark" ? "#ffffff" : "#000000",
     [bg, panel, raised],
   );
   const muted = readableThemeColor(p.textSecondary, text, [bg, panel, raised]);
@@ -176,7 +176,7 @@ export function paletteVariables(
     "--chart-4": danger,
     "--overlay": themeAlpha("#000000", mode === "dark" ? 0.5 : 0.22),
     "--scrollbar-thumb": themeAlpha(
-      mode === "dark" ? "#ffffff" : "#000000",
+      p.monochrome ? text : mode === "dark" ? "#ffffff" : "#000000",
       0.25,
     ),
   };
@@ -248,7 +248,7 @@ export function paletteVariables(
     );
   for (const n of [2, 3, 4, 5, 6, 7, 8, 10, 12, 15, 18, 25, 28])
     vars[`--overlay-white-${String(n).padStart(2, "0")}`] = themeAlpha(
-      mode === "dark" ? "#ffffff" : "#000000",
+      p.monochrome ? text : mode === "dark" ? "#ffffff" : "#000000",
       n / 100,
     );
   for (const [name, color, steps] of [

@@ -15,6 +15,8 @@ export interface ThemePalette {
   syntax?: Record<string, string>;
   /** Authored ANSI roles; palette generation still enforces readable foregrounds. */
   terminal?: Record<string, string>;
+  /** Preserve a single phosphor hue in contrast fallbacks and interaction overlays. */
+  monochrome?: boolean;
 }
 export interface ThemePreset {
   id: string;
@@ -1199,22 +1201,36 @@ export const WEB_THEME_PRESETS: ThemePreset[] = [
       borderColor: "#003300",
       accent: "#00ff00",
       accentHover: "#00ff00",
-      danger: "#ff5555",
-      success: "#00ff00",
-      warning: "#e5c07b",
+      danger: "#00ff00",
+      success: "#00cc00",
+      warning: "#00dd00",
+      monochrome: true,
       syntax: {
-        keyword: "#00ffaa",
-        string: "#33ff99",
-        number: "#99ff99",
+        keyword: "#00ff00",
+        string: "#00dd00",
+        number: "#00ee00",
         comment: "#007700",
-        type: "#00ffcc",
-        definition: "#66ff66",
-        property: "#00ff00",
+        type: "#00ff00",
+        definition: "#00cc00",
+        property: "#00cc00",
       },
       terminal: {
         black: "#000000",
-        green: "#00ff00",
-        "bright-green": "#33ff33",
+        red: "#00ff00",
+        green: "#00cc00",
+        yellow: "#00dd00",
+        blue: "#00bb00",
+        magenta: "#00ee00",
+        cyan: "#00cc00",
+        white: "#00dd00",
+        "bright-black": "#009900",
+        "bright-red": "#00ff00",
+        "bright-green": "#00ff00",
+        "bright-yellow": "#00ff00",
+        "bright-blue": "#00ee00",
+        "bright-magenta": "#00ff00",
+        "bright-cyan": "#00ee00",
+        "bright-white": "#00ff00",
       },
     },
     source: "https://github.com/jordandiazdiaz/as400-cursor",

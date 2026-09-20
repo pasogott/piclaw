@@ -90,6 +90,7 @@ const { highlightCodeToHtml } =
   await import("../../../web/src/utils/code-highlighting.js");
 const probes = document.createElement("div");
 probes.id = "theme-probes";
+probes.className = "post-content";
 probes.innerHTML =
   '<p id="theme-prose">Ordinary text must not glow.</p><pre><code><span class="token keyword">const</span> value = <span class="token string">"fixture"</span> + <span class="token number">3</span>;</code></pre><button class="compose-send-btn">Send</button>';
 const realCode = document.createElement("pre");

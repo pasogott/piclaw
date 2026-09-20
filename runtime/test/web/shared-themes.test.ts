@@ -142,10 +142,41 @@ test("requested catalogue families retain explicit source identity, mode and ANS
   const as400 = WEB_THEME_PRESETS.find((t) => t.id === "as400")!;
   const vars = paletteVariables(as400.dark!, "dark");
   expect(vars["--text-primary"]).toBe("#00ff00");
-  expect(vars["--term-green"]).toBe("#00ff00");
-  expect(vars["--term-bright-green"]).toBe("#33ff33");
-  expect(vars["--danger-color"]).toBe("#ff5555");
+  expect(vars["--term-green"]).toBe("#00cc00");
+  expect(vars["--term-bright-green"]).toBe("#00ff00");
+  expect(vars["--danger-color"]).toBe("#00ff00");
   expect(WEB_THEME_PRESETS.find((t) => t.id === "lumon")!.dark?.bgPrimary).toBe(
     "#1b2d40",
   );
+});
+
+test("AS/400 derived semantic, syntax, ANSI and overlay roles are strictly green or black", () => {
+  const theme = WEB_THEME_PRESETS.find((t) => t.id === "as400")!;
+  expect(theme.dark?.monochrome).toBe(true);
+  const vars = paletteVariables(theme.dark!, "dark");
+  for (const [key, color] of Object.entries(vars)) {
+    const hex = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(color);
+    const rgba = /^rgba\(\s*(\d+),\s*(\d+),\s*(\d+),/.exec(color);
+    expect(Boolean(hex || rgba)).toBe(true);
+    const channels = hex
+      ? hex.slice(1).map((c) => parseInt(c, 16))
+      : rgba!.slice(1).map(Number);
+    expect({ key, red: channels[0], blue: channels[2] }).toEqual({
+      key,
+      red: 0,
+      blue: 0,
+    });
+  }
+  for (const name of [
+    "red",
+    "green",
+    "yellow",
+    "blue",
+    "magenta",
+    "cyan",
+    "white",
+  ]) {
+    expect(vars[`--term-${name}`]).toMatch(/^#00[\da-f]{2}00$/i);
+    expect(vars[`--term-bright-${name}`]).toMatch(/^#00[\da-f]{2}00$/i);
+  }
 });

@@ -77,3 +77,4 @@ Feature: Shared palette identities with skin-specific interfaces
     And Turbo Pascal is dark while Tokyo Night Light is light despite inconsistent source metadata
     And only SynthWave Full starts the Full-theme animations
     And explicit terminal ANSI colours retain the theme's identity
+    And AS400 uses only green and black in syntax, status, overlays and every ANSI role
