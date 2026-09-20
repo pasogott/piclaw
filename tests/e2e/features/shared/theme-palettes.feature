@@ -12,6 +12,9 @@ Feature: Shared palette identities with skin-specific interfaces
     Then both token namespaces have matching surfaces, foregrounds and accents
     And the document and native control colour scheme match the selected mode
     And code and terminal roles are populated from that palette
+    And authored code foregrounds and syntax colours are separate from UI contrast adjustments
+    And all syntax roles render consistently in chat and the actual editor
+    And bundled VS Code themes and imported themes use the same semantic and TextMate precedence
     And each skin retains its own control layout and typography
 
   @ux-themes-002

@@ -18,9 +18,9 @@ Total: 56 shared IDs/variants. Mode inconsistencies in source JSON are explicitl
 
 ## Validation
 
-- **32 Chromium/WebKit browser cases passed, 3,224 assertions.** Both real Appearance components, all 56 palette applications, twelve requested variants selected by accessible UI names, normal/full effects and actual highlighted code, reduced motion, forced colours, simulated hidden-document pause, switching/import/reset and mounted xterm.
-- **42 focused tests passed, 1,940 assertions:** all catalogue roles/contrast, source identity/mode/aliases, explicit ANSI overrides plus existing theme/terminal/command coverage.
-- **Full `make ci-fast` passed:** 5,453 runtime tests, 4 skipped, zero failures; 25 feature tests and 9 build tests.
+- **38 Chromium/WebKit browser cases passed, 3,248 assertions**, including 16,736 individual rendered-colour comparisons in the exhaustive syntax/import checks. Both real Appearance components, all 56 palette applications, twelve requested variants selected by accessible UI names, normal/full effects and actual highlighted code, reduced motion, forced colours, simulated hidden-document pause, switching/import/reset and mounted xterm.
+- **48 focused tests passed, 3,947 assertions:** all catalogue roles/contrast, source identity/mode/aliases, explicit ANSI overrides plus existing theme/terminal/command coverage.
+- **Full `make ci-fast` passed:** 5,458 runtime tests, 4 skipped, zero failures; 25 feature tests and 9 build tests.
 - Repository typechecks, scoped lint, environment inventory, package hygiene, stale-dist and diff checks passed.
 - Independent delegate review timed out and is not counted as approval. No physical Apple/Windows, native hidden-tab or OS CPU/battery measurements are claimed. Full motion is intentional and can increase visible paint/compositing work; no browser-loop regression claim follows merely from CSS-only implementation.
 
@@ -31,4 +31,4 @@ Total: 56 shared IDs/variants. Mode inconsistencies in source JSON are explicitl
 - [Lumon](requested-themes/lumon.png)
 - [Bearded Arc](requested-themes/bearded-arc.png)
 
-These are browser-rendered theme/highlighter fixtures, not live user content. Following the AS/400 correction, the probes use the actual `.post-content` syntax cascade instead of inheriting standalone fallback token colours. AS/400 regression checks require zero red/blue channels in rendered syntax/status/overlay/terminal values; Full's bright cores are also checked inside this real scope. The complete browser matrix includes both skins and desktop/phone Appearance geometry. Source websites are used only at authoring time; there is no runtime theme download.
+These are browser-rendered theme/highlighter fixtures, not live user content. Following the syntax audit, both `.post-content` and a mounted CodeMirror editor use a shared role contract and highlighter. AS/400 regression checks require zero red/blue channels in rendered syntax/status/overlay/terminal values; Full's bright cores are also checked inside this real scope. [The per-theme syntax audit](theme-syntax-audit.md) records source precedence, every role and documented fallbacks. Lumon uses the exact OldJobobo source, including its semantic token colours. The complete browser matrix includes both skins and desktop/phone Appearance geometry. Source websites are used only at authoring time; there is no runtime theme download.

@@ -5,6 +5,11 @@ const { WEB_THEME_PRESETS } =
   await import("../../../src/core/ui-theme-catalogue.js");
 const { paletteVariables } =
   await import("../../../web/src/ui/theme-palette.js");
+const syntaxExpectations = (await import("./theme-syntax-expectations.json"))
+  .default;
+const syntaxSources = (await import("./vscode-syntax-sources.json")).default;
+const { SYNTAX_ROLES, resolveVSCodeSyntax } =
+  await import("../../../src/core/theme-syntax.js");
 const { terminalThemeFromCss } =
   await import("../../../web/src/ui/theme-terminal.js");
 const { importVSCodeTheme, applyTheme, saveTheme, resetTheme, loadSavedTheme } =
@@ -41,6 +46,10 @@ Object.assign(window, {
     terminalThemeFromCss,
     paletteVariables,
     presets: WEB_THEME_PRESETS,
+    syntaxExpectations,
+    syntaxSources,
+    syntaxRoles: SYNTAX_ROLES,
+    resolveVSCodeSyntax,
   },
 });
 if (skin === "classic") {
@@ -115,3 +124,75 @@ if (new URLSearchParams(location.search).get("terminal") === "1") {
   document.body.append(host);
   render(h(TerminalComponent, {}), host);
 }
+
+// Literal highlighter classes test the CSS role contract independently from the
+// resolver. The mounted EditorView below also exercises real parser/class output.
+const roles: Record<string, string> = {
+  keyword: "tok-keyword",
+  operator: "tok-operator",
+  number: "tok-number",
+  string: "tok-string",
+  regexp: "tok-regexp",
+  comment: "tok-comment",
+  variable: "tok-variableName",
+  variable2: "tok-variableName2",
+  definition: "tok-variableName tok-definition",
+  function: "tok-variableName tok-definition tok-function",
+  local: "tok-variableName tok-local",
+  property: "tok-propertyName",
+  propertyDefinition: "tok-propertyName tok-definition",
+  type: "tok-typeName",
+  class: "tok-className",
+  namespace: "tok-namespace",
+  label: "tok-labelName",
+  macro: "tok-macroName",
+  atom: "tok-atom",
+  bool: "tok-bool",
+  punctuation: "tok-punctuation",
+  meta: "tok-meta",
+  link: "tok-link",
+  heading: "tok-heading",
+  invalid: "tok-invalid",
+  deleted: "tok-deleted",
+  inserted: "tok-inserted",
+};
+const roleSheet = document.createElement("section");
+roleSheet.id = "syntax-roles";
+roleSheet.innerHTML = ["post-content", "cm-editor"]
+  .map(
+    (scope) =>
+      `<div class="${scope}"><pre class="cm-content"><code>${Object.entries(
+        roles,
+      )
+        .map(
+          ([role, classes]) =>
+            `<span data-role="${role}" class="${classes}">${role}</span>`,
+        )
+        .join(" ")}</code></pre></div>`,
+  )
+  .join("");
+document.body.append(roleSheet);
+const { EditorState, EditorView, syntaxHighlighting, javascript } =
+  await import("#editor-vendor/codemirror");
+const { themeClassHighlighter } =
+  await import("../../../extensions/viewers/editor/syntax-highlighter.js");
+const editorHost = document.createElement("div");
+editorHost.id = "syntax-editor";
+editorHost.style.cssText = "margin:16px;max-width:700px;";
+document.body.append(editorHost);
+const documentText =
+  '// Syntax identity\nconst greeting = "Welcome to the grid";\nfunction launchNeon(city) { return city.connect(84, true); }';
+const editor = new EditorView({
+  state: EditorState.create({
+    doc: documentText,
+    extensions: [
+      javascript(),
+      syntaxHighlighting(themeClassHighlighter),
+      EditorView.editable.of(false),
+    ],
+  }),
+  parent: editorHost,
+});
+Object.assign((window as any).themeFixture, {
+  destroyEditor: () => editor.destroy(),
+});

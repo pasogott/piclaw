@@ -1,3 +1,7 @@
+import {
+  resolveVSCodeSyntax,
+  type VSCodeSyntaxTheme,
+} from "../../../../../../src/core/theme-syntax";
 import { paletteVariables } from "../../../../../src/ui/theme-palette";
 import { reapplyStoredTheme } from "../../../../../src/ui/theme";
 /**
@@ -105,53 +109,8 @@ const VSCODE_TO_CSS: Record<string, string> = {
   "terminal.background": "--bg-terminal",
 };
 
-/** Token scope → our syntax highlight CSS var */
-const TOKEN_SCOPE_TO_CSS: Record<string, string> = {
-  keyword: "--syn-keyword",
-  "keyword.control": "--syn-keyword",
-  "keyword.operator": "--syn-operator",
-  "constant.numeric": "--syn-number",
-  "constant.language": "--syn-atom",
-  string: "--syn-string",
-  "string.quoted": "--syn-string",
-  comment: "--syn-comment",
-  "comment.line": "--syn-comment",
-  "comment.block": "--syn-comment",
-  variable: "--syn-variable",
-  "variable.other": "--syn-variable",
-  "variable.parameter": "--syn-variable",
-  "entity.name.function": "--syn-definition",
-  "entity.name.type": "--syn-type",
-  "entity.name.class": "--syn-type",
-  "entity.other.attribute-name": "--syn-property",
-  "support.function": "--syn-definition",
-  "support.type": "--syn-type",
-  "support.class": "--syn-type",
-  "storage.type": "--syn-keyword",
-  "storage.modifier": "--syn-keyword",
-  "meta.preprocessor": "--syn-macro",
-  "meta.tag": "--syn-punctuation",
-  punctuation: "--syn-punctuation",
-  "markup.heading": "--syn-heading",
-  "markup.inline.raw": "--syn-string",
-  "markup.deleted": "--syn-deleted",
-  "markup.inserted": "--syn-inserted",
-  invalid: "--syn-invalid",
-};
-
-export interface VSCodeThemeJSON {
+export interface VSCodeThemeJSON extends VSCodeSyntaxTheme {
   name?: string;
-  type?: "dark" | "light" | "hc" | "hcLight";
-  colors?: Record<string, string>;
-  tokenColors?: Array<{
-    name?: string;
-    scope?: string | string[];
-    settings?: {
-      foreground?: string;
-      background?: string;
-      fontStyle?: string;
-    };
-  }>;
 }
 
 /**
@@ -172,22 +131,20 @@ export function importVSCodeTheme(
     }
   }
 
-  // Map token colors (syntax highlighting)
-  if (Array.isArray(json.tokenColors)) {
-    for (const rule of json.tokenColors) {
-      const scopes = Array.isArray(rule.scope)
-        ? rule.scope
-        : typeof rule.scope === "string"
-          ? rule.scope.split(",").map((s) => s.trim())
-          : [];
-
-      for (const scope of scopes) {
-        const cssVar = TOKEN_SCOPE_TO_CSS[scope];
-        if (cssVar && rule.settings?.foreground && !result[cssVar]) {
-          result[cssVar] = normalizeColor(rule.settings.foreground);
-        }
-      }
-    }
+  if (
+    Object.keys(result).length ||
+    json.tokenColors?.length ||
+    Object.keys(json.semanticTokenColors || {}).length
+  ) {
+    const resolved = resolveVSCodeSyntax(json);
+    result["--text-code"] = resolved.foreground;
+    result["--bg-code"] =
+      result["--bg"] ||
+      (json.type === "light" || json.type === "hcLight"
+        ? "#ffffff"
+        : "#1e1e2e");
+    for (const [key, value] of Object.entries(resolved.syntax))
+      result[`--syn-${key}`] = normalizeColor(value);
   }
 
   if (!Object.keys(result).length) return result;
@@ -261,6 +218,11 @@ export function applyTheme(vars: Record<string, string>): void {
         vars["--bg"] ||
         (mode === "dark" ? "#16181c" : "#f6f8fa"),
       textPrimary: text,
+      codeForeground: vars["--text-code"] || text,
+      codeBackground:
+        vars["--bg-code"] ||
+        vars["--bg"] ||
+        (mode === "dark" ? "#1e1e2e" : "#ffffff"),
       textSecondary: vars["--text-muted"] || text,
       borderColor: vars["--border"] || "#718096",
       accent: vars["--accent"] || "#1d9bf0",

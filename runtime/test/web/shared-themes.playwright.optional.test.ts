@@ -100,6 +100,7 @@ for (const engine of ["chromium", "webkit"])
                 accent: s.getPropertyValue("--accent").trim(),
                 accentAlias: s.getPropertyValue("--accent-color").trim(),
                 code: s.getPropertyValue("--bg-code").trim(),
+                termBackground: s.getPropertyValue("--bg-terminal").trim(),
                 term: f.terminalThemeFromCss(),
               };
             });
@@ -111,7 +112,7 @@ for (const engine of ["chromium", "webkit"])
             expect(r.bg).toBe(r.bgAlias);
             expect(r.text).toBe(r.textAlias);
             expect(r.accent).toBe(r.accentAlias);
-            expect(r.term.background).toBe(r.code);
+            expect(r.term.background).toBe(r.termBackground);
             expect(r.term.foreground).toBe(r.text);
           }
           await page.evaluate(() => {
@@ -815,14 +816,9 @@ for (const engine of ["chromium", "webkit"])
           await mkdir(join(root, "../.artifacts/as400-green"), {
             recursive: true,
           });
-          await page
-            .locator("#theme-probes")
-            .screenshot({
-              path: join(
-                root,
-                `../.artifacts/as400-green/${engine}-${skin}.png`,
-              ),
-            });
+          await page.locator("#theme-probes").screenshot({
+            path: join(root, `../.artifacts/as400-green/${engine}-${skin}.png`),
+          });
           expect(errors).toEqual([]);
         } finally {
           await page.close();
@@ -831,3 +827,274 @@ for (const engine of ["chromium", "webkit"])
       20000,
     );
   }
+
+for (const engine of ["chromium", "webkit"])
+  for (const skin of ["classic", "visual"]) {
+    browserTest(
+      `${engine} ${skin}: every palette preserves expected syntax roles in real chat/editor scopes`,
+      async () => {
+        const { page, errors } = await open(engine, skin, 1280);
+        try {
+          await page.waitForSelector("#syntax-editor .cm-content");
+          const result = await page.evaluate((skin) => {
+            const f = (window as any).themeFixture;
+            const failures: string[] = [];
+            let checks = 0;
+            const color = (value: string) => {
+              const el = document.createElement("span");
+              el.style.color = value;
+              document.body.append(el);
+              const c = getComputedStyle(el).color;
+              el.remove();
+              return c;
+            };
+            for (const expectation of f.syntaxExpectations) {
+              if (expectation.skin && expectation.skin !== skin) continue;
+              if (
+                skin === "visual" &&
+                expectation.id === "default" &&
+                !expectation.skin
+              )
+                continue;
+              f.setThemeModePreference(expectation.mode);
+              f.selectLocalTheme(expectation.id);
+              for (const scope of [".post-content", ".cm-editor"])
+                for (const role of f.syntaxRoles) {
+                  const el = document.querySelector(
+                    `#syntax-roles ${scope} [data-role="${role}"]`,
+                  )!;
+                  const actual = getComputedStyle(el).color,
+                    expected = color(expectation.roles[role]);
+                  checks++;
+                  if (actual !== expected)
+                    failures.push(
+                      `${expectation.id}/${expectation.mode}/${scope}/${role}: ${actual} != ${expected}`,
+                    );
+                }
+              const pairs = [
+                ["#theme-real-code .tok-keyword", "keyword"],
+                ["#syntax-editor .tok-keyword", "keyword"],
+                ["#theme-real-code .tok-number", "number"],
+                ["#syntax-editor .tok-number", "number"],
+                ["#theme-real-code .tok-string", "string"],
+                ["#syntax-editor .tok-string", "string"],
+                ["#syntax-editor .tok-comment", "comment"],
+                ["#syntax-editor .tok-function", "function"],
+                ["#theme-real-code .tok-function", "function"],
+              ];
+              for (const [selector, role] of pairs) {
+                const el = document.querySelector(selector);
+                checks++;
+                if (!el) failures.push(`Missing real parser token ${selector}`);
+                else if (
+                  getComputedStyle(el).color !== color(expectation.roles[role])
+                )
+                  failures.push(
+                    `${expectation.id}/${selector}: incorrect ${role}`,
+                  );
+              }
+              for (const selector of [
+                "#theme-real-code code",
+                "#syntax-editor .cm-content",
+              ]) {
+                checks++;
+                if (
+                  getComputedStyle(document.querySelector(selector)!).color !==
+                  color(expectation.foreground)
+                )
+                  failures.push(
+                    `${expectation.id} base code foreground ${selector}`,
+                  );
+              }
+              for (const selector of [
+                "#theme-real-code",
+                "#syntax-editor .cm-scroller",
+              ]) {
+                checks++;
+                if (
+                  getComputedStyle(document.querySelector(selector)!)
+                    .backgroundColor !== color(expectation.background)
+                )
+                  failures.push(
+                    `${expectation.id} code background ${selector}`,
+                  );
+              }
+              checks++;
+              if (
+                getComputedStyle(document.querySelector("#theme-prose")!)
+                  .color !==
+                color(
+                  getComputedStyle(document.documentElement)
+                    .getPropertyValue("--text-primary")
+                    .trim(),
+                )
+              )
+                failures.push(`${expectation.id} prose foreground`);
+            }
+            return { failures, checks };
+          }, skin);
+          expect(result.failures).toEqual([]);
+          expect(result.checks).toBeGreaterThan(3500);
+          // Colour-oracle fixtures are independent literals; shared importer must obey them too.
+          const imported = await page.evaluate(() => {
+            const f = (window as any).themeFixture;
+            const vars = f.importVSCodeTheme({
+              type: "dark",
+              colors: {
+                "editor.background": "#101820",
+                "editor.foreground": "#abcdef",
+              },
+              semanticTokenColors: {
+                keyword: "#ff00aa",
+                function: "#11cc99",
+                variable: "#bbccdd",
+                number: "#cc8811",
+                comment: "#556677",
+              },
+              tokenColors: [
+                { scope: "string", settings: { foreground: "#779911" } },
+              ],
+            });
+            f.applyTheme(vars);
+            return {
+              keyword: getComputedStyle(
+                document.querySelector("#syntax-editor .tok-keyword")!,
+              ).color,
+              number: getComputedStyle(
+                document.querySelector("#syntax-editor .tok-number")!,
+              ).color,
+              function: getComputedStyle(
+                document.querySelector("#syntax-editor .tok-function")!,
+              ).color,
+              comment: getComputedStyle(
+                document.querySelector("#syntax-editor .tok-comment")!,
+              ).color,
+            };
+          });
+          expect(imported).toEqual({
+            keyword: "rgb(255, 0, 170)",
+            number: "rgb(204, 136, 17)",
+            function: "rgb(17, 204, 153)",
+            comment: "rgb(85, 102, 119)",
+          });
+          if (engine === "chromium") {
+            await mkdir(join(root, "../.artifacts/theme-syntax"), {
+              recursive: true,
+            });
+            for (const [id, label] of [
+              ["lumon", "Lumon"],
+              ["noctis", "Noctis"],
+              ["tokyo", "Tokyo Night"],
+              ["monokai", "Monokai Original"],
+              ["monokai-pro", "Monokai Pro"],
+              ["as400", "AS/400 Green Screen"],
+            ]) {
+              await page.evaluate(
+                ({ id, label }) => {
+                  const f = (window as any).themeFixture;
+                  f.resetTheme();
+                  f.selectLocalTheme(id);
+                  let frame = document.getElementById("syntax-capture");
+                  if (!frame) {
+                    frame = document.createElement("section");
+                    frame.id = "syntax-capture";
+                    frame.style.cssText =
+                      "padding:20px;max-width:760px;background:var(--bg-primary);color:var(--text-primary);";
+                    frame.innerHTML =
+                      '<h2 id="syntax-capture-title"></h2><h3>Chat code</h3><div class="post-content" id="syntax-capture-chat"></div><h3>Editor</h3>';
+                    frame
+                      .querySelector("#syntax-capture-chat")!
+                      .append(document.getElementById("theme-real-code")!);
+                    frame.append(document.getElementById("syntax-editor")!);
+                    document.body.append(frame);
+                  }
+                  document.getElementById("syntax-capture-title")!.textContent =
+                    label;
+                },
+                { id, label },
+              );
+              await page
+                .locator("#syntax-capture")
+                .screenshot({
+                  path: join(
+                    root,
+                    `../.artifacts/theme-syntax/${skin}-${id}.png`,
+                  ),
+                });
+            }
+          }
+          expect(errors).toEqual([]);
+        } finally {
+          await page.close();
+        }
+      },
+      60000,
+    );
+  }
+
+for (const engine of ["chromium", "webkit"]) {
+  browserTest(
+    `${engine}: pinned VS Code imports and bundles render identical authored syntax roles`,
+    async () => {
+      const { page, errors } = await open(engine, "visual");
+      try {
+        await page.waitForSelector("#syntax-editor .cm-content");
+        const result = await page.evaluate(() => {
+          const f = (window as any).themeFixture;
+          const failures: string[] = [];
+          let comparisons = 0;
+          const probe = document.createElement("span");
+          document.body.append(probe);
+          const color = (value: string) => {
+            probe.style.color = value;
+            return getComputedStyle(probe).color;
+          };
+          for (const source of f.syntaxSources) {
+            const expected = f.syntaxExpectations.find(
+              (e: any) => e.id === source.id,
+            );
+            const vars = f.importVSCodeTheme({
+              ...source.theme,
+              type: expected.mode,
+            });
+            f.applyTheme(vars);
+            for (const scope of [".post-content", ".cm-editor"])
+              for (const role of f.syntaxRoles) {
+                const actual = getComputedStyle(
+                  document.querySelector(
+                    `#syntax-roles ${scope} [data-role="${role}"]`,
+                  )!,
+                ).color;
+                comparisons++;
+                if (actual !== color(expected.roles[role]))
+                  failures.push(
+                    `${source.id}/${scope}/${role}: ${actual} != ${color(expected.roles[role])}`,
+                  );
+              }
+            for (const selector of [
+              "#theme-real-code code",
+              "#syntax-editor .cm-content",
+            ]) {
+              comparisons++;
+              if (
+                getComputedStyle(document.querySelector(selector)!).color !==
+                color(expected.foreground)
+              )
+                failures.push(`${source.id}/${selector}: foreground`);
+            }
+            f.resetTheme();
+          }
+          probe.remove();
+          return { failures, comparisons, sources: f.syntaxSources.length };
+        });
+        expect(result.sources).toBe(11);
+        expect(result.comparisons).toBe(616);
+        expect(result.failures).toEqual([]);
+        expect(errors).toEqual([]);
+      } finally {
+        await page.close();
+      }
+    },
+    30000,
+  );
+}

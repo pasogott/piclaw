@@ -9,7 +9,7 @@
       "sourceSha256": "4bc114bb6b3c9a9c9e156564aa84625aef32c5da514d9dd431cf1fcad433a05f",
       "licence": "MIT",
       "licenceFile": "docs/licenses/theme-palettes.txt",
-      "adaptation": "UI metadata/syntax/terminal contrast adjustments; original accent mapping noted in docs/theme-palettes.md"
+      "adaptation": "UI metadata/ANSI contrast guards; authored code and syntax roles preserved; original accent mapping noted in docs/theme-palettes.md"
     },
     {
       "repository": "https://github.com/sainnhe/everforest",
@@ -17,7 +17,7 @@
       "sourceSha256": "4ddab3c8d96e29310a21441a797e69a2c520ec074db9c20a7eaea866d8b5a8c4",
       "licence": "MIT",
       "licenceFile": "docs/licenses/theme-palettes.txt",
-      "adaptation": "UI metadata/syntax/terminal contrast adjustments; original accent mapping noted in docs/theme-palettes.md"
+      "adaptation": "UI metadata/ANSI contrast guards; authored code and syntax roles preserved; original accent mapping noted in docs/theme-palettes.md"
     },
     {
       "repository": "https://github.com/rose-pine/palette",
@@ -25,7 +25,7 @@
       "sourceSha256": "8b71546357c65ee23715e77f144d914e5f415f44f3ef3b0179bbe1f17d69211d",
       "licence": "MIT",
       "licenceFile": "docs/licenses/theme-palettes.txt",
-      "adaptation": "UI metadata/syntax/terminal contrast adjustments; original accent mapping noted in docs/theme-palettes.md"
+      "adaptation": "UI metadata/ANSI contrast guards; authored code and syntax roles preserved; original accent mapping noted in docs/theme-palettes.md"
     },
     {
       "repository": "https://github.com/wesbos/cobalt2-vscode",
@@ -33,7 +33,7 @@
       "sourceSha256": "9f5862db4e9424f65f5b7a3a36b70c2e66374fd8fbfd67b42c18480f7231a71e",
       "licence": "MIT",
       "licenceFile": "docs/licenses/theme-palettes.txt",
-      "adaptation": "UI metadata/syntax/terminal contrast adjustments; original accent mapping noted in docs/theme-palettes.md"
+      "adaptation": "UI metadata/ANSI contrast guards; authored code and syntax roles preserved; original accent mapping noted in docs/theme-palettes.md"
     },
     {
       "repository": "https://github.com/robb0wen/synthwave-vscode",
@@ -41,7 +41,7 @@
       "sourceSha256": "cc2361fa174b34f5c8b17ecc6b7a3d64040677c50936bff2f955000ae84e999b",
       "licence": "MIT",
       "licenceFile": "docs/licenses/theme-palettes.txt",
-      "adaptation": "UI metadata/syntax/terminal contrast adjustments; original accent mapping noted in docs/theme-palettes.md",
+      "adaptation": "UI metadata/ANSI contrast guards; authored code and syntax roles preserved; original accent mapping noted in docs/theme-palettes.md",
       "effectReference": {
         "sourceUrl": "https://raw.githubusercontent.com/robb0wen/synthwave-vscode/master/src/js/theme_template.js",
         "sourceSha256": "3ee59bb9ebf6c6316985565e760636e434a4f9a0b2f62c1512a48b7f774a1844",
@@ -58,7 +58,7 @@
       "catalogueStatus": 200,
       "licence": "MIT",
       "licenceFile": "docs/licenses/theme-palettes.txt",
-      "adaptation": "Source-derived palette/syntax/ANSI roles with declared Piclaw action accent and foreground contrast guards. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
+      "adaptation": "Source-derived palette and resolved semantic/TextMate syntax; UI/ANSI contrast guards are separate from preserved code colours. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
     },
     {
       "id": "lumon",
@@ -70,7 +70,7 @@
       "catalogueStatus": 200,
       "licence": "MIT",
       "licenceFile": "docs/licenses/theme-palettes.txt",
-      "adaptation": "Source-derived palette/syntax/ANSI roles with declared Piclaw action accent and foreground contrast guards. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
+      "adaptation": "Source-derived palette and resolved semantic/TextMate syntax; UI/ANSI contrast guards are separate from preserved code colours. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
     },
     {
       "id": "as400",
@@ -94,7 +94,7 @@
       "catalogueStatus": 200,
       "licence": "MIT",
       "licenceFile": "docs/licenses/theme-palettes.txt",
-      "adaptation": "Source-derived palette/syntax/ANSI roles with declared Piclaw action accent and foreground contrast guards. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
+      "adaptation": "Source-derived palette and resolved semantic/TextMate syntax; UI/ANSI contrast guards are separate from preserved code colours. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
     },
     {
       "id": "noctis-lux",
@@ -106,7 +106,7 @@
       "catalogueStatus": 200,
       "licence": "MIT",
       "licenceFile": "docs/licenses/theme-palettes.txt",
-      "adaptation": "Source-derived palette/syntax/ANSI roles with declared Piclaw action accent and foreground contrast guards. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
+      "adaptation": "Source-derived palette and resolved semantic/TextMate syntax; UI/ANSI contrast guards are separate from preserved code colours. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
     },
     {
       "id": "tokyo-night",
@@ -118,7 +118,7 @@
       "catalogueStatus": 200,
       "licence": "MIT",
       "licenceFile": "docs/licenses/theme-palettes.txt",
-      "adaptation": "Source-derived palette/syntax/ANSI roles with declared Piclaw action accent and foreground contrast guards. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
+      "adaptation": "Source-derived palette and resolved semantic/TextMate syntax; UI/ANSI contrast guards are separate from preserved code colours. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
     },
     {
       "id": "tokyo-night-storm",
@@ -130,7 +130,7 @@
       "catalogueStatus": 200,
       "licence": "MIT",
       "licenceFile": "docs/licenses/theme-palettes.txt",
-      "adaptation": "Source-derived palette/syntax/ANSI roles with declared Piclaw action accent and foreground contrast guards. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
+      "adaptation": "Source-derived palette and resolved semantic/TextMate syntax; UI/ANSI contrast guards are separate from preserved code colours. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
     },
     {
       "id": "tokyo-night-light",
@@ -142,7 +142,7 @@
       "catalogueStatus": 200,
       "licence": "MIT",
       "licenceFile": "docs/licenses/theme-palettes.txt",
-      "adaptation": "Source-derived palette/syntax/ANSI roles with declared Piclaw action accent and foreground contrast guards. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
+      "adaptation": "Source-derived palette and resolved semantic/TextMate syntax; UI/ANSI contrast guards are separate from preserved code colours. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
     },
     {
       "id": "nord",
@@ -154,7 +154,7 @@
       "catalogueStatus": 200,
       "licence": "MIT",
       "licenceFile": "docs/licenses/theme-palettes.txt",
-      "adaptation": "Source-derived palette/syntax/ANSI roles with declared Piclaw action accent and foreground contrast guards. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
+      "adaptation": "Source-derived palette and resolved semantic/TextMate syntax; UI/ANSI contrast guards are separate from preserved code colours. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
     },
     {
       "id": "bearded-arc",
@@ -167,7 +167,7 @@
       "licence": "MIT",
       "note": "Historical MIT snapshot; current upstream relicensed GPL-3.0. Do not update blindly.",
       "licenceFile": "docs/licenses/theme-palettes.txt",
-      "adaptation": "Source-derived palette/syntax/ANSI roles with declared Piclaw action accent and foreground contrast guards. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
+      "adaptation": "Source-derived palette and resolved semantic/TextMate syntax; UI/ANSI contrast guards are separate from preserved code colours. Turbo Pascal treated as dark blue; Tokyo Light as light regardless of inconsistent source type metadata."
     },
     {
       "repository": "https://github.com/catppuccin/palette",
@@ -178,5 +178,15 @@
       "licenceFile": "docs/licenses/theme-palettes.txt",
       "adaptation": "Adds Frappe and Macchiato to existing Latte/Mocha. Source palette1.8.0."
     }
-  ]
+  ],
+  "syntaxPolicy": {
+    "resolver": "runtime/src/core/theme-syntax.ts",
+    "precedence": "Generic semantic foregrounds, then specific TextMate scopes/last equal match, then explicit documented fallback roles",
+    "codeColours": "Authored code foreground/background and syntax are not UI-contrast remapped",
+    "audit": "docs/reviews/theme-syntax-audit.md",
+    "exceptions": [
+      "User-requested strictly green AS400 transformation",
+      "Intentional SynthWave Full neon foregrounds"
+    ]
+  }
 }
