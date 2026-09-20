@@ -74,7 +74,10 @@ The hamburger menu button uses `position: fixed` and appears:
 - **Theme table** with radio buttons and color swatches
   - Borderless table, centered swatch cells
   - Themes apply immediately via client-side `applyThemeFromEvent()`
-  - 15 themes: Default, Tango, XTerm, Monokai, Monokai Pro, Ristretto, Dracula, Catppuccin, Nord, Gruvbox, Solarized, Tokyo, Miasma, GitHub, Gotham
+  - Shared catalogue of 45 presets/variants in both skins, including all existing IDs and the approved new palette families
+  - **Monokai Original** (`monokai`) and **Monokai Pro** (`monokai-pro`) remain separate identities
+  - Browser-local system/light/dark preference for automatic pairs, plus optional static SynthWave glow; forced colours suppress the glow
+  - See [Web theme palettes](theme-palettes.md) for exact IDs, contrast, semantic/terminal roles and Visual import behaviour
 
 ### Editor (order 150) — Extension pane
 - **Vim mode** toggle (`piclaw_vim_mode`)

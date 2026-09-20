@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-09-20",
+  "scope": "Colour values adapted to Piclaw roles; no upstream code or runtime network fetching.",
+  "sources": [
+    {
+      "repository": "https://github.com/catppuccin/palette",
+      "sourceUrl": "https://raw.githubusercontent.com/catppuccin/palette/main/palette.json",
+      "sourceSha256": "4bc114bb6b3c9a9c9e156564aa84625aef32c5da514d9dd431cf1fcad433a05f",
+      "licence": "MIT",
+      "licenceFile": "docs/licenses/theme-palettes.txt",
+      "adaptation": "UI metadata/syntax/terminal contrast adjustments; original accent mapping noted in docs/theme-palettes.md"
+    },
+    {
+      "repository": "https://github.com/sainnhe/everforest",
+      "sourceUrl": "https://raw.githubusercontent.com/sainnhe/everforest/master/autoload/everforest.vim",
+      "sourceSha256": "4ddab3c8d96e29310a21441a797e69a2c520ec074db9c20a7eaea866d8b5a8c4",
+      "licence": "MIT",
+      "licenceFile": "docs/licenses/theme-palettes.txt",
+      "adaptation": "UI metadata/syntax/terminal contrast adjustments; original accent mapping noted in docs/theme-palettes.md"
+    },
+    {
+      "repository": "https://github.com/rose-pine/palette",
+      "sourceUrl": "https://raw.githubusercontent.com/rose-pine/palette/main/palette.json",
+      "sourceSha256": "8b71546357c65ee23715e77f144d914e5f415f44f3ef3b0179bbe1f17d69211d",
+      "licence": "MIT",
+      "licenceFile": "docs/licenses/theme-palettes.txt",
+      "adaptation": "UI metadata/syntax/terminal contrast adjustments; original accent mapping noted in docs/theme-palettes.md"
+    },
+    {
+      "repository": "https://github.com/wesbos/cobalt2-vscode",
+      "sourceUrl": "https://raw.githubusercontent.com/wesbos/cobalt2-vscode/master/theme/cobalt2.json",
+      "sourceSha256": "9f5862db4e9424f65f5b7a3a36b70c2e66374fd8fbfd67b42c18480f7231a71e",
+      "licence": "MIT",
+      "licenceFile": "docs/licenses/theme-palettes.txt",
+      "adaptation": "UI metadata/syntax/terminal contrast adjustments; original accent mapping noted in docs/theme-palettes.md"
+    },
+    {
+      "repository": "https://github.com/robb0wen/synthwave-vscode",
+      "sourceUrl": "https://raw.githubusercontent.com/robb0wen/synthwave-vscode/master/themes/synthwave-color-theme.json",
+      "sourceSha256": "cc2361fa174b34f5c8b17ecc6b7a3d64040677c50936bff2f955000ae84e999b",
+      "licence": "MIT",
+      "licenceFile": "docs/licenses/theme-palettes.txt",
+      "adaptation": "UI metadata/syntax/terminal contrast adjustments; original accent mapping noted in docs/theme-palettes.md"
+    }
+  ]
+}
