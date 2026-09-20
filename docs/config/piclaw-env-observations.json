@@ -87,7 +87,7 @@
       "semanticReaderOccurrences": 69
     },
     "docsDeploy": {
-      "referencedNames": 129,
+      "referencedNames": 136,
       "directReaderNames": 16,
       "directReaderOccurrences": 32,
       "helperReaderNames": 0,
@@ -2174,6 +2174,96 @@
       }
     },
     {
+      "name": "PICLAW_IDLE_BASELINE_ASSETS",
+      "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "docs/performance/browser-idle-cpu-1352.md"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
+      "name": "PICLAW_IDLE_CASES",
+      "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "docs/performance/browser-idle-cpu-1352.md"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
+      "name": "PICLAW_IDLE_HEADED",
+      "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "docs/performance/browser-idle-cpu-1352.md"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
+      "name": "PICLAW_IDLE_MEASURE_MS",
+      "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "docs/performance/browser-idle-cpu-1352.md"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
+      "name": "PICLAW_IDLE_PROFILE",
+      "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "docs/performance/browser-idle-cpu-1352.md"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
+      "name": "PICLAW_IDLE_SETTLE_MS",
+      "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "docs/performance/browser-idle-cpu-1352.md"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
       "name": "PICLAW_INTEGRATION_SKIP_DOCKER",
       "scopes": {
         "docsDeploy": {
@@ -3842,6 +3932,21 @@
       }
     },
     {
+      "name": "PICLAW_RUN_IDLE_CPU_PROFILE",
+      "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "docs/performance/browser-idle-cpu-1352.md"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
       "name": "PICLAW_RUN_OPTIONAL_BROWSER_TESTS",
       "scopes": {
         "docsDeploy": {
@@ -3851,6 +3956,7 @@
           "semanticReaders": 0,
           "files": [
             ".github/workflows/ci.yml",
+            "docs/performance/browser-idle-cpu-1352.md",
             "docs/reviews/picker-button-parity.md",
             "docs/reviews/vnc-narrow-pane.md",
             "package.json"
