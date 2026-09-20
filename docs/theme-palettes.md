@@ -8,7 +8,7 @@ Use **Settings → Appearance** in either skin, or `/theme <id>`. Named palette 
 
 **Automatic theme mode (this browser)** selects system/light/dark for the Default, Solarized and GitHub automatic pairs. Explicit Light/Dark presets keep their own mode. This local preference does not change another user's browser. Default tint applies only to Default; selecting a named palette uses its authored accent.
 
-**SynthWave glow (this browser)** enables static syntax and selected-action glow for SynthWave ’84. It is on by default for that theme and off when choosing another palette. Ordinary prose does not glow, there is no pulsing/animation, and forced-colours mode suppresses decoration. Canvas-based terminals follow the palette but do not receive fake CSS text glow.
+**SynthWave ’84 includes its glow.** Selecting the theme always enables static syntax and selected-action glow; there is no separate setting and old browser opt-out values are ignored. Choosing another palette removes the glow. Ordinary prose stays sharp, there is no pulsing/animation, and forced-colours mode suppresses decorative shadows for accessibility. Canvas-based terminals follow the palette but do not receive fake CSS text glow.
 
 ## Catalogue
 
@@ -68,4 +68,4 @@ No external theme assets are fetched at runtime or during builds. Palette source
 
 ## Validation
 
-`shared-themes.test.ts` checks catalogue parity, aliases, Original/Pro identity, complete semantic/ANSI roles and contrast. `shared-themes.playwright.optional.test.ts` uses real Appearance components with disposable stub APIs in Chromium and WebKit, checks every preset, actual selection, mode switching, glow/forced colours, real syntax classes, import preview/cancel/reset/reload, and a mounted xterm with a stub socket. It never changes the active instance's theme or opens its terminal.
+`shared-themes.test.ts` checks catalogue parity, aliases, Original/Pro identity, complete semantic/ANSI roles and contrast. `shared-themes.playwright.optional.test.ts` uses real Appearance components with disposable stub APIs in Chromium and WebKit, checks every preset, actual selection, mode switching, intrinsic glow/forced colours, real syntax classes, import preview/cancel/reset/reload, and a mounted xterm with a stub socket. It never changes the active instance's theme or opens its terminal.

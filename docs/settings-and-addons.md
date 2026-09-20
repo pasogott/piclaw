@@ -72,11 +72,11 @@ The hamburger menu button uses `position: fixed` and appears:
 - **Default theme** card at top with native color picker for tint
   - Tint applies immediately; clear button to reset
 - **Theme table** with radio buttons and color swatches
-  - Borderless table, centered swatch cells
+  - Aligned Selected, Theme, Mode and Palette columns; a compact swatch strip stays visible at narrow widths
   - Themes apply immediately via client-side `applyThemeFromEvent()`
   - Shared catalogue of 45 presets/variants in both skins, including all existing IDs and the approved new palette families
   - **Monokai Original** (`monokai`) and **Monokai Pro** (`monokai-pro`) remain separate identities
-  - Browser-local system/light/dark preference for automatic pairs, plus optional static SynthWave glow; forced colours suppress the glow
+  - Browser-local system/light/dark preference for automatic pairs; SynthWave glow is intrinsic to the theme, with no separate toggle. Forced colours suppress decorative shadows.
   - See [Web theme palettes](theme-palettes.md) for exact IDs, contrast, semantic/terminal roles and Visual import behaviour
 
 ### Editor (order 150) — Extension pane
