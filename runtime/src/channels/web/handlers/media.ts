@@ -9,6 +9,7 @@
  * Consumers: web/http/dispatch-media.ts routes media paths here.
  */
 
+import { resolveAudioContentType } from "../../../utils/audio-media.js";
 import { buildContentDisposition } from "../http/content-disposition.js";
 import { MediaService } from "../media/media-service.js";
 
@@ -57,7 +58,7 @@ const INLINE_SAFE_TYPES = new Set([
 
 function isInlineSafeType(contentType: string): boolean {
   const normalized = contentType.split(";", 1)[0]?.trim().toLowerCase() || "";
-  return INLINE_SAFE_TYPES.has(normalized) || normalized.startsWith("audio/");
+  return INLINE_SAFE_TYPES.has(normalized) || resolveAudioContentType(contentType) !== null;
 }
 
 /**
@@ -67,15 +68,22 @@ function isInlineSafeType(contentType: string): boolean {
  * @param thumbnail Whether to return a thumbnail variant when available.
  * @returns Binary media response on success, or JSON error response when media is missing.
  */
-export function handleMedia(channel: MediaResponseContext, id: number, thumbnail: boolean): Response {
+export function handleMedia(channel: MediaResponseContext, id: number, thumbnail: boolean, req?: Request): Response {
   const result = mediaService.getMedia(id, thumbnail);
   if (result.status !== 200) return channel.json({ error: "Media not found" }, result.status);
 
-  const contentType = result.contentType || "application/octet-stream";
+  const storedContentType = result.contentType || "application/octet-stream";
+  // Legacy/imported metadata can predate File's MIME validation. Never put
+  // control characters or non-header code points into a response header.
+  const contentType = Array.from(storedContentType).some(character => {
+    const code = character.charCodeAt(0);
+    return code < 32 || code > 126;
+  }) ? "application/octet-stream" : storedContentType;
   const headers: Record<string, string> = {
     "Content-Type": contentType,
     "Cache-Control": "no-cache",
-    ...(result.body.size > 0 ? { "Content-Length": String(result.body.size) } : {}),
+    "Content-Length": String(result.body.size),
+    "Accept-Ranges": "bytes",
   };
   // Force download for types that are not safe browser media to prevent stored
   // XSS via HTML/SVG uploads. Audio remains inline so the native player can load it.
@@ -83,6 +91,27 @@ export function handleMedia(channel: MediaResponseContext, id: number, thumbnail
   // attribute for PDFs and will otherwise open the response fullscreen.
   if (!isInlineSafeType(contentType)) {
     headers["Content-Disposition"] = buildContentDisposition("attachment", result.filename || `attachment-${id}`);
+  }
+  if (req?.method === "HEAD") return new Response(null, { headers });
+
+  // Match the PDF source policy: one byte range, ignoring malformed/multipart
+  // requests. Slice the stored Blob; never allocate based on the requested end.
+  const match = req?.headers.get("range")?.match(/^bytes=(\d*)-(\d*)$/);
+  if (match && (match[1] || match[2])) {
+    const size = result.body.size;
+    const suffix = !match[1] ? Number(match[2]) : null;
+    const start = suffix !== null ? Math.max(0, size - suffix) : Number(match[1]);
+    const requestedEnd = suffix !== null || !match[2] ? size - 1 : Number(match[2]);
+    const end = Math.min(requestedEnd, size - 1);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd)
+      || (suffix !== null && !Number.isSafeInteger(suffix)) || start >= size || start > end || suffix === 0) {
+      return new Response(null, { status: 416, headers: {
+        ...headers, "Content-Range": `bytes */${size}`, "Content-Length": "0",
+      } });
+    }
+    return new Response(result.body.slice(start, end + 1, contentType), { status: 206, headers: {
+      ...headers, "Content-Range": `bytes ${start}-${end}/${size}`, "Content-Length": String(end - start + 1),
+    } });
   }
   return new Response(result.body, { headers });
 }

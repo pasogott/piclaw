@@ -3851,6 +3851,7 @@
           "semanticReaders": 0,
           "files": [
             ".github/workflows/ci.yml",
+            "docs/audio-attachment-preview.md",
             "docs/reviews/picker-button-parity.md",
             "docs/reviews/vnc-narrow-pane.md",
             "package.json"

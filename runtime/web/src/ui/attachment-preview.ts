@@ -31,6 +31,7 @@ import {
   getAddonAttachmentPreviewLabel,
   resolveAddonAttachmentPreview,
 } from './addon-web-extensions.js';
+import { resolveAudioContentType } from '../../../src/utils/audio-media.js';
 import { isDelimitedAttachment } from './delimited-preview.js';
 
 const EML_PREVIEW_TYPES = new Set([
@@ -87,20 +88,7 @@ function isHtmlFilename(filename: unknown): boolean {
   return !!name && (name.endsWith(".html") || name.endsWith(".htm"));
 }
 
-function isAudioFilename(filename: unknown): boolean {
-  const name = normalize(filename);
-  return !!name && (
-    name.endsWith(".aac")
-    || name.endsWith(".flac")
-    || name.endsWith(".m4a")
-    || name.endsWith(".mp3")
-    || name.endsWith(".oga")
-    || name.endsWith(".ogg")
-    || name.endsWith(".opus")
-    || name.endsWith(".wav")
-    || name.endsWith(".weba")
-  );
-}
+
 
 function isTextFilename(filename: unknown): boolean {
   const name = normalize(filename);
@@ -129,7 +117,7 @@ export function getAttachmentPreviewKind(contentType: unknown, filename?: unknow
   if (isHtmlFilename(filename) || normalized === "text/html") return "html";
   if (isDelimitedAttachment(normalized, filename)) return "delimited";
   if (isTextFilename(filename)) return "text";
-  if (isAudioFilename(filename) || normalized.startsWith("audio/")) return "audio";
+  if (resolveAudioContentType(typeof contentType === 'string' ? contentType : null, typeof filename === 'string' ? filename : null)) return "audio";
   if (!normalized) return "unsupported";
   if (normalized.startsWith("video/")) return "video";
   if (normalized.startsWith("image/")) return "image";

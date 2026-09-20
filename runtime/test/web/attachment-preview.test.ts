@@ -93,3 +93,12 @@ describe("attachment preview kind", () => {
     expect(overlaysCss).toContain("width: min(680px, 100%)");
   });
 });
+
+
+test("audio preview rejects explicit mismatched and malformed MIME types", () => {
+  for (const type of ["text/html", "image/svg+xml", "application/xhtml+xml", "audio/x-html", "audio/", "audio/mpegjunk", "audio/mpeg\r\nX: bad"]) {
+    expect(getAttachmentPreviewKind(type, "fake.wav")).not.toBe("audio");
+  }
+  expect(getAttachmentPreviewKind(" AUDIO/X-WAV ; codecs=pcm", "file.bin")).toBe("audio");
+  expect(getAttachmentPreviewKind("", "note.opus")).toBe("audio");
+});
