@@ -1,0 +1,105 @@
+import { expect, test } from "bun:test";
+import {
+  WEB_THEME_PRESETS,
+  normaliseWebThemeId,
+} from "../../src/core/ui-theme-catalogue.js";
+import { THEME_PRESETS } from "../../src/channels/web/theming/ui-theme-data.js";
+import { BUNDLED_THEMES } from "../../web/static/visual/frontend/src/utils/bundled-themes";
+import {
+  paletteVariables,
+  themeContrast,
+  themeForeground,
+} from "../../web/src/ui/theme-palette.js";
+
+test("both skin catalogues share all identities and distinguish Monokai Original and Pro", () => {
+  expect(new Set(WEB_THEME_PRESETS.map((t) => t.id)).size).toBe(
+    WEB_THEME_PRESETS.length,
+  );
+  expect(THEME_PRESETS.map((t) => t.name)).toEqual(
+    WEB_THEME_PRESETS.map((t) => t.id),
+  );
+  expect(BUNDLED_THEMES.map((t) => t.id)).toEqual(
+    WEB_THEME_PRESETS.filter((t) => t.id !== "default").map((t) => t.id),
+  );
+  for (const [id, label] of [
+    ["monokai", "Monokai Original"],
+    ["monokai-pro", "Monokai Pro"],
+  ])
+    expect(WEB_THEME_PRESETS.find((t) => t.id === id)?.label).toBe(label);
+  for (const id of [
+    "catppuccin-latte",
+    "catppuccin",
+    "everforest-dark",
+    "everforest-light",
+    "rose-pine-dawn",
+    "graphite",
+    "paper",
+    "accessible-dark",
+    "accessible-light",
+    "colour-friendly-dark",
+    "colour-friendly-light",
+    "oled",
+    "petrol",
+    "petrol-light",
+    "aubergine",
+    "cobalt2",
+    "burgundy",
+    "porcelain",
+    "synthwave-84",
+  ])
+    expect(normaliseWebThemeId(id)).toBe(id);
+  expect(normaliseWebThemeId("monokai-original")).toBe("monokai");
+  expect(normaliseWebThemeId("synthwave")).toBe("synthwave-84");
+  expect(normaliseWebThemeId("solarized-light")).toBe("solarized-light");
+  expect(normaliseWebThemeId("not-a-theme")).toBeNull();
+});
+
+test("all palette variants have consistent aliases, readable text and complete syntax/ANSI roles", () => {
+  for (const theme of WEB_THEME_PRESETS)
+    for (const mode of ["light", "dark"] as const) {
+      const p = theme[mode];
+      if (!p) continue;
+      const vars = paletteVariables(p, mode);
+      for (const [left, right] of [
+        ["--bg", "--bg-primary"],
+        ["--text", "--text-primary"],
+        ["--accent", "--accent-color"],
+        ["--error", "--danger-color"],
+        ["--success", "--success-color"],
+      ])
+        expect(vars[left]).toBe(vars[right]);
+      for (const surface of ["--bg-primary", "--bg-secondary", "--bg-hover"]) {
+        expect(
+          themeContrast(vars["--text-primary"], vars[surface]),
+        ).toBeGreaterThanOrEqual(4.5);
+        expect(
+          themeContrast(vars["--text-secondary"], vars[surface]),
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+      expect(
+        themeContrast(vars["--accent-contrast-text"], vars["--accent-color"]),
+      ).toBeGreaterThanOrEqual(4.5);
+      for (const token of [
+        "--bg-code",
+        "--text-code",
+        "--syn-keyword",
+        "--syn-comment",
+        "--syn-inserted",
+        "--syn-deleted",
+        "--syntax-variable-definition",
+        "--term-red",
+        "--term-bright-blue",
+        "--focus-ring",
+        "--chart-4",
+        "--tint-blue-13",
+        "--overlay-white-07",
+      ])
+        expect(vars[token]).toBeTruthy();
+    }
+});
+
+test("accent foreground maximises black/white contrast, including vivid Monokai pink", () => {
+  expect(themeForeground("#f92672")).toBe("#000000");
+  expect(themeForeground("#ffffff")).toBe("#000000");
+  expect(themeForeground("#000000")).toBe("#ffffff");
+});

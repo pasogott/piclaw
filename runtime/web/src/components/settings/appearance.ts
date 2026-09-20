@@ -1,5 +1,5 @@
 import { html, useState, useEffect, useCallback, useMemo, useRef } from '../../vendor/preact-htm.js';
-import { applyOutputPad, applyThemeFromEvent } from '../../ui/theme.js';
+import { applyOutputPad, applyThemeFromEvent, getSynthwaveGlow, setSynthwaveGlow, getThemeModePreference, setThemeModePreference } from '../../ui/theme.js';
 import { LanguageSwitcher } from '../language-switcher.js';
 import { useTranslation } from '../../utils/i18n.js';
 
@@ -21,6 +21,8 @@ export function ThemeSection({ themes, colorKeys, settingsData, setStatus, merge
     const { t: tr } = useTranslation();
     const [currentTheme, setCurrentTheme] = useState('default');
     const [currentTint, setCurrentTint] = useState('');
+    const [glow, setGlow] = useState(getSynthwaveGlow);
+    const [mode, setMode] = useState(getThemeModePreference);
     const [outputPad, setOutputPad] = useState(0);
     const [saving, setSaving] = useState(false);
     const savedSnapshotRef = useRef('');
@@ -158,6 +160,10 @@ export function ThemeSection({ themes, colorKeys, settingsData, setStatus, merge
                 </div>
             </div>
 
+            <div class="settings-row"><label for="appearance-mode">Automatic theme mode (this browser)</label><select id="appearance-mode" value=${mode} onChange=${e=>{setMode(e.target.value);setThemeModePreference(e.target.value);}}><option value="auto">Follow system</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+            <p class="settings-hint">Applies to Default, Solarized and GitHub automatic pairs. Named Light/Dark variants keep their explicit mode.</p>
+            <label class="settings-row"><input type="checkbox" checked=${glow} onChange=${e=>{setGlow(e.target.checked);setSynthwaveGlow(e.target.checked);}} /> SynthWave glow (this browser)</label>
+            <p class="settings-hint">Static syntax/accent glow only; disabled in forced-colours mode.</p>
             <table class="settings-table settings-borderless settings-theme-table">
                 <thead>
                     <tr>
@@ -169,7 +175,7 @@ export function ThemeSection({ themes, colorKeys, settingsData, setStatus, merge
                     ${presets.filter(t => t.name !== 'default').map(t => html`
                         <tr class=${t.name === currentTheme ? 'settings-row-active' : ''}
                             style="cursor:pointer" onClick=${() => applyLocal(t.name, '')}>
-                            <td><input type="radio" name="settings-theme" checked=${t.name === currentTheme} onChange=${() => applyLocal(t.name, '')} /></td>
+                            <td><input type="radio" aria-label=${t.label} name="settings-theme" checked=${t.name === currentTheme} onChange=${() => applyLocal(t.name, '')} /></td>
                             <td><strong>${t.label}</strong></td>
                             <td>${t.mode}</td>
                             ${keys.map(k => {

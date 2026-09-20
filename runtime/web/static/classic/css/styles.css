@@ -17,3 +17,5 @@
 @import "./settings.css";
 @import "../../common/css/settings-addon-buttons.css";
 @import "../../common/css/settings-addon-controls.css";
+
+@import url("../../common/css/theme-effects.css");
