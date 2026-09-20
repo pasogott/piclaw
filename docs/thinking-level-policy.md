@@ -57,6 +57,9 @@ startup can append an effective clamp. Normal/emergency rotation, deferred
 branching and destructive pre-compaction trimming carry preference separately
 from the effective level. Older sessions without custom metadata begin with their
 recorded thinking level; the code does not invent an earlier user preference.
+Side-session and deferred-seed restoration carry the effective level independently:
+a destination override of `medium` stays `medium` even if session preference is
+`high`. Restoration is not treated as an explicit new thinking choice.
 
 - `/thinking` reports the session preference, effective default and its source.
 - A hydrated session's `/agent/models` response adds `thinking_policy` with

@@ -254,3 +254,45 @@ test('native max and restricted target capabilities clamp without erasing prefer
   expect(session.thinkingLevel).toBe('low'); expect(getSessionThinkingPolicy(session)?.preferred_level).toBe('high');
   await session.setModel(models[0]); expect(session.thinkingLevel).toBe('high');
 });
+
+
+test('side-session synchronization retains target effective override separately from session intent', async () => {
+  const { AgentSessionManager } = await import('../../src/agent-pool/session-manager.js');
+  const settings = SettingsManager.inMemory({ defaultThinkingLevel: 'low', modelThinkingLevels: { 'fixture-openai/b': 'medium' } });
+  const main = await fixture({ settings });
+  await main.session.setModel(models[1]);
+  expect(main.session.thinkingLevel).toBe('medium');
+  expect(getSessionThinkingPolicy(main.session)?.preferred_level).toBe('high');
+  let side = (await fixture({ settings })).session;
+  const sideRuntime = { get session() { return side; }, newSession: async ({ setup }: any) => {
+    const sm = SessionManager.inMemory(ws.workspace); await setup(sm);
+    side = (await fixture({ settings, manager: sm })).session;
+    return { cancelled: false };
+  } };
+  await AgentSessionManager.prototype.syncSideSessionFromMain.call({ options: {}, disposeSideRuntimeAfterError: async () => {} } as any, main.session, sideRuntime as any);
+  expect(side.thinkingLevel).toBe('medium');
+  expect(getSessionThinkingPolicy(side)?.preferred_level).toBe('high');
+  await side.setModel(models[2]); expect(side.thinkingLevel).toBe('high');
+  expect(settings.getDefaultThinkingLevel()).toBe('low');
+});
+
+
+test('deferred restore keeps carried effective choice and resumes session preference on next model', async () => {
+  const { restoreSessionThinkingPolicy } = await import('../../src/agent-pool/thinking-policy.js');
+  const { seedSessionManagerFromDeferredBranchSeed } = await import('../../src/agent-pool/branch-seeding.js');
+  const { session } = await fixture();
+  await seedSessionManagerFromDeferredBranchSeed(session.sessionManager, {
+    version: 1, parentSession: null, sessionName: null,
+    model: { provider: models[0].provider, modelId: models[0].id },
+    thinkingLevel: 'medium', preferredThinkingLevel: 'high', mode: 'rotated_context',
+  });
+  restoreSessionThinkingPolicy(session, 'medium', 'high');
+  expect(session.thinkingLevel).toBe('medium');
+  expect(getSessionThinkingPolicy(session)?.preferred_level).toBe('high');
+  expect(getSessionThinkingPolicy(session)?.last_transition).toMatchObject({ operation: 'restore', effective: 'medium', requested: 'medium' });
+  expect(session.sessionManager.buildSessionContext().thinkingLevel).toBe('medium');
+  expect(readThinkingPreference(session.sessionManager.getBranch())).toBe('high');
+  await session.setModel(models[1]); expect(session.thinkingLevel).toBe('high');
+  restoreSessionThinkingPolicy(session, 'low'); expect(getSessionThinkingPolicy(session)?.preferred_level).toBe('low');
+  await session.setModel(models[2]); expect(session.thinkingLevel).toBe('low');
+});

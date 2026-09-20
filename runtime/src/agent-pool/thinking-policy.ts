@@ -12,7 +12,12 @@ type Source = 'session' | 'model_default' | 'scoped_model';
 type Operation = 'model_set' | 'model_cycle' | 'thinking_set' | 'restore';
 type Transition = { operation: Operation; source: Source; previous: ThinkingLevel; requested: ThinkingLevel; effective: ThinkingLevel; clamped: boolean };
 const state = new WeakMap<AgentSession, { preferred: ThinkingLevel; last: Transition | null }>();
-const switching = new AsyncLocalStorage<{ session: AgentSession; operation: 'model_set' | 'model_cycle'; pending: boolean }>();
+const switching = new AsyncLocalStorage<{ session: AgentSession; operation: 'model_set' | 'model_cycle' | 'restore'; pending: boolean; preferred?: ThinkingLevel }>();
+
+/** Restore a carried effective value without treating it as a new user choice. */
+export function restoreSessionThinkingPolicy(session: AgentSession, effective: ThinkingLevel, preferred?: ThinkingLevel | null): void {
+  switching.run({ session, operation: 'restore', pending: true, preferred: preferred ?? effective }, () => session.setThinkingLevel(effective));
+}
 
 export function getThinkingDefaults(settings: SettingsManager) {
   const global = settings.getGlobalSettings().defaultThinkingLevel;
@@ -74,7 +79,7 @@ export function installSessionThinkingPolicy(session: AgentSession, restoredPref
     if (context?.session === session) context.pending = false;
     let requested = level;
     let source: Source = 'session';
-    if (operation !== 'thinking_set' && session.model) {
+    if ((operation === 'model_set' || operation === 'model_cycle') && session.model) {
       const model = session.model;
       const scoped = operation === 'model_cycle' ? session.scopedModels.find(item => item.model.provider === model.provider && item.model.id === model.id)?.thinkingLevel : undefined;
       const perModel = session.settingsManager.getModelThinkingLevel(model.provider, model.id);
@@ -85,6 +90,7 @@ export function installSessionThinkingPolicy(session: AgentSession, restoredPref
     // Remember intent before notifications: an extension may synchronously
     // switch model while handling the thinking event.
     if (operation === 'thinking_set') current.preferred = requested;
+    else if (operation === 'restore') current.preferred = context?.preferred ?? requested;
     // Keep SDK clamping, transcript events and explicit persist semantics intact.
     setThinking(requested, options);
     current.last = { operation, source, previous, requested, effective: session.thinkingLevel, clamped: requested !== session.thinkingLevel };

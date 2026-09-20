@@ -27,7 +27,7 @@ import { importAdoptedSession } from './adopted-session-import.js';
 import { createDefaultSession, createSessionInDir, ensureNamedSessionDir, ensureSessionDir, lightweightPrewarmSession } from "./session.js";
 import { forcePersistSessionFile, seedRotatedSession } from "../session-rotation.js";
 import { getSessionPersistencePort } from "./session-persistence.js";
-import { getSessionThinkingPolicy } from './thinking-policy.js';
+import { getSessionThinkingPolicy, restoreSessionThinkingPolicy } from './thinking-policy.js';
 import { getDefaultActiveToolNames } from "../extensions/tool-activation.js";
 
 /** Cached session entry stored for each chat JID. */
@@ -354,7 +354,7 @@ export class AgentSessionManager {
     }
 
     try {
-      sideSession.setThinkingLevel(getSessionThinkingPolicy(mainSession)?.preferred_level ?? mainSession.thinkingLevel);
+      restoreSessionThinkingPolicy(sideSession, mainSession.thinkingLevel, getSessionThinkingPolicy(mainSession)?.preferred_level);
     } catch (err) {
       this.options.onWarn?.("Failed to sync side-session thinking level", {
         operation: "sync_side_session_from_main.thinking_level",
@@ -686,7 +686,7 @@ export class AgentSessionManager {
         await this.applyResolvedModel(session, seed.model, "realize_deferred_branch_seed");
         try {
           if (seed.thinkingLevel) {
-            session.setThinkingLevel(seed.preferredThinkingLevel ?? seed.thinkingLevel);
+            restoreSessionThinkingPolicy(session, seed.thinkingLevel, seed.preferredThinkingLevel);
           }
         } catch (err) {
           this.options.onWarn?.("Failed to restore deferred branch thinking level", {
