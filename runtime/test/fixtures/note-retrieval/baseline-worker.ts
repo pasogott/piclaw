@@ -82,8 +82,8 @@ if (mode === 'build') {
   if (JSON.stringify([...tieOrders[0]].sort()) !== JSON.stringify(['notes/tie-a.md','notes/tie-b.md'])) throw Error('Tie probe corpus mismatch');
   for (const name of ['tie-b.md', 'tie-a.md']) unlinkSync(join(cwd,'notes',name));
   await search.refreshWorkspaceIndex({scope:'notes'});
-  results.push({id:'tie-checks',order:tieOrders[0],repeatStable:true,contract:'observed only; baseline SQL has no secondary tie-break'});
-  // Explicitly measure the existing equal-size/equal-mtime shortcut, not repair it.
+  results.push({id:'tie-checks',order:tieOrders[0],repeatStable:true,contract:'equal BM25 scores use binary path order'});
+  // Regression probe: equal-size/equal-mtime edits must refresh indexed text.
   const original=readFileSync(changed,'utf8');
   const fixedTime = new Date('2030-01-01T00:00:00.000Z');
   utimesSync(changed, fixedTime, fixedTime);

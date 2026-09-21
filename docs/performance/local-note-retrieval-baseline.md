@@ -159,3 +159,7 @@ Filesystem-isolation/entrypoint and silent-catch guards pass. Repository lint ha
 20 pre-existing diagnostics, unchanged from the checked main baseline; none
 concerns this evaluation. Passing tests validate the measurement and fixtures,
 not future retrieval quality or the proposed acceptance thresholds.
+
+## Freshness and tie-order follow-up
+
+[Content freshness and deterministic ties](local-note-retrieval-freshness-ties.md) records the subsequent production correction and matched rerun. The measurements above remain the original baseline; corpus labels and hashes are unchanged.
