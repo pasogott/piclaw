@@ -81,7 +81,10 @@ window.fetch = (async (input) => {
       path: u.searchParams.get("path"),
       size: u.searchParams.get("path") === "src" ? 7000 : 12000,
     });
-  if (u.pathname === "/agent/system-metrics") return Response.json(metrics);
+  if (u.pathname === "/agent/status") return Response.json({
+    status: { status: "idle", data: null }, model: null, context: null,
+    metrics, agent_name: "Fixture", errors: [],
+  });
   if (u.pathname === "/workspace/index-status")
     return Response.json({ status: "ready" });
   return Response.json({});
@@ -124,7 +127,7 @@ if (skin === "classic") {
   render(h(Explorer, {}), host);
   const { SystemStats } =
     await import("../../../web/static/visual/frontend/src/components/SystemStats");
-  render(h(SystemStats, {}), document.getElementById("visual-stats")!);
+  render(h(SystemStats, { stats: metrics, isStale: false }), document.getElementById("visual-stats")!);
 }
 const { html, render } = await import("../../../web/src/vendor/preact-htm");
 const { SystemMetersHud } =
