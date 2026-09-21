@@ -104,3 +104,16 @@ test("partial snapshot lets healthy consumers work but failing sections are not 
   expect((await getAgentStatus(jid)).status).toBe("idle");
   await expect(getAgentContext(jid)).rejects.toThrow("Context unavailable");
 });
+
+test("snapshot module imports with a partial non-browser window", async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "window");
+  try {
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { location: { href: "http://fixture/" } } });
+    const { importFresh } = await import("../helpers");
+    const module = await importFresh("../../web/src/ui/agent-ui-snapshot.ts", import.meta.url);
+    expect(typeof module.getAgentUiSnapshot).toBe("function");
+  } finally {
+    if (original) Object.defineProperty(globalThis, "window", original);
+    else Reflect.deleteProperty(globalThis, "window");
+  }
+});

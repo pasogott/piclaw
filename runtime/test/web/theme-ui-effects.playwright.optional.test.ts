@@ -361,7 +361,12 @@ for (const engine of ["chromium", "webkit"])
               expect(forced.inputText).toBe("none");
               expect(forced.shadow).toBe("none");
               expect(forced.background).toBe("none");
-              expect((await themedFocus(page, input)).style).toBe("solid");
+              expect((await themedFocus(page, input)).style).toBe("none");
+              expect(
+                await page
+                  .locator(compose)
+                  .evaluate((e) => getComputedStyle(e).outlineStyle),
+              ).toBe("solid");
               await page.emulateMedia({ forcedColors: "none" });
             }
             await page.emulateMedia({ reducedMotion: "no-preference" });
@@ -433,3 +438,191 @@ for (const engine of ["chromium", "webkit"])
     },
     20000,
   );
+
+for (const engine of ["chromium", "webkit"])
+  for (const skin of ["classic", "visual"])
+    for (const width of [390, 1280]) {
+      browserTest(
+        `${engine} ${skin}: compose frame alone owns focus across palettes at ${width}`,
+        async () => {
+          const { page, errors } = await open(engine, skin, "ui", width);
+          try {
+            const frame =
+              skin === "classic"
+                ? ".compose-input-wrapper"
+                : ".chat__compose-container";
+            const input = frame + " textarea";
+            await page
+              .locator(input)
+              .fill("Focus belongs to the complete composer.");
+            // Freeze transitions, not focus state or colours, for the exhaustive
+            // synchronous palette loop. Actual pointer/keyboard transitions follow.
+            await page.addStyleTag({
+              content: frame + "{transition:none !important}",
+            });
+            const result = await page.evaluate(
+              ({ frame, input }) => {
+                const f = (window as any).themeUi,
+                  box = document.querySelector(frame) as HTMLElement,
+                  field = document.querySelector(input) as HTMLTextAreaElement;
+                const probe = document.createElement("span");
+                document.body.append(probe);
+                const color = (v: string) => {
+                  probe.style.color = v;
+                  return getComputedStyle(probe).color;
+                };
+                const failures: string[] = [];
+                let checks = 0;
+                for (const preset of f.presets) {
+                  f.selectLocalTheme(preset.id);
+                  field.blur();
+                  const before = box.getBoundingClientRect();
+                  if (getComputedStyle(box).outlineStyle !== "none")
+                    failures.push(preset.id + " blur frame");
+                  field.focus();
+                  const outer = getComputedStyle(box),
+                    inner = getComputedStyle(field);
+                  checks++;
+                  const expected = color(
+                    preset.id === "synthwave-84-full"
+                      ? "#36f9f6"
+                      : "var(--focus-ring)",
+                  );
+                  if (
+                    document.activeElement !== field ||
+                    outer.outlineStyle !== "solid" ||
+                    outer.outlineWidth !== "2px" ||
+                    outer.outlineColor !== expected
+                  )
+                    failures.push(
+                      preset.id + " outer focus " + outer.outlineColor,
+                    );
+                  if (
+                    inner.outlineStyle !== "none" ||
+                    inner.boxShadow !== "none" ||
+                    inner.borderTopWidth !== "0px"
+                  )
+                    failures.push(preset.id + " inner decoration");
+                  if (inner.caretColor !== color("var(--accent-color)"))
+                    failures.push(preset.id + " caret");
+                  const after = box.getBoundingClientRect();
+                  if (
+                    before.width !== after.width ||
+                    before.height !== after.height
+                  )
+                    failures.push(preset.id + " geometry");
+                  field.blur();
+                  if (getComputedStyle(box).outlineStyle !== "none")
+                    failures.push(preset.id + " retained focus");
+                }
+                f.applyTheme(
+                  f.importVSCodeTheme({
+                    type: "light",
+                    colors: {
+                      "editor.background": "#faf6ed",
+                      "editor.foreground": "#152637",
+                      focusBorder: "#905500",
+                    },
+                  }),
+                );
+                field.focus();
+                if (
+                  getComputedStyle(box).outlineColor !==
+                    color("var(--focus-ring)") ||
+                  getComputedStyle(field).outlineStyle !== "none" ||
+                  getComputedStyle(field).boxShadow !== "none"
+                )
+                  failures.push("imported focus");
+                f.resetTheme();
+                probe.remove();
+                return { failures, checks };
+              },
+              { frame, input },
+            );
+            expect(result.failures).toEqual([]);
+            expect(result.checks).toBe(56);
+            await page.evaluate(() =>
+              (window as any).themeUi.selectLocalTheme("synthwave-84-full"),
+            );
+            await page.locator(input).click();
+            expect(
+              await page
+                .locator(frame)
+                .evaluate((e) => getComputedStyle(e).outlineColor),
+            ).toBe("rgb(54, 249, 246)");
+            expect(
+              await page
+                .locator(input)
+                .evaluate((e) => getComputedStyle(e).boxShadow),
+            ).toBe("none");
+            // In both real composers the attachment action precedes the textarea.
+            await page.keyboard.press("Shift+Tab");
+            await page.keyboard.press("Tab");
+            expect(
+              await page
+                .locator(input)
+                .evaluate((e) => document.activeElement === e),
+            ).toBe(true);
+            expect(
+              await page
+                .locator(frame)
+                .evaluate((e) => getComputedStyle(e).outlineStyle),
+            ).toBe("solid");
+            await page.screenshot({
+              path: join(
+                evidence,
+                `${engine}-${skin}-frame-focus-${width}.png`,
+              ),
+            });
+            await page.emulateMedia({ reducedMotion: "reduce" });
+            expect(
+              await page
+                .locator(input)
+                .evaluate((e) => getComputedStyle(e).outlineStyle),
+            ).toBe("none");
+            expect(
+              await page
+                .locator(frame)
+                .evaluate((e) => getComputedStyle(e).outlineStyle),
+            ).toBe("solid");
+            if (engine === "chromium") {
+              await page.emulateMedia({ forcedColors: "active" });
+              expect(
+                await page
+                  .locator(input)
+                  .evaluate((e) => getComputedStyle(e).outlineStyle),
+              ).toBe("none");
+              expect(
+                await page
+                  .locator(frame)
+                  .evaluate((e) => getComputedStyle(e).outlineStyle),
+              ).toBe("solid");
+              const system = await page.locator(frame).evaluate((e) => {
+                const p = document.createElement("i");
+                p.style.outline = "2px solid Highlight";
+                document.body.append(p);
+                const c = getComputedStyle(p).outlineColor;
+                p.remove();
+                return {
+                  actual: getComputedStyle(e).outlineColor,
+                  expected: c,
+                };
+              });
+              expect(system.actual).toBe(system.expected);
+            }
+            await page
+              .locator(input)
+              .evaluate((e: HTMLTextAreaElement) => e.blur());
+            expect(
+              await page
+                .locator(frame)
+                .evaluate((e) => getComputedStyle(e).outlineStyle),
+            ).toBe("none");
+            expect(errors).toEqual([]);
+          } finally {
+            await page.close();
+          }
+        },
+        20000,
+      );
+    }
