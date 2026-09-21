@@ -216,6 +216,7 @@ export class FamilyChatSurface {
       >Preview for family memory</button>`;
     };
     return html`<${ChatSurface}
+      currentChatJid=${value.currentChatJid}
       timelineId="timeline"
       composeId="compose-form"
       posts=${value.posts}
