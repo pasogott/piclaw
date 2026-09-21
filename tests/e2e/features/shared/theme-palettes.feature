@@ -89,6 +89,8 @@ Feature: Shared palette identities with skin-specific interfaces
     Given either skin with a selected bundled palette or imported VS Code theme
     When I focus a picker, settings field, dialog, custom select or compose input
     Then its focus ring follows the palette focus colour
+    And compose focus belongs to the outer frame while its inner textarea has no outline, border or focus shadow
+    And blurring the composer removes its focus ring without changing its geometry
     And its caret, text selection and native control accent follow the palette
     And disabled controls remain disabled and read-only fields remain read-only
     When I select SynthWave 84 Full

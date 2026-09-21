@@ -5,10 +5,21 @@
     caret-color: var(--accent-color);
     accent-color: var(--accent-color);
 }
-:root :is(input, textarea, select, [contenteditable="true"], .custom-select__trigger):focus,
-:root :is(button, a[href], [role="button"], [role="combobox"], [role="listbox"], [tabindex]:not([tabindex="-1"])):focus-visible {
+:root :is(input, textarea, select, [contenteditable="true"], .custom-select__trigger):focus:not(:where(.compose-input-wrapper textarea, .chat__input)),
+:root :is(button, a[href], [role="button"], [role="combobox"], [role="listbox"], [tabindex]:not([tabindex="-1"])):focus-visible:not(:where(.compose-input-wrapper textarea, .chat__input)) {
     outline: 2px solid var(--focus-ring, var(--accent-color)) !important;
     outline-offset: 2px;
+}
+/* The composer is one compound control. Its outer frame owns focus;
+ * the text field keeps the skin's borderless surface and themed caret. */
+:root :is(.compose-input-wrapper, .chat__compose-container):focus-within {
+    outline: 2px solid var(--compose-focus-color, var(--focus-ring, var(--accent-color))) !important;
+    outline-offset: 2px;
+}
+:root :is(.compose-input-wrapper textarea, textarea.chat__input) {
+    outline: none !important;
+    border: 0 !important;
+    box-shadow: none !important;
 }
 :root ::selection {
     background: var(--accent-color);
@@ -16,8 +27,11 @@
     text-shadow: none;
 }
 @media (forced-colors: active) {
-    :root :is(input, textarea, select, [contenteditable="true"], .custom-select__trigger):focus,
-    :root :is(button, a[href], [role="button"], [role="combobox"], [role="listbox"], [tabindex]:not([tabindex="-1"])):focus-visible {
+    :root :is(input, textarea, select, [contenteditable="true"], .custom-select__trigger):focus:not(:where(.compose-input-wrapper textarea, .chat__input)),
+    :root :is(button, a[href], [role="button"], [role="combobox"], [role="listbox"], [tabindex]:not([tabindex="-1"])):focus-visible:not(:where(.compose-input-wrapper textarea, .chat__input)) {
+        outline-color: Highlight !important;
+    }
+    :root :is(.compose-input-wrapper, .chat__compose-container):focus-within {
         outline-color: Highlight !important;
     }
     :root ::selection { background: Highlight; color: HighlightText; }
