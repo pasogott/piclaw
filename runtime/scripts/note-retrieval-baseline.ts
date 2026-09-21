@@ -1,5 +1,5 @@
 /** @file Provider-free current-search evaluation. Run with bun run test:local -- bun runtime/scripts/note-retrieval-baseline.ts. */
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { assertPathWithinTestFilesystemIsolation, getActiveTestFilesystemIsolationRoot } from './test-filesystem-isolation.js';
 const root = getActiveTestFilesystemIsolationRoot();
@@ -10,7 +10,7 @@ const scales = args.includes('--small') ? [0] : [0, 500];
 const reports: any[] = [];
 const repetitions = args.includes('--repeat-build') ? 2 : 1;
 for (let repetition = 0; repetition < repetitions; repetition++) for (const scale of scales) {
- const workspace = join(root, `retrieval-baseline-${scale}-${repetition}`);
+ const workspace = mkdtempSync(join(root, `retrieval-baseline-${scale}-${repetition}-`));
  assertPathWithinTestFilesystemIsolation(workspace);
  mkdirSync(workspace, { recursive: true });
  for (const mode of ['build', 'reopen']) {
@@ -40,4 +40,7 @@ for (const scale of scales) {
  const tie = (report: any) => JSON.stringify(report.results.find((row: any) => row.id === 'tie-checks')?.order);
  rebuildChecks.push({ scale, rankingStable, identicalScoreTieStable: builds.length > 1 ? builds.every(report => tie(report) === tie(builds[0])) : null });
 }
-console.log(JSON.stringify({ schema:1, corpusCommit:'2b21a5c09b1e31244a58fb1ba175b854762b2989', productionBaseline:'dc577cbb89b97ccc5d43f5e49f539ecec056897d', repeatsPerQuery:5, rankingStable:rebuildChecks.every(check => check.rankingStable), rebuildChecks, reports },null,2));
+const git = (args: string[]) => Bun.spawnSync(["git", ...args], { cwd: join(import.meta.dir, "../..") }).stdout.toString().trim();
+const measuredCommit = git(["rev-parse", "HEAD"]);
+const workingTreeModified = Boolean(git(["status", "--porcelain", "--untracked-files=no"]));
+console.log(JSON.stringify({ schema:1, measuredCommit, workingTreeModified, corpusCommit:'2b21a5c09b1e31244a58fb1ba175b854762b2989', productionBaseline:'dc577cbb89b97ccc5d43f5e49f539ecec056897d', repeatsPerQuery:5, rankingStable:rebuildChecks.every(check => check.rankingStable), rebuildChecks, reports },null,2));

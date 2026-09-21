@@ -40,9 +40,9 @@ test('real production search baseline is provider-free and stable across indepen
   const [out,err,exit] = await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);
   if(exit!==0)throw Error(err+out);
   const report = JSON.parse(out);
-  expect(typeof report.rankingStable).toBe('boolean'); expect(report.reports).toHaveLength(4);
+  expect(report.rankingStable).toBe(true); expect(report.reports).toHaveLength(4);
   expect(report.rebuildChecks).toHaveLength(1);
-  expect(typeof report.rebuildChecks[0].identicalScoreTieStable).toBe('boolean');
+  expect(report.rebuildChecks[0].identicalScoreTieStable).toBe(true);
   for(const run of report.reports){
     expect(run.metrics.development.fileRecall).toBeGreaterThan(0);
     expect(run.metrics.heldOut.unanswerableFalsePositiveRate).toBeGreaterThan(0);
@@ -51,6 +51,6 @@ test('real production search baseline is provider-free and stable across indepen
     if(run.mode==='build') {
       expect([...run.results.find((q:any)=>q.id==='tie-checks').order].sort()).toEqual(['notes/tie-a.md','notes/tie-b.md']);
     }
-    if(run.mode==='build')expect(run.results.find((q:any)=>q.id==='incremental-checks')).toMatchObject({editVisible:true,addVisible:true,deleteVisible:true,sameMetadataPreserved:true,sameMetadataEditDetected:false});
+    if(run.mode==='build')expect(run.results.find((q:any)=>q.id==='incremental-checks')).toMatchObject({editVisible:true,addVisible:true,deleteVisible:true,sameMetadataPreserved:true,sameMetadataEditDetected:true});
   }
 },30000);

@@ -24,3 +24,10 @@ additional untouched evaluation data if developers tune against these results.
 These labels are independent of search results, snippets and any future chunker.
 The deliberately repeated Rollback headings and UTF-8 BOM/CRLF file test source
 range identity without deriving labels from an implementation's chunk boundaries.
+
+After the metadata-freshness and deterministic-tie correction, the worker's
+mutation/tie probes are regression requirements: equal-size/equal-mtime edits
+must be detected and exact-score ties must sort by binary path. Historical
+baseline results remain unchanged in the performance report. New runs identify
+the measured commit and tracked-worktree modification state separately from the
+original production baseline.
