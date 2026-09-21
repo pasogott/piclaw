@@ -86,6 +86,7 @@
     50% { text-shadow: 0 0 3px #fff5fb99, 0 0 12px #ff2badee, 0 0 26px #36f9f6bb; }
 }
 :root[data-color-theme="synthwave-84-full"][data-synthwave-glow="on"] :is(.compose-input-wrapper, .chat__compose-container) {
+    --compose-focus-color: #36f9f6;
     border-color: #ff7edb;
     background-image: repeating-linear-gradient(0deg, transparent 0 3px, #36f9f609 3px 4px), linear-gradient(110deg, #ff2bad18, transparent 45%, #36f9f612);
     box-shadow: 0 0 0 1px #ff7edb, 0 0 14px #ff2bad99, 0 0 32px #36f9f666, inset 0 0 18px #ff2bad22;

@@ -94,7 +94,7 @@ export function getAgentUiSnapshot(
   const pending = state.inFlight;
   return pending;
 }
-if (typeof window !== "undefined") {
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   for (const name of [
     "piclaw:sse-connected",
     "piclaw:model-state-changed",
