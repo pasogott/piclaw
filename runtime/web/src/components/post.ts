@@ -1,3 +1,4 @@
+import { bindSvgImageThemes } from '../utils/svg-images.js';
 import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from '../vendor/preact-htm.js';
 import { useTranslation } from '../utils/i18n.js';
 import { getMediaInfo, getMediaUrl, getThumbnailUrl, submitAdaptiveCardAction } from '../api.js';
@@ -1106,7 +1107,7 @@ function enhanceCodeBlocks(container) {
     if (blocks.length === 0) return () => {};
 
     const resetTimers = new Map();
-    const cleanups = [];
+    const cleanups = [bindSvgImageThemes(container)];
 
     const handleDocumentCopy = (event) => {
         const selection = window.getSelection?.();
