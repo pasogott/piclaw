@@ -89,19 +89,19 @@
     --compose-focus-color: #36f9f6;
     border-color: #ff7edb;
     background-image: repeating-linear-gradient(0deg, transparent 0 3px, #36f9f609 3px 4px), linear-gradient(110deg, #ff2bad18, transparent 45%, #36f9f612);
-    box-shadow: 0 0 0 1px #ff7edb, 0 0 14px #ff2bad99, 0 0 32px #36f9f666, inset 0 0 18px #ff2bad22;
+    box-shadow: 0 0 4px #ff7edb, 0 0 14px #ff2bad99, 0 0 32px #36f9f666, inset 0 0 18px #ff2bad22;
     animation: synthwave-full-compose 4.8s ease-in-out infinite;
 }
 @keyframes synthwave-full-compose {
-    0%, 100% { box-shadow: 0 0 0 1px #ff7edb, 0 0 14px #ff2bad99, 0 0 32px #36f9f666, inset 0 0 18px #ff2bad22; }
-    50% { box-shadow: 0 0 0 1px #36f9f6, 0 0 22px #ff2baddd, 0 0 46px #36f9f699, inset 0 0 24px #36f9f622; }
+    0%, 100% { box-shadow: 0 0 4px #ff7edb, 0 0 14px #ff2bad99, 0 0 32px #36f9f666, inset 0 0 18px #ff2bad22; }
+    50% { box-shadow: 0 0 4px #36f9f6, 0 0 22px #ff2baddd, 0 0 46px #36f9f699, inset 0 0 24px #36f9f622; }
 }
 :root[data-color-theme="synthwave-84-full"][data-synthwave-glow="on"] :is(.compose-input-wrapper, .chat__compose-container):focus-within {
     border-color: #36f9f6;
 }
 :root[data-color-theme="synthwave-84-full"][data-synthwave-glow="on"] :is(.compose-session-popup, .compose-model-catalogue, .model-picker, .session-pill__dropdown, .custom-select__dropdown, .settings-modal, .modal-dialog, .command-palette) {
     border-color: #ff7edb;
-    box-shadow: 0 0 0 1px #ff7edb99, 0 0 18px #ff2bad88, 0 0 35px #36f9f655;
+    box-shadow: 0 0 4px #ff7edb99, 0 0 18px #ff2bad88, 0 0 35px #36f9f655;
 }
 :root[data-color-theme="synthwave-84-full"][data-synthwave-glow="on"] :is(input, textarea, select, [contenteditable="true"], .custom-select__trigger):focus,
 :root[data-color-theme="synthwave-84-full"][data-synthwave-glow="on"] :is(button, a[href], [role="button"], [role="combobox"], [role="listbox"], [tabindex]:not([tabindex="-1"])):focus-visible {

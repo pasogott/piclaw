@@ -76,9 +76,11 @@ See [the workspace/chart audit](reviews/workspace-chart-themes.md) for actual co
 
 ## Input focus
 
-Both skins share `theme-focus.css`, loaded after component styles and before Full's effects. Native inputs, textareas, selects, editable surfaces and custom selects use the palette focus ring. Keyboard-focusable controls use the same indicator; programmatically focused dialog containers are excluded. Carets, native control accents and DOM text selection follow the palette accent. Imported themes use the same variables. The composer is one compound control: its outer frame receives the focus ring through `:focus-within`, while the inner textarea has no outline, border or focus shadow. Full keeps its glowing text and animated frame with a cyan focus ring. Pickers and settings fields retain their own focus indicators. Invalid borders, disabled states and read-only behaviour are unchanged.
+Both skins share `theme-focus.css`, loaded after component styles and before Full's effects. Native inputs, textareas, selects, editable surfaces and custom selects use the palette focus ring. Keyboard-focusable controls use the same indicator; programmatically focused dialog containers are excluded. Carets, native control accents and DOM text selection follow the palette accent. Imported themes use the same variables. The composer is one compound control: its outer frame receives the focus ring through `:focus-within`, while the inner textarea has no outline, border or focus shadow. Full keeps its glowing text and animated frame with a cyan focus ring. Fields and compose frames draw their ring over the existing border to avoid duplicate sharp contours; Full keeps soft halos without an extra zero-blur rim. Pickers and settings fields retain their own focus indicators. Invalid borders, disabled states and read-only behaviour are unchanged.
 
 This styling cannot cross iframe/shadow roots or control operating-system select popups and mobile selection handles. Login and family pages have separate styles; the selected chat palette does not apply there. Forced-colour mode uses system Highlight/HighlightText colours.
+
+Attachment/image lightboxes use a theme-derived backdrop with 0.62 alpha; images and controls stay opaque. Context and timestamp details use native browser `title` tooltips like model-picker controls. Their text can contain line breaks, but browser tooltip geometry is not controlled by Piclaw.
 
 ## Imported Visual themes
 

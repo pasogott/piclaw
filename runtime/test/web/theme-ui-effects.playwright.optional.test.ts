@@ -33,6 +33,11 @@ beforeAll(async () => {
         return new Response(script, {
           headers: { "content-type": "text/javascript" },
         });
+      if (url.pathname === "/media/42")
+        return new Response(
+          '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" fill="#f4d35e"/><circle cx="160" cy="90" r="55" fill="#336699"/></svg>',
+          { headers: { "content-type": "image/svg+xml" } },
+        );
       if (url.pathname === "/sse/stream")
         return new Response(": fixture\n\n", {
           headers: { "content-type": "text/event-stream" },
@@ -626,3 +631,248 @@ for (const engine of ["chromium", "webkit"])
         20000,
       );
     }
+
+for (const engine of ["chromium", "webkit"])
+  for (const skin of ["classic", "visual"]) {
+    browserTest(
+      `${engine} ${skin}: field and compose focus have one sharp contour in all themes`,
+      async () => {
+        const { page, errors } = await open(engine, skin, "ui", 1280);
+        try {
+          const frame =
+            skin === "classic"
+              ? ".compose-input-wrapper"
+              : ".chat__compose-container";
+          const result = await page.evaluate(
+            ({ frame }) => {
+              const f = (window as any).themeUi,
+                box = document.querySelector(frame)!,
+                field = box.querySelector("textarea")!;
+              const control = document.createElement("input");
+              control.className = "settings-filter-input settings-panel__input";
+              document.body.append(control);
+              const failures: string[] = [];
+              for (const theme of f.presets) {
+                f.selectLocalTheme(theme.id);
+                field.focus();
+                const s = getComputedStyle(box);
+                if (s.outlineOffset !== "-2px")
+                  failures.push(theme.id + " frame gap");
+                if (theme.id !== "synthwave-84-full" && s.boxShadow !== "none")
+                  failures.push(theme.id + " frame shadow");
+                control.focus();
+                const c = getComputedStyle(control);
+                if (c.outlineOffset !== "-2px")
+                  failures.push(theme.id + " field gap");
+                if (theme.id !== "synthwave-84-full" && c.boxShadow !== "none")
+                  failures.push(theme.id + " field shadow");
+              }
+              control.remove();
+              return failures;
+            },
+            { frame },
+          );
+          expect(result).toEqual([]);
+          await page.evaluate(() =>
+            (window as any).themeUi.selectLocalTheme("synthwave-84-full"),
+          );
+          await page.locator(frame + " textarea").focus();
+          const shadows = await page.locator(frame).evaluate((e) => {
+            const animation = e
+              .getAnimations()
+              .find(
+                (a) =>
+                  (a as CSSAnimation).animationName ===
+                  "synthwave-full-compose",
+              );
+            animation?.pause();
+            return [0, 2400, 4800].map((time) => {
+              if (animation) animation.currentTime = time;
+              return getComputedStyle(e).boxShadow;
+            });
+          });
+          for (const shadow of shadows) {
+            expect(shadow).not.toBe("none");
+            expect(shadow).not.toMatch(/0px 0px 0px [1-9]/);
+          }
+          await page.evaluate(() =>
+            (window as any).themeUi.selectLocalTheme("paper"),
+          );
+          expect(
+            await page
+              .locator(frame)
+              .evaluate((e) => getComputedStyle(e).boxShadow),
+          ).toBe("none");
+          expect(errors).toEqual([]);
+        } finally {
+          await page.close();
+        }
+      },
+      20000,
+    );
+    for (const width of [390, 1280])
+      browserTest(
+        `${engine} ${skin}: session pill text is centred with explicit typography at ${width}`,
+        async () => {
+          const { page, errors } = await open(engine, skin, "session", width);
+          try {
+            const label =
+              skin === "classic"
+                ? ".compose-current-agent-label"
+                : ".session-pill__label";
+            await page.locator(label).waitFor();
+            await page.evaluate(() => document.fonts.ready);
+            const m = await page.locator(label).evaluate((e: HTMLElement) => {
+              const s = getComputedStyle(e),
+                r = e.getBoundingClientRect(),
+                p = e.parentElement!.getBoundingClientRect(),
+                range = document.createRange();
+              range.selectNodeContents(e);
+              const t = range.getBoundingClientRect();
+              return {
+                line: s.lineHeight,
+                size: s.fontSize,
+                font: s.fontFamily,
+                offset: Math.abs(t.y + t.height / 2 - (r.y + r.height / 2)),
+                parentOffset: Math.abs(
+                  r.y + r.height / 2 - (p.y + p.height / 2),
+                ),
+                height: r.height,
+              };
+            });
+            expect(m.line).toBe("16px");
+            expect(m.size).toBe(skin === 'visual' && width === 390 ? '11px' : '12px');
+            expect(m.offset).toBeLessThanOrEqual(1);
+            expect(m.parentOffset).toBeLessThanOrEqual(1);
+            expect(m.font).not.toContain("-webkit-standard");
+            await page
+              .locator(label)
+              .screenshot({
+                path: join(
+                  evidence,
+                  `${engine}-${skin}-pill-after-${width}.png`,
+                ),
+              });
+            expect(errors).toEqual([]);
+          } finally {
+            await page.close();
+          }
+        },
+        20000,
+      );
+    for (const view of skin === "visual"
+      ? ["lightbox", "image-lightbox"]
+      : ["lightbox"])
+      browserTest(
+        `${engine} ${skin}: ${view} uses a translucent theme surface without fading media`,
+        async () => {
+          const { page, errors } = await open(engine, skin, view, 390);
+          try {
+            await page.locator("#open-preview").click();
+            const backdrop =
+              view === "lightbox"
+                ? ".attachment-preview-modal"
+                : ".lightbox__backdrop";
+            await page.locator(backdrop).waitFor();
+            const failures = await page.evaluate((selector) => {
+              const f = (window as any).themeUi,
+                b = document.querySelector(selector)!;
+              const probe = document.createElement("i");
+              document.body.append(probe);
+              const failures: string[] = [];
+              for (const theme of f.presets) {
+                f.selectLocalTheme(theme.id);
+                probe.style.color = "var(--media-backdrop)";
+                const actual = getComputedStyle(b).backgroundColor,
+                  expected = getComputedStyle(probe).color;
+                if (actual !== expected || !actual.endsWith(", 0.62)"))
+                  failures.push(theme.id + ":" + actual);
+              }
+              probe.remove();
+              return failures;
+            }, backdrop);
+            expect(failures).toEqual([]);
+            await page.evaluate(() =>
+              (window as any).themeUi.selectLocalTheme("synthwave-84-full"),
+            );
+            await page.waitForTimeout(250);
+            expect(
+              await page
+                .locator(backdrop)
+                .evaluate((e) => getComputedStyle(e).opacity),
+            ).toBe("1");
+            expect(
+              await page
+                .locator(backdrop + " img")
+                .evaluate((e) => getComputedStyle(e).opacity),
+            ).toBe("1");
+            await page.screenshot({
+              path: join(evidence, `${engine}-${skin}-${view}-translucent.png`),
+            });
+            if (view === "image-lightbox") {
+              await page.keyboard.press("Escape");
+            } else
+              await page
+                .locator('.attachment-preview-close')
+                .click();
+            expect(await page.locator(backdrop).count()).toBe(0);
+            await page.locator("#open-preview").click();
+            await page.locator(backdrop).waitFor();
+            if (view === "image-lightbox")
+              await page.locator(backdrop).dispatchEvent("mousedown");
+            else await page.locator(backdrop).dispatchEvent("click");
+            expect(await page.locator(backdrop).count()).toBe(0);
+            expect(errors).toEqual([]);
+          } finally {
+            await page.close();
+          }
+        },
+        20000,
+      );
+    browserTest(
+      `${engine} ${skin}: timestamps and context retain only native title tooltips`,
+      async () => {
+        const { page, errors } = await open(
+          engine,
+          skin,
+          "native-tooltips",
+          390,
+        );
+        try {
+          await page.locator(".post-time").waitFor();
+          const title = await page.locator(".post-time").getAttribute("title");
+          expect(title).toContain("Input: 12,000 · Output: 3,456");
+          expect(title).toContain(
+            "Reasoning: 1,200 · Cache read: 7,800 · Cache write: 900",
+          );
+          expect(title).toContain("Provider-reported cost: $0.01");
+          expect(title!.split("\n")).toHaveLength(5);
+          expect(title).not.toMatch(/…|\.\.\./);
+          const pie = page.locator(".compose-context-pie");
+          await pie.waitFor();
+          expect(await pie.getAttribute("title")).toContain(
+            "32K / 128K tokens (25%)",
+          );
+          expect(await pie.getAttribute("data-tooltip")).toBeNull();
+          await pie.hover();
+          expect(
+            await pie.evaluate((e) => getComputedStyle(e, "::after").content),
+          ).toMatch(/^(none|normal)$/);
+          if (skin === "visual") {
+            const ring = page.locator(".context-ring");
+            expect(await ring.getAttribute("title")).toContain(
+              "Compact context",
+            );
+            expect(await ring.getAttribute("data-tooltip")).toBeNull();
+          }
+          expect(
+            await page.locator('[role="tooltip"],.timestamp-tooltip').count(),
+          ).toBe(0);
+          expect(errors).toEqual([]);
+        } finally {
+          await page.close();
+        }
+      },
+      20000,
+    );
+  }
