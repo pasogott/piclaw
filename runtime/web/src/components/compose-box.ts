@@ -1143,6 +1143,9 @@ export function QueuedFollowupStack({
 /**
  * Compose box component
  */
+// Stable default for the mention effect; a fresh [] on each render feeds it again.
+const EMPTY_CHAT_AGENTS = Object.freeze([]);
+
 export function ComposeBox({
     onPost,
     onFocus,
@@ -1183,7 +1186,7 @@ export function ComposeBox({
     onSubmitIntercept,
     onMessageResponse,
     isAgentActive = false,
-    activeChatAgents = [],
+    activeChatAgents = EMPTY_CHAT_AGENTS,
     currentChatJid = 'web:default',
     connectionStatus = 'connected',
     stateAccessFailed = false,
@@ -1510,8 +1513,8 @@ export function ComposeBox({
         : resolvedSubmitButtonState;
     const abortButtonState = resolveComposeAbortButtonState(isAgentActive, statusNoticeIsCompaction);
 
-    const mentionAgents = (Array.isArray(activeChatAgents) ? activeChatAgents : [])
-        .filter((chat) => !chat?.archived_at);
+    const mentionAgents = useMemo(() => (Array.isArray(activeChatAgents) ? activeChatAgents : EMPTY_CHAT_AGENTS)
+        .filter((chat) => !chat?.archived_at), [activeChatAgents]);
     const currentSessionAgent = (() => {
         for (const chat of Array.isArray(activeChatAgents) ? activeChatAgents : []) {
             const chatJid = typeof chat?.chat_jid === 'string' ? chat.chat_jid.trim() : '';

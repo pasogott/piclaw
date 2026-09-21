@@ -1,3 +1,4 @@
+import { applyThemeFromEvent } from '../../../../../../src/ui/theme';
 import { useEffect, useRef } from "preact/hooks";
 import type { Signal } from "@preact/signals";
 import { buildChatUrl } from "../../api/chat-jid";
@@ -99,6 +100,7 @@ export function useTimelineStream({
     const es = new EventSource(buildChatUrl("/sse/stream"));
     esRef.current = es;
 
+    es.addEventListener('ui_theme', (event: MessageEvent) => { try { applyThemeFromEvent(JSON.parse(event.data)); } catch (error) { log.warn('Invalid theme event', error); } });
     es.addEventListener("new_post", (e: MessageEvent) => {
       try {
         const raw = JSON.parse(e.data) as Record<string, unknown>;
@@ -207,6 +209,17 @@ export function useTimelineStream({
         window.dispatchEvent(new CustomEvent("piclaw:agent-request", { detail: data }));
       } catch (err) {
         log.warn("SSE extension_ui_request parse error:", err);
+      }
+    });
+
+    es.addEventListener("model_changed", (e: MessageEvent) => {
+      try {
+        const payload = JSON.parse(e.data);
+        window.dispatchEvent(new CustomEvent("piclaw:model-state-changed", {
+          detail: { chatJid: payload.chat_jid, payload },
+        }));
+      } catch (err) {
+        log.warn("SSE model change parse error:", err);
       }
     });
 

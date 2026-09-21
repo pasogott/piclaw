@@ -7181,6 +7181,21 @@ pre.frontmatter-block {
   cursor: default;
 }
 
+.audio-preview {
+  width: min(680px, 92vw);
+  max-height: 90vh;
+  overflow: auto;
+  padding: 20px;
+  border-radius: 12px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+.audio-preview__header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+.audio-preview__filename { flex: 1 1 180px; overflow-wrap: anywhere; min-width: 0; }
+.audio-preview audio { display: block; width: 100%; }
+.audio-preview button { min-height: 40px; }
+.audio-preview a { color: inherit; }
+
 .lightbox__image {
   max-width: 90vw;
   max-height: 90vh;

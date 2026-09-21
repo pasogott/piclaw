@@ -224,13 +224,13 @@ export async function handleFamilyRequest(channel: WebChannelLike, req: Request,
     } catch (error) { if (error instanceof ChatAccessDenied) return deny(); throw error; }
   }
   const media = path.match(/^\/media\/([1-9]\d*)(?:\/(thumbnail|info))?$/);
-  if (req.method === "GET" && media) {
+  if ((req.method === "GET" || (req.method === "HEAD" && media?.[2] !== "info")) && media) {
     try {
       const id = Number(media[1]);
       // Deliberately ignore caller-selected chat/owner parameters; resolve stored message links.
       authoriseOwnedMedia(getDb(), principal, id);
       if (media[2] === "info") return channel.json(readOwnedMediaInfo(getDb(), principal, id));
-      return handleMedia(channel, id, media[2] === "thumbnail");
+      return handleMedia(channel, id, media[2] === "thumbnail", req);
     } catch (error) { if (error instanceof ChatAccessDenied) return deny(); throw error; }
   }
   if (req.method === "GET" && path === "/agent/branch-download") {
