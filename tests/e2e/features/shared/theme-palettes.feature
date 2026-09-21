@@ -12,6 +12,9 @@ Feature: Shared palette identities with skin-specific interfaces
     Then both token namespaces have matching surfaces, foregrounds and accents
     And the document and native control colour scheme match the selected mode
     And code and terminal roles are populated from that palette
+    And authored code foregrounds and syntax colours are separate from UI contrast adjustments
+    And all syntax roles render consistently in chat and the actual editor
+    And bundled VS Code themes and imported themes use the same semantic and TextMate precedence
     And each skin retains its own control layout and typography
 
   @ux-themes-002
@@ -33,15 +36,22 @@ Feature: Shared palette identities with skin-specific interfaces
 
   @ux-themes-004
   Scenario: Keep SynthWave glow intrinsic and decorative
-    Given SynthWave 84 is selected
+    Given normal SynthWave 84 is selected
     Then syntax tokens and selected accents have static glow
     And ordinary prose does not glow
     And there is no separate glow control
     And an old browser opt-out cannot disable the theme's glow
     When I enable forced colours
     Then decorative shadows disappear
+    When I select SynthWave 84 Full
+    Then bright syntax cores have layered halos and slow pulsing
+    And selected actions have animated neon lighting
+    When I request reduced motion
+    Then Full retains strong static glow without animation
+    When the document becomes hidden
+    Then the visibility handler pauses Full animations
     When I select a different palette
-    Then no SynthWave glow remains
+    Then no SynthWave glow or animation remains
 
   @ux-themes-005
   Scenario: Restore complete palettes after imported-theme preview
@@ -61,3 +71,13 @@ Feature: Shared palette identities with skin-specific interfaces
     When I switch between a light and dark palette
     Then the terminal background and text update without reconnecting
     And theme changes send no terminal input
+
+  @ux-themes-007
+  Scenario: Select the requested source-verified catalogue families
+    Given the shared catalogue includes Turbo Pascal, Tokyo Night, Noctis, Bearded Arc, Catppuccin, Nord, AS400 and Lumon
+    When I select each requested variant in Classic or Visual Appearance
+    Then its stable ID and source-derived background are applied
+    And Turbo Pascal is dark while Tokyo Night Light is light despite inconsistent source metadata
+    And only SynthWave Full starts the Full-theme animations
+    And explicit terminal ANSI colours retain the theme's identity
+    And AS400 uses only green and black in syntax, status, overlays and every ANSI role

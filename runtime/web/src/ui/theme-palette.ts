@@ -1,3 +1,4 @@
+import { completeSyntaxPalette } from "../../../src/core/theme-syntax.js";
 import type {
   ThemeMode,
   ThemePalette,
@@ -68,43 +69,115 @@ export function themeAlpha(value: string, opacity: number): string {
     : `color-mix(in srgb, ${value} ${opacity * 100}%, transparent)`;
 }
 export function visualDefaultPalette(mode: ThemeMode): ThemePalette {
-  return mode === "dark"
-    ? {
-        bgPrimary: "#1e1e2e",
-        bgSecondary: "#181825",
-        bgHover: "#2a2a3d",
-        textPrimary: "#cdd6f4",
-        textSecondary: "#9399b2",
-        borderColor: "#45475a",
-        accent: "#89b4fa",
-        danger: "#f38ba8",
-        success: "#a6e3a1",
-        warning: "#f9e2af",
+  const palette: ThemePalette =
+    mode === "dark"
+      ? {
+          bgPrimary: "#1e1e2e",
+          bgSecondary: "#181825",
+          bgHover: "#2a2a3d",
+          textPrimary: "#cdd6f4",
+          textSecondary: "#9399b2",
+          borderColor: "#45475a",
+          accent: "#89b4fa",
+          danger: "#f38ba8",
+          success: "#a6e3a1",
+          warning: "#f9e2af",
+          syntax: {
+            keyword: "#cba6f7",
+            string: "#a6e3a1",
+            number: "#fab387",
+            type: "#f9e2af",
+          },
+        }
+      : {
+          bgPrimary: "#ffffff",
+          bgSecondary: "#f5f5f5",
+          bgHover: "#ebebeb",
+          textPrimary: "#1e1e1e",
+          textSecondary: "#6e6e6e",
+          borderColor: "#d4d4d4",
+          accent: "#2563eb",
+          danger: "#dc2626",
+          success: "#16a34a",
+          warning: "#ca8a04",
+          syntax: {
+            keyword: "#8839ef",
+            string: "#40a02b",
+            number: "#fe640b",
+            type: "#df8e1d",
+          },
+        };
+  return {
+    ...palette,
+    ...{
+      dark: {
+        codeBackground: "#11111b",
+        codeForeground: "#cdd6f4",
         syntax: {
           keyword: "#cba6f7",
-          string: "#a6e3a1",
+          operator: "#89dceb",
           number: "#fab387",
+          string: "#a6e3a1",
+          regexp: "#f5c2e7",
+          comment: "#9399b2",
+          variable: "#cdd6f4",
+          variable2: "#f38ba8",
+          definition: "#cdd6f4",
+          function: "#89b4fa",
+          local: "#eba0ac",
+          property: "#89b4fa",
+          propertyDefinition: "#89b4fa",
           type: "#f9e2af",
+          class: "#f9e2af",
+          namespace: "#f9e2af",
+          label: "#74c7ec",
+          macro: "#f5e0dc",
+          atom: "#fab387",
+          bool: "#fab387",
+          punctuation: "#9399b2",
+          meta: "#fab387",
+          link: "#89b4fa",
+          heading: "#89b4fa",
+          invalid: "#f38ba8",
+          deleted: "#f38ba8",
+          inserted: "#a6e3a1",
         },
-      }
-    : {
-        bgPrimary: "#ffffff",
-        bgSecondary: "#f5f5f5",
-        bgHover: "#ebebeb",
-        textPrimary: "#1e1e1e",
-        textSecondary: "#6e6e6e",
-        borderColor: "#d4d4d4",
-        accent: "#2563eb",
-        danger: "#dc2626",
-        success: "#16a34a",
-        warning: "#ca8a04",
+      },
+      light: {
+        codeBackground: "#f5f5f5",
+        codeForeground: "#4c4f69",
         syntax: {
           keyword: "#8839ef",
-          string: "#40a02b",
+          operator: "#04a5e5",
           number: "#fe640b",
+          string: "#40a02b",
+          regexp: "#ea76cb",
+          comment: "#7c7f93",
+          variable: "#4c4f69",
+          variable2: "#d20f39",
+          definition: "#4c4f69",
+          function: "#1e66f5",
+          local: "#e64553",
+          property: "#1e66f5",
+          propertyDefinition: "#1e66f5",
           type: "#df8e1d",
+          class: "#df8e1d",
+          namespace: "#df8e1d",
+          label: "#209fb5",
+          macro: "#dc8a78",
+          atom: "#fe640b",
+          bool: "#fe640b",
+          punctuation: "#7c7f93",
+          meta: "#fe640b",
+          link: "#1e66f5",
+          heading: "#1e66f5",
+          invalid: "#d20f39",
+          deleted: "#d20f39",
+          inserted: "#40a02b",
         },
-      };
+      },
+    }[mode],
+  };
 }
 /** Complete semantic palette; aliases cover both skins without changing typography or sizing. */
 export function paletteVariables(
@@ -116,7 +189,7 @@ export function paletteVariables(
     raised = p.bgHover || panel;
   const text = readableThemeColor(
     p.textPrimary,
-    mode === "dark" ? "#ffffff" : "#000000",
+    p.monochrome ? p.textPrimary : mode === "dark" ? "#ffffff" : "#000000",
     [bg, panel, raised],
   );
   const muted = readableThemeColor(p.textSecondary, text, [bg, panel, raised]);
@@ -156,8 +229,8 @@ export function paletteVariables(
     "--error": danger,
     "--handle": p.borderColor,
     "--handle-hover": accent,
-    "--bg-code": panel,
-    "--text-code": text,
+    "--bg-code": p.codeBackground || p.bgPrimary,
+    "--text-code": p.codeForeground || p.textPrimary,
     "--term-fg": text,
     "--focus-ring": readableThemeColor(accent, text, [bg, panel], 3),
     "--disabled-text": muted,
@@ -176,45 +249,26 @@ export function paletteVariables(
     "--chart-4": danger,
     "--overlay": themeAlpha("#000000", mode === "dark" ? 0.5 : 0.22),
     "--scrollbar-thumb": themeAlpha(
-      mode === "dark" ? "#ffffff" : "#000000",
+      p.monochrome ? text : mode === "dark" ? "#ffffff" : "#000000",
       0.25,
     ),
   };
-  const syntax: Record<string, string> = {
-    keyword: accent,
-    operator: text,
-    number: warning,
-    string: success,
-    comment: muted,
-    variable: text,
-    variable2: danger,
-    definition: accent,
-    type: accent,
-    property: accent,
-    label: warning,
-    namespace: accent,
-    macro: warning,
-    atom: warning,
-    punctuation: muted,
-    meta: accent,
-    link: accent,
-    heading: accent,
-    invalid: danger,
-    deleted: danger,
-    inserted: success,
-    local: warning,
-    ...p.syntax,
-  };
-  for (const [key, value] of Object.entries(syntax))
-    vars[`--syn-${key}`] = readableThemeColor(value, text, [panel]);
+  const syntax = completeSyntaxPalette(
+    p.syntax,
+    p.codeForeground || p.textPrimary,
+  );
   const aliases: Record<string, string> = {
     literal: "atom",
     "variable-definition": "definition",
     "variable-local": "local",
     "variable-special": "variable2",
   };
-  for (const key of [...Object.keys(syntax), ...Object.keys(aliases)])
-    vars[`--syntax-${key}`] = vars[`--syn-${aliases[key] || key}`];
+  for (const [key, value] of Object.entries(syntax)) {
+    vars[`--syn-${key}`] = value;
+    vars[`--syntax-${key}`] = value;
+  }
+  for (const [key, role] of Object.entries(aliases))
+    vars[`--syntax-${key}`] = syntax[role as keyof typeof syntax];
   const ansi = {
     black: muted,
     red: danger,
@@ -227,12 +281,19 @@ export function paletteVariables(
   };
   for (const [key, value] of Object.entries(ansi)) {
     vars[`--term-${key}`] = readableThemeColor(
-      value,
+      p.terminal?.[key] || value,
       text,
       [panel],
       key === "black" ? 3 : 4.5,
     );
-    vars[`--term-bright-${key}`] = mix(vars[`--term-${key}`], text, 0.18);
+    vars[`--term-bright-${key}`] = p.terminal?.[`bright-${key}`]
+      ? readableThemeColor(
+          p.terminal[`bright-${key}`],
+          text,
+          [panel],
+          key === "black" ? 3 : 4.5,
+        )
+      : mix(vars[`--term-${key}`], text, 0.18);
   }
   for (const n of [35, 40, 50, 85])
     vars[`--overlay-black-${n}`] = themeAlpha(
@@ -241,7 +302,7 @@ export function paletteVariables(
     );
   for (const n of [2, 3, 4, 5, 6, 7, 8, 10, 12, 15, 18, 25, 28])
     vars[`--overlay-white-${String(n).padStart(2, "0")}`] = themeAlpha(
-      mode === "dark" ? "#ffffff" : "#000000",
+      p.monochrome ? text : mode === "dark" ? "#ffffff" : "#000000",
       n / 100,
     );
   for (const [name, color, steps] of [
