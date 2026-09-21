@@ -394,3 +394,9 @@ test("family dispatcher serves pinned push routes and a public notification work
     expect((await router.handle(direct("/family-sw.js", null))).status).toBe(200);
   });
 });
+
+test("family status rejects operator-only UI snapshot query", async () => {
+  const response = await router.handle(request('/agent/status?chat_jid=web%3Aalice&ui=1'));
+  expect(response.status).toBe(403);
+  expect(await response.text()).not.toContain('metrics');
+});

@@ -173,3 +173,7 @@ Further candidates should be measured before changing behavior: Visual status
 polling, hidden-tab notification/connection recovery, and teardown of real optional
 panes. Preserve live delivery, session navigation, notifications and reconnect;
 server suspendable-runtime work (#410/#414/#422) is a different concern.
+
+## Shared polling follow-up
+
+[The Classic/Visual snapshot follow-up](browser-ui-snapshot-1352.md) measures the residual duplicate polling, coalesces passive requests and replies across both skins, and records a five-second request budget. SynthWave Full's deliberate effects are measured separately and remain unchanged.
