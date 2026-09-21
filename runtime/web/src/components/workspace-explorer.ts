@@ -42,7 +42,7 @@ import {
     persistPwaDisplayScalePercent,
     readStoredPwaDisplayScalePercent,
 } from '../ui/pwa-display-scale.js';
-import { getRecentFiles } from '../ui/recent-files.js';
+import { getRecentFiles, openRecentFile } from '../ui/recent-files.js';
 
 const isHiddenNode = (node) => {
     if (!node || !node.name) return false;
@@ -2451,7 +2451,7 @@ export function WorkspaceExplorer({
                                         ${recent.map((path) => {
                                             const label = path.split('/').pop() || path;
                                             return html`
-                                                <button class="workspace-menu-item workspace-menu-recent-item" role="menuitem" title=${path} onClick=${() => runMenuAction(() => onOpenEditorRef.current?.(path))}>${label}</button>
+                                                <button class="workspace-menu-item workspace-menu-recent-item" role="menuitem" title=${path} onClick=${() => runMenuAction(() => openRecentFile(path, onOpenEditorRef.current))}>${label}</button>
                                             `;
                                         })}
                                     `;
