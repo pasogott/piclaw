@@ -189,6 +189,7 @@ describe("latent Earendil Harness v3 compatibility evidence", () => {
     expect(normalized.value).toEqual(EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST);
     expectDeepFrozen(normalized.value);
 
+    expect(normalized.value.schemaVersion).toBe(4);
     expect(normalized.value.authority).toEqual({ currentRuntimeVersion: "0.85.1", harnessActivation: "latent_only", unsupportedCountsAsPass: false });
     expect(normalized.value.historical.authority).toEqual({
       currentRuntimeVersion: "0.84.4",
@@ -352,6 +353,97 @@ describe("latent Earendil Harness v3 compatibility evidence", () => {
     expect(() => activeTestNames("focused-chain.ts", 'test.only.each([[1]])("focused %s", () => {});')).toThrow(/Focused test/);
     expect(() => activeTestNames("focused-describe.ts", 'describe.each([[1]]).only("focused %s", () => { test("nested", () => {}); });')).toThrow(/Focused describe/);
     expect(() => activeTestNames("dynamic-skip.ts", 'describe.skipIf(flag)("ambiguous", () => { test("nested", () => {}); });')).toThrow(/Dynamic skipIf/);
+  });
+
+  test("published 0.87 candidate evidence remains separate from installed selected authority", () => {
+    const manifest = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST;
+    const candidate = manifest.publishedCandidate;
+    expect(manifest.authority.currentRuntimeVersion).toBe("0.85.1");
+    expect(manifest.selected.version).toBe("0.85.1");
+    expect(manifest.selected.runtimeSelection).toBe("installed_current_loop");
+    expect(candidate.version).toBe("0.87.0");
+    expect(candidate.commit).toBe("16787ad5b2dc748047f314ca1bfe7708f30f54f3");
+    expect(candidate.selection).toBe("published_candidate_not_installed");
+    expect(candidate.productionActivation).toBeFalse();
+    expect(candidate.promotionIssues).toEqual([1377, 1378, 1379, 1380, 1381]);
+  });
+
+  test("pins coherent 0.87 package closure and public export fingerprints", () => {
+    const candidate = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.publishedCandidate;
+    const packageNames = candidate.packages.map((entry) => entry.name);
+    expect(packageNames).toEqual([
+      "@earendil-works/chord",
+      "@earendil-works/pi-agent-core",
+      "@earendil-works/pi-ai",
+      "@earendil-works/pi-coding-agent",
+      "@earendil-works/pi-telemetry",
+      "@earendil-works/pi-tui",
+    ]);
+    expect(candidate.packages.every((entry) => entry.version === "0.87.0")).toBeTrue();
+    expect(candidate.packages.every((entry) => entry.gitHead === candidate.commit)).toBeTrue();
+    expect(candidate.packages.every((entry) => entry.engine === ">=22.19.0")).toBeTrue();
+    for (const entry of candidate.packages) {
+      expect(entry.shasum).toMatch(/^[0-9a-f]{40}$/);
+      expect(entry.integrity.startsWith("sha512-")).toBeTrue();
+      expect(Buffer.from(entry.integrity.slice("sha512-".length), "base64")).toHaveLength(64);
+      expect(entry.internalDependencies.every((dependency) => dependency.range === "^0.87.0")).toBeTrue();
+    }
+    expect(candidate.packages.find((entry) => entry.name === "@earendil-works/pi-agent-core")?.exports)
+      .toContain("./experimental/pico3");
+    const fingerprintKeys = candidate.fingerprints.map((entry) => `${entry.package}\0${entry.subpath}\0${entry.kind}`);
+    expect(candidate.fingerprints).toHaveLength(16);
+    expect(new Set(fingerprintKeys).size).toBe(candidate.fingerprints.length);
+    expect(candidate.fingerprints.every((entry) => /^[0-9a-f]{64}$/.test(entry.sha256))).toBeTrue();
+  });
+
+  test("records candidate compile and semantic receipts without promotion", () => {
+    const candidate = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.publishedCandidate;
+    expect(candidate.admissionReceipt).toEqual({
+      node: "22.19.0",
+      bun: "1.4.1",
+      packages: 6,
+      providerFactoryCalls: 0,
+      rootExports: "pass",
+      sourceOnlyDeepPaths: "rejected",
+      inheritedSecrets: false,
+      offlineRequested: true,
+      telemetry: "disabled",
+      networkSandboxed: false,
+    });
+    expect(candidate.semanticReceipt).toEqual({
+      environment: "disposable_exact_0_87_0_package_family",
+      tests: 28,
+      assertions: 340,
+      failures: 0,
+      coverage: "HC-001_through_HC-023_existing_public_cases",
+      evidenceLinks: "selected_exact_active_registrations_reexecuted",
+    });
+    expect(candidate.capabilities.slice(0, 23).map((entry) => [entry.id, entry.status])).toEqual(
+      SELECTED_HARNESS_EVIDENCE_LINKS.slice(0, 23).map((entry) => [entry.id, entry.status]),
+    );
+    expect(candidate.compileReceipt).toEqual({
+      status: "blocked",
+      blockers: [
+        { issue: 1377, boundary: "TranscriptContext and transcript-declared tool state replace pre-0.86 provider context fields." },
+        { issue: 1378, boundary: "ExecutionEnv requires openTextLineReader across current, SSH and fake adapters." },
+      ],
+    });
+    expect(candidate.publicSurface).toEqual({
+      stableImports: "pass",
+      executionEnvAssignment: "blocked_open_text_line_reader",
+      watchSession: "runtime_slice_not_implemented",
+      rawStorageConstructors: "not_exported_from_stable_session_barrel",
+      streamingForkConformance: "deferred_to_issue_1375",
+      experimentalPico3: "excluded_issue_1376",
+    });
+    const candidateIds: readonly string[] = candidate.capabilities.map((entry) => entry.id);
+    expect(candidateIds).toEqual(
+      Array.from({ length: 25 }, (_, index) => `HC-${String(index + 1).padStart(3, "0")}`),
+    );
+    expect(candidate.capabilities.filter((entry) => entry.status === "partial")).toHaveLength(23);
+    expect(candidate.capabilities.filter((entry) => entry.status === "unsupported").map((entry) => entry.id)).toEqual(["HC-024"]);
+    expect(candidate.capabilities.filter((entry) => entry.status === "unverified").map((entry) => entry.id)).toEqual(["HC-025"]);
+    expect(candidate.capabilities.some((entry) => entry.status === "partial" && entry.evidence.includes("full"))).toBeFalse();
   });
 
   test("selected-release partial HC coverage never counts as full promotion", () => {

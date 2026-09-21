@@ -1,5 +1,11 @@
 # Evidence register
 
+## Published 0.87.0 candidate
+
+| Evidence | Scope / state |
+|---|---|
+| [Stable Harness candidate](earendil-0870-harness-candidate.md) | Packed 0.87.0 publication coordinates, public-export fingerprints, 28-test HC-001–HC-023 partial receipt, compile blockers and unchanged activation limits; candidate is not installed or selected |
+
 ## Published 0.85.1 follow-up
 
 | Evidence | Scope / state |

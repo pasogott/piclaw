@@ -77,11 +77,63 @@ export interface HistoricalEarendilHarnessCompatibilityManifest {
   readonly promotionCriteria: readonly Readonly<{ id: `PG-0${number}`; requirement: string }>[];
 }
 
+export type EarendilPublishedCandidateStatus = "partial" | "unsupported" | "unverified";
+
+export interface EarendilPublishedCandidateCapability {
+  readonly id: `HC-0${string}`;
+  readonly status: EarendilPublishedCandidateStatus;
+  readonly evidence: string;
+}
+
+export interface EarendilPublishedCandidateAssessment {
+  readonly version: "0.87.0";
+  readonly commit: "16787ad5b2dc748047f314ca1bfe7708f30f54f3";
+  readonly selection: "published_candidate_not_installed";
+  readonly packages: readonly EarendilPackageEvidence[];
+  readonly fingerprints: readonly EarendilReleaseFingerprint[];
+  readonly publicSurface: Readonly<{
+    stableImports: "pass";
+    executionEnvAssignment: "blocked_open_text_line_reader";
+    watchSession: "runtime_slice_not_implemented";
+    rawStorageConstructors: "not_exported_from_stable_session_barrel";
+    streamingForkConformance: "deferred_to_issue_1375";
+    experimentalPico3: "excluded_issue_1376";
+  }>;
+  readonly admissionReceipt: Readonly<{
+    node: "22.19.0";
+    bun: "1.4.1";
+    packages: 6;
+    providerFactoryCalls: 0;
+    rootExports: "pass";
+    sourceOnlyDeepPaths: "rejected";
+    inheritedSecrets: false;
+    offlineRequested: true;
+    telemetry: "disabled";
+    networkSandboxed: false;
+  }>;
+  readonly semanticReceipt: Readonly<{
+    environment: "disposable_exact_0_87_0_package_family";
+    tests: 28;
+    assertions: 340;
+    failures: 0;
+    coverage: "HC-001_through_HC-023_existing_public_cases";
+    evidenceLinks: "selected_exact_active_registrations_reexecuted";
+  }>;
+  readonly compileReceipt: Readonly<{
+    status: "blocked";
+    blockers: readonly Readonly<{ issue: 1377 | 1378; boundary: string }>[];
+  }>;
+  readonly capabilities: readonly EarendilPublishedCandidateCapability[];
+  readonly promotionIssues: readonly (1377 | 1378 | 1379 | 1380 | 1381)[];
+  readonly productionActivation: false;
+}
+
 export interface EarendilHarnessCompatibilityManifest {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly authority: Readonly<{ currentRuntimeVersion: "0.85.1"; harnessActivation: "latent_only"; unsupportedCountsAsPass: false }>;
   readonly historical: HistoricalEarendilHarnessCompatibilityManifest;
   readonly selected: typeof SELECTED_RELEASE;
+  readonly publishedCandidate: EarendilPublishedCandidateAssessment;
 }
 
 export type EarendilManifestIssueCode =
@@ -743,11 +795,430 @@ const SELECTED_RELEASE = {
   "productionActivation": false
 } as const;
 
+const PUBLISHED_CANDIDATE = {
+  "version": "0.87.0",
+  "commit": "16787ad5b2dc748047f314ca1bfe7708f30f54f3",
+  "selection": "published_candidate_not_installed",
+  "packages": [
+    {
+      "name": "@earendil-works/chord",
+      "version": "0.87.0",
+      "integrity": "sha512-t8QOTf0GTHrsDSfcdtXuA9RCkh6mnR4l25N0SM/sgH7Ih25jH4tGXNbkGs9MWpV5xTu9MRPj4A7Zn1UEwQm9+g==",
+      "shasum": "b033dc0d576114e2b36e95d3cb50f8301ddf7bfd",
+      "gitHead": "16787ad5b2dc748047f314ca1bfe7708f30f54f3",
+      "engine": ">=22.19.0",
+      "installation": "transitive",
+      "exports": [
+        ".",
+        "./bundler",
+        "./context",
+        "./delta",
+        "./node",
+        "./package.json"
+      ],
+      "internalDependencies": []
+    },
+    {
+      "name": "@earendil-works/pi-agent-core",
+      "version": "0.87.0",
+      "integrity": "sha512-c5b2FMdJ7C++HBa6AyBmusdf96gdgRqpF7J+UCq2yVGB28UETJvJ190HkgDWUaLPnOQQPbanjKMAm/TgRmFE2w==",
+      "shasum": "cd8ec116e33c38e2dd551030fb83654bf5ce33af",
+      "gitHead": "16787ad5b2dc748047f314ca1bfe7708f30f54f3",
+      "engine": ">=22.19.0",
+      "installation": "direct",
+      "exports": [
+        ".",
+        "./experimental/pico3",
+        "./harness/context",
+        "./harness/env/nodejs",
+        "./harness/runtime/reducer",
+        "./harness/session",
+        "./harness/session/testing",
+        "./node",
+        "./package.json"
+      ],
+      "internalDependencies": [
+        {
+          "name": "@earendil-works/chord",
+          "range": "^0.87.0"
+        },
+        {
+          "name": "@earendil-works/pi-ai",
+          "range": "^0.87.0"
+        },
+        {
+          "name": "@earendil-works/pi-telemetry",
+          "range": "^0.87.0"
+        }
+      ]
+    },
+    {
+      "name": "@earendil-works/pi-ai",
+      "version": "0.87.0",
+      "integrity": "sha512-lbRm+EMY6Jx3l+HLpbqbm9Yrhkc5u7EffLk2id+zJQEoBuR5I+tijGiZU8zlnuuCclmQOgH0PVjL9PLbeqJ9MQ==",
+      "shasum": "e81ec36ab4e9f44bafa2c980c7ec3cf8cda32f8d",
+      "gitHead": "16787ad5b2dc748047f314ca1bfe7708f30f54f3",
+      "engine": ">=22.19.0",
+      "installation": "direct",
+      "exports": [
+        ".",
+        "./api/*",
+        "./bedrock-provider",
+        "./bun-oauth",
+        "./compat",
+        "./oauth",
+        "./providers/*",
+        "./utils/*"
+      ],
+      "internalDependencies": [
+        {
+          "name": "@earendil-works/pi-telemetry",
+          "range": "^0.87.0"
+        }
+      ]
+    },
+    {
+      "name": "@earendil-works/pi-coding-agent",
+      "version": "0.87.0",
+      "integrity": "sha512-S9JJVGHya/h0e0M+zwPTB6RkPe7PmLLqfBUTssFYW5mxAti6oZEILn4jvaUImENRC3U9RwXAB6H4gw8xj2J0GQ==",
+      "shasum": "908417741052a4ef12d9b9a8c0acb98a51ce9d87",
+      "gitHead": "16787ad5b2dc748047f314ca1bfe7708f30f54f3",
+      "engine": ">=22.19.0",
+      "installation": "direct",
+      "exports": [
+        ".",
+        "./client",
+        "./experimental/plugin",
+        "./rpc-entry"
+      ],
+      "internalDependencies": [
+        {
+          "name": "@earendil-works/chord",
+          "range": "^0.87.0"
+        },
+        {
+          "name": "@earendil-works/pi-agent-core",
+          "range": "^0.87.0"
+        },
+        {
+          "name": "@earendil-works/pi-ai",
+          "range": "^0.87.0"
+        },
+        {
+          "name": "@earendil-works/pi-tui",
+          "range": "^0.87.0"
+        }
+      ]
+    },
+    {
+      "name": "@earendil-works/pi-telemetry",
+      "version": "0.87.0",
+      "integrity": "sha512-IEUMnV6mgHyOMfAxa4CKXoBKKfHM8KxNjbXWM4Bps/iLJcFMf8hQsEZ+95VnVTc7C0cU77Rmdxt773C35jb5AA==",
+      "shasum": "3d63532659b3904f784c03daa8a3fb90be8f7746",
+      "gitHead": "16787ad5b2dc748047f314ca1bfe7708f30f54f3",
+      "engine": ">=22.19.0",
+      "installation": "transitive",
+      "exports": [
+        ".",
+        "./testing"
+      ],
+      "internalDependencies": []
+    },
+    {
+      "name": "@earendil-works/pi-tui",
+      "version": "0.87.0",
+      "integrity": "sha512-7gTC0XOgQfVWg4yGxwHINBpCnGl9p4KEC7PXIc8gAwc/cyxSW4VuFQrp+r1YD3oM+rBkoepKwAt6w6+VJ7BCaw==",
+      "shasum": "bdfa9b094b6d59628d92c55b485b01fd281c6284",
+      "gitHead": "16787ad5b2dc748047f314ca1bfe7708f30f54f3",
+      "engine": ">=22.19.0",
+      "installation": "transitive",
+      "exports": [],
+      "internalDependencies": []
+    }
+  ],
+  "fingerprints": [
+    {
+      "package": "@earendil-works/pi-agent-core",
+      "subpath": ".",
+      "kind": "runtime",
+      "sha256": "4a551a8b128525e90f3da827f5c459a6f6ba39796c63b2ba73d0f0bfb7be9e72"
+    },
+    {
+      "package": "@earendil-works/pi-agent-core",
+      "subpath": ".",
+      "kind": "declaration",
+      "sha256": "3ce94af0dcd9a9f82cdb2e6aa213222e29b42401367eb6c31c747fee02364611"
+    },
+    {
+      "package": "@earendil-works/pi-agent-core",
+      "subpath": "./node",
+      "kind": "runtime",
+      "sha256": "84c03ea93b7c4a6a656a3f560c1301ed825ca2f97ce919e16ee52bd13d88f28c"
+    },
+    {
+      "package": "@earendil-works/pi-agent-core",
+      "subpath": "./node",
+      "kind": "declaration",
+      "sha256": "eeb8d9441cb120cb5b0f86dc884e8df4c8e129a5f0a8d7d505da9a7186946686"
+    },
+    {
+      "package": "@earendil-works/pi-agent-core",
+      "subpath": "./harness/context",
+      "kind": "runtime",
+      "sha256": "3c6f154b1fd181967991b6df371e55eb2e52e834591b56bec928805cff54b143"
+    },
+    {
+      "package": "@earendil-works/pi-agent-core",
+      "subpath": "./harness/context",
+      "kind": "declaration",
+      "sha256": "8cddbf79a46b2b79f337d08b59049918be74d0efbdadbbf9c476c1af53e52eca"
+    },
+    {
+      "package": "@earendil-works/pi-agent-core",
+      "subpath": "./harness/env/nodejs",
+      "kind": "runtime",
+      "sha256": "f197648dc272eb1065deb02467ebb7cc07d020ad1c30cfd8adab26dddd3ff150"
+    },
+    {
+      "package": "@earendil-works/pi-agent-core",
+      "subpath": "./harness/env/nodejs",
+      "kind": "declaration",
+      "sha256": "8b892fd9130551cff8cf7bcf29baed12fbc3543a6f08bdb959701831df162e75"
+    },
+    {
+      "package": "@earendil-works/pi-agent-core",
+      "subpath": "./harness/session",
+      "kind": "runtime",
+      "sha256": "fab2c9c5eb32d52e4fff468dba4c6adbe33bf3ec23bfa642eba7aa712d537ac7"
+    },
+    {
+      "package": "@earendil-works/pi-agent-core",
+      "subpath": "./harness/session",
+      "kind": "declaration",
+      "sha256": "3deac15e45b9839c4406f522ea18f75d3f5b0953217fd84eaabe5d17a9e6cf97"
+    },
+    {
+      "package": "@earendil-works/pi-agent-core",
+      "subpath": "./harness/session/testing",
+      "kind": "runtime",
+      "sha256": "b6603b5a993e6eb678fb49352126138556e57a3963af7e000eec03f304ab02c4"
+    },
+    {
+      "package": "@earendil-works/pi-agent-core",
+      "subpath": "./harness/session/testing",
+      "kind": "declaration",
+      "sha256": "961fc28330bcffc231c14b3c3d3b5a247f3df9e13f6156e411dc791db152118e"
+    },
+    {
+      "package": "@earendil-works/pi-ai",
+      "subpath": ".",
+      "kind": "runtime",
+      "sha256": "4eee4d99e3eaf82e28826808136b2eede4184c3fb697328cbfc32db3360a8540"
+    },
+    {
+      "package": "@earendil-works/pi-ai",
+      "subpath": ".",
+      "kind": "declaration",
+      "sha256": "dd340daff435715950e104d1983cf013bef83c66e66b4e7b895360c1e8f4ec94"
+    },
+    {
+      "package": "@earendil-works/pi-coding-agent",
+      "subpath": ".",
+      "kind": "runtime",
+      "sha256": "1e3601da1e18a7be4dfdcc625d7a7fb942cc095a5d737bb1b70211af33b61e05"
+    },
+    {
+      "package": "@earendil-works/pi-coding-agent",
+      "subpath": ".",
+      "kind": "declaration",
+      "sha256": "1e89f64c284248e8004bc040be1b8d886f20c158091d4e466cb130fa9d13d458"
+    }
+  ],
+  "publicSurface": {
+    "stableImports": "pass",
+    "executionEnvAssignment": "blocked_open_text_line_reader",
+    "watchSession": "runtime_slice_not_implemented",
+    "rawStorageConstructors": "not_exported_from_stable_session_barrel",
+    "streamingForkConformance": "deferred_to_issue_1375",
+    "experimentalPico3": "excluded_issue_1376"
+  },
+  "admissionReceipt": {
+    "node": "22.19.0",
+    "bun": "1.4.1",
+    "packages": 6,
+    "providerFactoryCalls": 0,
+    "rootExports": "pass",
+    "sourceOnlyDeepPaths": "rejected",
+    "inheritedSecrets": false,
+    "offlineRequested": true,
+    "telemetry": "disabled",
+    "networkSandboxed": false
+  },
+  "semanticReceipt": {
+    "environment": "disposable_exact_0_87_0_package_family",
+    "tests": 28,
+    "assertions": 340,
+    "failures": 0,
+    "coverage": "HC-001_through_HC-023_existing_public_cases",
+    "evidenceLinks": "selected_exact_active_registrations_reexecuted"
+  },
+  "compileReceipt": {
+    "status": "blocked",
+    "blockers": [
+      {
+        "issue": 1377,
+        "boundary": "TranscriptContext and transcript-declared tool state replace pre-0.86 provider context fields."
+      },
+      {
+        "issue": 1378,
+        "boundary": "ExecutionEnv requires openTextLineReader across current, SSH and fake adapters."
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "id": "HC-001",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-002",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-003",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-004",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-005",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-006",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-007",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-008",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-009",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-010",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-011",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-012",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-013",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-014",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-015",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-016",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-017",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-018",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-019",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-020",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-021",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-022",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-023",
+      "status": "partial",
+      "evidence": "The existing deterministic public-boundary cases passed under the disposable exact 0.87.0 package family; the selected 0.85.1 unproved remainder still applies."
+    },
+    {
+      "id": "HC-024",
+      "status": "unsupported",
+      "evidence": "The stable harness/session barrel still exports neither MemoryStorage nor JsonlStorage, so downstream raw Storage migration fault injection remains unsupported without private imports."
+    },
+    {
+      "id": "HC-025",
+      "status": "unverified",
+      "evidence": "Stable 0.87.0 publishes streaming-fork conformance, but #1375 owns Memory/JSONL execution and SQLite remains pending; this issue does not promote HC-025."
+    }
+  ],
+  "promotionIssues": [
+    1377,
+    1378,
+    1379,
+    1380,
+    1381
+  ],
+  "productionActivation": false
+} as const satisfies EarendilPublishedCandidateAssessment;
+
+
 const RAW_MANIFEST = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   authority: { currentRuntimeVersion: "0.85.1", harnessActivation: "latent_only", unsupportedCountsAsPass: false },
   historical: HISTORICAL_MANIFEST,
   selected: SELECTED_RELEASE,
+  publishedCandidate: PUBLISHED_CANDIDATE,
 } as const satisfies EarendilHarnessCompatibilityManifest;
 
 const CANONICAL_MANIFEST = deepFreeze(RAW_MANIFEST);
