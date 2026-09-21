@@ -75,8 +75,8 @@ export function startPickerPinSync(options: Options = {}) {
   const set = (key: string, value: string) => {
     try {
       storage().setItem(key, value);
-    } catch {
-      /* Session remains usable when local storage is blocked. */
+    } catch (error) {
+      console.debug('[picker-pin-sync] Migration marker storage unavailable.', error);
     }
   };
   const report = () => {
@@ -151,7 +151,7 @@ export function startPickerPinSync(options: Options = {}) {
     const run = chain.then(async () => {
       if (!stopped) await job();
     });
-    chain = run.catch(() => {});
+    chain = run.catch((error) => { console.debug('[picker-pin-sync] Queued refresh failed; later requests remain runnable.', error); });
     return run;
   };
   const refresh = () => {

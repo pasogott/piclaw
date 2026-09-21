@@ -122,7 +122,7 @@ afterAll(async () => {
     for (const c of set)
       try {
         c.close();
-      } catch {}
+      } catch (error) { console.debug('Fixture stream already closed during browser teardown.', error); }
   server?.stop(true);
   db?.close();
 });
@@ -347,7 +347,7 @@ for (const engine of ["chromium", "webkit"])
 
 for (const engine of ['chromium','webkit']) browserTest(`${engine}: stopped sync never applies a delayed snapshot or resumes on focus`,async()=>{
  const owner='stop-'+engine,c=await context(engine,owner),p=await c.newPage();p.setDefaultTimeout(5000);let release!:()=>void;
- await p.route('**/agent/picker-pins',async route=>{await new Promise<void>(resolve=>{release=resolve;});await route.fulfill({json:{scope:'delayed',revision:1,models:['test/private'],sessions:['web:private']}}).catch(()=>{});});
+ await p.route('**/agent/picker-pins',async route=>{await new Promise<void>(resolve=>{release=resolve;});await route.fulfill({json:{scope:'delayed',revision:1,models:['test/private'],sessions:['web:private']}}).catch((error)=>{ console.debug('Held fixture response was cancelled during teardown.', error); });});
  try{
   await p.goto(server.url+'?skin=classic');await p.waitForFunction(()=>Boolean((window as any).pinFixture));
   await p.evaluate(()=>(window as any).pinFixture.stop());release();await p.waitForTimeout(150);
