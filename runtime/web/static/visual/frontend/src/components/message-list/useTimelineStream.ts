@@ -212,6 +212,17 @@ export function useTimelineStream({
       }
     });
 
+    es.addEventListener("model_changed", (e: MessageEvent) => {
+      try {
+        const payload = JSON.parse(e.data);
+        window.dispatchEvent(new CustomEvent("piclaw:model-state-changed", {
+          detail: { chatJid: payload.chat_jid, payload },
+        }));
+      } catch (err) {
+        log.warn("SSE model change parse error:", err);
+      }
+    });
+
     es.addEventListener("agent_status", (e: MessageEvent) => {
       try {
         const data = JSON.parse(e.data);

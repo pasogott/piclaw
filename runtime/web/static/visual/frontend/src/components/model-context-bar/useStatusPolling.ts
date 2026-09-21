@@ -6,6 +6,7 @@ import { addonHealthSignal } from "./addonHealthSignal";
 import { providerConfigured } from "../../app/providerState";
 import { safeGetItem, safeSetItem } from "../../utils/storage";
 import { mergeVisualLiveContext } from "./telemetry";
+import { AGENT_UI_POLL_MS, getAgentUiSnapshot, invalidateAgentUiSnapshot } from "../../../../../../src/ui/agent-ui-snapshot";
 
 import { createLogger } from "../../utils/logger";
 import { updateAgentDisplayName } from "../../api/agent-identity";
@@ -21,6 +22,8 @@ export interface UseStatusPollingResult {
   currentThinkingLevel: ReturnType<typeof useSignal<string>>;
   modelContextWindow: ReturnType<typeof useSignal<number>>;
   providerUsage: ReturnType<typeof useSignal<ProviderUsage | null>>;
+  systemMetrics: ReturnType<typeof useSignal<any>>;
+  metricsError: ReturnType<typeof useSignal<boolean>>;
   fetchStatus: () => Promise<void>;
   fetchContext: () => Promise<void>;
 }
@@ -47,127 +50,91 @@ export function useStatusPolling(): UseStatusPollingResult {
   // #60: store model's context_window from /agent/models as fallback
   const modelContextWindow = useSignal<number>(0);
   const providerUsage = useSignal<ProviderUsage | null>(null);
+  const systemMetrics = useSignal<any>(null);
+  const metricsError = useSignal(false);
 
   // Anti-race refs: versioning, abort controllers, and in-flight guards
   const statusVersion = useRef(0);
-  const contextVersion = useRef(0);
-  const statusAbort = useRef<AbortController | null>(null);
-  const contextAbort = useRef<AbortController | null>(null);
+  const mounted = useRef(true);
   const isFetchingStatus = useRef(false);
-  const isFetchingContext = useRef(false);
+  const statusRefresh = useRef<ReturnType<typeof setTimeout>>();
+  const contextRefresh = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => () => {
+    mounted.current = false;
+    statusVersion.current++;
+    clearTimeout(statusRefresh.current);
+    clearTimeout(contextRefresh.current);
+  }, []);
 
   const fetchStatus = useCallback(async () => {
     if (isFetchingStatus.current) return;
     isFetchingStatus.current = true;
-    // Abort any previous in-flight request and assign a new controller
-    statusAbort.current?.abort();
-    statusAbort.current = new AbortController();
+    // A shared request outlives individual consumers; versions reject stale results
     const myVersion = ++statusVersion.current;
     try {
-      const res = await fetch("/agent/status?chat_jid=" + encodeURIComponent(getChatJid()), { signal: statusAbort.current.signal });
-      // Discard stale response if a newer request has started
+      const snapshot = await getAgentUiSnapshot(getChatJid());
       if (statusVersion.current !== myVersion) return;
-      if (res.ok) {
-        const statusData = await res.json() as AgentStatus;
-        agentStatus.value = statusData;
-        // Update shared addon health signal
-        addonHealthSignal.value = statusData.addon_api ?? null;
-        error.value = false;
-        lastSuccessAt.value = Date.now();
-      } else {
-        error.value = true;
-      }
-      // Also fetch current model (status.data is null when idle)
-      const modelsRes = await fetch("/agent/models?chat_jid=" + encodeURIComponent(getChatJid()), { signal: statusAbort.current.signal });
-      if (statusVersion.current !== myVersion) return;
-      if (modelsRes.ok) {
-        const info = await modelsRes.json() as ModelInfo;
-        if (info.current) currentModel.value = info.current;
-        if (info.thinking_level_label || info.thinking_level) {
-          currentThinkingLevel.value = info.thinking_level_label ?? info.thinking_level!;
-        }
-        // #60: store context_window from current model's definition
+      const statusData = snapshot.status as AgentStatus;
+      agentStatus.value = statusData;
+      addonHealthSignal.value = statusData.addon_api ?? null;
+      error.value = false;
+      lastSuccessAt.value = Date.now();
+      if (snapshot.model) {
+        const info = snapshot.model as ModelInfo;
+        currentModel.value = info.current ?? null;
+        currentThinkingLevel.value = info.thinking_level_label ?? info.thinking_level ?? '';
         const currentOpt = info.model_options?.find((m: Record<string, unknown>) => m.label === info.current || m.id === info.current);
         if (currentOpt?.context_window) modelContextWindow.value = currentOpt.context_window as number;
-        // Set provider configured state from oobe field
         const oobeReady = info.oobe?.provider_ready_completed_instance;
-        providerConfigured.value = oobeReady !== undefined ? !!oobeReady : !!(info.current);
+        providerConfigured.value = oobeReady !== undefined ? !!oobeReady : !!info.current;
         providerUsage.value = info.provider_usage ?? null;
       }
+      if (snapshot.context) {
+        const data = snapshot.context as AgentContext;
+        if (data.tokens !== null || data.cacheUsage?.latest) {
+          const next = mergeVisualLiveContext(agentContext.value, data);
+          if (JSON.stringify(next) !== JSON.stringify(agentContext.value)) {
+            agentContext.value = next;
+            safeSetItem(`piclaw:context-cache:${getChatJid()}`, JSON.stringify(next));
+          }
+        }
+      }
+      metricsError.value = snapshot.errors.includes("metrics");
+      if (snapshot.metrics) systemMetrics.value = snapshot.metrics;
+      updateAgentDisplayName(snapshot.agent_name);
       pollTick.value += 1;
 
-      // Fetch agent display name from roster (best-effort, non-blocking)
-      try {
-        const rosterRes = await fetch("/agent/roster", { signal: statusAbort.current.signal });
-        if (rosterRes.ok) {
-          const roster = await rosterRes.json() as { agents?: Array<{ name?: string }> };
-          updateAgentDisplayName(roster.agents?.[0]?.name);
-        }
-      } catch { /* ignore roster fetch failure */ }
+
     } catch (err) {
+      if (statusVersion.current !== myVersion) return;
       if (err instanceof Error && err.name === "AbortError") return;
       log.warn("status fetch failed:", err);
       error.value = true;
       pollTick.value += 1;
     } finally {
       isFetchingStatus.current = false;
+      // A model event during a pending body supersedes the local view; its
+      // timeout may have joined this request. Apply the replacement immediately.
+      if (mounted.current && statusVersion.current !== myVersion) void fetchStatus();
     }
   }, []);
 
-  const fetchContext = useCallback(async () => {
-    if (isFetchingContext.current) return;
-    isFetchingContext.current = true;
-    // Abort any previous in-flight request and assign a new controller
-    contextAbort.current?.abort();
-    contextAbort.current = new AbortController();
-    const myVersion = ++contextVersion.current;
-    try {
-      const res = await fetch("/agent/context?chat_jid=" + encodeURIComponent(getChatJid()), { signal: contextAbort.current.signal });
-      // Discard stale response if a newer request has started
-      if (contextVersion.current !== myVersion) return;
-      if (res.ok) {
-        const data = await res.json() as AgentContext;
-        // Keep latest-run telemetry even when live context-window usage is temporarily unavailable.
-        if (data.tokens !== null || data.cacheUsage?.latest) {
-          agentContext.value = mergeVisualLiveContext(agentContext.value, data);
-          safeSetItem(`piclaw:context-cache:${getChatJid()}`, JSON.stringify(agentContext.value));
-        } else if (!agentContext.value) {
-          // Load from cache on first null response
-          const cached = safeGetItem(`piclaw:context-cache:${getChatJid()}`);
-          if (cached) {
-            try { agentContext.value = JSON.parse(cached) as AgentContext; } catch {}
-          }
-        }
-      }
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") return;
-      log.warn("context fetch failed:", err);
-    } finally {
-      isFetchingContext.current = false;
-    }
-  }, []);
+  const fetchContext = fetchStatus;
 
   useEffect(() => {
     void fetchStatus();
     const interval = setInterval(() => {
       void fetchStatus();
-    }, 5_000);
+    }, AGENT_UI_POLL_MS);
     return () => clearInterval(interval);
   }, [fetchStatus]);
-
-  useEffect(() => {
-    void fetchContext();
-    const interval = setInterval(() => {
-      void fetchContext();
-    }, 10_000);
-    return () => clearInterval(interval);
-  }, [fetchContext]);
 
   // Immediately refresh model/context when SSE connects (first load + reconnects)
   useEffect(() => {
     const onConnect = () => {
+      invalidateAgentUiSnapshot(getChatJid());
       void fetchStatus();
-      void fetchContext();
     };
     window.addEventListener("piclaw:sse-connected", onConnect);
     return () => window.removeEventListener("piclaw:sse-connected", onConnect);
@@ -212,9 +179,10 @@ export function useStatusPolling(): UseStatusPollingResult {
         }
       }
       if (payload?.provider_usage) providerUsage.value = payload.provider_usage;
+      invalidateAgentUiSnapshot(getChatJid());
       statusVersion.current += 1;
-      statusAbort.current?.abort();
-      setTimeout(() => void fetchStatus(), 0);
+      clearTimeout(statusRefresh.current);
+      statusRefresh.current = setTimeout(() => void fetchStatus(), 0);
     };
     window.addEventListener("piclaw:model-state-changed", onModelStateChanged);
     return () => window.removeEventListener("piclaw:model-state-changed", onModelStateChanged);
@@ -224,6 +192,7 @@ export function useStatusPolling(): UseStatusPollingResult {
   useEffect(() => {
     const onStatus = (e: Event) => {
       const detail = (e as CustomEvent).detail;
+      if (detail?.chat_jid && detail.chat_jid !== getChatJid()) return;
       // Extract context_usage from done event (pushed by backend after each turn)
       if (detail?.context_usage && detail.context_usage.tokens !== null && detail.context_usage.tokens !== undefined) {
         const cu = detail.context_usage;
@@ -232,7 +201,8 @@ export function useStatusPolling(): UseStatusPollingResult {
       }
       // Always refresh context after a turn completes
       if (detail?.type === "done" || detail?.type === "error" || detail?.status === "idle") {
-        setTimeout(() => { void fetchContext(); }, 500);
+        clearTimeout(contextRefresh.current);
+        contextRefresh.current = setTimeout(() => { void fetchContext(); }, 500);
       }
     };
     window.addEventListener("piclaw:agent-status", onStatus);
@@ -248,6 +218,8 @@ export function useStatusPolling(): UseStatusPollingResult {
     currentThinkingLevel,
     modelContextWindow,
     providerUsage,
+    systemMetrics,
+    metricsError,
     fetchStatus,
     fetchContext,
   };

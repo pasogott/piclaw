@@ -35,7 +35,10 @@ beforeAll(async () => {
     const skin = url.searchParams.get("skin") === "visual" ? "visual" : "classic";
     if (url.pathname === "/blank") return new Response("<!doctype html><title>Idle baseline</title><p>Idle baseline</p>", { headers: { "content-type": "text/html" } });
     if (url.pathname === "/") return new Response(Bun.file(join(webRoot, `static/${skin}/index.html`)), { headers: { "content-type": "text/html" } });
-    if (useBaselineAssets && url.pathname === "/static/classic/dist/app.bundle.js") return new Response(Bun.file(resolve(output, "../baseline-assets/app.bundle.js")), { headers: { "content-type": "text/javascript" } });
+    if (useBaselineAssets && ["/static/classic/dist/app.bundle.js", "/static/visual/dist/app.bundle.js"].includes(url.pathname)) {
+      const name = url.pathname.includes("/visual/") ? "visual.bundle.js" : "app.bundle.js";
+      return new Response(Bun.file(resolve(output, "../baseline-assets/" + name)), { headers: { "content-type": "text/javascript" } });
+    }
     if (url.pathname === "/editor-vendor/codemirror.js") return new Response(Bun.file(resolve(webRoot, "../extensions/viewers/editor/vendor/codemirror.js")), { headers: { "content-type": "text/javascript" } });
     if (url.pathname.startsWith("/static/")) {
       const path = resolve(webRoot, url.pathname.slice(1));
@@ -51,12 +54,13 @@ afterAll(async () => {
   if (results.length) await writeFile(join(output, "results.json"), JSON.stringify({ generatedAt: new Date().toISOString(), engine: headed ? "Chromium/Xvfb" : "Chromium/headless", browserVersion: browser?.version(), settleMs, measureMs, profileEnabled, useBaselineAssets, results }, null, 2) + "\n");
 });
 
-async function open(skin: string, postCount: number, instrument: boolean, reducedMotion: "reduce" | "no-preference" = "reduce") {
-  const context = await browser.newContext({ viewport: { width: 1366, height: 820 }, reducedMotion });
+async function open(skin: string, postCount: number, instrument: boolean, reducedMotion: "reduce" | "no-preference" = "reduce", width = 1366, theme = "default") {
+  const context = await browser.newContext({ viewport: { width, height: 820 }, reducedMotion });
   const page = await context.newPage();
   const errors: string[] = [], requests: string[] = [], unhandled = new Set<string>();
   page.on("pageerror", e => errors.push(e.message));
-  await page.addInitScript(({ instrument }) => {
+  await page.addInitScript(({ instrument, theme }) => {
+    localStorage.setItem("piclaw_theme", theme);
     localStorage.setItem("piclaw_wizard_dismissed", "1");
     localStorage.setItem("piclaw-active-panel", "chat");
     localStorage.setItem("piclaw_workspace_visible", "false");
@@ -87,7 +91,7 @@ async function open(skin: string, postCount: number, instrument: boolean, reduce
       };
     }
     addEventListener("DOMContentLoaded", () => new MutationObserver(records => { counts.mutations += records.length; counts.mutationNodes += records.reduce((n, r) => n + r.addedNodes.length + r.removedNodes.length, 0); for (const r of records) { const n = r.target instanceof Element ? r.target : r.target.parentElement; const k = `${n?.tagName}.${n?.className}:${r.attributeName || r.type}`; counts.targets[k] = (counts.targets[k] || 0) + 1; if (k.includes("compose-model-meta-subline") && counts.values.length < 10) counts.values.push(r.target.textContent || ""); } }).observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true }));
-  }, { instrument });
+  }, { instrument, theme });
   const posts = Array.from({ length: postCount }, (_, i) => ({ id: i + 1, timestamp: "2026-09-01T12:00:00.000Z", data: { content: `Fixture note ${i + 1}. A short settled message with **static text**.`, sender: i % 2 ? "agent" : "user", sender_name: i % 2 ? "Fixture Agent" : "Fixture User", is_from_me: false, chat_jid: "web:default", attachments: [] } }));
   await page.route("**/*", async route => {
     const req = route.request(), u = new URL(req.url());
@@ -96,7 +100,10 @@ async function open(skin: string, postCount: number, instrument: boolean, reduce
     requests.push(`${req.method()} ${u.pathname}`);
     let body: unknown;
     if (u.pathname === "/timeline") body = { posts, has_more: false, chat_jid: "web:default", user: { name: "Fixture User" }, agent: { name: "Fixture Agent" } };
-    else if (u.pathname === "/agent/status") body = status;
+    else if (u.pathname === "/agent/status") body = u.searchParams.get('ui') === '1' ? {
+      status, model: { current: 'fixture/model', models: ['fixture/model'], model_options: [], thinking_level: 'off', supports_thinking: false, oobe: {provider_ready_completed_instance:true} },
+      context: { tokens: null, percent: null, contextWindow: null, cacheUsage: null }, metrics, agent_name: 'Fixture Agent', errors: [],
+    } : status;
     else if (u.pathname === "/agent/context") body = { context: null, usage: null };
     else if (u.pathname === "/agent/models") body = { current: "fixture/model", models: ["fixture/model"], model_options: [], thinking_level: "off", supports_thinking: false, oobe: { provider_ready_completed_instance: true } };
     else if (u.pathname === "/agent/system-metrics") body = metrics;
@@ -114,7 +121,7 @@ async function open(skin: string, postCount: number, instrument: boolean, reduce
     else if (u.pathname === "/agent/queue-state") body = { items: [], queue: [], queued: [] };
     else if (u.pathname === "/agent/autoresearch/status") body = { enabled: false, active: false };
     else if (u.pathname === "/auth/me") body = { mode: "single-user", authenticated: false };
-    else if (u.pathname === "/agent/settings-data") body = { providers: [], toolsets: [], themes: [], colorKeys: [] };
+    else if (u.pathname === "/agent/settings-data") body = { providers: [], toolsets: [], themes: [], colorKeys: [], uiTheme: theme };
     else if (u.pathname === "/agent/client-perf") body = { ok: true };
     else if (u.pathname.startsWith("/avatar/")) return route.fulfill({ status: 404, body: "no fixture avatar" });
     else if (u.pathname === "/agent/skills") body = { skills: [] };
@@ -142,6 +149,9 @@ const cases = [
   { id: "visual-long", skin: "visual", posts: 200, traffic: true, instrument: true },
   { id: "classic-control", skin: "classic", posts: 10, traffic: false, instrument: false },
   { id: "visual-control", skin: "visual", posts: 10, traffic: false, instrument: false },
+  { id: "visual-mobile", skin: "visual", posts: 10, traffic: false, instrument: true, width: 390 },
+  { id: "visual-full", skin: "visual", posts: 10, traffic: false, instrument: true, motion: "no-preference" as const, theme: "synthwave-84-full" },
+  { id: "classic-full", skin: "classic", posts: 10, traffic: false, instrument: true, motion: "no-preference" as const, theme: "synthwave-84-full" },
   { id: "classic-motion", skin: "classic", posts: 10, traffic: false, instrument: true, motion: "no-preference" as const },
   { id: "visual-motion", skin: "visual", posts: 10, traffic: false, instrument: true, motion: "no-preference" as const },
   { id: "classic-hidden-simulated", skin: "classic", posts: 10, traffic: true, instrument: true, hidden: true },
@@ -149,7 +159,7 @@ const cases = [
 ];
 if (selected?.some(id => !cases.some(c => c.id === id))) throw new Error("Unknown idle profile case");
 for (const config of cases.filter(c => !selected || selected.includes(c.id))) browserTest(`browser idle profile ${config.id}`, async () => {
-  const f = await open(config.skin, config.posts, config.instrument, config.motion), { page } = f;
+  const f = await open(config.skin, config.posts, config.instrument, config.motion, config.width, config.theme), { page } = f;
   let timer: ReturnType<typeof setInterval> | undefined;
   const client = await page.context().newCDPSession(page);
   try {
@@ -173,15 +183,27 @@ for (const config of cases.filter(c => !selected || selected.includes(c.id))) br
     const after = await read(), afterCounts = await counters(page);
     const diff = Object.fromEntries(["TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration", "LayoutCount", "RecalcStyleCount"].map(k => [k, (after[k] || 0) - (before[k] || 0)]));
     const origins = Object.entries(afterCounts.sources).map(([key, value]) => ({ origin: key, callbacks: Number(value) - Number(beforeCounts.sources[key] || 0) })).filter(x => x.callbacks).sort((a, b) => b.callbacks - a.callbacks).slice(0, 12);
-    const result = { ...config, taskCpuEquivalentPercent: diff.TaskDuration / (measureMs / 1000) * 100, durations: diff,
+    const measuredRequests = f.requests.slice(beforeRequests);
+    const requestCounts = measuredRequests.reduce((counts, request) => { counts[request] = (counts[request] || 0) + 1; return counts; }, {} as Record<string, number>);
+    const result = { ...config, theme: await page.locator("html").getAttribute("data-color-theme"), requestCounts, taskCpuEquivalentPercent: diff.TaskDuration / (measureMs / 1000) * 100, durations: diff,
       counts: Object.fromEntries(["timeout", "interval", "raf", "mutations", "mutationNodes"].map(k => [k, afterCounts[k] - beforeCounts[k]])), origins,
       values: afterCounts.values,
       targets: Object.entries(afterCounts.targets).map(([target, count]) => ({ target, mutations: Number(count) - Number(beforeCounts.targets[target] || 0) })).filter(x => x.mutations).sort((a,b) => b.mutations-a.mutations).slice(0,12),
-      requests: f.requests.slice(beforeRequests), unhandled: [...f.unhandled], errors: f.errors, animations: afterCounts.animations, visibility: await page.evaluate(() => document.visibilityState), pageText: (await page.locator("body").innerText()).slice(0, 1100) };
+      requests: measuredRequests, unhandled: [...f.unhandled], errors: f.errors, animations: afterCounts.animations, visibility: await page.evaluate(() => document.visibilityState), pageText: (await page.locator("body").innerText()).slice(0, 1100) };
     results.push(result); console.log(JSON.stringify(result));
     expect(f.errors).toEqual([]);
     expect([...f.unhandled]).toEqual([]);
     expect(Number.isFinite(result.taskCpuEquivalentPercent)).toBe(true);
+    if (!useBaselineAssets && config.skin !== 'blank') {
+      // The deterministic fixture has no model changes or turn completions.
+      // Both skins must share status/model/context/metrics at the 5s cadence.
+      const polls = requestCounts['GET /agent/status'] || 0;
+      expect(polls).toBeGreaterThanOrEqual(Math.floor(measureMs / 5000) - 1);
+      expect(polls).toBeLessThanOrEqual(Math.ceil(measureMs / 5000) + 1);
+      for (const path of ['/agent/models','/agent/context','/agent/system-metrics','/agent/roster']) {
+        expect(requestCounts[`GET ${path}`] || 0).toBe(0);
+      }
+    }
     if (config.hidden) {
       await page.evaluate(() => {
         delete (document as any).visibilityState;
