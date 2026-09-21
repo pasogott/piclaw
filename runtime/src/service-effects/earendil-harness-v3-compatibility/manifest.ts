@@ -96,7 +96,7 @@ export interface EarendilPublishedCandidateAssessment {
     executionEnvAssignment: "blocked_open_text_line_reader";
     watchSession: "runtime_slice_not_implemented";
     rawStorageConstructors: "not_exported_from_stable_session_barrel";
-    streamingForkConformance: "deferred_to_issue_1375";
+    streamingForkConformance: "memory_and_jsonl_pass_sqlite_pending";
     experimentalPico3: "excluded_issue_1376";
   }>;
   readonly admissionReceipt: Readonly<{
@@ -118,6 +118,16 @@ export interface EarendilPublishedCandidateAssessment {
     failures: 0;
     coverage: "HC-001_through_HC-023_existing_public_cases";
     evidenceLinks: "selected_exact_active_registrations_reexecuted";
+  }>;
+  readonly streamingForkReceipt: Readonly<{
+    environment: "disposable_exact_0_87_0_package_family";
+    uniqueCases: 15;
+    memoryExecutions: 15;
+    jsonlExecutions: 15;
+    failures: 0;
+    sqlite: "pending_upstream_support";
+    hostOwnership: "unproved";
+    caseIds: readonly string[];
   }>;
   readonly compileReceipt: Readonly<{
     status: "blocked";
@@ -1039,7 +1049,7 @@ const PUBLISHED_CANDIDATE = {
     "executionEnvAssignment": "blocked_open_text_line_reader",
     "watchSession": "runtime_slice_not_implemented",
     "rawStorageConstructors": "not_exported_from_stable_session_barrel",
-    "streamingForkConformance": "deferred_to_issue_1375",
+    "streamingForkConformance": "memory_and_jsonl_pass_sqlite_pending",
     "experimentalPico3": "excluded_issue_1376"
   },
   "admissionReceipt": {
@@ -1061,6 +1071,32 @@ const PUBLISHED_CANDIDATE = {
     "failures": 0,
     "coverage": "HC-001_through_HC-023_existing_public_cases",
     "evidenceLinks": "selected_exact_active_registrations_reexecuted"
+  },
+  "streamingForkReceipt": {
+    "environment": "disposable_exact_0_87_0_package_family",
+    "uniqueCases": 15,
+    "memoryExecutions": 15,
+    "jsonlExecutions": 15,
+    "failures": 0,
+    "sqlite": "pending_upstream_support",
+    "hostOwnership": "unproved",
+    "caseIds": [
+      "branch fork application state (closed source) / excludes deleted/reappended and untouched application lists",
+      "branch fork application state (closed source) / excludes overwritten and unchanged application values",
+      "branch fork application state (open source) / excludes deleted/reappended and untouched application lists",
+      "branch fork application state (open source) / excludes overwritten and unchanged application values",
+      "fork application lists (closed source) / tree fork continues asc pagination using source cursors",
+      "fork application lists (closed source) / tree fork continues desc pagination using source cursors",
+      "fork application lists (closed source) / tree fork copies lists at distinct addresses",
+      "fork application lists (closed source) / tree fork copies only survivors after list deletion and reappend",
+      "fork application lists (closed source) / tree fork preserves list element sequences including gaps",
+      "fork application lists (open source) / tree fork continues asc pagination using source cursors",
+      "fork application lists (open source) / tree fork continues desc pagination using source cursors",
+      "fork application lists (open source) / tree fork copies lists at distinct addresses",
+      "fork application lists (open source) / tree fork copies only survivors after list deletion and reappend",
+      "fork application lists (open source) / tree fork preserves list element sequences including gaps",
+      "fork lane validation / ignores malformed unrelated lanes"
+    ]
   },
   "compileReceipt": {
     "status": "blocked",
@@ -1198,8 +1234,8 @@ const PUBLISHED_CANDIDATE = {
     },
     {
       "id": "HC-025",
-      "status": "unverified",
-      "evidence": "Stable 0.87.0 publishes streaming-fork conformance, but #1375 owns Memory/JSONL execution and SQLite remains pending; this issue does not promote HC-025."
+      "status": "partial",
+      "evidence": "Public 0.87.0 streaming-fork conformance passes 15 Memory and 15 JSONL executions across 15 unique application-list, branch-state and malformed-lane cases. SQLite streaming-fork support and cross-process host ownership remain unproved."
     }
   ],
   "promotionIssues": [
