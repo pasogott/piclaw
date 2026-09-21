@@ -1,0 +1,24 @@
+/* Shared focus contract: never fall back to the browser's blue ring/selection.
+ * Keep invalid borders and skin geometry; only the focus indicator is unified.
+ * Does not cross iframe/shadow roots or restyle OS-owned select popups. */
+:root :is(input, textarea, select, [contenteditable="true"]) {
+    caret-color: var(--accent-color);
+    accent-color: var(--accent-color);
+}
+:root :is(input, textarea, select, [contenteditable="true"], .custom-select__trigger):focus,
+:root :is(button, a[href], [role="button"], [role="combobox"], [role="listbox"], [tabindex]:not([tabindex="-1"])):focus-visible {
+    outline: 2px solid var(--focus-ring, var(--accent-color)) !important;
+    outline-offset: 2px;
+}
+:root ::selection {
+    background: var(--accent-color);
+    color: var(--accent-contrast-text);
+    text-shadow: none;
+}
+@media (forced-colors: active) {
+    :root :is(input, textarea, select, [contenteditable="true"], .custom-select__trigger):focus,
+    :root :is(button, a[href], [role="button"], [role="combobox"], [role="listbox"], [tabindex]:not([tabindex="-1"])):focus-visible {
+        outline-color: Highlight !important;
+    }
+    :root ::selection { background: Highlight; color: HighlightText; }
+}

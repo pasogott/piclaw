@@ -7,7 +7,7 @@ Adds a separately selectable **SynthWave ’84 Full**, while preserving the exis
 - Pale neon cores with layered coloured halos, adapted from upstream SynthWave's token replacements to actual Piclaw syntax classes.
 - Keyword/yellow, number/type/cyan, function/property/pink, literal/inserted/green and invalid/deleted/red roles; orange string halos extend the treatment to Piclaw's existing string palette.
 - Slow 5.5-second syntax pulse and 4.8-second accent light animation. These animations are Piclaw additions, not upstream behaviour.
-- Active-tab neon edge, glowing primary controls and cyan/magenta accent halos. Ordinary chat text is unchanged.
+- Active-tab neon edge, glowing primary controls and cyan/magenta accent halos. Full now also gives ordinary chat text, inputs and the compose frame neon treatment; see [the UI/focus correction](synthwave-full-ui.md). Normal keeps its original static syntax-only treatment.
 - No rapid flashing or whole-page flicker. Reduced motion disables animation but retains strong static glow. Hidden-document events pause CSS animations. Forced colours disable shadows/motion. Switching away removes the treatment.
 
 There is no animation timer or RAF loop in the theme runtime: one visibility listener sets a CSS state. Visible Full can still incur paint/compositing work; no CPU or battery claim is made. Canvas terminals follow the palette but cannot receive DOM syntax text shadows.
@@ -15,7 +15,7 @@ There is no animation timer or RAF loop in the theme runtime: one visibility lis
 ## Evidence
 
 - Actual Classic and Visual theme selectors expose Normal and Full separately.
-- Chromium/WebKit tests verify a running Full animation timeline, different bright-core colour, wider shadows, no prose animation, normal static behaviour, reduced-motion/forced-colour handling, and complete removal after switching.
+- Chromium/WebKit tests verify a running Full animation timeline, different bright-core colour, wider shadows, glowing prose, normal static behaviour, reduced-motion/forced-colour handling, and complete removal after switching.
 - The hidden test explicitly overrides `document.hidden` and dispatches `visibilitychange`. It validates the handler and CSS pause, not native headless background-tab throttling.
 - The moving preview is 44 actual browser captures sampled at 125ms intervals from the CSS animation timeline. It is not a production screen recording.
 - Existing all-palette, import/reset, mounted terminal and Appearance-column regressions remain in the suite.
@@ -25,8 +25,9 @@ Normal and Full use the same base palette. The follow-up catalogue request bring
 ## Captures
 
 - [Normal](synthwave-full/normal.png)
-- [Full at peak glow](synthwave-full/full.png)
-- [Full motion preview](synthwave-full/full-motion.gif)
+- [Original syntax-focused Full preview](synthwave-full/full.png)
+- [Original syntax motion preview](synthwave-full/full-motion.gif)
+- [Full UI and input-focus correction](synthwave-full-ui.md) — current composer, picker and prose captures
 
 Upstream reference: [token glow replacement formulas](https://github.com/robb0wen/synthwave-vscode/blob/master/src/js/theme_template.js). Source hash and existing MIT licence notice are recorded in the theme palette manifest/licence file. No upstream VS Code injection or MutationObserver bootstrapping is copied.
 

@@ -45,6 +45,8 @@ Feature: Shared palette identities with skin-specific interfaces
     Then decorative shadows disappear
     When I select SynthWave 84 Full
     Then bright syntax cores have layered halos and slow pulsing
+    And ordinary prose, controls and the compose box have neon glow
+    And the compose frame and UI text pulse without changing layout
     And selected actions have animated neon lighting
     When I request reduced motion
     Then Full retains strong static glow without animation
@@ -81,3 +83,15 @@ Feature: Shared palette identities with skin-specific interfaces
     And only SynthWave Full starts the Full-theme animations
     And explicit terminal ANSI colours retain the theme's identity
     And AS400 uses only green and black in syntax, status, overlays and every ANSI role
+
+  @ux-themes-008
+  Scenario: Theme all input focus surfaces and clear Full effects on palette changes
+    Given either skin with a selected bundled palette or imported VS Code theme
+    When I focus a picker, settings field, dialog, custom select or compose input
+    Then its focus ring follows the palette focus colour
+    And its caret, text selection and native control accent follow the palette
+    And disabled controls remain disabled and read-only fields remain read-only
+    When I select SynthWave 84 Full
+    Then input text and focus surfaces receive neon halos
+    When I select any other palette
+    Then Full UI and compose animations and inherited text glow are removed
