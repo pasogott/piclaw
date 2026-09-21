@@ -1200,6 +1200,7 @@
           "semanticReaders": 4,
           "files": [
             "runtime/scripts/benchmark-cold-session.ts",
+            "runtime/scripts/note-retrieval-baseline.ts",
             "runtime/scripts/test-filesystem-isolation.ts",
             "scripts/audit-baseline-quality-deterministic.ts",
             "scripts/audit-piclaw-env-surface.ts",
@@ -1265,6 +1266,7 @@
           "files": [
             "runtime/scripts/benchmark-cold-session.ts",
             "runtime/scripts/controlled-test-runner.ts",
+            "runtime/scripts/note-retrieval-baseline.ts",
             "runtime/scripts/test-filesystem-isolation.ts",
             "scripts/audit-baseline-quality-deterministic.ts",
             "scripts/audit-core-config-keychain-coverage.sh",
@@ -1368,7 +1370,8 @@
           "helperReaders": 0,
           "semanticReaders": 1,
           "files": [
-            "runtime/scripts/benchmark-cold-session.ts"
+            "runtime/scripts/benchmark-cold-session.ts",
+            "runtime/scripts/note-retrieval-baseline.ts"
           ],
           "readerFiles": [
             "runtime/scripts/benchmark-cold-session.ts"
@@ -5174,6 +5177,7 @@
           "semanticReaders": 5,
           "files": [
             "runtime/scripts/benchmark-cold-session.ts",
+            "runtime/scripts/note-retrieval-baseline.ts",
             "runtime/scripts/test-filesystem-isolation.ts",
             "scripts/audit-baseline-quality-deterministic.ts",
             "scripts/audit-piclaw-env-surface.ts",
@@ -7678,6 +7682,7 @@
           "semanticReaders": 3,
           "files": [
             "runtime/scripts/benchmark-cold-session.ts",
+            "runtime/scripts/note-retrieval-baseline.ts",
             "runtime/scripts/test-filesystem-isolation.ts",
             "scripts/audit-baseline-quality-deterministic.ts",
             "scripts/audit-piclaw-env-surface.ts",
