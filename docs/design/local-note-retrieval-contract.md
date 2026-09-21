@@ -1,8 +1,8 @@
 # Local note retrieval: access, freshness and citations
 
-Status: proposed prerequisite contract for [#1345](https://github.com/rcarmo/piclaw/issues/1345), under [epic #1347](https://github.com/rcarmo/piclaw/issues/1347).
+Status: accepted by Rui on 21 September 2026 as the prerequisite contract for [#1345](https://github.com/rcarmo/piclaw/issues/1345), under [epic #1347](https://github.com/rcarmo/piclaw/issues/1347).
 Source baseline rechecked for this revision: `7a38db66a4dc16200a050054c1a58c4ef6ff853b`. The original proposal used `0ea661493ef46cf24d5b03dbaa641a434e28a237`; historical validation below remains labelled separately.
-This change adds documentation only. `memory_query`, `memory_get` and the chunk index are not implemented or enabled by this PR. Acceptance requires review and merge; downstream work must satisfy the proposed rules below.
+This change adds documentation only. `memory_query`, `memory_get` and the chunk index are not implemented or enabled by this PR. The rules below govern downstream implementation; acceptance of this contract does not certify that implementation exists.
 
 ## Decisions
 
@@ -116,6 +116,6 @@ Source Markdown, existing bootstrap maps and the message database are never repa
 
 ## Ownership and approval
 
-#1345 supplies this proposed contract and a reviewable implementation test map. #376 implements versioned chunks/refresh after acceptance; #387 implements admitted query/get; #390 tunes ranking only after #1346 supplies frozen evaluation budgets; #377 adds guidance and closes release gates. Reranking, automatic prompt preflight and family capability expansion are excluded.
+#1345 supplies this accepted contract and a reviewable implementation test map. #376 implements versioned chunks/refresh after acceptance; #387 implements admitted query/get; #390 tunes ranking only after #1346 supplies frozen evaluation budgets; #377 adds guidance and closes release gates. Reranking, automatic prompt preflight and family capability expansion are excluded.
 
 Any change to roots, allow/deny rows, stale-reference semantics or output/resource ceilings must update this contract and its tests in the same reviewed PR. Conservative resource limits can be revised using #1346 evidence; they cannot be silently widened through request arguments. No production code, config, permissions or timers are changed by the documentation PR.

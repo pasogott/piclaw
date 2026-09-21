@@ -1,6 +1,6 @@
 # Local note retrieval: lifecycle, limits and test map
 
-Status: proposed decisions for [#1345](https://github.com/rcarmo/piclaw/issues/1345).
+Status: decisions accepted by Rui on 21 September 2026 for [#1345](https://github.com/rcarmo/piclaw/issues/1345).
 Read with the [access and citation contract](local-note-retrieval-contract.md).
 No row below means the future note-retrieval implementation already exists.
 
@@ -179,11 +179,14 @@ not execution of the future retrieval contract.
 | Finite file/chunk/query/output limits | Resource ceilings; NR-L01–L02 |
 | Untrusted reference text without authority | Access and result boundary; NR-Q02, NR-R02 |
 
-## Review checklist for this prerequisite
+## Accepted prerequisite decisions
 
-- [ ] Review and accept the mode/actor/root table and stricter single-user identity admission.
-- [ ] Accept file-wide byte revision, exact source ranges and opaque namespace-bound IDs; acknowledge conservative invalidation after unrelated file edits.
-- [ ] Accept excluded direct path/range lookup, per-file stale/no-content behaviour and partial-query taxonomy.
-- [ ] Accept proposed resource ceilings as a starting contract, with measured tuning reserved for #1346.
-- [ ] Confirm owned schema/atomic publication, filesystem-race limits, rollback and no capability expansion.
-- [ ] Map every #1345 criterion to the decision sections and planned tests before closing #1345. A merged contract does not close downstream implementation tickets.
+Rui accepted the explained contract on 21 September 2026. The checkmarks below
+record design acceptance, not execution of the planned implementation tests.
+
+- [x] Mode/actor/root table and stricter single-user identity admission.
+- [x] File-wide byte revision, exact source ranges and opaque namespace-bound IDs, including conservative invalidation after unrelated file edits.
+- [x] Excluded direct path/range lookup, per-file stale/no-content behaviour and partial-query taxonomy.
+- [x] Initial resource ceilings, with measured tuning reserved for #1346.
+- [x] Owned schema/atomic publication, filesystem-race limits, rollback and no capability expansion.
+- [x] Every #1345 criterion mapped to decision sections and planned tests. Contract acceptance does not close downstream implementation tickets.
