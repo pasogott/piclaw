@@ -66,6 +66,14 @@ Primary/secondary UI text is adjusted towards the palette foreground where neede
 
 Visual xterm now reads the selected palette and refreshes on theme changes without reconnecting or injecting terminal input. Classic retains its terminal contrast safeguards and uses the same ANSI roles. No renderer, terminal protocol or VNC input mapping changes are made.
 
+## Workspace and charts
+
+Explorer selection, hover, folders and file-icon foregrounds use the shared palette. Folder-size segments and legend dots map stable paths onto six chart roles; deeper rings blend towards the panel background. SVG fills reference CSS variables directly, so changing a palette or importing a theme repaints an open chart without refetching folder data or rebuilding geometry. AS/400 stays green-only.
+
+The system-meter traces use the same roles: CPU/accent, RAM/success, swap/danger, buffers/warning, RSS/type and VRAM/keyword. Normal SynthWave adds steady meter halos; Full adds layered pulsing halos plus chart/card neon edges. Reduced motion retains steady glow, hidden-document state pauses it, and forced colours remove it. Other palettes have no chart glow. Compact mobile meters keep their existing text-only layout; Visual retains its inline statistics rather than gaining a new meter panel.
+
+See [the workspace/chart audit](reviews/workspace-chart-themes.md) for actual component captures and test coverage.
+
 ## Input focus
 
 Both skins share `theme-focus.css`, loaded after component styles and before Full's effects. Native inputs, textareas, selects, editable surfaces and custom selects use the palette focus ring. Keyboard-focusable controls use the same indicator; programmatically focused dialog containers are excluded. Carets, native control accents and DOM text selection follow the palette accent. Imported themes use the same variables. Invalid borders, disabled states and read-only behaviour are unchanged.

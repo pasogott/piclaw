@@ -95,3 +95,18 @@ Feature: Shared palette identities with skin-specific interfaces
     Then input text and focus surfaces receive neon halos
     When I select any other palette
     Then Full UI and compose animations and inherited text glow are removed
+
+  @ux-themes-009
+  Scenario: Keep workspace charts and meter traces consistent with the selected palette
+    Given either skin shows a selected folder and its size chart
+    When I change the palette or import a VS Code theme
+    Then explorer selection, icons, chart fills and legend colours use shared palette roles
+    And existing chart geometry and folder data are retained
+    And AS400 chart and meter colours remain green-only
+    When I select normal SynthWave 84
+    Then meter traces have steady neon halos
+    When I select SynthWave 84 Full
+    Then meter traces pulse and chart edges glow
+    And reduced motion retains steady glow and hidden documents pause animations
+    When I select another palette or enable forced colours
+    Then the SynthWave chart effects disappear
