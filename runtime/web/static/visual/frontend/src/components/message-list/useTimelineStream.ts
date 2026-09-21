@@ -223,6 +223,7 @@ export function useTimelineStream({
       }
     });
 
+    es.addEventListener('picker_pins_changed', () => window.dispatchEvent(new Event('piclaw:picker-pins-changed')));
     es.addEventListener("agent_status", (e: MessageEvent) => {
       try {
         const data = JSON.parse(e.data);

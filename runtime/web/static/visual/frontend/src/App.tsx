@@ -1,3 +1,4 @@
+import { startPickerPinSync } from '../../../../src/ui/picker-pin-sync';
 import { isSafeExtensionUrl } from "./utils/isSafeExtensionUrl";
 import { useCallback, useRef, useEffect } from "preact/hooks";
 import { useSignal } from "@preact/signals";
@@ -37,6 +38,7 @@ const activateOnEnterOrSpace = (e: KeyboardEvent, handler: () => void) => {
 };
 
 function AppContent() {
+  useEffect(() => { const sync = startPickerPinSync({onError:message=>window.dispatchEvent(new CustomEvent("piclaw:status-flash",{detail:{message,type:"error"}}))}); return () => sync.stop(); }, []);
   // Desktop and mobile bars coexist in the DOM; CSS visibility is not a lifecycle.
   const modelStatus = useStatusPolling();
   const themeControl = useThemeControl();

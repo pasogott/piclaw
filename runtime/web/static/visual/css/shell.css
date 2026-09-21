@@ -8420,3 +8420,10 @@ mark[data-highlight] { border-radius: 2px; padding: 0 1px; }
 .settings-panel__scheduled-budget { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:end; gap:8px; }
 .settings-panel__scheduled-budget label { display:grid; gap:5px; }
 @media (max-width:720px) { .settings-panel__scheduled-layout,.settings-panel__scheduled-detail dl,.settings-panel__scheduled-budget { grid-template-columns:1fr; } }
+
+/* Session pin is a sibling action, never nested in the navigation button. */
+.session-pill__row { display:flex; align-items:center; }
+.session-pill__row .session-pill__item { flex:1; min-width:0; }
+.session-pill__pin { flex:none; padding:6px 8px; border:0; background:transparent; color:var(--text-secondary); cursor:pointer; }
+.session-pill__pin[aria-pressed="true"] { color:var(--accent); }
+.session-pill__pin:hover { background:var(--bg-hover); }

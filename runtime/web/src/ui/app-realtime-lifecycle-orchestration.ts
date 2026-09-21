@@ -168,6 +168,8 @@ export function useRealtimeLifecycleOrchestration(options: UseRealtimeLifecycleO
   } = options;
 
   const handleSseEvent = useCallback((eventType: string, data: any) => {
+    if (eventType === 'picker_pins_changed') { window.dispatchEvent(new Event('piclaw:picker-pins-changed')); return; }
+    if (eventType === 'connected') window.dispatchEvent(new Event('piclaw:sse-connected'));
     if (['model_changed', 'connected'].includes(eventType) || (eventType === 'agent_status' && (['done','error'].includes(data?.type) || data?.status === 'idle'))) invalidateAgentUiSnapshot(data?.chat_jid || currentChatJid);
     handleAppSseEvent(eventType, data, {
       currentChatJid,
