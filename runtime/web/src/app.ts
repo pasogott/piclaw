@@ -1,3 +1,4 @@
+import { startPickerPinSync } from './ui/picker-pin-sync.js';
 // Main authenticated web UI entry point.
 import { html, render, useState, useEffect, useMemo, useCallback } from './vendor/preact-htm.js';
 import { paneRegistry, TERMINAL_TAB_PATH, VNC_TAB_PREFIX, tabStore } from './panes/index.js';
@@ -598,6 +599,7 @@ function MainApp({ locationParams, navigate }) {
         };
     }, [branchPaneActions.handlePopOutPane, currentChatJid, interaction.composeReferenceActions.showIntentToast, pane.editorState.openEditor]);
 
+    useEffect(() => { const sync = startPickerPinSync({onError: message => interaction.composeReferenceActions.showIntentToast("Pins not saved", message, "error")}); return () => sync.stop(); }, []);
     return renderResolvedAppShell(composeRenderedMainAppOptions({
         routeState: {
             branchLoaderMode,
@@ -650,6 +652,7 @@ function MainApp({ locationParams, navigate }) {
 }
 
 function App() {
+
     const { locationParams, navigate } = useAppLocationNavigation();
     return html`<${MainApp} locationParams=${locationParams} navigate=${navigate} />`;
 }
