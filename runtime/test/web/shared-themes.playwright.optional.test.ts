@@ -536,11 +536,9 @@ for (const engine of ["chromium", "webkit"])
               .evaluate((e) => getComputedStyle(e, "::after").animationName),
           ).toBe("synthwave-full-accent");
           expect(
-            await page.locator("#theme-prose").evaluate((e) => ({
-              shadow: getComputedStyle(e).textShadow,
-              animation: getComputedStyle(e).animationName,
-            })),
-          ).toEqual({ shadow: "none", animation: "none" });
+            await page.locator("#theme-prose").evaluate((e) => getComputedStyle(e).textShadow),
+          ).not.toBe("none");
+          expect(await page.locator('body').evaluate((e) => getComputedStyle(e).animationName)).toBe('synthwave-full-ui');
           const before = await keyword.evaluate(
             (e) => e.getAnimations()[0]?.currentTime as number,
           );

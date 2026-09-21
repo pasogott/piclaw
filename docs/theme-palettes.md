@@ -10,7 +10,7 @@ Use **Settings → Appearance** in either skin, or `/theme <id>`. Named palette 
 
 **SynthWave ’84** is the normal, steady-glow version. **SynthWave ’84 Full** is a separate preset with bright neon text cores, layered halos, a slow 5.5-second syntax pulse and 4.8-second accent-light animation. Both include their glow without a checkbox; old browser opt-out values are ignored.
 
-Full adapts upstream's light-core/coloured-halo treatment to Piclaw syntax roles. The pulsing/accent motion is a Piclaw addition, not a claim that upstream animates its code. Ordinary prose stays sharp. There is no rapid flashing. Reduced motion keeps Full's strong static glow but stops animation; a document visibility event pauses CSS animations in hidden tabs. Forced colours suppress decorative shadows. Switching themes removes the effects. There is no perpetual JavaScript timer or RAF loop; visible Full effects can still consume browser paint/compositing work. Canvas terminals receive the palette, not CSS token glow.
+Full adapts upstream's light-core/coloured-halo treatment to Piclaw syntax roles. It also gives prose and controls inherited neon text, a six-second UI pulse, a glowing composer with scanlines and a 4.8-second frame pulse, neon popup edges and active navigation accents. Normal leaves ordinary prose unchanged. These UI effects and motion are Piclaw additions. There is no rapid flashing. Reduced motion keeps Full's strong static glow but stops animation; a document visibility event pauses CSS animations in hidden tabs. Forced colours suppress decorative shadows. Switching themes removes the effects. There is no perpetual JavaScript timer or RAF loop; visible Full effects can still consume browser paint/compositing work. Canvas terminals receive the palette, not CSS token glow.
 
 ## Catalogue
 
@@ -65,6 +65,12 @@ Source revisions, JSON hashes, catalogue links and notices are in the palette ma
 Primary/secondary UI text is adjusted towards the palette foreground where needed to reach 4.5:1 on the declared solid UI surfaces. Code text/background and syntax roles preserve authored source colours; they are not substituted with UI accent/status colours or silently contrast-remapped. ANSI colours retain the terminal readability safeguard. Palette identity and characteristic accents are retained. These calculations are guardrails, not certification of every rendered component: alpha composition, images, custom add-ons and font sizes need their own checks. Colour-friendly presets change semantic hues; status text and existing icons remain necessary. The accessible pair targets stronger contrast without globally resizing controls.
 
 Visual xterm now reads the selected palette and refreshes on theme changes without reconnecting or injecting terminal input. Classic retains its terminal contrast safeguards and uses the same ANSI roles. No renderer, terminal protocol or VNC input mapping changes are made.
+
+## Input focus
+
+Both skins share `theme-focus.css`, loaded after component styles and before Full's effects. Native inputs, textareas, selects, editable surfaces and custom selects use the palette focus ring. Keyboard-focusable controls use the same indicator; programmatically focused dialog containers are excluded. Carets, native control accents and DOM text selection follow the palette accent. Imported themes use the same variables. Invalid borders, disabled states and read-only behaviour are unchanged.
+
+This styling cannot cross iframe/shadow roots or control operating-system select popups and mobile selection handles. Login and family pages have separate styles; the selected chat palette does not apply there. Forced-colour mode uses system Highlight/HighlightText colours.
 
 ## Imported Visual themes
 
