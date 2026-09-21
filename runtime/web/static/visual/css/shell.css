@@ -841,7 +841,7 @@ body {
   background: var(--overlay-white-04);
   color: var(--text-primary, #e7e9ea);
   padding: 0 8px;
-  font-size: 12px;
+  font: 500 12px/16px var(--font-family);
   cursor: pointer;
   white-space: nowrap;
   transition: color 0.15s, background 0.15s;
@@ -857,6 +857,7 @@ body {
 }
 
 .session-pill__label {
+  line-height: 16px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -7160,7 +7161,7 @@ pre.frontmatter-block {
 .lightbox__backdrop {
   position: fixed;
   inset: 0;
-  background: var(--overlay-black-85);
+  background: var(--media-backdrop, rgba(20, 24, 32, 0.62));
   z-index: var(--z-overlay);
   display: flex;
   align-items: center;

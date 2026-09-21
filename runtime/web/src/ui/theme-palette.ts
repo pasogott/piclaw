@@ -250,6 +250,7 @@ export function paletteVariables(
     "--chart-5": p.syntax?.keyword || accent,
     "--chart-6": p.syntax?.type || success,
     "--overlay": themeAlpha("#000000", mode === "dark" ? 0.5 : 0.22),
+    "--media-backdrop": themeAlpha(bg, 0.62),
     "--scrollbar-thumb": themeAlpha(
       p.monochrome ? text : mode === "dark" ? "#ffffff" : "#000000",
       0.25,

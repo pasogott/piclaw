@@ -10,11 +10,22 @@
     outline: 2px solid var(--focus-ring, var(--accent-color)) !important;
     outline-offset: 2px;
 }
+/* Overlay the existing field border rather than drawing a second contour
+ * outside it. Button/link keyboard indicators retain their separate offset. */
+:root :is(input, textarea, select, [contenteditable="true"], .custom-select__trigger):focus {
+    outline-offset: -2px !important;
+}
+:root:not([data-color-theme="synthwave-84-full"][data-synthwave-glow="on"]) :is(input, textarea, select, [contenteditable="true"], .custom-select__trigger):focus {
+    box-shadow: none !important;
+}
 /* The composer is one compound control. Its outer frame owns focus;
  * the text field keeps the skin's borderless surface and themed caret. */
 :root :is(.compose-input-wrapper, .chat__compose-container):focus-within {
     outline: 2px solid var(--compose-focus-color, var(--focus-ring, var(--accent-color))) !important;
-    outline-offset: 2px;
+    outline-offset: -2px !important;
+}
+:root:not([data-color-theme="synthwave-84-full"][data-synthwave-glow="on"]) :is(.compose-input-wrapper, .chat__compose-container):focus-within {
+    box-shadow: none;
 }
 :root :is(.compose-input-wrapper textarea, textarea.chat__input) {
     outline: none !important;

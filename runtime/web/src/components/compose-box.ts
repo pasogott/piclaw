@@ -363,8 +363,8 @@ function ContextPie({ usage, onCompact, compactionLabel = '', compactionTitle = 
     const activeCompactionLabel = typeof compactionLabel === 'string' ? compactionLabel.trim() : '';
     const activeCompactionTitle = typeof compactionTitle === 'string' ? compactionTitle.trim() : '';
     const title = activeCompactionLabel
-        ? `${label} — ${activeCompactionTitle || 'Smart compaction'} · ${activeCompactionLabel}`
-        : `${label} — ${compactLabel}`;
+        ? `${label}\n${activeCompactionTitle || 'Smart compaction'} · ${activeCompactionLabel}`
+        : `${label}\n${compactLabel}`;
 
     // Pie arc: SVG circle with stroke-dasharray trick.
     // Circle circumference = 2πr = 2π×9 ≈ 56.55
@@ -381,7 +381,6 @@ function ContextPie({ usage, onCompact, compactionLabel = '', compactionTitle = 
             class=${`compose-context-pie icon-btn${activeCompactionLabel ? ' is-compacting' : ''}`}
             type="button"
             title=${title}
-            data-tooltip=${title}
             aria-label=${title}
             disabled=${!canCompact}
             onClick=${(e) => {

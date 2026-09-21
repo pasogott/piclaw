@@ -91,12 +91,14 @@ Feature: Shared palette identities with skin-specific interfaces
     Then its focus ring follows the palette focus colour
     And compose focus belongs to the outer frame while its inner textarea has no outline, border or focus shadow
     And blurring the composer removes its focus ring without changing its geometry
+    And field and composer focus use one sharp contour without a detached outer rim
     And its caret, text selection and native control accent follow the palette
     And disabled controls remain disabled and read-only fields remain read-only
     When I select SynthWave 84 Full
     Then input text and focus surfaces receive neon halos
     When I select any other palette
     Then Full UI and compose animations and inherited text glow are removed
+    And attachment preview backdrops remain translucent without reducing image opacity
 
   @ux-themes-009
   Scenario: Keep workspace charts and meter traces consistent with the selected palette

@@ -19,7 +19,98 @@ window.fetch = async (input) => {
   return Response.json({});
 };
 
-if (view === "settings") {
+if (view === "lightbox" || view === "image-lightbox") {
+  const {
+    html,
+    render: classicRender,
+    useState: classicState,
+  } = await import("../../../web/src/vendor/preact-htm");
+  const { AttachmentPreviewModal } =
+    await import("../../../web/src/components/attachment-preview-modal");
+  if (view === "lightbox") {
+    function Preview() {
+      const [open, setOpen] = classicState(false);
+      return html`<button id="open-preview" onClick=${() => setOpen(true)}>
+          Preview attachment
+        </button>
+        <p>Underlying page remains visible.</p>
+        ${open && html`<${AttachmentPreviewModal} mediaId=${42} info=${{ filename: "fixture.svg", content_type: "image/svg+xml" }} onClose=${() => setOpen(false)} />`}`;
+    }
+    classicRender(html`<${Preview} />`, host);
+  } else {
+    const { ImageLightbox } =
+      await import("../../../web/static/visual/frontend/src/components/ImageLightbox");
+    const { useState } = await import("preact/hooks");
+    function Preview() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button id="open-preview" onClick={() => setOpen(true)}>
+            Preview image
+          </button>
+          <p>Underlying page remains visible.</p>
+          {open && (
+            <ImageLightbox
+              src="/media/42"
+              alt="Fixture image"
+              onClose={() => setOpen(false)}
+            />
+          )}
+        </>
+      );
+    }
+    render(h(Preview, {}), host);
+  }
+} else if (view === "native-tooltips") {
+  const { html, render: classicRender } =
+    await import("../../../web/src/vendor/preact-htm");
+  const { ComposeBox } =
+    await import("../../../web/src/components/compose-box");
+  const { Post } = await import("../../../web/src/components/post");
+  const timing = {
+    type: "agent_timing",
+    started_at: "2026-09-21T12:00:00.000Z",
+    duration_ms: 62000,
+    usage: {
+      input_tokens: 12000,
+      output_tokens: 3456,
+      reasoning_tokens: 1200,
+      cache_read_tokens: 7800,
+      cache_write_tokens: 900,
+      total_tokens: 24156,
+      cost_total: 0.01234,
+      provider_cost_total: 0.01234,
+      cost_provenance: "provider_reported",
+    },
+  };
+  classicRender(
+    html`<${Post}
+        post=${{ id: 123, timestamp: "2026-09-21T12:01:02.000Z", data: { content: "Timestamp details", sender_name: "Fixture", is_bot_message: true, content_blocks: [timing] } }}
+      /><${ComposeBox}
+        currentChatJid="web:default"
+        activeChatAgents=${[]}
+        contextUsage=${{ tokens: 32000, contextWindow: 128000, percent: 25 }}
+        onContextCompact=${() => {}}
+        capabilities=${{ speech: false, attachmentButton: false, cameraButton: false, locationButton: false, notifications: false, modelPicker: false, commandReference: false }}
+        onSubmit=${async () => true}
+      />
+      <div id="visual-context"></div>`,
+    host,
+  );
+  if (skin === "visual") {
+    const { ContextRing } =
+      await import("../../../web/static/visual/frontend/src/components/model-context-bar/ContextRing");
+    render(
+      h(ContextRing, {
+        tokens: 32000,
+        contextWindow: 128000,
+        percent: 25,
+        onClick: () => {},
+      }),
+      document.getElementById("visual-context")!,
+    );
+  }
+} else if (view === "settings") {
   await import("./settings-controls-fixture");
 } else if (view === "model" || view === "session") {
   // Reuse real component fixtures, including the Classic session/compose host.
