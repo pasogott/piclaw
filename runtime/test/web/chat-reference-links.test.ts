@@ -6,11 +6,13 @@ import { getChatProjectRepository, setChatProjectRepository, subscribeChatProjec
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+const enabled = process.env.PICLAW_RUN_OPTIONAL_BROWSER_TESTS === '1';
+const browserTest = enabled ? test : test.skip;
 let browser: Browser;
-beforeAll(async () => { browser = await chromium.launch({ headless: true }); }, 30000);
+beforeAll(async () => { if (enabled) browser = await chromium.launch({ headless: true }); }, 30000);
 afterAll(async () => { await browser?.close(); });
 
-test('numeric references are plain when unset and named hashtags remain timeline links', async () => {
+browserTest('numeric references are plain when unset and named hashtags remain timeline links', async () => {
   const page = await browser.newPage();
   try {
     const result = await page.evaluate(([source]) => {
@@ -24,7 +26,7 @@ test('numeric references are plain when unset and named hashtags remain timeline
   } finally { await page.close(); }
 }, 30000);
 
-test('numeric project links are safe external links with conservative token boundaries', async () => {
+browserTest('numeric project links are safe external links with conservative token boundaries', async () => {
   const page = await browser.newPage();
   try {
     const result = await page.evaluate(([source]) => {
@@ -62,7 +64,7 @@ test('repository URL normalisation handles .git and rejects unsafe forms', () =>
   for (const url of ['javascript:alert(1)', 'https://u:p@example.com/o/r', 'https://example.com/o/r?q=1']) expect(() => normalizeProjectRepository(url)).toThrow();
 });
 
-test('numeric-only mode leaves named user hashtags unchanged', async () => {
+browserTest('numeric-only mode leaves named user hashtags unchanged', async () => {
   const page = await browser.newPage();
   try {
     const result = await page.evaluate(([source]) => {

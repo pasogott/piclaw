@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "preact/hooks";
 import { getChatJid } from "../../api/chat-jid";
-import { getChatProjectRepository, subscribeChatProject } from "../../../../../../../src/ui/chat-project-state";
+import { getChatProjectRepository, subscribeChatProject } from "../../../../../../src/ui/chat-project-state";
 import { agentDisplayName } from "../../api/agent-identity";
 import { HighlightPopup } from "./HighlightPopup";
 import { serializeSelection, applyHighlights, clearHighlights, HIGHLIGHT_COLORS, type HighlightRange } from "../../utils/highlight-serializer";
@@ -11,7 +11,7 @@ import { resolveAudioContentType } from "../../../../../../../src/utils/audio-me
 import { DelimitedTable } from "./DelimitedTable";
 import { isDelimitedFile } from "../../utils/delimited-preview";
 import { renderMarkdown } from "../../utils/markdown-pipeline";
-import { linkifyChatReferences } from "../../../../../../../src/ui/chat-reference-links";
+import { linkifyChatReferences } from "../../../../../../src/ui/chat-reference-links";
 import { relativeTime, getBlockKey, getTurnOutcomeMarker } from "./helpers";
 import { MessageActionBar } from "./MessageActionBar";
 import { userAvatarUrl, assistantAvatarUrl } from "../../api/identity";

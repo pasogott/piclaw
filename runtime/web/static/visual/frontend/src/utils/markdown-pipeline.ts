@@ -1,4 +1,4 @@
-import { linkifyChatReferences } from "../../../../../../src/ui/chat-reference-links";
+import { linkifyChatReferences } from "../../../../../src/ui/chat-reference-links";
 /**
  * Full markdown rendering pipeline — ported from upstream piclaw.
  *
