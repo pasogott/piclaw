@@ -367,7 +367,7 @@ export function createWebChannelConstructorFactory(
     handlePostRequest: (req, isReply, chatJid) => deps.handlePostRequest(channel, req, isReply, chatJid),
     listActiveChats: () => channel.agentPool.listActiveChats(),
     listKnownChats: resolveListKnownChats(channel.agentPool),
-    getProjectRepository: (chatJid) => getChatProject(chatJid).repository_url,
+    getProjectRepository: (chatJid) => getChatProject(chatJid),
   });
 
   const controlPlaneService = deps.createControlPlaneService(channel, {

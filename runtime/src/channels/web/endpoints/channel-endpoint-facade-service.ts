@@ -47,7 +47,7 @@ export interface WebChannelEndpointFacadeOptions {
   handlePostRequest(req: Request, isReply: boolean, chatJid: string): Promise<Response>;
   listActiveChats(): unknown[];
   listKnownChats?(rootChatJid?: string | null, options?: { includeArchived?: boolean }): unknown[];
-  getProjectRepository?(chatJid: string): string | null;
+  getProjectRepository?(chatJid: string): unknown;
 }
 
 /**

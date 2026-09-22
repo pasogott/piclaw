@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "preact/hooks";
 import { getChatJid } from "../../api/chat-jid";
-import { getChatProjectRepository, subscribeChatProject } from "../../../../../../src/ui/chat-project-state";
+import { getChatProjectRepository, seedChatProjectRepository, subscribeChatProject } from "../../../../../../src/ui/chat-project-state";
 import { agentDisplayName } from "../../api/agent-identity";
 import { HighlightPopup } from "./HighlightPopup";
 import { serializeSelection, applyHighlights, clearHighlights, HIGHLIGHT_COLORS, type HighlightRange } from "../../utils/highlight-serializer";
@@ -11,7 +11,6 @@ import { resolveAudioContentType } from "../../../../../../../src/utils/audio-me
 import { DelimitedTable } from "./DelimitedTable";
 import { isDelimitedFile } from "../../utils/delimited-preview";
 import { renderMarkdown } from "../../utils/markdown-pipeline";
-import { linkifyChatReferences } from "../../../../../../src/ui/chat-reference-links";
 import { relativeTime, getBlockKey, getTurnOutcomeMarker } from "./helpers";
 import { MessageActionBar } from "./MessageActionBar";
 import { userAvatarUrl, assistantAvatarUrl } from "../../api/identity";
@@ -201,8 +200,11 @@ export function MessageItem({
 }: MessageItemProps) {
   const chatJid = typeof interaction.data?.chat_jid === "string" ? interaction.data.chat_jid : getChatJid();
   const [, setProjectRevision] = useState(0);
-  useEffect(() => subscribeChatProject(chatJid, () => setProjectRevision((value) => value + 1)), [chatJid]);
-  const projectRepository = getChatProjectRepository(chatJid);
+  useEffect(() => {
+    seedChatProjectRepository(chatJid, interaction.project_repository);
+    return subscribeChatProject(chatJid, () => setProjectRevision((value) => value + 1));
+  }, [chatJid, interaction.project_repository]);
+  const projectRepository = getChatProjectRepository(chatJid) ?? interaction.project_repository?.repository_url ?? null;
   const isUser = interaction.type === "user";
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -284,13 +286,10 @@ export function MessageItem({
 
   const renderUserContent = (content: string) => {
     const { cleanedContent, attachments } = parseUserContent(content);
-    const escapedContent = cleanedContent
-      .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 
     return (
       <>
-        {cleanedContent && <span dangerouslySetInnerHTML={{ __html: linkifyChatReferences(escapedContent, projectRepository, false) }} />}
+        {cleanedContent && <div className="message-list__user-markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(cleanedContent, { projectRepository }) }} />}
         {attachments.length > 0 && (
           <div className="message-list__attachments">
             {attachments.map((attachment, idx) => (

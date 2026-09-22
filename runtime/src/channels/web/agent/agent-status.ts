@@ -341,7 +341,7 @@ export async function handleAgentModelsRequest(req: Request, ctx: AgentStatusCon
 export async function handleAgentUiSnapshotRequest(req: Request, ctx: AgentStatusContext, extra: {
   getSystemMetrics(): Promise<unknown>;
   getAgentName(): string;
-  getProjectRepository?(chatJid: string): string | null;
+  getProjectRepository?(chatJid: string): unknown;
 }): Promise<Response> {
   const chatJid = resolveChatJid(req, ctx.defaultChatJid);
   const { result, durationMs } = await measureAsync(async () => {

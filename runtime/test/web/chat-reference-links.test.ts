@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { chromium, type Browser } from 'playwright';
 import { linkifyChatReferences } from '../../web/src/ui/chat-reference-links';
 import { normalizeProjectRepository } from '../../src/core/project-repository';
-import { getChatProjectRepository, setChatProjectRepository, subscribeChatProject } from '../../web/src/ui/chat-project-state';
+import { getChatProjectRepository, resetChatProjectStateForTests, seedChatProjectRepository, setChatProjectRepository, subscribeChatProject } from '../../web/src/ui/chat-project-state';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -40,13 +40,18 @@ browserTest('numeric project links are safe external links with conservative tok
   } finally { await page.close(); }
 }, 30000);
 
-test('chat project state notifies only the matching chat', () => {
+test('chat project state keeps snapshots authoritative and rejects stale payload seeds', () => {
+  resetChatProjectStateForTests();
   let a = 0, b = 0;
   const offA = subscribeChatProject('a', () => a++), offB = subscribeChatProject('b', () => b++);
-  setChatProjectRepository('a', 'https://github.com/a/b');
-  setChatProjectRepository('a', 'https://github.com/a/b');
-  expect(getChatProjectRepository('a')).toBe('https://github.com/a/b');
-  expect([a, b]).toEqual([1, 0]); offA(); offB();
+  const old = { repository_url: 'https://github.com/a/old', source_branch_id: 'root', revision: '2026-01-01T00:00:00Z:root:1' };
+  const next = { repository_url: 'https://github.com/a/next', source_branch_id: 'root', revision: '2026-01-02T00:00:00Z:root:2' };
+  seedChatProjectRepository('a', old); seedChatProjectRepository('a', next); seedChatProjectRepository('a', old);
+  expect(getChatProjectRepository('a')).toBe('https://github.com/a/next');
+  setChatProjectRepository('a', { ...next, repository_url: 'https://github.com/a/live' });
+  seedChatProjectRepository('a', { ...next, repository_url: 'https://github.com/a/stale' });
+  expect(getChatProjectRepository('a')).toBe('https://github.com/a/live');
+  expect(b).toBe(0); expect(a).toBe(3); offA(); offB();
 });
 
 test('both shipped markdown surfaces consume the shared project repository option', () => {
@@ -57,11 +62,15 @@ test('both shipped markdown surfaces consume the shared project repository optio
     expect(source).toContain('linkifyChatReferences');
     expect(source).toContain('options.projectRepository');
   }
+  const item = readFileSync(resolve(root, 'web/static/visual/frontend/src/components/message-list/MessageItem.tsx'), 'utf8');
+  expect(item).toContain('renderMarkdown(cleanedContent, { projectRepository })');
+  expect(item).not.toContain('escapedContent');
 });
 
-test('repository URL normalisation handles .git and rejects unsafe forms', () => {
+test('repository URL normalisation accepts roots and rejects unsafe or known non-root paths', () => {
   expect(normalizeProjectRepository('https://github.com/o/r.git/')).toBe('https://github.com/o/r');
-  for (const url of ['javascript:alert(1)', 'https://u:p@example.com/o/r', 'https://example.com/o/r?q=1']) expect(() => normalizeProjectRepository(url)).toThrow();
+  expect(normalizeProjectRepository('https://gitea.example/base/o/r')).toBe('https://gitea.example/base/o/r');
+  for (const url of ['javascript:alert(1)', 'https://u:p@example.com/o/r', 'https://example.com/o/r?q=1', 'https://github.com/o/r/pull/1395', 'https://gitea.example/base/o/r/issues/42', 'https://gitea.example/explore/repos', 'https://gitea.example/too/deep/o/r']) expect(() => normalizeProjectRepository(url)).toThrow();
 });
 
 browserTest('numeric-only mode leaves named user hashtags unchanged', async () => {

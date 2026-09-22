@@ -57,7 +57,7 @@ test("opt-in UI envelope reads all sections for the exact chat and requests only
     {
       getSystemMetrics: async () => ({ cpu_percent: 3 }),
       getAgentName: () => "Fixture",
-      getProjectRepository: (jid) => { seen.push(jid); return "https://github.com/example/project"; },
+      getProjectRepository: (jid) => { seen.push(jid); return { repository_url: "https://github.com/example/project", source_branch_id: "root", revision: "2026-01-01T00:00:00Z:root:1" }; },
     },
   );
   expect(res.status).toBe(200);
@@ -70,7 +70,7 @@ test("opt-in UI envelope reads all sections for the exact chat and requests only
   expect(p.metrics.cpu_percent).toBe(3);
   expect(p.errors).toEqual([]);
   expect(p.agent_name).toBe("Fixture");
-  expect(p.project_repository).toBe("https://github.com/example/project");
+  expect(p.project_repository).toEqual({ repository_url: "https://github.com/example/project", source_branch_id: "root", revision: "2026-01-01T00:00:00Z:root:1" });
 });
 test("failed optional sections do not discard healthy status or leak exception text", async () => {
   const res = await handleAgentUiSnapshotRequest(

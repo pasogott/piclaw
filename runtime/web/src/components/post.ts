@@ -1599,7 +1599,7 @@ export function Post({ post, onClick, onHashtagClick, onMessageRef, onScrollToMe
     );
     const shouldRenderContent = Boolean(displayContent) && !isHardTruncated && !hideRenderedFallback;
     const highlightQueryText = typeof highlightQuery === 'string' ? highlightQuery.trim() : '';
-    const projectRepository = useChatProjectRepository(post.chat_jid);
+    const projectRepository = useChatProjectRepository(post.chat_jid, post.project_repository);
     const renderedHtml = useMemo(() => {
         if (!displayContent || hideRenderedFallback) return '';
         const baseHtml = renderMarkdown(displayContent, onHashtagClick, { rewriteImageSrc, projectRepository });

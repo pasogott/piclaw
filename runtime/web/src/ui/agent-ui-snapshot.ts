@@ -9,7 +9,7 @@ export interface AgentUiSnapshot {
   metrics: any;
   agent_name: string;
   errors: string[];
-  project_repository?: string | null;
+  project_repository?: { repository_url: string | null; source_branch_id: string | null; revision: string | null } | null;
 }
 interface Entry {
   value?: AgentUiSnapshot;
