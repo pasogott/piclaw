@@ -74,16 +74,20 @@ describe("latent Earendil Harness v3 non-interference boundary", () => {
 
   test("has no production importer, export, registration, or reachability edge", () => {
     const incoming: string[] = [];
+    const pico3Imports: string[] = [];
     for (const [path, source] of Object.entries(tree.files)) {
       if (path.startsWith(LATENT_ROOT) || !path.endsWith(".ts")) continue;
       for (const specifier of moduleSpecifiers(path, source)) {
         const resolved = resolveRepositoryModule(path, specifier, tree.files);
         if (resolved?.startsWith(LATENT_ROOT)) incoming.push(`${path} -> ${resolved}`);
+        if (specifier.includes("/experimental/pico3")) pico3Imports.push(`${path} -> ${specifier}`);
       }
       expect(source).not.toContain("earendil-harness-v3-compatibility");
     }
     expect(incoming).toEqual([]);
+    expect(pico3Imports).toEqual([]);
     expect(tree.files["package.json"]).not.toContain("earendil-harness-v3-compatibility");
+    expect(tree.files["package.json"]).not.toContain("experimental/pico3");
   });
 
   test("uses type-only public roots and emits no assignment or preparation runtime", () => {
