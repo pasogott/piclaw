@@ -69,8 +69,9 @@ test('both shipped markdown surfaces consume the shared project repository optio
 
 test('repository URL normalisation accepts roots and rejects unsafe or known non-root paths', () => {
   expect(normalizeProjectRepository('https://github.com/o/r.git/')).toBe('https://github.com/o/r');
+  expect(normalizeProjectRepository('https://gitea.example/o/r')).toBe('https://gitea.example/o/r');
   expect(normalizeProjectRepository('https://gitea.example/base/o/r')).toBe('https://gitea.example/base/o/r');
-  for (const url of ['javascript:alert(1)', 'https://u:p@example.com/o/r', 'https://example.com/o/r?q=1', 'https://github.com/o/r/pull/1395', 'https://gitea.example/base/o/r/issues/42', 'https://gitea.example/explore/repos', 'https://gitea.example/too/deep/o/r']) expect(() => normalizeProjectRepository(url)).toThrow();
+  for (const url of ['javascript:alert(1)', 'https://u:p@example.com/o/r', 'https://example.com/o/r?q=1', 'https://github.com/o/r/pull/1395', 'https://gitea.example/alice', 'https://gitea.example/base/o/r/issues/42', 'https://gitea.example/explore/repos', 'https://gitea.example/too/deep/o/r']) expect(() => normalizeProjectRepository(url)).toThrow();
 });
 
 browserTest('numeric-only mode leaves named user hashtags unchanged', async () => {

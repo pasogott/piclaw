@@ -12,7 +12,7 @@ export function normalizeProjectRepository(value: unknown): string {
   if (parts.at(-1)!.endsWith(".git")) parts[parts.length - 1] = parts.at(-1)!.slice(0, -4);
   if (!parts.at(-1)) throw new Error("Repository name is required.");
   if (url.hostname.toLowerCase() === "github.com" && parts.length !== 2) throw new Error("GitHub repository URLs must end at github.com/owner/repository.");
-  if (url.hostname.toLowerCase() !== "github.com" && parts.length > 3) throw new Error("Gitea repository URLs may contain at most one installation base before owner/repository.");
+  if (url.hostname.toLowerCase() !== "github.com" && parts.length !== 2 && parts.length !== 3) throw new Error("Gitea repository URLs must be owner/repository or installation-base/owner/repository.");
   const reservedTail = new Set(["issues", "issue", "pulls", "pull", "explore", "src", "commits", "commit", "actions", "releases", "projects", "settings", "wiki", "compare", "branches", "tags", "milestones"]);
   const repository = parts.at(-1)!.toLowerCase();
   if (parts.some(part => reservedTail.has(part.toLowerCase())) || /^\d+$/.test(repository)) throw new Error("Repository URL must identify a repository root, not an issue, pull request or explorer page.");
