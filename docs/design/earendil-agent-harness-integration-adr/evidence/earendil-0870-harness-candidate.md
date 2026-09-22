@@ -17,7 +17,7 @@ The packed candidate contains six coherent packages. Every package reports Node 
 | `@earendil-works/pi-telemetry` | transitive | `3d63532659b3904f784c03daa8a3fb90be8f7746` |
 | `@earendil-works/pi-tui` | transitive | `bdfa9b094b6d59628d92c55b485b01fd281c6284` |
 
-The closed compatibility manifest stores each npm integrity, shasum, public export list, internal dependency range and 16 SHA-256 fingerprints for public runtime/declaration targets. The new `./experimental/pico3` export is recorded but excluded from this stable-Harness assessment; issue #1376 owns it.
+The closed compatibility manifest stores each npm integrity, shasum, public export list, internal dependency range and 16 SHA-256 fingerprints for stable public runtime/declaration targets. The separate [`./experimental/pico3` assessment](earendil-0870-pico3-assessment.md) records its own packed-target hashes and does not change stable AgentHarness evidence.
 
 The repository's existing package-admission checker passed against a standalone coding-agent-only 0.87.0 consumer under real Node 22.19.0 and Bun 1.4.1. It found all six packages, imported the three root runtime exports, made zero provider factory calls, inherited no secrets, requested offline operation, disabled telemetry and rejected `./client` plus `./experimental/plugin` at export resolution. The checker does not provide an OS-level network sandbox; the receipt records `networkSandboxed: false`.
 

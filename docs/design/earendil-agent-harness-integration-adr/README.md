@@ -67,6 +67,7 @@ The original assessment produced this ADR, evidence tables and a proposed semant
 - [Current-loop migration readiness and receipts](evidence/earendil-0851-readiness.md)
 - [Broader inactive HC evidence](evidence/earendil-0851-hc-evidence.md)
 - [Published 0.87.0 stable Harness candidate evidence](evidence/earendil-0870-harness-candidate.md)
+- [Published 0.87.0 experimental Pico3 assessment](evidence/earendil-0870-pico3-assessment.md)
 - [Canary procedure](evidence/earendil-0851-canary.md) and [executed piclaw-test receipt](evidence/earendil-0851-canary-result.md)
 - [Evidence register](evidence/README.md)
   - [Piclaw v2.13.2 capability matrix](evidence/current-capability-matrix.md)
