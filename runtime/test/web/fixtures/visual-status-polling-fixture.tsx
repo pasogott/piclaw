@@ -14,6 +14,7 @@ let blocked = false;
 let statusCode = 200;
 let model = "fixture/model";
 let pending: Array<() => void> = [];
+let overrides: Record<string,unknown> = {};
 window.fetch = (async (input, init) => {
   const url = new URL(String(input), location.href);
   const record = {
@@ -30,6 +31,7 @@ window.fetch = (async (input, init) => {
     model: {
       current: model,
       thinking_level: "medium",
+      supports_thinking: true,
       model_options: [{ id: model, context_window: 200000 }],
       oobe: { provider_ready_completed_instance: true },
     },
@@ -37,6 +39,7 @@ window.fetch = (async (input, init) => {
     metrics: { cpu_percent: 2, ram_percent: 10 },
     agent_name: "Fixture",
     errors: [],
+    ...structuredClone(overrides),
   };
   // Delayed body deliberately ignores abort to prove late continuations are
   // discarded by versions, not merely by the browser's fetch implementation.
@@ -82,6 +85,7 @@ function Fixture() {
           getAgentContext("web:test"),
           getAgentModelState("web:test"),
         ]),
+      setSnapshot: (value:Record<string,unknown>) => { overrides = value; },
       calls,
       clear: () => calls.splice(0),
       setMounted,

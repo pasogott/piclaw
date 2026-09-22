@@ -654,7 +654,7 @@ export function resolveComposeModelPickerState(activeModel, agentModelsPayload) 
         };
     }
 
-    const hasAvailableModels = normalizeModelPickerOptions(agentModelsPayload).length > 0;
+    const hasAvailableModels = normalizeModelPickerOptions(agentModelsPayload).length > 0 || Number(agentModelsPayload?.available_model_count) > 0;
     return {
         showPicker: hasAvailableModels,
         label: hasAvailableModels ? 'Select model' : '',
