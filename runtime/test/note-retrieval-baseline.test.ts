@@ -41,6 +41,10 @@ test('real production search baseline is provider-free and stable across indepen
   if(exit!==0)throw Error(err+out);
   const report = JSON.parse(out);
   expect(report.rankingStable).toBe(true); expect(report.reports).toHaveLength(4);
+  expect(report.budgetSha256).toMatch(/^[0-9a-f]{64}$/);
+  expect(report.budgetAssessment.completeFixtureMatrix).toBe(false);
+  expect(report.budgetAssessment.allBudgetsSatisfied).toBe(false);
+  expect(report.budgetAssessment.counts.pass).toBe(0);
   expect(report.rebuildChecks).toHaveLength(1);
   expect(report.rebuildChecks[0].identicalScoreTieStable).toBe(true);
   for(const run of report.reports){

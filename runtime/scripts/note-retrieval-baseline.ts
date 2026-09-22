@@ -1,6 +1,8 @@
 /** @file Provider-free current-search evaluation. Run with bun run test:local -- bun runtime/scripts/note-retrieval-baseline.ts. */
 import { mkdirSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { assessRetrievalBudgets } from './note-retrieval-budget.js';
 import { assertPathWithinTestFilesystemIsolation, getActiveTestFilesystemIsolationRoot } from './test-filesystem-isolation.js';
 const root = getActiveTestFilesystemIsolationRoot();
 if (!root) throw Error('Must run under the filesystem-isolated local test launcher');
@@ -43,4 +45,8 @@ for (const scale of scales) {
 const git = (args: string[]) => Bun.spawnSync(["git", ...args], { cwd: join(import.meta.dir, "../..") }).stdout.toString().trim();
 const measuredCommit = git(["rev-parse", "HEAD"]);
 const workingTreeModified = Boolean(git(["status", "--porcelain", "--untracked-files=no"]));
-console.log(JSON.stringify({ schema:1, measuredCommit, workingTreeModified, corpusCommit:'2b21a5c09b1e31244a58fb1ba175b854762b2989', productionBaseline:'dc577cbb89b97ccc5d43f5e49f539ecec056897d', repeatsPerQuery:5, rankingStable:rebuildChecks.every(check => check.rankingStable), rebuildChecks, reports },null,2));
+const report = { schema:1, measuredCommit, workingTreeModified, corpusCommit:'2b21a5c09b1e31244a58fb1ba175b854762b2989', productionBaseline:'dc577cbb89b97ccc5d43f5e49f539ecec056897d', repeatsPerQuery:5, rankingStable:rebuildChecks.every(check => check.rankingStable), rebuildChecks, reports };
+const budgetsText = await Bun.file(join(import.meta.dir, '../test/fixtures/note-retrieval/budgets.json')).text();
+const budgets = JSON.parse(budgetsText);
+const budgetSha256 = createHash('sha256').update(budgetsText).digest('hex');
+console.log(JSON.stringify({ ...report, budgetSha256, budgetAssessment: assessRetrievalBudgets(report, budgets) },null,2));
