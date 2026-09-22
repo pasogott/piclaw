@@ -136,6 +136,9 @@ describe("latent Earendil Harness v3 non-interference boundary", () => {
         if (specifier.includes("/dist/") || /0\.84\.\d/.test(specifier)) {
           findings.push(`${path}: private or version-qualified runtime import ${specifier}`);
         }
+        if (specifier.includes("/experimental/pico3")) {
+          findings.push(`${path}: experimental Pico3 import is owned by issue #1376`);
+        }
       }
       walkSyntax(ast.program, (node) => {
         if (syntax.isClassDeclaration(node)) findings.push(`${path}: class declaration`);
@@ -188,6 +191,7 @@ describe("latent Earendil Harness v3 non-interference boundary", () => {
         expect(specifier).not.toContain("/dist/");
       }
       expect(specifiers.some((specifier) => /0\.84\.\d/.test(specifier))).toBe(false);
+      expect(specifiers.some((specifier) => specifier.includes("/experimental/pico3"))).toBe(false);
     }
   });
 });
