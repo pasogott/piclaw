@@ -14,7 +14,7 @@ export function ModelContextBar({ polling }: { polling: UseStatusPollingResult }
   const {
     agentStatus, agentContext, isStale,
     currentModel, currentThinkingLevel, modelContextWindow,
-    providerUsage,
+    providerUsage, modelSelectionKnown,
     fetchContext,
   } = polling;
 
@@ -32,8 +32,8 @@ export function ModelContextBar({ polling }: { polling: UseStatusPollingResult }
     return agentContext.value?.percent ?? (w > 0 ? (t / w) * 100 : 0);
   });
 
-  const modelName = agentStatus.value?.data?.model ?? currentModel.value ?? "";
-  const thinkingLevel = agentStatus.value?.data?.thinking_level || currentThinkingLevel.value || "";
+  const modelName = modelSelectionKnown.value ? currentModel.value ?? "" : agentStatus.value?.data?.model ?? "";
+  const thinkingLevel = modelSelectionKnown.value ? currentThinkingLevel.value : agentStatus.value?.data?.thinking_level || "";
   const activeModel = currentModel.value ?? modelName;
   const providerUsageMeta = formatVisualProviderUsage(providerUsage.value);
   const latestRunUsageMeta = formatVisualLatestRunUsage(agentContext.value, activeModel || null);
