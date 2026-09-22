@@ -189,7 +189,7 @@ describe("latent Earendil Harness v3 compatibility evidence", () => {
     expect(normalized.value).toEqual(EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST);
     expectDeepFrozen(normalized.value);
 
-    expect(normalized.value.schemaVersion).toBe(4);
+    expect(normalized.value.schemaVersion).toBe(5);
     expect(normalized.value.authority).toEqual({ currentRuntimeVersion: "0.85.1", harnessActivation: "latent_only", unsupportedCountsAsPass: false });
     expect(normalized.value.historical.authority).toEqual({
       currentRuntimeVersion: "0.84.4",
@@ -434,7 +434,7 @@ describe("latent Earendil Harness v3 compatibility evidence", () => {
       watchSession: "runtime_slice_not_implemented",
       rawStorageConstructors: "not_exported_from_stable_session_barrel",
       streamingForkConformance: "memory_and_jsonl_pass_sqlite_pending",
-      experimentalPico3: "excluded_issue_1376",
+      experimentalPico3: "assessed_separately_no_production_adoption",
     });
     const candidateIds: readonly string[] = candidate.capabilities.map((entry) => entry.id);
     expect(candidateIds).toEqual(
@@ -470,6 +470,80 @@ describe("latent Earendil Harness v3 compatibility evidence", () => {
     expect(candidate.capabilities.filter((entry) => entry.status === "unsupported").map((entry) => entry.id)).toEqual(["HC-024"]);
     expect(candidate.capabilities.filter((entry) => entry.status === "unverified")).toEqual([]);
     expect(candidate.capabilities.some((entry) => entry.status === "partial" && entry.evidence.includes("full"))).toBeFalse();
+  });
+
+  test("records experimental Pico3 implementation evidence without stable-Harness promotion", () => {
+    const pico = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.experimentalPico3;
+    expect(pico).toMatchObject({
+      version: "0.87.0",
+      commit: "16787ad5b2dc748047f314ca1bfe7708f30f54f3",
+      export: "@earendil-works/pi-agent-core/experimental/pico3",
+      selection: "experimental_assessment_only",
+      engine: ">=22.19.0",
+      runtimeSha256: "ce575fbbbd66e9bcb67ff0b6be483c5baefd1750cb10adaa1d73aedb9d66eafe",
+      declarationSha256: "1ef74b8615a31ec9eed49cfd9fa657b68958af82f1b6c480dfb40d65703a6d72",
+      runtimeExports: 30,
+      productionImport: false,
+      productionActivation: false,
+    });
+    expect(pico.packedConsumer).toEqual({
+      node: "22.19.0",
+      bun: "1.4.1",
+      runtimeImports: "pass",
+      declarationProbe: "pass_with_declared_optional_mcp_peer",
+      closureCaveat: "google_genai_optional_peer_required_for_strict_full_dependency_check",
+    });
+    expect(pico.testReceipt).toEqual({
+      source: "tagged_v0_87_0_source_with_published_pi_ai_dist",
+      runner: "vitest_4_1_9",
+      files: 22,
+      tests: 191,
+      failures: 0,
+    });
+    expect(pico.implementation).toEqual({
+      durableCore: "conversations_entries_tasks_inputs_and_chord_documents",
+      scheduler: "automatic_after_resume",
+      storage: ["MemoryStorage", "JsonlStorage"],
+      sqlite: "not_implemented",
+      processOwnership: "one_process_per_storage",
+      watch: "snapshot_plus_binding_local_revision_bounded_256",
+      chordBridge: "implemented",
+      designParity: "document_contains_proposed_unexported_shapes",
+    });
+  });
+
+  test("keeps every Piclaw service authority outside Pico3", () => {
+    const pico = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.experimentalPico3;
+    expect(pico.authorities).toEqual({
+      serviceWorkStore: "retained_piclaw",
+      terminalSettlementStore: "retained_piclaw",
+      serviceOutboxStore: "retained_piclaw",
+      scheduledRunStore: "retained_piclaw",
+      agentProjectionSink: "retained_piclaw",
+    });
+    expect(pico.recommendation).toEqual({
+      disposableSpike: "go",
+      productionAdoption: "no_go",
+      reason: "missing_piclaw_boundary_evidence_sqlite_host_fencing_and_api_stability",
+    });
+  });
+
+  test("classifies Pico3 HC evidence conservatively and leaves every Piclaw boundary unverified", () => {
+    const pico = EARENDIL_HARNESS_V3_COMPATIBILITY_MANIFEST.experimentalPico3;
+    const hcIds: readonly string[] = pico.harnessCases.map((entry) => entry.id);
+    const pcIds: readonly string[] = pico.piclawCases.map((entry) => entry.id);
+    expect(hcIds).toEqual(Array.from({ length: 25 }, (_, index) => `HC-${String(index + 1).padStart(3, "0")}`));
+    expect(pcIds).toEqual(Array.from({ length: 20 }, (_, index) => `PC-${String(index + 1).padStart(3, "0")}`));
+    expect(pico.harnessCases.filter((entry) => entry.status === "partial")).toHaveLength(21);
+    expect(pico.harnessCases.filter((entry) => entry.status === "unsupported").map((entry) => entry.id)).toEqual([
+      "HC-008",
+      "HC-017",
+      "HC-021",
+      "HC-024",
+    ]);
+    expect(pico.harnessCases.some((entry) => entry.status === "unverified")).toBeFalse();
+    expect(pico.piclawCases.every((entry) => entry.status === "unverified")).toBeTrue();
+    expect(pico.piclawCases.every((entry) => entry.evidence.includes("Piclaw"))).toBeTrue();
   });
 
   test("selected-release partial HC coverage never counts as full promotion", () => {

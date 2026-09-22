@@ -97,7 +97,7 @@ export interface EarendilPublishedCandidateAssessment {
     watchSession: "runtime_slice_not_implemented";
     rawStorageConstructors: "not_exported_from_stable_session_barrel";
     streamingForkConformance: "memory_and_jsonl_pass_sqlite_pending";
-    experimentalPico3: "excluded_issue_1376";
+    experimentalPico3: "assessed_separately_no_production_adoption";
   }>;
   readonly admissionReceipt: Readonly<{
     node: "22.19.0";
@@ -138,12 +138,72 @@ export interface EarendilPublishedCandidateAssessment {
   readonly productionActivation: false;
 }
 
+export type EarendilPico3AssessmentStatus = "partial" | "unsupported" | "unverified";
+
+export interface EarendilPico3AssessmentCase {
+  readonly id: `HC-0${string}` | `PC-0${string}`;
+  readonly status: EarendilPico3AssessmentStatus;
+  readonly evidence: string;
+}
+
+export interface EarendilPico3ExperimentalAssessment {
+  readonly version: "0.87.0";
+  readonly commit: "16787ad5b2dc748047f314ca1bfe7708f30f54f3";
+  readonly export: "@earendil-works/pi-agent-core/experimental/pico3";
+  readonly selection: "experimental_assessment_only";
+  readonly engine: ">=22.19.0";
+  readonly runtimeSha256: "ce575fbbbd66e9bcb67ff0b6be483c5baefd1750cb10adaa1d73aedb9d66eafe";
+  readonly declarationSha256: "1ef74b8615a31ec9eed49cfd9fa657b68958af82f1b6c480dfb40d65703a6d72";
+  readonly runtimeExports: 30;
+  readonly packedConsumer: Readonly<{
+    node: "22.19.0";
+    bun: "1.4.1";
+    runtimeImports: "pass";
+    declarationProbe: "pass_with_declared_optional_mcp_peer";
+    closureCaveat: "google_genai_optional_peer_required_for_strict_full_dependency_check";
+  }>;
+  readonly implementation: Readonly<{
+    durableCore: "conversations_entries_tasks_inputs_and_chord_documents";
+    scheduler: "automatic_after_resume";
+    storage: readonly ["MemoryStorage", "JsonlStorage"];
+    sqlite: "not_implemented";
+    processOwnership: "one_process_per_storage";
+    watch: "snapshot_plus_binding_local_revision_bounded_256";
+    chordBridge: "implemented";
+    designParity: "document_contains_proposed_unexported_shapes";
+  }>;
+  readonly testReceipt: Readonly<{
+    source: "tagged_v0_87_0_source_with_published_pi_ai_dist";
+    runner: "vitest_4_1_9";
+    files: 22;
+    tests: 191;
+    failures: 0;
+  }>;
+  readonly authorities: Readonly<{
+    serviceWorkStore: "retained_piclaw";
+    terminalSettlementStore: "retained_piclaw";
+    serviceOutboxStore: "retained_piclaw";
+    scheduledRunStore: "retained_piclaw";
+    agentProjectionSink: "retained_piclaw";
+  }>;
+  readonly harnessCases: readonly EarendilPico3AssessmentCase[];
+  readonly piclawCases: readonly EarendilPico3AssessmentCase[];
+  readonly recommendation: Readonly<{
+    disposableSpike: "go";
+    productionAdoption: "no_go";
+    reason: "missing_piclaw_boundary_evidence_sqlite_host_fencing_and_api_stability";
+  }>;
+  readonly productionImport: false;
+  readonly productionActivation: false;
+}
+
 export interface EarendilHarnessCompatibilityManifest {
-  readonly schemaVersion: 4;
+  readonly schemaVersion: 5;
   readonly authority: Readonly<{ currentRuntimeVersion: "0.85.1"; harnessActivation: "latent_only"; unsupportedCountsAsPass: false }>;
   readonly historical: HistoricalEarendilHarnessCompatibilityManifest;
   readonly selected: typeof SELECTED_RELEASE;
   readonly publishedCandidate: EarendilPublishedCandidateAssessment;
+  readonly experimentalPico3: EarendilPico3ExperimentalAssessment;
 }
 
 export type EarendilManifestIssueCode =
@@ -1050,7 +1110,7 @@ const PUBLISHED_CANDIDATE = {
     "watchSession": "runtime_slice_not_implemented",
     "rawStorageConstructors": "not_exported_from_stable_session_barrel",
     "streamingForkConformance": "memory_and_jsonl_pass_sqlite_pending",
-    "experimentalPico3": "excluded_issue_1376"
+    "experimentalPico3": "assessed_separately_no_production_adoption"
   },
   "admissionReceipt": {
     "node": "22.19.0",
@@ -1249,12 +1309,295 @@ const PUBLISHED_CANDIDATE = {
 } as const satisfies EarendilPublishedCandidateAssessment;
 
 
+const EXPERIMENTAL_PICO3 = {
+  "version": "0.87.0",
+  "commit": "16787ad5b2dc748047f314ca1bfe7708f30f54f3",
+  "export": "@earendil-works/pi-agent-core/experimental/pico3",
+  "selection": "experimental_assessment_only",
+  "engine": ">=22.19.0",
+  "runtimeSha256": "ce575fbbbd66e9bcb67ff0b6be483c5baefd1750cb10adaa1d73aedb9d66eafe",
+  "declarationSha256": "1ef74b8615a31ec9eed49cfd9fa657b68958af82f1b6c480dfb40d65703a6d72",
+  "runtimeExports": 30,
+  "packedConsumer": {
+    "node": "22.19.0",
+    "bun": "1.4.1",
+    "runtimeImports": "pass",
+    "declarationProbe": "pass_with_declared_optional_mcp_peer",
+    "closureCaveat": "google_genai_optional_peer_required_for_strict_full_dependency_check"
+  },
+  "implementation": {
+    "durableCore": "conversations_entries_tasks_inputs_and_chord_documents",
+    "scheduler": "automatic_after_resume",
+    "storage": [
+      "MemoryStorage",
+      "JsonlStorage"
+    ],
+    "sqlite": "not_implemented",
+    "processOwnership": "one_process_per_storage",
+    "watch": "snapshot_plus_binding_local_revision_bounded_256",
+    "chordBridge": "implemented",
+    "designParity": "document_contains_proposed_unexported_shapes"
+  },
+  "testReceipt": {
+    "source": "tagged_v0_87_0_source_with_published_pi_ai_dist",
+    "runner": "vitest_4_1_9",
+    "files": 22,
+    "tests": 191,
+    "failures": 0
+  },
+  "authorities": {
+    "serviceWorkStore": "retained_piclaw",
+    "terminalSettlementStore": "retained_piclaw",
+    "serviceOutboxStore": "retained_piclaw",
+    "scheduledRunStore": "retained_piclaw",
+    "agentProjectionSink": "retained_piclaw"
+  },
+  "harnessCases": [
+    {
+      "id": "HC-001",
+      "status": "partial",
+      "evidence": "send/requestId persists one input and generation task before provider execution; terminal input/entry outcome is retained."
+    },
+    {
+      "id": "HC-002",
+      "status": "partial",
+      "evidence": "tool tasks persist the finalized call and replay checkpoint before invocation, then append one result and join through post_tools."
+    },
+    {
+      "id": "HC-003",
+      "status": "partial",
+      "evidence": "parallel tool tasks settle independently and post_tools joins their terminal outcomes in source-call order."
+    },
+    {
+      "id": "HC-004",
+      "status": "partial",
+      "evidence": "reopened safe tools replay only when persisted and current declarations both remain safe."
+    },
+    {
+      "id": "HC-005",
+      "status": "partial",
+      "evidence": "reopened unsafe tools synthesize an interrupted result and do not invoke the external tool again."
+    },
+    {
+      "id": "HC-006",
+      "status": "partial",
+      "evidence": "busy input with whenBusy=steer is durably queued and placed at a post-tools/final boundary."
+    },
+    {
+      "id": "HC-007",
+      "status": "partial",
+      "evidence": "busy follow-up input is durably queued and placed at an eligible final boundary."
+    },
+    {
+      "id": "HC-008",
+      "status": "unsupported",
+      "evidence": "The exported SendInput supports steer/followUp/reject only; no next-run queue mode is implemented."
+    },
+    {
+      "id": "HC-009",
+      "status": "partial",
+      "evidence": "task abort marks persist before invocation cancellation; scheduler joins run execution before the abort closure settles."
+    },
+    {
+      "id": "HC-010",
+      "status": "partial",
+      "evidence": "manual/threshold/overflow collapse uses durable tasks, captured prefixes, retries and atomic summary/head publication."
+    },
+    {
+      "id": "HC-011",
+      "status": "partial",
+      "evidence": "generation and collapse retries persist attempt policy, retry timestamp and attempt progression."
+    },
+    {
+      "id": "HC-012",
+      "status": "partial",
+      "evidence": "deferred provider handles and poll times are durable; reopen resumes polling and abort performs best-effort cancellation."
+    },
+    {
+      "id": "HC-013",
+      "status": "partial",
+      "evidence": "Memory/JSONL reopen restores pending/running tasks, documents, inputs and exact referenced entries without task-history folding."
+    },
+    {
+      "id": "HC-014",
+      "status": "partial",
+      "evidence": "atomicity, hardening and JSONL recovery tests reject malformed or incomplete committed state rather than repairing silently."
+    },
+    {
+      "id": "HC-015",
+      "status": "partial",
+      "evidence": "conversation scope checks, ownership subtrees, namespace tokens and one owning Session per Storage enforce in-process isolation."
+    },
+    {
+      "id": "HC-016",
+      "status": "partial",
+      "evidence": "suspend joins local invocations and closes storage without terminalizing durable tasks; reopen resumes them."
+    },
+    {
+      "id": "HC-017",
+      "status": "unsupported",
+      "evidence": "The published implementation auto-dispatches after resume(); it does not expose the explicit gated/manual drive contract required by HC-017."
+    },
+    {
+      "id": "HC-018",
+      "status": "partial",
+      "evidence": "typed hooks, snapshot-first watches, bounded buffering and commit-granular envelopes are implemented and tested."
+    },
+    {
+      "id": "HC-019",
+      "status": "partial",
+      "evidence": "provider/tool usage is persisted in strict-JSON entries and outcomes, but no independent UsageRow ledger/totals parity is proved."
+    },
+    {
+      "id": "HC-020",
+      "status": "partial",
+      "evidence": "deferred handles survive reopen with explicit polling and cancellation behavior."
+    },
+    {
+      "id": "HC-021",
+      "status": "unsupported",
+      "evidence": "Pico3 uses committed in-flight checkpoints and invocation leases but has no Gate.admit primitive or site-completeness evidence."
+    },
+    {
+      "id": "HC-022",
+      "status": "partial",
+      "evidence": "in-flight checkpoints distinguish unknown provider/tool/process outcomes and apply kind-specific retry, adoption or interruption policy."
+    },
+    {
+      "id": "HC-023",
+      "status": "partial",
+      "evidence": "one scheduler invocation claim owns each task in process; duplicate writable cross-process authority is outside the implementation."
+    },
+    {
+      "id": "HC-024",
+      "status": "unsupported",
+      "evidence": "No storage-version migration surface, SQLite backend or open-operation migration fault suite is exported."
+    },
+    {
+      "id": "HC-025",
+      "status": "partial",
+      "evidence": "Memory and JSONL history/reopen tests pass; SQLite, migration and cross-process host ownership are absent."
+    }
+  ],
+  "piclawCases": [
+    {
+      "id": "PC-001",
+      "status": "unverified",
+      "evidence": "Ordinary accepted message: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-002",
+      "status": "unverified",
+      "evidence": "Exact steer: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-003",
+      "status": "unverified",
+      "evidence": "Stale steer: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-004",
+      "status": "unverified",
+      "evidence": "Exact cancellation: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-005",
+      "status": "unverified",
+      "evidence": "Stale cancellation: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-006",
+      "status": "unverified",
+      "evidence": "Late completion after cancellation: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-007",
+      "status": "unverified",
+      "evidence": "Terminal commit fault matrix: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-008",
+      "status": "unverified",
+      "evidence": "Restart with open run: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-009",
+      "status": "unverified",
+      "evidence": "Pending steer restart: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-010",
+      "status": "unverified",
+      "evidence": "Protected hand-off: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-011",
+      "status": "unverified",
+      "evidence": "Mutation containment: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-012",
+      "status": "unverified",
+      "evidence": "Scheduler agent task: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-013",
+      "status": "unverified",
+      "evidence": "Scheduler shell task: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-014",
+      "status": "unverified",
+      "evidence": "Stale SSE generation: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-015",
+      "status": "unverified",
+      "evidence": "Mobile Abort: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-016",
+      "status": "unverified",
+      "evidence": "Protected evidence: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-017",
+      "status": "unverified",
+      "evidence": "Maintenance failure: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-018",
+      "status": "unverified",
+      "evidence": "Trusted internal input: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-019",
+      "status": "unverified",
+      "evidence": "Cross-session steer: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    },
+    {
+      "id": "PC-020",
+      "status": "unverified",
+      "evidence": "Goal/checkpoint race: Pico3 self-tests do not execute Piclaw ServiceWorkStore, TerminalSettlementStore, ServiceOutboxStore, ScheduledRunStore or AgentProjectionSink boundaries."
+    }
+  ],
+  "recommendation": {
+    "disposableSpike": "go",
+    "productionAdoption": "no_go",
+    "reason": "missing_piclaw_boundary_evidence_sqlite_host_fencing_and_api_stability"
+  },
+  "productionImport": false,
+  "productionActivation": false
+} as const satisfies EarendilPico3ExperimentalAssessment;
+
+
 const RAW_MANIFEST = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   authority: { currentRuntimeVersion: "0.85.1", harnessActivation: "latent_only", unsupportedCountsAsPass: false },
   historical: HISTORICAL_MANIFEST,
   selected: SELECTED_RELEASE,
   publishedCandidate: PUBLISHED_CANDIDATE,
+  experimentalPico3: EXPERIMENTAL_PICO3,
 } as const satisfies EarendilHarnessCompatibilityManifest;
 
 const CANONICAL_MANIFEST = deepFreeze(RAW_MANIFEST);
