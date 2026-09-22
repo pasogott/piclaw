@@ -108,6 +108,7 @@ async function open(skin: string, postCount: number, instrument: boolean, reduce
     else if (u.pathname === "/agent/models") body = { current: "fixture/model", models: ["fixture/model"], model_options: [], thinking_level: "off", supports_thinking: false, oobe: { provider_ready_completed_instance: true } };
     else if (u.pathname === "/agent/system-metrics") body = metrics;
     else if (u.pathname === "/agent/addons/web-entries") body = { entries: [] };
+    else if (u.pathname === "/agent/picker-pins") body = { scope: "fixture-operator", revision: 0, models: [], sessions: [], import_needed: false };
     else if (u.pathname === "/agent/roster") body = { agents: [], default_agent: "fixture" };
     else if (u.pathname === "/agent/branches") body = { branches: [{ chat_jid: "web:default", root_chat_jid: "web:default", branch_id: "fixture-root", agent_name: "fixture" }] };
     else if (u.pathname === "/agent/active-chats") body = { chats: [{ chat_jid: "web:default", root_chat_jid: "web:default", agent_name: "fixture", is_active: false }] };
