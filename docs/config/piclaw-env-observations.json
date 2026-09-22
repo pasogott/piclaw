@@ -2203,6 +2203,7 @@
           "semanticReaders": 0,
           "files": [
             "docs/performance/browser-idle-cpu-1352.md",
+            "docs/performance/browser-idle-status-clock-1352.md",
             "docs/performance/browser-ui-snapshot-1352.md"
           ],
           "readerFiles": []
@@ -3948,6 +3949,7 @@
           "semanticReaders": 0,
           "files": [
             "docs/performance/browser-idle-cpu-1352.md",
+            "docs/performance/browser-idle-status-clock-1352.md",
             "docs/performance/browser-ui-snapshot-1352.md"
           ],
           "readerFiles": []
@@ -3966,6 +3968,7 @@
             ".github/workflows/ci.yml",
             "docs/audio-attachment-preview.md",
             "docs/performance/browser-idle-cpu-1352.md",
+            "docs/performance/browser-idle-status-clock-1352.md",
             "docs/performance/browser-ui-snapshot-1352.md",
             "docs/reviews/picker-button-parity.md",
             "docs/reviews/vnc-narrow-pane.md",
