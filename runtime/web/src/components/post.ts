@@ -3,6 +3,7 @@ import { html, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { useTranslation } from '../utils/i18n.js';
 import { getMediaInfo, getMediaUrl, getThumbnailUrl, submitAdaptiveCardAction } from '../api.js';
 import { renderMarkdown, renderMermaidDiagrams, renderThinkingMarkdown, sanitizeUrl } from '../markdown.js';
+import { useChatProjectRepository } from '../ui/use-chat-project.js';
 import { decodeSvgSource } from '../utils/svg-images.js';
 import { formatCount, formatFileSize, formatTime, formatTimestamp } from '../utils/format.js';
 import { buildPostMarkdownCopyPayload } from '../utils/post-copy-markdown.js';
@@ -1598,11 +1599,12 @@ export function Post({ post, onClick, onHashtagClick, onMessageRef, onScrollToMe
     );
     const shouldRenderContent = Boolean(displayContent) && !isHardTruncated && !hideRenderedFallback;
     const highlightQueryText = typeof highlightQuery === 'string' ? highlightQuery.trim() : '';
+    const projectRepository = useChatProjectRepository(post.chat_jid, post.project_repository);
     const renderedHtml = useMemo(() => {
         if (!displayContent || hideRenderedFallback) return '';
-        const baseHtml = renderMarkdown(displayContent, onHashtagClick, { rewriteImageSrc });
+        const baseHtml = renderMarkdown(displayContent, onHashtagClick, { rewriteImageSrc, projectRepository });
         return highlightQueryText ? highlightHtml(baseHtml, highlightQueryText) : baseHtml;
-    }, [displayContent, hideRenderedFallback, highlightQueryText, onHashtagClick, rewriteImageSrc]);
+    }, [displayContent, hideRenderedFallback, highlightQueryText, onHashtagClick, rewriteImageSrc, projectRepository]);
 
     const markdownCopyPayload = useMemo(() => buildPostMarkdownCopyPayload(post), [post]);
     const speechSupported = useMemo(() => isSpeechSynthesisSupported(), []);

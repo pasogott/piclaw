@@ -1,3 +1,4 @@
+import { linkifyChatReferences } from "../../../../../src/ui/chat-reference-links";
 /**
  * Full markdown rendering pipeline — ported from upstream piclaw.
  *
@@ -441,41 +442,8 @@ export function renderMath(html_content: string): string {
   return restoreCodeBlocks(processed, stripped.blocks);
 }
 
-function linkifyHashtagsInHtml(html_content: string): string {
-  if (!html_content) return html_content;
-  const doc = new DOMParser().parseFromString(html_content, "text/html");
-  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
-  const nodes: Text[] = [];
-  let node: Node | null;
-  while ((node = walker.nextNode())) {
-    nodes.push(node as Text);
-  }
-  for (const textNode of nodes) {
-    const value = textNode.nodeValue;
-    if (!value) continue;
-    HASHTAG_REGEX.lastIndex = 0;
-    if (!HASHTAG_REGEX.test(value)) continue;
-    HASHTAG_REGEX.lastIndex = 0;
-    const parent = textNode.parentElement;
-    if (parent && (parent.closest("a") || parent.closest("code") || parent.closest("pre"))) continue;
-    const parts = value.split(HASHTAG_REGEX);
-    if (parts.length <= 1) continue;
-    const fragment = doc.createDocumentFragment();
-    parts.forEach((part, idx) => {
-      if (idx % 2 === 1) {
-        const link = doc.createElement("a");
-        link.setAttribute("href", "#");
-        link.className = "hashtag";
-        link.setAttribute("data-hashtag", part);
-        link.textContent = `#${part}`;
-        fragment.appendChild(link);
-      } else {
-        fragment.appendChild(doc.createTextNode(part));
-      }
-    });
-    textNode.parentNode?.replaceChild(fragment, textNode);
-  }
-  return doc.body.innerHTML;
+export function linkifyHashtagsInHtml(html: string, repositoryUrl: string | null = null): string {
+  return linkifyChatReferences(html, repositoryUrl);
 }
 
 // ── Pre-processing pipeline ────────────────────────────────────────────────
@@ -495,7 +463,7 @@ export function prepareMarkdownSource(text: string): { safeHtml: string; mermaid
 
 // ── Main exports ───────────────────────────────────────────────────────────
 
-export function renderMarkdown(text: string, options: { sanitize?: boolean } = {}): string {
+export function renderMarkdown(text: string, options: { sanitize?: boolean; projectRepository?: string | null } = {}): string {
   if (!text) return "";
   return renderSvgFences(text, (part) => renderMarkdownBody(part, options), (source) => {
     const encoded = encodeSvgSource(source);
@@ -503,7 +471,7 @@ export function renderMarkdown(text: string, options: { sanitize?: boolean } = {
   }, { sanitize: typeof window === "undefined" || window.__PICLAW_SANITIZE_SVG_FENCES__ !== false });
 }
 
-function renderMarkdownBody(text: string, options: { sanitize?: boolean }): string {
+function renderMarkdownBody(text: string, options: { sanitize?: boolean; projectRepository?: string | null }): string {
 
   const { safeHtml, mermaidBlocks } = prepareMarkdownSource(text);
 
@@ -516,7 +484,7 @@ function renderMarkdownBody(text: string, options: { sanitize?: boolean }): stri
   html = decodeTextEntities(html);
   html = applySyntaxHighlighting(html);
   html = renderMath(html);
-  html = linkifyHashtagsInHtml(html);
+  html = linkifyHashtagsInHtml(html, options.projectRepository);
   html = injectMermaidBlocks(html, mermaidBlocks);
   html = sanitizeHtml(html, options);
 

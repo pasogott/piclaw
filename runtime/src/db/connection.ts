@@ -45,6 +45,7 @@ import { initializeFamilyScheduledPublications } from './family-scheduled-public
 import { initializeToolOutputOwnership } from './tool-output-ownership-schema.js';
 import { initializeBudgetLimitsSchema } from './budget-limits-schema.js';
 import { initializeAddonOperationsSchema } from './addon-operations-schema.js';
+import { initializeChatProjects } from './chat-project-schema.js';
 import fs from "fs";
 import path from "path";
 
@@ -996,6 +997,7 @@ export function initDatabase(): void {
   createSchema(db);
   ensureOwnedMigrationLedger(db);
   ensureChatBranchConstraints(db);
+  initializeChatProjects(db);
   ensureMessageColumns(db);
   ensureKeychainNoteColumns(db);
   ensureTokenUsageColumns(db);
