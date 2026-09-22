@@ -433,16 +433,42 @@ describe("latent Earendil Harness v3 compatibility evidence", () => {
       executionEnvAssignment: "blocked_open_text_line_reader",
       watchSession: "runtime_slice_not_implemented",
       rawStorageConstructors: "not_exported_from_stable_session_barrel",
-      streamingForkConformance: "deferred_to_issue_1375",
+      streamingForkConformance: "memory_and_jsonl_pass_sqlite_pending",
       experimentalPico3: "excluded_issue_1376",
     });
     const candidateIds: readonly string[] = candidate.capabilities.map((entry) => entry.id);
     expect(candidateIds).toEqual(
       Array.from({ length: 25 }, (_, index) => `HC-${String(index + 1).padStart(3, "0")}`),
     );
-    expect(candidate.capabilities.filter((entry) => entry.status === "partial")).toHaveLength(23);
+    expect(candidate.streamingForkReceipt).toEqual({
+      environment: "disposable_exact_0_87_0_package_family",
+      uniqueCases: 15,
+      memoryExecutions: 15,
+      jsonlExecutions: 15,
+      failures: 0,
+      sqlite: "pending_upstream_support",
+      hostOwnership: "unproved",
+      caseIds: [
+        "branch fork application state (closed source) / excludes deleted/reappended and untouched application lists",
+        "branch fork application state (closed source) / excludes overwritten and unchanged application values",
+        "branch fork application state (open source) / excludes deleted/reappended and untouched application lists",
+        "branch fork application state (open source) / excludes overwritten and unchanged application values",
+        "fork application lists (closed source) / tree fork continues asc pagination using source cursors",
+        "fork application lists (closed source) / tree fork continues desc pagination using source cursors",
+        "fork application lists (closed source) / tree fork copies lists at distinct addresses",
+        "fork application lists (closed source) / tree fork copies only survivors after list deletion and reappend",
+        "fork application lists (closed source) / tree fork preserves list element sequences including gaps",
+        "fork application lists (open source) / tree fork continues asc pagination using source cursors",
+        "fork application lists (open source) / tree fork continues desc pagination using source cursors",
+        "fork application lists (open source) / tree fork copies lists at distinct addresses",
+        "fork application lists (open source) / tree fork copies only survivors after list deletion and reappend",
+        "fork application lists (open source) / tree fork preserves list element sequences including gaps",
+        "fork lane validation / ignores malformed unrelated lanes",
+      ],
+    });
+    expect(candidate.capabilities.filter((entry) => entry.status === "partial")).toHaveLength(24);
     expect(candidate.capabilities.filter((entry) => entry.status === "unsupported").map((entry) => entry.id)).toEqual(["HC-024"]);
-    expect(candidate.capabilities.filter((entry) => entry.status === "unverified").map((entry) => entry.id)).toEqual(["HC-025"]);
+    expect(candidate.capabilities.filter((entry) => entry.status === "unverified")).toEqual([]);
     expect(candidate.capabilities.some((entry) => entry.status === "partial" && entry.evidence.includes("full"))).toBeFalse();
   });
 

@@ -5,6 +5,7 @@
 | Evidence | Scope / state |
 |---|---|
 | [Stable Harness candidate](earendil-0870-harness-candidate.md) | Packed 0.87.0 publication coordinates, public-export fingerprints, 28-test HC-001–HC-023 partial receipt, compile blockers and unchanged activation limits; candidate is not installed or selected |
+| [Streaming-fork evidence](earendil-0870-streaming-fork.md) | Public 0.87.0 conformance: 15 Memory + 15 JSONL executions pass; HC-025 remains partial because SQLite and cross-process host ownership are unproved |
 
 ## Published 0.85.1 follow-up
 

@@ -124,10 +124,10 @@ export interface EarendilV3PublishedCandidateGateShape {
   readonly candidateReleaseCommit: "16787ad5b2dc748047f314ca1bfe7708f30f54f3";
   readonly assessmentScope: "published_candidate_not_installed";
   readonly compileStatus: "blocked_on_1377_and_1378";
-  readonly semanticStatus: "partial_HC_001_through_HC_023";
+  readonly semanticStatus: "partial_HC_001_through_HC_023_and_HC_025";
   readonly watchSession: "runtime_slice_not_implemented";
   readonly rawStorage: "stable_constructors_not_exported";
-  readonly streamingFork: "deferred_to_1375";
+  readonly streamingFork: "memory_and_jsonl_pass_sqlite_pending";
   readonly experimentalPico3: "excluded_to_1376";
   readonly promotionIssues: readonly [1377, 1378, 1379, 1380, 1381];
   readonly harnessActivation: "blocked";

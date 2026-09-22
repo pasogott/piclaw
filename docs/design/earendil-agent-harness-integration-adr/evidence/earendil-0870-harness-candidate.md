@@ -26,7 +26,7 @@ The repository's existing package-admission checker passed against a standalone 
 - Package-root and stable Harness subpath imports succeeded in the disposable 0.87.0 consumer.
 - `AgentHarness.watchSession()` still throws `SliceNotImplemented` with `watchSession is not implemented until its later AgentHarness slice`.
 - The stable `harness/session` barrel exports neither `MemoryStorage` nor `JsonlStorage`; raw Storage conformance remains unavailable without deep/private imports.
-- `harness/session/testing` now exports streaming-fork conformance. Issue #1375 owns its Memory/JSONL execution and HC-025 update.
+- `harness/session/testing` exports streaming-fork conformance. Its 15 unique cases pass for Memory and JSONL: 30 executions with zero failures. SQLite streaming-fork support and cross-process host ownership remain unproved.
 - Piclaw's `ExecutionEnv` direct assignment fails until #1378 implements `openTextLineReader`.
 - Current-loop provider/compaction assignments require transcript-native migration in #1377.
 
@@ -38,7 +38,7 @@ A disposable clone installed the exact 0.87.0 package family and changed only ca
 - 340 assertions;
 - zero failures.
 
-These executions retain `partial` status because each 0.85.1 unproved remainder still applies. HC-024 remains `unsupported`. HC-025 is `unverified` in this issue pending #1375. No candidate row is a full pass.
+These executions retain `partial` status because each 0.85.1 unproved remainder still applies. HC-024 remains `unsupported`. HC-025 is `partial`: public streaming-fork conformance passes 15 Memory and 15 JSONL executions covering application-list pagination/copy/survivor/sequence cases, open/closed branch application state and malformed unrelated lanes. SQLite streaming-fork support and cross-process host ownership remain unproved. No candidate row is a full pass.
 
 ## Promotion boundary
 
