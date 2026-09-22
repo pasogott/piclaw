@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from "preact/hooks";
+import { getChatJid } from "../../api/chat-jid";
+import { getChatProjectRepository, subscribeChatProject } from "../../../../../../../src/ui/chat-project-state";
 import { agentDisplayName } from "../../api/agent-identity";
 import { HighlightPopup } from "./HighlightPopup";
 import { serializeSelection, applyHighlights, clearHighlights, HIGHLIGHT_COLORS, type HighlightRange } from "../../utils/highlight-serializer";
@@ -9,6 +11,7 @@ import { resolveAudioContentType } from "../../../../../../../src/utils/audio-me
 import { DelimitedTable } from "./DelimitedTable";
 import { isDelimitedFile } from "../../utils/delimited-preview";
 import { renderMarkdown } from "../../utils/markdown-pipeline";
+import { linkifyChatReferences } from "../../../../../../../src/ui/chat-reference-links";
 import { relativeTime, getBlockKey, getTurnOutcomeMarker } from "./helpers";
 import { MessageActionBar } from "./MessageActionBar";
 import { userAvatarUrl, assistantAvatarUrl } from "../../api/identity";
@@ -196,6 +199,10 @@ export function MessageItem({
   onToggleCollapse,
   onDelete,
 }: MessageItemProps) {
+  const chatJid = typeof interaction.data?.chat_jid === "string" ? interaction.data.chat_jid : getChatJid();
+  const [, setProjectRevision] = useState(0);
+  useEffect(() => subscribeChatProject(chatJid, () => setProjectRevision((value) => value + 1)), [chatJid]);
+  const projectRepository = getChatProjectRepository(chatJid);
   const isUser = interaction.type === "user";
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -216,7 +223,7 @@ export function MessageItem({
       clearHighlights(contentRef.current);
       applyHighlights(contentRef.current, stored);
     }
-  }, [interaction.id, interaction.content]);
+  }, [interaction.id, interaction.content, projectRepository]);
 
   const handlePointerUp = (e: PointerEvent) => {
     // Delay to let system selection menu appear first, then show ours above it
@@ -277,10 +284,13 @@ export function MessageItem({
 
   const renderUserContent = (content: string) => {
     const { cleanedContent, attachments } = parseUserContent(content);
+    const escapedContent = cleanedContent
+      .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 
     return (
       <>
-        {cleanedContent}
+        {cleanedContent && <span dangerouslySetInnerHTML={{ __html: linkifyChatReferences(escapedContent, projectRepository, false) }} />}
         {attachments.length > 0 && (
           <div className="message-list__attachments">
             {attachments.map((attachment, idx) => (
@@ -532,7 +542,7 @@ export function MessageItem({
                                     a { color: #89b4fa; }
                                   }
                                 </style>
-                                ${renderMarkdown(text)}
+                                ${renderMarkdown(text, { projectRepository })}
                               `;
                               window.dispatchEvent(new CustomEvent('piclaw:widget-open', {
                                 detail: { title: filename, html: previewHtml, widget_id: `preview-${mediaId}` }
@@ -565,7 +575,7 @@ export function MessageItem({
             dangerouslySetInnerHTML={
               isUser
                 ? undefined
-                : { __html: renderMarkdown(interaction.content) }
+                : { __html: renderMarkdown(interaction.content, { projectRepository }) }
             }
           >
             {isUser ? renderUserContent(interaction.content) : undefined}
