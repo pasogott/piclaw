@@ -2,7 +2,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { convertResponsesMessages, convertResponsesTools } from "@earendil-works/pi-ai/api/openai-responses-shared";
 import type { Api, Model, ProviderHeaders, Tool } from "@earendil-works/pi-ai";
-import { currentContextTools, hasTranscriptContextApi, providerTranscriptContext } from "../transcript-context-compat.js";
+import { currentContextTools, providerTranscriptContext } from "../transcript-context-compat.js";
 import { convertToLlm, type FileOperations, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { ModelRequestAuth } from "../../utils/model-auth.js";
 import { createLogger } from "../../utils/logger.js";
@@ -423,18 +423,9 @@ export async function attemptRemoteCompaction(options: {
   let requestTools = options.tools as Tool[] | undefined;
   try {
     const llmMessages = convertToLlm(withoutRemoteSummaryMarker(options.messages));
-    const convertedInput = hasTranscriptContextApi()
-      ? (() => {
-          const transcript = providerTranscriptContext({ messages: llmMessages, tools: requestTools });
-          requestTools = currentContextTools(transcript);
-          return convertResponsesMessages(options.model, transcript, OPENAI_TOOL_CALL_PROVIDERS, { includeSystemPrompt: false });
-        })()
-      : convertResponsesMessages(
-          options.model,
-          { messages: llmMessages, systemPrompt: "" },
-          OPENAI_TOOL_CALL_PROVIDERS,
-          { includeSystemPrompt: false, deferredTools: new Map((requestTools ?? []).map((tool) => [tool.name, tool])) },
-        );
+    const transcript = providerTranscriptContext({ messages: llmMessages, tools: requestTools });
+    requestTools = currentContextTools(transcript);
+    const convertedInput = convertResponsesMessages(options.model, transcript, OPENAI_TOOL_CALL_PROVIDERS, { includeSystemPrompt: false });
     const previousSummary = options.previousDetails ? "" : options.previousSummary?.trim();
     input = [
       ...(options.previousDetails?.output ?? []),
