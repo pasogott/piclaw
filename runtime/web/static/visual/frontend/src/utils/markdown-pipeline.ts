@@ -463,9 +463,10 @@ export function prepareMarkdownSource(text: string): { safeHtml: string; mermaid
 
 // ── Main exports ───────────────────────────────────────────────────────────
 
-export function renderMarkdown(text: string, options: { sanitize?: boolean; projectRepository?: string | null } = {}): string {
+export function renderMarkdown(text: string, options: { sanitize?: boolean; projectRepository?: string | null } | null = {}): string {
   if (!text) return "";
-  return renderSvgFences(text, (part) => renderMarkdownBody(part, options), (source) => {
+  const renderOptions = options ?? {};
+  return renderSvgFences(text, (part) => renderMarkdownBody(part, renderOptions), (source) => {
     const encoded = encodeSvgSource(source);
     return `<div class="code-block"><div class="code-block__header"><span class="code-block__lang">SVG</span><button type="button" class="code-block__copy" aria-label="Copy code" data-code="${encoded}"><i class="codicon codicon-copy"></i></button></div><pre><code class="language-svg">${escapeSvgSource(source)}</code></pre></div>`;
   }, { sanitize: typeof window === "undefined" || window.__PICLAW_SANITIZE_SVG_FENCES__ !== false });
