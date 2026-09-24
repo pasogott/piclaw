@@ -1,14 +1,15 @@
-@planned @not-implemented @single-user @passkeys @settings
+@shared @implemented @browser-verified @single-user @passkeys @settings
 Feature: Manage multiple single-user passkeys in Settings
   As the sole instance owner
   I want to add, recognise, rename and remove passkeys from Settings
   So that I can sign in from several authenticators without managing credentials in chat
 
-  # Acceptance specification only: step bindings and implementation are not complete.
+  # Acceptance contract: Bun/Playwright mappings and manual-device limits are in
+  # docs/reviews/single-user-passkey-settings.md. No generated Cucumber steps.
   # Run UI scenarios in Classic and Visual; the test matrix is in
   # docs/design/single-user-passkey-settings.md.
   # A passkey is a registered credential, not a count of physical devices.
-  # @policy-proposal scenarios require owner confirmation before implementation.
+  # Policies below are the conservative defaults used for the requested implementation.
 
   Background:
     Given a disposable instance uses single-user authentication
@@ -75,7 +76,7 @@ Feature: Manage multiple single-user passkeys in Settings
         | Laptop     |
         | Backup key |
 
-    @ux-single-passkeys-005
+    @ux-single-passkeys-005 @manual-device
     Scenario: A synced credential is not displayed as several physical devices
       Given "Synced key" represents one credential available on two devices
       When each device successfully signs in with that credential
@@ -142,7 +143,7 @@ Feature: Manage multiple single-user passkeys in Settings
       And Add passkey is available for an explicit retry with a fresh ceremony
       And the application does not reopen the native prompt automatically
 
-    @ux-single-passkeys-011
+    @ux-single-passkeys-011 @native-focus-manual
     Scenario: The native prompt may temporarily take focus away from the page
       Given an authorised passkey creation ceremony is pending
       When the browser's native prompt takes focus away from Settings
@@ -260,9 +261,8 @@ Feature: Manage multiple single-user passkeys in Settings
         | an invalid attestation or credential proof |
         | a session revoked while the native prompt was open |
 
-  @policy-proposal
   Rule: Security changes require proof within the preceding five minutes
-    # Proposed: reuse the account flow's five-minute freshness model.
+    # Policy: reuse the account flow's five-minute freshness model.
     # Listing is allowed for a valid owner session; writes require fresh proof.
 
     @ux-single-passkeys-019 @security
@@ -290,9 +290,8 @@ Feature: Manage multiple single-user passkeys in Settings
       But add, rename and remove requests from the second session still require its own fresh proof
       And a direct write request from the second session is refused without changing credentials
 
-  @policy-proposal
   Rule: Removal must preserve a usable future sign-in method
-    # Proposed: usability is determined by current server policy and current RP ID.
+    # Policy: usability is determined by current server policy and current RP ID.
     # Active sessions, internal tokens and credentials for another RP are not factors.
 
     @ux-single-passkeys-020 @security
@@ -311,7 +310,7 @@ Feature: Manage multiple single-user passkeys in Settings
         | passkey-only | a TOTP secret exists but there is no other passkey         | refuses  | no other sign-in method is accepted          |
         | passkey-only | only an active browser session remains                    | refuses  | a session is not a future sign-in method     |
         | passkey-only | the only other passkey is registered for old.piclaw.test   | refuses  | the other passkey cannot sign in here        |
-        | either       | a verified TOTP factor is configured and accepted         | allows   | TOTP remains available for sign-in           |
+        | either       | a TOTP factor is configured and accepted         | allows   | TOTP remains available for sign-in           |
         | either       | no other accepted factor is configured                    | refuses  | add another sign-in method before removing this key |
         | either       | a pending TOTP enrolment exists but has not been verified | refuses  | unverified TOTP setup is not a sign-in method |
 
@@ -336,10 +335,9 @@ Feature: Manage multiple single-user passkeys in Settings
     Scenario: Slash commands cannot bypass the last-factor guard
       Given "Laptop" is the only sign-in method accepted by the current policy
       When an authenticated owner submits a legacy passkey delete command for "Laptop"
-      Then the same server-side last-factor guard refuses removal
+      Then the command refuses removal and directs me to authenticated Settings
       And the command does not report success
 
-  @policy-proposal
   Rule: Removing a passkey does not silently revoke existing login sessions
 
     @ux-single-passkeys-024

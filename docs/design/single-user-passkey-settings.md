@@ -2,7 +2,7 @@
 
 Single-user owners need to enrol several passkeys and manage them from **Settings → Authentication → Passkeys** in both Classic and Visual.
 
-Status: proposed acceptance contract, not implemented. The [Gherkin feature](../../tests/e2e/features/planned/single-user-passkey-settings.feature) uses `@planned @not-implemented`. No scenario is evidence that the new behaviour already works.
+Status: implemented on an isolated feature branch, not deployed. The [Gherkin feature](../../tests/e2e/features/shared/single-user-passkey-settings.feature) maps to the [implementation evidence and device-test limits](../reviews/single-user-passkey-settings.md). Syntax validation alone is not behaviour evidence.
 
 ## Scope
 
@@ -16,25 +16,25 @@ Status: proposed acceptance contract, not implemented. The [Gherkin feature](../
 
 Out of scope: switching to family mode, redesigning TOTP enrolment, creating a new offline recovery mechanism, exporting private keys, manually syncing passkeys, or redesigning session management. The single-user route must not accept an account selector or act as a family-account management shortcut.
 
-## Proposed policy decisions
+## Implementation policy
 
-These require owner confirmation. Their feature rules carry `@policy-proposal`:
+The owner's instruction to complete implementation uses these conservative defaults:
 
-| Decision | Proposed rule | Scenarios |
+| Decision | Rule | Scenarios |
 |---|---|---|
 | Recent authentication | Listing requires a valid owner session. Add, rename and remove require successful factor proof within five minutes, bound to that session. Passive activity does not renew this proof; re-authentication in one browser does not authorise another. | 019, 026 |
-| Last usable factor | Refuse removal if no accepted sign-in factor remains for the default owner and current RP ID. TOTP counts only when verified/configured **and accepted by the effective login policy**. Enforce atomically at commit, including legacy delete commands. | 020–023 |
+| Last usable factor | Refuse removal if no accepted sign-in factor remains for the default owner and current RP ID. TOTP counts only when configured **and accepted by the effective login policy** (legacy single-user TOTP has no separate enrolment-verification flag). Enforce atomically at commit; legacy delete commands cannot mutate credentials. | 020–023 |
 | Existing sessions | Removal prevents future assertions with that credential; it does not implicitly revoke existing sessions. State this in confirmation. A future session-management policy can change it explicitly. | 024 |
 
 A registered passkey is not proof the owner still possesses the authenticator. The server checks registrations and policy; it cannot count physical copies of a synced key or guarantee that a backup device is reachable.
 
-The label-validation proposal follows the existing account label limit of 80 Unicode characters, trims surrounding whitespace, and treats markup as text. IDs distinguish duplicate display names. Existing unnamed credentials stay usable and display a stable fallback until renamed.
+Label validation follows the existing account label limit of 80 Unicode characters, trims surrounding whitespace, and treats markup as text. IDs distinguish duplicate display names. Existing unnamed credentials stay usable and display a stable fallback until renamed.
 
 “Either” in the feature means the effective login policy permits both TOTP and passkeys. A stored TOTP seed in passkey-only mode is not fallback. A session cookie, internal automation token, uncompleted enrolment, or credential for another RP is not fallback either.
 
-## Existing code and gaps
+## Original code and gaps
 
-Inspected source baseline: `2e4aa4f1b`.
+These findings describe the pre-implementation baseline `2e4aa4f1b`; the evidence note records the changes.
 
 - `runtime/src/db/webauthn.ts` stores multiple credentials per user and RP. `webauthn-auth.ts` excludes existing credentials during creation and verifies login assertions against the matching credential.
 - `runtime/src/agent-control/handlers/passkey.ts` supplies single-user list/enrol/delete commands. Its enrol action currently requires a TOTP secret. Its delete action does not enforce a last-factor guard.
@@ -59,4 +59,4 @@ Run UI cases in both skins at desktop width and 390 px; include tablet/Safari fo
 
 Use only disposable instances and owned test stores. Do not create, rename, delete or exercise passkeys in Smith's live account to validate this feature. Native prompt cancellation may leave a credential in the user's authenticator if the server completion failed; the UI must not claim it deleted authenticator-side data.
 
-Acceptance requires all implemented scenario bindings passing, documented manual device results or explicit gaps, confirmation of the proposed policies, and a review of server-side authority/lockout controls. Merge and deployment require separate approval.
+Acceptance requires passing automated checks mapped to the scenarios, documented manual device results or explicit gaps, and review of server-side authority/lockout controls. Merge and deployment require separate approval.
