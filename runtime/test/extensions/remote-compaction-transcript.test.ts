@@ -7,7 +7,7 @@ const model = { provider: 'openai', id: 'gpt-5.1', api: 'openai-responses', base
 const tool = (name: string): Tool => ({ name, description: name, parameters: Type.Object({}) });
 
 test('local fallback prepends opaque context without leaking the replay marker', () => {
-  const marker = { role: 'user', content: [{ type: 'input_text', text: REMOTE_COMPACTION_SUMMARY_SENTINEL }] };
+  const marker = { role: 'user', content: [{ type: 'input_text', text: `The conversation history before this point was compacted into the following summary:\n\n<summary>\n${REMOTE_COMPACTION_SUMMARY_SENTINEL}\n</summary>` }] };
   const suffix = { role: 'user', content: [{ type: 'input_text', text: 'keep' }] };
   const native = { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'native' }] };
   const later = { role: 'user', content: [{ type: 'input_text', text: `quoted ${REMOTE_COMPACTION_SUMMARY_SENTINEL}` }] };
