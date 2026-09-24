@@ -13,9 +13,11 @@ test('tool lookup resolves initial, added and removed declarations without trust
     { role: 'system', content: '', toolsRemoved: [{ name: 'initial' }], timestamp: 2 },
   ] } as unknown as Context;
   expect(currentContextTools(context).map((entry) => entry.name)).toEqual(['added']);
-  // The pinned 0.85.1 package has no public normalizer; a disposable 0.87.1
-  // fixture checks the published helper and branded provider assignment.
-  expect(providerTranscriptContext(context)).toBe(context);
+  // The public normalizer folds the legacy initial tools into a new transcript.
+  const transcript = providerTranscriptContext(context);
+  expect(transcript).not.toBe(context);
+  expect(transcript.messages[0]?.role).toBe('system');
+  expect(currentContextTools(transcript).map((entry) => entry.name)).toEqual(['added']);
 });
 
 test('tool lookup preserves initial tools when no transcript deltas exist', () => {

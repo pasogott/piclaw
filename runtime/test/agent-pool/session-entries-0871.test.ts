@@ -53,6 +53,21 @@ test('adoption rejects invalid, orphan, non-ancestral and non-editable targets a
   expect(() => inspect(jsonl)).toThrow('Context edit target is not on this branch');
 });
 
+test('adoption rejects assistant tool-call content and stop-reason mismatches', () => {
+  const { rows } = adoptedJsonl('/tmp/adoption', '/tmp/parent.jsonl');
+  const call = { type: 'toolCall', id: 'call-1', name: 'read', arguments: {} };
+  const toolResult = { type: 'message', id: 'tool-result', message: {
+    role: 'toolResult', toolCallId: 'call-1', toolName: 'read', content: [{ type: 'text', text: 'done' }], isError: false, timestamp: 2,
+  } };
+  const final = { type: 'message', id: 'final', message: { ...rows[4].message, content: [{ type: 'text', text: 'complete' }] } };
+  const wrongStop = rows.map((row) => structuredClone(row));
+  wrongStop[4].message.content = [call];
+  expect(() => inspect(append(wrongStop, [toolResult, final]))).toThrow('stop reason does not match tool calls');
+  const missingCall = rows.map((row) => structuredClone(row));
+  missingCall[4].message.stopReason = 'toolUse';
+  expect(() => inspect(append(missingCall, []))).toThrow('stop reason does not match tool calls');
+});
+
 test('deferred fork omits usage, maps surviving edits and preserves null compaction', async () => {
   const calls: string[] = [];
   let serial = 0;
@@ -84,7 +99,7 @@ test('deferred fork omits usage, maps surviving edits and preserves null compact
   expect(calls).toEqual([]);
 });
 
-test('nullable compaction is forwarded; pinned 0.85.1 fails closed on context-edit replay', async () => {
+test('nullable compaction is forwarded; managers without context-edit support fail closed', async () => {
   const port = createSessionManagerPersistencePort({
     appendCompaction: (_summary, first) => { expect(first).toBeNull(); return 'compact'; },
   } as any);
@@ -92,13 +107,14 @@ test('nullable compaction is forwarded; pinned 0.85.1 fails closed on context-ed
   expect(port.appendContextEdit).toBeUndefined();
 });
 
-test('0.85.1 rollback cannot safely reopen context-edited 0.87.1 JSONL', () => {
+test('0.87.1 canonical projection omits context-edited content on reopen', () => {
   const { rows } = adoptedJsonl('/tmp/adoption', '/tmp/parent.jsonl');
   const jsonl = append(rows, [{ type: 'context_edit', id: 'omit', targetId: 'user', replacement: null }]);
   const inspected = inspect(jsonl);
   expect(inspected.context.messages.some((message: any) => message.role === 'user')).toBe(false);
-  // The pinned 0.85.1 SDK silently ignores 0.87.1 edits during its projection.
-  expect(buildSessionContext(inspected.entries).messages.some((message) => message.role === 'user')).toBe(true);
+  // The upgraded SDK applies the edit; 0.85.1 would ignore this same JSONL.
+  // Rollback must restore the pre-upgrade snapshot instead of reopening it.
+  expect(buildSessionContext(inspected.entries).messages.some((message) => message.role === 'user')).toBe(false);
 });
 
 test('usage entries do not add a prompt-cache request and edits reset the comparison', () => {

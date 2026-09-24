@@ -9,7 +9,7 @@ type TranscriptApi = {
 };
 const transcriptApi = piAi as TranscriptApi;
 
-/** 0.87.1 replays system-message deltas; 0.85.1 still uses Context.tools. */
+/** Use public transcript replay; older providers can still pass Context.tools. */
 export function currentContextTools(context: Context): Tool[] {
   if (transcriptApi.getCurrentTools) return transcriptApi.getCurrentTools(providerTranscriptContext(context).messages);
   const tools = new Map<string, Tool>((context.tools ?? []).map((tool) => [tool.name, tool]));
