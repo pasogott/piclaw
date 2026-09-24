@@ -1049,7 +1049,8 @@ export function usePaneRuntimeOrchestration(options: UsePaneRuntimeOrchestration
       ...(pendingTransfer?.mtime !== undefined ? { mtime: pendingTransfer.mtime } : {}),
       ...(resolvedTransferState ? { transferState: resolvedTransferState } : {}),
     };
-    const ext = (effectivePaneOverrideId ? paneRegistry.get(effectivePaneOverrideId) : null)
+    const override = effectivePaneOverrideId ? paneRegistry.get(effectivePaneOverrideId) : null;
+    const ext = (activeId.startsWith('piclaw://addon/') ? null : override)
       || paneRegistry.resolve(context)
       || paneRegistry.get('editor');
 
@@ -1272,7 +1273,7 @@ export function usePaneRuntimeOrchestration(options: UsePaneRuntimeOrchestration
   const refreshActiveEditorFromWorkspace = useCallback(async (updates: unknown) => {
     const activePath = typeof tabStripActiveId === 'string' ? tabStripActiveId.trim() : '';
     const instance = editorInstanceRef.current;
-    if (!activePath || !instance?.setContent) return;
+    if (!activePath || activePath.startsWith('piclaw://addon/') || !instance?.setContent) return;
     if (typeof instance.isDirty === 'function' && instance.isDirty()) return;
     if (!isWorkspaceUpdateRelevantForPath(activePath, updates)) return;
 

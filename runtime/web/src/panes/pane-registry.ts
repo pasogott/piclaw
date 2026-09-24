@@ -6,20 +6,24 @@
  * for a given file/context.
  */
 
+import { addonUnavailablePane } from './addon-unavailable.js';
 import type { WebPaneExtension, PaneContext } from './pane-types.js';
 
 /** Singleton pane registry. */
 class PaneRegistryImpl {
     private extensions: Map<string, WebPaneExtension> = new Map();
+    private addonIds = new Set<string>();
 
     /** Register a pane extension. Overwrites if id already exists. */
-    register(ext: WebPaneExtension): void {
+    register(ext: WebPaneExtension, options: { addon?: boolean } = {}): void {
         this.extensions.set(ext.id, ext);
+        if (options.addon) this.addonIds.add(ext.id); else this.addonIds.delete(ext.id);
     }
 
     /** Remove a pane extension by id. */
     unregister(id: string): void {
         this.extensions.delete(id);
+        this.addonIds.delete(id);
     }
 
     /**
@@ -33,6 +37,8 @@ class PaneRegistryImpl {
 
         for (const ext of this.extensions.values()) {
             if (ext.placement !== 'tabs') continue;
+            if (context.path?.startsWith('piclaw://addon/') && (!this.addonIds.has(ext.id)
+                || !ext.capabilities.includes('readonly') || ext.capabilities.includes('edit'))) continue;
             if (!ext.canHandle) continue;
 
             try {
@@ -50,7 +56,7 @@ class PaneRegistryImpl {
             }
         }
 
-        return best;
+        return best ?? (context.path?.startsWith('piclaw://addon/') ? addonUnavailablePane : undefined);
     }
 
     /** List all registered pane extensions. */
