@@ -57,7 +57,8 @@ function isToolResultMessage(message: MessageRecord): boolean {
 
 function projection(manager: RepairManager): ProjectionEntry[] {
   if (typeof manager.buildSessionProjection === "function") return manager.buildSessionProjection().entries;
-  // The pinned 0.85.1 SDK can detect orphans but cannot persist a context edit.
+  // Fallback for older managers without buildSessionProjection; repair still
+  // requires appendContextEdit and fails closed when that method is absent.
   const entries = manager.getEntries();
   if (!entries.some((entry) => entry.type === "message" && !!entry.message || entry.type === "custom_message")) return [];
   return buildContextEntries(entries, manager.getLeafId()).map((sourceEntry) => ({
