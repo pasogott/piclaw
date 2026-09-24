@@ -86,7 +86,9 @@ export function inspectAdoptedSession(jsonl: string, expectedHash: string) {
   for(const message of context.messages) {
     if(message.role==='assistant') {
       if(!['stop','length','toolUse'].includes(message.stopReason)||!(Array.isArray(message.content))) throw new Error('Incomplete assistant turn.');
-      for(const part of message.content) if(part.type==='toolCall') {if(pending.has(part.id)) throw new Error('Duplicate pending tool call.');pending.add(part.id);}
+      const calls=message.content.filter((part): part is Extract<typeof part,{type:'toolCall'}>=>part?.type==='toolCall');
+      if((message.stopReason==='toolUse')!== (calls.length>0)) throw new Error('Assistant tool stop reason does not match tool calls.');
+      for(const part of calls) {if(pending.has(part.id)) throw new Error('Duplicate pending tool call.');pending.add(part.id);}
     } else if(message.role==='toolResult') {
       if(!pending.delete(message.toolCallId)) throw new Error('Unmatched tool result.');
     } else if(message.role==='user'&&pending.size) throw new Error('Unfinished tool turn.');

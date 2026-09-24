@@ -630,7 +630,11 @@ export function prependRemoteCompactionPayload(payload: unknown, details: Remote
   }
   const record = payload as Record<string, unknown>;
   if (!Array.isArray(record.input)) return stripRemoteCompactionMarker(payload);
-  return { ...record, input: [...structuredClone(details.output), ...record.input] };
+  const markerIndex = record.input.findIndex(inputItemContainsSentinel);
+  const suffix = markerIndex < 0
+    ? record.input
+    : [...record.input.slice(0, markerIndex), ...record.input.slice(markerIndex + 1)];
+  return { ...record, input: [...structuredClone(details.output), ...suffix] };
 }
 
 export function injectRemoteCompactionPayload(
