@@ -1311,6 +1311,7 @@ html[data-iphone-standalone-compose-inset="1"] .container {
 
     .app-shell.sidebar-resizing .workspace-sidebar,
     .app-shell.sidebar-resizing .workspace-splitter,
+    .app-shell.sidebar-resizing .workspace-toggle-tab,
     .app-shell.sidebar-resizing .container {
         transition: none;
     }
@@ -1321,14 +1322,13 @@ html[data-iphone-standalone-compose-inset="1"] .container {
         margin: 0 auto;
     }
 
-    .app-shell.workspace-collapsed:not(.editor-open):not(.chat-only):not(.pane-popout) {
-        justify-content: center;
-    }
-
+    /* Keep the collapsing sidebar anchored at the start of the flex row.
+       Centre only the chat in the remaining space; centring the entire row
+       moves the sidebar right while its width is still animating to zero. */
     .app-shell.workspace-collapsed:not(.editor-open):not(.chat-only):not(.pane-popout) > .container {
         flex: 0 1 auto;
         width: min(100%, var(--chat-max-width, 900px));
-        margin: 0;
+        margin: 0 auto;
     }
 
     .container {
