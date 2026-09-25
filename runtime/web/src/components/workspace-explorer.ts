@@ -1,4 +1,5 @@
 import { html, useCallback, useEffect, useMemo, useRef, useState } from '../vendor/preact-htm.js';
+import { subscribeWorkspaceActions, workspaceActionContext, listWorkspaceActions, invokeWorkspaceAction } from '../ui/addon-workspace-actions.js';
 import { workspaceChartColor } from '../ui/workspace-chart-colors.js';
 import { renderDisclosureTriangle } from '../ui/disclosure-triangle.js';
 import { useTranslation } from '../utils/i18n.js';
@@ -1447,6 +1448,19 @@ export function WorkspaceExplorer({
     nodeMapRef.current = nodeMap;
     const selectedNode = selectedPath ? nodeMapRef.current.get(selectedPath) : null;
     const selectedIsDir = selectedNode?.type === 'dir';
+    const [, setAddonActionsRevision] = useState(0);
+    const [addonActionError, setAddonActionError] = useState('');
+    useEffect(() => subscribeWorkspaceActions(() => setAddonActionsRevision(n => n + 1)), []);
+    const addonChatJid = typeof (window as any).__piclawCurrentChatJid === 'string' ? (window as any).__piclawCurrentChatJid : null;
+    const addonContext = workspaceActionContext(selectedNode, addonChatJid);
+    const addonActions = listWorkspaceActions(addonContext);
+    const runAddonAction = async (id) => {
+        setHeaderMenuOpen(false);
+        setAddonActionError('');
+        try {
+            await invokeWorkspaceAction(id, workspaceActionContext(nodeMapRef.current.get(selectedPathRef.current), addonChatJid));
+        } catch (error) { setAddonActionError(error instanceof Error ? error.message : 'Add-on action failed.'); }
+    };
 
     useEffect(() => {
         if (!selectedPath || !selectedIsDir) {
@@ -2456,6 +2470,7 @@ export function WorkspaceExplorer({
                                 ${selectedPath && !selectedIsDir && html`
                                     <button class="workspace-menu-item" role="menuitem" onClick=${handleMenuOpenEditor} disabled=${!canEdit}>${t('workspace.openInEditor')}</button>
                                 `}
+                                ${addonActions.map(action => html`<button class="workspace-menu-item" role="menuitem" title=${action.title} onClick=${() => runAddonAction(action.id)}>${action.label}</button>`)}
                                 ${selectedCanRename && html`
                                     <button class="workspace-menu-item" role="menuitem" onClick=${handleMenuRename}>${t('workspace.renameSelected')}</button>
                                 `}
@@ -2646,9 +2661,11 @@ export function WorkspaceExplorer({
             ${selectedPath && html`
                 <div class="workspace-preview-splitter-h" onMouseDown=${handlePreviewSplitterMouseDown} onTouchStart=${handlePreviewSplitterTouchStart}></div>
                 <div class="workspace-preview">
+                    ${addonActionError && html`<div role="alert">${addonActionError}</div>`}
                     <div class="workspace-preview-header">
                         <span class="workspace-preview-title">${selectedPath}</span>
                         <div class="workspace-preview-actions">
+                            ${addonActions.map(action => html`<button class="workspace-download" title=${action.title} aria-label=${action.label} onClick=${() => runAddonAction(action.id)}>${action.label}</button>`)}
                             <button class="workspace-create" onClick=${handleCreateFileClick} title=${t('workspace.newFile')} disabled=${uploading}>
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
