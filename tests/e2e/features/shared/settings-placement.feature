@@ -8,7 +8,7 @@ Feature: Focused core Settings placement
   # Uses shipped Classic and Visual bundles with disposable intercepted APIs.
 
   @ux-settings-placement-001
-  Scenario Outline: Find authentication, API access and recovery in their own sections
+  Scenario Outline: Find authentication and API access together and recovery in Sessions
     Given the <skin> Settings surface is open
     When I open General
     Then identity and upload controls remain available
@@ -16,7 +16,9 @@ Feature: Focused core Settings placement
     When I open Authentication
     Then the instance TOTP status and configured setup details appear alongside passkeys
     And TOTP changes use the existing enrolment confirmation flow
-    When I open API access
+    And the same Authentication page contains the API access subsection
+    And no separate API access navigation entry appears
+    And old API access links and saved selections resolve to Authentication
     Then I can reveal, copy and regenerate the widget token
     And cancelling regeneration sends no request
     And a rejected request shows an error without reporting success
@@ -34,5 +36,9 @@ Feature: Focused core Settings placement
   Scenario: Preserve security and narrow-screen usability
     Given Settings is open at desktop or phone width
     Then the moved forms fit their available content width
+    And Appearance immediately follows General in the navigation
+    And Tools immediately follows Models in the navigation
+    And Keychain immediately follows Environment in the navigation
+    And Classic Quick Actions immediately follows Keyboard in the navigation
     And passkey management retains its reauthentication and last-factor protections
     And Keychain and provider authentication remain separate from Authentication

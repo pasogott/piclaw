@@ -35,6 +35,8 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
     const contextPayload = () => ({ tokens, percent: tokens / 2000, contextWindow: 200000, sessionGeneration: "fixture-generation" });
     await page.addInitScript(({ chatJid }) => {
       localStorage.setItem("piclaw_wizard_dismissed", "1");
+      // An old saved standalone section must now open Authentication.
+      localStorage.setItem("piclaw-settings-category", "api-access");
       Object.defineProperty(navigator, 'clipboard', {value:{writeText: async (text: string) => { (window as any).copiedToken = text; }}, configurable:true});
       localStorage.setItem("piclaw-active-panel", "chat");
       localStorage.setItem("piclaw_workspace_visible", "false");
@@ -117,9 +119,10 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       await page.locator('textarea,[contenteditable="true"]').first().waitFor();
       // Allow pending layout hydration to settle before the user's Settings action.
       await page.waitForTimeout(500);
-      await page.evaluate(() => window.dispatchEvent(new CustomEvent('piclaw:open-settings', {detail:{section:'authentication'}})));
+      await page.evaluate(({skin,width}) => window.dispatchEvent(new CustomEvent('piclaw:open-settings', {detail:skin === 'classic' || width === 1024 ? {section:'api-access'} : {}})), {skin,width});
       const panel = page.locator('.passkey-settings').filter({visible:true});
       await panel.getByRole('heading',{name:'Existing key',exact:true}).waitFor({timeout:10000});
+      if (skin === 'visual') expect(await page.evaluate(() => localStorage.getItem('piclaw-settings-category'))).toBe('authentication');
       expect(await panel.getByText('Never used',{exact:true}).count()).toBe(1);
       await panel.getByRole('button',{name:'Rename',exact:true}).click();
       await panel.getByLabel('Rename passkey',{exact:true}).fill('Desktop backup');
@@ -133,6 +136,15 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
         await page.waitForTimeout(250);
       };
       expect(await content.getByLabel('Secret',{exact:true}).inputValue()).toBe('FIXTUREONLY');
+      const nav = page.locator(skin === 'classic' ? '.settings-nav' : '.settings-panel__nav').filter({visible:true});
+      const labels = (await nav.getByRole('button').allTextContents()).map(label => label.trim());
+      expect(labels[labels.indexOf('General') + 1]).toBe('Appearance');
+      expect(labels[labels.indexOf('Models') + 1]).toBe('Tools');
+      expect(labels[labels.indexOf('Environment') + 1]).toBe('Keychain');
+      if (skin === 'classic') expect(labels[labels.indexOf('Keyboard') + 1]).toBe('Quick Actions');
+      expect(labels).not.toContain('API access');
+      expect(labels.filter(label => label === 'Authentication')).toHaveLength(1);
+      expect(await content.getByRole('heading',{name:'API access',exact:true}).count()).toBe(1);
       expect(await content.getByText('/totp enrol',{exact:false}).count()).toBeGreaterThan(0);
       expect(await content.getByRole('button',{name:'Enable TOTP',exact:true}).count()).toBe(0);
       await openSection('general');
@@ -160,7 +172,10 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       await openSection('general'); await openSection('sessions');
       expect(await content.getByLabel(/^(automatic recovery maximum attempts|Maximum recovery attempts)$/,{exact:true}).inputValue()).toBe('4');
       expect(await content.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
-      await openSection('api-access');
+      // The nav can be scrolled outside the accessibility viewport on narrow layouts.
+      await nav.locator('button').filter({ hasText: /^Authentication$/ }).click();
+      await content.getByRole('heading',{name:'API access',exact:true}).waitFor();
+      await content.getByRole('heading',{name:'Desktop backup',exact:true}).waitFor();
       expect(await content.getByText('fixture-token-initial',{exact:true}).count()).toBe(0);
       await content.getByRole('button',{name:'Reveal token',exact:true}).click();
       await content.getByText('fixture-token-initial',{exact:true}).waitFor();
@@ -176,7 +191,9 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       await rotate(true); expect(tokenWrites).toBe(1);
       rejectToken=true; await rotate(true); expect(tokenWrites).toBe(2);
       expect(await page.getByText('Fixture regeneration failed',{exact:true}).count()).toBeGreaterThan(0);
+      // Compatibility event from an old API-access link resolves to the combined pane.
       await openSection('general'); await openSection('api-access');
+      await content.getByRole('heading',{name:'Desktop backup',exact:true}).waitFor();
       await content.getByRole('button',{name:'Reveal token',exact:true}).click();
       await content.getByText('fixture-token-rotated',{exact:true}).waitFor();
       expect(await content.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);

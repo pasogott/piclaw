@@ -1,3 +1,4 @@
+import { ApiAccessSection } from './api-access.js';
 import { useTranslation } from '../../utils/i18n.js';
 import { html, useEffect, useRef } from '../../vendor/preact-htm.js';
 import { h, render } from 'preact';
@@ -5,7 +6,7 @@ import { PasskeySettings } from '../../../shared/passkey-settings.js';
 
 /** Separate Preact root: Classic's vendored hooks must not mix with Visual hooks. */
 let authenticationInstanceId = 0;
-export function AuthenticationSection({ settingsData }) {
+export function AuthenticationSection({ settingsData, setStatus, mergeSettingsData }) {
     const { t } = useTranslation();
     const fieldPrefix = useRef(null);
     if (!fieldPrefix.current) fieldPrefix.current = `settings-authentication-${++authenticationInstanceId}`;
@@ -52,5 +53,6 @@ export function AuthenticationSection({ settingsData }) {
             </div>
             <p class="settings-hint">${t('settings.authentication.totpManage')}</p>
             <div ref=${root}></div>
+            <${ApiAccessSection} settingsData=${settingsData} setStatus=${setStatus} mergeSettingsData=${mergeSettingsData} />
         </div>`;
 }
