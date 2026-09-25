@@ -39,7 +39,7 @@ import { GeneralSection } from './settings/general.js';
 perf('imports-done');
 
 type SettingsSectionComponent = unknown;
-type BuiltinSectionId = 'authentication' | 'general' | 'sessions' | 'recordings' | 'compaction' | 'budget' | 'keyboard' | 'workspace' | 'environment' | 'providers' | 'models' | 'theme' | 'scheduled-tasks' | 'quick-actions' | 'keychain' | 'tools' | 'addons';
+type BuiltinSectionId = 'api-access' | 'authentication' | 'general' | 'sessions' | 'recordings' | 'compaction' | 'budget' | 'keyboard' | 'workspace' | 'environment' | 'providers' | 'models' | 'theme' | 'scheduled-tasks' | 'quick-actions' | 'keychain' | 'tools' | 'addons';
 
 const builtinSectionComponentCache = new Map<BuiltinSectionId, SettingsSectionComponent>();
 const builtinSectionLoadPromiseCache = new Map<BuiltinSectionId, Promise<SettingsSectionComponent>>();
@@ -50,6 +50,7 @@ builtinSectionComponentCache.set('general', GeneralSection);
 const BUILTIN_SECTION_LOADERS: Record<BuiltinSectionId, () => Promise<SettingsSectionComponent>> = {
     general: () => Promise.resolve(GeneralSection),
     authentication: () => import('./settings/authentication.js').then(mod => mod.AuthenticationSection),
+    'api-access': () => import('./settings/api-access.js').then(mod => mod.ApiAccessSection),
     sessions: () => import('./settings/sessions.js').then(mod => mod.SessionsSection),
     recordings: () => import('./settings/recordings.js').then(mod => mod.RecordingsSection),
     compaction: () => import('./settings/compaction.js').then(mod => mod.CompactionSection),
@@ -143,6 +144,7 @@ const BUILTIN_SECTIONS = [
     { id: 'scheduled-tasks', label: 'Scheduled Tasks', icon: iconScheduledTasks, searchable: true, placeholder: 'Filter scheduled tasks…', order: 65 },
     { id: 'quick-actions', label: 'Quick Actions', icon: iconQuickActions, searchable: true, placeholder: 'Filter quick actions…', order: 70 },
     { id: 'authentication', label: 'Authentication', icon: iconKeychain, searchable: false, order: 55 },
+    { id: 'api-access', label: 'API access', icon: iconKeychain, searchable: false, order: 56 },
     { id: 'keychain', label: 'Keychain', icon: iconKeychain, searchable: true, placeholder: 'Filter entries…', order: 75 },
     { id: 'tools', label: 'Tools', icon: iconTools, searchable: true, placeholder: 'Filter tools…', order: 80 },
     { id: 'addons', label: 'Add-ons', icon: iconAddons, searchable: true, placeholder: 'Filter add-ons…', order: 90 },
@@ -312,7 +314,8 @@ export function SettingsDialogContent({ onClose }) {
         }
 
         switch (activeSection) {
-            case 'authentication': return html`<${Comp} />`;
+            case 'authentication': return html`<${Comp} settingsData=${settingsData} />`;
+            case 'api-access': return html`<${Comp} settingsData=${settingsData} setStatus=${setStatus} mergeSettingsData=${mergeSettingsData} />`;
             case 'general': return html`<${Comp} settingsData=${settingsData} setStatus=${setStatus} mergeSettingsData=${mergeSettingsData} />`;
             case 'sessions': return html`<${Comp} settingsData=${settingsData} setStatus=${setStatus} mergeSettingsData=${mergeSettingsData} />`;
             case 'recordings': return html`<${Comp} filter=${filter} setStatus=${setStatus} />`;

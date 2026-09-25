@@ -21,6 +21,7 @@ import "./settings/ModelsSection";
 import "./settings/AppearanceSection";
 import "./settings/KeychainSection";
 import "./settings/AuthenticationSection";
+import "./settings/ApiAccessSection";
 import "./settings/ToolsSection";
 
 /** Safely render any pane component (built-in or addon); shows an error state if it throws. */
@@ -28,10 +29,12 @@ function PaneRenderer({
   pane,
   data,
   saveSetting,
+  mergeSettingsData,
 }: {
   pane: SettingsPaneDefinition;
   data: SettingsData;
   saveSetting: (endpoint: string, field: string, value: unknown) => Promise<void>;
+  mergeSettingsData: (patch: Partial<SettingsData>) => void;
 }) {
   const [renderError, setRenderError] = useState<string | null>(null);
 
@@ -56,9 +59,10 @@ function PaneRenderer({
       data: SettingsData;
       saveSetting: (endpoint: string, field: string, value: unknown) => Promise<void>;
       filter?: string;
+      mergeSettingsData?: (patch: Partial<SettingsData>) => void;
     }) => unknown;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return <>{Comp({ data, saveSetting }) as any}</>;
+    return <>{Comp({ data, saveSetting, mergeSettingsData }) as any}</>;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     Promise.resolve().then(() => setRenderError(msg));
@@ -204,7 +208,7 @@ export function SettingsPanel() {
         )}
 
         {activePane && (
-          <PaneRenderer pane={activePane} data={s} saveSetting={saveSetting} />
+          <PaneRenderer key={activePane.id} pane={activePane} data={s} saveSetting={saveSetting} mergeSettingsData={(patch) => { settings.value = { ...settings.value, ...patch }; }} />
         )}
       </div>
     </div>
