@@ -44,6 +44,24 @@ test('public pane launch is direct, readonly, namespace-bounded and lifecycle-bo
  unbind();expect(api.openPane({path,paneId:'example-review'})).toBe(false);
 });
 
+test('virtual tabs mount the requested readonly pane in view mode, never a competing pane',()=>{
+ const api=createAddonWebApi(null);
+ const path='piclaw://addon/example/review-1';
+ let opened:string|null=null;
+ api.registerPane({id:'requested',placement:'tabs',capabilities:['readonly'],canHandle:(c:any)=>c.path===path&&c.mode==='view',mount(){}});
+ api.registerPane({id:'competing',placement:'tabs',capabilities:['readonly'],canHandle:(c:any)=>c.path===path&&c.mode==='view'?10:false,mount(){}});
+ const unbind=bindAddonPaneLauncher((_path,options)=>{opened=options.paneOverrideId;});
+ expect(api.openPane({path,paneId:'requested'})).toBe(true);
+ expect(opened).toBe('requested');
+ expect(paneRegistry.resolve({path,mode:'view'},opened)?.id).toBe('requested');
+ expect(paneRegistry.resolve({path,mode:'view'})?.id).toBe('competing');
+ paneRegistry.unregister('requested');
+ expect(paneRegistry.resolve({path,mode:'view'},opened)?.id).toBe('addon-unavailable');
+ paneRegistry.register({id:'requested',placement:'tabs',capabilities:['edit'],canHandle:()=>true,mount(){}});
+ expect(paneRegistry.resolve({path,mode:'view'},opened)?.id).toBe('addon-unavailable');
+ unbind();
+});
+
 test('missing virtual addon never resolves editable fallback or appears in filesystem recents',async()=>{
  paneRegistry.register({id:'test-editor',label:'Editor',placement:'tabs',capabilities:['edit'],canHandle:()=>100,mount(){throw Error('must not mount');}});
  const path='piclaw://addon/missing/review-1';
