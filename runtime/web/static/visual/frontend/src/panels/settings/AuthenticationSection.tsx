@@ -1,3 +1,4 @@
+import { ApiAccessSection } from "./ApiAccessSection";
 import { PasskeySettings } from "../../../../../../shared/passkey-settings";
 import { useId } from "preact/hooks";
 import { CopyButton } from "../../components/CopyButton";
@@ -5,7 +6,8 @@ import { registerSettingsPane } from "./pane-registry";
 import type { SettingsSectionProps } from "./types";
 import { sanitizeSvg } from "../../utils/agent-status";
 
-function AuthenticationSection({ data }: SettingsSectionProps) {
+function AuthenticationSection(props: SettingsSectionProps) {
+  const { data } = props;
   const totp = data.instanceTotp ?? {};
   const prefix = useId();
   return (
@@ -29,6 +31,7 @@ function AuthenticationSection({ data }: SettingsSectionProps) {
       </>}
       <p className="settings-panel__description">To enrol an authenticator, use <code>/totp enrol</code> in chat. To replace the secret, use <code>/totp reset &lt;current code&gt;</code>. Changes require confirmation through the enrolment flow.</p>
       <PasskeySettings />
+      <ApiAccessSection {...props} />
     </section>
   );
 }

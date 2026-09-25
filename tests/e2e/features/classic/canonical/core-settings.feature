@@ -181,7 +181,7 @@ Feature: Classic Settings dialog core UX
 
   @ux-settings-021 @api-access @widget-token
   Scenario: Reveal and copy the widget token
-    Given API access has a widget token
+    Given Authentication's API access subsection has a widget token
     Then the displayed token starts masked
     When I toggle reveal
     Then the displayed value switches between the token and its mask
@@ -192,7 +192,7 @@ Feature: Classic Settings dialog core UX
 
   @ux-settings-022 @api-access @widget-token
   Scenario: Confirm widget-token regeneration
-    Given API access has no regeneration in progress
+    Given Authentication's API access subsection has no regeneration in progress
     When I request regeneration and cancel confirmation
     Then no regeneration request is sent
     When I request regeneration and confirm

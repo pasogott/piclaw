@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { useSignal } from "@preact/signals";
 
 import { type SettingsData } from "./settings/types";
+import { normalizeSettingsSectionId } from "../../../../../src/components/settings-dialog-events";
 import { safeGetItem, safeSetItem } from "../utils/storage";
 import { getRegisteredPanes, type SettingsPaneDefinition } from "./settings/pane-registry";
 import { mergeSavedSettings, SettingsSaveGeneration } from "./settings/save-state";
@@ -21,7 +22,6 @@ import "./settings/ModelsSection";
 import "./settings/AppearanceSection";
 import "./settings/KeychainSection";
 import "./settings/AuthenticationSection";
-import "./settings/ApiAccessSection";
 import "./settings/ToolsSection";
 
 /** Safely render any pane component (built-in or addon); shows an error state if it throws. */
@@ -71,7 +71,12 @@ function PaneRenderer({
 }
 
 export function SettingsPanel() {
-  const activeCategory = useSignal<string>(safeGetItem("piclaw-settings-category") || "general");
+  const activeCategory = useSignal<string>(normalizeSettingsSectionId(safeGetItem("piclaw-settings-category")) || "general");
+  useEffect(() => {
+    if (safeGetItem("piclaw-settings-category") === "api-access") {
+      safeSetItem("piclaw-settings-category", "authentication");
+    }
+  }, []);
   const settings = useSignal<SettingsData>({});
   const loading = useSignal(true);
   const error = useSignal<string | null>(null);
@@ -90,7 +95,7 @@ export function SettingsPanel() {
 
   useEffect(() => {
     const onOpenSettings = (event: Event) => {
-      const section = (event as CustomEvent<{ section?: string }>).detail?.section;
+      const section = normalizeSettingsSectionId((event as CustomEvent<{ section?: string }>).detail?.section);
       if (!section || !getRegisteredPanes().some((pane) => pane.id === section)) return;
       activeCategory.value = section;
       safeSetItem("piclaw-settings-category", section);

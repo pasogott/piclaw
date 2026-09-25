@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { copyToClipboard } from "../../utils/clipboard";
 import { useDialog } from "../../hooks/useDialog";
-import { registerSettingsPane } from "./pane-registry";
 import type { SettingsData, SettingsSectionProps } from "./types";
 
-function ApiAccessSection({ data, mergeSettingsData }: SettingsSectionProps) {
+export function ApiAccessSection({ data, mergeSettingsData }: SettingsSectionProps) {
   const [token, setToken] = useState(data.widgetToken ?? "");
   const [revealed, setRevealed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -49,7 +48,7 @@ function ApiAccessSection({ data, mergeSettingsData }: SettingsSectionProps) {
 
   return (
     <section className="settings-panel__section settings-panel__section--api-access">
-      <h2 className="settings-panel__section-title">API access</h2>
+      <h3 className="settings-panel__subsection-title">API access</h3>
       <div className="settings-panel__field">
         <label className="settings-panel__label">Widget token</label>
         <div className="settings-panel__field-content">
@@ -66,11 +65,3 @@ function ApiAccessSection({ data, mergeSettingsData }: SettingsSectionProps) {
     </section>
   );
 }
-
-registerSettingsPane({
-  id: "api-access",
-  label: "API access",
-  icon: <i className="codicon codicon-key" />,
-  order: 56,
-  component: ApiAccessSection,
-});
