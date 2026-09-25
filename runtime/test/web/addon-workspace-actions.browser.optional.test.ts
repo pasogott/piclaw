@@ -18,7 +18,7 @@ browserTest('real explorer exposes registered file action on desktop/touch and o
  const api=createAddonWebApi(window);window.api=api;window.opens=[];window.edits=[];
  const path='piclaw://addon/example/review-1';
  api.registerPane({id:'example-review',label:'Review',placement:'tabs',capabilities:['readonly'],canHandle:c=>c.path===path,mount(container){container.textContent='REVIEW_SAVED_FILE';return{getContent(){},isDirty(){return false},focus(){},dispose(){container.textContent=''}};}});
- window.unregister=api.registerWorkspaceAction({id:'example.review',label:'Review file',title:'Review saved file without opening an editor',when:c=>c.path.endsWith('.ts'),run:c=>{window.selected=c;api.openPane({path,paneId:'example-review',label:'Review file'});}});
+ window.unregister=api.registerWorkspaceAction({id:'example.review',label:'Review file',title:'Review saved file without opening an editor',icon:'review',when:c=>c.path.endsWith('.ts'),run:c=>{window.selected=c;api.openPane({path,paneId:'example-review',label:'Review file'});}});
  bindAddonPaneLauncher((path,options)=>{window.opens.push({path,options});paneRegistry.resolve({path,mode:'view'}).mount(document.getElementById('pane'),{path,mode:'view'});});
  render(html\`<\${WorkspaceExplorer} onOpenEditor=\${(p)=>window.edits.push(p)} />\`,document.getElementById('explorer'));
  `);
@@ -44,7 +44,10 @@ browserTest('real explorer exposes registered file action on desktop/touch and o
   try { await page.locator('.workspace-row[data-path="unchanged.ts"]').click({timeout:5000}); }
   catch(error) { console.error({errors,requests,body:await page.locator('body').innerText()});throw error; }
   const action=page.locator('.workspace-preview-actions button[aria-label="Review file"]');
-  await action.waitFor();await action.click();
+  await action.waitFor();
+  expect(await action.locator('svg[aria-hidden="true"]').count()).toBe(1);
+  expect(await action.innerText()).toBe('');
+  await action.click();
   await page.waitForFunction(()=>document.getElementById('pane')?.textContent==='REVIEW_SAVED_FILE');
   expect(await page.evaluate(()=>({opens:(window as any).opens.length,edits:(window as any).edits.length,path:(window as any).selected.path}))).toEqual({opens:1,edits:0,path:'unchanged.ts'});
   await page.setViewportSize({width:390,height:844});await action.click();
