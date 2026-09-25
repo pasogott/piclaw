@@ -13,6 +13,8 @@ export interface AddonWorkspaceAction {
   id: string;
   label: string;
   title: string;
+  /** Optional host-rendered preview icon; raw add-on SVG/HTML is not accepted. */
+  icon?: 'review';
   when?: (context: AddonWorkspaceActionContext) => boolean;
   run: (context: AddonWorkspaceActionContext) => void | Promise<void>;
 }

@@ -2665,7 +2665,7 @@ export function WorkspaceExplorer({
                     <div class="workspace-preview-header">
                         <span class="workspace-preview-title">${selectedPath}</span>
                         <div class="workspace-preview-actions">
-                            ${addonActions.map(action => html`<button class="workspace-download" title=${action.title} aria-label=${action.label} onClick=${() => runAddonAction(action.id)}>${action.label}</button>`)}
+                            ${addonActions.map(action => html`<button class="workspace-download" title=${action.title} aria-label=${action.label} onClick=${() => runAddonAction(action.id)}>${action.icon === 'review' ? html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><path d="M8 9h5M8 13h4M8 17h3"/><path d="m14 7 5-5 3 3-5 5-4 1 1-4Z"/></svg>` : action.label}</button>`)}
                             <button class="workspace-create" onClick=${handleCreateFileClick} title=${t('workspace.newFile')} disabled=${uploading}>
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

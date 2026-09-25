@@ -379,7 +379,9 @@ const unregister = web.registerWorkspaceAction({
 ```
 
 The host shows registered actions in the selected-file menu and the preview header
-for touch access. The frozen context contains `path`, `name`, `type:'file'`, optional
+for touch access. An action may set `icon: 'review'` for a host-rendered preview
+icon; raw add-on SVG/HTML is not accepted. Its `label` remains the accessible name
+and menu text. The frozen context contains `path`, `name`, `type:'file'`, optional
 `size`/`contentType`, and `chatJid:string|null`. It contains no source bytes. The
 path is workspace-relative; the host rechecks existence, root containment and
 file type with `/workspace/stat` before invoking the action. The backend must
