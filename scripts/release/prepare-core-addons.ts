@@ -25,12 +25,14 @@ export function coreCatalogEntries(catalog: { addons?: CatalogEntry[] }): Catalo
   return entries.sort((a, b) => a.slug.localeCompare(b.slug));
 }
 
-export function readCoreAddonLock(path = lockPath): Lock {
+export function readCoreAddonLock(path = lockPath, catalog = catalogPath): Lock {
   const lock = JSON.parse(readFileSync(path, "utf8")) as Lock;
   if (lock.schemaVersion !== 1 || !Array.isArray(lock.addons) || lock.addons.length === 0 || !/^https:\/\//.test(lock.catalog) || !/^[a-f0-9]{64}$/.test(lock.catalogSha256)) throw new Error("Invalid core add-on lock");
-  const catalogBytes = readFileSync(catalogPath);
-  if (sha256(catalogBytes) !== lock.catalogSha256) throw new Error("Catalog snapshot checksum mismatch");
-  const entries = coreCatalogEntries(JSON.parse(catalogBytes.toString("utf8")));
+  // Windows checkout may materialise Git text files with CRLF. Hash the
+  // repository's LF snapshot, not the platform-dependent working-tree bytes.
+  const catalogText = readFileSync(catalog, "utf8").replace(/\r\n/g, "\n");
+  if (sha256(Buffer.from(catalogText)) !== lock.catalogSha256) throw new Error("Catalog snapshot checksum mismatch");
+  const entries = coreCatalogEntries(JSON.parse(catalogText));
   if (entries.length !== lock.addons.length) throw new Error("Core add-on lock does not match catalog tags");
   const slugs = new Set<string>();
   const names = new Set<string>();
