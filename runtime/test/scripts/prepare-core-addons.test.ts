@@ -14,6 +14,18 @@ describe("core add-on release preparation", () => {
     expect(pins.length).toBeGreaterThan(0);
   });
 
+  test("accepts a Windows CRLF checkout without weakening the catalog checksum", () => {
+    const ws = createTempWorkspace("piclaw-core-catalog-eol-");
+    try {
+      const catalog = join(ws.base, "catalog.json");
+      const original = readFileSync(join(repo, "release/core-addons/catalog.json"), "utf8");
+      writeFileSync(catalog, original.replace(/\r?\n/g, "\r\n"));
+      expect(readCoreAddonLock(join(repo, "release/core-addons.lock.json"), catalog).addons).toEqual(readCoreAddonLock().addons);
+      writeFileSync(catalog, original.replace("\"core\"", "\"other\"").replace(/\r?\n/g, "\r\n"));
+      expect(() => readCoreAddonLock(join(repo, "release/core-addons.lock.json"), catalog)).toThrow("Catalog snapshot checksum mismatch");
+    } finally { ws.cleanup(); }
+  });
+
   test("builds the vendored seed offline and checks each installed package", async () => {
     const ws = createTempWorkspace("piclaw-core-pack-");
     try {
