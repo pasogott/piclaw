@@ -23,8 +23,9 @@ export async function readNote(workspace: string, relative: string, check: () =>
   const full=path.join(workspace,relative), parents=ancestors(workspace,relative), named=lstatSync(full);
   if(!named.isFile()||named.isSymbolicLink()||named.nlink!==1)throw new NoteSourceExcluded('link_or_type');
   if(named.size>NOTE_LIMITS.fileBytes)throw new NoteSourceExcluded('file_too_large');
-  const handle=await fs.open(full,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);check();
+  const handle=await fs.open(full,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
   try {
+    check();
     const before=await handle.stat();check();
     if(!before.isFile()||before.nlink!==1||identity(before)!==identity(named))throw new NoteSourceUnstable();
     const bytes=Buffer.alloc(before.size+1);let used=0;

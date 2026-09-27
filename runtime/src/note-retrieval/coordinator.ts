@@ -91,8 +91,10 @@ export async function runNoteIndexPhase(options: { rebuild?: boolean; signal?: A
           check();again.verify();if(state().dirty!==captured.dirty)throw new Error('superseded');
           deleteStagedPath(generation,relative);
           db.query('INSERT INTO note_retrieval_sources VALUES(?,?,?,?,?,?)').run(generation,relative,parsed.sourceRevision,source.bytes.length,Date.now(),captured.dirty);
-          for(const c of parsed.chunks){check();db.query('INSERT INTO note_retrieval_chunks(generation,path,chunk_id,revision,chunker,first_byte,after_last_byte,line_start,line_end,heading,kind,content) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(generation,relative,c.chunkId,parsed.sourceRevision,CHUNKER_VERSION,c.firstByte,c.afterLastByte,c.lineStart,c.lineEnd,JSON.stringify(c.headingPath),c.kind,c.text);
-            db.query('INSERT INTO note_retrieval_fts(content,heading,path,generation,chunk_id) VALUES(?,?,?,?,?)').run(c.text,JSON.stringify(c.headingPath),relative,generation,c.chunkId);}
+          // Bun's SQLite string binding can strip an initial BOM. Bind raw UTF-8
+          // and CAST to TEXT so stored content still matches the hashed byte range.
+          for(const c of parsed.chunks){check();db.query('INSERT INTO note_retrieval_chunks(generation,path,chunk_id,revision,chunker,first_byte,after_last_byte,line_start,line_end,heading,kind,content) VALUES(?,?,?,?,?,?,?,?,?,?,?,CAST(? AS TEXT))').run(generation,relative,c.chunkId,parsed.sourceRevision,CHUNKER_VERSION,c.firstByte,c.afterLastByte,c.lineStart,c.lineEnd,JSON.stringify(c.headingPath),c.kind,Buffer.from(c.text,'utf8'));
+            db.query('INSERT INTO note_retrieval_fts(content,heading,path,generation,chunk_id) VALUES(CAST(? AS TEXT),?,?,?,?)').run(Buffer.from(c.text,'utf8'),JSON.stringify(c.headingPath),relative,generation,c.chunkId);}
           check();again.verify();
         }).immediate();
       } catch(error){
