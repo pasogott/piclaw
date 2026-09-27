@@ -108,6 +108,26 @@ test('live writer cannot be reclaimed; crash-left staging is reclaimed before su
  {const db=database();db.query('UPDATE note_retrieval_state SET writer_pid=2147483647').run();db.query("INSERT INTO note_retrieval_sources VALUES(999,'notes/abandoned.md','rev',1,1,0)").run();db.close();}
  expect((await run()).code).toBe(0);expect(sql('SELECT count(*) n FROM note_retrieval_sources WHERE generation=999')).toEqual({n:0});
 });
+test('a competing process refuses a live writer and reclaims its staging after SIGKILL',async()=>{
+ put('a.md','original');expect((await run()).code).toBe(0);
+ const first=snapshot(),original=chunks()[0],ready=join(ws.data,'writer-ready');
+ const writer=spawn(process.execPath,['-e',`const {Database}=await import('bun:sqlite');const fs=await import('node:fs');const db=new Database(${JSON.stringify(join(ws.store,'messages.db'))});db.transaction(()=>{db.query("UPDATE note_retrieval_state SET staging=999,writer_pid=?,state='indexing' WHERE id=1").run(process.pid);db.query('INSERT INTO note_retrieval_sources VALUES(?,?,?,?,?,?)').run(999,'notes/abandoned.md','rev',1,1,0)}).immediate();db.close();fs.writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000);`],{cwd:resolve(import.meta.dir,'../..'),env:process.env,stdio:['ignore','ignore','pipe']});
+ let errors='';writer.stderr!.on('data',b=>errors+=b);const writerExited=once(writer,'exit');
+ try{
+  for(let i=0;i<500&&!existsSync(ready);i++){if(writer.exitCode!==null)throw Error(`writer exited ${writer.exitCode}: ${errors}`);await Bun.sleep(20);}
+  expect(existsSync(ready)).toBe(true);
+  const active=snapshot();expect(active).toMatchObject({published:first.published,staging:999,writer_pid:writer.pid,state:'indexing'});
+  expect(chunks()).toEqual([original]);
+  const contender=await run();expect(contender.code).toBe(1);expect(contender.errors).toContain('writer_busy');
+  expect(snapshot()).toMatchObject({published:first.published,staging:999,writer_pid:writer.pid});
+  writer.kill('SIGKILL');const [exit,signal]=await writerExited;expect(exit).toBeNull();expect(signal).toBe('SIGKILL');
+  put('a.md','replacement');expect((await run()).code).toBe(0);
+  expect(snapshot()).toMatchObject({staging:null,writer_pid:null,state:'ready'});
+  expect(snapshot().published).toBeGreaterThan(first.published);
+  expect(sql('SELECT count(*) n FROM note_retrieval_sources WHERE generation=999')).toEqual({n:0});
+  expect(chunks()[0].chunk_id).not.toBe(original.chunk_id);
+ }finally{if(writer.exitCode===null&&writer.signalCode===null){writer.kill('SIGKILL');await writerExited;}}
+});
 test('SQL fault rolls back staging, retains publication and never deletes source/other tables',async()=>{
  put('a.md','alpha');expect((await run()).code).toBe(0);const previous=chunks();
  {const db=database();db.exec("CREATE TABLE fixture_other(value TEXT); INSERT INTO fixture_other VALUES('keep'); CREATE TRIGGER note_fault BEFORE INSERT ON note_retrieval_chunks BEGIN SELECT RAISE(ABORT,'fixture fault'); END;");db.close();}put('a.md','bravo');
