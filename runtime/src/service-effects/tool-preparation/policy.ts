@@ -51,6 +51,7 @@ const CURRENT_AUTHORITY_PATHS: Readonly<Record<string, string>> = Object.freeze(
   export_attachment: "runtime/src/extensions/file-attachments.ts reads attachment/media persistence and writes the workspace tmp filesystem.",
   refresh_workspace_index: "runtime/src/extensions/workspace-search.ts invokes the current workspace FTS indexer and its SQLite-backed index directly.",
   memory_get: "runtime/src/extensions/memory-search.ts reads the admitted SQLite note index and source filesystem; stale files dirty index metadata and enqueue a background refresh.",
+  memory_query: "runtime/src/extensions/memory-search.ts searches the bounded admitted SQLite note index and source filesystem; stale candidates dirty index metadata and enqueue a background refresh.",
   open_workspace_file: "runtime/src/extensions/open-workspace-file.ts addresses the active web client and waits for the current SSE/browser acknowledgement path.",
   exit_process: "runtime/src/extensions/exit-process.ts writes restart handoff/timeline state, consults the session registry, and marks the shutdown registry.",
   schedule_task: "runtime/src/extensions/scheduled-tasks.ts writes the scheduled-task SQLite store and wakes the in-process task scheduler.",
@@ -143,6 +144,15 @@ const entries = Object.freeze([
     abortExpectation: "must_stop", ...DIRECT_QUERY,
     safeProof: "Bounded local index lookup has no mutation path.",
     authorityRationale: "Local query; no Piclaw service-operation authority is mutated.",
+  }),
+  ...policy(["memory_query"], {
+    effectClass: "mixed", replay: "never", contextFields: ["chatJid", "localEnv"],
+    serviceEffector: null, abortExpectation: "may_finish_late", safeProof: null,
+    nullAuthorityKind: "unsupported_mixed_authority",
+    authorityRationale: "A stale query candidate dirties note-index SQLite metadata and enqueues reconciliation through workspace-index coordination.",
+    idempotencyIdentity: null,
+    certainty: "Dirty markers or background refresh requests may persist after cancellation; automatic replay is forbidden.",
+    activationPrerequisites: ["separate admitted query and fenced dirty/refresh service authority before direct-tool migration"],
   }),
   ...policy(["memory_get"], {
     effectClass: "mixed", replay: "never", contextFields: ["chatJid", "localEnv"],

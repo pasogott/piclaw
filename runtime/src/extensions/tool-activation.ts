@@ -45,6 +45,7 @@ export const TOOLSETS: ToolsetDefinition[] = [
     toolNames: [
       "search_workspace",
       "memory_get",
+      "memory_query",
       "open_office_viewer",
       "office_read",
       "office_write",

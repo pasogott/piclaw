@@ -117,7 +117,7 @@ describe("WP-3C production-root coverage oracle", () => {
     expect(inventory.compositionRoots).toHaveLength(Object.values(compositionCategories).flat().length);
 
     const manifestByName = new Map(TOOL_PREPARATION_MANIFEST.map((row) => [row.toolName, row]));
-    expect(Object.keys(inventory.registrationSites)).toHaveLength(43);
+    expect(Object.keys(inventory.registrationSites)).toHaveLength(44);
     for (const [toolName, sites] of Object.entries(inventory.registrationSites)) {
       const currentSource = manifestByName.get(toolName)?.currentSource;
       expect(currentSource).toBeDefined();
@@ -238,7 +238,7 @@ describe("WP-3C closed manifest policy and hostile-safe normalization", () => {
       rejectUnexpectedExactTools: true,
     });
     expect(result.issues).toEqual([]);
-    expect(result.specs).toHaveLength(49);
+    expect(result.specs).toHaveLength(50);
     expect(Object.isFrozen(result.specs)).toBeTrue();
     for (const row of result.specs) {
       expect(Object.keys(row).sort()).toEqual(SPEC_FIELDS);
@@ -248,9 +248,9 @@ describe("WP-3C closed manifest policy and hostile-safe normalization", () => {
     }
   });
 
-  test("has closed rationale evidence for all 47 repository rows", () => {
+  test("has closed rationale evidence for all 48 repository rows", () => {
     const policies = listToolPreparationPolicies();
-    expect(policies).toHaveLength(47);
+    expect(policies).toHaveLength(48);
     expect(policies.map((policy) => policy.toolName).sort()).toEqual(TOOL_PREPARATION_MANIFEST.map((row) => row.toolName).sort());
     for (const row of TOOL_PREPARATION_MANIFEST) {
       const policy = getToolPreparationPolicy(row.toolName)!;
