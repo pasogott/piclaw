@@ -249,6 +249,15 @@ export const TOOL_PREPARATION_MANIFEST: readonly ToolPreparationSpec[] = Object.
     abortExpectation: "must_stop",
     protectedFields: ["params.query", "result.content"],
   }),
+  ...rows(["memory_query"], {
+    currentSource: "runtime/src/extensions/memory-search.ts",
+    effectClass: "mixed",
+    replay: "never",
+    contextFields: ["chatJid", "localEnv"],
+    serviceEffector: null,
+    abortExpectation: "may_finish_late",
+    protectedFields: ["params.query", "result.content", "result.details"],
+  }),
   ...rows(["memory_get"], {
     currentSource: "runtime/src/extensions/memory-search.ts",
     effectClass: "mixed",
