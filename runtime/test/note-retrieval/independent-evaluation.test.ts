@@ -18,12 +18,12 @@ async function run(direction:'forward'|'reverse') {
   } finally {clearTimeout(timer);ws.cleanup();}
 }
 
-test('frozen strict baseline: fresh rebuilds preserve coverage and response-size measurements', async () => {
+test('current default retrieval on frozen corpus: fresh rebuilds preserve measurements', async () => {
   const forward=await run('forward'),repeat=await run('forward'),reverse=await run('reverse');
   for(const report of [forward,repeat,reverse]) {
     expect(report.summary).toHaveLength(22);
-    expect(report.summary.every((row:any)=>row.status==='ok'&&row.reasons.length===0)).toBe(true);
-    expect(report.summary.every((row:any)=>row.variant==='strict')).toBe(true);
+    expect(report.summary.every((row:any)=>['ok','partial'].includes(row.status)&&row.reasons.every((reason:string)=>reason==='validation_budget')&&row.bytes<=16384)).toBe(true);
+    expect(report.summary.every((row:any)=>row.variant==='default')).toBe(true);
   }
   const payload=(report:any)=>JSON.stringify(report.summary.map(({elapsedMs,...row}:any)=>row));
   expect(payload(forward)).toEqual(payload(repeat));

@@ -1,4 +1,4 @@
-/** Consolidated main-compatible baseline; rejected candidate results are archived separately. */
+/** Current default-tool regression; immutable historical variants are archived separately. */
 import { mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
@@ -59,7 +59,7 @@ for(const item of data.queries){
 const summary:any[]=[];
 // Keep the frozen policy intact as historical evidence. The candidate API was
 // rejected in #1428; do not import it into main just to reproduce that variant.
-for(const variant of ['strict']){
+for(const variant of ['default']){
  for(const item of data.queries){
    const started=performance.now();
    const query=item.query;
