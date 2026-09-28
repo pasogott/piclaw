@@ -38,6 +38,12 @@ The original `runtime/test/fixtures/note-retrieval/budgets.json` file is not edi
 - Existing safety: 20 chunk validation operations including parents, five query hits, 2-second cooperative query/get deadline, exact revision checks and fail-closed permissions remain unchanged. Runtime safety ceilings do not approve performance budgets.
 - The old no-answer-hit and conflicting-path gates conflate retrieval exposure with wrong model answers. Do not silently relabel frozen runs; a useful note may say a fact was rejected/unrecorded. Future retrieval and answer-faithfulness gates need separate labels and explicit acceptance.
 
+## Recommended budget disposition — approval required
+
+For the integrated query/get workload, propose **warm query p95 ≤50 ms**, **first query after process reopen ≤100 ms**, **note-owned allocated table/index pages ≤3× source bytes on the fixed 516-note fixture**, and **encoded query output ≤16 KiB**. Retain the 30-second refresh cap, 256 MiB process-tree RSS test budget and all accepted logical/source/access limits. Measure whole-database/WAL/free-page growth separately; the 3× proposal is neither a bound on the messages database nor a long-run storage guarantee. This local sample fits these proposed values, but a repeated warm/first-query and interrupted-rebuild measurement is still required before declaring the release gate passed.
+
+These numbers replace neither `budgets.json` nor historical failures until Rui explicitly accepts this workload-specific disposition. Citation/admission checks require zero failures. Retrieval coverage and evidence-role relevance must be assessed separately from actual answer correctness; there is no proposed keyword-based abstention threshold.
+
 ## Review findings and remaining closure work
 
 A bounded independent review of note access/files found a same-inode growth race: `readNote` checked initial pathname size but allocated from the post-open descriptor size without reapplying the 512 KiB limit. Fixed before allocation and covered by a test requiring zero read calls and handle closure. A related post-opendir admission failure now closes its directory handle. Existing access identities/root bindings and source revisions were not relaxed.
