@@ -1,4 +1,4 @@
-import { useId } from "preact/hooks";
+import { useEffect, useId } from "preact/hooks";
 import { useSignal } from "@preact/signals";
 import { type SettingsData, type SettingsSectionProps } from "./types";
 import { NumberStepper } from "./NumberStepper";
@@ -15,6 +15,12 @@ export function GeneralSection({
   const assistantName = useSignal(data.assistantName ?? "");
   const userName = useSignal(data.userName ?? "");
   const workspaceUploadMb = useSignal(data.workspaceUploadLimitMb ?? 256);
+
+  // Reconcile every acknowledgement, even when an environment override keeps
+  // the effective limit unchanged from the previous response.
+  useEffect(() => {
+    workspaceUploadMb.value = data.workspaceUploadLimitMb ?? 256;
+  }, [data]);
 
   return (
     <section className="settings-panel__section settings-panel__section--general">

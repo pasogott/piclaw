@@ -37,6 +37,8 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
     let uploadedPath='';
     let submitted:any;
     let rejectChunks=false;
+    let effectiveLimitOverride: number | undefined;
+    const settingsSaves: Record<string, unknown>[] = [];
     const settings:any={providers:[],toolsets:[],themes:[],colorKeys:[],uiTheme:'default',workspaceUploadLimitMb:512,composeUploadLimitMb:512};
     const fileSize=33*1024*1024;
     let lastPost: any;
@@ -114,7 +116,14 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       else if (url.pathname === "/agent/autoresearch/status") body = { enabled: false, active: false };
       else if (url.pathname === "/auth/me") body = { mode: "single-user", authenticated: false };
       else if (url.pathname === "/agent/settings-data") body = settings;
-      else if (url.pathname === '/agent/settings/general') {Object.assign(settings,req.postDataJSON());settings.composeUploadLimitMb=settings.workspaceUploadLimitMb;body={ok:true,settings};}
+      else if (url.pathname === '/agent/settings/general') {
+        const patch = req.postDataJSON();
+        settingsSaves.push(patch);
+        Object.assign(settings, patch);
+        settings.workspaceUploadLimitMb = effectiveLimitOverride ?? Math.min(1024, Math.max(1, Math.round(Number(settings.workspaceUploadLimitMb))));
+        settings.composeUploadLimitMb = settings.workspaceUploadLimitMb;
+        body = { ok: true, settings };
+      }
       else if (url.pathname === "/agent/picker-pins") body = { scope: "fixture", revision: 0, models: [], sessions: [] };
       else if (url.pathname === "/agent/skills") body = { skills: [] };
       else if (url.pathname === "/agent/plan") body = { plan: null };
@@ -155,8 +164,35 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       await page.waitForFunction(()=>Array.from(document.querySelectorAll<HTMLInputElement>('input[aria-label="Upload limit (MB)"]')).some(el=>el.value==='512'));
       expect(await limit.inputValue()).toBe('512');
       expect(await content.getByText('Compose upload (MB)',{exact:true}).count()).toBe(0);
+      expect(await content.getByText('Workspace upload (MB)',{exact:true}).count()).toBe(0);
+      expect(await limit.count()).toBe(1);
       await limit.fill('600');await limit.blur();await page.waitForTimeout(1100);
       expect(settings.workspaceUploadLimitMb).toBe(600);expect(settings.composeUploadLimitMb).toBe(600);
+      expect(await limit.inputValue()).toBe('600');
+      // Returning the same effective value must still replace a rejected draft.
+      effectiveLimitOverride=600;
+      await limit.fill('700');await limit.blur();await page.waitForTimeout(1100);
+      expect(settings.workspaceUploadLimitMb).toBe(600);
+      expect(await limit.inputValue()).toBe('600');
+      effectiveLimitOverride=undefined;
+      for (const [draft, effective] of [['2000','1024'],['0','1'],['512','512']]) {
+        await limit.fill(draft);await limit.blur();await page.waitForTimeout(1100);
+        expect(settings.workspaceUploadLimitMb).toBe(Number(effective));
+        expect(settings.composeUploadLimitMb).toBe(Number(effective));
+        expect(await limit.inputValue()).toBe(effective);
+        expect(await limit.getAttribute('aria-invalid')).not.toBe('true');
+      }
+      expect(settingsSaves.length).toBeGreaterThanOrEqual(5);
+      for (const patch of settingsSaves) {
+        expect(patch).toHaveProperty('workspaceUploadLimitMb');
+        expect(patch).not.toHaveProperty('composeUploadLimitMb');
+      }
+      await page.reload({waitUntil:'load'});
+      await page.locator('textarea,[contenteditable="true"]').first().waitFor();
+      await page.evaluate(()=>window.dispatchEvent(new CustomEvent('piclaw:open-settings',{detail:{section:'general'}})));
+      await limit.waitFor();
+      await page.waitForFunction(()=>Array.from(document.querySelectorAll<HTMLInputElement>('input[aria-label="Upload limit (MB)"]')).some(el=>el.value==='512'));
+      expect(await limit.inputValue()).toBe('512');
       expect(errors).toEqual([]);
       expect([...unhandled]).toEqual([]);
     } catch (error) {

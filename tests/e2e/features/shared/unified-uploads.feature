@@ -22,6 +22,16 @@ Feature: Shared upload cap with workspace storage for large chat attachments
       | Classic |
       | Visual  |
 
+  @ux-unified-uploads-003
+  Scenario: One Settings limit reflects the effective server policy
+    Given either shipped skin has a configured upload limit of 512 MiB
+    Then General contains one upload-limit control for chat and workspace
+    When I edit the limit
+    Then only the canonical workspace limit is saved
+    And the displayed value follows the server acknowledgement including an unchanged environment override
+    And values outside 1 to 1024 MiB settle at the effective boundary
+    And the saved limit is displayed after reloading Settings
+
   @ux-unified-uploads-002
   Scenario: Enforce the shared limit and safe completion
     Given the shared upload limit is 512 MiB
