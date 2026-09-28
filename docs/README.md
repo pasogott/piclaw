@@ -41,6 +41,7 @@ Start with [getting started](getting-started.md) for installation, first chat, a
 - [Pipelined compaction](pipelined-compaction.md)
 - [Local note retrieval contract](design/local-note-retrieval-contract.md) — accepted access, freshness and citation rules; [lifecycle and implementation test map](design/local-note-retrieval-lifecycle-tests.md); [internal context assembly](design/local-note-context-assembly.md) and on-demand [exact-reference `memory_get`](design/local-note-memory-get.md) and [bounded `memory_query`](design/local-note-memory-query.md) are not deployed
 - [Local note retrieval baseline](performance/local-note-retrieval-baseline.md) — synthetic file-search evaluation, measured limits and proposed release budgets; [current budget assessment](performance/local-note-retrieval-budget-assessment.md) separates passing, failing and unsupported targets
+- [Retrieval evidence and next implementation](performance/local-note-retrieval-next-step.md) — consolidated experiments, metric correction and the selected #390/#377 approach
 - [Add-on runtime API](addon-runtime-api.md)
 - [Web pane extensions](web-pane-extensions.md) and [extension UI contract](extension-ui-contract.md)
 - [Vendored widget libraries](vendored-widget-libraries.md)
