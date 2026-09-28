@@ -43,6 +43,20 @@ The coalescer throttles replaceable thought/draft/tool-display payloads. User `n
 
 ## Validation and scope
 
+Validated on the combined branch after merging main `01b15b061`:
+
+| Check | Result |
+| --- | --- |
+| Full runtime suite | 5,750 passes, 7 skips, no failures; 38,043 assertions |
+| Feature and build stages | 25 feature checks and 9 build tests passed |
+| Post-build Chromium/WebKit shells, Classic/Visual | 4 passes, 36 assertions |
+| Focused streaming, SSE and frontend tests | 43 passes, 146 assertions |
+| Repository typecheck | All five configured projects/checks passed; 95 unchanged frontend baseline diagnostics |
+| Stale-dist, pack hygiene and diff check | Passed |
+| Independent source review | No blockers |
+
+The first full runtime run hit two existing EF-S07 SQLite checkpoint timeouts. Unchanged focused retry passed all 18 cases without extending limits. The final full-gate parent shell was interrupted, but its runtime child continued; it was allowed to finish successfully before running the remaining feature/build stages explicitly. No duplicate runtime gate was launched. Logs: `/workspace/tmp/submission-ci-final.log`, `submission-features-final.log`, `submission-build-final.log`, `submission-browser-final.log`, `submission-focused-final.log`.
+
 - Original Classic shipped-shell acknowledgement test failed; Visual passed after correcting its fixture endpoint.
 - Original delayed-metadata working-status test failed; patched test passes and checks the slim metadata options.
 - Chromium and WebKit, Classic and Visual: delayed SSE, HTTP-first/SSE-first deduplication, and rejected submission coverage.
