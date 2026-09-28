@@ -14,9 +14,14 @@ mkdirSync(join(workspace,'notes'),{recursive:true});mkdirSync(join(workspace,'.p
 const config=join(workspace,'.piclaw/config.json');
 const mode=(value:string)=>writeFileSync(config,JSON.stringify({domains:{access:{mode:value}}}));mode('single-user');
 const path=join(workspace,'notes/a.md'),other=join(workspace,'notes/b.md');
-const original=scenario==='late-match'?'# Lantern\n'+'filler '.repeat(90)+'cobalt sunrise\n':'\uFEFF# Lantern\r\nRegistry answer: cobalt sunrise.\r\n';
+const parentScenarios=['rank-context','parent-stale','parent-corrupt','parent-row-change'];
+const original=parentScenarios.includes(scenario!)?'\uFEFF# Guide\r\n\r\n## Birch Annex\r\n### Returns\r\nAfter-hours items go through slot C.\r\n\r\n## Cedar Annex\r\n### Returns\r\nAfter-hours items go through slot G.\r\n':scenario==='late-match'?'# Lantern\n'+'filler '.repeat(90)+'cobalt sunrise\n':'\uFEFF# Lantern\r\nRegistry answer: cobalt sunrise.\r\n';
 writeFileSync(path,original);writeFileSync(other,'# Lantern\nThe registry contains cobalt, but the answer is elsewhere.\n');
 if(scenario==='candidate-budget') for(let i=0;i<22;i++)writeFileSync(join(workspace,`notes/entry-${i}.md`),`# Entry ${i}\ncobalt candidate ${i}\n`);
+if(scenario==='anchors'){
+ writeFileSync(path,'# Units\nThe unit “Amber Kite” has code AK-12.\n');
+ writeFileSync(other,'# Units\nThe unit Amber-Kite has code AK-12B.\n');
+}
 const {initDatabase,getDb,closeDatabase}=await import('../../../src/db/connection.js');initDatabase();const db=getDb();
 const {captureNoteIndexBinding}=await import('../../../src/note-retrieval/access.js');
 const worker=spawn(process.execPath,['-e',"const {runNoteIndexPhase}=await import('./src/note-retrieval/coordinator.ts');await runNoteIndexPhase();"],{
@@ -52,7 +57,31 @@ try {
   const page=body(await run({query:'cobalt',limit:1,offset:1}));assert.equal(page.hits.length,1);
   only(await run({query:'  '}),'invalid_request');only(await run({query:'cobalt',path:'notes/a.md'}),'invalid_request');
   only(await run({query:'cobalt',limit:6}),'invalid_request');only(await run({query:'"broken'}),'invalid_request');
+ }else if(scenario==='rank-context'){
+  const r=body(await run({query:'Birch Annex Returns after-hours storage slot',limit:1}));
+  assert.equal(r.status,'ok');assert.equal(r.hits.length,1);
+  const hit=r.hits[0];assert.match(hit.snippet,/slot C/);assert.ok(!hit.snippet.includes('slot G'));
+  assert.equal(hit.context.length,2);assert.equal(hit.context[1].text,'## Birch Annex\r\n');
+  assert.ok(hit.signals.heading_terms>=3);assert.equal(hit.context[1].after_last_byte,hit.first_byte);
+  assert.notEqual(hit.context[1].chunk_id,hit.chunk_id);
+  fake.setActiveTools(['memory_query','memory_get']);
+  for(const ref of [...hit.context,hit]){
+    const got=body(await withChatContext('web:test','web',()=>fake.tools.get('memory_get').execute('g',{chunk_id:ref.chunk_id,source_revision:ref.source_revision},undefined,undefined,ctx)));
+    assert.equal(got.status,'ok');assert.equal(got.path,ref.path);
+    if(ref.text)assert.equal(got.text,ref.text);else assert.ok(got.text.includes(ref.snippet));
+  }
+ }else if(scenario==='parent-stale'){
+  writeFileSync(path,original.replace('Birch','Larch'));
+  const r=body(await run({query:'"Birch Annex" Returns'}));assert.equal(r.status,'partial');assert.equal(r.hits.length,0);assert.ok(r.reasons.includes('source_stale'));
+ }else if(scenario==='parent-corrupt'){
+  db.query("UPDATE note_retrieval_chunks SET content='fabricated' WHERE heading=?").run(JSON.stringify(['Guide','Birch Annex']));
+  only(await run({query:'content : "slot C"'}),'index_unavailable');
+ }else if(scenario==='anchors'){
+  const a=body(await run({query:'"Amber Kite" unknown catalogue',limit:5}));assert.equal(a.status,'ok');assert.equal(a.hits.length,1);assert.equal(a.hits[0].path,'notes/a.md');
+  const b=body(await run({query:'AK-12 extra words'}));assert.equal(b.hits.length,1);assert.equal(b.hits[0].path,'notes/a.md');
+  const explicit=body(await run({query:'"Amber Kite" AND unknown'}));assert.equal(explicit.hits.length,0);
  }else if(scenario==='admission'){
+
   let touched=false;const selector=new Proxy({}, {get(){touched=true;throw Error('accessed');},ownKeys(){touched=true;throw Error('accessed');}});
   const family:any=Object.freeze({mode:'family-shared',provenance:Object.freeze({})});
   only(await withExecutionIdentity(family,()=>run(selector)),'access_denied');fake.setActiveTools([]);only(await run(selector),'access_denied');fake.setActiveTools(['memory_query']);
@@ -96,22 +125,24 @@ try {
   const c=new AbortController();c.abort();only(await run({query:'cobalt'},ctx,c.signal),'cancelled');
  }else if(scenario==='transaction'){
   db.exec('BEGIN');try{only(await run(),'index_unavailable');}finally{db.exec('ROLLBACK');}
- }else if(['revoke-grant','replace-session','change-generation','change-coverage','scope-dirty','row-change','cancel-during-read','mode-change'].includes(scenario!)){
+ }else if(['revoke-grant','replace-session','change-generation','change-coverage','scope-dirty','row-change','parent-row-change','publish-prune','cancel-during-read','mode-change'].includes(scenario!)){
   const open=fs.open,c=new AbortController();let hooked=false,closed=false;
   fs.open=(async(...args:any[])=>{const handle=await (open as any)(...args);if(!hooked){hooked=true;
     const close=handle.close.bind(handle);handle.close=async()=>{closed=true;return close();};
     if(scenario==='revoke-grant')fake.setActiveTools([]);
     if(scenario==='replace-session')sessionId='other';
     if(scenario==='change-generation')db.query('UPDATE note_retrieval_state SET published=published+1').run();
+    if(scenario==='parent-row-change')db.query("UPDATE note_retrieval_chunks SET content='corrupt parent' WHERE heading=?").run(JSON.stringify(['Guide','Birch Annex']));
+    if(scenario==='publish-prune')db.transaction(()=>{db.exec('DELETE FROM note_retrieval_chunks; DELETE FROM note_retrieval_fts; UPDATE note_retrieval_state SET published=published+1,coverage=coverage+1');})();
     if(scenario==='change-coverage')db.query('UPDATE note_retrieval_state SET coverage=coverage+1').run();
     if(scenario==='scope-dirty')db.query("INSERT INTO note_retrieval_dirty VALUES('notes/unrelated.md',1,'refresh_pending')").run();
     if(scenario==='row-change')db.query("UPDATE note_retrieval_chunks SET heading='[\"Altered\"]' WHERE path='notes/a.md'").run();
     if(scenario==='cancel-during-read')c.abort();
     if(scenario==='mode-change')mode('family-shared');
   }return handle;}) as typeof fs.open;
-  try{const r=await run({query:'sunrise'},ctx,c.signal);if(['revoke-grant','replace-session','mode-change'].includes(scenario!))only(r,'access_denied');
+  try{const r=await run({query:scenario==='parent-row-change'?'content : "slot C"':'sunrise'},ctx,c.signal);if(['revoke-grant','replace-session','mode-change'].includes(scenario!))only(r,'access_denied');
     else if(scenario==='cancel-during-read')only(r,'cancelled');
-    else if(scenario==='row-change')only(r,'index_unavailable');
+    else if(scenario==='row-change'||scenario==='parent-row-change')only(r,'index_unavailable');
     else {const b=body(r);assert.equal(b.status,'partial');assert.deepEqual(b.reasons,['refresh_pending']);assert.equal(b.hits.length,0);}
     assert.equal(hooked,true);assert.equal(closed,true);
   }finally{fs.open=open;}
