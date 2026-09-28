@@ -18,6 +18,7 @@ import { attachHeaderAnchor } from '../ui/scroll-anchor.js';
 import { ImageModal } from './image-modal.js';
 import { ImageAnnotator, canAnnotate } from './image-annotator.js';
 import { FilePill } from './file-pill.js';
+import { isSafeUploadFilename } from '../../../src/core/upload-limits.js';
 import {
     applyHighlightsToElement,
     applyAsidesToElement,
@@ -2183,6 +2184,9 @@ export function Post({ post, onClick, onHashtagClick, onMessageRef, onScrollToMe
                         })}
                         ${fileRefs.map((ref) => {
                             const label = ref.split('/').pop() || ref;
+                            if (/^uploads\/upload-[a-zA-Z0-9-]{16,90}\/[^/]+$/.test(ref) && isSafeUploadFilename(label)) {
+                                return html`<a class="post-file-pill" href=${`/workspace/raw?path=${encodeURIComponent(ref)}&download=1`} download title=${ref}>${label}</a>`;
+                            }
                             return html`
                                 <${FilePill}
                                     prefix="post"
