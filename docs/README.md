@@ -11,6 +11,7 @@ Start with [getting started](getting-started.md) for installation, first chat, a
 - [Settings and add-ons](settings-and-addons.md) — installation and configuration; [add-on catalogue](https://rcarmo.github.io/piclaw-addons/)
 - [Visual artefact generation](visual-artifact-generator.md) — diagrams, charts and interactive output
 - [Dream memory](dream-memory.md) — file-based memory maintenance
+- [Local note recall](local-note-recall.md) — opt-in query→get→cited answers, stale handling, untrusted evidence and recovery
 - [Thinking persistence](thinking-persistence.md) — opt-in reasoning storage and privacy
 - [Notifications](web-notification-delivery-policy.md) and [iOS PWA](PWA.md)
 
