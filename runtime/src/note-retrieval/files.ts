@@ -28,6 +28,8 @@ export async function readNote(workspace: string, relative: string, check: () =>
     check();
     const before=await handle.stat();check();
     if(!before.isFile()||before.nlink!==1||identity(before)!==identity(named))throw new NoteSourceUnstable();
+    // A same-inode grow between lstat and open must not widen allocation.
+    if(!Number.isSafeInteger(before.size)||before.size<0||before.size>NOTE_LIMITS.fileBytes)throw new NoteSourceExcluded('file_too_large');
     const bytes=Buffer.alloc(before.size+1);let used=0;
     while(used<bytes.length){const r=await handle.read(bytes,used,bytes.length-used,null);check();if(!r.bytesRead)break;used+=r.bytesRead;}
     const after=await handle.stat();check();
@@ -44,8 +46,8 @@ export async function walkNotes(workspace: string, check: () => void, visit: (re
     check();if(depth>NOTE_LIMITS.depth)throw new NoteScanLimited();
     let stat;try{stat=lstatSync(directory);}catch(error){if(directory===root&&(error as NodeJS.ErrnoException).code==='ENOENT')return;throw error;}
     if(!stat.isDirectory()||stat.isSymbolicLink()||realpathSync(directory)!==directory)throw new NoteSourceExcluded('link_or_path');
-    const id=identity(stat);const dir=await fs.opendir(directory);check();
-    try {for(;;){const entry=await dir.read();check();if(!entry)break;if(++entries>NOTE_LIMITS.entries)throw new NoteScanLimited();
+    const id=identity(stat);const dir=await fs.opendir(directory);
+    try {check();for(;;){const entry=await dir.read();check();if(!entry)break;if(++entries>NOTE_LIMITS.entries)throw new NoteScanLimited();
       if(entry.name.startsWith('.')||['node_modules','generated'].includes(entry.name)||(directory===root&&['users','family'].includes(entry.name)))continue;
       const full=path.join(directory,entry.name),relative=path.relative(workspace,full).split(path.sep).join('/');
       if(entry.isSymbolicLink()){if(entry.name.endsWith('.md'))await visit(relative);continue;}
