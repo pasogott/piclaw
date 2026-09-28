@@ -91,7 +91,7 @@ export function createMemorySearchExtension(chatJid?: string): ExtensionFactory 
           check();
           if (!params || typeof params !== 'object' || Object.keys(params).some(k => !['query','limit','offset'].includes(k))) return finish('invalid_request');
           const { query, limit = 5, offset = 0 } = params as { query: unknown; limit?: unknown; offset?: unknown };
-          if (typeof query !== 'string' || query.trim().length < 1 || query.length > 512
+          if (typeof query !== 'string' || query.trim().length < 1 || query.length > 512 || Buffer.byteLength(query, 'utf8') > 1024
             || (query.match(/"/g)?.length ?? 0) % 2 !== 0
             || !Number.isSafeInteger(limit) || (limit as number) < 1 || (limit as number) > 5
             || !Number.isSafeInteger(offset) || (offset as number) < 0 || (offset as number) > 50) return finish('invalid_request');
@@ -184,6 +184,9 @@ export function createMemorySearchExtension(chatJid?: string): ExtensionFactory 
             if (!observedDirty.has(row.path)) observedDirty.set(row.path, dirtyRevision(row.path));
             if (dirty(row.path)) { reasons.add('refresh_pending'); continue; }
             if (!sources.has(row.path)) {
+              // The accepted 16-file ceiling also bounds total file reads to
+              // 8 MiB at readNote's 512 KiB cap, including failed attempts.
+              if (sources.size >= 16) { reasons.add('validation_budget'); continue; }
               try { sources.set(row.path, await readNote(access.binding.workspace, row.path, check)); }
               catch (error) {
                 check();

@@ -17,7 +17,7 @@ const path=join(workspace,'notes/a.md'),other=join(workspace,'notes/b.md');
 const parentScenarios=['rank-context','parent-stale','parent-corrupt','parent-row-change','parent-added-during-read'];
 const original=parentScenarios.includes(scenario!)?'\uFEFF# Guide\r\n\r\n## Birch Annex\r\n### Returns\r\nAfter-hours items go through slot C.\r\n\r\n## Cedar Annex\r\n### Returns\r\nAfter-hours items go through slot G.\r\n':scenario==='late-match'?'# Lantern\n'+'filler '.repeat(90)+'cobalt sunrise\n':'\uFEFF# Lantern\r\nRegistry answer: cobalt sunrise.\r\n';
 writeFileSync(path,original);writeFileSync(other,'# Lantern\nThe registry contains cobalt, but the answer is elsewhere.\n');
-if(scenario==='candidate-budget') for(let i=0;i<22;i++)writeFileSync(join(workspace,`notes/entry-${i}.md`),`# Entry ${i}\ncobalt candidate ${i}\n`);
+if(scenario==='candidate-budget'||scenario==='file-read-budget') for(let i=0;i<22;i++)writeFileSync(join(workspace,`notes/entry-${i}.md`),`# Entry ${i}\ncobalt candidate ${i}\n`);
 if(scenario==='parent-added-during-read')writeFileSync(other,'# Other\nUnrelated bloom entry.\n'+'padding '.repeat(1000));
 if(scenario==='anchors'){
  writeFileSync(path,'# Units\nThe unit “Amber Kite” has code AK-12.\n');
@@ -58,6 +58,7 @@ try {
   const page=body(await run({query:'cobalt',limit:1,offset:1}));assert.equal(page.hits.length,1);
   only(await run({query:'  '}),'invalid_request');only(await run({query:'cobalt',path:'notes/a.md'}),'invalid_request');
   only(await run({query:'cobalt',limit:6}),'invalid_request');only(await run({query:'"broken'}),'invalid_request');
+  only(await run({query:'漢'.repeat(400)}),'invalid_request');
  }else if(scenario==='rank-context'){
   const r=body(await run({query:'Birch Annex Returns after-hours storage slot',limit:1}));
   assert.equal(r.status,'ok');assert.equal(r.hits.length,1);
@@ -122,6 +123,10 @@ try {
   const r=body(await run({query:'absentunique'}));assert.equal(r.status,'partial');assert.deepEqual(r.reasons,['refresh_pending']);assert.equal(r.hits.length,0);assert.equal(refreshes,1);
  }else if(scenario==='late-match'){
   const r=body(await run({query:'sunrise'}));assert.equal(r.status,'ok');assert.equal(r.hits.length,1);assert.match(r.hits[0].snippet,/cobalt sunrise/);
+ }else if(scenario==='file-read-budget'){
+  const open=fs.open;let opens=0;
+  fs.open=(async(...args:any[])=>{opens++;return(open as any)(...args);}) as typeof fs.open;
+  try{const r=body(await run({query:'cobalt'}));assert.equal(r.status,'partial');assert.ok(r.reasons.includes('validation_budget'));assert.equal(opens,16);assert.ok(r.hits.length<=5);}finally{fs.open=open;}
  }else if(scenario==='candidate-budget'){
   const r=body(await run({query:'cobalt'}));assert.equal(r.status,'partial');assert.ok(r.reasons.includes('validation_budget'));
   assert.equal(r.hits.length,5);assert.equal(refreshes,0);
