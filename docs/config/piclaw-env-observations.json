@@ -3975,6 +3975,7 @@
             "docs/reviews/picker-button-parity.md",
             "docs/reviews/vnc-narrow-pane.md",
             "docs/web-avatar-icons.md",
+            "docs/workspace-indexing.md",
             "package.json"
           ],
           "readerFiles": []

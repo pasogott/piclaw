@@ -5,6 +5,7 @@ Start with [getting started](getting-started.md) for installation, first chat, a
 ## Use PiClaw
 
 - [Web UI](web-ui.md#chat-and-status-surfaces) — chat, workspace, editor, terminal and viewers
+- [Workspace indexing](workspace-indexing.md) — indexed roots, ignore patterns, preview and refresh controls
 - [Configuration](configuration.md) — settings, paths, providers, remote SSH tools and environment overrides
 - [Tools and skills](tools-and-skills.md) — tool discovery, skills and slash commands
 - [Budget limits](budget-limits.md) — opt-in spend/quota caps, status, approvals and enforcement limits

@@ -59,6 +59,29 @@ try {
   only(await run({query:'  '}),'invalid_request');only(await run({query:'cobalt',path:'notes/a.md'}),'invalid_request');
   only(await run({query:'cobalt',limit:6}),'invalid_request');only(await run({query:'"broken'}),'invalid_request');
   only(await run({query:'漢'.repeat(400)}),'invalid_request');
+ }else if(scenario==='policy'){
+  const {saveWorkspaceIndexPolicy}=await import('../../../src/core/workspace-index-policy.js');
+  const open={roots:['notes'],ignorePatterns:[]};
+  fake.setActiveTools(['memory_query','memory_get']);
+  const get=()=>withChatContext('web:test','web',()=>fake.tools.get('memory_get').execute('g',{chunk_id:row.chunk_id,source_revision:row.revision},undefined,undefined,ctx));
+  assert.equal(body(await get()).status,'ok');
+  saveWorkspaceIndexPolicy({roots:['notes'],ignorePatterns:['notes/a.md']});
+  only(await get(),'not_found');assert.ok(body(await run()).hits.every((h:any)=>h.path!=='notes/a.md'));
+  saveWorkspaceIndexPolicy(open);
+  // Policy changes after a source open invalidate the whole in-flight answer.
+  const originalOpen=fs.open;let opened=0,closed=0;
+  fs.open=(async(...args:any[])=>{const handle=await (originalOpen as any)(...args);if(String(args[0])===path){opened++;const close=handle.close.bind(handle);handle.close=async()=>{closed++;return close();};saveWorkspaceIndexPolicy({roots:['notes'],ignorePatterns:['notes/a.md']});}return handle;}) as typeof fs.open;
+  try{only(await get(),'index_unavailable');}finally{fs.open=originalOpen;}
+  assert.equal(opened,1);assert.equal(closed,1);
+  saveWorkspaceIndexPolicy(open);opened=0;closed=0;
+  fs.open=(async(...args:any[])=>{const handle=await (originalOpen as any)(...args);if(String(args[0])===path){opened++;const close=handle.close.bind(handle);handle.close=async()=>{closed++;return close();};saveWorkspaceIndexPolicy({roots:[],ignorePatterns:[]});}return handle;}) as typeof fs.open;
+  try{only(await run({query:'sunrise'}),'index_unavailable');}finally{fs.open=originalOpen;}
+  assert.equal(opened,1);assert.equal(closed,1);
+  saveWorkspaceIndexPolicy({roots:['notes'],ignorePatterns:['notes/a.md']});
+  const refresh=spawn(process.execPath,['-e',"const {runNoteIndexPhase}=await import('./src/note-retrieval/coordinator.ts');await runNoteIndexPhase();"],{cwd:join(import.meta.dir,'../../..'),env:process.env,stdio:['ignore','ignore','pipe','pipe']});
+  const end=once(refresh,'exit');let err='';refresh.stderr!.on('data',b=>err+=b);(refresh.stdio[3] as any).end(JSON.stringify(captureNoteIndexBinding()));assert.equal((await end)[0],0,err);
+  assert.equal(db.query("SELECT count(*) n FROM note_retrieval_chunks WHERE path='notes/a.md'").get().n,0);
+  only(await get(),'not_found');
  }else if(scenario==='rank-context'){
   const r=body(await run({query:'Birch Annex Returns after-hours storage slot',limit:1}));
   assert.equal(r.status,'ok');assert.equal(r.hits.length,1);

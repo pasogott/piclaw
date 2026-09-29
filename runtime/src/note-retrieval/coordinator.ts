@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { workspaceIndexPolicySnapshot } from '../core/workspace-index-policy.js';
 import { lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { getDb, initDatabase } from '../db/connection.js';
@@ -34,8 +35,8 @@ export async function runNoteIndexPhase(options: { rebuild?: boolean; signal?: A
   const admission=receiveNoteIndexBinding(); // Before database open or option access.
   initDatabase();const db=getDb();admission.bindDatabase(db);admission.validate();
   ensureNoteSchema(db);
-  const started=performance.now(),signal=options.signal;
-  const check=()=>{admission.validate();if(signal?.aborted)throw new Error('cancelled');if(performance.now()-started>=NOTE_LIMITS.elapsedMs)throw new NoteScanLimited();};
+  const started=performance.now(),signal=options.signal,policy=workspaceIndexPolicySnapshot();
+  const check=()=>{admission.validate();policy.validate();if(signal?.aborted)throw new Error('cancelled');if(performance.now()-started>=NOTE_LIMITS.elapsedMs)throw new NoteScanLimited();};
   const purge=(generation:number)=>{db.query('DELETE FROM note_retrieval_fts WHERE generation=?').run(generation);db.query('DELETE FROM note_retrieval_chunks WHERE generation=?').run(generation);db.query('DELETE FROM note_retrieval_sources WHERE generation=?').run(generation);};
   const deleteStagedPath=(generation:number,path:string)=>{db.query('DELETE FROM note_retrieval_fts WHERE generation=? AND path=?').run(generation,path);db.query('DELETE FROM note_retrieval_chunks WHERE generation=? AND path=?').run(generation,path);db.query('DELETE FROM note_retrieval_sources WHERE generation=? AND path=?').run(generation,path);};
   let captured!:State;let namespace='';let generation=0;let claimed=false;let dirtyPaths:string[]=[];let incremental=false;const binding=bindingKey(admission.binding);
