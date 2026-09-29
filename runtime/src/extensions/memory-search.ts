@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
+import { workspaceIndexPolicySnapshot, workspaceIndexPathDecision } from '../core/workspace-index-policy.js';
 import { getChatJid } from '../core/chat-context.js';
 import { getWorkspaceDir } from '../core/config-context.js';
 import { admitNoteIndexMetadata, admitNoteIndexStore, NoteIndexDenied } from '../note-retrieval/access.js';
@@ -79,9 +80,11 @@ export function createMemorySearchExtension(chatJid?: string): ExtensionFactory 
         try { checkSession(); } catch { return answer('access_denied'); }
         let access: ReturnType<typeof admitNoteIndexStore>;
         try { access = admitNoteIndexStore(); } catch { return answer('access_denied'); }
+        let policy: ReturnType<typeof workspaceIndexPolicySnapshot>;
+        try { policy=workspaceIndexPolicySnapshot(); } catch { return answer('index_unavailable'); }
         const started = performance.now();
         const check = () => {
-          checkSession(); access.validate();
+          checkSession(); access.validate(); policy.validate();
           if (signal?.aborted || ctx.signal?.aborted) throw new Cancelled();
           if (performance.now() - started >= 2000) throw new Deadline();
         };
@@ -150,7 +153,7 @@ export function createMemorySearchExtension(chatJid?: string): ExtensionFactory 
               if(!score||!Number.isFinite(score.rank))throw Error('invalid_candidate_score');
               row.rank=score.rank;
             }
-            candidates=[...pool.values()].filter(row=>queryPlan.anchors.every(anchor=>hasLiteralAnchor(JSON.parse(row.heading).join(' / ')+'\n'+Buffer.from(row.content,'hex').toString('utf8'),anchor)))
+            candidates=[...pool.values()].filter(row=>workspaceIndexPathDecision(row.path,policy.policy).included && queryPlan.anchors.every(anchor=>hasLiteralAnchor(JSON.parse(row.heading).join(' / ')+'\n'+Buffer.from(row.content,'hex').toString('utf8'),anchor)))
               .sort((a,b)=>compareNoteCandidates(queryPlan,a,b)).slice(offset as number,(offset as number)+21);
           } catch (error) {
             check();
@@ -320,9 +323,11 @@ export function createMemorySearchExtension(chatJid?: string): ExtensionFactory 
         try { checkSession(); } catch { return answer('access_denied'); }
         let access: ReturnType<typeof admitNoteIndexStore>;
         try { access = admitNoteIndexStore(); } catch { return answer('access_denied'); }
+        let policy: ReturnType<typeof workspaceIndexPolicySnapshot>;
+        try { policy=workspaceIndexPolicySnapshot(); } catch { return answer('index_unavailable'); }
         const started = performance.now();
         const check = () => {
-          checkSession(); access.validate();
+          checkSession(); access.validate(); policy.validate();
           if (signal?.aborted || ctx.signal?.aborted) throw new Cancelled();
           if (performance.now() - started >= 2000) throw new Deadline();
         };
@@ -354,6 +359,7 @@ export function createMemorySearchExtension(chatJid?: string): ExtensionFactory 
             || typeof row.heading !== 'string' || row.heading.length > 16 * 1024
             || !['section','paragraph','lines','fence'].includes(row.kind)
             || row.chunk_id !== `nr1:${hash(JSON.stringify([initial.namespace,row.path,row.revision,CHUNKER_VERSION,row.first_byte,row.after_last_byte]))}`) return finish('index_unavailable');
+          if (!workspaceIndexPathDecision(row.path,policy.policy).included) return finish('not_found');
           const headings: unknown = JSON.parse(row.heading);
           if (!Array.isArray(headings) || !headings.every(s => typeof s === 'string')) return finish('index_unavailable');
           const dirty = () => Boolean(db.query("SELECT 1 FROM note_retrieval_dirty WHERE path=? OR path='*'").get(row.path));

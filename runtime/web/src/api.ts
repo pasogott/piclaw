@@ -334,6 +334,31 @@ export async function saveWorkspaceSettings(payload) {
     });
 }
 
+export async function getWorkspaceIndexingSettings() {
+    return request('/agent/settings/workspace/indexing');
+}
+
+export async function previewWorkspaceIndexingPolicy(policy) {
+    return request('/agent/settings/workspace/indexing/preview', {
+        method: 'POST',
+        body: JSON.stringify(policy),
+    });
+}
+
+export async function saveWorkspaceIndexingPolicy(policy) {
+    return request('/agent/settings/workspace/indexing/save', {
+        method: 'POST',
+        body: JSON.stringify(policy),
+    });
+}
+
+export async function refreshWorkspaceIndexing() {
+    return request('/agent/settings/workspace/indexing/refresh', {
+        method: 'POST',
+        body: JSON.stringify({}),
+    });
+}
+
 export async function getEnvironmentSettings() {
     return request('/agent/settings/environment');
 }
