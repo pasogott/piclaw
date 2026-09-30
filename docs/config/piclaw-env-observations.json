@@ -1788,6 +1788,7 @@
           "files": [
             ".github/workflows/e2e.yml",
             "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-packed-provider-auth.md",
+            "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-provider-auth-ui-matrix.md",
             "docs/development.md"
           ],
           "readerFiles": []
@@ -4011,6 +4012,7 @@
           "files": [
             ".github/workflows/ci.yml",
             "docs/audio-attachment-preview.md",
+            "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-provider-auth-ui-matrix.md",
             "docs/development.md",
             "docs/performance/browser-idle-cpu-1352.md",
             "docs/performance/browser-idle-status-clock-1352.md",
