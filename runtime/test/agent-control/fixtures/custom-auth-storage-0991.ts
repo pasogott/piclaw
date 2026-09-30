@@ -86,14 +86,34 @@ try {
       assert.equal(statSync(join(root, name)).mode & 0o777, 0o600);
     }
   } else if (scenario === "keyless-local") {
-    assert.equal((await configure({ provider: "ollama", baseUrl: "http://127.0.0.1:11434/v1", apiKey: "" })).status, "success");
-    assert.equal(await credentials.read("ollama"), undefined);
-    assert.equal(modelConfig().providers.ollama.apiKey, undefined);
-    assert.equal(session.model.id, "gpt-test");
-    const logout = await withChatContext("web:custom-auth", "web", () => handleLogout(session as any, registry, { type: "logout", provider: "ollama", raw: "/logout ollama" }));
-    assert.equal(logout.status, "success");
-    assert.equal(modelConfig().providers.ollama, undefined);
-    assert.equal(backups().some(name => name.startsWith("auth.json")), false);
+    for (const provider of ["ollama", "llama-cpp"]) {
+      assert.equal((await configure({ provider, baseUrl: "http://127.0.0.1:11434/v1", apiKey: "" })).status, "success");
+      assert.equal(await credentials.read(provider), undefined);
+      assert.equal(modelConfig().providers[provider].apiKey, "piclaw-keyless-local");
+      assert.equal((await runtime.getAvailable(provider)).length, 1);
+      assert.equal((await runtime.getAuth(provider))?.auth.apiKey, "piclaw-keyless-local");
+      assert.equal(session.model.id, "gpt-test");
+      const reopened = await ModelRuntime.create({ credentials: new FileCredentialStore(authPath), modelsPath, modelsStorePath: join(root, "reopened-models-store.json"), allowModelNetwork: false });
+      assert.equal((await reopened.getAvailable(provider)).length, 1);
+      assert.equal((await configure({ provider, baseUrl: "http://127.0.0.1:11434/v1", apiKey: "", modelId: "updated-local" })).status, "success");
+      assert.equal((await runtime.getAvailable(provider))[0]?.id, "updated-local");
+      const logout = await withChatContext("web:custom-auth", "web", () => handleLogout(session as any, registry, { type: "logout", provider, raw: `/logout ${provider}` }));
+      assert.equal(logout.status, "success");
+      assert.equal(modelConfig().providers[provider], undefined);
+      assert.equal((await runtime.getAvailable(provider)).length, 0);
+      assert.equal(backups().some(name => name.startsWith("auth.json")), false);
+    }
+    for (const name of backups()) assert.ok(!readFileSync(join(root, name), "utf8").includes("piclaw-keyless-local"));
+  } else if (scenario === "authenticated-local-preserves-key") {
+    for (const provider of ["ollama", "llama-cpp"]) {
+      assert.equal((await configure({ provider, baseUrl: "http://127.0.0.1:11434/v1", apiKey: sentinel })).status, "success");
+      const before = await credentials.read(provider);
+      assert.equal((await configure({ provider, baseUrl: "http://127.0.0.1:11434/v1", apiKey: "", modelId: "updated-local" })).status, "success");
+      assert.deepEqual(await credentials.read(provider), before);
+      assert.equal(modelConfig().providers[provider].apiKey, undefined);
+      assert.equal((await runtime.getAuth(provider))?.auth.apiKey, sentinel);
+      assert.equal((await runtime.getAvailable(provider)).length, 1);
+    }
   } else if (scenario === "legacy-config-fails-closed") {
     const original = JSON.stringify({ providers: { "openai-compatible": { baseUrl: "https://fixture.invalid", apiKey: sentinel, models: [{ id: "old" }] } } });
     writeFileSync(modelsPath, original);
