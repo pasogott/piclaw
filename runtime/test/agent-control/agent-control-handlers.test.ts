@@ -10,6 +10,7 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { withChatContext } from "../../src/core/chat-context.js";
+import { withPrivateProviderAuthResponse } from "../../src/agent-control/handlers/login.js";
 import { clearProviderUsageCache, warmProviderUsage } from "../../src/agent-pool/provider-usage.js";
 import { listTrackedProcesses, registerProcess } from "../../src/utils/process-tracker.js";
 import { getTestWorkspace, setEnv } from "../helpers.js";
@@ -635,12 +636,14 @@ test("login config writes stay inside the overridden pi-agent dir", async () => 
     provider: `__step1 ${JSON.stringify({ provider: "openai" })}`,
     raw: "/login __step1",
   });
-  expect((apiKeyStart.contentBlocks?.[0] as any)?.payload?.body).toEqual(expect.arrayContaining([
-    expect.objectContaining({ id: "auth_value", style: "password" }),
-  ]));
+  expect(JSON.stringify(apiKeyStart.contentBlocks)).not.toContain('"id":"auth_value"');
+  const apiKeyShown = await withPrivateProviderAuthResponse(() => applyControlCommand(runtime as any, loginRegistry, {
+    type: "login", provider: `__step2 ${JSON.stringify(loginActionData(apiKeyStart, "runtime_present"))}`, raw: "/login __step2",
+  }));
+  expect(apiKeyShown.authPresentation?.prompt?.type).toBe("secret");
   const apiKeyResult = await applyControlCommand(runtime as any, loginRegistry, {
     type: "login",
-    provider: `__step2 ${JSON.stringify({ ...loginActionData(apiKeyStart, "runtime_continue"), auth_value: "new-key" })}`,
+    provider: `__step2 ${JSON.stringify({ ...loginActionData(apiKeyShown, "runtime_continue"), auth_value: "new-key" })}`,
     raw: "/login __step2",
   });
   expect(apiKeyResult.status).toBe("success");
@@ -718,11 +721,11 @@ test("provider-owned API-key login supports multiple prompts without direct cred
   const start = await applyControlCommand(runtime as any, loginRegistry, {
     type: "login", provider: `__step1 ${JSON.stringify({ provider: "cloudflare-ai-gateway" })}`, raw: "/login __step1",
   });
-  expect((start.contentBlocks?.[0] as any)?.payload?.body).toEqual(expect.arrayContaining([expect.objectContaining({ id: "auth_value", style: "password" })]));
+  expect(JSON.stringify(start.contentBlocks)).not.toContain("Enter Cloudflare API key");
   const next = await applyControlCommand(runtime as any, loginRegistry, {
     type: "login", provider: `__step2 ${JSON.stringify({ ...loginActionData(start, "runtime_continue"), auth_value: "secret-key" })}`, raw: "/login __step2",
   });
-  expect((next.contentBlocks?.[0] as any)?.payload?.body).toEqual(expect.arrayContaining([expect.objectContaining({ id: "auth_value", style: "text" })]));
+  expect(JSON.stringify(next.contentBlocks)).not.toContain("Enter Cloudflare account ID");
   const done = await applyControlCommand(runtime as any, loginRegistry, {
     type: "login", provider: `__step2 ${JSON.stringify({ ...loginActionData(next, "runtime_continue"), auth_value: "acct-1" })}`, raw: "/login __step2",
   });
@@ -860,9 +863,7 @@ test("provider-owned auth interaction renders select and device-code events", as
     provider: `__step1 ${JSON.stringify({ provider: "openai-codex" })}`,
     raw: "/login __step1",
   });
-  expect((start.contentBlocks?.[0] as any)?.payload?.body).toEqual(expect.arrayContaining([
-    expect.objectContaining({ id: "auth_value", style: "expanded" }),
-  ]));
+  expect(JSON.stringify(start.contentBlocks)).not.toContain("Select OpenAI Codex login method");
 
   const next = await applyControlCommand(runtime as any, loginRegistry, {
     type: "login",
@@ -870,11 +871,11 @@ test("provider-owned auth interaction renders select and device-code events", as
     raw: "/login __step2",
   });
   expect(selectedMethod).toBe("device_code");
-  const card = next.contentBlocks?.[0] as any;
-  expect(card?.payload?.actions?.find((action: any) => action.type === "Action.OpenUrl")?.url).toBe("https://auth.openai.com/codex/device");
-  expect(card?.payload?.body).toEqual(expect.arrayContaining([
-    expect.objectContaining({ text: "ABCD-EFGH", fontType: "Monospace" }),
-  ]));
+  expect(JSON.stringify(next.contentBlocks)).not.toContain("ABCD-EFGH");
+  const shown = await withPrivateProviderAuthResponse(() => applyControlCommand(runtime as any, loginRegistry, {
+    type: "login", provider: `__step2 ${JSON.stringify(loginActionData(next, "runtime_present"))}`, raw: "/login __step2",
+  }));
+  expect(shown.authPresentation?.events).toContainEqual({ type: "device_code", userCode: "ABCD-EFGH", verificationUri: "https://auth.openai.com/codex/device" });
 });
 
 test("agent control cycle and agent identity commands", async () => {
