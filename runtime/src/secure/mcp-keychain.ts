@@ -245,7 +245,9 @@ export async function hydrateMcpKeychainCredentials(workspaceDir: string, resolv
   catch (error) { loaded = { mcpServers: {} }; diagnostics.push({ serverName: "(configuration)", reason: `could not be loaded: ${error instanceof Error ? error.message : String(error)}` }); }
   if (tombstones.blockAll) for (const name of Object.keys(loaded.mcpServers)) loaded.mcpServers[name] = { disabled: true };
   else for (const name of tombstones.names) loaded.mcpServers[name] = { disabled: true };
-  const sanitized: McpConfig = { ...loaded, mcpServers: {} }; const nativeServers: McpServerEntry[] = [], nativeErrors: string[] = [], hydrated: HydratedMcpCredential[] = [], claimed = new Set<string>();
+  // Server-initiated model spending and interaction are opt-in only. A future
+  // policy/budget child may provide an authorized handler; config alone cannot.
+  const sanitized: McpConfig = { ...loaded, settings: { ...loaded.settings, sampling: false, samplingAutoApprove: false, elicitation: false }, mcpServers: {} }; const nativeServers: McpServerEntry[] = [], nativeErrors: string[] = [], hydrated: HydratedMcpCredential[] = [], claimed = new Set<string>();
   for (const [serverName, raw] of Object.entries(loaded.mcpServers ?? {})) {
     const reasons: string[] = [], mappings: string[] = []; const input = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : null;
     if (!input) reasons.push("configuration must be an object.");
