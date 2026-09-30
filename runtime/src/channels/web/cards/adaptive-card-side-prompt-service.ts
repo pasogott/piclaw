@@ -224,10 +224,33 @@ export class WebAdaptiveCardSidePromptService {
 
     const submittedAt = new Date().toISOString();
     const sanitizedSubmissionData = sanitizeAdaptiveCardSubmissionData(normalized.actionData);
+    const loginIntents = new Set(["login-step1", "login-step1-method", "login-step2", "login-step3"]);
+    const loginData = sanitizedSubmissionData && typeof sanitizedSubmissionData === "object" && !Array.isArray(sanitizedSubmissionData)
+      ? sanitizedSubmissionData as Record<string, unknown> : null;
+    const isLoginFlow = loginData && typeof loginData.intent === "string" && loginIntents.has(loginData.intent);
+    const blocks = sourceInteraction.data?.content_blocks;
+    const card = Array.isArray(blocks) ? blocks.find((block: any) => block?.type === "adaptive_card" && block.card_id === normalized.cardId && block.state === "active") as any : null;
+    const actions = card?.payload?.actions;
+    const isLoginCard = Array.isArray(actions) && actions.some((action: any) => loginIntents.has(action?.data?.intent));
+    if (isLoginCard || isLoginFlow) {
+      if (!isLoginFlow || !loginData) return this.options.json({ error: "Authentication card requires its original login action" }, 409);
+      const matchingAction = Array.isArray(actions) && actions.some((action: any) => {
+        const data = action?.data;
+        return action.type === "Action.Submit" && data?.intent === loginData.intent
+          && Object.keys(data).every(key => data[key] === loginData[key]);
+      });
+      if (!matchingAction) return this.options.json({ error: "Stale or mismatched authentication card action" }, 409);
+    }
+    // Auth inputs travel only through the in-memory control call. Never retain
+    // password/key/redirect values in card state, submission text or the DB.
+    const persistedSubmissionData = isLoginFlow
+      ? Object.fromEntries(Object.entries(loginData).filter(([key]) => ["intent", "provider", "method", "auth_type", "flow_id", "action_id", "activation_id", "confirmation_id"].includes(key)))
+      : sanitizedSubmissionData;
+    const persistedTitle = isLoginFlow ? "Authentication action" : normalized.actionTitle;
     const submissionMeta = {
       action_type: normalized.actionType,
-      title: normalized.actionTitle || undefined,
-      data: sanitizedSubmissionData,
+      title: persistedTitle || undefined,
+      data: persistedSubmissionData,
       submitted_at: submittedAt,
     };
     const submitBehavior = getAdaptiveCardSubmitBehavior(sourceInteraction.data?.content_blocks, normalized.cardId);
@@ -247,15 +270,15 @@ export class WebAdaptiveCardSidePromptService {
 
     const threadId = normalized.threadId ?? sourceInteraction.data?.thread_id ?? sourceInteraction.id;
     const submissionText = buildAdaptiveCardSubmissionText(
-      normalized.actionTitle,
+      persistedTitle,
       normalized.cardId,
-      sanitizedSubmissionData,
+      persistedSubmissionData,
     );
     const submissionBlock = buildAdaptiveCardSubmitBlock({
       cardId: normalized.cardId,
       sourcePostId,
-      title: normalized.actionTitle || undefined,
-      data: sanitizedSubmissionData,
+      title: persistedTitle || undefined,
+      data: persistedSubmissionData,
       submittedAt,
     });
 
@@ -276,16 +299,14 @@ export class WebAdaptiveCardSidePromptService {
       return interaction;
     };
 
-    const loginIntents = new Set(["login-step1", "login-step1-method", "login-step2", "login-step3"]);
-    const isLoginFlow = submissionData && typeof submissionData.intent === "string" && loginIntents.has(submissionData.intent);
-    if (isLoginFlow) {
+    if (isLoginFlow && loginData) {
       const updatedCardInteraction = submitBehavior === "keep_active"
         ? null
         : updateSourceCard(updatedCardBlocks);
 
-      const routePrefix = submissionData.intent === "login-step1" ? "__step1 "
-        : submissionData.intent === "login-step1-method" ? "__step1method "
-        : submissionData.intent === "login-step2" ? "__step2 "
+      const routePrefix = loginData.intent === "login-step1" ? "__step1 "
+        : loginData.intent === "login-step1-method" ? "__step1method "
+        : loginData.intent === "login-step2" ? "__step2 "
         : "__step3 ";
       const authResult = await this.options.agentPool.applyControlCommand?.(chatJid, {
         type: "login",
