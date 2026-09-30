@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,6 +23,36 @@ afterEach(() => {
 });
 
 describe("FileCredentialStore", () => {
+  test("rejects linked or non-regular targets without changing outside files", async () => {
+    const { authPath, store } = await createStore();
+    await store.read("test");
+    const outside = `${authPath}.outside`;
+    writeFileSync(outside, '{"outside":true}', { mode: 0o644 });
+    rmSync(authPath);
+    symlinkSync(outside, authPath);
+    await expect(new FileCredentialStore(authPath).read("test")).rejects.toThrow("private regular file");
+    expect(readFileSync(outside, "utf8")).toBe('{"outside":true}');
+    expect(statSync(outside).mode & 0o777).toBe(0o644);
+    rmSync(authPath);
+    linkSync(outside, authPath);
+    await expect(new FileCredentialStore(authPath).read("test")).rejects.toThrow("private regular file");
+    rmSync(authPath);
+    mkdirSync(authPath);
+    await expect(new FileCredentialStore(authPath).read("test")).rejects.toThrow("private regular file");
+  });
+
+  test("secures an existing owned credential directory and rejects a directory link", async () => {
+    const { authPath, store } = await createStore();
+    await store.read("test");
+    const parent = join(authPath, "..");
+    chmodSync(parent, 0o777);
+    await new FileCredentialStore(authPath).read("test");
+    expect(statSync(parent).mode & 0o777).toBe(0o700);
+    const linked = `${parent}-linked`;
+    symlinkSync(parent, linked);
+    await expect(new FileCredentialStore(join(linked, "auth.json")).read("test")).rejects.toThrow("real directory");
+  });
+
   test("creates auth.json with private permissions and resolves stored API-key expressions", async () => {
     const { authPath, store } = await createStore({
       openai: { type: "api_key", key: "$OPENAI_API_KEY", env: { OPENAI_API_KEY: "secret" } },
