@@ -56,6 +56,11 @@ interface ModelRegistryLike {
 
 // ── Config paths ────────────────────────────────────────────────
 
+// Earendil 0.99.1 keyless Ollama/llama.cpp availability requires a configured
+// placeholder. This non-secret compatibility marker never enters the credential store.
+const KEYLESS_LOCAL_MARKER = "piclaw-keyless-local";
+const KEYLESS_LOCAL_PROVIDERS = new Set(["ollama", "llama-cpp"]);
+
 function getModelsJsonPath(): string {
   return join(getPiclawAgentDir(), "models.json");
 }
@@ -837,13 +842,16 @@ async function handleStep2(
         const modelsJson = (original === null ? {} : JSON.parse(original)) as { providers?: Record<string, Record<string, unknown>> };
         // Never silently discard or migrate a legacy credential. That path
         // needs an explicit compatibility and historical-backup decision.
-        if (modelsJson.providers?.[providerId]?.apiKey) throw new Error("Legacy key migration required");
+        const existingKey = modelsJson.providers?.[providerId]?.apiKey;
+        if (existingKey && !(KEYLESS_LOCAL_PROVIDERS.has(providerId) && existingKey === KEYLESS_LOCAL_MARKER)) throw new Error("Legacy key migration required");
         const stored = (await modelRuntime.listCredentials()).some(entry => entry.providerId === providerId);
-        if (def.customFields?.some(field => field.key === "apiKey" && field.required) && !apiKey && (!stored || !(await modelRuntime.getAuth(providerId))?.auth.apiKey)) throw new Error("API key required");
+        const usableStoredKey = stored ? (await modelRuntime.getAuth(providerId))?.auth.apiKey : undefined;
+        if (def.customFields?.some(field => field.key === "apiKey" && field.required) && !apiKey && !usableStoredKey) throw new Error("API key required");
         if (!active()) throw new Error("Authentication owner replaced");
         backupModelsConfig(path);
         if (!modelsJson.providers) modelsJson.providers = {};
-        modelsJson.providers[providerId] = { baseUrl, api: def.customApi || "openai-completions", models };
+        modelsJson.providers[providerId] = { baseUrl, api: def.customApi || "openai-completions",
+          ...(KEYLESS_LOCAL_PROVIDERS.has(providerId) && !apiKey && !usableStoredKey ? { apiKey: KEYLESS_LOCAL_MARKER } : {}), models };
         let written = false;
         try {
           writeJsonFile(path, modelsJson);

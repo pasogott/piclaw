@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createTempWorkspace } from "../helpers.js";
 
-for (const scenario of ["new-key-and-logout", "blank-update-preserves-key", "keyless-local", "legacy-config-fails-closed", "malformed-config-fails-closed", "required-key-missing", "failed-login-restores-config", "committed-credential-sync-failure", "concurrent-custom-config", "blank-stored-key-rejected", "logout-delete-failure-retains-config", "same-provider-ordered-setup", "commit-window-blank-update"]) {
+for (const scenario of ["new-key-and-logout", "blank-update-preserves-key", "keyless-local", "authenticated-local-preserves-key", "legacy-config-fails-closed", "malformed-config-fails-closed", "required-key-missing", "failed-login-restores-config", "committed-credential-sync-failure", "concurrent-custom-config", "blank-stored-key-rejected", "logout-delete-failure-retains-config", "same-provider-ordered-setup", "commit-window-blank-update"]) {
   test(`custom provider credential/config boundary: ${scenario}`, async () => {
     const ws = createTempWorkspace("custom-auth-");
     const agent = join(ws.base, "agent");
