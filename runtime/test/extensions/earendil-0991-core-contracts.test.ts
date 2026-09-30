@@ -8,7 +8,7 @@ const root=resolve(import.meta.dir,'../../..'),pkg=JSON.parse(readFileSync(resol
 test('exact 0.99.1 package and lock closure retains adapter ownership',()=>{
  for(const name of ['@earendil-works/pi-agent-core','@earendil-works/pi-ai','@earendil-works/pi-coding-agent'])expect(pkg.dependencies[name]).toBe('0.99.1');
  for(const name of ['chord','pi-agent-core','pi-ai','pi-codemode','pi-coding-agent','pi-mcp','pi-telemetry','pi-tui'])expect(lock).toContain(`@earendil-works/${name}@0.99.1`);
- expect(pkg.dependencies['pi-mcp-adapter']).toBe('github:piclaw-bot/pi-mcp-adapter#41cf80e0d5a8ff8d963a37a9c742280649b3db1f');
+ expect(pkg.dependencies['pi-mcp-adapter']).toBe('github:piclaw-bot/pi-mcp-adapter#082ade48096e85f60c1d1343ce2b9328d605ad45');
  const session=readFileSync(resolve(root,'runtime/src/agent-pool/session.ts'),'utf8');expect(session).toContain('initializeOnLoad: false');expect(session).toContain('resolveRuntimeEnv');
  for(const factory of ['createMcpExtension','createToolSearchExtension','createCodemodeExtension'])expect(session).not.toContain(factory);
  expect(typeof createMcpExtension).toBe('function');expect(typeof createToolSearchExtension).toBe('function');expect(typeof createCodemodeExtension).toBe('function');

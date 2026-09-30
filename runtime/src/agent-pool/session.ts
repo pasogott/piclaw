@@ -34,6 +34,7 @@ import {
 
 import { createRequire } from "node:module";
 import { acquireMcpSessionBridge } from "../secure/mcp-keychain.js";
+import { mcpRuntimeRegistrationPolicy } from "../extensions/mcp-runtime-policy.js";
 import { getPiclawAgentDir } from "../core/agent-dir.js";
 import { SESSIONS_DIR, getRuntimeRoot, getSessionPersistenceConfig, getWorkspaceDir } from "../core/config.js";
 import { buildChannelSystemPromptAppendix } from "../channels/formatting.js";
@@ -615,6 +616,7 @@ export async function createSessionInDir(
         modelRuntime: options.modelRuntime,
         chatJid: options.chatJid,
       }),
+      mcpRuntimeRegistrationPolicy,
       // Piclaw synchronously emits the initial session_start event. Let that
       // session own eager servers instead of spawning a superseded load-time owner.
       createMcpAdapter({
