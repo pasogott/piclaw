@@ -300,7 +300,7 @@ describe("latent Earendil Harness v3 compatibility evidence", () => {
     expect(receipt.operations.map((r: { operation: string }) => r.operation)).toEqual(EARENDIL_HARNESS_DIRECT_OPERATIONS);
     expect(receipt.operations).toHaveLength(25);
     expect(receipt.operations.every((r: { status: string; errorName: string }) => r.status === "unsupported" && r.errorName === "HarnessNotImplemented")).toBe(true);
-    expect(await readInstalledEarendilAgentCoreVersion()).toBe("0.87.1");
+    expect(await readInstalledEarendilAgentCoreVersion()).toBe("0.99.1");
   });
 
   test("maps every selected HC row and status to exact active public test registrations", () => {
