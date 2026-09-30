@@ -3,11 +3,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { McpServerManager } from "../../../node_modules/pi-mcp-adapter/server-manager.ts";
-import { acquireMcpSessionBridge, clearHydratedMcpCredentials, hydrateMcpKeychainCredentials } from "../../src/secure/mcp-keychain.js";
+import { acquireMcpSessionBridge, clearHydratedMcpCredentials, hydrateMcpKeychainCredentials, resetMcpStartupStateForTests } from "../../src/secure/mcp-keychain.js";
 
 const touched = ["PICLAW_MCP_TEST_VALUE", "PICLAW_MCP_TEST_CWD"];
 afterEach(() => {
   for (const name of touched) delete process.env[name];
+  resetMcpStartupStateForTests();
 });
 
 test("pi-mcp-adapter expands supported environment forms into a stdio child", async () => {
@@ -86,3 +87,12 @@ test("keychain-hydrated environment values reach the stdio child without persist
     rmSync(root, { recursive: true, force: true });
   }
 }, 15_000);
+
+test("MCP fixture teardown leaves a fresh bridge for subsequent sessions", () => {
+  const lease = acquireMcpSessionBridge();
+  try {
+    expect(lease.config.mcpServers).toEqual({});
+  } finally {
+    lease.release();
+  }
+});
