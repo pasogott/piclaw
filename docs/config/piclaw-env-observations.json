@@ -87,7 +87,7 @@
       "semanticReaderOccurrences": 69
     },
     "docsDeploy": {
-      "referencedNames": 138,
+      "referencedNames": 140,
       "directReaderNames": 16,
       "directReaderOccurrences": 32,
       "helperReaderNames": 0,
@@ -582,6 +582,21 @@
           "readerFiles": [
             "scripts/audit-baseline-quality-deterministic.ts"
           ]
+        }
+      }
+    },
+    {
+      "name": "PICLAW_AUTH_ARTIFACT_RECEIPT",
+      "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-packed-provider-auth.md"
+          ],
+          "readerFiles": []
         }
       }
     },
@@ -1772,6 +1787,7 @@
           "semanticReaders": 0,
           "files": [
             ".github/workflows/e2e.yml",
+            "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-packed-provider-auth.md",
             "docs/development.md"
           ],
           "readerFiles": []
@@ -3932,6 +3948,21 @@
           "semanticReaders": 0,
           "files": [
             "skel/.pi/skills/reload/restart-piclaw.sh"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
+      "name": "PICLAW_RUN_AUTH_ARTIFACT_TESTS",
+      "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-packed-provider-auth.md"
           ],
           "readerFiles": []
         }
