@@ -13,10 +13,10 @@
  * custom-provider models.json configuration, with backups and awaited reload.
  */
 
-import type { AgentSession, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { CredentialSynchronizationError, type AgentSession, type ModelRegistry, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AuthEvent, AuthPrompt, AuthType, CredentialInfo } from "@earendil-works/pi-ai";
 import type { AgentControlCommand, AgentControlResult } from "../agent-control-types.js";
-import { writeFileSync, readFileSync, existsSync, copyFileSync } from "fs";
+import { writeFileSync, readFileSync, existsSync, chmodSync, unlinkSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "node:crypto";
 import { getPiclawAgentDir } from "../../core/agent-dir.js";
@@ -56,18 +56,30 @@ interface ModelRegistryLike {
 
 // ── Config paths ────────────────────────────────────────────────
 
-function getAuthJsonPath(): string {
-  return join(getPiclawAgentDir(), "auth.json");
-}
-
 function getModelsJsonPath(): string {
   return join(getPiclawAgentDir(), "models.json");
 }
 
-function backupFile(path: string): void {
+// Different providers share one configuration file; provider locks alone do
+// not protect its read/modify/write across asynchronous auth operations.
+const modelConfigWrites = new Map<string, Promise<void>>();
+async function serializeModelsConfig<T>(path: string, run: () => Promise<T>): Promise<T> {
+  const prior = modelConfigWrites.get(path) ?? Promise.resolve();
+  const operation = prior.then(run);
+  const tail = operation.then(() => undefined, () => undefined);
+  modelConfigWrites.set(path, tail);
+  try { return await operation; }
+  finally { if (modelConfigWrites.get(path) === tail) modelConfigWrites.delete(path); }
+}
+
+function backupModelsConfig(path: string): void {
   if (!existsSync(path)) return;
+  const snapshot = JSON.parse(readFileSync(path, "utf-8")) as { providers?: Record<string, Record<string, unknown>> };
+  // New backups must not duplicate provider API keys. Existing backups are
+  // preserved for a separately reviewed migration/retention decision.
+  for (const provider of Object.values(snapshot.providers ?? {})) delete provider.apiKey;
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  copyFileSync(path, `${path}.${ts}.bak`);
+  writeJsonFile(`${path}.${ts}.bak`, snapshot);
 }
 
 function readJsonFile(path: string): Record<string, unknown> {
@@ -76,7 +88,8 @@ function readJsonFile(path: string): Record<string, unknown> {
 }
 
 function writeJsonFile(path: string, data: unknown): void {
-  writeFileSync(path, JSON.stringify(data, null, 2) + "\n", "utf-8");
+  writeFileSync(path, JSON.stringify(data, null, 2) + "\n", { encoding: "utf-8", mode: 0o600 });
+  chmodSync(path, 0o600);
 }
 
 // ── Provider definitions ────────────────────────────────────────
@@ -193,7 +206,7 @@ function buildCard2Config(def: ProviderDef): Record<string, unknown> {
 
   const body: unknown[] = [
     { type: "TextBlock", text: `${def.name} — Configuration`, weight: "Bolder", size: "Medium" },
-    { type: "TextBlock", text: "Saved to `~/.pi/agent/models.json` (backup created first) and applied immediately.", wrap: true, isSubtle: true },
+    { type: "TextBlock", text: "Model configuration is applied immediately. Keys are saved through provider authentication, not in models.json or its new backups. Leave the key blank to retain a stored credential.", wrap: true, isSubtle: true },
   ];
 
   for (const field of def.customFields || []) {
@@ -210,7 +223,7 @@ function buildCard2Config(def: ProviderDef): Record<string, unknown> {
     if (field.key === "apiKey") currentValue = "";
     body.push({
       type: "Input.Text", id: field.key,
-      label: `${field.label}${field.required ? " *" : ""}`,
+      label: `${field.label}${field.required && field.key !== "apiKey" ? " *" : ""}`,
       placeholder: field.placeholder, value: currentValue,
       ...(field.key === "apiKey" ? { style: "password" } : {}),
     });
@@ -809,14 +822,60 @@ async function handleStep2(
       ...(def.customCompat ? { compat: def.customCompat } : {}),
     }));
 
-    backupFile(getModelsJsonPath());
-    const modelsJson = readJsonFile(getModelsJsonPath()) as { providers?: Record<string, unknown> };
-    if (!modelsJson.providers) modelsJson.providers = {};
-    modelsJson.providers[providerId] = { baseUrl, api: def.customApi || "openai-completions", ...(apiKey ? { apiKey } : {}), models };
-    writeJsonFile(getModelsJsonPath(), modelsJson);
-    await modelRuntime.refresh({ allowNetwork: false });
-
-    return await showCard3OrComplete(session, modelRegistry, def, providerId, name, registry);
+    const owner = getRuntimeAuthOwner(session);
+    let revision = -1;
+    const active = () => isRuntimeAuthOwnerActive(owner) && revision === providerAuthState(modelRuntime, providerId).revision;
+    try {
+      const path = getModelsJsonPath();
+      await serializeProviderAuth(modelRuntime, providerId, () => serializeModelsConfig(path, async () => {
+        // Custom setup admission is ordered with credential writes. A later
+        // setup cannot supersede a credential that is already committing.
+        retireProviderAuth(modelRuntime, providerId);
+        revision = providerAuthState(modelRuntime, providerId).revision;
+        if (!active()) throw new Error("Authentication owner replaced");
+        const original = existsSync(path) ? readFileSync(path, "utf-8") : null;
+        const modelsJson = (original === null ? {} : JSON.parse(original)) as { providers?: Record<string, Record<string, unknown>> };
+        // Never silently discard or migrate a legacy credential. That path
+        // needs an explicit compatibility and historical-backup decision.
+        if (modelsJson.providers?.[providerId]?.apiKey) throw new Error("Legacy key migration required");
+        const stored = (await modelRuntime.listCredentials()).some(entry => entry.providerId === providerId);
+        if (def.customFields?.some(field => field.key === "apiKey" && field.required) && !apiKey && (!stored || !(await modelRuntime.getAuth(providerId))?.auth.apiKey)) throw new Error("API key required");
+        if (!active()) throw new Error("Authentication owner replaced");
+        backupModelsConfig(path);
+        if (!modelsJson.providers) modelsJson.providers = {};
+        modelsJson.providers[providerId] = { baseUrl, api: def.customApi || "openai-completions", models };
+        let written = false;
+        try {
+          writeJsonFile(path, modelsJson);
+          written = true;
+          await modelRuntime.refresh({ allowNetwork: false });
+          if (!active()) throw new Error("Authentication owner replaced");
+          if (apiKey) await modelRuntime.login(providerId, "api_key", {
+            prompt: async prompt => {
+              if (!active() || prompt.type !== "secret") throw new Error("Unsupported custom credential prompt");
+              return apiKey;
+            },
+            notify: () => {},
+          });
+          if (!active()) throw new CredentialSynchronizationError(providerId, "login", undefined, { cause: new Error("Authentication owner changed after commit") });
+        } catch (error) {
+          // The public runtime distinguishes a committed credential from a
+          // post-write snapshot failure. Never restore a superseded credential.
+          if (error instanceof CredentialSynchronizationError) throw error;
+          if (written) {
+            if (original === null) unlinkSync(path);
+            else { writeFileSync(path, original, { encoding: "utf-8", mode: 0o600 }); chmodSync(path, 0o600); }
+            await modelRuntime.refresh({ allowNetwork: false });
+          }
+          throw error;
+        }
+      }));
+    } catch (error) {
+      return { status: "error", message: error instanceof CredentialSynchronizationError
+        ? "The credential was saved, but model availability could not be refreshed. Retry model refresh; do not restore an older credential."
+        : "Custom authentication configuration failed. Supply a required key or review legacy model configuration, then retry. The prior configuration and stored credential are retained." };
+    }
+    return await showCard3OrComplete(session, modelRegistry, def, providerId, name, registry, revision);
   }
 
   if (method === "logout") {
@@ -825,21 +884,43 @@ async function handleStep2(
     if (!confirmation || confirmation.provider !== providerId || confirmation.expiresAt <= Date.now() || confirmation.providerRevision !== providerAuthState(modelRuntime, providerId).revision) return { status: "error", message: "Stale or foreign logout confirmation. Use /logout or request a new confirmation." };
     owner.logouts.delete(id);
     retireProviderAuth(modelRuntime, providerId);
-    backupFile(getAuthJsonPath());
-    await serializeProviderAuth(modelRuntime, providerId, () => modelRuntime.logout(providerId));
-    if (def?.isCustom) {
-      const modelsJson = readJsonFile(getModelsJsonPath()) as { providers?: Record<string, unknown> };
-      if (modelsJson.providers?.[providerId]) {
-        backupFile(getModelsJsonPath());
-        delete modelsJson.providers[providerId];
-        writeJsonFile(getModelsJsonPath(), modelsJson);
-        await modelRuntime.refresh({ allowNetwork: false });
-      }
-    }
-    return { status: "success", message: `✓ **${name}** removed. Backups created.` };
+    await serializeProviderAuth(modelRuntime, providerId, async () => {
+      if (def?.isCustom) await removeCustomModelConfig(modelRuntime, providerId, true);
+      else await modelRuntime.logout(providerId);
+    });
+    return { status: "success", message: `✓ **${name}** removed. New configuration backups omit API keys; credentials are not snapshotted.` };
   }
 
   return { status: "error", message: `Unknown method: ${method}` };
+}
+
+async function removeCustomModelConfig(modelRuntime: ModelRuntime, providerId: string, removeCredential: boolean): Promise<boolean> {
+  const path = getModelsJsonPath();
+  return serializeModelsConfig(path, async () => {
+    const original = existsSync(path) ? readFileSync(path, "utf-8") : null;
+    const config = (original === null ? {} : JSON.parse(original)) as { providers?: Record<string, unknown> };
+    const configured = Boolean(config.providers?.[providerId]);
+    let written = false;
+    try {
+      // Configuration errors must not remove an otherwise working credential.
+      if (configured) {
+        backupModelsConfig(path);
+        delete config.providers![providerId];
+        writeJsonFile(path, config);
+        written = true;
+        await modelRuntime.refresh({ allowNetwork: false });
+      }
+      if (removeCredential) await modelRuntime.logout(providerId);
+    } catch (error) {
+      if (written && !(error instanceof CredentialSynchronizationError)) {
+        writeFileSync(path, original!, { encoding: "utf-8", mode: 0o600 });
+        chmodSync(path, 0o600);
+        await modelRuntime.refresh({ allowNetwork: false });
+      }
+      throw error;
+    }
+    return configured;
+  });
 }
 
 async function activateProviderModel(
@@ -864,9 +945,10 @@ async function showCard3OrComplete(
   providerId: string,
   name: string,
   registry: ModelRegistryLike,
+  expectedRevision?: number,
 ): Promise<AgentControlResult> {
   const owner = getRuntimeAuthOwner(session);
-  const providerRevision = providerAuthState(owner.runtime, providerId).revision;
+  const providerRevision = expectedRevision ?? providerAuthState(owner.runtime, providerId).revision;
   await registry.refresh?.();
   if (!isRuntimeAuthOwnerActive(owner) || owner.chatJid !== getChatJid() || providerRevision !== providerAuthState(owner.runtime, providerId).revision) return { status: "error", message: "Authentication session changed. Use /login in the active session." };
   const models = registry.getAll().filter((m) => m.provider === providerId);
@@ -964,10 +1046,11 @@ export async function handleLogout(
     retireProviderAuth(modelRuntime, providerId);
     const removed = await serializeProviderAuth(modelRuntime, providerId, async () => {
       const credentials = await modelRuntime.listCredentials();
-      if (!credentials.some((entry) => entry.providerId === providerId)) return false;
-      backupFile(getAuthJsonPath());
-      await modelRuntime.logout(providerId);
-      return true;
+      const stored = credentials.some((entry) => entry.providerId === providerId);
+      const custom = getProviderDef(modelRuntime, registry, providerId)?.isCustom;
+      const configured = custom ? await removeCustomModelConfig(modelRuntime, providerId, stored) : false;
+      if (stored && !custom) await modelRuntime.logout(providerId);
+      return stored || configured;
     });
     if (!removed) return { status: "error", message: `**${providerId}** is not logged in.` };
     return { status: "success", message: `✓ Logged out from **${providerId}**.` };
