@@ -85,6 +85,12 @@ afterEach(() => {
 
 const registry = createTestModelRegistry([DEFAULT_TEST_MODEL]);
 
+function loginActionData(result: any, method: string): Record<string, unknown> {
+  const action = result.contentBlocks?.[0]?.payload?.actions?.find((entry: any) => entry.data?.method === method);
+  if (!action) throw new Error(`Missing login card action ${method}`);
+  return action.data;
+}
+
 async function getControl() {
   const mod = await import("../../src/agent-control/index.js");
   return mod.applyControlCommand as (session: any, runtime: any, registry: any, command: any) => Promise<any>;
@@ -634,11 +640,16 @@ test("login config writes stay inside the overridden pi-agent dir", async () => 
   ]));
   const apiKeyResult = await applyControlCommand(runtime as any, loginRegistry, {
     type: "login",
-    provider: `__step2 ${JSON.stringify({ provider: "openai", method: "runtime_continue", auth_type: "api_key", auth_value: "new-key" })}`,
+    provider: `__step2 ${JSON.stringify({ ...loginActionData(apiKeyStart, "runtime_continue"), auth_value: "new-key" })}`,
     raw: "/login __step2",
   });
   expect(apiKeyResult.status).toBe("success");
-  expect(apiKeyResult.model_label).toBe("openai/gpt-test");
+  expect(apiKeyResult.model_label).toBeUndefined();
+  const activationData = (apiKeyResult.contentBlocks?.[0] as any)?.payload?.actions?.[0]?.data;
+  const activated = await applyControlCommand(runtime as any, loginRegistry, {
+    type: "login", provider: `__step3 ${JSON.stringify({ ...activationData, model: "gpt-test" })}`, raw: "/login __step3",
+  });
+  expect(activated.model_label).toBe("openai/gpt-test");
   expect(session.model?.provider).toBe("openai");
   expect(session.model?.id).toBe("gpt-test");
   expect(loginRegistry.authStorage.get("openai")).toMatchObject({ type: "api_key", key: "new-key" });
@@ -709,11 +720,11 @@ test("provider-owned API-key login supports multiple prompts without direct cred
   });
   expect((start.contentBlocks?.[0] as any)?.payload?.body).toEqual(expect.arrayContaining([expect.objectContaining({ id: "auth_value", style: "password" })]));
   const next = await applyControlCommand(runtime as any, loginRegistry, {
-    type: "login", provider: `__step2 ${JSON.stringify({ provider: "cloudflare-ai-gateway", method: "runtime_continue", auth_type: "api_key", auth_value: "secret-key" })}`, raw: "/login __step2",
+    type: "login", provider: `__step2 ${JSON.stringify({ ...loginActionData(start, "runtime_continue"), auth_value: "secret-key" })}`, raw: "/login __step2",
   });
   expect((next.contentBlocks?.[0] as any)?.payload?.body).toEqual(expect.arrayContaining([expect.objectContaining({ id: "auth_value", style: "text" })]));
   const done = await applyControlCommand(runtime as any, loginRegistry, {
-    type: "login", provider: `__step2 ${JSON.stringify({ provider: "cloudflare-ai-gateway", method: "runtime_continue", auth_type: "api_key", auth_value: "acct-1" })}`, raw: "/login __step2",
+    type: "login", provider: `__step2 ${JSON.stringify({ ...loginActionData(next, "runtime_continue"), auth_value: "acct-1" })}`, raw: "/login __step2",
   });
   expect(done.status).toBe("success");
   expect(loginRegistry.authStorage.get("cloudflare-ai-gateway")).toMatchObject({ key: "secret-key", env: { CLOUDFLARE_ACCOUNT_ID: "acct-1" } });
@@ -731,11 +742,11 @@ test("provider-owned auth cancellation aborts the runtime flow and clears pendin
   };
   const session = new TestAgentControlSession(ws.workspace, loginRegistry);
   const runtime = createTestSessionRuntime(session);
-  await applyControlCommand(runtime as any, loginRegistry, {
+  const start = await applyControlCommand(runtime as any, loginRegistry, {
     type: "login", provider: `__step1 ${JSON.stringify({ provider: "openai-codex" })}`, raw: "/login __step1",
   });
   const cancelled = await applyControlCommand(runtime as any, loginRegistry, {
-    type: "login", provider: `__step2 ${JSON.stringify({ provider: "openai-codex", method: "runtime_cancel", auth_type: "oauth" })}`, raw: "/login __step2",
+    type: "login", provider: `__step2 ${JSON.stringify(loginActionData(start, "runtime_cancel"))}`, raw: "/login __step2",
   });
   expect(cancelled.status).toBe("success");
   expect(cancelled.message).toContain("cancelled");
@@ -790,7 +801,7 @@ test("abort returns when session abort remains pending", async () => {
   expect(session.abortCalls).toBe(1);
 });
 
-test("login refreshes model registry before activating newly authenticated provider models", async () => {
+test("login refreshes model registry but requires explicit activation even for one model", async () => {
   const ws = getTestWorkspace();
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
 
@@ -815,7 +826,13 @@ test("login refreshes model registry before activating newly authenticated provi
 
   expect(result.status).toBe("success");
   expect(loginRegistry.authStorage.get("github-copilot")?.type).toBe("oauth");
-  expect(result.model_label, result.message).toBe("github-copilot/gpt-4.1");
+  expect(result.model_label).toBeUndefined();
+  expect(session.model?.provider).toBe("openai");
+  const activationData = (result.contentBlocks?.[0] as any)?.payload?.actions?.[0]?.data;
+  const activated = await applyControlCommand(runtime as any, loginRegistry, {
+    type: "login", provider: `__step3 ${JSON.stringify({ ...activationData, model: "gpt-4.1" })}`, raw: "/login __step3",
+  });
+  expect(activated.model_label).toBe("github-copilot/gpt-4.1");
   expect(session.model?.provider).toBe("github-copilot");
   expect(session.model?.id).toBe("gpt-4.1");
 });
@@ -849,7 +866,7 @@ test("provider-owned auth interaction renders select and device-code events", as
 
   const next = await applyControlCommand(runtime as any, loginRegistry, {
     type: "login",
-    provider: `__step2 ${JSON.stringify({ provider: "openai-codex", method: "runtime_continue", auth_type: "oauth", auth_value: "device_code" })}`,
+    provider: `__step2 ${JSON.stringify({ ...loginActionData(start, "runtime_continue"), auth_value: "device_code" })}`,
     raw: "/login __step2",
   });
   expect(selectedMethod).toBe("device_code");

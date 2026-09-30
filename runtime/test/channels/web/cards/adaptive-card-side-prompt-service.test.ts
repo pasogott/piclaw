@@ -85,6 +85,56 @@ function createFixture(overrides: Partial<WebAdaptiveCardSidePromptServiceOption
 }
 
 describe("Web adaptive-card/side-prompt service", () => {
+  test("login secrets reach only the in-memory handler and never completed card or submission state", async () => {
+    process.env.PICLAW_DB_IN_MEMORY = "1";
+    const db = await import("../../../../src/db.js");
+    db.initDatabase();
+    const sentinel = "AUTH-secret-input-sentinel";
+    const actionData = { intent: "login-step2", provider: "openai", method: "runtime_continue", auth_type: "api_key", flow_id: "flow", action_id: "action" };
+    const postId = db.storeMessage({
+      id: `login-secret-${crypto.randomUUID()}`, chat_jid: "web:auth-test", sender: "agent", sender_name: "Agent", content: "Authentication", timestamp: new Date().toISOString(), is_from_me: true, is_bot_message: true,
+      content_blocks: [{ type: "adaptive_card", card_id: "secret-login-card", state: "active", payload: { type: "AdaptiveCard", version: "1.5", body: [{ type: "Input.Text", id: "auth_value", style: "password" }], actions: [{ type: "Action.Submit", title: "Continue", data: actionData }] } }],
+    });
+    const received: any[] = [];
+    const fixture = createFixture({ agentPool: { applyControlCommand: async (_chat, command) => {
+      received.push(JSON.parse(command.provider.slice(8)));
+      return { status: "success", message: "Authentication completed." };
+    } } });
+    const response = await fixture.service.handleAdaptiveCardAction(createRequest("/agent/card-action", {
+      method: "POST", body: JSON.stringify({ post_id: postId, card_id: "secret-login-card", action: { type: "Action.Submit", title: sentinel, data: { ...actionData, auth_value: sentinel, redirect_url: `https://localhost/?code=${sentinel}`, apiKey: sentinel } } }),
+    }));
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0].auth_value).toBe(sentinel);
+    const persisted = db.getMessageByRowId("web:auth-test", postId);
+    expect(JSON.stringify({ persisted, sent: fixture.state.sentMessages, response: await response.json() })).not.toContain(sentinel);
+    expect((persisted?.data?.content_blocks?.[0] as any)?.last_submission?.data).toEqual(actionData);
+  });
+
+  test("login action bindings reject altered provider/flow metadata before handler or card mutation", async () => {
+    process.env.PICLAW_DB_IN_MEMORY = "1";
+    const db = await import("../../../../src/db.js");
+    db.initDatabase();
+    const data = { intent: "login-step2", provider: "openai", method: "runtime_continue", flow_id: "owned", action_id: "prompt" };
+    const postId = db.storeMessage({
+      id: `login-binding-${crypto.randomUUID()}`, chat_jid: "web:binding", sender: "agent", sender_name: "Agent", content: "Authentication", timestamp: new Date().toISOString(), is_from_me: true, is_bot_message: true,
+      content_blocks: [{ type: "adaptive_card", card_id: "bound-login-card", state: "active", payload: { type: "AdaptiveCard", version: "1.5", body: [], actions: [{ type: "Action.Submit", data }] } }],
+    });
+    let calls = 0;
+    const fixture = createFixture({ agentPool: { applyControlCommand: async () => { calls++; return { status: "success", message: "unexpected" }; } } });
+    const response = await fixture.service.handleAdaptiveCardAction(createRequest("/agent/card-action", {
+      method: "POST", body: JSON.stringify({ post_id: postId, card_id: "bound-login-card", action: { type: "Action.Submit", data: { ...data, provider: "foreign", auth_value: "secret" } } }),
+    }));
+    expect(response.status).toBe(409);
+    expect(calls).toBe(0);
+    expect((db.getMessageByRowId("web:binding", postId)?.data?.content_blocks?.[0] as any)?.state).toBe("active");
+    const substituted = await fixture.service.handleAdaptiveCardAction(createRequest("/agent/card-action", {
+      method: "POST", body: JSON.stringify({ post_id: postId, card_id: "bound-login-card", action: { type: "Action.Submit", data: { intent: "ordinary-note", auth_value: "AUTH-substitution-sentinel" } } }),
+    }));
+    expect(substituted.status).toBe(409);
+    expect(JSON.stringify(db.getMessageByRowId("web:binding", postId))).not.toContain("AUTH-substitution-sentinel");
+  });
+
   test("preserves adaptive-card validation and client-handled open-url responses", async () => {
     const fixture = createFixture();
 
