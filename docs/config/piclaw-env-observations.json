@@ -2831,8 +2831,7 @@
           "semanticReaders": 0,
           "files": [
             "runtime/src/core/config-sources.ts",
-            "runtime/src/core/config-tools.ts",
-            "runtime/src/extensions/mcp-timeout-patch.ts"
+            "runtime/src/core/config-tools.ts"
           ],
           "readerFiles": []
         },
@@ -2843,8 +2842,7 @@
           "semanticReaders": 0,
           "files": [
             "runtime/src/core/config-sources.ts",
-            "runtime/src/core/config-tools.ts",
-            "runtime/src/extensions/mcp-timeout-patch.ts"
+            "runtime/src/core/config-tools.ts"
           ],
           "readerFiles": []
         }
