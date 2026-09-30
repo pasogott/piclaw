@@ -247,7 +247,6 @@ export class FileCredentialStore implements PiclawCredentialStore {
             retryAttempt,
             maxRetries: this.oauthRefreshRetry.maxRetries,
             delayMs: jitteredDelay,
-            error: error instanceof Error ? error.message : String(error),
           });
           await this.oauthRefreshRetry.sleep(jitteredDelay);
         }

@@ -5,8 +5,10 @@ import { join } from "node:path";
 
 import type { Credential } from "@earendil-works/pi-ai";
 import { FileCredentialStore, isTransientOAuthRefreshError } from "../../src/agent-pool/credential-store.js";
+import { addLogSink, removeLogSink, type LogRecord } from "../../src/utils/logger.js";
 
 const roots: string[] = [];
+const expiredOAuth = { type: "oauth", access: "old", refresh: "refresh", expires: 1 } satisfies Credential;
 async function createStore(initial: Record<string, Credential> = {}) {
   const root = mkdtempSync(join(tmpdir(), "piclaw-credential-store-"));
   roots.push(root);
@@ -103,6 +105,41 @@ describe("FileCredentialStore", () => {
     expect(delays).toEqual([100, 200]);
     expect(refreshed).toMatchObject({ type: "oauth", access: "new", refresh: "rotated" });
     expect(await store.read("oauth")).toMatchObject({ type: "oauth", access: "new", refresh: "rotated" });
+  });
+
+  test("retry logs omit provider error diagnostics", async () => {
+    const sentinel = "SENTINEL-retry-secret";
+    const rawMessage = `503 Service Unavailable https://example.test/?access_token=${sentinel}`;
+    const failures: unknown[] = [
+      new Error(rawMessage, { cause: new Error(`token=${sentinel}`) }),
+      { status: 503, cause: { url: `https://example.test/?token=${sentinel}` } },
+    ];
+    const logs: LogRecord[] = [];
+    const sink = (record: LogRecord) => logs.push(record);
+    addLogSink(sink);
+    try {
+      for (const failure of failures) {
+        const { authPath } = await createStore({ oauth: expiredOAuth });
+        const store = new FileCredentialStore(authPath, {
+          maxRetries: 1, baseDelayMs: 0, random: () => 0, sleep: async () => undefined,
+        });
+        let attempts = 0;
+        await store.modify("oauth", async () => {
+          if (++attempts === 1) throw failure;
+          return { type: "oauth", access: "new", refresh: "rotated", expires: Date.now() + 60_000 };
+        });
+        expect(attempts).toBe(2);
+      }
+    } finally { removeLogSink(sink); }
+    const retries = logs.filter((record) => record.operation === "credential_store.oauth_refresh_retry");
+    expect(retries).toHaveLength(2);
+    for (const record of retries) {
+      expect(record).toMatchObject({ level: "warn", module: "agent-pool.credential-store", providerId: "oauth", retryAttempt: 1, maxRetries: 1, delayMs: 0 });
+      expect(record).not.toHaveProperty("error");
+      expect(record).not.toHaveProperty("cause");
+      expect(JSON.stringify(record)).not.toContain(sentinel);
+      expect(JSON.stringify(record)).not.toContain(rawMessage);
+    }
   });
 
   test("serializes concurrent refresh contenders around one retry sequence", async () => {
