@@ -24,6 +24,6 @@ test('published OAuth bundle contains the repaired ChatGPT module',async()=>{
  const bundled=await import('@earendil-works/pi-ai/bun-oauth');expect(()=>bundled.registerBunOAuthFlows()).not.toThrow();
 });
 test('Harness/Pico3 activation and Piclaw service-effect ownership remain unchanged',()=>{
- const manifest=readFileSync(resolve(root,'runtime/src/service-effects/earendil-harness-v3-compatibility/manifest.ts'),'utf8');expect(manifest).toContain('currentRuntimeVersion: "0.87.1"');expect(manifest).toContain('harnessActivation: "latent_only"');expect(manifest).toContain('"productionImport": false');expect(manifest).toContain('"productionActivation": false');
+ const manifest=readFileSync(resolve(root,'runtime/src/service-effects/earendil-harness-v3-compatibility/manifest.ts'),'utf8');expect(manifest).toContain('currentRuntimeVersion: "0.99.1"');expect(manifest).toContain('harnessActivation: "latent_only"');expect(manifest).toContain('"productionImport": false');expect(manifest).toContain('"productionActivation": false');
  const session=readFileSync(resolve(root,'runtime/src/agent-pool/session.ts'),'utf8');expect(session).not.toMatch(/AgentHarness|Pico3/);
 });
