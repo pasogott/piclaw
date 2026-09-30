@@ -235,6 +235,11 @@ describe("MCP keychain credential hydration", () => {
     clearHydratedMcpCredentials(entries);
   });
 
+  test("forces server sampling and elicitation off until an authorized budget policy exists", async () => {
+    await hydrateMcpKeychainCredentials(workspace({settings:{sampling:true,samplingAutoApprove:true,elicitation:true},mcpServers:{demo:{command:"node"}}}),resolveEntry);
+    expect(getPreparedMcpConfig().settings).toMatchObject({sampling:false,samplingAutoApprove:false,elicitation:false});
+  });
+
   test("preserves supported non-keychain bearer and command references in the scoped environment", async () => {
     setTestEnv("PICLAW_MCP_EXTERNAL_TOKEN","external-token");setTestEnv("COMMAND_VALUE","command-value");
     await hydrateMcpKeychainCredentials(workspace({mcpServers:{
