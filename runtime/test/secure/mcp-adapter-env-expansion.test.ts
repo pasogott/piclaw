@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { McpServerManager } from "../../../node_modules/pi-mcp-adapter/server-manager.ts";
-import { clearHydratedMcpCredentials, hydrateMcpKeychainCredentials } from "../../src/secure/mcp-keychain.js";
+import { acquireMcpSessionBridge, clearHydratedMcpCredentials, hydrateMcpKeychainCredentials } from "../../src/secure/mcp-keychain.js";
 
 const touched = ["PICLAW_MCP_TEST_VALUE", "PICLAW_MCP_TEST_CWD"];
 afterEach(() => {
@@ -71,7 +71,8 @@ test("keychain-hydrated environment values reach the stdio child without persist
     secret: "keychain-secret-sentinel",
     username: null,
   }));
-  const manager = new McpServerManager(cwd);
+  const lease=acquireMcpSessionBridge();
+  const manager = new McpServerManager(cwd, serverName=>lease.resolveRuntimeEnv(serverName));
   try {
     const connection = await manager.connect("env-echo", config.mcpServers["env-echo"]);
     const result = await connection.client.callTool({ name: "inspect_env", arguments: {} });
@@ -79,6 +80,7 @@ test("keychain-hydrated environment values reach the stdio child without persist
     expect(readFileSync(configPath, "utf8")).not.toContain("keychain-secret-sentinel");
   } finally {
     await manager.closeAll();
+    lease.release();
     clearHydratedMcpCredentials(hydrated);
     expect(process.env.PICLAW_MCP_KEYCHAIN_TOKEN).toBeUndefined();
     rmSync(root, { recursive: true, force: true });
