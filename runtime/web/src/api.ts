@@ -679,11 +679,12 @@ export async function respondToAgentRequest(requestId, outcome, chatJid = null) 
 /**
  * Submit an Adaptive Card action back to the web channel.
  */
-export async function submitAdaptiveCardAction(payload) {
+export async function submitAdaptiveCardAction(payload, options: { signal?: AbortSignal } = {}) {
     const response = await fetch(API_BASE + '/agent/card-action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
+        signal: options.signal,
     });
 
     if (!response.ok) {

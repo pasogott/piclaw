@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { handleLogin, handleLogout, cancelProviderAuthFlows } from "../../src/agent-control/handlers/login.js";
+import { handleLogin, handleLogout, cancelProviderAuthFlows, withPrivateProviderAuthResponse } from "../../src/agent-control/handlers/login.js";
 import { withChatContext } from "../../src/core/chat-context.js";
 import { addLogSink, removeLogSink, type LogRecord } from "../../src/utils/logger.js";
 import { createTestModelRegistry, TestAgentControlSession } from "./session-fixture.js";
@@ -27,6 +27,79 @@ function action(result: any, method = "runtime_continue") {
   if (!data) throw new Error(`Missing action ${method}`);
   return data;
 }
+
+test("provider events and prompt metadata stay out of persisted cards and reveal is owner-bound and one-use", async () => {
+  const sentinel = "PRIVATE-event-sentinel";
+  const f = fixture(async (_provider, _type, input) => {
+    input.notify({ type: "auth_url", url: `https://auth.example.test/?state=${sentinel}`, instructions: sentinel });
+    input.notify({ type: "device_code", userCode: sentinel, verificationUri: `https://verify.example.test/?code=${sentinel}`, expiresInSeconds: 120 });
+    input.notify({ type: "info", message: sentinel, links: [{ url: `https://info.example.test/?token=${sentinel}`, label: sentinel }] });
+    for (let i = 0; i < 12; i++) input.notify({ type: "progress", message: `${sentinel}-${i}` });
+    await input.prompt({ type: "secret", message: sentinel, placeholder: sentinel });
+  });
+  const start = await f.run("step1", { provider: "openai" });
+  expect(JSON.stringify(start)).not.toContain(sentinel);
+  const reveal = action(start, "runtime_present");
+  expect((await f.run("step2", reveal, "web:foreign")).status).toBe("error");
+  expect((await f.run("step2", reveal)).status).toBe("error"); // Other control surfaces cannot receive secrets.
+  const shown = await withPrivateProviderAuthResponse(() => f.run("step2", reveal));
+  expect(shown.authPresentation?.events.map((event: any) => event.type)).toEqual(["auth_url", "device_code", "info", "progress"]);
+  expect(shown.authPresentation?.events.at(-1).message).toBe(`${sentinel}-11`);
+  expect(shown.authPresentation?.prompt).toMatchObject({ type: "secret", message: sentinel });
+  expect(shown.authPresentation?.prompt.signal).toBeUndefined();
+  expect(JSON.stringify({ message: shown.message, cards: shown.contentBlocks })).not.toContain(sentinel);
+  expect((await f.run("step2", reveal)).status).toBe("error");
+  const cancelled = await f.run("step2", { ...shown.authPresentation.action_data, method: "runtime_cancel" });
+  expect(cancelled.status).toBe("success");
+  expect((await f.run("step2", { ...shown.authPresentation.action_data, method: "runtime_present" })).status).toBe("error");
+});
+
+test("provider code deadline fences private reveal before its expiry timer fires", async () => {
+  const f = fixture(async (_provider, _type, input) => {
+    input.notify({ type: "device_code", userCode: "short-code", verificationUri: "https://verify.example.test", expiresInSeconds: 1 });
+    await input.prompt({ type: "manual_code", message: "Enter code" });
+  });
+  const start = await f.run("step1", { provider: "openai" });
+  const previous = Date.now;
+  Date.now = () => previous() + 1_001;
+  try { expect((await f.run("step2", action(start, "runtime_present"))).message).toContain("expired"); }
+  finally { Date.now = previous; }
+  expect(f.registry.authStorage.get("openai")).toBeUndefined();
+});
+
+test("disposed or replaced owners cannot reveal provider events", async () => {
+  const f = fixture();
+  const start = await f.run("step1", { provider: "openai" });
+  f.session.sessionId = "replacement";
+  expect((await f.run("step2", action(start, "runtime_present"))).status).toBe("error");
+  const next = await f.run("step1", { provider: "openai" });
+  f.session.dispose();
+  expect((await f.run("step2", action(next, "runtime_present"))).status).toBe("error");
+});
+
+test("failed private reveal delivery restores the prior action while failed continuation delivery aborts", async () => {
+  const f = fixture(async (_provider, _type, input) => {
+    await input.prompt({ type: "secret", message: "First secret" });
+    await input.prompt({ type: "text", message: "Next field" });
+  });
+  const start = await f.run("step1", { provider: "openai" });
+  const reveal = action(start, "runtime_present");
+  await expect(withPrivateProviderAuthResponse(async () => {
+    await f.run("step2", reveal);
+    throw new Error("Synthetic delivery failure");
+  })).rejects.toThrow("Synthetic delivery failure");
+  const shown = await withPrivateProviderAuthResponse(() => f.run("step2", reveal));
+  expect(shown.authPresentation?.prompt.type).toBe("secret");
+  const continuation = { ...shown.authPresentation.action_data, method: "runtime_continue", auth_value: "owned-value" };
+  await expect(withPrivateProviderAuthResponse(async () => {
+    const next = await f.run("step2", continuation);
+    expect(next.authPresentation?.prompt).toMatchObject({ type: "text", message: "Next field" });
+    expect(JSON.stringify(next.contentBlocks)).not.toContain("Next field");
+    throw new Error("Synthetic continuation delivery failure");
+  })).rejects.toThrow("Synthetic continuation delivery failure");
+  expect((await withPrivateProviderAuthResponse(() => f.run("step2", continuation))).status).toBe("error");
+  expect(f.registry.authStorage.get("openai")).toBeUndefined();
+});
 
 test("same-provider flows stay session-local and foreign prompt IDs cannot resolve either", async () => {
   const first = fixture(), second = fixture();

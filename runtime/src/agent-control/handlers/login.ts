@@ -25,8 +25,22 @@ import { readAccessConfig } from "../../core/config-access.js";
 import { createLogger } from "../../utils/logger.js";
 import { getProviderDefs, type ProviderDef } from "../provider-defs.js";
 import { handleModel } from "./model.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 const log = createLogger("agent-control.login");
+const privateAuthResponse = new AsyncLocalStorage<{ rollback?: () => void }>();
+/** Admit sensitive presentation only from the authenticated, non-persisting HTTP callback. */
+export function withPrivateProviderAuthResponse<T>(run: () => Promise<T>): Promise<T> {
+  const delivery: { rollback?: () => void } = {};
+  return privateAuthResponse.run(delivery, async () => {
+    try { return await run(); }
+    catch (error) { delivery.rollback?.(); throw error; }
+  });
+}
+export function commitPrivateProviderAuthResponse(): void {
+  const delivery = privateAuthResponse.getStore();
+  if (delivery) delivery.rollback = undefined;
+}
 
 type LoginCommand = Extract<AgentControlCommand, { type: "login" }>;
 type LogoutCommand = Extract<AgentControlCommand, { type: "logout" }>;
@@ -400,7 +414,7 @@ function getRuntimeAuthOwner(session: AgentSession): RuntimeAuthOwner {
   }
   if (!disposeBound.has(session)) {
     const dispose = session.dispose.bind(session);
-    session.dispose = () => { disposedAuthSessions.add(session); cancelProviderAuthFlows(session); dispose(); };
+    session.dispose = () => { disposedAuthSessions.add(session); cancelProviderAuthFlows(session); return dispose(); };
     disposeBound.add(session);
   }
   return owner;
@@ -490,8 +504,19 @@ function beginRuntimeAuthFlow(owner: RuntimeAuthOwner, modelRuntime: ModelRuntim
     }),
     notify: (event) => {
       if (!isRuntimeAuthOwnerActive(owner) || flow.controller.signal.aborted || owner.flows.get(key) !== flow) return;
+      // Retain the latest actionable URL/code even during verbose progress.
+      flow.events = flow.events.filter(previous => previous.type !== event.type);
       flow.events.push(event);
-      if (flow.events.length > 8) flow.events.shift();
+      if (event.type === "device_code" && typeof event.expiresInSeconds === "number" && Number.isFinite(event.expiresInSeconds)) {
+        flow.expiresAt = Math.min(flow.expiresAt, Date.now() + Math.max(0, event.expiresInSeconds) * 1000);
+        clearTimeout(flow.expiry);
+        flow.expiry = setTimeout(() => {
+          flow.controller.abort(new Error("Authentication code expired"));
+          flow.pending?.reject(new Error("Authentication code expired"));
+          deleteRuntimeAuthFlow(flow);
+        }, Math.max(0, flow.expiresAt - Date.now()));
+        (flow.expiry as { unref?: () => void }).unref?.();
+      }
       updateAuthFlow(flow);
     },
     });
@@ -551,44 +576,11 @@ function buildRuntimeAuthCard(def: ProviderDef, flow: RuntimeAuthFlow): Record<s
     { type: "TextBlock", text: `${def.name} — ${flow.authType === "oauth" ? "OAuth" : "API Key"} Login`, weight: "Bolder", size: "Medium" },
   ];
   const actions: Record<string, unknown>[] = [];
-  for (const event of flow.events) {
-    if (event.type === "auth_url") {
-      body.push({ type: "TextBlock", text: event.instructions || "Open the login page and complete authentication.", wrap: true });
-      actions.push({ type: "Action.OpenUrl", title: "Open login page ↗", url: event.url });
-    } else if (event.type === "device_code") {
-      body.push(
-        { type: "TextBlock", text: `Open ${event.verificationUri} and enter code:`, wrap: true },
-        { type: "TextBlock", text: event.userCode, wrap: true, weight: "Bolder", fontType: "Monospace" },
-      );
-      actions.push({ type: "Action.OpenUrl", title: "Open login page ↗", url: event.verificationUri });
-    } else if (event.type === "info") {
-      body.push({ type: "TextBlock", text: event.message, wrap: true, isSubtle: true });
-      for (const link of event.links ?? []) actions.push({ type: "Action.OpenUrl", title: link.label || "Open link ↗", url: link.url });
-    } else {
-      body.push({ type: "TextBlock", text: event.message, wrap: true, isSubtle: true });
-    }
-  }
-
+  // Provider text, URLs, codes and choice values may contain credentials. Keep
+  // them in the flow and reveal only through the authenticated direct response.
+  body.push({ type: "TextBlock", text: "Open the private authentication dialog to view provider instructions and enter credentials.", wrap: true });
   const prompt = flow.pending?.prompt;
-  if (prompt?.type === "select") {
-    body.push({
-      type: "Input.ChoiceSet",
-      id: "auth_value",
-      label: prompt.message,
-      style: "expanded",
-      choices: prompt.options.map((option) => ({ title: option.description ? `${option.label} — ${option.description}` : option.label, value: option.id })),
-      value: prompt.options[0]?.id || "",
-    });
-  } else if (prompt) {
-    body.push({
-      type: "Input.Text",
-      id: "auth_value",
-      label: prompt.message,
-      placeholder: prompt.placeholder || "",
-      style: prompt.type === "secret" ? "password" : "text",
-    });
-  }
-
+  actions.push({ type: "Action.Submit", title: "Open private authentication", data: { ...actionData, method: "runtime_present" } });
   if (prompt) {
     actions.push({ type: "Action.Submit", title: "Continue →", data: { ...actionData, method: "runtime_continue" } });
   } else if (flow.status === "running") {
@@ -600,9 +592,10 @@ function buildRuntimeAuthCard(def: ProviderDef, flow: RuntimeAuthFlow): Record<s
 
   return {
     type: "adaptive_card",
-    card_id: `login-runtime-${def.id}-${Date.now()}`,
+    card_id: `login-runtime-${flow.id}-${flow.actionId}`,
     schema_version: "1.5",
     state: "active",
+    expires_at: flow.expiresAt,
     fallback_text: `Authentication for ${def.name}.`,
     payload: { type: "AdaptiveCard", version: "1.5", body, actions },
   };
@@ -716,7 +709,7 @@ async function handleStep2(
   const def = getProviderDef(modelRuntime, registry, providerId);
   const name = def?.name || providerId;
 
-  if (method === "runtime_continue" || method === "runtime_check" || method === "runtime_cancel" || method === "oauth_check" || method === "api_key") {
+  if (method === "runtime_present" || method === "runtime_continue" || method === "runtime_check" || method === "runtime_cancel" || method === "oauth_check" || method === "api_key") {
     const authType = String(data.auth_type || (method === "api_key" ? "api_key" : "oauth")) as AuthType;
     if (authType !== "api_key" && authType !== "oauth") return { status: "error", message: "Invalid authentication type." };
     const owner = getRuntimeAuthOwner(session);
@@ -729,6 +722,25 @@ async function handleStep2(
       return { status: "error", message: "Authentication flow expired. Start again with /login." };
     }
     if (data.flow_id !== flow.id || data.action_id !== flow.actionId) return { status: "error", message: "Stale or foreign authentication submission. Use the latest card in the initiating session." };
+    if (method === "runtime_present") {
+      if (!privateAuthResponse.getStore()) return { status: "error", message: "Open authentication from its private web dialog." };
+      if (flow.status !== "running") return { status: "error", message: "Authentication flow ended. Start again with /login." };
+      const oldActionId = flow.actionId;
+      const card = buildRuntimeAuthCard(def!, flow); // Consume reveal and rotate continuation before returning.
+      const nextActionId = flow.actionId;
+      privateAuthResponse.getStore()!.rollback = () => {
+        if (flow.actionId === nextActionId && owner.flows.get(flowKey(providerId, authType)) === flow) flow.actionId = oldActionId;
+      };
+      const pending = flow.pending?.prompt;
+      const prompt = pending ? (({ signal: _signal, ...safe }) => safe)(pending) : null;
+      return {
+        status: "success", message: "Private authentication instructions.", contentBlocks: [card],
+        authPresentation: {
+          expires_at: flow.expiresAt, events: structuredClone(flow.events), prompt,
+          action_data: { intent: "login-step2", provider: providerId, auth_type: authType, flow_id: flow.id, action_id: flow.actionId },
+        },
+      };
+    }
     if (method === "runtime_cancel") {
       flow.actionId = randomUUID();
       flow.controller.abort(new Error("Authentication cancelled by user"));
@@ -738,6 +750,14 @@ async function handleStep2(
     }
 
     let previousVersion = flow.version;
+    const delivery = privateAuthResponse.getStore();
+    if (delivery) delivery.rollback = () => {
+      // Provider input cannot be undone after delivery. Fail closed rather than
+      // leave a running flow with no usable persisted continuation.
+      flow.controller.abort(new Error("Authentication presentation delivery failed"));
+      flow.pending?.reject(new Error("Authentication presentation delivery failed"));
+      deleteRuntimeAuthFlow(flow);
+    };
     if (method === "runtime_continue" || method === "oauth_check" || method === "api_key") {
       const value = String(data.auth_value ?? data.redirect_url ?? data.api_key ?? "");
       if (!flow.pending) return { status: "error", message: `**${name}** is not waiting for input. Use Check & Continue.` };
@@ -758,7 +778,15 @@ async function handleStep2(
       deleteRuntimeAuthFlow(flow);
       return { status: "error", message: `Authentication for **${name}** failed: ${flow.error || "unknown error"}` };
     }
-    return { status: "success", message: `Authentication for ${name}`, contentBlocks: [buildRuntimeAuthCard(def!, flow)] };
+    const card = buildRuntimeAuthCard(def!, flow);
+    const pending = flow.pending?.prompt;
+    const prompt = pending ? (({ signal: _signal, ...safe }) => safe)(pending) : null;
+    return { status: "success", message: `Authentication for ${name}`, contentBlocks: [card],
+      ...(privateAuthResponse.getStore() ? { authPresentation: {
+        expires_at: flow.expiresAt, events: structuredClone(flow.events), prompt,
+        action_data: { intent: "login-step2", provider: providerId, auth_type: authType, flow_id: flow.id, action_id: flow.actionId },
+      } } : {}),
+    };
   }
 
   if (method === "configure" || method === "custom") {
