@@ -87,7 +87,7 @@
       "semanticReaderOccurrences": 69
     },
     "docsDeploy": {
-      "referencedNames": 144,
+      "referencedNames": 145,
       "directReaderNames": 16,
       "directReaderOccurrences": 32,
       "helperReaderNames": 0,
@@ -1792,6 +1792,7 @@
             "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-packed-provider-auth.md",
             "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-provider-auth-ui-matrix.md",
             "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-provider-browser-matrix.md",
+            "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-radius-auth.md",
             "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-xai-meta-device.md",
             "docs/development.md"
           ],
@@ -4069,6 +4070,21 @@
           "files": [
             "runtime/scripts/test-vnc-disposable.sh",
             "scripts/audit-session-turn-management-regression.sh"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
+      "name": "PICLAW_RUN_RADIUS_AUTH_TESTS",
+      "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-radius-auth.md"
           ],
           "readerFiles": []
         }
