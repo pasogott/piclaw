@@ -49,6 +49,17 @@ export const MODERN_PRIVATE_IMPORTS = [
   `${MCP_PACKAGE}/dist/client.js`,
   `${AI_PACKAGE}/dist/auth/oauth/openai-chatgpt.js`,
 ] as const;
+export const REMOVED_100_IMPORTS = [
+  "@earendil-works/pi-agent-core/node",
+  "@earendil-works/pi-agent-core/harness/context",
+  "@earendil-works/pi-agent-core/harness/env/nodejs",
+  "@earendil-works/pi-agent-core/harness/session",
+  "@earendil-works/pi-agent-core/harness/session/testing",
+  "@earendil-works/pi-agent-core/session/testing",
+  "@earendil-works/pi-agent-core/experimental/pico3",
+  "@earendil-works/pi-agent-core/experimental/pico3/testing",
+] as const;
+const REMOVED_100_EXPORTS = ["AgentHarness", "ExecutionEnv", "Result", "MemorySessionRepo", "JsonlSessionRepo", "NodeExecutionEnv"] as const;
 export const MODERN_CODING_AGENT_EXPORTS = [
   "createAgentSession", "createAgentSessionRuntime", "ModelRuntime",
   "createMcpExtension", "createToolSearchExtension", "createCodemodeExtension",
@@ -67,6 +78,9 @@ const MODERN_CONTRACT_VERSION = "0.99.0";
 const EXACT_0991_VERSION = "0.99.1";
 const EXACT_0991_GIT_HEAD = "d86654abb8862e201933517d6f1fce9f88dd117f";
 const EXACT_0991_PROVIDER_RECEIPT_SHA256 = "09a7c902f5b7c8bd69f92b5416d496bfe1ba7d09447c6dd3fa6f236851faaea7";
+const EXACT_100_VERSION = "1.0.0";
+const EXACT_100_GIT_HEAD = "a13d35a742c6ef8462812a28fbe1d8c8b7431c32";
+const EXACT_100_PROVIDER_RECEIPT_SHA256 = "4c66f1e7d9276bc39207fb508bca0e0a17b09d71969753d5611ca42982a85e4d";
 const NODE_ENGINE = ">=22.19.0";
 const EXACT_0991_REGISTRY = {
   "@earendil-works/chord": ["7f6ba945b705a5ab48d25dbed39b253afcec68df", "sha512-4xyn0IBzJ+Xu/iOGi2hjXJGAR61QEhEWZsIqTDqr+GmItdquYwBO5jYFnqGiBaTqlY12/EpM7QHoEKSHbyvOug=="],
@@ -77,6 +91,17 @@ const EXACT_0991_REGISTRY = {
   "@earendil-works/pi-mcp": ["c2002b819a5d75d9cfa8091171580f794c205042", "sha512-YCFGPkmDzLwQuIzwfbP6Vuk/g/ukKpZhwTpbcfzomuI1Fkiu6hHRkOGwAqsO3G8cTkZWkM8vmOkFJjStQNC4qA=="],
   "@earendil-works/pi-telemetry": ["37b1fb0ce8c0ca2fe04363035a4b7aea29a9e8cb", "sha512-9PBPjGk+TXRtuMianpqBbHBpYpyKusESF6rwdmgD0WTZSTUQXhcKEO0hAINRLuSwy4V7yPvXV+EVV0ONY7mbpQ=="],
   "@earendil-works/pi-tui": ["f6f82a4792fabb4aabf310e082743d87accc90cc", "sha512-gZp0Guat96Fr1AuC/xqVz5B2lulZakp/PxD1lXx3lSgBdjiqmwYhJbcQ0HRrGAfy0WtMGn9b05RJr5qJf7oIuw=="],
+} as const satisfies Record<(typeof FAMILY_PACKAGES)[number], readonly [string, string]>;
+
+const EXACT_100_REGISTRY = {
+  "@earendil-works/chord": ["8807eee9a24f6ba4d40165c01ee0d71fe18aeb28", "sha512-BIfWfrByM0pKq6tfKYXuwx0ed2CvaqIM3EDA7Dps+fP+d3CiPWdlHi1cDsJC05llqKJoRz5//G0hz0yQwwjISQ=="],
+  "@earendil-works/pi-agent-core": ["85f539d807600de676919cc93d70df84e850a218", "sha512-bHFONjtEBDqiV+g1DmmtkSlfAaqHELr+XO+6I5Nah4gswwZrLJO4yZB/JjsnlI4AKWTayBLfgS6DCbeBBz9e2Q=="],
+  "@earendil-works/pi-ai": ["48afaafcffeafdb951bee89b25c69daf4985c725", "sha512-3/W1vdDaVtpeMd23ElvJC12HLA5yS/BGqqcXF+0SK082dN7cbgNcCwguTBRBC258Ke8SzSvUW1B75iAf8w8IxA=="],
+  "@earendil-works/pi-codemode": ["ce4cb7c805a0336c0453b80107e564620397e65a", "sha512-LPpFI4+T9NzDnhBDs15izWAolaoM8xnwqdziRd6Zx8BQeoEPvzefD2vMMzSyF0rOtq34TfQqkZ0ki16f6cGdMg=="],
+  "@earendil-works/pi-coding-agent": ["ae6346e0d5e2a7e2d1fdd177965cda781aa3c514", "sha512-/FtbxoSQU/mEv1QnichJjRjqteqaIaMWxmhB4G367+MwZfX7/DI5B9YAg5lqbN7nztFskBEtUSZ+FlmMBECtMw=="],
+  "@earendil-works/pi-mcp": ["6f08a86735e7a4801d725ccdfd9e6983d8c64aca", "sha512-rYra0aF5iPmJd+fsB+VBuqxWNABGJ3Iiyhg0CqIc/91ta2n7IvQmCp0Cac/YkUTNnvRsVZnjgAiBkRi6+ouWuw=="],
+  "@earendil-works/pi-telemetry": ["313db5570991402c73b2229ed9a50770d3cf1435", "sha512-WjNBj5TYIiPZFQEz2WlULcDwPLaKwIlmsKjVeYM+LJSbnSp38kWsHUJysIDGnu23IcLbKoPtywsvYfUJCeZePA=="],
+  "@earendil-works/pi-tui": ["5da2e1eb99844c864d3d0a49e7da2515e03b73df", "sha512-JsT7kXnpZA2YOtQu6RyriyxEO0eJIzPyfiH09bH+OLN5+s18HYkwaUD/tBkjhnSfMu6/50CQPRYJagzSP6HdPw=="],
 } as const satisfies Record<(typeof FAMILY_PACKAGES)[number], readonly [string, string]>;
 
 const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] as const;
@@ -94,7 +119,6 @@ export type AdmissionOptions = {
   readonly registryReceiptPath?: string;
   readonly providerReceiptPath?: string;
   readonly tarballDir?: string;
-  readonly nodePaths: readonly string[];
   readonly bunPath: string;
 };
 
@@ -180,6 +204,8 @@ export type RuntimeProbeReceipt = {
     readonly status: "rejected";
     readonly error: { readonly name: string; readonly code?: string; readonly message: string };
   }>;
+  readonly removedImports?: RuntimeProbeReceipt["privateDeepPaths"];
+  readonly removedCoreExports?: Record<string, string>;
   readonly privateDeepPaths?: ReadonlyArray<{
     readonly specifier: string;
     readonly admitted: false;
@@ -205,10 +231,10 @@ function usage(): string {
     "Usage:",
     "  bun scripts/check-earendil-package-admission.ts \\",
     "    --consumer-root <installed-consumer> --version <exact-version> \\",
-    "    --git-head <exact-40-char-sha> --node <node-path> [--node <node-path> ...] \\",
+    "    --git-head <exact-40-char-sha> \\",
     "    --bun <bun-path> [--registry-receipt <json>] [--provider-receipt <json>] [--tarball-dir <dir>]",
     "",
-    "The check is read-only and offline. --git-head is a caller-supplied metadata receipt;",
+    "The check is Bun-only, read-only and offline. --git-head is a caller-supplied metadata receipt;",
     "packed package.json files are checked when they contain gitHead, but npm commonly omits it.",
     "--registry-receipt and --provider-receipt are required for versions >=0.99.0 and optional for older history.",
   ].join("\n");
@@ -235,13 +261,12 @@ export function parseAdmissionArgs(args: readonly string[]): AdmissionOptions | 
   let providerReceiptPath: string | undefined;
   let tarballDir: string | undefined;
   let bunPath: string | undefined;
-  const nodePaths: string[] = [];
 
   for (let index = 0; index < args.length; index++) {
     const argument = args[index]!;
     if (argument === "--help" || argument === "-h") return { help: true };
     const name = argument.includes("=") ? argument.slice(0, argument.indexOf("=")) : argument;
-    if (!["--consumer-root", "--version", "--git-head", "--registry-receipt", "--provider-receipt", "--tarball-dir", "--node", "--bun"].includes(name)) {
+    if (!["--consumer-root", "--version", "--git-head", "--registry-receipt", "--provider-receipt", "--tarball-dir", "--bun"].includes(name)) {
       throw new Error(`unknown argument: ${argument}`);
     }
     const option = takeOptionValue(args, index, name);
@@ -264,8 +289,6 @@ export function parseAdmissionArgs(args: readonly string[]): AdmissionOptions | 
     } else if (name === "--tarball-dir") {
       if (tarballDir !== undefined) throw new Error("--tarball-dir may only be supplied once");
       tarballDir = resolve(option.value);
-    } else if (name === "--node") {
-      nodePaths.push(option.value);
     } else {
       if (bunPath !== undefined) throw new Error("--bun may only be supplied once");
       bunPath = option.value;
@@ -277,7 +300,6 @@ export function parseAdmissionArgs(args: readonly string[]): AdmissionOptions | 
   if (!EXACT_VERSION_RE.test(version)) throw new Error(`--version must be an exact semantic version, received: ${version}`);
   if (!gitHead) throw new Error("--git-head is required");
   if (!EXACT_GIT_HEAD_RE.test(gitHead)) throw new Error("--git-head must be an exact lowercase 40-character commit SHA");
-  if (nodePaths.length === 0) throw new Error("at least one --node path is required");
   if (!bunPath) throw new Error("--bun is required");
   if (modernContractRequired(version) && !registryReceiptPath) {
     throw new Error(`--registry-receipt is required for versions >=${MODERN_CONTRACT_VERSION}`);
@@ -294,7 +316,7 @@ export function parseAdmissionArgs(args: readonly string[]): AdmissionOptions | 
     ...(registryReceiptPath === undefined ? {} : { registryReceiptPath }),
     ...(providerReceiptPath === undefined ? {} : { providerReceiptPath }),
     ...(tarballDir === undefined ? {} : { tarballDir }),
-    nodePaths, bunPath,
+    bunPath,
   };
 }
 
@@ -335,6 +357,7 @@ export function validateProviderAuthReceipt(pathInput: string, version: string, 
   const path = realpathSync(resolve(pathInput));
   const bytes=readFileSync(path);
   if(version===EXACT_0991_VERSION&&createHash("sha256").update(bytes).digest("hex")!==EXACT_0991_PROVIDER_RECEIPT_SHA256) throw new Error("provider auth receipt hash differs from exact 0.99.1 receipt");
+  if(version===EXACT_100_VERSION&&createHash("sha256").update(bytes).digest("hex")!==EXACT_100_PROVIDER_RECEIPT_SHA256) throw new Error("provider auth receipt hash differs from exact 1.0.0 receipt");
   const parsed = readJsonObject(path, "provider auth receipt");
   if (parsed.version !== version || parsed.gitHead !== gitHead || !Array.isArray(parsed.providers)) throw new Error("provider auth receipt version/gitHead/providers mismatch");
   const providers = parsed.providers.map((raw, index) => {
@@ -362,8 +385,11 @@ export function validateRegistryReceipt(pathInput: string, version: string, gitH
     throw new Error(`cannot read registry receipt at ${path}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
   if (!Array.isArray(parsed)) throw new Error(`registry receipt must contain an array: ${path}`);
-  if (version !== EXACT_0991_VERSION) throw new Error(`modern package admission supports exact ${EXACT_0991_VERSION}, received ${version}`);
-  if (gitHead !== EXACT_0991_GIT_HEAD) throw new Error(`${EXACT_0991_VERSION} registry receipt requires gitHead ${EXACT_0991_GIT_HEAD}`);
+  const target = version === EXACT_100_VERSION
+    ? { gitHead: EXACT_100_GIT_HEAD, packages: EXACT_100_REGISTRY }
+    : version === EXACT_0991_VERSION ? { gitHead: EXACT_0991_GIT_HEAD, packages: EXACT_0991_REGISTRY } : null;
+  if (!target) throw new Error(`modern package admission supports exact ${EXACT_0991_VERSION} or ${EXACT_100_VERSION}, received ${version}`);
+  if (gitHead !== target.gitHead) throw new Error(`${version} registry receipt requires gitHead ${target.gitHead}`);
 
   const seen = new Set<string>();
   const packages = parsed.map((value, index) => {
@@ -380,7 +406,7 @@ export function validateRegistryReceipt(pathInput: string, version: string, gitH
     const dist = entry.dist;
     if (!dist || typeof dist !== "object" || Array.isArray(dist)) throw new Error(`registry receipt ${name} dist must be an object`);
     const distribution = dist as JsonObject;
-    const expected = EXACT_0991_REGISTRY[name as keyof typeof EXACT_0991_REGISTRY];
+    const expected = target.packages[name as keyof typeof target.packages];
     if (distribution.shasum !== expected[0]) throw new Error(`registry receipt ${name} shasum mismatch`);
     if (distribution.integrity !== expected[1]) throw new Error(`registry receipt ${name} integrity mismatch`);
     const tarball = expectedTarball(name, version);
@@ -493,6 +519,9 @@ function inspectInstalledTree(consumerRoot: string, version: string, gitHead: st
         if (existsSync(path)) {
           const metadata = readJsonObject(path, "installed dependency");
           if (metadata.name === SERVER_PACKAGE) throw new Error(`${SERVER_PACKAGE} must not be installed: ${packageDir}`);
+          if (version === EXACT_100_VERSION && metadata.name === "@earendil-works/pi-durable") {
+            throw new Error("pi-durable is outside current-loop admission and must not be installed");
+          }
           if (typeof metadata.name === "string" && FAMILY_PACKAGES.some((name) => name === metadata.name)) {
             if (metadata.version !== version) throw new Error(`nested family version drift: ${metadata.name} at ${packageDir}`);
             if (metadata.gitHead !== undefined && metadata.gitHead !== gitHead) throw new Error(`nested family gitHead drift: ${metadata.name}`);
@@ -643,10 +672,9 @@ function resolveExecutable(path: string, label: string): string {
   return absolutePath;
 }
 
-function writeProbePreload(kind:"node"|"bun",scratch:string):string{
-  const path=join(scratch,kind==="node"?"permission-preload.mjs":"guard-preload.ts");
-  const program=kind==="node"?`globalThis.__ADMISSION_ENFORCEMENT__={mode:"node-permission",networkDenied:!process.permission.has("net"),childProcessDenied:!process.permission.has("child"),networkAttempts:null,childProcessAttempts:null};\n`
-    :`import {mock} from "bun:test";const state={mode:"bun-preload",networkDenied:true,childProcessDenied:true,networkAttempts:0,childProcessAttempts:0};globalThis.__ADMISSION_ENFORCEMENT__=state;const net=()=>{state.networkAttempts++;throw Error("network disabled by admission preload")};const child=()=>{state.childProcessAttempts++;throw Error("child process disabled by admission preload")};globalThis.fetch=net;for(const name of ["node:http","node:https","node:net","node:tls","node:dgram"]){const m=await import(name);mock.module(name,()=>({...m,default:{...m.default,request:net,get:net,connect:net,createConnection:net,createSocket:net},request:net,get:net,connect:net,createConnection:net,createSocket:net}));}const cp=await import("node:child_process");mock.module("node:child_process",()=>({...cp,default:{...cp.default,spawn:child,spawnSync:child,exec:child,execSync:child,execFile:child,execFileSync:child,fork:child},spawn:child,spawnSync:child,exec:child,execSync:child,execFile:child,execFileSync:child,fork:child}));\n`;
+function writeProbePreload(scratch:string):string{
+  const path=join(scratch,"guard-preload.ts");
+  const program=`import {mock} from "bun:test";const state={mode:"bun-preload",networkDenied:true,childProcessDenied:true,networkAttempts:0,childProcessAttempts:0};globalThis.__ADMISSION_ENFORCEMENT__=state;const net=()=>{state.networkAttempts++;throw Error("network disabled by admission preload")};const child=()=>{state.childProcessAttempts++;throw Error("child process disabled by admission preload")};globalThis.fetch=net;for(const name of ["node:http","node:https","node:net","node:tls","node:dgram"]){const m=await import(name);mock.module(name,()=>({...m,default:{...m.default,request:net,get:net,connect:net,createConnection:net,createSocket:net},request:net,get:net,connect:net,createConnection:net,createSocket:net}));}const cp=await import("node:child_process");mock.module("node:child_process",()=>({...cp,default:{...cp.default,spawn:child,spawnSync:child,exec:child,execSync:child,execFile:child,execFileSync:child,fork:child},spawn:child,spawnSync:child,exec:child,execSync:child,execFile:child,execFileSync:child,fork:child}));Bun.spawn=child;Bun.spawnSync=child;Bun.connect=net;Bun.listen=net;Bun.serve=net;Bun.udpSocket=net;globalThis.WebSocket=class{constructor(){net();}};\n`;
   writeFileSync(path,program);return path;
 }
 
@@ -748,6 +776,20 @@ if (${JSON.stringify(modern)}) {
     }
   }
 }
+if (${JSON.stringify(version === EXACT_100_VERSION)}) {
+  const core = await import("@earendil-works/pi-agent-core");
+  if (typeof core.Agent !== "function") throw new Error("current-loop Agent export missing");
+  receipt.removedCoreExports = Object.fromEntries(${JSON.stringify(REMOVED_100_EXPORTS)}.map(name => [name, typeof core[name]]));
+  receipt.removedImports = [];
+  for (const specifier of ${JSON.stringify(REMOVED_100_IMPORTS)}) {
+    try {
+      import.meta.resolve(specifier);
+      receipt.removedImports.push({ specifier, status: "resolved" });
+    } catch (error) {
+      receipt.removedImports.push({ specifier, status: "rejected", phase: "resolution", error: serializeError(error) });
+    }
+  }
+}
 console.log(${JSON.stringify(PROBE_MARKER)} + JSON.stringify(receipt));
 `;
 }
@@ -773,6 +815,8 @@ export type RawProbeReceipt = {
   providerAuth?: Array<{ id?: string; name?: string; apiKey?: boolean; oauth?: boolean }>;
   sourceOnlyDeepPaths?: RawRejectedPath[];
   privateDeepPaths?: RawRejectedPath[];
+  removedImports?: RawRejectedPath[];
+  removedCoreExports?: Record<string, string>;
 };
 
 export function assertProbeRuntime(kind: "node" | "bun", runtime: RuntimeProbeReceipt["actualRuntime"]): void {
@@ -831,9 +875,9 @@ function assertFunctionExports(kind: "node" | "bun", label: string, values: Reco
 }
 
 function executeRuntimeProbe(kind:"node"|"bun",executableInput:string,consumerRoot:string,scratch:string,version:string):RawProbeReceipt {
-  const executable=resolveExecutable(executableInput,kind);mkdirSync(scratch,{recursive:true});const preload=writeProbePreload(kind,scratch);
-  const args=kind==="node"?[executable,"--permission",`--allow-fs-read=${consumerRoot}`,`--allow-fs-read=${scratch}`,`--allow-fs-write=${scratch}`,"--import",preload,"--input-type=module","--eval",probeProgram(version)]
-    :[executable,"--preload",preload,"--eval",probeProgram(version)];
+  if (kind !== "bun") throw new Error("Package admission execution is Bun-only; Node receipts are historical");
+  const executable=resolveExecutable(executableInput,kind);mkdirSync(scratch,{recursive:true});const preload=writeProbePreload(scratch);
+  const args=[executable,"--preload",preload,"--eval",probeProgram(version)];
   const result=Bun.spawnSync(args,{cwd:consumerRoot,env:createProbeEnvironment(scratch,executable),stdout:"pipe",stderr:"pipe",timeout:30_000});
   const stdout=result.stdout.toString(),stderr=result.stderr.toString();
   if(result.exitCode!==0)throw new Error(`${kind} import probe failed with exit ${result.exitCode}: ${stderr||stdout}`);
@@ -844,20 +888,17 @@ function executeRuntimeProbe(kind:"node"|"bun",executableInput:string,consumerRo
 export function runRawRuntimeProbeForTests(kind:"node"|"bun",executable:string,consumerRoot:string,version:string):RawProbeReceipt {
   const scratch=mkdtempSync(join(tmpdir(),"earendil-raw-probe-"));try{return executeRuntimeProbe(kind,executable,realpathSync(consumerRoot),scratch,version);}finally{rmSync(scratch,{recursive:true,force:true});}
 }
-function runRuntimeProbe(kind: "node" | "bun", executableInput: string, consumerRoot: string, scratch: string, version: string, providerReceipt?: ProviderAuthReceipt): RuntimeProbeReceipt {
+function runRuntimeProbe(kind: "bun", executableInput: string, consumerRoot: string, scratch: string, version: string, providerReceipt?: ProviderAuthReceipt): RuntimeProbeReceipt {
   const executable = resolveExecutable(executableInput, kind);
   const raw = executeRuntimeProbe(kind,executable,consumerRoot,scratch,version);
   if (raw.rootImportError) throw new Error(`${kind} could not import ${CODING_AGENT_PACKAGE}: ${raw.rootImportError.message ?? raw.rootImportError.name ?? "unknown error"}`);
   if (!raw.actualRuntime || !raw.rootExports) throw new Error(`${kind} import probe returned an incomplete receipt`);
   const enforcement=raw.sideEffectEnforcement;
-  if(enforcement?.mode!==(kind==="node"?"node-permission":"bun-preload")||enforcement.networkDenied!==true||enforcement.childProcessDenied!==true
-    ||(kind==="node"?(enforcement.networkAttempts!==null||enforcement.childProcessAttempts!==null):(!Number.isSafeInteger(enforcement.networkAttempts)||!Number.isSafeInteger(enforcement.childProcessAttempts)))) throw new Error(`${kind} admission side-effect enforcement is incomplete`);
+  if(enforcement?.mode!=="bun-preload"||enforcement.networkDenied!==true||enforcement.childProcessDenied!==true
+    ||enforcement.networkAttempts!==0||enforcement.childProcessAttempts!==0) throw new Error(`${kind} admission requires complete enforcement and zero network/child-process attempts`);
   assertProbeRuntime(kind, raw.actualRuntime);
 
   const modern = modernContractRequired(version);
-  if (modern && kind === "node" && !versionAtLeast(raw.actualRuntime.node!, "22.19.0")) {
-    throw new Error(`Node ${raw.actualRuntime.node} does not satisfy ${NODE_ENGINE}`);
-  }
   const codingExports = modern ? MODERN_CODING_AGENT_EXPORTS : MODERN_CODING_AGENT_EXPORTS.slice(0, 3);
   assertFunctionExports(kind, CODING_AGENT_PACKAGE, raw.rootExports, codingExports);
   const sourceOnlyDeepPaths = checkedRejectedPaths(
@@ -879,6 +920,11 @@ function runRuntimeProbe(kind: "node" | "bun", executableInput: string, consumer
     throw new Error(`${kind} ${AI_PACKAGE}/bun-oauth registerBunOAuthFlows must import and complete without provider calls`);
   }
   const privateDeepPaths = checkedRejectedPaths(kind, raw.privateDeepPaths, MODERN_PRIVATE_IMPORTS, "private");
+  const removedImports = version === EXACT_100_VERSION
+    ? checkedRejectedPaths(kind, raw.removedImports, REMOVED_100_IMPORTS, "private") : undefined;
+  if (version === EXACT_100_VERSION && REMOVED_100_EXPORTS.some(name => raw.removedCoreExports?.[name] !== "undefined")) {
+    throw new Error("1.0.0 removed core exports differ from exact contract");
+  }
   if (!providerReceipt || JSON.stringify(raw.providerAuth) !== JSON.stringify(providerReceipt.providers)) throw new Error(`${kind} provider auth inventory differs from exact receipt`);
   return {
     requestedRuntime: kind,
@@ -892,6 +938,7 @@ function runRuntimeProbe(kind: "node" | "bun", executableInput: string, consumer
     providerAuth: providerReceipt.providers,
     sourceOnlyDeepPaths,
     privateDeepPaths,
+    ...(removedImports ? { removedImports, removedCoreExports: raw.removedCoreExports } : {}),
   };
 }
 
@@ -899,12 +946,10 @@ export function runEarendilPackageAdmission(options: AdmissionOptions): Earendil
   if (modernContractRequired(options.version) && !options.tarballDir) throw new Error(`tarball directory is required for versions >=${MODERN_CONTRACT_VERSION}`);
   if (!EXACT_VERSION_RE.test(options.version)) throw new Error(`version must be exact: ${options.version}`);
   if (!EXACT_GIT_HEAD_RE.test(options.gitHead)) throw new Error("gitHead must be an exact lowercase 40-character commit SHA");
-  if (options.nodePaths.length === 0) throw new Error("at least one Node runtime is required");
   const installed = inspectInstalledConsumer(options);
   const scratch = mkdtempSync(join(tmpdir(), "earendil-package-admission-"));
   try {
     const runtimes = [
-      ...options.nodePaths.map((nodePath, index) => runRuntimeProbe("node", nodePath, installed.consumerRoot, join(scratch, `node-${index}`), options.version, installed.providerAuthReceipt)),
       runRuntimeProbe("bun", options.bunPath, installed.consumerRoot, join(scratch, "bun"), options.version, installed.providerAuthReceipt),
     ];
     return {
