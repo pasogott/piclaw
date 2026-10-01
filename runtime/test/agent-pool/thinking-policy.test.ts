@@ -269,7 +269,11 @@ test('side-session synchronization retains target effective override separately 
     side = (await fixture({ settings, manager: sm })).session;
     return { cancelled: false };
   } };
-  await AgentSessionManager.prototype.syncSideSessionFromMain.call({ options: {}, disposeSideRuntimeAfterError: async () => {} } as any, main.session, sideRuntime as any);
+  const manager = new AgentSessionManager({
+    pool: new Map(), sidePool: new Map(), modelRuntime: main.runtime, settingsManager: settings,
+    createDefaultTools: () => [], bindSession: async () => {}, ensureBranchRegistration: () => {},
+  });
+  await manager.syncSideSessionFromMain(main.session, sideRuntime as any);
   expect(side.thinkingLevel).toBe('medium');
   expect(getSessionThinkingPolicy(side)?.preferred_level).toBe('high');
   await side.setModel(models[2]); expect(side.thinkingLevel).toBe('high');
