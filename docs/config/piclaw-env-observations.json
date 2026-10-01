@@ -1787,6 +1787,7 @@
           "semanticReaders": 0,
           "files": [
             ".github/workflows/e2e.yml",
+            "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-auth-recording-boundaries.md",
             "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-packaged-cli-auth.md",
             "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-packed-provider-auth.md",
             "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-provider-auth-ui-matrix.md",
@@ -4028,6 +4029,7 @@
           "files": [
             ".github/workflows/ci.yml",
             "docs/audio-attachment-preview.md",
+            "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-auth-recording-boundaries.md",
             "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-provider-auth-ui-matrix.md",
             "docs/development.md",
             "docs/performance/browser-idle-cpu-1352.md",
