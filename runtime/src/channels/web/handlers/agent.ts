@@ -65,6 +65,7 @@ import { broadcastInteractionUpdated } from "../cards/interaction-service.js";
 import { storeAgentTurn } from "../messaging/agent-message-store.js";
 import { finalizeSuccessfulProcessChatRun, persistIntermediateProcessChatTurn } from "../runtime/process-chat-finalization-runtime.js";
 import { createProcessChatStreamingRuntime } from "../runtime/process-chat-streaming-runtime.js";
+import { getMessageByRowId, promoteCompletedAgentReply } from "../../../db/messages.js";
 import { runProcessChatPreflight } from "../runtime/process-chat-preflight-runtime.js";
 import {
   MODEL_COMMAND_TYPES,
@@ -1787,6 +1788,7 @@ async function processAuthorisedChat(
     return persistVisibleFailureOutcome(markerBase, visibleDetail, options);
   };
 
+  let completedReplyRowId: number | null = null;
   const finalizeSuccessfulRun = async () => finalizeSuccessfulProcessChatRun({
     channel,
     emitter: trackedEmitter,
@@ -1829,6 +1831,7 @@ async function processAuthorisedChat(
       // consume their corresponding placeholder.
       const isFirstTurn = turnCount === 0;
       turnCount++;
+      completedReplyRowId = null;
       if (turn.text || turn.attachments.length > 0) {
         hadIntermediateOutput = true;
         const stored = persistIntermediateProcessChatTurn({
@@ -1844,6 +1847,8 @@ async function processAuthorisedChat(
           turnKind: turn.turnKind,
           cause: turn.cause,
           followedByToolUse: turn.followedByToolUse,
+          terminal: turn.terminal,
+          textPhase: turn.textPhase,
           buildThinkingRefBlocks: streamRuntime.buildThinkingRefBlocks,
           consumePersistedPreviewsForRow: streamRuntime.consumePersistedPreviewsForRow,
         });
@@ -1858,6 +1863,9 @@ async function processAuthorisedChat(
           });
         } else {
           persistedIntermediateOutput = true;
+          if (turn.terminal === true && turn.cause === "completed_boundary" && !turn.followedByToolUse) {
+            completedReplyRowId = stored;
+          }
         }
       }
     },
@@ -2264,6 +2272,12 @@ async function processAuthorisedChat(
   const hasOutput = !!(output.result || finalAttachments.length > 0);
   const finalDraft = channel.getBuffer(turnId, "draft");
   const hasDraftFallback = typeof finalDraft?.text === "string" && finalDraft.text.trim().length > 0;
+  const promotedCompletedReply = !hasOutput && completedReplyRowId !== null
+    && promoteCompletedAgentReply(chatJid, completedReplyRowId);
+  if (promotedCompletedReply && completedReplyRowId !== null) {
+    const updated = getMessageByRowId(chatJid, completedReplyRowId);
+    if (updated) channel.interactionBroadcaster.broadcastInteractionUpdated(updated);
+  }
   const finalized = hasOutput
     ? storeAgentTurn(channel, emitter, {
         chatJid,
@@ -2286,7 +2300,9 @@ async function processAuthorisedChat(
           interaction.data?.thread_id ?? resolvedThreadRootId,
         ),
       })
-    : hasDraftFallback
+    : promotedCompletedReply
+      ? true
+      : hasDraftFallback
       ? publishDraftFallback("empty-final")
       : persistedIntermediateOutput
         ? true
