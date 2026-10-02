@@ -1,5 +1,19 @@
 # Evidence register
 
+## Selected Pi 1.0.0
+
+| Evidence | Scope / state |
+|---|---|
+| [Durable architecture and HC/PC crosswalk](earendil-100-durable-crosswalk.md) | 25 HC and 20 PC intents; exact spec/archive references, prior paused Memory probe, explicit source-only gaps and retained host authority. Proposal, no production activation or new semantic acceptance. |
+| [Current-loop migration](earendil-100-current-loop-progress.md) | Independent #1497 migration and frozen 0.99.1 consumer; subsequent merge recorded in the ADR index. |
+
+## Completed 0.99.1 assessments
+
+| Evidence | Scope / state |
+|---|---|
+| [Inactive Harness](earendil-0991-harness-assessment.md) | Completed #1452; retained exact-version evidence, not pi-durable qualification. |
+| [Pico3](earendil-0991-pico3-assessment.md) | Completed #1453; experimental evidence and unverified host boundaries retained. |
+
 ## Published 0.87.0 candidate
 
 | Evidence | Scope / state |

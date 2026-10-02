@@ -1,8 +1,8 @@
 # ADR: Earendil-aligned agent harness integration
 
-Status: **Harness architecture proposed; released 0.85.1 current-loop migration merged and installed**
+Status: **Pi 1.0.0 current-loop migration merged; pi-durable successor proposed, inactive and awaiting architecture approval**
 
-This ADR proposes a future service-plane coordinator around Earendil Harness. The original assessment changed documentation only. The separately authorised 0.85.1 work updated Piclaw's existing coding-agent loop and inactive compatibility evidence; it did not activate this proposed replacement architecture. See the [A/B/C/D work sequence](evidence/earendil-0851-work-sequence.md).
+This ADR proposes a future service-plane coordinator around Earendil durable execution. The [1.0.0 architecture and 45-row HC/PC crosswalk](evidence/earendil-100-durable-crosswalk.md) supersedes the old lane/Drive/Gate design for the selected target. Current-loop migration [#1497](https://github.com/rcarmo/piclaw/pull/1497) merged independently at `5cc738d7c`; neither that merge nor this assessment deploys or activates pi-durable. Original chapters and versioned evidence retain their historical API assumptions and results.
 
 ## Decision record
 
@@ -11,14 +11,14 @@ This ADR proposes a future service-plane coordinator around Earendil Harness. Th
 | Decision owner | Rui Carmo |
 | Assessment baseline | Piclaw `v2.13.2` |
 | Baseline commit | `0afd3ae645c423bed82deef80c343bcaa6f31d4d` |
-| Earendil runtime selection | The #1381 upgrade candidate selects exact published `0.87.1` for the existing loop; Harness remains inactive. Local installation awaits separate approval. |
-| Earendil released evidence | 0.85.1 at `d981de1229ef899957bbe968bc8dcda02a21f477`; historical 0.87.0 candidate at `16787ad5b2dc748047f314ca1bfe7708f30f54f3`; the #1381 0.87.1 package candidate targets `f07218c4d4bbc12bef056a7058c3dd49dfe41abe`. None activates Harness. |
+| Earendil runtime selection | Exact published Pi `1.0.0`, gitHead `a13d35a742c6ef8462812a28fbe1d8c8b7431c32`, for the existing loop. Merged through #1497; deployed version is outside this source assessment. |
+| Earendil released evidence | Versioned 0.84–0.99.1 receipts remain historical. #1452/#1453 are completed 0.99.1 assessments; no historical result is relabelled as 1.0.0. Current-loop and durable qualification are separate. |
 | Earendil planning tip | `main` at `e4c75a73222ae2c72abb5f5314fa35ee8effc508`; historical planning evidence only, superseded for release-candidate assessment by published 0.87.0 |
 | Historical implementation capture | `dev` / draft #8963 at `d14d6b22327d545d6a253f932165b63e48d7f9c8`; spec blob `c7c18c74730d4971f8ca004924e44c7fbe236f25`, SHA-256 `1b200eb7b4255d5afd71e17bb4cf54f82e2c5d1d1e24ae87ba97363838251785` |
 | Evidence timestamps | Original capture: 2026-09-01 18:30 UTC; 0.85.1 follow-up: 2026-09-17–18; 0.87.0 candidate assessment: 2026-09-21; observations apply only to their recorded revisions |
-| Document state | A/B merged; C broader inactive HC evidence complete; D produced a historical 0.87.0 assessment. #1381 prepares a 0.87.1 current-loop upgrade; Harness architecture approval remains explicit. |
-| Production changes | The isolated #1381 worktree pins current-loop dependencies to `0.87.1`; the running installation is unchanged until an approved deploy. No production Harness importer, activation or authority change. |
-| Final decision | Proposed: select direct Earendil adoption with a selected-version test implementation first |
+| Document state | #1493 maps 25 HC and 20 PC intents to pi-durable 1.0.0. Source contracts and the prior paused Memory probe are distinct; #1494 owns fresh semantics/storage qualification. |
+| Production changes | Current-loop source dependencies select 1.0.0. This documentation adds no runtime importer, dependency, schema, activation or service-authority transfer. No installation/restart. |
+| Final decision | Proposed: public pi-durable execution with Piclaw service authority retained; architecture approval before production implementation. |
 
 ## Problem
 
@@ -49,13 +49,16 @@ The assessment covers the complete lifecycle of agent work:
 9. SSE and web status projection;
 10. extension and add-on integration points.
 
-The original assessment produced this ADR, evidence tables and a proposed semantic suite. Its 0.84.4 scaffold and earlier `dev` observations remain historical. Published 0.85.1 now supplies the public constructor, Context/tool and lane APIs used by the inactive evidence. Session watch remains a concrete stub; raw Storage exports and production Harness approval remain separate gates. This ADR does not activate a production Harness runner or migrate Harness persistence.
+The original assessment produced this ADR, evidence tables and a proposed semantic suite. Its 0.84.4 scaffold, earlier `dev` observations and 0.85–0.99.1 lane APIs remain historical. Pi-durable 1.0.0 exports stores and functioning bounded watches; these do not establish backend parity, host ownership or crash recovery. It has no public lane Drive or `Gate.admit()`. No production persistence is migrated here.
 
 ## Published 0.85.1 admission follow-up
 
-[Package admission and corrected catalogue evidence](evidence/earendil-0851-admission.md) supersedes the old requirement that pi-server become transitive. Fresh supported root imports pass in Bun and real Node, including the minimum declared Node version. The current loop now uses 0.85.1; Harness activation is a separate approval. Historical negative evidence below is preserved.
+[Package admission and corrected catalogue evidence](evidence/earendil-0851-admission.md) supersedes the old requirement that pi-server become transitive. Fresh supported root imports pass in Bun and real Node, including the minimum declared Node version. The 0.85.1 loop migration was subsequently superseded; Harness activation remains a separate approval. Historical negative evidence below is preserved.
 
 ## Chapters and evidence
+
+- [Pi 1.0.0 durable architecture, authority and complete HC/PC crosswalk](evidence/earendil-100-durable-crosswalk.md) — current successor proposal; source evidence, no activation
+- [Pi 1.0.0 current-loop migration](evidence/earendil-100-current-loop-progress.md) — independent merged migration
 
 - [Assessment method and quality bar](01-assessment-method.md)
 - [Bug and regression corpus](02-regression-corpus.md)
@@ -91,12 +94,12 @@ The index is the ADR decision record. Chapters hold the assessment and design an
 
 ## Proposed decision
 
-Select the direct-adoption architecture in [`evidence/alternatives-and-migration.md`](evidence/alternatives-and-migration.md), starting with a selected-version test implementation:
+Use the [pi-durable 1.0.0 proposal](evidence/earendil-100-durable-crosswalk.md) for the next architecture decision:
 
-- Piclaw retains authenticated acceptance, canonical source order, operation identity, exact cancellation, timeline/media persistence, scheduler/delivery policy, terminal disposition, frontier and restart reconciliation.
-- Earendil owns transcript execution, model/tool lifecycle, execution compaction and execution recovery. Harness v3's entries, typed values/lists, immutable operation results and usage ledger are the proposed execution model; 0.84 captures remain historical, and 0.85.1 supplies the selected inactive compatibility surface. The old `dev`/PR #8963 capture is not the current candidate.
-- Piclaw imports no current agent orchestration into the replacement path. Piclaw service actions use reviewed service-plane ports; execution uses Earendil's exported lower-level harness/session/model/tool/environment contracts directly, never private coding-agent factories.
-- One semantic suite runs against deterministic gated fixtures and a selected real constructor. It covers explicit Context propagation, one lane-owned Drive, `Gate.admit()` ordering, unknown effect outcomes, tool invocation identity, selected storage migration, host ownership and backend conformance. Piclaw updates its latent boundaries when Earendil types change; backward source compatibility is not a goal.
-- Production remains on the current Piclaw loop with Earendil `0.85.1`. PR C's broader inactive HC work is release-pinned; PR D reassesses later releases. No exact-`dev` adoption or production Harness activation is part of C.
+- Piclaw retains EF-S01/02/05/07/08 acceptance, source order, exact cancellation, atomic terminal settlement, frontier, delivery and projection fences.
+- Durable tasks, submissions, entries and documents own execution after host authorisation. No lane/Drive/Gate or immutable usage-row equivalence is assumed.
+- Paused recovery remains effect-denied until every resumable subtree is authorised. Progress calls can start recovered work; bounded watches supply observations only.
+- Current production orchestration is not imported into the replacement path. Execution uses public package contracts; Piclaw ports retain service-plane responsibilities.
+- #1494 qualifies fresh Bun-only storage/semantics after design approval. Historical 0.99.1 receipts remain separate. Production implementation, activation and deployment require explicit approval.
 
-Rui's architecture approval is required before M1 or production Harness implementation. Existing current-loop migration authorisation does not grant that approval. [`evidence/future-effector-specifications.md`](evidence/future-effector-specifications.md) is a documentation-only specification of contracts, fakes and later implementation slices; its TypeScript blocks are illustrative.
+Rui's architecture approval is required before M1 or production durable implementation. Current-loop migration authorisation does not grant it. The original [effector specifications](evidence/future-effector-specifications.md) retain service invariants, but their legacy execution correlations need the versioned migration identified in the crosswalk.
