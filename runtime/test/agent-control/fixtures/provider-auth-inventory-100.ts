@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const manifest = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.resolve("@earendil-works/pi-ai"))), "utf8"));
-if (manifest.version !== "0.99.1") throw new Error("Exact public pi-ai inventory target required");
+if (manifest.version !== "1.0.0") throw new Error("Exact public pi-ai inventory target required");
 
 // Metadata only. Do not call login, refresh, resolve, check or provider inference.
 const providers = builtinProviders().map(provider => ({
@@ -20,7 +20,7 @@ const customProviders = getProviderDefs().filter(provider => provider.isCustom).
   return { id: provider.id, authMode: requiresApiKey ? "custom_api_key" : "custom_no_key", requiresApiKey };
 });
 console.log(JSON.stringify({
-  version: manifest.version, gitHead: "d86654abb8862e201933517d6f1fce9f88dd117f",
+  version: manifest.version, gitHead: "a13d35a742c6ef8462812a28fbe1d8c8b7431c32",
   source: "public_builtinProviders_auth_definitions", methodsExecuted: false,
   providers, customProviders,
   externalIdentityRoutes: [

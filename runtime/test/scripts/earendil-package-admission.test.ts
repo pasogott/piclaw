@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   cpSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -19,6 +18,7 @@ import {
   MCP_ROOT_EXPORTS,
   MODERN_CODING_AGENT_EXPORTS,
   MODERN_PRIVATE_IMPORTS,
+  REMOVED_100_IMPORTS,
   assertPrivateImportRejection,
   assertProbeRuntime,
   assertSourceOnlyRejection,
@@ -54,11 +54,11 @@ function materializeConsumer(source = fixtureRoot): string {
   return consumerRoot;
 }
 
-function materializeRegistry(update?: (value: Array<Record<string, any>>) => void): string {
+function materializeRegistry(update?: (value: Array<Record<string, any>>) => void, source = registryFixture): string {
   const scratch = mkdtempSync(join(tmpdir(), "earendil-registry-test-"));
   scratchRoots.push(scratch);
   const path = join(scratch, "registry.json");
-  const value = JSON.parse(readFileSync(registryFixture, "utf8")) as Array<Record<string, any>>;
+  const value = JSON.parse(readFileSync(source, "utf8")) as Array<Record<string, any>>;
   update?.(value);
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
   return path;
@@ -75,6 +75,68 @@ function updateJson(path: string, update: (value: Record<string, any>) => void):
 }
 
 describe("Earendil package admission checker", () => {
+  test("checks 1.0.0 public removal by resolution and rejects an installed durable alias", () => {
+    const consumerRoot = materializeConsumer(modernFixtureRoot);
+    const version = "1.0.0", gitHead = "a13d35a742c6ef8462812a28fbe1d8c8b7431c32";
+    updateJson(join(consumerRoot, "package.json"), manifest => { manifest.dependencies[CODING_AGENT_PACKAGE] = version; });
+    for (const name of FAMILY_PACKAGES) updateJson(manifestPath(consumerRoot, name), manifest => { manifest.version = version; });
+    const coreManifest = manifestPath(consumerRoot, "@earendil-works/pi-agent-core");
+    const coreRoot = resolve(coreManifest, "..");
+    mkdirSync(join(coreRoot, "dist"), { recursive: true });
+    writeFileSync(join(coreRoot, "dist/index.js"), "export class Agent {}\n");
+    updateJson(coreManifest, manifest => { manifest.exports = { ".": { import: "./dist/index.js" } }; });
+    const options = { consumerRoot, version, gitHead, registryReceiptPath: join(fixturesRoot, "registry-1.0.0.json"), providerReceiptPath: join(fixturesRoot, "provider-auth-1.0.0.json") };
+    expect(inspectInstalledConsumer(options).packages).toHaveLength(8);
+    const receipt = runRawRuntimeProbeForTests("bun", process.execPath, consumerRoot, version);
+    expect(receipt.removedImports?.map(row => row.specifier)).toEqual([...REMOVED_100_IMPORTS]);
+    for (const entry of receipt.removedImports!) expect(() => assertPrivateImportRejection("bun", entry)).not.toThrow();
+    expect(Object.values(receipt.removedCoreExports!)).toEqual(Array(6).fill("undefined"));
+    updateJson(coreManifest, manifest => { manifest.exports["./node"] = { import: "./dist/index.js" }; });
+    const exposed = runRawRuntimeProbeForTests("bun", process.execPath, consumerRoot, version);
+    expect(() => assertPrivateImportRejection("bun", exposed.removedImports![0]!)).toThrow("export resolution");
+    const alias = join(consumerRoot, "node_modules/durable-alias");
+    mkdirSync(alias);
+    writeFileSync(join(alias, "package.json"), JSON.stringify({ name: "@earendil-works/pi-durable", version }));
+    expect(() => inspectInstalledConsumer(options)).toThrow("outside current-loop admission");
+  });
+
+  test("validates 1.0.0 receipts separately and rejects drift without admitting durable", () => {
+    const version = "1.0.0", gitHead = "a13d35a742c6ef8462812a28fbe1d8c8b7431c32";
+    const registry = join(fixturesRoot, "registry-1.0.0.json");
+    const providers = join(fixturesRoot, "provider-auth-1.0.0.json");
+    const receipt = validateRegistryReceipt(registry, version, gitHead);
+    expect(receipt.packages).toHaveLength(8);
+    expect(receipt.packages.every(row => row.version === version && row.gitHead === gitHead)).toBeTrue();
+    expect(receipt.packages.some(row => String(row.name).includes("pi-durable"))).toBeFalse();
+    expect(validateProviderAuthReceipt(providers, version, gitHead).providers).toHaveLength(42);
+    expect(() => validateRegistryReceipt(registryFixture, version, gitHead)).toThrow("version mismatch");
+    expect(() => validateProviderAuthReceipt(providerFixture, version, gitHead)).toThrow("hash differs");
+    for (const [field, bad] of [["shasum", "a".repeat(40)], ["integrity", "sha512-bad"], ["tarball", "https://example.invalid/archive"]]) {
+      const changed = materializeRegistry(rows => { rows[0]!.dist[field!] = bad; }, registry);
+      expect(() => validateRegistryReceipt(changed, version, gitHead)).toThrow(`${field} mismatch`);
+    }
+    expect(() => validateRegistryReceipt(materializeRegistry(rows => rows.pop(), registry), version, gitHead)).toThrow("missing packages");
+    expect(() => validateRegistryReceipt(materializeRegistry(rows => rows.push(rows[0]!), registry), version, gitHead)).toThrow("duplicate package");
+    expect(() => validateRegistryReceipt(materializeRegistry(rows => { rows[0]!.name = "@earendil-works/pi-durable"; }, registry), version, gitHead)).toThrow("extra package");
+  });
+
+  test("admits the synthetic Bun consumer with no Node runtime configured", () => {
+    const consumerRoot = materializeConsumer();
+    const receipt = runEarendilPackageAdmission({ consumerRoot, version: VERSION, gitHead: GIT_HEAD, bunPath: process.execPath });
+    expect(receipt.runtimes.map(row => row.requestedRuntime)).toEqual(["bun"]);
+    expect(receipt.admitted).toBeTrue();
+    const agent = join(consumerRoot, "node_modules", ...CODING_AGENT_PACKAGE.split("/"), "dist/index.js");
+    writeFileSync(agent, `try { Bun.spawnSync(["true"]); } catch {}\n${readFileSync(agent, "utf8")}`);
+    expect(() => runEarendilPackageAdmission({ consumerRoot, version: VERSION, gitHead: GIT_HEAD, bunPath: process.execPath }))
+      .toThrow("zero network/child-process attempts");
+  });
+
+  test("rejects Node execution before resolving or launching any executable", () => {
+    expect(() => parseAdmissionArgs(["--node", "/does/not/exist"])).toThrow("unknown argument");
+    expect(() => runRawRuntimeProbeForTests("node", "/does/not/exist", materializeConsumer(), VERSION))
+      .toThrow("Bun-only");
+  });
+
   test("rejects Bun posing as Node and checks the requested runtime family", () => {
     const node = { execPath: "/node", release: "node", version: "v22.19.0", node: "22.19.0" };
     const bun = { ...node, execPath: "/bun", bun: "1.4.1" };
@@ -108,14 +170,11 @@ describe("Earendil package admission checker", () => {
       "--consumer-root", "./consumer",
       `--version=${VERSION}`,
       "--git-head", GIT_HEAD,
-      "--node=/opt/node-22/bin/node",
-      "--node", "/opt/node-24/bin/node",
       "--bun", "/opt/bun/bin/bun",
     ])).toEqual({
       consumerRoot: resolve("./consumer"),
       version: VERSION,
       gitHead: GIT_HEAD,
-      nodePaths: ["/opt/node-22/bin/node", "/opt/node-24/bin/node"],
       bunPath: "/opt/bun/bin/bun",
     });
 
@@ -123,14 +182,12 @@ describe("Earendil package admission checker", () => {
       "--consumer-root", "./consumer",
       "--version", "^0.87.1",
       "--git-head", GIT_HEAD,
-      "--node", "/opt/node/bin/node",
       "--bun", "/opt/bun/bin/bun",
     ])).toThrow("--version must be an exact semantic version");
     expect(() => parseAdmissionArgs([
       "--consumer-root", "./consumer",
       "--version", VERSION,
       "--git-head", "ABC",
-      "--node", "/opt/node/bin/node",
       "--bun", "/opt/bun/bin/bun",
     ])).toThrow("exact lowercase 40-character commit SHA");
   });
@@ -238,11 +295,11 @@ describe("Earendil package admission checker", () => {
   test("requires and validates the exact 0.99.1 eight-package registry receipt", () => {
     expect(() => parseAdmissionArgs([
       "--consumer-root", "./consumer", "--version", MODERN_VERSION, "--git-head", MODERN_GIT_HEAD,
-      "--node", "/opt/node/bin/node", "--bun", "/opt/bun/bin/bun",
+      "--bun", "/opt/bun/bin/bun",
     ])).toThrow("--registry-receipt is required");
     expect(() => parseAdmissionArgs([
       "--consumer-root", "./consumer", "--version", MODERN_VERSION, "--git-head", MODERN_GIT_HEAD,
-      "--registry-receipt", registryFixture, "--node", "/opt/node/bin/node", "--bun", "/opt/bun/bin/bun",
+      "--registry-receipt", registryFixture, "--bun", "/opt/bun/bin/bun",
     ])).toThrow("--provider-receipt is required");
 
     const receipt = validateRegistryReceipt(registryFixture, MODERN_VERSION, MODERN_GIT_HEAD);
@@ -312,7 +369,7 @@ describe("Earendil package admission checker", () => {
   });
 
   test("real admission requires published tarballs for modern versions", () => {
-    const options={consumerRoot:materializeConsumer(modernFixtureRoot),version:MODERN_VERSION,gitHead:MODERN_GIT_HEAD,registryReceiptPath:registryFixture,providerReceiptPath:providerFixture,nodePaths:[process.execPath],bunPath:process.execPath};
+    const options={consumerRoot:materializeConsumer(modernFixtureRoot),version:MODERN_VERSION,gitHead:MODERN_GIT_HEAD,registryReceiptPath:registryFixture,providerReceiptPath:providerFixture,bunPath:process.execPath};
     expect(()=>runEarendilPackageAdmission(options)).toThrow("tarball directory is required");
   });
 
@@ -328,15 +385,6 @@ describe("Earendil package admission checker", () => {
   });
 
   test("side-effect enforcement denies fetch and named synchronous child-process imports", () => {
-    const nodeExecutable="/home/linuxbrew/.linuxbrew/bin/node";
-    if(existsSync(nodeExecutable)){
-      const nodeNetworkRoot=materializeConsumer(modernFixtureRoot),nodeAgent=join(nodeNetworkRoot,"node_modules","@earendil-works","pi-coding-agent","dist","index.js");
-      writeFileSync(nodeAgent,`await fetch("https://example.invalid");\n${readFileSync(nodeAgent,"utf8")}`);
-      const receipt=runRawRuntimeProbeForTests("node",nodeExecutable,nodeNetworkRoot,MODERN_VERSION);expect(receipt.sideEffectEnforcement?.networkDenied).toBeTrue();expect(receipt.sideEffectEnforcement?.networkAttempts).toBeNull();expect(receipt.rootImportError?.message).toContain("fetch failed");
-      const nodeChildRoot=materializeConsumer(modernFixtureRoot),nodeChildAgent=join(nodeChildRoot,"node_modules","@earendil-works","pi-coding-agent","dist","index.js");
-      writeFileSync(nodeChildAgent,`import {execSync} from "node:child_process";execSync("true");\n${readFileSync(nodeChildAgent,"utf8")}`);
-      const childReceipt=runRawRuntimeProbeForTests("node",nodeExecutable,nodeChildRoot,MODERN_VERSION);expect(childReceipt.sideEffectEnforcement?.childProcessDenied).toBeTrue();expect(childReceipt.sideEffectEnforcement?.childProcessAttempts).toBeNull();expect(childReceipt.rootImportError?.code).toBe("ERR_ACCESS_DENIED");
-    }
     const networkRoot=materializeConsumer(modernFixtureRoot),agent=join(networkRoot,"node_modules","@earendil-works","pi-coding-agent","dist","index.js");
     writeFileSync(agent,`await fetch("https://example.invalid");\n${readFileSync(agent,"utf8")}`);
     const networkReceipt=runRawRuntimeProbeForTests("bun",process.execPath,networkRoot,MODERN_VERSION);expect(networkReceipt.sideEffectEnforcement?.networkAttempts).toBe(1);expect(networkReceipt.rootImportError?.message).toContain("network disabled");

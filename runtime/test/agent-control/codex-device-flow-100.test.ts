@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 const modes = ["success", "denied", "malformed_device", "malformed_token", "cancel", "slow_down"];
 test("public Codex device flow preserves endpoint, failure, cancellation and real slow-down behavior", async () => {
-  const child = Bun.spawn([process.execPath, "--no-env-file", resolve(import.meta.dir, "fixtures/codex-device-flow-0991.mjs"), ...modes], {
+  const child = Bun.spawn([process.execPath, "--no-env-file", resolve(import.meta.dir, "fixtures/codex-device-flow-100.mjs"), ...modes], {
     env: { PATH: "/usr/local/lib/bun/bin:/usr/bin:/bin", HOME: "/nonexistent", PI_OFFLINE: "1", PI_TELEMETRY: "0", OTEL_SDK_DISABLED: "true" },
     stdout: "pipe", stderr: "pipe",
   });
