@@ -8,6 +8,10 @@ for (const scenario of [
   "bounded-reads", "event-loop-yield", "deterministic-output", "nested-output",
   "preserve-ineligible", "fresh-policy", "entry-gates", "revoke-at-yield",
   "abort-at-yield", "revoke-before-publish", "policy-request-snapshot",
+  ...["revoke", "abort"].flatMap(action =>
+    ["immediate", "microtask", "macrotask"].flatMap(timing =>
+      ["legacy", "nested"].flatMap(shape =>
+        [1, 64, 65].map(count => `publication-${action}-${timing}-${shape}-${count}`)))),
 ]) {
   test(`context projection performance/safety: ${scenario}`, async () => {
     const workspace = createTempWorkspace("context-projection-");

@@ -602,6 +602,9 @@ export default function (pi: any) {
       messages.push(nextMessage);
     }
 
+    // Even a short final batch needs an async publication boundary: callers
+    // may revoke access or abort immediately after starting the context hook.
+    await new Promise<void>((resolve) => setImmediate(resolve));
     if (!canUseToolOutput() || ctx?.signal?.aborted || !modified) return {};
     return { messages };
   });

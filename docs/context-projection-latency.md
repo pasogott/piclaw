@@ -10,8 +10,8 @@ The hook now:
 
 - Reads enabled-tool and per-tool-threshold policy once per request.
 - Projects legacy and nested tool results synchronously within each batch.
-- Uses `setImmediate` after every 64 messages to let other event-loop work run.
-- Rechecks access and cancellation after each yield and before publishing the result.
+- Uses `setImmediate` between 64-message batches and once after the final batch to let other event-loop work run, including for short histories.
+- Rechecks access and cancellation after each yield and immediately before publishing the result.
 - Keeps policy snapshots local to the invocation; later requests read fresh policy.
 
 The `tool_result` storage/semantic-summary path is unchanged. Context projection remains deterministic, does not call a model or store outputs, and does not mutate the input history. Policy changes made during a yield take effect on the next request; access revocation and turn cancellation discard the current partial projection.
@@ -47,6 +47,7 @@ These are hook-replay measurements, not an end-to-end model-speed claim. Provide
 - Per-tool thresholds, request-scoped policy and fresh subsequent requests.
 - Denied, disabled, missing-message and pre-aborted requests.
 - Access revocation or cancellation during a yield and access recheck before publication.
+- Immediate, microtask and previously queued macrotask revocation/abort for 1, 64 and 65 messages, covering legacy and nested-only results with a positive compaction control and input immutability checks.
 - No model calls or tool-output persistence during context projection.
 
 Run through the repository's isolated launcher:
@@ -56,3 +57,9 @@ bun run test:local --cwd runtime -- bun test test/extensions/context-projection-
 ```
 
 The standard filesystem preloads remain enabled. Fixtures contain synthetic data only.
+
+## Publication-fence correction
+
+Review reproduced a short-history access-revocation regression in the initial batching candidate: histories of 64 or fewer messages returned without yielding. The existing family-mode boundary test passed on the base but failed on that candidate. The new 36-case publication matrix reproduced 24 failures on the uncorrected implementation; its 65-message cases already crossed the batch boundary.
+
+The final `setImmediate` restores an asynchronous publication boundary for every eligible invocation while retaining one policy snapshot and batch-sized access checks. Permission changes and cancellation observable at that boundary discard the replacement; it is not a guarantee against revocation after the hook has completed. The earlier Windows replay measurements precede this correction and have not been remeasured for the corrected candidate.

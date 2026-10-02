@@ -42,6 +42,31 @@ const text = (value: string) => ({ type: "text", text: value });
 const message = (value = "x".repeat(150), tool = "bash") => ({ role: "toolResult", toolName: tool, content: [text(value)] as any[] });
 
 export async function runScenario(scenario: string): Promise<void> {
+  if (scenario.startsWith("publication-")) {
+    const [, action, timing, shape, rawCount] = scenario.split("-");
+    assert(["revoke", "abort"].includes(action));
+    assert(["immediate", "microtask", "macrotask"].includes(timing));
+    assert(["legacy", "nested"].includes(shape));
+    const count = Number(rawCount);
+    assert([1, 64, 65].includes(count));
+    const messages = Array.from({ length: count }, () => shape === "legacy" ? message() : {
+      role: "assistant", content: [{ type: "wrapper", content: [{ type: "tool_result", name: "bash", content: [text("z".repeat(150))] }] }],
+    });
+    const before = JSON.stringify(messages);
+    // Positive control ensures denial cannot pass by skipping eligible output.
+    assert.equal((await hook({ messages }, {})).messages.length, count);
+    const controller = new AbortController();
+    const revoke = () => { if (action === "abort") controller.abort(); else allowed = false; };
+    // A previously queued event-loop callback must run before final publication.
+    if (timing === "macrotask") setImmediate(revoke);
+    const pending = hook({ messages }, { signal: controller.signal });
+    if (timing === "immediate") revoke();
+    if (timing === "microtask") queueMicrotask(revoke);
+    assert.deepEqual(await pending, {});
+    assert.equal(JSON.stringify(messages), before);
+    assert.equal(stored, 0); assert.equal(modelCalls, 0);
+    return;
+  }
   switch (scenario) {
     case "bounded-reads": {
       const messages = Array.from({ length: 1024 }, () => message("small"));
