@@ -15,6 +15,20 @@ import { isRateLimitedForClient } from "../http/rate-limit.js";
 import { createLogger } from "../../../utils/logger.js";
 const log = createLogger("web.picker-pins");
 
+function isPinStoreBusy(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const { code, errno } = error as { code?: unknown; errno?: unknown };
+  return (typeof code === "string" && /^SQLITE_(?:BUSY|LOCKED)(?:_[A-Z]+)*$/.test(code)) ||
+    [code, errno].some(value => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && ((value & 0xff) === 5 || (value & 0xff) === 6));
+}
+
+function pinStoreBusyResponse(): Response {
+  return Response.json({ error: "Pin storage is busy. Retry shortly." }, {
+    status: 503,
+    headers: { "Cache-Control": "private, no-store", Vary: "Cookie", "Retry-After": "1" },
+  });
+}
+
 async function readPinBody(req: Request): Promise<unknown> {
   if (!req.body) throw Error("Missing pin body.");
   const reader = req.body.getReader(),
@@ -79,7 +93,8 @@ export async function handlePickerPins(
     if (denied) return denied;
     try {
       requireAccountActor(db, actor);
-    } catch {
+    } catch (error) {
+      if (isPinStoreBusy(error)) return pinStoreBusyResponse();
       return reply({ error: "Account access denied." }, 403);
     }
   }
@@ -94,11 +109,20 @@ export async function handlePickerPins(
       if (actor) resolveAuthorisedChat(db, actor, jid, "session.read");
       else if (!getChatBranchByChatJid(jid)) return false;
       return true;
-    } catch {
+    } catch (error) {
+      // Contention is not evidence that a pinned session is inaccessible.
+      if (isPinStoreBusy(error)) throw error;
       return false;
     }
   };
-  if (req.method === "GET") return reply(readPickerPins(db, owner, canRead));
+  if (req.method === "GET") {
+    try {
+      return reply(readPickerPins(db, owner, canRead));
+    } catch (error) {
+      if (isPinStoreBusy(error)) return pinStoreBusyResponse();
+      throw error;
+    }
+  }
   if (isRateLimitedForClient(owner, "picker-pins", 60000, 120))
     return reply({ error: "Too many pin changes. Try again shortly." }, 429);
   let change;
@@ -118,6 +142,7 @@ export async function handlePickerPins(
     );
     return reply(state);
   } catch (error) {
+    if (isPinStoreBusy(error)) return pinStoreBusyResponse();
     const message =
       error instanceof Error ? error.message : "Pin update failed.";
     return reply(
