@@ -63,3 +63,11 @@ The standard filesystem preloads remain enabled. Fixtures contain synthetic data
 Review reproduced a short-history access-revocation regression in the initial batching candidate: histories of 64 or fewer messages returned without yielding. The existing family-mode boundary test passed on the base but failed on that candidate. The new 36-case publication matrix reproduced 24 failures on the uncorrected implementation; its 65-message cases already crossed the batch boundary.
 
 The final `setImmediate` restores an asynchronous publication boundary for every eligible invocation while retaining one policy snapshot and batch-sized access checks. Permission changes and cancellation observable at that boundary discard the replacement; it is not a guarantee against revocation after the hook has completed. The earlier Windows replay measurements precede this correction and have not been remeasured for the corrected candidate.
+
+## Corrected candidate validation
+
+On 2 October 2026, Bun 1.4.2 in the Smith LXC passed all 99 focused projection/output/family/owner tests with 322 assertions. Independent read-only review found no blocking issue in the correction or regression matrix.
+
+After merging the #1516 base, frozen tree `1281eba21436023843778f3e6719938a33de887f` passed `make ci-fast`: 5,985 runtime tests, eight existing skips, zero failures; 25 feature tests and nine web checks. The separate frozen 0.99.1 consumer passed 468 tests and 8,720 assertions across 45 files. All five typechecks passed with the unchanged 95-diagnostic compose baseline. Pack hygiene checked 24,747 files; stale-dist and changed-file lint passed.
+
+Repository-wide `make lint` failed with 59 diagnostics, all reproduced identically on the base lint inputs. The corrected files introduced no diagnostic; unrelated source and test assertions were unchanged. The full-gate log is `/workspace/tmp/review-1517/ci-fast.log`, SHA-256 `f5ccbcc48e628dc8a8c3c11c2a87b896bcb7270cc9f41ef62b79e3e2ce5037b0`. Only validation prose changed after that frozen gate. No live replay, production install or restart was performed.
