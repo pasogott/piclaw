@@ -29,4 +29,8 @@ The patch consists of `17dcfc20b` and `3aa6f5754`, kept separate from Quick Acti
   - `runtime/test/dream-agent-turn.test.ts`: `17d87aceca1c5a1dee65803b85a880364003179f52c989c09b9a06c1345699d7`
   - `runtime/test/dream-clock-cleanup.test.ts`: `81ab011f13b09077f4b570bc8d2d971d2e1f75beb1e3fd3df77663713d9f2e1f`
 
-Current-main integration and final scoped receipts are recorded before publication. No runtime changes, database changes, installation or restart.
+After the auth/CSS integration landed, this separate branch merged current main `268298645`. Both clock files remain byte-identical to the final qualified combined tree `32f243429`. The final current-main focused rerun passed **19 tests, 107 assertions**, across Dream cleanup, Dream turns, offline account recovery and session-idle deadlines. No source changes followed that run.
+
+The integration lane also passed **45 auth cases, 188 assertions**, then the combined clock and Quick Actions browser check: **23 cases, 1,907 assertions**. Its first browser attempt failed before launch because the isolated HOME lacked browser binaries; the rerun used the existing cache without downloading. That setup failure is retained and is not counted as passing evidence.
+
+No runtime changes, database changes, installation or restart.
