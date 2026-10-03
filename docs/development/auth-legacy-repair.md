@@ -38,6 +38,10 @@ On 3 October, the integration update incorporates merged PRs #1529, #1530 and #1
 
 The merged-source focused gate passed **61 tests / 264 assertions** across auth races, repair, expiry, cache, contention/principals and MCP lifecycle (92.42 seconds). The race fixture counts executed reads through both `query()` and `prepare()` and requires at least an initial and canonical read. All five type projects, strict changed-fixture compilation, environment-reference checks and scoped lint passed; compose retains the same 95 transitive diagnostics. A narrow independent integration review found no blockers after an earlier review timed out. The combined full integration gate is still required; the earlier per-PR full gates above do not establish that result.
 
+The subsequent isolated combined gate passed **6,065 runtime tests, 8 skipped, zero failed** (958.93 seconds), followed by 25 feature and 9 web build tests. It included this auth integration and the separately reviewed test-only Dream clock cleanup, which is published in its own PR. Frozen combined head: `a828240febedb0c38a60e107940c2bf772f7a353`; tree: `cb7770c75c0cf421073d3ebf4f1a990f6e5808b6`; log SHA-256: `3dc1cc2d56e158b49ac96237546adba7efca2ec2e2b7d2ec2a06fdaf905d6dd7`. The historical 0.99.1 stage separately passed 468 tests / 8,720 assertions.
+
+After incorporating the already validated QuickActions PR #1534, final auth/MCP checks passed **45 tests / 188 assertions** (57.24 seconds). The updated combined tree also passed **23 tests / 1,907 assertions** (16.27 seconds), including four Chromium/WebKit source/built theme cases and the Dream/CLI/idle-clock tests. An initial browser rerun failed before launch because the isolated HOME had no browser binaries; the retained retry used an existing read-only browser cache and required no download. No runtime assertion or timeout was weakened. The full gate's frozen tree predates the CSS-only merge; these final checks qualify that later delta separately.
+
 ```sh
 bun run test:local --cwd runtime --env PICLAW_DB_IN_MEMORY=1 -- bun test \
   test/db/auth-legacy-race.test.ts test/db/web-session-repair.test.ts
