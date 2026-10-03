@@ -155,7 +155,7 @@ test("public azure-openai-responses keeps endpoint setup separate from exact aut
   const { provider, auth } = expectAuthApisRequired("azure-openai-responses");
   expect({ package: `${manifest.name}@${manifest.version}`, id: provider.id, name: provider.name, baseUrl: provider.baseUrl,
     authName: auth.name, authKeys: Object.keys(auth).sort(), oauth: provider.auth.oauth }).toEqual({
-    package: "@earendil-works/pi-ai@1.0.0", id: "azure-openai-responses", name: "Azure OpenAI", baseUrl: undefined,
+    package: "@earendil-works/pi-ai@1.0.1", id: "azure-openai-responses", name: "Azure OpenAI", baseUrl: undefined,
     authName: "Azure OpenAI API key", authKeys: ["login", "name", "resolve"], oauth: undefined,
   });
 });

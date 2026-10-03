@@ -3,15 +3,15 @@ import { mkdtempSync, readFileSync, readlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 const enabled = process.env.PICLAW_RUN_AUTH_CLI_TESTS === "1" && process.env.PICLAW_E2E_DISPOSABLE === "1";
-(enabled ? test : test.skip)("official 1.0.0 CLI qualifies isolated OpenAI/Codex login and provider-only rejection", async () => {
-  const archived = JSON.parse(readFileSync(resolve(import.meta.dir, "../../../docs/design/earendil-agent-harness-integration-adr/evidence/receipts/earendil-100-packaged-cli-auth-bun.json"), "utf8"));
+(enabled ? test : test.skip)("official 1.0.1 CLI qualifies isolated OpenAI/Codex login and provider-only rejection", async () => {
+  const archived = JSON.parse(readFileSync(resolve(import.meta.dir, "../../../docs/design/earendil-agent-harness-integration-adr/evidence/receipts/earendil-101-packaged-cli-auth-bun.json"), "utf8"));
   const results = [];
   for (const provider of ["openai", "openai-codex"]) for (const mode of ["success", "denied", "bad-state", "cancel", "provider-only"]) {
-    const root = mkdtempSync(join(tmpdir(), "piclaw-cli-100-"));
+    const root = mkdtempSync(join(tmpdir(), "piclaw-cli-101-"));
     const child = Bun.spawn(["sudo", "-n", "unshare", "--net", "/bin/sh", "-c",
       'ip link set lo up && exec setpriv --reuid="$1" --regid="$2" --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs env -i PATH="$3" HOME=/nonexistent SYNTHETIC_EXPECT_UID="$1" timeout --kill-after=2s 65s "$4" --no-env-file "$5" "$6" "$7" "$8" "$9"',
-      "cli-100-namespace", String(process.getuid?.()), String(process.getgid?.()), `${dirname(process.execPath)}:/usr/bin:/bin`, process.execPath,
-      resolve(import.meta.dir, "fixtures/packaged-cli-auth-100.ts"), provider, mode, root, readlinkSync("/proc/self/ns/net")], {
+      "cli-101-namespace", String(process.getuid?.()), String(process.getgid?.()), `${dirname(process.execPath)}:/usr/bin:/bin`, process.execPath,
+      resolve(import.meta.dir, "fixtures/packaged-cli-auth-101.ts"), provider, mode, root, readlinkSync("/proc/self/ns/net")], {
       env: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: "/nonexistent" }, stdout: "pipe", stderr: "pipe",
     });
     const timer = setTimeout(() => child.kill("SIGKILL"), 75_000);

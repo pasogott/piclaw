@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { dirname, resolve } from "node:path";
 for (const mode of ["refresh-permanent", "refresh-transient", "malformed-storage", "refresh-retry-success"]) {
   test(`public runtime credential error isolation: ${mode}`, async () => {
-    const child = Bun.spawn([process.execPath, "--no-env-file", resolve(import.meta.dir, "fixtures/provider-auth-stream-errors-100.ts"), mode], {
+    const child = Bun.spawn([process.execPath, "--no-env-file", resolve(import.meta.dir, "fixtures/provider-auth-stream-errors-101.ts"), mode], {
       env: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: "/nonexistent", PI_OFFLINE: "1", PI_TELEMETRY: "0", OTEL_SDK_DISABLED: "true" }, stdout: "pipe", stderr: "pipe",
     });
     const timer = setTimeout(() => child.kill("SIGKILL"), 15_000);
@@ -10,7 +10,7 @@ for (const mode of ["refresh-permanent", "refresh-transient", "malformed-storage
       const [exit, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
       expect(exit, err).toBe(0);
       const result = JSON.parse(out);
-      expect(result).toMatchObject({ version: "1.0.0", mode, networkRequests: 0, inference: 0, logsRedacted: true });
+      expect(result).toMatchObject({ version: "1.0.1", mode, networkRequests: 0, inference: 0, logsRedacted: true });
       expect(result.results.every((row: { status: string }) => row.status === "pass")).toBe(true);
       expect(result.results.map((row: { method: string }) => row.method)).toEqual(mode === "refresh-retry-success" ? ["getAuth"] : ["stream", "streamSimple"]);
       expect(out).not.toContain("PRIVATE-STREAM-CREDENTIAL-SENTINEL");
