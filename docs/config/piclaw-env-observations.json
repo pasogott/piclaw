@@ -1272,6 +1272,7 @@
             "docs/development/mcp-owner-lifecycle.md",
             "docs/development/mcp-settings-api.md",
             "docs/development/testing-and-linting-flow-presentation-2026-04-18.html",
+            "docs/development/web-session-query-performance.md",
             "package.json"
           ],
           "readerFiles": []
