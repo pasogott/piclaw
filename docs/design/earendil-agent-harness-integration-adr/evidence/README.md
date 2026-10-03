@@ -4,7 +4,7 @@
 
 | Evidence | Scope / state |
 |---|---|
-| [Durable architecture and HC/PC crosswalk](earendil-100-durable-crosswalk.md) | 25 HC and 20 PC intents; exact spec/archive references, prior paused Memory probe, explicit source-only gaps and retained host authority. Proposal, no production activation or new semantic acceptance. |
+| [Durable architecture and HC/PC crosswalk](earendil-100-durable-crosswalk.md) | 25 HC and 20 PC intents; exact spec/archive references, prior paused Memory probe, explicit source-only gaps and retained host authority. Design approved 3 October 2026; durable work out of scope, no production activation or new semantic acceptance. |
 | [Current-loop migration](earendil-100-current-loop-progress.md) | Independent #1497 migration and frozen 0.99.1 consumer; subsequent merge recorded in the ADR index. |
 
 ## Completed 0.99.1 assessments

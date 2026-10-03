@@ -1,6 +1,8 @@
 # Pi 1.0.0 durable architecture and HC/PC crosswalk (#1493)
 
-Piclaw proposes an isolated execution plane using experimental `@earendil-works/pi-durable@1.0.0`, while retaining its service-effect authority. Rui's architecture approval is required before production implementation. This assessment adds no durable dependency, importer, schema, registration or activation.
+Rui approved this design on 3 October 2026: an isolated execution plane using experimental `@earendil-works/pi-durable@1.0.0`, with Piclaw retaining its service-effect authority. Pi-durable qualification, implementation and activation are explicitly out of the current scope. This assessment adds no durable dependency, importer, schema, registration or activation.
+
+The active track remains adoption of mainline Pi 1.0.0 or a separately assessed subsequent update. #1494 and all other durable work require a new scope decision before they resume; they are not prerequisites for current-loop adoption.
 
 The existing coding-agent loop migrated independently through [#1497](https://github.com/rcarmo/piclaw/pull/1497). Historical Harness and Pico3 evidence through 0.99.1 stays frozen. The old lane, Drive, Gate and operation-result APIs were removed; their semantic requirements are mapped below.
 
@@ -152,12 +154,14 @@ All successor PC integrations are **proposed and unverified**. Existing service-
 | PC-019 | Cross-session steer | Durable exact-target acceptance before acknowledgement | Retry/dedup/wrong-owner/offline cases; no premature acknowledgement |
 | PC-020 | Goal/checkpoint race | Source disposition plus task/submission reconciliation | Late steer consumed/carried/disposed once; no skipped accepted work |
 
-## Qualification and approval gates
+## Future qualification gates — work out of scope
 
-1. Rui approves architecture and explicit substitutions for changed HC semantics, especially 003/008/011/013/017/019/020/021/023/024. A documentation merge does not waive unsupported guarantees.
+Rui's 3 October design approval does not start these work packages. They remain future requirements, including the unverified and unsupported classifications above.
+
+1. Before resuming, Rui must bring durable work back into scope and resolve the remaining unsupported guarantees, especially HC-003/008/011/013/017/019/020/021/023/024. Design approval does not turn those requirements into passing evidence.
 2. #1494 uses Bun-only public APIs, synthetic models/tools, disposable stores and the controlled test runner. Use network denial, effect/provider counters, controlled commit barriers and watchdogs. Preserve failed/aborted runs. No live credentials, production stores or deployment.
 3. Run fresh Memory/JSONL/approved Bun SQLite conformance with unique cases and separate backend counts. Qualify migrations, forks, watches, cancellation, replay, missing definitions, effect uncertainty, owner replacement and resources. Process-crash and power-failure evidence stay separate; HC-025 needs writable host-authority proof.
-4. Implement versioned EF-S01/02/05/07/08 correlation and host-effect fences only after architecture approval. Run every PC race/fault row. Upstream atomicity or watch convergence cannot replace host tests.
+4. Implement versioned EF-S01/02/05/07/08 correlation and host-effect fences only after explicit authorisation to resume durable implementation. Run every PC race/fault row. Upstream atomicity or watch convergence cannot replace host tests.
 5. Production installation/activation/canary/soak/rollback execution need separate authorisation. Current-loop auth/MCP/Delegate gates under #1495/#1458/#1449–#1451/#1455–#1456 stay independent. MCP adapter remains default, codemode defaults Auto and no native capability/security waiver follows here.
 
 ## Documentation validation

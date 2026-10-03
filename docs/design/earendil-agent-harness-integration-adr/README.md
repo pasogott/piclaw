@@ -1,8 +1,8 @@
 # ADR: Earendil-aligned agent harness integration
 
-Status: **Pi 1.0.0 current-loop migration merged; pi-durable successor proposed, inactive and awaiting architecture approval**
+Status: **Pi 1.0.0 current-loop migration merged; pi-durable design approved, with qualification and implementation out of scope**
 
-This ADR proposes a future service-plane coordinator around Earendil durable execution. The [1.0.0 architecture and 45-row HC/PC crosswalk](evidence/earendil-100-durable-crosswalk.md) supersedes the old lane/Drive/Gate design for the selected target. Current-loop migration [#1497](https://github.com/rcarmo/piclaw/pull/1497) merged independently at `5cc738d7c`; neither that merge nor this assessment deploys or activates pi-durable. Original chapters and versioned evidence retain their historical API assumptions and results.
+Rui approved this future service-plane design on 3 October 2026 and explicitly kept pi-durable work out of the current scope. The active track is completing adoption of mainline Pi 1.0.0 or a separately assessed subsequent update. The [1.0.0 architecture and 45-row HC/PC crosswalk](evidence/earendil-100-durable-crosswalk.md) supersedes the old lane/Drive/Gate design for the selected target. Current-loop migration [#1497](https://github.com/rcarmo/piclaw/pull/1497) merged independently at `5cc738d7c`; neither that merge nor this assessment deploys or activates pi-durable. Original chapters and versioned evidence retain their historical API assumptions and results.
 
 ## Decision record
 
@@ -18,7 +18,7 @@ This ADR proposes a future service-plane coordinator around Earendil durable exe
 | Evidence timestamps | Original capture: 2026-09-01 18:30 UTC; 0.85.1 follow-up: 2026-09-17–18; 0.87.0 candidate assessment: 2026-09-21; observations apply only to their recorded revisions |
 | Document state | #1493 maps 25 HC and 20 PC intents to pi-durable 1.0.0. Source contracts and the prior paused Memory probe are distinct; #1494 owns fresh semantics/storage qualification. |
 | Production changes | Current-loop source dependencies select 1.0.0. This documentation adds no runtime importer, dependency, schema, activation or service-authority transfer. No installation/restart. |
-| Final decision | Proposed: public pi-durable execution with Piclaw service authority retained; architecture approval before production implementation. |
+| Final decision | Design approved by Rui on 3 October 2026. Pi-durable qualification, implementation and activation are out of scope; resuming that work requires a separate scope decision. |
 
 ## Problem
 
@@ -57,7 +57,7 @@ The original assessment produced this ADR, evidence tables and a proposed semant
 
 ## Chapters and evidence
 
-- [Pi 1.0.0 durable architecture, authority and complete HC/PC crosswalk](evidence/earendil-100-durable-crosswalk.md) — current successor proposal; source evidence, no activation
+- [Pi 1.0.0 durable architecture, authority and complete HC/PC crosswalk](evidence/earendil-100-durable-crosswalk.md) — approved future design; work out of scope, no activation
 - [Pi 1.0.0 current-loop migration](evidence/earendil-100-current-loop-progress.md) — independent merged migration
 
 - [Assessment method and quality bar](01-assessment-method.md)
@@ -92,14 +92,14 @@ The original assessment produced this ADR, evidence tables and a proposed semant
 
 The index is the ADR decision record. Chapters hold the assessment and design analysis. The evidence directory holds registers, captures and replayable scenario descriptions. All files remain part of one ADR.
 
-## Proposed decision
+## Approved design, deferred work
 
-Use the [pi-durable 1.0.0 proposal](evidence/earendil-100-durable-crosswalk.md) for the next architecture decision:
+The [pi-durable 1.0.0 design](evidence/earendil-100-durable-crosswalk.md) is approved for reference; no durable work enters the active mainline-adoption track:
 
 - Piclaw retains EF-S01/02/05/07/08 acceptance, source order, exact cancellation, atomic terminal settlement, frontier, delivery and projection fences.
 - Durable tasks, submissions, entries and documents own execution after host authorisation. No lane/Drive/Gate or immutable usage-row equivalence is assumed.
 - Paused recovery remains effect-denied until every resumable subtree is authorised. Progress calls can start recovered work; bounded watches supply observations only.
 - Current production orchestration is not imported into the replacement path. Execution uses public package contracts; Piclaw ports retain service-plane responsibilities.
-- #1494 qualifies fresh Bun-only storage/semantics after design approval. Historical 0.99.1 receipts remain separate. Production implementation, activation and deployment require explicit approval.
+- #1494 records future Bun-only storage/semantics qualification. It is deferred outside the active scope and does not block mainline adoption. Historical 0.99.1 receipts remain separate. No durable implementation, activation or deployment is authorised.
 
-Rui's architecture approval is required before M1 or production durable implementation. Current-loop migration authorisation does not grant it. The original [effector specifications](evidence/future-effector-specifications.md) retain service invariants, but their legacy execution correlations need the versioned migration identified in the crosswalk.
+Design approval does not authorise starting M1 or #1494. Rui must separately bring pi-durable work back into scope before it resumes. The original [effector specifications](evidence/future-effector-specifications.md) retain service invariants, but their legacy execution correlations need the versioned migration identified in the crosswalk.
