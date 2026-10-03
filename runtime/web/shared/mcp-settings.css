@@ -1,0 +1,9 @@
+.mcp-settings { min-width: 0; overflow-wrap: anywhere; }
+.mcp-settings select { display: block; box-sizing: border-box; width: 100%; max-width: 100%; min-height: 36px; margin: 6px 0 14px; }
+.mcp-settings button { min-height: 36px; max-width: 100%; white-space: normal; }
+.mcp-settings label { display: block; margin-top: 12px; }
+.mcp-settings ul { padding-inline-start: 20px; }
+.mcp-settings li { margin-block: 6px; }
+.mcp-settings [role="alert"] { color: var(--error-color, #c44949); }
+.mcp-settings [role="status"] { margin-block: 12px; }
+@media (max-width: 600px) { .mcp-settings button, .mcp-settings select { min-height: 44px; } }
