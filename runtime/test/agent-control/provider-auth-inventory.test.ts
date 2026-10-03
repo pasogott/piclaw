@@ -6,7 +6,7 @@ import { ModelRuntime, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { getProviderDefs } from "../../src/agent-control/provider-defs.js";
 import { createTestCredentialStore } from "../model-services-fixture.js";
 
-const receipt = JSON.parse(readFileSync(resolve(import.meta.dir, "../fixtures/provider-auth-inventory-100.json"), "utf8"));
+const receipt = JSON.parse(readFileSync(resolve(import.meta.dir, "../fixtures/provider-auth-inventory-101.json"), "utf8"));
 const inventory = () => builtinProviders().map(provider => ({
   id: provider.id, name: provider.name,
   apiKeyLogin: typeof provider.auth.apiKey?.login === "function",
@@ -16,9 +16,9 @@ const inventory = () => builtinProviders().map(provider => ({
   oauthToAuth: typeof provider.auth.oauth?.toAuth === "function",
 })).sort((a, b) => a.id.localeCompare(b.id));
 
-test("exact1.0.0 provider-owned method inventory matches public runtime and UI definitions", async () => {
-  expect(receipt.version).toBe("1.0.0");
-  expect(receipt.gitHead).toBe("a13d35a742c6ef8462812a28fbe1d8c8b7431c32");
+test("exact1.0.1 provider-owned method inventory matches public runtime and UI definitions", async () => {
+  expect(receipt.version).toBe("1.0.1");
+  expect(receipt.gitHead).toBe("a7229ddc21810d6245105978033b7df645ecc2f7");
   expect(inventory()).toEqual(receipt.providers);
   expect(receipt.providers).toHaveLength(42);
   const runtime = await ModelRuntime.create({ credentials: createTestCredentialStore(), modelsPath: null, refreshOnCreate: false, allowModelNetwork: false });
@@ -52,7 +52,7 @@ test("custom local/no-key configuration and external cloud identity are distinct
 });
 
 test("packaged public OpenAI/Codex modules execute synthetic PKCE login, refresh, bad state and cancellation", async () => {
-  const probe = resolve(import.meta.dir, "fixtures/packaged-openai-login-100.mjs");
+  const probe = resolve(import.meta.dir, "fixtures/packaged-openai-login-101.mjs");
   const child = Bun.spawn([process.execPath, probe], {
     cwd: resolve(import.meta.dir, "../../.."),
     env: { PATH: "/usr/local/lib/bun/bin:/usr/bin:/bin", HOME: "/nonexistent", PI_OFFLINE: "1", PI_TELEMETRY: "0", OTEL_SDK_DISABLED: "true" },

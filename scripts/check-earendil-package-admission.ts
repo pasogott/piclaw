@@ -81,6 +81,9 @@ const EXACT_0991_PROVIDER_RECEIPT_SHA256 = "09a7c902f5b7c8bd69f92b5416d496bfe1ba
 const EXACT_100_VERSION = "1.0.0";
 const EXACT_100_GIT_HEAD = "a13d35a742c6ef8462812a28fbe1d8c8b7431c32";
 const EXACT_100_PROVIDER_RECEIPT_SHA256 = "4c66f1e7d9276bc39207fb508bca0e0a17b09d71969753d5611ca42982a85e4d";
+const EXACT_101_VERSION = "1.0.1";
+const EXACT_101_GIT_HEAD = "a7229ddc21810d6245105978033b7df645ecc2f7";
+const EXACT_101_PROVIDER_RECEIPT_SHA256 = "b56b0bdd98ebbdca8c178e922b85a00601c4c6e966df430a22fa34f99adb5f16";
 const NODE_ENGINE = ">=22.19.0";
 const EXACT_0991_REGISTRY = {
   "@earendil-works/chord": ["7f6ba945b705a5ab48d25dbed39b253afcec68df", "sha512-4xyn0IBzJ+Xu/iOGi2hjXJGAR61QEhEWZsIqTDqr+GmItdquYwBO5jYFnqGiBaTqlY12/EpM7QHoEKSHbyvOug=="],
@@ -102,6 +105,17 @@ const EXACT_100_REGISTRY = {
   "@earendil-works/pi-mcp": ["6f08a86735e7a4801d725ccdfd9e6983d8c64aca", "sha512-rYra0aF5iPmJd+fsB+VBuqxWNABGJ3Iiyhg0CqIc/91ta2n7IvQmCp0Cac/YkUTNnvRsVZnjgAiBkRi6+ouWuw=="],
   "@earendil-works/pi-telemetry": ["313db5570991402c73b2229ed9a50770d3cf1435", "sha512-WjNBj5TYIiPZFQEz2WlULcDwPLaKwIlmsKjVeYM+LJSbnSp38kWsHUJysIDGnu23IcLbKoPtywsvYfUJCeZePA=="],
   "@earendil-works/pi-tui": ["5da2e1eb99844c864d3d0a49e7da2515e03b73df", "sha512-JsT7kXnpZA2YOtQu6RyriyxEO0eJIzPyfiH09bH+OLN5+s18HYkwaUD/tBkjhnSfMu6/50CQPRYJagzSP6HdPw=="],
+} as const satisfies Record<(typeof FAMILY_PACKAGES)[number], readonly [string, string]>;
+
+const EXACT_101_REGISTRY = {
+  "@earendil-works/chord": ["13487f8c9ec01e9716527276c3123f15b9b1c122", "sha512-woq15kjUZ38fUIMqFrFzTeT0fYYM0CfGS2ELCUE5Ufni32tdxfs0Av2+zz8PXFNxyiC3SB1EnyGPp63CLtp8Fg=="],
+  "@earendil-works/pi-agent-core": ["6e6542ad7996f5185bc9dff813132ce02034a9b3", "sha512-os85rJM2hgCOOLdtcQ5WxRRhAbQiTNq9+48/pj6dOUU7czJhU8NTdHmDs41hBfAXR/ZQgstIgrjowEICEXimbQ=="],
+  "@earendil-works/pi-ai": ["6f3df9843292c0dc9a1f56257906c717fe7c577b", "sha512-eSA53pdfDLuQTTJn3yz1VC8BBmcX33OKkk8WihOXdVBvbgqqC4zuR6Sf+TeeWuAmh8LuqARoK14R1s2HZqVcsw=="],
+  "@earendil-works/pi-codemode": ["e2e77bc9a3810f393c634a4fcd1f28b43c6f8988", "sha512-RpZKpdKceYmIODfqKLJtZWUvfkbDGmEHxEEEYN+i21OFm8uY0sTcBMP4oaLf6SkBVBMPae1Z9GtW27+dIRAYPw=="],
+  "@earendil-works/pi-coding-agent": ["c43730168f5482f1c55b462ae43193cc6f7c1e13", "sha512-B7FGYpHpBPvS+Ux16CbCuVnE9S4v6c2h6ykocPNarC4msD/4JM/eFrCrO2wbRkedJZ25myFozSWHvCOx4QnN+w=="],
+  "@earendil-works/pi-mcp": ["5d45ee65f5b41cd9fffc4d78d4b630ad9771f61f", "sha512-XuhcCpNT9FgsMQTzjmwy2hbakg9CODcDHtC+KeHfr37HjKdj4QsfOrOThxLXYRN4kmC5HDvFyLzthAnHe/T4jw=="],
+  "@earendil-works/pi-telemetry": ["2aa53cd944f9e60920d2d648be279af786d1b5a8", "sha512-SuJ/4KyqZ6j6Whlau710DmusWDKMWCxKXpWqZclY/Cl3tGUuX8IFmbTbW2VRoVuoJpZYVMg6DJmt1mwHMUt9uw=="],
+  "@earendil-works/pi-tui": ["ea6cbc09db36f0ea6486e7d8e239f11713bcd025", "sha512-Rk/pWLoDKWI7WvywhLxf+DTYppS7XWTN5IacpqlD+QF+CbrT/y5CCnAHqPEoF41y+XtQJKbNjjzUuJE4yq0Dfg=="],
 } as const satisfies Record<(typeof FAMILY_PACKAGES)[number], readonly [string, string]>;
 
 const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] as const;
@@ -345,6 +359,10 @@ function modernContractRequired(version: string): boolean {
   return versionAtLeast(version, MODERN_CONTRACT_VERSION);
 }
 
+function isCurrentLoopVersion(version: string): boolean {
+  return version === EXACT_100_VERSION || version === EXACT_101_VERSION;
+}
+
 function packagesForVersion(version: string): readonly string[] {
   return modernContractRequired(version) ? FAMILY_PACKAGES : LEGACY_FAMILY_PACKAGES;
 }
@@ -358,6 +376,7 @@ export function validateProviderAuthReceipt(pathInput: string, version: string, 
   const bytes=readFileSync(path);
   if(version===EXACT_0991_VERSION&&createHash("sha256").update(bytes).digest("hex")!==EXACT_0991_PROVIDER_RECEIPT_SHA256) throw new Error("provider auth receipt hash differs from exact 0.99.1 receipt");
   if(version===EXACT_100_VERSION&&createHash("sha256").update(bytes).digest("hex")!==EXACT_100_PROVIDER_RECEIPT_SHA256) throw new Error("provider auth receipt hash differs from exact 1.0.0 receipt");
+  if(version===EXACT_101_VERSION&&createHash("sha256").update(bytes).digest("hex")!==EXACT_101_PROVIDER_RECEIPT_SHA256) throw new Error("provider auth receipt hash differs from exact 1.0.1 receipt");
   const parsed = readJsonObject(path, "provider auth receipt");
   if (parsed.version !== version || parsed.gitHead !== gitHead || !Array.isArray(parsed.providers)) throw new Error("provider auth receipt version/gitHead/providers mismatch");
   const providers = parsed.providers.map((raw, index) => {
@@ -385,10 +404,14 @@ export function validateRegistryReceipt(pathInput: string, version: string, gitH
     throw new Error(`cannot read registry receipt at ${path}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
   if (!Array.isArray(parsed)) throw new Error(`registry receipt must contain an array: ${path}`);
-  const target = version === EXACT_100_VERSION
-    ? { gitHead: EXACT_100_GIT_HEAD, packages: EXACT_100_REGISTRY }
-    : version === EXACT_0991_VERSION ? { gitHead: EXACT_0991_GIT_HEAD, packages: EXACT_0991_REGISTRY } : null;
-  if (!target) throw new Error(`modern package admission supports exact ${EXACT_0991_VERSION} or ${EXACT_100_VERSION}, received ${version}`);
+  const target = version === EXACT_0991_VERSION
+    ? { gitHead: EXACT_0991_GIT_HEAD, packages: EXACT_0991_REGISTRY }
+    : version === EXACT_100_VERSION
+      ? { gitHead: EXACT_100_GIT_HEAD, packages: EXACT_100_REGISTRY }
+      : version === EXACT_101_VERSION
+        ? { gitHead: EXACT_101_GIT_HEAD, packages: EXACT_101_REGISTRY }
+        : null;
+  if (!target) throw new Error(`modern package admission supports exact ${EXACT_0991_VERSION}, ${EXACT_100_VERSION}, or ${EXACT_101_VERSION}, received ${version}`);
   if (gitHead !== target.gitHead) throw new Error(`${version} registry receipt requires gitHead ${target.gitHead}`);
 
   const seen = new Set<string>();
@@ -519,7 +542,7 @@ function inspectInstalledTree(consumerRoot: string, version: string, gitHead: st
         if (existsSync(path)) {
           const metadata = readJsonObject(path, "installed dependency");
           if (metadata.name === SERVER_PACKAGE) throw new Error(`${SERVER_PACKAGE} must not be installed: ${packageDir}`);
-          if (version === EXACT_100_VERSION && metadata.name === "@earendil-works/pi-durable") {
+          if (isCurrentLoopVersion(version) && metadata.name === "@earendil-works/pi-durable") {
             throw new Error("pi-durable is outside current-loop admission and must not be installed");
           }
           if (typeof metadata.name === "string" && FAMILY_PACKAGES.some((name) => name === metadata.name)) {
@@ -776,7 +799,7 @@ if (${JSON.stringify(modern)}) {
     }
   }
 }
-if (${JSON.stringify(version === EXACT_100_VERSION)}) {
+if (${JSON.stringify(isCurrentLoopVersion(version))}) {
   const core = await import("@earendil-works/pi-agent-core");
   if (typeof core.Agent !== "function") throw new Error("current-loop Agent export missing");
   receipt.removedCoreExports = Object.fromEntries(${JSON.stringify(REMOVED_100_EXPORTS)}.map(name => [name, typeof core[name]]));
@@ -920,10 +943,10 @@ function runRuntimeProbe(kind: "bun", executableInput: string, consumerRoot: str
     throw new Error(`${kind} ${AI_PACKAGE}/bun-oauth registerBunOAuthFlows must import and complete without provider calls`);
   }
   const privateDeepPaths = checkedRejectedPaths(kind, raw.privateDeepPaths, MODERN_PRIVATE_IMPORTS, "private");
-  const removedImports = version === EXACT_100_VERSION
+  const removedImports = isCurrentLoopVersion(version)
     ? checkedRejectedPaths(kind, raw.removedImports, REMOVED_100_IMPORTS, "private") : undefined;
-  if (version === EXACT_100_VERSION && REMOVED_100_EXPORTS.some(name => raw.removedCoreExports?.[name] !== "undefined")) {
-    throw new Error("1.0.0 removed core exports differ from exact contract");
+  if (isCurrentLoopVersion(version) && REMOVED_100_EXPORTS.some(name => raw.removedCoreExports?.[name] !== "undefined")) {
+    throw new Error(`${version} removed core exports differ from exact contract`);
   }
   if (!providerReceipt || JSON.stringify(raw.providerAuth) !== JSON.stringify(providerReceipt.providers)) throw new Error(`${kind} provider auth inventory differs from exact receipt`);
   return {

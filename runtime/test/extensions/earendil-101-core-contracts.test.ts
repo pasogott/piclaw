@@ -5,9 +5,14 @@ import {isModelType} from '@earendil-works/pi-ai';
 import {getBuiltinModels} from '@earendil-works/pi-ai/providers/all';
 import {createMcpExtension,createToolSearchExtension,createCodemodeExtension} from '@earendil-works/pi-coding-agent';
 const root=resolve(import.meta.dir,'../../..'),pkg=JSON.parse(readFileSync(resolve(root,'package.json'),'utf8')),lock=readFileSync(resolve(root,'bun.lock'),'utf8');
-test('exact 1.0.0 package and lock closure retains adapter ownership',()=>{
- for(const name of ['@earendil-works/pi-agent-core','@earendil-works/pi-ai','@earendil-works/pi-coding-agent'])expect(pkg.dependencies[name]).toBe('1.0.0');
- for(const name of ['chord','pi-agent-core','pi-ai','pi-codemode','pi-coding-agent','pi-mcp','pi-telemetry','pi-tui'])expect(lock).toContain(`@earendil-works/${name}@1.0.0`);
+test('exact 1.0.1 package and lock closure retains adapter ownership',()=>{
+ for(const name of ['@earendil-works/pi-agent-core','@earendil-works/pi-ai','@earendil-works/pi-coding-agent'])expect(pkg.dependencies[name]).toBe('1.0.1');
+ // Parse Bun's JSON-with-trailing-delimiters lock and inspect package values.
+ const parsed=JSON.parse(lock.replace(/,\s*([}\]])/g,'$1'));
+ const family=['chord','pi-agent-core','pi-ai','pi-codemode','pi-coding-agent','pi-mcp','pi-telemetry','pi-tui'].map(name=>'@earendil-works/'+name);
+ const resolved=Object.values(parsed.packages).map((entry:any)=>entry[0] as string).filter(id=>family.some(name=>id.startsWith(name+'@')));
+ expect(resolved.sort()).toEqual(family.map(name=>name+'@1.0.1').sort());
+ expect(parsed.workspaces[''].dependencies['@earendil-works/chord']).toBe('1.0.1');
  expect(pkg.dependencies['pi-mcp-adapter']).toBe('github:piclaw-bot/pi-mcp-adapter#41f10ee5f54e66adb569182de7bb81f0801105d6');
  const session=readFileSync(resolve(root,'runtime/src/agent-pool/session.ts'),'utf8');expect(session).toContain('initializeOnLoad: false');expect(session).toContain('resolveRuntimeEnv');
  for(const factory of ['createMcpExtension','createToolSearchExtension','createCodemodeExtension'])expect(session).not.toContain(factory);
@@ -24,6 +29,7 @@ test('published OAuth bundle contains the repaired ChatGPT module',async()=>{
  const bundled=await import('@earendil-works/pi-ai/bun-oauth');expect(()=>bundled.registerBunOAuthFlows()).not.toThrow();
 });
 test('Harness/Pico3 activation and Piclaw service-effect ownership remain unchanged',()=>{
- const manifest=readFileSync(resolve(root,'runtime/src/service-effects/earendil-harness-v3-compatibility/manifest.ts'),'utf8');expect(manifest).toContain('currentRuntimeVersion: "0.99.1"'); // Frozen evidence, not the installed target.expect(manifest).toContain('harnessActivation: "latent_only"');expect(manifest).toContain('"productionImport": false');expect(manifest).toContain('"productionActivation": false');
+ const manifest=readFileSync(resolve(root,'runtime/src/service-effects/earendil-harness-v3-compatibility/manifest.ts'),'utf8');expect(manifest).toContain('currentRuntimeVersion: "0.99.1"'); // Frozen evidence, not the installed target.
+ expect(manifest).toContain('harnessActivation: "latent_only"');expect(manifest).toContain('"productionImport": false');expect(manifest).toContain('"productionActivation": false');
  const session=readFileSync(resolve(root,'runtime/src/agent-pool/session.ts'),'utf8');expect(session).not.toMatch(/AgentHarness|Pico3/);
 });
