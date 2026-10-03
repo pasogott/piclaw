@@ -47,7 +47,7 @@ export function createWebSession(
   return { token, session_id: sessionId, user_id: userId, auth_method: authMethod, created_at: createdAt, expires_at: expiresAt };
 }
 
-/** Fetch a session row by token and auto-delete it when expired. */
+/** Fetch a currently valid session. Expired rows are removed by auth maintenance. */
 export function getWebSession(token: string): WebSessionRecord | null {
   const db = getDb();
   const tokenHash = hashSessionToken(token);
@@ -65,6 +65,10 @@ export function getWebSession(token: string): WebSessionRecord | null {
       .get(token) as WebSessionRecord | undefined;
 
     if (row) {
+      // Reject invalid legacy rows before requesting a write lock. Periodic
+      // auth maintenance owns physical deletion, including logout triggers.
+      const expiresAt = Date.parse(row.expires_at);
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
       // Update the key in one statement, preserving identity if the process stops mid-migration.
       db.prepare("UPDATE web_sessions SET token = ? WHERE token = ?").run(tokenHash, token);
     }
@@ -73,11 +77,7 @@ export function getWebSession(token: string): WebSessionRecord | null {
   if (!row) return null;
 
   const expiresAt = Date.parse(row.expires_at);
-  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-    db.prepare("DELETE FROM web_sessions WHERE token = ?").run(tokenHash);
-    db.prepare("DELETE FROM web_sessions WHERE token = ?").run(token);
-    return null;
-  }
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
 
   if (!row.session_id) {
     const sessionId = createUuid("login");

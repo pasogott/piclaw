@@ -69,10 +69,12 @@ try {
   const old = "2000-01-01T00:00:00.000Z", future = "2999-01-01T00:00:00.000Z";
   external.query("UPDATE web_sessions SET expires_at = ? WHERE token = ?").run(old, hash("fixture-a"));
   assert.equal(getWebSession("fixture-a"), null);
+  assert.equal((db.query("SELECT count(*) n FROM web_sessions WHERE token=?").get(hash("fixture-a")) as { n: number }).n, 1, "denied expired row awaits maintenance");
   createWebSession("expiry-a", "default", 3600, "totp");
   createWebSession("expiry-b", "default", 7200, "totp");
   external.query("UPDATE web_sessions SET expires_at = ? WHERE token = ?").run(old, hash("expiry-a"));
-  assert.equal(deleteExpiredWebSessions(new Date(old)), 1);
+  assert.equal(deleteExpiredWebSessions(new Date(old)), 2); // fixture-a and expiry-a await this physical sweep.
+  assert.equal(db.query("SELECT 1 FROM web_sessions WHERE token IN (?,?)").get(hash("fixture-a"), hash("expiry-a")), null);
   assert(getWebSession("expiry-b"));
   assert.equal(deleteExpiredWebSessions(new Date(future)), 1);
   assert.equal(getWebSession("expiry-b"), null);
