@@ -49,6 +49,8 @@ Two profiled 250 ms baseline contention attempts unexpectedly returned `SQLITE_B
 
 This branch starts from the shared main checkpoint and does not include PR #1530's compiled-query changes. The source changes are compatible, but that PR's cache-contract fixture expects expired lookup to physically delete a row. Its later expiry-sweep count must account for that retained invalid row when integrating the changes; neither auth-denial nor maintenance assertions should be removed. An isolated combined test applied #1530's three compiled-query substitutions and changed only that sweep expectation from one to two: **10 tests / 56 assertions passed**. Both source and temporary tests were restored afterwards; neither published branch was modified.
 
+On 3 October, the integration update incorporates merged PRs #1529 and #1530. The cache-contract fixture now asserts that the denied expired row remains stored until maintenance, expects the sweep to remove both expired rows, and explicitly checks their absence afterwards. The earlier isolated receipts above retain their original source scope; combined integration validation is recorded separately.
+
 Maintenance still blocks the main event loop when waiting for a writer. Moving it to a separate worker requires validated database-path/identity handling, deterministic shutdown, no overlapping sweeps and in-memory-test policy. Valid legacy repairs also still block. Their existing concurrent-delete/migration races, HTTP error presentation, general request-principal caching and broader FTS/history/GC work are not resolved here.
 
 ## Reproduce
