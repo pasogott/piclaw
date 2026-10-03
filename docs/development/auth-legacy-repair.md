@@ -34,6 +34,10 @@ This branch starts from the shared main checkpoint. PR #1530 changes compiled-qu
 
 ## Reproduce
 
+On 3 October, the integration update incorporates merged PRs #1529, #1530 and #1532. Invalid plaintext expiry is checked before token repair, invalid hashed rows deny read-only, and all canonical rereads reuse the same compiled SELECT while validating freshly bound results. Full-state CAS, assigned-ID checks and post-repair expiry checks remain intact. The cache fixture retains the maintenance-count adjustment and explicit storage assertions. Earlier performance/race receipts retain their original source scope; combined validation is recorded separately.
+
+The merged-source focused gate passed **61 tests / 264 assertions** across auth races, repair, expiry, cache, contention/principals and MCP lifecycle (92.42 seconds). The race fixture counts executed reads through both `query()` and `prepare()` and requires at least an initial and canonical read. All five type projects, strict changed-fixture compilation, environment-reference checks and scoped lint passed; compose retains the same 95 transitive diagnostics. A narrow independent integration review found no blockers after an earlier review timed out. The combined full integration gate is still required; the earlier per-PR full gates above do not establish that result.
+
 ```sh
 bun run test:local --cwd runtime --env PICLAW_DB_IN_MEMORY=1 -- bun test \
   test/db/auth-legacy-race.test.ts test/db/web-session-repair.test.ts
