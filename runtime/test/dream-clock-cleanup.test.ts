@@ -3,18 +3,34 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createTempWorkspace } from './helpers.js';
 
+function validateClockCapture(source: string): void {
+  const captures = [...source.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*Date\s*\.\s*now\b(?!\s*\()/g)];
+  if (captures.length !== 1 || captures[0][1] !== 'realDateNow'
+    || !/^const realDateNow = Date\.now;$/m.test(source)) {
+    throw new Error('Dream fixture must capture Date.now exactly once, at module scope');
+  }
+}
+
+test('Dream clock capture guard rejects renamed and same-name local shadows', () => {
+  const source = readFileSync(join(import.meta.dir,'dream-agent-turn.test.ts'),'utf8');
+  validateClockCapture(source);
+  for (const declaration of ['const realNow = Date.now;', 'const realDateNow = Date.now;', 'let capturedClock = Date.now;', 'var saved = Date.now;']) {
+    const shadowed = source.replace('  const fixedNow =', `  ${declaration}\n  const fixedNow =`);
+    expect(() => validateClockCapture(shadowed)).toThrow('exactly once');
+  }
+});
+
 // Derive the cleanup statements from the actual Dream fixture. The child has
 // one intentional timeout; later assertions must still observe a real clock.
 test('Dream timeout cleanup cannot recapture or restore a frozen clock after a late finally', async () => {
   const source = readFileSync(join(import.meta.dir,'dream-agent-turn.test.ts'),'utf8');
   const moduleCapture = source.match(/^const realDateNow = Date\.now;$/m)?.[0] || '';
   const hook = source.match(/afterEach\(\(\) => \{([\s\S]*?)\n\}\);/)?.[1];
-  const captures = [...source.matchAll(/ {2}const realNow = Date\.now;/g)];
+  validateClockCapture(source);
   const restores = [...source.matchAll(/Date\.now = (realDateNow|realNow);/g)].map(match=>match[0]);
   const finallyRestore = restores.at(-1);
   if (hook === undefined || !finallyRestore) throw new Error('Dream cleanup statements not found');
   expect(moduleCapture).toBe('const realDateNow = Date.now;');
-  expect(captures).toHaveLength(0);
   const finallyRestores = [...source.matchAll(/finally \{\s*Date\.now = ([A-Za-z]+);/g)].map(match=>match[1]);
   expect(finallyRestores).toEqual(['realDateNow','realDateNow']);
   const ws = createTempWorkspace('dream-clock-regression-');
@@ -28,13 +44,11 @@ afterEach(()=>{${hook}
 let releaseLate:()=>void;
 const lateFinished=new Promise<void>(resolve=>{releaseLate=resolve;});
 test('intentional timeout while Dream clock is frozen',async()=>{
- ${captures.length?'const realNow = Date.now;':''}
  Date.now=()=>1000;
  try { await Bun.sleep(80); }
  finally { ${finallyRestore} releaseLate!(); }
 },15);
 test('next fixture must not restore a stale clock',async()=>{
- ${captures.length?'const realNow = Date.now;':''}
  const observedAtStart=Date.now;
  Date.now=()=>2000;
  try { await lateFinished; }
