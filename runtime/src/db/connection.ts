@@ -53,6 +53,7 @@ import { STORE_DIR, WORKSPACE_DIR, getRuntimeBootstrapPathOverrides } from "../c
 import { createLogger, debugSuppressedError } from "../utils/logger.js";
 import { recompressExistingMedia } from "./media-recompress.js";
 import { createVerifiedSqliteBackup, type SqliteBackupManifest } from "./backup.js";
+import { enableSqliteWal } from "./sqlite-journal.js";
 import { ensureOwnedMigrationLedger } from "./migrations.js";
 import { migrateScheduledTaskAuthorities } from "./scheduled-task-authority.js";
 import { installScheduledRunCompositionSchema } from "../service-effects/current-piclaw/scheduled-run-schema.js";
@@ -975,9 +976,12 @@ export function initDatabase(): void {
     throw new Error("Database initialization failed");
   }
 
-  const foreignKeysBeforeInitialization = (db.query("PRAGMA foreign_keys").get() as { foreign_keys?: number } | undefined)?.foreign_keys === 1;
-  db.exec(useMemory ? "PRAGMA journal_mode = MEMORY;" : "PRAGMA journal_mode = WAL;");
+  // Configure lock waiting before schema inspection and file-header pragmas.
   db.exec("PRAGMA busy_timeout = 5000;");
+  const emptySchema = !db.query("SELECT 1 FROM sqlite_schema LIMIT 1").get();
+  const foreignKeysBeforeInitialization = (db.query("PRAGMA foreign_keys").get() as { foreign_keys?: number } | undefined)?.foreign_keys === 1;
+  if (useMemory) db.exec("PRAGMA journal_mode = MEMORY;");
+  else enableSqliteWal(db);
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec("PRAGMA secure_delete = ON;");
   if (!useMemory) {
@@ -994,7 +998,15 @@ export function initDatabase(): void {
     }
   }
   migrateLegacyConfigTables(db);
-  createSchema(db);
+  if (emptySchema) {
+    // On a new database, commit the base tables/indexes/FTS triggers together
+    // instead of syncing every DDL statement. Existing-schema migration order
+    // and transaction boundaries stay unchanged.
+    const database = db;
+    database.transaction(() => createSchema(database)).immediate();
+  } else {
+    createSchema(db);
+  }
   ensureOwnedMigrationLedger(db);
   ensureChatBranchConstraints(db);
   initializeChatProjects(db);
