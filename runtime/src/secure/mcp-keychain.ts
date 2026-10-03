@@ -39,6 +39,10 @@ export interface McpBridgeSnapshot {
   sourceRevisions: Record<string, string | null>;
   dryRun: McpBridgeDryRun;
 }
+/** Prepared snapshots contain JSON only and are recursively frozen before publication. */
+type DeepReadonly<T> = T extends object ? { readonly [K in keyof T]: DeepReadonly<T[K]> } : T;
+export type McpBridgeReadSnapshot = DeepReadonly<McpBridgeSnapshot>;
+
 export interface McpSessionBridgeLease {
   config: McpConfig;
   revision: string;
@@ -232,6 +236,8 @@ export function validateMcpEnvironmentReferences(config: { mcpServers?: Record<s
 
 export function getPreparedMcpConfig(): McpConfig { return cloneMcpConfig(preparedSnapshot.adapterConfig); }
 export function getMcpBridgeSnapshot(): McpBridgeSnapshot { return structuredClone(preparedSnapshot); }
+/** Read-only consumers retain one immutable generation; hydration replaces it atomically. */
+export function getMcpBridgeReadSnapshot(): McpBridgeReadSnapshot { return preparedSnapshot; }
 export function getMcpBridgeDryRun(): McpBridgeDryRun { return structuredClone(preparedSnapshot.dryRun); }
 export function getMcpStartupDiagnostics(): McpStartupDiagnostic[] { return structuredClone(preparedSnapshot.diagnostics); }
 export function resetMcpStartupStateForTests(): void { retireGeneration(preparedGeneration); preparedGeneration = { secrets: new Map(), references: new Map(), leases: 0, retired: false }; preparedSnapshot = emptySnapshot(); hydrationSequence = 0; }

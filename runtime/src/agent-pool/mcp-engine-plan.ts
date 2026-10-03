@@ -1,4 +1,4 @@
-import type { McpBridgeSnapshot } from "../secure/mcp-keychain.js";
+import type { McpBridgeReadSnapshot } from "../secure/mcp-keychain.js";
 import { parseMcpEnginePolicy, resolveMcpCodemode, type McpEnginePolicy } from "./mcp-engine-policy.js";
 
 export interface McpEngineReadiness {
@@ -25,7 +25,7 @@ const SECRET_REFERENCE = /\$\{|\$env:|\{env:|^!(?!!)/;
 const NATIVE_ONLY_EXPOSURES = new Set(["codemode", "codemode-deferred"]);
 
 /** Non-secret capability plan. Never returns server values or raw diagnostics. */
-export function planMcpEnginePolicy(value: unknown, snapshot: McpBridgeSnapshot, readiness: McpEngineReadiness): McpEnginePlan {
+export function planMcpEnginePolicy(value: unknown, snapshot: McpBridgeReadSnapshot, readiness: McpEngineReadiness): McpEnginePlan {
   const policy = parseMcpEnginePolicy(value);
   const issues: McpEnginePlanIssue[] = [];
   const add = (serverName: string | null, field: string, code: McpEnginePlanIssue["code"], message: string) => {
