@@ -52,14 +52,16 @@ export function getWebSession(token: string): WebSessionRecord | null {
   const db = getDb();
   const tokenHash = hashSessionToken(token);
 
+  // Reuse the compiled statement, not its results. Every lookup explicitly
+  // rebinds the token and reads current rows before checking expiry.
   let row = db
-    .prepare("SELECT token, user_id, auth_method, created_at, expires_at, session_id FROM web_sessions WHERE token = ?")
+    .query("SELECT token, user_id, auth_method, created_at, expires_at, session_id FROM web_sessions WHERE token = ?")
     .get(tokenHash) as WebSessionRecord | undefined;
 
   // Legacy fallback for plain-token rows created before hashing hardening.
   if (!row) {
     row = db
-      .prepare("SELECT token, user_id, auth_method, created_at, expires_at, session_id FROM web_sessions WHERE token = ?")
+      .query("SELECT token, user_id, auth_method, created_at, expires_at, session_id FROM web_sessions WHERE token = ?")
       .get(token) as WebSessionRecord | undefined;
 
     if (row) {
@@ -113,7 +115,7 @@ export function revokeUserWebSessions(userId: string): number {
 export function deleteExpiredWebSessions(now = new Date()): number {
   const db = getDb();
   const nowIso = now.toISOString();
-  const info = db.prepare("DELETE FROM web_sessions WHERE expires_at <= ?").run(nowIso);
+  const info = db.query("DELETE FROM web_sessions WHERE expires_at <= ?").run(nowIso);
   return Number(info.changes || 0);
 }
 
