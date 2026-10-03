@@ -33,7 +33,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { createRequire } from "node:module";
-import { acquireMcpSessionBridge } from "../secure/mcp-keychain.js";
+import { bindMcpBridgeOwner, createMcpBridgeOwner } from "./mcp-bridge-owner.js";
 import { mcpRuntimeRegistrationPolicy } from "../extensions/mcp-runtime-policy.js";
 import { getPiclawAgentDir } from "../core/agent-dir.js";
 import { SESSIONS_DIR, getRuntimeRoot, getSessionPersistenceConfig, getWorkspaceDir } from "../core/config.js";
@@ -605,9 +605,11 @@ export async function createSessionInDir(
     sessionStartEvent?: SessionStartEvent;
   }) => {
     if (mode === 'family-shared' && !requireOwnedSessionExecution(options.chatJid!)) throw new Error('Owned family session identity is required.');
-    const mcpBridge = operationProfile ? null : acquireMcpSessionBridge();
-    let mcpBridgeReleased = false;
-    const releaseMcpBridge = () => { if (!mcpBridgeReleased) { mcpBridgeReleased = true; mcpBridge?.release(); } };
+    const mcpOwner = operationProfile ? null : createMcpBridgeOwner(bridge => createMcpAdapter({
+      config: bridge.config,
+      initializeOnLoad: false,
+      resolveRuntimeEnv: serverName => bridge.resolveRuntimeEnv(serverName),
+    }));
     try {
     const builtinExtensionFactories = operationProfile ? [] : [
       ...(mode === 'family-shared' ? [createFamilyToolCallGuard(options.chatJid!)] : []),
@@ -619,11 +621,7 @@ export async function createSessionInDir(
       mcpRuntimeRegistrationPolicy,
       // Piclaw synchronously emits the initial session_start event. Let that
       // session own eager servers instead of spawning a superseded load-time owner.
-      createMcpAdapter({
-        config: mcpBridge!.config,
-        initializeOnLoad: false,
-        resolveRuntimeEnv: (serverName) => mcpBridge!.resolveRuntimeEnv(serverName),
-      }),
+      mcpOwner!.extension,
     ];
     const resourceLoader = new DefaultResourceLoader({
       cwd,
@@ -637,6 +635,7 @@ export async function createSessionInDir(
       ...operationProfile,
     });
     await resourceLoader.reload();
+    mcpOwner?.assertLoaded(resourceLoader.getExtensions());
     if (mode === 'family-shared' && !requireOwnedSessionExecution(options.chatJid!)) throw new Error('Owned family session identity is required.');
     freezeExtensionRoutes();
 
@@ -668,15 +667,8 @@ export async function createSessionInDir(
         ? createFamilyBuiltinTools(cwd, options.chatJid!, (options.customTools ?? []) as ToolDefinition[])
         : options.customTools as any,
     });
-    if (mcpBridge) {
-      const dispose = result.session.dispose.bind(result.session);
-      let released = false;
-      result.session.dispose = () => {
-        try { dispose(); }
-        finally { if (!released) { released = true; releaseMcpBridge(); } }
-      };
-    }
     try {
+    if (mcpOwner) bindMcpBridgeOwner(result.session, resourceLoader, mcpOwner);
     if (mode === 'family-shared' && !requireOwnedSessionExecution(options.chatJid!)) throw new Error('Owned family session identity is required.');
 
     const normalizeResourceDiagnostics = (items: Array<{ path?: string; error?: string }> = []) =>
@@ -709,7 +701,7 @@ export async function createSessionInDir(
       diagnostics,
     };
     } catch (error) { result.session.dispose(); throw error; }
-    } catch (error) { releaseMcpBridge(); throw error; }
+    } catch (error) { mcpOwner?.dispose(); throw error; }
   };
 
   return await createAgentSessionRuntime(createRuntime as any, {
