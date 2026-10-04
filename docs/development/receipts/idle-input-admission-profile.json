@@ -1,0 +1,662 @@
+{
+  "recordedAt": "2026-10-04T13:37:50.154Z",
+  "baseMain": "a01b76730f694c9c0940e9223094e2f4021fe37f",
+  "runtime": "Bun 1.4.2",
+  "host": "Smith LXC",
+  "measurements": [
+    {
+      "log": "ux-idle-message-load-probe.log",
+      "logSha256": "8582c3658bb2a2582e5e24f42ea1dce0c4278820e3243567bd69c0c2d76aec66",
+      "kind": "idle-message-load-probe",
+      "results": [
+        {
+          "mode": "idle",
+          "input": {
+            "status": 201,
+            "ms": 31.824604999999792,
+            "userMessage": true
+          },
+          "unrelated": {
+            "status": 200,
+            "ms": 31.886357999999746,
+            "body": {
+              "ack": true
+            }
+          },
+          "sse": {
+            "ms": 31.752377999999226
+          },
+          "timerDelayMs": 31.55094999999983
+        },
+        {
+          "mode": "writer-lock",
+          "input": {
+            "status": 201,
+            "ms": 2058.2077209999998,
+            "userMessage": true
+          },
+          "unrelated": {
+            "status": 200,
+            "ms": 2058.61071,
+            "body": {
+              "ack": true
+            }
+          },
+          "sse": {
+            "ms": 2058.488069
+          },
+          "timerDelayMs": 2057.216496
+        }
+      ],
+      "busyTimeout": {
+        "timeout": 5000
+      },
+      "scope": "real handleAgentMessage idle + transactional storeWebMessage + SSE; synthetic executor no provider/authgateway/browser; current main97053085, PR1542 does not change this path"
+    },
+    {
+      "log": "idle-input-admission-profile.log",
+      "logSha256": "b4b7b6e7b0ebd70a134b2ce7e196e1319481afb2b2613e08043d2fc0e6d01616",
+      "kind": "idle-message-async-load-probe",
+      "results": [
+        {
+          "mode": "idle",
+          "input": {
+            "status": 201,
+            "ms": 21.61642800000027,
+            "userMessage": true
+          },
+          "unrelated": {
+            "status": 200,
+            "ms": 21.675721000000067,
+            "body": {
+              "ack": true
+            }
+          },
+          "sse": {
+            "ms": 21.699772000000394
+          },
+          "timerDelayMs": 21.506257000000005
+        },
+        {
+          "mode": "writer-lock",
+          "input": {
+            "status": 201,
+            "ms": 2213.72343,
+            "userMessage": true
+          },
+          "unrelated": {
+            "status": 200,
+            "ms": 1.110541000000012,
+            "body": {
+              "ack": true
+            }
+          },
+          "sse": {
+            "ms": 2213.710927
+          },
+          "timerDelayMs": 10.15992499999993
+        }
+      ],
+      "scheduled": 2,
+      "busyTimeout": {
+        "timeout": 5000
+      },
+      "scope": "real idle handleAgentMessage + admitWebUserMessage + SSE; synthetic executor/no authgateway/provider/browser; owned loopback only"
+    },
+    {
+      "log": "idle-public-load-1.log",
+      "logSha256": "5bb2bcc15067bafd9d54f9960635fd6a747f0288c4b9f212d520043b8dfccf58",
+      "kind": "public-idle-admission-load",
+      "results": [
+        {
+          "mode": "idle",
+          "input": {
+            "status": 201,
+            "ms": 24.80404499999986,
+            "requestId": true,
+            "serverTiming": "app;dur=23.2",
+            "hasMessage": true
+          },
+          "timeline": {
+            "status": 200,
+            "ms": 24.84155899999996
+          },
+          "sse": {
+            "ms": 24.926592000000255
+          },
+          "timerDelayMs": 24.740377999999964
+        },
+        {
+          "mode": "writer-lock",
+          "input": {
+            "status": 201,
+            "ms": 2031.9948239999999,
+            "requestId": true,
+            "serverTiming": "app;dur=2031.6",
+            "hasMessage": true
+          },
+          "timeline": {
+            "status": 200,
+            "ms": 1.929819999999836
+          },
+          "sse": {
+            "ms": 2031.9852079999996
+          },
+          "timerDelayMs": 10.279002999999648
+        }
+      ],
+      "scheduled": 2,
+      "scope": "actual WebChannel router/guards/storage/prototype/SSE; no-op task executor/provider; auth disabled single-user owned loopback"
+    },
+    {
+      "log": "idle-public-load-2.log",
+      "logSha256": "612a004db8def49e9bcff5969536ab70b84adb028fe022682f7b9c4734a09aa8",
+      "kind": "public-idle-admission-load",
+      "results": [
+        {
+          "mode": "idle",
+          "input": {
+            "status": 201,
+            "ms": 24.798127999999906,
+            "requestId": true,
+            "serverTiming": "app;dur=23.3",
+            "hasMessage": true
+          },
+          "timeline": {
+            "status": 200,
+            "ms": 24.914500000000317
+          },
+          "sse": {
+            "ms": 24.88507299999992
+          },
+          "timerDelayMs": 24.736747000000378
+        },
+        {
+          "mode": "writer-lock",
+          "input": {
+            "status": 201,
+            "ms": 2603.310939,
+            "requestId": true,
+            "serverTiming": "app;dur=2602.9",
+            "hasMessage": true
+          },
+          "timeline": {
+            "status": 200,
+            "ms": 2.1113240000004225
+          },
+          "sse": {
+            "ms": 2603.352627
+          },
+          "timerDelayMs": 10.084612000000561
+        }
+      ],
+      "scheduled": 2,
+      "scope": "actual WebChannel router/guards/storage/prototype/SSE; no-op task executor/provider; auth disabled single-user owned loopback"
+    },
+    {
+      "log": "idle-public-load-3.log",
+      "logSha256": "b05842a9f71f806c2b2924f0794bee3f9c2554cc79a1bf0433fd674db016287a",
+      "kind": "public-idle-admission-load",
+      "results": [
+        {
+          "mode": "idle",
+          "input": {
+            "status": 201,
+            "ms": 32.98121900000024,
+            "requestId": true,
+            "serverTiming": "app;dur=26.2",
+            "hasMessage": true
+          },
+          "timeline": {
+            "status": 200,
+            "ms": 33.021929
+          },
+          "sse": {
+            "ms": 33.16931300000033
+          },
+          "timerDelayMs": 32.90067200000021
+        },
+        {
+          "mode": "writer-lock",
+          "input": {
+            "status": 201,
+            "ms": 2037.2267039999997,
+            "requestId": true,
+            "serverTiming": "app;dur=2036.7",
+            "hasMessage": true
+          },
+          "timeline": {
+            "status": 200,
+            "ms": 1.9744219999997767
+          },
+          "sse": {
+            "ms": 2037.2207589999998
+          },
+          "timerDelayMs": 10.144279000000097
+        }
+      ],
+      "scheduled": 2,
+      "scope": "actual WebChannel router/guards/storage/prototype/SSE; no-op task executor/provider; auth disabled single-user owned loopback"
+    }
+  ],
+  "sourceSha256": {
+    "runtime/src/channels/web/messaging/message-store.ts": "8a66233686cbbcd210658b418b95aeddbc04bce212a19e226f664d59cffca43b",
+    "runtime/src/channels/web/messaging/message-processing-storage-service.ts": "99dd9ad735e28e3745dc19120808f561a34260a3779105155213c9ed5b4bf709",
+    "runtime/src/channels/web/handlers/agent.ts": "14a55c1c902972e5e74502939d8c51fef2b955ba35ac39bed8e63b6a4345e395",
+    "runtime/test/fixtures/idle-web-channel-load.ts": "be3e72ba01fcc37e08ff9c2e251dc145d1c7ea4935c1e633403c44ae213e3c80"
+  },
+  "tests": {
+    "atomicRoutingPostcommit": {
+      "tests": 33,
+      "assertions": 255,
+      "scope": "storage/handler in-memory faults and actualqueue materialization/selection, not providerexecution"
+    },
+    "taskQueue": {
+      "tests": 6,
+      "assertions": 54,
+      "scope": "actual samechatAgentQueue lane, stubexecutor"
+    },
+    "broadFocused": {
+      "tests": 127,
+      "assertions": 705
+    },
+    "disk": {
+      "tests": 1,
+      "assertions": 2
+    },
+    "browser": {
+      "tests": 4,
+      "assertions": 36,
+      "scope": "shipped Classic/Visual acknowledgement+d edupe in Chromium/WebKit with mockednetwork"
+    }
+  },
+  "limitations": [
+    "baseline one scoped handler/store run; candidate three public WebChannel runs include more routing work, no strict benchmarkspeedupclaim",
+    "writer sleeps nominal two seconds; actualcommitwait variance measured and retained",
+    "input201/SSE only afterdurablecommit, not instant acceptance duringlock",
+    "authdisabledsingle-userloopback/syntheticexecutor; provider/authgatewaydatabasewrites/browserCPU excluded fromloadprobe",
+    "full live30second report remainsuntraced; no productionconfig/database/provideractivity"
+  ],
+  "instrumented": [
+    {
+      "logSha256": "f4b961f6759c420b15590ba1a16ffd6cea7deba7257c7c0c310b41c82633e727",
+      "kind": "public-idle-admission-load",
+      "results": [
+        {
+          "mode": "idle",
+          "input": {
+            "status": 201,
+            "ms": 25.852574000000004,
+            "requestId": true,
+            "serverTiming": "app;dur=23.7",
+            "hasMessage": true
+          },
+          "timeline": {
+            "status": 200,
+            "ms": 25.924905999999737
+          },
+          "sse": {
+            "ms": 26.075598999999784
+          },
+          "timerDelayMs": 25.7583139999997
+        },
+        {
+          "mode": "writer-lock",
+          "input": {
+            "status": 201,
+            "ms": 2030.0542169999999,
+            "requestId": true,
+            "serverTiming": "app;dur=2029.6",
+            "hasMessage": true
+          },
+          "timeline": {
+            "status": 200,
+            "ms": 1.9066320000001724
+          },
+          "sse": {
+            "ms": 2030.0462879999995
+          },
+          "timerDelayMs": 10.075463000000127
+        }
+      ],
+      "scheduled": 2,
+      "instrument": true,
+      "metrics": {
+        "idle.json.stringify": {
+          "count": 20,
+          "ms": 0.08235000000013315
+        },
+        "idle.json.parse": {
+          "count": 13,
+          "ms": 0.0702579999997397
+        },
+        "idle.sqlite.prepare": {
+          "count": 17,
+          "ms": 0.6135439999998198
+        },
+        "idle.sqlite.query": {
+          "count": 2,
+          "ms": 0.03281700000025012
+        },
+        "idle.sqlite.exec": {
+          "count": 2,
+          "ms": 0.030441999999766267
+        },
+        "writer-lock.json.stringify": {
+          "count": 256,
+          "ms": 1.0264020000004166
+        },
+        "writer-lock.json.parse": {
+          "count": 13,
+          "ms": 0.06756299999915427
+        },
+        "writer-lock.sqlite.prepare": {
+          "count": 15,
+          "ms": 0.4300299999995332
+        },
+        "writer-lock.sqlite.query": {
+          "count": 82,
+          "ms": 0.712184000004072
+        },
+        "writer-lock.sqlite.exec": {
+          "count": 160,
+          "ms": 0.9779449999996359
+        }
+      },
+      "eventLoop": {
+        "resolutionMs": 1,
+        "samples": 1757,
+        "maxMs": 22.750595,
+        "p50Ms": 0.098879,
+        "p95Ms": 0.270335,
+        "p99Ms": 0.625663
+      },
+      "memory": {
+        "rss": 119226368,
+        "heapTotal": 20333568,
+        "heapUsed": 21234337,
+        "external": 6812961,
+        "arrayBuffers": 508
+      },
+      "scope": "actual WebChannel router/guards/storage/prototype/SSE; no-op task executor/provider; auth disabled single-user owned loopback"
+    },
+    {
+      "logSha256": "939596cea0f9a6ca90ec1854421bddbe4ca82b52eb1a5862015abbd6bfbf981b",
+      "kind": "public-idle-admission-load",
+      "results": [
+        {
+          "mode": "idle",
+          "input": {
+            "status": 201,
+            "ms": 32.55767900000001,
+            "requestId": true,
+            "serverTiming": "app;dur=30.2",
+            "hasMessage": true
+          },
+          "timeline": {
+            "status": 200,
+            "ms": 32.62390899999991
+          },
+          "sse": {
+            "ms": 32.78960099999995
+          },
+          "timerDelayMs": 32.456710999999814
+        },
+        {
+          "mode": "writer-lock",
+          "input": {
+            "status": 201,
+            "ms": 2028.7612399999998,
+            "requestId": true,
+            "serverTiming": "app;dur=2028.4",
+            "hasMessage": true
+          },
+          "timeline": {
+            "status": 200,
+            "ms": 2.084328999999798
+          },
+          "sse": {
+            "ms": 2028.7496739999997
+          },
+          "timerDelayMs": 10.079756999999972
+        }
+      ],
+      "scheduled": 2,
+      "instrument": true,
+      "metrics": {
+        "idle.json.stringify": {
+          "count": 20,
+          "ms": 0.07726799999954892
+        },
+        "idle.json.parse": {
+          "count": 13,
+          "ms": 0.06444599999895217
+        },
+        "idle.sqlite.prepare": {
+          "count": 17,
+          "ms": 0.6144309999990583
+        },
+        "idle.sqlite.query": {
+          "count": 2,
+          "ms": 0.04933800000026167
+        },
+        "idle.sqlite.exec": {
+          "count": 2,
+          "ms": 0.03325300000005882
+        },
+        "writer-lock.json.stringify": {
+          "count": 256,
+          "ms": 1.1114990000028229
+        },
+        "writer-lock.json.parse": {
+          "count": 13,
+          "ms": 0.0746740000004138
+        },
+        "writer-lock.sqlite.prepare": {
+          "count": 15,
+          "ms": 0.4359780000017963
+        },
+        "writer-lock.sqlite.query": {
+          "count": 82,
+          "ms": 0.7658919999998943
+        },
+        "writer-lock.sqlite.exec": {
+          "count": 160,
+          "ms": 1.0395890000049803
+        }
+      },
+      "eventLoop": {
+        "resolutionMs": 1,
+        "samples": 1736,
+        "maxMs": 20.81795,
+        "p50Ms": 0.108927,
+        "p95Ms": 0.278015,
+        "p99Ms": 0.672255
+      },
+      "memory": {
+        "rss": 116977664,
+        "heapTotal": 19921920,
+        "heapUsed": 21238780,
+        "external": 6816572,
+        "arrayBuffers": 508
+      },
+      "scope": "actual WebChannel router/guards/storage/prototype/SSE; no-op task executor/provider; auth disabled single-user owned loopback"
+    },
+    {
+      "logSha256": "6857ec57ff7fa858f75f7ab73ee84d5745e81ce4b085b6c11780f2e4244d5c19",
+      "kind": "public-idle-admission-load",
+      "results": [
+        {
+          "mode": "idle",
+          "input": {
+            "status": 201,
+            "ms": 36.185411999999815,
+            "requestId": true,
+            "serverTiming": "app;dur=26.9",
+            "hasMessage": true
+          },
+          "timeline": {
+            "status": 200,
+            "ms": 36.257102999999915
+          },
+          "sse": {
+            "ms": 36.381696999999804
+          },
+          "timerDelayMs": 36.07528300000013
+        },
+        {
+          "mode": "writer-lock",
+          "input": {
+            "status": 201,
+            "ms": 2022.2228170000003,
+            "requestId": true,
+            "serverTiming": "app;dur=2021.8",
+            "hasMessage": true
+          },
+          "timeline": {
+            "status": 200,
+            "ms": 1.9799509999998008
+          },
+          "sse": {
+            "ms": 2022.21258
+          },
+          "timerDelayMs": 10.0833090000001
+        }
+      ],
+      "scheduled": 2,
+      "instrument": true,
+      "metrics": {
+        "idle.json.stringify": {
+          "count": 20,
+          "ms": 0.08128700000133904
+        },
+        "idle.json.parse": {
+          "count": 13,
+          "ms": 0.07315699999890057
+        },
+        "idle.sqlite.prepare": {
+          "count": 17,
+          "ms": 0.6019750000004933
+        },
+        "idle.sqlite.query": {
+          "count": 2,
+          "ms": 0.037559999999757565
+        },
+        "idle.sqlite.exec": {
+          "count": 2,
+          "ms": 0.02721700000029159
+        },
+        "writer-lock.json.stringify": {
+          "count": 256,
+          "ms": 1.0932420000044658
+        },
+        "writer-lock.json.parse": {
+          "count": 13,
+          "ms": 0.0655639999986306
+        },
+        "writer-lock.sqlite.prepare": {
+          "count": 15,
+          "ms": 0.41763399999990725
+        },
+        "writer-lock.sqlite.query": {
+          "count": 82,
+          "ms": 0.7129119999999602
+        },
+        "writer-lock.sqlite.exec": {
+          "count": 160,
+          "ms": 1.099147999997058
+        }
+      },
+      "eventLoop": {
+        "resolutionMs": 1,
+        "samples": 1771,
+        "maxMs": 33.047414,
+        "p50Ms": 0.095359,
+        "p95Ms": 0.264959,
+        "p99Ms": 0.652799
+      },
+      "memory": {
+        "rss": 118824960,
+        "heapTotal": 20041728,
+        "heapUsed": 21455686,
+        "external": 7019478,
+        "arrayBuffers": 508
+      },
+      "scope": "actual WebChannel router/guards/storage/prototype/SSE; no-op task executor/provider; auth disabled single-user owned loopback"
+    }
+  ],
+  "cpu": {
+    "sha256": "22d6c2aae569723648103fc4c13d98f82ba4c67ed0efb77b54741c275f75d7f0",
+    "samples": 379,
+    "durationUs": 5275345.25,
+    "topFunctions": [
+      {
+        "functionName": "run",
+        "samples": 232
+      },
+      {
+        "functionName": "anonymous",
+        "samples": 55
+      },
+      {
+        "functionName": "(anonymous)",
+        "samples": 11
+      },
+      {
+        "functionName": "(module)",
+        "samples": 8
+      },
+      {
+        "functionName": "get",
+        "samples": 5
+      },
+      {
+        "functionName": "getDataRateLimitRule",
+        "samples": 4
+      },
+      {
+        "functionName": "statSync",
+        "samples": 4
+      },
+      {
+        "functionName": "admitSqliteWrite",
+        "samples": 3
+      },
+      {
+        "functionName": "@lazy",
+        "samples": 2
+      },
+      {
+        "functionName": "IsObject",
+        "samples": 2
+      },
+      {
+        "functionName": "FromPlainObject",
+        "samples": 2
+      },
+      {
+        "functionName": "FromValue",
+        "samples": 2
+      },
+      {
+        "functionName": "prepare",
+        "samples": 2
+      },
+      {
+        "functionName": "handleAgentMessage",
+        "samples": 2
+      },
+      {
+        "functionName": "resolve",
+        "samples": 2
+      }
+    ],
+    "scope": "whole process includes fresh schema/module startup, not request-only; frame URLs absent, raw profile local"
+  },
+  "instrumentationLimits": [
+    "SQL wrappers record exec/prepare/query duration and call counts, not bind values or SQL text",
+    "statement run/get calls not separately instrumented; transaction/commit wall attribution unmeasured",
+    "event-loop samples include idle timer/25ms retry backoff and startup excluded from monitor",
+    "no before/afterCPU claim or representative production-load benchmark"
+  ]
+}

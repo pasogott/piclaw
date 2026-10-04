@@ -5,6 +5,24 @@ import { getIdentityConfig, setAssistantAvatar } from '../../../src/core/config.
 import { handleAgentMessage } from "../../../src/channels/web/handlers/agent.ts";
 
 describe("web agent message handler", () => {
+  test('idle input becoming busy during storage is queued atomically before acknowledgement',async()=>{
+    let busy=false,committed=false,scheduled=0;const queued:any[]=[];const events:string[]=[];
+    let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+    const channel={agentPool:{isStreaming:()=>busy,isActive:()=>busy},getQueuedFollowupCount:()=>queued.length,
+      async admitUserMessage(_jid:string,_text:string,_media:unknown,_options:unknown,check:()=>void,_signal:unknown,defer:()=>boolean){await gate;check();const queued=defer();committed=true;expect(queued).toBe(true);return null;},
+      enqueueQueuedFollowupItem:(...args:any[])=>{expect(committed).toBe(false);queued.push(args);return -42;},broadcastEvent:(type:string)=>{expect(committed).toBe(true);events.push(type);},queue:{enqueue:()=>{scheduled++;}},resumeChat:()=>{scheduled++;},json:(value:unknown,status=200)=>Response.json(value,{status})} as any;
+    const pending=handleAgentMessage(channel,new Request('https://fixture/agent/default/message',{method:'POST',body:JSON.stringify({content:'idle input'})}),'/agent/default/message','web:test','default');await Bun.sleep(0);expect(events).toEqual([]);busy=true;release();
+    const response=await pending;expect(response.status).toBe(201);const body=await response.json();expect(body.queued).toBe('followup');expect(body.user_message).toBeUndefined();expect(queued[0].slice(0,4)).toEqual(['web:test',0,'idle input',null]);expect(events).toEqual(['agent_followup_queued']);expect(scheduled).toBe(0);
+  });
+  test('idle input acknowledgement and scheduling wait for successful atomic storage',async()=>{
+    let committed=false,scheduled=0;const events:string[]=[];
+    const channel={agentPool:{isStreaming:()=>false,isActive:()=>false},getQueuedFollowupCount:()=>0,
+      async admitUserMessage(_jid:string,_text:string,_media:unknown,_options:unknown,check:()=>void,_signal:unknown,defer:()=>boolean){check();expect(defer()).toBe(false);committed=true;return{id:43,chat_jid:'web:test',timestamp:'2026-10-04T13:00:01Z',data:{content:'idle input',thread_id:43}};},
+      broadcastEvent:(type:string)=>{expect(committed).toBe(true);events.push(type);},queue:{enqueue:()=>{expect(committed).toBe(true);scheduled++;}},json:(value:unknown,status=200)=>Response.json(value,{status})} as any;
+    const request=()=>new Request('https://fixture/agent/default/message',{method:'POST',body:JSON.stringify({content:'idle input'})});
+    expect((await handleAgentMessage(channel,request(),'/agent/default/message','web:test','default')).status).toBe(201);expect(events).toEqual(['new_post']);expect(scheduled).toBe(1);
+    channel.admitUserMessage=async()=>{throw Error('write rejected');};events.length=0;expect((await handleAgentMessage(channel,request(),'/agent/default/message','web:test','default')).status).toBe(503);expect(events).toEqual([]);expect(scheduled).toBe(1);
+  });
   test('fresh streaming state prevents a compose wake even if the active flag is false',async()=>{
     let wakes=0,admissions=0;
     const channel={agentPool:{isStreaming:()=>true,isActive:()=>false},getQueuedFollowupCount:()=>0,resumeChat:()=>{wakes++;},admitQueuedFollowupItem:async()=>{admissions++;return -1;},broadcastEvent:()=>{},json:(body:unknown,status=200)=>Response.json(body,{status})} as any;

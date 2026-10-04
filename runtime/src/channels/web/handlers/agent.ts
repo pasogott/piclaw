@@ -1030,15 +1030,51 @@ export async function handleAgentMessage(
     return response;
   }
 
-  const interaction = storeAgentUserMessage(channel, chatJid, {
-    content,
-    mediaIds: normalized.mediaIds,
-    contentBlocks: normalized.contentBlocks,
-    linkPreviews: normalized.linkPreviews,
-    threadId: normalized.threadId,
-    screenHint: normalized.screenHint,
-  });
+  let queuedDuringAdmission = false;
+  let deferredRowId = 0;
+  let deferredAt = '';
+  let interaction: ReturnType<typeof storeAgentUserMessage>;
+  // Ordinary input admitted while idle can become a follow-up while waiting
+  // for storage. Decide against fresh in-memory state inside the same commit.
+  if (channel.admitUserMessage && !command && !themeCommand && !metersCommand && !isSettingsCommand
+    && !content.trimStart().startsWith('/') && requestMode !== 'steer') {
+    try {
+      interaction = await channel.admitUserMessage(chatJid, content, normalized.mediaIds, {
+        contentBlocks: normalized.contentBlocks, linkPreviews: normalized.linkPreviews,
+        threadId: normalized.threadId, screenHint: normalized.screenHint,
+      }, revalidateQueuedAdmission, req.signal, () => {
+        const busy = channel.agentPool.isStreaming?.(chatJid) === true || channel.agentPool.isActive?.(chatJid) === true;
+        queuedDuringAdmission = busy || channel.getQueuedFollowupCount(chatJid) > 0;
+        if (!queuedDuringAdmission) return false;
+        deferredAt = new Date().toISOString();
+        deferredRowId = channel.enqueueQueuedFollowupItem(chatJid, 0, content,
+          null, deferredAt, {
+            source: 'web.compose', mediaIds: normalized.mediaIds, contentBlocks: normalized.contentBlocks,
+            linkPreviews: normalized.linkPreviews, screenHint: normalized.screenHint,
+            queuedBy: { ...(browserObservability.userId ? { userId: browserObservability.userId } : {}),
+              ...(browserObservability.sessionId ? { sessionId: browserObservability.sessionId } : {}),
+              ...(browserObservability.clientId ? { clientId: browserObservability.clientId } : {}) },
+          });
+        return true;
+      });
+    } catch (error) {
+      if (isSqliteContention(error)) return channel.json({ error: 'Message storage is busy; this input was not accepted.' }, 503);
+      if (req.signal.aborted) return channel.json({ error: 'Input submission was cancelled before acceptance.' }, 400);
+      return channel.json({ error: 'Input admission could not be confirmed.' }, 503);
+    }
+  } else {
+    interaction = storeAgentUserMessage(channel, chatJid, {
+      content, mediaIds: normalized.mediaIds, contentBlocks: normalized.contentBlocks,
+      linkPreviews: normalized.linkPreviews, threadId: normalized.threadId, screenHint: normalized.screenHint,
+    });
+  }
 
+  if (queuedDuringAdmission) {
+    channel.broadcastEvent('agent_followup_queued', { chat_jid: chatJid, row_id: deferredRowId, content,
+      thread_id: null, timestamp: deferredAt, source: 'web.compose' });
+    if (!channel.agentPool.isStreaming?.(chatJid) && !channel.agentPool.isActive?.(chatJid)) channel.resumeChat(chatJid);
+    return channel.json({ thread_id: null, queued: 'followup' }, 201);
+  }
   if (!interaction) return channel.json({ error: "Failed to store message" }, 500);
 
   // Defer new_post broadcast — don't emit for messages that will be queued
