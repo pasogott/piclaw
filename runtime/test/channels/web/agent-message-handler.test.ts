@@ -5,6 +5,18 @@ import { getIdentityConfig, setAssistantAvatar } from '../../../src/core/config.
 import { handleAgentMessage } from "../../../src/channels/web/handlers/agent.ts";
 
 describe("web agent message handler", () => {
+  test('queued HTTP acknowledgement follows durable admission and rejects changed authority without broadcast', async () => {
+    let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+    let admitted=false,active=true,wakes=0;const events:string[]=[];
+    let principal:any={kind:'local',userId:'default',mode:'single-user',role:'admin',authentication:{method:'local',sessionId:null,expiresAt:null}};
+    const channel={authGateway:{getPrincipal:()=>principal,isAuthEnabled:()=>false},agentPool:{isStreaming:()=>false,isActive:()=>active},getQueuedFollowupCount:()=>0,resumeChat:()=>{expect(admitted).toBe(true);wakes++;},
+      async admitQueuedFollowupItem(_args:unknown,check:()=>void){await gate;check();admitted=true;return -1;},broadcastEvent:(type:string)=>{expect(admitted).toBe(true);events.push(type);},json:(body:unknown,status=200)=>Response.json(body,{status})} as any;
+    const request=()=>new Request('https://fixture/agent/default/message',{method:'POST',body:JSON.stringify({content:'synthetic queued input',mode:'queue'})});
+    let done=false;const pending=handleAgentMessage(channel,request(),'/agent/default/message','web:test','default').then(res=>{done=true;return res;});await Bun.sleep(0);expect(done).toBe(false);expect(events).toEqual([]);
+    active=false;release();expect((await pending).status).toBe(201);expect(events).toEqual(['agent_followup_queued']);expect(wakes).toBe(1);
+    channel.admitQueuedFollowupItem=async(_args:unknown,check:()=>void)=>{principal={...principal,userId:'replacement'};check();return -2;};
+    active=true;events.length=0;expect((await handleAgentMessage(channel,request(),'/agent/default/message','web:test','default')).status).toBe(403);expect(events).toEqual([]);
+  });
   test('avatar command broadcasts updated branding and completion cannot restore the captured old avatar', async () => {
     const previous = getIdentityConfig().assistantAvatar;
     const broadcasts: Array<{event: string; payload: any}> = [];

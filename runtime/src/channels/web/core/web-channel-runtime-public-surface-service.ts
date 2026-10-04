@@ -13,6 +13,7 @@ type WebChannelRuntimePublicSurfaceFollowupFacade = Pick<
   | "postDashboardWidget"
   | "queueFollowupPlaceholder"
   | "enqueueQueuedFollowupItem"
+  | "admitQueuedFollowupItem"
   | "peekQueuedFollowupItem"
   | "consumeQueuedFollowupItem"
   | "prependQueuedFollowupItem"
@@ -454,6 +455,10 @@ export class WebChannelRuntimePublicSurfaceService {
 
   peekQueuedFollowupItem(chatJid: string): QueuedFollowupItem | null {
     return this.channel.runtimeFollowupFacade.peekQueuedFollowupItem(chatJid);
+  }
+
+  admitQueuedFollowupItem(args: Parameters<import('../runtime/queued-followup-lifecycle-service.js').QueuedFollowupLifecycleService['enqueueQueuedFollowupItem']>, authorise: () => void, signal: AbortSignal): Promise<number> {
+    return this.channel.runtimeFollowupFacade.admitQueuedFollowupItem(args, authorise, signal);
   }
 
   consumeQueuedFollowupItem(chatJid: string): QueuedFollowupItem | null {

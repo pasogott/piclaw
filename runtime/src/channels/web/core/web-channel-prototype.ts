@@ -187,6 +187,11 @@ export function installWebChannelPrototype(
         (service, chatJid: string): QueuedFollowupItem | null => service.peekQueuedFollowupItem(chatJid),
       ),
     },
+    admitQueuedFollowupItem: {
+      configurable: true,
+      writable: true,
+      value: withRuntimePublicSurface((service, args: Parameters<WebChannelRuntimePublicSurfaceService['enqueueQueuedFollowupItem']>, authorise: () => void, signal: AbortSignal) => service.admitQueuedFollowupItem(args, authorise, signal)),
+    },
     consumeQueuedFollowupItem: {
       configurable: true,
       writable: true,
