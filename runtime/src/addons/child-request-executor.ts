@@ -2,6 +2,9 @@ import type { Api, AssistantMessageEvent, Context, FetchFunction, Model, ModelsS
 import type { ChildRequestOptionsV1 } from './child-request-contracts.js';
 import { ChildRequestError, type PreparedChildExecution } from './child-request-scope.js';
 import { createChildRequestHttp } from './child-request-http.js';
+import { createLogger } from '../utils/logger.js';
+const log = createLogger('addons.child-request-executor');
+const observeTailFailure = () => { log.debug('Child request raw tail failed.', { operation: 'child_request.raw_tail' }); };
 
 export interface ChildRequestExecutorDependencies {
   model: Model<Api>;
@@ -57,14 +60,14 @@ export function childRequestExecutor(deps: ChildRequestExecutorDependencies) {
               yield event;
             }
             const httpTail = http.finish();
-            void httpTail.catch(() => {});
+            void httpTail.catch(observeTailFailure);
             if (rawTail) await rawTail;
             await httpTail;
             if (rawFailed) throw new ChildRequestError('settlement_failed');
             completed = true; resolveTail();
           } catch {
             aborter.abort();
-            const httpTail = http.finish().catch(() => {});
+            const httpTail = http.finish().catch(observeTailFailure);
             if (rawTail) await rawTail;
             await httpTail;
             rejectTail(new ChildRequestError('settlement_failed'));
@@ -72,14 +75,14 @@ export function childRequestExecutor(deps: ChildRequestExecutorDependencies) {
           } finally {
             if (!completed) {
               aborter.abort();
-              const httpTail = http.finish().catch(() => {});
+              const httpTail = http.finish().catch(observeTailFailure);
               if (rawTail) await rawTail;
               await httpTail;
               rejectTail(new ChildRequestError('settlement_failed'));
             }
           }
         })();
-        void settled.catch(() => {});
+        void settled.catch(observeTailFailure);
         return { events, settled };
       },
     };

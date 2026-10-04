@@ -2,6 +2,8 @@ import type { Api, Context, Model, ModelsSimpleStreamOptions, Provider } from '@
 import { normalizeContext } from '@earendil-works/pi-ai';
 import { ChildRequestError } from './child-request-scope.js';
 import type { ChildRequestOptionsV1 } from './child-request-contracts.js';
+import { createLogger } from '../utils/logger.js';
+const log = createLogger('addons.child-request-captured-provider');
 
 /** Host-retained request preparation. Auth options never leave this closure.
  * Capturing a public composed provider avoids the second auth lookup performed
@@ -30,7 +32,7 @@ export function captureChildProvider(input: {
       // Use only the captured exact composed provider. Never providerFallback,
       // route a virtual model or put authentication into the child's process.
       const settled = rawSettlement();
-      void settled.catch(() => {});
+      void settled.catch(() => { log.debug('Captured provider raw tail failed.', { operation: 'child_request.provider_tail' }); });
       try {
         const events = provider.streamSimple(model, transcript, { ...options, ...request, ...execution });
         return { events, settled };
