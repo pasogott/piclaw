@@ -66,6 +66,11 @@ test("new session refuses a silently discarded codemode extension",async()=>fixt
   const session={async prompt(){},getAllTools:()=>[],getActiveToolNames:()=>[],setActiveToolsByName(){}};
   expect(()=>bindMcpCodemodePolicy(session as any)).toThrow("did not load");
 }));
+test("unchanged codemode activation never resets SDK pending tool discovery",async()=>fixture(async()=>{
+  let sets=0;
+  const session={async prompt(){},getAllTools:()=>[{name:"codemode"}],getActiveToolNames:()=>["read","mcp"],setActiveToolsByName(){sets++;}};
+  bindMcpCodemodePolicy(session as any);expect(sets).toBe(0);
+}));
 test("hanging public abort hits deadline and quarantines without commit",async()=>fixture(async path=>{
   const h=harness({abort:()=>new Promise(()=>{}),timeout:20}),original=readFileSync(path,"utf8");
   await expect(h.controller.apply(h.input(),()=>{})).rejects.toThrow("remain blocked");

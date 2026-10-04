@@ -29,7 +29,9 @@ function syncMcpCodemodeSession(session: CodemodeSession, policy: Readonly<McpEn
   if (!session.getAllTools().some(tool => tool.name === "codemode")) {
     throw new Error("Codemode extension did not load.");
   }
-  const names = session.getActiveToolNames().filter(name => name !== "codemode");
+  const active = session.getActiveToolNames();
+  if (active.includes("codemode") === (policy.codemode === "on")) return;
+  const names = active.filter(name => name !== "codemode");
   if (policy.codemode === "on") names.push("codemode");
   session.setActiveToolsByName(names);
 }
@@ -48,8 +50,11 @@ export function bindMcpCodemodePolicy(session: CodemodeSession & Pick<AgentSessi
 export const mcpCodemodeExtension: ExtensionFactory = async pi => {
   await createCodemodeExtension({ models: false })(pi);
   const sync = () => {
-    const names = pi.getActiveTools().filter(name => name !== "codemode");
-    if (codemodeEnabled()) names.push("codemode");
+    const active = pi.getActiveTools();
+    const enabled = codemodeEnabled();
+    if (active.includes("codemode") === enabled) return;
+    const names = active.filter(name => name !== "codemode");
+    if (enabled) names.push("codemode");
     pi.setActiveTools(names);
   };
   pi.on("session_start", sync);

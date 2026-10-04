@@ -38,10 +38,14 @@ async function apply(codemode:string){await controller.apply({policy:{engine:"ad
 async function execute(session:typeof first.session,id:string,code:string){pending={type:"toolCall",id,name:"codemode",arguments:{code}};await session.prompt("fixture");assert.equal(pending,undefined);const result=session.messages.findLast(m=>m.role==="toolResult"&&m.toolCallId===id);assert.ok(result&&result.role==="toolResult");return result;}
 try{
   assert.ok(!first.session.getActiveToolNames().includes("codemode"));
+  let activationWrites=0;
+  const setActive=first.session.setActiveToolsByName.bind(first.session);
+  first.session.setActiveToolsByName=names=>{activationWrites++;setActive(names);};
   first.session.sessionManager.appendMessage({role:"user",content:"Preserve this history",timestamp:Date.now()});
   const id=first.session.sessionId,history=JSON.stringify(first.session.sessionManager.getEntries());
   await apply("on");assert.ok(first.session.getActiveToolNames().includes("codemode"));assert.equal(first.session.sessionId,id);assert.equal(JSON.stringify(first.session.sessionManager.getEntries()),history);
-  const result=await execute(first.session,"script","text(await tools.fixture_echo({value:'hello'}));");assert.equal(result.isError,false,JSON.stringify(result));assert.ok(JSON.stringify(result).includes("hello"));assert.equal(invoked,1);assert.ok(nested.some(e=>e.name==="fixture_echo"&&e.parent==="script"));
+  const writesAfterApply=activationWrites;
+  const result=await execute(first.session,"script","text(await tools.fixture_echo({value:'hello'}));");assert.equal(result.isError,false,JSON.stringify(result));assert.ok(JSON.stringify(result).includes("hello"));assert.equal(invoked,1);assert.ok(nested.some(e=>e.name==="fixture_echo"&&e.parent==="script"));assert.equal(activationWrites,writesAfterApply);
   const denied=await execute(first.session,"denied","await tools.fixture_echo({value:'denied'});");assert.equal(denied.isError,true);assert.equal(invoked,1);
   const models=await execute(first.session,"models","await models();");assert.equal(models.isError,true);assert.equal(invoked,1);
   const second=await create();assert.ok(second.session.getActiveToolNames().includes("codemode"));
