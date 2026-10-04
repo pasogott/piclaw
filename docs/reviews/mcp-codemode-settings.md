@@ -17,6 +17,7 @@ Adapter codemode settings now apply through the owner-only backend in Classic an
 |---|---|
 | Expanded focused controller/routes/planner/bridge/admission/guard tests | 89 passed / 548 assertions |
 | Post-retention focused gate at `84ce5ab69` | 31 passed / 286 assertions |
+| Updated browser-only matrix | 10 passed / 414 assertions; both skins, Chromium/WebKit, 1280/390 widths and actual settings navigation, existing compiled CSS |
 | Actual Pi 1.0.1 in-memory scripted-provider fixture | Current/new sessions, scripting, nested policy, disabled models, Off enforcement and preserved identity/history passed; enforced zero network/child attempts |
 | Five repository typecheck stages | Passed; 95 pre-existing frontend transitive diagnostics unchanged |
 | Actual Piclaw `createSessionInDir` / bundled adapter integration at `071e484ba` | 4 passed / 32 assertions; eager stdio ownership, policy/quarantine and proxy registration retained |
@@ -28,10 +29,12 @@ Two delegate reviews timed out and supplied no findings or approval. Self-review
 
 ## Pending qualification
 
-- Rebuilt Chromium/WebKit matrix for Classic/Visual at desktop/narrow widths, plus actual settings navigation.
+- Rebuild tracked web assets, then repeat the browser matrix against rebuilt CSS.
 - Updated synthetic disk-SQLite request profiling, with method counts, event-loop delay and CPU samples. Historical preview measurements are retained separately.
 - Full frozen runtime/feature/web gate and final exact-head review before publication.
 
-The shared feature's browser verification tag is withheld until the updated matrix passes. Earlier preview-only browser/full counts do not qualify this Apply flow. The matrix uses real UI/controller/handler/persistence with a synthetic runtime; actual Pi scripting is tested separately. Full production authentication and live MCP transports are outside this component fixture.
+The browser fixture keeps one engine resident at a time. The initial attempt failed to find installed browsers under its isolated HOME; explicitly selecting the existing browser cache fixed launch without downloads. The first real matrix passed eight cases and hit two Classic/WebKit 20-second timeouts. The same isolated case passed, then the unchanged full matrix passed 10/414 in 16.05 seconds. Deadlines and assertions were unchanged. Both failure logs are retained locally.
+
+Earlier preview-only browser/full counts do not qualify this Apply flow. The updated matrix uses real UI/controller/handler/persistence with a synthetic runtime; actual Pi scripting is tested separately. Full production authentication and live MCP transports are outside this component fixture.
 
 No production install, configuration change, provider call, native activation or restart was performed.

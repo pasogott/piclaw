@@ -1,4 +1,4 @@
-@shared @implemented @settings @mcp
+@shared @implemented @browser-verified @settings @mcp
 Feature: Instance-wide MCP codemode settings
   # Browser mapping: runtime/test/web/mcp-settings.playwright.optional.test.ts
   # Backend mapping: runtime/test/channels/web/mcp-settings.test.ts
