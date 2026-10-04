@@ -731,6 +731,11 @@ export function installWebChannelPrototype(
         } = {},
       ): InteractionRow | null => service.storeMessage(chatJid, content, isBot, mediaIds, options)),
     },
+    admitUserMessage: {
+      configurable: true,
+      writable: true,
+      value: withRuntimePublicSurface((service, ...args: Parameters<WebChannelRuntimePublicSurfaceService['admitUserMessage']>) => service.admitUserMessage(...args)),
+    },
     serveStatic: {
       configurable: true,
       writable: true,

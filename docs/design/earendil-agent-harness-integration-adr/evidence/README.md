@@ -1,6 +1,21 @@
 # Evidence register
 
-## Selected Pi 1.0.0
+## Selected Pi 1.0.1
+
+Exact upstream target: `a7229ddc21810d6245105978033b7df645ecc2f7`. [Source migration #1537](https://github.com/rcarmo/piclaw/pull/1537) is merged; Smith's initial installation was verified separately. Native/Apply, production Delegate integration, combined qualification and live-canary criteria are incomplete. Adapter/Auto stays the default.
+
+| Evidence | Scope / state |
+|---|---|
+| [Source migration](../../../development/pi-101-migration.md) | Exact core package pins and current-loop qualification; later source merges do not extend the initial installation receipt. |
+| [Registry provenance](receipts/earendil-101-registry.json) and [package admission](receipts/earendil-101-package-admission.json) | Fresh exact-version archives, package closure and offline admission. |
+| [Provider auth](receipts/earendil-101-provider-auth.json), [browser](receipts/earendil-101-provider-browser-bun.json) and [devices](receipts/earendil-101-provider-devices-bun.json) | Isolated synthetic public auth flows; real-account parity/canary is separate. |
+| [Packaged CLI auth](receipts/earendil-101-packaged-cli-auth-bun.json) and [Codex device flow](receipts/earendil-101-codex-device-bun.json) | Exact published CLI and device-flow fixtures under Bun; no live accounts or provider inference. |
+| [Public MCP contract](receipts/earendil-101-mcp-public.json) | Positive synthetic public factories and ten missing public contracts; Native parity/activation unqualified. Failed-teardown evidence is a separate gate. |
+| [Private-auth UI](receipts/earendil-101-anthropic-private-ui.json) | Synthetic privacy/activation UI cases; no private production-defect disclosure or live account acceptance. |
+| [Upgrade coherence](../../../development/pi-101-upgrade-coherence.md) and [public shutdown consumer](../../../development/mcp-public-shutdown-consumer.md) | Qualified source follow-ups; authoritative adapter acknowledgement does not certify Native teardown. |
+| [Delegate synthetic qualification](https://github.com/rcarmo/piclaw-addons/blob/cc8a67c/scripts/qualification/DELEGATE-AUTH-101.md) | Fresh public provider/private-pipe fixture from add-on #172; production auth/environment, cancellation, engine and budget gates are separate. |
+
+## Historical Pi 1.0.0 migration and approved durable design
 
 | Evidence | Scope / state |
 |---|---|
