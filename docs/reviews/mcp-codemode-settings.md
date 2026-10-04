@@ -31,7 +31,15 @@ Two delegate reviews timed out and supplied no findings or approval. Self-review
 
 ## Pending qualification
 
-- Full frozen runtime/feature/web gate after adopting the independently qualified core cleanup/admission changes, then exact-head delta verification before publication.
+- Corrected full frozen runtime/feature/web gate, then exact-head delta verification before publication.
+
+## Full-gate fixture correction
+
+The first full gate at `c699a9fbb` exposed four failures in production-session thinking and persistence-sanitisation fixtures. Those fixtures inherited the helpers' shared workspace, which an earlier test left with a `0644` configuration. Session creation now reads the MCP policy through the existing owned-private-file check and rejects that fixture configuration. The run was stopped to correct the fixtures; exit 143 and its four failures are retained in `/workspace/tmp/mcp-settings-full/` (log SHA-256 `274157a6b3883bf19eaee404aa3c6e163c896a09337d7b12ee1fe831928f6836`).
+
+An isolated preload creating the same shared `0644` config reproduced exactly four failures, with 22 passing tests. The two affected files now give production-session cases their own disposable workspace, private `0600` config and restored environment; all original thinking/sanitisation assertions are retained. The same preload then passed 26 tests / 128 assertions. Runtime configuration policy and production code are unchanged. Expanded MCP tests passed 91 / 554 assertions, and all five typecheck stages passed with the unchanged frontend baseline.
+
+PR #1539 merged as `469750211`; its tree equals the previously adopted candidate `fa54cc113`. Merging that main head into MCP produced the same committed tree as the first frozen gate before the fixture-only correction. The corrected full gate must pass before publication.
 
 ## Candidate profiling
 
