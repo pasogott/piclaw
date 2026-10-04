@@ -25,12 +25,13 @@ Adapter codemode settings now apply through the owner-only backend in Classic an
 | Strict standalone Visual MCP component/shared-controller compilation | Passed |
 | Scoped lint; silent-catch/logging/cycle/test-entrypoint checks | Passed |
 | Separate @github source review of controller/handler | No confirmed blocker; hanging-abort and resume-refusal regressions requested, added and passed |
+| Separate @github final shared-controller/Classic/Visual review at `40112de02` | No confirmed UI blocker; stale-response suppression, acknowledgement, Apply control locking, exact persisted/observed confirmation and explicit native rejection reviewed |
 
 Two delegate reviews timed out and supplied no findings or approval. Self-review subsequently added a post-resume inspection-failure regression and restored the global captured-prompt fence in that failure path. A type-only local import created a dependency cycle; the host now uses a small structural contract and the cycle check passes. SDK review also found that unchanged active-tool writes rebuild prompts and can reset pending tool discovery. Synchronisation now writes only when codemode membership differs; unit and actual Pi hook regressions pass (14 tests / 60 assertions).
 
 ## Pending qualification
 
-- Full frozen runtime/feature/web gate and final exact-head review before publication.
+- Full frozen runtime/feature/web gate after adopting the independently qualified core cleanup/admission changes, then exact-head delta verification before publication.
 
 ## Candidate profiling
 
