@@ -72,6 +72,8 @@ describe("request guards", () => {
     expect((await enforceRequestGuards(channel, req, path, getRouteFlags(req, path)))?.status).toBe(429);
     const preview = new Request("https://example.com" + path + "/preview", { method: "POST", headers: { origin: "https://example.com", host: "example.com" } });
     expect((await enforceRequestGuards(channel, preview, path + "/preview", getRouteFlags(preview, path + "/preview")))?.status).toBe(429);
+    const apply = new Request("https://example.com" + path + "/apply", { method: "POST", headers: { origin: "https://example.com", host: "example.com" } });
+    expect((await enforceRequestGuards(channel, apply, path + "/apply", getRouteFlags(apply, path + "/apply")))?.status).toBe(429);
   });
 
   test("rejects mutating requests that fail the CSRF origin check", async () => {

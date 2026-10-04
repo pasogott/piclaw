@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { createMcpSettingsController, type McpSettingsState } from '../../web/src/ui/mcp-settings-model.js';
 
 function payload(engine = 'adapter', codemode = 'auto') {
-    return { ok: true, persisted: { policy: { engine: 'adapter', codemode: 'auto' } }, runtime: { configuredFactory: 'adapter', observedPolicy: null, connectionStatus: 'unknown', applyAvailable: false }, readiness: { adapter: true, native: false, codemode: false }, servers: [{ name: 'test', nativeProjectionStatus: 'mapped' }], plan: { policy: { engine, codemode }, applicable: engine === 'adapter', codemodeEnabled: false, issues: [] }, applyAvailable: false };
+    return { ok: true, revision: 'opaque-fixture', effect: 'abort_active_turns_and_update_codemode', nativeBlockReason: 'Native shutdown acknowledgement is unqualified.', nativeBlockers: ['Closure unqualified'], persisted: { policy: { engine: 'adapter', codemode: 'auto' } }, runtime: { configuredFactory: 'adapter', observedPolicy: {engine:'adapter',codemode:'auto'}, connectionStatus: 'unknown', applyAvailable: true }, readiness: { adapter: true, native: false, codemode: true }, servers: [{ name: 'test', nativeProjectionStatus: 'mapped' }], plan: { policy: { engine, codemode }, applicable: engine === 'adapter', codemodeEnabled: codemode === 'on', issues: [] }, applyAvailable: engine === 'adapter' };
 }
 function harness() {
     let state: McpSettingsState;
@@ -65,6 +65,28 @@ test('unmount aborts work and suppresses every late state update', async () => {
     h.controller.dispose(); expect(h.calls[0].options.signal?.aborted).toBe(true);
     h.calls[0].finish(Response.json(payload())); await loading;
     expect(h.states).toHaveLength(count); await h.controller.refresh(); expect(h.calls).toHaveLength(1);
+});
+
+test('Apply requires fresh preview and explicit acknowledgement; active Apply cannot overlap selection or refresh', async () => {
+    const h = harness(), read = h.controller.refresh(); h.calls[0].finish(Response.json(payload())); await read;
+    await h.controller.apply(true); expect(h.calls).toHaveLength(1);
+    h.controller.select({codemode:'on'});
+    const preview = h.controller.preview(); h.calls[1].finish(Response.json(payload('adapter','on'))); await preview;
+    await h.controller.apply(false); expect(h.calls).toHaveLength(2);
+    const apply = h.controller.apply(true); expect(h.state.applying).toBe(true);
+    expect(JSON.parse(h.calls[2].options.body as string)).toEqual({policy:{engine:'adapter',codemode:'on'},revision:'opaque-fixture',acknowledgeInterruptions:true});
+    h.controller.select({codemode:'off'}); await h.controller.refresh(); await h.controller.apply(true);
+    expect(h.calls).toHaveLength(3); expect(h.state.draft.codemode).toBe('on');
+    const result = payload('adapter','on'); result.persisted.policy.codemode='on';result.runtime.observedPolicy.codemode='on';
+    h.calls[2].finish(Response.json(result));await apply;
+    expect(h.state.applied).toBe(true); expect(h.state.previewed).toBe(false); expect(h.state.applying).toBe(false);h.controller.dispose();
+});
+
+test('Apply errors never claim rollback or retain server state', async () => {
+    const h = harness(), read = h.controller.refresh(); h.calls[0].finish(Response.json(payload())); await read;
+    const preview = h.controller.preview(); h.calls[1].finish(Response.json(payload())); await preview;
+    const apply = h.controller.apply(true);h.calls[2].finish(Response.json({error:'PRIVATE_SENTINEL'},{status:503}));await apply;
+    expect(h.state.applied).toBe(false);expect(h.state.payload).toBeNull();expect(h.state.error).toContain('Refresh');expect(h.state.error).not.toContain('PRIVATE_SENTINEL');h.controller.dispose();
 });
 
 test('denial and malformed server results clear prior state and do not expose raw errors', async () => {
