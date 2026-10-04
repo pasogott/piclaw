@@ -5,6 +5,18 @@ import { getIdentityConfig, setAssistantAvatar } from '../../../src/core/config.
 import { handleAgentMessage } from "../../../src/channels/web/handlers/agent.ts";
 
 describe("web agent message handler", () => {
+  test('fresh streaming state prevents a compose wake even if the active flag is false',async()=>{
+    let wakes=0,admissions=0;
+    const channel={agentPool:{isStreaming:()=>true,isActive:()=>false},getQueuedFollowupCount:()=>0,resumeChat:()=>{wakes++;},admitQueuedFollowupItem:async()=>{admissions++;return -1;},broadcastEvent:()=>{},json:(body:unknown,status=200)=>Response.json(body,{status})} as any;
+    const response=await handleAgentMessage(channel,new Request('https://fixture/agent/default/message',{method:'POST',body:JSON.stringify({content:'stay queued while streaming',mode:'queue'})}),'/agent/default/message','web:test','default');
+    expect(response.status).toBe(201);expect(admissions).toBe(1);expect(wakes).toBe(0);
+  });
+  test('manual queue remains deferred when streaming stops during storage admission',async()=>{
+    let streaming=true,wakes=0;
+    const channel={agentPool:{isStreaming:()=>streaming,isActive:()=>false},getQueuedFollowupCount:()=>0,resumeChat:()=>{wakes++;},admitQueuedFollowupItem:async()=>{streaming=false;return -1;},broadcastEvent:()=>{},json:(body:unknown,status=200)=>Response.json(body,{status})} as any;
+    const response=await handleAgentMessage(channel,new Request('https://fixture/agent/default/message',{method:'POST',body:JSON.stringify({content:'/queue explicitly deferred'})}),'/agent/default/message','web:test','default');
+    expect(response.status).toBe(201);expect((await response.json()).queued).toBe('followup');expect(wakes).toBe(0);
+  });
   test('queued HTTP acknowledgement follows durable admission and rejects changed authority without broadcast', async () => {
     let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
     let admitted=false,active=true,wakes=0;const events:string[]=[];

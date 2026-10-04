@@ -691,9 +691,8 @@ export async function handleAgentMessage(
   const isStreaming = typeof channel.agentPool.isStreaming === "function"
     ? channel.agentPool.isStreaming(chatJid)
     : false;
-  const isActive = typeof (channel.agentPool as { isActive?: (chatJid: string) => boolean }).isActive === "function"
-    ? (channel.agentPool as { isActive: (chatJid: string) => boolean }).isActive(chatJid)
-    : isStreaming;
+  const isActive = isStreaming || (typeof (channel.agentPool as { isActive?: (chatJid: string) => boolean }).isActive === "function"
+    && (channel.agentPool as { isActive: (chatJid: string) => boolean }).isActive(chatJid));
   const hasQueuedBacklog = channel.getQueuedFollowupCount(chatJid) > 0;
   // NOTE: we intentionally use the in-memory active-run flags—not the DB
   // inflight marker—to decide whether to queue/defer. The DB marker survives
@@ -807,10 +806,12 @@ export async function handleAgentMessage(
       ...(extras.source ? { source: extras.source } : {}),
       ...(queuedBy && Object.keys(queuedBy).length > 0 ? { queued_by: queuedBy } : {}),
     });
-    const stillActive = typeof (channel.agentPool as { isActive?: (jid: string) => boolean }).isActive === 'function'
-      ? (channel.agentPool as { isActive: (jid: string) => boolean }).isActive(chatJid)
-      : channel.agentPool.isStreaming?.(chatJid) === true;
-    if (extras.wakeIfIdle || !stillActive) {
+    const stillActive = (typeof (channel.agentPool as { isActive?: (jid: string) => boolean }).isActive === 'function'
+      && (channel.agentPool as { isActive: (jid: string) => boolean }).isActive(chatJid))
+      || channel.agentPool.isStreaming?.(chatJid) === true;
+    // Manual /queue remains deferred even while idle. Compose admission opts
+    // in so a turn ending during an asynchronous lock wait cannot strand input.
+    if (extras.wakeIfIdle && !stillActive) {
       channel.resumeChat(chatJid);
     }
     return channel.json({ queued: "followup", thread_id: queuedThreadId }, 201);
@@ -1023,7 +1024,7 @@ export async function handleAgentMessage(
       screenHint: normalized.screenHint,
       source: "web.compose",
       browserContext: browserObservability,
-      wakeIfIdle: hasQueuedBacklog && !isActive,
+      wakeIfIdle: true,
     });
 
     return response;
