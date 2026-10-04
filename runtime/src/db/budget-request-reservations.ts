@@ -166,7 +166,8 @@ export function settleBudgetRequest(binding: BudgetRequestBinding, usage: Omit<T
         || [usage.cost_total,usage.cost_input,usage.cost_output,usage.cost_cache_read,usage.cost_cache_write].some(cost => cost !== 0))) throw new BudgetRequestError('invalid_binding');
     // A charge with this host identity must never pre-exist under another owner.
     if (database.query('SELECT 1 FROM token_usage WHERE usage_event_id=?').get(eventId)) throw new BudgetRequestError('conflict');
-    storeTokenUsage({ ...usage, work_id: binding.workId, invocation_id: binding.id, usage_event_id: eventId, execution_kind: 'delegate' },database);
+    storeTokenUsage({ ...usage, work_id: binding.workId, invocation_id: binding.id, usage_event_id: eventId,
+      execution_kind: getBudgetWork(binding.workId, database)!.execution_kind },database);
     database.query("UPDATE budget_request_reservations SET state='settled',settlement_sha256=?,usage_event_id=?,updated_at=? WHERE id=?").run(hash,eventId,new Date().toISOString(),binding.id);
     return getBudgetRequest(binding.id,database)!;
   }).immediate();
