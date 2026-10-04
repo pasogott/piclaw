@@ -14,7 +14,7 @@ export function isSqliteContention(error: unknown): boolean {
 export async function admitSqliteWrite<T>(
   database: Database,
   operation: () => T,
-  authorise: () => void,
+  authorise: (phase: 'before' | 'after') => void,
   signal: AbortSignal,
   timeoutMs = 5000,
   assertBinding: () => void = () => {},
@@ -29,10 +29,10 @@ export async function admitSqliteWrite<T>(
     database.exec('PRAGMA busy_timeout=0');
     try {
       return database.transaction(() => {
-        authorise();
+        authorise('before');
         signal.throwIfAborted();
         const result = operation();
-        authorise();
+        authorise('after');
         signal.throwIfAborted();
         return result;
       }).immediate();

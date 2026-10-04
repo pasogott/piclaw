@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-10-04T13:37:50.154Z",
+  "recordedAt": "2026-10-04T14:33:07.597Z",
   "baseMain": "a01b76730f694c9c0940e9223094e2f4021fe37f",
   "runtime": "Bun 1.4.2",
   "host": "Smith LXC",
@@ -237,6 +237,110 @@
       ],
       "scheduled": 2,
       "scope": "actual WebChannel router/guards/storage/prototype/SSE; no-op task executor/provider; auth disabled single-user owned loopback"
+    },
+    {
+      "log": "idle-authority-authenticated-profile-v2.log",
+      "logSha256": "3ff00500093f450d06cbc28bfc640decc77e5c73467cb645d326f0dde08ea399",
+      "kind": "public-idle-admission-load",
+      "results": [
+        {
+          "mode": "idle",
+          "input": {
+            "status": 201,
+            "ms": 33.72970699999996,
+            "requestId": true,
+            "serverTiming": "app;dur=31.7",
+            "hasMessage": true
+          },
+          "timeline": {
+            "status": 200,
+            "ms": 33.76719800000001
+          },
+          "sse": {
+            "ms": 33.85492299999987
+          },
+          "timerDelayMs": 33.663536999999906
+        },
+        {
+          "mode": "writer-lock",
+          "input": {
+            "status": 201,
+            "ms": 2052.711196,
+            "requestId": true,
+            "serverTiming": "app;dur=2052.3",
+            "hasMessage": true
+          },
+          "timeline": {
+            "status": 200,
+            "ms": 1.6612529999997605
+          },
+          "sse": {
+            "ms": 2052.705436
+          },
+          "timerDelayMs": 10.106667000000016
+        }
+      ],
+      "scheduled": 2,
+      "instrument": true,
+      "authenticated": true,
+      "metrics": {
+        "idle.json.stringify": {
+          "count": 22,
+          "ms": 0.0997390000006817
+        },
+        "idle.sqlite.query": {
+          "count": 16,
+          "ms": 0.14487499999904685
+        },
+        "idle.json.parse": {
+          "count": 15,
+          "ms": 0.061642999998639425
+        },
+        "idle.sqlite.prepare": {
+          "count": 17,
+          "ms": 0.564668000000438
+        },
+        "idle.sqlite.exec": {
+          "count": 2,
+          "ms": 0.036410000000159926
+        },
+        "writer-lock.json.stringify": {
+          "count": 261,
+          "ms": 0.8573200000037104
+        },
+        "writer-lock.sqlite.query": {
+          "count": 97,
+          "ms": 0.6133640000002742
+        },
+        "writer-lock.json.parse": {
+          "count": 15,
+          "ms": 0.04583299999922019
+        },
+        "writer-lock.sqlite.prepare": {
+          "count": 15,
+          "ms": 0.2952529999975013
+        },
+        "writer-lock.sqlite.exec": {
+          "count": 162,
+          "ms": 0.9817560000005869
+        }
+      },
+      "eventLoop": {
+        "resolutionMs": 1,
+        "samples": 1782,
+        "maxMs": 26.46996,
+        "p50Ms": 0.100031,
+        "p95Ms": 0.265983,
+        "p99Ms": 0.703487
+      },
+      "memory": {
+        "rss": 116916224,
+        "heapTotal": 19755008,
+        "heapUsed": 21279223,
+        "external": 6843121,
+        "arrayBuffers": 742
+      },
+      "scope": "actual WebChannel router/guards/storage/prototype/SSE; no-op task executor/provider; verified synthetic cookie; unauthenticated POST rejected single-user owned loopback"
     }
   ],
   "sourceSha256": {
@@ -658,5 +762,97 @@
     "statement run/get calls not separately instrumented; transaction/commit wall attribution unmeasured",
     "event-loop samples include idle timer/25ms retry backoff and startup excluded from monitor",
     "no before/afterCPU claim or representative production-load benchmark"
-  ]
+  ],
+  "authorityCorrection": {
+    "status": "reviewed focused candidate; fresh full gate required",
+    "reviewers": [
+      "github",
+      "auditor"
+    ],
+    "focused": {
+      "tests": 119,
+      "assertions": 797,
+      "files": 17
+    },
+    "browser": {
+      "tests": 4,
+      "assertions": 36,
+      "engines": [
+        "chromium",
+        "webkit"
+      ],
+      "skins": [
+        "classic",
+        "visual"
+      ]
+    },
+    "disk": {
+      "tests": 1,
+      "assertions": 2
+    },
+    "types": "five stages passed; 95 unchanged frontend diagnostics",
+    "lint": "changed TypeScript files passed",
+    "baselineImportBoundaries": {
+      "violations": 10,
+      "unchangedFiles": 5,
+      "comparedAgainst": [
+        "a01b76730",
+        "3e2b0eaf0"
+      ],
+      "checkerUnchanged": true
+    },
+    "sourceHashes": {
+      "runtime/src/channels/web/handlers/agent.ts": "7cf296bde2dcb0d916191b24b3551ac453b6ff75e8db666256080a5471716fbc",
+      "runtime/src/extensions/chat-tool-runtime.ts": "1567483c38ead6f90df2e432de480e1ee591b34235b4c5327a4b178bb8de12e4",
+      "runtime/src/channels/web/messaging/input-request-authority.ts": "4d2c663231434a5224123a0af5e6fefa8fcf82a8bc54a91a327839a6b730eb0c"
+    },
+    "logs": [
+      {
+        "log": "idle-authority-composed-broad.log",
+        "sha256": "7d3152d98ede092fcad403f7a6d0729a85a2391e9bd7a8f9109fde5dfff71a5d"
+      },
+      {
+        "log": "idle-authority-composed-types.log",
+        "sha256": "dfd0c6d3af373830a215c2274b74fba3950b6edffc950c5db83eccf51ae8e409"
+      },
+      {
+        "log": "idle-authority-composed-lint-v2.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "log": "idle-authority-composed-disk.log",
+        "sha256": "5d6b2acbec58e12eaca2c3774a9f7ca53af02c2d2f87e57e35e49cce6d95627e"
+      },
+      {
+        "log": "idle-authority-composed-browser.log",
+        "sha256": "aa78a4f8fd6b946f0495f4c2daf87cb0e399958c7a3dd97e61c25a66081482b3"
+      },
+      {
+        "log": "idle-authority-original-red.log",
+        "sha256": "7c624afddf090946dd0a4a9c0b222c9b32bbb2993825f818832bfad2d9ba9c02"
+      },
+      {
+        "log": "idle-authority-composed-red.log",
+        "sha256": "91b7dabf9ca05a8261808d7bb86021ae2056501ae15a3eaae83a4c34c17f5b5b"
+      },
+      {
+        "log": "idle-authority-authenticated-profile.log",
+        "sha256": "cfb2e56d928c2f0e3deb16a7d8f83e80c3ff2aa6b75a0b3c9bd64c44c4c6ca16"
+      },
+      {
+        "log": "idle-authority-import-boundaries.log",
+        "sha256": "a6f1c473bc313b93dc097f038846f601cc68bd55bb16b6847d78bb884b8acf19"
+      }
+    ],
+    "stoppedFull": {
+      "head": "3e2b0eaf0ed0344e9a4b651ed1ac1a01db6614c5",
+      "qualifying": false,
+      "logSha256": "72c6823e9b329cd165e03dc30c8f7691a239430d585e0aa4599ca1330aa676e6"
+    },
+    "limitations": [
+      "Source and forwarded target transactions are separate; partial target errors include source receipt",
+      "No provider execution, deployment or production delay attribution",
+      "Delegated baseline-only analysis timed out; direct exact file comparisons completed"
+    ]
+  }
 }

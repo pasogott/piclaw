@@ -24,6 +24,12 @@ Separate source review found two blocking issues in the initial implementation:
 
 No timeout, original functional assertion or security policy was relaxed. A new disk fixture initially hit its 15-second child deadline; the failed receipt is retained. Phase-only logging followed by direct and wrapper retries passed within the unchanged deadline. Its original timeout cause is unestablished.
 
+Authority review stopped the first frozen full gate. The corrected ingress binds a private capability to the actual Request, path, chat and raw body; headers, markers and internal URLs cannot mint it. Cookie sessions and internal secrets are freshly verified before admission. Trusted host and local-context inputs preserve their execution scope, cancellation and target lifetime.
+
+New-target creation happens inside admission. Each retry must still match the original target; the post-mutation check recognises only that attempt's exact created branch. Tests reject external creation after a rolled-back BUSY attempt and roll back branch, chat, message and spill on cancellation before commit.
+
+Mentions admit the source asynchronously before forwarding. The target has a separate transaction. Forwarding revalidates the source's committed lifetime and the original target binding; failed forwarding returns `source_committed: true`, the source interaction and `relayed: false`. This includes authority loss before the forwarding capability is bound. Direct relay rejects a persisted archived source or target without reviving it through stale AgentPool state.
+
 ## Measurements
 
 The [synthetic receipt](../development/receipts/idle-input-admission-profile.json) records a two-second owned WAL writer against actual handlers and public WebChannel routing/storage/SSE.
@@ -31,8 +37,9 @@ The [synthetic receipt](../development/receipts/idle-input-admission-profile.jso
 - Prior idle-handler/store probe: ordinary input, unrelated HTTP, SSE and timer all delayed about 2,058 ms under the writer lock; idle acknowledgement about 32 ms.
 - Candidate public WebChannel, three runs: durable input/SSE waited 2,032–2,603 ms; concurrent timeline GET returned in 1.93–2.11 ms and timer delay stayed 10.08–10.28 ms. Idle acknowledgement was 25–33 ms. The input is never acknowledged before commit.
 - Requests include actual router/guards/prototype/storage and correlated Server-Timing/request IDs. The executor is a no-op, authentication is disabled for the owned single-user fixture, and provider execution is excluded.
+- Latest corrected-source authenticated probe: unauthenticated POST returned 401; a verified synthetic cookie admitted two rows and scheduled two synthetic tasks. Under the two-second writer, durable ACK/SSE took 2,053 ms, timeline GET 1.66 ms and timer 10.11 ms. Instrumented whole-probe event-loop maximum was 26.47 ms, p99 0.70 ms. This fixture uses actual public guards/storage/SSE, with no provider execution.
 
-Writer duration, durable commit and process scheduling vary; these runs are not whole-system speed benchmarks. Browser renderer CPU, authenticated repairs, family ingress, maintenance and commands remain separate coverage gaps.
+Writer duration, durable commit and process scheduling vary; these runs are not whole-system speed benchmarks. Browser renderer CPU, production authentication repairs, family ingress, maintenance and commands remain separate coverage gaps.
 
 Three method-instrumented runs recorded 1,736–1,771 event-loop samples at 1 ms resolution. The whole probe's worst delays were 20.8–33.0 ms, with p99 0.63–0.67 ms; this includes idle HTTP work and retry backoff. The locked request made 160 SQLite exec calls and 82 query lookups as it retried, totalling about 1.0–1.1 ms and 0.71–0.77 ms respectively. It also made 256 JSON serialisations (about 1.0–1.1 ms) and 13 parses (about 0.07 ms). Statement run/get timing and isolated commit cost were not instrumented. These call counts expose retry overhead without a production throughput claim.
 
@@ -46,5 +53,15 @@ A whole-process CPU profile includes fresh schema creation and module loading; n
 - Shipped Classic/Visual acknowledgement, rejection and event-order deduplication: four browser cases / 36 assertions, Chromium and WebKit.
 - Web build: nine checks / 26 assertions. Five typecheck stages pass with 95 unchanged pre-existing frontend transitive diagnostics; scoped lint, circular-dependency and silent-catch checks pass.
 - Independent final narrow reviews found no additional confirmed blocker after the two boundary corrections. A frozen full gate and final exact-head checks are still required before publication.
+
+### Corrected-authority candidate
+
+- Fresh authority/caller/storage/queue regression: 119 passed / 797 assertions across 17 files. The expanded matrix includes real guards, trusted host/new-source mentions, local-context scope, relay/tool signal forwarding, forged bindings, original cookie expiry/revocation, real branch incarnation/archive checks and truthful partial source receipts.
+- Fresh disk gate: one passed / two assertions. Fresh shipped Classic/Visual ACK browsers: four passed / 36 assertions across Chromium and WebKit, serially.
+- Five typecheck stages, scoped changed-file lint, silent-catch, structured logging, pack hygiene and stale distribution checks pass. Import-boundary check still fails on ten existing edges across five files; all five files are byte-identical to base `a01b76730` and frozen `3e2b0eaf0`, and the checker is unchanged.
+- Both independent source reviews cleared the corrected candidate. Two reviewed Pi 1.0.1 ADR index corrections are included before the fresh freeze; historical 1.0.0 receipts stay unchanged.
+- Failed authority gates, the stopped original full run, the composed-caller expected-red run (five failures), an initial authenticated-fixture 401 assertion failure and a delegated baseline-check timeout are retained. The authenticated fixture set its test TOTP value after module bootstrap; the rerun sets the existing mutable test runtime field before constructing WebChannel and proves unauthenticated denial.
+
+The old frozen full run does not qualify these corrections. Fresh full qualification and publication permission are still required.
 
 No production install, restart, private credential/provider call or live database mutation was performed. The complete live thirty-second report remains open.

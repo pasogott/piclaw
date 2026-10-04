@@ -107,7 +107,7 @@ export class QueuedFollowupLifecycleService {
 
   async admitQueuedFollowupItem(
     args: Parameters<QueuedFollowupLifecycleService['enqueueQueuedFollowupItem']>,
-    authorise: () => void,
+    authorise: (phase?: 'before' | 'after') => void,
     signal: AbortSignal,
   ): Promise<number> {
     const database = getDb();
@@ -118,7 +118,7 @@ export class QueuedFollowupLifecycleService {
         || JSON.stringify([getWorkspaceDir(), getStoreDir(), getConfigPath()]) !== paths) throw Error('Queue database binding changed.');
       if (binding) { const stat=statSync(binding.path); if(`${stat.dev}:${stat.ino}` !== binding.identity) throw Error('Queue database file changed.'); }
     };
-    const check = () => { assertBinding(); authorise(); };
+    const check = (phase: 'before' | 'after') => { assertBinding(); authorise(phase); };
     return admitSqliteWrite(database, () => this.enqueueQueuedFollowupItem(...args), check, signal, 5000, assertBinding);
   }
 

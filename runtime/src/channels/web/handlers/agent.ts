@@ -59,6 +59,7 @@ import {
 } from "../../../db.js";
 import { detectChannel, formatMessages, formatOutbound } from "../../../router.js";
 import { isSqliteContention } from '../../../db/sqlite-async-admission.js';
+import { bindInputRequestAuthority, readInputRequestAuthority, releaseInputRequestAuthority, captureInputTarget, type ValidateInputAuthority } from '../messaging/input-request-authority.js';
 import { createAgentProfileBuilder } from "../agent/agent-utils.js";
 import { buildGeneralSettingsProfileUpdate, getGeneralSettingsData } from "./general-settings.js";
 import { resolveAvatarUrl } from "../media/avatar-service.js";
@@ -624,6 +625,27 @@ function shouldPersistSteerRequest(req: Request, payload: { persist_steer?: bool
   return payload?.persist_steer === true || req.headers.get("X-Piclaw-Persist-Steer") === "1";
 }
 
+// Only in-process forwarding can share the original guarded request authority.
+// No request body/header can supply or replace this capability.
+function captureInputAuthority(channel: WebChannelLike, req: Request): () => void {
+  const gateway = channel.authGateway;
+  const authEnabled = gateway?.isAuthEnabled?.() === true;
+  const principal = gateway?.getPrincipal?.(req, true) ?? null;
+  const key = (value: typeof principal) => JSON.stringify(value && [value.kind, value.userId, value.mode, value.role, value.authentication]);
+  const principalKey = key(principal);
+  const internal = !principal && gateway?.isInternalSecretEnabled?.() === true && gateway.verifyInternalSecret(req);
+  if (authEnabled && !principal && !internal) throw Error('Incoming request has no verified authority.');
+  return () => {
+    req.signal.throwIfAborted();
+    if (readAccessConfig().mode !== 'single-user' || (gateway?.isAuthEnabled?.() === true) !== authEnabled) throw Error('Incoming request authority changed.');
+    if (internal) {
+      if (!gateway.isInternalSecretEnabled() || !gateway.verifyInternalSecret(req)) throw Error('Internal request authority changed.');
+    } else if (key(gateway?.getPrincipal?.(req, true) ?? null) !== principalKey) {
+      throw Error('Incoming request principal changed.');
+    }
+  };
+}
+
 /**
  * Handle a web `/agent/:agentId/message` request by storing user input and starting/queuing a run.
  * @param channel Web channel contract providing persistence, queueing, and broadcast helpers.
@@ -641,11 +663,28 @@ export async function handleAgentMessage(
   defaultAgentId: string
 ): Promise<Response> {
   if (readAccessConfig().mode !== "single-user") return channel.json({ error: "Use account-bound text message admission." }, 403);
-  const admittedPrincipal = channel.authGateway?.getPrincipal?.(req, true);
+  let internalAuthority: ReturnType<typeof readInputRequestAuthority>;
+  let revalidateInputAuthority: ValidateInputAuthority;
+  try { internalAuthority = readInputRequestAuthority(req, chatJid, pathname); revalidateInputAuthority = internalAuthority?.validate ?? captureInputAuthority(channel, req); revalidateInputAuthority(); }
+  catch { return channel.json({ error: 'Input authority is unavailable.' }, 403); }
+  if (internalAuthority) {
+    try {
+      const reader = req.clone().body?.getReader();
+      if (!reader) throw Error('Internal input body is missing.');
+      const chunks: Uint8Array[] = []; let bytes = 0;
+      try {
+        for (;;) { req.signal.throwIfAborted(); const next=await reader.read(); if(next.done)break; bytes+=next.value.length; if(bytes>512*1024)throw Error('Internal input body exceeds bound.'); chunks.push(next.value); }
+        const body = Buffer.concat(chunks.map(chunk=>Buffer.from(chunk))).toString('utf8');
+        internalAuthority.verifyBody(body); revalidateInputAuthority();
+      } finally { await reader.cancel(); reader.releaseLock(); }
+    } catch { return channel.json({ error: 'Internal input binding changed.' }, 403); }
+  }
   const agentId = pathname.split("/")[2] || defaultAgentId;
   const browserObservability = getBrowserObservabilityContext(req);
   const parsed = await parseAgentMessageRequest(req);
   if (parsed.error || !parsed.payload) return channel.json({ error: parsed.error }, 400);
+  try { revalidateInputAuthority(); }
+  catch { return channel.json({ error: 'Input authority changed before admission.' }, 403); }
 
   const normalized = normalizeAgentMessagePayload(parsed.payload);
   const localDispatch = getAddonLocalDispatchBlock(req, chatJid, normalized.content ?? "");
@@ -703,13 +742,23 @@ export async function handleAgentMessage(
   // including streaming/compaction/retry phases of the same turn.
 
   if (mention && mentionTarget && mentionTarget.chat_jid !== chatJid) {
-    const sourceInteraction = storeAgentUserMessage(channel, chatJid, {
-      content: typeof normalized.content === "string" ? normalized.content : content,
-      mediaIds: normalized.mediaIds,
-      contentBlocks: normalized.contentBlocks,
-      linkPreviews: normalized.linkPreviews,
-      screenHint: normalized.screenHint,
-    });
+    const targetJid = mentionTarget.chat_jid;
+    const targetName = mentionTarget.agent_name;
+    const validateTarget = captureInputTarget(targetJid);
+    const sourceContent = typeof normalized.content === 'string' ? normalized.content : content;
+    const sourceOptions = { contentBlocks: normalized.contentBlocks, linkPreviews: normalized.linkPreviews, screenHint: normalized.screenHint };
+    let sourceInteraction: ReturnType<typeof storeAgentUserMessage>;
+    try {
+      // Mentions commit the source before forwarding, but creation and its
+      // authority proof still belong to that source's own admission TX.
+      sourceInteraction = channel.admitUserMessage
+        ? await channel.admitUserMessage(chatJid, sourceContent, normalized.mediaIds, sourceOptions, revalidateInputAuthority, req.signal)
+        : storeAgentUserMessage(channel, chatJid, { content: sourceContent, mediaIds: normalized.mediaIds, ...sourceOptions });
+    } catch (error) {
+      if (req.signal.aborted) return channel.json({ error: 'Input submission was cancelled before acceptance.' }, 400);
+      if (isSqliteContention(error)) return channel.json({ error: 'Message storage is busy; this input was not accepted.' }, 503);
+      return channel.json({ error: 'Source input admission could not be confirmed.' }, 503);
+    }
     if (!sourceInteraction) return channel.json({ error: "Failed to store message" }, 500);
 
     channel.broadcastEvent("new_post", sourceInteraction);
@@ -723,25 +772,37 @@ export async function handleAgentMessage(
     if (browserObservability.userId) forwardHeaders.set("x-piclaw-user-id", browserObservability.userId);
     if (browserObservability.sessionId) forwardHeaders.set("x-piclaw-session-id", browserObservability.sessionId);
     if (browserObservability.clientId) forwardHeaders.set("x-piclaw-client-id", browserObservability.clientId);
+    const forwardBody = JSON.stringify({
+      content: forwardedContent, media_ids: normalized.mediaIds, content_blocks: normalized.contentBlocks,
+      link_previews: normalized.linkPreviews, mode: requestMode,
+      ...(persistSteer ? { persist_steer: true } : {}), screen_hint: normalized.screenHint,
+    });
     const forwardReq = new Request(`http://internal/agent/${agentId}/message?chat_jid=${encodeURIComponent(mentionTarget.chat_jid)}`, {
       method: "POST",
       headers: forwardHeaders,
-      body: JSON.stringify({
-        content: forwardedContent,
-        media_ids: normalized.mediaIds,
-        content_blocks: normalized.contentBlocks,
-        link_previews: normalized.linkPreviews,
-        mode: requestMode,
-        ...(persistSteer ? { persist_steer: true } : {}),
-        screen_hint: normalized.screenHint,
-      }),
+      signal: req.signal,
+      body: forwardBody,
     });
-
-    const forwardRes = await handleAgentMessage(channel, forwardReq, pathname, mentionTarget.chat_jid, defaultAgentId);
-    if (!forwardRes.ok) {
-      return forwardRes;
+    let forwardRes: Response;
+    try {
+      bindInputRequestAuthority(forwardReq, targetJid, forwardBody, phase => {
+        // The source TX is already committed. Recheck that exact receipt, not
+        // its original absent lifetime or the target's new attempt phase.
+        revalidateInputAuthority('after');
+        const currentTarget = typeof channel.agentPool.findChatByAgentName === 'function'
+          ? channel.agentPool.findChatByAgentName(mention!.agentName)
+          : channel.agentPool.findActiveChatByAgentName?.(mention!.agentName);
+        if (currentTarget?.chat_jid !== targetJid || currentTarget?.agent_name !== targetName) throw Error('Mention target changed.');
+        validateTarget(phase);
+      });
+      forwardRes = await handleAgentMessage(channel, forwardReq, pathname, mentionTarget.chat_jid, defaultAgentId);
+    } catch (error) {
+      debugSuppressedError(log, 'Mention forwarding failed after source commit.', error, { operation: 'agent_message.mention_forward_after_commit', chatJid, targetJid, rowId: sourceInteraction.id });
+      forwardRes = channel.json({ error: req.signal.aborted
+        ? 'Mention forwarding was cancelled after source acceptance.'
+        : 'Mention forwarding authority could not be confirmed after source acceptance.' }, req.signal.aborted ? 400 : 403);
     }
-
+    finally { releaseInputRequestAuthority(forwardReq); }
     const responseBody = await forwardRes.json().catch(() => ({} as Record<string, unknown>));
     return channel.json({
       ...responseBody,
@@ -750,18 +811,13 @@ export async function handleAgentMessage(
       source_agent_name: sourceAgentName,
       target_chat_jid: mentionTarget.chat_jid,
       target_agent_name: mentionTarget.agent_name,
-      relayed: true,
+      source_committed: true,
+      relayed: forwardRes.ok,
       mention_routed: true,
     }, forwardRes.status);
   }
 
-  const principalKey = (value: typeof admittedPrincipal) => JSON.stringify(value && [value.kind, value.userId, value.mode, value.role, value.authentication]);
-  const admissionKey = principalKey(admittedPrincipal);
-  const revalidateQueuedAdmission = () => {
-    req.signal.throwIfAborted();
-    if (readAccessConfig().mode !== 'single-user' || principalKey(channel.authGateway?.getPrincipal?.(req, true)) !== admissionKey
-      || (channel.authGateway?.isAuthEnabled?.() && !admittedPrincipal)) throw new Error('Queued input authority changed.');
-  };
+  const revalidateQueuedAdmission = revalidateInputAuthority;
   const queueDeferredFollowup = async (
     queuedContent: string,
     extras: QueueDeferredFollowupExtras = {}

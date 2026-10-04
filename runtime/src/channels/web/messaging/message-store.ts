@@ -215,7 +215,7 @@ export function storeWebMessage(channel: LinkPreviewChannel, params: StoreWebMes
 
 /** Single-user incoming messages only; every retry owns a complete atomic write. */
 export async function admitWebUserMessage(channel: LinkPreviewChannel, params: StoreWebMessageParams, options: StoreWebMessageOptions,
-  authorise: () => void, signal: AbortSignal, deferBeforeInsert?: () => boolean): Promise<InteractionRow | null> {
+  authorise: (phase?: 'before' | 'after') => void, signal: AbortSignal, deferBeforeInsert?: () => boolean): Promise<InteractionRow | null> {
   if (params.isBot || readAccessConfig().mode !== 'single-user') throw Error('Incoming web admission requires single-user authority.');
   const database = getDb(), binding = getDatabaseBinding();
   const paths = JSON.stringify([getWorkspaceDir(), getStoreDir(), getConfigPath()]);
@@ -224,10 +224,10 @@ export async function admitWebUserMessage(channel: LinkPreviewChannel, params: S
       || JSON.stringify([getWorkspaceDir(), getStoreDir(), getConfigPath()]) !== paths) throw Error('Message database binding changed.');
     if (binding) { const stat=statSync(binding.path); if(`${stat.dev}:${stat.ino}` !== binding.identity) throw Error('Message database file changed.'); }
   };
-  const check = () => {
+  const check = (phase: 'before' | 'after') => {
     assertBinding();
     if (readAccessConfig().mode !== 'single-user') throw Error('Incoming message authority changed.');
-    authorise();
+    authorise(phase);
   };
   const prepared = prepareWebMessage(params, options);
   const committed = await admitSqliteWrite(database, () => {
