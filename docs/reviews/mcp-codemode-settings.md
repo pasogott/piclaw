@@ -19,6 +19,7 @@ Adapter codemode settings now apply through the owner-only backend in Classic an
 | Post-retention focused gate at `84ce5ab69` | 31 passed / 286 assertions |
 | Actual Pi 1.0.1 in-memory scripted-provider fixture | Current/new sessions, scripting, nested policy, disabled models, Off enforcement and preserved identity/history passed; enforced zero network/child attempts |
 | Five repository typecheck stages | Passed; 95 pre-existing frontend transitive diagnostics unchanged |
+| Actual Piclaw `createSessionInDir` / bundled adapter integration at `071e484ba` | 4 passed / 32 assertions; eager stdio ownership, policy/quarantine and proxy registration retained |
 | Strict standalone Visual MCP component/shared-controller compilation | Passed |
 | Scoped lint; silent-catch/logging/cycle/test-entrypoint checks | Passed |
 | Separate @github source review of controller/handler | No confirmed blocker; hanging-abort and resume-refusal regressions requested, added and passed |
