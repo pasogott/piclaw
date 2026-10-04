@@ -29,9 +29,11 @@ Adapter codemode settings now apply through the owner-only backend in Classic an
 
 Two delegate reviews timed out and supplied no findings or approval. Self-review subsequently added a post-resume inspection-failure regression and restored the global captured-prompt fence in that failure path. A type-only local import created a dependency cycle; the host now uses a small structural contract and the cycle check passes. SDK review also found that unchanged active-tool writes rebuild prompts and can reset pending tool discovery. Synchronisation now writes only when codemode membership differs; unit and actual Pi hook regressions pass (14 tests / 60 assertions).
 
-## Pending qualification
+## Final frozen gate
 
-- Corrected full frozen runtime/feature/web gate, then exact-head delta verification before publication.
+Frozen head `8adecc7fe495cfc57f2cbb5beff9fe7b4aeb139c`, tree `b60882bc32ed8758973fc236c77434d07c039c4c`, passed `make ci-fast` on 4 October 2026: 6,130 runtime tests, eight existing skips, zero failures, 39,925 assertions in 971.20 seconds; 25 feature tests / 232 assertions and nine web checks / 26 assertions. The tree stayed unchanged through the gate. Log SHA-256: `2cf2b319100d2159ee4a2a6aec01e45e55710b495785f23d929cb9a03b7632a9`; local log `/workspace/tmp/mcp-settings-full-v3/ci-fast.log`.
+
+Postgate focused checks passed 33 tests / 292 assertions. All five typecheck stages passed with 95 unchanged pre-existing frontend transitive diagnostics; pack hygiene passed for 24,752 files, and stale-dist passed. Runtime/handler, both UI renderers, no-op discovery preservation and fixture corrections received independent narrow source review. Only this qualification prose changed after the frozen gate; exact source/test/asset parity is checked before publication. No production install or restart was performed.
 
 ## Full-gate fixture correction
 
