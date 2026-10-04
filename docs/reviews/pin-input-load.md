@@ -35,6 +35,8 @@ The earlier naive queue acknowledgement append was discarded because a consumed 
 
 The first binding fixture closed its DB while the blocker still held its transaction, consuming the retry deadline. The fixture now releases that writer before synchronous close/reopen. Runtime admission checks captured binding before any PRAGMA on the old handle; the corrected disk case passes. This failure is retained locally.
 
+The first full gate at `99fe46668` exposed one production family model-defaults fixture writing its private config with the default `0644` mode. It was stopped on 4 October 2026 at 12:04 UTC; exit 143 and the failure are retained under `/workspace/tmp/ux-pin-input-full/` (log SHA-256 `939b448d3b530cfd41ced009a80d6860992dfbf0ae2720df81e6790d6f073496`). Running that unchanged file alone reproduced six passes / one failure. Adding `mode: 0o600` to its own newly created config passed seven tests / 87 assertions. The production private-file check and all original model/default/authority assertions are unchanged. A new frozen full gate is required; the stopped run is not passing evidence.
+
 ## Profiling and remaining coverage
 
 A whole-process Bun CPU profile contains fresh schema creation and module loading; native `run` frames dominate (237 samples). Frame URLs are absent, so function names cannot identify precise call sites. Raw CPU output stays local; reviewed aggregate counts are in the receipt. No SQL bind values, private conversation content or credentials were collected.
