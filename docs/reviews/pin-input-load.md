@@ -29,7 +29,13 @@ The writer still delays durable acceptance; the candidate yields during that wai
 - Disk pin/binding checks: 10 passed / 39 assertions. Reopened handles and replaced database files are rejected before writing captured state; configuration redirection rolls back. Runtime busy timeout is restored after success, denial and unrelated errors.
 - Browser matrix: eight passed / 64 assertions. Existing Classic/Visual model/session pin synchronisation cases pass; real Visual ChatPanel/QueueStack tests cover absent SSE, held snapshots, consumption, cancel/steer, denied actions and chat-scoped URLs. Display panels are stubbed and this queue fixture uses in-memory SQLite; disk behaviour is tested separately.
 - Web rebuild: nine passed / 26 assertions. Rebuilt browser replay passed eight / 64. Five typecheck stages pass with 95 unchanged pre-existing frontend transitive diagnostics; strict QueueStack/controller compile, scoped lint, cycle and silent-catch checks pass. Two silent fixture rejection observers were corrected to central debug logging before the full gate.
-- Separate source review found and corrected controller/component dual ownership, unscoped action URLs, active-to-idle lost wake and stale DB binding. Final narrow reviews found no additional confirmed blocker. Full frozen gate is pending.
+- Separate source review found and corrected controller/component dual ownership, unscoped action URLs, active-to-idle lost wake and stale DB binding. Final narrow reviews found no additional confirmed blocker.
+
+## Final frozen gate
+
+Frozen head `c3f3cdca9fdbbc7c4c187d4759073d14642d6153`, tree `eb5caa8213e98cb35b2324eae8fdb5cc2d7800ca`, passed `make ci-fast` on 4 October 2026: 6,168 runtime tests, eight existing skips, zero failures / 40,097 assertions in 964.44 seconds; 25 feature tests / 239 assertions and nine web checks / 26 assertions. The tree stayed unchanged through the gate. Local log `/workspace/tmp/ux-pin-input-full-v3/ci-fast.log`; SHA-256 `8b62877be8ded7ad311041381939605bc69c5b42983889ddde1b49316c56a5f2`.
+
+Postgate checks passed 49 tests / 342 assertions, all five typecheck stages with the unchanged frontend baseline, pack hygiene for 24,754 files and stale-dist. Only this qualification prose changed after the frozen gate; runtime/test/asset parity is checked before publication. No production install or restart was performed.
 
 The earlier naive queue acknowledgement append was discarded because a consumed SSE event could precede the HTTP reply and revive an already-consumed row. The candidate uses server snapshots instead. The old UI browser failure is retained; neither timeouts nor functional assertions were relaxed.
 
