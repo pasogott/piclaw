@@ -4,32 +4,38 @@ import { createMcpSettingsController, INITIAL_MCP_SETTINGS, type McpPolicy, type
 
 export function McpSection() {
     const [state, setState] = useState<McpSettingsState>(INITIAL_MCP_SETTINGS);
+    const [acknowledged, setAcknowledged] = useState(false);
     const controller = useRef<ReturnType<typeof createMcpSettingsController> | null>(null);
     useEffect(() => {
         const current = createMcpSettingsController(setState); controller.current = current;
         void current.refresh();
         return () => { current.dispose(); controller.current = null; };
     }, []);
-    const select = (patch: Partial<McpPolicy>) => controller.current?.select(patch);
+    const select = (patch: Partial<McpPolicy>) => { setAcknowledged(false); controller.current?.select(patch); };
     return <section className="settings-panel__section mcp-settings" aria-label="MCP settings">
       <h2 className="settings-panel__section-title">MCP</h2>
-      <p className="settings-panel__description">Instance-wide engine and codemode policy. This pane previews compatibility only; it does not save settings, connect servers or interrupt chats.</p>
+      <p className="settings-panel__description">Instance-wide MCP policy. Preview does not change settings. Apply saves codemode and interrupts active turns, without replacing the MCP owner or clearing chats.</p>
       <button className="settings-panel__button" type="button" disabled={state.loading} onClick={() => void controller.current?.refresh()}>Refresh MCP status</button>
       {state.loading && <p role="status" aria-live="polite">Loading MCP settings…</p>}
       {state.error && <p className="settings-panel__error" role="alert">{state.error}</p>}
       {state.payload && <>
         <div className="settings-panel__field"><strong>Persisted policy</strong><span>{state.payload.persisted.policy.engine} / {state.payload.persisted.policy.codemode}</span></div>
-        <p className="settings-panel__description">Configured factory: {state.payload.runtime.configuredFactory}. Effective policy and connection status: unknown.</p>
+        <p className="settings-panel__description">Configured factory: {state.payload.runtime.configuredFactory}. Observed policy: {state.payload.runtime.observedPolicy ? `${state.payload.runtime.observedPolicy.engine} / ${state.payload.runtime.observedPolicy.codemode}` : 'unknown or blocked'}. Live connection status is unknown.</p>
+        <p className="settings-panel__description">Auto keeps codemode inactive with the adapter; On enables scripting; Off blocks scripting. Model execution inside scripts is disabled.</p>
         <label className="settings-panel__label" htmlFor="mcp-engine">Engine to preview</label>
-        <select className="settings-panel__input" id="mcp-engine" value={state.draft.engine} onChange={e => select({ engine: e.currentTarget.value as McpPolicy['engine'] })}>
+        <select className="settings-panel__input" id="mcp-engine" disabled={state.applying} value={state.draft.engine} onChange={e => select({ engine: e.currentTarget.value as McpPolicy['engine'] })}>
           <option value="adapter">Adapter (default)</option><option value="native">Native (unavailable)</option>
         </select>
         <label className="settings-panel__label" htmlFor="mcp-codemode">Codemode to preview</label>
-        <select className="settings-panel__input" id="mcp-codemode" value={state.draft.codemode} onChange={e => select({ codemode: e.currentTarget.value as McpPolicy['codemode'] })}>
+        <select className="settings-panel__input" id="mcp-codemode" disabled={state.applying} value={state.draft.codemode} onChange={e => select({ codemode: e.currentTarget.value as McpPolicy['codemode'] })}>
           <option value="auto">Auto (default)</option><option value="on">On</option><option value="off">Off</option>
         </select>
         <button className="settings-panel__button" type="button" disabled={state.loading} onClick={() => void controller.current?.preview()}>Preview compatibility</button>
-        <p className="settings-panel__description">Apply unavailable: safe instance-wide switching is not enabled. A future switch will abort active turns and reload all extensions while retaining chats and history.</p>
+        <p className="settings-panel__description">{state.payload.nativeBlockReason}</p>
+        {state.draft.engine === 'native' && <ul>{state.payload.nativeBlockers.map(reason => <li>{reason}</li>)}</ul>}
+        <label><input type="checkbox" checked={acknowledged} disabled={state.loading} onChange={e => setAcknowledged(e.currentTarget.checked)} /> I understand Apply may interrupt active turns across all chats.</label>
+        <button className="settings-panel__button" type="button" disabled={state.loading || !acknowledged || !state.previewed || !state.payload.applyAvailable || !state.preview?.applicable} onClick={() => void controller.current?.apply(acknowledged)}>{state.applying ? 'Applying…' : 'Apply codemode'}</button>
+        {state.applied && <p role="status">Codemode saved and applied to current and new sessions.</p>}
         {state.previewed && state.preview && <div role="status" aria-live="polite"><strong>{state.preview.applicable ? 'Preview compatible — not applied.' : 'Preview blocked — not applied.'}</strong>
           {state.preview.issues.length > 0 && <ul>{state.preview.issues.map(issue => <li>{issue.serverName ? `${issue.serverName}: ` : ''}{issue.field} — {issue.message}</li>)}</ul>}
         </div>}

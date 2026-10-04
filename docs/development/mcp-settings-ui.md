@@ -1,8 +1,8 @@
-# MCP settings preview pane
+# MCP settings pane
 
-Classic and Visual Settings now include an MCP pane backed by the owner-only [read/preview API](mcp-settings-api.md). It previews instance-wide engine and codemode choices; it cannot save settings, start connections or switch engines. Safe Apply and runtime host integration remain separate #1451 work.
+Classic and Visual Settings include an MCP pane backed by the owner-only [settings API](mcp-settings-api.md). It previews engine/codemode compatibility and applies adapter codemode changes to current and new sessions. Engine replacement remains blocked, with the exact 1.0.1 public-contract gaps and closure blocker listed for Native.
 
-Both skins use one request/state controller and their own Preact renderer. Initial load and Refresh use GET; Preview sends only the selected engine/codemode. Changing a selector sends nothing until Preview is pressed. The pane displays persisted policy separately and labels results “not applied”. Effective policy/connection status remain unknown; native is unavailable. Native projection classifications are not connection health.
+Both skins use one request/state controller and their own Preact renderer. Initial load and Refresh use GET; Preview sends only the selected engine/codemode. Changing a selector sends nothing until Preview is pressed. Apply requires a fresh compatible preview and an explicit acknowledgement that turns across all chats may be interrupted. Changing a selector clears that acknowledgement. The pane separates persisted and observed policy; native projection and unknown connection status are not connection health.
 
 ## Request lifecycle and safety
 
@@ -10,8 +10,9 @@ Both skins use one request/state controller and their own Preact renderer. Initi
 - Refresh clears the previous server snapshot while loading. It cannot leave old data looking freshly loaded after a selection cancels the refresh.
 - Partial selection updates merge against controller state, avoiding stale render closures when events arrive in one task.
 - Preview responses must echo the requested policy. Malformed results and owner denials clear retained server data.
+- Active Apply cannot overlap Refresh, Preview or selection changes. Its request sends only the policy, opaque revision and interruption acknowledgement. Success requires both persisted and observed policy to match the draft; errors/ambiguous outcomes ask for a refresh and never claim rollback.
 - Unexpected transport/JSON errors use fixed UI text. Server strings render as escaped text, never HTML.
-- No auth material, server config, Apply/Save endpoint or fallback engine is introduced. The backend remains the authority; the pane itself grants no access.
+- No auth material, server config or fallback engine is introduced. The backend remains the authority; the pane itself grants no access.
 
 Shared theme-compatible CSS constrains controls and long names, with 44-pixel controls below 600px. The pane uses existing Classic/Visual styles. The core MCP nav label is registered in each supported Classic locale; the pane's English copy follows existing core settings conventions.
 
@@ -33,4 +34,4 @@ Full log: `/workspace/tmp/mcp-settings-ui-100/ci-fast.log`, SHA-256 `d74673fbbd9
 
 An initial controller test exposed raw JSON parse text in UI errors; fixed generic unexpected-error handling replaced it. Review found the stale-refresh snapshot issue and incomplete payload validation; both were corrected with regressions. Browser setup initially exceeded the default five-second hook limit; it now has an explicit 30-second setup allowance. Full-shell fixture tests used a wrong Classic open-state flag and an incorrect Visual accessible-name assumption; correcting those fixtures made both pass. No functional assertion was weakened. Esbuild reports the pre-existing shared passkey JSX annotation warning when bundling the whole settings shells.
 
-The UI does not yet edit server definitions/auth/exposure/timeouts or implement safe engine Apply. The full production authentication gateway is not exercised by the component/handler matrix; existing backend/guard tests own that boundary. Runtime switching must retain chats/history, abort active turns, reload whole extensions and keep one owner. No private native-auth gap or capability waiver is inferred.
+The UI does not edit server definitions/auth/exposure/timeouts or implement engine replacement. Adapter codemode changes retain the existing MCP owner without reloading transports. The earlier frozen-gate/profile counts above are historical preview-slice evidence, not qualification of the new Apply flow. The updated browser matrix uses real components/controller/handler/persistence with a synthetic runtime; a separate offline Pi 1.0.1 fixture verifies script execution, nested policy hooks, current/new sessions, Off enforcement, disabled model execution and preserved history. No native-auth gap or capability waiver is inferred.
