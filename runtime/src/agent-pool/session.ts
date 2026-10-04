@@ -65,7 +65,7 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const { createMcpAdapter } = require("pi-mcp-adapter") as {
-  createMcpAdapter(options: { config: unknown; initializeOnLoad?: boolean; resolveRuntimeEnv?: (serverName: string) => Readonly<NodeJS.ProcessEnv> }): ExtensionFactory;
+  createMcpAdapter(options: { config: unknown; initializeOnLoad?: boolean; resolveRuntimeEnv?: (serverName: string) => Readonly<NodeJS.ProcessEnv>; onLifecycle?: (lifecycle: { shutdown(reason?: string): Promise<void> }) => void }): ExtensionFactory;
 };
 const AGENT_DIR = getPiclawAgentDir();
 const EMPTY_STRING_ARRAY: string[] = [];
@@ -607,11 +607,12 @@ export async function createSessionInDir(
   }) => {
     if (mode === 'family-shared' && !requireOwnedSessionExecution(options.chatJid!)) throw new Error('Owned family session identity is required.');
     if (!operationProfile) assertSelectedMcpOwner();
-    const mcpOwner = operationProfile ? null : createMcpBridgeOwner(bridge => createMcpAdapter({
+    const mcpOwner = operationProfile ? null : createMcpBridgeOwner((bridge, onLifecycle) => createMcpAdapter({
       config: bridge.config,
       initializeOnLoad: false,
+      onLifecycle,
       resolveRuntimeEnv: serverName => bridge.resolveRuntimeEnv(serverName),
-    }));
+    }), undefined, { requireLifecycle: true });
     try {
     const builtinExtensionFactories = operationProfile ? [] : [
       ...(mode === 'family-shared' ? [createFamilyToolCallGuard(options.chatJid!)] : []),

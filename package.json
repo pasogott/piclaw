@@ -147,7 +147,7 @@
     "katex": "0.18.4",
     "marked": "18.0.10",
     "openai": "7.5.0",
-    "pi-mcp-adapter": "github:piclaw-bot/pi-mcp-adapter#41f10ee5f54e66adb569182de7bb81f0801105d6",
+    "pi-mcp-adapter": "github:piclaw-bot/pi-mcp-adapter#2400aec570d3c1b379ebbd6941590bdea54cd83d",
     "pptxviewjs": "1.1.9",
     "preact": "10.29.8",
     "proper-lockfile": "4.1.2",
