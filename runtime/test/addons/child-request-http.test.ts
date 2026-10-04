@@ -10,6 +10,11 @@ function fixture(overrides:Partial<Parameters<typeof createChildRequestHttp>[0]>
 test('single exact endpoint send waits admission and overrides redirect policy',async()=>{
  const f=fixture();const response=await f.host.fetch(endpoint,{redirect:'follow'});expect(await response.text()).toBe('synthetic');await f.host.finish();expect(f.calls()).toBe(1);expect(f.admissions()).toBe(1);expect(f.options()?.redirect).toBe('manual');
 });
+test('mutable URL and headers are frozen before asynchronous send admission',async()=>{
+ const admission=gate();const url=new URL(endpoint),headers=new Headers({authorization:'synthetic'});let sentUrl='',sentHeader='';
+ const f=fixture({beforeSend:()=>admission.promise,fetch:async request=>{const captured=request as Request;sentUrl=captured.url;sentHeader=captured.headers.get('authorization')||'';return new Response('synthetic');}});
+ const pending=f.host.fetch(url,{headers});await Bun.sleep(0);url.hostname='changed.invalid';headers.set('authorization','mutated');admission.resolve();const response=await pending;await response.text();await f.host.finish();expect(sentUrl).toBe(endpoint);expect(sentHeader).toBe('synthetic');
+});
 test('revocation after admission prevents actual send without leaking errors',async()=>{
  let revoked=false;const f=fixture({authorise(){if(revoked)throw Error('PRIVATE_DETAIL');},async beforeSend(){revoked=true;}});
  await expect(f.host.fetch(endpoint)).rejects.toThrow('execution_failed');expect(f.calls()).toBe(0);await expect(f.host.finish()).rejects.toThrow('settlement_failed');

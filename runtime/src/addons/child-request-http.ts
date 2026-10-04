@@ -40,15 +40,15 @@ export function createChildRequestHttp(input: {
     track(sending);
     try {
       check();
-      const url = request instanceof Request ? request.url : String(request);
-      if (new URL(url).href !== endpoint || sent) throw new ChildRequestError('unavailable');
+      // Request snapshots URL, headers and request options before admission
+      // yields. Never send a caller-owned mutable URL/header/options object.
+      const captured = new Request(request, options);
+      if (captured.url !== endpoint || sent) throw new ChildRequestError('unavailable');
+      const combined = AbortSignal.any([signal, captured.signal]);
       sent = true;
       await beforeSend();
-      check();
-      const requestSignal = request instanceof Request ? request.signal : undefined;
-      const combined = AbortSignal.any([signal, ...(requestSignal ? [requestSignal] : []), ...(options?.signal ? [options.signal] : [])]);
-      combined.throwIfAborted();
-      response = await upstream(request, { ...options, redirect: 'manual', signal: combined });
+      check(); combined.throwIfAborted();
+      response = await upstream(captured, { redirect: 'manual', signal: combined });
       if (response.status >= 300 && response.status < 400) {
         if (response.body) await response.body.cancel();
         throw new ChildRequestError('execution_failed');
