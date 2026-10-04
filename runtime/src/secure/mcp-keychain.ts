@@ -51,11 +51,19 @@ export interface McpSessionBridgeLease {
 }
 
 let preparedSnapshot: McpBridgeSnapshot = emptySnapshot();
+let preparedSourceIdentities: Record<string, string | null> = {};
 interface SecretGeneration { secrets: Map<string, Map<string, string>>; references: Map<string, Set<string>>; leases: number; retired: boolean }
 let preparedGeneration: SecretGeneration = { secrets: new Map(), references: new Map(), leases: 0, retired: false };
 let hydrationSequence = 0;
 const WRITE_AUTHORITY = Symbol("mcp-config-write-authority");
 export interface McpConfigWriteAuthority { readonly [WRITE_AUTHORITY]: true }
+const writeAuthorities = new WeakMap<McpConfigWriteAuthority, { workspaceDir: string; authorise(): void; signal: AbortSignal }>();
+export interface McpConfigCommitReceipt { path: string; fileRevision: string; committed: true }
+export class McpConfigWriteError extends Error {
+  constructor(readonly receipt: McpConfigCommitReceipt, cause: unknown) {
+    super('MCP configuration was saved, but commit completion could not be confirmed.', { cause });
+  }
+}
 
 function emptySnapshot(): McpBridgeSnapshot {
   const adapterConfig: McpConfig = { mcpServers: {} };
@@ -240,15 +248,24 @@ export function getMcpBridgeSnapshot(): McpBridgeSnapshot { return structuredClo
 export function getMcpBridgeReadSnapshot(): McpBridgeReadSnapshot { return preparedSnapshot; }
 export function getMcpBridgeDryRun(): McpBridgeDryRun { return structuredClone(preparedSnapshot.dryRun); }
 export function getMcpStartupDiagnostics(): McpStartupDiagnostic[] { return structuredClone(preparedSnapshot.diagnostics); }
-export function resetMcpStartupStateForTests(): void { retireGeneration(preparedGeneration); preparedGeneration = { secrets: new Map(), references: new Map(), leases: 0, retired: false }; preparedSnapshot = emptySnapshot(); hydrationSequence = 0; }
+export function resetMcpStartupStateForTests(): void { retireGeneration(preparedGeneration); preparedGeneration = { secrets: new Map(), references: new Map(), leases: 0, retired: false }; preparedSnapshot = emptySnapshot(); preparedSourceIdentities = {}; hydrationSequence = 0; }
 
-export async function hydrateMcpKeychainCredentials(workspaceDir: string, resolveEntry: typeof getKeychainEntry = getKeychainEntry): Promise<HydratedMcpCredential[]> {
+export async function hydrateMcpKeychainCredentials(workspaceDir: string, resolveEntry: typeof getKeychainEntry = getKeychainEntry,
+  admission?: { authorise(): void; signal: AbortSignal }): Promise<HydratedMcpCredential[]> {
+  const check = () => { if (admission) { admission.signal.throwIfAborted(); admission.authorise(); admission.signal.throwIfAborted(); } };
+  check();
   const sequence = ++hydrationSequence;
   const diagnostics: McpStartupDiagnostic[] = [], secrets = new Map<string, Map<string, string>>(), references = new Map<string, Set<string>>(), rows: McpBridgePreviewRow[] = [];
+  let published = false;
+  try {
   const tombstones = inspectProjectOverrideTombstones(workspaceDir); diagnostics.push(...tombstones.diagnostics);
   let loaded: PiclawMcpConfig; let provenance = new Map<string, ServerProvenance>();
   try { loaded = structuredClone(loadMcpConfig(undefined, workspaceDir)) as PiclawMcpConfig; provenance = getServerProvenance(undefined, workspaceDir); }
   catch (error) { loaded = { mcpServers: {} }; diagnostics.push({ serverName: "(configuration)", reason: `could not be loaded: ${error instanceof Error ? error.message : String(error)}` }); }
+  const projectOverride = resolve(workspaceDir, '.pi', 'mcp.json');
+  const sourcePaths = [...new Set([...getConfigDiscoveryPaths(undefined, workspaceDir).map(entry => entry.path), ...[...provenance.values()].map(row => row.path), projectOverride])].sort();
+  const sourceRevisions = Object.fromEntries(sourcePaths.map(path => [path, fileRevision(path)]));
+  const sourceIdentities = Object.fromEntries([...new Set([resolve(workspaceDir), dirname(projectOverride), ...sourcePaths])].map(path => [path, sourceIdentity(path)]));
   if (tombstones.blockAll) for (const name of Object.keys(loaded.mcpServers)) loaded.mcpServers[name] = { disabled: true };
   else for (const name of tombstones.names) loaded.mcpServers[name] = { disabled: true };
   // Server-initiated model spending and interaction are opt-in only. A future
@@ -267,10 +284,17 @@ export async function hydrateMcpKeychainCredentials(workspaceDir: string, resolv
         // sanitizeDefinition already recorded the exact schema error.
       } else if (process.env[envName] !== undefined) reasons.push(`bearerTokenEnv ${envName} is already set in the process environment.`);
       else if (claimed.has(envName)) reasons.push(`bearerTokenEnv ${envName} is already claimed by another MCP server.`);
-      else if (reasons.length === 0) try {
-        const entry = await resolveEntry(keychainName as string); if (!entry.secret) throw new Error("missing secret");
-        secrets.set(serverName, new Map([[envName, entry.secret]])); claimed.add(envName); mappings.push("keychain bearer reference");
-      } catch { reasons.push("keychain entry is unavailable or has no secret."); }
+      else if (reasons.length === 0) {
+        check();
+        try {
+          const entry = await resolveEntry(keychainName as string); check();
+          if (!entry.secret) throw new Error("missing secret");
+          secrets.set(serverName, new Map([[envName, entry.secret]])); claimed.add(envName); mappings.push("keychain bearer reference");
+        } catch { reasons.push("keychain entry is unavailable or has no secret."); }
+        // Revocation/cancellation must reject the transition, not turn into
+        // an optional quarantined credential and publish a new generation.
+        check();
+      }
     }
     const refs = new Set<string>(); for (const [, value] of serverValues(definition)) for (const name of referencedNames(value)) refs.add(name);
     if (typeof definition.bearerTokenEnv === "string" && keychainName === undefined) refs.add(definition.bearerTokenEnv);
@@ -287,18 +311,21 @@ export async function hydrateMcpKeychainCredentials(workspaceDir: string, resolv
     rows.push({ serverName, status: reasons.length ? "quarantined" : native.reasons.length ? "blocked" : "mapped", source: provenance.get(serverName)?.path, mappings: [...mappings, ...native.mappings], reasons: [...reasons, ...native.reasons] });
   }
   const provenanceRows = sourceRows(provenance);
-  const projectOverride = resolve(workspaceDir, ".pi", "mcp.json");
-  const discoveryPaths = getConfigDiscoveryPaths(undefined, workspaceDir).map((entry) => entry.path);
-  const sourceRevisions = Object.fromEntries([...new Set([...discoveryPaths, ...provenanceRows.map((row) => row.path), projectOverride])].sort().map((path) => [path, fileRevision(path)]));
   const revision = hashJson({ adapterConfig: sanitized, provenance: provenanceRows, sourceRevisions });
   rows.sort((a, b) => a.serverName.localeCompare(b.serverName));
   const dryRun: McpBridgeDryRun = { revision, rows, diagnostics, secretValuesPresent: false };
   if (sequence !== hydrationSequence) { for (const values of secrets.values()) values.clear(); throw new Error("MCP bridge hydration was superseded."); }
+  check();
+  if (Object.entries(sourceRevisions).some(([path, revision]) => fileRevision(path) !== revision)
+    || Object.entries(sourceIdentities).some(([path, identity]) => sourceIdentity(path) !== identity)) throw new Error('MCP configuration changed during hydration.');
   preparedSnapshot = deepFreeze({ revision, adapterConfig: sanitized, nativePreview: { servers: nativeServers, errors: nativeErrors }, provenance: provenanceRows, diagnostics, sourceRevisions, dryRun });
+  preparedSourceIdentities = sourceIdentities;
   retireGeneration(preparedGeneration);
   preparedGeneration = { secrets, references, leases: 0, retired: false };
+  published = true;
   for (const diagnostic of diagnostics) log.warn("Quarantined invalid optional MCP server during startup", { operation: "mcp.startup_quarantined", serverName: diagnostic.serverName, reason: diagnostic.reason });
   return hydrated;
+  } finally { if (!published) for (const values of secrets.values()) values.clear(); }
 }
 
 export function acquireMcpSessionBridge(): McpSessionBridgeLease {
@@ -340,26 +367,74 @@ function assertNoSymlinkComponents(root: string, target: string): void {
     if (existsSync(current) && lstatSync(current).isSymbolicLink()) throw new Error("MCP config target path must not contain symlinks.");
   }
 }
-function sourceRevisionsMatch(snapshot: McpBridgeSnapshot): boolean { return Object.entries(snapshot.sourceRevisions).every(([path, revision]) => fileRevision(path) === revision); }
-export function createMcpConfigWriteAuthority(): McpConfigWriteAuthority { return { [WRITE_AUTHORITY]: true }; }
-export async function writeMcpProjectOverride(input: { workspaceDir: string; expectedRevision: string; config: McpConfig; authority: McpConfigWriteAuthority; resolveEntry?: typeof getKeychainEntry }): Promise<{ path: string; revision: string }> {
-  if (!input.authority?.[WRITE_AUTHORITY]) throw new Error("MCP config write is not authorized.");
+function sourceIdentity(path: string): string | null { const stat = existsSync(path) ? lstatSync(path) : null; return stat ? `${stat.dev}:${stat.ino}` : null; }
+function sourceRevisionsMatch(snapshot: McpBridgeSnapshot, identities = preparedSourceIdentities): boolean {
+  return Object.entries(snapshot.sourceRevisions).every(([path, revision]) => fileRevision(path) === revision)
+    && Object.entries(identities).every(([path, identity]) => sourceIdentity(path) === identity);
+}
+export function createMcpConfigWriteAuthority(input: { workspaceDir: string; authorise(): void; signal: AbortSignal }): McpConfigWriteAuthority {
+  input.signal.throwIfAborted(); input.authorise(); input.signal.throwIfAborted();
+  const authority = Object.freeze({ [WRITE_AUTHORITY]: true as const });
+  writeAuthorities.set(authority, { ...input, workspaceDir: resolve(input.workspaceDir) });
+  return authority;
+}
+/** Commit only. The fenced runtime controller owns exactly one subsequent hydration. */
+export async function writeMcpProjectOverride(input: { workspaceDir: string; expectedRevision: string; config: McpConfig; authority: McpConfigWriteAuthority }): Promise<McpConfigCommitReceipt> {
+  const admission = writeAuthorities.get(input.authority);
+  const check = () => {
+    if (!admission || resolve(input.workspaceDir) !== admission.workspaceDir) throw new Error('MCP config write is not authorized.');
+    admission.signal.throwIfAborted(); admission.authorise(); admission.signal.throwIfAborted();
+  };
+  check();
+  const capturedSnapshot = preparedSnapshot;
   if (input.expectedRevision !== preparedSnapshot.revision || !sourceRevisionsMatch(preparedSnapshot)) throw new Error("MCP config revision conflict.");
-  assertWritableConfig(input.config);
+  const config = structuredClone(input.config);
+  assertWritableConfig(config);
   const path = resolve(input.workspaceDir, ".pi", "mcp.json"); const root = resolve(input.workspaceDir); if (!path.startsWith(`${root}/`)) throw new Error("MCP config target escapes workspace.");
   assertNoSymlinkComponents(root, path);
   const expectedFileRevision = preparedSnapshot.sourceRevisions[path] ?? null;
-  const text = `${JSON.stringify(input.config, null, 2)}\n`; if (/"(?:bearerToken|clientSecret)"\s*:\s*"(?![!$]|\{env:)/.test(text)) throw new Error("MCP config write contains a literal secret.");
+  // Establish our private parent synchronously before capturing its lifetime;
+  // subsequent await boundaries may not adopt a replaced directory.
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const originalIdentities = { ...preparedSourceIdentities };
+  if (originalIdentities[dirname(path)] === null) originalIdentities[dirname(path)] = sourceIdentity(dirname(path));
+  const identities = Object.fromEntries([...new Set([root, dirname(path), ...Object.keys(capturedSnapshot.sourceRevisions)])].map(source => {
+    const stat = existsSync(source) ? lstatSync(source) : null;
+    return [source, stat ? `${stat.dev}:${stat.ino}` : null];
+  }));
+  const checkRevision = () => {
+    check(); assertNoSymlinkComponents(root, path);
+    if (capturedSnapshot !== preparedSnapshot || input.expectedRevision !== preparedSnapshot.revision || !sourceRevisionsMatch(capturedSnapshot, originalIdentities)
+      || fileRevision(path) !== expectedFileRevision || Object.entries(identities).some(([source, identity]) => {
+        const stat = existsSync(source) ? lstatSync(source) : null;
+        return (stat ? `${stat.dev}:${stat.ino}` : null) !== identity;
+      })) throw new Error('MCP config revision conflict.');
+    // Filesystem checks are synchronous, but final owner hooks may dispatch
+    // cancellation too; do not rename after that authority is withdrawn.
+    check();
+  };
+  const text = `${JSON.stringify(config, null, 2)}\n`; if (/"(?:bearerToken|clientSecret)"\s*:\s*"(?![!$]|\{env:)/.test(text)) throw new Error("MCP config write contains a literal secret.");
   const release = await lockfile.lock(dirname(path), { realpath: false, retries: 0 });
   let temp: string | undefined;
+  let receipt: McpConfigCommitReceipt | undefined;
+  let failure: unknown;
   try {
-    assertNoSymlinkComponents(root, path);
-    if (input.expectedRevision !== preparedSnapshot.revision || !sourceRevisionsMatch(preparedSnapshot) || fileRevision(path) !== expectedFileRevision) throw new Error("MCP config revision conflict.");
+    checkRevision();
     temp = `${path}.${process.pid}.${randomUUID()}.tmp`; const fd = openSync(temp, "wx", 0o600);
     try { writeFileSync(fd, text); fsyncSync(fd); } finally { closeSync(fd); }
-    renameSync(temp, path); temp = undefined; const dirFd = openSync(dirname(path), "r"); try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
-  } finally { if (temp) try { unlinkSync(temp); } catch {} await release(); }
-  await hydrateMcpKeychainCredentials(input.workspaceDir, input.resolveEntry ?? getKeychainEntry);
-  return { path, revision: preparedSnapshot.revision };
+    checkRevision();
+    renameSync(temp, path); temp = undefined;
+    receipt = { path, fileRevision: createHash('sha256').update(text).digest('hex'), committed: true };
+    const dirFd = openSync(dirname(path), "r"); try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
+  } catch (error) { failure = error; }
+  finally {
+    if (temp) try { unlinkSync(temp); } catch (error) { failure ??= error; }
+    try { await release(); } catch (error) { failure ??= error; }
+  }
+  if (receipt) {
+    try { check(); } catch (error) { failure ??= error; }
+    if (failure !== undefined) throw new McpConfigWriteError(receipt, failure);
+    return receipt;
+  }
+  throw failure;
 }
