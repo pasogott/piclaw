@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-10-04T14:33:07.597Z",
+  "recordedAt": "2026-10-04T14:52:31.676Z",
   "baseMain": "a01b76730f694c9c0940e9223094e2f4021fe37f",
   "runtime": "Bun 1.4.2",
   "host": "Smith LXC",
@@ -764,7 +764,7 @@
     "no before/afterCPU claim or representative production-load benchmark"
   ],
   "authorityCorrection": {
-    "status": "reviewed focused candidate; fresh full gate required",
+    "status": "frozen full gate passed; documentation-only publication follow-up",
     "reviewers": [
       "github",
       "auditor"
@@ -854,5 +854,36 @@
       "No provider execution, deployment or production delay attribution",
       "Delegated baseline-only analysis timed out; direct exact file comparisons completed"
     ]
+  },
+  "frozenFullQualification": {
+    "head": "7112f2c0ce914ed25e49668b041a241cf01ddaab",
+    "tree": "3613dae2c7a57f60523c3313e41af437e0276414",
+    "startedAt": "2026-10-04T14:33:50Z",
+    "finishedAt": "2026-10-04T14:49:56Z",
+    "command": "bun --no-env-file runtime/scripts/local-test-priority.ts -- make ci-fast",
+    "timeoutSeconds": 2400,
+    "exit": 0,
+    "tests": {
+      "pass": 6219,
+      "skip": 8,
+      "fail": 0,
+      "assertions": 40391,
+      "total": 6227,
+      "files": 892,
+      "durationSeconds": 956.77
+    },
+    "features": {
+      "pass": 25,
+      "fail": 0,
+      "assertions": 246
+    },
+    "webBuild": {
+      "pass": 9,
+      "fail": 0,
+      "assertions": 26
+    },
+    "logSha256": "61a6605cb19bd72a845e6d5237318c4843927119e82bd49befc863ffb13a896d",
+    "candidateStatusAfterGate": "clean; head and tree unchanged",
+    "scope": "Source-only qualification; source and forwarded target commit separately with explicit partial receipts. No deployment, restart, production database/config mutation, provider call, native-MCP qualification or full live thirty-second attribution."
   }
 }

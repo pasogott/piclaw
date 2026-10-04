@@ -62,6 +62,15 @@ A whole-process CPU profile includes fresh schema creation and module loading; n
 - Both independent source reviews cleared the corrected candidate. Two reviewed Pi 1.0.1 ADR index corrections are included before the fresh freeze; historical 1.0.0 receipts stay unchanged.
 - Failed authority gates, the stopped original full run, the composed-caller expected-red run (five failures), an initial authenticated-fixture 401 assertion failure and a delegated baseline-check timeout are retained. The authenticated fixture set its test TOTP value after module bootstrap; the rerun sets the existing mutable test runtime field before constructing WebChannel and proves unauthenticated denial.
 
-The old frozen full run does not qualify these corrections. Fresh full qualification and publication permission are still required.
+### Frozen full gate
+
+`make ci-fast` passed on clean head `7112f2c0ce914ed25e49668b041a241cf01ddaab`, tree `3613dae2c7a57f60523c3313e41af437e0276414`, from 14:33:50 to 14:49:56 UTC on 4 October 2026. The final head/tree were unchanged and the worktree was clean.
+
+- Full suite: 6,219 passed, eight skipped, zero failed; 40,391 assertions, 6,227 tests across 892 files, 956.77 seconds.
+- Features: 25 passed / 246 assertions. Web build: nine passed / 26 assertions.
+- Final focused authority/caller matrix: 63 passed / 376 assertions across seven files. Five type stages and scoped lint passed after the final source change.
+- Full log SHA256: `61a6605cb19bd72a845e6d5237318c4843927119e82bd49befc863ffb13a896d`.
+
+The publication follow-up changes only this review and the JSON receipt. Runtime/test tree parity with the qualified head is checked before publication. The old stopped full run stays unqualified. Merge permission is outstanding; no production installation or restart is authorised.
 
 No production install, restart, private credential/provider call or live database mutation was performed. The complete live thirty-second report remains open.
