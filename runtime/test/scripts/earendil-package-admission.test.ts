@@ -24,6 +24,7 @@ import {
   assertSourceOnlyRejection,
   inspectInstalledConsumer,
   parseAdmissionArgs,
+  packagePayloadDigest,
   runEarendilPackageAdmission,
   runRawRuntimeProbeForTests,
   validateRegistryReceipt,
@@ -80,6 +81,29 @@ function updateJson(path: string, update: (value: Record<string, any>) => void):
 }
 
 describe("Earendil package admission checker", () => {
+  test("package payload hashes ignore only installed root dependency layout", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "earendil-payload-layout-"));
+    scratchRoots.push(scratch);
+    const published = join(scratch, "published"), installed = join(scratch, "installed");
+    for (const root of [published, installed]) {
+      mkdirSync(join(root, "dist/node_modules"), { recursive: true });
+      writeFileSync(join(root, "package.json"), '{"name":"payload-fixture","version":"1.0.1"}\n');
+      writeFileSync(join(root, "dist/index.js"), "export const value = 1;\n");
+      writeFileSync(join(root, "dist/node_modules/bundled.js"), "export const bundled = 1;\n");
+    }
+    const dependency = join(installed, "node_modules/marked");
+    mkdirSync(dependency, { recursive: true });
+    writeFileSync(join(dependency, "package.json"), '{"name":"marked","version":"17.0.5"}\n');
+    expect(packagePayloadDigest(installed)).toBe(packagePayloadDigest(published));
+    writeFileSync(join(dependency, "package.json"), '{"name":"marked","version":"18.0.0"}\n');
+    expect(packagePayloadDigest(installed)).toBe(packagePayloadDigest(published));
+    writeFileSync(join(installed, "dist/index.js"), "export const value = 2;\n");
+    expect(packagePayloadDigest(installed)).not.toBe(packagePayloadDigest(published));
+    writeFileSync(join(installed, "dist/index.js"), "export const value = 1;\n");
+    writeFileSync(join(installed, "dist/node_modules/bundled.js"), "export const bundled = 2;\n");
+    expect(packagePayloadDigest(installed)).not.toBe(packagePayloadDigest(published));
+  });
+
   test("checks 1.0.0 public removal by resolution and rejects an installed durable alias", () => {
     const consumerRoot = materializeConsumer(modernFixtureRoot);
     const version = "1.0.0", gitHead = "a13d35a742c6ef8462812a28fbe1d8c8b7431c32";
