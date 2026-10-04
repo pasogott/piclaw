@@ -88,7 +88,7 @@ export function getDataRateLimitRule(method: string, pathname: string): DataRate
       message: "Too many peer-agent messages. Slow down.",
     };
   }
-  if ((method === "GET" && pathname === "/agent/settings/mcp") || (method === "POST" && pathname === "/agent/settings/mcp/preview")) {
+  if ((method === "GET" && pathname === "/agent/settings/mcp") || (method === "POST" && ["/agent/settings/mcp/preview", "/agent/settings/mcp/apply"].includes(pathname))) {
     return { bucket: "data/mcp_settings", limit: DATA_AGENT_UI_LIMIT, message: "Too many MCP settings requests. Slow down." };
   }
   if (method === "POST" && pathname === "/agent/scheduled-tasks/action") {

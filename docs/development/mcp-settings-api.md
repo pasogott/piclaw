@@ -1,25 +1,38 @@
-# MCP instance settings read and preview
+# MCP instance settings
 
-`GET /agent/settings/mcp` and `POST /agent/settings/mcp/preview` expose owner-only policy inspection without starting, stopping or changing MCP connections. This is the first backend slice of #1451; no settings pane or apply operation is delivered here.
+`GET /agent/settings/mcp` and `POST /agent/settings/mcp/preview` expose owner-only policy inspection without changing MCP connections. `POST /agent/settings/mcp/apply` applies adapter codemode settings through public Pi 1.0.1 session APIs. Engine replacement remains blocked; a codemode update does not reload or replace the adapter.
 
-Both routes require a freshly resolved single-user administrator principal. The preview rechecks identity after reading the body and before publishing. Family and isolated-container modes deny access. Responses are private/no-store; unauthorised requests are rejected before body parsing or configuration reads. Normal HTTP authentication and preview CSRF checks remain in the request guard. GET and preview share an enforced rate-limit bucket.
+All three routes require a freshly resolved single-user administrator principal. Identity is checked after body I/O, before mutation, after participant abort and before publishing. Family and isolated-container modes deny access. Responses are private/no-store; unauthorised requests are rejected before body parsing or configuration reads. Normal HTTP authentication and POST CSRF checks remain in the request guard. The routes share an enforced rate-limit bucket.
 
-Preview accepts only `{ "engine": "adapter" | "native", "codemode": "auto" | "on" | "off" }`. Bodies are limited to 2,048 bytes, decoded as strict UTF-8, and have a five-second body-read timeout. This is not an absolute deadline for synchronous filesystem/configuration work. Query parameters are rejected. No save/apply routes exist.
+Preview accepts only `{ "engine": "adapter" | "native", "codemode": "auto" | "on" | "off" }`. Apply accepts only `{ "policy": <same policy>, "revision": <opaque preview token>, "acknowledgeInterruptions": true }`. Bodies are limited to 2,048 bytes, decoded as strict UTF-8, and have a five-second body-read timeout. This is not an absolute deadline for synchronous filesystem/configuration work. Query parameters are rejected. There is no generic save route.
 
 ## Response contract
 
 - `persisted.policy` describes desired settings, defaulting to adapter/Auto.
-- `runtime.configuredFactory` is `adapter`, reflecting existing source wiring. `observedPolicy` is null and `connectionStatus` is `unknown`; cached metadata is not evidence of connected servers.
-- `readiness` is exactly `{ adapter: true, native: false, codemode: false }` until the transition host/factories are qualified and connected.
-- `applyAvailable` is false even when the compatibility plan is applicable. Preview acceptance does not apply settings.
+- `runtime.configuredFactory` is `adapter`. `observedPolicy` is the immutable selected adapter policy, or null during a blocked transition or unsupported engine selection. `connectionStatus` remains `unknown`; cached metadata is not connection evidence.
+- `readiness` is `{ adapter: true, native: false, codemode: true }`. `applyAvailable` also requires a compatible plan, ready controller and existing adapter selection. Preview acceptance does not apply settings.
+- `revision` is a bounded, random, five-minute token held by the controller, not a secret-derived hash. It fences both instance config and the prepared bridge generation. Concurrent edits require another preview.
+- `nativeBlockReason` and `nativeBlockers` expose fixed diagnostics for the ten exact 1.0.1 public-contract gaps and the separate suppressed-close blocker, never raw errors.
 - `servers[].nativeProjectionStatus` is the bridge's mapped/blocked/quarantined classification. A blocked native projection may still be usable by the adapter; it is not connection status.
 - Server names, setting names and fixed planner rejection messages are intentionally visible to the owner. Raw commands, arguments, URLs, headers, environment values, keychain references, source paths, diagnostic payloads and secret-derived configuration hashes are omitted.
 
 Read/preview uses only prepared bridge state; it does not hydrate credentials, read the keychain, invoke a provider or contact a server. The existing clone-returning bridge API stays unchanged. A new deep-readonly accessor permits pure planners to inspect the recursively frozen generation without copying it; hydration atomically replaces the generation and existing readers keep their frozen snapshot.
 
+## Codemode Apply
+
+Adapter Auto leaves scripting inactive; On enables it; Off blocks it even after an explicit activation request. The public `createCodemodeExtension({ models: false })` supplies scripting and the nested tool pipeline. Model execution inside scripts is disabled until its budget boundary is qualified. Scripting does not change MCP server exposure or bypass nested tool hooks.
+
+Apply fences pool admissions and already-captured public prompts, drains lifecycle work, deduplicates and aborts current main/side sessions, rechecks authority and revisions, persists the policy, then updates active tools with `setActiveToolsByName`. New sessions load the same extension and policy. Session identity, history and other active tools are retained. No transport replacement or whole-extension reload occurs.
+
+The asynchronous transition has a 30-second deadline. Failure leaves admissions and tool execution blocked, with captured or late runtimes quarantined. A failure after persistence reports that the policy was saved but activation was not confirmed; it never claims rollback. There is no automatic recovery or fallback. A persisted unsupported native selection refuses adapter startup and needs explicit instance recovery.
+
+Native engine Apply is still not delivered. Adapter shutdown acknowledgement, native closure and native parity must be separately qualified before the engine-switch coordinator can be wired.
+
 ## Tests
 
-Focused tests cover real route registration, denied owner modes before body/state reads, exact readiness/unknown state, no apply/save path, malformed/oversized/multibyte/chunked bodies, stalled/failed readers, abort, identity/role/mode revocation, no sensitive field disclosure, real request-guard throttling, immutable bridge generations and compatibility planner cases. They use synthetic configuration and isolated databases only.
+Focused tests cover real route registration, denied owner modes before body/state reads, readiness, bounded/chunked bodies, stalled/failed readers, cancellation, identity revocation, no sensitive field disclosure, request-guard throttling, immutable bridge generations and planner cases. Apply tests add revision conflicts, interruption acknowledgement, native rejection, lifecycle fencing, late snapshot quarantine and post-persist activation failure. A separate offline Pi 1.0.1 scripted-provider fixture exercises current/new sessions, real scripting, nested tool policy, model execution disabled, Off enforcement and retained history. Only synthetic configuration and isolated state are used.
+
+The [codemode qualification](../reviews/mcp-codemode-settings.md) records the rebuilt browser replay and updated disk-SQLite profiling. The measurements below describe the earlier preview implementation variants.
 
 The initial test exposed a member-auth check reading malformed config before rejecting the role. The role check now precedes config access. Review also caught unregistered GET throttling and ambiguous `status`; tests exercise the actual guard and the response now names native projection explicitly.
 
@@ -71,4 +84,4 @@ From the repository root, invoke the existing launcher with disk-backed isolatio
 bun --no-env-file -e 'import {runLocalTestCommand} from "./runtime/scripts/local-test-priority.ts"; await runLocalTestCommand([process.execPath,"--cpu-prof","--cpu-prof-dir=/tmp/mcp-profile","test/fixtures/mcp-settings-profile.ts","--instrument"],{cwd:process.cwd()+"/runtime",env:{PICLAW_DB_IN_MEMORY:"0"}});'
 ```
 
-Create the output directory first. Omit `--cpu-prof` for method instrumentation only and omit `--instrument` for an uninstrumented timing run. Each run creates disposable state through the launcher. A code review and separate scope decision are required before any later apply endpoint or engine activation.
+Create the output directory first. Omit `--cpu-prof` for method instrumentation only and omit `--instrument` for an uninstrumented timing run. Each run creates disposable state through the launcher. The measurements and frozen-gate records above describe the earlier read/preview slice, not qualification of the new Apply implementation. Engine activation still needs separate qualification and review.

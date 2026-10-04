@@ -6,12 +6,22 @@ import { chromium, webkit, type Browser } from 'playwright';
 import { withTempWorkspaceEnv } from '../helpers.js';
 import { handleMcpSettings } from '../../src/channels/web/handlers/mcp-settings.js';
 import { hydrateMcpKeychainCredentials, resetMcpStartupStateForTests } from '../../src/secure/mcp-keychain.js';
+import { McpCodemodeController, resetMcpCodemodeRuntimeForTests } from '../../src/agent-pool/mcp-codemode-runtime.js';
 
 const enabled = process.env.PICLAW_RUN_OPTIONAL_BROWSER_TESTS === '1' && process.env.PICLAW_E2E_DISPOSABLE === '1';
 const browserTest = enabled ? test : test.skip;
 const runtime = resolve(import.meta.dir, '../..');
 const bundles: Record<string, string> = {};
-const browsers: Record<string, Browser> = {};
+let browser: Browser | null = null;
+let browserEngine: string | null = null;
+async function getBrowser(engine: string): Promise<Browser> {
+    if (browser && browserEngine === engine) return browser;
+    await browser?.close();
+    browser = null;
+    browser = await (engine === 'webkit' ? webkit : chromium).launch({ headless: true });
+    browserEngine = engine;
+    return browser;
+}
 const owner = { kind: 'local', userId: 'default', username: 'default', displayName: 'Fixture', role: 'admin', mode: 'single-user', homeChatJid: 'web:default', authentication: { method: 'local', sessionId: null, expiresAt: null } };
 
 beforeAll(async () => {
@@ -28,13 +38,11 @@ beforeAll(async () => {
         const shellResult = await build({ stdin: { contents: shell, resolveDir: runtime, loader: 'tsx' }, bundle: true, format: 'esm', platform: 'browser', jsx: 'automatic', jsxImportSource: 'preact', external: ['#editor-vendor/codemirror'], write: false });
         bundles[`${skin}-shell`] = shellResult.outputFiles[0].text;
     }
-    browsers.chromium = await chromium.launch({ headless: true });
-    browsers.webkit = await webkit.launch({ headless: true });
 }, 30000);
-afterAll(async () => { for (const browser of Object.values(browsers)) await browser.close(); });
+afterAll(async () => { await browser?.close(); browser = null; });
 
 for (const engine of ['chromium', 'webkit']) for (const skin of ['classic', 'visual']) for (const width of [1280, 390]) {
-    browserTest(`MCP preview-only ${skin}/${engine}/${width}: real backend, stale requests, denial and layout`, async () => {
+    browserTest(`MCP codemode Apply ${skin}/${engine}/${width}: real backend, native rejection, denial and layout`, async () => {
         await withTempWorkspaceEnv('mcp-pane-browser-', {}, async ws => {
             mkdirSync(join(ws.workspace, '.piclaw'), { recursive: true }); mkdirSync(join(ws.workspace, '.pi'), { recursive: true });
             const config = join(ws.workspace, '.piclaw/config.json');
@@ -43,7 +51,11 @@ for (const engine of ['chromium', 'webkit']) for (const skin of ['classic', 'vis
             const unsafeName = '<img src=x onerror=alert(1)>' + 'long-name-'.repeat(15);
             writeFileSync(join(ws.workspace, '.pi/mcp.json'), JSON.stringify({ mcpServers: { [unsafeName]: { command: 'fixture-never-run', lifecycle: 'lazy' } } }));
             resetMcpStartupStateForTests();
+            resetMcpCodemodeRuntimeForTests();
             await hydrateMcpKeychainCredentials(ws.workspace, () => { throw Error('No keychain'); });
+            const runtimeEvents: string[] = [];let activeTools = ['mcp'];
+            const sessionRuntime = { session: { async abort() { runtimeEvents.push('abort'); }, getAllTools: () => [{name:'codemode'}], getActiveToolNames: () => activeTools, setActiveToolsByName(names: string[]) { activeTools = names;runtimeEvents.push('set'); } } };
+            const controller = new McpCodemodeController({ blockMcpAdmissions() { runtimeEvents.push('fence'); }, async fenceMcpAndSnapshot() { return [sessionRuntime] as any; }, resumeMcpAdmissions() {runtimeEvents.push('resume');}, async quarantineMcpRuntime() {runtimeEvents.push('quarantine');} });
             let authorized = true, hold = false, holdRefresh = false, held = false;
             let release: (() => void) | undefined;
             const calls: string[] = [], previews: unknown[] = [], errors: string[] = [];
@@ -53,13 +65,13 @@ for (const engine of ['chromium', 'webkit']) for (const skin of ['classic', 'vis
                 if (url.pathname === '/pane.js') return new Response(bundles[skin], { headers: { 'Content-Type': 'text/javascript' } });
                 if (url.pathname === '/style.css') return new Response(readFileSync(join(runtime, `web/static/${skin}/dist/app.bundle.css`)), { headers: { 'Content-Type': 'text/css' } });
                 calls.push(url.pathname);
-                if (!['/agent/settings/mcp', '/agent/settings/mcp/preview'].includes(url.pathname)) return Response.json({ error: 'Unexpected endpoint' }, { status: 404 });
-                if (req.method === 'POST') previews.push(await req.clone().json());
-                const response = await handleMcpSettings({ authGateway: { getPrincipal: () => authorized ? owner : null } } as any, req, url);
+                if (!['/agent/settings/mcp', '/agent/settings/mcp/preview', '/agent/settings/mcp/apply'].includes(url.pathname)) return Response.json({ error: 'Unexpected endpoint' }, { status: 404 });
+                if (url.pathname.endsWith('/preview')) previews.push(await req.clone().json());
+                const response = await handleMcpSettings({ agentPool: { inspectMcpSettings: (policy?: unknown) => controller.inspect(policy), applyMcpSettings: (input: any, check: () => void) => controller.apply(input,check) }, authGateway: { getPrincipal: () => authorized ? owner : null } } as any, req, url);
                 if (hold && req.method === 'POST' || holdRefresh && req.method === 'GET') { hold = false; holdRefresh = false; held = true; await new Promise<void>(resolve => { release = resolve; }); }
                 return response;
             } });
-            const page = await browsers[engine].newPage({ viewport: { width, height: 900 } });
+            const page = await (await getBrowser(engine)).newPage({ viewport: { width, height: 900 } });
             page.on('pageerror', error => errors.push(error.message));
             await page.route('**/*', route => new URL(route.request().url()).origin === server.url.origin ? route.continue() : route.abort());
             try {
@@ -80,7 +92,7 @@ for (const engine of ['chromium', 'webkit']) for (const skin of ['classic', 'vis
                 }
                 expect(await page.getByLabel('Engine to preview').inputValue()).toBe('adapter');
                 expect(await page.getByLabel('Codemode to preview').inputValue()).toBe('auto');
-                expect(await page.getByRole('button', { name: /^(save|apply)/i }).count()).toBe(0);
+                expect(await page.getByRole('button', {name:'Apply codemode'}).isDisabled()).toBe(true);
                 expect(await page.locator('.mcp-settings img').count()).toBe(0);
                 expect(await page.getByText(unsafeName, { exact: true }).count()).toBe(1);
                 await page.getByLabel('Engine to preview').selectOption('native');
@@ -88,6 +100,8 @@ for (const engine of ['chromium', 'webkit']) for (const skin of ['classic', 'vis
                 await page.getByRole('button', { name: 'Preview compatibility' }).click();
                 await page.getByText('Preview blocked — not applied.', { exact: true }).waitFor();
                 expect(previews).toEqual([{ engine: 'native', codemode: 'auto' }]);
+                expect(await page.getByRole('button', {name:'Apply codemode'}).isDisabled()).toBe(true);
+                expect(await page.getByText('statusObserver: host connection status observation is not supported.', {exact:true}).count()).toBe(1);
                 expect(await page.getByText('adapter / auto', { exact: true }).count()).toBe(1);
                 hold = true;
                 await page.getByLabel('Engine to preview').selectOption('adapter');
@@ -107,18 +121,42 @@ for (const engine of ['chromium', 'webkit']) for (const skin of ['classic', 'vis
                 expect(await page.getByText(unsafeName, { exact: true }).count()).toBe(0);
                 const refreshDeadline = Date.now() + 3000; while (!held && Date.now() < refreshDeadline) await Bun.sleep(5); expect(held).toBe(true);
                 release!(); await page.getByLabel('Engine to preview').waitFor();
+                await page.getByLabel('Codemode to preview').selectOption('on');
+                await page.getByRole('button', {name:'Preview compatibility'}).click();
+                await page.getByText('Preview compatible — not applied.', {exact:true}).waitFor();
+                expect(await page.getByRole('button', {name:'Apply codemode'}).isDisabled()).toBe(true);
+                await page.getByRole('checkbox').check();
+                hold = true; held = false;
+                await page.getByRole('button', {name:'Apply codemode'}).click();
+                const applyDeadline = Date.now() + 3000; while (!held && Date.now() < applyDeadline) await Bun.sleep(5); expect(held).toBe(true);
+                expect(await page.getByLabel('Engine to preview').isDisabled()).toBe(true);
+                expect(await page.getByLabel('Codemode to preview').isDisabled()).toBe(true);
+                expect(await page.getByRole('button', {name:'Refresh MCP status'}).isDisabled()).toBe(true);
+                expect(await page.getByRole('checkbox').isDisabled()).toBe(true);
+                release!();
+                await page.getByText('Codemode saved and applied to current and new sessions.', {exact:true}).waitFor();
+                expect(activeTools).toEqual(['mcp','codemode']);expect(runtimeEvents).toEqual(['fence','abort','set','resume']);
+                expect(JSON.parse(readFileSync(config,'utf8')).domains.mcp).toEqual({engine:'adapter',codemode:'on'});
+                await page.getByLabel('Codemode to preview').selectOption('off');
+                expect(await page.getByRole('checkbox').isChecked()).toBe(false);
+                await page.getByRole('button', {name:'Preview compatibility'}).click();
+                await page.getByText('Preview compatible — not applied.', {exact:true}).waitFor();
+                await page.getByRole('checkbox').check();await page.getByRole('button', {name:'Apply codemode'}).click();
+                await page.getByText('Codemode saved and applied to current and new sessions.', {exact:true}).waitFor();
+                expect(activeTools).toEqual(['mcp']);expect(JSON.parse(readFileSync(config,'utf8')).domains.mcp.codemode).toBe('off');
+                const saved = readFileSync(config,'utf8');expect(saved).not.toBe(initial);
                 authorized = false;
                 await page.getByRole('button', { name: 'Refresh MCP status' }).click();
                 await page.getByRole('alert').waitFor();
                 expect(await page.getByText(unsafeName, { exact: true }).count()).toBe(0);
                 expect(await page.getByLabel('Engine to preview').count()).toBe(0);
-                expect(readFileSync(config, 'utf8')).toBe(initial);
-                expect(calls.every(path => ['/agent/settings/mcp', '/agent/settings/mcp/preview'].includes(path))).toBe(true);
+                expect(readFileSync(config, 'utf8')).toBe(saved);
+                expect(calls.every(path => ['/agent/settings/mcp', '/agent/settings/mcp/preview', '/agent/settings/mcp/apply'].includes(path))).toBe(true);
                 expect(errors).toEqual([]);
                 await page.evaluate(() => (window as any).unmount());
                 expect(await page.locator('.mcp-settings').count()).toBe(0);
-                console.log(JSON.stringify({ skin, engine, width, readyMs, cpu, requests: calls.length, previews: previews.length, scope: 'synthetic pane and real read-preview handler; not full authenticated host' }));
-            } finally { release?.(); await page.close(); server.stop(true); resetMcpStartupStateForTests(); }
+                console.log(JSON.stringify({ skin, engine, width, readyMs, cpu, requests: calls.length, previews: previews.length, scope: 'real pane/controller/backend persistence with synthetic runtime; real Pi execution separately tested' }));
+            } finally { release?.(); await page.close(); server.stop(true); resetMcpStartupStateForTests(); resetMcpCodemodeRuntimeForTests(); }
         });
     }, 20000);
 }
@@ -132,10 +170,10 @@ for (const skin of ['classic', 'visual']) {
             if (path === '/shell.js') return new Response(bundles[`${skin}-shell`], { headers: { 'Content-Type': 'text/javascript' } });
             if (path === '/style.css') return new Response(readFileSync(join(runtime, `web/static/${skin}/dist/app.bundle.css`)), { headers: { 'Content-Type': 'text/css' } });
             calls.push(path);
-            if (path === '/agent/settings/mcp') return Response.json({ ok: true, persisted: { policy: { engine: 'adapter', codemode: 'auto' } }, runtime: { configuredFactory: 'adapter', observedPolicy: null, connectionStatus: 'unknown', applyAvailable: false }, readiness: { adapter: true, native: false, codemode: false }, servers: [], plan: { policy: { engine: 'adapter', codemode: 'auto' }, applicable: true, codemodeEnabled: false, issues: [] }, applyAvailable: false });
+            if (path === '/agent/settings/mcp') return Response.json({ ok: true, revision:'opaque-fixture',effect:'abort_active_turns_and_update_codemode',nativeBlockReason:'Native not qualified',nativeBlockers:[], persisted: { policy: { engine: 'adapter', codemode: 'auto' } }, runtime: { configuredFactory: 'adapter', observedPolicy: null, connectionStatus: 'unknown', applyAvailable: false }, readiness: { adapter: true, native: false, codemode: true }, servers: [], plan: { policy: { engine: 'adapter', codemode: 'auto' }, applicable: true, codemodeEnabled: false, issues: [] }, applyAvailable: false });
             return Response.json({});
         } });
-        const page = await browsers.chromium.newPage({ viewport: { width: 1200, height: 900 } });
+        const page = await (await getBrowser('chromium')).newPage({ viewport: { width: 1200, height: 900 } });
         const pageErrors: string[] = [];
         page.on('pageerror', error => pageErrors.push(error.message));
         try {

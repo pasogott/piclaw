@@ -6,10 +6,14 @@ import { handleMcpSettings } from "../../../src/channels/web/handlers/mcp-settin
 import { handleAgentRoutes } from "../../../src/channels/web/http/dispatch-agent.js";
 import { getDataRateLimitRule } from "../../../src/channels/web/http/rate-limit-rules.js";
 import { hydrateMcpKeychainCredentials, resetMcpStartupStateForTests, getMcpBridgeSnapshot, getMcpBridgeReadSnapshot } from "../../../src/secure/mcp-keychain.js";
+import { McpCodemodeController, resetMcpCodemodeRuntimeForTests } from "../../../src/agent-pool/mcp-codemode-runtime.js";
 
 const owner = { kind: "local", userId: "default", username: "default", displayName: "Test", role: "admin", mode: "single-user", homeChatJid: "web:default", authentication: { method: "local", sessionId: null, expiresAt: null } };
 const endpoint = "https://fixture.invalid/agent/settings/mcp";
-function channel(get = () => owner as unknown) { return { authGateway: { getPrincipal: (_req: Request, refresh: boolean) => { expect(refresh).toBe(true); return get(); } } } as any; }
+function channel(get = () => owner as unknown) {
+  const controller = new McpCodemodeController({ blockMcpAdmissions() {}, async fenceMcpAndSnapshot() { return []; }, resumeMcpAdmissions() {}, async quarantineMcpRuntime() {} });
+  return { agentPool: { inspectMcpSettings: (policy?: unknown) => controller.inspect(policy), applyMcpSettings: (input: any, authorise: () => void) => controller.apply(input, authorise) }, authGateway: { getPrincipal: (_req: Request, refresh: boolean) => { expect(refresh).toBe(true); return get(); } } } as any;
+}
 async function call(c: any, body?: unknown, suffix = "") {
   const req = new Request(endpoint + suffix, body === undefined ? {} : { method: "POST", body: JSON.stringify(body) });
   return handleAgentRoutes(c, req, new URL(req.url).pathname, new URL(req.url));
@@ -17,10 +21,11 @@ async function call(c: any, body?: unknown, suffix = "") {
 async function fixture(run: (path: string) => Promise<void>) {
   await withTempWorkspaceEnv("mcp-settings-api-", {}, async ws => {
     resetMcpStartupStateForTests();
+    resetMcpCodemodeRuntimeForTests();
     mkdirSync(join(ws.workspace, ".piclaw"), { recursive: true });
     const path = join(ws.workspace, ".piclaw/config.json");
     writeFileSync(path, JSON.stringify({ domains: { access: { mode: "single-user" } } }), { mode: 0o600 }); chmodSync(path, 0o600);
-    try { await run(path); } finally { resetMcpStartupStateForTests(); }
+    try { await run(path); } finally { resetMcpStartupStateForTests(); resetMcpCodemodeRuntimeForTests(); }
   });
 }
 
@@ -29,28 +34,45 @@ test("MCP read and preview routes keep persisted and runtime policy distinct, wi
   const read = await call(channel()); expect(read?.status).toBe(200);
   expect(read?.headers.get("cache-control")).toBe("private, no-store");
   const state = await read!.json();
-  expect(state.runtime).toEqual({ configuredFactory: "adapter", observedPolicy: null, connectionStatus: "unknown", applyAvailable: false });
-  expect(state.readiness).toEqual({ adapter: true, native: false, codemode: false });
+  expect(state.runtime).toEqual({ configuredFactory: "adapter", observedPolicy: { engine: "adapter", codemode: "auto" }, connectionStatus: "unknown", applyAvailable: true, phase: "ready" });
+  expect(state.readiness).toEqual({ adapter: true, native: false, codemode: true });
   expect(state.persisted).toEqual({ policy: { engine: "adapter", codemode: "auto" } });
-  expect(state.applyAvailable).toBe(false);
-  expect(JSON.stringify(state)).not.toMatch(/revision/i);
-  for (const policy of [{ engine: "native", codemode: "auto" }, { engine: "adapter", codemode: "on" }]) {
+  expect(state.applyAvailable).toBe(true);
+  expect(typeof state.revision).toBe("string"); expect(state.plan).not.toHaveProperty("bridgeRevision");
+  for (const policy of [{ engine: "native", codemode: "auto" }]) {
     const res = await call(channel(), policy, "/preview");
     expect(res?.status).toBe(200); const body = await res!.json();
     expect(body.plan.applicable).toBe(false); expect(body.plan.issues.some((issue: any) => issue.code === "runtime_unavailable")).toBe(true);
   }
-  expect(await call(channel(), { engine: "adapter", codemode: "off" }, "/preview").then(r => r!.json())).toMatchObject({ plan: { applicable: true, codemodeEnabled: false }, applyAvailable: false });
-  for (const suffix of ["/apply", "/save", "/preview/", "-other"]) expect(await call(channel(), {}, suffix)).toBeNull();
+  expect(await call(channel(), { engine: "adapter", codemode: "off" }, "/preview").then(r => r!.json())).toMatchObject({ plan: { applicable: true, codemodeEnabled: false }, applyAvailable: true });
+  for (const suffix of ["/save", "/preview/", "-other"]) expect(await call(channel(), {}, suffix)).toBeNull();
   expect(getDataRateLimitRule("GET", "/agent/settings/mcp")?.bucket).toBe("data/mcp_settings");
   expect(getDataRateLimitRule("POST", "/agent/settings/mcp/preview")?.bucket).toBe("data/mcp_settings");
+  expect(getDataRateLimitRule("POST", "/agent/settings/mcp/apply")?.bucket).toBe("data/mcp_settings");
   expect(readFileSync(path, "utf8")).toBe(original);
+}));
+
+test("owner Apply requires acknowledgement and current revision, persists codemode and rejects native", async () => fixture(async path => {
+  const c = channel();
+  const preview = await call(c, {engine:"adapter",codemode:"on"}, "/preview").then(r => r!.json());
+  const input = {policy:{engine:"adapter",codemode:"on"},revision:preview.revision,acknowledgeInterruptions:true};
+  expect((await call(c, {...input,acknowledgeInterruptions:false}, "/apply"))?.status).toBe(400);
+  expect((await call(c, {...input,revision:"stale"}, "/apply"))?.status).toBe(409);
+  const applied = await call(c,input,"/apply");expect(applied?.status).toBe(200);
+  expect(await applied!.json()).toMatchObject({persisted:{policy:input.policy},runtime:{observedPolicy:input.policy}});
+  expect(JSON.parse(readFileSync(path,"utf8")).domains.mcp).toEqual(input.policy);
+  expect((await call(c,input,"/apply"))?.status).toBe(409);
+  const native = await call(c,{engine:"native",codemode:"auto"},"/preview").then(r=>r!.json());
+  const denied = await call(c,{policy:native.plan.policy,revision:native.revision,acknowledgeInterruptions:true},"/apply");
+  expect(denied?.status).toBe(422);expect(await denied!.text()).toContain("shutdown acknowledgement");
+  expect(JSON.parse(readFileSync(path,"utf8")).domains.mcp).toEqual(input.policy);
 }));
 
 test("MCP settings denies anonymous/member/family principals before body or state access", async () => fixture(async path => {
   writeFileSync(path, "INVALID PRIVATE CONFIG");
-  for (const principal of [null, { ...owner, role: "member" }, { ...owner, mode: "family-shared" }]) {
+  for (const suffix of ["/preview", "/apply"]) for (const principal of [null, { ...owner, role: "member" }, { ...owner, mode: "family-shared" }]) {
     let read = false;
-    const req = new Request(endpoint + "/preview", { method: "POST", body: "{}" });
+    const req = new Request(endpoint + suffix, { method: "POST", body: "{}" });
     Object.defineProperty(req, "body", { get() { read = true; throw Error("must not read"); } });
     const res = await handleMcpSettings(channel(() => principal), req, new URL(req.url));
     expect(res.status).toBe(403); expect(read).toBe(false); expect(res.headers.get("cache-control")).toContain("no-store");

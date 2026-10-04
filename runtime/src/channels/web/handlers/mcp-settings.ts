@@ -1,19 +1,13 @@
 import type { WebChannelLike } from "../core/web-channel-contracts.js";
 import { canPrincipalAct, type AuthenticatedPrincipal } from "../auth/principal.js";
 import { readAccessConfig } from "../../../core/config-access.js";
-import { readMcpInstancePolicy } from "../../../core/config-mcp.js";
-import { getMcpBridgeReadSnapshot } from "../../../secure/mcp-keychain.js";
-import { planMcpEnginePolicy } from "../../../agent-pool/mcp-engine-plan.js";
-import { MCP_ENGINE_SWITCH_EFFECT, parseMcpEnginePolicy } from "../../../agent-pool/mcp-engine-policy.js";
+import { parseMcpEnginePolicy } from "../../../agent-pool/mcp-engine-policy.js";
+import { McpPolicyApplyError } from "../../../agent-pool/mcp-codemode-runtime.js";
 import { createLogger, debugSuppressedError } from "../../../utils/logger.js";
 
 const log = createLogger("web.mcp-settings");
 const BASE = "/agent/settings/mcp";
 const MAX_BODY_BYTES = 2048;
-// The existing factory always installs the adapter. The instance transition
-// host and native/codemode factories are not wired yet; never imply readiness.
-const READINESS = Object.freeze({ adapter: true, native: false, codemode: false });
-const RUNTIME = Object.freeze({ configuredFactory: "adapter", observedPolicy: null, connectionStatus: "unknown", applyAvailable: false });
 
 class RequestFailure extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -31,7 +25,10 @@ function owner(channel: WebChannelLike, req: Request): AuthenticatedPrincipal {
 function ownerKey(principal: AuthenticatedPrincipal): string {
   return JSON.stringify([principal.kind, principal.userId, principal.role, principal.mode, principal.authentication]);
 }
-async function readPolicy(req: Request): Promise<ReturnType<typeof parseMcpEnginePolicy>> {
+type ApplyInput = { policy: ReturnType<typeof parseMcpEnginePolicy>; revision: string; acknowledgeInterruptions: boolean };
+async function readPolicy(req: Request, apply: true): Promise<ApplyInput>;
+async function readPolicy(req: Request, apply: false): Promise<ReturnType<typeof parseMcpEnginePolicy>>;
+async function readPolicy(req: Request, apply: boolean): Promise<ApplyInput | ReturnType<typeof parseMcpEnginePolicy>> {
   if (!req.body) throw new RequestFailure(400, "A JSON policy body is required.");
   const reader = req.body.getReader();
   const bytes = new Uint8Array(MAX_BODY_BYTES); let used = 0;
@@ -48,7 +45,13 @@ async function readPolicy(req: Request): Promise<ReturnType<typeof parseMcpEngin
       if (used + chunk.value.length > bytes.length) throw new RequestFailure(413, "MCP preview body exceeds 2 KiB.");
       bytes.set(chunk.value, used); used += chunk.value.length;
     }
-    try { return parseMcpEnginePolicy(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, used)))); }
+    try {
+      const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, used)));
+      if (!apply) return parseMcpEnginePolicy(value);
+      if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(key => !["policy", "revision", "acknowledgeInterruptions"].includes(key))
+        || typeof value.revision !== "string" || value.revision.length > 128 || value.acknowledgeInterruptions !== true) throw new Error("Invalid apply body.");
+      return { policy: parseMcpEnginePolicy(value.policy), revision: value.revision, acknowledgeInterruptions: true };
+    }
     catch { throw new RequestFailure(400, "Expected only engine (adapter/native) and codemode (auto/on/off)."); }
   } finally {
     clearTimeout(timer); req.signal.removeEventListener("abort", abort);
@@ -57,7 +60,7 @@ async function readPolicy(req: Request): Promise<ReturnType<typeof parseMcpEngin
   }
 }
 
-/** Read and preview only. No hydration, credentials, sessions or configuration writes. */
+/** Owner-only preview and revision-fenced codemode application. */
 export async function handleMcpSettings(channel: WebChannelLike, req: Request, url: URL): Promise<Response> {
   try {
     const identity = ownerKey(owner(channel, req));
@@ -70,24 +73,16 @@ export async function handleMcpSettings(channel: WebChannelLike, req: Request, u
     if (req.signal.aborted) throw new RequestFailure(400, "MCP preview request cancelled.");
     if (url.search) throw new RequestFailure(400, "MCP instance settings do not accept query parameters.");
     const preview = req.method === "POST" && url.pathname === `${BASE}/preview`;
-    if (!preview && !(req.method === "GET" && url.pathname === BASE)) throw new RequestFailure(405, "Method not allowed.");
-    const policy = preview ? await readPolicy(req) : undefined;
+    const apply = req.method === "POST" && url.pathname === `${BASE}/apply`;
+    if (!preview && !apply && !(req.method === "GET" && url.pathname === BASE)) throw new RequestFailure(405, "Method not allowed.");
+    const policy = apply ? await readPolicy(req, true) : preview ? await readPolicy(req, false) : undefined;
     check();
-    const persisted = readMcpInstancePolicy();
-    const snapshot = getMcpBridgeReadSnapshot();
-    const plan = planMcpEnginePolicy(policy ?? persisted.policy, snapshot, READINESS);
-    const { bridgeRevision: _bridgeRevision, ...publicPlan } = plan;
-    const payload = {
-      ok: true, persisted: { policy: persisted.policy },
-      runtime: RUNTIME, readiness: READINESS, effect: MCP_ENGINE_SWITCH_EFFECT,
-      // Never expose raw config, paths, native preview errors or startup diagnostics.
-      servers: snapshot.dryRun.rows.map(row => ({ name: row.serverName, nativeProjectionStatus: row.status })),
-      plan: publicPlan, applyAvailable: false,
-    };
+    const payload = apply ? await channel.agentPool.applyMcpSettings(policy as ApplyInput, check) : channel.agentPool.inspectMcpSettings(policy);
     check();
     return reply(payload);
   } catch (error) {
     if (error instanceof RequestFailure) return reply({ ok: false, error: error.message }, error.status);
+    if (error instanceof McpPolicyApplyError) return reply({ ok: false, error: error.message }, error.status);
     return reply({ ok: false, error: "MCP settings are unavailable; check instance configuration." }, 503);
   }
 }

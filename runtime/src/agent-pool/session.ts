@@ -40,6 +40,7 @@ import { SESSIONS_DIR, getRuntimeRoot, getSessionPersistenceConfig, getWorkspace
 import { buildChannelSystemPromptAppendix } from "../channels/formatting.js";
 import { detectChannel } from "../router.js";
 import { createBuiltinExtensionFactories } from "../extensions/index.js";
+import { assertSelectedMcpOwner, bindMcpCodemodePolicy, mcpCodemodeExtension } from "./mcp-codemode-runtime.js";
 import { readAccessConfig } from '../core/config-access.js';
 import { requireOwnedSessionExecution } from './owned-session-access.js';
 import { familySessionModelOptions } from './family-model-defaults.js';
@@ -605,6 +606,7 @@ export async function createSessionInDir(
     sessionStartEvent?: SessionStartEvent;
   }) => {
     if (mode === 'family-shared' && !requireOwnedSessionExecution(options.chatJid!)) throw new Error('Owned family session identity is required.');
+    if (!operationProfile) assertSelectedMcpOwner();
     const mcpOwner = operationProfile ? null : createMcpBridgeOwner(bridge => createMcpAdapter({
       config: bridge.config,
       initializeOnLoad: false,
@@ -619,6 +621,7 @@ export async function createSessionInDir(
         chatJid: options.chatJid,
       }),
       mcpRuntimeRegistrationPolicy,
+      mcpCodemodeExtension,
       // Piclaw synchronously emits the initial session_start event. Let that
       // session own eager servers instead of spawning a superseded load-time owner.
       mcpOwner!.extension,
@@ -668,7 +671,10 @@ export async function createSessionInDir(
         : options.customTools as any,
     });
     try {
-    if (mcpOwner) bindMcpBridgeOwner(result.session, resourceLoader, mcpOwner);
+    if (mcpOwner) {
+      bindMcpBridgeOwner(result.session, resourceLoader, mcpOwner);
+      bindMcpCodemodePolicy(result.session);
+    }
     if (mode === 'family-shared' && !requireOwnedSessionExecution(options.chatJid!)) throw new Error('Owned family session identity is required.');
 
     const normalizeResourceDiagnostics = (items: Array<{ path?: string; error?: string }> = []) =>

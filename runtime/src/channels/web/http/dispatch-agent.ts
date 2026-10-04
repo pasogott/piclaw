@@ -68,6 +68,7 @@ interface ExactAgentRoute {
 const EXACT_AGENT_ROUTES: ExactAgentRoute[] = [
   { method: "GET", path: "/agent/settings/mcp", handle: handleMcpSettings },
   { method: "POST", path: "/agent/settings/mcp/preview", handle: handleMcpSettings },
+  { method: "POST", path: "/agent/settings/mcp/apply", handle: handleMcpSettings },
   { method: "GET", path: "/agent/settings/workspace/indexing", handle: (channel, req, url) => handleWorkspaceIndexingSettings(channel, req, url) as Promise<Response> },
   ...["preview", "save", "refresh"].map(action => ({
     method: "POST", path: `/agent/settings/workspace/indexing/${action}`,
