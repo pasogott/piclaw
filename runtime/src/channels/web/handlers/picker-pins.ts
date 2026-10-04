@@ -15,6 +15,17 @@ import { isRateLimitedForClient } from "../http/rate-limit.js";
 import { createLogger } from "../../../utils/logger.js";
 const log = createLogger("web.picker-pins");
 
+/** A synchronous lock wait stalls every HTTP request on Bun's event loop.
+ * Keep this scope synchronous and restore the connection policy before yielding.
+ * Contention is returned as 503 for bounded asynchronous client retry. */
+function withoutPinLockWait<T>(operation: () => T): T {
+  const db = getDb();
+  const previous = (db.query("PRAGMA busy_timeout").get() as { timeout: number }).timeout;
+  db.exec("PRAGMA busy_timeout = 0");
+  try { return operation(); }
+  finally { db.exec(`PRAGMA busy_timeout = ${previous}`); }
+}
+
 function isPinStoreBusy(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const { code, errno } = error as { code?: unknown; errno?: unknown };
@@ -92,7 +103,7 @@ export async function handlePickerPins(
     const denied = enforceBrowserBinding(req, actor);
     if (denied) return denied;
     try {
-      requireAccountActor(db, actor);
+      withoutPinLockWait(() => requireAccountActor(db, actor));
     } catch (error) {
       if (isPinStoreBusy(error)) return pinStoreBusyResponse();
       return reply({ error: "Account access denied." }, 403);
@@ -117,7 +128,7 @@ export async function handlePickerPins(
   };
   if (req.method === "GET") {
     try {
-      return reply(readPickerPins(db, owner, canRead));
+      return reply(withoutPinLockWait(() => readPickerPins(db, owner, canRead)));
     } catch (error) {
       if (isPinStoreBusy(error)) return pinStoreBusyResponse();
       throw error;
@@ -133,8 +144,10 @@ export async function handlePickerPins(
   }
   try {
     // Body reading is asynchronous; revalidate identity before the transaction.
-    if (actor) requireAccountActor(db, actor);
-    const state = changePickerPins(db, owner, change, canRead);
+    const state = withoutPinLockWait(() => {
+      if (actor) requireAccountActor(db, actor);
+      return changePickerPins(db, owner, change, canRead);
+    });
     // Invalidation only: no session/model identifiers or account data on SSE.
     channel.broadcastEvent(
       "picker_pins_changed",

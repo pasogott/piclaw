@@ -112,6 +112,7 @@ export interface WebChannelLike
     extras?: { mediaIds?: number[]; contentBlocks?: unknown[]; linkPreviews?: unknown[]; screenHint?: string; source?: string; queuedBy?: QueuedFollowupItem["queuedBy"] }
   ): number;
   getQueuedFollowupCount(chatJid: string): number;
+  admitQueuedFollowupItem?(args: Parameters<WebChannelLike['enqueueQueuedFollowupItem']>, authorise: () => void, signal: AbortSignal): Promise<number>;
   getQueuedFollowupItems(chatJid: string): QueuedFollowupItem[];
   removeQueuedFollowupItem(chatJid: string, rowId: number): QueuedFollowupItem | null;
   peekQueuedFollowupItem(chatJid: string): QueuedFollowupItem | null;

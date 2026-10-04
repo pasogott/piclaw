@@ -58,6 +58,7 @@ import {
   setChatCursor,
 } from "../../../db.js";
 import { detectChannel, formatMessages, formatOutbound } from "../../../router.js";
+import { isSqliteContention } from '../../../db/sqlite-async-admission.js';
 import { createAgentProfileBuilder } from "../agent/agent-utils.js";
 import { buildGeneralSettingsProfileUpdate, getGeneralSettingsData } from "./general-settings.js";
 import { resolveAvatarUrl } from "../media/avatar-service.js";
@@ -640,6 +641,7 @@ export async function handleAgentMessage(
   defaultAgentId: string
 ): Promise<Response> {
   if (readAccessConfig().mode !== "single-user") return channel.json({ error: "Use account-bound text message admission." }, 403);
+  const admittedPrincipal = channel.authGateway?.getPrincipal?.(req, true);
   const agentId = pathname.split("/")[2] || defaultAgentId;
   const browserObservability = getBrowserObservabilityContext(req);
   const parsed = await parseAgentMessageRequest(req);
@@ -689,9 +691,8 @@ export async function handleAgentMessage(
   const isStreaming = typeof channel.agentPool.isStreaming === "function"
     ? channel.agentPool.isStreaming(chatJid)
     : false;
-  const isActive = typeof (channel.agentPool as { isActive?: (chatJid: string) => boolean }).isActive === "function"
-    ? (channel.agentPool as { isActive: (chatJid: string) => boolean }).isActive(chatJid)
-    : isStreaming;
+  const isActive = isStreaming || (typeof (channel.agentPool as { isActive?: (chatJid: string) => boolean }).isActive === "function"
+    && (channel.agentPool as { isActive: (chatJid: string) => boolean }).isActive(chatJid));
   const hasQueuedBacklog = channel.getQueuedFollowupCount(chatJid) > 0;
   // NOTE: we intentionally use the in-memory active-run flags—not the DB
   // inflight marker—to decide whether to queue/defer. The DB marker survives
@@ -754,10 +755,17 @@ export async function handleAgentMessage(
     }, forwardRes.status);
   }
 
-  const queueDeferredFollowup = (
+  const principalKey = (value: typeof admittedPrincipal) => JSON.stringify(value && [value.kind, value.userId, value.mode, value.role, value.authentication]);
+  const admissionKey = principalKey(admittedPrincipal);
+  const revalidateQueuedAdmission = () => {
+    req.signal.throwIfAborted();
+    if (readAccessConfig().mode !== 'single-user' || principalKey(channel.authGateway?.getPrincipal?.(req, true)) !== admissionKey
+      || (channel.authGateway?.isAuthEnabled?.() && !admittedPrincipal)) throw new Error('Queued input authority changed.');
+  };
+  const queueDeferredFollowup = async (
     queuedContent: string,
     extras: QueueDeferredFollowupExtras = {}
-  ): Response => {
+  ): Promise<Response> => {
     const queuedAt = new Date().toISOString();
     // Don't inherit the active turn's thread root. Deferred followups are
     // independent messages typed while the agent was busy — they should
@@ -771,14 +779,24 @@ export async function handleAgentMessage(
           ...(extras.browserContext.clientId ? { clientId: extras.browserContext.clientId } : {}),
         }
       : undefined;
-    const queuedRowId = channel.enqueueQueuedFollowupItem(chatJid, 0, queuedContent, queuedThreadId, queuedAt, {
+    const args: Parameters<WebChannelLike['enqueueQueuedFollowupItem']> = [chatJid, 0, queuedContent, queuedThreadId, queuedAt, {
       mediaIds: extras.mediaIds,
       contentBlocks: extras.contentBlocks,
       linkPreviews: extras.linkPreviews,
       screenHint: extras.screenHint,
       source: extras.source,
       queuedBy: queuedBy && Object.keys(queuedBy).length > 0 ? queuedBy : undefined,
-    });
+    }];
+    let queuedRowId: number;
+    try {
+      queuedRowId = channel.admitQueuedFollowupItem
+        ? await channel.admitQueuedFollowupItem(args, revalidateQueuedAdmission, req.signal)
+        : channel.enqueueQueuedFollowupItem(...args);
+    } catch (error) {
+      if (isSqliteContention(error)) return channel.json({ error: 'Queue storage is busy; this input was not accepted.' }, 503);
+      if (req.signal.aborted) return channel.json({ error: 'Input submission was cancelled before acceptance.' }, 400);
+      return channel.json({ error: 'Queued input could not be accepted.' }, 403);
+    }
     channel.broadcastEvent("agent_followup_queued", {
       chat_jid: chatJid,
       thread_id: queuedThreadId,
@@ -788,7 +806,12 @@ export async function handleAgentMessage(
       ...(extras.source ? { source: extras.source } : {}),
       ...(queuedBy && Object.keys(queuedBy).length > 0 ? { queued_by: queuedBy } : {}),
     });
-    if (extras.wakeIfIdle) {
+    const stillActive = (typeof (channel.agentPool as { isActive?: (jid: string) => boolean }).isActive === 'function'
+      && (channel.agentPool as { isActive: (jid: string) => boolean }).isActive(chatJid))
+      || channel.agentPool.isStreaming?.(chatJid) === true;
+    // Manual /queue remains deferred even while idle. Compose admission opts
+    // in so a turn ending during an asynchronous lock wait cannot strand input.
+    if (extras.wakeIfIdle && !stillActive) {
       channel.resumeChat(chatJid);
     }
     return channel.json({ queued: "followup", thread_id: queuedThreadId }, 201);
@@ -1001,7 +1024,7 @@ export async function handleAgentMessage(
       screenHint: normalized.screenHint,
       source: "web.compose",
       browserContext: browserObservability,
-      wakeIfIdle: hasQueuedBacklog && !isActive,
+      wakeIfIdle: true,
     });
 
     return response;
