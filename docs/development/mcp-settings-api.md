@@ -32,6 +32,8 @@ Native engine Apply is still not delivered. Adapter shutdown acknowledgement, na
 
 Focused tests cover real route registration, denied owner modes before body/state reads, readiness, bounded/chunked bodies, stalled/failed readers, cancellation, identity revocation, no sensitive field disclosure, request-guard throttling, immutable bridge generations and planner cases. Apply tests add revision conflicts, interruption acknowledgement, native rejection, lifecycle fencing, late snapshot quarantine and post-persist activation failure. A separate offline Pi 1.0.1 scripted-provider fixture exercises current/new sessions, real scripting, nested tool policy, model execution disabled, Off enforcement and retained history. Only synthetic configuration and isolated state are used.
 
+The [codemode qualification](../reviews/mcp-codemode-settings.md) records the rebuilt browser replay and updated disk-SQLite profiling. The measurements below describe the earlier preview implementation variants.
+
 The initial test exposed a member-auth check reading malformed config before rejecting the role. The role check now precedes config access. Review also caught unregistered GET throttling and ambiguous `status`; tests exercise the actual guard and the response now names native projection explicitly.
 
 ## Profiling results
