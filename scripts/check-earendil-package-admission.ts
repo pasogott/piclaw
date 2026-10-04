@@ -450,9 +450,12 @@ export function validateRegistryReceipt(pathInput: string, version: string, gitH
 }
 
 function fileDigest(path: string): string { return createHash("sha256").update(readFileSync(path)).digest("hex"); }
-function treeDigest(rootInput: string): string {
+export function packagePayloadDigest(rootInput: string): string {
   const root=realpathSync(rootInput), records:string[]=[];
   const walk=(directory:string)=>{for(const entry of readdirSync(directory,{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name))){
+    // Dependency placement is installer-owned; inspectInstalledTree validates
+    // its identities/versions separately. Deeper package-owned directories count.
+    if(directory===root&&entry.name==="node_modules")continue;
     const absolute=join(directory,entry.name),relative=absolute.slice(root.length+1).split(sep).join("/");
     if(entry.isDirectory())walk(absolute);
     else if(entry.isFile())records.push(`f\t${relative}\t${fileDigest(absolute)}`);
@@ -471,7 +474,7 @@ function verifyPublishedTarballs(consumerRoot:string,tarballDirInput:string,regi
     const result=Bun.spawnSync(["tar","-xzf",tarball,"-C",unpack],{stdout:"pipe",stderr:"pipe",timeout:30_000});
     if(result.exitCode!==0)throw new Error(`cannot extract ${entry.name}: ${result.stderr.toString()}`);
     const published=join(unpack,"package"),installed=packageDirectory(consumerRoot,entry.name);
-    const publishedDigest=treeDigest(published),installedTreeSha256=treeDigest(installed);
+    const publishedDigest=packagePayloadDigest(published),installedTreeSha256=packagePayloadDigest(installed);
     if(publishedDigest!==installedTreeSha256)throw new Error(`installed package tree differs from published tarball: ${entry.name}`);
     return {name:entry.name,tarball,shasum,integrity,installedTreeSha256};
   });}finally{rmSync(scratch,{recursive:true,force:true});}

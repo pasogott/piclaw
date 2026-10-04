@@ -350,7 +350,7 @@ describe("EF-S07 SQLite hardening", () => {
     }
   });
 
-  test("claim, bind, renew, abandon, and cleanup checkpoints are atomic", async () => {
+  test("claim checkpoints are atomic", async () => {
     for (const [index, checkpoint] of (["occurrence_insert", "lease_insert", "decision_insert"] as ScheduledRunStatement[]).entries()) {
       const subject = isolated();
       try {
@@ -362,6 +362,9 @@ describe("EF-S07 SQLite hardening", () => {
       } finally { subject.dispose?.(); }
     }
 
+  });
+
+  test("source binding checkpoints are atomic", async () => {
     for (const checkpoint of ["source_binding_insert", "source_binding_update", "decision_insert"] as ScheduledRunStatement[]) {
       const subject = isolated();
       try {
@@ -385,6 +388,9 @@ describe("EF-S07 SQLite hardening", () => {
       } finally { subject.dispose?.(); }
     }
 
+  });
+
+  test("renewal checkpoints are atomic", async () => {
     for (const checkpoint of ["renewal_insert", "lease_history_update", "lease_renew", "decision_insert"] as ScheduledRunStatement[]) {
       const subject = isolated();
       try {
@@ -402,6 +408,9 @@ describe("EF-S07 SQLite hardening", () => {
       } finally { subject.dispose?.(); }
     }
 
+  });
+
+  test("abandonment checkpoints are atomic", async () => {
     for (const checkpoint of ["next_decision_insert", "abandonment_insert", "task_head_update", "occurrence_terminal_update", "decision_insert"] as ScheduledRunStatement[]) {
       const subject = isolated();
       try {
@@ -418,6 +427,9 @@ describe("EF-S07 SQLite hardening", () => {
       } finally { subject.dispose?.(); }
     }
 
+  });
+
+  test("retention cleanup checkpoints are atomic", async () => {
     for (const checkpoint of ["tombstone_insert", "retention_delete", "decision_insert"] as ScheduledRunStatement[]) {
       const subject = isolated();
       try {
