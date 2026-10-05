@@ -30,6 +30,26 @@ for (let n = 0; n < size; n++) {
 writeFileSync(file, lines.join('\n') + '\n');
 lines.length = 0;
 const contextLength = shape === 'branched' ? (size - 1) % branchLength + 1 : size;
+function validateContext(manager: SessionManager) {
+  assert.equal(manager.getEntries().length, size);
+  const messages = manager.buildSessionContext().messages;
+  assert.equal(messages.length, contextLength);
+  const first = size - contextLength;
+  for (let n = 0; n < messages.length; n++) {
+    const message = messages[n];
+    const index = first + n;
+    const expected = 'Synthetic history ' + index + ' ' + 's'.repeat(1024);
+    if (shape === 'tools' && index % 3 === 1) {
+      assert.equal(message.role, 'assistant');
+      assert(message.role === 'assistant');
+      const call = message.content[0]; assert(call.type === 'toolCall');
+      assert.equal(call.id, 'call-' + index); assert.equal(call.arguments.value, expected);
+    } else if (shape === 'tools' && index % 3 === 2) {
+      assert(message.role === 'toolResult'); assert.equal(message.toolCallId, 'call-' + (index - 1));
+      const content = message.content[0]; assert(content.type === 'text'); assert.equal(content.text, expected);
+    } else { assert(message.role === 'user'); assert.equal(message.content, expected); }
+  }
+}
 let memoryReadRetries = 0;
 function memory() {
   for (let attempt = 0; ; attempt++) {
@@ -44,8 +64,7 @@ retained.forEach((manager, n) => registry.register(manager, -n - 1));
 function batch(firstId: number) {
   for (let n = 0; n < 3; n++) {
     const manager = SessionManager.open(file);
-    assert.equal(manager.getEntries().length, size);
-    assert.equal(manager.buildSessionContext().messages.length, contextLength);
+    validateContext(manager);
     registry.register(manager, firstId + n);
   }
 }
@@ -56,13 +75,15 @@ let opened = 0;
 try {
   do {
     const start = performance.now(); batch(opened); opened += 3;
-    for (const manager of retained) assert.equal(manager.buildSessionContext().messages.length, contextLength);
+    for (const manager of retained) validateContext(manager);
     assert([...finalized].every(id => id >= 0), 'Held control was finalized');
+    // Work + up to 1 s rest per cycle; observed throughput is reported, not fixed.
     await Bun.sleep(Math.min(1000, Math.max(1, durationMs - (performance.now() - at))));
     samples.push({ elapsedMs: performance.now() - at, cycleMs: performance.now() - start, opened, naturalFinalized: finalized.size, memory: memory(), eventLoopMaxMs: loop.max / 1e6 });
   } while (performance.now() - at < durationMs);
   loop.disable();
   assert(opened >= 3);
+  assert([...finalized].every(id => id >= 0), 'Held control finalized during final wait');
   assert.deepEqual(retained.map(manager => manager.getEntries().length), [size, size, size]);
-  console.log(JSON.stringify({ runtime: Bun.version, shape, entries: size, contextMessages: contextLength, requestedMs: durationMs, wallMs: performance.now() - at, cpu: process.cpuUsage(cpu), memoryBefore: before, memoryAfter: memory(), memoryReadRetries, openedDroppedManagers: opened, naturalFinalizedManagers: finalized.size, retainedControls: 3, noHeldFinalizers: true, explicitGcCalls: 0, fixtureBytes: statSync(file).size, eventLoop: { samples: loop.count, maxMs: loop.max / 1e6, meanMs: loop.mean / 1e6 }, samples, scope: 'Public SessionManager disk open/context soak with linear, ten-spoke branched or user/tool-call/tool-result histories. Three held controls, rotating dropped managers, no forced GC. Process-wide memory and nondeterministic finalizers are observations, not leak absence or per-GC pause attribution; no Agent inference/provider/live credentials/state. Whole-child CPU includes fixture setup.' }));
+  console.log(JSON.stringify({ runtime: Bun.version, shape, entries: size, contextMessages: contextLength, exactContextPayloadAndOrder: true, requestedMs: durationMs, wallMs: performance.now() - at, cpu: process.cpuUsage(cpu), memoryBefore: before, memoryAfter: memory(), memoryReadRetries, openedDroppedManagers: opened, naturalFinalizedManagers: [...finalized].filter(id => id >= 0).length, retainedControls: 3, noHeldFinalizers: [...finalized].every(id => id >= 0), explicitGcCalls: 0, fixtureBytes: statSync(file).size, eventLoop: { samples: loop.count, maxMs: loop.max / 1e6, meanMs: loop.mean / 1e6 }, samples, scope: 'Public SessionManager disk open/context soak with linear, ten independent branch chains or complete user/tool-call/tool-result triples. Three held controls, three dropped managers per work-plus-up-to-1s-rest cycle, exact selected-context payload/order, no forced GC. Process-wide memory and nondeterministic finalizers are observations, not leak absence or per-GC pause attribution; no Agent inference/provider/live credentials/state. Reported CPU excludes setup; external whole-child profile includes it.' }));
 } finally { loop.disable(); retained.length = 0; }
