@@ -149,19 +149,22 @@ export function patchMcpProjectOverride(document: unknown, value: unknown): Reco
   return next;
 }
 
-const CREDENTIAL_FIELDS = ['auth','bearerToken','bearerTokenEnv','bearerTokenKeychain','bearerTokenStore','headers','oauth','requestHeadersCommand'] as const;
+const CREDENTIAL_FIELDS = ['auth','bearerToken','bearerTokenEnv','bearerTokenKeychain','bearerTokenStore','headers','oauth','requestHeadersCommand','env'] as const;
 /** Omission from a local layer is not an inherited credential clear. Reject
  * repointing until the exact projected effective definition proves it safe. */
 export function assertMcpServerCredentialBinding(original: unknown, projected: unknown): void {
   if (!record(original) || !record(projected)) return;
-  const transport = (entry: Record<string, unknown>) => JSON.stringify([entry.command ?? null, entry.url ?? null, entry.socket ?? null]);
+  const transport = (entry: Record<string, unknown>) => JSON.stringify([entry.command ?? null, entry.url ?? null, entry.socket ?? null,
+    entry.command ? entry.args ?? [] : null, entry.command ? entry.cwd ?? null : null]);
   if (transport(original) === transport(projected)) return;
   const sharesValue = (before: unknown, after: unknown): boolean => {
     if (record(before) && record(after)) return Object.keys(before).some(key => Object.hasOwn(after, key) && sharesValue(before[key], after[key]));
     return before !== undefined && after !== undefined && JSON.stringify(before) === JSON.stringify(after);
   };
   if (CREDENTIAL_FIELDS.some(field => sharesValue(original[field], projected[field])
-    && !(field === 'auth' && projected[field] === false) && !(field === 'oauth' && projected[field] === false))) {
+    && !(field === 'auth' && projected[field] === false) && !(field === 'oauth' && projected[field] === false))
+    || (Array.isArray(original.args) && Array.isArray(projected.args) && original.args.some(arg => typeof arg === 'string'
+      && /\$\{|\$env:|\{env:|^!(?!!)/.test(arg) && (projected.args as unknown[]).includes(arg)))) {
     throw new McpServerEditError('inherited_credentials');
   }
 }

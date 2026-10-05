@@ -2,7 +2,7 @@ import { createCodemodeExtension, type AgentSession, type AgentSessionRuntime, t
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { commitMcpInstancePolicy, readMcpInstancePolicy } from "../core/config-mcp.js";
-import { getMcpBridgeReadSnapshot, assertMcpBridgeSourcesCurrent, inspectMcpServerDefinitions, prepareMcpServerEdit, createMcpConfigWriteAuthority, writeMcpProjectOverride, hydrateMcpKeychainCredentials, McpConfigWriteError, type McpServerWriteCandidate } from "../secure/mcp-keychain.js";
+import { getMcpBridgeReadSnapshot, assertMcpBridgeSourcesCurrent, assertMcpCommittedSourcesCurrent, inspectMcpServerDefinitions, prepareMcpServerEdit, createMcpConfigWriteAuthority, writeMcpProjectOverride, hydrateMcpKeychainCredentials, McpConfigWriteError, type McpServerWriteCandidate, type McpConfigCommitReceipt } from "../secure/mcp-keychain.js";
 import { acknowledgeMcpSessionsShutdown, reloadAcknowledgedMcpSessions } from './mcp-bridge-owner.js';
 import { getWorkspaceDir } from '../core/config.js';
 import { createLogger, debugSuppressedError } from '../utils/logger.js';
@@ -195,7 +195,9 @@ export class McpCodemodeController {
     combined.addEventListener('abort', onAbort, { once: true });
     const timer = setTimeout(() => deadlineAbort.abort(Error('MCP server update deadline exceeded.')), this.timeoutMs);
     const bounded = <T>(promise: Promise<T>) => Promise.race([promise, interrupted]);
+    let commitReceipt: McpConfigCommitReceipt | undefined;
     const check = () => { combined.throwIfAborted(); authorise(); combined.throwIfAborted();
+      if (commitReceipt) assertMcpCommittedSourcesCurrent(commitReceipt);
       if (getWorkspaceDir() !== token.workspace || readMcpInstancePolicy().revision !== token.config) throw Error('MCP instance binding changed.'); };
     let sessions: readonly AgentSessionRuntime[] = [], committed = false, failed = false;
     try {
@@ -207,7 +209,7 @@ export class McpCodemodeController {
       check(); assertMcpBridgeSourcesCurrent();
       try {
         const write = writeMcpProjectOverride({ workspaceDir: token.workspace, expectedRevision: token.bridge, candidate: token.candidate,
-          authority: createMcpConfigWriteAuthority({ workspaceDir: token.workspace, authorise: check, signal: combined }), onCommit: () => { committed = true; } });
+          authority: createMcpConfigWriteAuthority({ workspaceDir: token.workspace, authorise: check, signal: combined }), onCommit: receipt => { commitReceipt = receipt; committed = true; } });
         // A post-rename unlock tail may outlive the response deadline. Observe
         // its commit receipt before reporting an ambiguous response outcome.
         await bounded(write);

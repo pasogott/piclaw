@@ -60,8 +60,9 @@ const WRITE_AUTHORITY = Symbol("mcp-config-write-authority");
 export interface McpConfigWriteAuthority { readonly [WRITE_AUTHORITY]: true }
 const writeAuthorities = new WeakMap<McpConfigWriteAuthority, { workspaceDir: string; authorise(): void; signal: AbortSignal }>();
 export interface McpServerWriteCandidate { readonly prepared: true }
-const serverCandidates = new WeakMap<McpServerWriteCandidate, { workspaceDir: string; snapshot: McpBridgeSnapshot; document: Record<string, unknown>; edit: McpServerEdit; identities: Record<string, string | null> }>();
+const serverCandidates = new WeakMap<McpServerWriteCandidate, { workspaceDir: string; snapshot: McpBridgeSnapshot; document: Record<string, unknown>; effectiveHash: string; edit: McpServerEdit; identities: Record<string, string | null> }>();
 export interface McpConfigCommitReceipt { path: string; fileRevision: string; committed: true }
+const commitReceipts = new WeakMap<McpConfigCommitReceipt, { workspaceDir: string; revisions: Record<string, string | null>; identities: Record<string, string | null>; effectiveHash: string }>();
 export class McpConfigWriteError extends Error {
   constructor(readonly receipt: McpConfigCommitReceipt, cause: unknown) {
     super('MCP configuration was saved, but commit completion could not be confirmed.', { cause });
@@ -422,7 +423,7 @@ export function prepareMcpServerEdit(workspaceDir: string, value: unknown) {
   }
   assertMcpBridgeSourcesCurrent();
   const candidate = Object.freeze({ prepared: true as const });
-  serverCandidates.set(candidate, { workspaceDir: resolve(workspaceDir), snapshot: preparedSnapshot, document, edit, identities: { ...preparedSourceIdentities } });
+  serverCandidates.set(candidate, { workspaceDir: resolve(workspaceDir), snapshot: preparedSnapshot, document, effectiveHash: hashJson(effective), edit, identities: { ...preparedSourceIdentities } });
   return { candidate, preview: { name: edit.name, action: edit.action, present: !!definition, enabled: definition?.disabled !== true && !!definition,
     ...(definition ? projectMcpServerEdit(edit.name, definition) : { patch: {}, withheldFields: [] }),
     effect: 'abort_turns_and_reload_extensions', applicable: true } };
@@ -432,6 +433,14 @@ export function createMcpConfigWriteAuthority(input: { workspaceDir: string; aut
   const authority = Object.freeze({ [WRITE_AUTHORITY]: true as const });
   writeAuthorities.set(authority, { ...input, workspaceDir: resolve(input.workspaceDir) });
   return authority;
+}
+/** Carry the approved generation across rename/unlock/hydration/startup.
+ * A fresh hydration snapshot cannot turn an external file mutation into consent. */
+export function assertMcpCommittedSourcesCurrent(receipt: McpConfigCommitReceipt): void {
+  const binding = commitReceipts.get(receipt);
+  if (!binding || Object.entries(binding.revisions).some(([path, revision]) => fileRevision(path) !== revision)
+    || Object.entries(binding.identities).some(([path, identity]) => sourceIdentity(path) !== identity)
+    || hashJson(loadMcpConfig(undefined, binding.workspaceDir)) !== binding.effectiveHash) throw new Error('Committed MCP configuration changed before activation.');
 }
 /** Commit only. The fenced runtime controller owns exactly one subsequent hydration. */
 export async function writeMcpProjectOverride(input: { workspaceDir: string; expectedRevision: string; authority: McpConfigWriteAuthority; onCommit?: (receipt: McpConfigCommitReceipt) => void } & ({ config: McpConfig; candidate?: never } | { candidate: McpServerWriteCandidate; config?: never })): Promise<McpConfigCommitReceipt> {
@@ -445,8 +454,9 @@ export async function writeMcpProjectOverride(input: { workspaceDir: string; exp
   if (input.expectedRevision !== preparedSnapshot.revision || !sourceRevisionsMatch(preparedSnapshot)) throw new Error("MCP config revision conflict.");
   const candidate = input.candidate ? serverCandidates.get(input.candidate) : undefined;
   if (input.candidate && (!candidate || candidate.snapshot !== capturedSnapshot || candidate.workspaceDir !== resolve(input.workspaceDir))) throw new Error('MCP server candidate is not authorized.');
-  const config = structuredClone(candidate?.document ?? input.config!);
-  if (!candidate) assertWritableConfig(config as McpConfig);
+  const config = structuredClone(candidate?.document ?? input.config!) as unknown as Record<string, unknown>;
+  if (!candidate) assertWritableConfig(config as unknown as McpConfig);
+  const effectiveHash = candidate?.effectiveHash ?? hashJson(loadMcpConfig(undefined, input.workspaceDir, { projectOverride: config }));
   const path = resolve(input.workspaceDir, ".pi", "mcp.json"); const root = resolve(input.workspaceDir); if (!path.startsWith(`${root}/`)) throw new Error("MCP config target escapes workspace.");
   assertNoSymlinkComponents(root, path);
   const expectedFileRevision = preparedSnapshot.sourceRevisions[path] ?? null;
@@ -462,6 +472,7 @@ export async function writeMcpProjectOverride(input: { workspaceDir: string; exp
   const checkRevision = () => {
     check(); assertNoSymlinkComponents(root, path);
     if (capturedSnapshot !== preparedSnapshot || input.expectedRevision !== preparedSnapshot.revision || !sourceRevisionsMatch(capturedSnapshot, originalIdentities)
+      || hashJson(loadMcpConfig(undefined, input.workspaceDir, { projectOverride: config })) !== effectiveHash
       || fileRevision(path) !== expectedFileRevision || Object.entries(identities).some(([source, identity]) => {
         const stat = existsSync(source) ? lstatSync(source) : null;
         return (stat ? `${stat.dev}:${stat.ino}` : null) !== identity;
@@ -482,7 +493,9 @@ export async function writeMcpProjectOverride(input: { workspaceDir: string; exp
     checkRevision();
     renameSync(temp, path); temp = undefined;
     if (input.candidate) serverCandidates.delete(input.candidate);
-    receipt = { path, fileRevision: createHash('sha256').update(text).digest('hex'), committed: true };
+    receipt = Object.freeze({ path, fileRevision: createHash('sha256').update(text).digest('hex'), committed: true as const });
+    commitReceipts.set(receipt, { workspaceDir: root, revisions: { ...capturedSnapshot.sourceRevisions, [path]: receipt.fileRevision },
+      identities: { ...originalIdentities, [path]: sourceIdentity(path) }, effectiveHash });
     input.onCommit?.(receipt);
     const dirFd = openSync(dirname(path), "r"); try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
   } catch (error) { failure = error; }
@@ -491,7 +504,7 @@ export async function writeMcpProjectOverride(input: { workspaceDir: string; exp
     try { await release(); } catch (error) { failure ??= error; }
   }
   if (receipt) {
-    try { check(); } catch (error) { failure ??= error; }
+    try { check(); assertMcpCommittedSourcesCurrent(receipt); } catch (error) { failure ??= error; }
     if (failure !== undefined) throw new McpConfigWriteError(receipt, failure);
     return receipt;
   }

@@ -36,3 +36,10 @@ test('exact effective endpoint or transport changes cannot silently inherit cred
 test('repointing cannot hide a retained credential inside a modified header object',()=>{
  expect(()=>assertMcpServerCredentialBinding({url:'https://old.test',headers:{Authorization:'Bearer ${TOKEN}',Accept:'old'}},{url:'https://new.test',headers:{Authorization:'Bearer ${TOKEN}',Accept:'new'}})).toThrow('inherited_credentials');
 });
+for(const patch of [{command:'new-program'},{args:['new-script.ts','${TOKEN}']},{cwd:'/new/program-root'}])test('stdio program changes retain neither environment nor argument credential authority',()=>{
+ const original={command:'bun',args:['old-script.ts','${TOKEN}'],cwd:'/original',env:{API_KEY:'${TOKEN}'}};
+ expect(()=>assertMcpServerCredentialBinding(original,{...original,...patch})).toThrow('inherited_credentials');
+});
+test('unchanged stdio identity permits non-destination policy edits but credential clears must be effective',()=>{
+ const original={command:'bun',args:['server.ts'],cwd:'/original',env:{API_KEY:'${TOKEN}'}};expect(()=>assertMcpServerCredentialBinding(original,{...original,requestTimeoutMs:4500})).not.toThrow();expect(()=>assertMcpServerCredentialBinding(original,{command:'new-program'})).not.toThrow();
+});

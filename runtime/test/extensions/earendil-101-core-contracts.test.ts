@@ -13,7 +13,7 @@ test('exact 1.0.1 package and lock closure retains adapter ownership',()=>{
  const resolved=Object.values(parsed.packages).map((entry:any)=>entry[0] as string).filter(id=>family.some(name=>id.startsWith(name+'@')));
  expect(resolved.sort()).toEqual(family.map(name=>name+'@1.0.1').sort());
  expect(parsed.workspaces[''].dependencies['@earendil-works/chord']).toBe('1.0.1');
- expect(pkg.dependencies['pi-mcp-adapter']).toBe('github:piclaw-bot/pi-mcp-adapter#2400aec570d3c1b379ebbd6941590bdea54cd83d');
+ expect(pkg.dependencies['pi-mcp-adapter']).toBe('github:piclaw-bot/pi-mcp-adapter#dddfcf630508f42c169889c11dee94e69b746e7c');
  const session=readFileSync(resolve(root,'runtime/src/agent-pool/session.ts'),'utf8');expect(session).toContain('initializeOnLoad: false');expect(session).toContain('resolveRuntimeEnv');
  for(const factory of ['createMcpExtension','createToolSearchExtension','createCodemodeExtension'])expect(session).not.toContain(factory);
  expect(typeof createMcpExtension).toBe('function');expect(typeof createToolSearchExtension).toBe('function');expect(typeof createCodemodeExtension).toBe('function');
