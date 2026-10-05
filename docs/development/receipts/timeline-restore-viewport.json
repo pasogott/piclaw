@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-10-05T11:20:25.762Z",
+  "recordedAt": "2026-10-05T11:50:16.418Z",
   "baseMain": "44affa34d",
   "focused": {
     "pass": 41,
@@ -121,7 +121,7 @@
       "sha256": "f0f8afb3484372e553cd8aec7d79dbde624ecb56b7012fe1a04ac490966efd76"
     }
   ],
-  "qualification": "candidatefocused/browser/type/static pass; independentsource review/frozenfull pending",
+  "qualification": "freshfrozenfullpassed; independent scoped historyboundary/fixture correction reviewsCLEAR; sourceonly",
   "scope": "syntheticisolatedbrowser/helper; no production install/restart/livedata/provider; no full tablet-device qualification claim",
   "reviewCorrections": [
     "pageverified contiguous ID independentofSSE arrivals",
@@ -149,5 +149,29 @@
     "refreshOnCreate": false,
     "ownedWorkspace": true,
     "profileLogSha256": "9a32c7329fa30c18d178a9a1979bb6af681b977f321cf969c9c5ceefeab19bcd"
+  },
+  "full": {
+    "head": "686695bb879a4697b76e1bb5288e30e5a0dba2c9",
+    "tree": "91116a6f6b8634d50dcc01ef6cec07785b699ff9",
+    "startedAt": "2026-10-05T11:37:45Z",
+    "finishedAt": "2026-10-05T11:48:38Z",
+    "exit": 0,
+    "pass": 6467,
+    "skip": 8,
+    "fail": 0,
+    "assertions": 42157,
+    "total": 6475,
+    "files": 918,
+    "seconds": 643.72,
+    "features": {
+      "pass": 25,
+      "assertions": 246
+    },
+    "webBuild": {
+      "pass": 9,
+      "assertions": 26
+    },
+    "logSha256": "85953c1fc619bf9f8cf48d11c7f6aa17afb1f61f89de7f156576b0f70dd18af5",
+    "unchangedClean": true
   }
 }

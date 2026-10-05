@@ -19,7 +19,9 @@ The divider preserves drag-to-resize in Classic, distinguishing more-than4px mov
 - Web build:9passed/26assertions. Five type stages pass with95unchangedtransitive frontend diagnostics; scopedlint excepttwo unchanged pre-existing unused-variable diagnostics inComposeBox, fullstatic silent/logging/deps/env/cycles/pack/stale pass.
 - Syntheticworstcasehelperprofile100catchups/1000pages/50000rows20.19ms aggregate,10000viewportcalculations4.34ms; wall81.61ms inclsleep, CPUuser50.56ms/system7.65ms, loopmax5.41ms/p992.91ms/53samples. NoHTTP/DB/provider/livecontent, no production latency or before-after speed claim.
 
-Independentsource review and frozen full gate are required before publication. The existing mainline audit integration is separate; no sharedmain changes here.
+Independent scoped source reviews cleared the history-replacement boundary and fixture-only setup correction. Fresh frozen `make ci-fast` passed at head `686695bb879a4697b76e1bb5288e30e5a0dba2c9`, tree `91116a6f6b8634d50dcc01ef6cec07785b699ff9`, from11:37:45 to11:48:38UTC on5October2026:6,467passed/eightskipped/zerofailed,42,157assertions,6,475tests across918files,643.72seconds. Features25/246 andweb9/26 passed. Finalhead/treeunchanged andworktreeclean. Log SHA256 `85953c1fc619bf9f8cf48d11c7f6aa17afb1f61f89de7f156576b0f70dd18af5`.
+
+Publication changes only this review/JSON receipt; runtime/test/dependency/script parity with the frozen head is verified. The existing mainline audit integration is separate; no sharedmain changes here.
 
 ## Failed evidence
 
