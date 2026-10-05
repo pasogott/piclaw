@@ -1,9 +1,10 @@
 import { createVisibleInterval } from '../ui/visible-interval.js';
-import { html, useEffect, useMemo, useState } from '../vendor/preact-htm.js';
+import { html, useEffect, useMemo, useRef, useState } from '../vendor/preact-htm.js';
 import { getSystemMetrics } from '../api.js';
 import { AGENT_UI_POLL_MS } from '../ui/agent-ui-snapshot.js';
 import { METERS_COLLAPSED_EVENT_NAME, METERS_EVENT_NAME, applyMetersCollapsed, readStoredMetersCollapsed, readStoredMetersEnabled } from '../ui/meters.js';
 import { renderDisclosureTriangle } from '../ui/disclosure-triangle.js';
+import { buildIntelGpuCompactSummaryParts, IntelGpuDetailsPopover, IntelGpuMeterRows, normalizeIntelGpuSnapshots } from './intel-gpu-meters.js';
 
 export const SYSTEM_METERS_COMPACT_BREAKPOINT_PX = 600;
 
@@ -64,10 +65,11 @@ export function formatBytesCompact(value) {
     return `${scaled.toFixed(digits)}${units[unitIndex]}`;
 }
 
-export function buildCompactMetersSummary(metrics) {
+export function buildCompactMetersSummary(metrics, intelGpuMeters = []) {
     const parts = [
         `CPU ${formatPercent(metrics?.cpu_percent)}`,
         `RAM ${formatPercent(metrics?.ram_percent)}`,
+        ...buildIntelGpuCompactSummaryParts(intelGpuMeters),
     ];
     if (Number(metrics?.buffer_cache_bytes) > 0) {
         parts.push(`BUF ${formatBytesCompact(metrics?.buffer_cache_bytes)}`);
@@ -121,6 +123,7 @@ export function SystemMetersHud({ mode = 'overlay' }) {
         vram_total_bytes: 0,
         vram_used_bytes: 0,
         gpu_provider: null,
+        gpus: [],
         buffer_cache_bytes: null,
         buffer_cache_series_bytes: [],
         process_rss_series_bytes: [],
@@ -134,6 +137,10 @@ export function SystemMetersHud({ mode = 'overlay' }) {
         platform: '',
     });
     const [loading, setLoading] = useState(false);
+    const [openGpuId, setOpenGpuId] = useState(null);
+    const gpuTriggerRef = useRef(null);
+    const [lastSuccessfulRefreshMs, setLastSuccessfulRefreshMs] = useState(null);
+    const [nowMs, setNowMs] = useState(() => Date.now());
 
     useEffect(() => {
         const onMetersChange = (event) => {
@@ -141,6 +148,7 @@ export function SystemMetersHud({ mode = 'overlay' }) {
         };
         const onMetersCollapsedChange = (event) => {
             setCollapsed(Boolean(event?.detail?.collapsed));
+            setOpenGpuId(null);
         };
         window.addEventListener(METERS_EVENT_NAME, onMetersChange);
         window.addEventListener(METERS_COLLAPSED_EVENT_NAME, onMetersCollapsedChange);
@@ -187,6 +195,7 @@ export function SystemMetersHud({ mode = 'overlay' }) {
                     vram_total_bytes: Number(next?.vram_total_bytes) || 0,
                     vram_used_bytes: Number(next?.vram_used_bytes) || 0,
                     gpu_provider: typeof next?.gpu_provider === 'string' && next.gpu_provider.trim() ? next.gpu_provider.trim() : null,
+                    gpus: Array.isArray(next?.gpus) ? next.gpus : [],
                     buffer_cache_bytes: Number.isFinite(Number(next?.buffer_cache_bytes)) ? Number(next?.buffer_cache_bytes) : null,
                     buffer_cache_series_bytes: sanitizeSeries(next?.buffer_cache_series_bytes),
                     process_rss_series_bytes: sanitizeSeries(next?.process_rss_series_bytes),
@@ -199,8 +208,12 @@ export function SystemMetersHud({ mode = 'overlay' }) {
                     sample_interval_ms: Number(next?.sample_interval_ms) || 2000,
                     platform: String(next?.platform || ''),
                 });
+                const refreshedAt = Date.now();
+                setLastSuccessfulRefreshMs(refreshedAt);
+                setNowMs(refreshedAt);
             } catch {
                 if (cancelled) return;
+                setNowMs(Date.now());
             } finally {
                 if (!cancelled) setLoading(false);
             }
@@ -221,12 +234,25 @@ export function SystemMetersHud({ mode = 'overlay' }) {
     const vramPath = useMemo(() => buildSparklinePath(metrics.vram_series, 56, 16, { min: 0, max: 100 }), [metrics.vram_series]);
     const bufferCachePath = useMemo(() => buildSparklinePath(metrics.buffer_cache_series_bytes), [metrics.buffer_cache_series_bytes]);
     const rssPath = useMemo(() => buildSparklinePath(metrics.process_rss_series_bytes), [metrics.process_rss_series_bytes]);
+    const intelGpuMeters = useMemo(
+        () => normalizeIntelGpuSnapshots(metrics.gpus, { nowMs, lastSuccessAtMs: lastSuccessfulRefreshMs }),
+        [metrics.gpus, nowMs, lastSuccessfulRefreshMs],
+    );
     const showBufferCache = Number(metrics.buffer_cache_bytes) > 0 && sanitizeSeries(metrics.buffer_cache_series_bytes).length > 0;
     const showSwap = Number.isFinite(Number(metrics.swap_percent)) && metrics.swap_total_bytes > 0;
     const showVram = shouldShowVram(metrics);
     const currentRssBytes = resolveCurrentRssBytes(metrics);
     const showRss = shouldShowRss(metrics);
     const compactSummary = useMemo(() => buildCompactMetersSummary(metrics), [metrics]);
+    const handleGpuOpen = (id, trigger) => {
+        if (trigger) gpuTriggerRef.current = trigger;
+        setOpenGpuId((current) => trigger && current === id ? null : id);
+    };
+
+    useEffect(() => { setOpenGpuId(null); }, [isNarrowLayout, enabled]);
+    useEffect(() => {
+        if (openGpuId && !intelGpuMeters.some(meter => meter.id === openGpuId)) setOpenGpuId(null);
+    }, [intelGpuMeters, openGpuId]);
 
     if (!enabled || !isActiveInstance) return null;
 
@@ -238,76 +264,75 @@ export function SystemMetersHud({ mode = 'overlay' }) {
         event?.stopPropagation?.();
         const nextCollapsed = !collapsed;
         setCollapsed(nextCollapsed);
+        setOpenGpuId(null);
         applyMetersCollapsed(nextCollapsed);
     };
 
     return html`
         <div class=${`system-meters-hud system-meters-hud-${mode}${collapsed ? ' is-collapsed' : ''}`} aria-live="polite">
-            <button
-                class="system-meters-card"
-                type="button"
-                title=${title}
-                aria-label=${title}
-                aria-expanded=${collapsed ? 'false' : 'true'}
-                onClick=${handleToggleCollapsed}
-            >
+            <div class="system-meters-card" role="group" aria-label="System meters">
                 ${collapsed
-                    ? html`<span class="system-meters-collapse-tab" aria-hidden="true">${renderDisclosureTriangle('left')}</span>`
+                    ? html`<button class="system-meters-meter-button system-meters-collapse-tab" type="button" title=${title} aria-label=${title} aria-expanded="false" onClick=${handleToggleCollapsed}>${renderDisclosureTriangle('left')}</button>`
                     : isNarrowLayout
-                        ? html`<span class="system-meters-compact-summary">${compactSummary}</span>`
+                        ? html`<div class="system-meters-compact-summary">
+                            <button class="system-meters-meter-button system-meters-compact-system" type="button" title=${title} aria-label=${title} aria-expanded="true" onClick=${handleToggleCollapsed}>${compactSummary}</button>
+                            <${IntelGpuMeterRows} meters=${intelGpuMeters} compact=${true} openGpuId=${openGpuId} onOpen=${handleGpuOpen} />
+                        </div>`
                         : html`
-                            <div class="system-meters-row cpu">
+                            <button class="system-meters-meter-button system-meters-row cpu" type="button" aria-label=${title} aria-expanded="true" onClick=${handleToggleCollapsed}>
                                 <span class="system-meters-label">CPU</span>
                                 <svg class="system-meters-spark" viewBox="0 0 56 16" preserveAspectRatio="none" aria-hidden="true">
                                     <path d=${cpuPath}></path>
                                 </svg>
                                 <span class="system-meters-value">${formatPercent(metrics.cpu_percent)}</span>
-                            </div>
-                            <div class="system-meters-row ram">
+                            </button>
+                            <button class="system-meters-meter-button system-meters-row ram" type="button" aria-label=${title} aria-expanded="true" onClick=${handleToggleCollapsed}>
                                 <span class="system-meters-label">RAM</span>
                                 <svg class="system-meters-spark" viewBox="0 0 56 16" preserveAspectRatio="none" aria-hidden="true">
                                     <path d=${ramPath}></path>
                                 </svg>
                                 <span class="system-meters-value">${formatPercent(metrics.ram_percent)}</span>
-                            </div>
+                            </button>
                             ${showRss && html`
-                                <div class="system-meters-row rss">
+                                <button class="system-meters-meter-button system-meters-row rss" type="button" aria-label=${title} aria-expanded="true" onClick=${handleToggleCollapsed}>
                                     <span class="system-meters-label">RSS</span>
                                     <svg class="system-meters-spark" viewBox="0 0 56 16" preserveAspectRatio="none" aria-hidden="true">
                                         <path d=${rssPath}></path>
                                     </svg>
                                     <span class="system-meters-value">${formatBytesCompact(currentRssBytes)}</span>
-                                </div>
+                                </button>
                             `}
+                            ${intelGpuMeters.length > 0 && html`<${IntelGpuMeterRows} meters=${intelGpuMeters} openGpuId=${openGpuId} onOpen=${handleGpuOpen} />`}
                             ${showVram && html`
-                                <div class="system-meters-row vram" title=${metrics.gpu_provider ? `GPU telemetry: ${metrics.gpu_provider}` : 'GPU memory telemetry'}>
+                                <button class="system-meters-meter-button system-meters-row vram" title=${metrics.gpu_provider ? `GPU telemetry: ${metrics.gpu_provider}` : 'GPU memory telemetry'} type="button" aria-label=${title} aria-expanded="true" onClick=${handleToggleCollapsed}>
                                     <span class="system-meters-label">VRAM</span>
                                     <svg class="system-meters-spark" viewBox="0 0 56 16" preserveAspectRatio="none" aria-hidden="true">
                                         <path d=${vramPath}></path>
                                     </svg>
                                     <span class="system-meters-value">${formatPercent(metrics.vram_percent)}</span>
-                                </div>
+                                </button>
                             `}
                             ${showBufferCache && html`
-                                <div class="system-meters-row buf">
+                                <button class="system-meters-meter-button system-meters-row buf" type="button" aria-label=${title} aria-expanded="true" onClick=${handleToggleCollapsed}>
                                     <span class="system-meters-label">BUF</span>
                                     <svg class="system-meters-spark" viewBox="0 0 56 16" preserveAspectRatio="none" aria-hidden="true">
                                         <path d=${bufferCachePath}></path>
                                     </svg>
                                     <span class="system-meters-value">${formatBytesCompact(metrics.buffer_cache_bytes)}</span>
-                                </div>
+                                </button>
                             `}
                             ${showSwap && html`
-                                <div class="system-meters-row swap">
+                                <button class="system-meters-meter-button system-meters-row swap" type="button" aria-label=${title} aria-expanded="true" onClick=${handleToggleCollapsed}>
                                     <span class="system-meters-label">SWP</span>
                                     <svg class="system-meters-spark" viewBox="0 0 56 16" preserveAspectRatio="none" aria-hidden="true">
                                         <path d=${swapPath}></path>
                                     </svg>
                                     <span class="system-meters-value">${formatPercent(metrics.swap_percent)}</span>
-                                </div>
+                                </button>
                             `}
                         `}
-            </button>
+            </div>
+            ${!collapsed && intelGpuMeters.length > 0 && html`<${IntelGpuDetailsPopover} meters=${intelGpuMeters} openGpuId=${openGpuId} onOpen=${handleGpuOpen} triggerRef=${gpuTriggerRef} />`}
         </div>
     `;
 }
