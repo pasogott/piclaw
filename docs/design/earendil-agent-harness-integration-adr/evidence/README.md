@@ -5,6 +5,7 @@
 Exact released target: `cd32f7725fdbddbaecdff5b1e68491563394e0ca`. Rui authorised source retargeting with the standard shipped MCP wrapper retained. Native parity/removal and pi-durable are future scope; installation, restart and real-account tests need separate approval.
 
 - [Integration and qualification](../../../development/pi-102-integration.md)
+- [Current acceptance checkpoint](earendil-102-remaining-acceptance.md) — merged Settings, exact hosted/full/postmerge evidence, retained-wrapper/core checks, callback fixture correction and disposable rollback; production Delegate/live/rollout gates remain open
 - Fresh [registry](receipts/earendil-102-registry.json), [package admission](receipts/earendil-102-package-admission.json), [provider inventory](receipts/earendil-102-provider-auth.json) and [public MCP types](receipts/earendil-102-mcp-public.json)
 - Fresh synthetic [packaged CLI](receipts/earendil-102-packaged-cli-auth-bun.json), [browser/copy-code](receipts/earendil-102-provider-browser-bun.json), [provider devices](receipts/earendil-102-provider-devices-bun.json), [Codex device](receipts/earendil-102-codex-device-bun.json) and [private UI](receipts/earendil-102-anthropic-private-ui.json) receipts
 

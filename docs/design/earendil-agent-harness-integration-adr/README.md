@@ -8,6 +8,8 @@ Rui approved this future service-plane design on 3 October 2026 and explicitly k
 
 Rui authorised retargeting and source updates. The [integration record](../../development/pi-102-integration.md) contains fresh 1.0.2 package, SDK, wrapper, sampling and synthetic auth evidence. Historical 1.0.1 receipts remain unchanged. Source qualification does not authorise installation, restart or real-account testing. The unreleased OAuth cancellation fix after the 1.0.2 tag is excluded.
 
+The [Pi 1.0.2 acceptance checkpoint](evidence/earendil-102-remaining-acceptance.md) records merged Settings, exact qualification, retained-wrapper checks, disposable rollback and unfinished production Delegate/live rollout gates.
+
 ## Pi 1.0.1 checkpoint — historical, 4 October 2026
 
 [Source migration #1537](https://github.com/rcarmo/piclaw/pull/1537) merged at `98eb5ff4d8f1c833d42ce693c1bdce5530ad7d23`. The authorised Smith install/restart was verified on 4 October: Piclaw 3.2.5 / Pi 1.0.1, canonical Bun, HTTP 200 and preserved configuration/database identity. Later source changes are not installed by that operational receipt.
