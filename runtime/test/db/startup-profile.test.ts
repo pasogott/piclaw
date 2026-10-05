@@ -19,7 +19,7 @@ test("two processes initialize the same empty database without corruption", asyn
   });
 }, 25000);
 
-for (const mode of ["fresh", "empty-file", "existing", "rollback"]) {
+for (const mode of ["fresh", "empty-file", "existing", "rollback", "late-rollback", "existing-rollback"]) {
   test(`disk startup batching: ${mode}`, async () => {
     await withTempWorkspaceEnv("db-startup-contract-", {}, async () => {
       const child = Bun.spawn([process.execPath, "--no-env-file", new URL("../fixtures/db-startup-contracts.ts", import.meta.url).pathname, mode], {
