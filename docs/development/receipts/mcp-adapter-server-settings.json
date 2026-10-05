@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-10-05T01:06:12.495Z",
+  "recordedAt": "2026-10-05T07:22:11.718Z",
   "baseMain": "62a71d139",
   "adapter": "dddfcf630508f42c169889c11dee94e69b746e7c",
   "focused": {
@@ -106,7 +106,7 @@
       "sha256": "dfd0c6d3af373830a215c2274b74fba3950b6edffc950c5db83eccf51ae8e409"
     }
   ],
-  "qualification": "corrected focused candidate; final correction review and fresh full required",
+  "qualification": "MCP corrections reviewed; runner fixture corrected/tested; awaiting qualified released1.0.2 main and separate startup fix before fresh final gate",
   "scope": "source-only/no installation/restart/live accounts/provider/native waiver",
   "failedFull": {
     "head": "b4cc07012950d0ed691133a61c26a22c95e8c3bf",
@@ -130,5 +130,50 @@
     "exit": 143,
     "logSha256": "6bae91e61bc0f71190a4161e6f880a5093c44ce1ede3d6040dfbe8bace7c834e",
     "qualifying": false
+  },
+  "integrationTarget": "released Pi1.0.2; qualified main adoption pending; prior1.0.1 evidence historical",
+  "failedFullV3": {
+    "head": "18516e7565185a024e12db536ef497a13b43cee7",
+    "pass": 6418,
+    "skip": 8,
+    "fail": 2,
+    "assertions": 41082,
+    "seconds": 1721.73,
+    "logSha256": "621f9f1d07cc9c7f14078f5321b2e7dcd9447a1ec9ecd8fa0ff4734eeae09904",
+    "qualifying": false
+  },
+  "runnerFixtureCorrection": {
+    "productionChanged": false,
+    "setupHookMilliseconds": 15000,
+    "setupChildCleanupMilliseconds": 14000,
+    "originalTestMilliseconds": 15000,
+    "originalWatchdogMilliseconds": 10000,
+    "modeCount": 9,
+    "pass": 9,
+    "fail": 0,
+    "assertions": 36,
+    "profile": {
+      "importsMilliseconds": 61,
+      "databaseReadyMilliseconds": 6564.48,
+      "runnerCompleteMilliseconds": 6585.11
+    },
+    "logs": [
+      {
+        "log": "mcp-bun-settlement-phase-profile.log",
+        "sha256": "eb75d882adae989ae38b052704319902852d5640413d382acb3cc81442371578"
+      },
+      {
+        "log": "mcp-bun-settlement-prepared.log",
+        "sha256": "d5b9d5fc233c766a95ba36fa736194a8ecf67c1e670c51268b9a8f8d7718e59b"
+      },
+      {
+        "log": "mcp-bun-settlement-prepared-final.log",
+        "sha256": "3b0d8fa16e7f13502e8dd3562eef8789144fba8160767dc575f1e4fda25d54dd"
+      },
+      {
+        "log": "mcp-bun-settlement-prepared-types.log",
+        "sha256": "dfd0c6d3af373830a215c2274b74fba3950b6edffc950c5db83eccf51ae8e409"
+      }
+    ]
   }
 }

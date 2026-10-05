@@ -26,6 +26,12 @@ The first frozen full run at `b4cc07012950d0ed691133a61c26a22c95e8c3bf` failed: 
 
 A subsequent v2 gate was stopped for confirmed reference/literal rebinding corrections; exit143, logSHA `6bae91e61bc0f71190a4161e6f880a5093c44ce1ede3d6040dfbe8bace7c834e`. References are compared by environment/keychain identity across fields, keys and formats. Destination changes with opaque old/new argument/map/auth payloads fail closed when clearing cannot be proved. Local and inherited wrapped/rekeyed reference and literal cases reject. An actual offline Pi post-rename mutation fixture confirms saved-but-not-activated, old PID closed and zero replacement processes. No stopped run is qualifying evidence.
 
+The final 1.0.1 full v3 failed outside the MCP feature: 6,418 passed, eight skipped, two failures, 41,082 assertions, 1,721.73 seconds. Concurrent empty-schema startup returned `SQLITE_BUSY`; the small-busy runner child hit its watchdog. Log SHA256 `621f9f1d07cc9c7f14078f5321b2e7dcd9447a1ec9ecd8fa0ff4734eeae09904`. Independent database-startup correction is owned separately.
+
+Runner profiling isolated 6,564 ms in disposable schema setup and 21 ms in script execution/settlement. Its fixture now prepares the same disk database in a separately bounded 15-second setup hook (14-second child cleanup); the original runner test retains its 15-second bound, 10-second child watchdog, all settlement/output/ownership assertions and modes. Prepared suite passed nine tests / 36 assertions; final small-busy passed four assertions in 98.75 ms after setup. No production runner or durability change was made.
+
+Rui retargeted current integration to released Pi 1.0.2. The current Pi 1.0.1 results remain historical; final qualification waits for separately qualified 1.0.2 mainline adoption. Keep the shipped adapter wrapper. Unreleased OAuth cancellation changes, Native parity/removal, installation, restart and real-account tests are excluded.
+
 ## Retained failures
 
 The first new Classic/WebKit matrix case hit its unchanged20-second deadline; isolated unchanged rerun passed1.87s, then final rebuilt matrix passed all14. Old policy browser locators matched the added editor too; scoped original-section locators retain assertions and identify the added editor separately. No timeout or functional assertion was removed.

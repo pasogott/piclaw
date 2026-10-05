@@ -6,6 +6,9 @@ import { Database } from "bun:sqlite";
 
 // This host is disposable: before the fix, a close-callback exception kills it.
 const mode = process.argv[2];
+const profiling = process.argv.includes('--profile');
+const started = performance.now();
+const profilePhase = (phase: string) => { if (profiling) console.log(JSON.stringify({ phase, elapsedMs: performance.now() - started })); };
 delete process.env.PICLAW_WEB_VNC_ALLOW_DIRECT;
 delete process.env.PICLAW_TOOL_OUTPUT_STORE_BYTES;
 delete process.env.PICLAW_TOOL_OUTPUT_STORE_LINES;
@@ -19,8 +22,11 @@ const { listTrackedProcesses, killTrackedProcesses } = await import("../../src/u
 // script groups are killed even if an assertion or runner regression hangs us.
 process.once("SIGTERM", () => { killTrackedProcesses(); process.exitCode = 143; });
 const { searchToolOutput } = await import("../../src/tool-output.js");
+profilePhase('imports-complete');
 assert.equal(process.env.PICLAW_DB_IN_MEMORY, "0");
 initDatabase();
+profilePhase('database-ready');
+if (mode === '--setup') { closeDatabase(); console.log('BUN_SETUP_READY'); process.exit(0); }
 const db = getDb();
 db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=40");
 const blocker = new Database(join(STORE_DIR, "messages.db"));
@@ -48,6 +54,7 @@ let settled = 0;
 try {
   try {
     const result = await runBunScript({ script: "script.ts", captureStdout: true, timeoutSec: mode === "timeout" ? 1 : 5 }, controller.signal);
+    profilePhase('runner-complete');
     settled++;
     assert.ok(!["stdout-busy", "stderr-busy", "ownership-denied", "timeout", "abort"].includes(mode!));
     assert.equal(result.exitCode, mode === "exit-seven" ? 7 : 0);
