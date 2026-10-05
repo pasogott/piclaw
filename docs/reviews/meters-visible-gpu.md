@@ -11,7 +11,7 @@ Disabled and unavailable optional meter lines are omitted, and GPU details use a
 - Keyboard/touch opening, Escape/Close focus restoration, outside click, narrow layout and removal are preserved. If the clicked activity row disappears while a memory row remains, the popup closes rather than retaining a disconnected trigger.
 - Visual's actual SystemStats strip also omits unavailable Swap/BUF/RSS/GPU items. Disabled rows do not remain as `--` placeholders; valid zero optional readings are preserved.
 
-## Qualification so far
+## Qualification
 
 - Focusedfrontend+unchangedcollector tests:44passed/337assertions across4files.
 - Rebuilt browser matrix:5passed/114assertions across2files; Chromium/WebKit bothskin style contexts, actualVisualstrip, zero/absent/disabled/partial/aggregateNVML/observed-client readings, shortdetails/accessibility/trigger removal/device removal.
@@ -25,6 +25,16 @@ The first frozen `make ci-fast` run at `b5c265339fe6` failed: 6,543 passed, 8 sk
 
 Each vector is now registered as a separate test with the default five-second deadline. Fresh databases, corruption mutations, assertions and disposal remain unchanged; loop guards become callback returns after their assertions. The complete affected file passes 31 tests and 280 assertions. The first transformation's syntax failure is retained alongside the corrected result. Production storage is unchanged.
 
-A fresh complete gate from the corrected frozen snapshot is required before publication. The isolated passes do not clear the failed full run.
+The fresh complete gate passed at `69c2ae457341b563d290da7d88d574a1cb3d4702`, tree `09267e58a15ef2fe0b0d32c3f55a498e2a0214cc`, with a clean working tree before and after:
+
+| Gate | Result |
+| --- | --- |
+| Complete runtime suite | 6,553 passed / 8 skipped / 0 failed; 42,805 assertions; 931 files; 679.03s |
+| Settings and pane type-contract tests | 25 passed / 246 assertions |
+| Web build tests | 9 passed / 26 assertions |
+| Types, lint and static policy checks | Passed; 95 unchanged transitive frontend diagnostics |
+| Corrected fixture review | Scoped CLEAR; all ten vectors and original assertions preserved |
+
+The complete gate ran from 22:14:56 to 22:26:24 UTC on 5 October 2026. Log: `/workspace/tmp/meters-visible-full-v2/ci-fast.log`, SHA-256 `23c65d230e1a2b14c7d7f887db86c935701f72f4374909ac07c58df6848b6b47`. Publication changes after this snapshot are documentation and receipts only; the qualified runtime tree is `12d7ae9f2fd7e0ea080ac6fe96bd0bd3656cdee8`.
 
 No liveGPU workload, account/provider/network/production database mutation, installation or restart was performed. Generic display support does not claim new hardware collector support.

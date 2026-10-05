@@ -81,8 +81,8 @@
     }
   ],
   "scope": "frontendsource only; no collector/hardware/productionconfig/install/restart/liveGPU/provider changes",
-  "qualification": "Frontend scoped CLEAR, focused/browser/type/lint passed; fixture correction scoped CLEAR and31/280; failed full retained, corrected frozen full required",
-  "updatedAt": "2026-10-05T22:12:06.254Z",
+  "qualification": "Local complete gate passed; frontend and fixture reviews scoped CLEAR; no merge or deployment permission",
+  "updatedAt": "2026-10-05T22:27:21.432Z",
   "frontendReview": {
     "verdict": "scoped CLEAR",
     "messageRow": 62878,
@@ -101,6 +101,32 @@
       "log": "/workspace/tmp/meters-visible-full/ci-fast.log",
       "sha256": "30e11d40ef1607753ac4d5521c1889ae5ffe4b82746f8e433df22256c25fd1f7",
       "failure": "Existing EF-S07 ten-vector corruption test exceeded default5000ms at5840.24ms"
+    },
+    {
+      "head": "69c2ae457341b563d290da7d88d574a1cb3d4702",
+      "tree": "09267e58a15ef2fe0b0d32c3f55a498e2a0214cc",
+      "runtimeTree": "12d7ae9f2fd7e0ea080ac6fe96bd0bd3656cdee8",
+      "exit": 0,
+      "pass": 6553,
+      "skip": 8,
+      "fail": 0,
+      "assertions": 42805,
+      "files": 931,
+      "elapsedSeconds": 679.03,
+      "settingsContracts": {
+        "pass": 25,
+        "assertions": 246
+      },
+      "webBuild": {
+        "pass": 9,
+        "assertions": 26
+      },
+      "startedAt": "2026-10-05T22:14:56Z",
+      "finishedAt": "2026-10-05T22:26:24Z",
+      "log": "/workspace/tmp/meters-visible-full-v2/ci-fast.log",
+      "sha256": "23c65d230e1a2b14c7d7f887db86c935701f72f4374909ac07c58df6848b6b47",
+      "sourceUnchanged": true,
+      "finalWorkingTreeClean": true
     }
   ],
   "fixtureCorrection": {
@@ -111,5 +137,6 @@
     "assertions": 280,
     "review": "read-only delegated judge scoped CLEAR: ten cases retain all mutations/assertions/fresh databases/disposal/default5000ms; continue becomes callback return",
     "productionStorageChanged": false
-  }
+  },
+  "publicationDelta": "Documentation and receipts only; runtime tree equals qualified snapshot"
 }
