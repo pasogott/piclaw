@@ -2,15 +2,15 @@
   "recordedAt": "2026-10-05T10:56:11.482Z",
   "baseMain": "44affa34d",
   "focused": {
-    "pass": 36,
+    "pass": 39,
     "fail": 0,
-    "assertions": 75,
+    "assertions": 81,
     "files": 8
   },
   "browser": {
-    "pass": 21,
+    "pass": 23,
     "fail": 0,
-    "assertions": 141,
+    "assertions": 148,
     "files": 3
   },
   "webBuild": {
@@ -53,11 +53,11 @@
     "scope": "isolated synthetic helper CPU/bounded worst-case paging; no HTTP/backend/DB/provider/real-message data, no production latency or before-after speed claim"
   },
   "sourceHashes": {
-    "runtime/web/src/components/timeline.ts": "b83535d1a6b8bbafe9207cf24821ce90389cd24fae5390ec4d20585fd2e23fcf",
-    "runtime/web/src/ui/use-timeline.ts": "504943b692f3888910124bfba36fd1bef5976c8acfe5fb090644d1bae74a6c84",
-    "runtime/web/src/ui/timeline-catch-up.ts": "ee0f4bc34246aba933a21a1de1d6b6438774be4d5a99d0d9ccf487bb768db5aa",
+    "runtime/web/src/components/timeline.ts": "97cd828bae705598ec0bf11c8e77a6be53bcbfa65040ea982e2d872adac542e1",
+    "runtime/web/src/ui/use-timeline.ts": "fdb39e3bccb21689f9bfee7bf4d16470e5b32f295a834bfdffe922e028d344f0",
+    "runtime/web/src/ui/timeline-catch-up.ts": "24168b32e4247a339e7e4a3bb6ccc5a892d85762b40cd670f902ee8cbf64ba93",
     "runtime/web/src/ui/timeline-latest.ts": "5957b80f52bc7451368df409ee2a63285a8b9a320f19b2c7aa91430da0513e3c",
-    "runtime/web/static/visual/frontend/src/components/message-list/useTimelineFetch.ts": "bc123eff461f1a4608b5e78d1939f6cae9cef020dd3c09457eb879ae0590c5ab"
+    "runtime/web/static/visual/frontend/src/components/message-list/useTimelineFetch.ts": "bde39b32ea77f84799932aa024eea2036838553b33a001ea89f27f66947d6959"
   },
   "logs": [
     {
@@ -87,8 +87,30 @@
     {
       "log": "timeline-return-rebuilt-browser.log",
       "sha256": "d0729c636abc48860d30c133e1eb6114cd53f6e73f320be3bc251e8fe46c9092"
+    },
+    {
+      "log": "timeline-corrected-rebuilt-browser.log",
+      "sha256": "5a614649dc21cc68006d96fdd44883452bb4565e4fe5587bc150bdd7530df490"
+    },
+    {
+      "log": "timeline-corrected-final-unit.log",
+      "sha256": "9e55f00efd1d26c512fbab5323dab76248409a9d0313c918cb108a9658c3b777"
+    },
+    {
+      "log": "timeline-corrected-final-types.log",
+      "sha256": "dfd0c6d3af373830a215c2274b74fba3950b6edffc950c5db83eccf51ae8e409"
+    },
+    {
+      "log": "timeline-visual-sse-malformed.log",
+      "sha256": "d5492bc243993eea7f52c72da303de96f6d40cd962dd4f3745c008d5d1b6698a"
     }
   ],
   "qualification": "candidatefocused/browser/type/static pass; independentsource review/frozenfull pending",
-  "scope": "syntheticisolatedbrowser/helper; no production install/restart/livedata/provider; no full tablet-device qualification claim"
+  "scope": "syntheticisolatedbrowser/helper; no production install/restart/livedata/provider; no full tablet-device qualification claim",
+  "reviewCorrections": [
+    "pageverified contiguous ID independentofSSE arrivals",
+    "unified60pxfollow/away",
+    "Visualrawpostsvalidationbefore normalization",
+    "Synchronousmutationfence/boundedretry; explicitolder-page retryUI"
+  ]
 }

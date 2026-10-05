@@ -54,6 +54,7 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
   const loadingMoreRef = useRef(false);
   const lastBeforeIdRef = useRef(null);
   const postsRef = useRef(null);
+  const contiguousThroughIdRef = useRef(0);
   const chatTokenRef = useRef(0);
   const mutationVersionRef = useRef(0);
   const refreshRequestRef = useRef(0);
@@ -82,6 +83,7 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
     // different chat_jid timelines.
     setPostsState(null);
     postsRef.current = null;
+    contiguousThroughIdRef.current = 0;
     lastBeforeIdRef.current = null;
     loadingMoreRef.current = false;
     hasMoreRef.current = false;
@@ -95,6 +97,7 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
     cacheTimelineSnapshot(chatJid, {
       posts: Array.isArray(nextPosts) ? nextPosts : [],
       has_more: Boolean(nextHasMore),
+      contiguousThroughId: contiguousThroughIdRef.current,
     });
   }, [chatJid, shouldCacheCurrentView]);
 
@@ -110,10 +113,11 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
   const loadPosts = useCallback(async (hashtag = null) => {
     const token = chatTokenRef.current;
     const mutationVersion = mutationVersionRef.current;
+    const requestId = ++refreshRequestRef.current;
     try {
       if (hashtag) {
         const result = await getPostsByHashtag(hashtag, 50, 0, chatJid);
-        if (token !== chatTokenRef.current || mutationVersion !== mutationVersionRef.current) return;
+        if (token !== chatTokenRef.current || mutationVersion !== mutationVersionRef.current || requestId !== refreshRequestRef.current) return;
         mutationVersionRef.current += 1;
         postsRef.current = Array.isArray(result?.posts) ? result.posts : [];
         hasMoreRef.current = false;
@@ -123,20 +127,22 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
       }
 
       const applyFreshPayload = (result) => {
-        if (token !== chatTokenRef.current || mutationVersion !== mutationVersionRef.current) return;
+        if (token !== chatTokenRef.current || mutationVersion !== mutationVersionRef.current || requestId !== refreshRequestRef.current) return;
         const nextPosts = Array.isArray(result?.posts) ? result.posts : [];
         const nextHasMore = Boolean(result?.has_more);
+        contiguousThroughIdRef.current = Math.max(0, ...nextPosts.map(post => Number(post.id) || 0));
         setTimelineState(nextPosts, nextHasMore);
       };
 
       const cached = getCachedTimelineSnapshot(chatJid);
       if (cached) {
+        contiguousThroughIdRef.current = cached.contiguousThroughId;
         setTimelineState(cached.posts, cached.has_more);
         const backgroundMutationVersion = mutationVersionRef.current;
         void fetchContiguousTimeline(cached.posts, (limit, before) => getTimeline(limit, before, chatJid),
-          () => token === chatTokenRef.current && mutationVersionRef.current === backgroundMutationVersion && viewModeCacheableRef.current)
+          () => token === chatTokenRef.current && requestId === refreshRequestRef.current && mutationVersionRef.current === backgroundMutationVersion && viewModeCacheableRef.current, cached.contiguousThroughId)
           .then((result) => {
-            if (token !== chatTokenRef.current || mutationVersionRef.current !== backgroundMutationVersion) return;
+            if (token !== chatTokenRef.current || requestId !== refreshRequestRef.current || mutationVersionRef.current !== backgroundMutationVersion) return;
             // Drop the refresh if the user has switched into hashtag/search
             // mode since the request was kicked off — chatTokenRef does not
             // change across in-chat view-mode transitions, so it would not
@@ -145,6 +151,7 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
             if (!result) return;
             const freshPosts = Array.isArray(result?.posts) ? result.posts : [];
             const freshHasMore = Boolean(result?.has_more);
+            contiguousThroughIdRef.current = Math.max(0, ...freshPosts.map(post => Number(post.id) || 0));
             setTimelineState(freshPosts, freshHasMore);
           })
           .catch((error) => {
@@ -163,14 +170,17 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
     }
   }, [chatJid, setTimelineState]);
 
-  const refreshTimeline = useCallback(async () => {
+  const refreshTimeline = useCallback(async (retried = false) => {
     const token = chatTokenRef.current;
     const mutationVersion = mutationVersionRef.current;
     const requestId = ++refreshRequestRef.current;
     try {
       const result = await fetchContiguousTimeline(postsRef.current, (limit, before) => getTimeline(limit, before, chatJid),
-        () => isTimelineRequestCurrent({ requestId, currentRequestId: refreshRequestRef.current, mutationVersion, currentMutationVersion: mutationVersionRef.current, chatToken: token, currentChatToken: chatTokenRef.current }));
-      if (!result) return;
+        () => isTimelineRequestCurrent({ requestId, currentRequestId: refreshRequestRef.current, mutationVersion, currentMutationVersion: mutationVersionRef.current, chatToken: token, currentChatToken: chatTokenRef.current }), contiguousThroughIdRef.current);
+      if (!result) {
+        if (!retried && token === chatTokenRef.current && requestId === refreshRequestRef.current && viewModeCacheableRef.current) return refreshTimeline(true);
+        return;
+      }
       if (!isTimelineRequestCurrent({
         requestId,
         currentRequestId: refreshRequestRef.current,
@@ -179,6 +189,7 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
         chatToken: token,
         currentChatToken: chatTokenRef.current,
       })) return;
+      contiguousThroughIdRef.current = Math.max(0, ...result.posts.map(post => Number(post.id) || 0));
       setTimelineState(result.posts, Boolean(result?.has_more));
     } catch (error) {
       if (token !== chatTokenRef.current) return;
@@ -225,6 +236,7 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
       if (token !== chatTokenRef.current) return;
       lastBeforeIdRef.current = null;
       console.error('Failed to load more posts:', error);
+      throw error;
     } finally {
       if (token === chatTokenRef.current) {
         loadingMoreRef.current = false;
@@ -252,6 +264,7 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
           cacheTimelineSnapshot(chatJid, {
             posts: nextPosts,
             has_more: hasMoreRef.current,
+            contiguousThroughId: contiguousThroughIdRef.current,
           });
         }
       }

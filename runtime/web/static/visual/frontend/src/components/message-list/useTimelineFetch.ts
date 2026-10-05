@@ -26,11 +26,17 @@ export function useTimelineFetch({
   timelineError,
   listRef,
 }: UseTimelineFetchParams) {
-  const [messages, setMessages] = useState<Interaction[]>([]);
+  const [messages, setMessagesState] = useState<Interaction[]>([]);
+  const mutationVersion = useRef(0);
+  const setMessages = useCallback((update: Interaction[] | ((previous: Interaction[]) => Interaction[])) => {
+    mutationVersion.current++;
+    setMessagesState(update);
+  }, []);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const initialTimelineFetchedRef = useRef(false);
   const messagesRef = useRef<Interaction[]>([]);
+  const contiguousThroughId = useRef(0);
   messagesRef.current = messages;
   const generation = useRef(0);
   const resumePending = useRef(false);
@@ -63,14 +69,16 @@ export function useTimelineFetch({
       if (data.identity.user_avatar_url) uav.value = data.identity.user_avatar_url;
       if (data.identity.assistant_avatar_url) aav.value = data.identity.assistant_avatar_url;
     }
-    const posts = (data.posts ?? []).map(normalizePost);
+    if (!Array.isArray(data.posts)) throw Error('Invalid timeline page.');
+    const posts = data.posts.map(normalizePost);
     return { posts, hasMore: data.has_more ?? false };
   }, [setConnected]);
 
-  const refetchTimelineOnReconnect = useCallback(async () => {
+  const refetchTimelineOnReconnect = useCallback(async (retried = false): Promise<void> => {
     const root = listRef.current;
     const beforeId = Math.max(0, ...messagesRef.current.map(row => Number(row.id) || 0));
     const capturedMessages = messagesRef.current;
+    const capturedMutation = mutationVersion.current;
     const chatUrl = buildChatUrl('/timeline');
     const current = ++generation.current;
     const raw = await fetchContiguousTimeline(messagesRef.current, async (limit: number, before: number | null) => {
@@ -78,24 +86,31 @@ export function useTimelineFetch({
       const response = await fetch(url, { credentials: 'include' });
       if (!response.ok) throw Error(`HTTP ${response.status}`);
       const result = await response.json();
-      return { ...result, posts: (result.posts ?? []).map(normalizePost) };
-    }, () => current === generation.current && messagesRef.current === capturedMessages && buildChatUrl('/timeline') === chatUrl);
+      if (!Array.isArray(result.posts)) throw Error('Invalid timeline page.');
+      return { ...result, posts: result.posts.map(normalizePost) };
+    }, () => current === generation.current && mutationVersion.current === capturedMutation && messagesRef.current === capturedMessages && buildChatUrl('/timeline') === chatUrl, contiguousThroughId.current);
+    // A realtime arrival may invalidate a page started in the same event
+    // turn. Retry once from the still-verified page boundary, never from that
+    // isolated arrival's ID. Generation/chat guards still deny stale views.
+    if (!raw && !retried && current === generation.current && buildChatUrl('/timeline') === chatUrl && listRef.current === root) {
+      return refetchTimelineOnReconnect(true);
+    }
     const timeline = raw ? { posts: (raw.posts as Interaction[]).slice().sort((a,b) => a.id - b.id), hasMore: raw.has_more } : null;
     if (!timeline || listRef.current !== root) return;
+    contiguousThroughId.current = Math.max(0, ...timeline.posts.map(post => Number(post.id) || 0));
     // Capture at publication, not request start: the reader may have moved
     // while the network pages were in flight.
     const atLatest = !root || Math.abs(root.scrollTop) < 60;
     const beforeTop = root?.scrollTop ?? 0, beforeHeight = root?.scrollHeight ?? 0;
     if (root && !atLatest) restoreAnchor.current = { root, top: beforeTop, height: beforeHeight };
-    setMessages(timeline.posts);
+    setMessagesState(timeline.posts);
     setHasMore(timeline.hasMore);
     timelineError.value = null;
     if (atLatest) scrollToBottom(true);
     // Ensure scroll after DOM paint
     requestAnimationFrame(() => {
       if (listRef.current !== root || !root?.isConnected) return;
-      if (atLatest) scrollToBottom(true);
-      else root.scrollTop = Math.min(0, beforeTop - (root.scrollHeight - beforeHeight));
+      if (atLatest && Math.abs(root.scrollTop) < 60) scrollToBottom(true);
       if (!atLatest && Math.max(0, ...timeline.posts.map(row => Number(row.id) || 0)) > beforeId) root.dispatchEvent(new Event('piclaw:timeline-arrivals'));
     });
   }, [fetchTimeline, scrollToBottom, timelineError]);
@@ -120,7 +135,8 @@ export function useTimelineFetch({
         const timeline = await fetchTimeline();
         if (!timeline || cancelled || current !== generation.current || chatUrl !== buildChatUrl('/timeline')) return;
         initialFollow.current = true;
-        setMessages((prev) => mergeInteractions(prev, timeline.posts));
+        contiguousThroughId.current = Math.max(0, ...timeline.posts.map(post => Number(post.id) || 0));
+        setMessagesState((prev) => mergeInteractions(prev, timeline.posts));
         setHasMore(timeline.hasMore);
         timelineError.value = null;
         setConnected(true);
@@ -138,6 +154,7 @@ export function useTimelineFetch({
     const oldestId = messages[0].id;
     const current = generation.current, chatUrl = buildChatUrl('/timeline');
     const capturedMessages = messagesRef.current;
+    const capturedMutation = mutationVersion.current;
     setLoadingMore(true);
     try {
       const res = await fetch(
@@ -146,14 +163,14 @@ export function useTimelineFetch({
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: TimelineResponse = await res.json();
-      if (current !== generation.current || chatUrl !== buildChatUrl('/timeline') || capturedMessages !== messagesRef.current) return;
+      if (current !== generation.current || capturedMutation !== mutationVersion.current || chatUrl !== buildChatUrl('/timeline') || capturedMessages !== messagesRef.current) return;
       const olderPosts = (data.posts ?? []).map(normalizePost);
       setHasMore(data.has_more ?? false);
       timelineError.value = null;
       if (olderPosts.length) {
         const el = listRef.current;
         const prevScrollTop = el?.scrollTop ?? 0;
-        setMessages((prev) => mergeInteractions(olderPosts, prev));
+        setMessagesState((prev) => mergeInteractions(olderPosts, prev));
         // Restore scroll position
         requestAnimationFrame(() => {
           if (el && listRef.current === el) {

@@ -5,7 +5,7 @@ interface RefBox<T> {
   current: T;
 }
 
-export function shouldAutoScrollToBottom(scrollTop: number, threshold = 150): boolean {
+export function shouldAutoScrollToBottom(scrollTop: number, threshold = 60): boolean {
   return Math.abs(scrollTop) <= threshold;
 }
 

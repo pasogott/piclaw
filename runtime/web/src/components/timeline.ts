@@ -132,6 +132,7 @@ function resolveThreadInfo(displayPosts) {
 /** Timeline component. */
 function TimelineView({ posts, hasMore, onLoadMore, onPostClick, onHashtagClick, onMessageRef, onScrollToMessage, onFileRef, onOpenWidget, onOpenAttachmentPreview, onSaveAnnotations, onSubmitCardAction, renderPostAccessory, postCapabilities, emptyMessage, timelineRef, timelineId, agents, user, onDeletePost, reverse = true, removingPostIds, searchQuery }) {
     const [loadingMore, setLoadingMore] = useState(false);
+    const [loadMoreFailed, setLoadMoreFailed] = useState(false);
     const [windowRange, setWindowRange] = useState({ start: 0, end: 0 });
     const [heightRevision, setHeightRevision] = useState(0);
     const sentinelRef = useRef(null);
@@ -154,15 +155,18 @@ function TimelineView({ posts, hasMore, onLoadMore, onPostClick, onHashtagClick,
         return prefix;
     }, [displayPosts, heightRevision]);
 
-    const triggerLoadMore = useCallback(async () => {
-        if (!onLoadMore || !hasMore || loadingMore) return;
+    const triggerLoadMore = useCallback(async (retry = false) => {
+        if (!onLoadMore || !hasMore || loadingMore || (loadMoreFailed && !retry)) return;
         setLoadingMore(true);
+        setLoadMoreFailed(false);
         try {
             await onLoadMore({ preserveScroll: true, preserveMode: 'top' });
+        } catch {
+            setLoadMoreFailed(true);
         } finally {
             setLoadingMore(false);
         }
-    }, [hasMore, loadingMore, onLoadMore]);
+    }, [hasMore, loadingMore, loadMoreFailed, onLoadMore]);
 
     const handleScroll = useCallback((event) => {
         if (isAnchorScrolling(event.target)) return;
@@ -348,6 +352,7 @@ function TimelineView({ posts, hasMore, onLoadMore, onPostClick, onHashtagClick,
         <div id=${timelineId} class="timeline ${reverse ? 'reverse' : 'normal'}" ref=${timelineRef} onScroll=${handleScroll}>
             <div class="timeline-content" ref=${timelineContentRef}>
                 ${reverse ? loadMoreSentinel : null}
+                ${loadMoreFailed ? html`<button type="button" class="load-more-btn" onClick=${() => triggerLoadMore(true)}>Could not load older messages — retry</button>` : null}
                 ${shouldWindow && topSpacerHeight > 0 ? html`<div class="timeline-virtual-spacer" style=${{ height: `${topSpacerHeight}px` }}></div>` : null}
                 ${visiblePosts.map((post, visibleIndex) => {
                     const index = effectiveRange.start + visibleIndex;

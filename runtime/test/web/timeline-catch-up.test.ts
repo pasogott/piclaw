@@ -17,3 +17,11 @@ test('a failed page remains rejected so a later refresh can retry rather than ce
 test('a malformed page never clears the cached timeline as an authoritative empty result',async()=>{
  await expect(fetchContiguousTimeline([{id:1}],async()=>({ok:true}))).rejects.toThrow('Invalid timeline page');
 });
+test('an isolated SSE newest ID does not move the verified contiguous boundary',async()=>{
+ const cache=[...rows(1,20),{id:145}],calls:number[]=[];
+ const result=await fetchContiguousTimeline(cache,async(limit:number,before:number|null)=>{const end=before===null?145:before-1;calls.push(end);return{posts:rows(Math.max(1,end-limit+1),end),has_more:end-limit>=1};},()=>true,20);
+ expect(calls).toEqual([145,95,45]);expect(result!.posts.map(row=>row.id).sort((a,b)=>a-b)).toEqual(rows(1,145).map(row=>row.id));
+});
+test('without a verified boundary catch-up proves the oldest retained suffix rather than an SSE maximum',async()=>{
+ const cache=[...rows(1,20),{id:145}],calls:number[]=[];const result=await fetchContiguousTimeline(cache,async(limit:number,before:number|null)=>{const end=before===null?145:before-1;calls.push(end);return{posts:rows(Math.max(1,end-limit+1),end),has_more:end-limit>=1};});expect(calls).toEqual([145,95,45]);expect(result!.posts).toHaveLength(145);
+});

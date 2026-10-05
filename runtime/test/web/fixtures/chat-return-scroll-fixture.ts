@@ -24,7 +24,8 @@ function Fixture() {
   const timeline = useMainAppTimelineComposition({ timelineRef, viewStateRef, followupQueueRowIdsRef: queueIds, currentChatJid: chat, currentHashtag: null, searchQuery: null, followupQueueItems: queue });
   useEffect(() => {
     (window as any).timelineFixture = { replace: timeline.setPosts, refresh: timeline.refreshTimeline, loadMore: timeline.loadMore,
-      preserve: timeline.preserveTimelineScroll, preserveTop: timeline.preserveTimelineScrollTop };
+      preserve: timeline.preserveTimelineScroll, preserveTop: timeline.preserveTimelineScrollTop,
+      arrive(post: any) { timeline.setPosts(previous => [...(previous || []), post]); timeline.scrollToBottom(); } };
     return () => { delete (window as any).timelineFixture; };
   }, [timeline.setPosts, timeline.refreshTimeline]);
   useEffect(() => {

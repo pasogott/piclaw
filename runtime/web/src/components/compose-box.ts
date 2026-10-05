@@ -1327,6 +1327,8 @@ export function ComposeBox({
     const [loadingModels, setLoadingModels] = useState(false);
     const [rollingUpSession, setRollingUpSession] = useState(false);
     const [footerWidth, setFooterWidth] = useState(0);
+    const resizeChatRef = useRef(currentChatJid);
+    resizeChatRef.current = currentChatJid;
     const [submitError, setSubmitError] = useState(null);
     const [submitNotice, setSubmitNotice] = useState(null);
     const [speechSupport, setSpeechSupport] = useState(() => allowSpeech ? getSpeechInputSupport() : { showButton: false, canStart: false });
@@ -2055,6 +2057,7 @@ export function ComposeBox({
 
         let nextHeight = startHeight;
         let moved = false;
+        const resizeChat = currentChatJid;
         handle.classList.add('dragging');
         document.body.style.cursor = 'row-resize';
         document.body.style.userSelect = 'none';
@@ -2086,7 +2089,7 @@ export function ComposeBox({
             document.removeEventListener('touchmove', onTouchMove);
             document.removeEventListener('touchend', stop);
             document.removeEventListener('touchcancel', stop);
-            if (!moved && event?.type !== 'touchcancel') onJumpToLatest?.();
+            if (!moved && event?.type !== 'touchcancel' && textarea.isConnected && resizeChatRef.current === resizeChat) onJumpToLatest?.();
         };
 
         document.addEventListener('mousemove', onMouseMove);
