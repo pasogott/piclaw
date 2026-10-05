@@ -4,6 +4,7 @@ import { getSystemMetrics } from '../api.js';
 import { AGENT_UI_POLL_MS } from '../ui/agent-ui-snapshot.js';
 import { METERS_COLLAPSED_EVENT_NAME, METERS_EVENT_NAME, applyMetersCollapsed, readStoredMetersCollapsed, readStoredMetersEnabled } from '../ui/meters.js';
 import { renderDisclosureTriangle } from '../ui/disclosure-triangle.js';
+import { buildIntelGpuCompactSummaryParts, IntelGpuDetailsControls, IntelGpuMeterRows, normalizeIntelGpuSnapshots } from './intel-gpu-meters.js';
 
 export const SYSTEM_METERS_COMPACT_BREAKPOINT_PX = 600;
 
@@ -64,10 +65,11 @@ export function formatBytesCompact(value) {
     return `${scaled.toFixed(digits)}${units[unitIndex]}`;
 }
 
-export function buildCompactMetersSummary(metrics) {
+export function buildCompactMetersSummary(metrics, intelGpuMeters = []) {
     const parts = [
         `CPU ${formatPercent(metrics?.cpu_percent)}`,
         `RAM ${formatPercent(metrics?.ram_percent)}`,
+        ...buildIntelGpuCompactSummaryParts(intelGpuMeters),
     ];
     if (Number(metrics?.buffer_cache_bytes) > 0) {
         parts.push(`BUF ${formatBytesCompact(metrics?.buffer_cache_bytes)}`);
@@ -121,6 +123,7 @@ export function SystemMetersHud({ mode = 'overlay' }) {
         vram_total_bytes: 0,
         vram_used_bytes: 0,
         gpu_provider: null,
+        gpus: [],
         buffer_cache_bytes: null,
         buffer_cache_series_bytes: [],
         process_rss_series_bytes: [],
@@ -134,6 +137,9 @@ export function SystemMetersHud({ mode = 'overlay' }) {
         platform: '',
     });
     const [loading, setLoading] = useState(false);
+    const [openGpuId, setOpenGpuId] = useState(null);
+    const [lastSuccessfulRefreshMs, setLastSuccessfulRefreshMs] = useState(null);
+    const [nowMs, setNowMs] = useState(() => Date.now());
 
     useEffect(() => {
         const onMetersChange = (event) => {
@@ -187,6 +193,7 @@ export function SystemMetersHud({ mode = 'overlay' }) {
                     vram_total_bytes: Number(next?.vram_total_bytes) || 0,
                     vram_used_bytes: Number(next?.vram_used_bytes) || 0,
                     gpu_provider: typeof next?.gpu_provider === 'string' && next.gpu_provider.trim() ? next.gpu_provider.trim() : null,
+                    gpus: Array.isArray(next?.gpus) ? next.gpus : [],
                     buffer_cache_bytes: Number.isFinite(Number(next?.buffer_cache_bytes)) ? Number(next?.buffer_cache_bytes) : null,
                     buffer_cache_series_bytes: sanitizeSeries(next?.buffer_cache_series_bytes),
                     process_rss_series_bytes: sanitizeSeries(next?.process_rss_series_bytes),
@@ -199,8 +206,12 @@ export function SystemMetersHud({ mode = 'overlay' }) {
                     sample_interval_ms: Number(next?.sample_interval_ms) || 2000,
                     platform: String(next?.platform || ''),
                 });
+                const refreshedAt = Date.now();
+                setLastSuccessfulRefreshMs(refreshedAt);
+                setNowMs(refreshedAt);
             } catch {
                 if (cancelled) return;
+                setNowMs(Date.now());
             } finally {
                 if (!cancelled) setLoading(false);
             }
@@ -221,12 +232,16 @@ export function SystemMetersHud({ mode = 'overlay' }) {
     const vramPath = useMemo(() => buildSparklinePath(metrics.vram_series, 56, 16, { min: 0, max: 100 }), [metrics.vram_series]);
     const bufferCachePath = useMemo(() => buildSparklinePath(metrics.buffer_cache_series_bytes), [metrics.buffer_cache_series_bytes]);
     const rssPath = useMemo(() => buildSparklinePath(metrics.process_rss_series_bytes), [metrics.process_rss_series_bytes]);
+    const intelGpuMeters = useMemo(
+        () => normalizeIntelGpuSnapshots(metrics.gpus, { nowMs, lastSuccessAtMs: lastSuccessfulRefreshMs }),
+        [metrics.gpus, nowMs, lastSuccessfulRefreshMs],
+    );
     const showBufferCache = Number(metrics.buffer_cache_bytes) > 0 && sanitizeSeries(metrics.buffer_cache_series_bytes).length > 0;
     const showSwap = Number.isFinite(Number(metrics.swap_percent)) && metrics.swap_total_bytes > 0;
     const showVram = shouldShowVram(metrics);
     const currentRssBytes = resolveCurrentRssBytes(metrics);
     const showRss = shouldShowRss(metrics);
-    const compactSummary = useMemo(() => buildCompactMetersSummary(metrics), [metrics]);
+    const compactSummary = useMemo(() => buildCompactMetersSummary(metrics, intelGpuMeters), [metrics, intelGpuMeters]);
 
     if (!enabled || !isActiveInstance) return null;
 
@@ -279,6 +294,7 @@ export function SystemMetersHud({ mode = 'overlay' }) {
                                     <span class="system-meters-value">${formatBytesCompact(currentRssBytes)}</span>
                                 </div>
                             `}
+                            ${intelGpuMeters.length > 0 && html`<${IntelGpuMeterRows} meters=${intelGpuMeters} onOpen=${setOpenGpuId} />`}
                             ${showVram && html`
                                 <div class="system-meters-row vram" title=${metrics.gpu_provider ? `GPU telemetry: ${metrics.gpu_provider}` : 'GPU memory telemetry'}>
                                     <span class="system-meters-label">VRAM</span>
@@ -308,6 +324,7 @@ export function SystemMetersHud({ mode = 'overlay' }) {
                             `}
                         `}
             </button>
+            ${!collapsed && intelGpuMeters.length > 0 && html`<${IntelGpuDetailsControls} meters=${intelGpuMeters} openGpuId=${openGpuId} onOpen=${setOpenGpuId} />`}
         </div>
     `;
 }

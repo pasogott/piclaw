@@ -1,6 +1,19 @@
 import { expect, test } from "bun:test";
 import { handleSystemMetricsRequest, parseLinuxRamMeminfo, parseLinuxSwapMeminfo, parseNvidiaSmiMemoryCsv, SystemMetricsSampler } from "../../../src/channels/web/agent/system-metrics.js";
 
+test("system metrics reads shared GPU cache but can opt out for general UI polling", async () => {
+  let reads = 0;
+  const gpu = { read: () => { reads++; return []; } };
+  const ctx = { json: (payload: unknown) => Response.json(payload) };
+  const sampler = new SystemMetricsSampler(2, 2000, () => null);
+  const a = await handleSystemMetricsRequest(ctx, sampler, gpu).json();
+  expect(a.gpus).toEqual([]);
+  expect(reads).toBe(1);
+  const b = await handleSystemMetricsRequest(ctx, sampler, null).json();
+  expect(b.gpus).toEqual([]);
+  expect(reads).toBe(1);
+});
+
 test("parseLinuxRamMeminfo uses MemAvailable instead of MemFree for usage", () => {
   expect(parseLinuxRamMeminfo([
     "MemTotal:        7864320 kB",

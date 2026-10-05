@@ -5,6 +5,8 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
+import { IntelGpuMetrics } from "./intel-gpu-metrics.js";
+import type { IntelGpuSnapshot } from "./intel-gpu-accounting.js";
 
 import type { AgentPoolMemoryInstrumentationSnapshot } from "../../../agent-pool.js";
 import { createLogger, debugSuppressedError } from "../../../utils/logger.js";
@@ -76,6 +78,7 @@ export interface SystemMetricsSnapshot {
   vram_total_bytes: number;
   vram_used_bytes: number;
   gpu_provider: string | null;
+  gpus: IntelGpuSnapshot[];
 }
 
 export interface SystemMetricsContext {
@@ -211,7 +214,14 @@ export function parseNvidiaSmiMemoryCsv(text: string): GpuVramUsageSnapshot | nu
   };
 }
 
+// Cache missing/failed NVIDIA discovery instead of spawning on every Intel-only request.
+let nextNvidiaAttempt = 0;
+let cachedNvidiaUsage: GpuVramUsageSnapshot | null = null;
 function readGpuVramUsage(): GpuVramUsageSnapshot | null {
+  const now = performance.now();
+  if (now < nextNvidiaAttempt) return cachedNvidiaUsage;
+  nextNvidiaAttempt = now + 30000;
+  cachedNvidiaUsage = null;
   try {
     const result = spawnSync("nvidia-smi", [
       "--query-gpu=memory.used,memory.total",
@@ -222,7 +232,9 @@ function readGpuVramUsage(): GpuVramUsageSnapshot | null {
       windowsHide: true,
     });
     if (result.status !== 0 || result.error) return null;
-    return parseNvidiaSmiMemoryCsv(result.stdout || "");
+    cachedNvidiaUsage = parseNvidiaSmiMemoryCsv(result.stdout || "");
+    if (cachedNvidiaUsage) nextNvidiaAttempt = now + 2000;
+    return cachedNvidiaUsage;
   } catch {
     return null;
   }
@@ -376,7 +388,7 @@ export class SystemMetricsSampler {
     private readonly gpuVramReader: () => GpuVramUsageSnapshot | null = readGpuVramUsage,
   ) {}
 
-  readSnapshot(runtimeMemorySnapshot?: AgentPoolMemoryInstrumentationSnapshot | null): SystemMetricsSnapshot {
+  readSnapshot(runtimeMemorySnapshot?: AgentPoolMemoryInstrumentationSnapshot | null, gpus: IntelGpuSnapshot[] = []): SystemMetricsSnapshot {
     const currentCpuTotals = readCpuTotals();
     let cpuPercent = 0;
     if (this.lastCpuTotals) {
@@ -420,6 +432,7 @@ export class SystemMetricsSampler {
       vram_total_bytes: gpuVramUsage?.totalBytes ?? 0,
       vram_used_bytes: gpuVramUsage?.usedBytes ?? 0,
       gpu_provider: gpuVramUsage?.provider ?? null,
+      gpus,
       buffer_cache_bytes: ramUsage.bufferCacheBytes,
       buffer_cache_series_bytes: [...this.bufferCacheSeriesBytes],
       process_rss_series_bytes: [...this.processRssSeriesBytes],
@@ -453,7 +466,11 @@ export class SystemMetricsSampler {
 }
 
 const defaultSampler = new SystemMetricsSampler();
+const defaultIntelGpuMetrics = new IntelGpuMetrics();
 
-export function handleSystemMetricsRequest(ctx: SystemMetricsContext, sampler: SystemMetricsSampler = defaultSampler): Response {
-  return ctx.json(sampler.readSnapshot(ctx.getRuntimeMemorySnapshot?.() ?? null), 200);
+export function handleSystemMetricsRequest(
+  ctx: SystemMetricsContext, sampler: SystemMetricsSampler = defaultSampler,
+  gpuMetrics: Pick<IntelGpuMetrics, "read"> | null = defaultIntelGpuMetrics,
+): Response {
+  return ctx.json(sampler.readSnapshot(ctx.getRuntimeMemorySnapshot?.() ?? null, gpuMetrics?.read() ?? []), 200);
 }
