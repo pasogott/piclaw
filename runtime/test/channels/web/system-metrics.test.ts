@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { handleSystemMetricsRequest, parseLinuxRamMeminfo, parseLinuxSwapMeminfo, parseNvidiaSmiMemoryCsv, SystemMetricsSampler } from "../../../src/channels/web/agent/system-metrics.js";
+import { handleSystemMetricsRequest, parseLinuxRamMeminfo, parseLinuxSwapMeminfo, SystemMetricsSampler } from "../../../src/channels/web/agent/system-metrics.js";
 
 test("parseLinuxRamMeminfo uses MemAvailable instead of MemFree for usage", () => {
   expect(parseLinuxRamMeminfo([
@@ -33,23 +33,6 @@ test("parseLinuxSwapMeminfo parses swap totals and usage from /proc/meminfo text
   });
 
   expect(parseLinuxSwapMeminfo("SwapTotal:             0 kB\nSwapFree:              0 kB")).toBeNull();
-});
-
-test("parseNvidiaSmiMemoryCsv aggregates GPU memory rows", () => {
-  expect(parseNvidiaSmiMemoryCsv("1024, 8192\n512, 4096\n")).toEqual({
-    totalBytes: (8192 + 4096) * 1024 * 1024,
-    usedBytes: (1024 + 512) * 1024 * 1024,
-    percent: 12.5,
-    provider: "nvidia-smi",
-  });
-  expect(parseNvidiaSmiMemoryCsv("1024 MiB, 8192 MiB")).toEqual({
-    totalBytes: 8192 * 1024 * 1024,
-    usedBytes: 1024 * 1024 * 1024,
-    percent: 12.5,
-    provider: "nvidia-smi",
-  });
-  expect(parseNvidiaSmiMemoryCsv("bad, 8192")).toBeNull();
-  expect(parseNvidiaSmiMemoryCsv("")).toBeNull();
 });
 
 test("SystemMetricsSampler returns bounded CPU/RAM payloads with rolling series", () => {
@@ -109,9 +92,9 @@ test("SystemMetricsSampler returns bounded CPU/RAM payloads with rolling series"
 
 test("SystemMetricsSampler includes optional bounded VRAM payloads when GPU telemetry is available", () => {
   const samples = [
-    { usedBytes: 1 * 1024 * 1024 * 1024, totalBytes: 4 * 1024 * 1024 * 1024, percent: 25, provider: "nvidia-smi" },
-    { usedBytes: 2 * 1024 * 1024 * 1024, totalBytes: 4 * 1024 * 1024 * 1024, percent: 50, provider: "nvidia-smi" },
-    { usedBytes: 3 * 1024 * 1024 * 1024, totalBytes: 4 * 1024 * 1024 * 1024, percent: 75, provider: "nvidia-smi" },
+    { usedBytes: 1 * 1024 * 1024 * 1024, totalBytes: 4 * 1024 * 1024 * 1024, percent: 25, provider: "nvml" },
+    { usedBytes: 2 * 1024 * 1024 * 1024, totalBytes: 4 * 1024 * 1024 * 1024, percent: 50, provider: "nvml" },
+    { usedBytes: 3 * 1024 * 1024 * 1024, totalBytes: 4 * 1024 * 1024 * 1024, percent: 75, provider: "nvml" },
   ];
   const sampler = new SystemMetricsSampler(2, 1500, () => samples.shift() ?? null);
 
@@ -125,7 +108,7 @@ test("SystemMetricsSampler includes optional bounded VRAM payloads when GPU tele
   expect(third.vram_series).toEqual([50, 75]);
   expect(third.vram_total_bytes).toBe(4 * 1024 * 1024 * 1024);
   expect(third.vram_used_bytes).toBe(3 * 1024 * 1024 * 1024);
-  expect(third.gpu_provider).toBe("nvidia-smi");
+  expect(third.gpu_provider).toBe("nvml");
 });
 
 test("handleSystemMetricsRequest includes runtime memory instrumentation when provided", async () => {
@@ -159,7 +142,7 @@ test("handleSystemMetricsRequest includes runtime memory instrumentation when pr
         exhaustedRuns: 14,
       },
     }),
-  }, new SystemMetricsSampler(2, 1000));
+  }, new SystemMetricsSampler(2, 1000, () => null));
 
   expect(response.status).toBe(200);
   const payload = await response.json();
