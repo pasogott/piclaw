@@ -9,6 +9,7 @@ import type { McpConfig, ServerEntry, ServerProvenance } from "pi-mcp-adapter/ty
 import type { LoadedMcpConfig, McpServerConfig, McpServerEntry } from "@earendil-works/pi-coding-agent";
 import { getKeychainEntry } from "./keychain.js";
 import { createLogger } from "../utils/logger.js";
+import { assertMcpServerCredentialBinding, parseMcpServerEdit, patchMcpProjectOverride, projectMcpServerEdit, type McpServerEdit } from './mcp-server-edits.js';
 
 const log = createLogger("secure.mcp-keychain");
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -58,6 +59,8 @@ let hydrationSequence = 0;
 const WRITE_AUTHORITY = Symbol("mcp-config-write-authority");
 export interface McpConfigWriteAuthority { readonly [WRITE_AUTHORITY]: true }
 const writeAuthorities = new WeakMap<McpConfigWriteAuthority, { workspaceDir: string; authorise(): void; signal: AbortSignal }>();
+export interface McpServerWriteCandidate { readonly prepared: true }
+const serverCandidates = new WeakMap<McpServerWriteCandidate, { workspaceDir: string; snapshot: McpBridgeSnapshot; document: Record<string, unknown>; edit: McpServerEdit; identities: Record<string, string | null> }>();
 export interface McpConfigCommitReceipt { path: string; fileRevision: string; committed: true }
 export class McpConfigWriteError extends Error {
   constructor(readonly receipt: McpConfigCommitReceipt, cause: unknown) {
@@ -372,6 +375,58 @@ function sourceRevisionsMatch(snapshot: McpBridgeSnapshot, identities = prepared
   return Object.entries(snapshot.sourceRevisions).every(([path, revision]) => fileRevision(path) === revision)
     && Object.entries(identities).every(([path, identity]) => sourceIdentity(path) === identity);
 }
+export function assertMcpBridgeSourcesCurrent(): void {
+  if (!sourceRevisionsMatch(preparedSnapshot)) throw new Error('MCP config revision conflict.');
+}
+function readProjectDocument(workspaceDir: string): Record<string, unknown> {
+  const path = resolve(workspaceDir, '.pi', 'mcp.json');
+  assertNoSymlinkComponents(resolve(workspaceDir), path);
+  if (!existsSync(path)) return { mcpServers: {} };
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.getuid?.() || stat.size > 512 * 1024) throw new Error('MCP project configuration is not editable.');
+  const value: unknown = JSON.parse(stripJsonComments(readFileSync(path, 'utf8'), { trailingCommas: true }));
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('MCP project configuration is not editable.');
+  return value as Record<string, unknown>;
+}
+/** Safe editor read: raw source/secret values stay inside this module. */
+export function inspectMcpServerDefinitions(workspaceDir: string) {
+  assertMcpBridgeSourcesCurrent();
+  const local = readProjectDocument(workspaceDir), effective = loadMcpConfig(undefined, workspaceDir);
+  const localServers = (local.mcpServers ?? local['mcp-servers'] ?? {}) as Record<string, unknown>;
+  if (!localServers || typeof localServers !== 'object' || Array.isArray(localServers)) throw new Error('MCP project configuration is not editable.');
+  const provenance = getServerProvenance(undefined, workspaceDir);
+  assertMcpBridgeSourcesCurrent();
+  return Object.entries(effective.mcpServers).sort(([a], [b]) => a.localeCompare(b)).map(([name, entry]) => ({
+    name, ...projectMcpServerEdit(name, entry), localOverride: Object.hasOwn(localServers, name),
+    source: provenance.get(name)?.kind === 'project' ? 'project' : 'inherited',
+    enabled: entry.disabled !== true,
+  }));
+}
+/** Exact public virtual projection; no credential/command resolution. */
+export function prepareMcpServerEdit(workspaceDir: string, value: unknown) {
+  if (process.env.PI_MCP_CONFIG_MODE?.trim().toLowerCase() === 'exclusive') throw new Error('Workspace MCP editing is unavailable in exclusive mode.');
+  assertMcpBridgeSourcesCurrent();
+  const edit = parseMcpServerEdit(value), document = patchMcpProjectOverride(readProjectDocument(workspaceDir), edit);
+  const original = loadMcpConfig(undefined, workspaceDir);
+  const effective = loadMcpConfig(undefined, workspaceDir, { projectOverride: document });
+  const definition = effective.mcpServers[edit.name] as PiclawServerEntry | undefined;
+  if (definition) {
+    assertMcpServerCredentialBinding(original.mcpServers[edit.name], definition);
+    if (definition.disabled !== true && Object.keys(definition).some(key => !SERVER_FIELDS.has(key))) throw new Error('Enabled server has unsupported advanced configuration; disable or repair it before applying.');
+    const reasons: string[] = [];
+    // Unknown pre-existing fields remain private. Validate supported fields,
+    // but do not force unrelated servers through the narrower editor schema.
+    const known = Object.fromEntries(Object.entries(definition).filter(([key]) => SERVER_FIELDS.has(key))) as PiclawServerEntry;
+    const sanitized = sanitizeDefinition(known, reasons);
+    if (definition.disabled !== true && (reasons.length || JSON.stringify(sanitized) !== JSON.stringify(known))) throw new Error('Edited MCP server configuration is unsafe or incompatible.');
+  }
+  assertMcpBridgeSourcesCurrent();
+  const candidate = Object.freeze({ prepared: true as const });
+  serverCandidates.set(candidate, { workspaceDir: resolve(workspaceDir), snapshot: preparedSnapshot, document, edit, identities: { ...preparedSourceIdentities } });
+  return { candidate, preview: { name: edit.name, action: edit.action, present: !!definition, enabled: definition?.disabled !== true && !!definition,
+    ...(definition ? projectMcpServerEdit(edit.name, definition) : { patch: {}, withheldFields: [] }),
+    effect: 'abort_turns_and_reload_extensions', applicable: true } };
+}
 export function createMcpConfigWriteAuthority(input: { workspaceDir: string; authorise(): void; signal: AbortSignal }): McpConfigWriteAuthority {
   input.signal.throwIfAborted(); input.authorise(); input.signal.throwIfAborted();
   const authority = Object.freeze({ [WRITE_AUTHORITY]: true as const });
@@ -379,7 +434,7 @@ export function createMcpConfigWriteAuthority(input: { workspaceDir: string; aut
   return authority;
 }
 /** Commit only. The fenced runtime controller owns exactly one subsequent hydration. */
-export async function writeMcpProjectOverride(input: { workspaceDir: string; expectedRevision: string; config: McpConfig; authority: McpConfigWriteAuthority }): Promise<McpConfigCommitReceipt> {
+export async function writeMcpProjectOverride(input: { workspaceDir: string; expectedRevision: string; authority: McpConfigWriteAuthority; onCommit?: (receipt: McpConfigCommitReceipt) => void } & ({ config: McpConfig; candidate?: never } | { candidate: McpServerWriteCandidate; config?: never })): Promise<McpConfigCommitReceipt> {
   const admission = writeAuthorities.get(input.authority);
   const check = () => {
     if (!admission || resolve(input.workspaceDir) !== admission.workspaceDir) throw new Error('MCP config write is not authorized.');
@@ -388,15 +443,17 @@ export async function writeMcpProjectOverride(input: { workspaceDir: string; exp
   check();
   const capturedSnapshot = preparedSnapshot;
   if (input.expectedRevision !== preparedSnapshot.revision || !sourceRevisionsMatch(preparedSnapshot)) throw new Error("MCP config revision conflict.");
-  const config = structuredClone(input.config);
-  assertWritableConfig(config);
+  const candidate = input.candidate ? serverCandidates.get(input.candidate) : undefined;
+  if (input.candidate && (!candidate || candidate.snapshot !== capturedSnapshot || candidate.workspaceDir !== resolve(input.workspaceDir))) throw new Error('MCP server candidate is not authorized.');
+  const config = structuredClone(candidate?.document ?? input.config!);
+  if (!candidate) assertWritableConfig(config as McpConfig);
   const path = resolve(input.workspaceDir, ".pi", "mcp.json"); const root = resolve(input.workspaceDir); if (!path.startsWith(`${root}/`)) throw new Error("MCP config target escapes workspace.");
   assertNoSymlinkComponents(root, path);
   const expectedFileRevision = preparedSnapshot.sourceRevisions[path] ?? null;
   // Establish our private parent synchronously before capturing its lifetime;
   // subsequent await boundaries may not adopt a replaced directory.
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const originalIdentities = { ...preparedSourceIdentities };
+  const originalIdentities = { ...(candidate?.identities ?? preparedSourceIdentities) };
   if (originalIdentities[dirname(path)] === null) originalIdentities[dirname(path)] = sourceIdentity(dirname(path));
   const identities = Object.fromEntries([...new Set([root, dirname(path), ...Object.keys(capturedSnapshot.sourceRevisions)])].map(source => {
     const stat = existsSync(source) ? lstatSync(source) : null;
@@ -413,7 +470,7 @@ export async function writeMcpProjectOverride(input: { workspaceDir: string; exp
     // cancellation too; do not rename after that authority is withdrawn.
     check();
   };
-  const text = `${JSON.stringify(config, null, 2)}\n`; if (/"(?:bearerToken|clientSecret)"\s*:\s*"(?![!$]|\{env:)/.test(text)) throw new Error("MCP config write contains a literal secret.");
+  const text = `${JSON.stringify(config, null, 2)}\n`; if (!candidate && /"(?:bearerToken|clientSecret)"\s*:\s*"(?![!$]|\{env:)/.test(text)) throw new Error("MCP config write contains a literal secret.");
   const release = await lockfile.lock(dirname(path), { realpath: false, retries: 0 });
   let temp: string | undefined;
   let receipt: McpConfigCommitReceipt | undefined;
@@ -424,7 +481,9 @@ export async function writeMcpProjectOverride(input: { workspaceDir: string; exp
     try { writeFileSync(fd, text); fsyncSync(fd); } finally { closeSync(fd); }
     checkRevision();
     renameSync(temp, path); temp = undefined;
+    if (input.candidate) serverCandidates.delete(input.candidate);
     receipt = { path, fileRevision: createHash('sha256').update(text).digest('hex'), committed: true };
+    input.onCommit?.(receipt);
     const dirFd = openSync(dirname(path), "r"); try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
   } catch (error) { failure = error; }
   finally {

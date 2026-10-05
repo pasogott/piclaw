@@ -1,0 +1,112 @@
+{
+  "recordedAt": "2026-10-05T00:31:32.839Z",
+  "baseMain": "1534040a19b1841bb64cdc80797176531ba9efff",
+  "adapter": "dddfcf630508f42c169889c11dee94e69b746e7c",
+  "focused": {
+    "pass": 147,
+    "fail": 0,
+    "assertions": 705,
+    "files": 13
+  },
+  "browser": {
+    "pass": 14,
+    "fail": 0,
+    "assertions": 590
+  },
+  "webBuild": {
+    "pass": 9,
+    "assertions": 26
+  },
+  "profile": {
+    "kind": "mcp-server-settings-read-preview",
+    "requests": 100,
+    "servers": 25,
+    "diskDatabase": true,
+    "wallMs": 187.14886200000046,
+    "cpuUs": {
+      "user": 165179,
+      "system": 27274
+    },
+    "eventLoop": {
+      "maxMs": 14.784073,
+      "p99Ms": 13.271039,
+      "samples": 52
+    },
+    "methods": {
+      "query": {
+        "calls": 250,
+        "ms": 0.5367520000040713
+      },
+      "parse": {
+        "calls": 1051,
+        "ms": 6.672572999992099
+      },
+      "stringify": {
+        "calls": 600,
+        "ms": 1.2035559999940233
+      }
+    },
+    "memory": {
+      "rss": 123617280,
+      "heapTotal": 29369344,
+      "heapUsed": 17848383,
+      "external": 5884315,
+      "arrayBuffers": 14485
+    },
+    "scope": "isolated synthetic direct owner handler with disk SELECT1 authority probe; filesystem effective projection, no network/keychain/Apply/server/provider execution; not whole HTTP auth/CSRF or production benchmark"
+  },
+  "sourceHashes": {
+    "runtime/src/secure/mcp-keychain.ts": "f1224dd9080a860665413249c62bd5e1403f1d5a614ddaba473a329fc347ea95",
+    "runtime/src/agent-pool/mcp-codemode-runtime.ts": "63219889ff61208e6fec167d5c44c7987c6cb94fae852ce3cb4a83d7a1c01939",
+    "runtime/src/agent-pool/mcp-bridge-owner.ts": "d64b05c0ec9de5800f8dc2cd6d5f4ae8019f79c7d7dc26c786d9bafcbb36bb14",
+    "runtime/src/channels/web/handlers/mcp-settings.ts": "cd52c9240954f3d6eb0e0cff578df429c6017483afdbf117b5515735bdaf9067"
+  },
+  "logs": [
+    {
+      "log": "mcp-server-review-focus.log",
+      "sha256": "b5fa994d260db658a067162485b069a54dcb397708c1eb881b90792fd0b39070"
+    },
+    {
+      "log": "mcp-server-browser-matrix-v3.log",
+      "sha256": "5f7e7e4e908150d521f528337d6b8c5e9112fe5ee4c8abc2b1136c3ae9aa927a"
+    },
+    {
+      "log": "mcp-server-rebuilt-web.log",
+      "sha256": "f9219b989ba06f2c007fb69bedcdc927a38db85f7bdc746e76abede3ac43ffae"
+    },
+    {
+      "log": "mcp-server-settings-profile.log",
+      "sha256": "5c8a5b2d8c0171d01a74b41b76d4d057e1c43cb65ab339cb44a0ecf119f88e21"
+    },
+    {
+      "log": "mcp-server-types-final-v2.log",
+      "sha256": "dfd0c6d3af373830a215c2274b74fba3950b6edffc950c5db83eccf51ae8e409"
+    },
+    {
+      "log": "mcp-server-browser-first.log",
+      "sha256": "869573eb85580fc00b83d3f8e10dbcf18ebd1a80666c2c2c93f79322deb49203"
+    },
+    {
+      "log": "mcp-server-browser-matrix-v2.log",
+      "sha256": "2a129ff353f9fedefecedc1bba0744b2ed62cc33957102605483c8df201ee64f"
+    },
+    {
+      "log": "mcp-server-runtime-cause.log",
+      "sha256": "3cccd690623b933d807536165d5085b13e863dd6225777c712c2269f5ff5aaee"
+    },
+    {
+      "log": "mcp-server-stable-focus.log",
+      "sha256": "7bae43aee6d3e5538056616a3f09e2b6bb284e6ee54f6c773138af110168d9f0"
+    },
+    {
+      "log": "mcp-server-stable-browser.log",
+      "sha256": "7976e0393f746015378235f00f99dd8c08efb49f2fa795d199cecf69e3b3a19d"
+    },
+    {
+      "log": "mcp-server-stable-types.log",
+      "sha256": "dfd0c6d3af373830a215c2274b74fba3950b6edffc950c5db83eccf51ae8e409"
+    }
+  ],
+  "qualification": "focused candidate; final review and frozen full required",
+  "scope": "source-only/no installation/restart/live accounts/provider/native waiver"
+}

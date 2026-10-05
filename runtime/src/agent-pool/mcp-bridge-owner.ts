@@ -224,13 +224,18 @@ export function bindMcpBridgeOwner(
       owner.assertAdmission();
       await owner.shutdown("Piclaw MCP owner reload");
       owner.assertAdmission();
+      let reachedStart = false;
       await reload({ ...options, beforeSessionStart: async () => {
+        reachedStart = true;
         assertLoaded();
         transitionSignal?.throwIfAborted();
         await options?.beforeSessionStart?.();
         transitionSignal?.throwIfAborted();
         assertLoaded();
       } });
+      // Public SDK does not call this hook for unbound sessions. A host
+      // transition must not certify successful activation without the gate.
+      if (transitionSignal && !reachedStart) throw new Error('MCP replacement did not reach its startup barrier.');
       assertLoaded();
       if (!transitionSignal) {
         transitioning = false;
@@ -238,6 +243,9 @@ export function bindMcpBridgeOwner(
       }
     } catch (error) {
       owner.blockAdmission();
+      // A cancelled replacement can finish resource loading after the host
+      // already quarantined its runtime. Retire that late owner as well.
+      if (transitionSignal) owner.dispose();
       throw error;
     } finally { reloading = false; }
   };

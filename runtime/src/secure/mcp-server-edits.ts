@@ -156,7 +156,11 @@ export function assertMcpServerCredentialBinding(original: unknown, projected: u
   if (!record(original) || !record(projected)) return;
   const transport = (entry: Record<string, unknown>) => JSON.stringify([entry.command ?? null, entry.url ?? null, entry.socket ?? null]);
   if (transport(original) === transport(projected)) return;
-  if (CREDENTIAL_FIELDS.some(field => original[field] !== undefined && projected[field] !== undefined && JSON.stringify(original[field]) === JSON.stringify(projected[field])
+  const sharesValue = (before: unknown, after: unknown): boolean => {
+    if (record(before) && record(after)) return Object.keys(before).some(key => Object.hasOwn(after, key) && sharesValue(before[key], after[key]));
+    return before !== undefined && after !== undefined && JSON.stringify(before) === JSON.stringify(after);
+  };
+  if (CREDENTIAL_FIELDS.some(field => sharesValue(original[field], projected[field])
     && !(field === 'auth' && projected[field] === false) && !(field === 'oauth' && projected[field] === false))) {
     throw new McpServerEditError('inherited_credentials');
   }

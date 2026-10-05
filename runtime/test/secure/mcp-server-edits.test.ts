@@ -33,3 +33,6 @@ test('remove local override preserves other aliases/imports and null deletion re
 test('exact effective endpoint or transport changes cannot silently inherit credentials',()=>{
  const original={url:'https://original.test/mcp',bearerTokenKeychain:'synthetic/key',bearerTokenEnv:'SYNTHETIC'};expect(()=>assertMcpServerCredentialBinding(original,{...original,url:'https://replacement.test/mcp'})).toThrow('inherited_credentials');expect(()=>assertMcpServerCredentialBinding(original,{command:'never-run',bearerTokenKeychain:'synthetic/key'})).toThrow('inherited_credentials');expect(()=>assertMcpServerCredentialBinding(original,{...original,disabled:true})).not.toThrow();expect(()=>assertMcpServerCredentialBinding(original,{url:'https://replacement.test/mcp',auth:false})).not.toThrow();
 });
+test('repointing cannot hide a retained credential inside a modified header object',()=>{
+ expect(()=>assertMcpServerCredentialBinding({url:'https://old.test',headers:{Authorization:'Bearer ${TOKEN}',Accept:'old'}},{url:'https://new.test',headers:{Authorization:'Bearer ${TOKEN}',Accept:'new'}})).toThrow('inherited_credentials');
+});
