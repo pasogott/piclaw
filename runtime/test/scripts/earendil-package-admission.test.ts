@@ -40,11 +40,11 @@ const fixtureRoot = join(fixturesRoot, "valid-consumer");
 const modernFixtureRoot = join(fixturesRoot, "valid-consumer-0.99.1");
 const registryFixture = join(fixturesRoot, "registry-0.99.1.json");
 const providerFixture = join(fixturesRoot, "provider-auth-0.99.1.json");
-const CURRENT_VERSION = "1.0.1";
-const CURRENT_GIT_HEAD = "a7229ddc21810d6245105978033b7df645ecc2f7";
+const CURRENT_VERSION = "1.0.2";
+const CURRENT_GIT_HEAD = "cd32f7725fdbddbaecdff5b1e68491563394e0ca";
 const currentReceiptRoot = resolve(import.meta.dir, "../../../docs/design/earendil-agent-harness-integration-adr/evidence/receipts");
-const currentRegistryReceipt = join(currentReceiptRoot, "earendil-101-registry.json");
-const currentProviderReceipt = join(currentReceiptRoot, "earendil-101-provider-auth.json");
+const currentRegistryReceipt = join(currentReceiptRoot, "earendil-102-registry.json");
+const currentProviderReceipt = join(currentReceiptRoot, "earendil-102-provider-auth.json");
 const scratchRoots: string[] = [];
 
 afterEach(() => {
@@ -149,7 +149,7 @@ describe("Earendil package admission checker", () => {
     expect(() => validateRegistryReceipt(materializeRegistry(rows => { rows[0]!.name = "@earendil-works/pi-durable"; }, registry), version, gitHead)).toThrow("extra package");
   });
 
-  test("validates exact 1.0.1 registry and provider receipts and rejects provenance drift", () => {
+  test("validates exact 1.0.2 registry and provider receipts and rejects provenance drift", () => {
     const receipt = validateRegistryReceipt(currentRegistryReceipt, CURRENT_VERSION, CURRENT_GIT_HEAD);
     expect(receipt.packages).toHaveLength(8);
     expect(receipt.packages.every(row => row.version === CURRENT_VERSION && row.gitHead === CURRENT_GIT_HEAD)).toBeTrue();
@@ -171,7 +171,7 @@ describe("Earendil package admission checker", () => {
     }
     expect(() => validateRegistryReceipt(currentRegistryReceipt, CURRENT_VERSION, "b".repeat(40)))
       .toThrow(`requires gitHead ${CURRENT_GIT_HEAD}`);
-    expect(() => validateRegistryReceipt(currentRegistryReceipt, "1.0.2", CURRENT_GIT_HEAD))
+    expect(() => validateRegistryReceipt(currentRegistryReceipt, "1.0.3", CURRENT_GIT_HEAD))
       .toThrow("modern package admission supports exact");
 
     const scratch = mkdtempSync(join(tmpdir(), "provider-101-receipt-"));
@@ -179,7 +179,7 @@ describe("Earendil package admission checker", () => {
     const changedProvider = join(scratch, "provider.json");
     writeFileSync(changedProvider, readFileSync(currentProviderReceipt, "utf8") + " ");
     expect(() => validateProviderAuthReceipt(changedProvider, CURRENT_VERSION, CURRENT_GIT_HEAD))
-      .toThrow("provider auth receipt hash differs from exact 1.0.1 receipt");
+      .toThrow("provider auth receipt hash differs from exact 1.0.2 receipt");
   });
 
   test("admits the synthetic Bun consumer with no Node runtime configured", () => {

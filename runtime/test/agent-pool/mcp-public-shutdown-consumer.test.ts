@@ -12,7 +12,7 @@ for (const mode of ["success", "close-failure"] as const) {
         const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
         expect(code, err).toBe(0);
         const receipt = JSON.parse(out.split("\n").find(line => line.startsWith('{"mode"'))!);
-        expect(receipt).toMatchObject({ mode, status: "pass", sdk: "1.0.1", externalNetwork: 0, providerExecution: false, singleOwner: true });
+        expect(receipt).toMatchObject({ mode, status: "pass", sdk: "1.0.2", externalNetwork: 0, providerExecution: false, singleOwner: true });
         if (mode === "close-failure") expect(receipt).toMatchObject({ replacementDenied: true, promptDenied: true, scopedLeaseHeld: true });
         else expect(receipt).toMatchObject({ historyPreserved: true, oldClosedBeforeNew: true });
       } finally { clearTimeout(timer); if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }

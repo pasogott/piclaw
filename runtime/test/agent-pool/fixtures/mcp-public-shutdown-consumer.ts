@@ -57,12 +57,12 @@ try {
     assert.equal(leases.length, 1); assert.equal(leases[0].releaseCount, 0);
     assert.equal(leases[0].env().SYNTHETIC_BEARER, "synthetic-value");
     assert.deepEqual(pids(), [oldPid]);
-    console.log(JSON.stringify({ mode, status: "pass", sdk: "1.0.1", externalNetwork, providerExecution: false, singleOwner: true, replacementDenied: true, promptDenied: true, scopedLeaseHeld: true }));
+    console.log(JSON.stringify({ mode, status: "pass", sdk: "1.0.2", externalNetwork, providerExecution: false, singleOwner: true, replacementDenied: true, promptDenied: true, scopedLeaseHeld: true }));
   } else {
     await session.reload(); assert.deepEqual(extensionErrors, []); await wait(() => pids().length === 1 && pids()[0] !== oldPid && connected >= 2, "replacement");
     assert(!alive(oldPid)); assert.equal(leases[0].releaseCount, 1); assert.equal(leases.length, 2);
     assert.equal(session.sessionId, identity); assert.equal(JSON.stringify(session.sessionManager.getEntries()), history);
-    console.log(JSON.stringify({ mode, status: "pass", sdk: "1.0.1", externalNetwork, providerExecution: false, singleOwner: true, historyPreserved: true, oldClosedBeforeNew: true }));
+    console.log(JSON.stringify({ mode, status: "pass", sdk: "1.0.2", externalNetwork, providerExecution: false, singleOwner: true, historyPreserved: true, oldClosedBeforeNew: true }));
   }
   assert.equal(externalNetwork, 0);
 } finally {

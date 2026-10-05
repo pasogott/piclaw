@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readFileSync, readlinkSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const fingerprints = {
   "anthropic.js": "80fc4412ce09d42d678f5094932f3e58eecec53df40c4530fc4f55651a57d0a4",
@@ -11,12 +13,13 @@ const fingerprints = {
 const browserModes = ["manual-success", "callback-success", "callback-invalid-first", "callback-denied", "token-denied", "malformed-json", "cancel-prompt", "cancel-exchange", "pre-abort"];
 const copyModes = ["code-state", "bare-code", "query", "callback-url", "unrelated-url", "empty", "bad-state", "denied", "malformed-json", "cancel-prompt", "cancel-exchange", "refresh-denied", "cancel-refresh", "unknown-selection", "cancel-selection", "pre-abort-selection", "pre-abort-manual"];
 
-test("1.0.1 browser/copy-code receipt pins public implementation and distinct behaviour", () => {
-  const receipt = JSON.parse(readFileSync(resolve(import.meta.dir, "../../../docs/design/earendil-agent-harness-integration-adr/evidence/receipts/earendil-101-provider-browser-bun.json"), "utf8"));
-  expect(receipt).toMatchObject({ version: "1.0.1", runtime: "Bun 1.4.2", scope: "public_anthropic_browser_copy_code_and_openrouter_methods_only",
+test("1.0.2 browser/copy-code receipt pins public implementation and distinct behaviour", () => {
+  const receipt = JSON.parse(readFileSync(resolve(import.meta.dir, "../../../docs/design/earendil-agent-harness-integration-adr/evidence/receipts/earendil-102-provider-browser-bun.json"), "utf8"));
+  expect(receipt).toMatchObject({ version: "1.0.2", runtime: "Bun 1.4.2", scope: "public_anthropic_browser_copy_code_and_openrouter_methods_only",
     bootstrapRequests: 0, credentialPersistence: "none", inference: "not_invoked", networkGuard: "distinct_loopback_only_os_namespace_guarded_fetch_and_owned_ipv4_callbacks" });
   expect(receipt.sdkFileSha256).toEqual(fingerprints);
-  for (const hash of Object.values(fingerprints)) expect(hash).toMatch(/^[a-f0-9]{64}$/); // Historical, no current SDK comparison.
+  const root = import.meta.resolve("@earendil-works/pi-ai");
+  for (const [file, sha] of Object.entries(fingerprints)) expect(createHash("sha256").update(readFileSync(fileURLToPath(new URL(`auth/oauth/${file}`, root)))).digest("hex")).toBe(sha);
   expect(receipt.results.map((row: { provider: string; mode: string }) => [row.provider, row.mode])).toEqual(
     ["anthropic", "openrouter"].flatMap(provider => [...browserModes, provider === "anthropic" ? "manual-bad-state" : "missing-key"].map(mode => [provider, mode])));
   for (const row of receipt.results) {
@@ -52,8 +55,8 @@ test("1.0.1 browser/copy-code receipt pins public implementation and distinct be
   }
 });
 
-test("1.0.1 browser fixture refuses an ordinary network namespace before SDK imports", async () => {
-  const child = Bun.spawn([process.execPath, "--no-env-file", resolve(import.meta.dir, "fixtures/provider-browser-matrix-101.mjs")], {
+test("1.0.2 browser fixture refuses an ordinary network namespace before SDK imports", async () => {
+  const child = Bun.spawn([process.execPath, "--no-env-file", resolve(import.meta.dir, "fixtures/provider-browser-matrix-102.mjs")], {
     env: { PATH: "/usr/bin:/bin", HOME: "/nonexistent", SYNTHETIC_PARENT_NETNS: readlinkSync("/proc/self/ns/net"), SYNTHETIC_EXPECT_UID: String(process.getuid?.()) }, stdout: "pipe", stderr: "pipe",
   });
   const timer = setTimeout(() => child.kill("SIGKILL"), 5000);

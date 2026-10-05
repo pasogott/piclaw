@@ -1,6 +1,14 @@
 # Evidence register
 
-## Selected Pi 1.0.1
+## Selected Pi 1.0.2 integration
+
+Exact released target: `cd32f7725fdbddbaecdff5b1e68491563394e0ca`. Rui authorised source retargeting with the standard shipped MCP wrapper retained. Native parity/removal and pi-durable are future scope; installation, restart and real-account tests need separate approval.
+
+- [Integration and qualification](../../../development/pi-102-integration.md)
+- Fresh [registry](receipts/earendil-102-registry.json), [package admission](receipts/earendil-102-package-admission.json), [provider inventory](receipts/earendil-102-provider-auth.json) and [public MCP types](receipts/earendil-102-mcp-public.json)
+- Fresh synthetic [packaged CLI](receipts/earendil-102-packaged-cli-auth-bun.json), [browser/copy-code](receipts/earendil-102-provider-browser-bun.json), [provider devices](receipts/earendil-102-provider-devices-bun.json), [Codex device](receipts/earendil-102-codex-device-bun.json) and [private UI](receipts/earendil-102-anthropic-private-ui.json) receipts
+
+## Historical Pi 1.0.1 integration
 
 Exact upstream target: `a7229ddc21810d6245105978033b7df645ecc2f7`. [Source migration #1537](https://github.com/rcarmo/piclaw/pull/1537) is merged; Smith's initial installation was verified separately. Native/Apply, production Delegate integration, combined qualification and live-canary criteria are incomplete. Adapter/Auto stays the default.
 
