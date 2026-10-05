@@ -1,13 +1,24 @@
 import { createCodemodeExtension, type AgentSession, type AgentSessionRuntime, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { commitMcpInstancePolicy, readMcpInstancePolicy } from "../core/config-mcp.js";
-import { getMcpBridgeReadSnapshot } from "../secure/mcp-keychain.js";
+import { getMcpBridgeReadSnapshot, assertMcpBridgeSourcesCurrent, assertMcpCommittedSourcesCurrent, inspectMcpServerDefinitions, prepareMcpServerEdit, createMcpConfigWriteAuthority, writeMcpProjectOverride, hydrateMcpKeychainCredentials, McpConfigWriteError, type McpServerWriteCandidate, type McpConfigCommitReceipt } from "../secure/mcp-keychain.js";
+import { acknowledgeMcpSessionsShutdown, reloadAcknowledgedMcpSessions } from './mcp-bridge-owner.js';
+import { getWorkspaceDir } from '../core/config.js';
+import { createLogger, debugSuppressedError } from '../utils/logger.js';
+const log = createLogger('mcp-settings-runtime');
 import { planMcpEnginePolicy } from "./mcp-engine-plan.js";
 import { parseMcpEnginePolicy, type McpEnginePolicy } from "./mcp-engine-policy.js";
 
 const READINESS = Object.freeze({ adapter: true, native: false, codemode: true });
 let selected: Readonly<McpEnginePolicy> | null = null;
 let blocked = false;
+const ownerReloadContext = new AsyncLocalStorage<boolean>();
+/** Only the private acknowledged replacement batch may construct while fenced. */
+export function assertMcpOwnerConstruction(): void {
+  if (ownerReloadContext.getStore() && selectedMcpPolicy().engine === 'adapter') return;
+  assertSelectedMcpOwner();
+}
 
 export function selectedMcpPolicy(): Readonly<McpEnginePolicy> {
   return selected ??= readMcpInstancePolicy().policy;
@@ -86,7 +97,7 @@ export const MCP_NATIVE_BLOCKERS = Object.freeze([
 ]);
 
 export class McpPolicyApplyError extends Error {
-  constructor(readonly status: number, message: string) { super(message); }
+  constructor(readonly status: number, message: string, cause?: unknown) { super(message, { cause }); }
 }
 
 interface Revision {
@@ -94,6 +105,7 @@ interface Revision {
   bridge: string;
   expires: number;
 }
+interface ServerRevision extends Revision { workspace: string; candidate?: McpServerWriteCandidate; preview?: unknown }
 
 interface CodemodeHost {
   blockMcpAdmissions(): void;
@@ -106,6 +118,7 @@ interface CodemodeHost {
 export class McpCodemodeController {
   private phase: "ready" | "applying" | "blocked" = "ready";
   private readonly revisions = new Map<string, Revision>();
+  private readonly serverRevisions = new Map<string, ServerRevision>();
 
   constructor(private readonly manager: CodemodeHost, private readonly timeoutMs = 30_000) {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error("Invalid MCP update deadline.");
@@ -147,6 +160,92 @@ export class McpCodemodeController {
       nativeBlockReason: MCP_NATIVE_BLOCK_REASON,
       nativeBlockers: MCP_NATIVE_BLOCKERS,
     };
+  }
+
+  inspectServers(edit?: unknown) {
+    const workspace = getWorkspaceDir(), current = readMcpInstancePolicy(), snapshot = getMcpBridgeReadSnapshot();
+    const servers = inspectMcpServerDefinitions(workspace);
+    const prepared = edit === undefined ? undefined : prepareMcpServerEdit(workspace, edit);
+    const now = Date.now();
+    for (const [token, value] of this.serverRevisions) if (value.expires <= now) this.serverRevisions.delete(token);
+    while (this.serverRevisions.size >= 128) this.serverRevisions.delete(this.serverRevisions.keys().next().value!);
+    const revision = randomUUID();
+    this.serverRevisions.set(revision, { config: current.revision, bridge: snapshot.revision, workspace, expires: now + 300_000,
+      ...(prepared ? { candidate: prepared.candidate, preview: prepared.preview } : {}) });
+    return { ok: true, servers, revision, preview: prepared?.preview ?? null,
+      applyAvailable: this.phase === 'ready' && !blocked && selectedMcpPolicy().engine === 'adapter' && current.policy.engine === 'adapter',
+      phase: this.phase, effect: 'abort_turns_and_reload_extensions' };
+  }
+
+  async applyServers(input: { revision: string; acknowledgeInterruptions: boolean }, authorise: () => void, signal: AbortSignal) {
+    authorise(); signal.throwIfAborted();
+    if (!input.acknowledgeInterruptions) throw new McpPolicyApplyError(400, 'Confirm turn interruption and extension reload before applying server changes.');
+    if (this.phase !== 'ready' || blocked) throw new McpPolicyApplyError(409, 'MCP settings are busy or blocked.');
+    const token = this.serverRevisions.get(input.revision);
+    if (!token?.candidate || token.expires <= Date.now() || token.workspace !== getWorkspaceDir()
+      || token.config !== readMcpInstancePolicy().revision || token.bridge !== getMcpBridgeReadSnapshot().revision) throw new McpPolicyApplyError(409, 'Server preview expired or configuration changed; preview again.');
+    assertMcpBridgeSourcesCurrent();
+    if (selectedMcpPolicy().engine !== 'adapter' || readMcpInstancePolicy().policy.engine !== 'adapter') throw new McpPolicyApplyError(422, MCP_NATIVE_BLOCK_REASON);
+    this.serverRevisions.delete(input.revision);
+    this.phase = 'applying'; blocked = true;
+    const deadlineAbort = new AbortController(), combined = AbortSignal.any([signal, deadlineAbort.signal]);
+    let reject!: (reason: unknown) => void;
+    const interrupted = new Promise<never>((_resolve, fail) => { reject = fail; });
+    const onAbort = () => reject(combined.reason ?? Error('MCP transition cancelled.'));
+    combined.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => deadlineAbort.abort(Error('MCP server update deadline exceeded.')), this.timeoutMs);
+    const bounded = <T>(promise: Promise<T>) => Promise.race([promise, interrupted]);
+    let commitReceipt: McpConfigCommitReceipt | undefined;
+    const check = () => { combined.throwIfAborted(); authorise(); combined.throwIfAborted();
+      if (commitReceipt) assertMcpCommittedSourcesCurrent(commitReceipt);
+      if (getWorkspaceDir() !== token.workspace || readMcpInstancePolicy().revision !== token.config) throw Error('MCP instance binding changed.'); };
+    let sessions: readonly AgentSessionRuntime[] = [], committed = false, failed = false;
+    try {
+      this.manager.blockMcpAdmissions();
+      const pending = this.manager.fenceMcpAndSnapshot(combined);
+      void pending.then(late => { if (combined.aborted) for (const runtime of late) void this.manager.quarantineMcpRuntime(runtime).catch(() => undefined); }, () => undefined);
+      sessions = [...new Set(await bounded(pending))]; check();
+      const receipt = await bounded(acknowledgeMcpSessionsShutdown(sessions.map(runtime => runtime.session), combined));
+      check(); assertMcpBridgeSourcesCurrent();
+      try {
+        const write = writeMcpProjectOverride({ workspaceDir: token.workspace, expectedRevision: token.bridge, candidate: token.candidate,
+          authority: createMcpConfigWriteAuthority({ workspaceDir: token.workspace, authorise: check, signal: combined }), onCommit: receipt => { commitReceipt = receipt; committed = true; } });
+        // A post-rename unlock tail may outlive the response deadline. Observe
+        // its commit receipt before reporting an ambiguous response outcome.
+        await bounded(write);
+        committed = true;
+      } catch (error) { if (error instanceof McpConfigWriteError) committed = true; throw error; }
+      check();
+      await bounded(hydrateMcpKeychainCredentials(token.workspace, undefined, { authorise: check, signal: combined }));
+      check();
+      const editedName = (token.preview as { name?: string } | undefined)?.name;
+      if (editedName && getMcpBridgeReadSnapshot().dryRun.rows.some(row => row.serverName === editedName && row.status === 'quarantined')
+        && (token.preview as { enabled?: boolean }).enabled) throw Error('Edited server credentials or configuration could not be activated.');
+      let release!: () => void, failStart!: (reason: unknown) => void, arrived!: () => void, count = 0;
+      const start = new Promise<void>((resolve, reject) => { release = resolve; failStart = reject; });
+      void start.catch(() => undefined);
+      const ready = new Promise<void>(resolve => { arrived = resolve; if (!sessions.length) resolve(); });
+      const replacing = ownerReloadContext.run(true, () => reloadAcknowledgedMcpSessions(receipt, { beforeSessionStart: async () => {
+        check(); if (++count === sessions.length) arrived(); await start; check();
+      } }));
+      void replacing.finally(() => { if (failed) for (const runtime of sessions) void this.manager.quarantineMcpRuntime(runtime).catch(() => undefined); }).catch(() => undefined);
+      void replacing.catch(error => failStart(error));
+      try {
+        await bounded(Promise.race([ready, replacing.then(() => { if (sessions.length) throw Error('MCP reload bypassed start barrier.'); })]));
+        check(); release(); await bounded(replacing);
+      } catch (error) { failStart(error); throw error; }
+      for (const runtime of sessions) syncMcpCodemodeSession(runtime.session, selectedMcpPolicy());
+      check(); this.manager.resumeMcpAdmissions(); check(); blocked = false; this.phase = 'ready'; this.revisions.clear(); this.serverRevisions.clear();
+      return this.inspectServers();
+    } catch (error) {
+      debugSuppressedError(log, 'MCP server transition failed; admissions stay fenced.', error, { operation: 'mcp_settings.server_transition', committed });
+      failed = true;
+      deadlineAbort.abort(); blocked = true; this.phase = 'blocked'; this.manager.blockMcpAdmissions();
+      for (const runtime of sessions) void this.manager.quarantineMcpRuntime(runtime).catch(() => undefined);
+      throw new McpPolicyApplyError(committed ? 503 : 409, committed
+        ? 'Server configuration saved, but activation was not confirmed. Operations remain blocked; repair the instance.'
+        : 'Server update failed before configuration commit. Operations remain blocked; no fallback was selected.', error);
+    } finally { clearTimeout(timer); combined.removeEventListener('abort', onAbort); }
   }
 
   async apply(input: { policy: unknown; revision: string; acknowledgeInterruptions: boolean }, authorise: () => void) {

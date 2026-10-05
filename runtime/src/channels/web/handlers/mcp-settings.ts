@@ -4,10 +4,10 @@ import { readAccessConfig } from "../../../core/config-access.js";
 import { parseMcpEnginePolicy } from "../../../agent-pool/mcp-engine-policy.js";
 import { McpPolicyApplyError } from "../../../agent-pool/mcp-codemode-runtime.js";
 import { createLogger, debugSuppressedError } from "../../../utils/logger.js";
+import { McpServerEditError, parseMcpServerEdit } from '../../../secure/mcp-server-edits.js';
 
 const log = createLogger("web.mcp-settings");
 const BASE = "/agent/settings/mcp";
-const MAX_BODY_BYTES = 2048;
 
 class RequestFailure extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -26,38 +26,32 @@ function ownerKey(principal: AuthenticatedPrincipal): string {
   return JSON.stringify([principal.kind, principal.userId, principal.role, principal.mode, principal.authentication]);
 }
 type ApplyInput = { policy: ReturnType<typeof parseMcpEnginePolicy>; revision: string; acknowledgeInterruptions: boolean };
+async function readBody(req: Request, maxBytes: number): Promise<unknown> {
+  if (!req.body) throw new RequestFailure(400, 'A JSON body is required.');
+  const reader = req.body.getReader(), chunks: Uint8Array[] = []; let used = 0;
+  let fail!: (error: unknown) => void;
+  const interrupted = new Promise<never>((_resolve, reject) => { fail = reject; });
+  const abort = () => fail(new RequestFailure(400, 'MCP settings request cancelled.'));
+  const timer = setTimeout(() => fail(new RequestFailure(408, 'MCP settings body timed out.')), 5000);
+  req.signal.addEventListener('abort', abort, { once: true }); if (req.signal.aborted) abort();
+  try {
+    for (;;) { const chunk = await Promise.race([reader.read().catch(() => { throw new RequestFailure(400, 'Could not read MCP settings body.'); }), interrupted]); if (chunk.done) break;
+      used += chunk.value.length; if (used > maxBytes) throw new RequestFailure(413, `MCP settings body exceeds ${maxBytes / 1024} KiB.`); chunks.push(chunk.value); }
+    const bytes = new Uint8Array(used); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+    try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); } catch { throw new RequestFailure(400, 'Invalid MCP settings JSON.'); }
+  } finally { clearTimeout(timer); req.signal.removeEventListener('abort', abort); void reader.cancel().catch(error => debugSuppressedError(log, 'MCP settings reader cancellation failed.', error)); try { reader.releaseLock(); } catch (error) { debugSuppressedError(log, 'MCP settings reader release deferred.', error); } }
+}
 async function readPolicy(req: Request, apply: true): Promise<ApplyInput>;
 async function readPolicy(req: Request, apply: false): Promise<ReturnType<typeof parseMcpEnginePolicy>>;
 async function readPolicy(req: Request, apply: boolean): Promise<ApplyInput | ReturnType<typeof parseMcpEnginePolicy>> {
-  if (!req.body) throw new RequestFailure(400, "A JSON policy body is required.");
-  const reader = req.body.getReader();
-  const bytes = new Uint8Array(MAX_BODY_BYTES); let used = 0;
-  let reject!: (error: RequestFailure) => void;
-  const interrupted = new Promise<never>((_resolve, fail) => { reject = fail; });
-  const abort = () => reject(new RequestFailure(400, "MCP preview request cancelled."));
-  const timer = setTimeout(() => reject(new RequestFailure(408, "MCP preview body timed out.")), 5000);
-  req.signal.addEventListener("abort", abort, { once: true });
-  if (req.signal.aborted) abort();
+  const body = await readBody(req, 2048);
   try {
-    for (;;) {
-      const chunk = await Promise.race([reader.read().catch(() => { throw new RequestFailure(400, "Could not read MCP preview body."); }), interrupted]);
-      if (chunk.done) break;
-      if (used + chunk.value.length > bytes.length) throw new RequestFailure(413, "MCP preview body exceeds 2 KiB.");
-      bytes.set(chunk.value, used); used += chunk.value.length;
-    }
-    try {
-      const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, used)));
+      const value = body as Record<string, unknown> | null;
       if (!apply) return parseMcpEnginePolicy(value);
       if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(key => !["policy", "revision", "acknowledgeInterruptions"].includes(key))
         || typeof value.revision !== "string" || value.revision.length > 128 || value.acknowledgeInterruptions !== true) throw new Error("Invalid apply body.");
       return { policy: parseMcpEnginePolicy(value.policy), revision: value.revision, acknowledgeInterruptions: true };
-    }
-    catch { throw new RequestFailure(400, "Expected only engine (adapter/native) and codemode (auto/on/off)."); }
-  } finally {
-    clearTimeout(timer); req.signal.removeEventListener("abort", abort);
-    void reader.cancel().catch(error => debugSuppressedError(log, "MCP preview reader cancellation failed.", error));
-    try { reader.releaseLock(); } catch (error) { debugSuppressedError(log, "MCP preview reader release deferred.", error); }
-  }
+  } catch { throw new RequestFailure(400, "Expected only engine (adapter/native) and codemode (auto/on/off)."); }
 }
 
 /** Owner-only preview and revision-fenced codemode application. */
@@ -72,6 +66,17 @@ export async function handleMcpSettings(channel: WebChannelLike, req: Request, u
     // boundary. Re-resolve only after body I/O and before publishing.
     if (req.signal.aborted) throw new RequestFailure(400, "MCP preview request cancelled.");
     if (url.search) throw new RequestFailure(400, "MCP instance settings do not accept query parameters.");
+    if (url.pathname === `${BASE}/servers` || url.pathname.startsWith(`${BASE}/servers/`)) {
+      if (req.method === 'GET' && url.pathname === `${BASE}/servers`) { const payload = channel.agentPool.inspectMcpServers(); check(); return reply(payload); }
+      if (req.method !== 'POST') throw new RequestFailure(405, 'Method not allowed.');
+      const value = await readBody(req, 64 * 1024); check();
+      if (url.pathname === `${BASE}/servers/preview`) { const payload = channel.agentPool.inspectMcpServers(parseMcpServerEdit(value)); check(); return reply(payload); }
+      if (url.pathname !== `${BASE}/servers/apply`) throw new RequestFailure(405, 'Method not allowed.');
+      const input = value as Record<string, unknown> | null;
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['revision','acknowledgeInterruptions'].includes(key))
+        || typeof input.revision !== 'string' || input.revision.length > 128 || input.acknowledgeInterruptions !== true) throw new RequestFailure(400, 'Invalid MCP server Apply request.');
+      const payload = await channel.agentPool.applyMcpServers({ revision: input.revision as string, acknowledgeInterruptions: true }, check, req.signal); check(); return reply(payload);
+    }
     const preview = req.method === "POST" && url.pathname === `${BASE}/preview`;
     const apply = req.method === "POST" && url.pathname === `${BASE}/apply`;
     if (!preview && !apply && !(req.method === "GET" && url.pathname === BASE)) throw new RequestFailure(405, "Method not allowed.");
@@ -83,6 +88,7 @@ export async function handleMcpSettings(channel: WebChannelLike, req: Request, u
   } catch (error) {
     if (error instanceof RequestFailure) return reply({ ok: false, error: error.message }, error.status);
     if (error instanceof McpPolicyApplyError) return reply({ ok: false, error: error.message }, error.status);
+    if (error instanceof McpServerEditError) return reply({ ok: false, error: error.message }, 422);
     return reply({ ok: false, error: "MCP settings are unavailable; check instance configuration." }, 503);
   }
 }

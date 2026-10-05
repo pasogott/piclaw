@@ -40,7 +40,7 @@ import { SESSIONS_DIR, getRuntimeRoot, getSessionPersistenceConfig, getWorkspace
 import { buildChannelSystemPromptAppendix } from "../channels/formatting.js";
 import { detectChannel } from "../router.js";
 import { createBuiltinExtensionFactories } from "../extensions/index.js";
-import { assertSelectedMcpOwner, bindMcpCodemodePolicy, mcpCodemodeExtension } from "./mcp-codemode-runtime.js";
+import { assertMcpOwnerConstruction, bindMcpCodemodePolicy, mcpCodemodeExtension } from "./mcp-codemode-runtime.js";
 import { readAccessConfig } from '../core/config-access.js';
 import { requireOwnedSessionExecution } from './owned-session-access.js';
 import { familySessionModelOptions } from './family-model-defaults.js';
@@ -606,7 +606,7 @@ export async function createSessionInDir(
     sessionStartEvent?: SessionStartEvent;
   }) => {
     if (mode === 'family-shared' && !requireOwnedSessionExecution(options.chatJid!)) throw new Error('Owned family session identity is required.');
-    if (!operationProfile) assertSelectedMcpOwner();
+    if (!operationProfile) assertMcpOwnerConstruction();
     const mcpOwner = operationProfile ? null : createMcpBridgeOwner((bridge, onLifecycle) => createMcpAdapter({
       config: bridge.config,
       initializeOnLoad: false,

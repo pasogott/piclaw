@@ -286,6 +286,10 @@ export function createKnownModelCostResolver(agentDir: string): (provider: strin
  */
 export class AgentPool {
   inspectMcpSettings(policy?: unknown) { return this.mcpSettings.inspect(policy); }
+  inspectMcpServers(edit?: unknown) { return this.mcpSettings.inspectServers(edit); }
+  applyMcpServers(input: { revision: string; acknowledgeInterruptions: boolean }, authorise: () => void, signal: AbortSignal) {
+    return this.mcpSettings.applyServers(input, authorise, signal);
+  }
   applyMcpSettings(input: { policy: unknown; revision: string; acknowledgeInterruptions: boolean }, authorise: () => void) {
     return this.mcpSettings.apply(input, authorise);
   }

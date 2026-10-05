@@ -5,6 +5,42 @@ const log = createLogger("mcp-bridge-owner");
 
 const OWNER_NAME = "piclaw-mcp-owner";
 const OWNER_PATH = `<inline:${OWNER_NAME}>`;
+const shutdownAdmissions = new WeakMap<object, (signal: AbortSignal) => Promise<void>>();
+type ReloadOptions = Parameters<AgentSession['reload']>[0];
+const reloadAdmissions = new WeakMap<object, (options: ReloadOptions, signal: AbortSignal) => Promise<void>>();
+const resumeAdmissions = new WeakMap<object, () => void>();
+export interface McpShutdownReceipt { readonly acknowledged: true }
+const shutdownReceipts = new WeakMap<McpShutdownReceipt, { sessions: readonly object[]; signal: AbortSignal }>();
+
+/** Host settings transitions await every old owner before any new config load. */
+export function acknowledgeMcpSessionShutdown(session: object, signal: AbortSignal): Promise<void> {
+  const admission = shutdownAdmissions.get(session);
+  if (!admission) return Promise.reject(new Error('MCP session has no acknowledged owner binding.'));
+  return admission(signal);
+}
+
+/** Only a complete captured participant set may grant one replacement batch. */
+export async function acknowledgeMcpSessionsShutdown(sessions: readonly object[], signal: AbortSignal): Promise<McpShutdownReceipt> {
+  const captured = [...new Set(sessions)];
+  await Promise.all(captured.map(session => acknowledgeMcpSessionShutdown(session, signal)));
+  signal.throwIfAborted();
+  const receipt = Object.freeze({ acknowledged: true as const });
+  shutdownReceipts.set(receipt, { sessions: captured, signal });
+  return receipt;
+}
+export async function reloadAcknowledgedMcpSessions(receipt: McpShutdownReceipt, options: ReloadOptions): Promise<void> {
+  const captured = shutdownReceipts.get(receipt);
+  if (!captured) throw new Error('MCP replacement batch is not authorized.');
+  captured.signal.throwIfAborted();
+  shutdownReceipts.delete(receipt);
+  await Promise.all(captured.sessions.map(session => {
+    const reload = reloadAdmissions.get(session);
+    if (!reload) throw new Error('MCP session replacement binding is unavailable.');
+    return reload(options, captured.signal);
+  }));
+  captured.signal.throwIfAborted();
+  for (const session of captured.sessions) resumeAdmissions.get(session)!();
+}
 
 export interface McpOwnerLifecycle {
   shutdown(reason?: string): Promise<void>;
@@ -97,6 +133,15 @@ export function createMcpBridgeOwner(
       if (disposed || cleanupFailed) throw new Error("MCP owner is disposed or cleanup is unresolved; operations remain blocked.");
     },
     async shutdown(reason?: string) { await active?.shutdown(reason); },
+    async shutdownAndRelease(reason: string, signal: AbortSignal) {
+      const generation = active;
+      await generation?.shutdown(reason);
+      signal.throwIfAborted();
+      if (disposed || cleanupFailed) throw new Error('MCP owner cleanup is unresolved; operations remain blocked.');
+      // Fulfilled acknowledgement is the only release proof. SDK shutdown
+      // later calls this generation's idempotent release again during reload.
+      generation?.release();
+    },
     dispose() {
       disposed = true;
       const generation = active;
@@ -120,15 +165,17 @@ export function bindMcpBridgeOwner(
   const reload = session.reload.bind(session);
   const prompt = session.prompt.bind(session);
   let reloading = false;
+  let transitioning = false;
+  let transitionAcknowledged = false;
   const admittedPrompts = new Set<Promise<void>>();
   session.prompt = (...args) => {
     owner.assertAdmission();
-    if (reloading) throw new Error("MCP owner reload is in progress; operations remain blocked.");
+    if (reloading || transitioning) throw new Error("MCP owner reload is in progress; operations remain blocked.");
     // Register before invocation: SDK input/auth/extension preflight precedes
     // its active-agent flag, so abort/isIdle cannot certify prompt quiescence.
     const pending = Promise.resolve().then(() => {
       owner.assertAdmission();
-      if (reloading) throw new Error("MCP owner reload is in progress; operations remain blocked.");
+      if (reloading || transitioning) throw new Error("MCP owner reload is in progress; operations remain blocked.");
       return prompt(...args);
     });
     admittedPrompts.add(pending);
@@ -141,10 +188,31 @@ export function bindMcpBridgeOwner(
     try { dispose(); }
     finally { owner.dispose(); }
   };
-  session.reload = async options => {
+  shutdownAdmissions.set(session, async signal => {
+    if (reloading || transitioning) throw new Error('MCP owner transition is already in progress.');
+    signal.throwIfAborted(); owner.assertAdmission(); transitioning = true;
+    let rejectAbort!: (error: unknown) => void;
+    const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject; });
+    const onAbort = () => rejectAbort(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    try {
+      await Promise.race([session.abort(), aborted]);
+      // Agent idle does not prove preflight/auth or extension-command tails
+      // settled. The synchronous fence stops new admissions before this drain.
+      await Promise.race([Promise.allSettled([...admittedPrompts]), aborted]);
+      signal.throwIfAborted(); owner.assertAdmission();
+      await Promise.race([owner.shutdownAndRelease('Piclaw MCP server settings', signal), aborted]);
+      signal.throwIfAborted(); owner.assertAdmission();
+      transitionAcknowledged = true;
+    } catch (error) { owner.blockAdmission(); throw error; }
+    finally { signal.removeEventListener('abort', onAbort); }
+  });
+  const reloadBound = async (options: ReloadOptions, transitionSignal?: AbortSignal) => {
     // The SDK reload and resource loader both mutate shared session state.
     // Reject rather than queue: a barrier can itself try to reload.
     if (reloading) throw new Error("MCP bridge owner reload is already in progress.");
+    if (transitioning && (!transitionAcknowledged || !transitionSignal)) throw new Error('MCP owner settings transition requires its authorized replacement batch.');
+    transitionSignal?.throwIfAborted();
     // Reject instead of self-draining: commands inside an admitted prompt may
     // request reload, and its own preflight cannot await itself.
     if (admittedPrompts.size) throw new Error("MCP owner reload is blocked until admitted prompts settle.");
@@ -152,18 +220,36 @@ export function bindMcpBridgeOwner(
     try {
       owner.assertAdmission();
       await session.abort();
+      transitionSignal?.throwIfAborted();
       owner.assertAdmission();
       await owner.shutdown("Piclaw MCP owner reload");
       owner.assertAdmission();
+      let reachedStart = false;
       await reload({ ...options, beforeSessionStart: async () => {
+        reachedStart = true;
         assertLoaded();
+        transitionSignal?.throwIfAborted();
         await options?.beforeSessionStart?.();
+        transitionSignal?.throwIfAborted();
         assertLoaded();
       } });
+      // Public SDK does not call this hook for unbound sessions. A host
+      // transition must not certify successful activation without the gate.
+      if (transitionSignal && !reachedStart) throw new Error('MCP replacement did not reach its startup barrier.');
       assertLoaded();
+      if (!transitionSignal) {
+        transitioning = false;
+        transitionAcknowledged = false;
+      }
     } catch (error) {
       owner.blockAdmission();
+      // A cancelled replacement can finish resource loading after the host
+      // already quarantined its runtime. Retire that late owner as well.
+      if (transitionSignal) owner.dispose();
       throw error;
     } finally { reloading = false; }
   };
+  session.reload = options => reloadBound(options);
+  reloadAdmissions.set(session, (options, signal) => reloadBound(options, signal));
+  resumeAdmissions.set(session, () => { transitioning = false; transitionAcknowledged = false; });
 }

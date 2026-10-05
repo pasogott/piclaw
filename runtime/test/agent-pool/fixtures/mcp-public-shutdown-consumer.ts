@@ -4,13 +4,13 @@ import { join } from "node:path";
 import { createRequire } from "node:module";
 import { createAgentSession, createAgentSessionRuntime, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
-import { createMcpBridgeOwner, bindMcpBridgeOwner } from "../../../src/agent-pool/mcp-bridge-owner.js";
+import { acknowledgeMcpSessionsShutdown, reloadAcknowledgedMcpSessions, createMcpBridgeOwner, bindMcpBridgeOwner, type McpShutdownReceipt } from "../../../src/agent-pool/mcp-bridge-owner.js";
 import { acquireMcpSessionBridge, hydrateMcpKeychainCredentials, resetMcpStartupStateForTests } from "../../../src/secure/mcp-keychain.js";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { createLogger, debugSuppressedError } from "../../../src/utils/logger.js";
 const log = createLogger("mcp-public-shutdown-fixture");
 const mode = process.argv[2], root = process.argv[3]!;
-assert(["success", "close-failure"].includes(mode));
+assert(["success", "settings-reload", "close-failure"].includes(mode));
 const require = createRequire(import.meta.url);
 const { createMcpAdapter, MCP_STATUS_EVENT } = require("pi-mcp-adapter") as { MCP_STATUS_EVENT: string; createMcpAdapter(options: { config: unknown; initializeOnLoad: boolean; resolveRuntimeEnv(name: string): Readonly<NodeJS.ProcessEnv>; onLifecycle(handle: { shutdown(reason?: string): Promise<void> }): void }): ExtensionFactory };
 let connected = 0;
@@ -59,10 +59,21 @@ try {
     assert.deepEqual(pids(), [oldPid]);
     console.log(JSON.stringify({ mode, status: "pass", sdk: "1.0.2", externalNetwork, providerExecution: false, singleOwner: true, replacementDenied: true, promptDenied: true, scopedLeaseHeld: true }));
   } else {
-    await session.reload(); assert.deepEqual(extensionErrors, []); await wait(() => pids().length === 1 && pids()[0] !== oldPid && connected >= 2, "replacement");
+    let receipt: McpShutdownReceipt | undefined;
+    if (mode === 'settings-reload') {
+      receipt = await acknowledgeMcpSessionsShutdown([session], new AbortController().signal);
+      assert(!alive(oldPid)); assert.equal(leases[0].releaseCount, 1);
+      assert.equal(leases[0].env().SYNTHETIC_BEARER, undefined);
+      await hydrateMcpKeychainCredentials(root, () => ({ secret: 'replacement-synthetic-value' } as any));
+      assert.equal(leases.length, 1); assert.deepEqual(pids(), []);
+    }
+    if (receipt) await reloadAcknowledgedMcpSessions(receipt, {}); else await session.reload();
+    assert.deepEqual(extensionErrors, []); await wait(() => pids().length === 1 && pids()[0] !== oldPid && connected >= 2, "replacement");
     assert(!alive(oldPid)); assert.equal(leases[0].releaseCount, 1); assert.equal(leases.length, 2);
     assert.equal(session.sessionId, identity); assert.equal(JSON.stringify(session.sessionManager.getEntries()), history);
-    console.log(JSON.stringify({ mode, status: "pass", sdk: "1.0.2", externalNetwork, providerExecution: false, singleOwner: true, historyPreserved: true, oldClosedBeforeNew: true }));
+    if (mode === 'settings-reload') assert.equal(leases[1].env().SYNTHETIC_BEARER, 'replacement-synthetic-value');
+    console.log(JSON.stringify({ mode, status: "pass", sdk: "1.0.2", externalNetwork, providerExecution: false, singleOwner: true, historyPreserved: true, oldClosedBeforeNew: true,
+      ...(mode === 'settings-reload' ? { oldLeaseReleasedBeforeHydration: true, replacementCredentialGeneration: true } : {}) }));
   }
   assert.equal(externalNetwork, 0);
 } finally {
