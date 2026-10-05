@@ -3,9 +3,9 @@
   "baseMain": "62a71d139",
   "adapter": "dddfcf630508f42c169889c11dee94e69b746e7c",
   "focused": {
-    "pass": 181,
+    "pass": 187,
     "fail": 0,
-    "assertions": 791,
+    "assertions": 800,
     "files": 14
   },
   "browser": {
@@ -122,7 +122,8 @@
     "Stdio program identity includes executable,args,cwd and preserved env/argument credential values",
     "Private rename receipt fences committed/lower source bytes+identities and exactapprovedeffectivehash throughhydration/start",
     "Cross-field/key/formatted reference identity and opaque privatepayload rebinding failclosed",
-    "Actual publicPi unpreviewed postrename process-start denial"
+    "Actual publicPi unpreviewed postrename process-start denial",
+    "URL/command/cwd/socket/all nested reference leaves scanned; argument/env/URL→URL relocation denied"
   ],
   "stoppedFullV2": {
     "head": "0092fab81e4e46b9c2155b2ddbc6f5365d6f4be8",

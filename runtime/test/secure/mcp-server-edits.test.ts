@@ -61,3 +61,6 @@ for(const [original,projected] of [
 ])test('opaque credential payload must be cleared before a destination change regardless of formatting',()=>{
  expect(()=>assertMcpServerCredentialBinding(original,projected)).toThrow('inherited_credentials');
 });
+for(const original of [{command:'old',args:['${TOKEN}']},{command:'old',env:{LABEL:'${TOKEN}'}},{url:'https://old.test/mcp?value=${TOKEN}'}])test('retained credential reference cannot move into an innocuously named URL query',()=>{
+ expect(()=>assertMcpServerCredentialBinding(original,{url:'https://replacement.test/mcp?value=${TOKEN}'})).toThrow('inherited_credentials');
+});

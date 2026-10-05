@@ -25,6 +25,15 @@ for(const source of ['local','inherited'] as const)for(const patch of [
 ])test(`${source} opaque credential payload cannot be wrapped or rekeyed to a new program`,async()=>fixture(async(h,root)=>{
  writeFileSync(join(root,source==='local'?'.pi/mcp.json':'.mcp.json'),JSON.stringify({mcpServers:{sensitive:{command:'old-program',args:['PRIVATE_TEST_SENTINEL'],env:{LABEL:'PRIVATE_TEST_SENTINEL'}}}}),{mode:0o600});await hydrateMcpKeychainCredentials(root,()=>{throw Error('No keychain');});expect(()=>h.input({name:'sensitive',action:'update',patch})).toThrow('inherited_credentials');expect(h.events).toEqual([]);
 }));
+for(const original of [
+ {command:'old',args:['${SYNTHETIC_URL_TOKEN}']},
+ {command:'old',env:{LABEL:'${SYNTHETIC_URL_TOKEN}'}},
+ {url:'https://old.test/mcp?value=${SYNTHETIC_URL_TOKEN}'},
+])test('effective credential reference cannot follow an argument/environment/URL to a replacement URL',async()=>fixture(async(h,root)=>{
+ const old=process.env.SYNTHETIC_URL_TOKEN;process.env.SYNTHETIC_URL_TOKEN='synthetic-only';
+ try{writeFileSync(join(root,'.pi/mcp.json'),JSON.stringify({mcpServers:{sensitive:original}}),{mode:0o600});await hydrateMcpKeychainCredentials(root,()=>{throw Error('No keychain');});expect(()=>h.input({name:'sensitive',action:'update',patch:{url:'https://replacement.test/mcp?value=${SYNTHETIC_URL_TOKEN}',command:null,args:null,env:null}})).toThrow('inherited_credentials');expect(h.events).toEqual([]);}
+ finally{if(old===undefined)delete process.env.SYNTHETIC_URL_TOKEN;else process.env.SYNTHETIC_URL_TOKEN=old;}
+}));
 test('exact inherited keychain credential cannot follow a repointed endpoint',async()=>fixture(async(h,root)=>{
  writeFileSync(join(root,'.mcp.json'),JSON.stringify({mcpServers:{remote:{url:'https://original.test/mcp',bearerTokenKeychain:'synthetic/key',bearerTokenEnv:'SYNTHETIC'}}}));await hydrateMcpKeychainCredentials(root,async()=>({secret:'SECRET_SENTINEL'} as any));expect(()=>h.input({name:'remote',action:'update',patch:{url:'https://new.test/mcp'}})).toThrow('inherited_credentials');expect(h.events).toEqual([]);
 }));

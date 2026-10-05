@@ -160,7 +160,9 @@ function credentialReferences(definition: Record<string, unknown>): Set<string> 
     } else if (Array.isArray(value)) value.forEach(visit);
     else if (record(value)) Object.values(value).forEach(visit);
   };
-  for (const field of [...CREDENTIAL_FIELDS, 'args']) visit(definition[field]);
+  // Adapter resolution is not confined to auth-labelled fields: URLs,
+  // commands/cwd/socket and nested values can interpolate the same identity.
+  visit(definition);
   if (typeof definition.bearerTokenEnv === 'string') references.add(`env:${definition.bearerTokenEnv}`);
   if (typeof definition.bearerTokenKeychain === 'string') references.add(`keychain:${definition.bearerTokenKeychain}`);
   return references;
@@ -171,7 +173,12 @@ function hasOpaqueCredentialPayload(definition: Record<string, unknown>): boolea
     if (Array.isArray(value)) return value.some(opaque);
     return record(value) && Object.values(value).some(opaque);
   };
-  return ['args','env','headers','bearerToken','oauth','requestHeadersCommand'].some(field => opaque(definition[field]));
+  if (['args','env','headers','bearerToken','oauth','requestHeadersCommand'].some(field => opaque(definition[field]))) return true;
+  if (typeof definition.url === 'string') {
+    try { const url = new URL(definition.url); return !!url.username || !!url.password || [...url.searchParams.values()].some(opaque); }
+    catch { return true; }
+  }
+  return false;
 }
 /** Omission from a local layer is not an inherited credential clear. Reject
  * repointing until the exact projected effective definition proves it safe. */
