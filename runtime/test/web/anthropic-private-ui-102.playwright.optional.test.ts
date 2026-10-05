@@ -38,7 +38,7 @@ beforeAll(async () => {
   expect(status).toMatch(/NoNewPrivs:\s+1(?:\n|$)/);
   expect(status).toMatch(/Groups:\s*\n/);
   const packageRoot = fileURLToPath(new URL("..", import.meta.resolve("@earendil-works/pi-ai")));
-  expect(JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")).version).toBe("1.0.1");
+  expect(JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")).version).toBe("1.0.2");
   expect(createHash("sha256").update(readFileSync(join(packageRoot, "dist/auth/oauth/anthropic.js"))).digest("hex")).toBe("80fc4412ce09d42d678f5094932f3e58eecec53df40c4530fc4f55651a57d0a4");
   const built = await Bun.build({ entrypoints: [resolve(import.meta.dir, "fixtures/provider-auth-ui-matrix.ts")], target: "browser", format: "esm" });
   if (!built.success) throw new Error("Provider auth fixture did not build");
@@ -50,7 +50,7 @@ beforeAll(async () => {
 
 for (const [name, engine] of Object.entries({ chromium, webkit })) {
   for (const scenario of ["success", "denial-retry", "bad-state", "cancel-prompt", "cancel-exchange"]) {
-    browserTest(`${name}: Pi 1.0.1 builtin Anthropic copy-code private UI and recording ${scenario}`, async () => {
+    browserTest(`${name}: Pi 1.0.2 builtin Anthropic copy-code private UI and recording ${scenario}`, async () => {
       const ws = createTempWorkspace("provider-auth-ui-");
       const originalFetch = globalThis.fetch;
       let tokenRequests = 0, unexpectedNetwork = 0, transportAborted = false, privateResponses = 0;
@@ -290,7 +290,7 @@ for (const [name, engine] of Object.entries({ chromium, webkit })) {
         cancelProviderAuthFlows(session as any);
         await Bun.sleep(100);
         for (const secret of sensitive) expect(JSON.stringify(logs)).not.toContain(secret);
-        console.log("ANTHROPIC_PRIVATE_UI=" + JSON.stringify({ browser: name, scenario, version: "1.0.1", tokenRequests, unexpectedNetwork, transportAborted,
+        console.log("ANTHROPIC_PRIVATE_UI=" + JSON.stringify({ browser: name, scenario, version: "1.0.2", tokenRequests, unexpectedNetwork, transportAborted,
           modelActivated: session.model.id !== "gpt-test", privateHeadersChecked: privateResponses > 0, allChatRowsChecked: true,
           fullRecordingAndExportsChecked: true, redactionFallback: false, callbackListenerObserved: false, inference: "not_invoked" }));
       } finally {

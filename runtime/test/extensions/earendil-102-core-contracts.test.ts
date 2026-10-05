@@ -5,14 +5,14 @@ import {isModelType} from '@earendil-works/pi-ai';
 import {getBuiltinModels} from '@earendil-works/pi-ai/providers/all';
 import {createMcpExtension,createToolSearchExtension,createCodemodeExtension} from '@earendil-works/pi-coding-agent';
 const root=resolve(import.meta.dir,'../../..'),pkg=JSON.parse(readFileSync(resolve(root,'package.json'),'utf8')),lock=readFileSync(resolve(root,'bun.lock'),'utf8');
-test('exact 1.0.1 package and lock closure retains adapter ownership',()=>{
- for(const name of ['@earendil-works/pi-agent-core','@earendil-works/pi-ai','@earendil-works/pi-coding-agent'])expect(pkg.dependencies[name]).toBe('1.0.1');
+test('exact 1.0.2 package and lock closure retains adapter ownership',()=>{
+ for(const name of ['@earendil-works/pi-agent-core','@earendil-works/pi-ai','@earendil-works/pi-coding-agent'])expect(pkg.dependencies[name]).toBe('1.0.2');
  // Parse Bun's JSON-with-trailing-delimiters lock and inspect package values.
  const parsed=JSON.parse(lock.replace(/,\s*([}\]])/g,'$1'));
  const family=['chord','pi-agent-core','pi-ai','pi-codemode','pi-coding-agent','pi-mcp','pi-telemetry','pi-tui'].map(name=>'@earendil-works/'+name);
  const resolved=Object.values(parsed.packages).map((entry:any)=>entry[0] as string).filter(id=>family.some(name=>id.startsWith(name+'@')));
- expect(resolved.sort()).toEqual(family.map(name=>name+'@1.0.1').sort());
- expect(parsed.workspaces[''].dependencies['@earendil-works/chord']).toBe('1.0.1');
+ expect(resolved.sort()).toEqual(family.map(name=>name+'@1.0.2').sort());
+ expect(parsed.workspaces[''].dependencies['@earendil-works/chord']).toBe('1.0.2');
  expect(pkg.dependencies['pi-mcp-adapter']).toBe('github:piclaw-bot/pi-mcp-adapter#dddfcf630508f42c169889c11dee94e69b746e7c');
  const session=readFileSync(resolve(root,'runtime/src/agent-pool/session.ts'),'utf8');expect(session).toContain('initializeOnLoad: false');expect(session).toContain('resolveRuntimeEnv');
  for(const factory of ['createMcpExtension','createToolSearchExtension','createCodemodeExtension'])expect(session).not.toContain(factory);

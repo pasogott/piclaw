@@ -84,6 +84,9 @@ const EXACT_100_PROVIDER_RECEIPT_SHA256 = "4c66f1e7d9276bc39207fb508bca0e0a17b09
 const EXACT_101_VERSION = "1.0.1";
 const EXACT_101_GIT_HEAD = "a7229ddc21810d6245105978033b7df645ecc2f7";
 const EXACT_101_PROVIDER_RECEIPT_SHA256 = "b56b0bdd98ebbdca8c178e922b85a00601c4c6e966df430a22fa34f99adb5f16";
+const EXACT_102_VERSION = "1.0.2";
+const EXACT_102_GIT_HEAD = "cd32f7725fdbddbaecdff5b1e68491563394e0ca";
+const EXACT_102_PROVIDER_RECEIPT_SHA256 = "3b09ca73dbb70a64646f57809bb2129e4b01b235da06d895966580d91a39553c";
 const NODE_ENGINE = ">=22.19.0";
 const EXACT_0991_REGISTRY = {
   "@earendil-works/chord": ["7f6ba945b705a5ab48d25dbed39b253afcec68df", "sha512-4xyn0IBzJ+Xu/iOGi2hjXJGAR61QEhEWZsIqTDqr+GmItdquYwBO5jYFnqGiBaTqlY12/EpM7QHoEKSHbyvOug=="],
@@ -116,6 +119,41 @@ const EXACT_101_REGISTRY = {
   "@earendil-works/pi-mcp": ["5d45ee65f5b41cd9fffc4d78d4b630ad9771f61f", "sha512-XuhcCpNT9FgsMQTzjmwy2hbakg9CODcDHtC+KeHfr37HjKdj4QsfOrOThxLXYRN4kmC5HDvFyLzthAnHe/T4jw=="],
   "@earendil-works/pi-telemetry": ["2aa53cd944f9e60920d2d648be279af786d1b5a8", "sha512-SuJ/4KyqZ6j6Whlau710DmusWDKMWCxKXpWqZclY/Cl3tGUuX8IFmbTbW2VRoVuoJpZYVMg6DJmt1mwHMUt9uw=="],
   "@earendil-works/pi-tui": ["ea6cbc09db36f0ea6486e7d8e239f11713bcd025", "sha512-Rk/pWLoDKWI7WvywhLxf+DTYppS7XWTN5IacpqlD+QF+CbrT/y5CCnAHqPEoF41y+XtQJKbNjjzUuJE4yq0Dfg=="],
+} as const satisfies Record<(typeof FAMILY_PACKAGES)[number], readonly [string, string]>;
+
+const EXACT_102_REGISTRY = {
+  "@earendil-works/chord": [
+    "481516ce8b3c32c3d3f2175a4e61c46bc91f7f23",
+    "sha512-eUXGZjigyEQsFiT/oBJUOaCrzYZRmqf8AgLrlbyuS4u02hjSVhLYRi3xqk1o4UERCgRfjRegqwj/oucawIR7YQ=="
+  ],
+  "@earendil-works/pi-agent-core": [
+    "3c4925221694722007e26762310ee5c5e682dd7a",
+    "sha512-VRfewY1R5mbedJzlm01PxdCmqU8QrSXjXXhV50bp6rvVuT8YYQv1inTXRY4YzssmGAYpkC2rXipJKP5BpBFXew=="
+  ],
+  "@earendil-works/pi-ai": [
+    "491b32ed7dd8e333a58a55dfc18ff61e31bc43c9",
+    "sha512-JP59xGlSAQ/HhQ6EHN5qmneBlWfDyu6FPPryAvAaSo8A38ubAsEpS9YisCM5Jbbns0srrDffLZonE0OXorHI5A=="
+  ],
+  "@earendil-works/pi-codemode": [
+    "2bb448ee639e7db6317d878798631b91c248bbcd",
+    "sha512-tvfDSVz984ra/4y/hIFmYGpP5ojC+C6/ey+DNbjTzfJvbXviW4JYTXwVcm33KAceI0xcOuE+P1yRGLtQgis0/w=="
+  ],
+  "@earendil-works/pi-coding-agent": [
+    "aba0009c736a1de4e045665acceb017cdb791371",
+    "sha512-3ZdIghMSELMGV3sKi5iASOb1Jwb696fLjmNu0aezaqDxTLLWWoRpqBYkGxJ1CgAMCbtfqXWEF0lcRrlVXmiEGQ=="
+  ],
+  "@earendil-works/pi-mcp": [
+    "a48b3b1e83281076a1de7e15fd1c8b4a91171782",
+    "sha512-ED3+q41xLQkxzdadZIQy68SLYcqCJbve8iGbGkZoWjPJ9OZCPHTKcof24fjMO1LfnbIl1uMfhRBueS6IfdiCbQ=="
+  ],
+  "@earendil-works/pi-telemetry": [
+    "4abc269759cbc6fa434b252d5789003947b828a4",
+    "sha512-Ev5h9TE8nEXHCfRKhWj0qpUFhQgVqNteS95vsM2KNGRGm533vOO2ruDPaEwImBKPMBKXy4omz3D6V2cm41gLOQ=="
+  ],
+  "@earendil-works/pi-tui": [
+    "0169e89755e3bc7d9b5df2760032f84991f183e7",
+    "sha512-ElfzjnckohEjzHK5Q5iOpqLpQ1YbM/c/XmjBdPVR5k4uoorQPnny5BtT+rvC0cAjVVCUOHWAWppust7FAaEsOQ=="
+  ]
 } as const satisfies Record<(typeof FAMILY_PACKAGES)[number], readonly [string, string]>;
 
 const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] as const;
@@ -360,7 +398,7 @@ function modernContractRequired(version: string): boolean {
 }
 
 function isCurrentLoopVersion(version: string): boolean {
-  return version === EXACT_100_VERSION || version === EXACT_101_VERSION;
+  return version === EXACT_100_VERSION || version === EXACT_101_VERSION || version === EXACT_102_VERSION;
 }
 
 function packagesForVersion(version: string): readonly string[] {
@@ -377,6 +415,7 @@ export function validateProviderAuthReceipt(pathInput: string, version: string, 
   if(version===EXACT_0991_VERSION&&createHash("sha256").update(bytes).digest("hex")!==EXACT_0991_PROVIDER_RECEIPT_SHA256) throw new Error("provider auth receipt hash differs from exact 0.99.1 receipt");
   if(version===EXACT_100_VERSION&&createHash("sha256").update(bytes).digest("hex")!==EXACT_100_PROVIDER_RECEIPT_SHA256) throw new Error("provider auth receipt hash differs from exact 1.0.0 receipt");
   if(version===EXACT_101_VERSION&&createHash("sha256").update(bytes).digest("hex")!==EXACT_101_PROVIDER_RECEIPT_SHA256) throw new Error("provider auth receipt hash differs from exact 1.0.1 receipt");
+  if(version===EXACT_102_VERSION&&createHash("sha256").update(bytes).digest("hex")!==EXACT_102_PROVIDER_RECEIPT_SHA256) throw new Error("provider auth receipt hash differs from exact 1.0.2 receipt");
   const parsed = readJsonObject(path, "provider auth receipt");
   if (parsed.version !== version || parsed.gitHead !== gitHead || !Array.isArray(parsed.providers)) throw new Error("provider auth receipt version/gitHead/providers mismatch");
   const providers = parsed.providers.map((raw, index) => {
@@ -410,8 +449,8 @@ export function validateRegistryReceipt(pathInput: string, version: string, gitH
       ? { gitHead: EXACT_100_GIT_HEAD, packages: EXACT_100_REGISTRY }
       : version === EXACT_101_VERSION
         ? { gitHead: EXACT_101_GIT_HEAD, packages: EXACT_101_REGISTRY }
-        : null;
-  if (!target) throw new Error(`modern package admission supports exact ${EXACT_0991_VERSION}, ${EXACT_100_VERSION}, or ${EXACT_101_VERSION}, received ${version}`);
+        : version === EXACT_102_VERSION ? { gitHead: EXACT_102_GIT_HEAD, packages: EXACT_102_REGISTRY } : null;
+  if (!target) throw new Error(`modern package admission supports exact ${EXACT_0991_VERSION}, ${EXACT_100_VERSION}, ${EXACT_101_VERSION}, or ${EXACT_102_VERSION}, received ${version}`);
   if (gitHead !== target.gitHead) throw new Error(`${version} registry receipt requires gitHead ${target.gitHead}`);
 
   const seen = new Set<string>();
