@@ -27,7 +27,7 @@ test('released 1.0.3 cancellation rejects delivery but preserves late rotated re
   reopened.registerNativeProvider(provider);await reopened.refresh({allowNetwork:false});
   expect((await reopened.getAuth(provider.id))?.auth.apiKey).toBe(next.access);expect(refreshes).toBe(1);
  } finally {
-  release?.();await waiting?.catch(()=>{});
+  release?.();await waiting?.then(()=>({resolved:true}),error=>({resolved:false,error}));
   // A synthetic resolver may still hold the backing store after delivery
   // rejection; acquire its lock to drain refresh/persistence before cleanup.
   await credentials.read(provider.id);ws.cleanup();
