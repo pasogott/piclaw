@@ -129,5 +129,25 @@
     "Visualrawpostsvalidationbefore normalization",
     "Synchronousmutationfence/boundedretry; explicitolder-page retryUI",
     "continuitymetadatarebound/invalidateonhistoricalreplacement; actualVisualsearchpath middle-page regression"
-  ]
+  ],
+  "failedFull": {
+    "head": "77d362c7b4fc00178feee86485f59339fc22323d",
+    "pass": 6466,
+    "skip": 8,
+    "fail": 1,
+    "assertions": 42157,
+    "seconds": 636.42,
+    "logSha256": "415bf1f119eb150425c4afa8ba9d45d32a8357323bb32c7985c3e7c13fe839cc",
+    "qualifying": false
+  },
+  "fixtureCorrection": {
+    "productionChanged": false,
+    "originalTimeoutMilliseconds": 5000,
+    "assertions": 10,
+    "pass": 2,
+    "realPublicModelRuntime": true,
+    "refreshOnCreate": false,
+    "ownedWorkspace": true,
+    "profileLogSha256": "9a32c7329fa30c18d178a9a1979bb6af681b977f321cf969c9c5ceefeab19bcd"
+  }
 }
