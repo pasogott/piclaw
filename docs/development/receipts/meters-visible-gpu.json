@@ -1,0 +1,65 @@
+{
+  "recordedAt": "2026-10-05T21:48:12.094Z",
+  "baseMain": "a446de1e0",
+  "focused": {
+    "pass": 44,
+    "fail": 0,
+    "assertions": 337,
+    "files": 4
+  },
+  "browser": {
+    "pass": 5,
+    "fail": 0,
+    "assertions": 114,
+    "files": 2
+  },
+  "webBuild": {
+    "pass": 9,
+    "assertions": 26
+  },
+  "sourceHashes": {
+    "runtime/web/src/components/intel-gpu-meters.ts": "c612c05caa8c117c3c66f823e3d577ba302a12c3492761dc3807a806c213ccfa",
+    "runtime/web/src/components/system-meters-hud.ts": "7a5e79061d960163f5cb1e47a394ca679e525260c5396dab0985fc0d30644833",
+    "runtime/web/static/visual/frontend/src/components/SystemStats.tsx": "61e85ae0a9a36732a849a4c7199db6bf367def0a3ae5535f5a50365d08bdd55c"
+  },
+  "logs": [
+    {
+      "log": "meters-visible-review-focus.log",
+      "sha256": "cb2cbd95374d8fb773e55b3a70aa9d9ae57d1e1f3ab0033474fdaea98f8849e2"
+    },
+    {
+      "log": "meters-visible-final-browser.log",
+      "sha256": "ecedbb3f2399a30fa73c4acb0070928f4e83de853521b84c70262365e8a8eb39"
+    },
+    {
+      "log": "meters-visible-review-types.log",
+      "sha256": "dfd0c6d3af373830a215c2274b74fba3950b6edffc950c5db83eccf51ae8e409"
+    },
+    {
+      "log": "meters-visible-final-build.log",
+      "sha256": "adfcb6ab2d27941daab0a2d07bc1aa3d66cf4579b8c366c717e23b3322eff945"
+    },
+    {
+      "log": "meters-visible-first-browser.log",
+      "sha256": "4f66b2099820ed84246cd07c60c38ff45ca2db1f35ddf1d3df39d13dde6135df"
+    },
+    {
+      "log": "meters-visible-expected-red.log",
+      "sha256": "cb28de8067c95515b172097c8fe81e9125ce042e439acf615a23c3c23c70285b"
+    },
+    {
+      "log": "meters-visible-freeze-focus.log",
+      "sha256": "ca68f695b688d4707883feffefa1d86f0fe328e2a75b03bc0256bbbc9e12fc7d"
+    },
+    {
+      "log": "meters-visible-freeze-browser.log",
+      "sha256": "79dd0b6d58e8625f653b103f3d06be98f8b97dce89b0c30c35cb6c6d40e17969"
+    },
+    {
+      "log": "meters-visible-freeze-types.log",
+      "sha256": "dfd0c6d3af373830a215c2274b74fba3950b6edffc950c5db83eccf51ae8e409"
+    }
+  ],
+  "scope": "frontendsource only; no collector/hardware/productionconfig/install/restart/liveGPU/provider changes",
+  "qualification": "focused/browser/type/lint passed; independentreview/frozenfull pending"
+}

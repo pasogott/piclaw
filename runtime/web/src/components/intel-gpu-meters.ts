@@ -150,17 +150,19 @@ function statusToneClass(status) {
         : 'is-unavailable';
 }
 
-export function normalizeIntelGpuSnapshots(input, options = {}) {
+export function normalizeGpuSnapshots(input, options = {}) {
     const snapshots = Array.isArray(input)
-        ? input.filter(s => s?.provider === 'intel-drm-fdinfo' && s?.driver === 'i915').slice(0, 8)
+        ? input.filter(s => s && typeof s.provider === 'string' && s.provider.trim() && s.disabled !== true && s.enabled !== false && s.status !== 'disabled').slice(0, 8)
         : [];
     const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
-    const lastSuccessAtMs = Number.isFinite(Number(options.lastSuccessAtMs)) ? Number(options.lastSuccessAtMs) : null;
+    const lastSuccessAtMs = toFiniteNumber(options.lastSuccessAtMs);
     const transportStale = lastSuccessAtMs !== null && nowMs - lastSuccessAtMs > INTEL_GPU_STALE_AFTER_MS;
 
     return snapshots.map((snapshot, index) => {
-        const id = String(snapshot?.id || `intel-gpu-${index}`);
-        const name = String(snapshot?.name || `Intel GPU ${index}`).trim() || `Intel GPU ${index}`;
+        const id = String(snapshot?.id || `gpu-${index}`);
+        const name = String(snapshot?.name || `GPU ${index}`).trim() || `GPU ${index}`;
+        const observedClients = snapshot.provider.endsWith('fdinfo')
+            || (snapshot?.memory?.used_bytes === undefined && snapshot?.memory?.resident_bytes !== undefined);
         const rawStatus = ['ok', 'partial', 'unavailable', 'stale'].includes(String(snapshot?.status))
             ? String(snapshot?.status)
             : 'unavailable';
@@ -194,7 +196,7 @@ export function normalizeIntelGpuSnapshots(input, options = {}) {
 
         const busyPercent = unavailable ? null : clampPercent(snapshot?.busy_percent);
         const residentBytes = (() => {
-            const number = unavailable ? null : toFiniteNumber(snapshot?.memory?.resident_bytes);
+            const number = unavailable ? null : toFiniteNumber(observedClients ? snapshot?.memory?.resident_bytes : snapshot?.memory?.used_bytes ?? snapshot?.memory?.resident_bytes);
             return number === null || number < 0 ? null : number;
         })();
         const totalBytes = (() => {
@@ -205,6 +207,7 @@ export function normalizeIntelGpuSnapshots(input, options = {}) {
             const number = toFiniteNumber(snapshot?.memory?.shared_bytes);
             return number === null || number < 0 ? null : number;
         })();
+        const deviceMemoryPercent = !observedClients && residentBytes !== null && totalBytes > 0 ? clampPercent(residentBytes / totalBytes * 100) : null;
 
         const coverage = {
             scope: String(snapshot?.coverage?.scope || 'observed-clients'),
@@ -220,13 +223,13 @@ export function normalizeIntelGpuSnapshots(input, options = {}) {
             ? [...reasons, 'UI refresh overdue.']
             : reasons;
         const busiestEngineLabel = busiestEngine?.label || null;
-        const coverageText = [
+        const coverageText = observedClients ? [
             `Observed clients: ${coverage.clients}`,
             `scanned processes: ${coverage.scannedProcesses}`,
             `unreadable processes: ${coverage.unreadableProcesses}`,
             `unreadable clients: ${coverage.unreadableClients}`,
             coverage.truncated ? 'scan truncated; best-effort visibility' : 'best-effort process visibility',
-        ].join(' • ');
+        ].join(' • ') : '';
 
         return {
             id,
@@ -243,25 +246,27 @@ export function normalizeIntelGpuSnapshots(input, options = {}) {
             reasons,
             effectiveReasons,
             busiestEngineLabel,
-            noVisibleClientsText: coverage.clients === 0 ? 'No visible clients (unavailable).' : '',
-            memoryWarningText: 'Client-reported GPU-backed resident sum may double count shared buffers, overlaps system RAM, and is not a VRAM% figure.',
+            noVisibleClientsText: observedClients && coverage.clients === 0 ? 'No visible clients.' : '',
+            memoryWarningText: observedClients ? 'Observed client memory may overlap system RAM and shared buffers; it is not dedicated VRAM usage.' : '',
             coverageText,
             engines,
             coverage,
             rows: {
-                gpuLabel: snapshots.length === 1 ? 'GPU*' : `GPU${index}*`,
-                gmemLabel: snapshots.length === 1 ? 'GMEM*' : `GMEM${index}*`,
+                gpuLabel: snapshots.length === 1 ? 'GPU' : `GPU${index}`,
+                gmemLabel: snapshots.length === 1 ? (observedClients ? 'GMEM' : 'VRAM') : `${observedClients ? 'GMEM' : 'VRAM'}${index}`,
                 busyPercent,
                 busyText: formatOptionalPercent(busyPercent),
                 busySparkPath: unavailable ? '' : buildNullableSparklinePath(busySeries, 56, 16, { min: 0, max: 100 }),
-                busyTitle: busiestEngineLabel
+                busyTitle: observedClients && busiestEngineLabel
                     ? `${name} — busiest observed engine: ${busiestEngineLabel}`
-                    : `${name} — engine activity unavailable`,
-                engineNote: 'GPU engine activity covers all APIs, not Vulkan alone.',
+                    : `${name} — ${busyPercent === null ? 'activity unavailable' : 'GPU activity'}`,
+                engineNote: '',
                 residentBytes,
-                residentText: formatOptionalBytesCompact(residentBytes),
-                residentSparkPath: unavailable ? '' : buildNullableSparklinePath(residentSeries, 56, 16),
-                memoryTitle: `${name} — client-reported GPU-backed resident sum`,
+                residentText: deviceMemoryPercent !== null ? formatOptionalPercent(deviceMemoryPercent) : formatOptionalBytesCompact(residentBytes),
+                residentSparkPath: unavailable ? '' : deviceMemoryPercent !== null
+                    ? buildNullableSparklinePath(residentSeries.map(value => value === null ? null : value / totalBytes * 100), 56, 16, { min: 0, max: 100 })
+                    : buildNullableSparklinePath(residentSeries, 56, 16),
+                memoryTitle: `${name} — ${observedClients ? 'observed client memory' : 'device memory usage'}`,
             },
             memory: {
                 residentBytes,
@@ -274,15 +279,21 @@ export function normalizeIntelGpuSnapshots(input, options = {}) {
         };
     });
 }
+export const normalizeIntelGpuSnapshots = normalizeGpuSnapshots;
+
+export function getGpuMeterRows(meter) {
+    return [
+        { key: 'busy', className: 'intel-gpu', label: meter.rows.gpuLabel, value: meter.rows.busyText, title: meter.rows.busyTitle, path: meter.rows.busySparkPath, available: meter.rows.busyPercent !== null },
+        { key: 'memory', className: 'intel-gmem', label: meter.rows.gmemLabel, value: meter.rows.residentText, title: meter.rows.memoryTitle, path: meter.rows.residentSparkPath, available: meter.rows.residentBytes !== null },
+    ].filter(row => row.available);
+}
 
 export function buildIntelGpuCompactSummaryParts(meters) {
     return Array.isArray(meters)
-        ? meters.flatMap((meter) => [
-            `${meter.rows.gpuLabel} ${meter.rows.busyText}`,
-            `${meter.rows.gmemLabel} ${meter.rows.residentText}`,
-        ])
+        ? meters.flatMap(meter => getGpuMeterRows(meter).map(row => `${row.label} ${row.value}`))
         : [];
 }
+export const buildGpuCompactSummaryParts = buildIntelGpuCompactSummaryParts;
 
 function renderDetailsSection(label, value) {
     return html`
@@ -292,14 +303,11 @@ function renderDetailsSection(label, value) {
 }
 
 function gpuDialogId(id) {
-    return `intel-gpu-details-${id.replace(/[^a-z0-9_-]+/gi, '-')}`;
+    return `gpu-details-${id.replace(/[^a-z0-9_-]+/gi, '-')}`;
 }
 
-export function IntelGpuMeterRows({ meters = [], compact = false, openGpuId = null, onOpen = () => {} }) {
-    return html`${meters.map((meter) => [
-        { key: 'busy', className: 'intel-gpu', label: meter.rows.gpuLabel, value: meter.rows.busyText, title: meter.rows.busyTitle, path: meter.rows.busySparkPath },
-        { key: 'memory', className: 'intel-gmem', label: meter.rows.gmemLabel, value: meter.rows.residentText, title: meter.rows.memoryTitle, path: meter.rows.residentSparkPath },
-    ].map((row) => html`
+export function GpuMeterRows({ meters = [], compact = false, openGpuId = null, onOpen = () => {} }) {
+    return html`${meters.map((meter) => getGpuMeterRows(meter).map((row) => html`
         <button
             key=${`${meter.id}-${row.key}`}
             class=${`system-meters-meter-button ${compact ? 'system-meters-compact-gpu' : 'system-meters-row'} ${row.className} ${meter.statusToneClass}`}
@@ -318,7 +326,7 @@ export function IntelGpuMeterRows({ meters = [], compact = false, openGpuId = nu
     `))}`;
 }
 
-export function IntelGpuDetailsPopover({ meters = [], openGpuId = null, onOpen = () => {}, triggerRef }) {
+export function GpuDetailsPopover({ meters = [], openGpuId = null, onOpen = () => {}, triggerRef }) {
     const setOpenGpuId = onOpen;
     const panelRef = useRef(null);
     const closePanel = (restoreFocus = true) => {
@@ -383,15 +391,12 @@ export function IntelGpuDetailsPopover({ meters = [], openGpuId = null, onOpen =
                     aria-modal="false"
                     aria-label=${`${activeMeter.name} details`}
                     tabIndex="-1"
-                    data-testid="intel-gpu-popover"
+                    data-testid="gpu-popover"
                 >
                     <div class="system-meters-gpu-popover-header">
                         <div class="system-meters-gpu-popover-heading">
                             <div class="system-meters-gpu-popover-title">${activeMeter.name}</div>
-                            <div class="system-meters-gpu-popover-subtitle">
-                                ${activeMeter.rows.gpuLabel} / ${activeMeter.rows.gmemLabel}
-                                ${activeMeter.busiestEngineLabel ? `• busiest ${activeMeter.busiestEngineLabel}` : ''}
-                            </div>
+                            <div class="system-meters-gpu-popover-subtitle">GPU telemetry</div>
                         </div>
                         <button class="system-meters-gpu-popover-close" type="button" onClick=${() => closePanel()}>
                             Close
@@ -400,38 +405,15 @@ export function IntelGpuDetailsPopover({ meters = [], openGpuId = null, onOpen =
 
                     <div class="system-meters-gpu-detail-grid">
                         ${renderDetailsSection('Status', activeMeter.statusText)}
-                        ${renderDetailsSection('Sample age', activeMeter.sampleAgeText)}
-                        ${renderDetailsSection('Resident', activeMeter.memory.residentText)}
-                        ${renderDetailsSection('Shared', activeMeter.memory.sharedText)}
-                        ${renderDetailsSection('Total', activeMeter.memory.totalText)}
-                        ${renderDetailsSection('Coverage', activeMeter.coverageText)}
+                        ${activeMeter.sampleAgeMs !== null && renderDetailsSection('Sample age', activeMeter.sampleAgeText)}
+                        ${activeMeter.rows.busyPercent !== null && renderDetailsSection('Activity', activeMeter.rows.busyText)}
+                        ${activeMeter.rows.residentBytes !== null && renderDetailsSection(activeMeter.rows.gmemLabel.startsWith('GMEM') ? 'Observed memory' : 'Device memory', activeMeter.memory.residentText)}
+                        ${activeMeter.memory.totalBytes !== null && renderDetailsSection(activeMeter.rows.gmemLabel.startsWith('GMEM') ? 'Client-reported total' : 'Memory capacity', activeMeter.memory.totalText)}
                     </div>
-
-                    <div class="system-meters-gpu-detail-section">
-                        <div class="system-meters-gpu-section-title">Engines</div>
-                        <ul class="system-meters-gpu-engine-list">
-                            ${activeMeter.engines.length
-                                ? activeMeter.engines.map((engine) => html`
-                                    <li key=${`${activeMeter.id}-${engine.name}`}>
-                                        <span>${engine.label}${engine.capacity > 1 ? ` (${engine.capacity} engines)` : ''}</span>
-                                        <span>${formatOptionalPercent(engine.busyPercent)}</span>
-                                    </li>
-                                `)
-                                : html`<li><span>No engine counters reported.</span><span>${INTEL_GPU_MISSING_VALUE}</span></li>`}
-                        </ul>
-                    </div>
-
-                    <div class="system-meters-gpu-detail-section">
-                        <div class="system-meters-gpu-section-title">Notes</div>
-                        <p class="system-meters-gpu-note">${activeMeter.rows.engineNote}</p>
-                        <p class="system-meters-gpu-note">${activeMeter.memoryWarningText}</p>
-                        ${activeMeter.noVisibleClientsText && html`<p class="system-meters-gpu-note">${activeMeter.noVisibleClientsText}</p>`}
-                        ${activeMeter.effectiveReasons.length > 0 && html`
-                            <ul class="system-meters-gpu-notes-list">
-                                ${activeMeter.effectiveReasons.map((reason, index) => html`<li key=${`${activeMeter.id}-reason-${index}`}>${reason}</li>`)}
-                            </ul>
-                        `}
-                    </div>
+                    ${activeMeter.memoryWarningText && html`<p class="system-meters-gpu-note">${activeMeter.memoryWarningText}</p>`}
+                    ${activeMeter.effectiveReasons.length > 0 && html`<p class="system-meters-gpu-note">${activeMeter.effectiveReasons.join(' ')}</p>`}
                 </div>
     `;
 }
+export const IntelGpuMeterRows = GpuMeterRows;
+export const IntelGpuDetailsPopover = GpuDetailsPopover;

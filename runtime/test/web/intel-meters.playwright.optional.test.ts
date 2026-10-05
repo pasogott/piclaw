@@ -37,7 +37,8 @@ run('Intel meters hide absent GPUs and expose accessible details on desktop/tabl
   expect(await page.locator('.system-meters-gpu-trigger, .system-meters-gpu-controls').count()).toBe(0);
   expect(await page.getByRole('dialog').count()).toBe(0);
   await activity.click();await page.getByRole('dialog').waitFor();
-  expect(await page.getByRole('dialog').innerText()).toContain('best-effort');expect(await page.getByRole('dialog').innerText()).toContain('677');
+  expect(await page.getByRole('dialog').innerText()).toContain('Observed memory');expect(await page.getByRole('dialog').innerText()).toContain('677');
+  expect(await page.getByRole('dialog').innerText()).not.toContain('Engines');
   expect(await page.locator('button button').count()).toBe(0);
   expect(await activity.getAttribute('aria-expanded')).toBe('true');
   expect(await page.locator('.system-meters-hud.is-collapsed').count()).toBe(0);
@@ -63,11 +64,9 @@ run('Intel meters hide absent GPUs and expose accessible details on desktop/tabl
   await compactMem.click();expect(await page.getByRole('dialog').count()).toBe(0);
   expect(await page.locator('.system-meters-gpu-trigger, .system-meters-gpu-controls').count()).toBe(0);
   devices=[{...gpu,busy_percent:null,status:'unavailable',memory:{resident_bytes:null},coverage:{clients:0},engines:[]}];await page.reload();
-  await compactGpu.waitFor();expect(await page.locator('.system-meters-compact-summary').innerText()).toContain('GPU*');
-  expect(await compactGpu.innerText()).toContain('—');await compactGpu.click();await page.getByRole('dialog').waitFor();
-  expect(await page.getByRole('dialog').innerText()).toContain('No visible clients');
+  await page.locator('.system-meters-compact-summary').waitFor();expect(await compactGpu.count()).toBe(0);expect(await compactMem.count()).toBe(0);
   devices=[gpu,{...gpu,id:'0000:03:00.0',name:'Second Intel GPU',busy_percent:22}];await page.reload();
-  await page.getByRole('button',{name:/GPU1\*.*Second Intel GPU details/}).click();
+  await page.getByRole('button',{name:/GPU1 .*Second Intel GPU details/}).click();
   await page.getByRole('dialog',{name:'Second Intel GPU details'}).waitFor();
   expect(await page.locator('button button').count()).toBe(0);
   // Live disappearance while open must clear the trigger, not reopen on return.
@@ -75,9 +74,9 @@ run('Intel meters hide absent GPUs and expose accessible details on desktop/tabl
   await page.getByRole('dialog').waitFor({state:'detached',timeout:8000});
   expect(await page.locator('.intel-gpu,.intel-gmem').count()).toBe(0);
   devices=[gpu,{...gpu,id:'0000:03:00.0',name:'Second Intel GPU',busy_percent:22}];
-  await page.getByRole('button',{name:/GPU1\*.*Second Intel GPU details/}).waitFor({timeout:8000});
+  await page.getByRole('button',{name:/GPU1 .*Second Intel GPU details/}).waitFor({timeout:8000});
   expect(await page.getByRole('dialog').count()).toBe(0);
-  expect(await page.getByRole('button',{name:/GPU1\*.*Second Intel GPU details/}).getAttribute('aria-expanded')).toBe('false');
+  expect(await page.getByRole('button',{name:/GPU1 .*Second Intel GPU details/}).getAttribute('aria-expanded')).toBe('false');
   expect(errors).toEqual([]);
  } finally {await browser?.close();server?.stop(true);await rm(tmp,{recursive:true,force:true})}
 },30000);
