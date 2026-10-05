@@ -120,13 +120,10 @@ export function searchToolOutputSnippets(outputId: string, query: string, limit 
   const ftsQuery = prepareFtsQuery(query, getSearchMatchMode());
   if (!ftsQuery) return [];
   try {
-    // output_id is UNINDEXED. A target-rowid scan helps broad terms but is
-    // expensive for rare terms. Probe at most 64 matches to select the plan;
-    // both plans still evaluate the complete query and exact output scope.
-    const broad = db.query("SELECT rowid FROM tool_outputs_fts WHERE tool_outputs_fts MATCH ? LIMIT 64").all(ftsQuery).length === 64;
-    const stmt = db.prepare(broad
-      ? "SELECT snippet(tool_outputs_fts, 0, '[', ']', '…', 12) as snippet FROM tool_outputs_fts WHERE tool_outputs_fts MATCH ? AND rowid IN (SELECT rowid FROM tool_outputs_fts WHERE output_id = ?) LIMIT ?"
-      : "SELECT snippet(tool_outputs_fts, 0, '[', ']', '…', 12) as snippet FROM tool_outputs_fts WHERE tool_outputs_fts MATCH ? AND output_id = ? LIMIT ?"
+    const stmt = db.prepare(
+      // output_id is UNINDEXED. Resolve the target chunk rowids once before
+      // FTS evaluation rather than testing every common-term match globally.
+      "SELECT snippet(tool_outputs_fts, 0, '[', ']', '…', 12) as snippet FROM tool_outputs_fts WHERE tool_outputs_fts MATCH ? AND rowid IN (SELECT rowid FROM tool_outputs_fts WHERE output_id = ?) LIMIT ?"
     );
     const rows = stmt.all(ftsQuery, outputId, limit) as Array<{ snippet: string }>;
     return rows.map((row) => row.snippet);
