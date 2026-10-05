@@ -1,4 +1,4 @@
-import { html, useEffect, useMemo, useRef } from '../vendor/preact-htm.js';
+import { html, useEffect, useLayoutEffect, useMemo, useRef } from '../vendor/preact-htm.js';
 
 export const INTEL_GPU_STALE_AFTER_MS = 6000;
 export const INTEL_GPU_MISSING_VALUE = '—';
@@ -291,31 +291,41 @@ function renderDetailsSection(label, value) {
     `;
 }
 
-export function IntelGpuMeterRows({ meters = [], onOpen = () => {} }) {
-    return html`
-        ${meters.map((meter) => html`
-            <div key=${`${meter.id}-busy`} class=${`system-meters-row intel-gpu ${meter.statusToneClass}`} title=${`${meter.rows.busyTitle} — tap for details`} onClick=${(event) => { event.stopPropagation(); onOpen(meter.id); }}>
-                <span class="system-meters-label">${meter.rows.gpuLabel}</span>
-                <svg class="system-meters-spark" viewBox="0 0 56 16" preserveAspectRatio="none" aria-hidden="true">
-                    <path d=${meter.rows.busySparkPath}></path>
-                </svg>
-                <span class="system-meters-value">${meter.rows.busyText}</span>
-            </div>
-            <div key=${`${meter.id}-memory`} class=${`system-meters-row intel-gmem ${meter.statusToneClass}`} title=${`${meter.rows.memoryTitle} — tap for details`} onClick=${(event) => { event.stopPropagation(); onOpen(meter.id); }}>
-                <span class="system-meters-label">${meter.rows.gmemLabel}</span>
-                <svg class="system-meters-spark" viewBox="0 0 56 16" preserveAspectRatio="none" aria-hidden="true">
-                    <path d=${meter.rows.residentSparkPath}></path>
-                </svg>
-                <span class="system-meters-value">${meter.rows.residentText}</span>
-            </div>
-        `)}
-    `;
+function gpuDialogId(id) {
+    return `intel-gpu-details-${id.replace(/[^a-z0-9_-]+/gi, '-')}`;
 }
 
-export function IntelGpuDetailsControls({ meters = [], openGpuId = null, onOpen = () => {} }) {
+export function IntelGpuMeterRows({ meters = [], compact = false, openGpuId = null, onOpen = () => {} }) {
+    return html`${meters.map((meter) => [
+        { key: 'busy', className: 'intel-gpu', label: meter.rows.gpuLabel, value: meter.rows.busyText, title: meter.rows.busyTitle, path: meter.rows.busySparkPath },
+        { key: 'memory', className: 'intel-gmem', label: meter.rows.gmemLabel, value: meter.rows.residentText, title: meter.rows.memoryTitle, path: meter.rows.residentSparkPath },
+    ].map((row) => html`
+        <button
+            key=${`${meter.id}-${row.key}`}
+            class=${`system-meters-meter-button ${compact ? 'system-meters-compact-gpu' : 'system-meters-row'} ${row.className} ${meter.statusToneClass}`}
+            type="button"
+            title=${`${row.title} — tap for details`}
+            aria-label=${`${row.label} ${row.value} — ${meter.name} details`}
+            aria-haspopup="dialog"
+            aria-expanded=${openGpuId === meter.id ? 'true' : 'false'}
+            aria-controls=${gpuDialogId(meter.id)}
+            onClick=${(event) => { event.stopPropagation(); onOpen(meter.id, event.currentTarget); }}
+        >
+            <span class="system-meters-label">${row.label}</span>
+            ${!compact && html`<svg class="system-meters-spark" viewBox="0 0 56 16" preserveAspectRatio="none" aria-hidden="true"><path d=${row.path}></path></svg>`}
+            <span class="system-meters-value">${row.value}</span>
+        </button>
+    `))}`;
+}
+
+export function IntelGpuDetailsPopover({ meters = [], openGpuId = null, onOpen = () => {}, triggerRef }) {
     const setOpenGpuId = onOpen;
     const panelRef = useRef(null);
-    const triggerRefs = useRef(new Map());
+    const closePanel = (restoreFocus = true) => {
+        setOpenGpuId(null);
+        const trigger = triggerRef?.current;
+        if (restoreFocus && trigger?.isConnected) queueMicrotask(() => trigger.focus());
+    };
 
     const activeMeter = useMemo(
         () => meters.find((meter) => meter.id === openGpuId) || null,
@@ -328,16 +338,8 @@ export function IntelGpuDetailsControls({ meters = [], openGpuId = null, onOpen 
         }
     }, [meters, openGpuId]);
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         if (!activeMeter) return undefined;
-
-        const closePanel = (focusId = activeMeter.id) => {
-            setOpenGpuId(null);
-            const trigger = triggerRefs.current.get(focusId);
-            if (trigger && typeof trigger.focus === 'function') {
-                queueMicrotask(() => trigger.focus());
-            }
-        };
 
         const onKeyDown = (event) => {
             if (event?.key !== 'Escape') return;
@@ -349,9 +351,10 @@ export function IntelGpuDetailsControls({ meters = [], openGpuId = null, onOpen 
             const target = event?.target;
             if (!(target instanceof Node)) return;
             if (panelRef.current?.contains(target)) return;
-            const trigger = triggerRefs.current.get(activeMeter.id);
-            if (trigger?.contains?.(target)) return;
-            closePanel(activeMeter.id);
+            // Meter buttons handle opening/toggling themselves. Outside taps
+            // should retain their normal focus target instead of stealing focus.
+            if (target instanceof Element && target.closest('.system-meters-meter-button[aria-haspopup="dialog"]')) return;
+            closePanel(false);
         };
 
         document.addEventListener('keydown', onKeyDown);
@@ -369,38 +372,12 @@ export function IntelGpuDetailsControls({ meters = [], openGpuId = null, onOpen 
         };
     }, [activeMeter?.id]);
 
-    if (!meters.length) return null;
+    if (!activeMeter) return null;
 
     return html`
-        <div class="system-meters-gpu-controls" data-testid="intel-gpu-controls">
-            <div class="system-meters-gpu-trigger-strip" role="group" aria-label="Intel GPU details">
-                ${meters.map((meter) => {
-                    const isOpen = meter.id === openGpuId;
-                    const dialogId = `intel-gpu-details-${meter.id.replace(/[^a-z0-9_-]+/gi, '-')}`;
-                    return html`
-                        <button
-                            key=${meter.id}
-                            ref=${(node) => {
-                                if (node) triggerRefs.current.set(meter.id, node);
-                                else triggerRefs.current.delete(meter.id);
-                            }}
-                            class=${`system-meters-gpu-trigger ${meter.statusToneClass}${isOpen ? ' is-open' : ''}`}
-                            type="button"
-                            title=${`${meter.name} details`}
-                            aria-haspopup="dialog"
-                            aria-expanded=${isOpen ? 'true' : 'false'}
-                            aria-controls=${dialogId}
-                            onClick=${() => setOpenGpuId(isOpen ? null : meter.id)}
-                        >
-                            ${meter.rows.gpuLabel} details
-                        </button>
-                    `;
-                })}
-            </div>
-            ${activeMeter && html`
                 <div
                     ref=${panelRef}
-                    id=${`intel-gpu-details-${activeMeter.id.replace(/[^a-z0-9_-]+/gi, '-')}`}
+                    id=${gpuDialogId(activeMeter.id)}
                     class=${`system-meters-gpu-popover ${activeMeter.statusToneClass}`}
                     role="dialog"
                     aria-modal="false"
@@ -416,7 +393,7 @@ export function IntelGpuDetailsControls({ meters = [], openGpuId = null, onOpen 
                                 ${activeMeter.busiestEngineLabel ? `• busiest ${activeMeter.busiestEngineLabel}` : ''}
                             </div>
                         </div>
-                        <button class="system-meters-gpu-popover-close" type="button" onClick=${() => setOpenGpuId(null)}>
+                        <button class="system-meters-gpu-popover-close" type="button" onClick=${() => closePanel()}>
                             Close
                         </button>
                     </div>
@@ -456,7 +433,5 @@ export function IntelGpuDetailsControls({ meters = [], openGpuId = null, onOpen 
                         `}
                     </div>
                 </div>
-            `}
-        </div>
     `;
 }

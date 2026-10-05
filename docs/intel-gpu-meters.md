@@ -2,7 +2,7 @@
 
 The web meters show two additional rows when a Linux Intel `i915` device is discovered: **GPU*** (busiest observed engine class) and **GMEM*** (client-reported resident memory). With no supported Intel GPU, neither the rows nor their detail controls appear. NVIDIA's existing VRAM row is unchanged.
 
-Tap a GPU row or use its keyboard-accessible details button to see engine percentages, memory, sample age and coverage. Escape dismisses the details. Multiple Intel devices remain separate; compact mobile meters include the same values. Unknown, missing or stale readings show `—`, not a false zero.
+Tap the GPU or GMEM meter itself to see engine percentages, memory, sample age and coverage. Each meter is also a keyboard-accessible button (Enter/Space); there is no separate details pill. Escape or Close dismisses the details and restores focus to the meter. Clicking outside dismisses without stealing focus. Multiple Intel devices remain separate; compact mobile values are the same direct triggers. CPU/RAM and other non-GPU meters retain the collapse action. Unknown, missing or stale readings show `—`, not a false zero.
 
 ## Collection and permissions
 

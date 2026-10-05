@@ -75,7 +75,7 @@
     transform: translateY(-1px);
 }
 
-.system-meters-card:focus-visible {
+.system-meters-meter-button:focus-visible {
     outline: 2px solid var(--accent-color);
     outline-offset: 2px;
 }
@@ -188,23 +188,30 @@
     opacity: 0.72;
 }
 
-.system-meters-gpu-controls {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 6px;
-    margin-top: 6px;
-    pointer-events: auto;
+.system-meters-meter-button {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
 }
 
-.system-meters-gpu-trigger-strip {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 6px;
+.system-meters-meter-button.system-meters-row {
+    width: 100%;
+    font-size: 11px;
+    line-height: 1;
 }
 
-.system-meters-gpu-trigger,
+.system-meters-compact-gpu {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+}
+
 .system-meters-gpu-popover-close {
     appearance: none;
     border: 1px solid color-mix(in srgb, var(--border-color) 86%, transparent);
@@ -214,35 +221,22 @@
     cursor: pointer;
 }
 
-.system-meters-gpu-trigger {
-    padding: 5px 8px;
-    border-radius: 999px;
-    font-size: 11px;
-    line-height: 1;
-    backdrop-filter: blur(10px);
-}
-
-.system-meters-gpu-trigger:hover,
 .system-meters-gpu-popover-close:hover {
     background: color-mix(in srgb, var(--bg-hover) 74%, transparent);
 }
 
-.system-meters-gpu-trigger:focus-visible,
 .system-meters-gpu-popover-close:focus-visible {
     outline: 2px solid var(--accent-color);
     outline-offset: 2px;
 }
 
-.system-meters-gpu-trigger.is-open {
-    background: color-mix(in srgb, var(--accent-color) 18%, var(--bg-primary) 82%);
-}
-
-.system-meters-gpu-trigger.is-stale,
-.system-meters-gpu-trigger.is-unavailable {
-    color: var(--text-secondary);
-}
-
 .system-meters-gpu-popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    box-sizing: border-box;
+    max-height: min(65vh, 520px);
+    overflow-y: auto;
     width: min(340px, calc(100vw - 24px));
     padding: 10px 11px;
     border-radius: 14px;
@@ -382,11 +376,10 @@
     }
 
     .system-meters-compact-summary {
-        display: inline-flex;
+        display: flex;
         align-items: center;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        flex-wrap: wrap;
+        gap: 4px 8px;
         font-size: 11px;
         line-height: 1;
         font-weight: 600;
