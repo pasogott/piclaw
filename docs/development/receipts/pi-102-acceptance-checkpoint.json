@@ -379,5 +379,31 @@
     "Live server/account approval and canary/soak",
     "Operational matching core/addon/token rollback",
     "Mixed/background/large-history/GC performance coverage"
-  ]
+  ],
+  "checkpointQualification": {
+    "head": "b7d741c68dcd123ed764a3b95157204c55c9055e",
+    "tree": "8f9a3e0a4af4b22afb254b3105b6e4847b54dc84",
+    "finishedAt": "2026-10-05T09:46:09Z",
+    "pass": 6456,
+    "skip": 8,
+    "fail": 0,
+    "assertions": 42138,
+    "seconds": 641.6,
+    "features": {
+      "pass": 25,
+      "assertions": 246
+    },
+    "web": {
+      "pass": 9,
+      "assertions": 26
+    },
+    "logSha256": "41bda4f996ef7677c93fd0a84d3d55fa63daed9db78ecdc5dbde4a24b0184395",
+    "unchangedClean": true,
+    "scriptsExcludedFromFull": true,
+    "checkpointStructuralTests": {
+      "pass": 6,
+      "assertions": 217,
+      "separate": true
+    }
+  }
 }
