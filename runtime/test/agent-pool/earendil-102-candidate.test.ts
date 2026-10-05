@@ -4,9 +4,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTempWorkspace } from "../helpers.js";
 const version = JSON.parse(readFileSync(join(import.meta.dir, "../../../node_modules/@earendil-works/pi-coding-agent/package.json"), "utf8")).version;
-test("candidate dependency target is exactly 1.0.1", () => { expect(version).toBe("1.0.1"); });
+test("candidate dependency target is exactly 1.0.2", () => { expect(version).toBe("1.0.2"); });
 async function run(fixture: string, args: string[], env: Record<string, string> = {}, cwd?: string) {
-  const child = Bun.spawn([process.execPath, "--no-env-file", "--preload", join(import.meta.dir, "fixtures/earendil-101-offline-guard.ts"), join(import.meta.dir, "fixtures", fixture), ...args], {
+  const child = Bun.spawn([process.execPath, "--no-env-file", "--preload", join(import.meta.dir, "fixtures/earendil-102-offline-guard.ts"), join(import.meta.dir, "fixtures", fixture), ...args], {
     cwd, env: { PATH: process.env.PATH, HOME: "/nonexistent", PI_OFFLINE: "1", PI_TELEMETRY: "0", OTEL_SDK_DISABLED: "true", PICLAW_DB_IN_MEMORY: "1", ...env }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
   });
   const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
@@ -18,23 +18,23 @@ async function run(fixture: string, args: string[], env: Record<string, string> 
   } finally { clearTimeout(timer); if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
 }
 for (const mode of ["success", "failed-initial", "failed-reload", "commit-failure", "unbound", "overlap", "disposed-barrier", "failed-barrier", "shutdown-error", "runtime-dispose"]) {
-  test(`1.0.1 candidate bridge lease lifecycle: ${mode}`, async () => {
-    const ws = createTempWorkspace("candidate-101-bridge-");
-    try { const result = await run("mcp-bridge-reload-101.ts", [mode, "3", "plain", ws.workspace]); expect(result).toMatchObject({ mode, version: "1.0.1", adapterVersion: "2.31.0", status: "pass", network: 0 }); expect(result.released).toBe(result.acquired); }
+  test(`1.0.2 candidate bridge lease lifecycle: ${mode}`, async () => {
+    const ws = createTempWorkspace("candidate-102-bridge-");
+    try { const result = await run("mcp-bridge-reload-102.ts", [mode, "3", "plain", ws.workspace]); expect(result).toMatchObject({ mode, version: "1.0.2", adapterVersion: "2.31.0", status: "pass", network: 0 }); expect(result.released).toBe(result.acquired); }
     finally { ws.cleanup(); }
   }, 25_000);
 }
 for (const exposure of ["deferred", "codemode"]) {
-  test(`1.0.1 candidate real MCP/tool pipeline: ${exposure}`, async () => {
-    const ws = createTempWorkspace("candidate-101-public-");
+  test(`1.0.2 candidate real MCP/tool pipeline: ${exposure}`, async () => {
+    const ws = createTempWorkspace("candidate-102-public-");
     try {
-      const result = await run("mcp-public-runtime-101.ts", [exposure], { MCP_PUBLIC_FIXTURE_ROOT: ws.workspace });
-      expect(result).toMatchObject({ version: "1.0.1", exposure, scriptedResponses: 14, networkAttempts: 0, nestedPolicyAndParentId: true, hiddenInvocationBlocked: true, sessionAndHistoryPreserved: true, transportsClosed: true });
+      const result = await run("mcp-public-runtime-102.ts", [exposure], { MCP_PUBLIC_FIXTURE_ROOT: ws.workspace });
+      expect(result).toMatchObject({ version: "1.0.2", exposure, scriptedResponses: 14, networkAttempts: 0, nestedPolicyAndParentId: true, hiddenInvocationBlocked: true, sessionAndHistoryPreserved: true, transportsClosed: true });
     } finally { ws.cleanup(); }
   }, 25_000);
 }
-test("1.0.1 public OAuth callback path/state isolation on owned loopback", async () => {
-  const child = Bun.spawn([process.execPath, "--no-env-file", "--preload", join(import.meta.dir, "fixtures/earendil-101-callback-guard.ts"), join(import.meta.dir, "fixtures/earendil-101-callback.ts")], {
+test("1.0.2 public OAuth callback path/state isolation on owned loopback", async () => {
+  const child = Bun.spawn([process.execPath, "--no-env-file", "--preload", join(import.meta.dir, "fixtures/earendil-102-callback-guard.ts"), join(import.meta.dir, "fixtures/earendil-102-callback.ts")], {
     env: { PATH: process.env.PATH, HOME: "/nonexistent", PI_OFFLINE: "1", OTEL_SDK_DISABLED: "true" }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
   });
   const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
@@ -45,18 +45,18 @@ test("1.0.1 public OAuth callback path/state isolation on owned loopback", async
   } finally { clearTimeout(timer); if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
 }, 15_000);
 for (const mode of ["disabled-trusted", "disabled-untrusted", "exposure", "invalid-extra", "replacement"]) {
-  test(`1.0.1 public project MCP override: ${mode}`, async () => {
-    const ws = createTempWorkspace("candidate-101-overrides-");
+  test(`1.0.2 public project MCP override: ${mode}`, async () => {
+    const ws = createTempWorkspace("candidate-102-overrides-");
     try {
-      const result = await run("earendil-101-overrides.ts", [mode], { CANDIDATE_101_ROOT: ws.workspace });
-      expect(result).toMatchObject({ version: "1.0.1", mode, configUnmodified: true, guard: { networkAttempts: 0, childProcessAttempts: 0 } });
+      const result = await run("earendil-102-overrides.ts", [mode], { CANDIDATE_102_ROOT: ws.workspace });
+      expect(result).toMatchObject({ version: "1.0.2", mode, configUnmodified: true, guard: { networkAttempts: 0, childProcessAttempts: 0 } });
     } finally { ws.cleanup(); }
   }, 25_000);
 }
-test("1.0.1 native transport close failure is retained as a teardown blocker", async () => {
-  const ws = createTempWorkspace("candidate-101-close-failure-");
+test("1.0.2 native transport close failure is retained as a teardown blocker", async () => {
+  const ws = createTempWorkspace("candidate-102-close-failure-");
   try {
-    const result = await run("earendil-101-close-failure.ts", [], { CANDIDATE_101_ROOT: ws.workspace });
-    expect(result).toMatchObject({ version: "1.0.1", closeFailureObserved: true, reloadResolved: true, firstTransportClosed: false, secondTransportClosed: true, surfacedErrors: 0 });
+    const result = await run("earendil-102-close-failure.ts", [], { CANDIDATE_102_ROOT: ws.workspace });
+    expect(result).toMatchObject({ version: "1.0.2", closeFailureObserved: true, reloadResolved: true, firstTransportClosed: false, secondTransportClosed: true, surfacedErrors: 0 });
   } finally { ws.cleanup(); }
 }, 25_000);

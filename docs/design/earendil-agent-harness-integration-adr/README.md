@@ -1,10 +1,14 @@
 # ADR: Earendil-aligned agent harness integration
 
-Status: **Pi 1.0.1 current-loop migration merged and installed on Smith; wider acceptance incomplete. Pi-durable design approved; qualification and implementation out of scope.**
+Status: **Released Pi 1.0.2 integration authorised with the shipped MCP wrapper retained. Pi 1.0.1 installation remains the prior operational receipt; no 1.0.2 deployment. Pi-durable work stays out of scope.**
 
-Rui approved this future service-plane design on 3 October 2026 and explicitly kept pi-durable work out of the current scope. The active track is completing adoption of exact mainline Pi 1.0.1, upstream `a7229ddc21810d6245105978033b7df645ecc2f7`. The [1.0.0 architecture and 45-row HC/PC crosswalk](evidence/earendil-100-durable-crosswalk.md) defines the approved future durable design at its recorded target; it does not qualify pi-durable 1.0.1. It supersedes the old lane/Drive/Gate design for that separate, excluded work. Current-loop migration [#1497](https://github.com/rcarmo/piclaw/pull/1497) merged independently at `5cc738d7c`; neither that merge nor this assessment deploys or activates pi-durable. Original chapters and versioned evidence retain their historical API assumptions and results.
+Rui approved this future service-plane design on 3 October 2026 and explicitly kept pi-durable work out of the current scope. The active track is integrating released Pi 1.0.2, upstream `cd32f7725fdbddbaecdff5b1e68491563394e0ca`, with the standard MCP wrapper shipped by Piclaw. Native parity and wrapper removal are future scope, not prerequisites. The [1.0.0 architecture and 45-row HC/PC crosswalk](evidence/earendil-100-durable-crosswalk.md) defines the approved future durable design at its recorded target; it does not qualify pi-durable 1.0.1. It supersedes the old lane/Drive/Gate design for that separate, excluded work. Current-loop migration [#1497](https://github.com/rcarmo/piclaw/pull/1497) merged independently at `5cc738d7c`; neither that merge nor this assessment deploys or activates pi-durable. Original chapters and versioned evidence retain their historical API assumptions and results.
 
-## Pi 1.0.1 checkpoint — 4 October 2026
+## Pi 1.0.2 target — 5 October 2026
+
+Rui authorised retargeting and source updates. The [integration record](../../development/pi-102-integration.md) contains fresh 1.0.2 package, SDK, wrapper, sampling and synthetic auth evidence. Historical 1.0.1 receipts remain unchanged. Source qualification does not authorise installation, restart or real-account testing. The unreleased OAuth cancellation fix after the 1.0.2 tag is excluded.
+
+## Pi 1.0.1 checkpoint — historical, 4 October 2026
 
 [Source migration #1537](https://github.com/rcarmo/piclaw/pull/1537) merged at `98eb5ff4d8f1c833d42ce693c1bdce5530ad7d23`. The authorised Smith install/restart was verified on 4 October: Piclaw 3.2.5 / Pi 1.0.1, canonical Bun, HTTP 200 and preserved configuration/database identity. Later source changes are not installed by that operational receipt.
 
@@ -21,13 +25,13 @@ Versioned 0.99.1/1.0.0 receipts and the approved 1.0.0 durable crosswalk remain 
 | Decision owner | Rui Carmo |
 | Assessment baseline | Piclaw `v2.13.2` |
 | Baseline commit | `0afd3ae645c423bed82deef80c343bcaa6f31d4d` |
-| Earendil runtime selection | Exact published Pi `1.0.1`, gitHead `a7229ddc21810d6245105978033b7df645ecc2f7`, for the existing loop. Source migration merged through #1537; Smith installation verified separately. #1497 retains the historical 1.0.0 migration. |
+| Earendil runtime selection | Exact released Pi `1.0.2`, gitHead `cd32f7725fdbddbaecdff5b1e68491563394e0ca`, for integration with the retained MCP wrapper. Previous #1537/1.0.1 installation and #1497/1.0.0 migration remain historical receipts. |
 | Earendil released evidence | Versioned 0.84–1.0.0 receipts remain historical. #1452/#1453 are completed 0.99.1 assessments; no historical result is relabelled as 1.0.1. Current-loop and durable qualification are separate. |
 | Earendil planning tip | `main` at `e4c75a73222ae2c72abb5f5314fa35ee8effc508`; historical planning evidence only, superseded for release-candidate assessment by published 0.87.0 |
 | Historical implementation capture | `dev` / draft #8963 at `d14d6b22327d545d6a253f932165b63e48d7f9c8`; spec blob `c7c18c74730d4971f8ca004924e44c7fbe236f25`, SHA-256 `1b200eb7b4255d5afd71e17bb4cf54f82e2c5d1d1e24ae87ba97363838251785` |
 | Evidence timestamps | Original capture: 2026-09-01 18:30 UTC; 0.85.1 follow-up: 2026-09-17–18; 0.87.0 candidate assessment: 2026-09-21; observations apply only to their recorded revisions |
 | Document state | #1493 maps 25 HC and 20 PC intents to pi-durable 1.0.0. Source contracts and the prior paused Memory probe are distinct; #1494 owns fresh semantics/storage qualification. |
-| Production changes | Current-loop source dependencies and the initially upgraded Smith runtime select 1.0.1. Subsequent source tranches have separate deployment gates. This index update changes no runtime importer, dependency, schema, activation or service authority, and performs no installation/restart. |
+| Production changes | This candidate's source dependencies select 1.0.2. The prior installed-runtime receipt is 1.0.1; installation and restart need separate approval. No Native replacement, durable activation or new service authority is introduced. |
 | Final decision | Design approved by Rui on 3 October 2026. Pi-durable qualification, implementation and activation are out of scope; resuming that work requires a separate scope decision. |
 
 ## Problem

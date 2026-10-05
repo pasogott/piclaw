@@ -1,5 +1,7 @@
 # Pi 1.0.1 remaining acceptance
 
+> Historical checkpoint. Rui subsequently selected released Pi 1.0.2 and confirmed integration with the shipped MCP wrapper. Native parity and wrapper removal are future work, not current integration prerequisites. See the [1.0.2 integration record](../../../development/pi-102-integration.md). The observations below retain their original version and scope.
+
 The initial Pi 1.0.1 upgrade is installed on Smith. The later source improvements listed below are merged but have not been deployed by this work. Native MCP replacement, production Delegate integration, combined acceptance and live canary criteria are unfinished. Adapter/Auto stays the default; Piclaw rejects unsupported Native selection before activation. Pi-durable qualification and implementation are outside this task.
 
 Target: Pi 1.0.1, upstream `a7229ddc21810d6245105978033b7df645ecc2f7`. Source checkpoint: Piclaw `1534040a19b1841bb64cdc80797176531ba9efff`, after shared request foundation PR #1547. This document changes no runtime, dependency, credential, activation or deployment setting. Historical 0.99.1/1.0.0 fixtures and receipts retain their original status.
