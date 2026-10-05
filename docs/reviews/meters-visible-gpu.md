@@ -17,6 +17,14 @@ Disabled and unavailable optional meter lines are omitted, and GPU details use a
 - Rebuilt browser matrix:5passed/114assertions across2files; Chromium/WebKit bothskin style contexts, actualVisualstrip, zero/absent/disabled/partial/aggregateNVML/observed-client readings, shortdetails/accessibility/trigger removal/device removal.
 - Webbuild9/26, five type stages and scopedlint pass with95unchangedfrontend transitive diagnostics.
 
-Independent finalsource review and frozen full gate are required before publication. A delegated judge timed out and supplied no approval. Firstmatrix had two WebKit timeouts; unchanged isolatedcase and final rebuiltmatrix passed without deadline/assertion relaxation. Firstfocusedexpected labels updated from starred Intel labels to simple generic labels; priorfailures retained.
+Independent frontend source review cleared `b5c265339fe6` (message 62878). A delegated judge timed out and supplied no approval. The first browser matrix had two WebKit timeouts; the unchanged isolated case and rebuilt matrix passed without deadline or assertion relaxation. Focused expected labels were updated from starred Intel labels to simple generic labels; prior failures are retained.
+
+## Full-gate correction
+
+The first frozen `make ci-fast` run at `b5c265339fe6` failed: 6,543 passed, 8 skipped, 1 failed, 42,805 assertions across 931 files. The existing EF-S07 corruption fixture ran ten independent disk-backed vectors inside one five-second test and timed out at 5,840ms. Its unchanged isolated run passed all 31 assertions in 1.72 seconds. The failed full log is retained at `/workspace/tmp/meters-visible-full/ci-fast.log`, SHA-256 `30e11d40ef1607753ac4d5521c1889ae5ffe4b82746f8e433df22256c25fd1f7`.
+
+Each vector is now registered as a separate test with the default five-second deadline. Fresh databases, corruption mutations, assertions and disposal remain unchanged; loop guards become callback returns after their assertions. The complete affected file passes 31 tests and 280 assertions. The first transformation's syntax failure is retained alongside the corrected result. Production storage is unchanged.
+
+A fresh complete gate from the corrected frozen snapshot is required before publication. The isolated passes do not clear the failed full run.
 
 No liveGPU workload, account/provider/network/production database mutation, installation or restart was performed. Generic display support does not claim new hardware collector support.

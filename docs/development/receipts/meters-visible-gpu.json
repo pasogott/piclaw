@@ -58,8 +58,58 @@
     {
       "log": "meters-visible-freeze-types.log",
       "sha256": "dfd0c6d3af373830a215c2274b74fba3950b6edffc950c5db83eccf51ae8e409"
+    },
+    {
+      "log": "meters-visible-sqlite-fixture-isolated.log",
+      "sha256": "f35cbf08555e4e2f0bfff24ba1a78045c0f0f2bfb71876ba2826090f3889494c"
+    },
+    {
+      "log": "meters-visible-sqlite-segmented.log",
+      "sha256": "a0a9965edb9f1a6d298ad43d7486fc196ffa52861eae7ffc969c6dcd16d43c7b"
+    },
+    {
+      "log": "meters-visible-sqlite-segmented-v2.log",
+      "sha256": "79e5d3a710e399122510592ce967e75b0342047c5c602853070a5ba3d296cc3e"
+    },
+    {
+      "log": "meters-visible-sqlite-segmented-final.log",
+      "sha256": "641f63173ec145005b8f1191fbbee1c325735969d94bfc00061a3ee81eb64379"
+    },
+    {
+      "log": "meters-visible-correction-types.log",
+      "sha256": "dfd0c6d3af373830a215c2274b74fba3950b6edffc950c5db83eccf51ae8e409"
     }
   ],
   "scope": "frontendsource only; no collector/hardware/productionconfig/install/restart/liveGPU/provider changes",
-  "qualification": "focused/browser/type/lint passed; independentreview/frozenfull pending"
+  "qualification": "Frontend scoped CLEAR, focused/browser/type/lint passed; fixture correction scoped CLEAR and31/280; failed full retained, corrected frozen full required",
+  "updatedAt": "2026-10-05T22:12:06.254Z",
+  "frontendReview": {
+    "verdict": "scoped CLEAR",
+    "messageRow": 62878,
+    "head": "b5c265339fe6af9341baccc628295a95a9e46e01"
+  },
+  "fullAttempts": [
+    {
+      "head": "b5c265339fe6af9341baccc628295a95a9e46e01",
+      "exit": 2,
+      "pass": 6543,
+      "skip": 8,
+      "fail": 1,
+      "assertions": 42805,
+      "files": 931,
+      "elapsedSeconds": 697.53,
+      "log": "/workspace/tmp/meters-visible-full/ci-fast.log",
+      "sha256": "30e11d40ef1607753ac4d5521c1889ae5ffe4b82746f8e433df22256c25fd1f7",
+      "failure": "Existing EF-S07 ten-vector corruption test exceeded default5000ms at5840.24ms"
+    }
+  ],
+  "fixtureCorrection": {
+    "path": "runtime/test/service-effects/scheduled-run-store-contracts.test.ts",
+    "sha256": "52dfde936757d22610899fb8f5ca8a93914c44e88b9fb2a33f1350adc7e8858c",
+    "pass": 31,
+    "fail": 0,
+    "assertions": 280,
+    "review": "read-only delegated judge scoped CLEAR: ten cases retain all mutations/assertions/fresh databases/disposal/default5000ms; continue becomes callback return",
+    "productionStorageChanged": false
+  }
 }
