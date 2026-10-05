@@ -57,7 +57,7 @@
   },
   "sourceHashes": {
     "runtime/src/secure/mcp-keychain.ts": "8a6b5c40c0f86a3c636c1bed697ea3ba3ce3517f11ee513e4501d0663f559da5",
-    "runtime/src/secure/mcp-server-edits.ts": "7274b939f59b3c3ee3ffcadd85ca0e21c1fdf124fa2ecddbbf4941e6622e7eb8",
+    "runtime/src/secure/mcp-server-edits.ts": "b5df4f7b9ef351d7c8fedb0dc796411e506c5ffd107a5da1cb55c41b70bee158",
     "runtime/src/agent-pool/mcp-codemode-runtime.ts": "9ad7249b1593f1bb5f0307dcb4193b74d370174e719d9e55512d59a6758975c9"
   },
   "logs": [
@@ -106,7 +106,7 @@
       "sha256": "dfd0c6d3af373830a215c2274b74fba3950b6edffc950c5db83eccf51ae8e409"
     }
   ],
-  "qualification": "focused candidate; final review and frozen full required",
+  "qualification": "corrected focused candidate; final correction review and fresh full required",
   "scope": "source-only/no installation/restart/live accounts/provider/native waiver",
   "failedFull": {
     "head": "b4cc07012950d0ed691133a61c26a22c95e8c3bf",
