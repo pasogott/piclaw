@@ -6,7 +6,7 @@ Rui approved this future service-plane design on 3 October 2026 and explicitly k
 
 ## Pi 1.0.3 target — 5 October 2026
 
-The [1.0.3 integration record](../../development/pi-103-integration.md) contains fresh package/auth/SDK evidence and fail-closed Azure provider-rename guidance. Historical 1.0.2 receipts remain unchanged. Installation, restart, live-account tests and production Delegate activation are separate.
+The [1.0.3 integration record](../../development/pi-103-integration.md) contains fresh package/auth/SDK evidence and fail-closed Azure provider-rename guidance. The [current acceptance checkpoint](evidence/earendil-103-remaining-acceptance.md) records merged source fixes, approved synthetic VM canary/quarantine evidence and unfinished production Delegate/live-rollout decisions. Historical 1.0.2 receipts remain unchanged. Smith installation/restart and live account/server tests remain separate.
 
 ## Pi 1.0.2 target — historical, 5 October 2026
 
@@ -31,13 +31,13 @@ Versioned 0.99.1/1.0.0 receipts and the approved 1.0.0 durable crosswalk remain 
 | Decision owner | Rui Carmo |
 | Assessment baseline | Piclaw `v2.13.2` |
 | Baseline commit | `0afd3ae645c423bed82deef80c343bcaa6f31d4d` |
-| Earendil runtime selection | Exact released Pi `1.0.2`, gitHead `cd32f7725fdbddbaecdff5b1e68491563394e0ca`, for integration with the retained MCP wrapper. Previous #1537/1.0.1 installation and #1497/1.0.0 migration remain historical receipts. |
+| Earendil runtime selection | Exact released Pi `1.0.3`, gitHead `d78dc83d633229d12f8b79631384c4c2717c399f`, for integration with the retained MCP wrapper. Previous #1537/1.0.1 installation and #1497/1.0.0 migration remain historical receipts. |
 | Earendil released evidence | Versioned 0.84–1.0.0 receipts remain historical. #1452/#1453 are completed 0.99.1 assessments; no historical result is relabelled as 1.0.1. Current-loop and durable qualification are separate. |
 | Earendil planning tip | `main` at `e4c75a73222ae2c72abb5f5314fa35ee8effc508`; historical planning evidence only, superseded for release-candidate assessment by published 0.87.0 |
 | Historical implementation capture | `dev` / draft #8963 at `d14d6b22327d545d6a253f932165b63e48d7f9c8`; spec blob `c7c18c74730d4971f8ca004924e44c7fbe236f25`, SHA-256 `1b200eb7b4255d5afd71e17bb4cf54f82e2c5d1d1e24ae87ba97363838251785` |
 | Evidence timestamps | Original capture: 2026-09-01 18:30 UTC; 0.85.1 follow-up: 2026-09-17–18; 0.87.0 candidate assessment: 2026-09-21; observations apply only to their recorded revisions |
 | Document state | #1493 maps 25 HC and 20 PC intents to pi-durable 1.0.0. Source contracts and the prior paused Memory probe are distinct; #1494 owns fresh semantics/storage qualification. |
-| Production changes | This candidate's source dependencies select 1.0.2. The prior installed-runtime receipt is 1.0.1; installation and restart need separate approval. No Native replacement, durable activation or new service authority is introduced. |
+| Production changes | Source dependencies select 1.0.3. Approved synthetic VM rollout/canary/quarantine is separately recorded; Smith's prior installed-runtime receipt is 1.0.1. New Smith installation/restart and live calls need separate approval. No Native replacement or durable activation is introduced. |
 | Final decision | Design approved by Rui on 3 October 2026. Pi-durable qualification, implementation and activation are out of scope; resuming that work requires a separate scope decision. |
 
 ## Problem
