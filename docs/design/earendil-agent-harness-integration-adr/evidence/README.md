@@ -1,6 +1,13 @@
 # Evidence register
 
-## Selected Pi 1.0.2 integration
+## Selected Pi 1.0.3 integration
+
+Released target: `d78dc83d633229d12f8b79631384c4c2717c399f`. Source retarget authorised after unified timeline/audit PR1557. Retain the shipped MCP wrapper; deployment/live accounts remain separately gated.
+
+- [Integration and Azure migration](../../../development/pi-103-integration.md)
+- Fresh [registry](receipts/earendil-103-registry.json), [package admission](receipts/earendil-103-package-admission.json), [provider inventory](receipts/earendil-103-provider-auth.json), [public MCP types](receipts/earendil-103-mcp-public.json), [CLI](receipts/earendil-103-packaged-cli-auth-bun.json), [browser](receipts/earendil-103-provider-browser-bun.json), [devices](receipts/earendil-103-provider-devices-bun.json), [Codex device](receipts/earendil-103-codex-device-bun.json) and [private UI](receipts/earendil-103-anthropic-private-ui.json)
+
+## Historical Pi 1.0.2 integration
 
 Exact released target: `cd32f7725fdbddbaecdff5b1e68491563394e0ca`. Rui authorised source retargeting with the standard shipped MCP wrapper retained. Native parity/removal and pi-durable are future scope; installation, restart and real-account tests need separate approval.
 

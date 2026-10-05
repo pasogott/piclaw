@@ -140,8 +140,8 @@ test("public google-vertex login produces service-account env without an API key
   expect(await auth.resolve({ ctx: ctx.ctx, credential: result.credential, signal })).toEqual({ auth: {}, env: result.credential.env, source: "stored credential" });
 });
 
-test("public azure-openai-responses auth resolves stored, env, and missing API-key states", async () => {
-  const { auth } = expectAuthApisRequired("azure-openai-responses");
+test("public azure auth resolves stored, env, and missing API-key states", async () => {
+  const { auth } = expectAuthApisRequired("azure");
   const stored = syntheticContext();
   expect(await auth.resolve({ ctx: stored.ctx, credential: { type: "api_key", key: "synthetic-known-azure-stored" }, signal }))
     .toEqual({ auth: { apiKey: "synthetic-known-azure-stored" }, env: undefined, source: "stored credential" });
@@ -151,11 +151,11 @@ test("public azure-openai-responses auth resolves stored, env, and missing API-k
   expect(await auth.resolve({ ctx: missing.ctx, signal })).toBeUndefined();
 });
 
-test("public azure-openai-responses keeps endpoint setup separate from exact auth method metadata", () => {
-  const { provider, auth } = expectAuthApisRequired("azure-openai-responses");
+test("public azure keeps endpoint setup separate from exact auth method metadata", () => {
+  const { provider, auth } = expectAuthApisRequired("azure");
   expect({ package: `${manifest.name}@${manifest.version}`, id: provider.id, name: provider.name, baseUrl: provider.baseUrl,
     authName: auth.name, authKeys: Object.keys(auth).sort(), oauth: provider.auth.oauth }).toEqual({
-    package: "@earendil-works/pi-ai@1.0.2", id: "azure-openai-responses", name: "Azure OpenAI", baseUrl: undefined,
+    package: "@earendil-works/pi-ai@1.0.3", id: "azure", name: "Azure", baseUrl: undefined,
     authName: "Azure OpenAI API key", authKeys: ["login", "name", "resolve"], oauth: undefined,
   });
 });

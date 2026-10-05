@@ -56,5 +56,5 @@ try{
   const third=await create();assert.ok(!third.session.getActiveToolNames().includes("codemode"));
   assert.equal(JSON.parse(readFileSync(join(root,".piclaw/config.json"),"utf8")).domains.mcp.codemode,"off");
   const guard=(globalThis as any).__ADMISSION_ENFORCEMENT__;assert.equal(guard.networkAttempts,0);assert.equal(guard.childProcessAttempts,0);
-  console.log(JSON.stringify({version:"1.0.2",currentAndNewSessions:true,scriptCalls:invoked,nestedPolicy:true,modelsDisabled:true,offFailClosed:true,historyPreserved:true,networkAttempts:guard.networkAttempts,childProcessAttempts:guard.childProcessAttempts}));
+  console.log(JSON.stringify({version:JSON.parse(readFileSync(new URL('../package.json',import.meta.resolve('@earendil-works/pi-coding-agent')),'utf8')).version,currentAndNewSessions:true,scriptCalls:invoked,nestedPolicy:true,modelsDisabled:true,offFailClosed:true,historyPreserved:true,networkAttempts:guard.networkAttempts,childProcessAttempts:guard.childProcessAttempts}));
 }finally{for(const {session} of sessions){await session.abort();session.dispose();}}

@@ -19,11 +19,11 @@ function tree(input: string): string {
   };
   visit(base); return createHash("sha256").update(rows.join("\n")).digest("hex");
 }
-test("actual exact1.0.2 admission binds exact package payloads, registry and providers", () => {
-  const r = JSON.parse(readFileSync(join(receipts, "earendil-102-package-admission.json"), "utf8"));
-  const registry = JSON.parse(readFileSync(join(receipts, "earendil-102-registry.json"), "utf8"));
-  const providers = JSON.parse(readFileSync(join(receipts, "earendil-102-provider-auth.json"), "utf8"));
-  expect(r.expected).toEqual({ version: "1.0.2", gitHead: "cd32f7725fdbddbaecdff5b1e68491563394e0ca" });
+test("actual exact1.0.3 admission binds exact package payloads, registry and providers", () => {
+  const r = JSON.parse(readFileSync(join(receipts, "earendil-103-package-admission.json"), "utf8"));
+  const registry = JSON.parse(readFileSync(join(receipts, "earendil-103-registry.json"), "utf8"));
+  const providers = JSON.parse(readFileSync(join(receipts, "earendil-103-provider-auth.json"), "utf8"));
+  expect(r.expected).toEqual({ version: "1.0.3", gitHead: "d78dc83d633229d12f8b79631384c4c2717c399f" });
   expect(r.tarballVerification.map((p: { name: string }) => p.name).sort()).toEqual(names);
   expect(r.registryReceipt.packages.map((p: { name: string }) => p.name).sort()).toEqual(names);
   expect(registry.map((p: { name: string }) => p.name).sort()).toEqual(names);
@@ -32,11 +32,11 @@ test("actual exact1.0.2 admission binds exact package payloads, registry and pro
   expect(r.runtimes[0].sideEffectEnforcement).toMatchObject({ networkDenied: true, childProcessDenied: true, networkAttempts: 0, childProcessAttempts: 0 });
   for (const p of r.tarballVerification) {
     const registered = registry.find((entry: { name: string }) => entry.name === p.name); expect(registered).toBeDefined();
-    expect(registered.version).toBe("1.0.2"); expect(registered.gitHead).toBe(r.expected.gitHead);
-    expect(p.shasum).toBe(registered.dist.shasum); expect(p.integrity).toBe(registered.dist.integrity); expect(p.tarball).toContain("-1.0.2.tgz");
+    expect(registered.version).toBe("1.0.3"); expect(registered.gitHead).toBe(r.expected.gitHead);
+    expect(p.shasum).toBe(registered.dist.shasum); expect(p.integrity).toBe(registered.dist.integrity); expect(p.tarball).toContain("-1.0.3.tgz");
     const canonical = r.registryReceipt.packages.find((entry: { name: string }) => entry.name === p.name);
-    expect(canonical.version).toBe("1.0.2"); expect(canonical.shasum).toBe(p.shasum); expect(canonical.integrity).toBe(p.integrity);
-    expect(JSON.parse(readFileSync(join(root, "node_modules", p.name, "package.json"), "utf8")).version).toBe("1.0.2");
+    expect(canonical.version).toBe("1.0.3"); expect(canonical.shasum).toBe(p.shasum); expect(canonical.integrity).toBe(p.integrity);
+    expect(JSON.parse(readFileSync(join(root, "node_modules", p.name, "package.json"), "utf8")).version).toBe("1.0.3");
     expect(p.installedTreeSha256).toBe(tree(join(root, "node_modules", p.name)));
   }
   // Raw paths were redacted for publication. This hash identifies the local
