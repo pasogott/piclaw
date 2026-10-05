@@ -1,8 +1,9 @@
-import { useState, useCallback, useEffect, useRef } from "preact/hooks";
+import { useState, useCallback, useEffect, useLayoutEffect, useRef } from "preact/hooks";
 import type { Signal } from "@preact/signals";
 import { buildChatUrl } from "../../api/chat-jid";
 import { normalizePost, mergeInteractions } from "./helpers";
 import type { Interaction, TimelineResponse } from "./types";
+import { fetchContiguousTimeline } from '../../../../../../src/ui/timeline-catch-up';
 
 import { createLogger } from "../../utils/logger";
 const log = createLogger("MessageList");
@@ -29,6 +30,18 @@ export function useTimelineFetch({
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const initialTimelineFetchedRef = useRef(false);
+  const messagesRef = useRef<Interaction[]>([]);
+  messagesRef.current = messages;
+  const generation = useRef(0);
+  const resumePending = useRef(false);
+  const restoreAnchor = useRef<{ root: HTMLDivElement; top: number; height: number } | null>(null);
+  const initialFollow = useRef(false);
+  useLayoutEffect(() => {
+    if (initialFollow.current) { initialFollow.current = false; scrollToBottom(true); }
+    const anchor = restoreAnchor.current; restoreAnchor.current = null;
+    if (anchor && listRef.current === anchor.root && anchor.root.isConnected) anchor.root.scrollTop = Math.min(0, anchor.top - (anchor.root.scrollHeight - anchor.height));
+  }, [messages]);
+  useEffect(() => () => { generation.current++; }, []);
 
   const fetchTimeline = useCallback(async () => {
     const res = await fetch(buildChatUrl("/timeline", { limit: "50" }), {
@@ -55,42 +68,76 @@ export function useTimelineFetch({
   }, [setConnected]);
 
   const refetchTimelineOnReconnect = useCallback(async () => {
-    const timeline = await fetchTimeline();
-    if (!timeline) return;
-    setMessages((prev) => mergeInteractions(prev, timeline.posts));
+    const root = listRef.current;
+    const beforeId = Math.max(0, ...messagesRef.current.map(row => Number(row.id) || 0));
+    const capturedMessages = messagesRef.current;
+    const chatUrl = buildChatUrl('/timeline');
+    const current = ++generation.current;
+    const raw = await fetchContiguousTimeline(messagesRef.current, async (limit: number, before: number | null) => {
+      const url = new URL(chatUrl, location.href); url.searchParams.set('limit', String(limit)); if (before !== null) url.searchParams.set('before', String(before));
+      const response = await fetch(url, { credentials: 'include' });
+      if (!response.ok) throw Error(`HTTP ${response.status}`);
+      const result = await response.json();
+      return { ...result, posts: (result.posts ?? []).map(normalizePost) };
+    }, () => current === generation.current && messagesRef.current === capturedMessages && buildChatUrl('/timeline') === chatUrl);
+    const timeline = raw ? { posts: (raw.posts as Interaction[]).slice().sort((a,b) => a.id - b.id), hasMore: raw.has_more } : null;
+    if (!timeline || listRef.current !== root) return;
+    // Capture at publication, not request start: the reader may have moved
+    // while the network pages were in flight.
+    const atLatest = !root || Math.abs(root.scrollTop) < 60;
+    const beforeTop = root?.scrollTop ?? 0, beforeHeight = root?.scrollHeight ?? 0;
+    if (root && !atLatest) restoreAnchor.current = { root, top: beforeTop, height: beforeHeight };
+    setMessages(timeline.posts);
     setHasMore(timeline.hasMore);
     timelineError.value = null;
-    scrollToBottom(true);
+    if (atLatest) scrollToBottom(true);
     // Ensure scroll after DOM paint
-    requestAnimationFrame(() => scrollToBottom(true));
+    requestAnimationFrame(() => {
+      if (listRef.current !== root || !root?.isConnected) return;
+      if (atLatest) scrollToBottom(true);
+      else root.scrollTop = Math.min(0, beforeTop - (root.scrollHeight - beforeHeight));
+      if (!atLatest && Math.max(0, ...timeline.posts.map(row => Number(row.id) || 0)) > beforeId) root.dispatchEvent(new Event('piclaw:timeline-arrivals'));
+    });
   }, [fetchTimeline, scrollToBottom, timelineError]);
+
+  useEffect(() => {
+    const resume = () => {
+      if (document.visibilityState === 'hidden' || resumePending.current) return;
+      resumePending.current = true;
+      void refetchTimelineOnReconnect().catch(error => { log.warn('timeline resume failed:', error); timelineError.value = 'Could not refresh messages. Try again.'; })
+        .finally(() => { resumePending.current = false; });
+    };
+    window.addEventListener('pageshow', resume); window.addEventListener('focus', resume); document.addEventListener('visibilitychange', resume);
+    return () => { window.removeEventListener('pageshow', resume); window.removeEventListener('focus', resume); document.removeEventListener('visibilitychange', resume); };
+  }, [refetchTimelineOnReconnect, timelineError]);
 
   // Initial fetch
   useEffect(() => {
+    let cancelled = false;
+    const current = generation.current, chatUrl = buildChatUrl('/timeline');
     async function fetchInitialTimeline() {
       try {
         const timeline = await fetchTimeline();
-        if (!timeline) return;
+        if (!timeline || cancelled || current !== generation.current || chatUrl !== buildChatUrl('/timeline')) return;
+        initialFollow.current = true;
         setMessages((prev) => mergeInteractions(prev, timeline.posts));
         setHasMore(timeline.hasMore);
         timelineError.value = null;
         setConnected(true);
         initialTimelineFetchedRef.current = true;
-        // Scroll to bottom after first load — wait for DOM
-        setTimeout(() => {
-          scrollToBottom(true);
-          requestAnimationFrame(() => scrollToBottom(true));
-        }, 100);
       } catch {
-        setConnected(false);
+        if (!cancelled) setConnected(false);
       }
     }
     fetchInitialTimeline();
+    return () => { cancelled = true; initialFollow.current = false; };
   }, [fetchTimeline, scrollToBottom, setConnected, timelineError]);
 
   const loadMore = async () => {
     if (!messages.length || loadingMore) return;
     const oldestId = messages[0].id;
+    const current = generation.current, chatUrl = buildChatUrl('/timeline');
+    const capturedMessages = messagesRef.current;
     setLoadingMore(true);
     try {
       const res = await fetch(
@@ -99,17 +146,18 @@ export function useTimelineFetch({
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: TimelineResponse = await res.json();
+      if (current !== generation.current || chatUrl !== buildChatUrl('/timeline') || capturedMessages !== messagesRef.current) return;
       const olderPosts = (data.posts ?? []).map(normalizePost);
       setHasMore(data.has_more ?? false);
       timelineError.value = null;
       if (olderPosts.length) {
         const el = listRef.current;
-        const prevScrollHeight = el?.scrollHeight ?? 0;
+        const prevScrollTop = el?.scrollTop ?? 0;
         setMessages((prev) => mergeInteractions(olderPosts, prev));
         // Restore scroll position
         requestAnimationFrame(() => {
-          if (el) {
-            el.scrollTop = el.scrollHeight - prevScrollHeight;
+          if (el && listRef.current === el) {
+            el.scrollTop = prevScrollTop;
           }
         });
       }

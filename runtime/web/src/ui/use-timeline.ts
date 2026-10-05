@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from '../vendor/preact-htm.js';
 import { getTimeline, getPostsByHashtag } from '../api.js';
 import { cacheTimelineSnapshot, getCachedTimelineSnapshot } from './app-timeline-cache.js';
+import { fetchContiguousTimeline } from './timeline-catch-up.js';
+export { fetchContiguousTimeline } from './timeline-catch-up.js';
 import { dedupePosts } from './timeline-utils.js';
 
 export function isTimelineRequestCurrent({
@@ -131,7 +133,8 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
       if (cached) {
         setTimelineState(cached.posts, cached.has_more);
         const backgroundMutationVersion = mutationVersionRef.current;
-        void getTimeline(10, null, chatJid)
+        void fetchContiguousTimeline(cached.posts, (limit, before) => getTimeline(limit, before, chatJid),
+          () => token === chatTokenRef.current && mutationVersionRef.current === backgroundMutationVersion && viewModeCacheableRef.current)
           .then((result) => {
             if (token !== chatTokenRef.current || mutationVersionRef.current !== backgroundMutationVersion) return;
             // Drop the refresh if the user has switched into hashtag/search
@@ -139,9 +142,10 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
             // change across in-chat view-mode transitions, so it would not
             // otherwise invalidate this callback.
             if (!viewModeCacheableRef.current) return;
+            if (!result) return;
             const freshPosts = Array.isArray(result?.posts) ? result.posts : [];
             const freshHasMore = Boolean(result?.has_more);
-            setTimelineState(mergeFreshTimelinePosts(postsRef.current, freshPosts), freshHasMore);
+            setTimelineState(freshPosts, freshHasMore);
           })
           .catch((error) => {
             if (token !== chatTokenRef.current) return;
@@ -150,7 +154,7 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
         return;
       }
 
-      const result = await getTimeline(10, null, chatJid);
+      const result = await getTimeline(50, null, chatJid);
       applyFreshPayload(result);
     } catch (error) {
       if (token !== chatTokenRef.current) return;
@@ -164,7 +168,9 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
     const mutationVersion = mutationVersionRef.current;
     const requestId = ++refreshRequestRef.current;
     try {
-      const result = await getTimeline(10, null, chatJid);
+      const result = await fetchContiguousTimeline(postsRef.current, (limit, before) => getTimeline(limit, before, chatJid),
+        () => isTimelineRequestCurrent({ requestId, currentRequestId: refreshRequestRef.current, mutationVersion, currentMutationVersion: mutationVersionRef.current, chatToken: token, currentChatToken: chatTokenRef.current }));
+      if (!result) return;
       if (!isTimelineRequestCurrent({
         requestId,
         currentRequestId: refreshRequestRef.current,
@@ -173,7 +179,7 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
         chatToken: token,
         currentChatToken: chatTokenRef.current,
       })) return;
-      setTimelineState(mergeFreshTimelinePosts(postsRef.current, result?.posts), Boolean(result?.has_more));
+      setTimelineState(result.posts, Boolean(result?.has_more));
     } catch (error) {
       if (token !== chatTokenRef.current) return;
       console.error('Failed to refresh timeline:', error);
@@ -184,6 +190,7 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
   const loadMore = useCallback(async (options = {}) => {
     const token = chatTokenRef.current;
     const currentPosts = postsRef.current;
+    const mutationVersion = mutationVersionRef.current;
     if (!currentPosts || currentPosts.length === 0) return;
     if (loadingMoreRef.current) return;
     const { preserveScroll = true, preserveMode = 'top', allowRepeat = false } = options;
@@ -205,6 +212,7 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
     try {
       const result = await getTimeline(10, oldestId, chatJid);
       if (token !== chatTokenRef.current) return;
+      if (mutationVersion !== mutationVersionRef.current) { lastBeforeIdRef.current = null; return; }
       if (result.posts.length > 0) {
         applyUpdate(() => {
           const nextPosts = dedupePosts([...result.posts, ...(postsRef.current || [])]);
@@ -215,6 +223,7 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
       }
     } catch (error) {
       if (token !== chatTokenRef.current) return;
+      lastBeforeIdRef.current = null;
       console.error('Failed to load more posts:', error);
     } finally {
       if (token === chatTokenRef.current) {

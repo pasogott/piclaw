@@ -55,15 +55,15 @@ export function useScrollManager(
   const userScrolledRef = useRef(false);
 
   const scrollToBottom = useCallback((force = false) => {
-    if (force || !userScrolledRef.current) {
+    if (force || (!userScrolledRef.current && Math.abs(listRef.current?.scrollTop ?? 0) < 60)) {
       const doScroll = () => {
         const el = listRef.current;
         // column-reverse: scrollTop 0 = visual bottom
-        if (el) el.scrollTop = 0;
+        if (el && (force || Math.abs(el.scrollTop) < 60)) el.scrollTop = 0;
       };
       doScroll();
       // Double-tap: ensure scroll after Preact render cycle
-      requestAnimationFrame(doScroll);
+      requestAnimationFrame(() => { if (Math.abs(listRef.current?.scrollTop ?? 0) < 60) doScroll(); });
     }
   }, []);
 

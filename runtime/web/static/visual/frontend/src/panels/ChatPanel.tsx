@@ -64,6 +64,8 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounterRef = useRef(0);
   const [isListening, setIsListening] = useState(false);
+  const [latestState, setLatestState] = useState({ away: false, hasNew: false });
+  useEffect(() => { const handler = (event: Event) => { const detail = (event as CustomEvent).detail; if (detail?.scroller?.isConnected) setLatestState({ away: !!detail.away, hasNew: !!detail.hasNew }); }; window.addEventListener('piclaw:timeline-latest-state', handler); return () => window.removeEventListener('piclaw:timeline-latest-state', handler); }, []);
   const recognitionRef = useRef<any>(null);
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => {
     return safeGetItem("piclaw:notifications") === "on";
@@ -532,6 +534,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
           )}
 
           <div className="chat__compose">
+            <button type="button" className={`compose-latest-divider ${latestState.away ? 'away-from-latest' : ''} ${latestState.hasNew ? 'has-new-messages' : ''}`} aria-label={latestState.hasNew ? 'New messages — jump to latest' : 'Jump to latest message'} onClick={() => window.dispatchEvent(new Event('piclaw:jump-latest'))}><span className="compose-latest-chevron" aria-hidden="true">⌄</span></button>
             <input
               ref={fileInputRef}
               type="file"

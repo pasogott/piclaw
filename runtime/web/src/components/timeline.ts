@@ -6,6 +6,7 @@ import { getAgentAvatarUrl, getAgentName } from '../ui/agent-utils.js';
 export const TIMELINE_WINDOW_SIZE = 16;
 export const TIMELINE_WINDOW_THRESHOLD = 100;
 export const TIMELINE_REVEAL_EVENT = 'piclaw:reveal-timeline-post';
+export const TIMELINE_JUMP_LATEST_EVENT = 'piclaw:jump-timeline-latest';
 
 export function haveSameTimelineProps(currentProps, nextProps) {
     if (currentProps === nextProps) return true;
@@ -44,6 +45,18 @@ export function findTimelineIndexAtOffset(prefixHeights, offset) {
         else high = middle - 1;
     }
     return Math.min(prefixHeights.length - 2, low);
+}
+
+/** Render the actual viewport plus a small row buffer, never a fixed number
+ * that can leave visible spacer when short rows or the viewport change. */
+export function getTimelineViewportWindow(prefixHeights, offset, viewportHeight, atLatest = false) {
+    const count = Math.max(0, prefixHeights.length - 1);
+    const total = prefixHeights[count] || 0;
+    const top = atLatest ? Math.max(0, total - viewportHeight) : Math.max(0, offset);
+    const first = findTimelineIndexAtOffset(prefixHeights, top);
+    const last = atLatest ? count : Math.min(count, findTimelineIndexAtOffset(prefixHeights, top + viewportHeight) + 1);
+    const end = Math.min(count, Math.max(last + 4, first + TIMELINE_WINDOW_SIZE));
+    return { start: Math.max(0, Math.min(first - 4, end - TIMELINE_WINDOW_SIZE)), end };
 }
 
 /**
@@ -154,25 +167,39 @@ function TimelineView({ posts, hasMore, onLoadMore, onPostClick, onHashtagClick,
     const handleScroll = useCallback((event) => {
         if (isAnchorScrolling(event.target)) return;
         const { scrollTop, scrollHeight, clientHeight } = event.target;
-        const distanceFromTop = reverse ? (scrollHeight - clientHeight - scrollTop) : scrollTop;
+        const distanceFromTop = reverse ? (scrollHeight - clientHeight + scrollTop) : scrollTop;
         if (distanceFromTop < Math.max(300, clientHeight)) triggerLoadMore();
 
         if (shouldWindow) {
             const contentOffset = reverse
                 ? Math.max(0, scrollHeight - clientHeight + scrollTop)
                 : Math.max(0, scrollTop);
-            const targetIndex = findTimelineIndexAtOffset(virtualHeights, contentOffset);
-            setWindowRange((current) => {
-                if (reverse && scrollTop >= -2) {
-                    const latest = getLatestTimelineWindow(displayPosts.length);
-                    return current.start === latest.start && current.end === latest.end ? current : latest;
-                }
-                return targetIndex >= current.start + 4 && targetIndex < current.end - 4
-                    ? current
-                    : getTimelineWindowAroundIndex(targetIndex, displayPosts.length);
-            });
+            const next = getTimelineViewportWindow(virtualHeights, contentOffset, clientHeight, reverse && scrollTop >= -2);
+            setWindowRange(current => current.start === next.start && current.end === next.end ? current : next);
         }
     }, [displayPosts.length, reverse, shouldWindow, triggerLoadMore, virtualHeights]);
+
+    useLayoutEffect(() => {
+        const root = timelineRef?.current;
+        if (!root || !shouldWindow) return;
+        let frame = 0;
+        const reconcile = () => {
+            if (!root.clientHeight || !root.isConnected) return;
+            const offset = Math.max(0, virtualHeights[displayPosts.length] - root.clientHeight + root.scrollTop);
+            const next = getTimelineViewportWindow(virtualHeights, offset, root.clientHeight, root.scrollTop >= -2);
+            setWindowRange(current => current.start === next.start && current.end === next.end ? current : next);
+        };
+        const schedule = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; reconcile(); }); };
+        const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
+        observer?.observe(root);
+        const visible = () => { if (document.visibilityState !== 'hidden') schedule(); };
+        root.addEventListener(TIMELINE_JUMP_LATEST_EVENT, schedule);
+        window.addEventListener('pageshow', schedule);
+        window.addEventListener('focus', visible);
+        document.addEventListener('visibilitychange', visible);
+        reconcile();
+        return () => { observer?.disconnect(); if (frame) cancelAnimationFrame(frame); root.removeEventListener(TIMELINE_JUMP_LATEST_EVENT, schedule); window.removeEventListener('pageshow', schedule); window.removeEventListener('focus', visible); document.removeEventListener('visibilitychange', visible); };
+    }, [displayPosts.length, shouldWindow, timelineRef, virtualHeights]);
 
     useLayoutEffect(() => {
         const previousPosts = previousPostsRef.current;
@@ -184,25 +211,25 @@ function TimelineView({ posts, hasMore, onLoadMore, onPostClick, onHashtagClick,
 
         setWindowRange((current) => {
             if (previousPosts.length === 0 || current.end === 0) {
-                return getLatestTimelineWindow(displayPosts.length);
+                return getTimelineViewportWindow(virtualHeights, 0, timelineRef?.current?.clientHeight || 0, true);
             }
-            const wasAtNewest = current.end >= previousPosts.length;
-            if (wasAtNewest) return getLatestTimelineWindow(displayPosts.length);
+            const wasAtNewest = (timelineRef?.current?.scrollTop ?? 0) >= -2;
+            if (wasAtNewest) return getTimelineViewportWindow(virtualHeights, 0, timelineRef?.current?.clientHeight || 0, true);
 
             const firstVisibleId = previousPosts[current.start]?.id;
             const preservedStart = displayPosts.findIndex((post) => post.id === firstVisibleId);
             return preservedStart >= 0
-                ? { start: preservedStart, end: Math.min(displayPosts.length, preservedStart + TIMELINE_WINDOW_SIZE) }
+                ? { start: preservedStart, end: Math.min(displayPosts.length, preservedStart + Math.max(TIMELINE_WINDOW_SIZE, current.end - current.start)) }
                 : getLatestTimelineWindow(displayPosts.length);
         });
     }, [displayPosts, shouldWindow]);
 
     useLayoutEffect(() => {
-        if (!shouldWindow || windowRange.end < displayPosts.length) return;
+        if (!shouldWindow || windowRange.end < displayPosts.length || (timelineRef?.current?.scrollTop ?? 0) < -2) return;
         const root = timelineRef?.current;
         if (!root) return;
         const frame = requestAnimationFrame(() => {
-            if (root.scrollTop !== 0) root.scrollTop = 0;
+            if (root.isConnected && root.scrollTop >= -2 && root.scrollTop !== 0) root.scrollTop = 0;
         });
         return () => cancelAnimationFrame(frame);
     }, [displayPosts.length, shouldWindow, timelineRef, windowRange.end]);
@@ -243,11 +270,15 @@ function TimelineView({ posts, hasMore, onLoadMore, onPostClick, onHashtagClick,
             const targetId = String(event?.detail?.id ?? '');
             if (!targetId || !shouldWindow) return;
             const index = displayPosts.findIndex((post) => String(post.id) === targetId);
-            if (index >= 0) setWindowRange(getTimelineWindowAroundIndex(index, displayPosts.length));
+            if (index >= 0) {
+                const root = timelineRef?.current;
+                if (root) root.scrollTop = Math.min(0, virtualHeights[index] - (virtualHeights[displayPosts.length] - root.clientHeight));
+                setWindowRange(getTimelineWindowAroundIndex(index, displayPosts.length));
+            }
         };
         window.addEventListener(TIMELINE_REVEAL_EVENT, reveal);
         return () => window.removeEventListener(TIMELINE_REVEAL_EVENT, reveal);
-    }, [displayPosts, shouldWindow]);
+    }, [displayPosts, shouldWindow, virtualHeights, timelineRef]);
 
     useEffect(() => {
         if (!hasIntersectionObserver) return;
@@ -271,14 +302,14 @@ function TimelineView({ posts, hasMore, onLoadMore, onPostClick, onHashtagClick,
     useEffect(() => {
         if (hasIntersectionObserver || !timelineRef?.current) return;
         const { scrollTop, scrollHeight, clientHeight } = timelineRef.current;
-        const distanceFromTop = reverse ? (scrollHeight - clientHeight - scrollTop) : scrollTop;
+        const distanceFromTop = reverse ? (scrollHeight - clientHeight + scrollTop) : scrollTop;
         if (distanceFromTop < Math.max(300, clientHeight)) triggerLoadMoreRef.current?.();
     }, [hasIntersectionObserver, posts, hasMore, reverse, timelineRef]);
 
     useEffect(() => {
         if (!timelineRef?.current || !hasMore || loadingMore) return;
         const { scrollTop, scrollHeight, clientHeight } = timelineRef.current;
-        const distanceFromTop = reverse ? (scrollHeight - clientHeight - scrollTop) : scrollTop;
+        const distanceFromTop = reverse ? (scrollHeight - clientHeight + scrollTop) : scrollTop;
         if (scrollHeight <= clientHeight + 1 || distanceFromTop < Math.max(300, clientHeight)) {
             triggerLoadMoreRef.current?.();
         }
