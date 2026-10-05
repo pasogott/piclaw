@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-10-05T07:22:11.718Z",
+  "recordedAt": "2026-10-05T08:37:59.640Z",
   "baseMain": "62a71d139",
   "adapter": "dddfcf630508f42c169889c11dee94e69b746e7c",
   "focused": {
@@ -106,7 +106,7 @@
       "sha256": "dfd0c6d3af373830a215c2274b74fba3950b6edffc950c5db83eccf51ae8e409"
     }
   ],
-  "qualification": "MCP corrections reviewed; runner fixture corrected/tested; awaiting qualified released1.0.2 main and separate startup fix before fresh final gate",
+  "qualification": "released1.0.2 focused/browser/type/static qualified; fresh full integration gate next",
   "scope": "source-only/no installation/restart/live accounts/provider/native waiver",
   "failedFull": {
     "head": "b4cc07012950d0ed691133a61c26a22c95e8c3bf",
@@ -131,7 +131,7 @@
     "logSha256": "6bae91e61bc0f71190a4161e6f880a5093c44ce1ede3d6040dfbe8bace7c834e",
     "qualifying": false
   },
-  "integrationTarget": "released Pi1.0.2; qualified main adoption pending; prior1.0.1 evidence historical",
+  "integrationTarget": "released Pi1.0.2; qualified main d1858aa84f028038c4affb8d49d79943feb0fea7 adopted by merge",
   "failedFullV3": {
     "head": "18516e7565185a024e12db536ef497a13b43cee7",
     "pass": 6418,
@@ -175,5 +175,77 @@
         "sha256": "dfd0c6d3af373830a215c2274b74fba3950b6edffc950c5db83eccf51ae8e409"
       }
     ]
+  },
+  "released102": {
+    "baseMain": "d1858aa84f028038c4affb8d49d79943feb0fea7",
+    "adoptionHead": "e8706fd8cc4651caa4ced9f9d55ab021a9cb2109",
+    "focused": {
+      "pass": 203,
+      "fail": 0,
+      "assertions": 852,
+      "files": 16
+    },
+    "browser": {
+      "pass": 14,
+      "fail": 0,
+      "assertions": 590
+    },
+    "profile": {
+      "kind": "mcp-server-settings-read-preview",
+      "requests": 100,
+      "servers": 25,
+      "diskDatabase": true,
+      "wallMs": 148.214027,
+      "cpuUs": {
+        "user": 139439,
+        "system": 15640
+      },
+      "eventLoop": {
+        "maxMs": 16.33789,
+        "p99Ms": 9.904127,
+        "samples": 52
+      },
+      "methods": {
+        "query": {
+          "calls": 250,
+          "ms": 0.3469670000009728
+        },
+        "parse": {
+          "calls": 1051,
+          "ms": 4.652892000001771
+        },
+        "stringify": {
+          "calls": 650,
+          "ms": 1.0926569999995763
+        }
+      },
+      "memory": {
+        "rss": 124575744,
+        "heapTotal": 29645824,
+        "heapUsed": 18201045,
+        "external": 6186529,
+        "arrayBuffers": 138335
+      },
+      "scope": "isolated synthetic direct owner handler with disk SELECT1 authority probe; filesystem effective projection, no network/keychain/Apply/server/provider execution; not whole HTTP auth/CSRF or production benchmark"
+    },
+    "logs": [
+      {
+        "log": "mcp-settings-102-integrated-focused.log",
+        "sha256": "bb9b0c0b922ae24baa53c579de7ff1e9942afecbc3345e3b555ee78526f387a4"
+      },
+      {
+        "log": "mcp-settings-102-browser.log",
+        "sha256": "8199d161eb81857e0b38691a39b7edf41117119985fe56d78832115625d68db5"
+      },
+      {
+        "log": "mcp-settings-102-types.log",
+        "sha256": "dfd0c6d3af373830a215c2274b74fba3950b6edffc950c5db83eccf51ae8e409"
+      },
+      {
+        "log": "mcp-settings-102-profile.log",
+        "sha256": "9ac3af60ecacf9b3ebebfb70ab27aba95c07550353be72d956c1a942e9c1552c"
+      }
+    ],
+    "qualifyingFull": false
   }
 }

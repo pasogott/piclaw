@@ -1,6 +1,6 @@
 # Adapter MCP server Settings
 
-Both MCP panes now preview and apply adapter server overrides through owner-only direct routes. Native engine replacement stays unavailable. Source only: no production installation, restart, configuration mutation or real-account test.
+Both MCP panes now preview and apply adapter server overrides through owner-only direct routes on released Pi 1.0.2, retaining the shipped wrapper. Native engine replacement is outside this integration scope. Source only: no production installation, restart, configuration mutation or real-account test.
 
 ## Change boundary
 
@@ -30,7 +30,15 @@ The final 1.0.1 full v3 failed outside the MCP feature: 6,418 passed, eight skip
 
 Runner profiling isolated 6,564 ms in disposable schema setup and 21 ms in script execution/settlement. Its fixture now prepares the same disk database in a separately bounded 15-second setup hook (14-second child cleanup); the original runner test retains its 15-second bound, 10-second child watchdog, all settlement/output/ownership assertions and modes. Prepared suite passed nine tests / 36 assertions; final small-busy passed four assertions in 98.75 ms after setup. No production runner or durability change was made.
 
-Rui retargeted current integration to released Pi 1.0.2. The current Pi 1.0.1 results remain historical; final qualification waits for separately qualified 1.0.2 mainline adoption. Keep the shipped adapter wrapper. Unreleased OAuth cancellation changes, Native parity/removal, installation, restart and real-account tests are excluded.
+Rui retargeted current integration to released Pi 1.0.2. Qualified main PR1549 at `d1858aa84f028038c4affb8d49d79943feb0fea7` was adopted by merge, preserving the approved adapter pin and runner-fixture correction. Prior Pi 1.0.1 results remain historical. Keep the shipped adapter wrapper. Unreleased OAuth cancellation changes, Native parity/removal, installation, restart and real-account tests are excluded.
+
+## Released 1.0.2 integrated evidence
+
+- Integrated Settings/credential/writer/ACK/current+new SDK/startup/runner suite: 203 passed / 852 assertions across 16 files, 17.95 seconds.
+- Fresh rebuilt both-skin Chromium/WebKit matrix: 14 passed / 590 assertions, 13.65 seconds. Web build: nine passed / 26 assertions.
+- Five type stages, scoped lint, silent-catch/structured logging/dependency/action/env/circular/pack/stale checks pass. MCP security source hashes match final corrected review; only active SDK receipt version/pin fixture conflicts were reconciled during adoption.
+- Fresh 100 read/preview requests/25 servers: wall148.21ms, CPUuser139439µs/system15640µs, event-loopmax16.34ms/p999.90ms/52samples; JSONparse1051/4.65ms/stringify650/1.09ms/query250/0.35ms. Synthetic fixture scope remains unchanged; no performance causation or production throughput claim.
+- A new frozen full gate is required on this integrated head. No old failed run or prior-target green substitutes for it.
 
 ## Retained failures
 
