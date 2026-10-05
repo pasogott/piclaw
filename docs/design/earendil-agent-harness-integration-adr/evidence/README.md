@@ -6,6 +6,7 @@ Exact upstream target: `a7229ddc21810d6245105978033b7df645ecc2f7`. [Source migra
 
 | Evidence | Scope / state |
 |---|---|
+| [Remaining acceptance](earendil-101-remaining-acceptance.md) | Current MCP-01–15 and AUTH-01–08 evidence/gaps, merged inactive request foundations and separate rollout permissions. |
 | [Source migration](../../../development/pi-101-migration.md) | Exact core package pins and current-loop qualification; later source merges do not extend the initial installation receipt. |
 | [Registry provenance](receipts/earendil-101-registry.json) and [package admission](receipts/earendil-101-package-admission.json) | Fresh exact-version archives, package closure and offline admission. |
 | [Provider auth](receipts/earendil-101-provider-auth.json), [browser](receipts/earendil-101-provider-browser-bun.json) and [devices](receipts/earendil-101-provider-devices-bun.json) | Isolated synthetic public auth flows; real-account parity/canary is separate. |
