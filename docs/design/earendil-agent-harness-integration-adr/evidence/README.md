@@ -5,6 +5,7 @@
 Released target: `d78dc83d633229d12f8b79631384c4c2717c399f`. Source retarget authorised after unified timeline/audit PR1557. Retain the shipped MCP wrapper; deployment/live accounts remain separately gated.
 
 - [Integration and Azure migration](../../../development/pi-103-integration.md)
+- [Fresh-workspace add-on host peers](../../../development/pi-103-core-addon-peers.md) — offline seed import correction and preserved existing-workspace semantics; guarded seven-entry import and frozen-source evidence, no deployment or Delegate activation
 - [Synthetic VM canary and private-config correction](../../../development/pi-103-vm-canary.md) — corrected 30-minute Classic window / 59 cycles, bounded both-skin/MCP/scheduler/family checks, preserved failure and quarantine-only rollback; live/production Delegate gates remain open
 - [Deeper workload audit](../../../development/pi-103-deeper-performance.md) — scoped scheduler, family contention and natural reclamation observations; captured-authority async admission correction, exploratory comparison provenance and retained failures; whole-plan acceptance and deployment remain gated
 - [Bounded retention and actual scheduler-agent](../../../development/pi-103-soak-agent.md) — corrected 60-second history shapes, real AgentPool/SDK prompting and live leaf restoration; deterministic provider and delivery sink, broader/live/Delegate gates remain separate
