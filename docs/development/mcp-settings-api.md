@@ -4,6 +4,16 @@
 
 All three routes require a freshly resolved single-user administrator principal. Identity is checked after body I/O, before mutation, after participant abort and before publishing. Family and isolated-container modes deny access. Responses are private/no-store; unauthorised requests are rejected before body parsing or configuration reads. Normal HTTP authentication and POST CSRF checks remain in the request guard. The routes share an enforced rate-limit bucket.
 
+## Adapter server routes
+
+`GET /agent/settings/mcp/servers` returns a safe editable projection. `POST /agent/settings/mcp/servers/preview` accepts `{ name, action: "update", patch }` or `{ name, action: "remove_override" }`; `POST /agent/settings/mcp/servers/apply` accepts only `{ revision, acknowledgeInterruptions: true }`. Preview and Apply bodies are bounded to 64 KiB, strict UTF-8 JSON with the same five-second read deadline. The routes share the owner/CSRF/rate-limit boundary above.
+
+Patches change only one highest-precedence project override. Blank form fields preserve current values; explicit null removes a local field and can reveal an inherited value. Preview uses the merged adapter's public virtual-override API. Existing private/advanced fields and unrelated settings/imports/servers stay backend-only and are preserved. Literal arguments/maps/credentials are withheld from GET/preview payloads; keychain and environment references can be configured without returning secret values. Removing an override previews any inherited definition. Disabling retains an inert override.
+
+Changing an effective executable, argument list, working directory, URL or socket cannot carry old credentials. Reference identities are compared across all nested fields and formatting; destination changes with opaque private payloads fail closed when clearing cannot be proved. An inherited field omitted from a local patch is not a credential tombstone.
+
+Server Apply shares the codemode controller's transition phase and captured-prompt fence. It drains both session pools, awaits all public adapter shutdown acknowledgements, commits a private atomic override, hydrates one guarded generation and reloads extensions through an authorised batch/start barrier. The private rename receipt binds committed bytes/identity, unchanged lower sources and exact approved effective configuration through activation. A post-rename mismatch/failure reports saved-but-not-activated and keeps operations blocked. It does not restart the service or clear chat history. The [server qualification](../reviews/mcp-adapter-server-settings.md) records the runtime/browser/security evidence and retained failures.
+
 Preview accepts only `{ "engine": "adapter" | "native", "codemode": "auto" | "on" | "off" }`. Apply accepts only `{ "policy": <same policy>, "revision": <opaque preview token>, "acknowledgeInterruptions": true }`. Bodies are limited to 2,048 bytes, decoded as strict UTF-8, and have a five-second body-read timeout. This is not an absolute deadline for synchronous filesystem/configuration work. Query parameters are rejected. There is no generic save route.
 
 ## Response contract
