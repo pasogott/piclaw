@@ -1,10 +1,14 @@
 # ADR: Earendil-aligned agent harness integration
 
-Status: **Released Pi 1.0.2 integration authorised with the shipped MCP wrapper retained. Pi 1.0.1 installation remains the prior operational receipt; no 1.0.2 deployment. Pi-durable work stays out of scope.**
+Status: **Released Pi 1.0.3 source retarget authorised after timeline/audit integration, with the shipped MCP wrapper retained. Prior Pi 1.0.1 installation is a separate operational receipt; no new deployment. Pi-durable stays out of scope.**
 
-Rui approved this future service-plane design on 3 October 2026 and explicitly kept pi-durable work out of the current scope. The active track is integrating released Pi 1.0.2, upstream `cd32f7725fdbddbaecdff5b1e68491563394e0ca`, with the standard MCP wrapper shipped by Piclaw. Native parity and wrapper removal are future scope, not prerequisites. The [1.0.0 architecture and 45-row HC/PC crosswalk](evidence/earendil-100-durable-crosswalk.md) defines the approved future durable design at its recorded target; it does not qualify pi-durable 1.0.1. It supersedes the old lane/Drive/Gate design for that separate, excluded work. Current-loop migration [#1497](https://github.com/rcarmo/piclaw/pull/1497) merged independently at `5cc738d7c`; neither that merge nor this assessment deploys or activates pi-durable. Original chapters and versioned evidence retain their historical API assumptions and results.
+Rui approved this future service-plane design on 3 October 2026 and explicitly kept pi-durable work out of the current scope. The active track is integrating released Pi 1.0.3, upstream `d78dc83d633229d12f8b79631384c4c2717c399f`, with the standard MCP wrapper shipped by Piclaw. Native parity and wrapper removal are future scope, not prerequisites. The [1.0.0 architecture and 45-row HC/PC crosswalk](evidence/earendil-100-durable-crosswalk.md) defines the approved future durable design at its recorded target; it does not qualify pi-durable 1.0.1. It supersedes the old lane/Drive/Gate design for that separate, excluded work. Current-loop migration [#1497](https://github.com/rcarmo/piclaw/pull/1497) merged independently at `5cc738d7c`; neither that merge nor this assessment deploys or activates pi-durable. Original chapters and versioned evidence retain their historical API assumptions and results.
 
-## Pi 1.0.2 target — 5 October 2026
+## Pi 1.0.3 target — 5 October 2026
+
+The [1.0.3 integration record](../../development/pi-103-integration.md) contains fresh package/auth/SDK evidence and fail-closed Azure provider-rename guidance. Historical 1.0.2 receipts remain unchanged. Installation, restart, live-account tests and production Delegate activation are separate.
+
+## Pi 1.0.2 target — historical, 5 October 2026
 
 Rui authorised retargeting and source updates. The [integration record](../../development/pi-102-integration.md) contains fresh 1.0.2 package, SDK, wrapper, sampling and synthetic auth evidence. Historical 1.0.1 receipts remain unchanged. Source qualification does not authorise installation, restart or real-account testing. The unreleased OAuth cancellation fix after the 1.0.2 tag is excluded.
 

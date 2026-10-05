@@ -7,7 +7,7 @@ const serverUrl = "https://mcp.example.invalid/mcp", issuer = "https://auth.exam
 const metadata: AuthorizationServerMetadata = { issuer, authorization_endpoint: issuer + "/authorize", token_endpoint: issuer + "/token", registration_endpoint: issuer + "/register", response_types_supported: ["code"], code_challenge_methods_supported: ["S256"], client_id_metadata_document_supported: true };
 const document = { url: "https://client.example.invalid/document.json", redirectUrl: "http://127.0.0.1:1234/callback/synthetic" };
 let originalFetch: typeof fetch, externalAttempts = 0;
-beforeAll(() => { expect(version).toBe("1.0.2"); originalFetch = globalThis.fetch; const deny = () => { externalAttempts++; throw Error("external network forbidden"); }; globalThis.fetch = Object.assign(deny, { preconnect: deny }) as typeof fetch; });
+beforeAll(() => { expect(version).toBe("1.0.3"); originalFetch = globalThis.fetch; const deny = () => { externalAttempts++; throw Error("external network forbidden"); }; globalThis.fetch = Object.assign(deny, { preconnect: deny }) as typeof fetch; });
 afterAll(() => { globalThis.fetch = originalFetch; expect(externalAttempts).toBe(0); });
 async function fixture(options: { stored?: boolean; document?: boolean; declineDocument?: boolean; meta?: AuthorizationServerMetadata | undefined; invalidDocument?: string; failStore?: boolean; failTokenStore?: boolean } = {}) {
   const stateStore = new MemoryOAuthStateStore(); let fail = false;

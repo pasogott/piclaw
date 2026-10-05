@@ -1,4 +1,5 @@
 import { operationSessionProfile, operationSessionTools } from "./operation-session-profile.js";
+import { assertCurrentProviderSelection } from './retired-provider-selection.js';
 /**
  * agent-pool/session.ts – pi-agent session creation and directory management.
  *
@@ -606,6 +607,7 @@ export async function createSessionInDir(
     sessionStartEvent?: SessionStartEvent;
   }) => {
     if (mode === 'family-shared' && !requireOwnedSessionExecution(options.chatJid!)) throw new Error('Owned family session identity is required.');
+    assertCurrentProviderSelection(options.settingsManager, sessionManager);
     if (!operationProfile) assertMcpOwnerConstruction();
     const mcpOwner = operationProfile ? null : createMcpBridgeOwner((bridge, onLifecycle) => createMcpAdapter({
       config: bridge.config,

@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 const modes = ["success", "denied", "malformed_device", "malformed_token", "cancel", "slow_down"];
 test("public Codex device flow preserves endpoint, failure, cancellation and real slow-down behavior", async () => {
-  const child = Bun.spawn([process.execPath, "--no-env-file", resolve(import.meta.dir, "fixtures/codex-device-flow-102.mjs"), ...modes], {
+  const child = Bun.spawn([process.execPath, "--no-env-file", resolve(import.meta.dir, "fixtures/codex-device-flow-103.mjs"), ...modes], {
     env: { PATH: "/usr/local/lib/bun/bin:/usr/bin:/bin", HOME: "/nonexistent", PI_OFFLINE: "1", PI_TELEMETRY: "0", OTEL_SDK_DISABLED: "true" },
     stdout: "pipe", stderr: "pipe",
   });
@@ -19,7 +19,7 @@ test("public Codex device flow preserves endpoint, failure, cancellation and rea
     expect(result.results.find((row: any) => row.mode === "cancel").cancellationObserved).toBe(true);
     expect(result.results.find((row: any) => row.mode === "slow_down").slowDownDelayVerified).toBe(true);
     for (const runtime of ["bun"]) {
-      const receipt = JSON.parse(readFileSync(resolve(import.meta.dir, `../../../docs/design/earendil-agent-harness-integration-adr/evidence/receipts/earendil-102-codex-device-${runtime}.json`), "utf8"));
+      const receipt = JSON.parse(readFileSync(resolve(import.meta.dir, `../../../docs/design/earendil-agent-harness-integration-adr/evidence/receipts/earendil-103-codex-device-${runtime}.json`), "utf8"));
       expect(receipt.results).toEqual(result.results);
       expect(receipt.sdkFileSha256).toEqual(result.sdkFileSha256);
       expect(receipt.runtime).toMatch(runtime === "node" ? /^Node / : /^Bun /);

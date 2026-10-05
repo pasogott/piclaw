@@ -87,6 +87,44 @@ const EXACT_101_PROVIDER_RECEIPT_SHA256 = "b56b0bdd98ebbdca8c178e922b85a00601c4c
 const EXACT_102_VERSION = "1.0.2";
 const EXACT_102_GIT_HEAD = "cd32f7725fdbddbaecdff5b1e68491563394e0ca";
 const EXACT_102_PROVIDER_RECEIPT_SHA256 = "3b09ca73dbb70a64646f57809bb2129e4b01b235da06d895966580d91a39553c";
+const EXACT_103_VERSION = "1.0.3";
+const EXACT_103_GIT_HEAD = "d78dc83d633229d12f8b79631384c4c2717c399f";
+const EXACT_103_PROVIDER_RECEIPT_SHA256 = "1f5ef502f89d8aa0db2784149e18168ed6ec62ed37a231ba78812124b0b1176d";
+const EXACT_103_REGISTRY = {
+  "@earendil-works/chord": [
+    "8e9e2a9b52729db7383d421084f9e6d92526a3ad",
+    "sha512-H5pKMs3S1z2q4V7NkDGKDFzOMW+OkzdsnGxxj5wNJUANG03VKj29UVmc1xnnnf0FAc03COHYNxwgNApO0nt0fg=="
+  ],
+  "@earendil-works/pi-agent-core": [
+    "300388ec6ae56d402b1a85c61fefafff5ee8f3e7",
+    "sha512-lnvi2PJYaq8mDLzwWBttNqfxrLS63SSMONUJnTCypdvt/flmNJchXwWXsXUOJ5Yhe/mN+iHkrXu696lWZZ8o+w=="
+  ],
+  "@earendil-works/pi-ai": [
+    "31463068aa4f979db0f066aa8c1b79b57d310e35",
+    "sha512-p+/EUrbmfT0xWOtL/NJRtWOsyzcKKFSyiivHLDBMG0DUVpHdaIykd5jFibq0YZDFGBN/nv61zdOelMb+ylPfSg=="
+  ],
+  "@earendil-works/pi-codemode": [
+    "0daeb93e109558d7d0dd5d99a73f214926690015",
+    "sha512-/rgWAXA9PhuFm0+j6N5FVvvWrAwt1LnhmbjA3Hy5+Q033XUHgh0YCMGAmU76S90ocr0Vfxm50ddYT/O76T5OGQ=="
+  ],
+  "@earendil-works/pi-coding-agent": [
+    "de643ce8049ed7182517bbc5620dacf2b68314c6",
+    "sha512-t2lb0dw4y/jr5a2PRo6eTHGTZOPB3/YAMVyhhYFC1W3Hl5xE+462I/gMWjF4gCLuhGipNEfuNqONFmdqLFz4SQ=="
+  ],
+  "@earendil-works/pi-mcp": [
+    "0138f6a96c06c21edca86172c0270007ed1d183f",
+    "sha512-ZAhL/g0rpjyKtcKzD0jSDk7sFIrMCQocmKtpAE1F9eRnI5fGGVWUyiZwALG/Tn1sagzxFbSqtc29zGx5OvDDGA=="
+  ],
+  "@earendil-works/pi-telemetry": [
+    "cc53177d242769f3792650eedf0d71ee2d84a903",
+    "sha512-Li4YamN09x9zzCquPbtEL2AQmwqv3Vn3sNOYqG0DRg24fjiMfntCsb7QKbejCXZssTAyaN+hutLl6O0UnJDrfg=="
+  ],
+  "@earendil-works/pi-tui": [
+    "512c622ff113c809964217212ab6267c79081177",
+    "sha512-C7b8Y+7iz+/oPEZUJubv6NPm3M/4ziq0hjQ2jhqMNpBwcXeqDMYKL2FYP90t2b5S1IoGc2io47dj5ZlIC1IZWg=="
+  ]
+} as const satisfies Record<(typeof FAMILY_PACKAGES)[number], readonly [string, string]>;
+
 const NODE_ENGINE = ">=22.19.0";
 const EXACT_0991_REGISTRY = {
   "@earendil-works/chord": ["7f6ba945b705a5ab48d25dbed39b253afcec68df", "sha512-4xyn0IBzJ+Xu/iOGi2hjXJGAR61QEhEWZsIqTDqr+GmItdquYwBO5jYFnqGiBaTqlY12/EpM7QHoEKSHbyvOug=="],
@@ -398,7 +436,7 @@ function modernContractRequired(version: string): boolean {
 }
 
 function isCurrentLoopVersion(version: string): boolean {
-  return version === EXACT_100_VERSION || version === EXACT_101_VERSION || version === EXACT_102_VERSION;
+  return version === EXACT_100_VERSION || version === EXACT_101_VERSION || version === EXACT_102_VERSION || version === EXACT_103_VERSION;
 }
 
 function packagesForVersion(version: string): readonly string[] {
@@ -416,6 +454,7 @@ export function validateProviderAuthReceipt(pathInput: string, version: string, 
   if(version===EXACT_100_VERSION&&createHash("sha256").update(bytes).digest("hex")!==EXACT_100_PROVIDER_RECEIPT_SHA256) throw new Error("provider auth receipt hash differs from exact 1.0.0 receipt");
   if(version===EXACT_101_VERSION&&createHash("sha256").update(bytes).digest("hex")!==EXACT_101_PROVIDER_RECEIPT_SHA256) throw new Error("provider auth receipt hash differs from exact 1.0.1 receipt");
   if(version===EXACT_102_VERSION&&createHash("sha256").update(bytes).digest("hex")!==EXACT_102_PROVIDER_RECEIPT_SHA256) throw new Error("provider auth receipt hash differs from exact 1.0.2 receipt");
+  if(version===EXACT_103_VERSION&&createHash("sha256").update(bytes).digest("hex")!==EXACT_103_PROVIDER_RECEIPT_SHA256) throw new Error("provider auth receipt hash differs from exact 1.0.3 receipt");
   const parsed = readJsonObject(path, "provider auth receipt");
   if (parsed.version !== version || parsed.gitHead !== gitHead || !Array.isArray(parsed.providers)) throw new Error("provider auth receipt version/gitHead/providers mismatch");
   const providers = parsed.providers.map((raw, index) => {
@@ -428,7 +467,7 @@ export function validateProviderAuthReceipt(pathInput: string, version: string, 
   });
   const ids=providers.map(provider=>provider.id);
   if (providers.length !== 42 || new Set(ids).size !== providers.length || JSON.stringify(ids) !== JSON.stringify([...ids].sort())) throw new Error("provider auth receipt must contain 42 unique providers sorted by id");
-  for (const required of ["openai","openai-codex","github-copilot","anthropic","kimi-coding","openrouter","radius","amazon-bedrock","google","google-vertex","azure-openai-responses"]) {
+  for (const required of ["openai","openai-codex","github-copilot","anthropic","kimi-coding","openrouter","radius","amazon-bedrock","google","google-vertex",version === EXACT_103_VERSION ? "azure" : "azure-openai-responses"]) {
     if (!ids.includes(required)) throw new Error(`provider auth receipt missing ${required}`);
   }
   return { path, version, gitHead, providers };
@@ -449,8 +488,9 @@ export function validateRegistryReceipt(pathInput: string, version: string, gitH
       ? { gitHead: EXACT_100_GIT_HEAD, packages: EXACT_100_REGISTRY }
       : version === EXACT_101_VERSION
         ? { gitHead: EXACT_101_GIT_HEAD, packages: EXACT_101_REGISTRY }
-        : version === EXACT_102_VERSION ? { gitHead: EXACT_102_GIT_HEAD, packages: EXACT_102_REGISTRY } : null;
-  if (!target) throw new Error(`modern package admission supports exact ${EXACT_0991_VERSION}, ${EXACT_100_VERSION}, ${EXACT_101_VERSION}, or ${EXACT_102_VERSION}, received ${version}`);
+        : version === EXACT_102_VERSION ? { gitHead: EXACT_102_GIT_HEAD, packages: EXACT_102_REGISTRY }
+          : version === EXACT_103_VERSION ? { gitHead: EXACT_103_GIT_HEAD, packages: EXACT_103_REGISTRY } : null;
+  if (!target) throw new Error(`modern package admission supports exact ${EXACT_0991_VERSION}, ${EXACT_100_VERSION}, ${EXACT_101_VERSION}, ${EXACT_102_VERSION}, or ${EXACT_103_VERSION}, received ${version}`);
   if (gitHead !== target.gitHead) throw new Error(`${version} registry receipt requires gitHead ${target.gitHead}`);
 
   const seen = new Set<string>();
