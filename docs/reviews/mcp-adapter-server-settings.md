@@ -38,7 +38,8 @@ Rui retargeted current integration to released Pi 1.0.2. Qualified main PR1549 a
 - Fresh rebuilt both-skin Chromium/WebKit matrix: 14 passed / 590 assertions, 13.65 seconds. Web build: nine passed / 26 assertions.
 - Five type stages, scoped lint, silent-catch/structured logging/dependency/action/env/circular/pack/stale checks pass. MCP security source hashes match final corrected review; only active SDK receipt version/pin fixture conflicts were reconciled during adoption.
 - Fresh 100 read/preview requests/25 servers: wall148.21ms, CPUuser139439µs/system15640µs, event-loopmax16.34ms/p999.90ms/52samples; JSONparse1051/4.65ms/stringify650/1.09ms/query250/0.35ms. Synthetic fixture scope remains unchanged; no performance causation or production throughput claim.
-- A new frozen full gate is required on this integrated head. No old failed run or prior-target green substitutes for it.
+- Fresh integrated `make ci-fast` passed on frozen head `04d6c9917f3e66e9255784874de83b6a3c548388`, tree `edbb79d707e76fb1500583ac77c34b0c5be3d9f2`, from 08:38:20 to 08:49:03 UTC on 5 October 2026: 6,456 passed, eight skipped, zero failed; 42,138 assertions, 6,464 tests across 917 files, 632.50 seconds. Features25/246 and web9/26 passed. Final head/tree unchanged and worktree clean. Log SHA256 `7a7661ce3b3e63f51db5c3375609b1092f47a0bd65145064667bfa4c8431b601`.
+- Publication adds only qualification prose/JSON. Runtime, dependency, test and script parity with the frozen head is verified. No old failed run or prior-target green substitutes for this gate.
 
 ## Retained failures
 

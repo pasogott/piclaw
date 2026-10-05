@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-10-05T08:37:59.640Z",
+  "recordedAt": "2026-10-05T08:50:12.462Z",
   "baseMain": "62a71d139",
   "adapter": "dddfcf630508f42c169889c11dee94e69b746e7c",
   "focused": {
@@ -106,7 +106,7 @@
       "sha256": "dfd0c6d3af373830a215c2274b74fba3950b6edffc950c5db83eccf51ae8e409"
     }
   ],
-  "qualification": "released1.0.2 focused/browser/type/static qualified; fresh full integration gate next",
+  "qualification": "released1.0.2 fresh frozen full qualified; reviewed corrections and runner boundary retained",
   "scope": "source-only/no installation/restart/live accounts/provider/native waiver",
   "failedFull": {
     "head": "b4cc07012950d0ed691133a61c26a22c95e8c3bf",
@@ -246,6 +246,30 @@
         "sha256": "9ac3af60ecacf9b3ebebfb70ab27aba95c07550353be72d956c1a942e9c1552c"
       }
     ],
-    "qualifyingFull": false
+    "qualifyingFull": true,
+    "full": {
+      "head": "04d6c9917f3e66e9255784874de83b6a3c548388",
+      "tree": "edbb79d707e76fb1500583ac77c34b0c5be3d9f2",
+      "startedAt": "2026-10-05T08:38:20Z",
+      "finishedAt": "2026-10-05T08:49:03Z",
+      "exit": 0,
+      "pass": 6456,
+      "skip": 8,
+      "fail": 0,
+      "assertions": 42138,
+      "total": 6464,
+      "files": 917,
+      "seconds": 632.5,
+      "features": {
+        "pass": 25,
+        "assertions": 246
+      },
+      "web": {
+        "pass": 9,
+        "assertions": 26
+      },
+      "logSha256": "7a7661ce3b3e63f51db5c3375609b1092f47a0bd65145064667bfa4c8431b601",
+      "unchangedClean": true
+    }
   }
 }
