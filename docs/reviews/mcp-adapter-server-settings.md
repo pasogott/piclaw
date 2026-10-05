@@ -14,7 +14,7 @@ Guarded hydration checks authority/signal/source identities before and after lat
 
 ## Evidence so far
 
-- Corrected authority/controller/writer/ACK/API/model/codemode/exact-package regression: 164 passed / 765 assertions across 14 files, 9.83 seconds.
+- Corrected authority/controller/writer/ACK/API/model/codemode/exact-package regression: 181 passed / 791 assertions across 14 files, 13.58 seconds.
 - Actual offline Pi1.0.1 + synthetic stdio MCP current/new-session test passed; old process closes before replacement, identity/history retained, no external network/provider.
 - Rebuilt Classic/Visual browser matrix: 14 passed / 590 assertions; Chromium/WebKit, desktop/mobile codemode regressions plus server preview/disable/Apply/remove/private preservation/owner denial.
 - Web build: nine passed / 26 assertions. Five type stages pass with 95 unchanged frontend transitive diagnostics. Changed-file lint/circular-dependency/pack/stale checks pass.
@@ -23,6 +23,8 @@ Guarded hydration checks authority/signal/source identities before and after lat
 Local logs under `/workspace/tmp/mcp-server-*`. Machine-readable profiling/receipt is maintained separately. Full frozen qualification and final independent source review are required before publication.
 
 The first frozen full run at `b4cc07012950d0ed691133a61c26a22c95e8c3bf` failed: 6,383 passed, eight skipped, one stale exact-adapter-pin assertion, 41,017 assertions in 1,008.28 seconds. Log SHA256 `d09a9c871cd64ac1857155163a1bc82ab594fedd5092085591ed86ac5adf188b`. Final review separately found retained stdio credentials could follow changed executable/arguments/cwd, and post-rename unlock mutations could activate unpreviewed configuration. Both have targeted local/inherited and gated unlock/startup regressions. Stdio identity now includes arguments/cwd and preserved credential-bearing environment/argument references; the rename receipt fences committed and lower files through activation. The old full run does not qualify these corrections.
+
+A subsequent v2 gate was stopped for confirmed reference/literal rebinding corrections; exit143, logSHA `6bae91e61bc0f71190a4161e6f880a5093c44ce1ede3d6040dfbe8bace7c834e`. References are compared by environment/keychain identity across fields, keys and formats. Destination changes with opaque old/new argument/map/auth payloads fail closed when clearing cannot be proved. Local and inherited wrapped/rekeyed reference and literal cases reject. An actual offline Pi post-rename mutation fixture confirms saved-but-not-activated, old PID closed and zero replacement processes. No stopped run is qualifying evidence.
 
 ## Retained failures
 

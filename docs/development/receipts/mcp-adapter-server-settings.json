@@ -3,9 +3,9 @@
   "baseMain": "62a71d139",
   "adapter": "dddfcf630508f42c169889c11dee94e69b746e7c",
   "focused": {
-    "pass": 165,
+    "pass": 181,
     "fail": 0,
-    "assertions": 766,
+    "assertions": 791,
     "files": 14
   },
   "browser": {
@@ -57,7 +57,7 @@
   },
   "sourceHashes": {
     "runtime/src/secure/mcp-keychain.ts": "8a6b5c40c0f86a3c636c1bed697ea3ba3ce3517f11ee513e4501d0663f559da5",
-    "runtime/src/secure/mcp-server-edits.ts": "a380106d7e5eb31e2028fbbb630396a79bf973847f66e1dc8fd6c6c1e0a9d16c",
+    "runtime/src/secure/mcp-server-edits.ts": "7274b939f59b3c3ee3ffcadd85ca0e21c1fdf124fa2ecddbbf4941e6622e7eb8",
     "runtime/src/agent-pool/mcp-codemode-runtime.ts": "9ad7249b1593f1bb5f0307dcb4193b74d370174e719d9e55512d59a6758975c9"
   },
   "logs": [
@@ -120,6 +120,14 @@
   },
   "reviewCorrections": [
     "Stdio program identity includes executable,args,cwd and preserved env/argument credential values",
-    "Private rename receipt fences committed/lower source bytes+identities and exactapprovedeffectivehash throughhydration/start"
-  ]
+    "Private rename receipt fences committed/lower source bytes+identities and exactapprovedeffectivehash throughhydration/start",
+    "Cross-field/key/formatted reference identity and opaque privatepayload rebinding failclosed",
+    "Actual publicPi unpreviewed postrename process-start denial"
+  ],
+  "stoppedFullV2": {
+    "head": "0092fab81e4e46b9c2155b2ddbc6f5365d6f4be8",
+    "exit": 143,
+    "logSha256": "6bae91e61bc0f71190a4161e6f880a5093c44ce1ede3d6040dfbe8bace7c834e",
+    "qualifying": false
+  }
 }

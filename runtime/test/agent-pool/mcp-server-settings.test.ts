@@ -19,6 +19,12 @@ test('server Apply preserves private/advanced unrelated config, waits both ACKs,
  const original=JSON.parse(readFileSync(join(root,'.pi','mcp.json'),'utf8'));const input=h.input({name:'demo',action:'update',patch:{requestTimeoutMs:4000}});const result=await h.controller.applyServers(input,()=>{},new AbortController().signal);
  expect(result.phase).toBe('ready');expect(h.events.indexOf('reload:0')).toBeGreaterThan(h.events.indexOf('close:1'));expect(h.events.indexOf('resume')).toBeGreaterThan(h.events.indexOf('started:1'));expect(JSON.parse(readFileSync(join(root,'.pi','mcp.json'),'utf8'))).toEqual({...original,mcpServers:{...original.mcpServers,demo:{...original.mcpServers.demo,requestTimeoutMs:4000}}});expect(JSON.stringify(result)).not.toContain('private-arg');await expect(h.controller.applyServers(input,()=>{},new AbortController().signal)).rejects.toThrow('expired');
 }));
+for(const source of ['local','inherited'] as const)for(const patch of [
+ {command:'new-program',args:['--key=PRIVATE_TEST_SENTINEL'],env:null},
+ {command:'new-program',env:{OTHER:'PRIVATE_TEST_SENTINEL'},args:null},
+])test(`${source} opaque credential payload cannot be wrapped or rekeyed to a new program`,async()=>fixture(async(h,root)=>{
+ writeFileSync(join(root,source==='local'?'.pi/mcp.json':'.mcp.json'),JSON.stringify({mcpServers:{sensitive:{command:'old-program',args:['PRIVATE_TEST_SENTINEL'],env:{LABEL:'PRIVATE_TEST_SENTINEL'}}}}),{mode:0o600});await hydrateMcpKeychainCredentials(root,()=>{throw Error('No keychain');});expect(()=>h.input({name:'sensitive',action:'update',patch})).toThrow('inherited_credentials');expect(h.events).toEqual([]);
+}));
 test('exact inherited keychain credential cannot follow a repointed endpoint',async()=>fixture(async(h,root)=>{
  writeFileSync(join(root,'.mcp.json'),JSON.stringify({mcpServers:{remote:{url:'https://original.test/mcp',bearerTokenKeychain:'synthetic/key',bearerTokenEnv:'SYNTHETIC'}}}));await hydrateMcpKeychainCredentials(root,async()=>({secret:'SECRET_SENTINEL'} as any));expect(()=>h.input({name:'remote',action:'update',patch:{url:'https://new.test/mcp'}})).toThrow('inherited_credentials');expect(h.events).toEqual([]);
 }));
@@ -58,3 +64,11 @@ for(const source of ['committed','lower'] as const)test(`mutation of ${source} c
 test('a lower-source mutation during replacement loading never reaches session startup',async()=>{
  let mutate=()=>{};await fixture(async(h,root)=>{writeFileSync(join(root,'.mcp.json'),JSON.stringify({mcpServers:{lower:{command:'previewed-lower'}}}));await hydrateMcpKeychainCredentials(root,()=>{throw Error('No keychain');});mutate=()=>writeFileSync(join(root,'.mcp.json'),JSON.stringify({mcpServers:{unpreviewed:{command:'must-never-start'}}}));const input=h.input({name:'demo',action:'update',patch:{requestTimeoutMs:5000}});await expect(h.controller.applyServers(input,()=>{},new AbortController().signal)).rejects.toThrow('configuration saved');expect(h.events.filter(event=>event.startsWith('started:'))).toEqual([]);expect(h.events).not.toContain('resume');},{reload:async()=>{mutate();}});
 });
+for(const source of ['local','inherited'] as const)for(const patch of [
+ {command:'new-program',args:['--key=${SYNTHETIC_STDIO_TOKEN}'],env:null},
+ {command:'new-program',env:{AUTH_TOKEN:'${SYNTHETIC_STDIO_TOKEN}'},args:null},
+])test(`${source} stdio credential reference cannot be wrapped or moved to a different map key`,async()=>fixture(async(h,root)=>{
+ const old=process.env.SYNTHETIC_STDIO_TOKEN;process.env.SYNTHETIC_STDIO_TOKEN='synthetic-only';
+ try{writeFileSync(join(root,source==='local'?'.pi/mcp.json':'.mcp.json'),JSON.stringify({mcpServers:{sensitive:{command:'old-program',args:['${SYNTHETIC_STDIO_TOKEN}'],env:{API_KEY:'${SYNTHETIC_STDIO_TOKEN}'}}}}),{mode:0o600});await hydrateMcpKeychainCredentials(root,()=>{throw Error('No keychain');});expect(()=>h.input({name:'sensitive',action:'update',patch})).toThrow('inherited_credentials');expect(h.events).toEqual([]);}
+ finally{if(old===undefined)delete process.env.SYNTHETIC_STDIO_TOKEN;else process.env.SYNTHETIC_STDIO_TOKEN=old;}
+}));

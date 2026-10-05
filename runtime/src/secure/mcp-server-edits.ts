@@ -150,6 +150,29 @@ export function patchMcpProjectOverride(document: unknown, value: unknown): Reco
 }
 
 const CREDENTIAL_FIELDS = ['auth','bearerToken','bearerTokenEnv','bearerTokenKeychain','bearerTokenStore','headers','oauth','requestHeadersCommand','env'] as const;
+function credentialReferences(definition: Record<string, unknown>): Set<string> {
+  const references = new Set<string>();
+  const visit = (value: unknown) => {
+    if (typeof value === 'string') {
+      for (const match of value.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$env:([A-Za-z_][A-Za-z0-9_]*)|\{env:([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g)) {
+        references.add(`env:${match[1] ?? match[2] ?? match[3] ?? match[4]}`);
+      }
+    } else if (Array.isArray(value)) value.forEach(visit);
+    else if (record(value)) Object.values(value).forEach(visit);
+  };
+  for (const field of [...CREDENTIAL_FIELDS, 'args']) visit(definition[field]);
+  if (typeof definition.bearerTokenEnv === 'string') references.add(`env:${definition.bearerTokenEnv}`);
+  if (typeof definition.bearerTokenKeychain === 'string') references.add(`keychain:${definition.bearerTokenKeychain}`);
+  return references;
+}
+function hasOpaqueCredentialPayload(definition: Record<string, unknown>): boolean {
+  const opaque = (value: unknown): boolean => {
+    if (typeof value === 'string') return !!value && !REFERENCE.test(value) && !HEADER_REFERENCE.test(value);
+    if (Array.isArray(value)) return value.some(opaque);
+    return record(value) && Object.values(value).some(opaque);
+  };
+  return ['args','env','headers','bearerToken','oauth','requestHeadersCommand'].some(field => opaque(definition[field]));
+}
 /** Omission from a local layer is not an inherited credential clear. Reject
  * repointing until the exact projected effective definition proves it safe. */
 export function assertMcpServerCredentialBinding(original: unknown, projected: unknown): void {
@@ -157,6 +180,12 @@ export function assertMcpServerCredentialBinding(original: unknown, projected: u
   const transport = (entry: Record<string, unknown>) => JSON.stringify([entry.command ?? null, entry.url ?? null, entry.socket ?? null,
     entry.command ? entry.args ?? [] : null, entry.command ? entry.cwd ?? null : null]);
   if (transport(original) === transport(projected)) return;
+  // Arbitrary stored values may be credentials, and reformatting/rekeying
+  // destroys reliable provenance. Require clearing the opaque payload before
+  // a destination change; do not guess based on names or substring matches.
+  if (hasOpaqueCredentialPayload(original) && hasOpaqueCredentialPayload(projected)) throw new McpServerEditError('inherited_credentials');
+  const oldReferences = credentialReferences(original);
+  if ([...credentialReferences(projected)].some(reference => oldReferences.has(reference))) throw new McpServerEditError('inherited_credentials');
   const sharesValue = (before: unknown, after: unknown): boolean => {
     if (record(before) && record(after)) return Object.keys(before).some(key => Object.hasOwn(after, key) && sharesValue(before[key], after[key]));
     return before !== undefined && after !== undefined && JSON.stringify(before) === JSON.stringify(after);

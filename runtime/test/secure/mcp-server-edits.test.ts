@@ -46,3 +46,18 @@ test('unchanged stdio identity permits non-destination policy edits but credenti
 test('literal credential arguments cannot follow a different executable or script',()=>{
  const original={command:'bun',args:['old.ts','--credential','PRIVATE_LITERAL']};expect(()=>assertMcpServerCredentialBinding(original,{command:'bun',args:['new.ts','--credential','PRIVATE_LITERAL']})).toThrow('inherited_credentials');
 });
+for (const [original,projected] of [
+ [{command:'old',args:['${SYNTHETIC_TOKEN}']},{command:'new',args:['--key=${SYNTHETIC_TOKEN}']}],
+ [{command:'old',env:{API_KEY:'${SYNTHETIC_TOKEN}'}},{command:'new',env:{AUTH_TOKEN:'${SYNTHETIC_TOKEN}'}}],
+ [{command:'old',env:{API_KEY:'${SYNTHETIC_TOKEN}'}},{command:'new',args:['--key={env:SYNTHETIC_TOKEN}']}],
+ [{url:'https://old.test',headers:{Authorization:'Bearer ${SYNTHETIC_TOKEN}'}},{url:'https://new.test',headers:{'X-Token':'$env:SYNTHETIC_TOKEN'}}],
+])test('credential reference identity cannot be renamed, reformatted or moved on a destination change',()=>{
+ expect(()=>assertMcpServerCredentialBinding(original,projected)).toThrow('inherited_credentials');
+});
+for(const [original,projected] of [
+ [{command:'old',args:['PRIVATE_TEST_SENTINEL']},{command:'new',args:['--key=PRIVATE_TEST_SENTINEL']}],
+ [{command:'old',env:{LABEL:'PRIVATE_TEST_SENTINEL'}},{command:'new',env:{OTHER:'PRIVATE_TEST_SENTINEL'}}],
+ [{command:'old',env:{LABEL:'PRIVATE_TEST_SENTINEL'}},{command:'new',args:['--key=PRIVATE_TEST_SENTINEL']}],
+])test('opaque credential payload must be cleared before a destination change regardless of formatting',()=>{
+ expect(()=>assertMcpServerCredentialBinding(original,projected)).toThrow('inherited_credentials');
+});
