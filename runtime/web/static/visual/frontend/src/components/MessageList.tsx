@@ -43,6 +43,7 @@ export function MessageList() {
   const {
     messages,
     setMessages,
+    replaceMessages,
     hasMore,
     loadingMore,
     fetchTimeline,
@@ -51,7 +52,7 @@ export function MessageList() {
   } = useTimelineFetch({ setConnected, scrollToBottom, timelineError, listRef });
 
   // Keep replaceMessagesRef in sync (setMessages is a stable setState setter)
-  replaceMessagesRef.current = (posts: Interaction[]) => setMessages(() => posts);
+  replaceMessagesRef.current = replaceMessages;
   useEffect(() => {
     const root = listRef.current; if (!root) return;
     const binding = bindTimelineLatest(root, state => window.dispatchEvent(new CustomEvent('piclaw:timeline-latest-state', { detail: { ...state, scroller: root } })));

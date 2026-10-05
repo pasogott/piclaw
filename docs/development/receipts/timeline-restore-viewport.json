@@ -1,16 +1,16 @@
 {
-  "recordedAt": "2026-10-05T10:56:11.482Z",
+  "recordedAt": "2026-10-05T11:20:25.762Z",
   "baseMain": "44affa34d",
   "focused": {
-    "pass": 39,
+    "pass": 41,
     "fail": 0,
-    "assertions": 81,
+    "assertions": 85,
     "files": 8
   },
   "browser": {
-    "pass": 23,
+    "pass": 25,
     "fail": 0,
-    "assertions": 148,
+    "assertions": 152,
     "files": 3
   },
   "webBuild": {
@@ -54,10 +54,10 @@
   },
   "sourceHashes": {
     "runtime/web/src/components/timeline.ts": "97cd828bae705598ec0bf11c8e77a6be53bcbfa65040ea982e2d872adac542e1",
-    "runtime/web/src/ui/use-timeline.ts": "fdb39e3bccb21689f9bfee7bf4d16470e5b32f295a834bfdffe922e028d344f0",
-    "runtime/web/src/ui/timeline-catch-up.ts": "24168b32e4247a339e7e4a3bb6ccc5a892d85762b40cd670f902ee8cbf64ba93",
+    "runtime/web/src/ui/use-timeline.ts": "9f7e729f1b93027756fdcf66fc126d6320a355ee03a11fa9f8603421b9251acc",
+    "runtime/web/src/ui/timeline-catch-up.ts": "77b0305b604f009cfda39fb23d79d617e9b463bc95aa40d89743e622b628e692",
     "runtime/web/src/ui/timeline-latest.ts": "5957b80f52bc7451368df409ee2a63285a8b9a320f19b2c7aa91430da0513e3c",
-    "runtime/web/static/visual/frontend/src/components/message-list/useTimelineFetch.ts": "bde39b32ea77f84799932aa024eea2036838553b33a001ea89f27f66947d6959"
+    "runtime/web/static/visual/frontend/src/components/message-list/useTimelineFetch.ts": "78afadd4ed35cccad893fc9b897aec1fe72a87562e5054f43d7cc901a18c2b95"
   },
   "logs": [
     {
@@ -103,6 +103,22 @@
     {
       "log": "timeline-visual-sse-malformed.log",
       "sha256": "d5492bc243993eea7f52c72da303de96f6d40cd962dd4f3745c008d5d1b6698a"
+    },
+    {
+      "log": "timeline-history-final-browser.log",
+      "sha256": "416a7389752b920e88003201a90abd9f0c31d39a555d1e9c55b1a1797eab1d13"
+    },
+    {
+      "log": "timeline-history-final-unit.log",
+      "sha256": "cde8666f9defb2b306c06ea4c682b0ced0c218b51b2ef21211eb2b636c45fca2"
+    },
+    {
+      "log": "timeline-history-replacement-red-v2.log",
+      "sha256": "c9dbd3f2786c32c38bb7166a5a2437a440589f65dd426f086df1865536a33ded"
+    },
+    {
+      "log": "timeline-history-replacement-green.log",
+      "sha256": "f0f8afb3484372e553cd8aec7d79dbde624ecb56b7012fe1a04ac490966efd76"
     }
   ],
   "qualification": "candidatefocused/browser/type/static pass; independentsource review/frozenfull pending",
@@ -111,6 +127,7 @@
     "pageverified contiguous ID independentofSSE arrivals",
     "unified60pxfollow/away",
     "Visualrawpostsvalidationbefore normalization",
-    "Synchronousmutationfence/boundedretry; explicitolder-page retryUI"
+    "Synchronousmutationfence/boundedretry; explicitolder-page retryUI",
+    "continuitymetadatarebound/invalidateonhistoricalreplacement; actualVisualsearchpath middle-page regression"
   ]
 }

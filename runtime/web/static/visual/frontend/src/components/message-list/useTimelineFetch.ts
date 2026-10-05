@@ -37,6 +37,14 @@ export function useTimelineFetch({
   const initialTimelineFetchedRef = useRef(false);
   const messagesRef = useRef<Interaction[]>([]);
   const contiguousThroughId = useRef(0);
+  const replaceMessages = useCallback((posts: Interaction[]) => {
+    // Search/history replacement discards the segment that proved the old
+    // boundary. This newly fetched page supplies its own verified endpoint.
+    mutationVersion.current++;
+    generation.current++;
+    contiguousThroughId.current = Math.max(0, ...posts.map(post => Number(post.id) || 0));
+    setMessagesState(posts);
+  }, []);
   messagesRef.current = messages;
   const generation = useRef(0);
   const resumePending = useRef(false);
@@ -189,6 +197,7 @@ export function useTimelineFetch({
   return {
     messages,
     setMessages,
+    replaceMessages,
     hasMore,
     loadingMore,
     fetchTimeline,

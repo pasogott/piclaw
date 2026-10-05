@@ -253,6 +253,9 @@ export function useTimeline({ preserveTimelineScroll, preserveTimelineScrollTop,
     // run on a later render, which is too late for view switches and realtime
     // final responses racing an already-resolved timeline request.
     mutationVersionRef.current += 1;
+    // Search/context replacement discards the page that proved the prior
+    // endpoint. Individual functional SSE edits retain, never advance, it.
+    if (typeof updater !== 'function') contiguousThroughIdRef.current = 0;
     setPostsState((prev) => {
       const nextPosts = typeof updater === 'function' ? updater(prev) : updater;
       postsRef.current = nextPosts;

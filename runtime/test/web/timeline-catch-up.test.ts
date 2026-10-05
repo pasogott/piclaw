@@ -25,3 +25,9 @@ test('an isolated SSE newest ID does not move the verified contiguous boundary',
 test('without a verified boundary catch-up proves the oldest retained suffix rather than an SSE maximum',async()=>{
  const cache=[...rows(1,20),{id:145}],calls:number[]=[];const result=await fetchContiguousTimeline(cache,async(limit:number,before:number|null)=>{const end=before===null?145:before-1;calls.push(end);return{posts:rows(Math.max(1,end-limit+1),end),has_more:end-limit>=1};});expect(calls).toEqual([145,95,45]);expect(result!.posts).toHaveLength(145);
 });
+test('an unverified zero boundary with individual rows uses the conservative oldest suffix',async()=>{
+ const calls:number[]=[],result=await fetchContiguousTimeline([{id:1},{id:145}],async(limit:number,before:number|null)=>{const end=before===null?145:before-1;calls.push(end);return{posts:rows(Math.max(1,end-limit+1),end),has_more:end-limit>=1};},()=>true,0);expect(calls).toEqual([145,95,45]);expect(result!.posts).toHaveLength(145);
+});
+test('an SSE mutation during a multi-page catch-up invalidates the whole candidate',async()=>{
+ let version=0,calls=0;expect(await fetchContiguousTimeline(rows(1,20),async(limit:number,before:number|null)=>{if(++calls===2)version++;const end=before===null?145:before-1;return{posts:rows(end-limit+1,end),has_more:true};},()=>version===0,20)).toBeNull();expect(calls).toBe(2);
+});
