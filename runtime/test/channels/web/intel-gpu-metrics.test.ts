@@ -131,6 +131,21 @@ test("bounded reads, fd disappearance and PID reuse lose coverage instead of fab
  await fs.unlink(path.join(base,'fdinfo','9'));now=8000;const gone=await reader.scan();expect(gone.clients).toEqual([]);expect(gone.coverage.unreadable_clients).toBeGreaterThan(0);
 });
 
+test("partial device discovery retains all known devices until complete removal evidence", async () => {
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'intel-partial-devices-'));roots.push(root);
+ const proc=path.join(root,'proc'),sys=path.join(root,'drm');await fs.mkdir(proc);await fs.mkdir(sys);
+ for(const [node,id] of [['renderD128',device.id],['renderD129','0000:03:00.0']]) {
+  const dev=path.join(sys,node,'device');await fs.mkdir(dev,{recursive:true});
+  await fs.writeFile(path.join(dev,'vendor'),'0x8086');await fs.writeFile(path.join(dev,'uevent'),`PCI_SLOT_NAME=${id}\n`);
+  await fs.symlink('/sys/bus/pci/drivers/i915',path.join(dev,'driver'));
+ }
+ let now=0;const reader=new IntelDrmReader(proc,sys,()=>now,'linux');expect((await reader.scan()).devices).toHaveLength(2);
+ await fs.unlink(path.join(sys,'renderD129','device','uevent'));now=31000;
+ const partial=await reader.scan();expect(partial.devices).toHaveLength(2);expect(partial.coverage.truncated).toBe(true);
+ await fs.rm(path.join(sys,'renderD129'),{recursive:true});now=37000;
+ const complete=await reader.scan();expect(complete.devices).toHaveLength(1);expect(complete.devices[0].id).toBe(device.id);expect(complete.coverage.truncated).toBe(false);
+});
+
 test("conflicting capacity and missing engine fields never produce a zero headline", () => {
  const a=new IntelGpuAccounting(),other=client('0','drm-engine-capacity-render: 2','20:123');other.id='2';
  samples(a,[client(),other],0);const mismatch=samples(a,[client('100'),{...other,engines:new Map([['render',100n]])}],2000);

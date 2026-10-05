@@ -56,7 +56,9 @@ export class IntelDrmReader {
         this.deviceScanIncomplete = (error as NodeJS.ErrnoException).code !== "ENOENT";
       }
       // An interrupted sysfs scan is not proof that known devices disappeared.
-      this.devices = this.deviceScanIncomplete && !found.length ? this.devices : found;
+      this.devices = this.deviceScanIncomplete
+        ? [...new Map([...this.devices, ...found].map(device => [device.id, device])).values()].slice(0, 8)
+        : found;
       this.nextDevices = start + (this.deviceScanIncomplete ? 5000 : 30000);
       this.nextClients = 0;
     }
