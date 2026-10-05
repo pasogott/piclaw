@@ -121,7 +121,9 @@ export function searchToolOutputSnippets(outputId: string, query: string, limit 
   if (!ftsQuery) return [];
   try {
     const stmt = db.prepare(
-      "SELECT snippet(tool_outputs_fts, 0, '[', ']', '…', 12) as snippet FROM tool_outputs_fts WHERE tool_outputs_fts MATCH ? AND output_id = ? LIMIT ?"
+      // output_id is UNINDEXED. Resolve the target chunk rowids once before
+      // FTS evaluation rather than testing every common-term match globally.
+      "SELECT snippet(tool_outputs_fts, 0, '[', ']', '…', 12) as snippet FROM tool_outputs_fts WHERE tool_outputs_fts MATCH ? AND rowid IN (SELECT rowid FROM tool_outputs_fts WHERE output_id = ?) LIMIT ?"
     );
     const rows = stmt.all(ftsQuery, outputId, limit) as Array<{ snippet: string }>;
     return rows.map((row) => row.snippet);
