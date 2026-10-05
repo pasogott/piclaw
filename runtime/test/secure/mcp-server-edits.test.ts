@@ -43,3 +43,6 @@ for(const patch of [{command:'new-program'},{args:['new-script.ts','${TOKEN}']},
 test('unchanged stdio identity permits non-destination policy edits but credential clears must be effective',()=>{
  const original={command:'bun',args:['server.ts'],cwd:'/original',env:{API_KEY:'${TOKEN}'}};expect(()=>assertMcpServerCredentialBinding(original,{...original,requestTimeoutMs:4500})).not.toThrow();expect(()=>assertMcpServerCredentialBinding(original,{command:'new-program'})).not.toThrow();
 });
+test('literal credential arguments cannot follow a different executable or script',()=>{
+ const original={command:'bun',args:['old.ts','--credential','PRIVATE_LITERAL']};expect(()=>assertMcpServerCredentialBinding(original,{command:'bun',args:['new.ts','--credential','PRIVATE_LITERAL']})).toThrow('inherited_credentials');
+});

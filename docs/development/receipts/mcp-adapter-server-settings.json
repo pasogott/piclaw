@@ -1,12 +1,12 @@
 {
-  "recordedAt": "2026-10-05T00:31:32.839Z",
-  "baseMain": "1534040a19b1841bb64cdc80797176531ba9efff",
+  "recordedAt": "2026-10-05T01:06:12.495Z",
+  "baseMain": "62a71d139",
   "adapter": "dddfcf630508f42c169889c11dee94e69b746e7c",
   "focused": {
-    "pass": 147,
+    "pass": 165,
     "fail": 0,
-    "assertions": 705,
-    "files": 13
+    "assertions": 766,
+    "files": 14
   },
   "browser": {
     "pass": 14,
@@ -22,44 +22,43 @@
     "requests": 100,
     "servers": 25,
     "diskDatabase": true,
-    "wallMs": 187.14886200000046,
+    "wallMs": 174.69121899999982,
     "cpuUs": {
-      "user": 165179,
-      "system": 27274
+      "user": 176660,
+      "system": 27380
     },
     "eventLoop": {
-      "maxMs": 14.784073,
-      "p99Ms": 13.271039,
+      "maxMs": 22.030786,
+      "p99Ms": 13.230079,
       "samples": 52
     },
     "methods": {
       "query": {
         "calls": 250,
-        "ms": 0.5367520000040713
+        "ms": 0.49662699999771576
       },
       "parse": {
         "calls": 1051,
-        "ms": 6.672572999992099
+        "ms": 5.719944999994368
       },
       "stringify": {
-        "calls": 600,
-        "ms": 1.2035559999940233
+        "calls": 650,
+        "ms": 1.2013820000029227
       }
     },
     "memory": {
-      "rss": 123617280,
-      "heapTotal": 29369344,
-      "heapUsed": 17848383,
-      "external": 5884315,
-      "arrayBuffers": 14485
+      "rss": 142172160,
+      "heapTotal": 41044992,
+      "heapUsed": 17807756,
+      "external": 5954795,
+      "arrayBuffers": 132554
     },
     "scope": "isolated synthetic direct owner handler with disk SELECT1 authority probe; filesystem effective projection, no network/keychain/Apply/server/provider execution; not whole HTTP auth/CSRF or production benchmark"
   },
   "sourceHashes": {
-    "runtime/src/secure/mcp-keychain.ts": "f1224dd9080a860665413249c62bd5e1403f1d5a614ddaba473a329fc347ea95",
-    "runtime/src/agent-pool/mcp-codemode-runtime.ts": "63219889ff61208e6fec167d5c44c7987c6cb94fae852ce3cb4a83d7a1c01939",
-    "runtime/src/agent-pool/mcp-bridge-owner.ts": "d64b05c0ec9de5800f8dc2cd6d5f4ae8019f79c7d7dc26c786d9bafcbb36bb14",
-    "runtime/src/channels/web/handlers/mcp-settings.ts": "cd52c9240954f3d6eb0e0cff578df429c6017483afdbf117b5515735bdaf9067"
+    "runtime/src/secure/mcp-keychain.ts": "8a6b5c40c0f86a3c636c1bed697ea3ba3ce3517f11ee513e4501d0663f559da5",
+    "runtime/src/secure/mcp-server-edits.ts": "a380106d7e5eb31e2028fbbb630396a79bf973847f66e1dc8fd6c6c1e0a9d16c",
+    "runtime/src/agent-pool/mcp-codemode-runtime.ts": "9ad7249b1593f1bb5f0307dcb4193b74d370174e719d9e55512d59a6758975c9"
   },
   "logs": [
     {
@@ -108,5 +107,19 @@
     }
   ],
   "qualification": "focused candidate; final review and frozen full required",
-  "scope": "source-only/no installation/restart/live accounts/provider/native waiver"
+  "scope": "source-only/no installation/restart/live accounts/provider/native waiver",
+  "failedFull": {
+    "head": "b4cc07012950d0ed691133a61c26a22c95e8c3bf",
+    "pass": 6383,
+    "skip": 8,
+    "fail": 1,
+    "assertions": 41017,
+    "seconds": 1008.28,
+    "logSha256": "d09a9c871cd64ac1857155163a1bc82ab594fedd5092085591ed86ac5adf188b",
+    "qualifying": false
+  },
+  "reviewCorrections": [
+    "Stdio program identity includes executable,args,cwd and preserved env/argument credential values",
+    "Private rename receipt fences committed/lower source bytes+identities and exactapprovedeffectivehash throughhydration/start"
+  ]
 }

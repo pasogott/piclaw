@@ -163,8 +163,10 @@ export function assertMcpServerCredentialBinding(original: unknown, projected: u
   };
   if (CREDENTIAL_FIELDS.some(field => sharesValue(original[field], projected[field])
     && !(field === 'auth' && projected[field] === false) && !(field === 'oauth' && projected[field] === false))
+    // Arguments may contain literal credentials without recognisable names.
+    // Conservatively refuse carrying any old argument to a changed program.
     || (Array.isArray(original.args) && Array.isArray(projected.args) && original.args.some(arg => typeof arg === 'string'
-      && /\$\{|\$env:|\{env:|^!(?!!)/.test(arg) && (projected.args as unknown[]).includes(arg)))) {
+      && (projected.args as unknown[]).includes(arg)))) {
     throw new McpServerEditError('inherited_credentials');
   }
 }
