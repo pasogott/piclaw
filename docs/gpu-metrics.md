@@ -4,7 +4,7 @@ The web HUD reads NVIDIA VRAM through NVML (`libnvidia-ml.so.1`) using Bun FFI. 
 
 ## Sampling and availability
 
-One lazy, unreferenced Bun worker owns the library and native buffers. All `SystemMetricsSampler` instances share its cache. Requests return immediately, including the first request before GPU discovery finishes. Sampling is demand-driven, at most once every two seconds, with one request in flight. No polling runs when no caller requests metrics.
+One lazy, unreferenced Bun worker owns the library and native buffers. All `SystemMetricsSampler` instances share its cache. Requests return immediately, including the first request before GPU discovery finishes. Sampling is demand-driven, at most once every two seconds, with one request in flight. No polling runs when no caller requests meter GPU metrics. General UI-status polling opts out of both GPU collectors and neither renews demand nor clears the retained VRAM history.
 
 A successful sample sums physical-device memory; one failed device invalidates the whole aggregate rather than publishing a misleading partial total. Device handles are reacquired each sample. The reader bounds device enumeration to 64 devices and validates byte counts and percentages before publishing them.
 
@@ -32,7 +32,7 @@ The existing `vram_*` JSON fields and HUD layout are unchanged. These values mea
 - `gpu_provider: "nvml-v1"`: legacy used bytes, which include reserved memory. The HUD's existing provider tooltip exposes this fallback.
 - `gpu_provider: null`, `vram_percent: null`: unavailable; byte fields retain their existing zero defaults and the VRAM series is cleared.
 
-V2 fallback is allowed only for missing symbols, `NOT_SUPPORTED`, `FUNCTION_NOT_FOUND` or `ARGUMENT_VERSION_MISMATCH`. Permission, device-loss and unknown errors do not select a different accounting method. If a later device requires v1, aggregation restarts using v1 for every device. Physical handles are queried once each; MIG instances are not separately enumerated or double-counted.
+V2 fallback is allowed only for missing symbols, `NOT_SUPPORTED`, `FUNCTION_NOT_FOUND` or `ARGUMENT_VERSION_MISMATCH`. Permission, device-loss and unknown errors do not select a different accounting method. If a later device requires v1, aggregation restarts using v1 for every device. Each aggregation pass queries physical handles once; a compatibility fallback restarts enumeration under uniform v1 semantics. MIG instances are not separately enumerated or double-counted.
 
 The binding uses the Linux x64/arm64 NVML layouts: 24-byte v1 memory structure and 40-byte versioned v2 structure. The live smoke check was on Linux x64; arm64 and multi-GPU behaviour have synthetic coverage only.
 

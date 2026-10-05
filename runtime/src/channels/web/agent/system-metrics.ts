@@ -348,7 +348,7 @@ export class SystemMetricsSampler {
     this.cpuSeries = pushSample(this.cpuSeries, cpuValue, this.maxSamples);
     this.ramSeries = pushSample(this.ramSeries, ramValue, this.maxSamples);
     this.swapSeries = swapValue === null ? [] : pushSample(this.swapSeries, swapValue, this.maxSamples);
-    this.vramSeries = vramValue === null ? [] : pushSample(this.vramSeries, vramValue, this.maxSamples);
+    if (collectGpu) this.vramSeries = vramValue === null ? [] : pushSample(this.vramSeries, vramValue, this.maxSamples);
     this.bufferCacheSeriesBytes = ramUsage.bufferCacheBytes === null
       ? []
       : pushSample(this.bufferCacheSeriesBytes, ramUsage.bufferCacheBytes, this.maxSamples);
@@ -368,7 +368,7 @@ export class SystemMetricsSampler {
       ram_series: [...this.ramSeries],
       swap_series: [...this.swapSeries],
       vram_percent: vramValue,
-      vram_series: [...this.vramSeries],
+      vram_series: collectGpu ? [...this.vramSeries] : [],
       vram_total_bytes: gpuVramUsage?.totalBytes ?? 0,
       vram_used_bytes: gpuVramUsage?.usedBytes ?? 0,
       gpu_provider: gpuVramUsage?.provider ?? null,

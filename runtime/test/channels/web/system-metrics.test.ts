@@ -17,6 +17,11 @@ test("system metrics reads shared GPU cache but can opt out for general UI polli
   expect(b.vram_percent).toBeNull();
   expect(reads).toBe(1);
   expect(nvmlReads).toBe(1);
+  expect(b.vram_series).toEqual([]);
+  const c = await handleSystemMetricsRequest(ctx, sampler, gpu).json();
+  expect(c.vram_series).toEqual([25, 25]);
+  expect(reads).toBe(2);
+  expect(nvmlReads).toBe(2);
 });
 
 test("parseLinuxRamMeminfo uses MemAvailable instead of MemFree for usage", () => {
