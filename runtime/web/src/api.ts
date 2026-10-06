@@ -167,9 +167,9 @@ export async function getThread(threadId, chatJid = null) {
 }
 
 export async function getSystemMetrics() {
-    const snapshot = await getAgentUiSnapshot();
-    if (!snapshot.metrics) throw new Error('System metrics unavailable');
-    return snapshot.metrics;
+    // Only visible/enabled meters renew GPU sampling. General UI status polling
+    // must not keep the collector alive while the HUD is disabled.
+    return deduplicatedGet('/agent/system-metrics');
 }
 
 export async function getBudgetSettings(chatJid = null) {
@@ -679,11 +679,12 @@ export async function respondToAgentRequest(requestId, outcome, chatJid = null) 
 /**
  * Submit an Adaptive Card action back to the web channel.
  */
-export async function submitAdaptiveCardAction(payload) {
+export async function submitAdaptiveCardAction(payload, options: { signal?: AbortSignal } = {}) {
     const response = await fetch(API_BASE + '/agent/card-action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
+        signal: options.signal,
     });
 
     if (!response.ok) {

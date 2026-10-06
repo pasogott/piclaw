@@ -46,7 +46,7 @@ const REMOVED_PROVIDER_IDS = new Set([
 const API_KEY_HINTS: Record<string, string> = {
   "ant-ling": "...",
   anthropic: "sk-ant-...",
-  "azure-openai-responses": "...",
+  azure: "...",
   cerebras: "csk-...",
   "cloudflare-ai-gateway": "...",
   "cloudflare-workers-ai": "...",
@@ -85,7 +85,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   "amazon-bedrock": "Amazon Bedrock",
   "ant-ling": "Ant Ling",
   anthropic: "Anthropic",
-  "azure-openai-responses": "Azure OpenAI Responses",
+  azure: "Azure",
   cerebras: "Cerebras",
   "cloudflare-ai-gateway": "Cloudflare AI Gateway",
   "cloudflare-workers-ai": "Cloudflare Workers AI",
@@ -153,7 +153,7 @@ export const PROVIDER_DEFS: ProviderDef[] = [
   { id: "github-copilot", name: "GitHub Copilot", hasOAuth: true, hasApiKey: false },
   { id: "openai-codex", name: "OpenAI Codex", hasOAuth: true, hasApiKey: false },
   { id: "openai", name: "OpenAI", hasOAuth: false, hasApiKey: true, apiKeyHint: API_KEY_HINTS.openai },
-  { id: "azure-openai-responses", name: "Azure OpenAI Responses", hasOAuth: false, hasApiKey: true, apiKeyHint: API_KEY_HINTS["azure-openai-responses"] },
+  { id: "azure", name: "Azure", hasOAuth: false, hasApiKey: true, apiKeyHint: API_KEY_HINTS.azure },
   { id: "google", name: "Google Gemini", hasOAuth: false, hasApiKey: true, apiKeyHint: API_KEY_HINTS.google },
   { id: "deepseek", name: "DeepSeek", hasOAuth: false, hasApiKey: true, apiKeyHint: API_KEY_HINTS.deepseek },
   { id: "mistral", name: "Mistral", hasOAuth: false, hasApiKey: true, apiKeyHint: API_KEY_HINTS.mistral },
@@ -263,10 +263,12 @@ function titleCaseProvider(providerId: string): string {
     .join(" ");
 }
 
-function getRuntimeProviders(modelRuntime?: ModelRuntimeLike | null): Map<string, RuntimeProviderLike> {
+function getRuntimeProviders(modelRuntime?: ModelRuntimeLike | null): Map<string, RuntimeProviderLike> | null {
+  if (typeof modelRuntime?.getProviders !== "function") return null;
   try {
-    return new Map((modelRuntime?.getProviders?.() ?? []).map((provider) => [provider.id, provider]));
+    return new Map(modelRuntime.getProviders().map((provider) => [provider.id, provider]));
   } catch {
+    // A failed authoritative runtime inventory cannot advertise fallback logins.
     return new Map();
   }
 }
@@ -289,23 +291,24 @@ export function getProviderDefs(
   modelRuntime?: ModelRuntimeLike | null,
 ): ProviderDef[] {
   const runtimeProviders = getRuntimeProviders(modelRuntime);
+  const authoritative = runtimeProviders !== null;
   const defs = PROVIDER_DEFS
     .filter((provider) => !REMOVED_PROVIDER_IDS.has(provider.id))
     .map((provider) => {
-      const runtimeProvider = runtimeProviders.get(provider.id);
+      const runtimeProvider = runtimeProviders?.get(provider.id);
       return {
         ...provider,
         name: runtimeProvider?.name || getProviderDisplayName(provider.id, registry),
-        hasOAuth: runtimeProvider ? typeof runtimeProvider.auth.oauth?.login === "function" : provider.hasOAuth,
-        hasApiKey: runtimeProvider ? typeof runtimeProvider.auth.apiKey?.login === "function" : provider.hasApiKey,
+        hasOAuth: authoritative ? typeof runtimeProvider?.auth.oauth?.login === "function" : provider.hasOAuth,
+        hasApiKey: authoritative ? typeof runtimeProvider?.auth.apiKey?.login === "function" : provider.hasApiKey,
         hasExternalAuth: runtimeProvider
           ? Boolean(runtimeProvider.auth.apiKey && typeof runtimeProvider.auth.apiKey.login !== "function")
-          : provider.hasExternalAuth,
+          : authoritative ? false : provider.hasExternalAuth,
       };
     });
 
   const byId = new Map(defs.map((provider) => [provider.id, provider]));
-  const dynamicProviderIds = new Set(runtimeProviders.keys());
+  const dynamicProviderIds = new Set(runtimeProviders?.keys() ?? []);
   try {
     for (const model of registry?.getAll?.() ?? []) {
       if (model.provider && !REMOVED_PROVIDER_IDS.has(model.provider)) dynamicProviderIds.add(model.provider);
@@ -318,14 +321,14 @@ export function getProviderDefs(
   for (const providerId of dynamicProviderIds) {
     const existing = byId.get(providerId);
     if (existing) {
-      const runtimeProvider = runtimeProviders.get(providerId);
+      const runtimeProvider = runtimeProviders?.get(providerId);
       existing.name = runtimeProvider?.name || getProviderDisplayName(providerId, registry);
-      existing.hasOAuth = runtimeProvider ? typeof runtimeProvider.auth.oauth?.login === "function" : existing.hasOAuth;
-      existing.hasApiKey = runtimeProvider ? typeof runtimeProvider.auth.apiKey?.login === "function" : existing.hasApiKey;
+      existing.hasOAuth = authoritative ? typeof runtimeProvider?.auth.oauth?.login === "function" : existing.hasOAuth;
+      existing.hasApiKey = authoritative ? typeof runtimeProvider?.auth.apiKey?.login === "function" : existing.hasApiKey;
       continue;
     }
 
-    const runtimeProvider = runtimeProviders.get(providerId);
+    const runtimeProvider = runtimeProviders?.get(providerId);
     const hasOAuth = typeof runtimeProvider?.auth.oauth?.login === "function";
     const hasApiKey = typeof runtimeProvider?.auth.apiKey?.login === "function";
     byId.set(providerId, {
