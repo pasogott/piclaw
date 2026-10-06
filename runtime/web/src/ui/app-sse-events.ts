@@ -15,6 +15,7 @@ import {
 } from './app-agent-turn-events.js';
 import { readAgentTurnId, resolveAgentPreviewRestoreState } from './app-agent-status-refresh.js';
 import { parseStatusLastEventAt } from './status-duration.js';
+import { invalidateAgentUiSnapshot } from './agent-ui-snapshot.js';
 import { resolveLiveGeneratedWidgetEvent } from './app-generated-widget-events.js';
 import {
   appendUniqueTimelinePost,
@@ -489,6 +490,7 @@ export function handleAppSseEvent(
       return;
     }
 
+    if (data.type === 'intent' && data.intent_key === 'compaction') invalidateAgentUiSnapshot(currentChatJid);
     const liveContextUsage = normalizeContextUsage(data.context_usage);
     if (liveContextUsage) {
       setContextUsage((prev) => {
