@@ -132,7 +132,8 @@ jobs:
           mkdir -p "$PICLAW_WORKSPACE/.piclaw"
 
           # Write minimal config and seed one known root file for workspace/editor UX tests.
-          echo '{"sessionAutoRotate":true}' > "$PICLAW_WORKSPACE/.piclaw/config.json"
+          (umask 077; printf '%s\n' '{"sessionAutoRotate":true}' > "$PICLAW_WORKSPACE/.piclaw/config.json")
+          chmod 600 "$PICLAW_WORKSPACE/.piclaw/config.json"
           cp AGENTS.md "$PICLAW_WORKSPACE/AGENTS.md"
 
           # Start server

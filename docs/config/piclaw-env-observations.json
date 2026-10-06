@@ -7881,6 +7881,7 @@
             "scripts/audit-baseline-quality-deterministic.ts",
             "scripts/audit-piclaw-env-surface.ts",
             "scripts/audit-queue-session-threading-replay.ts",
+            "scripts/check-actions-workflows.ts",
             "scripts/smoke-install-from-repo.sh"
           ],
           "readerFiles": [
