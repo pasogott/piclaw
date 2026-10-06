@@ -70,6 +70,8 @@ for (const jobName of ["build-portable-artifacts", "build-experimental-shell-art
 expectTrue(publish.concurrency === undefined, "Publish/tag work must never be cancellation-concurrent.");
 
 const e2e = workflow("e2e.yml");
+const e2eRaw = readFileSync(resolve(ROOT, '.github/workflows/e2e.yml'), 'utf8');
+expectTrue(e2eRaw.includes('umask 077;') && e2eRaw.includes('chmod 600 "$PICLAW_WORKSPACE/.piclaw/config.json"'), 'E2E runtime config must be created private.');
 expectTrue(e2e.concurrency === undefined, "E2E tag work must never be cancellation-concurrent.");
 expectEqual(values(e2e.on?.push?.tags), ["*-ux", "*-prerelease"], "E2E tag routing changed unexpectedly.");
 const expectedE2eSpecs = [
