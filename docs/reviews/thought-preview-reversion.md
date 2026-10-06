@@ -27,3 +27,7 @@ The earlier complete run failed five files and reported one error: DB migration 
 The five files passed unchanged in isolation, then the unchanged complete snapshot passed. This supports load sensitivity but does not prove the cause of each earlier failure. No deadlines or assertions were relaxed; the failed receipt remains preserved. An initial review timeout supplied no approval. A pre-existing unknown turn-ID type diagnostic was fixed by narrowing to a nonempty string; its resolved baseline entry was removed.
 
 Publication changes after the frozen snapshot are docs/receipts only, with runtime parity verified. No main merge, deployment, installation or restart is authorised for this change. A different session owns the current main integration batch.
+
+## Current-main integration
+
+Merged current main `296187fd6` without rebase. Fresh complete qualification at `cfab718a8cf24330697bc3e756b99dc7d3426dba`: 6,633 passed / 71 skipped / 0 failed, 43,169 assertions across 952 files; settings25/246 and build9/26. Focus123/450, browser2/4, types/build pass. Initial WebKit timeout retained; unchanged rerun passed. Log SHA-256 `49a07a09a77de94e51bdf3fad605a2b4dd0b7a940326a982341df2d59c924d9f`. Runtime tree `b12973e4510ab84565c83a93a5d31a027b949fb1`; final publication delta docs only. Rui authorised merge; main hold released for1588 only.

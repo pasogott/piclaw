@@ -56,5 +56,39 @@
   },
   "scope": "ClassicHTTPstaleresponseguards; VisualSSEunchanged",
   "publicationDelta": "Docs/receipts only with runtimeparity",
-  "operations": "No featuremerge/install/restart; cleanup/reload separatelyauthorised completedbyotherowner"
+  "operations": "No featuremerge/install/restart; cleanup/reload separatelyauthorised completedbyotherowner",
+  "integration": {
+    "baseMain": "296187fd6dfb5768ffdd4e14c497d7f1cb32c5f4",
+    "qualifiedHead": "cfab718a8cf24330697bc3e756b99dc7d3426dba",
+    "tree": "0ae8a6bc7bc2b70358eee3228e718b18ded64e58",
+    "runtimeTree": "b12973e4510ab84565c83a93a5d31a027b949fb1",
+    "full": {
+      "pass": 6633,
+      "skip": 71,
+      "fail": 0,
+      "assertions": 43169,
+      "files": 952,
+      "seconds": 656.47,
+      "sha256": "49a07a09a77de94e51bdf3fad605a2b4dd0b7a940326a982341df2d59c924d9f",
+      "log": "/workspace/exports/thought-preview-resume/full-integrated/ci-fast.log",
+      "cleanUnchanged": true
+    },
+    "focused": {
+      "pass": 123,
+      "assertions": 450
+    },
+    "browser": {
+      "pass": 2,
+      "assertions": 4,
+      "initialWebkitTimeoutRetained": true
+    },
+    "settings": {
+      "pass": 25,
+      "assertions": 246
+    },
+    "build": {
+      "pass": 9,
+      "assertions": 26
+    }
+  }
 }
