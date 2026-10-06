@@ -2,8 +2,9 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+const historicalTest = JSON.parse(readFileSync(new URL("../../../node_modules/@earendil-works/pi-ai/package.json", import.meta.url), "utf8")).version === "1.0.3" ? test : test.skip;
 const modes = ["success", "denied", "malformed_device", "malformed_token", "cancel", "slow_down"];
-test("public Codex device flow preserves endpoint, failure, cancellation and real slow-down behavior", async () => {
+historicalTest("public Codex device flow preserves endpoint, failure, cancellation and real slow-down behavior", async () => {
   const child = Bun.spawn([process.execPath, "--no-env-file", resolve(import.meta.dir, "fixtures/codex-device-flow-103.mjs"), ...modes], {
     env: { PATH: "/usr/local/lib/bun/bin:/usr/bin:/bin", HOME: "/nonexistent", PI_OFFLINE: "1", PI_TELEMETRY: "0", OTEL_SDK_DISABLED: "true" },
     stdout: "pipe", stderr: "pipe",

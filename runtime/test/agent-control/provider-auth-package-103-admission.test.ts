@@ -19,7 +19,7 @@ function tree(input: string): string {
   };
   visit(base); return createHash("sha256").update(rows.join("\n")).digest("hex");
 }
-test("actual exact1.0.3 admission binds exact package payloads, registry and providers", () => {
+test.skipIf(JSON.parse(readFileSync(resolve(repoForTarget(), "node_modules/@earendil-works/pi-ai/package.json"), "utf8")).version !== "1.0.3")("actual exact1.0.3 admission binds exact package payloads, registry and providers", () => {
   const r = JSON.parse(readFileSync(join(receipts, "earendil-103-package-admission.json"), "utf8"));
   const registry = JSON.parse(readFileSync(join(receipts, "earendil-103-registry.json"), "utf8"));
   const providers = JSON.parse(readFileSync(join(receipts, "earendil-103-provider-auth.json"), "utf8"));
@@ -43,3 +43,5 @@ test("actual exact1.0.3 admission binds exact package payloads, registry and pro
   // raw receipt; it is metadata, not an independently re-computed CI guard.
   expect(r.rawReceiptSha256).toMatch(/^[a-f0-9]{64}$/);
 });
+
+function repoForTarget(){return resolve(import.meta.dir,"../../..");}

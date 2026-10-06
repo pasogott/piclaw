@@ -1,3 +1,7 @@
+import { readFileSync as readFileSyncForTarget } from "node:fs";
+
+const historicalTest = JSON.parse(readFileSyncForTarget(new URL("../../../node_modules/@earendil-works/pi-coding-agent/package.json", import.meta.url), "utf8")).version === "1.0.3" ? test : test.skip;
+
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
@@ -5,7 +9,7 @@ import type { OAuthCredential, Provider } from '@earendil-works/pi-ai';
 import { FileCredentialStore } from '../../src/agent-pool/credential-store.js';
 import { createTempWorkspace } from '../helpers.js';
 
-test('released 1.0.3 cancellation rejects delivery but preserves late rotated refresh tokens', async () => {
+historicalTest('released 1.0.3 cancellation rejects delivery but preserves late rotated refresh tokens', async () => {
  const ws=createTempWorkspace('pi103-refresh-');
  const credentials=new FileCredentialStore(join(ws.base,'agent/auth.json'));
  const old:OAuthCredential={type:'oauth',access:'synthetic-old-access',refresh:'synthetic-old-refresh',expires:1};

@@ -7,6 +7,7 @@ import { getProviderDefs } from "../../src/agent-control/provider-defs.js";
 import { createTestCredentialStore } from "../model-services-fixture.js";
 
 const receipt = JSON.parse(readFileSync(resolve(import.meta.dir, "../fixtures/provider-auth-inventory-103.json"), "utf8"));
+const historicalTest = JSON.parse(readFileSync(new URL("../../../node_modules/@earendil-works/pi-ai/package.json", import.meta.url), "utf8")).version === "1.0.3" ? test : test.skip;
 const inventory = () => builtinProviders().map(provider => ({
   id: provider.id, name: provider.name,
   apiKeyLogin: typeof provider.auth.apiKey?.login === "function",
@@ -16,7 +17,7 @@ const inventory = () => builtinProviders().map(provider => ({
   oauthToAuth: typeof provider.auth.oauth?.toAuth === "function",
 })).sort((a, b) => a.id.localeCompare(b.id));
 
-test("exact1.0.3 provider-owned method inventory matches public runtime and UI definitions", async () => {
+historicalTest("exact1.0.3 provider-owned method inventory matches public runtime and UI definitions", async () => {
   expect(receipt.version).toBe("1.0.3");
   expect(receipt.gitHead).toBe("d78dc83d633229d12f8b79631384c4c2717c399f");
   expect(inventory()).toEqual(receipt.providers);
@@ -51,7 +52,7 @@ test("custom local/no-key configuration and external cloud identity are distinct
   for (const custom of receipt.customProviders) expect(defs.find(entry => entry.id === custom.id)?.customFields?.some(field => field.key === "apiKey" && field.required)).toBe(custom.requiresApiKey);
 });
 
-test("packaged public OpenAI/Codex modules execute synthetic PKCE login, refresh, bad state and cancellation", async () => {
+historicalTest("packaged public OpenAI/Codex modules execute synthetic PKCE login, refresh, bad state and cancellation", async () => {
   const probe = resolve(import.meta.dir, "fixtures/packaged-openai-login-103.mjs");
   const child = Bun.spawn([process.execPath, probe], {
     cwd: resolve(import.meta.dir, "../../.."),

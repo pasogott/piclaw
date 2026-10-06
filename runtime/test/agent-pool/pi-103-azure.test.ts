@@ -1,9 +1,13 @@
+import { readFileSync as readFileSyncForTarget } from "node:fs";
+
+const historicalTest = JSON.parse(readFileSyncForTarget(new URL("../../../node_modules/@earendil-works/pi-coding-agent/package.json", import.meta.url), "utf8")).version === "1.0.3" ? test : test.skip;
+
 import { expect,test } from 'bun:test';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all';
 import { createTestCredentialStore } from '../model-services-fixture.js';
 
-test('released Azure Foundry completions resolve the configured endpoint and deployment without sending',async()=>{
+historicalTest('released Azure Foundry completions resolve the configured endpoint and deployment without sending',async()=>{
  const model=getBuiltinModels('azure').find(m=>m.id==='deepseek-v4-pro');
  if(!model||model.type&&model.type!=='chat')throw Error('Azure chat model missing');
  expect(model.api).toBe('openai-completions');

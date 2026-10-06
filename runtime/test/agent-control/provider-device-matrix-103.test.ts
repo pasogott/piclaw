@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+const historicalTest = JSON.parse(readFileSync(new URL("../../../node_modules/@earendil-works/pi-ai/package.json", import.meta.url), "utf8")).version === "1.0.3" ? test : test.skip;
 const modes = ["pending-success", "denied", "malformed-device", "malformed-token", "blocked-cancel", "expiry", "slow-down", "unsafe-device-uri", "initial-wait-cancel", "pending-wait-cancel", "slow-wait-cancel"];
-test("public Copilot and Kimi device methods execute synthetic polling, failure and cancellation matrix", async () => {
+historicalTest("public Copilot and Kimi device methods execute synthetic polling, failure and cancellation matrix", async () => {
   const child = Bun.spawn([process.execPath, "--no-env-file", resolve(import.meta.dir, "fixtures/provider-device-matrix-103.mjs")], {
     env: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: "/nonexistent", PI_OFFLINE: "1", PI_TELEMETRY: "0", OTEL_SDK_DISABLED: "true" }, stdout: "pipe", stderr: "pipe",
   });

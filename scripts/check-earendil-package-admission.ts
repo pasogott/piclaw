@@ -125,6 +125,44 @@ const EXACT_103_REGISTRY = {
   ]
 } as const satisfies Record<(typeof FAMILY_PACKAGES)[number], readonly [string, string]>;
 
+const EXACT_104_VERSION = "1.0.4";
+const EXACT_104_GIT_HEAD = "7c10bd4337495ee613f2224843ecdf349b80d1df";
+const EXACT_104_PROVIDER_RECEIPT_SHA256 = "014e39f6bb0551f9488d5ff832a91a71531ad513a01b1da766605934713541dd";
+const EXACT_104_REGISTRY = {
+  "@earendil-works/chord": [
+    "6b5b0ee6c5fa5933813b27c263cce37bfa4d2985",
+    "sha512-d2JZw2utoa/reoSmL07O71wsXiMDhIlnnxTb4LCNV+Oq8Evj2rGLvjVuYrlXZGbXUr0IDNfvd1RT/utCY1UhkQ=="
+  ],
+  "@earendil-works/pi-agent-core": [
+    "3a52d338895a16e5a7e4eecd0f55919c7fa474af",
+    "sha512-/xGICE+N/+G9N7KfYFSxlE8G8fQcBlLHKiY+j1Ehz9vvb1zhvGneWosFK56d2qmA5oteafeG7yKr2nqU4ed9ig=="
+  ],
+  "@earendil-works/pi-ai": [
+    "f398aa4469437bfa0c6326bcb61f7bc4f25840e6",
+    "sha512-/Eu5R0gfor6wcmRcVyOmulUiZmsHJ0bKu5wXXnpCoSHF3y4FnW4fgnjRlLjNza8NJWXdvW5Uew90Zukx7Sh2rw=="
+  ],
+  "@earendil-works/pi-codemode": [
+    "128ed3dcc7c60adba83cf3c9233d72cd19b17556",
+    "sha512-e198pjBsdEQJ/RCjJ9ZeYIjRaQYWUgtoZbPCmJ57auuOsiRsBXeSZ1aiWtTah0/7gx97WIOD1XqHvgRU0gOXtg=="
+  ],
+  "@earendil-works/pi-coding-agent": [
+    "878235d4ecc2ad3ac6fad0adfeffcf233b8159d7",
+    "sha512-+956nfMFHr5lDUVY/2Q4k+YzojzBuCaBXFgj0eSlXVGr7QVliVddKdc1Pz6yVg1dOlJQmb67doOVrlMsIcIdaw=="
+  ],
+  "@earendil-works/pi-mcp": [
+    "73aa5fa6c988211b71775d443ad1124e64f81935",
+    "sha512-I6SqOqrKED+XrjkkFIXY7Ze38QtXtjojPJlQsJ2v5soCPV4QI1bNxXDwQaqzZ2a+6pNN8meWrRw1qkSMbPy9QQ=="
+  ],
+  "@earendil-works/pi-telemetry": [
+    "de93bb1dca0a41d11fb8763b2c5c783b53c44236",
+    "sha512-DL2eXXtnL5/VQkuQd97fL57GXTG1/zKHtMmDsrv8tGeJ5EgYYTWvzy44dqbYL0lD0Z22v/NOwqU3PHO75HVrqA=="
+  ],
+  "@earendil-works/pi-tui": [
+    "7d3c2baf15f6132573b69b43e4b703b57334f3c6",
+    "sha512-TgvDJohtxvG3XWQID5w6bwEyBocywdG0F9yHZtP+Ywvtiq9RgeSMbeB8quUobk7/4ko6IvFOQo45AqIqNVr8Rg=="
+  ]
+} as const satisfies Record<(typeof FAMILY_PACKAGES)[number], readonly [string, string]>;
+
 const NODE_ENGINE = ">=22.19.0";
 const EXACT_0991_REGISTRY = {
   "@earendil-works/chord": ["7f6ba945b705a5ab48d25dbed39b253afcec68df", "sha512-4xyn0IBzJ+Xu/iOGi2hjXJGAR61QEhEWZsIqTDqr+GmItdquYwBO5jYFnqGiBaTqlY12/EpM7QHoEKSHbyvOug=="],
@@ -436,7 +474,7 @@ function modernContractRequired(version: string): boolean {
 }
 
 function isCurrentLoopVersion(version: string): boolean {
-  return version === EXACT_100_VERSION || version === EXACT_101_VERSION || version === EXACT_102_VERSION || version === EXACT_103_VERSION;
+  return version === EXACT_100_VERSION || version === EXACT_101_VERSION || version === EXACT_102_VERSION || version === EXACT_103_VERSION || version === EXACT_104_VERSION;
 }
 
 function packagesForVersion(version: string): readonly string[] {
@@ -455,6 +493,7 @@ export function validateProviderAuthReceipt(pathInput: string, version: string, 
   if(version===EXACT_101_VERSION&&createHash("sha256").update(bytes).digest("hex")!==EXACT_101_PROVIDER_RECEIPT_SHA256) throw new Error("provider auth receipt hash differs from exact 1.0.1 receipt");
   if(version===EXACT_102_VERSION&&createHash("sha256").update(bytes).digest("hex")!==EXACT_102_PROVIDER_RECEIPT_SHA256) throw new Error("provider auth receipt hash differs from exact 1.0.2 receipt");
   if(version===EXACT_103_VERSION&&createHash("sha256").update(bytes).digest("hex")!==EXACT_103_PROVIDER_RECEIPT_SHA256) throw new Error("provider auth receipt hash differs from exact 1.0.3 receipt");
+  if(version===EXACT_104_VERSION&&createHash("sha256").update(bytes).digest("hex")!==EXACT_104_PROVIDER_RECEIPT_SHA256) throw new Error("provider auth receipt hash differs from exact 1.0.4 receipt");
   const parsed = readJsonObject(path, "provider auth receipt");
   if (parsed.version !== version || parsed.gitHead !== gitHead || !Array.isArray(parsed.providers)) throw new Error("provider auth receipt version/gitHead/providers mismatch");
   const providers = parsed.providers.map((raw, index) => {
@@ -467,7 +506,7 @@ export function validateProviderAuthReceipt(pathInput: string, version: string, 
   });
   const ids=providers.map(provider=>provider.id);
   if (providers.length !== 42 || new Set(ids).size !== providers.length || JSON.stringify(ids) !== JSON.stringify([...ids].sort())) throw new Error("provider auth receipt must contain 42 unique providers sorted by id");
-  for (const required of ["openai","openai-codex","github-copilot","anthropic","kimi-coding","openrouter","radius","amazon-bedrock","google","google-vertex",version === EXACT_103_VERSION ? "azure" : "azure-openai-responses"]) {
+  for (const required of ["openai","openai-codex","github-copilot","anthropic","kimi-coding","openrouter","radius","amazon-bedrock","google","google-vertex",version === EXACT_103_VERSION || version === EXACT_104_VERSION ? "azure" : "azure-openai-responses"]) {
     if (!ids.includes(required)) throw new Error(`provider auth receipt missing ${required}`);
   }
   return { path, version, gitHead, providers };
@@ -489,8 +528,9 @@ export function validateRegistryReceipt(pathInput: string, version: string, gitH
       : version === EXACT_101_VERSION
         ? { gitHead: EXACT_101_GIT_HEAD, packages: EXACT_101_REGISTRY }
         : version === EXACT_102_VERSION ? { gitHead: EXACT_102_GIT_HEAD, packages: EXACT_102_REGISTRY }
-          : version === EXACT_103_VERSION ? { gitHead: EXACT_103_GIT_HEAD, packages: EXACT_103_REGISTRY } : null;
-  if (!target) throw new Error(`modern package admission supports exact ${EXACT_0991_VERSION}, ${EXACT_100_VERSION}, ${EXACT_101_VERSION}, ${EXACT_102_VERSION}, or ${EXACT_103_VERSION}, received ${version}`);
+          : version === EXACT_103_VERSION ? { gitHead: EXACT_103_GIT_HEAD, packages: EXACT_103_REGISTRY }
+          : version === EXACT_104_VERSION ? { gitHead: EXACT_104_GIT_HEAD, packages: EXACT_104_REGISTRY } : null;
+  if (!target) throw new Error(`modern package admission supports exact ${EXACT_0991_VERSION}, ${EXACT_100_VERSION}, ${EXACT_101_VERSION}, ${EXACT_102_VERSION}, ${EXACT_103_VERSION}, or ${EXACT_104_VERSION}, received ${version}`);
   if (gitHead !== target.gitHead) throw new Error(`${version} registry receipt requires gitHead ${target.gitHead}`);
 
   const seen = new Set<string>();

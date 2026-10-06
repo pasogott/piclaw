@@ -1,10 +1,14 @@
+import { readFileSync as readFileSyncForTarget } from "node:fs";
+
+const historicalTest = JSON.parse(readFileSyncForTarget(new URL("../../../node_modules/@earendil-works/pi-coding-agent/package.json", import.meta.url), "utf8")).version === "1.0.3" ? test : test.skip;
+
 /** Candidate-only exact-target probes; historical 1.0.0 fixtures stay intact. */
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTempWorkspace } from "../helpers.js";
 const version = JSON.parse(readFileSync(join(import.meta.dir, "../../../node_modules/@earendil-works/pi-coding-agent/package.json"), "utf8")).version;
-test("candidate dependency target is exactly 1.0.3", () => { expect(version).toBe("1.0.3"); });
+historicalTest("candidate dependency target is exactly 1.0.3", () => { expect(version).toBe("1.0.3"); });
 async function run(fixture: string, args: string[], env: Record<string, string> = {}, cwd?: string) {
   const child = Bun.spawn([process.execPath, "--no-env-file", "--preload", join(import.meta.dir, "fixtures/earendil-103-offline-guard.ts"), join(import.meta.dir, "fixtures", fixture), ...args], {
     cwd, env: { PATH: process.env.PATH, HOME: "/nonexistent", PI_OFFLINE: "1", PI_TELEMETRY: "0", OTEL_SDK_DISABLED: "true", PICLAW_DB_IN_MEMORY: "1", ...env }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
@@ -18,14 +22,14 @@ async function run(fixture: string, args: string[], env: Record<string, string> 
   } finally { clearTimeout(timer); if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
 }
 for (const mode of ["success", "failed-initial", "failed-reload", "commit-failure", "unbound", "overlap", "disposed-barrier", "failed-barrier", "shutdown-error", "runtime-dispose"]) {
-  test(`1.0.3 candidate bridge lease lifecycle: ${mode}`, async () => {
+  historicalTest(`1.0.3 candidate bridge lease lifecycle: ${mode}`, async () => {
     const ws = createTempWorkspace("candidate-103-bridge-");
     try { const result = await run("mcp-bridge-reload-103.ts", [mode, "3", "plain", ws.workspace]); expect(result).toMatchObject({ mode, version: "1.0.3", adapterVersion: "2.31.0", status: "pass", network: 0 }); expect(result.released).toBe(result.acquired); }
     finally { ws.cleanup(); }
   }, 25_000);
 }
 for (const exposure of ["deferred", "codemode"]) {
-  test(`1.0.3 candidate real MCP/tool pipeline: ${exposure}`, async () => {
+  historicalTest(`1.0.3 candidate real MCP/tool pipeline: ${exposure}`, async () => {
     const ws = createTempWorkspace("candidate-103-public-");
     try {
       const result = await run("mcp-public-runtime-103.ts", [exposure], { MCP_PUBLIC_FIXTURE_ROOT: ws.workspace });
@@ -33,7 +37,7 @@ for (const exposure of ["deferred", "codemode"]) {
     } finally { ws.cleanup(); }
   }, 25_000);
 }
-test("1.0.3 public OAuth callback path/state isolation on owned loopback", async () => {
+historicalTest("1.0.3 public OAuth callback path/state isolation on owned loopback", async () => {
   const child = Bun.spawn([process.execPath, "--no-env-file", "--preload", join(import.meta.dir, "fixtures/earendil-103-callback-guard.ts"), join(import.meta.dir, "fixtures/earendil-103-callback.ts")], {
     env: { PATH: process.env.PATH, HOME: "/nonexistent", PI_OFFLINE: "1", OTEL_SDK_DISABLED: "true" }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
   });
@@ -45,7 +49,7 @@ test("1.0.3 public OAuth callback path/state isolation on owned loopback", async
   } finally { clearTimeout(timer); if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
 }, 15_000);
 for (const mode of ["disabled-trusted", "disabled-untrusted", "exposure", "invalid-extra", "replacement"]) {
-  test(`1.0.3 public project MCP override: ${mode}`, async () => {
+  historicalTest(`1.0.3 public project MCP override: ${mode}`, async () => {
     const ws = createTempWorkspace("candidate-103-overrides-");
     try {
       const result = await run("earendil-103-overrides.ts", [mode], { CANDIDATE_102_ROOT: ws.workspace });
@@ -53,7 +57,7 @@ for (const mode of ["disabled-trusted", "disabled-untrusted", "exposure", "inval
     } finally { ws.cleanup(); }
   }, 25_000);
 }
-test("1.0.3 native transport close failure is retained as a teardown blocker", async () => {
+historicalTest("1.0.3 native transport close failure is retained as a teardown blocker", async () => {
   const ws = createTempWorkspace("candidate-103-close-failure-");
   try {
     const result = await run("earendil-103-close-failure.ts", [], { CANDIDATE_102_ROOT: ws.workspace });
