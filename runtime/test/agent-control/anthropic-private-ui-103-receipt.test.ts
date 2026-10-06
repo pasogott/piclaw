@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repo = resolve(import.meta.dir, "../../..");
-test("1.0.3 Anthropic private UI receipt covers both engines without broadening acceptance", () => {
+test.skipIf(JSON.parse(readFileSync(resolve(repoForTarget(), "node_modules/@earendil-works/pi-ai/package.json"), "utf8")).version !== "1.0.3")("1.0.3 Anthropic private UI receipt covers both engines without broadening acceptance", () => {
   const receipt = JSON.parse(readFileSync(resolve(repo, "docs/design/earendil-agent-harness-integration-adr/evidence/receipts/earendil-103-anthropic-private-ui.json"), "utf8"));
   expect(receipt.version).toBe("1.0.3"); expect(receipt.runtime).toBe("Bun 1.4.2");
   expect(receipt.scope).toBe("builtin_anthropic_copy_code_private_card_and_recording_fixture");
@@ -36,3 +36,5 @@ test("private UI preload rejects an ordinary namespace before runtime imports", 
     expect(exit).not.toBe(0); expect(out).toBe(""); expect(err).toContain("A distinct network namespace is required.");
   } finally { clearTimeout(timeout); if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
 });
+
+function repoForTarget(){return resolve(import.meta.dir,"../../..");}

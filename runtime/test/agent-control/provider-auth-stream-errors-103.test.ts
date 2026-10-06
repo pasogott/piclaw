@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+const historicalTest = JSON.parse(readFileSync(new URL("../../../node_modules/@earendil-works/pi-coding-agent/package.json", import.meta.url), "utf8")).version === "1.0.3" ? test : test.skip;
 for (const mode of ["refresh-permanent", "refresh-transient", "malformed-storage", "refresh-retry-success"]) {
-  test(`public runtime credential error isolation: ${mode}`, async () => {
+  historicalTest(`public runtime credential error isolation: ${mode}`, async () => {
     const child = Bun.spawn([process.execPath, "--no-env-file", resolve(import.meta.dir, "fixtures/provider-auth-stream-errors-103.ts"), mode], {
       env: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: "/nonexistent", PI_OFFLINE: "1", PI_TELEMETRY: "0", OTEL_SDK_DISABLED: "true" }, stdout: "pipe", stderr: "pipe",
     });

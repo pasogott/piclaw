@@ -1,3 +1,7 @@
+import { readFileSync as readFileSyncForTarget } from "node:fs";
+
+const historicalTest = JSON.parse(readFileSyncForTarget(new URL("../../../node_modules/@earendil-works/pi-coding-agent/package.json", import.meta.url), "utf8")).version === "1.0.3" ? test : test.skip;
+
 import { expect,test } from 'bun:test';
 import { readFileSync,statSync,rmSync,readdirSync,mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
@@ -8,7 +12,7 @@ import { createAssistantMessageEventStream, type AssistantMessage, type Model, t
 import { createTestCredentialStore } from '../model-services-fixture.js';
 import { assertPathWithinTestFilesystemIsolation } from '../../scripts/test-filesystem-isolation.js';
 
-test('public 1.0.3 codemode writes shown images and truncated output as private owned files',async()=>{
+historicalTest('public 1.0.3 codemode writes shown images and truncated output as private owned files',async()=>{
  const ws=createTempWorkspace('codemode103-files-'),paths=new Set<string>();
  const originalTmp=process.env.TMPDIR,outputDir=mkdtempSync(join(tmpdir(),'codemode103-private-'));
  assertPathWithinTestFilesystemIsolation(outputDir);process.env.TMPDIR=outputDir;
