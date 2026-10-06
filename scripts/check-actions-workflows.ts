@@ -7,6 +7,7 @@
 import { load } from "js-yaml";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { checkPublishSmokeGate } from "./check-publish-smoke-gate";
 
 const ROOT = resolve(import.meta.dir, "..");
 
@@ -61,6 +62,7 @@ expectTrue(integration.on?.push === undefined, "Integration must run only inside
 expectTrue(integration.jobs?.integration?.["timeout-minutes"] === 30, "Integration timeout must remain 30 minutes.");
 
 const publish = workflow("publish.yml");
+checkPublishSmokeGate(publish);
 expectTrue(publish.jobs?.integration?.uses === "./.github/workflows/integration-gate.yml", "Publish must call the reusable exact-SHA integration gate.");
 expectEqual(publish.jobs?.integration?.with, { ref: "${{ github.sha }}" }, "Publish integration must validate the exact tag SHA.");
 expectTrue(!publish.jobs?.["wait-for-integration"], "Publish must not retain a polling waiter runner.");
