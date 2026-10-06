@@ -1,6 +1,6 @@
 import { html, useRef, useState, useEffect, useCallback, useMemo } from '../vendor/preact-htm.js';
 import { useTranslation } from '../utils/i18n.js';
-import { findPopupTypeaheadMatch, isPopupTypeaheadKey, resolvePopupTypeaheadMatch, updatePopupTypeaheadBuffer } from '../ui/popup-typeahead.js';
+import { isPopupTypeaheadKey, resolvePopupTypeaheadMatch, updatePopupTypeaheadBuffer } from '../ui/popup-typeahead.js';
 import { getAgentModels, sendAgentMessage } from '../api.js';
 import { uploadFileBatch, uploadChatAttachment } from '../ui/upload-transfers.js';
 import { getLocalStorageItem, setLocalStorageItem } from '../utils/storage.js';
@@ -1326,7 +1326,7 @@ export function ComposeBox({
     const sessionPopupEntriesRef = useRef([]);
     const [loadingModels, setLoadingModels] = useState(false);
     const [rollingUpSession, setRollingUpSession] = useState(false);
-    const [footerWidth, setFooterWidth] = useState(0);
+    const [, setFooterWidth] = useState(0);
     const resizeChatRef = useRef(currentChatJid);
     resizeChatRef.current = currentChatJid;
     const [submitError, setSubmitError] = useState(null);
@@ -3386,7 +3386,7 @@ export function ComposeBox({
                 title=${t('compose.resizeInputHint')}
                 onMouseDown=${handleComposeResizeMouseDown}
                 onTouchStart=${handleComposeResizeTouchStart}
-            >${onJumpToLatest && html`<button type="button" class="compose-latest-handle" aria-label=${timelineHasNew ? 'New messages — jump to latest' : 'Jump to latest message'} title="Jump to latest message" onClick=${(event) => { if (event.detail === 0) onJumpToLatest(); }}><span class="compose-latest-chevron" aria-hidden="true">⌄</span></button>`}</div>
+            >${onJumpToLatest && html`<button type="button" class="compose-latest-handle" aria-label=${timelineHasNew ? 'New messages — jump to latest' : 'Jump to latest message'} title="Jump to latest message" onClick=${(event) => { if (event.detail === 0) onJumpToLatest(); }}><span class="compose-latest-chevron compose-latest-chevron-left" aria-hidden="true"></span><span class="compose-latest-chevron compose-latest-chevron-right" aria-hidden="true"></span></button>`}</div>
             ${speechUiVisible && html`
                 <div class=${`compose-inline-status compose-speech-status compose-speech-status-${speechUiState.kind}`} role="status" aria-live="polite">
                     <div class="compose-inline-status-row">
