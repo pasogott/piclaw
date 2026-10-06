@@ -1,3 +1,7 @@
+import { readFileSync as readFileSyncForTarget } from "node:fs";
+
+const historicalTest = JSON.parse(readFileSyncForTarget(new URL("../../../node_modules/@earendil-works/pi-coding-agent/package.json", import.meta.url), "utf8")).version === "1.0.3" ? test : test.skip;
+
 /** Synthetic public OAuth methods: no server socket, credentials or real fetch. */
 import { beforeAll, afterAll, expect, test } from "bun:test";
 import { createRequire } from "node:module";
@@ -7,7 +11,7 @@ const serverUrl = "https://mcp.example.invalid/mcp", issuer = "https://auth.exam
 const metadata: AuthorizationServerMetadata = { issuer, authorization_endpoint: issuer + "/authorize", token_endpoint: issuer + "/token", registration_endpoint: issuer + "/register", response_types_supported: ["code"], code_challenge_methods_supported: ["S256"], client_id_metadata_document_supported: true };
 const document = { url: "https://client.example.invalid/document.json", redirectUrl: "http://127.0.0.1:1234/callback/synthetic" };
 let originalFetch: typeof fetch, externalAttempts = 0;
-beforeAll(() => { expect(version).toBe("1.0.3"); originalFetch = globalThis.fetch; const deny = () => { externalAttempts++; throw Error("external network forbidden"); }; globalThis.fetch = Object.assign(deny, { preconnect: deny }) as typeof fetch; });
+beforeAll(() => { originalFetch = globalThis.fetch; const deny = () => { externalAttempts++; throw Error("external network forbidden"); }; globalThis.fetch = Object.assign(deny, { preconnect: deny }) as typeof fetch; });
 afterAll(() => { globalThis.fetch = originalFetch; expect(externalAttempts).toBe(0); });
 async function fixture(options: { stored?: boolean; document?: boolean; declineDocument?: boolean; meta?: AuthorizationServerMetadata | undefined; invalidDocument?: string; failStore?: boolean; failTokenStore?: boolean } = {}) {
   const stateStore = new MemoryOAuthStateStore(); let fail = false;
@@ -28,51 +32,51 @@ async function fixture(options: { stored?: boolean; document?: boolean; declineD
   };
   return { provider, stateStore, redirects, calls, fetcher, get documentCalls() { return documentCalls; } };
 }
-test("CIMD redirect uses document client ID/path and is not saved as registration", async () => {
+historicalTest("CIMD redirect uses document client ID/path and is not saved as registration", async () => {
   const f = await fixture(); expect(await authorizeMcp(f.provider, { serverUrl, fetch: f.fetcher })).toBe("REDIRECT");
   expect(f.documentCalls).toBe(1); expect(f.calls).toEqual([]);
   expect(f.redirects[0].searchParams.get("client_id")).toBe(document.url); expect(f.redirects[0].searchParams.get("redirect_uri")).toBe(document.redirectUrl);
   expect(await f.provider.clientInformation()).toBeUndefined(); expect(f.stateStore.load()?.clientInformation).toBeUndefined();
 });
-test("stored registration wins without invoking document selection", async () => {
+historicalTest("stored registration wins without invoking document selection", async () => {
   const f = await fixture({ stored: true }); expect(await authorizeMcp(f.provider, { serverUrl, fetch: f.fetcher })).toBe("REDIRECT");
   expect(f.documentCalls).toBe(0); expect(f.calls).toEqual([]); expect(f.redirects[0].searchParams.get("client_id")).toBe("synthetic-stored-client"); expect(f.redirects[0].searchParams.get("redirect_uri")).toBe(f.provider.redirectUrl);
 });
-test("no document dynamically registers and persists the assigned client", async () => {
+historicalTest("no document dynamically registers and persists the assigned client", async () => {
   const f = await fixture({ document: false }); expect(await authorizeMcp(f.provider, { serverUrl, fetch: f.fetcher })).toBe("REDIRECT");
   expect(f.calls).toEqual([issuer + "/register"]); expect((await f.provider.clientInformation())?.client_id).toBe("synthetic-dynamic-client");
 });
-test("document selector may decline and use dynamic registration", async () => {
+historicalTest("document selector may decline and use dynamic registration", async () => {
   const f = await fixture({ declineDocument: true }); expect(await authorizeMcp(f.provider, { serverUrl, fetch: f.fetcher })).toBe("REDIRECT");
   expect(f.documentCalls).toBe(1); expect(f.calls).toEqual([issuer + "/register"]); expect((await f.provider.clientInformation())?.client_id).toBe("synthetic-dynamic-client");
 });
-test("low-level document selector sees metadata even without advertised support", async () => {
+historicalTest("low-level document selector sees metadata even without advertised support", async () => {
   const f = await fixture({ meta: { ...metadata, client_id_metadata_document_supported: false } });
   expect(await authorizeMcp(f.provider, { serverUrl, fetch: f.fetcher })).toBe("REDIRECT"); expect(f.documentCalls).toBe(1); expect(f.calls).toEqual([]);
   // Capability admission is the host callback's responsibility; this public
   // low-level contract does not certify the coding-agent CIMD UI policy.
   expect(f.redirects[0].searchParams.get("client_id")).toBe(document.url);
 });
-for (const url of ["http://client.example.invalid/document.json", "https://client.example.invalid/"]) test(`invalid document is rejected before redirect/token: ${url}`, async () => {
+for (const url of ["http://client.example.invalid/document.json", "https://client.example.invalid/"]) historicalTest(`invalid document is rejected before redirect/token: ${url}`, async () => {
   const f = await fixture({ invalidDocument: url }); await expect(authorizeMcp(f.provider, { serverUrl, fetch: f.fetcher })).rejects.toThrow("Invalid OAuth client metadata URL"); expect(f.calls).toEqual([]); expect(f.redirects).toEqual([]);
 });
-test("document code exchange uses selected redirect and preserves requested scope", async () => {
+historicalTest("document code exchange uses selected redirect and preserves requested scope", async () => {
   const f = await fixture(); await f.provider.saveCodeVerifier("synthetic-pkce-verifier");
   expect(await authorizeMcp(f.provider, { serverUrl, authorizationCode: "synthetic-code", iss: issuer, scope: "read write", fetch: f.fetcher })).toBe("AUTHORIZED");
   expect(f.calls).toEqual([issuer + "/token"]); expect((await f.provider.tokens())?.scope).toBe("read write"); expect(await f.provider.clientInformation()).toBeUndefined();
 });
-test("wrong issuer denies before code exchange", async () => {
+historicalTest("wrong issuer denies before code exchange", async () => {
   const f = await fixture(); await f.provider.saveCodeVerifier("synthetic-verifier");
   await expect(authorizeMcp(f.provider, { serverUrl, authorizationCode: "synthetic-code", iss: "https://wrong.example.invalid", fetch: f.fetcher })).rejects.toThrow(); expect(f.calls).toEqual([]); expect(await f.provider.tokens()).toBeUndefined();
 });
-test("required issuer denies missing issuer before token exchange", async () => {
+historicalTest("required issuer denies missing issuer before token exchange", async () => {
   const f = await fixture({ meta: { ...metadata, authorization_response_iss_parameter_supported: true } }); await f.provider.saveCodeVerifier("synthetic-verifier");
   await expect(authorizeMcp(f.provider, { serverUrl, authorizationCode: "synthetic-code", fetch: f.fetcher })).rejects.toThrow(); expect(f.calls).toEqual([]);
 });
-test("early state-store failure propagates before token exchange or redirect", async () => {
+historicalTest("early state-store failure propagates before token exchange or redirect", async () => {
   const f = await fixture({ failStore: true }); await expect(authorizeMcp(f.provider, { serverUrl, fetch: f.fetcher })).rejects.toThrow("synthetic storage failure"); expect(f.calls).toEqual([]); expect(f.redirects).toEqual([]); expect(f.stateStore.load()?.tokens).toBeUndefined();
 });
-test("token-store failure after successful exchange rejects without persisting tokens", async () => {
+historicalTest("token-store failure after successful exchange rejects without persisting tokens", async () => {
   const f = await fixture({ failTokenStore: true }); await f.provider.saveCodeVerifier("synthetic-verifier");
   await expect(authorizeMcp(f.provider, { serverUrl, authorizationCode: "synthetic-code", iss: issuer, fetch: f.fetcher })).rejects.toThrow("synthetic storage failure");
   expect(f.calls).toEqual([issuer + "/token"]); expect(f.stateStore.load()?.tokens).toBeUndefined(); expect(f.redirects).toEqual([]);

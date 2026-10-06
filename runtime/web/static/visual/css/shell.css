@@ -1300,9 +1300,7 @@ body {
 }
 
 .model-picker__section-heading {
-  position: sticky;
-  top: 0;
-  z-index: 1;
+  position: relative;
   padding: 7px 10px 5px;
   background: color-mix(in srgb, var(--bg-secondary, #2a2a3c) 94%, transparent);
   backdrop-filter: blur(8px);

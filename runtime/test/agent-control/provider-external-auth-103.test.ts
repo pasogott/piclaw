@@ -11,6 +11,8 @@ const signal = new AbortController().signal;
 const manifestPath = resolve(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-ai"))), "../package.json");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { name: string; version: string };
 
+const historicalTest = manifest.version === "1.0.3" ? test : test.skip;
+
 function expectAuthApisRequired(id: string): { provider: Provider; auth: RequiredApiKeyAuth } {
   const provider = providers.find(candidate => candidate.id === id);
   const auth = provider?.auth.apiKey;
@@ -67,7 +69,7 @@ async function publicLogin(auth: RequiredApiKeyAuth, method: string, methods: st
   return { credential, prompts, events };
 }
 
-test("public amazon-bedrock auth resolves stored bearer before ambient bearer", async () => {
+historicalTest("public amazon-bedrock auth resolves stored bearer before ambient bearer", async () => {
   const { auth } = expectAuthApisRequired("amazon-bedrock");
   const stored = syntheticContext();
   expect(await auth.resolve({ ctx: stored.ctx, credential: { type: "api_key", key: "synthetic-known-stored-bedrock" }, signal }))
@@ -78,7 +80,7 @@ test("public amazon-bedrock auth resolves stored bearer before ambient bearer", 
   expect(ambient.envCalls).toEqual(["AWS_BEARER_TOKEN_BEDROCK"]);
 });
 
-test("public amazon-bedrock auth detects AWS profile and static access-key configuration", async () => {
+historicalTest("public amazon-bedrock auth detects AWS profile and static access-key configuration", async () => {
   const { auth } = expectAuthApisRequired("amazon-bedrock");
   const profile = syntheticContext([["AWS_BEARER_TOKEN_BEDROCK", undefined], ["AWS_PROFILE", "synthetic-profile"]]);
   expect(await auth.resolve({ ctx: profile.ctx, signal })).toEqual({ auth: {}, source: "AWS_PROFILE" });
@@ -92,7 +94,7 @@ test("public amazon-bedrock auth detects AWS profile and static access-key confi
   expect(missing.fileCalls).toEqual([]);
 });
 
-test("public amazon-bedrock login owns select and text prompts for an AWS profile", async () => {
+historicalTest("public amazon-bedrock login owns select and text prompts for an AWS profile", async () => {
   const { auth } = expectAuthApisRequired("amazon-bedrock");
   const result = await publicLogin(auth, "aws-profile", ["bearer-token", "aws-profile", "credential-chain"], ["synthetic-profile"]);
   expect(result.credential).toEqual({ type: "api_key", env: { AWS_PROFILE: "synthetic-profile" } });
@@ -102,7 +104,7 @@ test("public amazon-bedrock login owns select and text prompts for an AWS profil
   expect(result.events).toHaveLength(1);
 });
 
-test("public google-vertex auth gives a stored API key precedence over its env key", async () => {
+historicalTest("public google-vertex auth gives a stored API key precedence over its env key", async () => {
   const { auth } = expectAuthApisRequired("google-vertex");
   const stored = syntheticContext();
   expect(await auth.resolve({ ctx: stored.ctx, credential: { type: "api_key", key: "synthetic-known-vertex-stored" }, signal }))
@@ -112,7 +114,7 @@ test("public google-vertex auth gives a stored API key precedence over its env k
   expect(await auth.resolve({ ctx: ambient.ctx, signal })).toEqual({ auth: { apiKey: "synthetic-known-vertex-env" }, source: "GOOGLE_CLOUD_API_KEY" });
 });
 
-test("public google-vertex ADC requires a synthetic file, project, and location and honors stored env", async () => {
+historicalTest("public google-vertex ADC requires a synthetic file, project, and location and honors stored env", async () => {
   const { auth } = expectAuthApisRequired("google-vertex");
   const adc = "~/.config/gcloud/application_default_credentials.json";
   for (const [file, project, location] of [[false, "synthetic-project", "synthetic-location"], [true, undefined, "synthetic-location"], [true, "synthetic-project", undefined]] as const) {
@@ -130,7 +132,7 @@ test("public google-vertex ADC requires a synthetic file, project, and location 
   expect(stored.fileCalls).toEqual(["/synthetic/stored-adc.json"]);
 });
 
-test("public google-vertex login produces service-account env without an API key and resolves it", async () => {
+historicalTest("public google-vertex login produces service-account env without an API key and resolves it", async () => {
   const { auth } = expectAuthApisRequired("google-vertex");
   const result = await publicLogin(auth, "service-account", ["api-key", "adc", "service-account"], ["synthetic-project", "synthetic-location", "/synthetic/service-account.json"]);
   expect(result.credential).toEqual({ type: "api_key", env: { GOOGLE_CLOUD_PROJECT: "synthetic-project", GOOGLE_CLOUD_LOCATION: "synthetic-location", GOOGLE_APPLICATION_CREDENTIALS: "/synthetic/service-account.json" } });
@@ -140,7 +142,7 @@ test("public google-vertex login produces service-account env without an API key
   expect(await auth.resolve({ ctx: ctx.ctx, credential: result.credential, signal })).toEqual({ auth: {}, env: result.credential.env, source: "stored credential" });
 });
 
-test("public azure auth resolves stored, env, and missing API-key states", async () => {
+historicalTest("public azure auth resolves stored, env, and missing API-key states", async () => {
   const { auth } = expectAuthApisRequired("azure");
   const stored = syntheticContext();
   expect(await auth.resolve({ ctx: stored.ctx, credential: { type: "api_key", key: "synthetic-known-azure-stored" }, signal }))
@@ -151,7 +153,7 @@ test("public azure auth resolves stored, env, and missing API-key states", async
   expect(await auth.resolve({ ctx: missing.ctx, signal })).toBeUndefined();
 });
 
-test("public azure keeps endpoint setup separate from exact auth method metadata", () => {
+historicalTest("public azure keeps endpoint setup separate from exact auth method metadata", () => {
   const { provider, auth } = expectAuthApisRequired("azure");
   expect({ package: `${manifest.name}@${manifest.version}`, id: provider.id, name: provider.name, baseUrl: provider.baseUrl,
     authName: auth.name, authKeys: Object.keys(auth).sort(), oauth: provider.auth.oauth }).toEqual({

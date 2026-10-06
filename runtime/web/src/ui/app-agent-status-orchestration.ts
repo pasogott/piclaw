@@ -37,6 +37,7 @@ function resolveExtensionWorkingRestoreState(value: unknown): ExtensionWorkingRe
 
 export interface RefreshAgentStatusForChatOptions {
   currentChatJid: string;
+  currentTurnIdRef?: RefBox<string | null>;
   getAgentStatus: (chatJid: string) => Promise<any>;
   activeChatJidRef: RefBox<string>;
   wasAgentActiveRef: RefBox<boolean>;
@@ -86,11 +87,19 @@ export async function refreshAgentStatusForChat(options: RefreshAgentStatusForCh
   } = options;
 
   const targetChatJid = currentChatJid;
+  const requestedTurn = options.currentTurnIdRef?.current;
+  const requestedStatus = agentStatusRef.current;
+  const requestedThought = thoughtBufferRef.current;
+  const requestedDraft = draftBufferRef.current;
 
   try {
     const response = await getAgentStatus(targetChatJid);
     onStateAccessResult?.(false);
-    if (activeChatJidRef.current !== targetChatJid) {
+    if (activeChatJidRef.current !== targetChatJid
+      || options.currentTurnIdRef?.current !== requestedTurn
+      || agentStatusRef.current !== requestedStatus
+      || thoughtBufferRef.current !== requestedThought
+      || draftBufferRef.current !== requestedDraft) {
       return null;
     }
 
@@ -119,7 +128,7 @@ export async function refreshAgentStatusForChat(options: RefreshAgentStatusForCh
     agentStatusRef.current = payload;
 
     const activeTurn = readAgentTurnId(payload);
-    if (activeTurn) setActiveTurn(activeTurn);
+    if (typeof activeTurn === 'string' && activeTurn) setActiveTurn(activeTurn);
 
     noteAgentActivity({
       running: true,

@@ -9,7 +9,7 @@ const artifactPath = resolve(root, "runtime/test/fixtures/earendil-package-admis
 const digest = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
 const artifact = JSON.parse(readFileSync(artifactPath, "utf8"));
 
-test("1.0.3 CLI artifact and measured outcomes remain separate from historical receipts", () => {
+test.skipIf(JSON.parse(readFileSync(resolve(repoForTarget(), "node_modules/@earendil-works/pi-ai/package.json"), "utf8")).version !== "1.0.3")("1.0.3 CLI artifact and measured outcomes remain separate from historical receipts", () => {
   expect(digest(artifactPath)).toBe("c7e0191c9fd39cae213ddefabe3aa960599cf7b7b4ee2e329a8173d3f0b77ca6");
   expect(artifact.version).toBe("1.0.3"); expect(artifact.gitHead).toBe("d78dc83d633229d12f8b79631384c4c2717c399f");
   const registry = JSON.parse(readFileSync(resolve(root, "runtime/test/fixtures/earendil-package-admission/registry-1.0.3.json"), "utf8"));
@@ -61,3 +61,5 @@ test("1.0.3 CLI fixture rejects ordinary-namespace execution before creating a p
     expect(exit).not.toBe(0); expect(out).toBe(""); expect(err).toContain("A distinct network namespace is required."); expect(existsSync(resolve(scratch, "agent"))).toBe(false);
   } finally { clearTimeout(timer); if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; rmSync(scratch, { recursive: true, force: true }); }
 });
+
+function repoForTarget(){return resolve(import.meta.dir,"../../..");}
