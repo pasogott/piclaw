@@ -91,3 +91,61 @@ test("persisted unsupported native selection never silently starts adapter",asyn
   expect(()=>assertSelectedMcpOwner()).toThrow("unavailable");const h=harness();expect(h.controller.inspect().runtime.observedPolicy).toBeNull();expect(h.controller.inspect().applyAvailable).toBe(false);
   await expect(h.controller.apply(h.input(),()=>{})).rejects.toThrow("replacement");expect(h.events).toEqual([]);
 }));
+
+test("session startup migrates legacy config instead of blocking agent construction", async () => fixture(async path => {
+  const { chmodSync, statSync } = await import("node:fs");
+  const { canConstructMcpOwner } = await import("../../src/agent-pool/mcp-codemode-runtime.js");
+  const original = readFileSync(path, "utf8");
+  chmodSync(path, 0o664);
+  expect(canConstructMcpOwner()).toBe(true);
+  expect(statSync(path).mode & 0o777).toBe(0o600);
+  expect(readFileSync(path, "utf8")).toBe(original);
+  expect(selectedMcpPolicy()).toEqual({ engine: "adapter", codemode: "auto" });
+}));
+
+test("unavailable MCP policy degrades construction only and recovers after repair", async () => fixture(async path => {
+  const { canConstructMcpOwner } = await import("../../src/agent-pool/mcp-codemode-runtime.js");
+  const original = readFileSync(path, "utf8");
+  writeFileSync(path, '{"domains":{"mcp":{"engine":"PRIVATE_SENTINEL"}}}');
+  expect(canConstructMcpOwner()).toBe(false);
+  expect(() => selectedMcpPolicy()).toThrow("Invalid MCP settings policy");
+  writeFileSync(path, original);
+  expect(canConstructMcpOwner()).toBe(true);
+}));
+
+test("untrusted linked config is not repaired or selected as an adapter fallback", async () => fixture(async path => {
+  const { renameSync, symlinkSync, statSync, chmodSync } = await import("node:fs");
+  const { canConstructMcpOwner } = await import("../../src/agent-pool/mcp-codemode-runtime.js");
+  const target = path + ".untrusted";
+  renameSync(path, target); chmodSync(target, 0o644); symlinkSync(target, path);
+  const original = readFileSync(target, "utf8");
+  expect(canConstructMcpOwner()).toBe(false);
+  expect(statSync(target).mode & 0o777).toBe(0o644);
+  expect(readFileSync(target, "utf8")).toBe(original);
+}));
+
+test("MCP construction fallback does not bypass explicit native policy or transition fences", async () => fixture(async path => {
+  const { canConstructMcpOwner } = await import("../../src/agent-pool/mcp-codemode-runtime.js");
+  writeFileSync(path, JSON.stringify({ domains: { mcp: { engine: "native", codemode: "auto" } } }));
+  expect(() => canConstructMcpOwner()).toThrow("unavailable");
+  resetMcpCodemodeRuntimeForTests();
+  writeFileSync(path, JSON.stringify({ domains: { mcp: { engine: "adapter", codemode: "auto" } } }));
+  const h = harness({ set() { throw Error("activation failed"); } });
+  await expect(h.controller.apply(h.input(), () => {})).rejects.toThrow("Policy saved");
+  writeFileSync(path, "invalid config after failed transition");
+  expect(() => canConstructMcpOwner()).toThrow("blocked");
+}));
+
+test("repair after MCP-only degradation cannot fence working core sessions via Apply", async () => fixture(async path => {
+  const { canConstructMcpOwner } = await import("../../src/agent-pool/mcp-codemode-runtime.js");
+  const original = readFileSync(path, "utf8");
+  writeFileSync(path, '{"domains":{"mcp":{"engine":"invalid"}}}');
+  expect(canConstructMcpOwner()).toBe(false);
+  writeFileSync(path, original);
+  expect(canConstructMcpOwner()).toBe(true);
+  const h = harness();
+  expect(h.controller.inspect().applyAvailable).toBe(false);
+  await expect(h.controller.apply(h.input(), () => {})).rejects.toThrow("restart");
+  expect(h.events).toEqual([]);
+  expect(() => assertSelectedMcpOwner()).not.toThrow();
+}));

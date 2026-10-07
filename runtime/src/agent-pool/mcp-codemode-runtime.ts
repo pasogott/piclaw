@@ -1,7 +1,7 @@
 import { createCodemodeExtension, type AgentSession, type AgentSessionRuntime, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { commitMcpInstancePolicy, readMcpInstancePolicy } from "../core/config-mcp.js";
+import { commitMcpInstancePolicy, readMcpInstancePolicy, migrateMcpInstanceConfigPermissions, McpInstanceConfigError } from "../core/config-mcp.js";
 import { getMcpBridgeReadSnapshot, assertMcpBridgeSourcesCurrent, assertMcpCommittedSourcesCurrent, inspectMcpServerDefinitions, prepareMcpServerEdit, createMcpConfigWriteAuthority, writeMcpProjectOverride, hydrateMcpKeychainCredentials, McpConfigWriteError, type McpServerWriteCandidate, type McpConfigCommitReceipt } from "../secure/mcp-keychain.js";
 import { acknowledgeMcpSessionsShutdown, reloadAcknowledgedMcpSessions } from './mcp-bridge-owner.js';
 import { getWorkspaceDir } from '../core/config.js';
@@ -13,6 +13,7 @@ import { parseMcpEnginePolicy, type McpEnginePolicy } from "./mcp-engine-policy.
 const READINESS = Object.freeze({ adapter: true, native: false, codemode: true });
 let selected: Readonly<McpEnginePolicy> | null = null;
 let blocked = false;
+let degradedConstruction = false;
 const ownerReloadContext = new AsyncLocalStorage<boolean>();
 /** Only the private acknowledged replacement batch may construct while fenced. */
 export function assertMcpOwnerConstruction(): void {
@@ -21,7 +22,25 @@ export function assertMcpOwnerConstruction(): void {
 }
 
 export function selectedMcpPolicy(): Readonly<McpEnginePolicy> {
-  return selected ??= readMcpInstancePolicy().policy;
+  if (!selected) {
+    migrateMcpInstanceConfigPermissions();
+    selected = readMcpInstancePolicy().policy;
+  }
+  return selected;
+}
+
+/** Invalid/untrusted policy disables only MCP. Transition and unsupported-owner fences remain strict. */
+export function canConstructMcpOwner(): boolean {
+  if (blocked) { assertMcpOwnerConstruction(); return true; }
+  try { assertMcpOwnerConstruction(); return true; }
+  catch (error) {
+    if (!(error instanceof McpInstanceConfigError)) throw error;
+    degradedConstruction = true;
+    log.warn("MCP instance policy unavailable; starting agent without MCP or codemode.", {
+      operation: "mcp_settings.startup_degraded", reason: error.message,
+    });
+    return false;
+  }
 }
 
 export function assertSelectedMcpOwner(): void {
@@ -140,7 +159,7 @@ export class McpCodemodeController {
     const revision = randomUUID();
     this.revisions.set(revision, { config: persisted.revision, bridge: snapshot.revision, expires: now + 300_000 });
     const { bridgeRevision: _private, ...publicPlan } = plan;
-    const available = this.phase === "ready" && !blocked && selectedMcpPolicy().engine === "adapter";
+    const available = this.phase === "ready" && !blocked && !degradedConstruction && selectedMcpPolicy().engine === "adapter";
     return {
       ok: true,
       persisted: { policy: persisted.policy },
@@ -173,12 +192,13 @@ export class McpCodemodeController {
     this.serverRevisions.set(revision, { config: current.revision, bridge: snapshot.revision, workspace, expires: now + 300_000,
       ...(prepared ? { candidate: prepared.candidate, preview: prepared.preview } : {}) });
     return { ok: true, servers, revision, preview: prepared?.preview ?? null,
-      applyAvailable: this.phase === 'ready' && !blocked && selectedMcpPolicy().engine === 'adapter' && current.policy.engine === 'adapter',
+      applyAvailable: this.phase === 'ready' && !blocked && !degradedConstruction && selectedMcpPolicy().engine === 'adapter' && current.policy.engine === 'adapter',
       phase: this.phase, effect: 'abort_turns_and_reload_extensions' };
   }
 
   async applyServers(input: { revision: string; acknowledgeInterruptions: boolean }, authorise: () => void, signal: AbortSignal) {
     authorise(); signal.throwIfAborted();
+    if (degradedConstruction) throw new McpPolicyApplyError(409, "Repair the MCP configuration and restart before applying MCP settings to degraded sessions.");
     if (!input.acknowledgeInterruptions) throw new McpPolicyApplyError(400, 'Confirm turn interruption and extension reload before applying server changes.');
     if (this.phase !== 'ready' || blocked) throw new McpPolicyApplyError(409, 'MCP settings are busy or blocked.');
     const token = this.serverRevisions.get(input.revision);
@@ -250,6 +270,7 @@ export class McpCodemodeController {
 
   async apply(input: { policy: unknown; revision: string; acknowledgeInterruptions: boolean }, authorise: () => void) {
     authorise();
+    if (degradedConstruction) throw new McpPolicyApplyError(409, "Repair the MCP configuration and restart before applying MCP settings to degraded sessions.");
     const policy = parseMcpEnginePolicy(input.policy);
     if (input.acknowledgeInterruptions !== true) {
       throw new McpPolicyApplyError(400, "Confirm that active turns may be interrupted before applying.");
@@ -337,4 +358,5 @@ export class McpCodemodeController {
 export function resetMcpCodemodeRuntimeForTests(): void {
   selected = null;
   blocked = false;
+  degradedConstruction = false;
 }
