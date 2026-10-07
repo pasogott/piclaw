@@ -87,7 +87,7 @@
       "semanticReaderOccurrences": 71
     },
     "docsDeploy": {
-      "referencedNames": 147,
+      "referencedNames": 148,
       "directReaderNames": 16,
       "directReaderOccurrences": 32,
       "helperReaderNames": 0,
@@ -5599,6 +5599,21 @@
           "semanticReaders": 0,
           "files": [
             "runtime/src/channels/web/terminal/terminal-session-service.ts"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
+      "name": "PICLAW_TEST_CDP_CLIENTS",
+      "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            ".github/workflows/ci.yml"
           ],
           "readerFiles": []
         }

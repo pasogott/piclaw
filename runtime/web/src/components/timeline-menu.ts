@@ -24,7 +24,7 @@ export function TimelineMenu({
     chatOnlyMode,
     openEditor,
     onOpenTerminalTab,
-    onOpenVncTab,
+    onOpenVncTab, onOpenCdpTab,
 }) {
     const { t } = useTranslation();
     const [open, setOpen] = useState(false);
@@ -190,8 +190,9 @@ export function TimelineMenu({
                     ${chatOnlyMode ? t('menu.exitChatOnly') : t('menu.chatOnly')}
                 </button>
 
-                ${(onOpenTerminalTab || onOpenVncTab) && html`<div class="workspace-menu-separator"></div>`}
+                ${(onOpenTerminalTab || onOpenVncTab || onOpenCdpTab) && html`<div class="workspace-menu-separator"></div>`}
                 ${onOpenTerminalTab && html`<button class="workspace-menu-item" role="menuitem" onClick=${() => run(onOpenTerminalTab)}>${t('menu.openTerminal')}</button>`}
+                ${onOpenCdpTab && html`<button class="workspace-menu-item" role="menuitem" onClick=${() => run(onOpenCdpTab)}>Open browser in tab</button>`}
                 ${onOpenVncTab && html`<button class="workspace-menu-item" role="menuitem" onClick=${() => run(onOpenVncTab)}>${t('menu.openVnc')}</button>`}
 
                 <div class="workspace-menu-separator"></div>
