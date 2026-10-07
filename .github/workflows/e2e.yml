@@ -77,8 +77,12 @@ jobs:
         working-directory: tests/e2e
 
       - name: Install Playwright browsers
-        run: bunx playwright install chromium
-        working-directory: tests/e2e
+        uses: ./.github/actions/playwright-cache
+        with:
+          bun-version: ${{ steps.bun-version.outputs.version }}
+          working-directory: tests/e2e
+          browsers: chromium
+          variant: chromium
 
       - name: Start deterministic E2E LLM stub
         env:

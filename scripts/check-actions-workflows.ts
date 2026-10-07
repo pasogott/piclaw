@@ -38,6 +38,21 @@ function e2eSpecs(workflowData: Workflow): string[] {
   return include.flatMap((entry: { specs?: unknown }) => String(entry.specs ?? "").split(/\s+/).filter(Boolean)).sort();
 }
 
+const browserCache = load(readFileSync(resolve(ROOT, '.github/actions/playwright-cache/action.yml'), 'utf8')) as Workflow;
+const cacheSteps = browserCache.runs.steps;
+const restoreBrowsers = cacheSteps.find((step: Workflow) => step.id === 'cache');
+expectEqual(restoreBrowsers.with, {
+  path: '~/.cache/ms-playwright',
+  key: "browsers-v1-${{ runner.os }}-${{ runner.arch }}-bun${{ inputs.bun-version }}-${{ hashFiles('bun.lock', 'tests/e2e/bun.lock') }}-pw${{ steps.playwright.outputs.version }}-${{ inputs.variant }}",
+}, 'Browser cache must contain only binaries with an exact platform/toolchain/lock/browser key.');
+const installBrowsers = cacheSteps.find((step: Workflow) => step.name === 'Install required browsers');
+expectTrue(installBrowsers.if === undefined && installBrowsers.run === 'bunx playwright install ${{ inputs.browsers }}',
+  'Normal browser installation must run even on cache hits.');
+expectTrue(cacheSteps.findIndex((step: Workflow) => step.name === 'Check restored browser integrity') < cacheSteps.indexOf(installBrowsers),
+  'Restored browser contents must be verified before installation.');
+expectEqual(cacheSteps.find((step: Workflow) => step.name === 'Save browser binaries').with.path,
+  '~/.cache/ms-playwright', 'Browser cache save must never include profiles or fixtures.');
+
 const ci = workflow("ci.yml");
 expectEqual(ci.concurrency, {
   group: "ci-${{ github.event.pull_request.number || github.ref }}",
