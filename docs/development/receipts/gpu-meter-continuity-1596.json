@@ -86,5 +86,61 @@
     "Per-HUD capability only,no browserpersistence",
     "No collector/hardware/provider/liveconfig/install/restart"
   ],
-  "publicationDelta": "Docs/receipts only withruntimeparity"
+  "publicationDelta": "Docs/receipts only withruntimeparity",
+  "integration": {
+    "baseMain": "3d33978e873fdaebb79568292b24151139c8f8cc",
+    "head": "f6de1fc11e14498105a1577bbe11a1a794dba000",
+    "tree": "11ff94035ca5eedf1ac51cb8b87bef0cc5287501",
+    "runtimeTree": "bf79cbacfcbbce5f9b42c32cb322dfb9e2d3d983",
+    "full": {
+      "pass": 6686,
+      "skip": 71,
+      "fail": 0,
+      "assertions": 43444,
+      "files": 958,
+      "seconds": 688.49,
+      "log": "/workspace/exports/gpu1596-full-integrated-v2/ci-fast.log",
+      "sha256": "9a63edd6f414c6202e8ed26d136a14d0fef8537cfbbb7a41aeea8b1dce84f4b2",
+      "cleanUnchanged": true
+    },
+    "focused": {
+      "pass": 63,
+      "assertions": 485
+    },
+    "settings": {
+      "pass": 25,
+      "assertions": 253
+    },
+    "build": {
+      "pass": 9,
+      "assertions": 26
+    },
+    "privateReceipt": {
+      "id": "20a8c6ee-2904-4bf3-8108-c1f7b3577765",
+      "status": "passed",
+      "aggregate": {
+        "pass": 6720,
+        "skip": 71,
+        "fail": 0,
+        "summaries": 3
+      },
+      "logHash": "c2aed6f37a3784d49d5d29b3befa6d5561be8d2c0351c82ae551adb59cfbcccc"
+    },
+    "retainedFailedFull": {
+      "pass": 6685,
+      "skip": 71,
+      "fail": 1,
+      "assertions": 43444,
+      "reason": "Existing newest owner window receipt-retention test exceeded15000ms at33978.63ms",
+      "log": "/workspace/exports/gpu1596-full-integrated/ci-fast.log",
+      "sha256": "0f9a09be0791f2317f866cd5519535c117b77de44d6f54c20f33c6eb089495fb",
+      "privateReceiptId": "cf186183-33dc-4aec-ac12-afc255305778",
+      "unchangedIsolatedFile": {
+        "pass": 7,
+        "assertions": 146
+      },
+      "sourceChangedBetweenFullRuns": false,
+      "causeUnproven": true
+    }
+  }
 }

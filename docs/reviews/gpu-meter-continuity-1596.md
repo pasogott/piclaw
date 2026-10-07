@@ -34,3 +34,7 @@ The complete gate queued behind an existing run, then ran7October2026 21:08:23â€
 Evidence logs are under `/workspace/exports/gpu1596-*`. No deadline, assertion or database/collector semantics were weakened. No new GPU workload, account/provider request, live UI configuration, installation or restart occurred. Historical Sigma Intel load remains issue evidence;no physical NVIDIA claim is made.
 
 Publication changes are docs/receipts only and must retain the qualified runtime tree. Merge requires separate approval.
+
+## Approved current-main integration
+
+Rui authorised merge7October2026 at21:35UTC. Main3d33978e8 adds Actions measurement docs/scripts/tests and was integrated without rebase at `f6de1fc11e14498105a1577bbe11a1a794dba000`, tree11ff94035ca5eedf1ac51cb8b87bef0cc5287501. Combined focus63/485passed. The first integrated complete run failed the unchanged receipt-retention15s test; retained failed receiptcf186183-33dc-4aec-ac12-afc255305778 and logSHA0f9a09be0791f2317f866cd5519535c117b77de44d6f54c20f33c6eb089495fb. Whole affected file7/146passed unchanged; cause remains unproven. A fresh unchanged complete run passed6686/71skip0/43444assertions+25/253+9/26, private receipt20a8c6ee-2904-4bf3-8108-c1f7b3577765passed. WrapperlogSHA9a63edd6f414c6202e8ed26d136a14d0fef8537cfbbb7a41aeea8b1dce84f4b2. No deadline/assertion changes or isolated-pass substitution. Runtime tree `bf79cbacfcbbce5f9b42c32cb322dfb9e2d3d983`; final publication documentation only. No deployment/restart.
