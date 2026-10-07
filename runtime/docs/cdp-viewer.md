@@ -2,6 +2,8 @@
 
 Use **Open browser in tab** in the timeline menu to view tabs from `cdp_browser` and registered Stealth Browser sessions. The pane streams the selected page through CDP without VNC or a second browser.
 
+Safari clients use the same authenticated WebSocket and JPEG stream as other browsers; CDP runs on the server against Chromium. Client qualification covers Playwright WebKit and Chromium with both skin styles, light/dark themes and tablet dimensions: streamed JPEG decode/acknowledgement, view-only/control, mouse/touch/keyboard/text, viewport resize, focus release and reconnect. This is WebKit engine coverage, not a claim of testing native Safari on physical Apple hardware.
+
 The backend requires enabled web authentication, a valid authenticated request and same-origin checks. Multi-user mode is refused because browser ownership is currently instance-wide. Browser endpoints stay on the backend; the UI chooses registered source and tab IDs only.
 
 The default is view-only and scale-to-fit. Scaling preserves aspect ratio and browser dimensions; letterbox regions reject input. **Take control** enables mouse, wheel, keys, text and single-touch gestures. A running browser tool prevents takeover; manual control prevents new tool actions. Release control before asking the agent to resume.
