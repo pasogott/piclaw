@@ -549,6 +549,8 @@ export class StandaloneEditorInstance implements PaneInstance {
             const result = await updateWorkspaceFile(this.path, value);
             if (this.disposed) return;
 
+            const currentContent = this.view.state.doc.toString();
+            this.clearDirtyRecheckTimer();
             this.initialContent = value;
             this.initialContentLength = value.length;
             this.largeDocumentMode = isLargeDocumentContent(value);
@@ -556,12 +558,13 @@ export class StandaloneEditorInstance implements PaneInstance {
             this.conflictMonitor?.onSaved(this.currentMtime);
             if (this.isDiffMode()) {
                 const viewState = this.captureViewState();
-                this.renderEditorSurface(value, 'saved', viewState);
+                this.renderEditorSurface(currentContent, 'saved', viewState);
             }
-            this.setDirty(false);
+            const hasUnsavedChanges = currentContent !== value;
+            this.setDirty(hasUnsavedChanges);
             this.saving = false;
             this.updateSaveButton();
-            this.updateStatusText('All changes saved');
+            this.updateStatusText(hasUnsavedChanges ? 'Unsaved changes' : 'All changes saved');
         } catch (err: any) {
             if (this.disposed) return;
             this.saving = false;
