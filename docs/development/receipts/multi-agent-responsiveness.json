@@ -535,5 +535,46 @@
     "Pressure384MiB/cap1/overrides/protections/durability unchanged"
   ],
   "operations": "Sourceonly no liveconfig/provider/install/restart",
-  "publicationDelta": "Docs/receipts only with runtimeparity"
+  "publicationDelta": "Docs/receipts only with runtimeparity",
+  "integration": {
+    "baseMain": "274a6cdbde1f2e6a9769ee9700d465c2f6d24993",
+    "head": "a13a3503c0f230644d4bf018b643db683ed8ab7f",
+    "tree": "79290d7c8be7e09f5f5284f431439e21c355aeaf",
+    "runtimeTree": "6a15950d9fb92afd6917baa537d0753b1c626fbb",
+    "full": {
+      "pass": 6656,
+      "skip": 71,
+      "fail": 0,
+      "assertions": 43279,
+      "files": 955,
+      "seconds": 660.81,
+      "log": "/workspace/exports/responsiveness-20261007/full-integrated/ci-fast.log",
+      "sha256": "62fe9554c9e62970a235b85792c771c416d8abd300169cdd0cdaed2e380e55e7",
+      "cleanUnchanged": true
+    },
+    "focused": {
+      "pass": 125,
+      "assertions": 909
+    },
+    "settings": {
+      "pass": 25,
+      "assertions": 253
+    },
+    "build": {
+      "pass": 9,
+      "assertions": 26
+    },
+    "privateReceipt": {
+      "id": "9e383c94-9f99-4e2a-b9a1-f8509897e560",
+      "status": "passed",
+      "ciFastCounts": {
+        "pass": 6690,
+        "skip": 71,
+        "fail": 0,
+        "summaries": 3
+      },
+      "logHash": "5fee11a5bccf143cfe8f8d71714544c4132b1d2b614a638a0a9fa09f780bee91",
+      "note": "Exact canonical ci-fast capability; other capabilities not run"
+    }
+  }
 }

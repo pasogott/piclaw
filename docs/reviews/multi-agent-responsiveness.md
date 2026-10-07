@@ -28,3 +28,7 @@ Tests retain eviction/pressure caps and config override precedence, pending clea
 Reproducible fixtures: `runtime/test/fixtures/multi-session-responsiveness-profile.ts` and `session-cleanup-profile.ts`. Detailed method/limits: `docs/development/multi-agent-responsiveness.md`. Aggregated local profiles: `/workspace/exports/responsiveness-20261007/profile-report.json`, SHA-256 `99ea977c067190e236da98a12f8f0de4c1257a2926de1bb11b5e66507ac125b5`.
 
 Publication after the frozen gate changes docs/receipts only and verifies runtime parity. No live configuration, provider account, production installation or restart changed. Storage contention, authentication waits and unrelated model/tool-transition stalls require separate attribution; this is not a claim that all slowdown is eliminated.
+
+## Approved current-main integration
+
+Rui authorised merge on7October2026 at19:17UTC. Main274a6cdbd was merged without rebase. Fresh exact-source complete gate at `a13a3503c0f230644d4bf018b643db683ed8ab7f`, tree79290d7c8be7e09f5f5284f431439e21c355aeaf, passed6656/71skip0/43279assertions+25/253+9/26; focused combined125/909. Private local receipt9e383c94-9f99-4e2a-b9a1-f8509897e560 is passed for canonicalci-fast only. Runtime tree `6a15950d9fb92afd6917baa537d0753b1c626fbb`. Final publication adds documentation/receipts only. No installation or restart.
