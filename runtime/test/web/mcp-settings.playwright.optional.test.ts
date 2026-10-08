@@ -93,7 +93,7 @@ for (const engine of ['chromium', 'webkit']) for (const skin of ['classic', 'vis
                 }
                 expect(await page.getByLabel('Engine to preview').inputValue()).toBe('adapter');
                 expect(await page.getByLabel('Codemode to preview').inputValue()).toBe('auto');
-                expect(await page.getByRole('button', {name:'Apply codemode'}).isDisabled()).toBe(true);
+                expect(await page.getByRole('button', {name:'Apply MCP settings'}).isDisabled()).toBe(true);
                 expect(await page.locator('.mcp-settings img').count()).toBe(0);
                 expect(await page.locator(".mcp-settings > ul").getByText(unsafeName, { exact: true }).count()).toBe(1);
                 await page.getByLabel('Engine to preview').selectOption('native');
@@ -101,8 +101,8 @@ for (const engine of ['chromium', 'webkit']) for (const skin of ['classic', 'vis
                 await page.getByRole('button', { name: 'Preview compatibility' }).click();
                 await page.getByText('Preview blocked — not applied.', { exact: true }).waitFor();
                 expect(previews).toEqual([{ engine: 'native', codemode: 'auto' }]);
-                expect(await page.getByRole('button', {name:'Apply codemode'}).isDisabled()).toBe(true);
-                expect(await page.getByText('statusObserver: host connection status observation is not supported.', {exact:true}).count()).toBe(1);
+                expect(await page.getByRole('button', {name:'Apply MCP settings'}).isDisabled()).toBe(true);
+                expect(await page.getByText('absoluteDeadlineMs and statusObserver: per-server absolute deadlines and live connection status are unavailable.', {exact:true}).count()).toBe(1);
                 expect(await page.getByText('adapter / auto', { exact: true }).count()).toBe(1);
                 hold = true;
                 await page.getByLabel('Engine to preview').selectOption('adapter');
@@ -125,10 +125,10 @@ for (const engine of ['chromium', 'webkit']) for (const skin of ['classic', 'vis
                 await page.getByLabel('Codemode to preview').selectOption('on');
                 await page.getByRole('button', {name:'Preview compatibility'}).click();
                 await page.getByText('Preview compatible — not applied.', {exact:true}).waitFor();
-                expect(await page.getByRole('button', {name:'Apply codemode'}).isDisabled()).toBe(true);
+                expect(await page.getByRole('button', {name:'Apply MCP settings'}).isDisabled()).toBe(true);
                 await page.getByLabel('I understand Apply may interrupt active turns across all chats.').check();
                 hold = true; held = false;
-                await page.getByRole('button', {name:'Apply codemode'}).click();
+                await page.getByRole('button', {name:'Apply MCP settings'}).click();
                 const applyDeadline = Date.now() + 3000; while (!held && Date.now() < applyDeadline) await Bun.sleep(5); expect(held).toBe(true);
                 expect(await page.getByLabel('Engine to preview').isDisabled()).toBe(true);
                 expect(await page.getByLabel('Codemode to preview').isDisabled()).toBe(true);
@@ -142,7 +142,7 @@ for (const engine of ['chromium', 'webkit']) for (const skin of ['classic', 'vis
                 expect(await page.getByLabel('I understand Apply may interrupt active turns across all chats.').isChecked()).toBe(false);
                 await page.getByRole('button', {name:'Preview compatibility'}).click();
                 await page.getByText('Preview compatible — not applied.', {exact:true}).waitFor();
-                await page.getByLabel('I understand Apply may interrupt active turns across all chats.').check();await page.getByRole('button', {name:'Apply codemode'}).click();
+                await page.getByLabel('I understand Apply may interrupt active turns across all chats.').check();await page.getByRole('button', {name:'Apply MCP settings'}).click();
                 await page.getByText('Codemode saved and applied to current and new sessions.', {exact:true}).waitFor();
                 expect(activeTools).toEqual(['mcp']);expect(JSON.parse(readFileSync(config,'utf8')).domains.mcp.codemode).toBe('off');
                 const saved = readFileSync(config,'utf8');expect(saved).not.toBe(initial);
