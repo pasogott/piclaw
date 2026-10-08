@@ -106,6 +106,7 @@ export interface SettingsData {
   progressWatchdogTimeoutSec?: number;
   compactionBackoffs?: CompactionBackoff[];
   progressWatchdogPhases?: WatchdogPhase[];
+  localLitePromptProfileEnabled?: boolean;
   toolResultCompactionEnabled?: boolean;
   toolResultCompactionTools?: string[];
   toolResultSemanticSummaryEnabled?: boolean;
