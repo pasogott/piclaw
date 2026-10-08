@@ -33,11 +33,11 @@ export function McpSection() {
           <option value="auto">Auto (default)</option><option value="on">On</option><option value="off">Off</option>
         </select>
         <button className="settings-panel__button" type="button" disabled={state.loading || serversApplying} onClick={() => void controller.current?.preview()}>Preview compatibility</button>
-        <p className="settings-panel__description">{state.payload.nativeBlockReason}</p>
+        {state.draft.engine === 'native' && state.preview?.applicable === false && <p className="settings-panel__description">{state.payload.nativeBlockReason}</p>}
         {state.draft.engine === 'native' && <ul>{state.payload.nativeBlockers.map(reason => <li>{reason}</li>)}</ul>}
         <label><input type="checkbox" checked={acknowledged} disabled={state.loading || serversApplying} onChange={e => setAcknowledged(e.currentTarget.checked)} /> I understand Apply may interrupt active turns across all chats.</label>
         <button className="settings-panel__button" type="button" disabled={serversApplying || state.loading || !acknowledged || !state.previewed || !state.payload.applyAvailable || !state.preview?.applicable} onClick={() => void controller.current?.apply(acknowledged)}>{state.applying ? 'Applying…' : 'Apply MCP settings'}</button>
-        {state.applied && <p role="status">Codemode saved and applied to current and new sessions.</p>}
+        {state.applied && <p role="status">MCP settings saved and applied to current and new sessions.</p>}
         {state.previewed && state.preview && <div role="status" aria-live="polite"><strong>{state.preview.applicable ? 'Preview compatible — not applied.' : 'Preview blocked — not applied.'}</strong>
           {state.preview.issues.length > 0 && <ul>{state.preview.issues.map(issue => <li>{issue.serverName ? `${issue.serverName}: ` : ''}{issue.field} — {issue.message}</li>)}</ul>}
         </div>}

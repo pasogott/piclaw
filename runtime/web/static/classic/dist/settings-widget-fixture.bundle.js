@@ -749,11 +749,11 @@ ${I.title||""}`))return;k(!0);try{await co(I.id),t?.(n("settings.recordings.dele
           </select>
         </div>
         <button class="settings-btn" type="button" disabled=${e.loading||o} onClick=${()=>void r.current?.preview()}>Preview compatibility</button>
-        <p class="settings-hint">${e.payload.nativeBlockReason}</p>
+        ${e.draft.engine==="native"&&e.preview?.applicable===!1&&u`<p class="settings-hint">${e.payload.nativeBlockReason}</p>`}
         ${e.draft.engine==="native"&&u`<ul>${e.payload.nativeBlockers.map((d)=>u`<li>${d}</li>`)}</ul>`}
         <label><input type="checkbox" checked=${n} disabled=${e.loading||o} onChange=${(d)=>s(d.target.checked)} /> I understand Apply may interrupt active turns across all chats.</label>
         <button class="settings-btn" type="button" disabled=${o||e.loading||!n||!e.previewed||!e.payload.applyAvailable||!e.preview?.applicable} onClick=${()=>void r.current?.apply(n)}>${e.applying?"Applying…":"Apply MCP settings"}</button>
-        ${e.applied&&u`<p role="status">Codemode saved and applied to current and new sessions.</p>`}
+        ${e.applied&&u`<p role="status">MCP settings saved and applied to current and new sessions.</p>`}
         ${e.previewed&&e.preview&&u`<div role="status" aria-live="polite"><strong>${e.preview.applicable?"Preview compatible — not applied.":"Preview blocked — not applied."}</strong>
           ${e.preview.issues.length>0&&u`<ul>${e.preview.issues.map((d)=>u`<li>${d.serverName?`${d.serverName}: `:""}${d.field} — ${d.message}</li>`)}</ul>`}
         </div>`}
@@ -1998,5 +1998,5 @@ ${W}`;if(!window.confirm(x))return;if(O&&!window.confirm(n("settings.tasks.confi
     </div>
   `}function Am(){$m(),Cm(),Pm();let e=new URLSearchParams(window.location.search);Xl(e.get("section")||"general");let t=document.getElementById("settings-widget-fixture-root")||document.body.appendChild(document.createElement("div"));t.id="settings-widget-fixture-root",Mt(u`<${Tm} />`,t),window.piclawWidget?.ready?.({title:"Settings fixture",mockMode:Zt})}Am();
 
-//# debugId=47C6B4D19F1F6EB364756E2164756E21
+//# debugId=40AACC91DB3E3B0B64756E2164756E21
 //# sourceMappingURL=settings-widget-fixture.bundle.js.map

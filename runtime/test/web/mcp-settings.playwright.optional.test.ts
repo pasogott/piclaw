@@ -94,6 +94,7 @@ for (const engine of ['chromium', 'webkit']) for (const skin of ['classic', 'vis
                 expect(await page.getByLabel('Engine to preview').inputValue()).toBe('adapter');
                 expect(await page.getByLabel('Codemode to preview').inputValue()).toBe('auto');
                 expect(await page.getByRole('button', {name:'Apply MCP settings'}).isDisabled()).toBe(true);
+                expect(await page.getByText('Experimental Native configuration is incompatible. Use Adapter or remove the listed unsupported settings.', {exact:true}).count()).toBe(0);
                 expect(await page.locator('.mcp-settings img').count()).toBe(0);
                 expect(await page.locator(".mcp-settings > ul").getByText(unsafeName, { exact: true }).count()).toBe(1);
                 await page.getByLabel('Engine to preview').selectOption('native');
@@ -135,7 +136,7 @@ for (const engine of ['chromium', 'webkit']) for (const skin of ['classic', 'vis
                 expect(await page.getByRole('button', {name:'Refresh MCP status'}).isDisabled()).toBe(true);
                 expect(await page.getByLabel('I understand Apply may interrupt active turns across all chats.').isDisabled()).toBe(true);
                 release!();
-                await page.getByText('Codemode saved and applied to current and new sessions.', {exact:true}).waitFor();
+                await page.getByText('MCP settings saved and applied to current and new sessions.', {exact:true}).waitFor();
                 expect(activeTools).toEqual(['mcp','codemode']);expect(runtimeEvents).toEqual(['fence','abort','set','resume']);
                 expect(JSON.parse(readFileSync(config,'utf8')).domains.mcp).toEqual({engine:'adapter',codemode:'on'});
                 await page.getByLabel('Codemode to preview').selectOption('off');
@@ -143,7 +144,7 @@ for (const engine of ['chromium', 'webkit']) for (const skin of ['classic', 'vis
                 await page.getByRole('button', {name:'Preview compatibility'}).click();
                 await page.getByText('Preview compatible — not applied.', {exact:true}).waitFor();
                 await page.getByLabel('I understand Apply may interrupt active turns across all chats.').check();await page.getByRole('button', {name:'Apply MCP settings'}).click();
-                await page.getByText('Codemode saved and applied to current and new sessions.', {exact:true}).waitFor();
+                await page.getByText('MCP settings saved and applied to current and new sessions.', {exact:true}).waitFor();
                 expect(activeTools).toEqual(['mcp']);expect(JSON.parse(readFileSync(config,'utf8')).domains.mcp.codemode).toBe('off');
                 const saved = readFileSync(config,'utf8');expect(saved).not.toBe(initial);
                 authorized = false;
