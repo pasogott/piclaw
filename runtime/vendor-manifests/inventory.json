@@ -293,8 +293,8 @@
     },
     {
       "path": "runtime/web/static/common/fonts/vendor/jetbrains-mono.meta.json",
-      "bytes": 4449,
-      "sha256": "efa544d24e0048130f83fe511a1403be16e507c18453957dc7783448edf3b637",
+      "bytes": 4575,
+      "sha256": "94ff6609a718d579e59ea79a65722d805c2e0937a013f2d551cb80c531e38b5a",
       "manifests": [],
       "provenance": "unrecorded"
     },
