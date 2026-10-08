@@ -8,16 +8,17 @@ import { getWorkspaceDir } from '../core/config.js';
 import { createLogger, debugSuppressedError } from '../utils/logger.js';
 const log = createLogger('mcp-settings-runtime');
 import { planMcpEnginePolicy } from "./mcp-engine-plan.js";
+import { readAccessConfig } from '../core/config-access.js';
 import { parseMcpEnginePolicy, type McpEnginePolicy } from "./mcp-engine-policy.js";
 
-const READINESS = Object.freeze({ adapter: true, native: false, codemode: true });
+const READINESS = Object.freeze({ adapter: true, native: true, codemode: true });
 let selected: Readonly<McpEnginePolicy> | null = null;
 let blocked = false;
 let degradedConstruction = false;
 const ownerReloadContext = new AsyncLocalStorage<boolean>();
 /** Only the private acknowledged replacement batch may construct while fenced. */
 export function assertMcpOwnerConstruction(): void {
-  if (ownerReloadContext.getStore() && selectedMcpPolicy().engine === 'adapter') return;
+  if (ownerReloadContext.getStore()) return;
   assertSelectedMcpOwner();
 }
 
@@ -44,13 +45,19 @@ export function canConstructMcpOwner(): boolean {
 }
 
 export function assertSelectedMcpOwner(): void {
-  if (blocked || selectedMcpPolicy().engine !== "adapter") {
-    throw new Error("Selected MCP runtime is blocked or unavailable; explicit instance recovery is required.");
+  if (blocked) throw new Error("Selected MCP runtime is blocked or unavailable; explicit instance recovery is required.");
+  if (selectedMcpPolicy().engine === 'native') {
+    if (!READINESS.native) throw new Error('Selected MCP runtime is blocked or unavailable; Native qualification is incomplete.');
+    if (readAccessConfig().mode !== 'single-user') throw new Error('Experimental Native MCP is limited to single-user mode.');
+    const plan = planMcpEnginePolicy(selectedMcpPolicy(), getMcpBridgeReadSnapshot(), READINESS);
+    if (!plan.applicable) throw new Error('Native MCP configuration is incompatible; choose Adapter or repair it explicitly.');
   }
 }
 
 function codemodeEnabled(): boolean {
-  return !blocked && selectedMcpPolicy().engine === "adapter" && selectedMcpPolicy().codemode === "on";
+  if (blocked) return false;
+  const policy = selectedMcpPolicy();
+  return policy.engine === 'native' ? planMcpEnginePolicy(policy, getMcpBridgeReadSnapshot(), READINESS).codemodeEnabled : policy.codemode === 'on';
 }
 
 type CodemodeSession = Pick<AgentSession, "getAllTools" | "getActiveToolNames" | "setActiveToolsByName">;
@@ -60,9 +67,10 @@ function syncMcpCodemodeSession(session: CodemodeSession, policy: Readonly<McpEn
     throw new Error("Codemode extension did not load.");
   }
   const active = session.getActiveToolNames();
-  if (active.includes("codemode") === (policy.codemode === "on")) return;
+  const enabled = policy.engine === 'native' ? planMcpEnginePolicy(policy, getMcpBridgeReadSnapshot(), READINESS).codemodeEnabled : policy.codemode === 'on';
+  if (active.includes("codemode") === enabled) return;
   const names = active.filter(name => name !== "codemode");
-  if (policy.codemode === "on") names.push("codemode");
+  if (enabled) names.push("codemode");
   session.setActiveToolsByName(names);
 }
 
@@ -98,21 +106,17 @@ export const mcpCodemodeExtension: ExtensionFactory = async pi => {
   });
 };
 
-export const MCP_NATIVE_BLOCK_REASON = "Native Apply is blocked: transport shutdown acknowledgement and the Piclaw credential/exposure lifecycle are not qualified. Adapter remains the supported owner.";
+export const MCP_NATIVE_BLOCK_REASON = 'Experimental Native configuration is incompatible. Use Adapter or remove the listed unsupported settings.';
 
-/** Exact 1.0.1 public-contract probe gaps plus the separate close-failure probe. */
+/** Restrictions enforced by the experimental tool-only owner and compatibility plan. */
 export const MCP_NATIVE_BLOCKERS = Object.freeze([
-  "Transport shutdown failures can be suppressed; authoritative closure is not qualified.",
-  "lazy: host-owned lazy connection lifecycle is not supported.",
-  "statusObserver: host connection status observation is not supported.",
-  "resourceFilter: host resource filtering is not supported.",
-  "authStart: headless host-owned authentication initiation is not supported.",
-  "appRenderer: host-owned MCP app rendering is not supported.",
-  "absoluteDeadlineMs: Piclaw absolute operation deadlines are not supported.",
-  "McpOAuthCredentialStore: the approved Piclaw credential contract is incompatible.",
-  "socket: Unix socket transport configuration is not supported.",
-  "listPrompts: public prompt listing is not supported.",
-  "getPrompt: public prompt retrieval is not supported.",
+  'Single-user mode only; Adapter stays the default.',
+  'Resources and prompts are disabled, including direct protocol requests.',
+  'Browser OAuth, provider login, MCP apps and extension-registered servers are disabled.',
+  'HTTP requires explicit server-scoped credentials; no credentials are migrated to Pi storage.',
+  'Unix sockets, lazy lifecycle, tool filters and adapter-only settings require Adapter.',
+  'absoluteDeadlineMs and statusObserver: per-server absolute deadlines and live connection status are unavailable.',
+  'Server edits require switching back to Adapter. Cleanup failure blocks admission without fallback.',
 ]);
 
 export class McpPolicyApplyError extends Error {
@@ -159,14 +163,14 @@ export class McpCodemodeController {
     const revision = randomUUID();
     this.revisions.set(revision, { config: persisted.revision, bridge: snapshot.revision, expires: now + 300_000 });
     const { bridgeRevision: _private, ...publicPlan } = plan;
-    const available = this.phase === "ready" && !blocked && !degradedConstruction && selectedMcpPolicy().engine === "adapter";
+    const available = this.phase === "ready" && !blocked && !degradedConstruction && (selectedMcpPolicy().engine === 'adapter' || READINESS.native);
     return {
       ok: true,
       persisted: { policy: persisted.policy },
       revision,
       runtime: {
-        configuredFactory: "adapter",
-        observedPolicy: blocked || selectedMcpPolicy().engine !== "adapter" ? null : { ...selectedMcpPolicy() },
+        configuredFactory: selectedMcpPolicy().engine,
+        observedPolicy: blocked || (selectedMcpPolicy().engine === 'native' && !READINESS.native) ? null : { ...selectedMcpPolicy() },
         connectionStatus: "unknown",
         applyAvailable: available,
         phase: this.phase,
@@ -289,10 +293,9 @@ export class McpCodemodeController {
     if (!plan.applicable) {
       throw new McpPolicyApplyError(422, policy.engine === "native" ? MCP_NATIVE_BLOCK_REASON : "MCP configuration is incompatible with this policy; preview the rejection reasons.");
     }
-    if (selectedMcpPolicy().engine !== "adapter") {
-      throw new McpPolicyApplyError(422, "Engine replacement is unavailable until authoritative shutdown is qualified.");
-    }
-    if (policy.codemode === selectedMcpPolicy().codemode && current.policy.codemode === policy.codemode) return this.inspect();
+    if (!READINESS.native && selectedMcpPolicy().engine === 'native') throw new McpPolicyApplyError(422, 'Engine replacement is unavailable until Native qualification completes.');
+    const replacingEngine = policy.engine !== selectedMcpPolicy().engine;
+    if (!replacingEngine && policy.codemode === selectedMcpPolicy().codemode && current.policy.codemode === policy.codemode) return this.inspect();
     this.phase = "applying";
     const abort = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
@@ -321,13 +324,55 @@ export class McpCodemodeController {
       await bounded(Promise.all(sessions.map(runtime => runtime.session.abort())));
       authorise();
       if (abort.signal.aborted) throw new Error("MCP policy update cancelled.");
+      assertMcpBridgeSourcesCurrent();
       if (getMcpBridgeReadSnapshot().revision !== token.bridge) throw new Error("MCP configuration changed during update.");
       if (sessions.some(runtime => !runtime.session.getAllTools().some(tool => tool.name === "codemode"))) {
         throw new Error("Codemode tool is missing from an existing session.");
       }
-      commitMcpInstancePolicy(policy, token.config);
-      committed = true;
-      selected = policy;
+      if (replacingEngine) {
+        const receipt = await bounded(acknowledgeMcpSessionsShutdown(sessions.map(runtime => runtime.session), abort.signal));
+        authorise(); abort.signal.throwIfAborted();
+        assertMcpBridgeSourcesCurrent();
+        if (getMcpBridgeReadSnapshot().revision !== token.bridge) throw new Error('MCP configuration changed during owner shutdown.');
+        commitMcpInstancePolicy(policy, token.config);
+        committed = true;
+        selected = policy;
+        let releaseStartup!: () => void;
+        let rejectStartup!: (error: unknown) => void;
+        const startup = new Promise<void>((resolve, reject) => { releaseStartup = resolve; rejectStartup = reject; });
+        void startup.catch(error => { log.debug('Native replacement startup barrier rejected.', { operation: 'mcp.native_startup_rejected', reason: error instanceof Error ? error.name : 'unknown' }); });
+        const rejectOnAbort = () => rejectStartup(abort.signal.reason ?? new Error('Native replacement aborted.'));
+        abort.signal.addEventListener('abort', rejectOnAbort, { once: true });
+        let allArrived!: () => void;
+        const arrived = new Promise<void>(resolve => { allArrived = resolve; });
+        const captured = new Set(sessions.map(runtime => runtime.session));
+        let arrivals = 0;
+        const beforeSessionStart = () => {
+          if (++arrivals > captured.size) throw new Error('Native owner replacement bypassed its captured startup barrier.');
+          if (arrivals === captured.size) allArrived();
+          return startup;
+        };
+        const reloading = ownerReloadContext.run(true, () => reloadAcknowledgedMcpSessions(receipt, { beforeSessionStart }));
+        void reloading.catch(() => undefined);
+        if (!captured.size) allArrived();
+        await bounded(Promise.race([arrived, reloading.then(() => { throw new Error('Native replacement finished before startup barrier.'); })]));
+        authorise(); abort.signal.throwIfAborted();
+        assertMcpBridgeSourcesCurrent();
+        if (getMcpBridgeReadSnapshot().revision !== token.bridge) throw new Error('MCP configuration changed before Native startup.');
+        releaseStartup();
+        await bounded(reloading);
+        abort.signal.removeEventListener('abort', rejectOnAbort);
+        authorise(); abort.signal.throwIfAborted();
+        assertMcpBridgeSourcesCurrent();
+        const finalPolicy = readMcpInstancePolicy().policy;
+        if (finalPolicy.engine !== policy.engine || finalPolicy.codemode !== policy.codemode || getMcpBridgeReadSnapshot().revision !== token.bridge || !planMcpEnginePolicy(policy, getMcpBridgeReadSnapshot(), READINESS).applicable) throw new Error('MCP policy changed before admission resumed.');
+      } else {
+        commitMcpInstancePolicy(policy, token.config);
+        committed = true;
+        selected = policy;
+      }
+      authorise(); abort.signal.throwIfAborted();
+      assertMcpBridgeSourcesCurrent();
       for (const runtime of sessions) syncMcpCodemodeSession(runtime.session, policy);
       this.manager.resumeMcpAdmissions();
       blocked = false;

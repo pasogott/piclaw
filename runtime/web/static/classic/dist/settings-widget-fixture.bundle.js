@@ -730,17 +730,17 @@ ${I.title||""}`))return;k(!0);try{await co(I.id),t?.(n("settings.recordings.dele
  <label><input type="checkbox" checked=${d} disabled=${e||n.loading} onChange=${(m)=>c(m.target.checked)} /> I understand server Apply interrupts turns and reloads extensions.</label>
  <button class="settings-btn" type="button" disabled=${e||n.loading||!d||!n.previewed||!n.payload?.applyAvailable} onClick=${()=>void l.current?.apply(d)}>${n.applying?"Applying servers…":"Apply server change"}</button>${n.applied&&u`<p role="status">Server configuration saved and applied to current and new sessions.</p>`}</section>`}var dc=Q(()=>{ae();cc()});function Wg(){let[e,t]=f(ms),[n,s]=f(!1),[o,i]=f(!1),r=K(null);B(()=>{let d=oc(t);return r.current=d,d.refresh(),()=>{d.dispose(),r.current=null}},[]);let a=(d)=>{s(!1),r.current?.select(d)};return u`<section class="settings-section mcp-settings" aria-label="MCP settings">
       <h3>MCP</h3>
-      <p class="settings-hint">Instance-wide MCP policy. Preview does not change settings. Apply saves codemode and interrupts active turns, without replacing the MCP owner or clearing chats.</p>
+      <p class="settings-hint">Instance-wide MCP policy. Preview does not change settings. Apply interrupts active turns. Engine changes close the old owner before reloading extensions; chat history is preserved.</p>
       <button class="settings-btn" type="button" disabled=${e.loading||o} onClick=${()=>void r.current?.refresh()}>Refresh MCP status</button>
       ${e.loading&&u`<p role="status" aria-live="polite">Loading MCP settings…</p>`}
       ${e.error&&u`<p class="settings-error" role="alert">${e.error}</p>`}
       ${e.payload&&u`
         <div class="settings-row settings-row-vertical"><strong>Persisted policy</strong><span>${e.payload.persisted.policy.engine} / ${e.payload.persisted.policy.codemode}</span></div>
         <p class="settings-hint">Configured factory: ${e.payload.runtime.configuredFactory}. Observed policy: ${e.payload.runtime.observedPolicy?`${e.payload.runtime.observedPolicy.engine} / ${e.payload.runtime.observedPolicy.codemode}`:"unknown or blocked"}. Live connection status is unknown.</p>
-        <p class="settings-hint">Auto keeps codemode inactive with the adapter; On enables scripting; Off blocks scripting. Model execution inside scripts is disabled.</p>
+        <p class="settings-hint">Auto keeps codemode inactive with Adapter and enables it when Native needs it. On enables scripting; Off blocks scripting. Model execution inside scripts is disabled.</p>
         <div class="settings-row settings-row-vertical"><label for="mcp-engine">Engine to preview</label>
           <select id="mcp-engine" disabled=${e.applying||o} value=${e.draft.engine} onChange=${(d)=>a({engine:d.target.value})}>
-            <option value="adapter">Adapter (default)</option><option value="native">Native (unavailable)</option>
+            <option value="adapter">Adapter (default)</option><option value="native">Native (experimental)</option>
           </select>
         </div>
         <div class="settings-row settings-row-vertical"><label for="mcp-codemode">Codemode to preview</label>
@@ -752,7 +752,7 @@ ${I.title||""}`))return;k(!0);try{await co(I.id),t?.(n("settings.recordings.dele
         <p class="settings-hint">${e.payload.nativeBlockReason}</p>
         ${e.draft.engine==="native"&&u`<ul>${e.payload.nativeBlockers.map((d)=>u`<li>${d}</li>`)}</ul>`}
         <label><input type="checkbox" checked=${n} disabled=${e.loading||o} onChange=${(d)=>s(d.target.checked)} /> I understand Apply may interrupt active turns across all chats.</label>
-        <button class="settings-btn" type="button" disabled=${o||e.loading||!n||!e.previewed||!e.payload.applyAvailable||!e.preview?.applicable} onClick=${()=>void r.current?.apply(n)}>${e.applying?"Applying…":"Apply codemode"}</button>
+        <button class="settings-btn" type="button" disabled=${o||e.loading||!n||!e.previewed||!e.payload.applyAvailable||!e.preview?.applicable} onClick=${()=>void r.current?.apply(n)}>${e.applying?"Applying…":"Apply MCP settings"}</button>
         ${e.applied&&u`<p role="status">Codemode saved and applied to current and new sessions.</p>`}
         ${e.previewed&&e.preview&&u`<div role="status" aria-live="polite"><strong>${e.preview.applicable?"Preview compatible — not applied.":"Preview blocked — not applied."}</strong>
           ${e.preview.issues.length>0&&u`<ul>${e.preview.issues.map((d)=>u`<li>${d.serverName?`${d.serverName}: `:""}${d.field} — ${d.message}</li>`)}</ul>`}
@@ -1998,5 +1998,5 @@ ${W}`;if(!window.confirm(x))return;if(O&&!window.confirm(n("settings.tasks.confi
     </div>
   `}function Am(){$m(),Cm(),Pm();let e=new URLSearchParams(window.location.search);Xl(e.get("section")||"general");let t=document.getElementById("settings-widget-fixture-root")||document.body.appendChild(document.createElement("div"));t.id="settings-widget-fixture-root",Mt(u`<${Tm} />`,t),window.piclawWidget?.ready?.({title:"Settings fixture",mockMode:Zt})}Am();
 
-//# debugId=776138D319E09E8564756E2164756E21
+//# debugId=47C6B4D19F1F6EB364756E2164756E21
 //# sourceMappingURL=settings-widget-fixture.bundle.js.map

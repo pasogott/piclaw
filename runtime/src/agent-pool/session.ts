@@ -35,13 +35,14 @@ import {
 
 import { createRequire } from "node:module";
 import { bindMcpBridgeOwner, createMcpBridgeOwner } from "./mcp-bridge-owner.js";
+import { createConstrainedNativeOwner } from './mcp-native-owner.js';
 import { mcpRuntimeRegistrationPolicy } from "../extensions/mcp-runtime-policy.js";
 import { getPiclawAgentDir } from "../core/agent-dir.js";
 import { SESSIONS_DIR, getRuntimeRoot, getSessionPersistenceConfig, getWorkspaceDir } from "../core/config.js";
 import { buildChannelSystemPromptAppendix } from "../channels/formatting.js";
 import { detectChannel } from "../router.js";
 import { createBuiltinExtensionFactories } from "../extensions/index.js";
-import { canConstructMcpOwner, bindMcpCodemodePolicy, mcpCodemodeExtension } from "./mcp-codemode-runtime.js";
+import { canConstructMcpOwner, bindMcpCodemodePolicy, mcpCodemodeExtension, selectedMcpPolicy } from "./mcp-codemode-runtime.js";
 import { readAccessConfig } from '../core/config-access.js';
 import { requireOwnedSessionExecution } from './owned-session-access.js';
 import { familySessionModelOptions } from './family-model-defaults.js';
@@ -609,7 +610,14 @@ export async function createSessionInDir(
     if (mode === 'family-shared' && !requireOwnedSessionExecution(options.chatJid!)) throw new Error('Owned family session identity is required.');
     assertCurrentProviderSelection(options.settingsManager, sessionManager);
     const mcpAvailable = !operationProfile && canConstructMcpOwner();
-    const mcpOwner = !mcpAvailable ? null : createMcpBridgeOwner((bridge, onLifecycle) => createMcpAdapter({
+    const mcpOwner = !mcpAvailable ? null : createMcpBridgeOwner((bridge, onLifecycle) => selectedMcpPolicy().engine === 'native'
+      ? createConstrainedNativeOwner({
+          servers: (bridge.nativePreview ?? { servers: [], errors: [] }).servers.map(entry => ({ ...entry, config: 'command' in entry.config
+            ? { ...entry.config, args: entry.config.args ? [...entry.config.args] : undefined }
+            : { ...entry.config } })),
+          errors: [...(bridge.nativePreview?.errors ?? [])], autoEnableCodemode: false,
+        }, onLifecycle, name => bridge.resolveRuntimeEnv(name))
+      : createMcpAdapter({
       config: bridge.config,
       initializeOnLoad: false,
       onLifecycle,

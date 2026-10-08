@@ -29,7 +29,7 @@ test("codemode Apply fences, deduplicates aborts, updates only codemode, persist
 }));
 test("native, missing acknowledgement and stale config revisions never fence or write",async()=>fixture(async path=>{
   const h=harness(),input=h.input();const original=readFileSync(path,"utf8");
-  await expect(h.controller.apply({...input,policy:{engine:"native",codemode:"auto"}},()=>{})).rejects.toThrow("shutdown acknowledgement");
+  await expect(h.controller.apply({...input,policy:{engine:"native",codemode:"auto"},acknowledgeInterruptions:false},()=>{})).rejects.toThrow("Confirm");
   await expect(h.controller.apply({...input,acknowledgeInterruptions:false},()=>{})).rejects.toThrow("Confirm");
   writeFileSync(path,original+"\n");await expect(h.controller.apply(input,()=>{})).rejects.toThrow("changed");
   expect(h.events).toEqual([]);expect(readFileSync(path,"utf8")).toBe(original+"\n");
@@ -86,10 +86,12 @@ test("response inspection failure after resume re-fences captured prompts",async
   await expect(h.controller.apply(h.input(),()=>{})).rejects.toThrow("Policy saved");
   expect(h.events).toContain("resume");expect(h.events.filter(event=>event==="fence")).toHaveLength(2);expect(()=>assertSelectedMcpOwner()).toThrow("blocked");expect(h.events).toContain("quarantine");
 }));
-test("persisted unsupported native selection never silently starts adapter",async()=>fixture(async path=>{
+test("persisted constrained Native reports its owner without silently selecting Adapter",async()=>fixture(async path=>{
   writeFileSync(path,JSON.stringify({domains:{mcp:{engine:"native",codemode:"auto"}}}));
-  expect(()=>assertSelectedMcpOwner()).toThrow("unavailable");const h=harness();expect(h.controller.inspect().runtime.observedPolicy).toBeNull();expect(h.controller.inspect().applyAvailable).toBe(false);
-  await expect(h.controller.apply(h.input(),()=>{})).rejects.toThrow("replacement");expect(h.events).toEqual([]);
+  expect(()=>assertSelectedMcpOwner()).not.toThrow();const h=harness();
+  expect(h.controller.inspect().runtime.configuredFactory).toBe('native');
+  expect(h.controller.inspect().runtime.observedPolicy).toEqual({engine:'native',codemode:'auto'});
+  expect(h.controller.inspect().readiness.native).toBe(true);expect(h.events).toEqual([]);
 }));
 
 test("session startup migrates legacy config instead of blocking agent construction", async () => fixture(async path => {
@@ -127,7 +129,7 @@ test("untrusted linked config is not repaired or selected as an adapter fallback
 test("MCP construction fallback does not bypass explicit native policy or transition fences", async () => fixture(async path => {
   const { canConstructMcpOwner } = await import("../../src/agent-pool/mcp-codemode-runtime.js");
   writeFileSync(path, JSON.stringify({ domains: { mcp: { engine: "native", codemode: "auto" } } }));
-  expect(() => canConstructMcpOwner()).toThrow("unavailable");
+  expect(canConstructMcpOwner()).toBe(true);
   resetMcpCodemodeRuntimeForTests();
   writeFileSync(path, JSON.stringify({ domains: { mcp: { engine: "adapter", codemode: "auto" } } }));
   const h = harness({ set() { throw Error("activation failed"); } });
