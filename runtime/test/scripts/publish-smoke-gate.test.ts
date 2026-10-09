@@ -64,12 +64,17 @@ esac
     writeFileSync(join(dir, "curl"), '#!/usr/bin/env bash\n[ "$SCENARIO" != http ]\n');
     for (const file of ["docker", "curl"]) chmodSync(join(dir, file), 0o755);
     try {
-      const result = Bun.spawnSync(["bash", join(root, "scripts/docker/publish-smoke-test.sh"),
-        "example/image@sha256:test", "linux/amd64", "1.4.2", "0.18.1"], {
+      // Exercise the CI entrypoint with Bun explicitly unavailable on the host.
+      writeFileSync(join(dir, "bun"), '#!/usr/bin/env bash\necho "host Bun must not be called" >&2\nexit 127\n');
+      chmodSync(join(dir, "bun"), 0o755);
+      const result = Bun.spawnSync(["make", "-C", root, "publish-smoke",
+        "IMAGE_REF=example/image@sha256:test", "PLATFORM=linux/amd64",
+        "EXPECTED_BUN_VERSION=1.4.2", "EXPECTED_RESTIC_VERSION=0.18.1"], {
         env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, TMPDIR: dir, CALL_LOG: log, SCENARIO: scenario },
         stdout: "pipe", stderr: "pipe", timeout: 40000,
       });
-      expect(result.exitCode).toBe(scenario === "pass" ? 0 : scenario === "binary" ? 23 : 1);
+      expect(result.exitCode).toBe(scenario === "pass" ? 0 : 2);
+      expect(result.stderr.toString()).not.toContain("host Bun must not be called");
       const calls = readFileSync(log, "utf8");
       expect(calls).toContain("example/image@sha256:test");
       if (scenario !== "binary") expect(calls).toContain("rm -f container-id");
