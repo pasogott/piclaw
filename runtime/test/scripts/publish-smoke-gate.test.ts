@@ -77,6 +77,10 @@ esac
       expect(result.stderr.toString()).not.toContain("host Bun must not be called");
       const calls = readFileSync(log, "utf8");
       expect(calls).toContain("example/image@sha256:test");
+      if (scenario !== "binary") {
+        expect(calls).toContain(`PUID=${process.getuid!()}`);
+        expect(calls).toContain(`PGID=${process.getgid!()}`);
+      }
       if (scenario !== "binary") expect(calls).toContain("rm -f container-id");
       if (scenario === "pass") {
         expect(calls).toContain("volume rm -f test-volume");
