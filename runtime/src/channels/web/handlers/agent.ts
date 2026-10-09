@@ -730,8 +730,10 @@ export async function handleAgentMessage(
   const isStreaming = typeof channel.agentPool.isStreaming === "function"
     ? channel.agentPool.isStreaming(chatJid)
     : false;
-  const isActive = isStreaming || (typeof (channel.agentPool as { isActive?: (chatJid: string) => boolean }).isActive === "function"
-    && (channel.agentPool as { isActive: (chatJid: string) => boolean }).isActive(chatJid));
+  const isChatActive = () => channel.agentPool.isStreaming?.(chatJid) === true
+    || channel.agentPool.isActive?.(chatJid) === true
+    || channel.queue?.isLaneBusy?.(`chat:${chatJid}`) === true;
+  const isActive = isChatActive();
   const hasQueuedBacklog = channel.getQueuedFollowupCount(chatJid) > 0;
   // NOTE: we intentionally use the in-memory active-run flags—not the DB
   // inflight marker—to decide whether to queue/defer. The DB marker survives
@@ -862,9 +864,7 @@ export async function handleAgentMessage(
       ...(extras.source ? { source: extras.source } : {}),
       ...(queuedBy && Object.keys(queuedBy).length > 0 ? { queued_by: queuedBy } : {}),
     });
-    const stillActive = (typeof (channel.agentPool as { isActive?: (jid: string) => boolean }).isActive === 'function'
-      && (channel.agentPool as { isActive: (jid: string) => boolean }).isActive(chatJid))
-      || channel.agentPool.isStreaming?.(chatJid) === true;
+    const stillActive = isChatActive();
     // Manual /queue remains deferred even while idle. Compose admission opts
     // in so a turn ending during an asynchronous lock wait cannot strand input.
     if (extras.wakeIfIdle && !stillActive) {
@@ -903,6 +903,11 @@ export async function handleAgentMessage(
   if (!persistSteer && !command && !themeCommand && !metersCommand && !isSettingsCommand && isStreaming && requestMode === "steer") {
     const steerResponse = await queueDeferredSteer(content, "compose");
     if (steerResponse) return steerResponse;
+    return queueDeferredFollowup(content, {
+      source: 'web.steer_startup_fallback', browserContext: browserObservability, wakeIfIdle: true,
+      mediaIds: normalized.mediaIds, contentBlocks: normalized.contentBlocks,
+      linkPreviews: normalized.linkPreviews, screenHint: normalized.screenHint,
+    });
   }
 
   if ((command?.type === "queue" || command?.type === "queue_all") && isStreaming) {
@@ -1058,7 +1063,7 @@ export async function handleAgentMessage(
     !metersCommand &&
     !isSlashCommandInvocation(trimmed) &&
     (isActive || hasQueuedBacklog) &&
-    (requestMode === "queue" || requestMode === "auto");
+    (requestMode === "queue" || requestMode === "auto" || (!persistSteer && requestMode === "steer"));
 
   if (shouldDeferQueuedFollowup) {
     log.info("Deferring agent message as queued follow-up", {
@@ -1078,7 +1083,7 @@ export async function handleAgentMessage(
       contentBlocks: normalized.contentBlocks,
       linkPreviews: normalized.linkPreviews,
       screenHint: normalized.screenHint,
-      source: "web.compose",
+      source: requestMode === 'steer' ? 'web.steer_startup_fallback' : 'web.compose',
       browserContext: browserObservability,
       wakeIfIdle: true,
     });
@@ -1093,13 +1098,13 @@ export async function handleAgentMessage(
   // Ordinary input admitted while idle can become a follow-up while waiting
   // for storage. Decide against fresh in-memory state inside the same commit.
   if (channel.admitUserMessage && !command && !themeCommand && !metersCommand && !isSettingsCommand
-    && !content.trimStart().startsWith('/') && requestMode !== 'steer') {
+    && !content.trimStart().startsWith('/') && (!persistSteer || requestMode !== 'steer')) {
     try {
       interaction = await channel.admitUserMessage(chatJid, content, normalized.mediaIds, {
         contentBlocks: normalized.contentBlocks, linkPreviews: normalized.linkPreviews,
         threadId: normalized.threadId, screenHint: normalized.screenHint,
       }, revalidateQueuedAdmission, req.signal, () => {
-        const busy = channel.agentPool.isStreaming?.(chatJid) === true || channel.agentPool.isActive?.(chatJid) === true;
+        const busy = isChatActive();
         queuedDuringAdmission = busy || channel.getQueuedFollowupCount(chatJid) > 0;
         if (!queuedDuringAdmission) return false;
         deferredAt = new Date().toISOString();
@@ -1128,7 +1133,7 @@ export async function handleAgentMessage(
   if (queuedDuringAdmission) {
     channel.broadcastEvent('agent_followup_queued', { chat_jid: chatJid, row_id: deferredRowId, content,
       thread_id: null, timestamp: deferredAt, source: 'web.compose' });
-    if (!channel.agentPool.isStreaming?.(chatJid) && !channel.agentPool.isActive?.(chatJid)) channel.resumeChat(chatJid);
+    if (!isChatActive()) channel.resumeChat(chatJid);
     return channel.json({ thread_id: null, queued: 'followup' }, 201);
   }
   if (!interaction) return channel.json({ error: "Failed to store message" }, 500);

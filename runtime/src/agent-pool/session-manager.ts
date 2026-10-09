@@ -216,6 +216,10 @@ export class AgentSessionManager {
   }
 
   /** Lifecycle callers must not archive while a run, hydration or disposal is in flight. */
+  hasProtectedRun(chatJid: string): boolean {
+    return this.evictionProtectionCounts.has(chatJid);
+  }
+
   hasPendingSessionWork(chatJid: string): boolean {
     return this.createInFlight.has(chatJid) || this.createSideInFlight.has(chatJid)
       || this.branchSeedRealizationInFlight.has(chatJid) || this.evictionProtectionCounts.has(chatJid)
