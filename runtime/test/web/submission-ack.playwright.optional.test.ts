@@ -35,6 +35,12 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
     let sseFirst = false;
     let rejectNext = false;
     let queueNext = false;
+    let invalidAck: 'json' | 'empty' | null = null;
+    const shortcutPosts: any[] = [];
+    let heldShortcut = false;
+    let shortcutPending = false;
+    let releaseShortcut!: () => void;
+    const shortcutGate = new Promise<void>(resolve => { releaseShortcut = resolve; });
     let releaseAck!: () => void;
     let holdAck = new Promise<void>(resolve => { releaseAck = resolve; });
     let lastPost: any;
@@ -77,7 +83,14 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       requests.push(`${req.method()} ${url.pathname}`);
       let body: unknown;
       if (url.pathname.startsWith('/agent/') && url.pathname.endsWith('/message') && req.method() === 'POST') {
+        if (invalidAck === 'json') return route.fulfill({status:201,contentType:'application/json',body:'not json'});
+        if (invalidAck === 'empty') return route.fulfill({status:201,json:{}});
         if(rejectNext) return route.fulfill({status:500,json:{error:'Fixture submission rejected'}});
+        if (req.postDataJSON().content.startsWith('Ctrl queue')) {
+          shortcutPosts.push(req.postDataJSON());
+          if (heldShortcut) { shortcutPending = true; await shortcutGate; }
+          return route.fulfill({status:201,json:{queued:'followup',thread_id:null}});
+        }
         if(queueNext) { queueNext = false; return route.fulfill({ status:201,json:{thread_id:null,queued:'followup'} }); }
         accepted++;
         const id=777000+accepted;
@@ -157,11 +170,46 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       await page.waitForTimeout(300);
       expect(await page.locator('[data-submission-state]').count()).toBe(0);
       expect(accepted).toBe(2);
+      await input.fill('Ctrl queue blocked shortcut');
+      await input.evaluate(el => el.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',ctrlKey:true,repeat:true,bubbles:true,cancelable:true})));
+      await input.evaluate(el => { const event = new KeyboardEvent('keydown', {key:'Enter',ctrlKey:true,bubbles:true,cancelable:true});event.preventDefault();el.dispatchEvent(event); });
+      await page.waitForTimeout(100);
+      expect(shortcutPosts).toHaveLength(0);
+      expect(await input.inputValue()).toBe('Ctrl queue blocked shortcut');
+      // Explicit Ctrl+Enter must request queueing, not steering or default Enter.
+      await page.evaluate(payload=>(window as any).emitShellEvent('agent_status',payload),{chat_jid:lastPost.chat_jid,type:'thinking',phase:'thinking',thread_id:'busy-thread',turn_id:'busy-turn'});
+      heldShortcut=true;
+      await input.fill('Ctrl queue while busy'); await input.press('Control+Enter');
+      await page.waitForTimeout(100);
+      expect(shortcutPending).toBe(true);
+      await input.fill('Next draft while queue acknowledgement is pending');
+      releaseShortcut(); heldShortcut=false;
+      await page.locator('[data-submission-state]').waitFor({state:'hidden'});
+      expect(await input.inputValue()).toContain('Next draft while queue acknowledgement is pending');
+      expect(shortcutPosts).toHaveLength(1);
+      expect(shortcutPosts[0]).toMatchObject({content:'Ctrl queue while busy',mode:'queue'});
+      await page.evaluate(payload=>(window as any).emitShellEvent('agent_status',payload),{chat_jid:lastPost.chat_jid,type:'done',thread_id:'busy-thread',turn_id:'busy-turn'});
+      await input.fill('Ctrl queue while idle'); await input.press('Control+Enter');
+      await page.waitForFunction(()=>document.querySelector('textarea')?.value === '');
+      await input.fill('Ctrl queue with Cmd'); await input.press('Meta+Enter');
+      await page.waitForFunction(()=>document.querySelector('textarea')?.value === '');
+      expect(shortcutPosts).toHaveLength(3);
+      expect(shortcutPosts.every(post => post.mode === 'queue')).toBe(true);
+      for (const invalid of ['json', 'empty'] as const) {
+        invalidAck=invalid;
+        const draft=`Unconfirmed ${invalid} draft`;
+        await input.fill(draft); await input.press('Control+Enter');
+        await page.locator('[data-submission-state]').waitFor({state:'hidden'});
+        expect(await input.inputValue()).toBe(draft);
+        expect(await page.locator('[role="alert"]').count()).toBeGreaterThan(0);
+      }
+      invalidAck=null;
       // Rejected submissions are never made to look accepted in the timeline.
       rejectNext=true;
-      await input.fill('Rejected latency probe');await input.press('Enter');
+      await input.fill('Rejected latency probe');await input.press('Control+Enter');
       await page.waitForTimeout(500);
       expect(accepted).toBe(2);
+      expect(await input.inputValue()).toBe('Rejected latency probe');
       expect(await page.locator('[data-submission-state]').count()).toBe(0);
       expect(await page.locator('#post-777003,[data-message-id="777003"]').count()).toBe(0);
       expect(errors).toEqual([]);

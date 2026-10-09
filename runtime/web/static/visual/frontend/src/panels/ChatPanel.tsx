@@ -9,6 +9,7 @@ import { safeGetItem, safeSetItem } from "../utils/storage";
 import { createLogger } from "../utils/logger";
 import { agentDisplayName } from "../api/agent-identity";
 import { SubmissionFeedback, isSubmissionRunStatus, type SubmissionFeedbackState } from '../../../../../src/ui/submission-feedback';
+import { isComposeQueueShortcut, requireComposeAcknowledgement } from '../../../../../src/ui/compose-submission';
 import {
   uploadFileBatch,
   uploadChatAttachment,
@@ -399,7 +400,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
     return () => window.removeEventListener("piclaw:new-message", handler);
   }, [notificationsEnabled]);
 
-  const sendMessage = async (forceSteer = false) => {
+  const sendMessage = async (forceSteer = false, forceQueue = false) => {
     const el = textareaRef.current;
     if (!el || isSending.value) return;
     const content = el.value.trim();
@@ -409,7 +410,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
     const submissionUrl = getMessageUrl();
 
     // Shift+Send = steer (inject mid-stream); default when busy = queue
-    const mode = isAgentRunning.value ? (forceSteer ? "steer" : "queue") : undefined;
+    const mode = forceQueue ? 'queue' : isAgentRunning.value ? (forceSteer ? "steer" : "queue") : undefined;
 
     isSending.value = true;
     const feedbackGeneration = feedbackRef.current!.begin(submissionChatJid);
@@ -478,6 +479,8 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
 
       if (!res.ok) throw new Error(`Send failed (HTTP ${res.status}). Try again.`);
 
+      const data = await res.json();
+      requireComposeAcknowledgement(data);
       // Only clear the submitted draft after confirmed success. Text entered
       // while the request was in flight remains as the next draft.
       const draftChangedDuringSend = el.value.trim() !== content;
@@ -497,7 +500,6 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
       }
       sendError.value = null;
       setAttachments([]);
-      const data = await res.json();
       feedbackRef.current!.acknowledged(feedbackGeneration, Boolean(data?.queued) || Boolean(data?.command) || data?.ui_only === true || data?.relayed === true, data?.thread_id, data?.user_message?.data?.timestamp);
       if (data?.queued === 'followup' || data?.queued === 'steer') {
         window.dispatchEvent(new CustomEvent('piclaw:queue-acknowledged', { detail: { chat_jid: submissionChatJid } }));
@@ -640,11 +642,16 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
                 onInput={handleInput}
                 onPaste={handlePaste as any}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
+                  if (e.isComposing || e.defaultPrevented) return;
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+                    const queueShortcut = isComposeQueueShortcut(e);
                     e.preventDefault();
-                    sendMessage();
+                    if (queueShortcut) void sendMessage(false, true);
+                  } else if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat) {
+                    e.preventDefault();
+                    void sendMessage();
                   }
-                  if (e.key === "Enter" && e.shiftKey && isAgentRunning.value) {
+                  if (e.key === "Enter" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat && isAgentRunning.value) {
                     e.preventDefault();
                     sendMessage(true);
                   }

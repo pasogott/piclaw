@@ -3,6 +3,7 @@ import { useTranslation } from '../utils/i18n.js';
 import { isPopupTypeaheadKey, resolvePopupTypeaheadMatch, updatePopupTypeaheadBuffer } from '../ui/popup-typeahead.js';
 import { getAgentModels, sendAgentMessage } from '../api.js';
 import { SubmissionFeedback, isSubmissionRunStatus, type SubmissionFeedbackState } from '../ui/submission-feedback.js';
+import { isComposeQueueShortcut, requireComposeAcknowledgement } from '../ui/compose-submission.js';
 import { uploadFileBatch, uploadChatAttachment } from '../ui/upload-transfers.js';
 import { getLocalStorageItem, setLocalStorageItem } from '../utils/storage.js';
 import { buildMentionValue, filterMentionAgents, parseMentionAutocompleteQuery } from '../ui/agent-mentions.js';
@@ -2656,6 +2657,7 @@ export function ComposeBox({
                 // submission is a separate compose action with its own button state.
                 setUploadProgress(null);
                 const response = await sendMessage('default', message, null, mediaIds, resolveSubmitMode(submitMode), submissionChatJid);
+                requireComposeAcknowledgement(response);
                 onMessageResponse?.(response);
                 if (feedbackGeneration !== null) {
                     if (response?.command?.status === 'error') feedbackRef.current!.failed(feedbackGeneration);
@@ -2796,7 +2798,13 @@ export function ComposeBox({
     ]);
 
     const handleKeyDown = (e) => {
-        if (e.isComposing) return;
+        if (e.isComposing || e.defaultPrevented) return;
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && !searchMode) {
+            const queueShortcut = isComposeQueueShortcut(e);
+            e.preventDefault();
+            if (queueShortcut) void handleSubmit(textareaRef.current?.value ?? content, 'queue');
+            return;
+        }
         if (searchMode && e.key === 'Escape') {
             e.preventDefault();
             setSearchText('');
@@ -2949,13 +2957,11 @@ export function ComposeBox({
                 if (currentValue.trim()) {
                     onSearch?.(currentValue.trim(), searchScope, { images: searchFilterImages, attachments: searchFilterAttachments });
                 }
-            } else {
-                void handleSubmit(currentValue, "steer");
             }
             return;
         }
 
-        if (e.key === 'Enter' && !e.shiftKey) {
+        if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat) {
             e.preventDefault();
             if (searchMode) {
                 if (currentValue.trim()) {
