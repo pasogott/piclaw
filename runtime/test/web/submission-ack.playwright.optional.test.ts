@@ -37,6 +37,7 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
     let queueNext = false;
     let invalidAck: 'json' | 'empty' | null = null;
     const shortcutPosts: any[] = [];
+    const invalidRequests: string[] = [];
     let heldShortcut = false;
     let shortcutPending = false;
     let releaseShortcut!: () => void;
@@ -83,6 +84,7 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       requests.push(`${req.method()} ${url.pathname}`);
       let body: unknown;
       if (url.pathname.startsWith('/agent/') && url.pathname.endsWith('/message') && req.method() === 'POST') {
+        if (invalidAck) invalidRequests.push(req.postDataJSON().content);
         if (invalidAck === 'json') return route.fulfill({status:201,contentType:'application/json',body:'not json'});
         if (invalidAck === 'empty') return route.fulfill({status:201,json:{}});
         if(rejectNext) return route.fulfill({status:500,json:{error:'Fixture submission rejected'}});
@@ -137,6 +139,10 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       await page.locator('textarea,[contenteditable="true"]').first().waitFor();
       await page.waitForTimeout(500);
       const input=page.locator('textarea').filter({visible:true}).first();
+      const waitForSubmitReady = () => page.waitForFunction(() => {
+        const button = document.querySelector<HTMLButtonElement>('.compose-box .send-btn, .chat__send-btn');
+        return button != null && !button.disabled;
+      });
       await input.fill('Latency probe submission');
       await input.press('Enter');
       await page.locator('[data-submission-state="sending"]').waitFor({ timeout: 1500 });
@@ -185,6 +191,7 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       await input.fill('Next draft while queue acknowledgement is pending');
       releaseShortcut(); heldShortcut=false;
       await page.locator('[data-submission-state]').waitFor({state:'hidden'});
+      await waitForSubmitReady();
       expect(await input.inputValue()).toContain('Next draft while queue acknowledgement is pending');
       expect(shortcutPosts).toHaveLength(1);
       expect(shortcutPosts[0]).toMatchObject({content:'Ctrl steer while busy',mode:'steer'});
@@ -195,22 +202,29 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       await page.evaluate(payload=>(window as any).emitShellEvent('agent_status',payload),{chat_jid:lastPost.chat_jid,type:'done',thread_id:'busy-thread',turn_id:'busy-turn'});
       await input.fill('Ctrl steer while idle'); await input.press('Control+Enter');
       await page.waitForFunction(()=>document.querySelector('textarea')?.value === '');
-      await input.fill('Ctrl steer with Cmd'); await input.press('Meta+Enter');
+      await input.fill('Ctrl steer with Cmd');
+      await waitForSubmitReady();
+      await input.press('Meta+Enter');
       await page.waitForFunction(()=>document.querySelector('textarea')?.value === '');
       expect(shortcutPosts).toHaveLength(3);
       expect(shortcutPosts.every(post => post.mode === 'steer')).toBe(true);
       for (const invalid of ['json', 'empty'] as const) {
         invalidAck=invalid;
         const draft=`Unconfirmed ${invalid} draft`;
-        await input.fill(draft); await input.press('Control+Enter');
+        await input.fill(draft);
+        await waitForSubmitReady();
+        await input.press('Control+Enter');
+        await page.locator('[role="alert"]').waitFor({state:'visible'});
         await page.locator('[data-submission-state]').waitFor({state:'hidden'});
+        await waitForSubmitReady();
         expect(await input.inputValue()).toBe(draft);
+        expect(invalidRequests).toContain(draft);
         expect(await page.locator('[role="alert"]').count()).toBeGreaterThan(0);
       }
       invalidAck=null;
       // Rejected submissions are never made to look accepted in the timeline.
       rejectNext=true;
-      await input.fill('Rejected latency probe');await input.press('Control+Enter');
+      await input.fill('Rejected latency probe');await waitForSubmitReady();await input.press('Control+Enter');
       await page.waitForTimeout(500);
       expect(accepted).toBe(2);
       expect(await input.inputValue()).toBe('Rejected latency probe');
@@ -219,7 +233,7 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       expect(errors).toEqual([]);
       expect([...unhandled]).toEqual([]);
     } catch (error) {
-      console.log("SHELL_FAILURE", JSON.stringify({ engineName, skin, errors, unhandled: [...unhandled], requests, feedbackEvents: await page.evaluate(() => (window as any).feedbackEvents), body: (await page.locator("body").innerText()).slice(-2500), badges: await page.locator(".model-badge-wrapper,.compose-model-meta").evaluateAll(nodes => nodes.map(n => n.outerHTML)), scripts: await page.locator("script[src]").evaluateAll(nodes => nodes.map(n => n.getAttribute("src"))) }));
+      console.log("SHELL_FAILURE", JSON.stringify({ engineName, skin, errors, unhandled: [...unhandled], requests, invalidRequests, shortcutPosts, feedbackEvents: await page.evaluate(() => (window as any).feedbackEvents), body: (await page.locator("body").innerText()).slice(-2500), badges: await page.locator(".model-badge-wrapper,.compose-model-meta").evaluateAll(nodes => nodes.map(n => n.outerHTML)), scripts: await page.locator("script[src]").evaluateAll(nodes => nodes.map(n => n.getAttribute("src"))) }));
       throw error;
     } finally { await context.close(); await browser.close(); }
   }, 60000);
