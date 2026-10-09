@@ -1772,6 +1772,12 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.chat__compose-shell {
+  flex-shrink: 0;
+  width: 100%;
+  min-width: 0;
+}
+
 .chat__compose {
   background: var(--bg);
   border-top: 1px solid var(--border);

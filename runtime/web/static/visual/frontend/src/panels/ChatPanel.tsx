@@ -555,8 +555,9 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
             </div>
           )}
 
-          <div className="chat__compose">
+          <div className="chat__compose-shell">
             <button type="button" className={`compose-latest-divider ${latestState.away ? 'away-from-latest' : ''} ${latestState.hasNew ? 'has-new-messages' : ''}`} aria-label={latestState.hasNew ? 'New messages — jump to latest' : 'Jump to latest message'} onClick={() => window.dispatchEvent(new Event('piclaw:jump-latest'))}><span className="compose-latest-chevron compose-latest-chevron-left" aria-hidden="true" /><span className="compose-latest-chevron compose-latest-chevron-right" aria-hidden="true" /></button>
+            <div className="chat__compose">
             <input
               ref={fileInputRef}
               type="file"
@@ -740,6 +741,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
                 </svg>
               </button>
             )}
+            </div>
           </div>
       {sendError.value && (
         <div className="chat__send-error" role="alert" aria-live="assertive">
