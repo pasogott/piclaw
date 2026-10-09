@@ -1,5 +1,7 @@
 # Ctrl/Cmd+Enter and unconfirmed drafts
 
+**Historical queue-only qualification, superseded by the steering amendment.** Rui clarified on9October2026 at22:32UTC that Ctrl/Cmd+Enter should steer consistently and that the lost input occurred during a starting turn. The new source uses Ctrl/Cmd+Enter steering, Shift+Enter newline, and durable follow-up fallback before a stream exists. The gate below qualifies the earlier queue-only source; a fresh complete gate is required for the amendment. Draft acknowledgement protection is retained.
+
 Ctrl/Cmd+Enter now explicitly requests queue-mode submission in both skins. Visual decodes and validates the acknowledgement before clearing the draft; Classic validates before its response callback and uses existing draft restoration on failure. Malformed or empty acknowledgements and rejected requests leave text available and show an error.
 
 The backend queue/admission rules are unchanged: busy targets defer a follow-up, while an idle target may start the accepted input. This fix does not create an idle-only holding queue or change steering persistence.

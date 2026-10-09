@@ -9,7 +9,7 @@ import { safeGetItem, safeSetItem } from "../utils/storage";
 import { createLogger } from "../utils/logger";
 import { agentDisplayName } from "../api/agent-identity";
 import { SubmissionFeedback, isSubmissionRunStatus, type SubmissionFeedbackState } from '../../../../../src/ui/submission-feedback';
-import { isComposeQueueShortcut, requireComposeAcknowledgement } from '../../../../../src/ui/compose-submission';
+import { isComposeSteerShortcut, requireComposeAcknowledgement, composeSubmissionNotice } from '../../../../../src/ui/compose-submission';
 import {
   uploadFileBatch,
   uploadChatAttachment,
@@ -58,6 +58,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isSending = useSignal(false);
   const sendError = useSignal<string | null>(null);
+  const sendNotice = useSignal<string | null>(null);
   const [submissionFeedback, setSubmissionFeedback] = useState<SubmissionFeedbackState>(null);
   const feedbackRef = useRef<SubmissionFeedback | null>(null);
   if (!feedbackRef.current) feedbackRef.current = new SubmissionFeedback(setSubmissionFeedback);
@@ -400,7 +401,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
     return () => window.removeEventListener("piclaw:new-message", handler);
   }, [notificationsEnabled]);
 
-  const sendMessage = async (forceSteer = false, forceQueue = false) => {
+  const sendMessage = async (forceSteer = false) => {
     const el = textareaRef.current;
     if (!el || isSending.value) return;
     const content = el.value.trim();
@@ -410,11 +411,12 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
     const submissionUrl = getMessageUrl();
 
     // Shift+Send = steer (inject mid-stream); default when busy = queue
-    const mode = forceQueue ? 'queue' : isAgentRunning.value ? (forceSteer ? "steer" : "queue") : undefined;
+    const mode = forceSteer ? 'steer' : isAgentRunning.value ? 'queue' : undefined;
 
     isSending.value = true;
     const feedbackGeneration = feedbackRef.current!.begin(submissionChatJid);
     sendError.value = null;
+    sendNotice.value = null;
     let stage: "upload" | "send" = "upload";
 
     try {
@@ -481,6 +483,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
 
       const data = await res.json();
       requireComposeAcknowledgement(data);
+      sendNotice.value = composeSubmissionNotice(data);
       // Only clear the submitted draft after confirmed success. Text entered
       // while the request was in flight remains as the next draft.
       const draftChangedDuringSend = el.value.trim() !== content;
@@ -533,6 +536,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
           <AgentStatusPanel />
 
           <QueueStack onEdit={handleQueueEdit} />
+          {sendNotice.value && <div className="compose-submission-feedback" role="status" aria-live="polite">{sendNotice.value}</div>}
           {submissionFeedback && <div className="compose-submission-feedback" role="status" aria-live="polite" data-submission-state={submissionFeedback}><span className="submission-feedback-spinner" aria-hidden="true" />{submissionFeedback === 'sending' ? 'Sending message…' : 'Message accepted. Waiting for agent…'}</div>}
 
           {uploadProgress && (
@@ -636,7 +640,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
               <textarea
                 ref={textareaRef}
                 className="chat__input"
-                placeholder={isAgentRunning.value ? "Type to queue (Shift+Enter to steer mid-turn)" : "Type a message..."}
+                placeholder={isAgentRunning.value ? "Type to queue (Ctrl/Cmd+Enter to steer; Shift+Enter for a newline)" : "Type a message..."}
                 rows={3}
                 autoFocus
                 onInput={handleInput}
@@ -644,16 +648,12 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
                 onKeyDown={(e) => {
                   if (e.isComposing || e.defaultPrevented) return;
                   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
-                    const queueShortcut = isComposeQueueShortcut(e);
+                    const steerShortcut = isComposeSteerShortcut(e);
                     e.preventDefault();
-                    if (queueShortcut) void sendMessage(false, true);
+                    if (steerShortcut) void sendMessage(true);
                   } else if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat) {
                     e.preventDefault();
                     void sendMessage();
-                  }
-                  if (e.key === "Enter" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat && isAgentRunning.value) {
-                    e.preventDefault();
-                    sendMessage(true);
                   }
                   if (e.key === "Escape" && isAgentRunning.value) {
                     abortAgent();
@@ -704,7 +704,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
                   onClick={() => sendMessage(true)}
                   disabled={isSending.value || (!hasText.value && attachments.length === 0)}
                   aria-label="Steer (inject mid-turn)"
-                  title="Steer — inject into the current turn (Shift+Enter)"
+                  title="Steer — inject into the current turn (Ctrl/Cmd+Enter)"
                 >
                   <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M12 19V5M5 12l7-7 7 7"/>

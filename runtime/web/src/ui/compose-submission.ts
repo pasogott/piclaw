@@ -1,7 +1,13 @@
-/** Ctrl/Cmd+Enter explicitly requests a follow-up queue; Shift remains available for existing newline/steer shortcuts. */
-export function isComposeQueueShortcut(event: { key?: string; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; altKey?: boolean; isComposing?: boolean; repeat?: boolean; defaultPrevented?: boolean }): boolean {
+/** Ctrl/Cmd+Enter steers; Shift+Enter remains a newline. */
+export function isComposeSteerShortcut(event: { key?: string; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; altKey?: boolean; isComposing?: boolean; repeat?: boolean; defaultPrevented?: boolean }): boolean {
   return event.key === 'Enter' && Boolean(event.ctrlKey || event.metaKey)
     && !event.shiftKey && !event.altKey && !event.isComposing && !event.repeat && !event.defaultPrevented;
+}
+
+export function composeSubmissionNotice(response: any): string | null {
+  if (response?.queued === 'steer') return 'Steering queued for the current turn.';
+  if (response?.queued === 'followup') return 'Follow-up queued.';
+  return null;
 }
 
 /** A successful HTTP status alone does not prove a prompt was accepted. Never retry automatically. */

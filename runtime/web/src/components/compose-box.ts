@@ -3,7 +3,7 @@ import { useTranslation } from '../utils/i18n.js';
 import { isPopupTypeaheadKey, resolvePopupTypeaheadMatch, updatePopupTypeaheadBuffer } from '../ui/popup-typeahead.js';
 import { getAgentModels, sendAgentMessage } from '../api.js';
 import { SubmissionFeedback, isSubmissionRunStatus, type SubmissionFeedbackState } from '../ui/submission-feedback.js';
-import { isComposeQueueShortcut, requireComposeAcknowledgement } from '../ui/compose-submission.js';
+import { isComposeSteerShortcut, requireComposeAcknowledgement, composeSubmissionNotice } from '../ui/compose-submission.js';
 import { uploadFileBatch, uploadChatAttachment } from '../ui/upload-transfers.js';
 import { getLocalStorageItem, setLocalStorageItem } from '../utils/storage.js';
 import { buildMentionValue, filterMentionAgents, parseMentionAutocompleteQuery } from '../ui/agent-mentions.js';
@@ -2677,7 +2677,7 @@ export function ComposeBox({
                     });
                 }
 
-                setSubmitNotice(resolveUiOnlyCommandNotice(baseContent, response));
+                setSubmitNotice(resolveUiOnlyCommandNotice(baseContent, response) || composeSubmissionNotice(response));
                 onPost?.(response);
             } catch (error) {
                 if (clearAfterSubmit) {
@@ -2800,9 +2800,9 @@ export function ComposeBox({
     const handleKeyDown = (e) => {
         if (e.isComposing || e.defaultPrevented) return;
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && !searchMode) {
-            const queueShortcut = isComposeQueueShortcut(e);
+            const steerShortcut = isComposeSteerShortcut(e);
             e.preventDefault();
-            if (queueShortcut) void handleSubmit(textareaRef.current?.value ?? content, 'queue');
+            if (steerShortcut) void handleSubmit(textareaRef.current?.value ?? content, 'steer');
             return;
         }
         if (searchMode && e.key === 'Escape') {
