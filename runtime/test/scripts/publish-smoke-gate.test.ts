@@ -1,3 +1,4 @@
+import * as yaml from "js-yaml";
 import { expect, test } from "bun:test";
 import { load } from "js-yaml";
 import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -94,3 +95,21 @@ esac
     }
   }, 45000);
 }
+
+test("emergency workflow is explicit manual artifact-only release while normal gates remain", () => {
+  const hotfix = yaml.load(readFileSync(join(root, '.github/workflows/hotfix.yml'), 'utf8')) as any;
+  expect(Object.keys(hotfix.on)).toEqual(['workflow_dispatch']);
+  expect(hotfix.on.workflow_dispatch.inputs.sha.required).toBe(true);
+  expect(hotfix.jobs.integration).toBeUndefined();
+  expect(hotfix.jobs['build-portable-artifacts'].strategy.matrix.include).toHaveLength(5);
+  for (const arch of ['amd64', 'arm64']) {
+    expect(hotfix.jobs[`build-${arch}`].steps.some((step: any) => /smoke|test/i.test(step.name ?? ''))).toBe(false);
+    expect(hotfix.jobs[`build-${arch}`].needs).toEqual(['resolve']);
+  }
+  const text = readFileSync(join(root, '.github/workflows/hotfix.yml'), 'utf8');
+  expect(text).not.toContain(':latest');
+  expect(text).toContain('force:true');
+  expect(text).toContain('deliberately skipped');
+  expect(text).toContain("context.payload.inputs.sha");
+  expect(() => checkPublishSmokeGate(workflow)).not.toThrow();
+});
