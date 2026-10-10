@@ -2,8 +2,8 @@ import { html, useRef, useState, useEffect, useCallback, useMemo } from '../vend
 import { useTranslation } from '../utils/i18n.js';
 import { isPopupTypeaheadKey, resolvePopupTypeaheadMatch, updatePopupTypeaheadBuffer } from '../ui/popup-typeahead.js';
 import { getAgentModels, sendAgentMessage } from '../api.js';
-import { SubmissionFeedback, isSubmissionRunStatus, type SubmissionFeedbackState } from '../ui/submission-feedback.js';
-import { isComposeSteerShortcut, requireComposeAcknowledgement, composeSubmissionNotice } from '../ui/compose-submission.js';
+import { SubmissionFeedback, type SubmissionFeedbackState } from '../ui/submission-feedback.js';
+import { isComposeSteerShortcut, requireComposeAcknowledgement } from '../ui/compose-submission.js';
 import { uploadFileBatch, uploadChatAttachment } from '../ui/upload-transfers.js';
 import { getLocalStorageItem, setLocalStorageItem } from '../utils/storage.js';
 import { buildMentionValue, filterMentionAgents, parseMentionAutocompleteQuery } from '../ui/agent-mentions.js';
@@ -1259,12 +1259,7 @@ export function ComposeBox({
     useEffect(() => {
         const feedback = feedbackRef.current!;
         feedback.reset();
-        const listener = (event: Event) => {
-            const detail = (event as CustomEvent).detail;
-            if (isSubmissionRunStatus(detail?.type)) feedback.activity(detail.chat_jid, detail.thread_id);
-        };
-        window.addEventListener('piclaw:submission-run-status', listener);
-        return () => { feedback.reset(); window.removeEventListener('piclaw:submission-run-status', listener); };
+        return () => feedback.reset();
     }, [currentChatJid]);
     const [isDragActive, setIsDragActive] = useState(false);
     const [slashMatches, setSlashMatches] = useState([]);
@@ -2661,7 +2656,7 @@ export function ComposeBox({
                 onMessageResponse?.(response);
                 if (feedbackGeneration !== null) {
                     if (response?.command?.status === 'error') feedbackRef.current!.failed(feedbackGeneration);
-                    else feedbackRef.current!.acknowledged(feedbackGeneration, Boolean(response?.queued) || Boolean(response?.command) || response?.ui_only === true || response?.relayed === true, response?.thread_id, response?.user_message?.data?.timestamp);
+                    else feedbackRef.current!.acknowledged(feedbackGeneration);
                 }
 
                 if (response?.command && response.command.status !== 'error') {
@@ -2677,7 +2672,7 @@ export function ComposeBox({
                     });
                 }
 
-                setSubmitNotice(resolveUiOnlyCommandNotice(baseContent, response) || composeSubmissionNotice(response));
+                setSubmitNotice(resolveUiOnlyCommandNotice(baseContent, response));
                 onPost?.(response);
             } catch (error) {
                 if (clearAfterSubmit) {
@@ -3415,7 +3410,7 @@ export function ComposeBox({
                 onMouseDown=${handleComposeResizeMouseDown}
                 onTouchStart=${handleComposeResizeTouchStart}
             >${onJumpToLatest && html`<button type="button" class="compose-latest-handle" aria-label=${timelineHasNew ? 'New messages — jump to latest' : 'Jump to latest message'} title="Jump to latest message" onClick=${(event) => { if (event.detail === 0) onJumpToLatest(); }}><span class="compose-latest-chevron compose-latest-chevron-left" aria-hidden="true"></span><span class="compose-latest-chevron compose-latest-chevron-right" aria-hidden="true"></span></button>`}</div>
-            ${submissionFeedback && html`<div class="compose-submission-feedback" role="status" aria-live="polite" data-submission-state=${submissionFeedback}><span class="submission-feedback-spinner" aria-hidden="true"></span>${submissionFeedback === 'sending' ? 'Sending message…' : 'Message accepted. Waiting for agent…'}</div>`}
+            ${submissionFeedback && html`<div class="agent-status" role="status" aria-live="polite" data-submission-state="sending"><div class="agent-status-spinner" aria-hidden="true"></div><span class="status-text">Sending…</span></div>`}
             ${speechUiVisible && html`
                 <div class=${`compose-inline-status compose-speech-status compose-speech-status-${speechUiState.kind}`} role="status" aria-live="polite">
                     <div class="compose-inline-status-row">

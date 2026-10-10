@@ -91,15 +91,18 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
         if (req.postDataJSON().content.startsWith('Ctrl steer')) {
           shortcutPosts.push(req.postDataJSON());
           if (heldShortcut) { shortcutPending = true; await shortcutGate; }
-          return route.fulfill({status:201,json:{queued:'steer',thread_id:null}});
+          const post = {id:778000+shortcutPosts.length,chat_jid:url.searchParams.get('chat_jid') || chatJid,type:'user',timestamp:new Date().toISOString(),data:{type:'user_message',content:req.postDataJSON().content,sender_name:'Fixture User',is_bot_message:false,thread_id:777001}};
+          durablePosts.push(post);
+          await page.evaluate(post=>(window as any).emitShellEvent('new_post',post),post);
+          return route.fulfill({status:201,json:{queued:'steer',thread_id:777001,user_message:post}});
         }
         if(queueNext) { queueNext = false; return route.fulfill({ status:201,json:{thread_id:null,queued:'followup'} }); }
         accepted++;
         const id=777000+accepted;
-        lastPost={id,chat_jid:url.searchParams.get("chat_jid") || chatJid,type:'user',data:{type:'user_message',content:req.postDataJSON().content,timestamp:new Date().toISOString(),sender_name:'Fixture User',is_bot_message:false,thread_id:id}};
+        lastPost={id,chat_jid:url.searchParams.get("chat_jid") || chatJid,type:'user',timestamp:new Date().toISOString(),data:{type:'user_message',content:req.postDataJSON().content,sender_name:'Fixture User',is_bot_message:false,thread_id:id}};
         durablePosts.push(lastPost);
         if(sseFirst){
-          await page.evaluate(post=>{(window as any).emitShellEvent('new_post',post);(window as any).emitShellEvent('agent_status',{chat_jid:post.chat_jid,thread_id:post.data.timestamp,type:'thinking',phase:'thinking',turn_id:'second-turn'});},lastPost);
+          await page.evaluate(post=>{(window as any).emitShellEvent('new_post',post);(window as any).emitShellEvent('agent_status',{chat_jid:post.chat_jid,thread_id:post.timestamp,type:'thinking',phase:'thinking',turn_id:'second-turn'});},lastPost);
           await Bun.sleep(100);
         }
         await holdAck;
@@ -146,22 +149,24 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       await input.fill('Latency probe submission');
       await input.press('Enter');
       await page.locator('[data-submission-state="sending"]').waitFor({ timeout: 1500 });
-      expect(await page.locator('[data-submission-state="sending"]').textContent()).toContain('Sending message');
+      expect(await page.locator('[data-submission-state="sending"]').textContent()).toContain('Sending');
+      expect(await page.locator('[data-submission-state="sending"]').getAttribute('class')).toContain(skin==='classic'?'agent-status':'agent-status-panel__status');
+      expect(await page.locator('[data-submission-state="sending"] .agent-status-spinner, [data-submission-state="sending"] .agent-status-panel__spinner').count()).toBe(1);
       expect(await page.locator('#post-777001,[data-message-id="777001"]').count()).toBe(0);
       releaseAck();
       await page.waitForFunction(()=>document.querySelector('#post-777001,[data-message-id="777001"]'),{},{timeout:1500});
       expect(accepted).toBe(1);
-      await page.locator('[data-submission-state="waiting"]').waitFor({ timeout: 1500 });
-      expect(await page.locator('[data-submission-state="waiting"]').textContent()).toContain('Message accepted');
+      await page.locator('[data-submission-state]').waitFor({state:'hidden',timeout:1500});
+      expect(await page.getByText('Message accepted. Waiting for agent…',{exact:true}).count()).toBe(0);
       await page.evaluate(payload=>(window as any).emitShellEvent('agent_status',payload),{chat_jid:lastPost.chat_jid,thread_id:777000,type:'tool_status',title:'Previous turn',turn_id:'previous'});
-      expect(await page.locator('[data-submission-state="waiting"]').count()).toBe(1);
-      await page.evaluate(payload=>(window as any).emitShellEvent('agent_status',payload),{chat_jid:lastPost.chat_jid,thread_id:lastPost.data.timestamp,type:'thinking',phase:'thinking',title:'Thinking...',turn_id:'accepted-turn'});
+      expect(await page.locator('[data-submission-state]').count()).toBe(0);
+      await page.evaluate(payload=>(window as any).emitShellEvent('agent_status',payload),{chat_jid:lastPost.chat_jid,thread_id:lastPost.timestamp,type:'thinking',phase:'thinking',title:'Thinking...',turn_id:'accepted-turn'});
       await page.locator('[data-submission-state]').waitFor({ state: 'hidden', timeout: 1500 });
       expect(Date.now()-ackAt).toBeLessThan(1500);
       await page.evaluate(post=>(window as any).emitShellEvent('new_post',post),lastPost);
       await page.waitForTimeout(100);
       expect(await page.locator('#post-777001,[data-message-id="777001"]').count()).toBe(1);
-      await page.evaluate(payload=>(window as any).emitShellEvent('agent_status',payload),{chat_jid:lastPost.chat_jid,thread_id:lastPost.data.timestamp,type:'done',turn_id:'accepted-turn'});
+      await page.evaluate(payload=>(window as any).emitShellEvent('agent_status',payload),{chat_jid:lastPost.chat_jid,thread_id:lastPost.timestamp,type:'done',turn_id:'accepted-turn'});
       await page.waitForTimeout(150);
       // Event first, response later must likewise leave exactly one durable row.
       sseFirst=true;
@@ -194,8 +199,11 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       await waitForSubmitReady();
       expect(await input.inputValue()).toContain('Next draft while queue acknowledgement is pending');
       expect(shortcutPosts).toHaveLength(1);
-      expect(shortcutPosts[0]).toMatchObject({content:'Ctrl steer while busy',mode:'steer'});
-      await page.getByText('Steering queued for the current turn.',{exact:true}).waitFor();
+      expect(shortcutPosts[0]).toMatchObject({content:'Ctrl steer while busy',mode:'steer',persist_steer:true});
+      await page.locator('#post-778001,[data-message-id="778001"]').waitFor();
+      expect(await page.locator('#post-778001,[data-message-id="778001"]').count()).toBe(1);
+      expect(await page.getByText('Steering queued for the current turn.',{exact:true}).count()).toBe(0);
+      expect(await page.getByText('Follow-up queued.',{exact:true}).count()).toBe(0);
       await input.fill('Shift Enter newline'); await input.press('Shift+Enter');
       expect(await input.inputValue()).toContain('\n');
       expect(shortcutPosts).toHaveLength(1);
@@ -207,7 +215,9 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       await input.press('Meta+Enter');
       await page.waitForFunction(()=>document.querySelector('textarea')?.value === '');
       expect(shortcutPosts).toHaveLength(3);
-      expect(shortcutPosts.every(post => post.mode === 'steer')).toBe(true);
+      expect(shortcutPosts.every(post => post.mode === 'steer' && post.persist_steer === true)).toBe(true);
+      expect(await page.locator('#post-778002,[data-message-id="778002"]').count()).toBe(1);
+      expect(await page.locator('#post-778003,[data-message-id="778003"]').count()).toBe(1);
       for (const invalid of ['json', 'empty'] as const) {
         invalidAck=invalid;
         const draft=`Unconfirmed ${invalid} draft`;

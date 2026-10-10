@@ -8,8 +8,8 @@ import { safeGetItem, safeSetItem } from "../utils/storage";
 
 import { createLogger } from "../utils/logger";
 import { agentDisplayName } from "../api/agent-identity";
-import { SubmissionFeedback, isSubmissionRunStatus, type SubmissionFeedbackState } from '../../../../../src/ui/submission-feedback';
-import { isComposeSteerShortcut, requireComposeAcknowledgement, composeSubmissionNotice } from '../../../../../src/ui/compose-submission';
+import { SubmissionFeedback, type SubmissionFeedbackState } from '../../../../../src/ui/submission-feedback';
+import { isComposeSteerShortcut, requireComposeAcknowledgement } from '../../../../../src/ui/compose-submission';
 import {
   uploadFileBatch,
   uploadChatAttachment,
@@ -58,22 +58,15 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isSending = useSignal(false);
   const sendError = useSignal<string | null>(null);
-  const sendNotice = useSignal<string | null>(null);
   const [submissionFeedback, setSubmissionFeedback] = useState<SubmissionFeedbackState>(null);
   const feedbackRef = useRef<SubmissionFeedback | null>(null);
   if (!feedbackRef.current) feedbackRef.current = new SubmissionFeedback(setSubmissionFeedback);
   useEffect(() => {
     const feedback = feedbackRef.current!;
-    const onStatus = (event: Event) => {
-      const detail = (event as CustomEvent).detail;
-      if (isSubmissionRunStatus(detail?.type)) feedback.activity(detail.chat_jid ?? getChatJid(), detail.thread_id);
-    };
     const onChatChange = () => feedback.reset();
-    window.addEventListener('piclaw:agent-status', onStatus);
-    window.addEventListener('piclaw:submission-run-status', onStatus);
     window.addEventListener('popstate', onChatChange);
     window.addEventListener('piclaw:current-chat-changed', onChatChange);
-    return () => { feedback.reset(); window.removeEventListener('piclaw:agent-status', onStatus); window.removeEventListener('piclaw:submission-run-status', onStatus); window.removeEventListener('popstate', onChatChange); window.removeEventListener('piclaw:current-chat-changed', onChatChange); };
+    return () => { feedback.reset(); window.removeEventListener('popstate', onChatChange); window.removeEventListener('piclaw:current-chat-changed', onChatChange); };
   }, []);
   const isAgentRunning = useSignal(false);
   const [uploadProgress, setUploadProgress] = useState<UploadBatchProgress | null>(null);
@@ -416,7 +409,6 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
     isSending.value = true;
     const feedbackGeneration = feedbackRef.current!.begin(submissionChatJid);
     sendError.value = null;
-    sendNotice.value = null;
     let stage: "upload" | "send" = "upload";
 
     try {
@@ -472,6 +464,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
             content: messageContent,
             media_ids: mediaIds.length > 0 ? mediaIds : undefined,
             ...(mode ? { mode } : {}),
+            ...(mode === 'steer' ? { persist_steer: true } : {}),
           }),
           signal: controller.signal,
         });
@@ -483,7 +476,6 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
 
       const data = await res.json();
       requireComposeAcknowledgement(data);
-      sendNotice.value = composeSubmissionNotice(data);
       // Only clear the submitted draft after confirmed success. Text entered
       // while the request was in flight remains as the next draft.
       const draftChangedDuringSend = el.value.trim() !== content;
@@ -503,7 +495,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
       }
       sendError.value = null;
       setAttachments([]);
-      feedbackRef.current!.acknowledged(feedbackGeneration, Boolean(data?.queued) || Boolean(data?.command) || data?.ui_only === true || data?.relayed === true, data?.thread_id, data?.user_message?.data?.timestamp);
+      feedbackRef.current!.acknowledged(feedbackGeneration);
       if (data?.queued === 'followup' || data?.queued === 'steer') {
         window.dispatchEvent(new CustomEvent('piclaw:queue-acknowledged', { detail: { chat_jid: submissionChatJid } }));
       }
@@ -536,8 +528,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
           <AgentStatusPanel />
 
           <QueueStack onEdit={handleQueueEdit} />
-          {sendNotice.value && <div className="compose-submission-feedback" role="status" aria-live="polite">{sendNotice.value}</div>}
-          {submissionFeedback && <div className="compose-submission-feedback" role="status" aria-live="polite" data-submission-state={submissionFeedback}><span className="submission-feedback-spinner" aria-hidden="true" />{submissionFeedback === 'sending' ? 'Sending message…' : 'Message accepted. Waiting for agent…'}</div>}
+          {submissionFeedback && <div className="agent-status-panel__status" role="status" aria-live="polite" data-submission-state="sending"><div className="agent-status-panel__spinner" aria-hidden="true" /><span className="agent-status-panel__status-text">Sending…</span></div>}
 
           {uploadProgress && (
             <div className="chat__upload-status" role="status" aria-live="polite" data-testid="compose-upload-status">

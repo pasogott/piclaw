@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test';
 import { admitWebUserMessage, storeWebMessage } from '../../../../src/channels/web/messaging/message-store.js';
 import { handleAgentMessage } from '../../../../src/channels/web/handlers/agent.js';
-import { initDatabase, getDb, getDeferredQueuedFollowups, createMedia } from '../../../../src/db.js';
+import { initDatabase, getDb, getDeferredQueuedFollowups, createMedia, getMessagesSince, setChatCursor } from '../../../../src/db.js';
+import { selectProcessChatMessage } from '../../../../src/channels/web/runtime/process-chat-control-runtime.js';
+import { finalizeSuccessfulProcessChatRun } from '../../../../src/channels/web/runtime/process-chat-finalization-runtime.js';
 import { QueuedFollowupLifecycleService } from '../../../../src/channels/web/runtime/queued-followup-lifecycle-service.js';
 import { AgentQueue } from '../../../../src/queue.js';
 import { withTempWorkspaceEnv } from '../../../helpers.js';
@@ -9,7 +11,7 @@ import { withTempWorkspaceEnv } from '../../../helpers.js';
 function fixture(queue: AgentQueue) {
   const queued = new QueuedFollowupLifecycleService();
   const db = getDb();
-  const state = { active: false, streaming: false, steerAccepted: false, steerCalls: 0, scheduled: 0, wakes: 0, events: [] as any[] };
+  const state = { active: false, streaming: false, steerAccepted: false, steerCalls: 0, scheduled: 0, wakes: 0, pendingSteering: [] as string[], events: [] as any[] };
   const channel: any = {
     authGateway: { isAuthEnabled: () => false, getPrincipal: () => ({ mode: 'single-user' }) },
     agentPool: {
@@ -23,6 +25,7 @@ function fixture(queue: AgentQueue) {
     enqueueQueuedFollowupItem: (chat: string, row: number, content: string, thread: number | null, at: string, extra: any) => queued.enqueueQueuedFollowupItem(chat, row, content, thread, at, extra),
     broadcastEvent: (event: string, body: unknown) => state.events.push({ event, body }),
     resumeChat: () => { state.wakes++; },
+    queuePendingSteering: (_chat: string, timestamp: string) => state.pendingSteering.push(timestamp),
     admitQueuedFollowupItem: queued.admitQueuedFollowupItem.bind(queued),
     storeMessage: (chat: string, content: string, isBot: boolean, media: number[], options: any) => storeWebMessage(channel, { chatJid: chat, content, isBot, mediaIds: media, agentId: 'default', agentName: 'Fixture', agentAvatar: '', userName: null, userAvatar: '', userAvatarBackground: null }, options),
     admitUserMessage: (chat: string, content: string, media: number[], options: any, validate: () => void, signal: AbortSignal, defer: () => boolean) => admitWebUserMessage(channel, { chatJid: chat, content, isBot: false, mediaIds: media, agentId: 'default', agentName: 'Fixture', agentAvatar: '', userName: null, userAvatar: '', userAvatarBackground: null }, options, validate, signal, defer),
@@ -105,6 +108,61 @@ test('stream-ending fallback preserves attachment-only and structured input meta
       expect(item.mediaIds).toEqual([mediaId]); expect(item.contentBlocks).toEqual(blocks);
       expect(item.linkPreviews).toEqual(previews); expect(item.screenHint).toBe('tablet');
       expect(countMessages(f.db, 'web:payload')).toBe(0);
+    } finally { await queue.shutdown(); }
+  });
+});
+test('persisted keyboard steering creates one timeline input and excludes it from ordinary replay', async () => {
+  await withTempWorkspaceEnv('steer-timeline-', {}, async () => {
+    initDatabase(); const queue = new AgentQueue(), f = fixture(queue); f.state.streaming = true; f.state.steerAccepted = true;
+    try {
+      const response = await handleAgentMessage(f.channel, request('Visible correction', {persist_steer:true}), '/agent/default/message', 'web:persist', 'default');
+      expect(response.status).toBe(201);
+      const body = await response.json();
+      expect(body.queued).toBe('steer'); expect(body.user_message.data.content).toBe('Visible correction');
+      expect(countMessages(f.db, 'web:persist')).toBe(1);
+      const row = f.db.query('SELECT is_steering_message FROM messages WHERE chat_jid=?').get('web:persist') as any;
+      expect(row.is_steering_message).toBe(1);
+      expect(getMessagesSince('web:persist','','Fixture')).toHaveLength(0);
+      expect(f.state.events.filter(event=>event.event==='new_post')).toHaveLength(1);
+      expect(f.state.events.filter(event=>event.event==='new_post')[0].body.id).toBe(body.user_message.id);
+      expect(f.state.pendingSteering).toHaveLength(1); expect(f.state.steerCalls).toBe(1);
+      expect(f.state.scheduled).toBe(0); expect(getDeferredQueuedFollowups('web:persist')).toHaveLength(0);
+    } finally { await queue.shutdown(); }
+  });
+});
+for (const streaming of [false,true]) test(`persisted steering that cannot inject has exactly one delivery path; initial streaming ${streaming}`,  async () => {
+  await withTempWorkspaceEnv('steer-persist-fallback-', {}, async () => {
+    initDatabase(); const queue = new AgentQueue(), f = fixture(queue); f.state.streaming = streaming; f.state.active = true;
+    try {
+      const response = await handleAgentMessage(f.channel, request('Starting correction', {persist_steer:true}), '/agent/default/message', 'web:persist-fallback', 'default');
+      expect(response.status).toBe(201); const body = await response.json();
+      if (!streaming) {
+        expect(body.queued).toBe('followup');
+        expect(countMessages(f.db,'web:persist-fallback')).toBe(0);
+        expect(getDeferredQueuedFollowups('web:persist-fallback')).toHaveLength(1);
+      } else {
+        expect(countMessages(f.db,'web:persist-fallback')).toBe(1);
+        expect(body.user_message.data.content).toBe('Starting correction');
+        expect(body.queued).toBeUndefined();
+        expect(f.queued.getQueuedFollowupCount('web:persist-fallback')).toBe(0);
+        expect(getDeferredQueuedFollowups('web:persist-fallback')).toHaveLength(0);
+        expect(f.state.events.filter(event=>event.event==='new_post')).toHaveLength(1);
+        f.channel.consumePendingSteering = () => [];
+        f.channel.saveState = () => {};
+        f.channel.agentPool.getContextUsageForChat = async () => null;
+        f.channel.setContextUsage = () => {};
+        await finalizeSuccessfulProcessChatRun({channel:f.channel,emitter:{status:()=>{}} as any,chatJid:'web:persist-fallback',agentId:'default',turnId:'current',threadId:null,prevCursor:'',recovery:null});
+        expect(f.state.wakes).toBe(1);
+        expect(f.queued.getQueuedFollowupCount('web:persist-fallback')).toBe(0);
+        const pending = getMessagesSince('web:persist-fallback','','Fixture');
+        expect(pending).toHaveLength(1);
+        const selection = selectProcessChatMessage({chatJid:'web:persist-fallback',prevCursor:''});
+        expect(selection.kind).toBe('message');
+        setChatCursor('web:persist-fallback', pending[0].timestamp);
+        expect(getMessagesSince('web:persist-fallback',pending[0].timestamp,'Fixture')).toHaveLength(0);
+        expect(countMessages(f.db,'web:persist-fallback')).toBe(1);
+      }
+      expect(f.state.scheduled).toBe(streaming ? 1 : 0);
     } finally { await queue.shutdown(); }
   });
 });
