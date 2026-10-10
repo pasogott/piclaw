@@ -1063,7 +1063,7 @@ export async function handleAgentMessage(
     !metersCommand &&
     !isSlashCommandInvocation(trimmed) &&
     (isActive || hasQueuedBacklog) &&
-    (requestMode === "queue" || requestMode === "auto" || (!persistSteer && requestMode === "steer"));
+    (requestMode === "queue" || requestMode === "auto" || (requestMode === "steer" && !isStreaming));
 
   if (shouldDeferQueuedFollowup) {
     log.info("Deferring agent message as queued follow-up", {
@@ -1098,7 +1098,7 @@ export async function handleAgentMessage(
   // Ordinary input admitted while idle can become a follow-up while waiting
   // for storage. Decide against fresh in-memory state inside the same commit.
   if (channel.admitUserMessage && !command && !themeCommand && !metersCommand && !isSettingsCommand
-    && !content.trimStart().startsWith('/') && (!persistSteer || requestMode !== 'steer')) {
+    && !content.trimStart().startsWith('/') && (!persistSteer || requestMode !== 'steer' || !isStreaming)) {
     try {
       interaction = await channel.admitUserMessage(chatJid, content, normalized.mediaIds, {
         contentBlocks: normalized.contentBlocks, linkPreviews: normalized.linkPreviews,

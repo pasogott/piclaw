@@ -4,12 +4,6 @@ export function isComposeSteerShortcut(event: { key?: string; ctrlKey?: boolean;
     && !event.shiftKey && !event.altKey && !event.isComposing && !event.repeat && !event.defaultPrevented;
 }
 
-export function composeSubmissionNotice(response: any): string | null {
-  if (response?.queued === 'steer') return 'Steering queued for the current turn.';
-  if (response?.queued === 'followup') return 'Follow-up queued.';
-  return null;
-}
-
 /** A successful HTTP status alone does not prove a prompt was accepted. Never retry automatically. */
 export function requireComposeAcknowledgement(response: any): void {
   // A relay may commit the source but fail forwarding. Restoring it as unsent

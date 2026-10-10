@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { isComposeSteerShortcut, requireComposeAcknowledgement, composeSubmissionNotice } from '../../web/src/ui/compose-submission.js';
+import { isComposeSteerShortcut, requireComposeAcknowledgement } from '../../web/src/ui/compose-submission.js';
 
 test('Ctrl and Cmd Enter explicitly steer, preserving newline/IME/handled/repeated events', () => {
   expect(isComposeSteerShortcut({ key: 'Enter', ctrlKey: true })).toBe(true);
@@ -8,11 +8,6 @@ test('Ctrl and Cmd Enter explicitly steer, preserving newline/IME/handled/repeat
     expect(isComposeSteerShortcut({ key: 'Enter', ctrlKey: true, ...patch })).toBe(false);
   }
   expect(isComposeSteerShortcut({ key: 'Enter' })).toBe(false);
-});
-test('acknowledgement notice distinguishes steering from a safe follow-up fallback', () => {
-  expect(composeSubmissionNotice({queued:'steer'})).toBe('Steering queued for the current turn.');
-  expect(composeSubmissionNotice({queued:'followup'})).toBe('Follow-up queued.');
-  expect(composeSubmissionNotice({thread_id:1})).toBeNull();
 });
 test('queue/steer/durable message and explicit control outcomes confirm acceptance', () => {
   for (const response of [{ queued: 'followup' }, { queued: 'steer' }, { thread_id: 10 }, { user_message: { id: 10 } }, { command: { status: 'success' } }, { ui_only: true }, { source_committed: true }]) {
