@@ -15,6 +15,7 @@ beforeAll(async () => {
   if (!bundle.success) throw new Error(bundle.logs.join('\n'));
   server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
     const path = new URL(req.url).pathname; requests.push(path);
+    if (path === '/fixture.css') return new Response('#styled { color: rgb(17, 34, 51); }', { headers: { 'Content-Type': 'text/css' } });
     if (path === '/fixture.js') return new Response(bundle.outputs[0], { headers: { 'Content-Type': 'text/javascript' } });
     if (path === '/fixture.wasm') return new Response(wasm, { headers: { 'Content-Type': 'application/wasm' } });
     if (path === '/child') return new Response('<p>Same-origin child</p>', { headers: { 'Content-Type': 'text/html' } });
@@ -40,23 +41,23 @@ for (const mode of ['classic', 'visual']) {
       await frame.waitForFunction(() => ['connect-src', 'frame-src', 'script-src'].every(d => (window as any).violations.includes(d)));
       expect(await frame.evaluate(() => (window as any).violations)).toEqual(expect.arrayContaining(['connect-src', 'frame-src', 'script-src']));
       expect(requests).toContain('/fixture.wasm');
+      expect(await frame.locator('#styled').evaluate(el=>getComputedStyle(el).color)).toBe('rgb(17, 34, 51)');
       expect(requests).toContain('/child');
     } finally { await page.close(); }
   }, 15000);
 }
 
-browserTest('static preview still prevents script execution and network access', async () => {
-  const page = await browser.newPage();
-  try {
-    await page.goto(server.url.toString());
-    const widget = { source: 'timeline', kind: 'html', html: '<script>window.ran = true; fetch("/forbidden-static")</script><iframe src="/forbidden-static"></iframe>' };
-    await page.evaluate(({ srcdoc, sandbox }) => {
-      document.body.innerHTML = '';
-      const frame = document.createElement('iframe'); frame.sandbox.value = sandbox; frame.srcdoc = srcdoc; document.body.append(frame);
-    }, { srcdoc: buildWidgetSrcDoc(widget), sandbox: getGeneratedWidgetIframeSandbox(widget) });
-    await page.waitForTimeout(250);
-    const frame = page.frames().find(f => f.parentFrame() === page.mainFrame())!;
-    expect(await frame.evaluate(() => (window as any).ran)).toBeUndefined();
-    expect(requests).not.toContain('/forbidden-static');
-  } finally { await page.close(); }
-}, 15000);
+for (const mode of ["classic","visual"]) browserTest(mode + " static preview prevents script execution and network access", async () => {
+ const page=await browser.newPage();
+ try {
+  const requested:string[]=[];page.on("request",request=>requested.push(new URL(request.url()).pathname));
+  await page.goto(server.url.href + "?mode="+mode+"&static=1");
+  await page.locator("iframe").waitFor();
+  const frame=page.frames().find(f=>f.parentFrame()===page.mainFrame())!;
+  await frame.locator("#styled").waitFor();
+  expect(await frame.evaluate(()=>Boolean((window as any).result))).toBe(false);
+  expect(await page.locator("iframe").getAttribute("sandbox")).toBe("allow-downloads");
+  expect(await frame.locator("#styled").evaluate(el=>getComputedStyle(el).color)).toBe("rgb(17, 34, 51)");
+  expect(requested).not.toContain("/fixture.wasm");expect(requested).not.toContain("/child");
+ }finally{await page.close();}
+},15000);

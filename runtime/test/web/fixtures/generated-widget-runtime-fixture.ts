@@ -20,9 +20,11 @@ addEventListener('securitypolicyviolation', event => violations.push(event.effec
 })().catch(error => { result.error = String(error); result.ready = true; });
 </script>`;
 const mode = new URL(location.href).searchParams.get('mode');
-const widget = { title: 'Runtime fixture', widgetId: 'runtime-fixture', source: 'live', status: 'final', artifact: { kind: 'html', html: content } };
+const source = new URL(location.href).searchParams.get('static') ? 'message' : 'live';
+const styledContent='<link rel="stylesheet" href="/fixture.css"><div id="styled">Styled</div>'+content;
+const widget = { title: 'Runtime fixture', widgetId: 'runtime-fixture', source, status: 'final', artifact: { kind: 'html', html: styledContent } };
 if (mode === 'visual') {
-  renderVisual(h(WidgetPane, { tabMode: true, widgetHtml: content, widgetTitle: 'Runtime fixture' }), document.getElementById('app')!);
+  renderVisual(h(WidgetPane, { tabMode: true, widgetHtml: styledContent, widgetTitle: 'Runtime fixture', widgetSource: source }), document.getElementById('app')!);
 } else {
   render(html`<${FloatingWidgetPane} widget=${widget} onClose=${() => {}} />`, document.getElementById('app')!);
 }

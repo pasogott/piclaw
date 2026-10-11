@@ -19,7 +19,7 @@ export function getGeneratedWidgetCsp(widget: any): string {
   return [
     "default-src 'none'",
     "img-src data: blob: https: http:",
-    "style-src 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
     "font-src 'self' data: https: http:",
     "media-src data: blob: https: http:",
     interactive ? "connect-src 'self'" : "connect-src 'none'",

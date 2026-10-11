@@ -20,3 +20,7 @@ for (const widget of [{ kind: 'html' }, { source: 'live', kind: 'svg' }, { kind:
     expect(getGeneratedWidgetSandbox(widget)).toBe('allow-downloads');
   });
 }
+
+test('same-origin styles remain available for interactive and static widgets', () => {
+  for(const policy of [{source:'live',kind:'html'},{source:'message',kind:'html'}])expect(getGeneratedWidgetCsp(policy)).toContain("style-src 'self' 'unsafe-inline'");
+});
