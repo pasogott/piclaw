@@ -381,3 +381,13 @@ test("runtime stream sessions support cancellation and timeout cleanup", async (
   unsubscribe();
   resetAddonRuntimeContributionsForTests();
 });
+
+test('held or rejected socket disposal does not prevent independent runtime shutdown handlers',async()=>{
+ const {withAddonRegistrationOwner}=await import('../../src/addons/registration-owner');
+ const {registerAuthenticatedWebSocket,reserveAuthenticatedAddonSocket,resetAuthenticatedAddonSocketsForTests}=await import('../../src/addons/authenticated-socket-registry');
+ resetAddonRuntimeContributionsForTests();let release!:()=>void;const held=new Promise<void>(resolve=>{release=resolve;});let cleaned=false;
+ await withAddonRegistrationOwner({addonId:'shutdown-test',packageName:'shutdown-test',entryPath:'test'},async()=>{registerAuthenticatedWebSocket({path:'stream',maxMessageBytes:8,maxQueuedBytes:8,maxSessionMs:1000,maxConnections:1,authorize:async()=>({chatJid:'web:a'}),open:async()=>({message:async()=>{},dispose:async()=>{await held;throw Error('sensitive transcript');}})});});
+ const session=reserveAuthenticatedAddonSocket('/agent/addons/shutdown-test/stream')!.session;await session.open({} as any,{chatJid:'web:a'},{send:async()=>{},close:()=>{}});
+ installAddonRuntimeApi().lifecycle.onShutdown(()=>{cleaned=true;});
+ const stopping=shutdownAddonRuntimeContributionsForTests();await new Promise(resolve=>setTimeout(resolve,0));expect(cleaned).toBe(true);release();await expect(stopping).rejects.toThrow('Authenticated socket shutdown failed.');resetAuthenticatedAddonSocketsForTests();
+});
