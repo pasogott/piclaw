@@ -1,12 +1,14 @@
 import { createVisibleInterval } from '../ui/visible-interval.js';
 import { html, useEffect, useMemo, useRef, useState } from '../vendor/preact-htm.js';
 import { getSystemMetrics } from '../api.js';
-import { AGENT_UI_POLL_MS } from '../ui/agent-ui-snapshot.js';
 import { METERS_COLLAPSED_EVENT_NAME, METERS_EVENT_NAME, applyMetersCollapsed, readStoredMetersCollapsed, readStoredMetersEnabled } from '../ui/meters.js';
 import { renderDisclosureTriangle } from '../ui/disclosure-triangle.js';
 import { buildGpuCompactSummaryParts, GpuDetailsPopover, GpuMeterRows, GpuMeterHistory, getGpuMeterRows } from './intel-gpu-meters.js';
 
 export const SYSTEM_METERS_COMPACT_BREAKPOINT_PX = 600;
+// Match the metrics sampler's cadence. The general UI's 5s poll meets the
+// demand-driven GPU cache's 5s expiry, so every refresh loses VRAM history.
+export const SYSTEM_METERS_POLL_MS = 2000;
 
 function sanitizeSeries(input, maxPoints = 30) {
     const series = Array.isArray(input)
@@ -280,7 +282,7 @@ export function SystemMetersHud({ mode = 'overlay' }) {
         };
 
         void refresh();
-        const stopVisibleInterval = createVisibleInterval(() => { void refresh(); }, AGENT_UI_POLL_MS);
+        const stopVisibleInterval = createVisibleInterval(() => { void refresh(); }, SYSTEM_METERS_POLL_MS);
 
         return () => {
             cancelled = true;
