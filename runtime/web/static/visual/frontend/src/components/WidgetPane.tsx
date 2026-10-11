@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { OverlayShell } from "./OverlayShell";
+import { getGeneratedWidgetCsp } from "../../../../../src/ui/generated-widget-policy";
 
 interface WidgetState {
   html: string;
@@ -36,13 +37,14 @@ const BRIDGE_SCRIPT = `
 <\/script>
 `;
 
-function buildSrcDoc(html: string, title: string): string {
+export function buildSrcDoc(html: string, title: string): string {
   if (!html) return "";
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>${title || "Widget"}</title>
+  <meta http-equiv="Content-Security-Policy" content="${getGeneratedWidgetCsp({ source: 'live', kind: 'html' })}">
+  <title>${(title || "Widget").replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!)}</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     body { margin: 0; padding: 8px; background: #1e1e2e; color: #cdd6f4; font-family: system-ui, sans-serif; font-size: 14px; }
