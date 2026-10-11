@@ -436,3 +436,12 @@ describe("web server lifecycle gateway service", () => {
     await fixture.service.stop();
   });
 });
+
+test('socket disposal failure does not prevent independent gateway services from stopping',async()=>{
+ const {withAddonRegistrationOwner}=await import('../../../src/addons/registration-owner');
+ const {registerAuthenticatedWebSocket,reserveAuthenticatedAddonSocket,resetAuthenticatedAddonSocketsForTests}=await import('../../../src/addons/authenticated-socket-registry');
+ const {service,calls}=createFixture();await service.start();
+ await withAddonRegistrationOwner({addonId:'gateway-stop',packageName:'gateway-stop',entryPath:'test'},async()=>{registerAuthenticatedWebSocket({path:'stream',maxMessageBytes:8,maxQueuedBytes:8,maxSessionMs:1000,maxConnections:1,authorize:async()=>({chatJid:'web:a'}),open:async()=>({message:async()=>{},dispose:async()=>{throw Error('private transcript');}})});});
+ const session=reserveAuthenticatedAddonSocket('/agent/addons/gateway-stop/stream')!.session;await session.open({} as any,{chatJid:'web:a'},{send:async()=>{},close:()=>{}});
+ await expect(service.stop()).rejects.toThrow('Authenticated socket shutdown failed.');expect(calls.sseCloseCalls).toBe(1);expect(calls.uiBridgeStopCalls).toBe(1);expect(calls.terminalShutdownCalls).toBe(1);expect(calls.vncShutdownCalls).toBe(1);expect(service.server).toBeNull();resetAuthenticatedAddonSocketsForTests();
+});

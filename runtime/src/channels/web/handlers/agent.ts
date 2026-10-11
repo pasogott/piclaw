@@ -1759,12 +1759,16 @@ async function processAuthorisedChat(
   let intermediatePersistFailed = false;
   const resolvedThreadRootId = resolveThreadRootId(channel, chatJid, currentMessage.id ?? "", effectiveThreadRootId);
 
-  const preflight = await runProcessChatPreflight({
+  let startupFailure: string | undefined;
+  let preflight: "continue" | "deferred" = "continue";
+  try { preflight = await runProcessChatPreflight({
     channel, chatJid, agentId, message: { id: lastMessage.id, timestamp: lastMessage.timestamp }, prevCursor, effectiveThreadRootId: effectiveThreadRootId ?? null, turnId, runStartedAt, browserObservability,
     streamingHandler: trackedStreamingHandler, compactionState: streamState,
     skipPrePromptCompaction: Boolean(identity) || protectedRecoveryHandoffContext?.reason === "unresolved_tool_execution",
     enqueueResume: (root) => enqueueProcessChatAfterCompaction(channel, chatJid, agentId, lastMessage.id, root, browserObservability),
-  });
+  }); } catch (error) {
+    startupFailure = error instanceof Error ? error.message : "Runtime startup failed.";
+  }
   if (preflight === "deferred") return;
 
   let shouldRemoveStaleProtectedContinuation = false;
@@ -1920,7 +1924,7 @@ async function processAuthorisedChat(
     recovery: streamState.lastRecoveryMeta,
   });
 
-  const output = await withVerifiedAddonMessage(chatJid, currentMessage, () => channel.agentPool.runAgent(prompt, chatJid, {
+  const output = startupFailure ? {status: "error" as const, result: null, error: startupFailure, failureCategory: classifyOpaqueAgentFailure(startupFailure)} : await withVerifiedAddonMessage(chatJid, currentMessage, () => channel.agentPool.runAgent(prompt, chatJid, {
     ...(identity ? {
       executionProvenance: identity.provenance,
       // Narrow initial family conversation tools; global mutators lack owner-scoped entry points.
