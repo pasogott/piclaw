@@ -17,7 +17,7 @@ const standard = rows(openai.split('### Standard pricing data')[1]?.split('\n###
 const openaiRates = standard.map(row => {
   const id = row[0].replace(/\s*\(.*/,'');
   const current = {input:money(row[1]),cr:money(row[2]),cw:money(row[3]),output:money(row[4])};
-  const previous = priorSol.rates.find(rate => rate.provider === 'openai' && rate.id === id) ?? baseline.rates.find(rate => rate.provider === 'openai' && rate.id === id);
+  const previous = baseline.rates.find(rate => rate.provider === 'openai' && rate.id === id) ?? priorSol.rates.find(rate => rate.provider === 'openai' && rate.id === id);
   const old = previous ? {input:previous.input,cr:previous.cr,cw:previous.cw,output:previous.output} : null;
   return {provider:'openai',id,processing:'standard',...current,previous:old,status:old === null ? 'new-coverage' : JSON.stringify(current) === JSON.stringify(old) ? 'unchanged' : 'changed',source:'https://developers.openai.com/api/docs/pricing.md'};
 });

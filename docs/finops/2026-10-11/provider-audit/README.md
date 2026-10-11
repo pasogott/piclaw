@@ -20,8 +20,8 @@ All rates below are **OpenRouter's exact routes**, USD per million tokens. They 
 | `nvidia/nemotron-3-nano-30b-a3b` | $0.06 | $0.24 | Unquoted | Input/output +20%; prior read quote $0.03 is absent |
 | `nvidia/nemotron-3.5-lightning` | $0.07 | $0.20 | $0.04 | Unchanged |
 | `nvidia/nemotron-3.5-content-safety` | $0.20 | $0.20 | Unquoted | Unchanged |
-| `nvidia/nemotron-3-super-120b-a12b` | $0.10 | $0.50 | Unquoted | Unchanged |
-| `nvidia/nemotron-3-ultra-550b-a55b` | $0.50 | $1.50 | Unquoted | Unchanged |
+| `nvidia/nemotron-3-super-120b-a12b` | $0.08 | $0.45 | Unquoted | Unchanged |
+| `nvidia/nemotron-3-ultra-550b-a55b` | $0.60 | $2.40 | $0.12 | Unchanged |
 
 `Unquoted` stays `null` in the data; it never means free caching. Paid and `:free` variants retain distinct IDs and context/availability limits. Trial/free access does not establish unlimited production throughput.
 
@@ -33,7 +33,7 @@ Sources: [OpenRouter models API](https://openrouter.ai/api/v1/models), [NVIDIA t
 
 ## Mistral
 
-Mistral Large 4 remains **$1.36 input / $0.14 cached input / $4.18 output** undiscounted. The 50% launch offer ($0.68 / $0.07 / $2.09) is captured but **excluded from comparison rates**, as Rui requested. No separate write tariff is published. The public preview has received model updates; no capability or price stability is inferred from its name.
+Mistral Large 4 remains **$1.36 input / $0.14 cached input / $4.18 output** undiscounted. The 50% launch offer ($0.68 / $0.07 / $2.09) is captured but **excluded from comparison rates**. No separate write tariff is published. The public preview has received model updates; no capability or price stability is inferred from its name.
 
 The official pricing table now permits these native cached-input quotes to be recorded; the old native snapshot lacked reliable coverage, so these are newly verified entries, not claimed price cuts:
 
