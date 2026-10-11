@@ -112,13 +112,19 @@ export function shouldShowVram(metrics) {
         && sanitizeSeries(metrics?.vram_series).length > 0;
 }
 
-/** Existing aggregate device-memory telemetry has no activity counters. */
+/** Aggregate NVML memory plus optional busiest-device activity. */
 export function resolveGpuMeterSnapshots(metrics) {
     const devices = Array.isArray(metrics?.gpus) ? metrics.gpus : [];
     if (!shouldShowVram(metrics) || devices.some(gpu => gpu?.provider === metrics.gpu_provider)) return devices;
     return [...devices, { id: `memory-${metrics.gpu_provider || 'gpu'}`, name: 'GPU', provider: metrics.gpu_provider || 'device-memory', status: 'ok',
+        busy_percent: optionalPercent(metrics.gpu_busy_percent),
         memory: { used_bytes: Number(metrics.vram_used_bytes), total_bytes: Number(metrics.vram_total_bytes) },
-        history: metrics.vram_series.map(percent => ({ resident_bytes: optionalPercent(percent) === null ? null : Number(metrics.vram_total_bytes) * Number(percent) / 100 })) }];
+        history: Array.from({ length: Math.max(metrics.vram_series.length, metrics.gpu_busy_series?.length || 0) }, (_, index) => {
+            const percent = metrics.vram_series[index - Math.max(0, (metrics.gpu_busy_series?.length || 0) - metrics.vram_series.length)];
+            const busyIndex = index - Math.max(0, metrics.vram_series.length - (metrics.gpu_busy_series?.length || 0));
+            return { resident_bytes: optionalPercent(percent) === null ? null : Number(metrics.vram_total_bytes) * Number(percent) / 100,
+                busy_percent: optionalPercent(metrics.gpu_busy_series?.[busyIndex]) };
+        }) }];
 }
 
 /** Legacy NVIDIA memory transport has no explicit device-removal signal. */
@@ -159,6 +165,8 @@ export function SystemMetersHud({ mode = 'overlay' }) {
         cpu_series: [],
         ram_series: [],
         swap_series: [],
+        gpu_busy_percent: null,
+        gpu_busy_series: [],
         vram_percent: null,
         vram_series: [],
         vram_total_bytes: 0,
@@ -246,6 +254,8 @@ export function SystemMetersHud({ mode = 'overlay' }) {
                     cpu_percent: optionalPercent(next?.cpu_percent),
                     ram_percent: optionalPercent(next?.ram_percent),
                     swap_percent: optionalPercent(next?.swap_percent),
+                    gpu_busy_percent: optionalPercent(next?.gpu_busy_percent),
+                    gpu_busy_series: Array.isArray(next?.gpu_busy_series) ? next.gpu_busy_series.slice(-30).map(optionalPercent) : [],
                     vram_percent: next?.vram_percent !== null && next?.vram_percent !== undefined && Number.isFinite(Number(next.vram_percent)) ? Number(next.vram_percent) : null,
                     cpu_series: clampPercentSeries(next?.cpu_series),
                     ram_series: clampPercentSeries(next?.ram_series),

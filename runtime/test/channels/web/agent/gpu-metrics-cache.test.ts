@@ -52,3 +52,12 @@ test("worker construction failure retries with backoff; wrong request IDs are ig
   const h = setup(); h.cache.read(); h.worker.reply(sample, 999); expect(h.cache.read()).toBeNull();
   h.worker.reply(sample, 1); expect(h.cache.read()).toEqual(sample);
 });
+
+test('invalid optional activity never rejects a valid memory snapshot; zero is valid',()=>{
+ const s=setup();const cache=s.cache;
+ for(const busyPercent of [0,70,null,NaN,-1,101,'70',false]){
+  cache.read();s.worker.reply({...sample,busyPercent});
+  expect(cache.read()).toMatchObject({usedBytes:100,percent:10,busyPercent:typeof busyPercent==='number'&&Number.isFinite(busyPercent)&&busyPercent>=0&&busyPercent<=100?busyPercent:null});s.tick(2000);
+ }
+ cache.dispose();
+});

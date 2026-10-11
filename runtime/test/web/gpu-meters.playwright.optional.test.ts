@@ -105,7 +105,10 @@ run('HUD polling keeps asynchronous GPU telemetry and a continuous VRAM sparklin
    const path = document.querySelector('.intel-gmem path')?.getAttribute('d') || '';
    return path.includes('56.00') && !path.includes('NaN');
   }, null, { timeout: 4500 });
-  await page.waitForTimeout(4200); // Cross the old cache-expiry/poll boundary.
+  // Wait for five actual responses; the first multi-point path can arrive
+  // sooner when optional activity history starts during async discovery.
+  const deadline = Date.now() + 6500;
+  while (pollingResponses.length < 5 && Date.now() < deadline) await page.waitForTimeout(100);
   expect(pollingResponses.length).toBeGreaterThanOrEqual(5);
   expect(pollingResponses[0].vram_percent).toBeNull();
   for (let i = 1; i < pollingResponses.length; i += 1) {
@@ -129,4 +132,29 @@ run('HUD polling keeps asynchronous GPU telemetry and a continuous VRAM sparklin
   pollingSampler = null;
   cache.dispose();
  }
+}, 15000);
+
+for (const [name, engine] of Object.entries({ chromium, webkit })) run(`${name}: NVML activity and VRAM remain independent in desktop and mobile meters`, async () => {
+ const browser = await engine.launch({ headless: true });
+ const page = await browser.newPage({ viewport: { width: 1024, height: 768 } });
+ try {
+  fixture = { gpus: [], gpu_provider: 'nvml', vram_percent: 50, vram_series: [25,50], vram_total_bytes: 4096, vram_used_bytes: 2048,
+   gpu_busy_percent: 0, gpu_busy_series: [70,null,0] };
+  await page.goto(server.url.href);
+  const activity = page.locator('.system-meters-row.intel-gpu');
+  await activity.waitFor();
+  expect(await activity.innerText()).toContain('0%');
+  expect(await activity.locator('path').getAttribute('d')).toContain('M');
+  expect(await page.locator('.system-meters-row.intel-gmem').innerText()).toContain('50%');
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobile = page.locator('.system-meters-compact-gpu.intel-gpu');
+  await mobile.waitFor();
+  expect(await mobile.locator('svg').count()).toBe(1);
+  fixture.gpu_busy_percent = null; fixture.gpu_busy_series = [70,null,0,null];
+  await page.waitForFunction(() => document.querySelector('.system-meters-compact-gpu.intel-gpu')?.textContent?.includes('—'), null, { timeout: 5000 });
+  expect(await page.locator('.system-meters-compact-gpu.intel-gmem').innerText()).toContain('50%');
+  fixture.gpu_busy_percent=100;fixture.gpu_busy_series=[70,null,0,null,100];
+  await page.waitForFunction(() => document.querySelector('.system-meters-compact-gpu.intel-gpu')?.textContent?.includes('100%'), null, { timeout: 5000 });
+  expect(await mobile.locator('path').evaluate(el => getComputedStyle(el).stroke)).toBe('rgb(56, 189, 248)');
+ } finally { await browser.close(); }
 }, 15000);

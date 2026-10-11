@@ -192,3 +192,13 @@ test("handleSystemMetricsRequest includes runtime memory instrumentation when pr
     recovery_exhausted_runs: 14,
   });
 });
+
+test('optional GPU activity has nullable history and survives memory-only telemetry',()=>{
+ let value:any={totalBytes:100,usedBytes:25,percent:25,provider:'nvml',busyPercent:0};
+ const sampler=new SystemMetricsSampler(3,2000,()=>value);
+ expect(sampler.readSnapshot()).toMatchObject({gpu_busy_percent:0,gpu_busy_series:[0],vram_percent:25});
+ value.busyPercent=60;expect(sampler.readSnapshot().gpu_busy_series).toEqual([0,60]);
+ value.busyPercent=null;expect(sampler.readSnapshot()).toMatchObject({gpu_busy_percent:null,gpu_busy_series:[0,60,null],vram_percent:25});
+ expect(sampler.readSnapshot(null,[],false)).toMatchObject({gpu_busy_percent:null,gpu_busy_series:[],vram_percent:null});
+ value.busyPercent=100;expect(sampler.readSnapshot().gpu_busy_series).toEqual([60,null,100]);
+});

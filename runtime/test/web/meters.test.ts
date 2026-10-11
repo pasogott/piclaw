@@ -244,3 +244,14 @@ test('applyMetersFromEvent applies server-persisted enabled and collapsed state'
   expect(readStoredMetersEnabled(false)).toBe(true);
   expect(readStoredMetersCollapsed(false)).toBe(true);
 });
+
+test('aggregate GPU activity adds the GPU row without conflating it with VRAM percent',()=>{
+ const value={gpu_provider:'nvml',gpus:[],vram_percent:50,vram_total_bytes:4096,vram_used_bytes:2048,vram_series:[25,50],gpu_busy_percent:0,gpu_busy_series:[75,null,0]};
+ const [snapshot]=resolveGpuMeterSnapshots(value);
+ expect(snapshot.busy_percent).toBe(0);
+ expect(snapshot.history.map(x=>x.busy_percent)).toEqual([75,null,0]);
+ expect(snapshot.history.map(x=>x.resident_bytes)).toEqual([null,1024,2048]);
+ const [meter]=normalizeGpuSnapshots([snapshot]);expect(meter.rows.busyText).toBe('0%');expect(meter.rows.residentText).toBe('50%');
+ expect(meter.rows.busySparkPath).not.toContain('NaN');
+ const [memoryOnly]=normalizeGpuSnapshots(resolveGpuMeterSnapshots({...value,gpu_busy_percent:null}));expect(memoryOnly.rows.busyPercent).toBeNull();expect(memoryOnly.rows.residentText).toBe('50%');
+});

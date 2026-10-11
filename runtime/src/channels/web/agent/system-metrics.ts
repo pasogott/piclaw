@@ -75,6 +75,8 @@ export interface SystemMetricsSnapshot {
   platform: NodeJS.Platform;
   process_memory: ProcessMemorySnapshot;
   runtime_memory: RuntimeMemorySnapshot | null;
+  gpu_busy_percent: number | null;
+  gpu_busy_series: Array<number | null>;
   vram_percent: number | null;
   vram_series: number[];
   vram_total_bytes: number;
@@ -318,6 +320,7 @@ export class SystemMetricsSampler {
   private ramSeries: number[] = [];
   private swapSeries: number[] = [];
   private vramSeries: number[] = [];
+  private gpuBusySeries: Array<number | null> = [];
   private bufferCacheSeriesBytes: number[] = [];
   private processRssSeriesBytes: number[] = [];
   private processHeapUsedSeriesBytes: number[] = [];
@@ -345,6 +348,12 @@ export class SystemMetricsSampler {
     const ramValue = ramUsage.percent;
     const swapValue = swapUsage ? roundPercent(swapUsage.percent) : null;
     const vramValue = gpuVramUsage ? roundPercent(gpuVramUsage.percent) : null;
+    const rawBusy = gpuVramUsage?.busyPercent;
+    const gpuBusyValue = typeof rawBusy === "number" && Number.isFinite(rawBusy) && rawBusy >= 0 && rawBusy <= 100 ? roundPercent(rawBusy) : null;
+    if (collectGpu) {
+      this.gpuBusySeries.push(gpuBusyValue);
+      if (this.gpuBusySeries.length > this.maxSamples) this.gpuBusySeries.shift();
+    }
     this.cpuSeries = pushSample(this.cpuSeries, cpuValue, this.maxSamples);
     this.ramSeries = pushSample(this.ramSeries, ramValue, this.maxSamples);
     this.swapSeries = swapValue === null ? [] : pushSample(this.swapSeries, swapValue, this.maxSamples);
@@ -367,6 +376,8 @@ export class SystemMetricsSampler {
       cpu_series: [...this.cpuSeries],
       ram_series: [...this.ramSeries],
       swap_series: [...this.swapSeries],
+      gpu_busy_percent: gpuBusyValue,
+      gpu_busy_series: collectGpu ? [...this.gpuBusySeries] : [],
       vram_percent: vramValue,
       vram_series: collectGpu ? [...this.vramSeries] : [],
       vram_total_bytes: gpuVramUsage?.totalBytes ?? 0,
