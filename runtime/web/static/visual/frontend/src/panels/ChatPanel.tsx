@@ -713,7 +713,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
                   type="button"
                   className="chat__send-btn chat__send-btn--steer"
                   onClick={() => sendMessage(true)}
-                  disabled={isSending.value || (!hasText.value && attachments.length === 0)}
+                  disabled={isSending.value || (!hasText.value && attachments.length === 0 && !dictationRef.current?.active)}
                   aria-label="Steer (inject mid-turn)"
                   title="Steer — inject into the current turn (Ctrl/Cmd+Enter)"
                 >
@@ -725,7 +725,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
                   type="button"
                   className="chat__send-btn chat__send-btn--queue"
                   onClick={() => sendMessage()}
-                  disabled={isSending.value || (!hasText.value && attachments.length === 0)}
+                  disabled={isSending.value || (!hasText.value && attachments.length === 0 && !dictationRef.current?.active)}
                   aria-label="Queue message"
                   title="Queue — sent after current turn (Enter)"
                 >
@@ -750,7 +750,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
                 type="button"
                 className="chat__send-btn"
                 onClick={() => { void sendMessage(); }}
-                disabled={isSending.value || (!hasText.value && attachments.length === 0)}
+                disabled={isSending.value || (!hasText.value && attachments.length === 0 && !dictationRef.current?.active)}
                 aria-label={isSending.value ? "Sending..." : "Send message"}
                 title="Send (Enter)"
               >

@@ -90,3 +90,13 @@ for(const[name,engine]of Object.entries({chromium,webkit})) browserTest(`${name}
   await page.evaluate(()=>(window as any).dictationFixture.partial());expect(await page.getByTestId('compose-input').inputValue()).toBe('');expect(await page.locator('.voice-input-btn').count()).toBe(0);
  }finally{await browser.close();}
 },30000);
+
+for(const[name,engine]of Object.entries({chromium,webkit}))for(const skin of ['classic','visual'])browserTest(`${name}/${skin}: Send before first partial awaits final result`,async()=>{
+ const browser=await engine.launch({headless:true});try{
+  const page=await browser.newPage();await page.goto(new URL(skin+'?chat_jid=web:fixture',server.url).href,{waitUntil:'domcontentloaded'});
+  await page.getByRole('button',{name:skin==='classic'?'Voice input':'Speech to text',exact:true}).click();await page.waitForFunction(()=>(window as any).dictationFixture.calls.includes('start'));
+  await page.getByRole('button',{name:'Send message',exact:true}).click();await page.waitForFunction(()=>(window as any).dictationFixture.calls.includes('finish'));
+  expect(await page.evaluate(()=>(window as any).dictationFixture.calls.filter((value:string)=>value.startsWith('send:')))).toEqual([]);await page.evaluate(()=>(window as any).dictationFixture.release());
+  await page.waitForFunction(()=>(window as any).dictationFixture.calls.includes('send:final words'));
+ }finally{await browser.close();}
+},30000);

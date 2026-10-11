@@ -63,3 +63,9 @@ test('queued frame awaiting opening is fenced after close or revocation',async()
   release({message:async()=>{calls++;},dispose:async()=>{}});await expect(frame).rejects.toThrow('unauthorized');await opening;await closing;expect(calls).toBe(0);await session.close();
  }
 });
+
+test('opening deadline aborts immediately but disposes a late handler exactly once',async()=>{
+ let release!:(handler:any)=>void;const held=new Promise<any>(resolve=>{release=resolve;});let disposed=0,released=0;
+ const registration={path:'expiry',maxMessageBytes:8,maxQueuedBytes:8,maxSessionMs:5,maxConnections:1,authorize:async()=>({chatJid:'web:a'}),open:()=>held};const session=new AuthenticatedAddonSocketSession(registration,()=>{released++;});const opening=session.open(principal,{chatJid:'web:a'},{send:async()=>{},close:()=>{}});
+ await new Promise(resolve=>setTimeout(resolve,15));expect(session.signal.aborted).toBe(true);expect(released).toBe(0);release({message:async()=>{},dispose:async()=>{disposed++;}});await opening;await session.close();expect(disposed).toBe(1);expect(released).toBe(1);
+});

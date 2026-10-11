@@ -873,3 +873,8 @@ describe("web agent message handler", () => {
     }
   });
 });
+
+test('/theme acknowledges applied UI change but reports failed timeline delivery without session lookup',async()=>{
+ const broadcasts:any[]=[];const errors:any[]=[];const channel:any={getQueuedFollowupCount:()=>0,agentPool:{isStreaming:()=>false,isActive:()=>false,applySlashCommand:()=>{throw Error('must not hydrate');}},queue:{enqueue:()=>{throw Error('must not queue');}},getLastMessageTimestamp:()=>'',json:(body:any,status=200)=>Response.json(body,{status}),broadcastEvent:(event:any)=>broadcasts.push(event),sendMessage:async()=>{throw Error('synthetic delivery failure');},storeMessage:()=>{throw Error('must not store input');}};
+ const response=await handleAgentMessage(channel,new Request('http://test/agent/message',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({content:'/theme default'})}), '/agent/message');expect(response.status).toBe(200);const body=await response.json();expect(body.ui_only).toBe(true);expect(body.response_delivery).toBe('failed');expect(broadcasts).toContain('ui_theme');
+});

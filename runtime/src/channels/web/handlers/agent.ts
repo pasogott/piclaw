@@ -896,7 +896,7 @@ export async function handleAgentMessage(
     isActive,
     hasQueuedBacklog,
     shouldDefer: false,
-    hasCommand: Boolean(command),
+    hasCommand: Boolean(command || themeCommand),
     contentPreview: content.slice(0, 60),
   });
 
@@ -931,6 +931,7 @@ export async function handleAgentMessage(
       channel.broadcastEvent("ui_theme", { ...uiTheme });
     }
 
+    let themeResponseDelivered = true;
     const formattedThemeMessage = formatOutbound(themeCommand.message, "web");
     if (formattedThemeMessage) {
       try {
@@ -938,6 +939,7 @@ export async function handleAgentMessage(
         // timeline so users can see the theme list/output immediately.
         await channel.sendMessage(chatJid, formattedThemeMessage, { forceRoot: true });
       } catch (error) {
+        themeResponseDelivered = false;
         log.error("Failed to send /theme response", {
           operation: "handle_agent_message.theme_response",
           chatJid,
@@ -947,7 +949,7 @@ export async function handleAgentMessage(
     }
 
     return channel.json(
-      { thread_id: null, command: themeCommand, ui_only: true },
+      { thread_id: null, command: themeCommand, ui_only: true, response_delivery: themeResponseDelivered ? 'persisted' : 'failed' },
       200
     );
   }
@@ -1074,7 +1076,7 @@ export async function handleAgentMessage(
       isActive,
       hasQueuedBacklog,
       shouldDefer: true,
-      hasCommand: Boolean(command),
+      hasCommand: Boolean(command || themeCommand),
       contentPreview: content.slice(0, 60),
     });
 

@@ -30,3 +30,14 @@ test('disconnect during held authorization aborts promptly but retains capacity 
  const {reserveAuthenticatedAddonSocket}=await import('../../src/addons/authenticated-socket-registry');expect(()=>reserveAuthenticatedAddonSocket(route)).toThrow('limit');release();await new Promise(resolve=>setTimeout(resolve,0));
  const reservation=reserveAuthenticatedAddonSocket(route)!;expect(reservation).toBeDefined();await reservation.session.close();remove();
 });
+
+test('socket rejects auth-disabled, internal-style principal, unknown chat and workspace mismatch',async()=>{
+ const auth={isAuthEnabled:()=>true,getPrincipal:()=>principal};
+ await expect(prepareAuthenticatedAddonSocket(request(),path,{...auth,isAuthEnabled:()=>false})).rejects.toThrow('denied');
+ await expect(prepareAuthenticatedAddonSocket(request(),path,{...auth,getPrincipal:()=>({...principal,kind:'local' as const})})).rejects.toThrow('login');
+ for(const target of [{chatJid:'web:unknown'},{chatJid:'web:socket',workspaceId:'client-supplied'}]){
+  storeChatMetadata('web:socket','2026-01-01','socket','web',false);const {getDb}=await import('../../src/db');getDb().run("UPDATE chat_branches SET archived_at=NULL WHERE chat_jid='web:socket'");
+  let remove!:()=>void;await withAddonRegistrationOwner({addonId:'denied',packageName:'denied',entryPath:'test'},async()=>{remove=registerAuthenticatedWebSocket({path:'stream',maxMessageBytes:8,maxQueuedBytes:8,maxSessionMs:1000,maxConnections:1,authorize:async()=>target,open:async()=>({message:async()=>{},dispose:async()=>{}})});});
+  const route='/agent/addons/denied/stream';await expect(prepareAuthenticatedAddonSocket(new Request('https://test.example'+route,{headers:{origin:'https://test.example',upgrade:'websocket'}}),route,auth)).rejects.toThrow('preparation');remove();await new Promise(resolve=>setTimeout(resolve,0));
+ }
+});

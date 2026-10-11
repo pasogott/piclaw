@@ -46,3 +46,26 @@ test('provider-reported error aborts capture and rejects held Send',async()=>{
  await f.controller.start({id:'reported',label:'Reported',availability:()=>({available:true}),start:async c=>{context=c;return{finish:async()=>{await held;return{status:'finished'};},cancel:async()=>{cancels++;}};}});
  const pending=f.controller.submit(async()=>{throw Error('must not send');});context.setState('error');release();await expect(pending).rejects.toThrow('finish');await f.controller.cancel();expect(context.signal.aborted).toBe(true);expect(cancels).toBe(1);expect(f.states.at(-1)).toBe('error');
 });
+
+test('intentional cancellation during held finish stays idle and never sends',async()=>{
+ const f=fixture();let release!:()=>void;const held=new Promise<void>(resolve=>{release=resolve;});let sends=0;
+ await f.controller.start({id:'cancelled',label:'Cancelled',availability:()=>({available:true}),start:async()=>({finish:async()=>{await held;return{status:'finished'};},cancel:async()=>{}})});
+ const pending=f.controller.submit(async()=>{sends++;});await Promise.resolve();await f.controller.cancel();expect(await pending).toBe(false);release();expect(f.states.at(-1)).toBe('idle');expect(sends).toBe(0);
+});
+
+test('finishing during loading never regresses to recording',async()=>{
+ const f=fixture();let release!:(session:any)=>void;const held=new Promise<any>(resolve=>{release=resolve;});let context:any;const starting=f.controller.start({id:'loading',label:'Loading',availability:()=>({available:true}),start:ctx=>{context=ctx;return held;}});
+ const finishing=f.controller.finish();await Promise.resolve();context.setState('recording');context.setState('loading');release({finish:async()=>({status:'finished'}),cancel:async()=>{}});await starting;await finishing;expect(f.states).toEqual(['loading','finishing','idle']);
+});
+
+test('start and finish deadlines retain late cleanup ownership and reject pending Send',async()=>{
+ for(const phase of ['start','finish']){
+  let release!:(session:any)=>void;const held=new Promise<any>(resolve=>{release=resolve;});let cancelled=0,sends=0;const states:string[]=[];
+  const controller=new ComposerDictationController({readDraft:()=>({text:'draft',revision:0,selectionStart:5,selectionEnd:5,chatJid:'web:deadline'}),writeDraft:()=>true,state:state=>states.push(state)},5);
+  const session={finish:async()=>{await held;return{status:'finished' as const};},cancel:async()=>{cancelled++;}};
+  const starting=controller.start({id:'deadline',label:'Deadline',availability:()=>({available:true}),start:async()=>phase==='start'?held:session});
+  if(phase==='start'){await starting;expect(controller.active).toBe(true);release(session);await controller.cancel();}
+  else{await starting;await expect(controller.submit(async()=>{sends++;})).rejects.toThrow('finish');release(session);await controller.cancel();}
+  expect(cancelled).toBe(1);expect(sends).toBe(0);expect(states.at(-1)).toBe('error');
+ }
+});

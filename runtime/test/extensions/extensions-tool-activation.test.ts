@@ -137,7 +137,7 @@ describe("tool-activation extension", () => {
     const tool = fake.tools.get("activate_tools");
     const result = await tool.execute("t1", { names: ["messages", "missing_tool"] });
     expect(result.content[0].text).toContain("1 accepted");
-    expect(result.content[0].text).toContain("same turn");
+    expect(result.content[0].text).toContain("next model step");
     expect(result.details.availability).toBe("same_turn");
     expect(result.details.newlyActivated).toEqual(["messages"]);
     expect(result.details.missing).toEqual(["missing_tool"]);
