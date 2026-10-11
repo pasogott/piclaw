@@ -255,3 +255,10 @@ test('aggregate GPU activity adds the GPU row without conflating it with VRAM pe
  expect(meter.rows.busySparkPath).not.toContain('NaN');
  const [memoryOnly]=normalizeGpuSnapshots(resolveGpuMeterSnapshots({...value,gpu_busy_percent:null}));expect(memoryOnly.rows.busyPercent).toBeNull();expect(memoryOnly.rows.residentText).toBe('50%');
 });
+
+test('aggregate sample identities and resident gaps survive tracker outages and recovery',()=>{
+ const tracker=new GpuSnapshotTracker();const base={gpus:[],vram_percent:25,vram_total_bytes:100,vram_used_bytes:25,vram_series:[25,25,25],gpu_provider:'nvml',gpu_busy_percent:20,gpu_busy_series:[20],gpu_sample_times:[10000],gpu_resident_series:[25]};
+ expect(tracker.resolve(base)[0].sample_time_ms).toBe(10000);
+ const missing=tracker.resolve({...base,vram_percent:null,vram_series:[],gpu_busy_series:[20,null],gpu_sample_times:[10000,12000],gpu_resident_series:[25,null]})[0];expect(missing.sample_time_ms).toBe(12000);expect(missing.history[1]).toEqual({timestamp_ms:12000,busy_percent:null,resident_bytes:null});
+ const recovered=tracker.resolve({...base,vram_percent:50,vram_used_bytes:50,vram_series:[25,25,50],gpu_busy_series:[20,null,60],gpu_sample_times:[10000,12000,14000],gpu_resident_series:[25,null,50]})[0];expect(recovered.history.map(row=>row.resident_bytes)).toEqual([25,null,50]);expect(recovered.history.map(row=>row.timestamp_ms)).toEqual([10000,12000,14000]);
+});

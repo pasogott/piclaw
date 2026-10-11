@@ -7,6 +7,7 @@ export interface GpuVramUsageSnapshot {
   percent: number;
   provider: string;
   busyPercent?: number | null;
+  sampleTimeMs?: number;
 }
 
 export interface GpuMetricsWorker {
@@ -60,6 +61,7 @@ export class GpuMetricsCache {
               const busy = this.snapshot.busyPercent;
               this.snapshot.busyPercent = typeof busy === "number" && Number.isFinite(busy) && busy >= 0 && busy <= 100 ? busy : null;
             }
+            if (this.snapshot) this.snapshot.sampleTimeMs = Date.now();
             this.capturedAt = receivedAt;
             this.nextAt = receivedAt + (this.snapshot ? SAMPLE_MS : RETRY_MS);
           };

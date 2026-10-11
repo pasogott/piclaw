@@ -77,6 +77,8 @@ export interface SystemMetricsSnapshot {
   runtime_memory: RuntimeMemorySnapshot | null;
   gpu_busy_percent: number | null;
   gpu_busy_series: Array<number | null>;
+  gpu_sample_times: number[];
+  gpu_resident_series: Array<number | null>;
   vram_percent: number | null;
   vram_series: number[];
   vram_total_bytes: number;
@@ -321,6 +323,9 @@ export class SystemMetricsSampler {
   private swapSeries: number[] = [];
   private vramSeries: number[] = [];
   private gpuBusySeries: Array<number | null> = [];
+  private gpuSampleTimes: number[] = [];
+  private lastGpuObservation: string | null = null;
+  private gpuResidentSeries: Array<number | null> = [];
   private bufferCacheSeriesBytes: number[] = [];
   private processRssSeriesBytes: number[] = [];
   private processHeapUsedSeriesBytes: number[] = [];
@@ -351,8 +356,15 @@ export class SystemMetricsSampler {
     const rawBusy = gpuVramUsage?.busyPercent;
     const gpuBusyValue = typeof rawBusy === "number" && Number.isFinite(rawBusy) && rawBusy >= 0 && rawBusy <= 100 ? roundPercent(rawBusy) : null;
     if (collectGpu) {
-      this.gpuBusySeries.push(gpuBusyValue);
-      if (this.gpuBusySeries.length > this.maxSamples) this.gpuBusySeries.shift();
+      const rawTime = gpuVramUsage?.sampleTimeMs ?? Math.floor(Date.now() / this.sampleIntervalMs) * this.sampleIntervalMs;
+      const identity = `${gpuVramUsage ? 'native' : 'gap'}:${rawTime}`;
+      if (identity !== this.lastGpuObservation) {
+        this.lastGpuObservation = identity;
+        const observation = Math.max(rawTime, (this.gpuSampleTimes.at(-1) ?? -1) + 1);
+        this.gpuResidentSeries = [...this.gpuResidentSeries, gpuVramUsage?.usedBytes ?? null].slice(-this.maxSamples);
+        this.gpuBusySeries = [...this.gpuBusySeries, gpuBusyValue].slice(-this.maxSamples);
+        this.gpuSampleTimes = [...this.gpuSampleTimes, observation].slice(-this.maxSamples);
+      }
     }
     this.cpuSeries = pushSample(this.cpuSeries, cpuValue, this.maxSamples);
     this.ramSeries = pushSample(this.ramSeries, ramValue, this.maxSamples);
@@ -378,6 +390,8 @@ export class SystemMetricsSampler {
       swap_series: [...this.swapSeries],
       gpu_busy_percent: gpuBusyValue,
       gpu_busy_series: collectGpu ? [...this.gpuBusySeries] : [],
+      gpu_sample_times: collectGpu ? [...this.gpuSampleTimes] : [],
+      gpu_resident_series: collectGpu ? [...this.gpuResidentSeries] : [],
       vram_percent: vramValue,
       vram_series: collectGpu ? [...this.vramSeries] : [],
       vram_total_bytes: gpuVramUsage?.totalBytes ?? 0,

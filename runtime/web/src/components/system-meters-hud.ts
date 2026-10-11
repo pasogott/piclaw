@@ -118,11 +118,13 @@ export function resolveGpuMeterSnapshots(metrics) {
     if (!shouldShowVram(metrics) || devices.some(gpu => gpu?.provider === metrics.gpu_provider)) return devices;
     return [...devices, { id: `memory-${metrics.gpu_provider || 'gpu'}`, name: 'GPU', provider: metrics.gpu_provider || 'device-memory', status: 'ok',
         busy_percent: optionalPercent(metrics.gpu_busy_percent),
+        sample_time_ms: metrics.gpu_sample_times?.at(-1),
         memory: { used_bytes: Number(metrics.vram_used_bytes), total_bytes: Number(metrics.vram_total_bytes) },
-        history: Array.from({ length: Math.max(metrics.vram_series.length, metrics.gpu_busy_series?.length || 0) }, (_, index) => {
-            const percent = metrics.vram_series[index - Math.max(0, (metrics.gpu_busy_series?.length || 0) - metrics.vram_series.length)];
-            const busyIndex = index - Math.max(0, metrics.vram_series.length - (metrics.gpu_busy_series?.length || 0));
-            return { resident_bytes: optionalPercent(percent) === null ? null : Number(metrics.vram_total_bytes) * Number(percent) / 100,
+        history: Array.from({ length: metrics.gpu_sample_times?.length || Math.max(metrics.vram_series.length, metrics.gpu_busy_series?.length || 0) }, (_, index) => {
+            const length = metrics.gpu_sample_times?.length || Math.max(metrics.vram_series.length, metrics.gpu_busy_series?.length || 0);
+            const percent = metrics.vram_series[index + metrics.vram_series.length - length];
+            const busyIndex = index + (metrics.gpu_busy_series?.length || 0) - length;
+            return { timestamp_ms: metrics.gpu_sample_times?.[index], resident_bytes: Array.isArray(metrics.gpu_resident_series) && metrics.gpu_resident_series.length > 0 ? metrics.gpu_resident_series[index] : optionalPercent(percent) === null ? null : Number(metrics.vram_total_bytes) * Number(percent) / 100,
                 busy_percent: optionalPercent(metrics.gpu_busy_series?.[busyIndex]) };
         }) }];
 }
@@ -141,7 +143,9 @@ export class GpuSnapshotTracker {
         else if (this.aggregate && snapshots.some(snapshot => snapshot.provider === this.aggregate.provider)) this.clear();
         else if (this.aggregate) {
             // A failed aggregate read is not proof that the GPU disappeared.
-            this.missing ||= { ...this.aggregate, status: 'unavailable', memory: { total_bytes: this.aggregate.memory.total_bytes }, history: [],
+            const times = metrics?.gpu_sample_times || [];
+            this.missing = { ...this.aggregate, status: 'unavailable', sample_time_ms: times.at(-1) ?? this.aggregate.sample_time_ms, busy_percent: null,
+                memory: { total_bytes: this.aggregate.memory.total_bytes }, history: times.map((timestamp_ms, index) => ({timestamp_ms,busy_percent:metrics.gpu_busy_series?.[index] ?? null,resident_bytes:metrics.gpu_resident_series?.[index] ?? null})),
                 reasons: ['GPU memory telemetry is temporarily unavailable.'] };
             return [...snapshots, this.missing];
         }
@@ -263,6 +267,8 @@ export function SystemMetersHud({ mode = 'overlay' }) {
                     vram_series: Array.isArray(next?.vram_series) ? next.vram_series.slice(-30).map(optionalPercent) : [],
                     vram_total_bytes: optionalBytes(next?.vram_total_bytes),
                     vram_used_bytes: optionalBytes(next?.vram_used_bytes),
+                    gpu_sample_times: Array.isArray(next?.gpu_sample_times) ? next.gpu_sample_times : [],
+                    gpu_resident_series: Array.isArray(next?.gpu_resident_series) ? next.gpu_resident_series : [],
                     gpu_provider: typeof next?.gpu_provider === 'string' && next.gpu_provider.trim() ? next.gpu_provider.trim() : null,
                     gpus: Array.isArray(next?.gpus) ? next.gpus : [],
                     buffer_cache_bytes: Number.isFinite(Number(next?.buffer_cache_bytes)) ? Number(next?.buffer_cache_bytes) : null,
