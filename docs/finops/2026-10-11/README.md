@@ -32,3 +32,7 @@ bun docs/finops/2026-10-11/verify.ts
 ```
 
 Documentation-only update. No runtime, test, configuration, deployment, default-model change, paid inference request or historical usage rewrite.
+
+## Additional provider checks
+
+[OpenAI, Nemotron, Mistral and DeepSeek check](provider-audit/README.md) records the new OpenAI Ultrafast tier, OpenRouter Nemotron Nano's changed price and cache-quote gap, unchanged Mistral Large 4/DeepSeek prices, and newly verified native Mistral coverage. Hosted routes, licences and trial credits remain separate.
