@@ -1,3 +1,5 @@
+import { createDictationComposerBinding } from '../../../../../src/ui/composer-dictation-binding.js';
+import { subscribeDictationProviders } from '../../../../../src/ui/composer-dictation-registry.js';
 import { AgentStatusPanel } from "../components/AgentStatusPanel";
 import { QueueStack, type QueueItem } from "../components/QueueStack";
 import { getMessageUrl, getChatJid } from "../api/chat-jid";
@@ -63,7 +65,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
   if (!feedbackRef.current) feedbackRef.current = new SubmissionFeedback(setSubmissionFeedback);
   useEffect(() => {
     const feedback = feedbackRef.current!;
-    const onChatChange = () => feedback.reset();
+    const onChatChange = () => { feedback.reset(); void dictationRef.current?.cancel(); };
     window.addEventListener('popstate', onChatChange);
     window.addEventListener('piclaw:current-chat-changed', onChatChange);
     return () => { feedback.reset(); window.removeEventListener('popstate', onChatChange); window.removeEventListener('piclaw:current-chat-changed', onChatChange); };
@@ -76,6 +78,14 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounterRef = useRef(0);
   const [isListening, setIsListening] = useState(false);
+  const [, refreshDictationProviders] = useState(0);
+  useEffect(() => subscribeDictationProviders(() => refreshDictationProviders(value => value + 1)), []);
+  const dictationHostRef = useRef<any>(null);
+  dictationHostRef.current = { read: () => ({text: textareaRef.current?.value ?? '', chatJid: getChatJid(), selectionStart: textareaRef.current?.selectionStart ?? 0, selectionEnd: textareaRef.current?.selectionEnd ?? 0}), write: (text: string) => { if (textareaRef.current) textareaRef.current.value = text; draftText.value = text; hasText.value = text.trim().length > 0; }, state: (state: string) => { setIsListening(state === 'recording' || state === 'loading' || state === 'finishing'); if (state === 'error') sendError.value = 'Dictation failed; draft preserved'; } };
+  const dictationRef = useRef<ReturnType<typeof createDictationComposerBinding> | null>(null);
+  if (!dictationRef.current) dictationRef.current = createDictationComposerBinding({read: () => dictationHostRef.current.read(), write: text => dictationHostRef.current.write(text), state: (state, message) => dictationHostRef.current.state(state, message), providerSelected: () => { const native=recognitionRef.current;if(native){recognitionRef.current=null;native.abort?.();setIsListening(false);} }});
+  useEffect(() => { dictationRef.current?.draftChanged(); }, [getChatJid(), draftText.value]);
+  useEffect(() => () => { void dictationRef.current?.dispose(); }, []);
   const [latestState, setLatestState] = useState({ away: false, hasNew: false });
   useEffect(() => { const handler = (event: Event) => { const detail = (event as CustomEvent).detail; if (detail?.scroller?.isConnected) setLatestState({ away: !!detail.away, hasNew: !!detail.hasNew }); }; window.addEventListener('piclaw:timeline-latest-state', handler); return () => window.removeEventListener('piclaw:timeline-latest-state', handler); }, []);
   const recognitionRef = useRef<any>(null);
@@ -132,6 +142,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
   const handleInput = (e: Event) => {
     const el = e.target as HTMLTextAreaElement;
     draftText.value = el.value;
+    dictationRef.current?.draftChanged();
     hasText.value = el.value.trim().length > 0;
     if (el.value === "/") {
       onOpenPalette?.();
@@ -300,6 +311,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
   const hasSpeechSupport = typeof window !== "undefined" && ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
 
   const toggleListening = () => {
+    if (dictationRef.current?.selected) { void dictationRef.current.toggle().catch(() => { sendError.value = 'Dictation failed; draft preserved'; }); return; }
     if (isListening) {
       recognitionRef.current?.stop();
       setIsListening(false);
@@ -316,6 +328,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
     const baseText = textareaRef.current?.value || "";
 
     recognition.onresult = (event: any) => {
+      if(recognitionRef.current!==recognition||dictationRef.current?.selected)return;
       const el = textareaRef.current;
       if (!el) return;
       let interim = "";
@@ -341,6 +354,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
       }
     };
     recognition.onerror = (event: any) => {
+      if(recognitionRef.current!==recognition||dictationRef.current?.selected)return;
       setIsListening(false);
       recognitionRef.current = null;
       const msg = event.error === "not-allowed"
@@ -351,6 +365,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
       window.dispatchEvent(new CustomEvent("piclaw:status-flash", { detail: { message: msg, type: "error" } }));
     };
     recognition.onend = () => {
+      if(recognitionRef.current!==recognition||dictationRef.current?.selected)return;
       // Clean up interim markers
       const el = textareaRef.current;
       if (el) el.value = el.value.replace(/\u200B.*$/, "");
@@ -394,7 +409,12 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
     return () => window.removeEventListener("piclaw:new-message", handler);
   }, [notificationsEnabled]);
 
-  const sendMessage = async (forceSteer = false) => {
+  const sendMessage = async (forceSteer = false, dictationFinished = false) => {
+    if (!dictationFinished && dictationRef.current?.active) {
+      try { await dictationRef.current.submit(async () => { await sendMessage(forceSteer, true); }); }
+      catch { sendError.value = 'Dictation could not finish. Draft preserved; send again explicitly.'; }
+      return;
+    }
     const el = textareaRef.current;
     if (!el || isSending.value) return;
     const content = el.value.trim();
@@ -581,7 +601,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
                 >
                   <i className="codicon codicon-attach" />
                 </button>
-                {hasSpeechSupport && (
+                {(dictationRef.current?.selected || hasSpeechSupport) && (
                   <button
                     type="button"
                     className={`chat__toolbar-btn${isListening ? " chat__toolbar-btn--active" : ""}`}
@@ -729,7 +749,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
               <button
                 type="button"
                 className="chat__send-btn"
-                onClick={sendMessage}
+                onClick={() => { void sendMessage(); }}
                 disabled={isSending.value || (!hasText.value && attachments.length === 0)}
                 aria-label={isSending.value ? "Sending..." : "Send message"}
                 title="Send (Enter)"
