@@ -62,7 +62,11 @@ export class ComposerDictationController {
     this.host.state('loading');
     const acquired = Promise.resolve().then(() => provider.start({
       signal: controller.signal, chatJid: draft.chatJid,
-      setState: state => { if (this.current === owner && !controller.signal.aborted) this.host.state(state); },
+      setState: state => {
+        if(this.current!==owner||controller.signal.aborted)return;
+        if(state==='error'){owner.error='Dictation provider failed. Draft preserved.';void this.cancel();this.host.state('error',owner.error);}
+        else this.host.state(state);
+      },
       updateSegment: update => this.updateSegment(owner, update),
     }));
     void acquired.then(resolve, reject);
@@ -122,6 +126,7 @@ export class ComposerDictationController {
         try {
           const session=await this.bounded(owner.starting,owner.controller.signal);
           const result=await this.bounded(Promise.resolve().then(()=>session.finish()),owner.controller.signal);
+          if (owner.error)throw Error('Dictation provider failed.');
           if (this.current!==owner || owner.controller.signal.aborted) return {status:'cancelled'};
           if (result.status!=='finished') { void this.cancel(); return {status:'cancelled'}; }
           // Provider finish promises include final draft application; callbacks are fenced now.
