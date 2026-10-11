@@ -1,3 +1,5 @@
+import { createDictationComposerBinding } from '../ui/composer-dictation-binding.js';
+import { subscribeDictationProviders } from '../ui/composer-dictation-registry.js';
 import { html, useRef, useState, useEffect, useCallback, useMemo } from '../vendor/preact-htm.js';
 import { useTranslation } from '../utils/i18n.js';
 import { isPopupTypeaheadKey, resolvePopupTypeaheadMatch, updatePopupTypeaheadBuffer } from '../ui/popup-typeahead.js';
@@ -1357,6 +1359,14 @@ export function ComposeBox({
     const sessionTriggerRef = useRef(null);
     const footerRef = useRef(null);
     const popupTypeaheadRef = useRef({ value: '', updatedAt: 0 });
+    const [, refreshDictationProviders] = useState(0);
+    useEffect(() => subscribeDictationProviders(() => refreshDictationProviders(value => value + 1)), []);
+    const dictationHostRef = useRef<any>(null);
+    dictationHostRef.current = {read: () => ({text: textareaRef.current?.value ?? content, chatJid: currentChatJid, selectionStart: textareaRef.current?.selectionStart ?? content.length, selectionEnd: textareaRef.current?.selectionEnd ?? content.length}), write: (text: string) => { if (textareaRef.current) textareaRef.current.value = text; setContent(text); }, state: (state: string) => setSpeechUiState({kind: state === 'recording' || state === 'finishing' ? 'listening' : state === 'loading' ? 'requesting_permission' : state === 'error' ? 'error' : 'idle', title: state === 'error' ? 'Dictation failed; draft preserved' : state === 'finishing' ? 'Finishing dictation' : '', detail: ''})};
+    const dictationRef = useRef<ReturnType<typeof createDictationComposerBinding> | null>(null);
+    if (!dictationRef.current) dictationRef.current = createDictationComposerBinding({read: () => dictationHostRef.current.read(), write: text => dictationHostRef.current.write(text), state: (state, message) => dictationHostRef.current.state(state, message), providerSelected: () => { const native=speechRecognitionRef.current; if(native){speechRecognitionRef.current=null;native.abort?.();clearSpeechUiState();} }});
+    useEffect(() => { dictationRef.current?.draftChanged(); }, [content, currentChatJid]);
+    useEffect(() => () => { void dictationRef.current?.dispose(); }, []);
     const speechRecognitionRef = useRef(null);
     const speechBaseContentRef = useRef('');
     const speechFinalTranscriptRef = useRef('');
@@ -1485,11 +1495,12 @@ export function ComposeBox({
     const canSend = !disabled && (content.trim() || mediaFiles.length > 0 || fileRefs.length > 0 || folderRefs.length > 0 || messageRefs.length > 0);
     const speechUiVisible = speechUiState.kind !== 'idle';
     const speechUiPulsing = speechUiState.kind === 'requesting_permission' || speechUiState.kind === 'listening';
-    const speechButtonVisible = allowSpeech && !searchMode && Boolean(speechSupport?.showButton);
+    const selectedDictationProvider = dictationRef.current?.selected;
+    const speechButtonVisible = allowSpeech && !searchMode && Boolean(selectedDictationProvider || speechSupport?.showButton);
     const speechButtonActive = speechUiState.kind === 'requesting_permission' || speechUiState.kind === 'listening';
     const speechButtonTitle = speechButtonActive
         ? 'Stop voice input'
-        : (speechSupport?.title || 'Voice input');
+        : (selectedDictationProvider ? 'Voice input' : (speechSupport?.title || 'Voice input'));
     const canShareLocation = allowLocation && typeof window !== 'undefined'
         && typeof navigator !== 'undefined'
         && Boolean(navigator.geolocation)
@@ -2181,6 +2192,7 @@ export function ComposeBox({
     }, [clearSpeechUiState]);
 
     const handleSpeechToggle = useCallback(() => {
+        if (dictationRef.current?.selected) { void dictationRef.current.toggle().catch(() => setSubmitError('Dictation could not finish. Draft preserved.')); return; }
         setSubmitError(null);
         setSubmitNotice(null);
 
@@ -2227,6 +2239,7 @@ export function ComposeBox({
             }
 
             recognition.onstart = () => {
+            if(speechRecognitionRef.current!==recognition||dictationRef.current?.selected)return;
                 setSpeechUiState({
                     kind: 'listening',
                     title: 'Listening…',
@@ -2235,6 +2248,7 @@ export function ComposeBox({
             };
 
             recognition.onresult = (event) => {
+            if(speechRecognitionRef.current!==recognition||dictationRef.current?.selected)return;
                 const { finalText, interimText } = extractSpeechRecognitionText(event?.results, event?.resultIndex || 0);
                 if (finalText) {
                     speechFinalTranscriptRef.current = `${speechFinalTranscriptRef.current} ${finalText}`.trim();
@@ -2251,6 +2265,7 @@ export function ComposeBox({
             };
 
             recognition.onerror = (event) => {
+            if(speechRecognitionRef.current!==recognition||dictationRef.current?.selected)return;
                 const errorCode = String(event?.error || '').trim();
                 speechLastErrorRef.current = errorCode;
                 speechRecognitionRef.current = null;
@@ -2267,6 +2282,7 @@ export function ComposeBox({
             };
 
             recognition.onend = () => {
+            if(speechRecognitionRef.current!==recognition||dictationRef.current?.selected)return;
                 const lastError = speechLastErrorRef.current;
                 const pendingStop = speechPendingStopRef.current;
                 const hadTranscript = Boolean(speechFinalTranscriptRef.current.trim() || speechInterimTranscriptRef.current.trim());
@@ -2357,11 +2373,11 @@ export function ComposeBox({
     const handleSpeechButtonPointerDown = (e) => {
         if (e.pointerType === 'mouse') return;
         const currentValue = textareaRef.current?.value ?? (searchMode ? searchText : content);
-        if (!shouldStartSpeechPushToTalk(e, currentValue, {
+        if (!shouldStartSpeechPushToTalk({key:' ',code:'Space',ctrlKey:e.ctrlKey,metaKey:e.metaKey,altKey:e.altKey}, currentValue, {
             searchMode,
             speechButtonVisible,
             speechButtonActive,
-            canStartSpeech: Boolean(speechSupport?.canStart && speechSupport?.recognitionCtor),
+            canStartSpeech: Boolean(selectedDictationProvider || (speechSupport?.canStart && speechSupport?.recognitionCtor)),
         })) return;
         e.preventDefault();
         speechPushToTalkActiveRef.current = true;
@@ -2373,7 +2389,8 @@ export function ComposeBox({
         if (!speechPushToTalkActiveRef.current) return;
         e?.preventDefault?.();
         speechPushToTalkActiveRef.current = false;
-        if (speechRecognitionRef.current) {
+        if(dictationRef.current?.selected)void dictationRef.current.toggle().catch(()=>setSubmitError('Dictation could not finish. Draft preserved.'));
+        else if (speechRecognitionRef.current) {
             stopSpeechRecognition();
         }
     };
@@ -2486,7 +2503,13 @@ export function ComposeBox({
         return isAgentActive ? 'queue' : undefined;
     };
 
-    const handleSubmit = async (overrideContent, submitMode, submitOptions = {}) => {
+    const handleSubmit = async (overrideContent, submitMode, submitOptions: any = {}) => {
+        if (!submitOptions.dictationFinished && dictationRef.current?.active && !/^\/abort\s*$/i.test(String(overrideContent || ''))) {
+            const useFinalDraft = overrideContent == null || overrideContent === (textareaRef.current?.value ?? content);
+            try { await dictationRef.current.submit(async () => { await handleSubmit(useFinalDraft ? (textareaRef.current?.value ?? content) : overrideContent, submitMode, { ...submitOptions, dictationFinished: true }); }); }
+            catch { setSubmitError('Dictation could not finish. Draft preserved; send again explicitly.'); }
+            return;
+        }
         // Client-side interception for UI-only shortcuts.
         const rawInput = typeof overrideContent === 'string' ? overrideContent : content;
         if (allowModelSettings && /^\/settings\s*$/i.test(rawInput.trim())) {
@@ -2814,7 +2837,7 @@ export function ComposeBox({
             searchMode,
             speechButtonVisible,
             speechButtonActive,
-            canStartSpeech: Boolean(speechSupport?.canStart && speechSupport?.recognitionCtor),
+            canStartSpeech: Boolean(selectedDictationProvider || (speechSupport?.canStart && speechSupport?.recognitionCtor)),
         })) {
             e.preventDefault();
             speechPushToTalkActiveRef.current = true;
@@ -2979,7 +3002,8 @@ export function ComposeBox({
         if (shouldStopSpeechPushToTalk(e, speechPushToTalkActiveRef.current)) {
             e.preventDefault();
             speechPushToTalkActiveRef.current = false;
-            if (speechRecognitionRef.current) {
+            if(dictationRef.current?.selected)void dictationRef.current.toggle().catch(()=>setSubmitError('Dictation could not finish. Draft preserved.'));
+            else if (speechRecognitionRef.current) {
                 stopSpeechRecognition();
             }
         }
@@ -3348,6 +3372,7 @@ export function ComposeBox({
 
     useEffect(() => {
         if (!searchMode) return undefined;
+        void dictationRef.current?.cancel();
         if (speechRecognitionRef.current) {
             stopSpeechRecognition();
         }
