@@ -1122,8 +1122,9 @@
     {
       "file": "baseline-2026-09-22.json",
       "url": "https://github.com/rcarmo/piclaw/tree/main/docs/finops/2026-09-22",
-      "provenance": "Preserved historical repository snapshot; not a fresh price quote",
-      "sha256": "ea5e95ee3a82ef572a61bf95f61259bb5c308d99d28f36ee6a3559190c5f274c"
+      "provenance": "Relevant historical rate rows only; full original snapshot remains unchanged in its dated folder",
+      "sha256": "03e288069b3cd508dfa07dbe73da8d7199cb066fd25bfbdbb42587a85c6cc133",
+      "originalSha256": "ea5e95ee3a82ef572a61bf95f61259bb5c308d99d28f36ee6a3559190c5f274c"
     },
     {
       "file": "mistral-baseline-2026-10-06.json",
