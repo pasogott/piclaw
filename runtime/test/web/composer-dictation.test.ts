@@ -40,3 +40,9 @@ test('start and finish failures remain terminal errors after cleanup completes',
   await c.cancel();expect(f.states.at(-1)).toBe('error');
  }
 });
+
+test('provider-reported error aborts capture and rejects held Send',async()=>{
+ const f=fixture();let context:any,release!:()=>void,cancels=0;const held=new Promise<void>(resolve=>{release=resolve;});
+ await f.controller.start({id:'reported',label:'Reported',availability:()=>({available:true}),start:async c=>{context=c;return{finish:async()=>{await held;return{status:'finished'};},cancel:async()=>{cancels++;}};}});
+ const pending=f.controller.submit(async()=>{throw Error('must not send');});context.setState('error');release();await expect(pending).rejects.toThrow('finish');await f.controller.cancel();expect(context.signal.aborted).toBe(true);expect(cancels).toBe(1);expect(f.states.at(-1)).toBe('error');
+});

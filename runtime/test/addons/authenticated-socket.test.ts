@@ -53,3 +53,13 @@ test('transport close failure preserves a single failed cleanup owner',async()=>
  const session=new AuthenticatedAddonSocketSession(registration,()=>{releases++;});await session.open(principal,{chatJid:'web:a'},{send:async()=>{},close:()=>{closes++;throw Error('transport failed');}});
  await expect(session.close()).rejects.toThrow('Authenticated socket cleanup failed.');await expect(session.close()).rejects.toThrow('Authenticated socket cleanup failed.');expect(closes).toBe(1);expect(releases).toBe(0);
 });
+
+test('queued frame awaiting opening is fenced after close or revocation',async()=>{
+ for(const reason of ['close','revoked']){
+  let release!:(value:any)=>void;const held=new Promise<any>(resolve=>{release=resolve;});let calls=0,allowed=true;
+  const registration={path:'stream',maxMessageBytes:8,maxQueuedBytes:8,maxSessionMs:1000,maxConnections:1,authorize:async()=>({chatJid:'web:a'}),open:()=>held};
+  const session=new AuthenticatedAddonSocketSession(registration,()=>{});session.monitorAuthorization(()=>allowed);const opening=session.open(principal,{chatJid:'web:a'},{send:async()=>{},close:()=>{}});const frame=session.message('early');await Promise.resolve();
+  const closing=reason==='close'?session.close():undefined;if(reason==='revoked')allowed=false;
+  release({message:async()=>{calls++;},dispose:async()=>{}});await expect(frame).rejects.toThrow('unauthorized');await opening;await closing;expect(calls).toBe(0);await session.close();
+ }
+});

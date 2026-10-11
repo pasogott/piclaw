@@ -197,7 +197,7 @@ async function shutdownAddonRuntimeContributions(): Promise<void> {
       ]);
       if (result === timeout) log.warn("Add-on runtime shutdown handler timed out", { operation: "runtime_addon_shutdown", handlerIndex: index, timeoutMs: ADDON_RUNTIME_SHUTDOWN_TIMEOUT_MS });
     } catch (error) {
-      log.warn("Add-on runtime shutdown handler failed", { operation: "runtime_addon_shutdown", handlerIndex: index, err: error });
+      log.warn("Add-on runtime shutdown handler failed", { operation: "runtime_addon_shutdown", handlerIndex: index });
     } finally {
       clearTimeout(timer);
     }
@@ -430,7 +430,7 @@ export async function ensureAddonRuntimeEntriesLoaded(): Promise<void> {
   if (lazyRuntimeEntriesLoadPromise) return lazyRuntimeEntriesLoadPromise;
 
   const entries = getInstalledAddonRuntimeEntries().filter((entry) => entry.load === "lazy");
-  lazyRuntimeEntriesLoadPromise = importAddonRuntimeEntries(entries).catch((error) => {
+  lazyRuntimeEntriesLoadPromise = ensureStartupAddonRuntimeEntriesLoaded().then(()=>importAddonRuntimeEntries(entries)).catch((error) => {
     lazyRuntimeEntriesLoadPromise = null;
     throw error;
   });

@@ -28,7 +28,7 @@ export function reserveAuthenticatedAddonSocket(path:string): {registration:Read
 export function hasAuthenticatedAddonSocket(path:string):boolean{return entries.has(path);}
 export function resetAuthenticatedAddonSocketsForTests():void {entries.clear();retired.clear();cleanupFailures.length=0;}
 export async function shutdownAuthenticatedAddonSockets():Promise<void>{
- const sessions=[...new Set([...entries.values(),...retired])].flatMap(entry=>{entry.removed=true;return[...entry.sessions];});entries.clear();
+ const sessions=[...new Set([...entries.values(),...retired])].flatMap(entry=>{entry.removed=true;if(entry.sessions.size)retired.add(entry);return[...entry.sessions];});entries.clear();
  const results=await Promise.allSettled(sessions.map(session=>session.close()));
  const failure=results.find((r):r is PromiseRejectedResult=>r.status==='rejected');if(failure)throw failure.reason;if(cleanupFailures.length)throw cleanupFailures[0];
 }

@@ -27,3 +27,11 @@ test('unregister keeps route capacity reserved until actual disposal finishes',a
  release();await session.close();
  await withAddonRegistrationOwner(owner,async()=>{remove=registerAuthenticatedWebSocket(registration);});remove();
 });
+
+test('concurrent shutdown callers retain held cleanup and block route replacement',async()=>{
+ const {shutdownAuthenticatedAddonSockets}=await import('../../src/addons/authenticated-socket-registry');let release!:()=>void;const held=new Promise<void>(resolve=>{release=resolve;});
+ await withAddonRegistrationOwner(owner,async()=>{registerAuthenticatedWebSocket({...registration,open:async()=>({message:async()=>{},dispose:async()=>{await held;}})});});
+ const session=reserveAuthenticatedAddonSocket('/agent/addons/test-socket/stream')!.session;await session.open({} as any,{chatJid:'web:a'},{send:async()=>{},close:()=>{}});
+ let completed=0;const a=shutdownAuthenticatedAddonSockets().then(()=>{completed++;}),b=shutdownAuthenticatedAddonSockets().then(()=>{completed++;});await Promise.resolve();expect(completed).toBe(0);
+ await withAddonRegistrationOwner(owner,async()=>{expect(()=>registerAuthenticatedWebSocket(registration)).toThrow('Duplicate');});release();await Promise.all([a,b]);expect(completed).toBe(2);
+});

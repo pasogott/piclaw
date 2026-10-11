@@ -16,6 +16,10 @@ export async function prepareAuthenticatedAddonSocket(request:Request,path:strin
  const principal=auth.getPrincipal(request,true);if(!principal||principal.kind!=='user')throw Error('Authenticated socket login required.');
  const reserved=reserveAuthenticatedAddonSocket(path);if(!reserved)throw Error('Authenticated socket route unavailable.');
  const {session,registration}=reserved;
+ const onDisconnect=()=>{void session.close().catch(()=>log.warn('Socket disconnected preparation cleanup failed.',{operation:'addon_socket.request_abort'}));};
+ request.signal.addEventListener('abort',onDisconnect,{once:true});
+ session.signal.addEventListener('abort',()=>request.signal.removeEventListener('abort',onDisconnect),{once:true});
+ if(request.signal.aborted)onDisconnect();
  let scopedTarget: {chatJid:string;incarnation:string;workspaceRoot:string}|undefined;
  const stillValid=()=>{
   const fresh=auth.getPrincipal(request,true);

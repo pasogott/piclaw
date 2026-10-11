@@ -71,7 +71,7 @@ export class AuthenticatedAddonSocketSession {
     if(bytes>this.registration.maxMessageBytes || this.queuedBytes+bytes>this.registration.maxQueuedBytes){void this.close(1009,'Socket input exceeds limits.').catch(error=>log.warn('Socket limit cleanup failed.',{operation:'addon_socket.limit_cleanup'}));return Promise.reject(Error('Socket input exceeds limits.'));}
     const captured=typeof message==='string'?message:message.slice();
     this.queuedBytes+=bytes;
-    const pending=this.queue.then(async()=>{if(this.closed||this.authorized?.()===false)throw Error('Socket closed or unauthorized before dispatch.');const handler=this.handler??await this.opening;if(!handler)throw Error('Socket is not open.');await handler.message(captured);});
+    const pending=this.queue.then(async()=>{if(this.closed||this.authorized?.()===false)throw Error('Socket closed or unauthorized before dispatch.');const handler=this.handler??await this.opening;if(!handler)throw Error('Socket is not open.');if(this.closed||this.authorized?.()===false)throw Error('Socket closed or unauthorized after opening.');await handler.message(captured);});
     this.queue=pending.then(()=>{this.queuedBytes-=bytes;},()=>{this.queuedBytes-=bytes;});
     return pending;
   }
