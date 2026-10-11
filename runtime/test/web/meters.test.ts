@@ -10,7 +10,11 @@ import {
   readStoredMetersEnabled,
   toggleMetersCollapsed,
 } from '../../web/src/ui/meters.ts';
-import { SYSTEM_METERS_COMPACT_BREAKPOINT_PX, buildCompactMetersSummary, buildSparklinePath, formatBytesCompact, resolveCurrentRssBytes, resolveGpuMeterSnapshots, GpuSnapshotTracker, shouldShowRss, shouldShowVram } from '../../web/src/components/system-meters-hud.ts';
+import { SYSTEM_METERS_COMPACT_BREAKPOINT_PX, SYSTEM_METERS_POLL_MS, buildCompactMetersSummary, buildSparklinePath, formatBytesCompact, resolveCurrentRssBytes, resolveGpuMeterSnapshots, GpuSnapshotTracker, shouldShowRss, shouldShowVram } from '../../web/src/components/system-meters-hud.ts';
+
+import { GpuMetricsCache } from '../../src/channels/web/agent/gpu-metrics-cache.ts';
+import { SystemMetricsSampler } from '../../src/channels/web/agent/system-metrics.ts';
+import { normalizeGpuSnapshots } from '../../web/src/components/intel-gpu-meters.ts';
 
 test('legacy NVIDIA aggregate memory remains discoverable through transient reader failure', () => {
     const tracker = new GpuSnapshotTracker();
@@ -167,6 +171,49 @@ test('shouldShowVram requires valid optional GPU memory telemetry', () => {
     vram_series: [],
   })).toBe(false);
 });
+test('meter polling preserves demand-driven GPU samples and VRAM chart history', () => {
+  let now = 0;
+  let requestId = 0;
+  let reads = 0;
+  const worker = {
+    onmessage: null as ((event: MessageEvent) => void) | null,
+    onerror: null as ((event: ErrorEvent) => void) | null,
+    postMessage(message: any) { if (message.type === 'sample') requestId = message.id; },
+  };
+  const cache = new GpuMetricsCache(() => worker, () => now);
+  const sampler = new SystemMetricsSampler(30, SYSTEM_METERS_POLL_MS, () => cache.read());
+  const poll = () => sampler.readSnapshot();
+  const complete = () => {
+    now += 5; // Worker replies after the HTTP snapshot, not synchronously.
+    reads += 1;
+    const usedBytes = reads * 1024;
+    worker.onmessage!({ data: { id: requestId, snapshot: {
+      totalBytes: 4096, usedBytes, percent: usedBytes / 4096 * 100, provider: 'nvml',
+    } } } as MessageEvent);
+  };
+
+  expect(poll().vram_percent).toBeNull(); // Discovery is asynchronous.
+  complete();
+  let lastRequestId = requestId;
+  for (let index = 1; index <= 5; index += 1) {
+    now = index * SYSTEM_METERS_POLL_MS;
+    const metrics = poll();
+    expect(metrics.sample_interval_ms).toBe(SYSTEM_METERS_POLL_MS);
+    expect(metrics.gpu_provider).toBe('nvml');
+    expect(metrics.vram_series).toHaveLength(index);
+    expect(metrics.vram_percent).toBeGreaterThan(0);
+    const [meter] = normalizeGpuSnapshots(resolveGpuMeterSnapshots(metrics), { nowMs: now });
+    expect(meter.rows.residentSparkPath).toContain('L');
+    expect(meter.rows.residentSparkPath).not.toContain('NaN');
+    if (requestId !== lastRequestId) { complete(); lastRequestId = requestId; }
+  }
+  expect(reads).toBeGreaterThan(1);
+  // A genuinely overdue poll must still suppress stale readings.
+  now += 6000;
+  expect(poll().vram_percent).toBeNull();
+  cache.dispose();
+});
+
 test('aggregate non-Intel telemetry supplies a generic GPU memory popup only when enabled and available',()=>{
  const value={gpu_provider:'nvml',gpus:[],vram_percent:50,vram_total_bytes:4096,vram_used_bytes:2048,vram_series:[25,50]};expect(resolveGpuMeterSnapshots(value)).toMatchObject([{name:'GPU',provider:'nvml',memory:{used_bytes:2048,total_bytes:4096}}]);expect(resolveGpuMeterSnapshots({...value,vram_percent:null})).toEqual([]);expect(resolveGpuMeterSnapshots({...value,gpus:[{id:'nvidia0',provider:'nvml'}]})).toHaveLength(1);
 });
