@@ -65,7 +65,7 @@ export class ComposerDictationController {
       setState: state => {
         if(this.current!==owner||controller.signal.aborted)return;
         if(state==='error'){owner.error='Dictation provider failed. Draft preserved.';void this.cancel();this.host.state('error',owner.error);}
-        else this.host.state(state);
+        else if (!owner.finishing || (state !== 'loading' && state !== 'recording')) this.host.state(state);
       },
       updateSegment: update => this.updateSegment(owner, update),
     }));
@@ -73,7 +73,7 @@ export class ComposerDictationController {
     // A late result remains owned by starting; cancellation awaits and disposes it once.
     try {
       await this.bounded(starting, controller.signal);
-      if (this.current === owner && !controller.signal.aborted) this.host.state('recording');
+      if (this.current === owner && !controller.signal.aborted && !owner.finishing) this.host.state('recording');
     } catch {
       const cancelled = controller.signal.aborted;
       controller.abort();
@@ -132,6 +132,7 @@ export class ComposerDictationController {
           // Provider finish promises include final draft application; callbacks are fenced now.
           owner.controller.abort(); this.current=undefined; this.host.state('idle'); return result;
         } catch {
+          if (owner.controller.signal.aborted && !owner.error) return {status:'cancelled'};
           if(this.current===owner){owner.error='Dictation could not finish. Draft preserved; send again explicitly.';void this.cancel();this.host.state('error',owner.error);}
           throw Error('Dictation finish failed.');
         }

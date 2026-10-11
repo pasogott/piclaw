@@ -1492,7 +1492,7 @@ export function ComposeBox({
         setSpeechSupport(allowSpeech ? getSpeechInputSupport() : { showButton: false, canStart: false });
     }, [allowSpeech]);
 
-    const canSend = !disabled && (content.trim() || mediaFiles.length > 0 || fileRefs.length > 0 || folderRefs.length > 0 || messageRefs.length > 0);
+    const canSend = !disabled && (dictationRef.current?.active || content.trim() || mediaFiles.length > 0 || fileRefs.length > 0 || folderRefs.length > 0 || messageRefs.length > 0);
     const speechUiVisible = speechUiState.kind !== 'idle';
     const speechUiPulsing = speechUiState.kind === 'requesting_permission' || speechUiState.kind === 'listening';
     const selectedDictationProvider = dictationRef.current?.selected;

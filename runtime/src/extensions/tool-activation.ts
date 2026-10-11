@@ -123,7 +123,7 @@ const TOOL_ACTIVATION_HINT = [
   "Keep the active tool set small by default.",
   "Discover first: if you are unsure which capability is available, call list_tools with a focused query before activating extra tools.",
   "Use activate_tools to enable only what you need, when you need it.",
-  "Newly activated tools become available immediately to subsequent tool/model steps in the same turn.",
+  "Newly activated tools are available on the next model step of this turn. Never batch activation and use of an inactive tool in the same assistant response; wait for the activation result first.",
   "Use reset_active_tools to return to the default configured tool set.",
 ].join("\n");
 
@@ -259,7 +259,7 @@ function formatActivationSummary(result: ReturnType<typeof applyActiveToolNames>
   if (result.missing.length > 0) {
     lines.push(`Missing tools: ${result.missing.join(", ")}.`);
   }
-  lines.push("Changes apply immediately to subsequent tool/model steps in the same turn.");
+  lines.push("Changes apply on the next model step of this turn. Do not combine activation and use of an inactive tool in one assistant tool-call batch.");
   lines.push("For frequently used or safety-critical tools, prefer the default active baseline or config-defined defaults.");
   return lines.join("\n");
 }

@@ -385,3 +385,8 @@ must resolve `finish()` only after applying its final segments. Failure preserve
 the draft and rejects that pending Send; an explicit later Send can retry. Provider
 finish never submits, clears the draft or controls the host's Send button. Existing
 failed-send draft restoration remains owned by each composer.
+
+The shipped self-contained hook declarations are at
+`piclaw/runtime/public/addon-hooks` (TypeScript bundler resolution). See the
+[connected dictation example](development/dictation-hooks-example.md) for explicit
+opt-in, audio draining, final application and disposal without composer DOM access.

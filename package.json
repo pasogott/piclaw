@@ -23,6 +23,7 @@
     "scripts/postinstall.ts",
     "electrobun.config.ts",
     "runtime/desktop",
+    "runtime/public",
     "runtime/src",
     "runtime/extensions",
     "runtime/skills",
