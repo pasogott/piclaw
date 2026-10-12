@@ -5,6 +5,12 @@ export function isComposeSteerShortcut(event: { key?: string; ctrlKey?: boolean;
 }
 
 /** A successful HTTP status alone does not prove a prompt was accepted. Never retry automatically. */
+/** Accepted UI commands must not be resent when only reply delivery failed. */
+export function getComposeDeliveryNotice(response: any): string | null {
+  return response?.ui_only === true && response?.response_delivery === 'failed'
+    ? 'Command handled, but its timeline reply could not be delivered. Do not resend the command.' : null;
+}
+
 export function requireComposeAcknowledgement(response: any): void {
   // A relay may commit the source but fail forwarding. Restoring it as unsent
   // would encourage a duplicate; its explicit committed receipt is authoritative.

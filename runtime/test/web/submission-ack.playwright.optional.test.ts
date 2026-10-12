@@ -84,6 +84,7 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       requests.push(`${req.method()} ${url.pathname}`);
       let body: unknown;
       if (url.pathname.startsWith('/agent/') && url.pathname.endsWith('/message') && req.method() === 'POST') {
+        if (req.postDataJSON().content === '/theme default') return route.fulfill({json:{ui_only:true,command:{status:'success',message:'Theme set'},response_delivery:'failed'}});
         if (invalidAck) invalidRequests.push(req.postDataJSON().content);
         if (invalidAck === 'json') return route.fulfill({status:201,contentType:'application/json',body:'not json'});
         if (invalidAck === 'empty') return route.fulfill({status:201,json:{}});
@@ -240,6 +241,9 @@ for (const [engineName, engine] of Object.entries({ chromium, webkit })) {
       expect(await input.inputValue()).toBe('Rejected latency probe');
       expect(await page.locator('[data-submission-state]').count()).toBe(0);
       expect(await page.locator('#post-777003,[data-message-id="777003"]').count()).toBe(0);
+      rejectNext=false;await input.fill('/theme default');await waitForSubmitReady();await input.press('Enter');
+      await page.getByText('Command handled, but its timeline reply could not be delivered. Do not resend the command.',{exact:false}).waitFor({timeout:5000});
+      expect(await input.inputValue()).toBe('');expect(accepted).toBe(2);
       expect(errors).toEqual([]);
       expect([...unhandled]).toEqual([]);
     } catch (error) {

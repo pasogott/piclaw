@@ -217,6 +217,7 @@ function applyActiveToolNames(
   requested: string[];
   accepted: string[];
   missing: string[];
+  unavailable: string[];
   alreadyActive: string[];
   newlyActivated: string[];
 } {
@@ -228,15 +229,17 @@ function applyActiveToolNames(
   const next = unique([...base, ...accepted]).filter((name) => allToolNames.has(name));
 
   api.setActiveTools(next);
-
-  const alreadyActive = accepted.filter((name) => activeSet.has(name));
-  const newlyActivated = accepted.filter((name) => !activeSet.has(name));
+  const effective = normalizeToolNamesForPlatform(api.getActiveTools());
+  const unavailable = accepted.filter(name => !effective.includes(name));
+  const alreadyActive = accepted.filter((name) => activeSet.has(name) && effective.includes(name));
+  const newlyActivated = accepted.filter((name) => !activeSet.has(name) && effective.includes(name));
 
   return {
-    activeToolNames: next,
+    activeToolNames: effective,
     requested,
     accepted,
     missing,
+    unavailable,
     alreadyActive,
     newlyActivated,
   };
@@ -259,6 +262,7 @@ function formatActivationSummary(result: ReturnType<typeof applyActiveToolNames>
   if (result.missing.length > 0) {
     lines.push(`Missing tools: ${result.missing.join(", ")}.`);
   }
+  if (result.unavailable.length) lines.push(`Not activated in this execution scope: ${result.unavailable.join(', ')}.`);
   lines.push("Changes apply on the next model step of this turn. Do not combine activation and use of an inactive tool in one assistant tool-call batch.");
   lines.push("For frequently used or safety-critical tools, prefer the default active baseline or config-defined defaults.");
   return lines.join("\n");

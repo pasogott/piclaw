@@ -11,7 +11,7 @@ import { safeGetItem, safeSetItem } from "../utils/storage";
 import { createLogger } from "../utils/logger";
 import { agentDisplayName } from "../api/agent-identity";
 import { SubmissionFeedback, type SubmissionFeedbackState } from '../../../../../src/ui/submission-feedback';
-import { isComposeSteerShortcut, requireComposeAcknowledgement } from '../../../../../src/ui/compose-submission';
+import { isComposeSteerShortcut, requireComposeAcknowledgement, getComposeDeliveryNotice } from '../../../../../src/ui/compose-submission';
 import {
   uploadFileBatch,
   uploadChatAttachment,
@@ -496,6 +496,8 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
 
       const data = await res.json();
       requireComposeAcknowledgement(data);
+      const deliveryNotice = getComposeDeliveryNotice(data);
+      if (deliveryNotice && getChatJid() === submissionChatJid) sendError.value = deliveryNotice;
       // Only clear the submitted draft after confirmed success. Text entered
       // while the request was in flight remains as the next draft.
       const draftChangedDuringSend = el.value.trim() !== content;
@@ -513,7 +515,7 @@ export function ChatPanel({ onOpenPalette }: ChatPanelProps = {}) {
         el.value = "";
         el.style.height = "auto";
       }
-      sendError.value = null;
+      if (!deliveryNotice) sendError.value = null;
       setAttachments([]);
       feedbackRef.current!.acknowledged(feedbackGeneration);
       if (data?.queued === 'followup' || data?.queued === 'steer') {

@@ -27,3 +27,8 @@ test('finish-to-send continuation is fenced by provider removal and chat identit
   const binding=createDictationComposerBinding({read:()=>draft,write:text=>{draft={...draft,text};},state:()=>{}});await binding.toggle();const pending=binding.submit(async()=>{sends++;});finish();await pending.catch(()=>false);expect(sends).toBe(0);await binding.dispose();resetDictationProvidersForTests();
  }
 });
+
+test('programmatic submission shares finishing and preserves the final draft once',async()=>{
+ resetDictationProvidersForTests();let draft={text:'before ',chatJid:'web:a',selectionStart:7,selectionEnd:7};let context:any,release!:()=>void;const held=new Promise<void>(resolve=>{release=resolve;});let sends=0;
+ registerOwnedDictationProvider('a',{id:'a',label:'a',availability:()=>({available:true}),start:async c=>{context=c;return{finish:async()=>{await held;context.updateSegment({segmentId:'one',text:'final',final:true});return{status:'finished'};},cancel:async()=>{}};}});selectOwnedDictationProvider('a','a');const binding=createDictationComposerBinding({read:()=>draft,write:text=>{draft={...draft,text};},state:()=>{}});await binding.toggle();const send=()=>binding.submit(async()=>{sends++;expect(draft.text).toBe('before final');});const first=send();expect(send()).toBe(first);expect(sends).toBe(0);release();expect(await first).toBe(true);expect(sends).toBe(1);await binding.dispose();resetDictationProvidersForTests();
+});

@@ -100,3 +100,12 @@ for(const[name,engine]of Object.entries({chromium,webkit}))for(const skin of ['c
   await page.waitForFunction(()=>(window as any).dictationFixture.calls.includes('send:final words'));
  }finally{await browser.close();}
 },30000);
+
+for(const[name,engine]of Object.entries({chromium,webkit}))for(const skin of ['classic','visual'])for(const theme of ['light','dark'])browserTest(`${name}/${skin}/${theme}: steering shortcut waits final draft`,async()=>{
+ const browser=await engine.launch({headless:true});try{
+  const page=await browser.newPage();await page.goto(new URL(skin+'?chat_jid=web:fixture',server.url).href,{waitUntil:'domcontentloaded'});await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;document.documentElement.style.colorScheme=theme;},theme);
+  await page.getByRole('button',{name:skin==='classic'?'Voice input':'Speech to text',exact:true}).click();await page.waitForFunction(()=>(window as any).dictationFixture.calls.includes('start'));
+  const input=page.locator(skin==='classic'?'[data-testid="compose-input"]':'.chat__input');await input.focus();await page.keyboard.press('Control+Enter');await page.waitForFunction(()=>(window as any).dictationFixture.calls.includes('finish'));
+  expect(await page.evaluate(()=>(window as any).dictationFixture.calls.filter((value:string)=>value.startsWith('send:')))).toEqual([]);await page.evaluate(()=>(window as any).dictationFixture.release());await page.waitForFunction(()=>(window as any).dictationFixture.calls.includes('send:final words'));
+ }finally{await browser.close();}
+},30000);
