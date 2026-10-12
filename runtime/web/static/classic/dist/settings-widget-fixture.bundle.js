@@ -1577,6 +1577,7 @@ ${D}`;if(!window.confirm(_))return;if(H&&!window.confirm(n("settings.tasks.confi
                                 <td class="settings-keychain-env">${N.envVar?u`<code>$${N.envVar}</code>`:"—"}</td>
                                 <td class="settings-keychain-date">${Op(N.updatedAt)}</td>
                                 <td class="settings-keychain-actions">
+                                    <div class="settings-keychain-action-group">
                                     <button ref=${(X)=>{if(X)r.current.set(N.name,X);else r.current.delete(N.name)}} aria-label=${`${be?t("settings.keychain.hideSecret"):t("settings.keychain.revealSecret")}: ${N.name}`} aria-expanded=${Boolean(W)} class=${`settings-keychain-reveal-btn${be?" active":""}`}
                                         onClick=${()=>he(N.name)}
                                         title=${be?t("settings.keychain.hideSecret"):t("settings.keychain.revealSecret")}>
@@ -1588,6 +1589,7 @@ ${D}`;if(!window.confirm(_))return;if(H&&!window.confirm(n("settings.tasks.confi
                                                 <button class="settings-keychain-confirm-no" onClick=${()=>{m("delete",N.name),ne(null)}}>${t("settings.keychain.no")}</button>
                                             </span>
                                         `:u`<button ref=${(X)=>{if(X)a.current.set(N.name,X);else a.current.delete(N.name)}} aria-label=${`Delete ${N.name}`} class="settings-keychain-delete-btn" onClick=${()=>ne(N.name)} title=${t("settings.keychain.deleteTitle")}>🗑</button>`}
+                                    </div>
                                 </td>
                             </tr>
                             <tr class="settings-keychain-notes-row" key=${N.name+"-notes"}>
@@ -2005,5 +2007,5 @@ ${D}`;if(!window.confirm(_))return;if(H&&!window.confirm(n("settings.tasks.confi
     </div>
   `}function Cm(){wm(),xm(),$m();let e=new URLSearchParams(window.location.search);Vl(e.get("section")||"general");let t=document.getElementById("settings-widget-fixture-root")||document.body.appendChild(document.createElement("div"));t.id="settings-widget-fixture-root",Mt(u`<${Sm} />`,t),window.piclawWidget?.ready?.({title:"Settings fixture",mockMode:Zt})}Cm();
 
-//# debugId=E3F16038E40A5F6464756E2164756E21
+//# debugId=54BC737D1A10909564756E2164756E21
 //# sourceMappingURL=settings-widget-fixture.bundle.js.map
