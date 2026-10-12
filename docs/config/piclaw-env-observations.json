@@ -87,7 +87,7 @@
       "semanticReaderOccurrences": 71
     },
     "docsDeploy": {
-      "referencedNames": 149,
+      "referencedNames": 147,
       "directReaderNames": 16,
       "directReaderOccurrences": 32,
       "helperReaderNames": 0,
@@ -796,22 +796,6 @@
       }
     },
     {
-      "name": "PICLAW_BUILD_EXPERIMENTAL_DESKTOP",
-      "scopes": {
-        "docsDeploy": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            ".github/workflows/publish.yml",
-            "docs/release.md"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
       "name": "PICLAW_CHAT_JID",
       "scopes": {
         "docsDeploy": {
@@ -1367,21 +1351,6 @@
           "files": [
             "runtime/src/core/config-sources.ts",
             "runtime/src/core/config-web.ts"
-          ],
-          "readerFiles": []
-        }
-      }
-    },
-    {
-      "name": "PICLAW_DESKTOP_URL",
-      "scopes": {
-        "docsDeploy": {
-          "referenced": true,
-          "directReaders": 0,
-          "helperReaders": 0,
-          "semanticReaders": 0,
-          "files": [
-            "docs/desktop.md"
           ],
           "readerFiles": []
         }
@@ -7907,7 +7876,6 @@
             ".github/workflows/e2e.yml",
             "docs/azure/README.md",
             "docs/configuration.md",
-            "docs/desktop.md",
             "skel/.pi/skills/bootstrap-container/SKILL.md",
             "skel/.pi/skills/bootstrap-container/bootstrap-container.sh",
             "skel/.pi/skills/situate-daily-notes/agent-memory-sidecar.ts",

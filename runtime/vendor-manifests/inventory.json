@@ -4,8 +4,8 @@
   "files": [
     {
       "path": "runtime/extensions/viewers/editor/vendor/codemirror.js",
-      "bytes": 1413631,
-      "sha256": "c96806050d7a1e33ef1c119528e9df8251d7f83f6edd48efff9b3dadc161df26",
+      "bytes": 1413945,
+      "sha256": "4f8db5d98c9ca84afb6d4a94cf45ae03eb9a1869a8b4533f3bd10e1021d14b94",
       "manifests": [
         "runtime/vendor-manifests/codemirror-editor.json"
       ],
@@ -300,8 +300,8 @@
     },
     {
       "path": "runtime/web/static/common/js/marked.min.js",
-      "bytes": 42623,
-      "sha256": "94ee39ac79f7ac39a7fdfb4dc5d166c6f7902b69b33adf13a7e8c41cf7e85ff6",
+      "bytes": 45950,
+      "sha256": "5c024edb6e86d06c2768c90f401054a828600fc8fe1e8367825f867a97d76501",
       "manifests": [
         "runtime/vendor-manifests/marked-global.json"
       ],
@@ -398,14 +398,14 @@
     {
       "path": "runtime/web/static/common/js/vendor/katex.meta.json",
       "bytes": 1101,
-      "sha256": "691e08f25735e40ebd16fd9cd823338d1848b99b124f4c6bad13347e9fc70468",
+      "sha256": "ae8689cdd6b8422620982a31b7f1aa84595d3656b88ea9bfae71295f7a22bce4",
       "manifests": [],
       "provenance": "unrecorded"
     },
     {
       "path": "runtime/web/static/common/js/vendor/katex.min.js",
-      "bytes": 273969,
-      "sha256": "420b6c6c16a4d734fc2f367ab67691525489d6cdf481192ec76af3058aa9058e",
+      "bytes": 274626,
+      "sha256": "acfa2a4555ec7b94c63346ae74816b9a70722b614a3fb0e18af01be511e3c179",
       "manifests": [
         "runtime/vendor-manifests/katex-global.json"
       ],
@@ -413,8 +413,8 @@
     },
     {
       "path": "runtime/web/static/common/js/vendor/preact-htm.js",
-      "bytes": 15837,
-      "sha256": "455e401d1a382ddc361f20cc9b7d95a2abc7be805f3c0fc61b94c9a2e030b977",
+      "bytes": 16021,
+      "sha256": "263d372b74351afd74e1633debcde5dd4f93750e00f27a3405342fed68370d95",
       "manifests": [
         "runtime/vendor-manifests/preact-htm.json"
       ],
@@ -422,8 +422,8 @@
     },
     {
       "path": "runtime/web/static/common/js/vendor/preact-htm.meta.json",
-      "bytes": 1155,
-      "sha256": "c22cf64681a7e1d1f4e13c02539000a717d408515d8c57500fac62ca0af4d002",
+      "bytes": 1207,
+      "sha256": "0eb81645a479196c31e5b0bab95ea6974c406a4c25ac7fec5e53e585a3725c53",
       "manifests": [],
       "provenance": "unrecorded"
     },
