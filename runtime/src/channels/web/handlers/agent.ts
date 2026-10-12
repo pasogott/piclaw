@@ -937,7 +937,7 @@ export async function handleAgentMessage(
       try {
         // Keep /theme purely UI-scope but still surface the command output to the
         // timeline so users can see the theme list/output immediately.
-        await channel.sendMessage(chatJid, formattedThemeMessage, { forceRoot: true });
+        await channel.sendMessage(chatJid, formattedThemeMessage, { forceRoot: true, requirePersistence: true });
       } catch (error) {
         themeResponseDelivered = false;
         log.error("Failed to send /theme response", {

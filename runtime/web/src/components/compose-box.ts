@@ -5,7 +5,7 @@ import { useTranslation } from '../utils/i18n.js';
 import { isPopupTypeaheadKey, resolvePopupTypeaheadMatch, updatePopupTypeaheadBuffer } from '../ui/popup-typeahead.js';
 import { getAgentModels, sendAgentMessage } from '../api.js';
 import { SubmissionFeedback, type SubmissionFeedbackState } from '../ui/submission-feedback.js';
-import { isComposeSteerShortcut, requireComposeAcknowledgement } from '../ui/compose-submission.js';
+import { isComposeSteerShortcut, requireComposeAcknowledgement, getComposeDeliveryNotice } from '../ui/compose-submission.js';
 import { uploadFileBatch, uploadChatAttachment } from '../ui/upload-transfers.js';
 import { getLocalStorageItem, setLocalStorageItem } from '../utils/storage.js';
 import { buildMentionValue, filterMentionAgents, parseMentionAutocompleteQuery } from '../ui/agent-mentions.js';
@@ -2676,6 +2676,8 @@ export function ComposeBox({
                 setUploadProgress(null);
                 const response = await sendMessage('default', message, null, mediaIds, resolveSubmitMode(submitMode), submissionChatJid);
                 requireComposeAcknowledgement(response);
+                const deliveryNotice = getComposeDeliveryNotice(response);
+                if (deliveryNotice && currentChatJidRef.current === submissionChatJid) setSubmitError(deliveryNotice);
                 onMessageResponse?.(response);
                 if (feedbackGeneration !== null) {
                     if (response?.command?.status === 'error') feedbackRef.current!.failed(feedbackGeneration);

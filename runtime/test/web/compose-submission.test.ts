@@ -22,3 +22,7 @@ test('empty or rejected successful HTTP payloads do not silently consume a draft
     expect(() => requireComposeAcknowledgement(response)).toThrow();
   }
 });
+
+test('accepted UI command with failed reply delivery remains accepted and has an explicit notice',async()=>{
+ const {getComposeDeliveryNotice}=await import('../../web/src/ui/compose-submission');const response={ui_only:true,command:{status:'success'},response_delivery:'failed'};expect(()=>requireComposeAcknowledgement(response)).not.toThrow();expect(getComposeDeliveryNotice(response)).toBe('Command handled, but its timeline reply could not be delivered. Do not resend the command.');expect(getComposeDeliveryNotice({...response,response_delivery:'persisted'})).toBeNull();
+});
