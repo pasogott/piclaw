@@ -87,7 +87,7 @@
       "semanticReaderOccurrences": 71
     },
     "docsDeploy": {
-      "referencedNames": 147,
+      "referencedNames": 148,
       "directReaderNames": 16,
       "directReaderOccurrences": 32,
       "helperReaderNames": 0,
@@ -2325,6 +2325,16 @@
     {
       "name": "PICLAW_INTEGRATION_TIMEOUT_SEC",
       "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            ".github/workflows/integration-gate.yml"
+          ],
+          "readerFiles": []
+        },
         "tooling": {
           "referenced": true,
           "directReaders": 1,
