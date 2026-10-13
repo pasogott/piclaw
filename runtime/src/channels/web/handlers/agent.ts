@@ -875,7 +875,8 @@ export async function handleAgentMessage(
 
   const queueDeferredSteer = async (steerContent: string, source?: string): Promise<Response | null> => {
     if (!isStreaming) return null;
-    const steerResult = await channel.agentPool.queueStreamingMessage(chatJid, steerContent, "steer");
+    const steerResult = await channel.agentPool.queueStreamingMessage(chatJid, steerContent, "steer",
+      internalAuthority ? { validate: revalidateInputAuthority, signal: req.signal } : undefined);
     if (!steerResult.queued) return null;
     const queuedAt = new Date().toISOString();
     channel.broadcastEvent("agent_steer_queued", {
@@ -1126,6 +1127,8 @@ export async function handleAgentMessage(
       return channel.json({ error: 'Input admission could not be confirmed.' }, 503);
     }
   } else {
+    // Legacy synchronous storage still needs the host fence after async parsing/attachments.
+    revalidateInputAuthority();
     interaction = storeAgentUserMessage(channel, chatJid, {
       content, mediaIds: normalized.mediaIds, contentBlocks: normalized.contentBlocks,
       linkPreviews: normalized.linkPreviews, threadId: normalized.threadId, screenHint: normalized.screenHint,

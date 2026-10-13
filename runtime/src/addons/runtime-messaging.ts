@@ -1,6 +1,8 @@
 /** Safe runtime implementation for the versioned add-on messaging ABI. */
 
+import { listAddonLocalTargets } from "./local-context.js";
 import type {
+  AddonAdvertisableSession,
   AddonAdvertisableAgent,
   AddonAuthenticatedPeerSource,
   AddonMessagingRuntimeHandlers,
@@ -126,6 +128,8 @@ function resolveTarget(
     throw new Error("Provide exactly one of target_agent_name or target_chat_jid.");
   }
 
+  const incarnation = input?.target_incarnation === undefined
+    ? undefined : requiredString(input.target_incarnation, "target_incarnation");
   const known = knownWebChats(options);
   const found = targetChatJid
     ? known.find((chat) => chat.chat_jid === targetChatJid) ?? null
@@ -141,11 +145,15 @@ function resolveTarget(
     })();
 
   if (!found?.agent_name) return { resolution: { status: "not_found" } };
+  const persisted = incarnation === undefined ? undefined
+    : listAddonLocalTargets().find(target => target.chatJid === found.chat_jid && target.incarnation === incarnation);
+  if (incarnation !== undefined && !persisted) return { resolution: { status: "not_found" } };
   return {
     resolution: {
       status: "resolved",
       target_agent_name: found.agent_name,
       active: Boolean(found.is_active),
+      ...(persisted ? { incarnation: persisted.incarnation } : {}),
     },
     chat: found,
   };
@@ -228,6 +236,11 @@ export function createAddonMessagingRuntimeHandlers(options: AddonMessagingRunti
       }));
     },
 
+    listAdvertisableSessions(): AddonAdvertisableSession[] {
+      requireSingleUserAddonMessaging();
+      return listAddonLocalTargets().map(({ chatJid, agentName, incarnation, active }) => ({ chatJid, agentName, incarnation, active }));
+    },
+
     resolveLocalTarget(input): AddonMessagingTargetResolution {
       requireSingleUserAddonMessaging();
       return resolveTarget(options, input).resolution;
@@ -235,12 +248,24 @@ export function createAddonMessagingRuntimeHandlers(options: AddonMessagingRunti
 
     async deliverPeerMessage(input: AddonPeerMessageDeliveryRequest): Promise<RuntimeAgentMessageResult> {
       requireSingleUserAddonMessaging();
+      input?.signal?.throwIfAborted();
       const attachments = normalizePeerAttachments(input?.attachments);
       const body = messageContent(input?.content, attachments.length > 0);
       const resolved = resolveTarget(options, input);
       if (resolved.resolution.status !== "resolved" || !resolved.chat) {
         throw new Error("Peer-message target was not found.");
       }
+      const targetChatJid = resolved.chat.chat_jid;
+      const targetIncarnation = resolved.resolution.incarnation;
+      const admission = targetIncarnation === undefined ? undefined : {
+        validate: () => {
+          requireSingleUserAddonMessaging();
+          input.signal?.throwIfAborted();
+          if (!listAddonLocalTargets().some(target => target.chatJid === targetChatJid && target.incarnation === targetIncarnation)) {
+            throw new Error("Peer-message target lifetime changed before admission.");
+          }
+        },
+      };
       const block = buildPeerMessageBlock({ source: input.source, target: resolved.chat, body });
       const mediaIds: number[] = [];
       try {
@@ -263,6 +288,8 @@ export function createAddonMessagingRuntimeHandlers(options: AddonMessagingRunti
         }));
         return await options.enqueueAgentMessage({
           chatJid: resolved.chat.chat_jid,
+          ...(admission ? { admission } : {}),
+          ...(input.signal ? { signal: input.signal } : {}),
           content: buildForwardedContent(input.source, resolved.chat, body),
           contentBlocks: [block, ...attachmentBlocks],
           ...(mediaIds.length ? { mediaIds } : {}),
