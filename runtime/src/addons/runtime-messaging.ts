@@ -99,14 +99,20 @@ function normalizeMode(value: unknown): "auto" | "queue" | "steer" {
   return value === "steer" || value === "auto" || value === "queue" ? value : "queue";
 }
 
-function uniqueKnownWebChats(options: AddonMessagingRuntimeOptions): KnownChat[] {
-  const byAgentName = new Map<string, KnownChat>();
+function knownWebChats(options: AddonMessagingRuntimeOptions): KnownChat[] {
+  const result: KnownChat[] = [];
   for (const chat of options.listKnownChats()) {
     const chatJid = typeof chat?.chat_jid === "string" ? chat.chat_jid.trim() : "";
     const agentName = normalizeAgentName(chat?.agent_name);
     if (!chatJid.startsWith("web:") || !agentName || chat.archived_at) continue;
-    if (!byAgentName.has(agentName)) byAgentName.set(agentName, { ...chat, chat_jid: chatJid, agent_name: agentName });
+    result.push({ ...chat, chat_jid: chatJid, agent_name: agentName });
   }
+  return result;
+}
+
+function uniqueKnownWebChats(options: AddonMessagingRuntimeOptions): KnownChat[] {
+  const byAgentName = new Map<string, KnownChat>();
+  for (const chat of knownWebChats(options)) if (!byAgentName.has(chat.agent_name)) byAgentName.set(chat.agent_name, chat);
   return [...byAgentName.values()].sort((a, b) => a.agent_name.localeCompare(b.agent_name));
 }
 
@@ -120,7 +126,7 @@ function resolveTarget(
     throw new Error("Provide exactly one of target_agent_name or target_chat_jid.");
   }
 
-  const known = uniqueKnownWebChats(options);
+  const known = knownWebChats(options);
   const found = targetChatJid
     ? known.find((chat) => chat.chat_jid === targetChatJid) ?? null
     : (() => {
