@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { dirname, resolve } from "node:path";
-for (const mode of ["refresh-permanent", "refresh-transient", "malformed-storage", "refresh-retry-success"]) {
+for (const mode of ["refresh-permanent", "refresh-transient", "malformed-storage", "storage-eacces", "storage-elocked", "unknown-resolution", "missing-config", "refresh-retry-success"]) {
   test(`public runtime credential error isolation: ${mode}`, async () => {
     const child = Bun.spawn([process.execPath, "--no-env-file", "--preload", resolve(import.meta.dir, "../setup-filesystem-isolation.ts"), resolve(import.meta.dir, "fixtures/provider-auth-stream-errors-110.ts"), mode], {
       env: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: "/nonexistent", PI_OFFLINE: "1", PI_TELEMETRY: "0", OTEL_SDK_DISABLED: "true" }, stdout: "pipe", stderr: "pipe",
