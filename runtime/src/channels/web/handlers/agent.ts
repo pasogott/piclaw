@@ -297,6 +297,16 @@ function buildErrorOutcomeMarker(
   if (category === "rate_limit") {
     return buildTurnOutcomeMarker({ ...common, kind: "provider", label: "rate limit", title: "Provider retry budget exhausted", severity: "warning" });
   }
+  if (category === "credential_storage") {
+    return buildTurnOutcomeMarker({
+      ...common,
+      kind: "error",
+      label: "credentials",
+      title: "Credentials could not be read/resolved; local storage/configuration needs attention",
+      detail: "Credentials could not be read/resolved; local storage/configuration needs attention",
+      severity: options.severity ?? "error",
+    });
+  }
   if (category === "auth_config") {
     return buildTurnOutcomeMarker({
       ...common,
