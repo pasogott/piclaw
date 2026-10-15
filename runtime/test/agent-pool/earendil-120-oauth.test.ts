@@ -6,8 +6,10 @@ const version = createRequire(import.meta.url)("@earendil-works/pi-mcp/package.j
 const serverUrl = "https://mcp.example.invalid/mcp", issuer = "https://auth.example.invalid";
 const metadata: AuthorizationServerMetadata = { issuer, authorization_endpoint: issuer + "/authorize", token_endpoint: issuer + "/token", registration_endpoint: issuer + "/register", response_types_supported: ["code"], code_challenge_methods_supported: ["S256"], client_id_metadata_document_supported: true };
 const document = { url: "https://client.example.invalid/document.json", redirectUrl: "http://127.0.0.1:1234/callback/synthetic" };
-let originalFetch: typeof fetch, externalAttempts = 0;
-beforeAll(() => { expect(version).toBe("1.1.0"); originalFetch = globalThis.fetch; const deny = () => { externalAttempts++; throw Error("external network forbidden"); }; globalThis.fetch = Object.assign(deny, { preconnect: deny }) as typeof fetch; });
+// Capture before setup assertions: Bun still runs afterAll when beforeAll fails.
+const originalFetch = globalThis.fetch;
+let externalAttempts = 0;
+beforeAll(() => { expect(version).toBe("1.2.0"); const deny = () => { externalAttempts++; throw Error("external network forbidden"); }; globalThis.fetch = Object.assign(deny, { preconnect: deny }) as typeof fetch; });
 afterAll(() => { globalThis.fetch = originalFetch; expect(externalAttempts).toBe(0); });
 async function fixture(options: { stored?: boolean; document?: boolean; declineDocument?: boolean; meta?: AuthorizationServerMetadata | undefined; invalidDocument?: string; failStore?: boolean; failTokenStore?: boolean } = {}) {
   const stateStore = new MemoryOAuthStateStore(); let fail = false;
@@ -78,6 +80,6 @@ test("token-store failure after successful exchange rejects without persisting t
   expect(f.calls).toEqual([issuer + "/token"]); expect(f.stateStore.load()?.tokens).toBeUndefined(); expect(f.redirects).toEqual([]);
 });
 
-for(const [redirect,expected]of [['http://127.0.0.1:1234/callback','native'],['http://localhost:1234/callback','native'],['piclaw-fixture:/callback','native'],['https://example.invalid/callback','web']]as const)test('1.1.0 OAuth registration application type '+expected+' '+redirect,async()=>{
+for(const [redirect,expected]of [['http://127.0.0.1:1234/callback','native'],['http://localhost:1234/callback','native'],['piclaw-fixture:/callback','native'],['https://example.invalid/callback','web']]as const)test('1.2.0 OAuth registration application type '+expected+' '+redirect,async()=>{
  let body:any;await registerClient(issuer,{clientMetadata:{redirect_uris:[redirect],client_name:'Synthetic'},metadata,fetch:async(_url,init)=>{body=JSON.parse(String(init?.body));return Response.json({client_id:'synthetic'});}});expect(body.application_type).toBe(expected);
 });
