@@ -212,3 +212,22 @@ do not qualify arbitrary surviving child tools. Explicit release requires the
 caller to close/drain Harness/storage first. No public protocol, native package,
 platform abstraction, production schema/pins, root source, services or profile
 changes. Detailed receipt: `/workspace/reviews/durable-1650/ownership-checkpoint.md`.
+
+## Cross-store process-death qualification
+
+`cross-store.test.ts` adds five cases. The combined package receipt is 90 tests,
+698 assertions, zero failures across six files; strict typecheck passes.
+Separate disposable host/candidate SQLite files survive SIGKILL after accepted,
+submitted, answered and terminal/lost-ack boundaries. Recovery acquires the host
+owner and binds the incarnation before opening the paused candidate. It verifies
+one real EF-S02 terminal commit, one transcript answer, one outbox intent and no
+re-execution of a committed synthetic answer. Revocation during held payload
+resolution is checked inside the actual host settlement transaction.
+
+These are post-boundary kill windows, not arbitrary mid-commit crash coverage.
+The file counter records synthetic model admission, not paid-provider effects.
+The outbox test proves intent persistence, not delivery. Host ownership is not
+an atomic cross-file write fence: recovery refuses live-owner takeover and waits
+for confirmed/reaped child death. Arbitrary surviving external tools, general
+migration and production admission remain unqualified. Independent source review
+cleared this increment within those boundaries; #1650 remains incomplete.
