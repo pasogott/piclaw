@@ -157,3 +157,58 @@ live provider/effect, service restart, commit or push. No all-45-qualified or
 goal-complete claim. Parent publication should explicitly scope a **partial
 foundation**, use **Refs #1650**, not **Fixes #1650**; full implementation and
 production migration approval remain open.
+
+## Next slice: Linux owner-before-open prerequisite (separate scope)
+
+The preceding first-slice verdict and evidence are retained unchanged. New
+`ownership.test.ts`, `src/ownership.ts`, and `src/ownership-child.ts` qualify a
+**disposable one-chat/file test backend**, not production ownership. The package
+script now includes this fifth test file.
+
+`TestOwner.acquire` uses a raw Bun SQLite connection and `BEGIN IMMEDIATE` to
+acquire an owner row in the same candidate file **before** constructing public
+storage/Harness. Identity includes Linux boot ID, PID, `/proc/PID/stat` start ID,
+fresh nonce and generation. A live process (including SIGSTOP) is never stolen;
+there is no TTL. Replacement requires explicit release after close/drain or
+verified missing/reused PID/previous boot. Inaccessible `/proc` fails closed;
+a zombie remains busy until reaped. This assumes one trusted Linux PID namespace,
+local SQLite and no path aliases/untrusted raw owner-table mutation. It does not
+choose production chat/store granularity.
+
+`OwnedSqlite` reuses the existing facade queue. All SQL operations check the
+owner in the same SQLite transaction before callback and before commit. A
+read-locked snapshot cannot be replaced by a competing writer and still commit
+stale writes; SQLite lock/snapshot conflicts fail rather than authorize takeover.
+The end check also rolls back an owner-token change made inside the callback.
+The prior `BunSqliteDatabase` and boolean fixture implementation are unchanged;
+this backend supplies an authoritative getter to the existing dispatch gates.
+
+Tests cover two actual child contenders (only one allocates/opens Harness),
+SIGSTOP refusal, SIGKILL/reap recovery of an actual pending request, paused reopen
+before explicit model resume, same-process duplicate rejection, exact-token
+revocation, stale public storage open before migration/normalization, SQL rollback,
+and held old synthetic model/tool denial at actual dispatch. Raw live revocation
+is fault injection, **not** an admitted living-writer replacement API. Child
+processes have a small environment allowlist, isolated path/argument guards and
+only keyless synthetic provider/tool code; no real provider or environment tools.
+
+Inspected existing user/session ownership, process-local MCP admission epochs,
+EF-S05 outbox deadline leases and EF-S02 commit guard. None supplies exclusive
+candidate storage ownership before open. Existing queue and dispatch gates are
+reused; outbox scheduling is not replaced. The actual host EF-S02 optional guard
+is still not registered in production, and this slice does **not** prove an owner
+read in one file atomic with settlement in another. The transaction rollback test
+uses a synthetic settlement table, not the actual EF-S02 publication path.
+
+`/proc` must faithfully expose the same trusted PID namespace. Under hidepid,
+mismatched proc mounts or namespace visibility restrictions, ENOENT cannot be
+trusted as evidence of death; this fixture must not be used in those conditions.
+Release remains a caller-enforced close/drain contract. Parent death is not proof
+that arbitrary external tool children have exited.
+
+**Partial prerequisite only: production D2 remains NOT ADMITTED.** Synthetic
+synchronous dispatch checks do not make external model/tool effects atomic and
+do not qualify arbitrary surviving child tools. Explicit release requires the
+caller to close/drain Harness/storage first. No public protocol, native package,
+platform abstraction, production schema/pins, root source, services or profile
+changes. Detailed receipt: `/workspace/reviews/durable-1650/ownership-checkpoint.md`.
