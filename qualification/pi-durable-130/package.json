@@ -1,0 +1,19 @@
+{
+  "name": "piclaw-pi-durable-130-qualification",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun ../../runtime/scripts/local-test-priority.ts --cwd . -- bun test ./test.ts ./sqlite.test.ts ./host-handoff.test.ts ./migration.test.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@earendil-works/pi-durable": "1.3.0",
+    "@earendil-works/chord": "1.3.0",
+    "@earendil-works/pi-ai": "1.3.0",
+    "@earendil-works/pi-codemode": "1.3.0"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "7.0.2"
+  }
+}

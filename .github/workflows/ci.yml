@@ -13,6 +13,7 @@ on:
       - 'package.json'
       - 'bun.lock'
       - 'BUN_VERSION'
+      - 'qualification/pi-durable-130/**'
       - 'Makefile'
       - 'tsconfig*.json'
       - '.github/workflows/ci.yml'
@@ -26,6 +27,7 @@ on:
       - 'package.json'
       - 'bun.lock'
       - 'BUN_VERSION'
+      - 'qualification/pi-durable-130/**'
       - 'Makefile'
       - 'tsconfig*.json'
       - '.github/workflows/ci.yml'
@@ -64,6 +66,13 @@ jobs:
 
       - name: Run canonical fast CI contract
         run: make ci-fast
+
+      - name: Isolated pi-durable qualification
+        working-directory: qualification/pi-durable-130
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          bun run typecheck
+          bun run test
 
       - name: Install SVG acceptance browsers
         uses: ./.github/actions/playwright-cache

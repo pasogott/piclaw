@@ -152,6 +152,15 @@ export type TerminalSettlementStatement =
   | "link_commit_outbox";
 
 export interface TerminalSettlementAdapterRuntime {
+  /**
+   * Optional host ownership check. Must be synchronous and must not await:
+   * read the host's durable owner/incarnation binding on this same database
+   * connection, not a cached entry check. Called inside BEGIN IMMEDIATE before
+   * and after apply; only exact true permits commit. False, nonboolean results
+   * and throws abort with owner_conflict and roll back all settlement effects.
+   * Existing committed replay is observational and does not call this hook.
+   */
+  validateOwnership?: () => boolean;
   hitFault(
     point: "before_effect" | "effect_then_lost_acknowledgement",
   ): unknown;
@@ -338,7 +347,10 @@ class CurrentPiclawTerminalSettlementStore
             if (reconciled.kind === "replay") return reconciled.commit;
             throw new SettlementAbort(reconciled.error);
           }
-          return this.apply(request, resolved.value);
+          this.validateOwnership();
+          const commit = this.apply(request, resolved.value);
+          this.validateOwnership();
+          return commit;
         })
         .immediate();
 
@@ -1251,6 +1263,16 @@ class CurrentPiclawTerminalSettlementStore
       outboxIds,
       committedAt,
     });
+  }
+
+  private validateOwnership(): void {
+    try {
+      if (!this.runtime.validateOwnership) return;
+      if (this.runtime.validateOwnership() === true) return;
+    } catch (error) {
+      void error;
+    }
+    throw new SettlementAbort(settlementError("owner_conflict"));
   }
 
   private afterStatement(statement: TerminalSettlementStatement): void {
