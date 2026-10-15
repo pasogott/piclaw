@@ -1173,10 +1173,26 @@ export async function handleAgentMessage(
     )(payload);
   };
 
+  let commandStatusTurnId: unknown;
+  let commandStatusStarted = false;
   const emitCommandStatus = (payload: Record<string, unknown>) => {
     const activeStatus = typeof channel.getAgentStatus === "function"
       ? channel.getAgentStatus(chatJid)
       : null;
+    // A new command may claim the surface, but an older operation must not
+    // overwrite a successor (or resurrect a status that has been cleared).
+    if (commandStatusStarted && typeof channel.getAgentStatus === "function"
+      && (!activeStatus || activeStatus.turn_id !== commandStatusTurnId)) return;
+    if (!commandStatusStarted) {
+      commandStatusTurnId = payload.turn_id;
+      commandStatusStarted = true;
+    }
+    // Usage is a side-channel event, not a lifecycle phase. In particular it
+    // must not replace the owning intent before that command's terminal event.
+    if (payload.type === "context_usage") {
+      channel.broadcastEvent("agent_status", withAgentProfile(payload));
+      return;
+    }
     const nextPayload = withAgentStatusProgressMetadata(payload, activeStatus);
     channel.updateAgentStatus(chatJid, nextPayload);
     channel.broadcastEvent("agent_status", withAgentProfile(nextPayload));
@@ -1329,35 +1345,32 @@ export async function handleAgentMessage(
     const commandTitle = content.trim().split(/\s+/, 1)[0] || "command";
     const isCompactCommand = command.type === "compact";
     const isSessionRotateCommand = command.type === "session_rotate";
-    const commandModel = (isCompactCommand || isSessionRotateCommand) && typeof channel.agentPool.getCurrentModelLabel === "function"
-      ? await channel.agentPool.getCurrentModelLabel(chatJid).catch(() => null)
-      : null;
-
-    if (isCompactCommand) {
-      // Compaction gets the timer affordance (same as auto-compaction)
-      emitCommandStatus({
+    if (isCompactCommand || isSessionRotateCommand) {
+      // Claim before model lookup can yield; later metadata must retain ownership
+      // and the original timer rather than claiming over a newer command.
+      const intent = {
         thread_id: interaction.timestamp,
         agent_id: agentId,
         turn_id: commandTurnId,
         type: "intent",
-        title: "Compacting context",
-        detail: "Manual compaction requested via /compact.",
-        intent_key: "compaction",
+        title: isCompactCommand ? "Compacting context" : "Rotating session",
+        detail: isCompactCommand
+          ? "Manual compaction requested via /compact."
+          : "Compacting context before archiving the current session and creating its successor.",
+        intent_key: isCompactCommand ? "compaction" : "session_rotation",
         started_at: new Date().toISOString(),
-        model: commandModel,
-      });
-    } else if (isSessionRotateCommand) {
-      emitCommandStatus({
-        thread_id: interaction.timestamp,
-        agent_id: agentId,
-        turn_id: commandTurnId,
-        type: "intent",
-        title: "Rotating session",
-        detail: "Compacting context before archiving the current session and creating its successor.",
-        intent_key: "session_rotation",
-        started_at: new Date().toISOString(),
-        model: commandModel,
-      });
+        model: null,
+      };
+      emitCommandStatus(intent);
+      if (typeof channel.agentPool.getCurrentModelLabel === "function") {
+        let commandModel: string | null = null;
+        try {
+          commandModel = await channel.agentPool.getCurrentModelLabel(chatJid);
+        } catch (err) {
+          debugSuppressedError(log, "Failed to read model for command status.", err, { operation: "command_status.model_lookup" });
+        }
+        if (commandModel !== null) emitCommandStatus({ ...intent, model: commandModel });
+      }
     } else {
       emitCommandStatus({
         thread_id: interaction.timestamp,
