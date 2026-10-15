@@ -9,6 +9,7 @@ export function manualCompactionBackend() {
   let publish!: () => void;
   let active = false;
   let aborts = 0;
+  let messageId = 456;
   const store = new AgentStatusStore({ load() {}, save() {}, setAgentStatus() {}, getAgentStatuses: () => ({}) },
     { getInflightRuns: () => [], getPreflightRuns: () => [] });
   const channel: any = {
@@ -19,6 +20,7 @@ export function manualCompactionBackend() {
           aborts++; active = false; release({ status: 'error', message: 'Compaction cancelled.' });
           return { status: 'success', message: 'Compaction aborted.' };
         }
+        if (command.type === 'stats') return { status: 'success', message: 'Stats result' };
         return new Promise(resolve => { release = resolve; });
       },
     },
@@ -26,8 +28,8 @@ export function manualCompactionBackend() {
     getQueuedFollowupCount: () => 0,
     broadcastEvent(type: string, data: any) { events.push({ type, data }); },
     getAgentStatus: (chat: string) => store.get(chat),
-    updateAgentStatus(chat: string, data: any) { store.update(chat, data); events.push({ type: 'agent_status', data: { ...data, chat_jid: chat } }); },
-    storeMessage: () => ({ id: 456, timestamp: '2026-10-15T12:00:00.000Z', data: { thread_id: null }, content: '/compact' }),
+    updateAgentStatus(chat: string, data: any) { store.update(chat, data); },
+    storeMessage: (_chat: string, content: string) => ({ id: messageId++, timestamp: new Date(Date.UTC(2026, 9, 15, 12, 0, 0, messageId)).toISOString(), data: { thread_id: null }, content }),
     sendMessage: async () => {
       events.push({ type: 'agent_response', data: { chat_jid: 'web:hook-fixture', id: 457, content: 'Command result' } });
       await new Promise<void>(resolve => { publish = resolve; });

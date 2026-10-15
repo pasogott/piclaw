@@ -8,6 +8,8 @@ const browserTest = enabled ? test : test.skip;
 let server: ReturnType<typeof Bun.serve>;
 let browser: Browser;
 let backend = manualCompactionBackend();
+const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
+const encoder = new TextEncoder();
 beforeAll(async () => {
   if (!enabled) return;
   const baseline = process.env.PICLAW_STATUS_BASELINE;
@@ -21,8 +23,20 @@ beforeAll(async () => {
   } }] : [];
   const built = await build({ plugins, entryPoints: [join(import.meta.dir, 'fixtures/agent-status-lifecycle-fixture.ts')], bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2022' });
   server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
-    const result = await backend.fetch(request);
+    const path = new URL(request.url).pathname;
+    if (path === '/fixture-events') {
+      if (request.method === 'POST') {
+        const events = await request.json();
+        for (const event of events) for (const client of sseClients) client.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        return Response.json({ ok: true });
+      }
+      let controller: ReadableStreamDefaultController<Uint8Array>;
+      const stream = new ReadableStream<Uint8Array>({ start(value) { controller = value; sseClients.add(value); value.enqueue(encoder.encode(': ready\n\n')); }, cancel() { sseClients.delete(controller); } });
+      return new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
+    }
+    const result = await backend.fetch(path === '/agent/default/message' ? new Request(new URL('/manual', request.url), request) : request);
     if (result) return result;
+    if (path.startsWith('/agent/')) return Response.json({ models: [], commands: [] });
     if (new URL(request.url).pathname === '/fixture.js') return new Response(built.outputFiles[0].contents, { headers: { 'content-type': 'text/javascript' } });
     return new Response('<!doctype html><main id="app"></main><script type="module" src="/fixture.js"></script>', { headers: { 'content-type': 'text/html' } });
   } });
@@ -65,8 +79,12 @@ browserTest('real status hook fences disconnect ABA and reconnect starts a separ
   } finally { await page.close(); }
 }, 15000);
 
-for (const terminal of ['success', 'error', 'cancelled']) {
-  browserTest(`held manual compaction rejects pre-intent idle and retains ownership through command publication: ${terminal}`, async () => {
+const heldScenarios = [false, true].flatMap(compose =>
+  ['success', 'error', 'cancelled'].map(terminal => ({ compose, terminal, lateCompletion: false })));
+heldScenarios.push({ compose: true, terminal: 'success', lateCompletion: true });
+for (const { compose, terminal, lateCompletion } of heldScenarios) {
+  browserTest(`held manual compaction rejects pre-intent idle and retains ownership through command publication: ${terminal}, actual Compose=${compose}, late completion=${lateCompletion}`, async () => {
+    const stop = compose ? 'button[aria-label="Compacting context — Stop response"]' : '#stop';
     backend.cleanup(); backend = manualCompactionBackend();
     const page = await browser.newPage();
     const errors: string[] = [];
@@ -75,22 +93,35 @@ for (const terminal of ['success', 'error', 'cancelled']) {
     await page.route('**/*', route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
     const deliver = async () => {
       const events = backend.events.splice(0);
-      for (const event of events) await page.evaluate(({ type, data }) => (window as any).statusLifecycleFixture.event(type, data), event);
+      if (compose) {
+        await page.request.post(`${origin}/fixture-events`, { data: events });
+        await page.waitForTimeout(30);
+      } else for (const event of events) await page.evaluate(({ type, data }) => (window as any).statusLifecycleFixture.event(type, data), event);
     };
     try {
-      await page.goto(origin);
+      await page.goto(origin + (compose ? '/?compose=1' : '/'));
+      if (compose) await page.waitForFunction(() => (window as any).fixtureSseReady);
       await page.waitForFunction(() => Boolean((window as any).statusLifecycleFixture));
+      if (lateCompletion) {
+        await page.evaluate(() => { void (window as any).statusLifecycleFixture.manual('/stats').then(() => { (window as any).statsDone = true; }); });
+        for (let i = 0; i < 100 && !backend.events.some(event => event.type === 'agent_response'); i++) await Bun.sleep(10);
+        expect(backend.events.some(event => event.type === 'agent_response')).toBe(true);
+        await deliver();
+      }
       await page.evaluate(() => { void (window as any).statusLifecycleFixture.refresh(); });
       await page.waitForFunction(() => (window as any).statusLifecycleFixture.count() === 1);
-      await page.evaluate(() => { (window as any).manualDone = false; void (window as any).statusLifecycleFixture.manual().then(() => { (window as any).manualDone = true; }); });
+      await page.evaluate(() => { (window as any).manualDone = false; });
+      if (compose) await page.locator('.compose-context-pie').click();
+      else await page.evaluate(() => { void (window as any).statusLifecycleFixture.manual(); });
       // The command is genuinely held server-side, not a status-only simulation.
       for (let i = 0; i < 100 && !backend.events.length; i++) await Bun.sleep(10);
       expect(backend.events.some(event => event.data?.intent_key === 'compaction')).toBe(true);
       await deliver();
-      await page.waitForSelector('#stop');
+      await page.waitForSelector(stop);
+      if (compose) expect(await page.locator('.compose-context-pie.is-compacting').count()).toBe(1);
       await page.evaluate(() => (window as any).statusLifecycleFixture.release(0, { status: 'idle', data: null }));
       await page.waitForTimeout(30);
-      expect(await page.locator('#stop').count()).toBe(1);
+      expect(await page.locator(stop).count()).toBe(1);
       expect(JSON.parse((await page.locator('#state').textContent())!).status.intent_key).toBe('compaction');
       for (let i = 0; i < 3; i++) {
         const status = await (await page.request.get(`${origin}/status`)).json();
@@ -98,20 +129,41 @@ for (const terminal of ['success', 'error', 'cancelled']) {
         expect(status.data.intent_key).toBe('compaction');
       }
       expect(await page.evaluate(() => (window as any).manualDone)).toBe(false);
+      if (lateCompletion) {
+        // The earlier real command finishes publishing AFTER the newer compact
+        // intent. Its terminal must not erase the newer operation in the store.
+        backend.publish();
+        await page.waitForFunction(() => (window as any).statsDone);
+        await deliver();
+        // The live event's foreign turn is ignored; the persisted snapshot is
+        // the independently observed path which can erase compaction later.
+        expect(await page.locator(stop).count()).toBe(1);
+        const lateStatus = await (await page.request.get(`${origin}/status`)).json();
+        await page.waitForTimeout(350);
+        await page.evaluate(() => { void (window as any).statusLifecycleFixture.refresh(); });
+        await page.waitForFunction(() => (window as any).statusLifecycleFixture.count() === 2);
+        await page.evaluate(payload => (window as any).statusLifecycleFixture.release(1, payload), lateStatus);
+        await page.waitForTimeout(30);
+        console.info('late command completion evidence', JSON.stringify({ lateStatus, state: await page.locator('#state').textContent(), stopCount: await page.locator(stop).count() }));
+        expect(lateStatus.status).toBe('active');
+        expect(lateStatus.data.intent_key).toBe('compaction');
+        expect(await page.locator(stop).count()).toBe(1);
+      }
       if (terminal === 'cancelled') {
-        await page.locator('#stop').click();
+        await page.locator(stop).click();
         for (let i = 0; i < 100 && backend.aborts === 0; i++) await Bun.sleep(10);
         expect(backend.aborts).toBe(1);
       } else backend.finish(terminal);
       for (let i = 0; i < 100 && !backend.events.some(event => event.type === 'agent_response'); i++) await Bun.sleep(10);
       expect(backend.events.some(event => event.type === 'agent_response')).toBe(true);
       await deliver();
-      expect(await page.locator('#stop').count()).toBe(1);
+      expect(await page.locator(stop).count()).toBe(1);
       expect((await (await page.request.get(`${origin}/status`)).json()).status).toBe('active');
       backend.publish();
       await page.waitForFunction(() => (window as any).manualDone);
       await deliver();
-      await page.waitForFunction(() => !document.querySelector('#stop'));
+      await page.waitForFunction(selector => !document.querySelector(selector), stop);
+      if (compose) expect(await page.locator('.compose-context-pie.is-compacting').count()).toBe(0);
       expect((await (await page.request.get(`${origin}/status`)).json()).status).toBe('idle');
       expect(errors).toEqual([]);
     } finally { await page.close(); }
