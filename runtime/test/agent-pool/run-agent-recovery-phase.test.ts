@@ -12,7 +12,7 @@ import {
   type PromptAttemptResult,
   type SessionWithToolControl,
 } from "../../src/agent-pool/run-agent-recovery-phase.js";
-import { RECOVERY_CONTINUATION_PROMPT } from "../../src/agent-pool/context-pressure-retry.js";
+import { FINALIZATION_RECOVERY_PROMPT, RECOVERY_CONTINUATION_PROMPT } from "../../src/agent-pool/context-pressure-retry.js";
 import type { AgentOutput } from "../../src/agent-pool/contracts.js";
 import { initDatabase } from "../../src/db.js";
 import { endTrackedPhase } from "../../src/runtime/progress-watchdog.js";
@@ -1651,4 +1651,50 @@ describe("runAgentRecoveryPhase", () => {
       toolExecutionCount: 7,
     });
   });
+});
+
+test("finalization asks for a text-only checkpoint while tools are disabled and restores the loadout", async () => {
+  const prompts: string[] = [];
+  let tools = ["bash", "list_tools"];
+  const session = fakeSession();
+  Object.assign(session, {
+    getActiveToolNames: () => [...tools],
+    setActiveToolsByName: (names: string[]) => { tools = [...names]; },
+  });
+  const result = await runAgentRecoveryPhase({
+    chatJid: "web:finalization-prompt",
+    initialSession: session,
+    prompt: "implement the next step",
+    timeoutMs: 1_000,
+    recoveryConfig: recoveryConfig({ maxAttempts: 1 }),
+    runPromptAttempt: async ({ prompt }) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) {
+        return attempt({
+          result: { status: "error", error: "No terminal assistant output" },
+          failureCategory: "no_terminal_output",
+          promptWasPersisted: true,
+          snapshot: {
+            hadToolActivity: true, hadAssistantText: false, hadThinking: true,
+            hadSessionMessage: true, hadCompletedTurnOutput: false,
+            hadTerminalTurnOutput: false, hasUnresolvedToolExecution: false,
+          },
+        });
+      }
+      expect(tools).toEqual([]);
+      expect(prompt).toBe(FINALIZATION_RECOVERY_PROMPT);
+      expect(prompt).toContain("Do not call tools");
+      expect(prompt).toContain("text-only checkpoint");
+      expect(prompt).not.toBe(RECOVERY_CONTINUATION_PROMPT);
+      // Extension hooks cannot re-enable tools in the closing attempt.
+      (session as any).setActiveToolsByName(["bash"]);
+      expect(tools).toEqual([]);
+      return successfulAttempt();
+    },
+    recoverSession: async () => ({ session, compaction: { compacted: false } }),
+    persistRecoveredSession: () => {},
+  });
+  expect(result.result.status).toBe("success");
+  expect(prompts).toEqual(["implement the next step", FINALIZATION_RECOVERY_PROMPT]);
+  expect(tools).toEqual(["bash", "list_tools"]);
 });
