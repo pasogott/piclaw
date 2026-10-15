@@ -126,8 +126,8 @@ export function getCompactionOutputTokenTarget(reserveTokens: number): number {
 
 /** The model's declared output limit, when it provides a usable one. */
 function getModelOutputTokenLimit(model: unknown): number | undefined {
-  const maxTokens = Number((model as { maxTokens?: unknown } | null | undefined)?.maxTokens);
-  return Number.isFinite(maxTokens) && maxTokens > 0 ? Math.floor(maxTokens) : undefined;
+  const maxTokens = Math.floor(Number((model as { maxTokens?: unknown } | null | undefined)?.maxTokens));
+  return Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : undefined;
 }
 
 export function getSafeCompactionMaxTokens(model: unknown, promptText: string, requestedMaxTokens: number): {

@@ -2388,7 +2388,11 @@ describe("smart-compaction", () => {
       // The minimum never exceeds what the model declares.
       expect(getSafeCompactionMaxTokens({ contextWindow: 262_144, maxTokens: 256 }, prompt, 13_107).maxTokens).toBe(256);
       // Invalid declared limits are ignored rather than collapsing the budget.
-      expect(getSafeCompactionMaxTokens({ contextWindow: 262_144, maxTokens: 0 }, prompt, 13_107).maxTokens).toBe(13_107);
+      for (const maxTokens of [0, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+        expect(getSafeCompactionMaxTokens({ contextWindow: 262_144, maxTokens }, prompt, 13_107).maxTokens).toBe(13_107);
+      }
+      expect(getSafeCompactionMaxTokens({ contextWindow: 262_144, maxTokens: 1 }, prompt, 13_107).maxTokens).toBe(1);
+      expect(getSafeCompactionMaxTokens({ contextWindow: 262_144, maxTokens: 256.9 }, prompt, 13_107).maxTokens).toBe(256);
       // Context remains a hard bound.
       const tight = getSafeCompactionMaxTokens({ contextWindow: 8_000, maxTokens: 32_768 }, prompt, 80_000);
       expect(tight.maxTokens).toBe(tight.availableOutputTokens);
