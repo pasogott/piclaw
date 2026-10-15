@@ -18,7 +18,7 @@ import {
 } from "../../src/agent-pool/run-agent-orchestrator.js";
 import { getAgentAbortCause, recordAgentAbortCause, resetAgentAbortProvenanceForTests } from "../../src/agent-pool/abort-provenance.js";
 import { getRecoveryFinalizationReserveMs } from "../../src/agent-pool/run-agent-recovery-phase.js";
-import { RECOVERY_CONTINUATION_PROMPT } from "../../src/agent-pool/context-pressure-retry.js";
+import { RECOVERY_CONTINUATION_PROMPT, TOOLS_DISABLED_RECOVERY_PROMPT } from "../../src/agent-pool/context-pressure-retry.js";
 import { getSshConfig, initDatabase, setChatAutoCompactionWindow, upsertSshConfig } from "../../src/db.js";
 import {
   getTrackedPhasesSnapshot,
@@ -4332,7 +4332,7 @@ test("runAgentPrompt continues with tools after a resolved side-effecting tool",
 
     expect(result.status).toBe("success");
     expect(result.result).toBe("Wrote /tmp/x successfully.");
-    expect(session.promptTexts).toEqual(["write file", RECOVERY_CONTINUATION_PROMPT]);
+    expect(session.promptTexts).toEqual(["write file", TOOLS_DISABLED_RECOVERY_PROMPT]);
     expect(session.getActiveToolNames()).toEqual(["bash", "write"]);
   } finally {
     restoreEnv();
@@ -4713,7 +4713,7 @@ test("runAgentPrompt requests one tools-disabled closing reply after resolved to
     expect(result.status).toBe("success");
     expect(result.result).toBe("Tests passed. The requested work is complete.");
     expect(session.promptCalls).toBe(2);
-    expect(session.promptTexts).toEqual(["run tests", RECOVERY_CONTINUATION_PROMPT]);
+    expect(session.promptTexts).toEqual(["run tests", TOOLS_DISABLED_RECOVERY_PROMPT]);
     expect(session.toolSets).toEqual([[], ["bash", "read"]]);
     expect(completedTurns).toEqual([
       { text: "I will run the tests now.", followedByToolUse: true },
