@@ -13,6 +13,7 @@ import {
   storeWebMessage as persistWebMessage,
   admitWebUserMessage,
   type StoreWebMessageOptions,
+  type WebUserMessageStoreOptions,
   type StoreWebMessageParams,
 } from "./message-store.js";
 import type { WebChannelLike } from "../core/web-channel-contracts.js";
@@ -107,7 +108,7 @@ export class WebMessageProcessingStorageService {
     return interaction;
   }
 
-  async admitUserMessage(chatJid: string, content: string, mediaIds: number[], options: WebChannelStoreMessageOptions,
+  async admitUserMessage(chatJid: string, content: string, mediaIds: number[], options: WebUserMessageStoreOptions,
     authorise: () => void, signal: AbortSignal, deferBeforeInsert?: () => boolean): Promise<InteractionRow | null> {
     const interaction = await admitWebUserMessage(this.channel, {
       chatJid, content, isBot: false, mediaIds,

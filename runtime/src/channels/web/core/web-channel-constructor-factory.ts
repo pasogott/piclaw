@@ -115,6 +115,7 @@ export interface WebChannelConstructorFactoryDefaults {
 export interface WebChannelConstructorFactoryRuntimeOpts {
   queue: AgentQueue;
   agentPool: AgentPool;
+  getInputSourceAdmission?: WebChannelLike["getInputSourceAdmission"];
 }
 
 export interface WebChannelConstructorFactoryOptions extends WebChannelConstructorFactoryDefaults {

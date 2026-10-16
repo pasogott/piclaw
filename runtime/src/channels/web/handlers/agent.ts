@@ -677,6 +677,11 @@ export async function handleAgentMessage(
   let revalidateInputAuthority: ValidateInputAuthority;
   try { internalAuthority = readInputRequestAuthority(req, chatJid, pathname); revalidateInputAuthority = internalAuthority?.validate ?? captureInputAuthority(channel, req); revalidateInputAuthority(); }
   catch { return channel.json({ error: 'Input authority is unavailable.' }, 403); }
+  // Pin the trusted host selection to this route before any body read/await.
+  // Request contents cannot select an engine or replace this SQL-only callback.
+  let acceptSource: ReturnType<NonNullable<WebChannelLike["getInputSourceAdmission"]>>;
+  try { acceptSource = channel.getInputSourceAdmission?.(chatJid); }
+  catch { return channel.json({ error: 'Input admission could not be confirmed.' }, 503); }
   if (internalAuthority) {
     try {
       const reader = req.clone().body?.getReader();
@@ -1115,7 +1120,7 @@ export async function handleAgentMessage(
     try {
       interaction = await channel.admitUserMessage(chatJid, content, normalized.mediaIds, {
         contentBlocks: normalized.contentBlocks, linkPreviews: normalized.linkPreviews,
-        threadId: normalized.threadId, screenHint: normalized.screenHint,
+        threadId: normalized.threadId, screenHint: normalized.screenHint, acceptSource,
       }, revalidateQueuedAdmission, req.signal, () => {
         const busy = isChatActive();
         queuedDuringAdmission = busy || channel.getQueuedFollowupCount(chatJid) > 0;

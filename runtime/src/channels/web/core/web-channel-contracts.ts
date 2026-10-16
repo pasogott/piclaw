@@ -20,6 +20,7 @@ import type { TotpAuthContext } from "../auth/totp-auth.js";
 import type { WebauthnAuthContext } from "../auth/webauthn-auth.js";
 import type { WebauthnEnrolPageContext } from "../auth/webauthn-enrol-page.js";
 import type { AgentStatusContext } from "../agent/agent-status.js";
+import type { WebUserMessageStoreOptions } from "../messaging/message-store.js";
 
 interface AuthGatewayLike {
   isAuthEnabled(): boolean;
@@ -58,9 +59,10 @@ export interface WebChannelLike
 
   /** Runtime dependencies and state services used across web layers. */
   queue: TaskQueueLike;
-  admitUserMessage?(chatJid: string, content: string, mediaIds: number[], options: {
-    contentBlocks?: unknown[]; linkPreviews?: unknown[]; threadId?: number | null; screenHint?: string | null;
-  }, authorise: () => void, signal: AbortSignal, deferBeforeInsert?: () => boolean): Promise<InteractionRow | null>;
+  /** Trusted host-only selection, captured before reading HTTP input; absent by default. */
+  getInputSourceAdmission?(chatJid: string): WebUserMessageStoreOptions["acceptSource"];
+  admitUserMessage?(chatJid: string, content: string, mediaIds: number[], options: WebUserMessageStoreOptions,
+    authorise: () => void, signal: AbortSignal, deferBeforeInsert?: () => boolean): Promise<InteractionRow | null>;
   agentPool: AgentPool & {
     queueOwnedStreamingMessage?(chatJid: string, text: string, behavior: "steer"): Promise<{ queued: boolean; error?: string }>;
     abortOwnedRun?(chatJid: string): Promise<unknown>;
