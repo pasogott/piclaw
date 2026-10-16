@@ -98,7 +98,7 @@ async function setup(busy = false) {
       await hooks.authorize?.();
       // Fail closed: this fixture grants progress only when there is no recovered live work.
       if (!busy && !allowKnown && (inspection.tasks.length || inspection.submissions.length)) throw new Error("Recovered authority requires explicit host review");
-      if ((busy || allowKnown) && inspection.submissions.some(s => s.conversationId !== id || !["request-1", "intent-1", "intent-2", ...(busy ? ["known-seed"] : [])].includes(s.requestId!))) throw new Error("Unknown recovered submission");
+      if ((busy || allowKnown) && inspection.submissions.some(s => s.conversationId !== id || !["request-1", "queued-steer:intent-1", "queued-steer:intent-2", ...(busy ? ["known-seed"] : [])].includes(s.requestId!))) throw new Error("Unknown recovered submission");
     },
     putAnswer: (ref, text) => { payloads.putText(ref, text); }, sessionId: "existing-host-session", lane: "main", generation: 1, now: () => at,
   };
@@ -128,9 +128,12 @@ async function setup(busy = false) {
       payloadRef: source.payloadRef, createdAt: at };
     request.effect.requestHash = hashCanonicalRequest({ method: "attachQueuedSource.v1", ...request } as unknown as CanonicalJsonValue);
     db.transaction(() => work.attachQueuedSourceInTransaction(request, db))();
+    const intent = db.query(`SELECT intent_id FROM service_effect_s01_intents
+      WHERE operation_id=? AND kind='queue_input' AND payload_ref=?`).get(op.operationId, source.payloadRef) as { intent_id: string };
+    expect(intent.intent_id).toBe(`queued-steer:${source.sourceId}`);
     db.query("INSERT INTO runtime_payloads VALUES (?,?)").run(source.payloadRef, content);
-    return { ...primary, sourceSeq: source.sourceSeq, sourceId: requestId, payloadRef: source.payloadRef, requestId,
-      requestHash: hashCanonicalRequest({ type: "input", requestId, content }) };
+    return { ...primary, sourceSeq: source.sourceSeq, sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: intent.intent_id,
+      requestHash: hashCanonicalRequest({ type: "input", requestId: intent.intent_id, content }) };
   }
   // Explicit test driver only; runtime reconciliation never waits or enables scheduling.
   async function drain() {

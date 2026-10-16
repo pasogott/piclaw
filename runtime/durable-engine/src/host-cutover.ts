@@ -1,5 +1,6 @@
 // INACTIVE application module. No bootstrap, engine open, queue or production migration.
 import type { Database } from "bun:sqlite";
+import { initializeHostSchemaTables } from "./host-schema.js";
 import { hashCanonicalRequest, type CanonicalJsonValue } from "../../../runtime/src/service-effects/contracts/common.js";
 export type Phase = "source" | "copying" | "verified" | "active" | "reconciliation_required";
 export interface CutoverIdentity { domain: string; incarnation: string; ownerGeneration: number; sourceEngineId: string; candidateStoreRef: string }
@@ -42,13 +43,10 @@ function requestSnapshot(r: CutoverRequest) {
   return Object.freeze({ requestKey: ref(r.requestKey), sourceDigest: digest(r.sourceDigest), importHash: digest(r.importHash) });
 }
 /** Explicit sidecar initializer, never invoked by controller construction. Caller enables FK. */
-export function initializeCutoverManifest(db: Database) {
-  safe(() => db.exec(`CREATE TABLE IF NOT EXISTS qualification_cutover_v1 (
-    domain TEXT PRIMARY KEY, identity TEXT NOT NULL, request_hash TEXT NOT NULL, manifest TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS qualification_cutover_work_v1 (
-    domain TEXT NOT NULL REFERENCES qualification_cutover_v1(domain), operation_id TEXT NOT NULL,
-    content_hash TEXT NOT NULL, PRIMARY KEY(domain,operation_id));`));
+export function initializeCutoverManifest(db: Database, assertOwner: () => void = () => {}) {
+  initializeHostSchemaTables(db, assertOwner, [2, 3]);
 }
+
 export class HostCutoverController {
   private readonly identity: Readonly<CutoverIdentity>;
   private readonly ports: CutoverPorts;
@@ -66,7 +64,13 @@ export class HostCutoverController {
     if (row && row.identity !== JSON.stringify(this.identity)) throw fail();
     return row;
   }
-  inspect(): Manifest | null { return safe(() => { this.owner(); const row = this.read(); return row ? JSON.parse(row.manifest) : null; }); }
+  private manifest(json: string): Manifest {
+    const m: Manifest = JSON.parse(json);
+    m.postCutoverCount = (this.db.query("SELECT count(*) AS n FROM qualification_cutover_work_v1 WHERE domain=?")
+      .get(this.identity.domain) as { n: number }).n;
+    return m;
+  }
+  inspect(): Manifest | null { return safe(() => { this.owner(); const row = this.read(); return row ? this.manifest(row.manifest) : null; }); }
   private drained(r: CutoverRequest) {
     const { sourceDigest, pending, inflight } = this.ports.checkDrained();
     if (sourceDigest !== r.sourceDigest || pending !== 0 || inflight !== 0) throw fail();
@@ -77,7 +81,7 @@ export class HostCutoverController {
       return this.db.transaction(() => {
         this.owner(); this.ports.assertCurrentWriter(this.identity.sourceEngineId); this.drained(r);
         const prior = this.read(), hash = hashCanonicalRequest(r);
-        if (prior) { if (prior.request_hash !== hash) throw fail(); this.owner(); return JSON.parse(prior.manifest); }
+        if (prior) { if (prior.request_hash !== hash) throw fail(); this.owner(); return this.manifest(prior.manifest); }
         const m: Manifest = { phase: "source", revision: 0, writer: this.identity.sourceEngineId, postCutoverCount: 0, request: r, receipt: null };
         this.db.query("INSERT INTO qualification_cutover_v1 VALUES (?,?,?,?)").run(this.identity.domain, JSON.stringify(this.identity), hash, JSON.stringify(m));
         this.owner(); return m;
@@ -87,7 +91,7 @@ export class HostCutoverController {
   private change(expected: number, phases: Phase[], body: (m: Manifest) => void, finalCheck?: () => void): Manifest {
     return safe(() => this.db.transaction(() => {
       this.owner(); const row = this.read(); if (!row) throw fail();
-      const m: Manifest = JSON.parse(row.manifest);
+      const m: Manifest = this.manifest(row.manifest);
       if (m.revision !== expected || !phases.includes(m.phase)) throw fail();
       this.ports.assertCurrentWriter(m.writer); body(m); this.owner(); finalCheck?.(); m.revision++;
       // BEGIN IMMEDIATE serializes contenders; revision and phase were compared within this TX.
@@ -137,7 +141,8 @@ export class HostCutoverController {
         const prior = this.db.query("SELECT content_hash FROM qualification_cutover_work_v1 WHERE domain=? AND operation_id=?")
           .get(this.identity.domain, id) as { content_hash: string } | null;
         if (prior) { if (prior.content_hash !== hash) throw fail(); return; }
-        this.db.query("INSERT INTO qualification_cutover_work_v1 VALUES (?,?,?)").run(this.identity.domain, id, hash); m.postCutoverCount++;
+        this.db.query("INSERT INTO qualification_cutover_work_v1 VALUES (?,?,?)").run(this.identity.domain, id, hash);
+        m.postCutoverCount = this.manifest(JSON.stringify(m)).postCutoverCount;
       });
     });
   }
@@ -196,7 +201,7 @@ export class HostCutoverController {
   prepareRollback(expectedRevision: number): RollbackPlan {
     return safe(() => this.db.transaction(() => {
       this.owner(); const row = this.read(); if (!row) throw fail();
-      const m: Manifest = JSON.parse(row.manifest);
+      const m: Manifest = this.manifest(row.manifest);
       if (m.revision !== expectedRevision) throw fail();
       this.ports.assertCurrentWriter(m.writer);
       const plan = this.rollbackPlan(m); this.owner(); return plan;

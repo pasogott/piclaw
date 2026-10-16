@@ -914,20 +914,38 @@ public candidate progress evidence before writer switching. No activation occurs
 The opt-in factory now exposes one-use `controller.rollback(cutover, revision)`.
 It seals runtime admissions synchronously, joins host calls, and inspects the whole
 public pending task/submission domain. Any live work is refused **before** Harness
-close, without aborting accepted work. For an empty domain, Harness/storage close
-while the real factory owner remains held; only then may the existing SQL rollback
-preflight and writer transition run. Successful rollback releases the owner.
-Failures retain it; explicit controller close after confirmed resource cleanup can
-abort a failed SQL rollback. Failed/uncertain cleanup stays sealed and retains its
-cached failure and owner. Ordinary close remains unchanged.
+close, without aborting accepted work. For an empty domain, the factory now also
+requires historical candidate proof **before** Harness/storage close. Because no
+qualified proof is available, it refuses the rollback and retains the owner and
+open storage; no SQL writer transition or journal mutation occurs. Failed shutdown
+retains its cached failure and owner. Ordinary close remains unchanged.
 
 This adds quiescence only, not public historical-progress evidence. In particular,
 a completed candidate-only commit absent from the host projection still requires a
 trusted persisted activation-frontier comparison, which is not implemented here.
 Do not treat this composition as general/production rollback safety. No boolean
 approval, proof registry, new journal, migration or activation is introduced.
-Factory tests use actual candidate pending work and actual cutover SQL transitions;
+Factory tests use actual public candidate commits and SQL cutover journals;
 the test drain adapter is intentionally bounded, not a production drain proof.
+
+#### Historical-progress fail-closed guard
+
+`controller.checkpointCutover(cutover)` explicitly rejects without changing the
+journal. Public pi-durable 1.3.0 Storage has no persistent store-identity getter or
+read-only global commit head/history. Entry history excludes generic document
+commits; all-task/submission scans expose terminal records but only latest state.
+Document scans expose incarnations alive in one exact scope/point, so a newly
+created then retired session document disappears from the complete current scan.
+Actual public API regression fixtures demonstrate this, plus terminal task outcome
+and submission mutations invisible to pending inspection.
+
+`Storage.commit([])` returns a sequence but is itself a durable write, not a
+read-only inspection frontier, and supplies no persistent store identity. A barrier
+write/identity/crash protocol would need separate qualification. We do not claim
+that current snapshots or caller hashes establish historical absence of progress.
+Consequently even unchanged factory rollback is denied; host-only controller
+fixtures remain unchanged. No optional `candidateProgress` proof is persisted
+until its identity, domain and historical coverage can actually be qualified.
 
 Rollback quiescence follow-up: review found that detached wait observers could
 finish before an underlying host callback. Rollback now joins raw wait operations
@@ -937,3 +955,39 @@ provider refusal without abort. Focused controller verification passes 8 cases /
 190 assertions, full candidate verification passes 372 tests / 6,075 assertions,
 and both private-package types pass. Independent review cleared current quiescence
 only—not historical candidate progress, production rollback or a shutdown deadline.
+
+## Converged database target
+
+The application target is **one SQLite database and no ongoing JSONL session
+files**. JSONL is legacy migration input only. Host admission/lifecycle, queue,
+timeline, bindings, cutover state and SDK execution/history keep their respective
+authorities within that database; do not add another progress ledger or queue.
+
+`host-schema.ts` now owns the existing host binding/cutover DDL. Its explicit
+offline installer verifies FK enforcement, exact supported schema and synchronous
+ownership, then installs atomically in one IMMEDIATE transaction. Compatibility
+exports remain; incompatible schemas fail closed rather than pretending that
+`CREATE IF NOT EXISTS` performs migration. No production auto-install is added.
+Root admission/recovery and binding writes share one SDK-free queued-intent proof;
+identity, semantic hash and payload membership cannot diverge across those paths.
+Cutover work counts are derived from existing work rows.
+
+The single-database qualification opens host and SDK connections to the same
+physical file under ownership, exercises primary/intent execution and terminal
+commit, then reopens under a new owner preserving IDs and public documents. Both
+connections pass FK/integrity checks; file scans reject JSONL and extra database
+files. Separate connections do not imply one atomic cross-connection transaction.
+Older split-store fixtures remain boundary tests, not the application target.
+
+Factory rollback now refuses unavailable historical progress proof before storage
+close/writer transition/owner release. The public API has no qualified persistent
+store identity/read-only historical frontier; no incomplete SDK snapshot or new
+progress table substitutes for that proof. This remains an implementation gap,
+not production rollback acceptance.
+
+Final verification: 378 tests / 6,280 assertions across 27 files and both private-
+package types pass. The earlier full run hit six five-second timeouts; sequential
+repeat passed unchanged. Root fast CI for the convergence changes passed 7,143
+plus 25 feature and 9 build tests (74 baseline skips), before the final test-only
+fixture identity/shared-file additions. Independent bounded convergence and shared-
+file reviews are clear. No live database, activation or services were changed.

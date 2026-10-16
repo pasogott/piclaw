@@ -1,7 +1,8 @@
 import "./test-guard.js";
 import check from "node:assert/strict";
 import { join, basename } from "node:path";
-import { SqliteStorage } from "../../../runtime/durable-engine/qualification/sqlite.ts";
+import { STORE_DIR } from "../../../runtime/src/core/config.js";
+import { SqliteStorage, SQLITE_MIGRATIONS } from "../../../runtime/durable-engine/qualification/sqlite.ts";
 import { HostConversationRuntime, initializeHostDurableBindings, createHostDurableBindings, type AcceptedInput } from "../../../runtime/durable-engine/src/index.js";
 import { TestOwner, OwnedSqlite } from "./ownership.js";
 import { openFixture, context, barrier } from "./fixture.js";
@@ -19,16 +20,34 @@ import { storeWebMessage } from "../../../runtime/src/channels/web/messaging/mes
 
 
 export type RecoveryCheckpoint = { generation: number; intentSourceId: string; primary: AcceptedInput; primaryId: number; b: { sourceId: string; sourceSeq: number }; committedIntentId?: number; intent: DurableConversationOperation; candidate?: { id: number; requestId?: string }; modelCalls: number; effects: number; };
-export async function acceptedSteerFixture(dir: string, boundary: "before-submit" | "committed-ack-lost", recovered?: RecoveryCheckpoint, queuePrimary = false, testConfig: { loseIntentBindingAck?: boolean } = {}) {
+export async function acceptedSteerFixture(dir: string, boundary: "before-submit" | "committed-ack-lost", recovered?: RecoveryCheckpoint, queuePrimary = false, testConfig: { loseIntentBindingAck?: boolean; sharedDatabase?: boolean } = {}) {
     process.env.PICLAW_DB_IN_MEMORY = "0";
     const chatJid = `web:recovery:${basename(dir)}:${boundary}`;
-    const path = join(dir, "candidate.sqlite");
-    let owner = TestOwner.acquire(path);
+    const hostPath = join(STORE_DIR, "messages.db");
+    const path = testConfig.sharedDatabase ? hostPath : join(dir, "candidate.sqlite");
+    let owner = TestOwner.acquire(path); // Shared mode owns the root file BEFORE either runtime connection opens.
+    owner.assert();
     initDatabase();
     let db = getDb();
+    if (testConfig.sharedDatabase) {
+      db.exec("PRAGMA foreign_keys=ON");
+      // Inspect the published default DDL, including index names, against the actual root schema.
+      const sdkNames = SQLITE_MIGRATIONS.flatMap(m => m.statements.flatMap(sql => {
+        const match = /^CREATE (?:TABLE|INDEX) (\w+)/.exec(sql);
+        return match ? [match[1]!] : [];
+      })).concat("durable_schema");
+      const rootNames = new Set((db.query("SELECT name FROM sqlite_master").all() as { name: string }[]).map(r => r.name));
+      check.deepEqual(sdkNames.filter(name => rootNames.has(name)), [], "Public SDK default schema collides with root schema; use public SqliteStorageOptions.prefix before opening");
+    }
+    const rootSchemaMigrations = db.query("SELECT * FROM core_schema_migrations ORDER BY name").all();
+    let candidateDatabase: OwnedSqlite;
+    const openStorage = () => {
+      candidateDatabase = new OwnedSqlite(owner, { foreignKeys: testConfig.sharedDatabase });
+      return SqliteStorage.open(candidateDatabase);
+    };
     const primaryRow = (db.query('SELECT COALESCE(MAX(rowid),0)+1 AS id FROM messages').get() as { id: number }).id;
     const incarnation = queuePrimary ? `message:${primaryRow}:1` : `recovery:${basename(dir)}:${boundary}`;
-    const base = await openFixture({ get acquired() { return owner.acquired; } }, () => {}, () => SqliteStorage.open(new OwnedSqlite(owner)));
+    const base = await openFixture({ get acquired() { return owner.acquired; } }, () => {}, openStorage);
     await base.close();
     const manifest = [{ chatJid, branchId: "main", conversationId: base.root.id }];
     const generation = recovered?.generation ?? owner.token.generation; // Persisted operation watch generation, NOT replacement owner token.
@@ -81,7 +100,7 @@ export async function acceptedSteerFixture(dir: string, boundary: "before-submit
     let ports = stores();
     async function open() {
       runtime = await HostConversationRuntime.open({ incarnation, owner: { assert, release() {} },
-        openStorage: async () => { assert(); candidateStorage = await SqliteStorage.open(new OwnedSqlite(owner)); return candidateStorage; },
+        openStorage: async () => { assert(); candidateStorage = await openStorage(); return candidateStorage; },
         harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
         ...ports, existingConversationIds: [base.root.id], conversationFor(chat, branch) {
           if (chat !== chatJid || branch !== "main") throw Error("Manifest conflict"); return base.root.id;
@@ -155,6 +174,8 @@ get owner() { return owner; }, set owner(v) { owner = v; },
 get ports() { return ports; }, set ports(v) { ports = v; },
 get runtime() { return runtime; }, set runtime(v) { runtime = v; },
 get candidateStorage() { return candidateStorage; }, set candidateStorage(v) { candidateStorage = v; },
+get candidateDatabase() { return candidateDatabase; },
+rootSchemaMigrations,
 get providerEntries() { return providerEntries; }, set providerEntries(v) { providerEntries = v; },
 get entryObserved() { return entryObserved; }, set entryObserved(v) { entryObserved = v; },
 get ackLost() { return ackLost; }, set ackLost(v) { ackLost = v; },
@@ -164,6 +185,7 @@ get authorizations() { return authorizations; }, set authorizations(v) { authori
 base,
 putAnswer(ref: string, text: string) { payloads.putText(ref, text); },
 path,
+hostPath,
 generation,
 intentSourceId,
 primaryRequestId,

@@ -150,17 +150,27 @@ export async function createHostController(config: HostControllerOptions, contex
     }
     let rollbackAttempt: Promise<ReturnType<HostCutoverController["rollback"]>> | undefined;
     let closing: Promise<void> | undefined;
-    /** Explicit inactive composition, one attempt only. Actual runtime resources close while
-     * the same exclusive owner remains held through the synchronous SQL writer transition.
-     * HostCutoverController still supplies its exact host frontier/drain checks. This does
-     * NOT prove historical candidate-only progress: activation-frontier proof is separate. */
+    /** No qualified public storage identity/global historical frontier exists in 1.3.0.
+     * Current history/tasks/submissions/documents are insufficient: retired latest-only
+     * documents disappear from scans. Never persist those snapshots as a rollback proof.
+     * No caller boolean/hash or host-only checkpoint can authorize this factory path. */
+    async function checkpointCutover(_cutover: HostCutoverController): Promise<never> {
+      assert();
+      throw new Error("Candidate progress proof unavailable: public storage identity and historical commit frontier required");
+    }
+    /** Explicit inactive composition, one attempt only. Seal/join/inspect under the actual
+     * owner, then fail BEFORE closing storage if historical proof is unavailable.
+     * The independent host-only controller remains usable by its existing fixtures. */
     function rollback(cutover: Pick<HostCutoverController, "prepareRollback" | "rollback">, revision: number) {
       if (rollbackAttempt || closing) return Promise.reject(new Error("Controller already closing"));
       const prepare = cutover.prepareRollback.bind(cutover), restore = cutover.rollback.bind(cutover);
       retainOwner = true; // Synchronous: even a concurrent runtime.close cannot release the lease.
       return rollbackAttempt = (async () => {
         assert();
-        await activeRuntime.quiesceForRollback();
+        await activeRuntime.quiesceForRollback(async () => {
+          assert();
+          throw new Error("Candidate progress proof unavailable: public storage identity and historical commit frontier required");
+        });
         assert();
         if (!closedStorage) throw Error("Candidate storage not closed");
         if (prepare(revision).disposition !== "safe_to_restore") throw Error("Reconciliation required");
@@ -180,7 +190,7 @@ export async function createHostController(config: HostControllerOptions, contex
         if (retainOwner && !released && closedStorage) await releaseOwner();
       })();
     }
-    return Object.freeze({ runtime, recovered, reconcileRecovered, rollback,
+    return Object.freeze({ runtime, recovered, reconcileRecovered, checkpointCutover, rollback,
       pendingIntentIds: Object.freeze(recovered.filter(e => e.role === "intent" && e.binding?.submissionId == null).map(e => e.input.requestId)),
       close });
   } catch (error) {

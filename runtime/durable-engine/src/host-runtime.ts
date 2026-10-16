@@ -468,12 +468,12 @@ export class HostConversationRuntime {
   /** Rollback-only shutdown: seal before yielding, join host calls, then reject ANY live
    * public task/submission before Harness.close can cancel work. Failure stays sealed.
    * This proves quiescence, NOT absence of historical candidate-only commits. */
-  quiesceForRollback(): Promise<void> {
+  quiesceForRollback(beforeStorageClose?: () => Promise<void>): Promise<void> {
     if (this.closed) return Promise.reject(new Error("Runtime already closing"));
-    return this.shutdown(true);
+    return this.shutdown(true, beforeStorageClose);
   }
   close(): Promise<void> { return this.shutdown(false); }
-  private shutdown(requireQuiescent: boolean): Promise<void> {
+  private shutdown(requireQuiescent: boolean, beforeStorageClose?: () => Promise<void>): Promise<void> {
     if (this.closing) return this.closing;
     this.closed = true; // Seal admissions, preserve pending/unknown work; close does not enable scheduling.
     this.observations.abort();
@@ -485,6 +485,8 @@ export class HostConversationRuntime {
         const inspection = await this.harness.inspect(withoutAbortSignal(this.context));
         this.options.owner.assert();
         if (inspection.tasks.length || inspection.submissions.length) throw new Error("Candidate not quiescent");
+        await beforeStorageClose?.();
+        this.options.owner.assert();
       }
       await this.harness.close(withoutAbortSignal(this.context)); // May wait for cooperative providers/tools; no bounded-close claim.
       await this.options.owner.release(); // Only after confirmed resource cleanup.

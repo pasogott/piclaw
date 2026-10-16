@@ -28,3 +28,5 @@ export { HostCutoverController, initializeCutoverManifest } from "./host-cutover
 export type {
   Phase, CutoverIdentity, CutoverRequest, Receipt, Manifest, CutoverPorts, Preparation, RollbackPlan,
 } from "./host-cutover.js";
+
+export { initializeHostSchema, UnsupportedHostSchemaError } from "./host-schema.js";

@@ -47,7 +47,7 @@ async function setup() {
       operationId: claim.operation.operationId, sourceSeq: source.sourceSeq, sourceId: source.sourceId,
       payloadRef: source.payloadRef, requestId, requestHash: hashCanonicalRequest({ type: "input", requestId, content }) };
   }
-  return { dir, db, options, bindings, payloads, accept, count, resolves: () => resolves,
+  return { dir, db, work, options, bindings, payloads, accept, count, resolves: () => resolves,
     loseOwner: () => { owned = false; }, failAfterWrite: () => { failAfterWrite = true; } };
 }
 
@@ -59,6 +59,7 @@ test("bindings: factory does not initialize schema; explicit setup is fenced", a
     expect(db.query("SELECT name FROM sqlite_master WHERE type='table'").all()).toEqual([]);
     expect(() => initializeHostDurableBindings(db, () => { throw Error("Owner lost"); })).toThrow("Owner lost");
     expect(db.query("SELECT name FROM sqlite_master WHERE type='table'").all()).toEqual([]);
+    db.exec("PRAGMA foreign_keys=ON");
     initializeHostDurableBindings(db, () => {}); initializeHostDurableBindings(db, () => {});
     const columns = db.query("PRAGMA table_info(piclaw_durable_bindings_v1)").all() as { name: string }[];
     expect(columns.some(c => c.name === "content")).toBe(false);
@@ -152,4 +153,65 @@ test("bindings: submission IDs are unique within a store, not globally across in
   const second = await f.accept("second", "accepted user prompt", "web:bindings-2"); await f.bindings.bind(second);
   await expect(f.bindings.recordSubmission(second, 8)).rejects.toThrow("Host binding conflict");
   expect((await f.bindings.get(second))?.submissionId).toBeNull();
+}));
+
+test("bindings: exact queued intent proof matches root; terminal committed replay survives reopen", () => fixture(async f => {
+  const primary = await f.accept();
+  const sourceId = crypto.randomUUID(), content = "queued payload", requestId = `queued-steer:${sourceId}`;
+  const source = value(await f.work.acceptSource(sealed({ effect: effect("queue-source"), chatJid: primary.chatJid,
+    sourceId, kind: "message" as const, payloadRef: `queued-source:${sourceId}`, targetOperationId: primary.operationId,
+    parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
+  f.db.query("UPDATE service_effect_s01_sources SET state='claimed' WHERE chat_jid=? AND source_seq=?").run(source.chatJid, source.sourceSeq);
+  f.db.query("INSERT INTO service_effect_s01_operation_sources (operation_id,chat_jid,source_seq) VALUES (?,?,?)")
+    .run(primary.operationId, source.chatJid, source.sourceSeq);
+  const intent = { operationId: primary.operationId, intentId: requestId, kind: "queue_input", payloadRef: source.payloadRef, createdAt: at };
+  const hash = hashCanonicalRequest(intent);
+  f.db.query("INSERT INTO service_effect_s01_intents (operation_id,intent_id,intent_hash,kind,payload_ref,created_at) VALUES (?,?,?,?,?,?)")
+    .run(intent.operationId, intent.intentId, hash, intent.kind, intent.payloadRef, intent.createdAt);
+  f.payloads.set(source.payloadRef, content);
+  const input = { ...primary, sourceSeq: source.sourceSeq, sourceId, payloadRef: source.payloadRef, requestId,
+    requestHash: hashCanonicalRequest({ type: "input", requestId, content }) };
+  expect(f.work.getQueuedInputIntent(primary.operationId, source)?.intentId).toBe(requestId);
+  for (const [column, bad] of [["intent_id", "wrong"], ["intent_hash", "0".repeat(64)], ["payload_ref", "wrong"], ["kind", "prompt"]]) {
+    const original = column === "intent_id" ? requestId : column === "intent_hash" ? hash : column === "payload_ref" ? source.payloadRef : "queue_input";
+    f.db.query(`UPDATE service_effect_s01_intents SET ${column}=? WHERE operation_id=?`).run(bad!, primary.operationId);
+    expect(f.work.getQueuedInputIntent(primary.operationId, source)).toBeNull();
+    await expect(f.bindings.intents!.bind(input)).rejects.toThrow("Unverified host source");
+    f.db.query(`UPDATE service_effect_s01_intents SET ${column}=? WHERE operation_id=?`).run(original, primary.operationId);
+  }
+  const wrongRequest = "other", wrongInput = { ...input, requestId: wrongRequest,
+    requestHash: hashCanonicalRequest({ type: "input", requestId: wrongRequest, content }) };
+  await expect(f.bindings.intents!.bind(wrongInput)).rejects.toThrow("Unverified host source");
+  f.db.query("UPDATE service_effect_s01_sources SET target_operation_id=NULL WHERE chat_jid=? AND source_seq=?").run(input.chatJid, input.sourceSeq);
+  expect(f.work.getQueuedInputIntent(primary.operationId, source)).toBeNull();
+  await expect(f.bindings.intents!.bind(input)).rejects.toThrow("Unverified host source");
+  f.db.query("UPDATE service_effect_s01_sources SET target_operation_id=? WHERE chat_jid=? AND source_seq=?").run(primary.operationId, input.chatJid, input.sourceSeq);
+  f.db.query("DELETE FROM service_effect_s01_operation_sources WHERE operation_id=? AND source_seq=?").run(primary.operationId, input.sourceSeq);
+  expect(f.work.getQueuedInputIntent(primary.operationId, source)).toBeNull();
+  await expect(f.bindings.intents!.bind(input)).rejects.toThrow("Unverified host source");
+  f.db.query("INSERT INTO service_effect_s01_operation_sources (operation_id,chat_jid,source_seq) VALUES (?,?,?)").run(primary.operationId, input.chatJid, input.sourceSeq);
+  const mutating = createHostDurableBindings(f.db, { ...f.options, async resolveContent() {
+    f.db.query("UPDATE service_effect_s01_intents SET intent_hash=? WHERE operation_id=?").run("0".repeat(64), primary.operationId);
+    return content;
+  } });
+  await expect(mutating.intents!.bind(input)).rejects.toThrow("Unverified host source");
+  expect(await f.bindings.intents!.get(input)).toBeNull();
+  f.db.query("UPDATE service_effect_s01_intents SET intent_hash=? WHERE operation_id=?").run(hash, primary.operationId);
+  await f.bindings.intents!.bind(input); await f.bindings.intents!.recordSubmission(input, 77);
+  // Cross-table source overlap is rejected even when a conflicting row bypassed the role verifier.
+  f.db.query("INSERT INTO piclaw_durable_bindings_v1 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+    .run("host", "store-A", 1, input.chatJid, "main", "other-op", input.sourceSeq, input.sourceId, input.payloadRef, "other-request", input.requestHash, null);
+  await expect(f.bindings.intents!.bind(input)).rejects.toThrow("Host binding conflict");
+  f.db.query("DELETE FROM piclaw_durable_bindings_v1 WHERE operation_id='other-op'").run();
+  // A terminal operation cannot gain a fresh binding, but its exact committed binding can replay.
+  f.db.query("UPDATE service_effect_s01_operations SET phase='terminal' WHERE operation_id=?").run(primary.operationId);
+  f.db.query("UPDATE service_effect_s01_sources SET state='consumed' WHERE chat_jid=? AND source_seq=?").run(input.chatJid, input.sourceSeq);
+  expect(f.work.getQueuedInputIntent(primary.operationId, source)).toBeNull();
+  const reopenedDb = new Database(join(f.dir, "host.sqlite"), { strict: true });
+  try {
+    const reopened = createHostDurableBindings(reopenedDb, f.options);
+    expect((await reopened.intents!.bind(input)).submissionId).toBe(77);
+    reopenedDb.query("DELETE FROM piclaw_durable_intent_bindings_v1").run();
+    await expect(reopened.intents!.bind(input)).rejects.toThrow("Unverified host source");
+  } finally { reopenedDb.close(); }
 }));

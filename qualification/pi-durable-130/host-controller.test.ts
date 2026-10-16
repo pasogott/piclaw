@@ -14,7 +14,8 @@ import { HostCutoverController, initializeCutoverManifest } from "../../runtime/
 for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["background"],
   ["bootstrap-close-failure", "shutdown-close-failure"],
   ["rollback", "rollback-host-changed", "rollback-close-failure", "rollback-pending"],
-  ["rollback-held", "rollback-held-close", "rollback-close-first", "rollback-inflight"]] as const) {
+  ["rollback-held", "rollback-held-close", "rollback-close-first", "rollback-inflight"],
+  ["rollback-candidate-only", "rollback-retired-document", "rollback-terminal-records"]] as const) {
   test(`explicit owner-first host controller: ${modes.join(" / ")}`, async () => {
     for (const mode of modes) {
     const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "host-controller-"));
@@ -22,6 +23,7 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
     const f = await acceptedSteerFixture(dir, mode === "lost-ack" || mode === "rollback-pending" ? "committed-ack-lost" : "before-submit");
     let controller: Awaited<ReturnType<typeof createHostController>> | undefined;
     let actualClose: (() => Promise<void>) | undefined;
+    let candidate: Awaited<ReturnType<typeof SqliteStorage.open>> | undefined;
     let capturedLease: Parameters<HostControllerOptions["createStorage"]>[0] | undefined;
     const rollbackMode = mode.startsWith("rollback");
     const held = barrier(), entered = barrier();
@@ -71,7 +73,7 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
           expect(() => TestOwner.acquire(f.path)).toThrow("owner busy");
           const s = await SqliteStorage.open(new OwnedSqlite(f.owner));
           const close = s.close.bind(s);
-          if (rollbackMode) { capturedLease = lease; actualClose = () => close(context); }
+          if (rollbackMode) { candidate = s; capturedLease = lease; actualClose = () => close(context); }
           if (closeFailure) {
             capturedLease = lease;
             actualClose = () => close(context);
@@ -167,6 +169,35 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
           m = cutover.commitWriter(m.revision);
           if (mode === "rollback-host-changed") f.db.exec("DELETE FROM piclaw_durable_intent_bindings_v1");
           const before = cutover.inspect();
+          await expect(controller.checkpointCutover(cutover)).rejects.toThrow("Candidate progress proof unavailable");
+          expect(cutover.inspect()).toEqual(before);
+          if (mode === "rollback-candidate-only" || mode === "rollback-retired-document") {
+            const scope = { kind: "session" as const };
+            const query = { scope, at: "current" as const };
+            const documentsBefore = await candidate!.scanDocuments(query, 1000, undefined, context);
+            const id = await candidate!.mintId<import("../../runtime/durable-engine/qualification/durable.ts").DocumentId>();
+            await candidate!.commit([{ type: "document.create", record: { id, kind: "qualification.candidate-only", scope },
+              content: { kind: "base", version: 1, value: { outcome: "committed" } } }], context);
+            expect((await candidate!.document(id, "current", context))!.value.outcome).toBe("committed");
+            if (mode === "rollback-retired-document") {
+              await candidate!.commit([{ type: "document.retire", id }], context);
+              // A complete current scan has no evidence of this actual committed change.
+              expect(await candidate!.scanDocuments(query, 1000, undefined, context)).toEqual(documentsBefore);
+            }
+          }
+          if (mode === "rollback-terminal-records") {
+            const tasks = await candidate!.scanTasks({ status: "terminal" }, 1000, undefined, context);
+            const submissions = await candidate!.scanSubmissions({ status: "done" }, 1000, undefined, context);
+            expect(tasks.items.length).toBeGreaterThan(0);
+            expect(submissions.items.length).toBeGreaterThan(0);
+            // Real public commits of historical terminal records, invisible to pending inspection.
+            await candidate!.commit([{ type: "task", value: { ...tasks.items[0]!, memos: undefined, state: { status: "terminal",
+              outcome: { status: "completed", result: "candidate-only-outcome" } } } },
+              { type: "submission", value: { ...submissions.items[0]!, requestId: "candidate-only-terminal-change" } }], context);
+            expect((await controller.runtime.inspectAuthority()).inspection.tasks).toEqual([]);
+            expect((await controller.runtime.inspectAuthority()).inspection.submissions).toEqual([]);
+          }
+          expect(cutover.inspect()).toEqual(before);
           const actualRollback = cutover.rollback.bind(cutover);
           let flips = 0;
           cutover.rollback = revision => {
@@ -197,7 +228,7 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
           }
           const attempt = controller.rollback(cutover, m.revision);
           if (observer) {
-            if (mode === "rollback-held-close") concurrentClose = controller.close();
+            if (mode === "rollback-held-close") { concurrentClose = controller.close(); void concurrentClose.catch(() => {}); }
             await expect(observer).rejects.toThrow();
             // Flush detached wrapper continuations while the underlying callback stays held.
             await Bun.sleep(0);
@@ -210,14 +241,9 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
           }
           expect(() => controller!.runtime.reconcile(primary)).toThrow("Runtime closed");
           await expect(controller.rollback(cutover, m.revision)).rejects.toThrow("Controller already closing");
-          if (mode === "rollback" || mode === "rollback-held" || mode === "rollback-held-close") {
-            expect((await attempt).writer).toBe("legacy");
-            expect(flips).toBe(1);
-            await concurrentClose;
-            await controller.close();
-          } else {
+          {
             await expect(attempt).rejects.toThrow(mode === "rollback-pending" || mode === "rollback-inflight" ? "Candidate not quiescent" :
-              mode === "rollback-close-failure" ? "injected storage close failure" : "Reconciliation required");
+              "Candidate progress proof unavailable");
             expect(cutover.inspect()).toEqual(before);
             expect(flips).toBe(0);
             f.owner.assert();
@@ -232,6 +258,8 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
             }
             // Explicit test teardown, not a rollback retry or work cancellation by the guard.
             f.base.host.modelHold?.release();
+            expect(events).toEqual(["owner", "storage"]);
+            if (concurrentClose) await expect(concurrentClose).rejects.toThrow("Candidate progress proof unavailable");
             await actualClose!(); actualClose = undefined;
             await capturedLease!.release(); capturedLease = undefined;
             controller = undefined;
@@ -253,8 +281,7 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
         expect(events).toEqual(["owner", "storage", "close-failed", "release"]);
         const contender = TestOwner.acquire(f.path);
         contender.releaseAfterClose(); contender.closeConnection();
-      } else if (mode === "rollback-close-failure") expect(events).toEqual(["owner", "storage", "close-failed", "release"]);
-      else if (mode === "rollback-pending" || mode === "rollback-inflight") expect(events).toEqual(["owner", "storage", "release"]);
+      } else if (rollbackMode && mode !== "rollback-close-first") expect(events).toEqual(["owner", "storage", "release"]);
       else expect(events).toEqual(["owner", "storage", "close", "release"]);
     } finally {
       held.release();
