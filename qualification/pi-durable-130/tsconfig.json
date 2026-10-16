@@ -17,6 +17,7 @@
     "test.ts",
     "sqlite.test.ts",
     "host-handoff.test.ts",
+    "runtime.test.ts",
     "migration.test.ts",
     "ownership.test.ts",
     "cross-store.test.ts",

@@ -114,6 +114,6 @@ export async function openFixture(owner: { acquired: boolean }, allocated = () =
     if (!answer || answer.conversationId !== root.id) throw new Error("Missing committed answer entry");
     return { status, answer };
   }
-  return { owner, host, harness, storage, root, submit, settlement, reports, close: () => harness.close(context) };
+  return { owner, host, harness, storage, root, models, registry, submit, settlement, reports, close: () => harness.close(context) };
 
 }

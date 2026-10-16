@@ -477,3 +477,28 @@ files, with 93 focused model cases and strict types. Source review cleared the
 model-mutation fix. Bridge recreation uses the same retained host authority;
 production/process-persistent handle authority and whole durable recovery remain
 unqualified. The accepted provider-call microtask limitation is unchanged.
+
+## Inactive host conversation runtime
+
+`host-runtime.ts` exposes explicit open/submit/cancel/reconcile/settle/close over
+public Harness APIs and real host acceptance/settlement ports. It opens only
+manifest-listed conversations after ownership assertion, with injected models,
+registry and fenced storage; it does not create a default chat, queue or engine
+registration. Host-owned durable bindings are required. Passive reconciliation
+never starts work. Any progress permission must cover all recovered work in the
+ownership domain, not just one task.
+
+Input and cancellation identities, nested effects, manifest and port/callback
+references are captured before awaits. Host policy remains live behind captured
+callbacks. EF-S01 owns cancellation version checks and replay, so a lost
+acknowledgement or denied progress can retry the same sealed request after reopen.
+Queued work can be withdrawn; already placed work reports `already_placed` and
+is not escalated to conversation-wide abort. Successful close precedes release;
+non-cooperative providers/tools do not have a bounded-close guarantee.
+
+The candidate suite passes 283 tests / 4,587 assertions across sixteen files and
+strict types; ten runtime regressions cover immutable bindings, cancellation
+recovery, passive reopen and cleanup. Source judges cleared the corrected code.
+Production schema/correlation setup, exact running-task cancellation, general
+multimedia settlement and engine bootstrap remain inactive/unqualified. This is
+an implemented reusable integration seam, not completion or deployment of #1650.
