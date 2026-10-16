@@ -21,6 +21,7 @@
     "cross-store.test.ts",
     "models.test.ts",
     "tools.test.ts",
-    "bash-port.test.ts"
+    "bash-port.test.ts",
+    "plan.test.ts"
   ]
 }

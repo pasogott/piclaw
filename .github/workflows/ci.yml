@@ -67,8 +67,18 @@ jobs:
       - name: Run canonical fast CI contract
         run: make ci-fast
 
+      - name: Checkout pinned add-on qualification source
+        uses: actions/checkout@v6
+        with:
+          repository: rcarmo/piclaw-addons
+          ref: de92bc95b5b3bb1505beec9617d3b8a5e4fa92d3
+          path: .qualification-addons
+          persist-credentials: false
+
       - name: Isolated pi-durable qualification
         working-directory: qualification/pi-durable-130
+        env:
+          DURABLE_ADDONS_ROOT: ${{ github.workspace }}/.qualification-addons
         run: |
           bun install --frozen-lockfile --ignore-scripts
           bun run typecheck

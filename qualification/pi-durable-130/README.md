@@ -265,3 +265,29 @@ local shell effects, child cancellation and unsafe replay/reopen boundaries.
 This does not qualify SSH, filesystem tools, MCP effects, arbitrary child trees
 or provider dispatch. The untouched SDK local runner's late-spawn limitation is
 retained as a negative control. No production port is registered.
+
+## Actual Plan factory and hidden context lifecycle
+
+Set `DURABLE_ADDONS_ROOT` to the pinned piclaw-addons source (commit
+`de92bc95b5b3bb1505beec9617d3b8a5e4fa92d3`). CI checks out that source separately
+without persisted credentials. `plan.test.ts` verifies Plan 0.1.25 and executable
+source hashes; absent or mismatched source fails rather than silently skipping.
+
+The combined suite now passes 148 tests, 1,146 assertions across ten files,
+plus strict types. Actual Plan registration/preparation, existing-chat KV,
+cross-chat denial, fork storage separation and fresh context are exercised.
+A real Pi 1.2 SDK baseline demonstrates why request-local projection alone is not
+hidden-message persistence, and why committing a hidden message after request
+capture alone misses that request. The positive public-API path commits and
+projects once per explicitly accepted run: two immutable snapshots across four
+provider user-message histories match the SDK fixture; tool rounds do not
+refresh snapshots. Persisted requestId-to-entry bookkeeping survives cooperative
+interrupted-hook reopen using an externally retained submissionId. Fork and
+SQLite reopen retain the snapshots.
+
+This is a serial, explicitly correlated qualification fixture, not a generic
+ExtensionAPI runtime. It does not discover unknown recovered operations, prove
+concurrent admission, preserve every system/tool context, qualify SIGKILL in the
+Plan hook, or support general add-on lifecycle migration. Model-provider final
+admission and other activation blockers above remain open. No production Plan
+adapter is registered.
