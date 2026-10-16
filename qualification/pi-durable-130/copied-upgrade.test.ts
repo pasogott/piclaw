@@ -1,11 +1,13 @@
 import "./src/test-guard.js";
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { SessionManager, buildSessionContext, convertToLlm, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
-import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
+import { SqliteStorage, SQLITE_MIGRATIONS, CURRENT_SQLITE_SCHEMA_VERSION } from "../../runtime/durable-engine/qualification/sqlite.ts";
+import { STORE_DIR } from "../../runtime/src/core/config.js";
+import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
 import { prepareCopiedUpgrade } from "../../runtime/durable-engine/src/copied-upgrade.ts";
 import { HostCutoverController, initializeCutoverManifest, LegacyTreeImportManifest, LegacyImportManifest, type GetLegacyContext } from "../../runtime/durable-engine/src/index.ts";
 import { TestOwner, OwnedSqlite } from "./src/ownership.ts";
@@ -18,8 +20,9 @@ async function using(run: (f: Awaited<ReturnType<typeof setup>>) => Promise<void
   const f = await setup();
   try { await run(f); } finally { await f.base.close(); f.owner.releaseAfterClose(); f.db.close(); f.owner.closeConnection(); await rm(f.dir, { recursive: true, force: true }); }
 }
-async function setup() {
-  const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "upgrade-")), path = join(dir, "owned.sqlite");
+async function setup(sharedDatabase = false) {
+  const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "upgrade-"));
+  const path = sharedDatabase ? join(STORE_DIR, "messages.db") : join(dir, "owned.sqlite");
   const manager = SessionManager.inMemory(dir, { id: "existing-session" });
   manager.appendMessage({ role: "system", content: "persisted baseline", timestamp: 1 });
   const user = manager.appendMessage({ role: "user", content: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }], timestamp: 2 });
@@ -29,19 +32,59 @@ async function setup() {
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
   const left = answer(); manager.branch(shared); const right = answer();
   const source = Buffer.from([manager.getHeader(), ...manager.getEntries()].map(v => JSON.stringify(v)).join("\n") + "\n");
+  const chatJid = sharedDatabase ? `web:existing-${crypto.randomUUID()}` : "web:existing";
   const host = { version: 1, sourceCopied: true, expectedSourceSHA256: sha(source), pending: 0, inflight: 0,
-    hostBranchBindings: Object.fromEntries([left, right].map((leaf, i) => [leaf, { chatJid: "web:existing", chatIncarnation: "existing-incarnation", branchId: `existing-${i}`, hostBaseline: "persisted baseline" }])) };
-  await writeFile(join(dir, "copy.jsonl"), source); await writeFile(join(dir, "host.json"), JSON.stringify(host));
-  const bytes = await readFile(join(dir, "copy.jsonl")), manifest = await readFile(join(dir, "host.json"));
+    hostBranchBindings: Object.fromEntries([left, right].map((leaf, i) => [leaf, { chatJid: sharedDatabase && i === 1 ? `${chatJid}-right` : chatJid, chatIncarnation: "existing-incarnation", branchId: `${chatJid}-${i}`, hostBaseline: "persisted baseline" }])) };
+  if (!sharedDatabase) {
+    await writeFile(join(dir, "copy.jsonl"), source); await writeFile(join(dir, "host.json"), JSON.stringify(host));
+  }
+  // Shared mode has only migration input bytes in memory, never a session file.
+  const bytes = Buffer.from(source), manifest = Buffer.from(JSON.stringify(host));
   const expected = { sourceSHA256: sha(bytes), manifestSHA256: sha(manifest) };
-  const owner = TestOwner.acquire(path), db = new Database(path, { strict: true });
-  db.exec("PRAGMA foreign_keys=ON"); initializeCutoverManifest(db);
-  const base = await openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(new OwnedSqlite(owner)));
+  const owner = TestOwner.acquire(path);
+  if (sharedDatabase) { owner.assert(); initDatabase(); }
+  const db = sharedDatabase ? getDb() : new Database(path, { strict: true });
+  db.exec("PRAGMA foreign_keys=ON"); initializeCutoverManifest(db, () => owner.assert());
+  if (sharedDatabase) {
+    // These are original manifest identities, persisted BEFORE any SDK import.
+    for (const [leaf, binding] of Object.entries(host.hostBranchBindings)) {
+      db.query("INSERT INTO chats(jid,name) VALUES (?,?)").run(binding.chatJid, "Existing host chat");
+      db.query("INSERT INTO chat_branches(branch_id,chat_jid,root_chat_jid,agent_name,created_at,updated_at) VALUES (?,?,?,?,?,?)")
+        .run(binding.branchId, binding.chatJid, chatJid, `smith-${binding.branchId}`, "2026-01-01", "2026-01-01");
+      for (const entry of manager.getBranch(leaf)) {
+        if (entry.type === "message" && "content" in entry.message) db.query("INSERT INTO messages(id,chat_jid,content,timestamp) VALUES (?,?,?,?)")
+          .run(entry.id, binding.chatJid, JSON.stringify(entry.message.content), "2026-01-01");
+      }
+    }
+    db.query("INSERT INTO chat_cursors(chat_jid,cursor_ts,queued_followups_json) VALUES (?,?,?)")
+      .run(chatJid, "2026-01-01", JSON.stringify([{ id: "original-queued", content: "untouched queue" }]));
+    db.query("INSERT INTO users(id,username,display_name,role,enabled,created_at,updated_at) VALUES (?,?,?,'member',1,?,?)")
+      .run(chatJid, chatJid, "Existing host user", "2026-01-01", "2026-01-01");
+    db.query("INSERT INTO user_preferences VALUES (?,?,?,?,?)").run(chatJid, 1, "dark", "original guidance", "2026-01-01");
+    const message = db.query("SELECT rowid FROM messages WHERE id=? AND chat_jid=?").get(user, chatJid) as { rowid: number };
+    const media = db.query("INSERT INTO media(filename,content_type,data,metadata) VALUES (?,?,?,?) RETURNING id")
+      .get("original.png", "image/png", Buffer.from("image"), JSON.stringify({ sourceEntryId: user })) as { id: number };
+    db.query("INSERT INTO message_media VALUES (?,?)").run(message.rowid, media.id);
+    const rootNames = new Set((db.query("SELECT name FROM sqlite_master").all() as { name: string }[]).map(row => row.name));
+    const sdkNames = SQLITE_MIGRATIONS.flatMap(m => m.statements.flatMap(sql => {
+      const match = /^CREATE (?:TABLE|INDEX) (\w+)/.exec(sql); return match ? [match[1]!] : [];
+    })).concat("durable_schema");
+    if (!rootNames.has("durable_schema")) expect(sdkNames.filter(name => rootNames.has(name))).toEqual([]);
+  }
+  const hostSnapshot = (connection = db) => ["chats", "chat_branches", "messages", "chat_cursors", "users", "user_preferences", "media", "message_media", "core_schema_migrations"]
+    .map(table => connection.query(`SELECT * FROM ${table} ORDER BY rowid`).all());
+  const originalHost = sharedDatabase ? hostSnapshot() : [];
+  const candidateDatabase = new OwnedSqlite(owner, { foreignKeys: sharedDatabase });
+  const opened = await openFixture(owner, () => {}, () => SqliteStorage.open(candidateDatabase));
+  // Harness.root() reuses the fixed SDK root, which can contain another fixture's history.
+  // Keep the exact handle returned by public creation; never select a global first row.
+  const root = sharedDatabase ? await opened.harness.createConversation({ ownership: { kind: "ownerless" } }, context) : opened.root;
+  const base = { ...opened, root };
   const identity = { domain: "copied-authority", incarnation: "existing-host", ownerGeneration: owner.token.generation, sourceEngineId: "legacy", candidateStoreRef: "candidate" };
   const ports = { assertOwner() { owner.assert(); }, assertCurrentWriter(writer: string) { if (writer !== "legacy") throw Error("not source"); },
     checkDrained() { return { sourceDigest: expected.sourceSHA256, pending: 0, inflight: 0 }; } };
   const controller = new HostCutoverController(db, identity, ports);
-  return { dir, owner, db, base, bytes, manifest, expected, controller, identity, ports, host };
+  return { dir, path, owner, db, base, bytes, manifest, expected, controller, identity, ports, host, candidateDatabase, hostSnapshot, originalHost };
 }
 test("copied upgrade: exact bytes checkpoint before import; lost acknowledgement and disk/public reopen preserve all IDs", () => using(async f => {
   const plan = prepareCopiedUpgrade(f.bytes, f.manifest, f.expected, bridge);
@@ -49,7 +92,19 @@ test("copied upgrade: exact bytes checkpoint before import; lost acknowledgement
   const checkpoint = plan.checkpoint(f.controller);
   const preparation = { async copy() { return { sourceDigest: plan.sourceSHA256, receiptHash: plan.request.importHash }; },
     importCopied: () => plan.importCopied(f.base.root, () => f.owner.assert(), context) };
-  await expect(f.controller.begin(checkpoint.revision, { ...preparation, async importCopied() { await preparation.importCopied(); throw Error("lost acknowledgement"); } })).rejects.toThrow();
+  const lostAcknowledgement = new Error("lost acknowledgement");
+  let importCommitted = false;
+  let callbackError: unknown;
+  await expect(f.controller.begin(checkpoint.revision, { ...preparation, async importCopied() {
+    try {
+      await preparation.importCopied();
+      expect((await f.base.harness.snapshot(LegacyTreeImportManifest, f.base.root.id, context))?.binding).toBeDefined();
+      importCommitted = true;
+      throw lostAcknowledgement;
+    } catch (error) { callbackError = error; throw error; }
+  } })).rejects.toThrow(/^Cutover rejected$/);
+  expect(callbackError).toBe(lostAcknowledgement);
+  expect(importCommitted).toBe(true);
   const rootId = f.base.root.id;
   const before = await f.base.harness.snapshot(LegacyTreeImportManifest, rootId, context);
   await f.base.close();
@@ -73,6 +128,84 @@ test("copied upgrade: exact bytes checkpoint before import; lost acknowledgement
     expect(reopened.host.modelCalls + reopened.host.effects + reopened.host.credentialLookups).toBe(0);
   } finally { await reopened.close(); journal.close(); }
 }));
+test("copied upgrade: single host messages.db preserves original rows through lost import ACK and SDK/journal reopen without JSONL", async () => {
+  const oldMemory = process.env.PICLAW_DB_IN_MEMORY;
+  process.env.PICLAW_DB_IN_MEMORY = "0";
+  const f = await setup(true);
+  let reopened: Awaited<ReturnType<typeof openFixture>> | undefined;
+  let journal: Database | undefined;
+  try {
+    const plan = prepareCopiedUpgrade(f.bytes, f.manifest, f.expected, bridge);
+    const rootId = f.base.root.id;
+    const checkpoint = plan.checkpoint(f.controller);
+    const copy = async () => ({ sourceDigest: plan.sourceSHA256, receiptHash: plan.request.importHash });
+    let importCommitted = false;
+    const lostAcknowledgement = new Error("lost import acknowledgement");
+    let callbackError: unknown;
+    await expect(f.controller.begin(checkpoint.revision, { copy, async importCopied() {
+      try {
+        await plan.importCopied(f.base.root, () => f.owner.assert(), context);
+        expect((await f.base.harness.snapshot(LegacyTreeImportManifest, rootId, context))?.binding).toBeDefined();
+        importCommitted = true;
+        throw lostAcknowledgement;
+      } catch (error) { callbackError = error; throw error; }
+    } })).rejects.toThrow(/^Cutover rejected$/);
+    expect(callbackError).toBe(lostAcknowledgement);
+    expect(importCommitted).toBe(true);
+    const before = await f.base.harness.snapshot(LegacyTreeImportManifest, rootId, context);
+    expect(before!.binding!.sourceSessionId).toBe("existing-session");
+    expect(before!.binding!.branches.map(b => [b.sourceLeafId, b.chatJid, b.branchId]).sort(([a], [b]) => a!.localeCompare(b!)))
+      .toEqual(Object.entries(f.host.hostBranchBindings).sort(([a], [b]) => a.localeCompare(b)).map(([leaf, b]) => [leaf, b.chatJid, b.branchId]));
+    // Verify full source rows, provenance, branch receipts, contexts and media BEFORE close too.
+    await plan.verify(f.base.harness, rootId, context);
+    expect(f.hostSnapshot()).toEqual(f.originalHost);
+    const originalConversations = (await f.base.root.commit(tx => tx.scanConversations({}, 100), context)).items;
+    const header = f.db.query("PRAGMA user_version").get();
+    await f.base.close(); closeDatabase();
+    // The exclusive owner remains held across connection restart; nobody can steal a live owner.
+    expect(() => TestOwner.acquire(f.path)).toThrow("owner busy");
+    f.owner.assert(); initDatabase(); journal = getDb(); journal.exec("PRAGMA foreign_keys=ON");
+    expect(f.hostSnapshot(journal)).toEqual(f.originalHost);
+    expect(journal.query("PRAGMA user_version").get()).toEqual(header);
+    const sdk = new OwnedSqlite(f.owner, { foreignKeys: true });
+    reopened = await openFixture(f.owner, () => {}, () => SqliteStorage.open(sdk));
+    const root = (await reopened.harness.conversation(rootId, context))!;
+    const controller = new HostCutoverController(journal, f.identity, f.ports);
+    const imported = await controller.begin(plan.checkpoint(controller).revision, { copy,
+      importCopied: () => plan.importCopied(root, () => f.owner.assert(), context) });
+    const verified = await controller.verify(imported.revision, () => plan.verify(reopened!.harness, rootId, context));
+    expect(verified.phase).toBe("verified"); expect(verified.writer).toBe("legacy");
+    // Retry again after verification: no extra durable IDs or entries, no writer flip.
+    await plan.importCopied(root, () => f.owner.assert(), context);
+    expect(await reopened.harness.snapshot(LegacyTreeImportManifest, rootId, context)).toEqual(before);
+    const conversations = (await root.commit(tx => tx.scanConversations({}, 100), context)).items;
+    expect(conversations).toEqual(originalConversations);
+    expect(conversations.filter(c => before!.binding!.branches.some(b => b.engineConversationId === c.id))).toHaveLength(2);
+    expect(f.hostSnapshot(journal)).toEqual(f.originalHost);
+    for (const connection of [journal.query("PRAGMA database_list").all(), await sdk.all("PRAGMA database_list")]) {
+      expect(connection).toEqual([{ seq: 0, name: "main", file: f.owner.path }]);
+    }
+    expect(journal.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    expect(await sdk.get("PRAGMA foreign_keys")).toEqual({ foreign_keys: 1 });
+    expect(journal.query("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
+    expect(await sdk.all("PRAGMA foreign_key_check")).toEqual([]);
+    expect(journal.query("SELECT version FROM durable_schema").get()).toEqual({ version: CURRENT_SQLITE_SCHEMA_VERSION });
+    for (const table of ["qualification_cutover_v1", "documents", "document_revisions", "entries", "conversations"]) {
+      expect((journal.query(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n).toBeGreaterThan(0);
+    }
+    expect(controller.inspect()).toEqual(verified);
+    expect(reopened.host.modelCalls + reopened.host.effects + reopened.host.credentialLookups).toBe(0);
+    const files = [...(await readdir(f.dir)).map(name => join(f.dir, name)), ...(await readdir(STORE_DIR)).map(name => join(STORE_DIR, name))];
+    expect(files.filter(file => /\.jsonl$/i.test(file))).toEqual([]);
+    expect(files.filter(file => ![f.path, `${f.path}-wal`, `${f.path}-shm`].includes(file))).toEqual([]);
+    expect((await stat(f.path)).ino).toBe((await stat(f.owner.path)).ino);
+  } finally {
+    await reopened?.close(); await f.base.close(); closeDatabase();
+    f.owner.releaseAfterClose(); f.owner.closeConnection();
+    process.env.PICLAW_DB_IN_MEMORY = oldMemory;
+    await rm(f.dir, { recursive: true, force: true });
+  }
+}, 20000);
 for (const fault of ["missing tree mapping", "missing branch mapping", "aliased conversations", "matching forged manifests"] as const) {
   test(`copied upgrade: public receipt corruption rejects ${fault} without advancing cutover`, () => using(async f => {
     const plan = prepareCopiedUpgrade(f.bytes, f.manifest, f.expected, bridge);

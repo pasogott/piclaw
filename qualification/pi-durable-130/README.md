@@ -1005,3 +1005,18 @@ passes 380 tests / 6,440 assertions across 27 files, both private-package types 
 and independent bounded review is clear. Initial review caught the post-reopen
 baseline blind spot; the pre-kill snapshots close it. This covers two fixed windows,
 not arbitrary crash placement or production activation.
+
+Legacy import now has a shared-database rehearsal too: in-memory legacy migration
+bytes import into the same `messages.db` holding original host messages, branch
+identities, media references, queue/preferences and migration metadata. Lost import
+acknowledgement and SDK/host/journal connection reopen preserve those rows and all
+import bindings without duplicate conversations or session JSONL files. The same
+owner remains held; this is not fresh-owner/process-death evidence. The journal
+reaches verified with the legacy writer unchanged, not automatic activation.
+
+The shared-history fixture uses a fresh public SDK root and random host identities,
+compares branch mappings by leaf identity, and requires the exact injected lost-ACK
+error after a persisted manifest. These corrections prevent random ordering or an
+earlier import failure from masquerading as evidence. Final correctly configured
+candidate run passes 381 tests / 6,476 assertions across 27 files; types and bounded
+independent review are clear.
