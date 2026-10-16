@@ -438,3 +438,20 @@ may retain an accurately attributed failure audit; it must not be described as
 proof of no stale logs. Root EF-S07 remains responsible for atomic completion
 and successor advancement. Dedicated-conversation fixtures do not qualify the
 production main-chat save/restore or a registered durable scheduler adapter.
+
+## Host image and classifier operations
+
+The model bridge now supports explicitly approved image/classifier models through
+the host's public `getModelOfType`, `generateImages` and `classify` methods. Catalog
+keys include model kind, so shared IDs do not cross operation boundaries. Host
+credentials remain host-owned; catalog/results expose only selected JSON fields.
+Public and direct-provider calls reject callbacks, auth overrides, invalid JSON
+options and retry widening before host dispatch. Held-auth policy/budget/cancel
+cases use actual host ModelRuntime with synthetic providers. The accepted
+post-auth microtask limitation remains; deferred and login-control paths still
+reject. This supersedes the earlier chat-only description for these two paths.
+
+The complete candidate suite passes 225 tests / 2,436 assertions across fifteen
+files and strict types. Independent source review cleared the corrected public
+preflight and option-isolation boundaries. No live image/classifier accounts,
+paid operations, production registration or whole-migration acceptance is claimed.
