@@ -10,7 +10,8 @@ import type { ConversationId } from "../../runtime/durable-engine/qualification/
 import { TestOwner, OwnedSqlite } from "./src/ownership.js";
 import { barrier, context, openFixture } from "./src/fixture.js";
 import { importCopiedLegacyTree, LegacyTreeImportManifest, DEFAULT_TREE_IMPORT_LIMITS, type GetLegacyContext } from "../../runtime/durable-engine/src/index.js";
-import { HostCutoverController, initializeCutoverManifest, type Manifest, type Receipt } from "../../runtime/durable-engine/src/index.js";
+import { HostCutoverController, initializeCutoverManifest, initializeHostDurableBindings, type Manifest, type Receipt } from "../../runtime/durable-engine/src/index.js";
+import { installTerminalSettlementCompositionSchema } from "../../runtime/src/service-effects/current-piclaw/terminal-settlement-schema.js";
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const json = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const bridge: GetLegacyContext = (entries, leaf) => ({
@@ -25,6 +26,7 @@ async function setup() {
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "cutover-")), path = join(dir, "host.sqlite");
   const owner = TestOwner.acquire(path), db = new Database(path, { strict: true });
   db.exec("PRAGMA foreign_keys=ON"); initializeCutoverManifest(db);
+  owner.assert(); installTerminalSettlementCompositionSchema(db); initializeHostDurableBindings(db, () => owner.assert());
   db.exec("CREATE TABLE fixture_accepted (operation_id TEXT PRIMARY KEY, writer TEXT NOT NULL, state TEXT NOT NULL)");
   const base = await openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(new OwnedSqlite(owner)));
   const manager = SessionManager.inMemory(dir, { id: "copied-session" });
@@ -43,6 +45,7 @@ async function setup() {
   const request = { requestKey: "cutover:one", sourceDigest, importHash };
   const identity = { domain: "fixture-domain", incarnation: "host-A", ownerGeneration: owner.token.generation, sourceEngineId: "legacy", candidateStoreRef: "candidate:one" };
   let currentDigest = sourceDigest;
+  let onDrain: (() => void) | undefined;
   const expectedIdentity = { ...identity };
   const ports = {
     assertOwner(id: typeof identity) { owner.assert(); if (id.incarnation !== "host-A" || id.ownerGeneration !== owner.token.generation || id.domain !== expectedIdentity.domain) throw Error("secret owner"); },
@@ -51,6 +54,7 @@ async function setup() {
       if (writer !== (row ? JSON.parse(row.manifest).writer : "legacy")) throw Error("secret writer");
     },
     checkDrained() {
+      onDrain?.();
       const count = (state: string) => (db.query("SELECT COUNT(*) AS n FROM fixture_accepted WHERE writer='legacy' AND state=?").get(state) as { n: number }).n;
       return { sourceDigest: currentDigest, pending: count("pending"), inflight: count("inflight") };
     },
@@ -85,7 +89,7 @@ async function setup() {
     }).immediate();
   }
   async function ready() { const m = controller.preflight(request); const copied = await controller.begin(m.revision, preparation); return controller.verify(copied.revision, verifier); }
-  return { dir, db, base, owner, controller, request, identity, ports, preparation, verifier, receipt, ready, accept, setDigest: (d: string) => { currentDigest = d; } };
+  return { dir, db, base, owner, controller, request, identity, ports, preparation, verifier, receipt, ready, accept, setDigest: (d: string) => { currentDigest = d; }, setDrainHook: (hook: () => void) => { onDrain = hook; } };
 }
 
 test("cutover: real public JSONL tree import remains offline; explicit flip fences source; rollback before new work", () => fixture(async f => {
@@ -132,10 +136,42 @@ test("cutover: new accepted work is durable, deduplicated, preserved and blocks 
   expect(active.postCutoverCount).toBe(1);
   expect(() => f.controller.recordPostCutoverWork(active.revision, { operationId: "actual-operation", contentHash: sha("changed") })).toThrow();
   expect(() => f.controller.rollback(active.revision)).toThrow("Reconciliation required");
-  expect(f.controller.inspect()!.writer).toBe("candidate:one"); expect(f.controller.inspect()!.phase).toBe("reconciliation_required");
+  expect(f.controller.inspect()!.writer).toBe("candidate:one"); expect(f.controller.inspect()).toEqual(active);
   expect((f.db.query("SELECT COUNT(*) AS n FROM fixture_accepted").get() as { n: number }).n).toBe(1);
   expect((f.db.query("SELECT COUNT(*) AS n FROM qualification_cutover_work_v1").get() as { n: number }).n).toBe(1);
 }));
+test("cutover: rollback preflight pins actual original snapshot and final SQL switch rechecks it", () => fixture(async f => {
+  const verified = await f.ready(), active = f.controller.commitWriter(verified.revision);
+  const journal = f.controller.inspect();
+  const plan = f.controller.prepareRollback(active.revision);
+  expect(plan.disposition).toBe("safe_to_restore");
+  expect(plan.checkpointDigest).toBe(plan.currentDigest);
+  expect(f.controller.inspect()).toEqual(journal);
+  f.setDigest("f".repeat(64));
+  expect(f.controller.prepareRollback(active.revision).reasons).toEqual(["source_changed"]);
+  expect(() => f.controller.rollback(active.revision)).toThrow("Reconciliation required");
+  expect(f.controller.inspect()).toEqual(journal);
+  f.setDigest(f.request.sourceDigest);
+  // Drift after the advisory plan and initial body checks, at the final SQL fence.
+  let calls = 0;
+  f.setDrainHook(() => { if (++calls === 4) f.setDigest("a".repeat(64)); });
+  expect(() => f.controller.rollback(active.revision)).toThrow("Cutover rejected");
+  expect(f.controller.inspect()).toEqual(journal);
+  f.setDrainHook(() => {}); f.setDigest(f.request.sourceDigest);
+  expect(f.controller.rollback(active.revision).writer).toBe("legacy");
+}));
+
+test("cutover: old/missing actual-host checkpoint cannot authorize active rollback", () => fixture(async f => {
+  const verified = await f.ready();
+  f.db.exec("DROP TABLE piclaw_durable_intent_bindings_v1");
+  const active = f.controller.commitWriter(verified.revision);
+  expect(active.rollbackCheckpoint).toBeNull();
+  const reopened = new HostCutoverController(f.db, f.identity, f.ports);
+  expect(reopened.prepareRollback(active.revision).reasons).toContain("checkpoint_unavailable");
+  expect(() => reopened.rollback(active.revision)).toThrow("Reconciliation required");
+  expect(reopened.inspect()).toEqual(active);
+}));
+
 test("cutover: competing revision, changed request and exact owner fail closed with sanitized errors", () => fixture(async f => {
   const m = f.controller.preflight(f.request); expect(f.controller.preflight(f.request)).toEqual(m);
   expect(() => f.controller.preflight({ ...f.request, importHash: "b".repeat(64) })).toThrow(/^Cutover rejected$/);

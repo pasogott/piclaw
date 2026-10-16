@@ -1,7 +1,7 @@
 import "./src/test-guard.js";
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, writeFile, copyFile, rm } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -95,9 +95,7 @@ async function setup() {
     kind: "message" as const, payloadRef: `input:${id}`, targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: true });
   async function accept(id: string, content = "hello"): Promise<AcceptedInput> {
     assertWriter("candidate:one");
-    // Conservative durable intent BEFORE asynchronous admission: a crash/failure may require
-    // reconciliation, never rollback that discards newly accepted candidate work.
-    controller.recordPostCutoverWork(controller.inspect()!.revision, { operationId: `operation:${id}`, contentHash: hashCanonicalRequest({ id, content }) });
+    // Deliberately NO recordPostCutoverWork: rollback must discover actual SQL work.
     const source = value(await work.acceptSource(sourceRequest(id)));
     const claim = value(await work.claimNext(sealed({ effect: effect(`claim:${id}`), chatJid: source.chatJid,
       expectedFrontier: source.sourceSeq - 1, newOperationId: `operation:${id}`, claimedAt: at })))!;
@@ -125,21 +123,36 @@ async function setup() {
       sessionId: "copied-runtime-session", lane: "main", generation: owner.token.generation, now: () => at };
     runtime = await InactiveHostRuntime.open(options, context); return runtime;
   }
+  let committedMessages: unknown[] = [];
   async function drain() {
     await runtime!.close();
     const storage = await options.openStorage(), harness = await Harness.open(storage, options.harnessOptions, context);
-    try { await harness.waitForIdle(context); } finally { await harness.close(context); }
+    try {
+      await harness.waitForIdle(context);
+      const conversation = (await harness.conversation(conversationId, context))!;
+      committedMessages = [...(await conversation.context(context)).messages];
+    } finally { await harness.close(context); }
     runtime = await InactiveHostRuntime.open(options, context); return runtime;
   }
   return { dir, db, owner, base, controller, request, preparation, verify, ready, legacy, legacyTerminal, work, sourceRequest, accept, open, drain,
-    conversationId: () => conversationId, closeRuntime: async () => { await runtime?.close(); } };
+    committedMessages: () => committedMessages, conversationId: () => conversationId, closeRuntime: async () => { await runtime?.close(); } };
 }
 
-test("cutover/runtime: public copied history, real accepted source, runtime reopen, one terminal; rollback refuses new work", () => fixture(async f => {
+test("cutover/runtime: real accepted UUID, committed tool/answer and terminal block rollback without manual work records", () => fixture(async f => {
   const verified = await f.ready();
   const early = await f.work.acceptSource(f.sourceRequest("early")); expect(early.ok).toBe(false);
   f.controller.commitWriter(verified.revision); await f.base.close();
-  const runtime = await f.open(), input = await f.accept("new-work");
+  const runtime = await f.open();
+  const beforeAcceptance = f.controller.inspect()!;
+  expect(f.controller.prepareRollback(beforeAcceptance.revision).disposition).toBe("safe_to_restore");
+  expect(f.controller.inspect()).toEqual(beforeAcceptance);
+  const input = await f.accept(randomUUID(), "use-tool");
+  const pendingPlan = f.controller.prepareRollback(beforeAcceptance.revision);
+  expect(pendingPlan.disposition).toBe("reconciliation_required");
+  expect(pendingPlan.unresolvedAcceptedUUIDs).toEqual([input.sourceId]);
+  expect(beforeAcceptance.postCutoverCount).toBe(0);
+  expect(() => f.controller.rollback(beforeAcceptance.revision)).toThrow("Reconciliation required");
+  expect(f.controller.inspect()).toEqual(beforeAcceptance);
   const submission = await runtime.submit(input); expect(await runtime.submit(input)).toBe(submission);
   const reopened = await f.drain();
   expect((await reopened.reconcile(input)).answer?.text).toBe("synthetic answer");
@@ -147,8 +160,26 @@ test("cutover/runtime: public copied history, real accepted source, runtime reop
   expect((await reopened.settle(input))?.disposition).toBe("completed");
   expect(f.db.query("SELECT content FROM messages WHERE is_bot_message=1").all()).toEqual([{ content: "synthetic answer" }]);
   expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(1);
-  expect(f.base.host.modelCalls).toBe(1); expect(f.base.host.credentialLookups).toBe(0);
-  expect(() => f.controller.rollback(f.controller.inspect()!.revision)).toThrow("Reconciliation required");
+  // The provider requests host_effect only for actual input containing use-tool.
+  // Prove the effect AND its committed public result, not a guessed model count.
+  expect(f.base.host.effects).toBe(1); expect(f.base.host.credentialLookups).toBe(0);
+  expect(f.committedMessages()).toContainEqual(expect.objectContaining({
+    role: "toolResult", toolName: "host_effect", isError: false,
+    content: [{ type: "text", text: "synthetic effect committed" }],
+  }));
+  const journal = f.controller.inspect()!;
+  const data = ["service_effect_s01_sources", "service_effect_s02_commits", "piclaw_durable_bindings_v1", "messages"]
+    .map(table => f.db.query(`SELECT * FROM ${table}`).all());
+  const plan = f.controller.prepareRollback(journal.revision);
+  expect(plan.disposition).toBe("reconciliation_required");
+  expect(plan.unresolvedAcceptedUUIDs).toEqual([input.sourceId]);
+  expect(plan.reasons).toContain("accepted_work_changed");
+  expect(journal.postCutoverCount).toBe(0);
+  // Candidate reconcile/terminal completion is not proof of a matching OLD snapshot.
+  expect(() => f.controller.rollback(journal.revision)).toThrow("Reconciliation required");
+  expect(f.controller.inspect()).toEqual(journal);
+  expect(["service_effect_s01_sources", "service_effect_s02_commits", "piclaw_durable_bindings_v1", "messages"]
+    .map(table => f.db.query(`SELECT * FROM ${table}`).all())).toEqual(data);
   expect(f.controller.inspect()!.writer).toBe("candidate:one");
 }), 20000);
 

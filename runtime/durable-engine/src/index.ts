@@ -26,5 +26,5 @@ export type { ScheduledAgentInput, CurrentScheduledTask, ReadCurrentTask } from 
 export { prepareCopiedUpgrade } from "./copied-upgrade.js";
 export { HostCutoverController, initializeCutoverManifest } from "./host-cutover.js";
 export type {
-  Phase, CutoverIdentity, CutoverRequest, Receipt, Manifest, CutoverPorts, Preparation,
+  Phase, CutoverIdentity, CutoverRequest, Receipt, Manifest, CutoverPorts, Preparation, RollbackPlan,
 } from "./host-cutover.js";

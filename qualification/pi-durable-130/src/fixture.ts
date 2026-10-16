@@ -68,7 +68,9 @@ export async function openFixture(owner: { acquired: boolean }, allocated = () =
         options?.signal?.throwIfAborted();
         gate("model", `model:${++attempt}`, { transcript: JSON.stringify(transcript.messages) });
         host.modelCalls++;
-        const last = transcript.messages.at(-1);
+        // Imported conversations may append a tool-catalog system entry after
+        // input. Select the last dialogue message, not that metadata entry.
+        const last = transcript.messages.findLast(message => message.role !== "system");
         const callsTool = last?.role === "user" && JSON.stringify(last.content).includes("use-tool");
         message = { ...message, stopReason: callsTool ? "toolUse" : "stop", content: callsTool
           ? [{ type: "toolCall", id: `call-${attempt}`, name: "host_effect", arguments: { value: "synthetic" } }]

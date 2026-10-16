@@ -1,11 +1,19 @@
 // INACTIVE application module. No bootstrap, engine open, queue or production migration.
 import type { Database } from "bun:sqlite";
-import { hashCanonicalRequest } from "../../../runtime/src/service-effects/contracts/common.js";
+import { hashCanonicalRequest, type CanonicalJsonValue } from "../../../runtime/src/service-effects/contracts/common.js";
 export type Phase = "source" | "copying" | "verified" | "active" | "reconciliation_required";
 export interface CutoverIdentity { domain: string; incarnation: string; ownerGeneration: number; sourceEngineId: string; candidateStoreRef: string }
 export interface CutoverRequest { requestKey: string; sourceDigest: string; importHash: string }
 export interface Receipt { sourceDigest: string; receiptHash: string }
-export interface Manifest { phase: Phase; revision: number; writer: string; postCutoverCount: number; request: CutoverRequest; receipt: Receipt | null }
+interface RollbackCheckpoint { digest: string; accepted: readonly { sourceId: string; evidenceHash: string }[] }
+export interface Manifest { phase: Phase; revision: number; writer: string; postCutoverCount: number; request: CutoverRequest; receipt: Receipt | null;
+  rollbackCheckpoint?: RollbackCheckpoint | null }
+export interface RollbackPlan {
+  disposition: "safe_to_restore" | "reconciliation_required";
+  revision: number; sourceDigest: string; checkpointDigest: string | null; currentDigest: string | null;
+  unresolvedAcceptedUUIDs: readonly string[];
+  reasons: readonly ("checkpoint_unavailable" | "source_changed" | "host_not_drained" | "accepted_work_changed" | "recorded_work")[];
+}
 export interface CutoverPorts {
   /** Synchronous exact domain/incarnation/generation assertion. Must throw on owner loss. */
   assertOwner(identity: Readonly<CutoverIdentity>): void;
@@ -76,16 +84,16 @@ export class HostCutoverController {
       }).immediate();
     });
   }
-  private change(expected: number, phases: Phase[], body: (m: Manifest) => void): Manifest {
+  private change(expected: number, phases: Phase[], body: (m: Manifest) => void, finalCheck?: () => void): Manifest {
     return safe(() => this.db.transaction(() => {
       this.owner(); const row = this.read(); if (!row) throw fail();
       const m: Manifest = JSON.parse(row.manifest);
       if (m.revision !== expected || !phases.includes(m.phase)) throw fail();
-      this.ports.assertCurrentWriter(m.writer); body(m); this.owner(); m.revision++;
+      this.ports.assertCurrentWriter(m.writer); body(m); this.owner(); finalCheck?.(); m.revision++;
       // BEGIN IMMEDIATE serializes contenders; revision and phase were compared within this TX.
       this.db.query("UPDATE qualification_cutover_v1 SET manifest=? WHERE domain=? AND manifest=?")
         .run(JSON.stringify(m), this.identity.domain, row.manifest);
-      this.owner(); return m;
+      this.owner(); finalCheck?.(); return m;
     }).immediate());
   }
   private receipt(value: Receipt, request: CutoverRequest) {
@@ -115,7 +123,9 @@ export class HostCutoverController {
   /** Returns candidateReady data; caller alone may subsequently open the inactive host runtime. */
   commitWriter(expectedRevision: number) {
     return this.change(expectedRevision, ["verified"], m => {
-      this.drained(m.request); if (!m.receipt) throw fail(); m.phase = "active"; m.writer = this.identity.candidateStoreRef;
+      this.drained(m.request); if (!m.receipt) throw fail();
+      m.rollbackCheckpoint = this.rollbackFrontier();
+      m.phase = "active"; m.writer = this.identity.candidateStoreRef;
     });
   }
   /** Call in the host acceptance transaction with the actual immutable operation binding.
@@ -131,12 +141,82 @@ export class HostCutoverController {
       });
     });
   }
+  /** Concrete, read-only shared-host frontier. Missing composition schemas fail closed.
+   * The authority domain is this entire host SQL store (conservative across chats).
+   * Runtime submission/tool/answer commits require an accepted host source; bindings
+   * are correlation evidence, never a caller's assertion of reconciliation. */
+  private rollbackFrontier(): RollbackCheckpoint | null {
+    const tables = ["service_effect_s01_sources", "service_effect_s01_operations", "service_effect_s01_operation_sources",
+      "service_effect_s01_intents", "service_effect_s01_queued_inputs", "service_effect_s02_commits",
+      "piclaw_durable_bindings_v1", "piclaw_durable_intent_bindings_v1"];
+    if (tables.some(name => !this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name))) return null;
+    const rows = tables.map(table => this.db.query<Record<string, unknown>, []>(`SELECT * FROM ${table}`).all().map(row => {
+      const copy: Record<string, string | number | null> = {};
+      for (const [key, value] of Object.entries(row)) {
+        // These host schemas contain JSON scalars only. Reject blobs/bigints rather
+        // than silently coercing them (or hashing a Uint8Array as an object).
+        if (value !== null && typeof value !== "string" && !(typeof value === "number" && Number.isFinite(value))) throw fail();
+        copy[key] = value;
+      }
+      return copy;
+    }));
+    // Canonical hashes are order independent; use exact rows, not MAX(seq)/counts.
+    const hashes = (items: readonly CanonicalJsonValue[]) => items.map(row => hashCanonicalRequest(row)).sort();
+    const sources = rows[0]!, operations = rows[1]!, memberships = rows[2]!;
+    const accepted = sources.map(source => {
+      const ids = new Set(memberships.filter(row => row.chat_jid === source.chat_jid && row.source_seq === source.source_seq)
+        .map(row => row.operation_id));
+      const evidence = rows.map((items, index) => hashes(index === 0 ? [source] : items.filter(row =>
+        index >= 6 ? row.chat_jid === source.chat_jid && row.source_seq === source.source_seq : ids.has(row.operation_id))));
+      // Cancellation/control sources may target an operation without being claimed.
+      evidence.push(hashes(operations.filter(row => row.operation_id === source.target_operation_id)));
+      if (typeof source.source_id !== "string") throw fail();
+      return { sourceId: source.source_id, evidenceHash: hashCanonicalRequest(evidence) };
+    }).sort((a, b) => a.sourceId.localeCompare(b.sourceId) || a.evidenceHash.localeCompare(b.evidenceHash));
+    return { digest: hashCanonicalRequest(rows.map(hashes)), accepted };
+  }
+  private rollbackPlan(m: Manifest): RollbackPlan {
+    const reasons: RollbackPlan["reasons"][number][] = [];
+    const active = m.writer === this.identity.candidateStoreRef;
+    const current = active ? this.rollbackFrontier() : null, checkpoint = m.rollbackCheckpoint;
+    if (active && (!current || !checkpoint)) reasons.push("checkpoint_unavailable");
+    const drained = this.ports.checkDrained();
+    if (drained.sourceDigest !== m.request.sourceDigest) reasons.push("source_changed");
+    if (drained.pending !== 0 || drained.inflight !== 0) reasons.push("host_not_drained");
+    if (active && current && checkpoint && current.digest !== checkpoint.digest) reasons.push("accepted_work_changed");
+    if (m.postCutoverCount) reasons.push("recorded_work");
+    const unresolved = current?.accepted.filter(row => !checkpoint?.accepted.some(prior =>
+      prior.sourceId === row.sourceId && prior.evidenceHash === row.evidenceHash)).map(row => row.sourceId) ?? [];
+    return Object.freeze({ disposition: reasons.length ? "reconciliation_required" : "safe_to_restore", revision: m.revision,
+      sourceDigest: m.request.sourceDigest, checkpointDigest: checkpoint?.digest ?? null, currentDigest: current?.digest ?? null,
+      unresolvedAcceptedUUIDs: Object.freeze([...new Set(unresolved)].sort()), reasons: Object.freeze(reasons) });
+  }
+  /** Advisory only. No restore/activation API, reconciliation boolean, or ledger mutation.
+   * Old journals without an actual host checkpoint cannot authorize active rollback. */
+  prepareRollback(expectedRevision: number): RollbackPlan {
+    return safe(() => this.db.transaction(() => {
+      this.owner(); const row = this.read(); if (!row) throw fail();
+      const m: Manifest = JSON.parse(row.manifest);
+      if (m.revision !== expectedRevision) throw fail();
+      this.ports.assertCurrentWriter(m.writer);
+      const plan = this.rollbackPlan(m); this.owner(); return plan;
+    }).immediate());
+  }
   rollback(expectedRevision: number) {
-    const m = this.change(expectedRevision, ["source", "copying", "verified", "active", "reconciliation_required"], m => {
-      if (m.postCutoverCount) { m.phase = "reconciliation_required"; return; }
+    // A blocked attempt must preserve revision, journal, accepted data and writer.
+    if (this.prepareRollback(expectedRevision).disposition !== "safe_to_restore") throw new Error("Reconciliation required");
+    let original: Manifest;
+    const recheck = () => {
+      if (this.rollbackPlan(original).disposition !== "safe_to_restore") throw fail();
+      this.drained(original.request);
+    };
+    return this.change(expectedRevision, ["source", "copying", "verified", "active", "reconciliation_required"], m => {
+      original = JSON.parse(JSON.stringify(m));
+      if (this.rollbackPlan(m).disposition !== "safe_to_restore") throw fail();
+      // Exact original snapshot and drained host admission are checked at the final
+      // synchronous switch, inside the SAME SQL writer fence. No await/restore here.
+      this.drained(m.request);
       m.phase = "source"; m.writer = this.identity.sourceEngineId; m.receipt = null;
-    });
-    if (m.phase === "reconciliation_required") throw new Error("Reconciliation required");
-    return m;
+    }, recheck);
   }
 }

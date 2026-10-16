@@ -885,3 +885,26 @@ review cleared complete history-derived root/branch mapping verification and the
 four committed-storage corruption cases. Standalone root aggregate typecheck
 still fails the previously recorded unrelated frontend diagnostic baseline; no
 frontend or baseline changes are included in this slice.
+
+### Shared-host rollback frontier guard
+
+The inactive cutover controller records eight shared-host SQL table frontiers at
+writer activation. `prepareRollback()` is read-only and reports reconciliation
+required when those frontiers change, including accepted work absent from the
+optional manual tracker. Missing checkpoint/schema evidence fails closed. The
+final rollback transaction repeats frontier, source-digest and drain checks under
+the writer fence; denial preserves the active writer and journal.
+
+A real accepted UUID followed by a committed tool result, answer and terminal
+settlement blocks rollback before and after completion without manual tracking.
+Candidate verification passes 370 tests / 5,936 assertions; focused cutover tests
+pass 12 cases / 264 assertions and both private-package types pass. The synthetic
+provider fixture now chooses the last dialogue message rather than trailing tool
+catalogue metadata, allowing the tool assertion to exercise an actual effect.
+
+Independent review cleared this guard only under the existing complete host drain
+and exclusive-owner/runtime authority contract. It does not independently inspect
+candidate-only progress or establish candidate-owner quiescence. Unsupported
+background activity, incomplete drain adapters or live-owner replacement invalidate
+that approval. Production rollback still requires owner-controlled seal/drain and
+public candidate progress evidence before writer switching. No activation occurs.
