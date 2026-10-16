@@ -1,5 +1,5 @@
 // INACTIVE application module. No bootstrap registration or production schema migration.
-import { AssistantEntry, InboxDoc, LiveDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
+import { AgentDoc, AssistantEntry, InboxDoc, LiveDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { awaitWithContext, withAbortSignal, withoutAbortSignal, type Context } from "@earendil-works/chord/context";
 import type { CurrentPiclawServiceWorkStore, FinishHarnessRequest } from "../../../runtime/src/service-effects/current-piclaw/service-work-store.js";
@@ -208,6 +208,24 @@ export class HostConversationRuntime {
       if (!conversation) throw new Error("Missing existing conversation");
       const page = await conversation.entries({ order: "descending" }, 1, undefined, this.context); this.fence();
       return page.items[0] ? String(page.items[0].id) : null;
+    });
+  }
+  /** Read only the public persisted agent choice, not resolved host defaults or response metadata. */
+  readSessionModel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<string | null> {
+    const copy = Object.freeze({ incarnation: binding.incarnation, chatJid: binding.chatJid,
+      branchId: binding.branchId, conversationId: binding.conversationId });
+    return this.observe(async () => {
+      const o = this.options;
+      const id = o.existingConversationIds.find(id => id === copy.conversationId);
+      if (copy.incarnation !== o.incarnation || id === undefined ||
+        o.conversationFor(copy.chatJid, copy.branchId) !== id) throw new Error("Host binding conflict");
+      const conversation = await this.harness.conversation(id, this.context); this.fence();
+      if (!conversation) throw new Error("Missing existing conversation");
+      const label = await conversation.commit(async tx => {
+        const state = await tx.doc(AgentDoc, id);
+        return state.model ? `${state.model.provider}/${state.model.modelId}` : null;
+      }, this.context); this.fence();
+      return label;
     });
   }
   private port(intent: boolean) {

@@ -1037,3 +1037,13 @@ readers remain to be converted. Full candidate verification passes 381 tests /
 6,487 assertions, root fast CI passes 7,143 tests (74 baseline skips) plus 25 feature
 and 9 build tests, types pass within the stated private/runtime scope, and bounded
 independent review is clear.
+
+The existing current-model-label reader now uses the same captured durable-session
+port to read persisted public `AgentDoc` state. It returns the stored provider/model
+choice (or null), not last-input metadata or a guessed default. Missing bound
+capability and reader errors fail closed without legacy session construction.
+Single-file reopen preserves the model choice; forbidden SessionManager factories
+remain untouched with zero JSONL events. Legacy/facade tests pass 38 cases, full
+candidate verification passes 381 tests / 6,490 assertions, typechecks pass within
+the stated scope and bounded independent review is clear. Tree/history projection
+and branch mutation remain incomplete; no activation or new session file occurs.

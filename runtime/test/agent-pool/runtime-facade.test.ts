@@ -71,6 +71,20 @@ function createFacade(overrides: Partial<ConstructorParameters<typeof AgentRunti
   return { facade, pool, warnings, errors, cleared };
 }
 
+test("current model uses captured durable port, fails closed when absent, preserves legacy", async () => {
+  const port = { sessionId: "session", branchId: "main", readPosition: async () => null,
+    readModel: async () => "persisted/model" };
+  const fixture = createFacade({ durableSessions: new Map([["bound", port],
+    ["unsupported", { sessionId: "other", branchId: "main", readPosition: async () => null }]]) });
+  port.readModel = async () => "replaced/model";
+  expect(await fixture.facade.getCurrentModelLabel("bound")).toBe("persisted/model");
+  await expect(fixture.facade.getCurrentModelLabel("unsupported")).rejects.toThrow("Durable session model unavailable");
+  fixture.pool.set("legacy", { runtime: createRuntime({ model: { provider: "legacy", id: "model" } }), lastUsed: 0 });
+  expect(await fixture.facade.getCurrentModelLabel("legacy")).toBe("legacy/model");
+  fixture.pool.set("empty", { runtime: createRuntime({}), lastUsed: 0 });
+  expect(await fixture.facade.getCurrentModelLabel("empty")).toBeNull();
+});
+
 test("AgentRuntimeFacade reports available models and context usage", async () => {
   let refreshCalls = 0;
   const session = {

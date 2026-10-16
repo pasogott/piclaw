@@ -61,6 +61,9 @@ test("single physical database: accepted primary + attached intent, terminal ide
     const captured = JSON.parse((f.db.query("SELECT input FROM recovery_fixture_identity WHERE id=?").get(f.incarnation) as { input: string }).input) as DurableConversationOperation;
     const app = facade(adapter);
     expect(app.getSessionGenerationForChat(f.chatJid)).toBe("preserved-session-id");
+    // The root fixture persists this choice through the candidate's public AgentDoc API.
+    const persistedModel = await app.getCurrentModelLabel(f.chatJid);
+    expect(persistedModel).toBe("qualification/synthetic");
     const beforePosition = await app.saveSessionPosition(f.chatJid);
     await expect(app.restoreSessionPosition(f.chatJid, beforePosition)).rejects.toThrow("Durable history navigation unavailable");
     await expect(app.applySlashCommand(f.chatJid, "/compact")).rejects.toThrow("Legacy session operation unavailable");
@@ -96,6 +99,8 @@ test("single physical database: accepted primary + attached intent, terminal ide
     const reopened = await f.open();
     const reopenedApp = facade(reopened);
     expect(await reopenedApp.saveSessionPosition(f.chatJid)).toBe(position);
+    expect(await reopenedApp.getCurrentModelLabel(f.chatJid)).toBe(persistedModel);
+    await expect(app.getCurrentModelLabel(f.chatJid)).rejects.toThrow("Runtime closed");
     expect(reopenedApp.getSessionGenerationForChat(f.chatJid)).toBe("preserved-session-id");
     await expect(app.saveSessionPosition(f.chatJid)).rejects.toThrow("Runtime closed");
     expect(await f.candidateStorage!.conversation(f.base.root.id, context)).toBeDefined();

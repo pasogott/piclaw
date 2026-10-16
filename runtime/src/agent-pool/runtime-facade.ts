@@ -320,7 +320,8 @@ export class AgentRuntimeFacade {
     this.providerUsageRefreshListener = options.onProviderUsageRefresh;
     // Capture routing before any session factory is entered. Never fall back on port failure.
     this.durableSessions = new Map([...options.durableSessions ?? []].map(([chat, port]) =>
-      [chat, Object.freeze({ sessionId: port.sessionId, branchId: port.branchId, readPosition: port.readPosition.bind(port) })]));
+      [chat, Object.freeze({ sessionId: port.sessionId, branchId: port.branchId,
+        readPosition: port.readPosition.bind(port), readModel: port.readModel?.bind(port) })]));
     const legacy = options.getOrCreateRuntime;
     this.options = { ...options, getOrCreateRuntime: chat => {
       if (this.durableSessions.has(chat)) return Promise.reject(new Error("Legacy session operation unavailable for durable conversation"));
@@ -411,6 +412,11 @@ export class AgentRuntimeFacade {
   }
 
   async getCurrentModelLabel(chatJid: string): Promise<string | null> {
+    const durable = this.durableSessions.get(chatJid);
+    if (durable) {
+      if (!durable.readModel) throw new Error("Durable session model unavailable");
+      return durable.readModel();
+    }
     const session = (await this.options.getOrCreateRuntime(chatJid)).session;
     const model = session.model;
     return model ? `${model.provider}/${model.id}` : null;

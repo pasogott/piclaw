@@ -22,6 +22,8 @@ export interface DurableSessionPositionPort {
   readonly sessionId: string;
   readonly branchId: string;
   readonly readPosition: () => Promise<string | null>;
+  /** Persisted conversation choice only; never infer a model from provider responses. */
+  readonly readModel?: () => Promise<string | null>;
 }
 
 export interface DurableConversationBinding {
@@ -51,6 +53,7 @@ export interface DurableConversationState {
  * Reconciliation deliberately does not expose the engine's private answer/thinking evidence. */
 export interface DurableConversationRuntimePort {
   readSessionPosition?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<string | null>;
+  readSessionModel?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<string | null>;
   submit(input: DurableAcceptedInput): Promise<number>;
   submitIntent?(input: DurableAcceptedInput): Promise<number>;
   reconcile(input: DurableAcceptedInput): Promise<DurableConversationState>;
@@ -88,6 +91,7 @@ export function createDurableConversationAdapter(options: {
   const settle = runtime.settle.bind(runtime), close = runtime.close.bind(runtime);
   const wait = runtime.wait?.bind(runtime), submitIntent = runtime.submitIntent?.bind(runtime);
   const readPosition = runtime.readSessionPosition?.bind(runtime);
+  const readModel = runtime.readSessionModel?.bind(runtime);
   function input(work: DurableConversationOperation, intent = false): DurableAcceptedInput {
     const { source, operation } = work.claimed;
     const binding = manifest.find(b => b.chatJid === source.chatJid && b.branchId === work.branchId);
@@ -109,7 +113,8 @@ export function createDurableConversationAdapter(options: {
       const binding = manifest.find(b => b.chatJid === chatJid && b.branchId === branchId);
       if (!binding || !sessionId || !readPosition) throw new Error("Durable session position unavailable");
       return Object.freeze({ sessionId, branchId,
-        readPosition: () => readPosition({ ...binding, incarnation }) });
+        readPosition: () => readPosition({ ...binding, incarnation }),
+        readModel: readModel ? () => readModel({ ...binding, incarnation }) : undefined });
     },
     supportsIntent: !!submitIntent,
     validateIntent(work: DurableConversationOperation) { input(work, true); },
