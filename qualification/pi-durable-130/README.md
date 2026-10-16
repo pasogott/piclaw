@@ -604,3 +604,26 @@ Importing the entrypoint does not open the execution store or register an engine
 root configuration modules may still read settings during import. This package
 is source-only and excluded from the current root distribution: it is not yet a
 production packaging, installation or activation claim.
+
+## Concrete host correlation adapter and safe acknowledgement repair
+
+The application package now exports an explicitly initialized SQL binding adapter.
+It records immutable host/store/chat/branch/operation/source/request/conversation
+identity and payload references, not another prompt-content store. Ownership is
+checked in its transactions; submission IDs use unique compare-and-set rules.
+Runtime and cutover fixtures use the concrete adapter.
+
+Request ID alone is not evidence of the submitted content. Runtime adoption reads
+public queued inbox or placed-entry evidence in a transaction and verifies both
+the original content hash and complete `host.accepted` metadata before recording
+an ID. New inputs carry that metadata separately from unchanged model-visible
+content. Unknown/legacy submissions, including same-content collisions, cannot be
+automatically adopted. Withdrawn records lacking input evidence require an already
+verified immutable host binding. This correlation metadata assumes an exclusively
+host-owned Harness; it is not authentication against arbitrary writers.
+
+The combined suite passes 336 tests / 5,312 assertions across nineteen files;
+focused binding/runtime/cutover tests pass 56 / 516 and both package typechecks
+pass. Source review cleared the collision correction and concrete adapter.
+General migration must resolve or reject unknown legacy pending ownership; this
+is not production schema initialization or admission registration.

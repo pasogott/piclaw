@@ -4,7 +4,7 @@ import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
-import { Harness, LiveDoc, AssistantEntry, UserEntry, type Tx } from "../../runtime/durable-engine/qualification/durable.ts";
+import { Harness, LiveDoc, AssistantEntry, type Tx } from "../../runtime/durable-engine/qualification/durable.ts";
 import type { AssistantMessage } from "../../runtime/durable-engine/qualification/ai.ts";
 import { HostConversationRuntime, type AcceptedInput, type RuntimeOptions, type SettledAnswer } from "../../runtime/durable-engine/src/index.js";
 import { BunSqliteDatabase } from "../../runtime/durable-engine/src/index.js";
@@ -15,6 +15,7 @@ import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connect
 import { installTerminalSettlementCompositionSchema } from "../../runtime/src/service-effects/current-piclaw/terminal-settlement-schema.js";
 import { createCurrentPiclawServiceWorkStore } from "../../runtime/src/service-effects/current-piclaw/service-work-store.js";
 import { createCurrentPiclawTerminalSettlementStore } from "../../runtime/src/service-effects/current-piclaw/terminal-settlement-store.js";
+import { createHostDurableBindings, initializeHostDurableBindings } from "../../runtime/durable-engine/src/index.js";
 import { InMemoryEffectPayloadResolver } from "../../runtime/src/service-effects/testing/in-memory-payload-resolver.js";
 
 // Same known-row fixture as terminal-settlement-test-support.seedSqliteMedia, against
@@ -49,8 +50,7 @@ async function setup(busy = false) {
   const db = new Database(join(dir, "host.sqlite"), { strict: true });
   db.exec("PRAGMA foreign_keys=ON"); installTerminalSettlementCompositionSchema(db);
   // Explicit qualification-only host correlation schema. Never installed by runtime.open().
-  db.exec(`CREATE TABLE runtime_bindings (operation_id TEXT PRIMARY KEY, request_id TEXT UNIQUE NOT NULL, binding TEXT NOT NULL);
-    CREATE TABLE runtime_payloads (ref TEXT PRIMARY KEY, content TEXT NOT NULL)`);
+  db.exec(`CREATE TABLE runtime_payloads (ref TEXT PRIMARY KEY, content TEXT NOT NULL)`);
   const path = join(dir, "candidate.sqlite");
   const base = await openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(new BunSqliteDatabase(path)));
   const id = base.root.id;
@@ -61,6 +61,7 @@ async function setup(busy = false) {
   await base.close();
   let acquired = true, releases = 0, opens = 0, authorizations = 0, allowKnown = false;
   const assert = () => { if (!acquired) throw new Error("Host owner lost"); };
+  initializeHostDurableBindings(db, assert);
   let loseCancellationAck = false;
   const hooks = { authorize: undefined as (() => void | Promise<void>) | undefined,
     cancellation: undefined as (() => void | Promise<void>) | undefined }; 
@@ -86,19 +87,12 @@ async function setup(busy = false) {
       async acceptCancellation(request) { await hooks.cancellation?.(); return work.acceptCancellation(request); } }, terminal, existingConversationIds: [id], conversationFor: (chat, branch) => {
       if (chat !== "web:runtime" || branch !== "existing-main") throw new Error("Unknown host branch"); return id;
     },
-    bindings: { async getOrBind(input) {
-      assert();
-      return db.transaction(() => {
-        const source = db.query("SELECT source_id,payload_ref,state FROM service_effect_s01_sources WHERE chat_jid=? AND source_seq=?").get(input.chatJid, input.sourceSeq) as { source_id: string; payload_ref: string; state: string } | null;
-        if (!source || source.source_id !== input.sourceId || source.payload_ref !== input.payloadRef || !["claimed", "consumed"].includes(source.state)) throw new Error("Unverified host source");
-        const payload = db.query("SELECT content FROM runtime_payloads WHERE ref=?").get(input.payloadRef) as { content: string } | null;
-        if (!payload || hashCanonicalRequest({ type: "input", requestId: input.requestId, content: payload.content }) !== input.requestHash) throw new Error("Host payload hash conflict");
-        db.query("INSERT OR IGNORE INTO runtime_bindings VALUES (?,?,?)").run(input.operationId, input.requestId, JSON.stringify(input));
-        const prior = db.query("SELECT binding FROM runtime_bindings WHERE operation_id=?").get(input.operationId) as { binding: string } | null;
-        if (prior?.binding !== JSON.stringify(input)) throw new Error("Immutable intent binding conflict");
-        return payload;
-      })();
-    } },
+    bindings: createHostDurableBindings(db, { domain: "runtime", incarnation: "copy-A", assertOwner: assert,
+      manifest: [{ chatJid: "web:runtime", branchId: "existing-main", conversationId: id }],
+      async resolveContent(ref) {
+        const payload = db.query("SELECT content FROM runtime_payloads WHERE ref=?").get(ref) as { content: string } | null;
+        if (!payload) throw new Error("Missing host payload"); return payload.content;
+      } }),
     async authorizeScheduling(inspection) {
       authorizations++;
       await hooks.authorize?.();
@@ -127,6 +121,93 @@ async function setup(busy = false) {
     return HostConversationRuntime.open(options, context);
   }
   return { dir, db, base, options, runtime, accept, drain, work, terminal, payloads, path, hooks, stats: () => ({ opens, releases, authorizations }), setOwner: (v: boolean) => { acquired = v; }, grantKnown: () => { allowKnown = true; }, loseCancellationAck: () => { loseCancellationAck = true; } };
+}
+
+for (const state of ["queued", "placed", "done"] as const) {
+  for (const content of ["held seed", "different private seed"] as const) {
+    test(`runtime: unowned ${state} request collision (${content === "held seed" ? "same" : "different"} content) cannot be adopted or progressed`, () => fixture(async f => {
+      const input = await f.accept("known-seed", "held seed");
+      await f.runtime.close(); f.setOwner(true);
+      const storage = await f.options.openStorage(), harness = await Harness.open(storage, f.options.harnessOptions, context);
+      let seedId: Parameters<HostConversationRuntime["resume"]>[1];
+      try {
+        const conversation = (await harness.conversation(input.conversationId, context))!;
+        if (state !== "done") f.base.host.modelHold = barrier();
+        if (state === "queued") await conversation.submit({ type: "input", requestId: "blocker", content: "blocker" }, context);
+        const seed = await conversation.submit({ type: "input", requestId: input.requestId, content }, context);
+        seedId = seed.id;
+        if (state === "done") await harness.waitForIdle(context);
+        expect((await seed.status(context)).status).toBe(state);
+      } finally { await harness.close(context); }
+      const reopened = await HostConversationRuntime.open(f.options, context);
+      try {
+        const calls = f.base.host.modelCalls, grants = f.stats().authorizations;
+        const operation = value(await f.work.getOperation(input.operationId))!;
+        const cancel = sealed({ effect: effect("collision-cancel", input.operationId, input.sourceSeq), expectedVersion: operation.version,
+          sourceId: input.sourceId, sourceSeq: input.sourceSeq, cause: "user", requestedAt: at });
+        for (const attempt of [() => reopened.submit(input), () => reopened.reconcile(input), () => reopened.settle(input),
+          () => reopened.resume(input, seedId!), () => reopened.cancel(input, seedId!, cancel)]) {
+          await expect(attempt()).rejects.toThrow("Submission binding conflict");
+        }
+        expect((await f.options.bindings.get(input))?.submissionId).toBeNull();
+        expect(value(await f.work.getOperation(input.operationId))).toEqual(operation);
+        expect(f.base.host.modelCalls).toBe(calls); expect(f.base.host.effects).toBe(0);
+        expect(f.stats().authorizations).toBe(grants);
+        expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+        expect(f.db.query("SELECT * FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+      } finally { await reopened.close(); }
+    }));
+  }
+}
+
+for (const mismatch of ["operationId", "sourceSeq", "incarnation", "requestHash", "content"] as const) {
+  test(`runtime: matching request ID with forged ${mismatch} evidence is rejected`, () => fixture(async f => {
+    const input = await f.accept(); await f.runtime.close(); f.setOwner(true);
+    const storage = await f.options.openStorage(), harness = await Harness.open(storage, f.options.harnessOptions, context);
+    try {
+      const conversation = (await harness.conversation(input.conversationId, context))!;
+      const data = { ...input, ...(mismatch === "content" ? {} : { [mismatch]: mismatch === "sourceSeq" ? 2 : "foreign" }) };
+      await conversation.submit({ type: "input", requestId: input.requestId, content: mismatch === "content" ? "private foreign content" : "hello",
+        entry: { kind: "host.accepted", data } }, context);
+    } finally { await harness.close(context); }
+    const reopened = await HostConversationRuntime.open(f.options, context);
+    try {
+      await expect(reopened.submit(input)).rejects.toThrow("Submission binding conflict");
+      await expect(reopened.settle(input)).rejects.toThrow("Submission binding conflict");
+      expect((await f.options.bindings.get(input))?.submissionId).toBeNull();
+      expect(f.stats().authorizations).toBe(0); expect(f.base.host.modelCalls).toBe(0);
+      expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+    } finally { await reopened.close(); }
+  }));
+}
+
+for (const queued of [false, true]) {
+  test(`runtime: genuine ${queued ? "queued" : "placed"} submit lost acknowledgement repairs only proven host evidence across reopen`, () => fixture(async f => {
+    const input = await f.accept();
+    f.base.host.modelHold ??= barrier();
+    await f.runtime.close(); f.setOwner(true);
+    let lost = false;
+    const bindings = f.options.bindings;
+    const options = { ...f.options, bindings: { ...bindings, async recordSubmission(i: AcceptedInput, id: Parameters<typeof bindings.recordSubmission>[1]) {
+      if (!lost) { lost = true; throw new Error("lost acknowledgement before host CAS"); }
+      return bindings.recordSubmission(i, id);
+    } } };
+    const runtime = await HostConversationRuntime.open(options, context);
+    try { await expect(runtime.submit(input)).rejects.toThrow("lost acknowledgement before host CAS"); }
+    finally { await runtime.close(); }
+    f.setOwner(true);
+    expect((await bindings.get(input))?.submissionId).toBeNull();
+    const reopened = await HostConversationRuntime.open(options, context);
+    try {
+      const calls = f.base.host.modelCalls, grants = f.stats().authorizations;
+      const id = await reopened.submit(input);
+      expect((await reopened.reconcile(input)).status?.status).toBe(queued ? "queued" : "placed");
+      expect((await bindings.get(input))?.submissionId).toBe(id);
+      expect(await reopened.submit(input)).toBe(id);
+      expect(f.base.host.modelCalls).toBe(calls); expect(f.stats().authorizations).toBe(grants);
+      expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+    } finally { await reopened.close(); }
+  }, queued));
 }
 
 test("runtime: public transaction reads exact run ownership but cannot atomically mark its abort; queued successor survives", async () => {
@@ -178,8 +259,7 @@ test("runtime: caller mutation during authorization cannot admit an unbound requ
   await entered.promise;
   Object.assign(input, { requestId: "rogue-B", requestHash: "0".repeat(64), sourceId: "rogue-source", operationId: "rogue-operation" });
   hold.release(); const submission = await pending;
-  const binding = f.db.query("SELECT binding FROM runtime_bindings").get() as { binding: string };
-  expect(JSON.parse(binding.binding)).toEqual(original);
+  expect(await f.options.bindings.get(original)).toEqual({ ...original, submissionId: submission });
   const storage = await f.options.openStorage();
   try {
     expect((await storage.submissionByRequest(original.conversationId, original.requestId, context))?.id).toBe(submission);
@@ -323,7 +403,7 @@ for (const failure of ["authorization", "lost-ack", "queued-lost-ack"] as const)
     expect(value(await f.work.getOperation(input.operationId))!.version).toBe(operation.version);
     Object.freeze(request.effect); Object.freeze(request);
     const original = JSON.stringify(request);
-    const binding = f.db.query("SELECT * FROM runtime_bindings").all();
+    const binding = f.db.query("SELECT * FROM piclaw_durable_bindings_v1").all();
     const authorize = f.options.authorizeScheduling;
     // Only public ports: actual EF-S01 commit, then fail the scheduling handoff or lose its acknowledgement.
     const options = { ...f.options, authorizeScheduling: authorize };
@@ -345,7 +425,7 @@ for (const failure of ["authorization", "lost-ack", "queued-lost-ack"] as const)
       expect((await reopened.reconcile(input)).submissionId).toBe(submission);
       expect(await reopened.cancel(input, submission, request)).toBe(failure === "queued-lost-ack" ? "settled" : "already_placed");
       expect(JSON.stringify(request)).toBe(original);
-      expect(f.db.query("SELECT * FROM runtime_bindings").all()).toEqual(binding);
+      expect(f.db.query("SELECT * FROM piclaw_durable_bindings_v1").all()).toEqual(binding);
     } finally { await reopened.close(); }
     f.base.host.modelHold.release();
     const settled = await f.drain();
@@ -519,7 +599,7 @@ for (const unsupported of ["image", "toolCall"] as const) {
       // Synthetic malformed/imported final evidence through PUBLIC transaction APIs only.
       // No invented provider image API and no private candidate SQL/schema writes.
       await harness.commit(async tx => {
-        const entry = await tx.appendEntry(UserEntry, input.conversationId, { model: [{ role: "user", content: "hello", timestamp: 1 }] });
+        const entry = await tx.appendEntry(input.conversationId, { kind: "host.accepted", data: { ...input }, model: [{ role: "user", content: "hello", timestamp: 1 }] });
         const message: AssistantMessage = { role: "assistant", api: "openai-completions", provider: "qualification", model: "synthetic",
           content: unsupported === "image" ? [unsupportedAssistantImage] : [{ type: "toolCall", id: "unfinished", name: "host_effect", arguments: {} }],
           stopReason: "stop", timestamp: 1,

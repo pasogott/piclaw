@@ -1,5 +1,5 @@
 // INACTIVE application module. No bootstrap registration or production schema migration.
-import { AssistantEntry, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
+import { AssistantEntry, InboxDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { Context } from "@earendil-works/chord/context";
 import { hashCanonicalRequest } from "../../../runtime/src/service-effects/contracts/common.js";
@@ -19,6 +19,15 @@ export interface AcceptedInput {
   readonly payloadRef: string;
   readonly requestId: string;
   readonly requestHash: string;
+}
+export interface HostInputBinding extends AcceptedInput {
+  readonly submissionId: SubmissionId | null;
+}
+export interface HostDurableBindings {
+  get(input: AcceptedInput): Promise<HostInputBinding | null>;
+  bind(input: AcceptedInput): Promise<HostInputBinding>;
+  getOrBind(input: AcceptedInput): Promise<{ content: string }>;
+  recordSubmission(input: AcceptedInput, submissionId: SubmissionId): Promise<void>;
 }
 /** Host-private evidence, never a public timeline payload (message may contain thinking). */
 export interface SettledAnswer {
@@ -42,9 +51,7 @@ export interface RuntimeOptions {
   /** Host-owned durable mapping. Must atomically verify the accepted source, payload and immutable
    * operation/source/hash binding in the SAME host database. No Map-based admission/dedup.
    * Production implementation/migration is NOT activated by this module. */
-  readonly bindings: {
-    getOrBind(input: AcceptedInput): Promise<{ content: string }>;
-  };
+  readonly bindings: HostDurableBindings;
   readonly conversationFor: (chatJid: string, branchId: string) => ConversationId;
   /** All IDs must come from a caller-validated, quiescent import manifest. Never creates root. */
   readonly existingConversationIds: readonly ConversationId[];
@@ -86,16 +93,17 @@ function materializedSnapshot(answer: MaterializedAnswer): MaterializedAnswer {
     throw new TypeError("Invalid materialized answer");
   return Object.freeze({ contentRef, contentBlocksRef, mediaIds: Object.freeze(ids) });
 }
-function inputSnapshot(i: AcceptedInput): AcceptedInput {
+export function inputSnapshot(i: AcceptedInput): AcceptedInput {
   plainData(i);
   const copy = { incarnation: i.incarnation, conversationId: i.conversationId, chatJid: i.chatJid,
     branchId: i.branchId, operationId: i.operationId, sourceSeq: i.sourceSeq, sourceId: i.sourceId,
     payloadRef: i.payloadRef, requestId: i.requestId, requestHash: i.requestHash };
   for (const [key, value] of Object.entries(copy)) {
     if (key === "conversationId" || key === "sourceSeq") {
-      if (!Number.isSafeInteger(value)) throw new TypeError("Expected integer input identity");
-    } else if (typeof value !== "string") throw new TypeError("Expected string input identity");
+      if (!Number.isSafeInteger(value) || Number(value) <= 0) throw new TypeError("Expected integer input identity");
+    } else if (typeof value !== "string" || !value.length || value.length > (key === "requestId" ? 1024 : 2048)) throw new TypeError("Expected string input identity");
   }
+  if (!/^[a-f0-9]{64}$/.test(copy.requestHash)) throw new TypeError("Invalid input hash");
   return Object.freeze(copy);
 }
 function cancellationSnapshot(r: AcceptCancellationRequest): AcceptCancellationRequest {
@@ -128,7 +136,8 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
     owner: Object.freeze({ assert: owner.assert.bind(owner), release: owner.release.bind(owner) }),
     work: Object.freeze({ getOperation: work.getOperation.bind(work), acceptCancellation: work.acceptCancellation.bind(work), bindHarness: work.bindHarness.bind(work) }),
     terminal: Object.freeze({ getTerminal: terminal.getTerminal.bind(terminal), commitTerminal: terminal.commitTerminal.bind(terminal) }),
-    bindings: Object.freeze({ getOrBind: bindings.getOrBind.bind(bindings) }),
+    bindings: Object.freeze({ get: bindings.get.bind(bindings), bind: bindings.bind.bind(bindings),
+      getOrBind: bindings.getOrBind.bind(bindings), recordSubmission: bindings.recordSubmission.bind(bindings) }),
     existingConversationIds: Object.freeze([...existingConversationIds]),
     // Catalogs and settings are intentionally live host APIs; detach their containing options only.
     harnessOptions: Object.freeze({ models: h.models, registry: h.registry, settings: h.settings,
@@ -195,8 +204,38 @@ export class HostConversationRuntime {
     return { operation, conversation, content };
   }
   private async record(input: AcceptedInput) {
-    const record = await this.storage.submissionByRequest(input.conversationId, input.requestId, this.context); this.fence();
-    if (record && (record.type !== "input" || record.conversationId !== input.conversationId || record.requestId !== input.requestId)) throw new Error("Submission binding conflict");
+    const conflict = () => new Error("Submission binding conflict");
+    const binding = await this.options.bindings.get(input); this.fence();
+    if (!binding) throw conflict();
+    // Read status AND its original input evidence in one public transaction. Request IDs
+    // alone are candidate dedup keys, not proof of content or accepted host provenance.
+    const record = await this.harness.commit(async tx => {
+      const record = await tx.submissionByRequest(input.conversationId, input.requestId);
+      if (binding.submissionId !== null && binding.submissionId !== record?.id) throw conflict();
+      if (!record) return record;
+      if (record.type !== "input" || record.conversationId !== input.conversationId || record.requestId !== input.requestId) throw conflict();
+      let content: unknown, entry: { kind: string; data?: unknown } | undefined;
+      if (record.entry !== undefined) {
+        const placed = await tx.entry(record.entry);
+        if (!placed || placed.conversationId !== input.conversationId || placed.model?.length !== 1 || placed.model[0]?.role !== "user") throw conflict();
+        content = placed.model[0].content; entry = placed;
+      } else if (record.status === "queued") {
+        const inbox = await tx.doc(InboxDoc, input.conversationId);
+        const item = inbox.items.find(item => item.id === record.id);
+        if (!item || item.mode === "write") throw conflict();
+        content = item.content; entry = item.entry;
+      } else {
+        // Withdrawal removes queued evidence. Only an ID already durably recorded AFTER
+        // validation may reconcile that terminal state; lost-ack unbound records fail closed.
+        if (record.status !== "unanswered" || binding.submissionId !== record.id) throw conflict();
+        return record;
+      }
+      const data = entry?.data;
+      if (entry?.kind !== "host.accepted" || !data || typeof data !== "object" || Array.isArray(data) ||
+        Object.entries(input).some(([key, value]) => (data as Record<string, unknown>)[key] !== value) ||
+        typeof content !== "string" || hashCanonicalRequest({ type: "input", requestId: input.requestId, content }) !== input.requestHash) throw conflict();
+      return record;
+    }, this.context); this.fence();
     return record;
   }
   private async progress() {
@@ -207,11 +246,20 @@ export class HostConversationRuntime {
   private async submitInput(input: AcceptedInput) {
     const { operation, conversation, content } = await this.checked(input);
     const prior = await this.record(input);
-    if (prior) return prior.id; // Acknowledgement repair is not permission to resume.
+    if (prior) {
+      await this.options.bindings.recordSubmission(input, prior.id); this.fence();
+      return prior.id; // Acknowledgement repair is not permission to resume.
+    }
     if (operation.terminal || operation.cancellation) throw new Error("Operation no longer executable");
     await this.progress();
-    const submission = await conversation.submit({ type: "input", requestId: input.requestId, content }, this.context);
-    this.fence(); return submission.id;
+    const submission = await conversation.submit({ type: "input", requestId: input.requestId, content,
+      entry: { kind: "host.accepted", data: { ...input } } }, this.context);
+    this.fence();
+    // Recheck the returned durable evidence too: submit itself deduplicates by request ID.
+    const admitted = await this.record(input);
+    if (!admitted || admitted.id !== submission.id) throw new Error("Submission binding conflict");
+    await this.options.bindings.recordSubmission(input, submission.id); this.fence();
+    return submission.id;
   }
   /** Pure lookup/status/committed-entry reads. No wait/resume, terminal write or payload publication. */
   reconcile(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.readState(copy)); }

@@ -19,6 +19,7 @@ import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connect
 import { installTerminalSettlementCompositionSchema } from "../../runtime/src/service-effects/current-piclaw/terminal-settlement-schema.js";
 import { createCurrentPiclawServiceWorkStore } from "../../runtime/src/service-effects/current-piclaw/service-work-store.js";
 import { createCurrentPiclawTerminalSettlementStore } from "../../runtime/src/service-effects/current-piclaw/terminal-settlement-store.js";
+import { createHostDurableBindings, initializeHostDurableBindings } from "../../runtime/durable-engine/src/index.js";
 import { InMemoryEffectPayloadResolver } from "../../runtime/src/service-effects/testing/in-memory-payload-resolver.js";
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const json = <T>(x: T): T => JSON.parse(JSON.stringify(x));
@@ -38,9 +39,9 @@ async function setup() {
   const hostPath = join(dir, "host.sqlite"); getDb().query("VACUUM INTO ?").run(hostPath); closeDatabase();
   const db = new Database(hostPath, { strict: true }); db.exec("PRAGMA foreign_keys=ON");
   installTerminalSettlementCompositionSchema(db); initializeCutoverManifest(db);
-  db.exec(`CREATE TABLE runtime_payloads (ref TEXT PRIMARY KEY, content TEXT NOT NULL);
-    CREATE TABLE runtime_bindings (operation_id TEXT PRIMARY KEY, binding TEXT NOT NULL)`);
+  db.exec(`CREATE TABLE runtime_payloads (ref TEXT PRIMARY KEY, content TEXT NOT NULL)`);
   const owner = TestOwner.acquire(join(dir, "candidate.sqlite"));
+  initializeHostDurableBindings(db, () => owner.assert());
   const base = await openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(new OwnedSqlite(owner)));
   const manager = SessionManager.inMemory(dir, { id: "copied-runtime-session" });
   manager.appendMessage({ role: "system", content: "baseline", timestamp: 0 });
@@ -113,17 +114,13 @@ async function setup() {
       harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
       work, terminal, existingConversationIds: [conversationId], conversationFor(chat, branch) {
         if (chat !== "web:cutover" || branch !== "main") throw Error("Unknown branch"); return conversationId;
-      }, bindings: { async getOrBind(input) { return db.transaction(() => {
-        owner.assert();
-        const source = db.query("SELECT source_id,payload_ref,state FROM service_effect_s01_sources WHERE chat_jid=? AND source_seq=?")
-          .get(input.chatJid, input.sourceSeq) as { source_id: string; payload_ref: string; state: string } | null;
-        if (!source || source.source_id !== input.sourceId || source.payload_ref !== input.payloadRef || !["claimed", "consumed"].includes(source.state)) throw Error("Unverified source");
-        const payload = db.query("SELECT content FROM runtime_payloads WHERE ref=?").get(input.payloadRef) as { content: string };
-        if (hashCanonicalRequest({ type: "input", requestId: input.requestId, content: payload.content }) !== input.requestHash) throw Error("Payload conflict");
-        db.query("INSERT OR IGNORE INTO runtime_bindings VALUES (?,?)").run(input.operationId, JSON.stringify(input));
-        if ((db.query("SELECT binding FROM runtime_bindings WHERE operation_id=?").get(input.operationId) as { binding: string }).binding !== JSON.stringify(input)) throw Error("Binding conflict");
-        return payload;
-      }).immediate(); } },
+      }, bindings: createHostDurableBindings(db, { domain: identity.domain, incarnation: "host-A",
+        assertOwner() { owner.assert(); assertWriter("candidate:one"); },
+        manifest: [{ chatJid: "web:cutover", branchId: "main", conversationId }],
+        async resolveContent(ref) {
+          const row = db.query("SELECT content FROM runtime_payloads WHERE ref=?").get(ref) as { content: string } | null;
+          if (!row) throw Error("Missing host payload"); return row.content;
+        } }),
       authorizeScheduling() { assertWriter("candidate:one"); }, putAnswer: (ref, text) => { payloads.putText(ref, text); },
       sessionId: "copied-runtime-session", lane: "main", generation: owner.token.generation, now: () => at };
     runtime = await InactiveHostRuntime.open(options, context); return runtime;

@@ -1,6 +1,8 @@
 // INACTIVE application module: importing this API never opens storage or registers an engine.
 export { HostConversationRuntime } from "./host-runtime.js";
-export type { AcceptedInput, RuntimeOptions, SettledAnswer, MaterializedAnswer } from "./host-runtime.js";
+export type { AcceptedInput, RuntimeOptions, SettledAnswer, MaterializedAnswer, HostDurableBindings, HostInputBinding } from "./host-runtime.js";
+export { createHostDurableBindings, initializeHostDurableBindings } from "./host-bindings.js";
+export type { HostBindingOptions } from "./host-bindings.js";
 export { createHostModels } from "./host-models.js";
 export type { ModelRef, HostModelPolicy } from "./host-models.js";
 export { createHostTool } from "./host-tools.js";
