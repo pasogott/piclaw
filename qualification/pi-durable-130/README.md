@@ -502,3 +502,25 @@ recovery, passive reopen and cleanup. Source judges cleared the corrected code.
 Production schema/correlation setup, exact running-task cancellation, general
 multimedia settlement and engine bootstrap remain inactive/unqualified. This is
 an implemented reusable integration seam, not completion or deployment of #1650.
+
+## Controlled inactive cutover
+
+`host-cutover.ts` records one explicit writer choice in a caller-owned manifest.
+Initialization is separate; no production schema, engine bootstrap or admission
+hook is installed. Preparation persists intent before idempotent copied import;
+verification and writer switching require matching owner/revision, source digest
+and zero accepted-pending/inflight work, rechecked in the SQL transaction. Partial
+candidate data stays offline. Exact retries after lost acknowledgement do not
+create duplicate branches.
+
+Rollback before new candidate work can select the source again. Once new accepted
+work is recorded, rollback is blocked and its records are preserved pending real
+reconciliation/reverse conversion. There is no silent discard or promise of zero
+downtime. The caller must enforce the manifest at actual admission/effects; a
+stored marker alone does not enforce a single writer.
+
+Six cutover cases use actual copied SessionManager tree import, rollback/reopen,
+mutation, competing revisions and final drain/digest checks. The combined suite
+passes 289 tests / 4,717 assertions across seventeen files and strict types.
+Independent source review cleared this inactive boundary. General cutover wiring,
+post-new-work rollback and production activation remain incomplete.
