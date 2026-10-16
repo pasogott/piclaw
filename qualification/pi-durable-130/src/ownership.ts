@@ -28,7 +28,7 @@ export class TestOwner {
     if (process.platform !== "linux") throw new Error("Linux qualification only");
     const db = new Database(path, { create: true, strict: true });
     try {
-      db.exec("PRAGMA busy_timeout=1000; BEGIN IMMEDIATE");
+      db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=1000; BEGIN IMMEDIATE");
       db.exec(`CREATE TABLE IF NOT EXISTS ${table} (singleton INTEGER PRIMARY KEY CHECK(singleton=1), boot TEXT, pid INTEGER, start TEXT, nonce TEXT, generation INTEGER, active INTEGER)`);
       const old = db.query(`SELECT * FROM ${table} WHERE singleton=1`).get() as Row | null;
       const currentBoot = boot();
@@ -66,11 +66,15 @@ export class TestOwner {
 /** Existing facade queue; checks use the SAME SQLite transaction as candidate writes. */
 export class OwnedSqlite implements SqliteDatabase {
   private readonly base: BunSqliteDatabase;
-  constructor(private readonly owner: TestOwner) {
+  private readonly ready: Promise<void>;
+  constructor(private readonly owner: TestOwner, options: { foreignKeys?: boolean } = {}) {
     owner.assert(); // before constructing candidate storage connection
     this.base = new BunSqliteDatabase(owner.path);
+    // PRAGMA must run outside a transaction, before SDK schema initialization.
+    this.ready = options.foreignKeys ? this.base.exec("PRAGMA foreign_keys=ON") : Promise.resolve();
   }
-  transaction<T>(callback: (tx: SqliteExecutor) => Promise<T>): Promise<T> {
+  async transaction<T>(callback: (tx: SqliteExecutor) => Promise<T>): Promise<T> {
+    await this.ready;
     return this.base.transaction(async tx => {
       await this.owner.check(tx);
       const result = await callback(tx);
