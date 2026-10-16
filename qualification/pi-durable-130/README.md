@@ -312,3 +312,25 @@ Its fake provider checks authority cooperatively, so the real provider admission
 gap remains. No exhaustive database/log secret audit or cross-file transaction
 fence is claimed. Original chat/branch retention is tested on copied synthetic
 data only. Independent review cleared this bounded composition.
+
+## Reusable copied linear-history importer
+
+`src/legacy-import.ts` exposes `prepareLegacyImport` and `importCopiedLegacy` for
+copied, quiescent linear v3 histories, explicit persisted baselines and stable
+host chat/incarnation/branch bindings. Defaults are 1,000 entries and 8 MiB;
+limits are caller-overridable and reject the entire input without truncation.
+Entries, original audit records, source hash and manifest commit atomically.
+Repeated identical input is idempotent; changed source or binding is rejected.
+A 100-record public-SDK context-equivalence case extends the small fixtures.
+Non-finite JSON numbers are rejected before cloning/projection. Scalar inputs and
+limits are snapshotted once, so callbacks or delayed commits cannot change the
+identity associated with the hash. The projection callback is a trusted host
+bridge, not an authentication boundary. Hash identity is intentionally sensitive
+to the exact copied source bytes, including newline changes.
+
+The combined suite now passes 162 tests with types. Independent judges cleared
+the importer after overflow and input-mutation regressions. This module still
+requires caller drain/ownership and final storage fencing. It rejects nonlinear
+full-tree histories, unsupported record semantics and missing baselines; large
+transaction performance and general migration are not qualified. No production
+importer is registered or allowed to touch existing live history.

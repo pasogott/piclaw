@@ -9,7 +9,8 @@ import type { Message } from "@earendil-works/pi-ai";
 import { CompactionEntry, SystemEntry, defineDoc, type Conversation, type EntryId, type EntryDraft, type ConversationId } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { BunSqliteDatabase } from "./src/bun-sqlite.js";
-import { context, openFixture } from "./src/fixture.js";
+import { barrier, context, openFixture } from "./src/fixture.js";
+import { importCopiedLegacy, prepareLegacyImport, LegacyImportManifest, type CopiedLegacyInput, type GetLegacyContext } from "./src/legacy-import.js";
 
 // Resolve ONLY the public current SDK export from root dependencies, never its internals.
 // The current package has an import-only export; createRequire.resolve cannot resolve it.
@@ -260,6 +261,186 @@ describe("H5 bounded copied existing-history qualification (not production migra
       expect((await f.root.context(context)).entries).toHaveLength(0);
     }));
   }
+});
+
+const publicContextBridge: GetLegacyContext = (entries, leafId) => ({
+  messages: json(convertToLlm(buildSessionContext([...entries], leafId).messages)),
+  projected: entries.map(entry => ({ sourceEntryId: entry.id,
+    messages: entry.type === "custom" ? [] : json(convertToLlm(sessionEntryToContextMessages(entry))) })),
+});
+function moduleInput(manager: LegacyManager): CopiedLegacyInput {
+  return { sourceJSONL: copied(manager).jsonl, chatJid: "web:module-chat", chatIncarnation: "stable-original-uuid",
+    branchId: "original-main", hostBaseline: "Known original synthetic baseline" };
+}
+describe("reusable copied-history module (not live migration wiring)", () => {
+  for (const location of ["tool arguments", "tool details", "custom metadata", "compaction details"] as const) {
+    test(`literal 1e400 in ${location} rejects before bridge or any writes`, () => using(async f => {
+      const manager = advancedFixture(true);
+      manager.appendMessage(assistant(true));
+      manager.appendMessage({ role: "toolResult", toolCallId: "copied-call", toolName: "host_effect",
+        content: [{ type: "text", text: "completed" }], details: {}, isError: false, timestamp: 3000 });
+      manager.appendCustomEntry("qualification.display", {});
+      const input = moduleInput(manager);
+      const records = input.sourceJSONL.trim().split("\n").map(line => JSON.parse(line));
+      const nested = { nested: [0, { overflow: "OVERFLOW" }] };
+      if (location === "tool arguments") records.find(r => r.message?.stopReason === "toolUse").message.content[0].arguments = nested;
+      if (location === "tool details") records.find(r => r.message?.role === "toolResult").message.details = nested;
+      if (location === "custom metadata") records.find(r => r.type === "custom").data = nested;
+      if (location === "compaction details") records.find(r => r.type === "compaction").details = nested;
+      const invalid = { ...input, sourceJSONL: records.map(r => JSON.stringify(r)).join("\n").replace('"OVERFLOW"', "1e400") };
+      let calls = 0;
+      const bridge: GetLegacyContext = (...args) => { calls++; return publicContextBridge(...args); };
+      expect(() => prepareLegacyImport(invalid, bridge)).toThrow("non-finite JSON number");
+      await expect(importCopiedLegacy(f.root, invalid, bridge, () => {}, context)).rejects.toThrow("non-finite JSON number");
+      expect(calls).toBe(0);
+      expect((await f.root.entries({}, 100, undefined, context)).items).toEqual([]);
+      expect(await f.harness.snapshot(LegacyImportManifest, f.root.id, context)).toBeUndefined();
+      expect(f.host.effects + f.host.modelCalls + f.host.credentialLookups).toBe(0);
+    }));
+  }
+  test("trusted bridge mutation cannot change the source hash or receipt identity", () => using(async f => {
+    const original = moduleInput(advancedFixture(true));
+    const expected = prepareLegacyImport(original, publicContextBridge);
+    const input = { ...original };
+    const receipt = await importCopiedLegacy(f.root, input, (...args) => {
+      Object.assign(input, { sourceJSONL: "changed after validation", chatJid: "changed-chat",
+        chatIncarnation: "changed-incarnation", branchId: "changed-branch", hostBaseline: "changed-baseline",
+        maxEntries: 1, maxBytes: 1 });
+      return publicContextBridge(...args);
+    }, () => {}, context);
+    expect(receipt.sourceHash).toBe(expected.sourceHash);
+    expect(receipt.chatJid).toBe(original.chatJid);
+    expect(receipt.chatIncarnation).toBe(original.chatIncarnation);
+    expect(receipt.branchId).toBe(original.branchId);
+    expect(receipt.originalEntries).toEqual(JSON.parse(JSON.stringify(expected.entries)));
+    expect(await importCopiedLegacy(f.root, original, publicContextBridge, () => {}, context)).toEqual(receipt);
+  }));
+  test("host scalar accessors including limits are read exactly once", () => using(async f => {
+    const original = { ...moduleInput(advancedFixture()), maxEntries: 1000, maxBytes: 8 * 1024 * 1024 };
+    const reads = new Map<string, number>();
+    const input = Object.defineProperties({}, Object.fromEntries(Object.entries(original).map(([key, value]) => [key, {
+      get() { const count = (reads.get(key) ?? 0) + 1; reads.set(key, count); return count === 1 ? value : null; },
+    }]))) as CopiedLegacyInput;
+    const receipt = await importCopiedLegacy(f.root, input, publicContextBridge, () => {}, context);
+    expect(receipt.sourceHash).toBe(prepareLegacyImport(original, publicContextBridge).sourceHash);
+    expect(Object.fromEntries(reads)).toEqual(Object.fromEntries(Object.keys(original).map(key => [key, 1])));
+    expect(receipt.chatJid).toBe(original.chatJid);
+    expect(receipt.chatIncarnation).toBe(original.chatIncarnation);
+    expect(receipt.branchId).toBe(original.branchId);
+  }));
+  test("held public commit uses private preparation despite later host and public-output mutation", () => using(async f => {
+    const original = moduleInput(advancedFixture(true)), input = { ...original };
+    const exposed = prepareLegacyImport(input, publicContextBridge);
+    const expectedHash = exposed.sourceHash;
+    const entered = barrier(), hold = barrier();
+    // Decorate only the public Conversation.commit contract; no candidate store internals.
+    const conversation: Conversation = Object.create(f.root);
+    conversation.commit = async (callback, ctx) => {
+      entered.release();
+      await hold.promise;
+      return f.root.commit(callback, ctx);
+    };
+    const pending = importCopiedLegacy(conversation, input, publicContextBridge, () => {}, context);
+    await entered.promise;
+    try {
+      Object.assign(input, { sourceJSONL: "changed while commit held", chatJid: "changed-chat",
+        chatIncarnation: "changed-incarnation", branchId: "changed-branch", hostBaseline: "changed-baseline" });
+      exposed.sourceHash = "forged-public-hash";
+      exposed.entries.length = 0;
+      exposed.projection = { messages: [], projected: [] };
+    } finally { hold.release(); }
+    const receipt = await pending;
+    expect(receipt.sourceHash).toBe(expectedHash);
+    expect(receipt.chatJid).toBe(original.chatJid);
+    expect(receipt.chatIncarnation).toBe(original.chatIncarnation);
+    expect(receipt.branchId).toBe(original.branchId);
+    expect(receipt.entries).toHaveLength(5);
+    expect((await f.harness.snapshot(LegacyImportManifest, f.root.id, context))!.binding).toEqual(receipt);
+    expect(await importCopiedLegacy(f.root, original, publicContextBridge, () => {}, context)).toEqual(receipt);
+  }));
+  test("100 records from public Pi120 preserve exact context, original UUID mapping and idempotency", () => using(async f => {
+    const manager = advancedFixture();
+    while (manager.getEntries().length < 100) manager.appendMessage({ role: "user", content: `history-${manager.getEntries().length}`, timestamp: 3000 });
+    const input = moduleInput(manager);
+    const receipt = await importCopiedLegacy(f.root, input, publicContextBridge, () => {}, context);
+    await equivalent(f, manager);
+    expect(receipt.entries).toHaveLength(100);
+    expect(receipt.originalEntries).toEqual(JSON.parse(JSON.stringify(manager.getEntries())));
+    expect(receipt.chatIncarnation).toBe("stable-original-uuid");
+    expect(receipt.sourceSessionId).toBe(manager.getSessionId());
+    expect(receipt.entries.map(e => e.sourceEntryId)).toEqual(manager.getEntries().map(e => e.id));
+    expect(await importCopiedLegacy(f.root, input, publicContextBridge, () => {}, context)).toEqual(receipt);
+    await expect(importCopiedLegacy(f.root, { ...input, sourceJSONL: input.sourceJSONL + "\n" }, publicContextBridge, () => {}, context)).rejects.toThrow("content conflict");
+    expect((await f.root.context(context)).entries).toHaveLength(200);
+  }));
+  test("compaction checkpoint, audit data and original fork points survive extraction", () => using(async f => {
+    const manager = advancedFixture(true);
+    const receipt = await importCopiedLegacy(f.root, moduleInput(manager), publicContextBridge, () => {}, context);
+    await equivalent(f, manager);
+    for (const index of [1, 3]) {
+      const entry = manager.getEntries()[index]!;
+      const at = receipt.entries.find(e => e.sourceEntryId === entry.id)!.durableEntryId;
+      const fork = await f.root.fork(at as EntryId, { ownership: { kind: "ownerless" } }, context);
+      expect((await fork.context(context)).messages).toEqual(json(convertToLlm(buildSessionContext(manager.getEntries(), entry.id).messages)));
+    }
+    expect((await f.harness.snapshot(LegacyImportManifest, f.root.id, context))!.binding).toEqual(receipt);
+  }));
+  test("interruption after actual appends rolls back all entries and manifest; retry is idempotent", () => using(async f => {
+    const input = moduleInput(advancedFixture(true)); let checks = 0;
+    await expect(importCopiedLegacy(f.root, input, publicContextBridge, () => {
+      if (++checks === 7) throw new Error("interrupted owner");
+    }, context)).rejects.toThrow("interrupted owner");
+    expect((await f.root.entries({}, 100, undefined, context)).items).toEqual([]);
+    expect(await f.harness.snapshot(LegacyImportManifest, f.root.id, context)).toBeUndefined();
+    const receipt = await importCopiedLegacy(f.root, input, publicContextBridge, () => {}, context);
+    expect(await importCopiedLegacy(f.root, input, publicContextBridge, () => {}, context)).toEqual(receipt);
+    expect((await f.harness.inspect(context)).tasks).toEqual([]);
+    expect(f.host.effects + f.host.modelCalls + f.host.credentialLookups).toBe(0);
+  }));
+  test("completed historical tool result, image and display metadata import as data only", () => using(async f => {
+    const manager = SessionManager.inMemory(process.env.PICLAW_WORKSPACE!, { id: "original-tools-uuid" });
+    manager.appendMessage({ role: "system", content: "Known original synthetic baseline", timestamp: 999 });
+    for (const entry of representative().getEntries()) {
+      if (entry.type === "message") { message(entry.message); manager.appendMessage(entry.message); }
+      else if (entry.type === "custom") manager.appendCustomEntry(entry.customType, entry.data);
+    }
+    const receipt = await importCopiedLegacy(f.root, moduleInput(manager), publicContextBridge, () => {}, context);
+    await equivalent(f, manager);
+    expect(receipt.originalEntries).toEqual(JSON.parse(JSON.stringify(manager.getEntries())));
+    expect(JSON.stringify((await f.root.context(context)).messages)).toContain("historically completed");
+  }));
+  test("module SQLite rollback, reopen and lost-ack retry retain manifest and exact context", async () => {
+    const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "module-sqlite-"));
+    const open = () => openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(new BunSqliteDatabase(join(dir, "copy.sqlite"))));
+    let f = await open();
+    try {
+      const manager = advancedFixture(true), input = moduleInput(manager); let checks = 0;
+      await expect(importCopiedLegacy(f.root, input, publicContextBridge, () => {
+        if (++checks === 7) throw new Error("interrupted SQLite import");
+      }, context)).rejects.toThrow("interrupted SQLite");
+      await f.close(); f = await open();
+      expect((await f.root.entries({}, 100, undefined, context)).items).toEqual([]);
+      expect(await f.harness.snapshot(LegacyImportManifest, f.root.id, context)).toBeUndefined();
+      const receipt = await importCopiedLegacy(f.root, input, publicContextBridge, () => {}, context);
+      await f.close(); f = await open();
+      expect(await importCopiedLegacy(f.root, input, publicContextBridge, () => {}, context)).toEqual(receipt);
+      await equivalent(f, manager);
+    } finally { await f.close(); await rm(dir, { recursive: true, force: true }); }
+  });
+  test("explicit bounds, absent baseline, nonlinear tree, unsupported records fail before writing", () => using(async f => {
+    const manager = advancedFixture(true), input = moduleInput(manager);
+    for (const invalid of [{ ...input, maxEntries: 2 }, { ...input, maxBytes: 10 }, { ...input, hostBaseline: "" },
+      { ...input, hostBaseline: undefined } as unknown as CopiedLegacyInput]) {
+      await expect(importCopiedLegacy(f.root, invalid, publicContextBridge, () => {}, context)).rejects.toThrow();
+    }
+    manager.branch(manager.getEntries()[1]!.id);
+    manager.appendMessage({ role: "user", content: "deep branch", timestamp: 4000 });
+    expect(() => prepareLegacyImport(moduleInput(manager), publicContextBridge)).toThrow("nonlinear");
+    const unknown = advancedFixture(); unknown.appendCustomEntry("unknown", {});
+    expect(() => prepareLegacyImport(moduleInput(unknown), publicContextBridge)).toThrow("unsupported extension");
+    expect((await f.root.entries({}, 100, undefined, context)).items).toEqual([]);
+    expect(await f.harness.snapshot(LegacyImportManifest, f.root.id, context)).toBeUndefined();
+  }));
 });
 
 // Independent advanced fixture lane. The original fail-closed importer above is unchanged.
