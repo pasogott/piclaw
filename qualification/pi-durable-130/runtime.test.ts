@@ -4,8 +4,9 @@ import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { Harness, LiveDoc, type Tx } from "@earendil-works/pi-durable";
-import { HostConversationRuntime, type AcceptedInput, type RuntimeOptions } from "./src/host-runtime.js";
+import { Harness, LiveDoc, AssistantEntry, UserEntry, type Tx } from "@earendil-works/pi-durable";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { HostConversationRuntime, type AcceptedInput, type RuntimeOptions, type SettledAnswer } from "./src/host-runtime.js";
 import { BunSqliteDatabase } from "./src/bun-sqlite.js";
 import { barrier, context, openFixture } from "./src/fixture.js";
 import { at, effect, sealed, value } from "./src/host-handoff.js";
@@ -15,6 +16,27 @@ import { installTerminalSettlementCompositionSchema } from "../../runtime/src/se
 import { createCurrentPiclawServiceWorkStore } from "../../runtime/src/service-effects/current-piclaw/service-work-store.js";
 import { createCurrentPiclawTerminalSettlementStore } from "../../runtime/src/service-effects/current-piclaw/terminal-settlement-store.js";
 import { InMemoryEffectPayloadResolver } from "../../runtime/src/service-effects/testing/in-memory-payload-resolver.js";
+
+// Same known-row fixture as terminal-settlement-test-support.seedSqliteMedia, against
+// this test's copied root DB. Image bytes/metadata are stored in the existing media table.
+function insertMedia(db: Database, operationId: string, mediaId: number) {
+  const data = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=", "base64");
+  db.transaction(() => {
+    db.query("INSERT INTO media(id,filename,content_type,data) VALUES (?,?,?,?)").run(mediaId, "generated.png", "image/png", data);
+    db.query(`INSERT INTO service_effect_media_uploads
+      (idempotency_key,request_hash,upload_id,media_id,sha256,byte_length,data_ref,thumbnail_ref,metadata_ref,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`).run(`upload:${mediaId}`, "c".repeat(64), `upload:${mediaId}`, mediaId,
+        new Bun.CryptoHasher("sha256").update(data).digest("hex"), data.length, `media:${mediaId}`, null, null, at);
+    db.query(`INSERT INTO service_effect_operation_media
+      (idempotency_key,request_hash,operation_id,media_id,role,bound_at) VALUES (?,?,?,?,?,?)`)
+      .run(`bind:${mediaId}`, "e".repeat(64), operationId, mediaId, "terminal", at);
+  }).immediate();
+}
+const imageBlock = { type: "image", name: "generated.png", filename: "generated.png", mime_type: "image/png", size: 68 };
+// Negative API contract: pi-ai 1.3 does NOT support generated images in assistant content.
+// Images are tool/host-owned media, not a newly invented assistant wire variant.
+// @ts-expect-error ImageContent is not an AssistantMessage content variant.
+const unsupportedAssistantImage: AssistantMessage["content"][number] = { type: "image", data: "AA==", mimeType: "image/png" };
 
 async function fixture(run: (f: Awaited<ReturnType<typeof setup>>) => Promise<void>, busy = false) {
   const f = await setup(busy);
@@ -104,7 +126,7 @@ async function setup(busy = false) {
     try { await harness.waitForIdle(context); } finally { await harness.close(context); }
     return HostConversationRuntime.open(options, context);
   }
-  return { dir, db, base, options, runtime, accept, drain, work, terminal, path, hooks, stats: () => ({ opens, releases, authorizations }), setOwner: (v: boolean) => { acquired = v; }, grantKnown: () => { allowKnown = true; }, loseCancellationAck: () => { loseCancellationAck = true; } };
+  return { dir, db, base, options, runtime, accept, drain, work, terminal, payloads, path, hooks, stats: () => ({ opens, releases, authorizations }), setOwner: (v: boolean) => { acquired = v; }, grantKnown: () => { allowKnown = true; }, loseCancellationAck: () => { loseCancellationAck = true; } };
 }
 
 test("runtime: public transaction reads exact run ownership but cannot atomically mark its abort; queued successor survives", async () => {
@@ -239,7 +261,7 @@ test("runtime: real accepted input, immutable source/hash; acknowledgement repai
   try {
     const calls = f.base.host.modelCalls, grants = f.stats().authorizations;
     expect(await reopened.submit(input)).toBe(submission);
-    expect((await reopened.reconcile(input)).answer).toBe("synthetic answer");
+    expect((await reopened.reconcile(input)).answer?.text).toBe("synthetic answer");
     expect(f.stats().authorizations).toBe(grants); expect(f.base.host.modelCalls).toBe(calls);
     expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
     expect((await reopened.settle(input))?.disposition).toBe("completed");
@@ -354,7 +376,190 @@ test("runtime: close/reopen preserves pending unknown work, passive reconcile ne
     for (let n = 0; state.answer === null && n < 100; n++) {
       await Bun.sleep(10); state = await reopened.reconcile(input);
     }
-    expect(state.answer).toBe("synthetic answer");
+    expect(state.answer?.text).toBe("synthetic answer");
     expect(f.base.host.modelCalls).toBe(1);
   } finally { await reopened.close(); }
+}));
+
+test("runtime: reasoning stays in immutable host-private final evidence, never in default visible text", () => fixture(async f => {
+  f.base.host.finalContent = [{ type: "thinking", thinking: "private reasoning", thinkingSignature: "private-signature" },
+    { type: "text", text: "Visible " }, { type: "text", text: "answer" }];
+  const input = await f.accept(); await f.runtime.submit(input);
+  const reopened = await f.drain();
+  try {
+    const state = await reopened.reconcile(input);
+    expect(state.answer?.text).toBe("Visible answer");
+    expect(state.answer?.message.content).toEqual(f.base.host.finalContent);
+    expect(state.answer?.message.usage).toBeDefined();
+    expect(Object.isFrozen(state.answer?.message.content[0])).toBe(true);
+    expect((await reopened.settle(input))?.disposition).toBe("completed");
+    expect(f.db.query("SELECT content,content_blocks FROM messages WHERE is_bot_message=1").all())
+      .toEqual([{ content: "Visible answer", content_blocks: null }]);
+    expect(JSON.stringify(f.db.query("SELECT * FROM service_effect_s02_commits").all())).not.toContain("private reasoning");
+  } finally { await reopened.close(); }
+}));
+
+test("runtime: host materializes tool-owned image and blocks through real EF-S02 payload/media verification exactly once", () => fixture(async f => {
+  f.base.host.finalContent = [{ type: "thinking", thinking: "private reasoning" }, { type: "text", text: "Generated image" }];
+  const input = await f.accept("request-1", "use-tool");
+  insertMedia(f.db, input.operationId, 51);
+  let calls = 0;
+  Object.assign(f.options, { async materializeAnswer(ref: string, answer: SettledAnswer,
+    operation: import("../../runtime/src/service-effects/contracts/service-work-store.js").OperationSnapshot) {
+    calls++;
+    expect(operation.operationId).toBe(input.operationId);
+    expect(operation.chatJid).toBe(input.chatJid);
+    expect(Object.isFrozen(operation.harness)).toBe(true);
+    expect(answer.message.content).toEqual(f.base.host.finalContent!);
+    expect(answer.text).toBe("Generated image");
+    f.payloads.putText(ref, answer.text); f.payloads.putJson(`${ref}:blocks`, [imageBlock]);
+    return { contentRef: ref, contentBlocksRef: `${ref}:blocks`, mediaIds: [51] };
+  } });
+  await f.runtime.submit(input); const reopened = await f.drain();
+  try {
+    const grants = f.stats().authorizations, modelCalls = f.base.host.modelCalls;
+    expect(f.base.host.effects).toBe(1);
+    await reopened.reconcile(input); expect(calls).toBe(0);
+    const terminal = await reopened.settle(input);
+    expect(terminal?.disposition).toBe("completed");
+    expect(await reopened.settle(input)).toEqual(terminal); expect(calls).toBe(1);
+    expect(f.stats().authorizations).toBe(grants); expect(f.base.host.modelCalls).toBe(modelCalls);
+    const row = f.db.query("SELECT rowid,content,content_blocks FROM messages WHERE is_bot_message=1").get() as { rowid: number; content: string; content_blocks: string };
+    expect(row.content).toBe("Generated image"); expect(JSON.parse(row.content_blocks)).toEqual([imageBlock]);
+    expect(f.db.query("SELECT media_id FROM message_media WHERE message_rowid=?").all(row.rowid)).toEqual([{ media_id: 51 }]);
+    expect(f.db.query("SELECT content_type,length(data) AS bytes FROM media WHERE id=51").get()).toEqual({ content_type: "image/png", bytes: 68 });
+    expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(1);
+  } finally { await reopened.close(); }
+}));
+
+for (const invalid of ["duplicate", "zero", "fraction", "missing", "foreign", "forbidden-block", "wrong-redaction", "wrong-type", "corrupt-bytes", "throws"] as const) {
+  test(`runtime: materializer ${invalid} fails closed without terminal publication or private errors`, () => fixture(async f => {
+    const input = await f.accept();
+    if (invalid === "foreign") {
+      const foreign = value(await f.work.acceptSource(sealed({ effect: effect("foreign-source"), chatJid: "web:foreign",
+        sourceId: "foreign", kind: "message" as const, payloadRef: "input:foreign", targetOperationId: null,
+        parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
+      const claimed = value(await f.work.claimNext(sealed({ effect: effect("foreign-claim"), chatJid: foreign.chatJid,
+        expectedFrontier: 0, newOperationId: "operation:foreign", claimedAt: at })))!;
+      insertMedia(f.db, claimed.operation.operationId, 51);
+    }
+    Object.assign(f.options, { async materializeAnswer(ref: string) {
+      if (invalid === "throws") throw new Error("credential=DO-NOT-EXPOSE");
+      f.payloads.putText(ref, "Visible");
+      f.payloads.putJson(`${ref}:blocks`, invalid === "forbidden-block" ? [{ type: "control_intent" }] : [imageBlock]);
+      if (invalid === "wrong-redaction") f.payloads.putBytes(`${ref}:bad`, new TextEncoder().encode("Visible"), "text/plain", "secret");
+      if (invalid === "wrong-type") f.payloads.putJson(`${ref}:bad`, "Visible");
+      if (invalid === "corrupt-bytes") {
+        const resolve = f.payloads.resolve.bind(f.payloads);
+        f.payloads.resolve = async ref => { const payload = await resolve(ref); return payload ? { ...payload, bytes: new Uint8Array([0]) } : null; };
+      }
+      return { contentRef: ["wrong-redaction", "wrong-type"].includes(invalid) ? `${ref}:bad` : ref,
+        contentBlocksRef: `${ref}:blocks`, mediaIds: invalid === "duplicate" ? [51, 51] : invalid === "zero" ? [0] : invalid === "fraction" ? [1.5]
+          : ["missing", "foreign"].includes(invalid) ? [51] : [] };
+    } });
+    await f.runtime.submit(input); const reopened = await f.drain();
+    try {
+      let error: unknown; try { await reopened.settle(input); } catch (caught) { error = caught; }
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).not.toContain("DO-NOT-EXPOSE");
+      if (invalid === "throws") expect(String(error)).toBe("Error: Host answer materialization failed");
+      expect(f.db.query("SELECT * FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+      expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+    } finally { await reopened.close(); }
+  }));
+}
+
+for (const race of ["cancellation", "owner", "version", "sql-owner", "sql-cancellation"] as const) {
+  test(`runtime: ${race} while materializing prevents stale completion and publication`, () => fixture(async f => {
+    const input = await f.accept(), entered = barrier(), hold = barrier();
+    let calls = 0;
+    Object.assign(f.options, { async materializeAnswer(ref: string, answer: SettledAnswer) {
+      calls++; f.payloads.putText(ref, answer.text); entered.release(); await hold.promise;
+      return { contentRef: ref, contentBlocksRef: null, mediaIds: [] };
+    } });
+    await f.runtime.submit(input); const reopened = await f.drain();
+    try {
+      const pending = reopened.settle(input); void pending.catch(() => {}); await entered.promise;
+      const operation = value(await f.work.getOperation(input.operationId))!;
+      let releasePayload: (() => void) | undefined;
+      if (race === "sql-owner" || race === "sql-cancellation") {
+        const ref = `runtime-answer:copy-A:${(await reopened.reconcile(input)).submissionId}`;
+        releasePayload = f.payloads.hold(ref);
+        hold.release(); await f.payloads.waitUntilHeld(ref);
+      }
+      if (race === "cancellation" || race === "sql-cancellation") {
+        const source = value(await f.work.acceptSource(sealed({ effect: effect("materialize-cancel-source"), chatJid: input.chatJid,
+          sourceId: "materialize-cancel", kind: "cancellation" as const, payloadRef: "cancel:materialize", targetOperationId: input.operationId,
+          parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
+        value(await f.work.acceptCancellation(sealed({ effect: effect("materialize-cancel", input.operationId, source.sourceSeq),
+          expectedVersion: operation.version, sourceId: source.sourceId, sourceSeq: source.sourceSeq, cause: "user", requestedAt: at })));
+      } else if (race === "version") {
+        value(await f.work.appendIntent(sealed({ effect: effect("materialize-intent", input.operationId, input.sourceSeq),
+          expectedVersion: operation.version, intentId: "materialize-intent", kind: "abort" as const, payloadRef: "cancel:intent", createdAt: at })));
+      } else if (race === "owner") f.setOwner(false);
+      else f.setOwner(false);
+      releasePayload?.(); hold.release(); await expect(pending).rejects.toThrow(); f.setOwner(true);
+      expect(f.db.query("SELECT * FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+      expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+      if (race === "cancellation" || race === "sql-cancellation") {
+        expect((await reopened.settle(input))?.disposition).toBe("cancelled"); expect(calls).toBe(1);
+        expect(f.db.query("SELECT * FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+      }
+    } finally { hold.release(); f.setOwner(true); await reopened.close(); }
+  }));
+}
+
+for (const unsupported of ["image", "toolCall"] as const) {
+  test(`runtime: committed ${unsupported} final is explicitly rejected, never flattened or materialized`, () => fixture(async f => {
+    const input = await f.accept();
+    await f.runtime.reconcile(input); // Establish the real accepted host binding without scheduling.
+    await f.runtime.close(); f.setOwner(true);
+    const storage = await f.options.openStorage(), harness = await Harness.open(storage, f.options.harnessOptions, context);
+    try {
+      // Synthetic malformed/imported final evidence through PUBLIC transaction APIs only.
+      // No invented provider image API and no private candidate SQL/schema writes.
+      await harness.commit(async tx => {
+        const entry = await tx.appendEntry(UserEntry, input.conversationId, { model: [{ role: "user", content: "hello", timestamp: 1 }] });
+        const message: AssistantMessage = { role: "assistant", api: "openai-completions", provider: "qualification", model: "synthetic",
+          content: unsupported === "image" ? [unsupportedAssistantImage] : [{ type: "toolCall", id: "unfinished", name: "host_effect", arguments: {} }],
+          stopReason: "stop", timestamp: 1,
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+        const answer = await tx.appendEntry(AssistantEntry, input.conversationId, { model: [message] });
+        const submission = await tx.createSubmission({ type: "input", status: "placed", conversationId: input.conversationId, requestId: input.requestId, entry: entry.id });
+        tx.settleSubmission(submission.id, { status: "done", answer: answer.id });
+      }, context);
+    } finally { await harness.close(context); }
+    let materializations = 0;
+    Object.assign(f.options, { async materializeAnswer() { materializations++; throw new Error("must not run"); } });
+    const reopened = await HostConversationRuntime.open(f.options, context);
+    try {
+      await expect(reopened.reconcile(input)).rejects.toThrow("Unsupported final assistant content");
+      await expect(reopened.settle(input)).rejects.toThrow("Unsupported final assistant content");
+      expect(materializations).toBe(0); expect(f.base.host.modelCalls).toBe(0);
+      expect(f.db.query("SELECT * FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+      expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+    } finally { await reopened.close(); }
+  }));
+}
+
+test("runtime: materializer callback captured before open await and returned media refs detached before EF resolution await", () => fixture(async f => {
+  const input = await f.accept(); insertMedia(f.db, input.operationId, 51);
+  await f.runtime.submit(input); const drained = await f.drain(); await drained.close(); f.setOwner(true);
+  const entered = barrier(), hold = barrier(), storageFactory = f.options.openStorage;
+  const result = { contentRef: "answer:snapshot", contentBlocksRef: "blocks:snapshot", mediaIds: [51] };
+  f.payloads.putText(result.contentRef, "Authorized"); f.payloads.putJson(result.contentBlocksRef, [imageBlock]);
+  const options = { ...f.options, async materializeAnswer() { return result; },
+    async openStorage() { entered.release(); await hold.promise; return storageFactory(); } };
+  const pendingOpen = HostConversationRuntime.open(options, context); await entered.promise;
+  options.materializeAnswer = async () => { throw new Error("replacement must not run"); };
+  hold.release(); const reopened = await pendingOpen;
+  const releasePayload = f.payloads.hold(result.contentRef);
+  try {
+    const pending = reopened.settle(input); await f.payloads.waitUntilHeld(result.contentRef);
+    result.mediaIds.splice(0, 1, 999); result.contentBlocksRef = "blocks:rogue"; result.contentRef = "answer:rogue";
+    releasePayload(); expect((await pending)?.disposition).toBe("completed");
+    expect(f.db.query("SELECT media_id FROM message_media").all()).toEqual([{ media_id: 51 }]);
+    expect(f.db.query("SELECT content,content_blocks FROM messages WHERE is_bot_message=1").get())
+      .toEqual({ content: "Authorized", content_blocks: JSON.stringify([imageBlock]) });
+  } finally { releasePayload(); await reopened.close(); }
 }));

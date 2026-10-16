@@ -20,6 +20,7 @@ export async function openFixture(owner: { acquired: boolean }, allocated = () =
     modelAllowed: true, toolAllowed: true, modelCalls: 0, effects: 0, credentialLookups: 0,
     admissions: [] as EffectIdentity[], denials: [] as string[],
     modelHold: undefined as ReturnType<typeof barrier> | undefined,
+    finalContent: undefined as AssistantMessage["content"] | undefined,
     toolHold: undefined as ReturnType<typeof barrier> | undefined,
     toolEntered: barrier(),
   };
@@ -69,7 +70,7 @@ export async function openFixture(owner: { acquired: boolean }, allocated = () =
         const callsTool = last?.role === "user" && JSON.stringify(last.content).includes("use-tool");
         message = { ...message, stopReason: callsTool ? "toolUse" : "stop", content: callsTool
           ? [{ type: "toolCall", id: `call-${attempt}`, name: "host_effect", arguments: { value: "synthetic" } }]
-          : [{ type: "text", text: "synthetic answer" }] };
+          : host.finalContent ?? [{ type: "text", text: "synthetic answer" }] };
         output.push({ type: "done", reason: message.stopReason as "toolUse" | "stop", message });
       } catch (error) {
         message = { ...message, stopReason: "error", errorMessage: String(error) };

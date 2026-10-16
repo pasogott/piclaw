@@ -30,6 +30,7 @@
     "addon-host-services.test.ts",
     "delegate.test.ts",
     "scheduled.test.ts",
-    "cutover.test.ts"
+    "cutover.test.ts",
+    "cutover-runtime.test.ts"
   ]
 }

@@ -145,7 +145,7 @@ test("cutover/runtime: public copied history, real accepted source, runtime reop
   const runtime = await f.open(), input = await f.accept("new-work");
   const submission = await runtime.submit(input); expect(await runtime.submit(input)).toBe(submission);
   const reopened = await f.drain();
-  expect((await reopened.reconcile(input)).answer).toBe("synthetic answer");
+  expect((await reopened.reconcile(input)).answer?.text).toBe("synthetic answer");
   expect((await reopened.settle(input))?.disposition).toBe("completed");
   expect((await reopened.settle(input))?.disposition).toBe("completed");
   expect(f.db.query("SELECT content FROM messages WHERE is_bot_message=1").all()).toEqual([{ content: "synthetic answer" }]);

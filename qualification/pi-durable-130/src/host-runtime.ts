@@ -1,8 +1,9 @@
 // INACTIVE qualification module. No bootstrap registration or production schema migration.
 import { AssistantEntry, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { Context } from "@earendil-works/chord/context";
 import { hashCanonicalRequest } from "../../../runtime/src/service-effects/contracts/common.js";
-import type { ServiceWorkStore, AcceptCancellationRequest } from "../../../runtime/src/service-effects/contracts/service-work-store.js";
+import type { ServiceWorkStore, AcceptCancellationRequest, OperationSnapshot } from "../../../runtime/src/service-effects/contracts/service-work-store.js";
 import type { TerminalSettlementStore, CommitTerminalRequest } from "../../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
 import { value, sealed, effect } from "./host-handoff.js";
 
@@ -18,6 +19,16 @@ export interface AcceptedInput {
   readonly payloadRef: string;
   readonly requestId: string;
   readonly requestHash: string;
+}
+/** Host-private evidence, never a public timeline payload (message may contain thinking). */
+export interface SettledAnswer {
+  readonly message: AssistantMessage;
+  readonly text: string;
+}
+export interface MaterializedAnswer {
+  readonly contentRef: string;
+  readonly contentBlocksRef: string | null;
+  readonly mediaIds: readonly number[];
 }
 export interface RuntimeOptions {
   readonly incarnation: string;
@@ -41,6 +52,11 @@ export interface RuntimeOptions {
    * authority before explicit progress (including recovered work); deny mixed/unknown authority. */
   readonly authorizeScheduling: (inspection: HarnessInspection) => void | Promise<void>;
   readonly putAnswer: (ref: string, text: string) => void | Promise<void>;
+  /** Optional host authority for ALL final answers, including operation-owned tool media.
+   * Publish only authorized visible content, never raw message/thinking. Refs must resolve
+   * through EF-S02's existing payload resolver with the effect's exact redaction class;
+   * media must already be bound to this operation. No provider execution is granted here. */
+  readonly materializeAnswer?: (ref: string, answer: SettledAnswer, operation: OperationSnapshot) => Promise<MaterializedAnswer>;
   readonly sessionId: string;
   readonly lane: string;
   readonly generation: number;
@@ -51,6 +67,24 @@ export interface RuntimeOptions {
 function plainData(value: object) {
   if (!value || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null))
     throw new TypeError("Expected plain contract data");
+}
+function freezeTree<T>(value: T): T {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value)) freezeTree(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+function materializedSnapshot(answer: MaterializedAnswer): MaterializedAnswer {
+  plainData(answer);
+  const { contentRef, contentBlocksRef, mediaIds } = answer;
+  const ids = Array.isArray(mediaIds) ? [...mediaIds] : null;
+  const validRef = (ref: unknown) => typeof ref === "string" && ref.length > 0 && ref.length <= 2048;
+  if (!validRef(contentRef) || (contentBlocksRef !== null && !validRef(contentBlocksRef)) ||
+    !ids || ids.length > 100 ||
+    ids.some(id => !Number.isSafeInteger(id) || id <= 0) || new Set(ids).size !== ids.length)
+    throw new TypeError("Invalid materialized answer");
+  return Object.freeze({ contentRef, contentBlocksRef, mediaIds: Object.freeze(ids) });
 }
 function inputSnapshot(i: AcceptedInput): AcceptedInput {
   plainData(i);
@@ -86,10 +120,11 @@ type RuntimeSnapshot = Omit<RuntimeOptions, "work" | "terminal"> & {
 };
 function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
   const { owner, work, terminal, bindings, harnessOptions: h, existingConversationIds,
-    openStorage, conversationFor, authorizeScheduling, putAnswer, now, incarnation, sessionId, lane, generation } = o;
+    openStorage, conversationFor, authorizeScheduling, putAnswer, materializeAnswer, now, incarnation, sessionId, lane, generation } = o;
   return Object.freeze({ incarnation, sessionId, lane, generation, captured: true as const,
     openStorage: openStorage.bind(o), conversationFor: conversationFor.bind(o),
-    authorizeScheduling: authorizeScheduling.bind(o), putAnswer: putAnswer.bind(o), now: now.bind(o),
+    authorizeScheduling: authorizeScheduling.bind(o), putAnswer: putAnswer.bind(o),
+    materializeAnswer: materializeAnswer?.bind(o), now: now.bind(o),
     owner: Object.freeze({ assert: owner.assert.bind(owner), release: owner.release.bind(owner) }),
     work: Object.freeze({ getOperation: work.getOperation.bind(work), acceptCancellation: work.acceptCancellation.bind(work), bindHarness: work.bindHarness.bind(work) }),
     terminal: Object.freeze({ getTerminal: terminal.getTerminal.bind(terminal), commitTerminal: terminal.commitTerminal.bind(terminal) }),
@@ -187,19 +222,21 @@ export class HostConversationRuntime {
     const handle = await this.harness.submission(record.id, this.context); this.fence();
     if (!handle) throw new Error("Missing submission");
     const status = await handle.status(this.context); this.fence();
-    let answer: string | null = null;
+    let answer: SettledAnswer | null = null;
     if (status.type === "input" && status.status === "done") {
       const entry = await conversation.commit(tx => tx.entry(AssistantEntry, status.answer), this.context); this.fence();
       if (!entry || entry.conversationId !== input.conversationId) throw new Error("Missing committed answer");
       const messages = entry.model ?? [];
       if (messages.length !== 1 || messages[0]!.role !== "assistant") throw new Error("Unsupported answer shape");
-      const content = messages[0]!.content;
-      if (typeof content === "string") answer = content;
-      else {
-        if (content.some(part => part.type !== "text")) throw new Error("Unsupported non-text answer");
-        answer = content.map(part => part.type === "text" ? part.text : "").join("");
-      }
-      if (answer.length > 65536) throw new Error("Answer exceeds qualification bound");
+      const message = messages[0]!;
+      // Public pi-ai 1.3 AssistantMessage supports text/thinking/toolCall, NOT image.
+      // A tool-call generation is not a final answer. Tool media belongs to the host port.
+      if (!Array.isArray(message.content) || message.content.some(part => part.type !== "text" && part.type !== "thinking"))
+        throw new Error("Unsupported final assistant content");
+      if (message.stopReason !== "stop" && message.stopReason !== "length") throw new Error("Unsupported final assistant stop reason");
+      const text = message.content.map(part => part.type === "text" ? part.text : "").join("");
+      if (text.length > 65536) throw new Error("Answer exceeds qualification bound");
+      answer = freezeTree({ message: structuredClone(message), text });
     }
     return { operation, submissionId: record.id, status, answer };
   }
@@ -248,10 +285,23 @@ export class HostConversationRuntime {
         state: "finished" as const, watchGeneration: o.generation }))); this.fence();
     }
     const cancelled = operation.cancellation !== null, ref = `runtime-answer:${o.incarnation}:${state.submissionId}`;
-    if (!cancelled) { await o.putAnswer(ref, state.answer!); this.fence(); }
+    let materialized: MaterializedAnswer = Object.freeze({ contentRef: ref, contentBlocksRef: null, mediaIds: Object.freeze([]) });
+    if (!cancelled) {
+      // Capture and validate returned refs BEFORE the next await. Host exceptions may contain secrets.
+      try {
+        if (o.materializeAnswer) materialized = materializedSnapshot(await o.materializeAnswer(ref, state.answer!, freezeTree(structuredClone(operation))));
+        else await o.putAnswer(ref, state.answer!.text);
+      } catch { throw new Error("Host answer materialization failed"); }
+      this.fence();
+      // Do not refresh expectedVersion: cancellation/version changes must reject this stale
+      // completion. EF-S02 repeats owner/version checks inside its terminal SQL transaction.
+      const current = value(await o.work.getOperation(input.operationId)); this.fence();
+      if (!current || current.version !== operation.version || current.cancellation || current.terminal)
+        throw new Error("Operation changed during answer materialization");
+    }
     const timeline: CommitTerminalRequest["timeline"] = cancelled
       ? { mode: "none", placeholderRowId: null, chatJid: input.chatJid, contentRef: null, threadId: null, mediaIds: [], contentBlocksRef: null }
-      : { mode: "insert", placeholderRowId: null, chatJid: input.chatJid, contentRef: ref, threadId: null, mediaIds: [], contentBlocksRef: null };
+      : { mode: "insert", placeholderRowId: null, chatJid: input.chatJid, ...materialized, threadId: null };
     const request: CommitTerminalRequest = sealed({ effect: effect(`runtime:terminal:${input.requestId}`, input.operationId, input.sourceSeq),
       expectedChatJid: input.chatJid, expectedVersion: operation.version, expectedHarness: operation.harness,
       disposition: cancelled ? "cancelled" as const : "completed" as const, errorCode: null, terminalAuthorityRef: null,

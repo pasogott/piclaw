@@ -556,3 +556,20 @@ aborts its task nor withdraws queued successor B; EF-S01 cancellation replay doe
 not increment its version, and a late answer is suppressed at host settlement.
 Eleven runtime tests / 146 assertions and types pass. This explicitly remains
 missing running-cancellation support, not successful cancellation qualification.
+
+## Host-private reasoning and authorized media settlement
+
+Final text may include thinking blocks in the underlying assistant message.
+Reconciliation retains that immutable message as host-private evidence but
+extracts only visible text by default. The optional captured `materializeAnswer`
+port may provide host-authorized content, content-block references and media IDs;
+actual EF-S02 validates those payload/media bindings. The port is trusted output
+authorization, not a generic redactor. Its exceptions are static, returned refs
+are detached, and owner/version/cancellation are rechecked after preparation and
+again by the transactional settlement boundary. Cancellation retry publishes no
+answer. Orphan material cleanup remains the host materializer's responsibility.
+
+Public final image/tool-call message shapes not supported by the assistant API
+are rejected, not silently flattened. The combined suite passes 314 tests / 4,931
+assertions across eighteen files plus strict types. Source review cleared this
+inactive rich-output path; no production materializer is registered.
