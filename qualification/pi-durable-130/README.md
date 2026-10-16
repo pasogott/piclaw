@@ -231,3 +231,37 @@ an atomic cross-file write fence: recovery refuses live-owner takeover and waits
 for confirmed/reaped child death. Arbitrary surviving external tools, general
 migration and production admission remain unqualified. Independent source review
 cleared this increment within those boundaries; #1650 remains incomplete.
+
+## Host model and tool policy ports (qualification only)
+
+The combined candidate suite now passes 145 tests, 1,036 assertions across nine
+files, plus strict TypeScript checks. These counts supersede earlier totals.
+
+`host-models.ts` adapts only approved physical chat models through the actual
+1.2 host ModelRuntime. Credentials, provider URLs/headers and auth mutations stay
+with the host; the 1.3 catalog receives JSON metadata and static errors. Tests
+exercise successful streaming/tool/thinking data, denied approval/budget, held
+authentication revocation, logout and no alternative-account fallback. Deferred,
+image/classifier and login-control operations deliberately reject. **Activation
+blocker:** public `transformHeaders` is awaited before provider invocation; the
+negative test demonstrates a revoked provider may still be invoked with an
+aborted signal. This is not proof of a sent request, but the strict zero-call
+admission contract remains unqualified.
+
+`host-tools.ts` preserves prepared arguments, text/images, details, explicit
+errors and progress acknowledgements. Throwing callbacks produce static errors
+without private causes. Registration snapshots the schema and approved callbacks.
+Replay defaults to unsafe; structured/nested tool definitions remain unsupported.
+The host effect port must recheck authority at every actual effect after awaits;
+a pre-tool check alone is not a security boundary.
+
+The opt-in root tracked-bash `validateSpawn` check runs after asynchronous cwd,
+environment/keychain work and immediately before each spawn, including fallback
+candidates. Only synchronous literal true authorizes; invalid async results are
+observed but never authorize. Existing callers are unchanged. `host-bash.ts`
+uses invocation-local tracked operations; progress failures abort the owned child,
+suppress later updates and expose only static errors. Tests use actual disposable
+local shell effects, child cancellation and unsafe replay/reopen boundaries.
+This does not qualify SSH, filesystem tools, MCP effects, arbitrary child trees
+or provider dispatch. The untouched SDK local runner's late-spawn limitation is
+retained as a negative control. No production port is registered.

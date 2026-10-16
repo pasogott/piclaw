@@ -18,6 +18,9 @@
     "host-handoff.test.ts",
     "migration.test.ts",
     "ownership.test.ts",
-    "cross-store.test.ts"
+    "cross-store.test.ts",
+    "models.test.ts",
+    "tools.test.ts",
+    "bash-port.test.ts"
   ]
 }
