@@ -3,6 +3,9 @@ import {
   type Result as ResultValue,
 } from "../contracts/result.js";
 import type Database from "bun:sqlite";
+import { computeClosedSourceFrontier } from "./source-frontier.js";
+import { normaliseWithdrawalRequest, type WithdrawUnclaimedSourceRequest } from "./service-work-request-normalizer.js";
+export type { WithdrawUnclaimedSourceRequest } from "./service-work-request-normalizer.js";
 
 import type { NormalisedTraceInput } from "../contracts/common.js";
 import type {
@@ -202,6 +205,54 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
       if (cause instanceof EffectAdmissionError) throw cause;
       throw new EffectAdmissionError(cause instanceof RollbackFault
         ? "storage_unavailable" : mutationError(cause)._tag);
+    }
+  }
+
+  /** Host-only precommit receipt. The caller MUST roll back on any failure. */
+  withdrawUnclaimedSourceInTransaction(input: WithdrawUnclaimedSourceRequest, transactionDatabase: Database): AcceptedSourceSnapshot {
+    if (transactionDatabase !== this.database || !this.database.inTransaction) throw new EffectAdmissionError("owner_conflict");
+    const request = normaliseWithdrawalRequest(input);
+    if (!request) throw new EffectAdmissionError("invalid_transition");
+    try {
+      // Unlike historical admission, withdrawal requires an explicit writer fence.
+      if (!this.runtime.validateAcceptance) throw new AcceptanceOwnershipError();
+      this.validateAcceptance();
+      const method = "withdrawUnclaimedSource.v1";
+      const replay = this.readDecision<AcceptedSourceSnapshot>(method, request.effect.idempotencyKey, request.effect.requestHash);
+      if (replay) {
+        if (!replay.ok) throw new EffectAdmissionError(replay.error._tag);
+        this.validateAcceptance();
+        return replay.value;
+      }
+      const raw = this.database.query("SELECT * FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?")
+        .get(request.chatJid, request.sourceId) as Record<string, unknown> | null;
+      if (!raw) throw new EffectAdmissionError("invalid_transition");
+      const source = sourceRow(raw);
+      if (source.kind !== "message" || source.source_hash !== request.sourceHash || source.payload_ref !== request.payloadRef
+        || request.payloadRef !== `queued-source:${request.sourceId}` || source.state !== "pending"
+        || source.target_operation_id !== null || source.disposition_reason !== null) throw new EffectAdmissionError("invalid_transition");
+      const owned = this.database.query(`SELECT 1 FROM service_effect_s01_operation_sources WHERE chat_jid=? AND source_seq=?
+        UNION ALL SELECT 1 FROM service_effect_s01_operations WHERE chat_jid=? AND (primary_source_seq=? OR cancellation_source_seq=?)
+        UNION ALL SELECT 1 FROM service_effect_s01_queued_inputs WHERE chat_jid=? AND source_seq=? LIMIT 1`)
+        .get(request.chatJid, source.source_seq, request.chatJid, source.source_seq, source.source_seq, request.chatJid, source.source_seq);
+      if (owned) throw new EffectAdmissionError("owner_conflict");
+      const changed = this.database.query("UPDATE service_effect_s01_sources SET state='disposed', disposition_reason='host_cancelled' WHERE chat_jid=? AND source_seq=? AND state='pending'")
+        .run(request.chatJid, source.source_seq);
+      if (changed.changes !== 1) throw new EffectAdmissionError("invalid_transition");
+      const chat = this.chatRow(request.chatJid);
+      // An active operation owns its frontier until EF-S02 releases it.
+      if (!chat.activeOperationId) {
+        const frontier = computeClosedSourceFrontier(this.database, request.chatJid, chat.consumedThroughSourceSeq, chat.nextSourceSeq);
+        this.database.query("UPDATE service_effect_s01_chats SET consumed_through_source_seq=? WHERE chat_jid=?")
+          .run(frontier, request.chatJid);
+      }
+      const snapshot = sourceSnapshot(this.requireSourceRow(request.chatJid, source.source_seq));
+      this.writeDecision(method, request.effect.idempotencyKey, request.effect.requestHash, snapshot);
+      this.validateAcceptance();
+      return snapshot;
+    } catch (cause) {
+      if (cause instanceof EffectAdmissionError) throw cause;
+      throw new EffectAdmissionError(mutationError(cause)._tag);
     }
   }
 
@@ -941,7 +992,7 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
   }
 
   private readDecision<T>(
-    method: MutationMethod,
+    method: string,
     key: string,
     hash: string,
   ): MutationOutcome<T> | null {
@@ -983,7 +1034,7 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
   }
 
   private writeDecision(
-    method: MutationMethod,
+    method: string,
     key: string,
     hash: string,
     value: unknown,
@@ -1001,7 +1052,7 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
 
   private materialiseDecision(
     decision: StoredDecision,
-    method: MutationMethod,
+    method: string,
   ): unknown {
     if (decision.kind === "empty") return null;
     if (decision.kind === "operation")

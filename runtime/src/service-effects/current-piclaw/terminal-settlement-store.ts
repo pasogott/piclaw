@@ -1,5 +1,6 @@
 import { Result, type Result as ResultValue } from "../contracts/result.js";
 import type Database from "bun:sqlite";
+import { computeClosedSourceFrontier } from "./source-frontier.js";
 
 import { validateServiceEffectContentBlocks } from "../../channels/web/messaging/content-block-safety.js";
 import type { NormalisedTraceInput } from "../contracts/common.js";
@@ -64,7 +65,6 @@ const DISPOSITIONS = new Set<PiclawDisposition>([
   "skipped",
   "superseded",
 ]);
-const CLOSED_SOURCE_STATES = new Set(["consumed", "disposed"]);
 const REQUIRED_SCHEMA = Object.freeze([
   "chats",
   "media",
@@ -737,20 +737,9 @@ class CurrentPiclawTerminalSettlementStore
   }
 
   private computeFrontier(operation: ClosedOperation): number {
-    let frontier = operation.consumedThroughSourceSeq;
-    while (frontier + 1 < operation.nextSourceSeq) {
-      const row = this.database
-        .query(
-          "SELECT state FROM service_effect_s01_sources WHERE chat_jid=? AND source_seq=?",
-        )
-        .get(operation.chatJid, frontier + 1) as { state?: unknown } | undefined;
-      if (!row || typeof row.state !== "string") {
-        throw new CorruptSettlementState();
-      }
-      if (!CLOSED_SOURCE_STATES.has(row.state)) break;
-      frontier += 1;
-    }
-    return frontier;
+    try {
+      return computeClosedSourceFrontier(this.database, operation.chatJid, operation.consumedThroughSourceSeq, operation.nextSourceSeq);
+    } catch { throw new CorruptSettlementState(); }
   }
 
   private validateOutboxAuthority(

@@ -66,6 +66,8 @@ export interface QueuedFollowupStateItem {
 }
 
 export interface RemoveQueuedFollowupForActionOptions {
+  /** Host-selected, explicit DELETE action only. Never supplied by steer/drain. */
+  withdrawAcceptedSource?: QueuedInputSourceAdmission;
   removeQueuedFollowupMessage?: (chatJid: string, queuedContent?: string) => Promise<boolean> | boolean;
 }
 
@@ -263,7 +265,27 @@ export class QueuedFollowupLifecycleService {
   ): Promise<RemoveQueuedFollowupForActionResult> {
     const queued = this.getDeferredQueuedFollowupItems(chatJid);
     const queuedIndex = queued.findIndex((item) => item.rowId === rowId);
-    if (queuedIndex >= 0 && queued[queuedIndex]!.source_accepted) throw new Error('Accepted input requires host cancellation');
+    if (queuedIndex >= 0 && queued[queuedIndex]!.source_accepted) {
+      const withdraw = options.withdrawAcceptedSource;
+      if (!withdraw) throw new Error('Accepted input requires host cancellation');
+      const database = getDb();
+      // No await between the authoritative read, host transition, and queue removal.
+      return database.transaction(() => {
+        const current = this.getDeferredQueuedFollowupItems(chatJid);
+        const index = current.findIndex(item => item.rowId === rowId);
+        const item = current[index];
+        if (!item?.source_accepted || !item.source_id) throw new Error('Accepted queue item is unavailable.');
+        const result: unknown = withdraw({ chatJid, item: { ...cloneQueuedFollowupItem(item), source_id: item.source_id }, database });
+        if (result !== undefined) {
+          void Promise.resolve(result).then(() => undefined, () => undefined);
+          throw new Error('Queued source withdrawal callback must be synchronous.');
+        }
+        current.splice(index, 1);
+        this.setDeferredQueuedFollowupItems(chatJid, current);
+        if (item.rowId > 0) deleteMessageByRowId(chatJid, item.rowId);
+        return { removed: cloneQueuedFollowupItem(item), source: 'deferred' as const };
+      }).immediate();
+    }
     const removedQueued = queuedIndex >= 0 ? (queued.splice(queuedIndex, 1)[0] ?? null) : null;
     if (queuedIndex >= 0) {
       this.setDeferredQueuedFollowupItems(chatJid, queued);

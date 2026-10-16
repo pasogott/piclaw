@@ -217,6 +217,29 @@ export function normaliseMutationRequest(
   }
 }
 
+export interface WithdrawUnclaimedSourceRequest {
+  readonly effect: EffectIdentity;
+  readonly chatJid: string;
+  readonly sourceId: string;
+  readonly sourceHash: string;
+  readonly payloadRef: string;
+  readonly actor: string;
+}
+
+/** Host-only versioned identity; never aliases an existing public mutation hash. */
+export function normaliseWithdrawalRequest(input: unknown): WithdrawUnclaimedSourceRequest | null {
+  try {
+    const value = record(input);
+    if (!value || !isBoundedTree(input) || !exactKeys(value, ["effect", "chatJid", "sourceId", "sourceHash", "payloadRef", "actor"])) return null;
+    const effect = normaliseEffect(value.effect);
+    if (!effect || effect.operationId !== null || effect.sourceSeq !== null) return null;
+    const request = { effect, chatJid: requiredText(value.chatJid), sourceId: requiredText(value.sourceId),
+      sourceHash: requiredText(value.sourceHash), payloadRef: requiredText(value.payloadRef), actor: requiredText(value.actor) };
+    if (!HASH.test(request.sourceHash) || effect.requestHash !== hashCanonicalRequest({ method: "withdrawUnclaimedSource.v1", ...request } as unknown as CanonicalJsonValue)) return null;
+    return deepFreeze(request);
+  } catch { return null; }
+}
+
 export function normaliseListRequest(
   input: unknown,
 ): Readonly<ListOpenOperationsRequest> | null {

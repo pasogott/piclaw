@@ -83,6 +83,131 @@ function fixture(select?: WebChannelOpts["getInputSourceAdmission"], validateAcc
     busy(value: boolean, stream = false) { active = value; streaming = stream; } };
 }
 
+function withdrawalFixture() {
+  const f = fixture(undefined, () => true);
+  f.channel.getQueuedInputSourceAdmission = () => f.acceptQueued;
+  f.busy(true);
+  const withdraw: NonNullable<ReturnType<NonNullable<WebChannelOpts['getQueuedInputSourceWithdrawal']>>> = ({ chatJid, item, database }) => {
+    const accepted = f.work.getAcceptedSource(chatJid, item.source_id)!;
+    const { source_accepted, materializeRetries, ...immutableInput } = item;
+    expect(accepted.provenanceRef).toBe(`engine:host-selected:${hashCanonicalRequest(JSON.parse(JSON.stringify(immutableInput)) as CanonicalJsonValue)}`);
+    const sourceHash = (database.query('SELECT source_hash FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?').get(chatJid, item.source_id) as { source_hash: string }).source_hash;
+    const request = { effect: { idempotencyKey: `withdraw:${item.source_id}`, requestHash: '', operationId: null, sourceSeq: null,
+      provenanceRef: 'host:queue-remove', redactionClass: 'private' as const }, chatJid, sourceId: item.source_id,
+      sourceHash, payloadRef: `queued-source:${item.source_id}`, actor: 'single-user' };
+    request.effect.requestHash = hashCanonicalRequest({ method: 'withdrawUnclaimedSource.v1', ...request } as unknown as CanonicalJsonValue);
+    f.work.withdrawUnclaimedSourceInTransaction(request, database);
+  };
+  f.channel.getQueuedInputSourceWithdrawal = () => withdraw;
+  const remove = (rowId: number, path = '/agent/queue-remove') => f.channel.handleRequest(new Request(`http://fixture${path}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://fixture' }, body: JSON.stringify({ row_id: rowId }) }));
+  return { ...f, withdraw, remove };
+}
+
+test('accepted HTTP queue withdrawal is atomic, private, duplicate-safe and preserves FIFO', async () => {
+  const f = withdrawalFixture();
+  f.expectSources(1); expect((await f.route({ content: 'first queued' })).status).toBe(201);
+  f.expectSources(2); expect((await f.route({ content: 'second queued' })).status).toBe(201);
+  const [first, second] = getDeferredQueuedFollowups('web:default');
+  const response = await f.remove(first!.rowId);
+  const body = await response.json(); expect(body.error).toBeUndefined();
+  expect(response.status).toBe(200);
+  expect(body.removed).toBe(true); expect(JSON.stringify(body)).not.toContain(first!.source_id!);
+  expect(f.work.getAcceptedSource('web:default', first!.source_id!)?.state).toBe('disposed');
+  expect(getDeferredQueuedFollowups('web:default').map(item => item.rowId)).toEqual([second!.rowId]);
+  const frontier = await f.work.getChatFrontier('web:default'); expect(frontier.ok && frontier.value.consumedThroughSourceSeq).toBe(1);
+  const before = f.snapshot(), events = f.events.length;
+  expect((await (await f.remove(first!.rowId)).json()).removed).toBe(false);
+  expect(f.snapshot()).toEqual(before); expect(f.events.length).toBe(events);
+  const claim = { effect: { idempotencyKey: 'claim-after-withdrawal', requestHash: '', operationId: null, sourceSeq: null,
+    provenanceRef: 'host', redactionClass: 'private' as const }, chatJid: 'web:default', expectedFrontier: 1,
+    newOperationId: 'after-withdrawal', claimedAt: '2026-08-13T00:00:01.000Z' };
+  claim.effect.requestHash = hashCanonicalRequest(claim as unknown as CanonicalJsonValue);
+  const claimed = await f.work.claimNext(claim); expect(claimed.ok && claimed.value?.source.sourceSeq).toBe(2);
+});
+
+test('claimed accepted source cannot be withdrawn and missing queue cannot dispose materialized work', async () => {
+  const f = withdrawalFixture(); f.expectSources(1); await f.route({ content: 'claimed queued' });
+  const item = getDeferredQueuedFollowups('web:default')[0]!;
+  const claim = { effect: { idempotencyKey: 'claimed-blocks-withdrawal', requestHash: '', operationId: null, sourceSeq: null,
+    provenanceRef: 'host', redactionClass: 'private' as const }, chatJid: 'web:default', expectedFrontier: 0,
+    newOperationId: 'claimed-blocks', claimedAt: '2026-08-13T00:00:01.000Z' };
+  claim.effect.requestHash = hashCanonicalRequest(claim as unknown as CanonicalJsonValue);
+  expect((await f.work.claimNext(claim)).ok).toBe(true);
+  const before = f.snapshot(), events = f.events.length;
+  expect((await f.remove(item.rowId)).status).toBe(500); expect(f.snapshot()).toEqual(before); expect(f.events.length).toBe(events);
+  setDeferredQueuedFollowups('web:default', []);
+  const materialized = f.snapshot();
+  expect((await (await f.remove(item.rowId)).json()).removed).toBe(false);
+  expect(f.snapshot()).toEqual(materialized);
+});
+
+test('steer never invokes registered withdrawal or creates legacy work for accepted input', async () => {
+  const f = withdrawalFixture(); f.expectSources(1); await f.route({ content: 'do not steer' });
+  const item = getDeferredQueuedFollowups('web:default')[0]!;
+  let calls = 0; f.channel.getQueuedInputSourceWithdrawal = () => () => { calls++; };
+  const before = f.snapshot(), jobs = f.jobs.length;
+  expect((await f.remove(item.rowId, '/agent/queue-steer')).status).toBe(500);
+  expect(calls).toBe(0); expect(f.snapshot()).toEqual(before); expect(f.jobs.length).toBe(jobs);
+});
+
+test('withdrawal callback post-write failure rolls back source, queue and publication', async () => {
+  const f = withdrawalFixture(); f.expectSources(1); await f.route({ content: 'rollback queued' });
+  const item = getDeferredQueuedFollowups('web:default')[0]!;
+  f.channel.getQueuedInputSourceWithdrawal = () => stored => { f.withdraw(stored); throw Error('after source write'); };
+  const before = f.snapshot(), events = f.events.length;
+  expect((await f.remove(item.rowId)).status).toBe(500);
+  expect(f.snapshot()).toEqual(before); expect(f.events.length).toBe(events);
+});
+
+test('accepted withdrawal is denied without host hook and async callbacks roll back', async () => {
+  const f = withdrawalFixture(); f.expectSources(1); await f.route({ content: 'deny queued' });
+  const item = getDeferredQueuedFollowups('web:default')[0]!, before = f.snapshot();
+  f.channel.getQueuedInputSourceWithdrawal = undefined;
+  expect((await f.remove(item.rowId)).status).toBe(500); expect(f.snapshot()).toEqual(before);
+  f.channel.getQueuedInputSourceWithdrawal = () => (stored => { f.withdraw(stored); return Promise.reject(Error('invalid async')); }) as any;
+  expect((await f.remove(item.rowId)).status).toBe(500); expect(f.snapshot()).toEqual(before);
+});
+
+test('queue-remove rejects before selector on CSRF, ignores forged authority, and never calls withdrawal for missing rows', async () => {
+  const f = withdrawalFixture(); f.expectSources(1); await f.route({ content: 'authority queued' });
+  const item = getDeferredQueuedFollowups('web:default')[0]!;
+  let selected = 0, called = 0;
+  f.channel.getQueuedInputSourceWithdrawal = jid => {
+    selected++; expect(jid).toBe('web:default');
+    return stored => { called++; expect(stored.item.source_id).toBe(item.source_id); expect(stored.database.inTransaction).toBe(true); f.withdraw(stored); };
+  };
+  const before = f.snapshot();
+  const request = (origin: string, extra: Record<string, unknown> = {}) => f.channel.handleRequest(new Request('http://fixture/agent/queue-remove', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify({ row_id: item.rowId, ...extra }) }));
+  expect((await request('http://evil.invalid')).status).toBe(403);
+  expect(selected).toBe(0); expect(called).toBe(0); expect(f.snapshot()).toEqual(before);
+  setDeferredQueuedFollowups('web:default', []);
+  expect((await (await request('http://fixture')).json()).removed).toBe(false);
+  expect(called).toBe(0); expect(f.work.getAcceptedSource('web:default', item.source_id!)?.state).toBe('pending');
+  setDeferredQueuedFollowups('web:default', [item]);
+  expect((await request('http://fixture', { actor: 'forged', user: 'admin', engine: 'forged', source_id: 'forged', getQueuedInputSourceWithdrawal: 'forged', withdrawAcceptedSource: 'forged' })).status).toBe(200);
+  expect(called).toBe(1);
+  expect(f.work.getAcceptedSource('web:default', item.source_id!)?.state).toBe('disposed');
+});
+
+test('queue-remove callback errors are private and mismatched chat cannot withdraw the accepted source', async () => {
+  const f = withdrawalFixture(); f.expectSources(1); await f.route({ content: 'private queue' });
+  const item = getDeferredQueuedFollowups('web:default')[0]!;
+  const before = f.snapshot(), events = f.events.length;
+  f.channel.getQueuedInputSourceWithdrawal = () => stored => f.withdraw({ ...stored, chatJid: 'web:other' });
+  const mismatch = await f.remove(item.rowId);
+  expect(mismatch.status).toBe(500); expect(f.snapshot()).toEqual(before);
+  f.channel.getQueuedInputSourceWithdrawal = () => () => { throw Error('PRIVATE_SOURCE_UUID_SECRET'); };
+  const denied = await f.remove(item.rowId);
+  expect(denied.status).toBe(500); expect(await denied.text()).not.toContain('PRIVATE_SOURCE_UUID_SECRET');
+  expect(f.snapshot()).toEqual(before); expect(f.events.length).toBe(events);
+  f.channel.getQueuedInputSourceWithdrawal = () => () => Promise.reject(Error('PRIVATE_ASYNC_SECRET')) as never;
+  expect((await f.remove(item.rowId)).status).toBe(500);
+  await Bun.sleep(0); // bun:test itself fails on any raw unhandled rejection.
+  expect(f.snapshot()).toEqual(before);
+});
+
 test("HTTP default is off, including forged engine and callback fields", async () => {
   const f = fixture();
   expect(f.channel.getInputSourceAdmission).toBeUndefined();
@@ -552,11 +677,19 @@ for (const queuedInput of [false, true]) for (const pending of [false, true]) te
       expect(f.jobs).toHaveLength(0);
       f.busy(false);
       f.channel.resumeChat = resumeQueued;
+      const queuedRowId = getDeferredQueuedFollowups('web:default')[0]!.rowId;
       const { materializeDeferredFollowups } = await import('../../../src/channels/web/runtime/process-chat-control-runtime.js');
       expect((await materializeDeferredFollowups({ channel: f.channel as any, chatJid: 'web:default', agentId: 'default' })).status).toBe('resumed');
       for (let n = 0; n < 200 && !f.jobs.length; n++) await Bun.sleep(1);
       expect(f.jobs).toHaveLength(1);
       expect(getDeferredQueuedFollowups('web:default')).toEqual([]);
+      let withdrawalCalls = 0;
+      f.channel.getQueuedInputSourceWithdrawal = () => () => { withdrawalCalls++; throw Error('materialized source must not withdraw'); };
+      const materializedSnapshot = f.snapshot(), published = f.events.length;
+      const remove = await f.channel.handleRequest(new Request('http://fixture/agent/queue-remove', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://fixture' }, body: JSON.stringify({ row_id: queuedRowId }) }));
+      expect(remove.status).toBe(200); expect((await remove.json()).removed).toBe(false);
+      expect(withdrawalCalls).toBe(0); expect(f.snapshot()).toEqual(materializedSnapshot); expect(f.events.length).toBe(published);
       expect(f.db.query('SELECT source_id, source_seq, payload_ref FROM service_effect_s01_sources').all()).toEqual(originalSources);
     }
     let releases = 0;

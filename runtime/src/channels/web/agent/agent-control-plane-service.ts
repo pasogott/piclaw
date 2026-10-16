@@ -100,6 +100,7 @@ type ControlPlaneQueuedLifecycle = Pick<
 >;
 
 export interface WebAgentControlPlaneServiceOptions {
+  getQueuedInputSourceWithdrawal?: (chatJid: string) => import('../runtime/queued-followup-lifecycle-service.js').QueuedInputSourceAdmission | undefined;
   defaultChatJid: string;
   defaultAgentId: string;
   json(payload: unknown, status?: number): Response;
@@ -126,6 +127,7 @@ export interface WebAgentControlPlaneServiceOptions {
 }
 
 export interface WebAgentControlPlaneChannelLike {
+  getQueuedInputSourceWithdrawal?: WebAgentControlPlaneServiceOptions['getQueuedInputSourceWithdrawal'];
   json(payload: unknown, status?: number): Response;
   broadcastEvent(eventType: string, data: unknown): void;
   queue: AgentQueueLike;
@@ -156,6 +158,7 @@ export function createWebAgentControlPlaneService(
     queue: channel.queue,
     agentPool: channel.agentPool,
     queuedFollowupLifecycle: channel.queuedFollowupLifecycle,
+    get getQueuedInputSourceWithdrawal() { return channel.getQueuedInputSourceWithdrawal?.bind(channel); },
     queuePendingSteering: (chatJid, timestamp) => channel.queuePendingSteering(chatJid, timestamp),
     storeMessage: (chatJid, content, isBot, mediaIds, options) =>
       channel.storeMessage(chatJid, content, isBot, mediaIds, options),
@@ -264,6 +267,7 @@ export class WebAgentControlPlaneService {
   }
 
   async handleAgentQueueRemove(req: Request): Promise<Response> {
+    const selectWithdrawal = this.options.getQueuedInputSourceWithdrawal;
     const parsed = await parseJsonObjectRequest(req);
     if (!parsed.ok) return this.options.json({ error: parsed.error }, 400);
 
@@ -275,7 +279,11 @@ export class WebAgentControlPlaneService {
         return this.options.json({ error: "Missing or invalid row_id" }, 400);
       }
 
-      const { removed } = await this.removeQueuedFollowupForAction(chatJid, rowId);
+      const withdrawAcceptedSource = selectWithdrawal?.(chatJid);
+      const { removed } = await this.options.queuedFollowupLifecycle.removeQueuedFollowupForAction(chatJid, rowId, {
+        withdrawAcceptedSource,
+        removeQueuedFollowupMessage: (jid, content) => this.options.agentPool.removeQueuedFollowupMessage?.(jid, content) ?? false,
+      });
       if (!removed) {
         return this.options.json({ status: "ok", removed: false, count: this.options.queuedFollowupLifecycle.getQueuedFollowupCount(chatJid) }, 200);
       }
@@ -293,8 +301,8 @@ export class WebAgentControlPlaneService {
         count: this.options.queuedFollowupLifecycle.getQueuedFollowupCount(chatJid),
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return this.options.json({ error: message }, 500);
+      // Host selectors/callbacks can carry private engine or source details.
+      return this.options.json({ error: "Unable to remove queued follow-up" }, 500);
     }
   }
 

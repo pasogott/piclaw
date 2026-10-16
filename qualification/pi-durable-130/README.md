@@ -686,3 +686,21 @@ is added. Root qualification passes 7,084 tests plus 25 and 9 feature/build test
 source judge cleared this bounded slice. Actual required-engine tests cover
 queued HTTP-to-worker settlement and lost acknowledgement. Queue cancellation,
 edit/reorder policy and broader steering are still activation requirements.
+
+## Atomic withdrawal of unclaimed accepted queue input
+
+A host-only optional queue-remove port now disposes the exact pending, unowned
+queued source and removes its queue row in the same transaction. The original
+source remains as `disposed` / `host_cancelled` audit evidence. The concrete
+source-store method requires the owned connection, active transaction, explicit
+writer fence and immutable source/hash/reference match. Idempotent decisions are
+versioned. Claimed or materialized work cannot use this withdrawal operation.
+
+Contiguous closed-source frontier calculation is shared with terminal settlement:
+withdrawal cannot skip an open source, and an active operation retains its
+frontier until settlement. Explicit queue removal alone gets withdrawal authority;
+steer/drain/edit/reorder do not inherit it. Missing registration still fails closed.
+Callback failures roll back both sides and private selector errors are sanitized.
+Focused withdrawal/lifecycle/HTTP verification passes 68 tests / 799 assertions;
+independent source review cleared the bounded operation. No production callback
+is registered or schema initialized by this change.

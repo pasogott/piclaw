@@ -70,6 +70,7 @@ export interface WebChannelOpts {
   /** Internal host coordinator only; never derived from request fields. */
   getInputSourceAdmission?: WebChannelLike["getInputSourceAdmission"];
   getQueuedInputSourceAdmission?: WebChannelLike["getQueuedInputSourceAdmission"];
+  getQueuedInputSourceWithdrawal?: WebChannelLike["getQueuedInputSourceWithdrawal"];
   getQueuedInputMaterialization?: WebChannelLike["getQueuedInputMaterialization"];
   dispatchAcceptedInput?: WebChannelLike["dispatchAcceptedInput"];
 }
