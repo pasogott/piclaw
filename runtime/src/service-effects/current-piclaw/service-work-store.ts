@@ -7,7 +7,7 @@ import { computeClosedSourceFrontier } from "./source-frontier.js";
 import { normaliseWithdrawalRequest, normaliseQueuedSourceAttachment, type AttachQueuedSourceRequest, type WithdrawUnclaimedSourceRequest, type FinishHarnessRequest } from "./service-work-request-normalizer.js";
 export type { AttachQueuedSourceRequest, WithdrawUnclaimedSourceRequest, FinishHarnessRequest } from "./service-work-request-normalizer.js";
 
-import type { NormalisedTraceInput } from "../contracts/common.js";
+import { hashCanonicalRequest, type NormalisedTraceInput } from "../contracts/common.js";
 import type {
   AcceptCancellationRequest,
   AcceptedSourceSnapshot,
@@ -381,6 +381,39 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
       "SELECT * FROM service_effect_s01_sources WHERE chat_jid = ? AND source_id = ?",
     ).get(chatJid, sourceId);
     return row ? sourceSnapshot(sourceRow(row as Record<string, unknown>)) : null;
+  }
+
+  /** Concrete recovery lookup by the operation's persisted claimed-source sequence. */
+  getSourceBySeq(chatJid: string, sourceSeq: number): AcceptedSourceSnapshot | null {
+    const row = this.database.query(
+      "SELECT * FROM service_effect_s01_sources WHERE chat_jid = ? AND source_seq = ?",
+    ).get(chatJid, sourceSeq);
+    return row ? sourceSnapshot(sourceRow(row as Record<string, unknown>)) : null;
+  }
+
+  /** Read-only host recovery proof, scoped to the exact operation/source membership. */
+  getQueuedInputIntent(operationId: string, source: AcceptedSourceSnapshot): Readonly<{
+    operationId: string; sourceSeq: number; sourceId: string; intentId: string;
+    kind: "queue_input"; payloadRef: string; createdAt: string; intentHash: string; sourceHash: string;
+  }> | null {
+    const row = this.database.query(`SELECT i.operation_id, i.intent_id, i.intent_hash, i.kind, i.payload_ref, i.created_at, s.source_hash
+      FROM service_effect_s01_intents i
+      JOIN service_effect_s01_operations o ON o.operation_id=i.operation_id
+      JOIN service_effect_s01_operation_sources m ON m.operation_id=o.operation_id AND m.chat_jid=o.chat_jid
+      JOIN service_effect_s01_sources s ON s.chat_jid=m.chat_jid AND s.source_seq=m.source_seq
+      WHERE o.operation_id=? AND o.chat_jid=? AND m.source_seq=? AND s.source_id=?
+        AND s.payload_ref=? AND s.target_operation_id=o.operation_id
+        AND s.kind='message' AND s.state IN ('claimed','consumed')
+        AND o.primary_source_seq<>s.source_seq AND o.phase<>'terminal'
+        AND i.intent_id=? AND i.kind='queue_input' AND i.payload_ref=s.payload_ref`)
+      .get(operationId, source.chatJid, source.sourceSeq, source.sourceId,
+        source.payloadRef, `queued-steer:${source.sourceId}`) as Record<string, unknown> | null;
+    if (!row || source.payloadRef !== `queued-source:${source.sourceId}`) return null;
+    const proof = Object.freeze({ operationId: requiredText(row.operation_id), sourceSeq: source.sourceSeq,
+      sourceId: source.sourceId, intentId: requiredText(row.intent_id), kind: "queue_input" as const,
+      payloadRef: requiredText(row.payload_ref), createdAt: requiredText(row.created_at), intentHash: requiredHash(row.intent_hash), sourceHash: requiredHash(row.source_hash) });
+    return proof.intentHash === hashCanonicalRequest({ operationId: proof.operationId, intentId: proof.intentId,
+      kind: proof.kind, payloadRef: proof.payloadRef, createdAt: proof.createdAt }) ? proof : null;
   }
 
   getChatFrontier(

@@ -58,7 +58,9 @@ type Row = { conversation_id: ConversationId; chat_jid: string; branch_id: strin
  * inside each write transaction (ServiceWorkStore has no synchronous snapshot method).
  * Payload resolution happens outside SQL; immutable reference/hash and source are rechecked inside.
  * The owner callback must fence this whole store; no distributed atomicity is claimed. */
-export function createHostDurableBindings(db: Database, options: HostBindingOptions): HostDurableBindings {
+export function createHostDurableBindings(db: Database, options: HostBindingOptions): HostDurableBindings & {
+  findSource(chatJid: string, sourceSeq: number): Promise<HostInputBinding | null>;
+} {
   const domain = identity(options.domain), incarnation = identity(options.incarnation);
   const assertOwner = options.assertOwner.bind(options), resolveContent = options.resolveContent.bind(options);
   const manifest = options.manifest.map(b => Object.freeze({ chatJid: identity(b.chatJid),
@@ -162,5 +164,22 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
     },
   });
   }
-  return Object.freeze({ ...makePort(), intents: makePort(true) });
+  return Object.freeze({ ...makePort(), intents: makePort(true),
+    async findSource(chatJid: string, sourceSeq: number) {
+      assertOwner();
+      const rows = db.query(`SELECT * FROM piclaw_durable_bindings_v1
+        WHERE domain=? AND incarnation=? AND chat_jid=? AND source_seq=?
+        UNION ALL SELECT * FROM piclaw_durable_intent_bindings_v1
+        WHERE domain=? AND incarnation=? AND chat_jid=? AND source_seq=?`)
+        .all(domain, incarnation, chatJid, sourceSeq, domain, incarnation, chatJid, sourceSeq) as Row[];
+      if (rows.length > 1) throw conflict();
+      const row = rows[0];
+      if (!row) return null;
+      const input = capture({ incarnation, conversationId: row.conversation_id, chatJid: row.chat_jid,
+        branchId: row.branch_id, operationId: row.operation_id, sourceSeq: row.source_seq,
+        sourceId: row.source_id, payloadRef: row.payload_ref, requestId: row.request_id, requestHash: row.request_hash });
+      assertOwner();
+      return Object.freeze({ ...input, submissionId: row.submission_id });
+    },
+  });
 }

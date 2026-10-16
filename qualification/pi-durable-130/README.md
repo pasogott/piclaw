@@ -765,3 +765,25 @@ repeats, and types pass. An earlier unchanged ownership-contender test returned
 zero admitted contenders before a passing rerun; the cause remains unknown.
 Bounded independent review cleared the crash-window tests. Production controller
 integration and general cutover/rollback acceptance remain unqualified.
+
+### Passive accepted-work discovery
+
+`reconstituteAcceptedWork` scans persisted open operations and their claimed
+sources under an existing owner while the runtime remains paused. It preserves
+bound request IDs and requires exact persisted `queue_input` intent evidence for
+both bound and unbound steering inputs. A final await-free check rereads operation,
+source and intent snapshots. Missing or altered evidence rejects discovery.
+
+The helper returns identities only: it does not authorise, submit, settle or resume
+work. Owner-before-open factory composition, whole-domain authorisation, worker
+wake-ups and shutdown wiring remain incomplete. The trusted host reader must load
+persisted message bytes and validate accepted payload references.
+
+Review caught missing intent authority in the initial implementation; real-SQL
+negative tests now cover missing and altered evidence before and after asynchronous
+reads. Candidate verification passes 355 tests / 5,745 assertions across 22 files,
+with engine and qualification types passing. Root fast CI completed 7,143 tests
+(74 baseline skips), plus 25 feature and 9 build tests. Standalone root typecheck
+still reports nine untouched frontend baseline-diagnostic differences; it is not
+claimed green. Independent review cleared the bounded passive helper, not a
+production controller or permission to resume.

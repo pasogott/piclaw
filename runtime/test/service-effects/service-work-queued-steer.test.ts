@@ -72,6 +72,30 @@ test("queued steer attaches the same accepted source and intent atomically; repl
   } finally { f.dispose(); }
 });
 
+test("queued recovery lookup reads exact SQL membership and validates selected intent fields against hash", () => {
+  const f = fixture();
+  try {
+    f.attach();
+    const source = f.work.getSourceBySeq("web:terminal", f.source.sourceSeq)!;
+    expect(source).toEqual(f.work.getAcceptedSource("web:terminal", "queued")!);
+    const before = f.snapshot();
+    const proof = f.work.getQueuedInputIntent("operation-1", source)!;
+    expect(proof).toMatchObject({ operationId: "operation-1", sourceId: "queued", sourceSeq: source.sourceSeq,
+      intentId: "queued-steer:queued", kind: "queue_input", payloadRef: source.payloadRef });
+    expect(proof.intentHash).toBe(hashCanonicalRequest({ operationId: proof.operationId, intentId: proof.intentId,
+      kind: proof.kind, payloadRef: proof.payloadRef, createdAt: proof.createdAt }));
+    expect(f.snapshot()).toEqual(before);
+    expect(f.work.getQueuedInputIntent("other", source)).toBeNull();
+    expect(f.work.getQueuedInputIntent("operation-1", { ...source, sourceId: "other" })).toBeNull();
+    expect(f.work.getQueuedInputIntent("operation-1", { ...source, chatJid: "other" })).toBeNull();
+    expect(f.work.getQueuedInputIntent("operation-1", { ...source, sourceSeq: 1 })).toBeNull();
+    f.db.query("UPDATE service_effect_s01_intents SET created_at='changed'").run();
+    expect(f.work.getQueuedInputIntent("operation-1", source)).toBeNull();
+    f.db.query("DELETE FROM service_effect_s01_intents").run();
+    expect(f.work.getQueuedInputIntent("operation-1", source)).toBeNull();
+  } finally { f.dispose(); }
+});
+
 for (const [name, patch] of Object.entries({
   "stale operation version": { expectedVersion: 2 },
   "missing operation": { effect: { operationId: "missing" } },
