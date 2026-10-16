@@ -2,7 +2,8 @@
 import { AssistantEntry, InboxDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { awaitWithContext, withAbortSignal, withoutAbortSignal, type Context } from "@earendil-works/chord/context";
-import { hashCanonicalRequest } from "../../../runtime/src/service-effects/contracts/common.js";
+import type { CurrentPiclawServiceWorkStore, FinishHarnessRequest } from "../../../runtime/src/service-effects/current-piclaw/service-work-store.js";
+import { hashCanonicalRequest, type CanonicalJsonValue } from "../../../runtime/src/service-effects/contracts/common.js";
 import type { ServiceWorkStore, AcceptCancellationRequest, OperationSnapshot } from "../../../runtime/src/service-effects/contracts/service-work-store.js";
 import type { TerminalSettlementStore, CommitTerminalRequest } from "../../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
 import { value, sealed, effect } from "./host-effects.js";
@@ -24,6 +25,8 @@ export interface HostInputBinding extends AcceptedInput {
   readonly submissionId: SubmissionId | null;
 }
 export interface HostDurableBindings {
+  /** Optional until the host explicitly supports accepted intents. */
+  readonly intents?: HostDurableBindings & { list(input: AcceptedInput): Promise<readonly HostInputBinding[]> };
   get(input: AcceptedInput): Promise<HostInputBinding | null>;
   bind(input: AcceptedInput): Promise<HostInputBinding>;
   getOrBind(input: AcceptedInput): Promise<{ content: string }>;
@@ -46,7 +49,7 @@ export interface RuntimeOptions {
   readonly owner: { assert(): void; release(): void | Promise<void> };
   readonly openStorage: () => Promise<Storage>;
   readonly harnessOptions: HarnessOptions;
-  readonly work: ServiceWorkStore;
+  readonly work: ServiceWorkStore & Partial<Pick<CurrentPiclawServiceWorkStore, "finishHarness">>;
   readonly terminal: TerminalSettlementStore;
   /** Host-owned durable mapping. Must atomically verify the accepted source, payload and immutable
    * operation/source/hash binding in the SAME host database. No Map-based admission/dedup.
@@ -123,7 +126,7 @@ function cancellationSnapshot(r: AcceptCancellationRequest): AcceptCancellationR
 // Private snapshot type cannot be confused with caller-owned RuntimeOptions.
 type RuntimeSnapshot = Omit<RuntimeOptions, "work" | "terminal"> & {
   readonly captured: true;
-  readonly work: Pick<ServiceWorkStore, "getOperation" | "acceptCancellation" | "bindHarness">;
+  readonly work: Pick<ServiceWorkStore, "getOperation" | "acceptCancellation" | "bindHarness"> & Partial<Pick<CurrentPiclawServiceWorkStore, "finishHarness">>;
   readonly terminal: Pick<TerminalSettlementStore, "getTerminal" | "commitTerminal">;
 };
 function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
@@ -134,10 +137,13 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
     authorizeScheduling: authorizeScheduling.bind(o), putAnswer: putAnswer.bind(o),
     materializeAnswer: materializeAnswer?.bind(o), now: now.bind(o),
     owner: Object.freeze({ assert: owner.assert.bind(owner), release: owner.release.bind(owner) }),
-    work: Object.freeze({ getOperation: work.getOperation.bind(work), acceptCancellation: work.acceptCancellation.bind(work), bindHarness: work.bindHarness.bind(work) }),
+    work: Object.freeze({ getOperation: work.getOperation.bind(work), acceptCancellation: work.acceptCancellation.bind(work), bindHarness: work.bindHarness.bind(work), finishHarness: work.finishHarness?.bind(work) }),
     terminal: Object.freeze({ getTerminal: terminal.getTerminal.bind(terminal), commitTerminal: terminal.commitTerminal.bind(terminal) }),
     bindings: Object.freeze({ get: bindings.get.bind(bindings), bind: bindings.bind.bind(bindings),
-      getOrBind: bindings.getOrBind.bind(bindings), recordSubmission: bindings.recordSubmission.bind(bindings) }),
+      getOrBind: bindings.getOrBind.bind(bindings), recordSubmission: bindings.recordSubmission.bind(bindings),
+      intents: bindings.intents && Object.freeze({ get: bindings.intents.get.bind(bindings.intents),
+        bind: bindings.intents.bind.bind(bindings.intents), getOrBind: bindings.intents.getOrBind.bind(bindings.intents),
+        recordSubmission: bindings.intents.recordSubmission.bind(bindings.intents), list: bindings.intents.list.bind(bindings.intents) }) }),
     existingConversationIds: Object.freeze([...existingConversationIds]),
     // Catalogs and settings are intentionally live host APIs; detach their containing options only.
     harnessOptions: Object.freeze({ models: h.models, registry: h.registry, settings: h.settings,
@@ -188,15 +194,34 @@ export class HostConversationRuntime {
     if (this.closed) throw new Error("Runtime closed");
     this.options.owner.assert();
   }
-  private async checked(input: AcceptedInput) {
+  private port(intent: boolean) {
+    const port = intent ? this.options.bindings.intents : this.options.bindings;
+    if (!port) throw new Error("Accepted intent bindings required");
+    return port;
+  }
+  private async checked(input: AcceptedInput, intent = false) {
     this.fence();
     const o = this.options;
     if (input.incarnation !== o.incarnation || !o.existingConversationIds.includes(input.conversationId) ||
       o.conversationFor(input.chatJid, input.branchId) !== input.conversationId) throw new Error("Host binding conflict");
     const operation = value(await o.work.getOperation(input.operationId)); this.fence();
-    if (!operation || operation.chatJid !== input.chatJid || operation.primarySourceSeq !== input.sourceSeq ||
+    if (!operation || operation.chatJid !== input.chatJid ||
+      (intent ? operation.primarySourceSeq === input.sourceSeq : operation.primarySourceSeq !== input.sourceSeq) ||
       !operation.claimedSourceSeqs.includes(input.sourceSeq)) throw new Error("Unaccepted operation/source");
-    const { content } = await o.bindings.getOrBind(input); this.fence();
+    if (intent && (!operation.harness || operation.harness.sessionId !== o.sessionId || operation.harness.lane !== o.lane ||
+      operation.harness.watchGeneration !== o.generation || !operation.harness.harnessOperationId ||
+      (!operation.terminal && operation.harness.state !== "running" && !(operation.phase === "settling" && operation.harness.state === "finished")))) throw new Error("Exact host harness required");
+    if (intent) {
+      const primary = await this.harness.submission(Number(operation.harness!.harnessOperationId) as SubmissionId, this.context); this.fence();
+      const status = await primary?.status(this.context); this.fence();
+      if (!status || status.type !== "input" || status.conversationId !== input.conversationId || status.entry === undefined)
+        throw new Error("Exact host harness required");
+      const entry = await this.harness.commit(tx => tx.entry(status.entry!), this.context); this.fence();
+      const data = entry?.data as Record<string, unknown> | undefined;
+      if (entry?.kind !== "host.accepted" || data?.role !== "primary" || data.operationId !== input.operationId ||
+        data.sourceSeq !== operation.primarySourceSeq || data.incarnation !== input.incarnation) throw new Error("Exact host harness required");
+    }
+    const { content } = await this.port(intent).getOrBind(input); this.fence();
     if (typeof content !== "string") throw new TypeError("Expected string payload");
     if (hashCanonicalRequest({ type: "input", requestId: input.requestId, content }) !== input.requestHash)
       throw new Error("Host payload hash conflict");
@@ -204,9 +229,9 @@ export class HostConversationRuntime {
     if (!conversation) throw new Error("Missing existing conversation");
     return { operation, conversation, content };
   }
-  private async record(input: AcceptedInput) {
+  private async record(input: AcceptedInput, intent = false) {
     const conflict = () => new Error("Submission binding conflict");
-    const binding = await this.options.bindings.get(input); this.fence();
+    const binding = await this.port(intent).get(input); this.fence();
     if (!binding) throw conflict();
     // Read status AND its original input evidence in one public transaction. Request IDs
     // alone are candidate dedup keys, not proof of content or accepted host provenance.
@@ -233,6 +258,7 @@ export class HostConversationRuntime {
       }
       const data = entry?.data;
       if (entry?.kind !== "host.accepted" || !data || typeof data !== "object" || Array.isArray(data) ||
+        (data as Record<string, unknown>).role !== (intent ? "intent" : "primary") ||
         Object.entries(input).some(([key, value]) => (data as Record<string, unknown>)[key] !== value) ||
         typeof content !== "string" || hashCanonicalRequest({ type: "input", requestId: input.requestId, content }) !== input.requestHash) throw conflict();
       return record;
@@ -244,29 +270,33 @@ export class HostConversationRuntime {
     await this.options.authorizeScheduling(inspection); this.fence();
   }
   submit(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.submitInput(copy)); }
-  private async submitInput(input: AcceptedInput) {
-    const { operation, conversation, content } = await this.checked(input);
-    const prior = await this.record(input);
+  /** Targets the accepted host operation, NOT an exact physical model generation. */
+  submitIntent(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.submitInput(copy, true)); }
+  private async submitInput(input: AcceptedInput, intent = false) {
+    const port = this.port(intent);
+    const { operation, conversation, content } = await this.checked(input, intent);
+    const prior = await this.record(input, intent);
     if (prior) {
-      await this.options.bindings.recordSubmission(input, prior.id); this.fence();
+      await port.recordSubmission(input, prior.id); this.fence();
       return prior.id; // Acknowledgement repair is not permission to resume.
     }
     if (operation.terminal || operation.cancellation) throw new Error("Operation no longer executable");
     await this.progress();
     const submission = await conversation.submit({ type: "input", requestId: input.requestId, content,
-      entry: { kind: "host.accepted", data: { ...input } } }, this.context);
+      ...(intent ? { whenBusy: "steer" as const } : {}),
+      entry: { kind: "host.accepted", data: { ...input, role: intent ? "intent" : "primary" } } }, this.context);
     this.fence();
     // Recheck the returned durable evidence too: submit itself deduplicates by request ID.
-    const admitted = await this.record(input);
+    const admitted = await this.record(input, intent);
     if (!admitted || admitted.id !== submission.id) throw new Error("Submission binding conflict");
-    await this.options.bindings.recordSubmission(input, submission.id); this.fence();
+    await port.recordSubmission(input, submission.id); this.fence();
     return submission.id;
   }
   /** Pure lookup/status/committed-entry reads. No wait/resume, terminal write or payload publication. */
   reconcile(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.readState(copy)); }
-  private async readState(input: AcceptedInput) {
-    const { operation, conversation } = await this.checked(input);
-    const record = await this.record(input);
+  private async readState(input: AcceptedInput, intent = false) {
+    const { operation, conversation } = await this.checked(input, intent);
+    const record = await this.record(input, intent);
     if (!record) return { operation, submissionId: null, status: null, answer: null };
     const handle = await this.harness.submission(record.id, this.context); this.fence();
     if (!handle) throw new Error("Missing submission");
@@ -343,14 +373,52 @@ export class HostConversationRuntime {
   }
   settle(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.settleInput(copy)); }
   private async settleInput(input: AcceptedInput) {
-    const state = await this.readState(input), o = this.options;
+    let state = await this.readState(input); const o = this.options;
     if (state.operation.terminal) {
       const terminal = value(await o.terminal.getTerminal(input.operationId)); this.fence(); return terminal;
+    }
+    const initialVersion = state.operation.version;
+    const primarySubmissionId = state.submissionId;
+    const claimed = state.operation.claimedSourceSeqs.filter(seq => seq !== state.operation.primarySourceSeq);
+    if (claimed.length) {
+      const port = o.bindings.intents;
+      if (!port) throw new Error("Accepted intent bindings required");
+      const bindings = await port.list(input); this.fence();
+      if (bindings.some(b => !claimed.includes(b.sourceSeq))) return null;
+      const states = [state];
+      for (const seq of claimed) {
+        const matches = bindings.filter(b => b.sourceSeq === seq);
+        if (matches.length !== 1 || matches[0]!.submissionId === null) return null;
+        const next = await this.readState(inputSnapshot(matches[0]!), true);
+        if (next.operation.version !== initialVersion || next.status?.status !== "done" || !next.answer) return null;
+        states.push(next);
+      }
+      if (states.some(s => s.status?.status !== "done" || !s.answer)) return null;
+      // Public entry IDs are transcript positions (EntryQuery's documented ID ordering).
+      const positions = states.map(s => s.status!.entry!);
+      if (positions.some(p => !Number.isSafeInteger(p)) || new Set(positions).size !== positions.length)
+        throw new Error("Ambiguous accepted input placement");
+      state = states.reduce((latest, s) => s.status!.entry! > latest.status!.entry! ? s : latest);
     }
     const aborted = state.operation.cancellation !== null && state.status?.status === "unanswered";
     if ((!aborted && state.answer === null) || !state.submissionId) return null;
     let operation = value(await o.work.getOperation(input.operationId)); this.fence();
     if (!operation) throw new Error("Missing operation");
+    // Never refresh away an attachment/version fence after inspecting accepted inputs.
+    if (operation.version !== initialVersion) return null;
+    if (operation.harness?.state === "running") {
+      if (!o.work.finishHarness) throw new Error("Host harness completion API required");
+      if (operation.harness.sessionId !== o.sessionId || operation.harness.lane !== o.lane ||
+        operation.harness.watchGeneration !== o.generation || operation.harness.harnessOperationId !== String(primarySubmissionId))
+        throw new Error("Exact host harness required");
+      const request = {
+        effect: { ...effect(`runtime:finish:${input.requestId}:${operation.version}`, input.operationId, input.sourceSeq), operationId: input.operationId },
+        expectedVersion: operation.version, expectedHarness: operation.harness,
+      } satisfies FinishHarnessRequest;
+      request.effect.requestHash = hashCanonicalRequest({ method: "finishHarness.v1", ...request } as unknown as CanonicalJsonValue);
+      this.fence();
+      operation = value(await o.work.finishHarness(request)); this.fence();
+    }
     if (!operation.harness) {
       operation = value(await o.work.bindHarness(sealed({ effect: effect(`runtime:bind:${input.requestId}:${o.generation}`, input.operationId, input.sourceSeq),
         expectedVersion: operation.version, sessionId: o.sessionId, lane: o.lane, harnessOperationId: String(state.submissionId),
@@ -377,7 +445,7 @@ export class HostConversationRuntime {
     const request: CommitTerminalRequest = sealed({ effect: effect(`runtime:terminal:${input.requestId}`, input.operationId, input.sourceSeq),
       expectedChatJid: input.chatJid, expectedVersion: operation.version, expectedHarness: operation.harness,
       disposition: cancelled ? "cancelled" as const : "completed" as const, errorCode: null, terminalAuthorityRef: null,
-      timeline, sourceDispositions: [{ sourceSeq: input.sourceSeq, state: "consumed" as const, reason: "runtime committed answer" }],
+      timeline, sourceDispositions: operation.claimedSourceSeqs.map(sourceSeq => ({ sourceSeq, state: "consumed" as const, reason: "runtime committed answer" })),
       outboxIntents: [], committedAt: o.now() });
     const terminal = value(await o.terminal.commitTerminal(request)); this.fence(); return terminal;
   }

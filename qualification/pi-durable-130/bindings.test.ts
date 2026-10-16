@@ -62,6 +62,9 @@ test("bindings: factory does not initialize schema; explicit setup is fenced", a
     initializeHostDurableBindings(db, () => {}); initializeHostDurableBindings(db, () => {});
     const columns = db.query("PRAGMA table_info(piclaw_durable_bindings_v1)").all() as { name: string }[];
     expect(columns.some(c => c.name === "content")).toBe(false);
+    const intentColumns = db.query("PRAGMA table_info(piclaw_durable_intent_bindings_v1)").all() as { name: string }[];
+    expect(intentColumns.some(c => c.name === "content")).toBe(false);
+    expect(intentColumns.filter(c => ["operation_id", "source_seq", "request_hash"].includes(c.name))).toHaveLength(3);
   } finally { db.close(); }
 });
 
@@ -99,6 +102,9 @@ test("bindings: missing binding, unaccepted source and incorrect payload are rej
   f.payloads.set(i.payloadRef, "tampered");
   await expect(f.bindings.bind(i)).rejects.toThrow("Host payload hash conflict");
   expect(f.count()).toBe(0);
+  // Primary evidence cannot be reused through the optional intent capability.
+  await expect(f.bindings.intents!.bind(i)).rejects.toThrow("Unverified host source");
+  expect(await f.bindings.intents!.list(i)).toEqual([]);
 }));
 
 test("bindings: owner loss on read, after awaited resolution, and after write rolls back", () => fixture(async f => {

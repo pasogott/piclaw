@@ -10,7 +10,7 @@ import { HostConversationRuntime, type AcceptedInput, type RuntimeOptions, type 
 import { BunSqliteDatabase } from "../../runtime/durable-engine/src/index.js";
 import { barrier, context, openFixture } from "./src/fixture.js";
 import { at, effect, sealed, value } from "./src/host-handoff.js";
-import { hashCanonicalRequest } from "../../runtime/src/service-effects/contracts/common.js";
+import { hashCanonicalRequest, type CanonicalJsonValue } from "../../runtime/src/service-effects/contracts/common.js";
 import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
 import { installTerminalSettlementCompositionSchema } from "../../runtime/src/service-effects/current-piclaw/terminal-settlement-schema.js";
 import { createCurrentPiclawServiceWorkStore } from "../../runtime/src/service-effects/current-piclaw/service-work-store.js";
@@ -71,7 +71,7 @@ async function setup(busy = false) {
         loseCancellationAck = false; return true;
       }
       return false;
-    }, recordTrace() {},
+    }, recordTrace() {}, validateAcceptance: () => { assert(); return true; },
   }));
   const payloads = new InMemoryEffectPayloadResolver();
   const terminal = value(createCurrentPiclawTerminalSettlementStore(db, payloads, {
@@ -82,7 +82,7 @@ async function setup(busy = false) {
     openStorage: () => { assert(); opens++; return SqliteStorage.open(new BunSqliteDatabase(path)); },
     harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
     work: { acceptSource: work.acceptSource.bind(work), claimNext: work.claimNext.bind(work), appendIntent: work.appendIntent.bind(work),
-      bindHarness: work.bindHarness.bind(work), recordQueuedInput: work.recordQueuedInput.bind(work), getOperation: work.getOperation.bind(work),
+      finishHarness: work.finishHarness.bind(work), bindHarness: work.bindHarness.bind(work), recordQueuedInput: work.recordQueuedInput.bind(work), getOperation: work.getOperation.bind(work),
       getChatFrontier: work.getChatFrontier.bind(work), listOpenOperations: work.listOpenOperations.bind(work),
       async acceptCancellation(request) { await hooks.cancellation?.(); return work.acceptCancellation(request); } }, terminal, existingConversationIds: [id], conversationFor: (chat, branch) => {
       if (chat !== "web:runtime" || branch !== "existing-main") throw new Error("Unknown host branch"); return id;
@@ -98,7 +98,7 @@ async function setup(busy = false) {
       await hooks.authorize?.();
       // Fail closed: this fixture grants progress only when there is no recovered live work.
       if (!busy && !allowKnown && (inspection.tasks.length || inspection.submissions.length)) throw new Error("Recovered authority requires explicit host review");
-      if ((busy || allowKnown) && inspection.submissions.some(s => s.conversationId !== id || !["request-1", ...(busy ? ["known-seed"] : [])].includes(s.requestId!))) throw new Error("Unknown recovered submission");
+      if ((busy || allowKnown) && inspection.submissions.some(s => s.conversationId !== id || !["request-1", "intent-1", "intent-2", ...(busy ? ["known-seed"] : [])].includes(s.requestId!))) throw new Error("Unknown recovered submission");
     },
     putAnswer: (ref, text) => { payloads.putText(ref, text); }, sessionId: "existing-host-session", lane: "main", generation: 1, now: () => at,
   };
@@ -113,6 +113,25 @@ async function setup(busy = false) {
       sourceSeq: source.sourceSeq, sourceId: source.sourceId, payloadRef: source.payloadRef, requestId,
       requestHash: hashCanonicalRequest({ type: "input", requestId, content }) };
   }
+  async function attach(primary: AcceptedInput, submissionId: number, requestId = "intent-1", content = "new accepted answer"): Promise<AcceptedInput> {
+    let op = value(await work.getOperation(primary.operationId))!;
+    if (!op.harness) op = value(await work.bindHarness(sealed({ effect: effect("bind-running", op.operationId, primary.sourceSeq),
+      expectedVersion: op.version, sessionId: options.sessionId, lane: options.lane, harnessOperationId: String(submissionId),
+      state: "running" as const, watchGeneration: options.generation })));
+    const source = value(await work.acceptSource(sealed({ effect: effect(`accept:${requestId}`), chatJid: primary.chatJid,
+      sourceId: requestId, kind: "message" as const, payloadRef: `queued-source:${requestId}`,
+      targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
+    const row = db.query("SELECT source_hash FROM service_effect_s01_sources WHERE chat_jid=? AND source_seq=?")
+      .get(primary.chatJid, source.sourceSeq) as { source_hash: string };
+    const request = { effect: { ...effect(`attach:${requestId}`, op.operationId, source.sourceSeq), sourceSeq: source.sourceSeq }, chatJid: primary.chatJid,
+      expectedVersion: op.version, expectedHarness: op.harness!, sourceId: requestId, sourceHash: row.source_hash,
+      payloadRef: source.payloadRef, createdAt: at };
+    request.effect.requestHash = hashCanonicalRequest({ method: "attachQueuedSource.v1", ...request } as unknown as CanonicalJsonValue);
+    db.transaction(() => work.attachQueuedSourceInTransaction(request, db))();
+    db.query("INSERT INTO runtime_payloads VALUES (?,?)").run(source.payloadRef, content);
+    return { ...primary, sourceSeq: source.sourceSeq, sourceId: requestId, payloadRef: source.payloadRef, requestId,
+      requestHash: hashCanonicalRequest({ type: "input", requestId, content }) };
+  }
   // Explicit test driver only; runtime reconciliation never waits or enables scheduling.
   async function drain() {
     await runtime.close(); acquired = true;
@@ -120,7 +139,7 @@ async function setup(busy = false) {
     try { await harness.waitForIdle(context); } finally { await harness.close(context); }
     return HostConversationRuntime.open(options, context);
   }
-  return { dir, db, base, options, runtime, accept, drain, work, terminal, payloads, path, hooks, stats: () => ({ opens, releases, authorizations }), setOwner: (v: boolean) => { acquired = v; }, grantKnown: () => { allowKnown = true; }, loseCancellationAck: () => { loseCancellationAck = true; } };
+  return { dir, db, base, options, runtime, accept, attach, drain, work, terminal, payloads, path, hooks, stats: () => ({ opens, releases, authorizations }), setOwner: (v: boolean) => { acquired = v; }, grantKnown: () => { allowKnown = true; }, loseCancellationAck: () => { loseCancellationAck = true; } };
 }
 
 test("runtime: close aborts unresolved observation before cooperative model cleanup and releases owner", () => fixture(async f => {
@@ -661,7 +680,7 @@ for (const unsupported of ["image", "toolCall"] as const) {
       // Synthetic malformed/imported final evidence through PUBLIC transaction APIs only.
       // No invented provider image API and no private candidate SQL/schema writes.
       await harness.commit(async tx => {
-        const entry = await tx.appendEntry(input.conversationId, { kind: "host.accepted", data: { ...input }, model: [{ role: "user", content: "hello", timestamp: 1 }] });
+        const entry = await tx.appendEntry(input.conversationId, { kind: "host.accepted", data: { ...input, role: "primary" }, model: [{ role: "user", content: "hello", timestamp: 1 }] });
         const message: AssistantMessage = { role: "assistant", api: "openai-completions", provider: "qualification", model: "synthetic",
           content: unsupported === "image" ? [unsupportedAssistantImage] : [{ type: "toolCall", id: "unfinished", name: "host_effect", arguments: {} }],
           stopReason: "stop", timestamp: 1,
@@ -705,3 +724,137 @@ test("runtime: materializer callback captured before open await and returned med
       .toEqual({ content: "Authorized", content_blocks: JSON.stringify([imageBlock]) });
   } finally { releasePayload(); await reopened.close(); }
 }));
+
+
+test("runtime intents: held primary, multiple attached inputs, immutable replay and latest answer frontier", () => fixture(async f => {
+  const input = await f.accept();
+  f.base.host.modelHold = barrier();
+  const id = await f.runtime.submit(input); f.grantKnown();
+  const waiting = f.runtime.wait(input, id);
+  await Bun.sleep(20);
+  const intent = await f.attach(input, id);
+  const second = await f.attach(input, id, "intent-2", "latest accepted input");
+  expect(await f.runtime.settle(input)).toBeNull();
+  for (const patch of [{ sourceSeq: input.sourceSeq }, { requestHash: "0".repeat(64) }, { operationId: "foreign" }])
+    await expect(f.runtime.submitIntent({ ...intent, ...patch })).rejects.toThrow();
+  const sid = await f.runtime.submitIntent(intent);
+  expect(await f.runtime.submitIntent(intent)).toBe(sid);
+  await f.runtime.submitIntent(second);
+  expect(value(await f.work.getChatFrontier(input.chatJid)).consumedThroughSourceSeq).toBe(0);
+  f.base.host.modelHold.release(); await waiting;
+  let terminal = await f.runtime.settle(input);
+  for (let n = 0; !terminal && n < 100; n++) { await Bun.sleep(10); terminal = await f.runtime.settle(input); }
+  expect(terminal?.disposition).toBe("completed");
+  expect(value(await f.work.getChatFrontier(input.chatJid)).consumedThroughSourceSeq).toBe(second.sourceSeq);
+  expect(f.db.query("SELECT * FROM messages WHERE is_bot_message=1").all()).toHaveLength(1);
+  const calls = f.base.host.modelCalls;
+  await f.runtime.close(); f.setOwner(true);
+  const reopened = await HostConversationRuntime.open(f.options, context);
+  try { expect(await reopened.submitIntent(intent)).toBe(sid); expect(f.base.host.modelCalls).toBe(calls); }
+  finally { await reopened.close(); }
+}));
+
+test("runtime intents: primary done before intent binding cannot settle; idle continuation stays same host operation", () => fixture(async f => {
+  const input = await f.accept(), id = await f.runtime.submit(input); f.grantKnown();
+  await f.runtime.wait(input, id);
+  const intent = await f.attach(input, id);
+  expect(await f.runtime.settle(input)).toBeNull();
+  f.base.host.modelHold = barrier();
+  const sid = await f.runtime.submitIntent(intent);
+  expect(await f.runtime.settle(input)).toBeNull();
+  f.base.host.finalContent = [{ type: "text", text: "new answer only" }];
+  f.base.host.modelHold.release();
+  let terminal = await f.runtime.settle(input);
+  for (let n = 0; !terminal && n < 100; n++) { await Bun.sleep(10); terminal = await f.runtime.settle(input); }
+  expect(terminal?.disposition).toBe("completed");
+  expect(f.db.query("SELECT content FROM messages WHERE is_bot_message=1").all()).toEqual([{ content: "new answer only" }]);
+  expect((await f.options.bindings.intents!.get(intent))?.submissionId).toBe(sid);
+}));
+
+test("runtime intents: attachment after listed bindings cannot refresh the initial settlement fence", () => fixture(async f => {
+  const input = await f.accept(), id = await f.runtime.submit(input); f.grantKnown();
+  await f.runtime.wait(input, id);
+  const intent = await f.attach(input, id);
+  await f.runtime.submitIntent(intent);
+  const drained = await f.drain(); await drained.close(); f.setOwner(true);
+  const initial = value(await f.work.getOperation(input.operationId))!;
+  expect(initial.claimedSourceSeqs).toEqual([input.sourceSeq, intent.sourceSeq]);
+  let attached: AcceptedInput | undefined;
+  const bindings = f.options.bindings, intents = bindings.intents!;
+  const reopened = await HostConversationRuntime.open({ ...f.options, bindings: { ...bindings, intents: {
+    ...intents, async list(i: AcceptedInput) {
+      const listed = await intents.list(i);
+      if (!attached) attached = await f.attach(input, id, "intent-2", "latest answer from C");
+      return listed;
+    },
+  } } }, context);
+  try {
+    expect(await reopened.settle(input)).toBeNull();
+    const current = value(await f.work.getOperation(input.operationId))!;
+    expect(current.version).toBe(initial.version + 1);
+    expect(current.claimedSourceSeqs).toEqual([...initial.claimedSourceSeqs, attached!.sourceSeq]);
+    expect(current.harness?.state).toBe("running");
+    expect(current.terminal).toBeNull();
+    expect(await intents.get(attached!)).toBeNull();
+    expect(f.db.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid=? AND source_seq=?")
+      .get(input.chatJid, attached!.sourceSeq)).toEqual({ state: "claimed" });
+    expect(f.db.query("SELECT kind FROM service_effect_s01_intents WHERE operation_id=? AND payload_ref=?")
+      .get(input.operationId, attached!.payloadRef)).toEqual({ kind: "queue_input" });
+    expect(value(await f.work.getChatFrontier(input.chatJid)).consumedThroughSourceSeq).toBe(0);
+    expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+    expect(f.db.query("SELECT * FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+    f.base.host.modelHold = barrier();
+    await reopened.submitIntent(attached!);
+    expect(await reopened.settle(input)).toBeNull();
+    f.base.host.finalContent = [{ type: "text", text: "latest answer from C" }];
+    f.base.host.modelHold.release();
+    let terminal = await reopened.settle(input);
+    for (let n = 0; !terminal && n < 100; n++) { await Bun.sleep(10); terminal = await reopened.settle(input); }
+    expect(terminal?.disposition).toBe("completed");
+    expect(value(await f.work.getChatFrontier(input.chatJid)).consumedThroughSourceSeq).toBe(attached!.sourceSeq);
+    expect(f.db.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid=? ORDER BY source_seq")
+      .all(input.chatJid)).toEqual([{ state: "consumed" }, { state: "consumed" }, { state: "consumed" }]);
+    expect(f.db.query("SELECT content FROM messages WHERE is_bot_message=1").all()).toEqual([{ content: "latest answer from C" }]);
+    expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(1);
+  } finally { f.base.host.modelHold?.release(); await reopened.close(); }
+}));
+
+for (const failure of ["missing-port", "late-version", "materialize-retry"] as const) {
+  test(`runtime intents: finish lifecycle ${failure} fails closed or retries without premature publication`, () => fixture(async f => {
+    const input = await f.accept(), id = await f.runtime.submit(input); f.grantKnown();
+    await f.runtime.wait(input, id);
+    const intent = await f.attach(input, id);
+    await f.runtime.submitIntent(intent);
+    await f.runtime.close(); f.setOwner(true);
+    // Drain committed candidate work through an explicit test-driver progress grant.
+    const storage = await f.options.openStorage();
+    const harness = await Harness.open(storage, f.options.harnessOptions, context);
+    try { await harness.waitForIdle(context); } finally { await harness.close(context); }
+    let first = true, finishes = 0;
+    const work = { ...f.options.work, finishHarness: failure === "missing-port" ? undefined : async (request: Parameters<typeof f.work.finishHarness>[0]) => {
+      finishes++;
+      if (failure === "late-version") value(await f.work.appendIntent(sealed({ effect: effect("late-finish-intent", input.operationId, input.sourceSeq),
+        expectedVersion: request.expectedVersion, intentId: "late-finish-intent", kind: "abort" as const, payloadRef: "cancel:intent", createdAt: at })));
+      return f.work.finishHarness(request);
+    } };
+    const reopened = await HostConversationRuntime.open({ ...f.options, work,
+      materializeAnswer: failure !== "materialize-retry" ? undefined : async (ref, answer) => {
+        if (first) { first = false; throw Error("host failure"); }
+        f.payloads.putText(ref, answer.text);
+        return { contentRef: ref, contentBlocksRef: null, mediaIds: [] };
+      },
+    }, context);
+    try {
+      await expect(reopened.settle(input)).rejects.toThrow();
+      const op = value(await f.work.getOperation(input.operationId))!;
+      expect(op.terminal).toBeNull();
+      expect(op.harness?.state).toBe(failure === "materialize-retry" ? "finished" : "running");
+      expect(value(await f.work.getChatFrontier(input.chatJid)).consumedThroughSourceSeq).toBe(0);
+      expect(f.db.query("SELECT * FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+      if (failure === "materialize-retry") {
+        expect((await reopened.settle(input))?.disposition).toBe("completed");
+        expect(finishes).toBe(1);
+      }
+    } finally { await reopened.close(); }
+  }));
+}

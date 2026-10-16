@@ -704,3 +704,23 @@ Callback failures roll back both sides and private selector errors are sanitized
 Focused withdrawal/lifecycle/HTTP verification passes 68 tests / 799 assertions;
 independent source review cleared the bounded operation. No production callback
 is registered or schema initialized by this change.
+
+## Accepted input attached to an existing host operation
+
+The concrete source store can attach an existing queued source to the exact active
+host operation in a caller-owned transaction. Source identity/sequence/hash remain
+unchanged; version and running harness correlation are checked, and old terminal
+attempts become stale. No new source or queue is created.
+
+The inactive runtime has separate immutable intent bindings, submits accepted
+intents with public steer placement, and refuses settlement until every claimed
+input is bound and done. Idle continuation is still the same host operation—not
+an exact physical-generation targeting claim. The host store now has an explicit
+versioned finishHarness transition, so successful tests no longer change host
+phases using raw SQL. Latest-answer selection cannot refresh the initial operation
+version fence: newly attached inputs invalidate that entire settlement attempt.
+
+Candidate qualification passes 349 tests / 5,460 assertions and types. Source
+review cleared the corrected version race and bounded lifecycle. Actual queue
+steer UI/coordinator dispatch remains disabled; this does not qualify exact
+running cancellation or complete #1650.

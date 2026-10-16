@@ -36,6 +36,16 @@ export function initializeHostDurableBindings(db: Database, assertOwner: () => v
       CHECK(conversation_id > 0 AND source_seq > 0),
       CHECK(submission_id IS NULL OR submission_id > 0)
     )`);
+    db.exec(`CREATE TABLE IF NOT EXISTS piclaw_durable_intent_bindings_v1 (
+      domain TEXT NOT NULL, incarnation TEXT NOT NULL, conversation_id INTEGER NOT NULL,
+      chat_jid TEXT NOT NULL, branch_id TEXT NOT NULL, operation_id TEXT NOT NULL,
+      source_seq INTEGER NOT NULL, source_id TEXT NOT NULL, payload_ref TEXT NOT NULL,
+      request_id TEXT NOT NULL, request_hash TEXT NOT NULL, submission_id INTEGER,
+      PRIMARY KEY(domain,incarnation,operation_id,source_seq),
+      UNIQUE(domain,incarnation,conversation_id,request_id),
+      UNIQUE(domain,incarnation,chat_jid,source_seq), UNIQUE(domain,incarnation,submission_id),
+      CHECK(conversation_id > 0 AND source_seq > 0), CHECK(submission_id IS NULL OR submission_id > 0)
+    )`);
     assertOwner();
   }).immediate();
 }
@@ -61,8 +71,11 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
       b.branchId === i.branchId && b.conversationId === i.conversationId)) throw conflict();
     return i;
   }
+  function makePort(intent = false) {
+  const table = intent ? "piclaw_durable_intent_bindings_v1" : "piclaw_durable_bindings_v1";
+  const otherTable = intent ? "piclaw_durable_bindings_v1" : "piclaw_durable_intent_bindings_v1";
   function read(i: AcceptedInput): HostInputBinding | null {
-    const r = db.query(`SELECT * FROM piclaw_durable_bindings_v1
+    const r = db.query(`SELECT * FROM ${table}
       WHERE domain=? AND incarnation=? AND conversation_id=? AND request_id=?`)
       .get(domain, incarnation, i.conversationId, i.requestId) as Row | null;
     if (!r) return null;
@@ -78,8 +91,12 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
       JOIN service_effect_s01_operation_sources c ON c.chat_jid=s.chat_jid AND c.source_seq=s.source_seq
       JOIN service_effect_s01_operations o ON o.operation_id=c.operation_id AND o.chat_jid=s.chat_jid
       WHERE s.chat_jid=? AND s.source_seq=? AND s.source_id=? AND s.payload_ref=?
-        AND s.state IN ('claimed','consumed') AND o.operation_id=? AND o.primary_source_seq=s.source_seq
-        AND s.kind IN ('message','scheduled_agent')`)
+        AND s.state IN ('claimed','consumed') AND o.operation_id=?
+        AND ${intent ? `o.primary_source_seq<>s.source_seq AND s.target_operation_id=o.operation_id
+          AND s.kind IN ('message','steer','follow_up','continuation')
+          AND EXISTS (SELECT 1 FROM service_effect_s01_intents q WHERE q.operation_id=o.operation_id
+            AND q.kind='queue_input' AND q.payload_ref=s.payload_ref)` :
+          "o.primary_source_seq=s.source_seq AND s.kind IN ('message','scheduled_agent')"}`)
       .get(i.chatJid, i.sourceSeq, i.sourceId, i.payloadRef, i.operationId);
     if (!source) throw new Error("Unverified host source");
   }
@@ -91,7 +108,9 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
       throw new Error("Host payload hash conflict");
     const binding = db.transaction(() => {
       assertOwner(); verifySource(i);
-      db.query(`INSERT OR IGNORE INTO piclaw_durable_bindings_v1
+      if (db.query(`SELECT 1 FROM ${otherTable} WHERE domain=? AND incarnation=? AND conversation_id=? AND request_id=?`)
+        .get(domain, incarnation, i.conversationId, i.requestId)) throw conflict();
+      db.query(`INSERT OR IGNORE INTO ${table}
         (domain,incarnation,conversation_id,chat_jid,branch_id,operation_id,source_seq,source_id,payload_ref,request_id,request_hash)
         VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(domain, incarnation, i.conversationId, i.chatJid, i.branchId,
           i.operationId, i.sourceSeq, i.sourceId, i.payloadRef, i.requestId, i.requestHash);
@@ -102,6 +121,21 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
     return { binding, content };
   }
   return Object.freeze({
+    async list(input: AcceptedInput) {
+      const i = capture(input);
+      const rows = db.query(`SELECT request_id FROM ${table} WHERE domain=? AND incarnation=? AND operation_id=?`)
+        .all(domain, incarnation, i.operationId) as { request_id: string }[];
+      const result = rows.map(r => {
+        const row = db.query(`SELECT * FROM ${table} WHERE domain=? AND incarnation=? AND conversation_id=? AND request_id=?`)
+          .get(domain, incarnation, i.conversationId, r.request_id) as Row | null;
+        if (!row) throw conflict();
+        const bound = read({ incarnation, conversationId: row.conversation_id, chatJid: row.chat_jid, branchId: row.branch_id,
+          operationId: row.operation_id, sourceSeq: row.source_seq, sourceId: row.source_id, payloadRef: row.payload_ref,
+          requestId: row.request_id, requestHash: row.request_hash });
+        if (!bound) throw conflict(); verifySource(bound); return bound;
+      });
+      assertOwner(); return Object.freeze(result);
+    },
     async get(input: AcceptedInput) {
       const i = capture(input), result = read(i); assertOwner(); return result;
     },
@@ -114,11 +148,12 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
         assertOwner(); verifySource(i);
         const prior = read(i);
         if (!prior || (prior.submissionId !== null && prior.submissionId !== submissionId)) throw conflict();
-        const other = db.query(`SELECT 1 FROM piclaw_durable_bindings_v1 WHERE domain=? AND incarnation=?
-          AND submission_id=? AND NOT (conversation_id=? AND request_id=?)`)
-          .get(domain, incarnation, submissionId, i.conversationId, i.requestId);
+        const other = db.query(`SELECT 1 FROM ${table} WHERE domain=? AND incarnation=?
+          AND submission_id=? AND NOT (conversation_id=? AND request_id=?)
+          UNION ALL SELECT 1 FROM ${otherTable} WHERE domain=? AND incarnation=? AND submission_id=?`)
+          .get(domain, incarnation, submissionId, i.conversationId, i.requestId, domain, incarnation, submissionId);
         if (other) throw conflict();
-        db.query(`UPDATE piclaw_durable_bindings_v1 SET submission_id=?
+        db.query(`UPDATE ${table} SET submission_id=?
           WHERE domain=? AND incarnation=? AND conversation_id=? AND request_id=? AND submission_id IS NULL`)
           .run(submissionId, domain, incarnation, i.conversationId, i.requestId);
         if (read(i)?.submissionId !== submissionId) throw conflict();
@@ -126,4 +161,6 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
       }).immediate();
     },
   });
+  }
+  return Object.freeze({ ...makePort(), intents: makePort(true) });
 }
