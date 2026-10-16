@@ -40,6 +40,7 @@ export interface AgentPoolServiceFactoryOptions extends AgentPoolLogHooks {
   workspaceDir: string;
   mainSessionMaxSize?: number | null;
   bashOperations?: AgentBashOperations;
+  durableSessions?: AgentPoolOptions["durableSessions"];
   createSession?: AgentPoolOptions["createSession"];
   createSideSession?: AgentPoolOptions["createSideSession"];
 }
@@ -78,6 +79,7 @@ async function resolveSessionExtensionFactories(chatJid: string): Promise<Extens
  * Keeps constructor wiring in one place so AgentPool itself remains a thin façade.
  */
 export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions): AgentPoolServices {
+  const durableSessions = new Map(options.durableSessions);
   const attachments = getAttachmentRegistry();
   const sessionBinder = new AgentSessionBinder({
     pool: options.pool,
@@ -102,6 +104,7 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
   let branchManager: AgentBranchManager;
   const runtimeFacade = new AgentRuntimeFacade({
     pool: options.pool,
+    durableSessions,
     acquireCommandProtection: chatJid => sessionManager.acquireEvictionProtection(chatJid),
     getOrCreateRuntime: (chatJid) => sessionManager.getOrCreate(chatJid),
     modelRegistry: options.modelRegistry,
@@ -127,6 +130,9 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     onWarn: options.onWarn,
   });
   sessionManager = new AgentSessionManager({
+    assertLegacySession: chat => {
+      if (durableSessions.has(chat)) throw new Error("Legacy session operation unavailable for durable conversation");
+    },
     pool: options.pool,
     sidePool: options.sidePool,
     ...(options.createSession ? { createSession: options.createSession } : {}),

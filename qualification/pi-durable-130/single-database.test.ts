@@ -1,5 +1,8 @@
 import "./src/test-guard.js";
-import { expect, test } from "bun:test";
+import { expect, test, spyOn } from "bun:test";
+import { watch } from "node:fs";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { AgentRuntimeFacade } from "../../runtime/src/agent-pool/runtime-facade.js";
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { acceptedSteerFixture } from "./src/accepted-steer-recovery-fixture.js";
@@ -17,6 +20,22 @@ test("single physical database: accepted primary + attached intent, terminal ide
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "single-database-"));
   const oldMemory = process.env.PICLAW_DB_IN_MEMORY;
   const f = await acceptedSteerFixture(dir, "before-submit", undefined, false, { sharedDatabase: true });
+  const factories = ["create", "open", "continueRecent"] as const;
+  const spies = factories.map(name => spyOn(SessionManager, name).mockImplementation(() => { throw new Error("JSONL session factory forbidden"); }));
+  const fileEvents: string[] = [];
+  const watcher = watch(dirname(f.hostPath), { recursive: true }, (_event, name) => { if (name?.endsWith(".jsonl")) fileEvents.push(name); });
+  function facade(adapter: Awaited<ReturnType<typeof f.open>>) {
+    const bindings = new Map([[f.chatJid, adapter.sessionPosition(f.chatJid, "main", "preserved-session-id")]]);
+    const app = new AgentRuntimeFacade({
+      pool: new Map(), durableSessions: bindings,
+      getOrCreateRuntime: async () => { throw new Error("legacy runtime factory forbidden"); },
+      modelRegistry: {} as ConstructorParameters<typeof AgentRuntimeFacade>[0]["modelRegistry"],
+      modelRuntime: {} as ConstructorParameters<typeof AgentRuntimeFacade>[0]["modelRuntime"],
+      authPath: "unused", clearAttachments() {}, async refreshRuntime() {},
+    });
+    bindings.clear(); // Caller cannot unbind an accepted durable chat into legacy.
+    return app;
+  }
   try {
     expect(resolve(f.path)).toBe(resolve(f.hostPath));
     expect(() => TestOwner.acquire(f.path)).toThrow("owner busy");
@@ -40,6 +59,11 @@ test("single physical database: accepted primary + attached intent, terminal ide
     };
     const { primary, primaryId, b, adapter } = await f.prepare();
     const captured = JSON.parse((f.db.query("SELECT input FROM recovery_fixture_identity WHERE id=?").get(f.incarnation) as { input: string }).input) as DurableConversationOperation;
+    const app = facade(adapter);
+    expect(app.getSessionGenerationForChat(f.chatJid)).toBe("preserved-session-id");
+    const beforePosition = await app.saveSessionPosition(f.chatJid);
+    await expect(app.restoreSessionPosition(f.chatJid, beforePosition)).rejects.toThrow("Durable history navigation unavailable");
+    await expect(app.applySlashCommand(f.chatJid, "/compact")).rejects.toThrow("Legacy session operation unavailable");
     const sid = await adapter.submitIntent(captured);
     expect(await adapter.submitIntent(captured)).toBe(sid);
     expect(await f.runtime!.submit(primary)).toBe(primaryId);
@@ -58,6 +82,8 @@ test("single physical database: accepted primary + attached intent, terminal ide
     expect(f.db.query("SELECT version FROM durable_schema").get()).toEqual({ version: CURRENT_SQLITE_SCHEMA_VERSION });
     expect(rootLedger()).toEqual(ledger);
     await checkConnections();
+    const position = await app.saveSessionPosition(f.chatJid);
+    expect(position).not.toBeNull();
     const snapshot = f.snapshot();
     const bindings = { primary: await f.ports.bindings.get(primary), intents: await f.ports.bindings.intents!.list(primary) };
     const generation = f.owner.token.generation;
@@ -68,6 +94,10 @@ test("single physical database: accepted primary + attached intent, terminal ide
     expect(f.owner.token.generation).toBe(generation + 1);
     f.owner.assert(); initDatabase(); f.db = getDb(); f.ports = f.stores();
     const reopened = await f.open();
+    const reopenedApp = facade(reopened);
+    expect(await reopenedApp.saveSessionPosition(f.chatJid)).toBe(position);
+    expect(reopenedApp.getSessionGenerationForChat(f.chatJid)).toBe("preserved-session-id");
+    await expect(app.saveSessionPosition(f.chatJid)).rejects.toThrow("Runtime closed");
     expect(await f.candidateStorage!.conversation(f.base.root.id, context)).toBeDefined();
     expect((await f.candidateStorage!.submissionByRequest(f.base.root.id, f.primaryRequestId, context))?.id).toBe(primaryId);
     expect((await f.candidateStorage!.submissionByRequest(f.base.root.id, captured.requestId, context))?.id).toBe(sid);
@@ -97,7 +127,11 @@ test("single physical database: accepted primary + attached intent, terminal ide
     // in this very file: no separate lease DB or session files are permitted.
     expect(files.filter(p => ![f.hostPath, `${f.hostPath}-wal`, `${f.hostPath}-shm`].includes(p))).toEqual([]);
     expect((await stat(f.path)).ino).toBe((await stat(f.hostPath)).ino);
+    expect(fileEvents).toEqual([]);
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
   } finally {
+    watcher.close();
+    for (const spy of spies) spy.mockRestore();
     await f.close(); process.env.PICLAW_DB_IN_MEMORY = oldMemory;
     await rm(dir, { recursive: true, force: true });
   }

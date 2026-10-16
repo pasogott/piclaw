@@ -214,6 +214,8 @@ export interface RetrySettingsProvider {
 
 /** Construction options for creating an AgentPool. */
 export interface AgentPoolOptions {
+  /** Internal-only explicit candidate bindings. No bootstrap/global/HTTP selection. */
+  durableSessions?: ReadonlyMap<string, import("./durable-runtime-adapter.js").DurableSessionPositionPort>;
   createSession?: (chatJid: string, sessionDir: string) => Promise<AgentSessionRuntime>;
   createSideSession?: (chatJid: string, sessionDir: string) => Promise<AgentSessionRuntime>;
   credentialStore?: PiclawCredentialStore;

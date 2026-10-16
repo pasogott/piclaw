@@ -289,6 +289,7 @@ export interface ProviderUsageRefreshEvent {
 
 export interface AgentRuntimeFacadeOptions {
   pool: Map<string, PoolEntry>;
+  durableSessions?: ReadonlyMap<string, import("./durable-runtime-adapter.js").DurableSessionPositionPort>;
   getOrCreateRuntime: (chatJid: string) => Promise<AgentSessionRuntime>;
   modelRegistry: ModelRegistry;
   modelRuntime: ModelRuntime;
@@ -311,11 +312,20 @@ export interface AgentRuntimeFacadeOptions {
 export class AgentRuntimeFacade {
   // ModelRuntime auth is instance-wide, so provider id is also the credential scope here.
   // provider-usage.ts fingerprints that credential and discards superseded refresh results.
+  private readonly durableSessions: ReadonlyMap<string, import("./durable-runtime-adapter.js").DurableSessionPositionPort>;
   private readonly providerUsageRefreshInFlight = new Map<string, Promise<void>>();
   private providerUsageRefreshListener: ((event: ProviderUsageRefreshEvent) => void) | undefined;
 
   constructor(private readonly options: AgentRuntimeFacadeOptions) {
     this.providerUsageRefreshListener = options.onProviderUsageRefresh;
+    // Capture routing before any session factory is entered. Never fall back on port failure.
+    this.durableSessions = new Map([...options.durableSessions ?? []].map(([chat, port]) =>
+      [chat, Object.freeze({ sessionId: port.sessionId, branchId: port.branchId, readPosition: port.readPosition.bind(port) })]));
+    const legacy = options.getOrCreateRuntime;
+    this.options = { ...options, getOrCreateRuntime: chat => {
+      if (this.durableSessions.has(chat)) return Promise.reject(new Error("Legacy session operation unavailable for durable conversation"));
+      return legacy(chat);
+    } };
   }
 
   setProviderUsageRefreshListener(listener: ((event: ProviderUsageRefreshEvent) => void) | undefined): void {
@@ -553,7 +563,7 @@ export class AgentRuntimeFacade {
   }
 
   getSessionGenerationForChat(chatJid: string): string | null {
-    const sessionId = this.options.pool.get(chatJid)?.runtime.session.sessionId;
+    const sessionId = this.durableSessions.get(chatJid)?.sessionId ?? this.options.pool.get(chatJid)?.runtime.session.sessionId;
     return typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : null;
   }
 
@@ -565,11 +575,14 @@ export class AgentRuntimeFacade {
   }
 
   async saveSessionPosition(chatJid: string): Promise<string | null> {
+    const durable = this.durableSessions.get(chatJid);
+    if (durable) return durable.readPosition();
     const session = (await this.options.getOrCreateRuntime(chatJid)).session;
     return session.sessionManager.getLeafId();
   }
 
   async restoreSessionPosition(chatJid: string, leafId: string | null): Promise<void> {
+    if (this.durableSessions.has(chatJid)) throw new Error("Durable history navigation unavailable");
     if (leafId === null) return;
     const session = (await this.options.getOrCreateRuntime(chatJid)).session;
     const currentLeaf = session.sessionManager.getLeafId();

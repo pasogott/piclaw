@@ -46,6 +46,7 @@ const RECENT_USE_EVICTION_GRACE_MS = 1_000;
 
 /** Dependencies required to manage AgentPool session lifecycles. */
 export interface AgentSessionManagerOptions {
+  assertLegacySession?: (chatJid: string) => void;
   pool: Map<string, PoolEntry>;
   sidePool: Map<string, PoolEntry>;
   createSession?: (chatJid: string, sessionDir: string) => Promise<AgentSessionRuntime>;
@@ -267,6 +268,7 @@ export class AgentSessionManager {
   }
 
   async getOrCreate(chatJid: string): Promise<AgentSessionRuntime> {
+    this.options.assertLegacySession?.(chatJid);
     requireOwnedSessionExecution(chatJid);
     this.assertNonReentrantLifecycleTransition();
     this.assertMcpAdmission();
@@ -382,6 +384,7 @@ export class AgentSessionManager {
   }
 
   async getOrCreateSide(chatJid: string): Promise<AgentSessionRuntime> {
+    this.options.assertLegacySession?.(chatJid);
     requireOwnedSessionExecution(chatJid);
     this.assertNonReentrantLifecycleTransition();
     this.assertMcpAdmission();

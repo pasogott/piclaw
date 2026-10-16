@@ -17,6 +17,13 @@ export interface DurableAcceptedInput {
   readonly requestHash: string;
 }
 
+/** Explicit internal binding for the existing application session-position reader. */
+export interface DurableSessionPositionPort {
+  readonly sessionId: string;
+  readonly branchId: string;
+  readonly readPosition: () => Promise<string | null>;
+}
+
 export interface DurableConversationBinding {
   readonly chatJid: string;
   readonly branchId: string;
@@ -43,6 +50,7 @@ export interface DurableConversationState {
  * must already be configured there. No 1.2 Models, SDK session or context crosses this port.
  * Reconciliation deliberately does not expose the engine's private answer/thinking evidence. */
 export interface DurableConversationRuntimePort {
+  readSessionPosition?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<string | null>;
   submit(input: DurableAcceptedInput): Promise<number>;
   submitIntent?(input: DurableAcceptedInput): Promise<number>;
   reconcile(input: DurableAcceptedInput): Promise<DurableConversationState>;
@@ -79,6 +87,7 @@ export function createDurableConversationAdapter(options: {
   const cancel = runtime.cancel.bind(runtime), resume = runtime.resume.bind(runtime);
   const settle = runtime.settle.bind(runtime), close = runtime.close.bind(runtime);
   const wait = runtime.wait?.bind(runtime), submitIntent = runtime.submitIntent?.bind(runtime);
+  const readPosition = runtime.readSessionPosition?.bind(runtime);
   function input(work: DurableConversationOperation, intent = false): DurableAcceptedInput {
     const { source, operation } = work.claimed;
     const binding = manifest.find(b => b.chatJid === source.chatJid && b.branchId === work.branchId);
@@ -96,6 +105,12 @@ export function createDurableConversationAdapter(options: {
       requestHash: hashCanonicalRequest({ type: "input", requestId: work.requestId, content: work.content }) });
   }
   return Object.freeze({
+    sessionPosition(chatJid: string, branchId: string, sessionId: string): DurableSessionPositionPort {
+      const binding = manifest.find(b => b.chatJid === chatJid && b.branchId === branchId);
+      if (!binding || !sessionId || !readPosition) throw new Error("Durable session position unavailable");
+      return Object.freeze({ sessionId, branchId,
+        readPosition: () => readPosition({ ...binding, incarnation }) });
+    },
     supportsIntent: !!submitIntent,
     validateIntent(work: DurableConversationOperation) { input(work, true); },
     async submitIntent(work: DurableConversationOperation) {

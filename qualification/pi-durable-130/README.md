@@ -1020,3 +1020,20 @@ error after a persisted manifest. These corrections prevent random ordering or a
 earlier import failure from masquerading as evidence. Final correctly configured
 candidate run passes 381 tests / 6,476 assertions across 27 files; types and bounded
 independent review are clear.
+
+### Application session-position binding without JSONL
+
+Explicit internal `AgentPoolOptions.durableSessions` now routes the existing
+session-position reader through the runtime facade and captured adapter to public
+candidate database history. Bound main/side session construction rejects before
+legacy factories, including on reader errors. Unsupported restore/navigation fails
+closed. Unbound Pi 1.2.0 behaviour remains unchanged; nothing is registered.
+
+The real shared-database/application-facade test preserves position and original
+session identity across fresh-owner reopen. Throwing SessionManager factories
+remain untouched and the recursive watcher observes no JSONL files. This is not a
+fully constructed AgentPool/HTTP end-to-end qualification; legacy list/model/branch
+readers remain to be converted. Full candidate verification passes 381 tests /
+6,487 assertions, root fast CI passes 7,143 tests (74 baseline skips) plus 25 feature
+and 9 build tests, types pass within the stated private/runtime scope, and bounded
+independent review is clear.

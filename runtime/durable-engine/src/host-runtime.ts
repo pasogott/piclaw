@@ -197,6 +197,19 @@ export class HostConversationRuntime {
     if (this.closed) throw new Error("Runtime closed");
     this.options.owner.assert();
   }
+  /** Read the current public history head, never instantiate a legacy SDK session. */
+  async readSessionPosition(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<string | null> {
+    return this.observe(async () => {
+      const o = this.options;
+      const id = o.existingConversationIds.find(id => id === binding.conversationId);
+      if (binding.incarnation !== o.incarnation || id === undefined ||
+        o.conversationFor(binding.chatJid, binding.branchId) !== id) throw new Error("Host binding conflict");
+      const conversation = await this.harness.conversation(id, this.context); this.fence();
+      if (!conversation) throw new Error("Missing existing conversation");
+      const page = await conversation.entries({ order: "descending" }, 1, undefined, this.context); this.fence();
+      return page.items[0] ? String(page.items[0].id) : null;
+    });
+  }
   private port(intent: boolean) {
     const port = intent ? this.options.bindings.intents : this.options.bindings;
     if (!port) throw new Error("Accepted intent bindings required");

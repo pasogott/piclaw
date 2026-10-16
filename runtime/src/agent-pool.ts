@@ -360,6 +360,7 @@ export class AgentPool {
       workspaceDir: WORKSPACE_DIR,
       mainSessionMaxSize: this.config.mainSessionPoolMaxSize,
       bashOperations: this.bashOperations,
+      durableSessions: options.durableSessions,
       createSession: this.createSession,
       createSideSession: this.createSideSession,
       onInfo: (message, details) => log.info(message, details),
