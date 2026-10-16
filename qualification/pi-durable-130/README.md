@@ -418,3 +418,23 @@ This is not full Delegate activation or child authentication/MCP/fallback parity
 The operator accepted the narrow provider-microtask race on 2026-10-16; retain
 its negative test and existing cancellation checks rather than patching the SDK
 or waiting for upstream. No other migration or effect guarantees are waived.
+
+## Scheduled agent occurrence handoff
+
+`host-scheduled-run.ts` reuses the real scheduler/EF-S07 occurrence, source,
+lease and settlement authority. Duplicate dispatch calls share one promise;
+non-agent/shell tasks are rejected rather than moved onto a new path. Required
+live task-head reads reject revision changes and pause before dispatch and after
+results, even while the original occurrence lease remains valid. Nine scheduled
+tests cover the real root path plus six explicit revision/pause probes. The
+combined candidate suite passes 199 tests and types; source review cleared this
+bounded increment.
+
+These are observational checks, not atomic dispatch authorization. Pending-edit
+probes explicitly call `check()`; they do not prove automatic cancellation on
+every edit before renewal. The new probes isolate bridge rejection, not the
+legacy runner's error-log catch path or all delivery fencing. An old occurrence
+may retain an accurately attributed failure audit; it must not be described as
+proof of no stale logs. Root EF-S07 remains responsible for atomic completion
+and successor advancement. Dedicated-conversation fixtures do not qualify the
+production main-chat save/restore or a registered durable scheduler adapter.
