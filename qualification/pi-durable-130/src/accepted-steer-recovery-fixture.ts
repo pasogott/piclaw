@@ -29,7 +29,7 @@ export async function sdkRecoverySnapshot(database: OwnedSqlite) {
 }
 
 export type RecoveryCheckpoint = { sdkSnapshot?: Awaited<ReturnType<typeof sdkRecoverySnapshot>>; generation: number; intentSourceId: string; primary: AcceptedInput; primaryId: number; b: { sourceId: string; sourceSeq: number }; committedIntentId?: number; intent: DurableConversationOperation; candidate?: { id: number; requestId?: string }; modelCalls: number; effects: number; };
-export async function acceptedSteerFixture(dir: string, boundary: "before-submit" | "committed-ack-lost", recovered?: RecoveryCheckpoint, queuePrimary = false, testConfig: { loseIntentBindingAck?: boolean; sharedDatabase?: boolean } = {}) {
+export async function acceptedSteerFixture(dir: string, boundary: "before-submit" | "committed-ack-lost", recovered?: RecoveryCheckpoint, queuePrimary = false, testConfig: { loseIntentBindingAck?: boolean; sharedDatabase?: boolean; httpPrimary?: boolean } = {}) {
     process.env.PICLAW_DB_IN_MEMORY = "0";
     const chatJid = `web:recovery:${basename(dir)}:${boundary}`;
     const hostPath = join(STORE_DIR, "messages.db");
@@ -121,8 +121,10 @@ export async function acceptedSteerFixture(dir: string, boundary: "before-submit
         }, authorizeScheduling(inspection) {
           assert(); authorizations++;
           if (!permit) throw Error("Host scheduling gate closed");
-          if (inspection.submissions.some(s => s.conversationId !== base.root.id || ![primaryRequestId, `queued-steer:${intentSourceId}`].includes(s.requestId!))) throw Error("Unknown recovered authority");
-        }, putAnswer(ref, text) { payloads.putText(ref, text); }, sessionId: incarnation, lane: "main", generation, now: () => at }, context);
+          const httpRow = testConfig.httpPrimary ? db.query('SELECT rowid, id FROM messages WHERE chat_jid=? AND is_bot_message=0 ORDER BY rowid LIMIT 1').get(chatJid) as { rowid: number; id: string } | null : null;
+          const allowedPrimary = httpRow ? `message:${httpRow.rowid}:${httpRow.id}` : primaryRequestId;
+          if (inspection.submissions.some(s => s.conversationId !== base.root.id || ![allowedPrimary, `queued-steer:${intentSourceId}`].includes(s.requestId!))) throw Error("Unknown recovered authority");
+        }, putAnswer(ref, text) { payloads.putText(ref, text); }, sessionId: incarnation, lane: "main", generation, now: () => testConfig.httpPrimary ? new Date().toISOString() : at }, context);
       return createDurableConversationAdapter({ incarnation, manifest, runtime });
     }
     const snapshot = () => ["messages", "service_effect_s01_sources", "service_effect_s01_operations", "service_effect_s02_commits", "recovery_fixture_identity"].map(t => db.query(`SELECT * FROM ${t}`).all());

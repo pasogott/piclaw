@@ -1067,3 +1067,21 @@ Final candidate verification passes 383 tests / 6,538 assertions across 28 files
 root fast CI and engine/runtime/qualification types pass. Focused root tree/handler/
 facade tests pass 65 cases. Independent bounded review is clear. This is read-only
 projection, not branch mutation, complete UI/browser qualification or activation.
+
+### Combined normal web input and actual application pool
+
+`application-web.test.ts` constructs the real AgentPool and WebChannel, posts a
+normal content-only message and runs the actual AgentQueue/processChat worker into
+the real candidate runtime sharing host messages.db. It checks one EF terminal
+commit/answer, preserved identity, DB model/position/tree reads and `/tree` after
+the supplied registration map is cleared. A lost-wait acknowledgement retains the
+busy lane/inflight marker without answer publication or legacy runAgent calls.
+Throwing SessionManager factories, recursive JSONL observation and same-file checks
+cover the combined exercise. HTTP identity and current acceptance timestamps remain
+subject to the existing public provenance and EF checks.
+
+Final candidate verification passes 385 tests / 6,607 assertions across 29 files;
+focused combined regressions pass 11 tests / 518 assertions, qualification types
+pass and independent bounded review is clear. This is synthetic-provider, explicit
+fixture-port, in-process HTTP qualification—not production registration or complete
+compatibility/performance acceptance. No production runtime source changed.
