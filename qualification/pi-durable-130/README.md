@@ -524,3 +524,22 @@ mutation, competing revisions and final drain/digest checks. The combined suite
 passes 289 tests / 4,717 assertions across seventeen files and strict types.
 Independent source review cleared this inactive boundary. General cutover wiring,
 post-new-work rollback and production activation remain incomplete.
+
+## Cutover/runtime admission composition
+
+`cutover-runtime.test.ts` combines the actual copied importer, controller,
+inactive runtime and real EF stores. New source admission uses the optional
+EF-S01 `validateAcceptance` seam inside its SQL transaction before and after
+mutation; old committed request replay remains observational. A stale caller
+cannot cross the writer flip after awaiting. Candidate admission records a
+conservative work intent before async acceptance, preventing unsafe rollback
+through an acknowledgement gap. Pending/inflight work blocks flipping, rollback
+denies candidate scheduling, and accepted cancellation suppresses a late answer.
+
+Both EF-S01 acceptance and EF-S02 settlement hooks require exact synchronous true.
+Invalid promises/thenables are observed but never awaited or authorized; errors
+are sanitized and rollback includes decision/counter writes. Focused root boundary
+verification passes 118 tests; the candidate suite passes 293 tests and types.
+Source review cleared the corrected composition. This is still an inactive
+caller-enforced writer contract, not production ingress wiring or a cross-file
+transaction. Arbitrary external effects and reverse conversion remain outside it.

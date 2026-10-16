@@ -41,6 +41,14 @@ export interface ServiceWorkAdapterRuntime {
   recordTrace(input: NormalisedTraceInput): void;
 }
 
+/** Optional host writer fence for new source admissions only. Replays remain observational. */
+export interface ServiceWorkAcceptanceRuntime extends ServiceWorkAdapterRuntime {
+  /** Synchronous, fail-closed check inside the acceptance SQL transaction, before/after apply. */
+  validateAcceptance?: () => boolean;
+}
+
+class AcceptanceOwnershipError extends Error {}
+
 type MutationRequest = NormalisedMutationRequest;
 type MutationOutcome<T> =
   | { readonly ok: true; readonly value: T; readonly duplicate: boolean }
@@ -110,7 +118,7 @@ export type ServiceWorkStoreConstructionResult = ResultValue<
  */
 export function createCurrentPiclawServiceWorkStore(
   database: Database,
-  runtime: ServiceWorkAdapterRuntime,
+  runtime: ServiceWorkAcceptanceRuntime,
 ): ServiceWorkStoreConstructionResult {
   return CurrentPiclawServiceWorkStore.create(database, runtime);
 }
@@ -118,7 +126,7 @@ export function createCurrentPiclawServiceWorkStore(
 export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
   static create(
     database: Database,
-    runtime: ServiceWorkAdapterRuntime,
+    runtime: ServiceWorkAcceptanceRuntime,
   ): ServiceWorkStoreConstructionResult {
     try {
       return Result.ok(new CurrentPiclawServiceWorkStore(database, runtime));
@@ -132,7 +140,7 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
 
   private constructor(
     readonly database: Database,
-    private readonly runtime: ServiceWorkAdapterRuntime,
+    private readonly runtime: ServiceWorkAcceptanceRuntime,
   ) {
     const foreignKeys = database.query("PRAGMA foreign_keys").get() as
       { foreign_keys?: number } | undefined;
@@ -774,6 +782,7 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
             effect.requestHash,
           );
           if (replay) return replay;
+          if (method === "acceptSource") this.validateAcceptance();
           const value = apply(request);
           if (!value.ok) return value;
           const transactionFault = this.fault(method, "before_effect");
@@ -785,6 +794,7 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
             effect.requestHash,
             value.value,
           );
+          if (method === "acceptSource") this.validateAcceptance();
           return value;
         })
         .immediate();
@@ -810,13 +820,29 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
       );
     } catch (cause) {
       const error =
-        cause instanceof CorruptStateError
-          ? serviceError("corrupt_state")
-          : isBusy(cause)
-            ? serviceError("storage_unavailable", "not_applied", true)
-            : serviceError("corrupt_state");
+        cause instanceof AcceptanceOwnershipError
+          ? serviceError("owner_conflict")
+          : cause instanceof CorruptStateError
+            ? serviceError("corrupt_state")
+            : isBusy(cause)
+              ? serviceError("storage_unavailable", "not_applied", true)
+              : serviceError("corrupt_state");
       return this.fail(method, effect, error);
     }
+  }
+
+  private validateAcceptance(): void {
+    try {
+      if (!this.runtime.validateAcceptance) return;
+      const observed: unknown = this.runtime.validateAcceptance();
+      if (observed === true) return;
+      // Invalid asynchronous guards must be denied, but their rejections still need an observer.
+      if ((typeof observed === "object" && observed !== null) || typeof observed === "function")
+        void Promise.resolve(observed).then(() => undefined, () => undefined);
+    } catch (error) {
+      void error;
+    }
+    throw new AcceptanceOwnershipError();
   }
 
   private async read<T>(

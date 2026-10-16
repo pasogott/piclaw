@@ -1268,7 +1268,11 @@ class CurrentPiclawTerminalSettlementStore
   private validateOwnership(): void {
     try {
       if (!this.runtime.validateOwnership) return;
-      if (this.runtime.validateOwnership() === true) return;
+      const observed: unknown = this.runtime.validateOwnership();
+      if (observed === true) return;
+      // Invalid asynchronous guards must be denied, but their rejections still need an observer.
+      if ((typeof observed === "object" && observed !== null) || typeof observed === "function")
+        void Promise.resolve(observed).then(() => undefined, () => undefined);
     } catch (error) {
       void error;
     }

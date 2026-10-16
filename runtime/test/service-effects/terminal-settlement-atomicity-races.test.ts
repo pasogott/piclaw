@@ -6,9 +6,13 @@ import { context, fakeFactory, fakeSubject, openSqliteSubject, sqliteFactory } f
 
 describe("EF-S02 optional synchronous commit ownership guard", () => {
   for (const atCheck of [1, 2]) {
-    for (const behavior of ["false", "throw", "undefined", "truthy", "promise", "thenable"] as const) {
+    for (const behavior of ["false", "throw", "undefined", "truthy", "promise", "thenable", "async-reject", "rejected-promise", "then-getter-throw", "function-thenable", "object"] as const) {
       test(`${behavior} at ownership check ${atCheck} rejects atomically without public exception text`, async () => {
         const subject = openSqliteSubject(":memory:", [], false);
+        const unhandled: unknown[] = [];
+        const thenableTransactions: boolean[] = [];
+        const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+        process.on("unhandledRejection", onUnhandled);
         try {
           subject.seedOperation(terminalOperation());
           subject.seedMedia("operation-1", 81);
@@ -31,7 +35,12 @@ describe("EF-S02 optional synchronous commit ownership guard", () => {
               if (behavior === "undefined") return undefined;
               if (behavior === "truthy") return "true";
               if (behavior === "promise") return Promise.resolve(true);
-              if (behavior === "thenable") return { then() { throw new Error("must not await"); } };
+              if (behavior === "thenable") return { then() { thenableTransactions.push(subject.database.inTransaction); throw new Error("protected-owner-secret"); } };
+              if (behavior === "async-reject") return (async () => { throw new Error("protected-owner-secret"); })();
+              if (behavior === "rejected-promise") return Promise.reject(new Error("protected-owner-secret"));
+              if (behavior === "then-getter-throw") return { get then() { throw new Error("protected-owner-secret"); } };
+              if (behavior === "function-thenable") return Object.assign(() => undefined, { then() { thenableTransactions.push(subject.database.inTransaction); throw new Error("protected-owner-secret"); } });
+              if (behavior === "object") return {};
               return false;
             }) as () => boolean, // Exercise invalid JavaScript callers; TS accepts only synchronous booleans.
           });
@@ -45,8 +54,13 @@ describe("EF-S02 optional synchronous commit ownership guard", () => {
           expect(subject.database.query("SELECT * FROM service_effect_s02_commit_outbox").all()).toEqual([]);
           expect(subject.database.query("SELECT * FROM service_effect_s05_decisions").all()).toEqual([]);
           expect(subject.database.query("SELECT * FROM message_media").all()).toEqual([]);
+          await new Promise(resolve => setTimeout(resolve, 0));
+          expect(unhandled).toEqual([]);
+          expect(thenableTransactions).toEqual(behavior === "thenable" || behavior === "function-thenable" ? [false] : []);
+          expect(subject.inspectDurable()).toEqual(baseline);
+          expect(JSON.stringify(result)).not.toContain("protected-owner-secret");
           expect(JSON.stringify(subject.runtime.trace.inspect())).not.toContain("protected-owner-secret");
-        } finally { subject.dispose?.(); }
+        } finally { process.off("unhandledRejection", onUnhandled); subject.dispose?.(); }
       });
     }
   }
