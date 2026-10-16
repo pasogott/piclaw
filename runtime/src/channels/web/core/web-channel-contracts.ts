@@ -61,6 +61,9 @@ export interface WebChannelLike
   queue: TaskQueueLike;
   /** Trusted host-only selection, captured before reading HTTP input; absent by default. */
   getInputSourceAdmission?(chatJid: string): WebUserMessageStoreOptions["acceptSource"];
+  /** Default-off trusted SQL materialization binding; not an HTTP selection. */
+  getQueuedInputMaterialization?(chatJid: string): import('../messaging/message-store.js').QueuedInputMaterialization | undefined;
+  getQueuedInputSourceAdmission?(chatJid: string): import("../runtime/queued-followup-lifecycle-service.js").QueuedInputSourceAdmission | undefined;
   dispatchAcceptedInput?: import("../../../agent-pool/durable-queue-dispatch.js").AcceptedQueueDispatch;
   admitUserMessage?(chatJid: string, content: string, mediaIds: number[], options: WebUserMessageStoreOptions,
     authorise: () => void, signal: AbortSignal, deferBeforeInsert?: () => boolean): Promise<InteractionRow | null>;
@@ -119,7 +122,7 @@ export interface WebChannelLike
     extras?: { mediaIds?: number[]; contentBlocks?: unknown[]; linkPreviews?: unknown[]; screenHint?: string; source?: string; queuedBy?: QueuedFollowupItem["queuedBy"] }
   ): number;
   getQueuedFollowupCount(chatJid: string): number;
-  admitQueuedFollowupItem?(args: Parameters<WebChannelLike['enqueueQueuedFollowupItem']>, authorise: () => void, signal: AbortSignal): Promise<number>;
+  admitQueuedFollowupItem?(args: Parameters<WebChannelLike['enqueueQueuedFollowupItem']>, authorise: () => void, signal: AbortSignal, acceptSource?: import("../runtime/queued-followup-lifecycle-service.js").QueuedInputSourceAdmission): Promise<number>;
   getQueuedFollowupItems(chatJid: string): QueuedFollowupItem[];
   removeQueuedFollowupItem(chatJid: string, rowId: number): QueuedFollowupItem | null;
   peekQueuedFollowupItem(chatJid: string): QueuedFollowupItem | null;

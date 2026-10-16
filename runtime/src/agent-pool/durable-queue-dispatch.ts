@@ -3,6 +3,9 @@ import { hashCanonicalRequest, type CanonicalJsonValue } from "../service-effect
 import { createLogger } from "../utils/logger.js";
 
 const log = createLogger("durable.queue-dispatch");
+function matchesPayloadRef(ref: string, messageId: string, rowId: number): boolean {
+  return ref === `message-row:${rowId}` || (/^source-[0-9a-f-]{36}$/i.test(messageId) && ref === `queued-source:${messageId}`);
+}
 import type { CurrentPiclawServiceWorkStore } from "../service-effects/current-piclaw/service-work-store.js";
 import type { createDurableConversationAdapter } from "./durable-runtime-adapter.js";
 
@@ -39,7 +42,7 @@ export function createDurableQueueDispatch(options: {
     const message = work.database.query("SELECT id, chat_jid, content FROM messages WHERE rowid = ?").get(rowId) as
       { id: string; chat_jid: string; content: string } | null;
     if (!message || message.id !== messageId || message.chat_jid !== chatJid || source.kind !== "message" ||
-      source.payloadRef !== `message-row:${rowId}`) throw new Error("Accepted queue identity conflict");
+      !matchesPayloadRef(source.payloadRef, messageId, rowId)) throw new Error("Accepted queue identity conflict");
     const content = message.content, requestId = `message:${rowId}:${source.sourceId}`;
     const requestHash = hashCanonicalRequest({ type: "input", requestId, content });
     return async () => {
@@ -84,7 +87,8 @@ export function createDurableQueueDispatch(options: {
       try {
         assert();
         const source = sourceFor(chatJid, messageId);
-        if (source?.kind === "message" && source.payloadRef === `message-row:${rowId}`) {
+        const message = work.database.query('SELECT id, chat_jid FROM messages WHERE rowid = ?').get(rowId) as { id: string; chat_jid: string } | null;
+        if (source?.kind === "message" && message?.id === messageId && message.chat_jid === chatJid && matchesPayloadRef(source.payloadRef, messageId, rowId)) {
           const operation = await operationFor(`message:${rowId}:${source.sourceSeq}`); assert();
           const frontier = await frontierFor(chatJid); assert();
           const current = sourceFor(chatJid, messageId);

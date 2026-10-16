@@ -82,6 +82,9 @@ export class WebMessageProcessingStorageService {
     mediaIds: number[],
     options: WebChannelStoreMessageOptions = {},
   ): InteractionRow | null {
+    // Capture the host port before entering SQL; request fields never select it.
+    const materializeQueuedSource = !isBot && typeof options.consumeDeferredFollowupRowId === 'number'
+      ? this.channel.getQueuedInputMaterialization?.(chatJid) : undefined;
     const interaction = this.options.storeWebMessage(
       this.channel,
       {
@@ -102,6 +105,7 @@ export class WebMessageProcessingStorageService {
         isSteeringMessage: options.isSteeringMessage,
         removeProtectedContinuationForSourceMessageId: options.removeProtectedContinuationForSourceMessageId,
         consumeDeferredFollowupRowId: options.consumeDeferredFollowupRowId,
+        materializeQueuedSource,
       },
     );
     recordTimelineInteraction(interaction);

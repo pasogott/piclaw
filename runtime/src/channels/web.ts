@@ -69,6 +69,8 @@ export interface WebChannelOpts {
   agentPool: AgentPool;
   /** Internal host coordinator only; never derived from request fields. */
   getInputSourceAdmission?: WebChannelLike["getInputSourceAdmission"];
+  getQueuedInputSourceAdmission?: WebChannelLike["getQueuedInputSourceAdmission"];
+  getQueuedInputMaterialization?: WebChannelLike["getQueuedInputMaterialization"];
   dispatchAcceptedInput?: WebChannelLike["dispatchAcceptedInput"];
 }
 

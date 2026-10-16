@@ -37,6 +37,18 @@ import { statSync } from 'node:fs';
 import { createLogger, debugSuppressedError } from '../../../utils/logger.js';
 const log = createLogger('web.message-store');
 
+/** Host SQL-only binding of an existing accepted queue source, never re-admission.
+ * sourceId must be item.source_id; payloadRef remains queued-source:<sourceId>.
+ * Receives persisted queue bytes and the new row in the same transaction.
+ * The host must verify chat/source identity and the accepted immutable input digest
+ * (excluding retry/acceptance bookkeeping), throwing on conflict. Never mutate
+ * the accepted source payloadRef or create a second source. Payload resolution
+ * after consume uses messages.id = item.source_id, not the deleted queue row. */
+export type QueuedInputMaterialization = (stored: Readonly<{
+  chatJid: string; item: Readonly<import('../../../queued-followups.js').QueuedFollowupItem & { source_id: string }>;
+  message: Readonly<NewMessage>; rowId: number; database: Database;
+}>) => void;
+
 /** Options for storing a web channel message (content, media, thread). */
 export interface StoreWebMessageOptions {
   contentBlocks?: unknown[];
@@ -51,6 +63,8 @@ export interface StoreWebMessageOptions {
   consumeDeferredFollowupRowId?: number | null;
   /** Fault-injection seam used to prove transaction rollback before consume. */
   beforeDeferredFollowupConsume?: () => void;
+  /** Captured host callback only; never sourced from request/content blocks. */
+  materializeQueuedSource?: QueuedInputMaterialization;
 }
 
 /** Host-only incoming admission options; never populated from HTTP fields. */
@@ -112,6 +126,25 @@ function prepareWebMessage(params: StoreWebMessageParams, options: StoreWebMessa
 /** Caller owns the transaction. All generated media and metadata roll back together. */
 function writePreparedWebMessage(prepared: PreparedWebMessage): CommittedWebMessage {
   const { params, options } = prepared;
+  const consumeId = options.consumeDeferredFollowupRowId;
+  const queued = !params.isBot && typeof consumeId === 'number' && Number.isFinite(consumeId)
+    ? getDeferredQueuedFollowups(params.chatJid) : undefined;
+  const queueIndex = queued?.findIndex(item => item.rowId === consumeId) ?? -1;
+  const queuedItem = queued?.[queueIndex];
+  if (queued && !queuedItem) throw Error('Deferred follow-up intent disappeared before materialization');
+  let messageId = prepared.messageId;
+  if (queuedItem?.source_accepted) {
+    if (!queuedItem.source_id || !/^source-[0-9a-f-]{36}$/i.test(queuedItem.source_id) || !options.materializeQueuedSource)
+      throw Error('Accepted queued input requires its host materialization binding');
+    if (params.content !== queuedItem.queuedContent || JSON.stringify(params.mediaIds) !== JSON.stringify(queuedItem.mediaIds ?? []) ||
+      JSON.stringify(options.contentBlocks ?? []) !== JSON.stringify(queuedItem.contentBlocks ?? []) ||
+      JSON.stringify(options.linkPreviews ?? []) !== JSON.stringify(queuedItem.linkPreviews ?? []) ||
+      (options.threadId ?? null) !== (queuedItem.threadId ?? null) || (options.screenHint ?? null) !== (queuedItem.screenHint ?? null))
+      throw Error('Accepted queued input payload conflict');
+    messageId = queuedItem.source_id;
+    // storeMessage upserts: never permit materialization to overwrite any existing row.
+    if (getDb().query('SELECT 1 FROM messages WHERE id = ?').get(messageId)) throw Error('Accepted queued input identity collision');
+  }
   let contentBlocks = Array.isArray(options.contentBlocks)
     ? [...options.contentBlocks]
     : undefined;
@@ -155,7 +188,7 @@ function writePreparedWebMessage(prepared: PreparedWebMessage): CommittedWebMess
   }
 
   const msg: NewMessage = {
-    id: prepared.messageId,
+    id: messageId,
     chat_jid: params.chatJid,
     sender: params.isBot ? "web-agent" : "web-user",
     sender_name: params.isBot ? params.agentName : (typeof params.userName === "string" && params.userName.trim() ? params.userName.trim() : "You"),
@@ -196,10 +229,16 @@ function writePreparedWebMessage(prepared: PreparedWebMessage): CommittedWebMess
     : null;
   if (!params.isBot && consumeDeferredRowId !== null && Number.isFinite(consumeDeferredRowId)) {
     options.beforeDeferredFollowupConsume?.();
-    const queued = getDeferredQueuedFollowups(params.chatJid);
-    const index = queued.findIndex((item) => item.rowId === consumeDeferredRowId);
-    if (index < 0) throw new Error("Deferred follow-up intent disappeared before materialization");
-    queued.splice(index, 1);
+    if (!queued || !queuedItem || queueIndex < 0) throw Error('Deferred follow-up intent disappeared before materialization');
+    if (queuedItem.source_accepted) {
+      const result: unknown = options.materializeQueuedSource!({ chatJid: params.chatJid,
+        item: { ...structuredClone(queuedItem), source_id: queuedItem.source_id! }, message: { ...msg }, rowId, database: getDb() });
+      if (result !== undefined) {
+        void Promise.resolve(result).then(() => undefined, () => undefined);
+        throw Error('Queued materialization callback must be synchronous');
+      }
+    }
+    queued.splice(queueIndex, 1);
     setDeferredQueuedFollowups(params.chatJid, queued);
   }
 

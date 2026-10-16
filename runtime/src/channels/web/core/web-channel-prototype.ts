@@ -190,7 +190,7 @@ export function installWebChannelPrototype(
     admitQueuedFollowupItem: {
       configurable: true,
       writable: true,
-      value: withRuntimePublicSurface((service, args: Parameters<WebChannelRuntimePublicSurfaceService['enqueueQueuedFollowupItem']>, authorise: () => void, signal: AbortSignal) => service.admitQueuedFollowupItem(args, authorise, signal)),
+      value: withRuntimePublicSurface((service, args: Parameters<WebChannelRuntimePublicSurfaceService['enqueueQueuedFollowupItem']>, authorise: () => void, signal: AbortSignal, acceptSource?: import('../runtime/queued-followup-lifecycle-service.js').QueuedInputSourceAdmission) => service.admitQueuedFollowupItem(args, authorise, signal, acceptSource)),
     },
     consumeQueuedFollowupItem: {
       configurable: true,

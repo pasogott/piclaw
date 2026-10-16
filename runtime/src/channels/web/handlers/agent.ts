@@ -8,6 +8,7 @@
  * Consumers: web/request-router.ts routes agent paths to these handlers.
  */
 
+import { acceptQueuedInputSource } from "../runtime/queued-followup-lifecycle-service.js";
 import { getAddonLocalDispatchBlock } from "../../../addons/local-dispatch.js";
 import { withVerifiedAddonMessage } from "../../../addons/local-context.js";
 import type { WebChannelLike } from "../core/web-channel-contracts.js";
@@ -680,7 +681,11 @@ export async function handleAgentMessage(
   // Pin the trusted host selection to this route before any body read/await.
   // Request contents cannot select an engine or replace this SQL-only callback.
   let acceptSource: ReturnType<NonNullable<WebChannelLike["getInputSourceAdmission"]>>;
-  try { acceptSource = channel.getInputSourceAdmission?.(chatJid); }
+  let acceptQueuedSource: ReturnType<NonNullable<WebChannelLike["getQueuedInputSourceAdmission"]>>;
+  try {
+    acceptSource = channel.getInputSourceAdmission?.(chatJid);
+    acceptQueuedSource = channel.getQueuedInputSourceAdmission?.(chatJid);
+  }
   catch { return channel.json({ error: 'Input admission could not be confirmed.' }, 503); }
   if (internalAuthority) {
     try {
@@ -862,8 +867,11 @@ export async function handleAgentMessage(
     }];
     let queuedRowId: number;
     try {
+      const accept = !command && !themeCommand && !metersCommand && !isSettingsCommand
+        && !isSlashCommandInvocation(trimmed) && extras.source === 'web.compose' ? acceptQueuedSource : undefined;
+      if (accept && !channel.admitQueuedFollowupItem) throw Error('Atomic queued admission is unavailable.');
       queuedRowId = channel.admitQueuedFollowupItem
-        ? await channel.admitQueuedFollowupItem(args, revalidateQueuedAdmission, req.signal)
+        ? await channel.admitQueuedFollowupItem(args, revalidateQueuedAdmission, req.signal, accept)
         : channel.enqueueQueuedFollowupItem(...args);
     } catch (error) {
       if (isSqliteContention(error)) return channel.json({ error: 'Queue storage is busy; this input was not accepted.' }, 503);
@@ -1112,6 +1120,7 @@ export async function handleAgentMessage(
   let queuedDuringAdmission = false;
   let deferredRowId = 0;
   let deferredAt = '';
+  const deferredSource = requestMode === 'steer' ? 'web.steer_startup_fallback' : 'web.compose';
   let interaction: ReturnType<typeof storeAgentUserMessage>;
   // Ordinary input admitted while idle can become a follow-up while waiting
   // for storage. Decide against fresh in-memory state inside the same commit.
@@ -1128,12 +1137,14 @@ export async function handleAgentMessage(
         deferredAt = new Date().toISOString();
         deferredRowId = channel.enqueueQueuedFollowupItem(chatJid, 0, content,
           null, deferredAt, {
-            source: 'web.compose', mediaIds: normalized.mediaIds, contentBlocks: normalized.contentBlocks,
+            source: deferredSource, mediaIds: normalized.mediaIds, contentBlocks: normalized.contentBlocks,
             linkPreviews: normalized.linkPreviews, screenHint: normalized.screenHint,
             queuedBy: { ...(browserObservability.userId ? { userId: browserObservability.userId } : {}),
               ...(browserObservability.sessionId ? { sessionId: browserObservability.sessionId } : {}),
               ...(browserObservability.clientId ? { clientId: browserObservability.clientId } : {}) },
           });
+        if (deferredSource === 'web.compose' && acceptQueuedSource)
+          acceptQueuedInputSource(chatJid, deferredRowId, getDb(), acceptQueuedSource);
         return true;
       });
     } catch (error) {
@@ -1152,7 +1163,7 @@ export async function handleAgentMessage(
 
   if (queuedDuringAdmission) {
     channel.broadcastEvent('agent_followup_queued', { chat_jid: chatJid, row_id: deferredRowId, content,
-      thread_id: null, timestamp: deferredAt, source: 'web.compose' });
+      thread_id: null, timestamp: deferredAt, source: deferredSource });
     if (!isChatActive()) channel.resumeChat(chatJid);
     return channel.json({ thread_id: null, queued: 'followup' }, 201);
   }

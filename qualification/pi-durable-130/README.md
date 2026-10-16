@@ -666,3 +666,23 @@ The candidate suite passes 343 tests and types. Hosted CI explicitly reruns the
 real HTTP-to-engine integration after installing the private engine; a missing
 prerequisite fails rather than silently skipping. This is ordinary-input inactive
 integration, not full steering, running cancellation or activation acceptance.
+
+## Accepted queued follow-up identity and materialization
+
+Host-only, default-off callbacks can atomically bind queued ordinary input and
+its EF source using the existing SQL admission transaction. A private persisted
+source UUID—not the reusable numeric UI row ID—identifies that input. Accepted
+materialization preserves it as the timeline message ID and retains the same
+source sequence/reference through existing worker dispatch. Payload/collision
+checks and callback failures roll back queue consumption, message/media writes
+and source effects; accepted work is not discarded at the legacy retry limit.
+
+Accepted items reject unsupported removal/steering, payload replacement and
+reordering before effects. Materialization retry increments remain supported.
+Idle-to-busy steering fallback is excluded from ordinary source acceptance. UI
+numeric allocation may contain harmless gaps after rollback; durable UUID identity
+and committed source sequencing remain correct. No alias table or second queue
+is added. Root qualification passes 7,084 tests plus 25 and 9 feature/build tests;
+source judge cleared this bounded slice. Actual required-engine tests cover
+queued HTTP-to-worker settlement and lost acknowledgement. Queue cancellation,
+edit/reorder policy and broader steering are still activation requirements.

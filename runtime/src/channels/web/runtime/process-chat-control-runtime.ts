@@ -446,7 +446,9 @@ export async function materializeDeferredFollowups(
     const queuedInteraction = materializeQueuedFollowup(channel, chatJid, nextQueued);
 
     if (!queuedInteraction) {
-      if (retries >= maxMaterializeRetries) {
+      // Accepted engine input cannot be discarded by the legacy retry budget.
+      // Retain the existing queue/recovery surface until its binding can commit.
+      if (retries >= maxMaterializeRetries && !nextQueued.source_accepted) {
         const consumed = channel.consumeQueuedFollowupItem(chatJid);
         if (!consumed || consumed.rowId !== nextQueued.rowId) {
           throw new Error("Deferred follow-up queue changed before terminal materialization drop");

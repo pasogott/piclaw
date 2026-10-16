@@ -12,6 +12,8 @@ import { createCurrentPiclawServiceWorkStore } from "../../../src/service-effect
 import { hashCanonicalRequest, type CanonicalJsonValue } from "../../../src/service-effects/contracts/common.js";
 import type { AcceptSourceRequest } from "../../../src/service-effects/contracts/service-work-store.js";
 import { resetRateLimiterStateForTests } from "../../../src/channels/web/http/rate-limit.js";
+import { acceptQueuedInputSource, QueuedFollowupLifecycleService } from "../../../src/channels/web/runtime/queued-followup-lifecycle-service.js";
+import { getDeferredQueuedFollowups, setDeferredQueuedFollowups } from "../../../src/db.js";
 
 let cleanup = () => {};
 afterEach(() => { closeDatabase(); cleanup(); resetRateLimiterStateForTests(); });
@@ -56,12 +58,27 @@ function fixture(select?: WebChannelOpts["getInputSourceAdmission"], validateAcc
     input.effect.requestHash = hashCanonicalRequest(input as unknown as CanonicalJsonValue);
     made.value.acceptSourceInTransaction(input, database);
   };
+  const acceptQueued: NonNullable<ReturnType<NonNullable<WebChannelOpts["getQueuedInputSourceAdmission"]>>> = ({ chatJid, item, database }) => {
+    expect(database).toBe(db);
+    expect(database.inTransaction).toBe(true);
+    const sourceId = item.source_id;
+    const input: AcceptSourceRequest = {
+      effect: { idempotencyKey: `${chatJid}:${sourceId}`, requestHash: "", operationId: null, sourceSeq: null,
+        provenanceRef: "engine:host-selected", redactionClass: "private" },
+      chatJid, sourceId, kind: "message", payloadRef: `queued-source:${sourceId}`,
+      targetOperationId: null, parentSourceSeq: null, acceptedAt: item.queuedAt, createWakeIntent: false,
+    };
+    const { source_accepted, materializeRetries, ...immutableInput } = item;
+    input.effect.provenanceRef += `:${hashCanonicalRequest(JSON.parse(JSON.stringify(immutableInput)) as CanonicalJsonValue)}`;
+    input.effect.requestHash = hashCanonicalRequest(input as unknown as CanonicalJsonValue);
+    made.value.acceptSourceInTransaction(input, database);
+  };
   const route = (body: Record<string, unknown> = { content: "ordinary input" }, signal?: AbortSignal) => channel.handleRequest(new Request(
     "http://fixture/agent/default/message", { method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" },
       body: JSON.stringify(body), signal }));
-  const snapshot = () => ["messages", "chats", "media", "message_media", "sqlite_sequence", "service_effect_s01_chats",
+  const snapshot = () => ["chat_cursors", "messages", "chats", "media", "message_media", "sqlite_sequence", "service_effect_s01_chats",
     "service_effect_s01_sources", "service_effect_s01_decisions", "service_effect_s01_wake_intents"].map(table => db.query(`SELECT * FROM ${table}`).all());
-  return { channel, db, work: made.value, accept, route, snapshot, events, jobs,
+  return { channel, db, work: made.value, accept, acceptQueued, route, snapshot, events, jobs,
     expectSources(count: number) { expectedSources = count; },
     busy(value: boolean, stream = false) { active = value; streaming = stream; } };
 }
@@ -69,6 +86,7 @@ function fixture(select?: WebChannelOpts["getInputSourceAdmission"], validateAcc
 test("HTTP default is off, including forged engine and callback fields", async () => {
   const f = fixture();
   expect(f.channel.getInputSourceAdmission).toBeUndefined();
+  expect(f.channel.getQueuedInputSourceAdmission).toBeUndefined();
   expect(f.channel.dispatchAcceptedInput).toBeUndefined();
   const response = await f.route({ content: "ordinary input", engine: "durable", acceptSource: "forged", getInputSourceAdmission: "forged" });
   expect(response.status).toBe(201);
@@ -185,6 +203,246 @@ for (const duringAdmission of [false, true]) test(`HTTP queued input preserves o
   expect(f.events).toEqual(["agent_followup_queued", "agent_followup_queued"]);
 });
 
+for (const mode of ["active", "backlog", "race"] as const) test(`HTTP queued source commits existing FIFO atomically: ${mode}`, async () => {
+  const f = fixture(() => () => { throw Error("ordinary callback must not run"); });
+  const seen: unknown[] = [];
+  f.channel.getQueuedInputSourceAdmission = jid => {
+    expect(jid).toBe("web:default");
+    return stored => { seen.push(structuredClone(stored.item)); f.acceptQueued(stored); };
+  };
+  if (mode === "active") f.busy(true);
+  if (mode === "backlog") f.channel.enqueueQueuedFollowupItem("web:default", 0, "older backlog");
+  if (mode === "race") {
+    const admit = f.channel.admitUserMessage!.bind(f.channel);
+    f.channel.admitUserMessage = async (...args) => { f.busy(true); return admit(...args); };
+  }
+  for (let n = 1; n <= 2; n++) {
+    f.expectSources(n);
+    expect((await f.route({ content: `follow-up ${n}`, mode: "auto", content_blocks: [{ type: "text", text: "actual body" }],
+      engine: "forged", getQueuedInputSourceAdmission: "forged", source_id: "forged", accepted_source_id: "forged" })).status).toBe(201);
+  }
+  const items = f.channel.getQueuedFollowupItems("web:default");
+  expect(items.map(item => item.queuedContent)).toEqual(mode === "backlog" ? ["older backlog", "follow-up 1", "follow-up 2"] : ["follow-up 1", "follow-up 2"]);
+  expect(seen).toEqual(items.slice(-2).map(({ source_accepted, ...item }) => item));
+  const sources = f.db.query("SELECT source_id, payload_ref, accepted_at FROM service_effect_s01_sources ORDER BY source_seq").all();
+  expect(sources).toEqual(items.slice(-2).map(item => ({ source_id: item.source_id,
+    payload_ref: `queued-source:${item.source_id}`, accepted_at: item.queuedAt })));
+  for (const item of items.slice(-2)) expect(item.source_id).toMatch(/^source-[0-9a-f-]{36}$/);
+  expect(f.channel.getQueuedFollowupItems("web:default")).toEqual(items);
+  expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toHaveLength(2);
+  expect(f.db.query("SELECT * FROM messages").all()).toHaveLength(0);
+  expect(f.events).toEqual(["agent_followup_queued", "agent_followup_queued"]);
+  expect(f.jobs).toHaveLength(mode === "backlog" ? 2 : 0);
+  for (const job of f.jobs) expect(job.lane).toBe("chat:web:default");
+});
+
+test("idle steer becoming active inside admission remains an unaccepted startup fallback", async () => {
+  const f = fixture(() => () => { throw Error("ordinary source must not run"); });
+  let selections = 0;
+  f.channel.getQueuedInputSourceAdmission = () => {
+    selections++;
+    return () => { throw Error("steer fallback must not accept a queued source"); };
+  };
+  const published: unknown[] = [];
+  const broadcast = f.channel.broadcastEvent.bind(f.channel);
+  f.channel.broadcastEvent = (type, data) => { published.push(data); broadcast(type, data); };
+  const admit = f.channel.admitUserMessage!.bind(f.channel);
+  f.channel.admitUserMessage = (...args) => {
+    const validate = args[4];
+    args[4] = phase => { validate(phase); if (phase === "before") f.busy(true); };
+    return admit(...args);
+  };
+  const response = await f.route({ content: "startup steer", mode: "steer" });
+  expect(response.status).toBe(201);
+  const receipt = await response.json();
+  expect(receipt).toEqual({ thread_id: null, queued: "followup" });
+  expect(JSON.stringify(receipt)).not.toContain("source-");
+  expect(selections).toBe(1); // Read-only host selection is pinned before body parsing.
+  const items = f.channel.getQueuedFollowupItems("web:default");
+  expect(items).toHaveLength(1);
+  expect(items[0]!.source).toBe("web.steer_startup_fallback");
+  expect(items[0]!.source_accepted).not.toBe(true);
+  expect(items[0]!.source_id).toMatch(/^source-[0-9a-f-]{36}$/);
+  expect(published).toEqual([expect.objectContaining({ source: "web.steer_startup_fallback" })]);
+  expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toEqual([]);
+  expect(f.db.query("SELECT * FROM service_effect_s01_wake_intents").all()).toEqual([]);
+  expect(f.db.query("SELECT * FROM messages").all()).toEqual([]);
+  expect(f.jobs).toEqual([]);
+});
+
+for (const failure of ["throw", "owner-after", "abort"] as const) test(`idle-race ${failure} rollback leaves only a harmless public allocator gap`, async () => {
+  const f = fixture();
+  const abort = new AbortController();
+  const admit = f.channel.admitUserMessage!.bind(f.channel);
+  f.channel.admitUserMessage = (...args) => {
+    const validate = args[4];
+    args[4] = phase => {
+      validate(phase);
+      if (phase === "before") f.busy(true);
+      if (phase === "after" && failure === "owner-after") throw Error("authority lost");
+    };
+    return admit(...args);
+  };
+  let rejectedSourceId = "";
+  f.channel.getQueuedInputSourceAdmission = () => stored => {
+    rejectedSourceId = stored.item.source_id;
+    f.acceptQueued(stored);
+    if (failure === "throw") throw Error("source rejected");
+    if (failure === "abort") abort.abort();
+  };
+  const before = f.snapshot();
+  const rejected = await f.route({ content: "rejected idle race" }, abort.signal);
+  expect(rejected.status).toBe(failure === "abort" ? 400 : 503);
+  expect(f.snapshot()).toEqual(before);
+  expect(f.channel.getQueuedFollowupItems("web:default")).toEqual([]);
+  expect(f.events).toEqual([]);
+  expect(f.jobs).toEqual([]);
+  // Public action IDs need uniqueness, not contiguous numbering. Durable source
+  // identity/sequence come from accepted UUIDs, never this in-memory allocator.
+  f.channel.admitUserMessage = admit;
+  f.channel.getQueuedInputSourceAdmission = () => f.acceptQueued;
+  f.expectSources(1);
+  expect((await f.route({ content: "accepted after idle race" })).status).toBe(201);
+  const accepted = f.channel.peekQueuedFollowupItem("web:default")!;
+  expect(accepted.rowId).toBe(-2);
+  expect(accepted.source_id).not.toBe(rejectedSourceId);
+  expect(accepted.source_accepted).toBe(true);
+  expect(f.db.query("SELECT source_id, source_seq FROM service_effect_s01_sources").all()).toEqual([
+    { source_id: accepted.source_id, source_seq: 1 },
+  ]);
+  expect(f.db.query("SELECT * FROM service_effect_s01_wake_intents").all()).toEqual([]);
+  expect(f.db.query("SELECT * FROM messages").all()).toEqual([]);
+  expect(f.channel.removeQueuedFollowupItem("web:default", -1)).toBeNull();
+  expect(() => f.channel.removeQueuedFollowupItem("web:default", accepted.rowId)).toThrow("host cancellation");
+  expect(f.channel.peekQueuedFollowupItem("web:default")).toEqual(accepted);
+});
+
+test("persisted queue replay keeps source identity while reconstructed empty queue can reuse public row id", async () => {
+  const f = fixture();
+  const signal = new AbortController().signal;
+  const stamp = "2026-08-13T00:00:00.000Z";
+  const first = new QueuedFollowupLifecycleService();
+  const rowId = await first.admitQueuedFollowupItem(["web:default", 0, "same input", null, stamp], () => {}, signal, f.acceptQueued);
+  const before = first.peekQueuedFollowupItem("web:default")!;
+  const persisted = f.db.query("SELECT queued_followups_json FROM chat_cursors WHERE chat_jid = ?").get("web:default") as { queued_followups_json: string };
+  expect(JSON.parse(persisted.queued_followups_json)[0].source_id).toBe(before.source_id);
+  const restored = new QueuedFollowupLifecycleService();
+  expect(restored.peekQueuedFollowupItem("web:default")).toEqual(before);
+  f.db.transaction(() => acceptQueuedInputSource("web:default", rowId, f.db, f.acceptQueued)).immediate();
+  expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toHaveLength(1);
+  expect(restored.consumeQueuedFollowupItem("web:default")).toEqual(before);
+  const restartedEmpty = new QueuedFollowupLifecycleService();
+  const reused = await restartedEmpty.admitQueuedFollowupItem(["web:default", 0, "same input", null, stamp], () => {}, signal, f.acceptQueued);
+  const after = restartedEmpty.peekQueuedFollowupItem("web:default")!;
+  expect(reused).toBe(rowId);
+  expect(after.queuedAt).toBe(before.queuedAt);
+  expect(after.source_id).not.toBe(before.source_id);
+  expect(f.db.query("SELECT source_id FROM service_effect_s01_sources ORDER BY source_seq").all()).toEqual([
+    { source_id: before.source_id }, { source_id: after.source_id },
+  ]);
+  expect(restartedEmpty.listQueuedStateItems("web:default")).toEqual([
+    { row_id: rowId, content: "same input", timestamp: stamp, thread_id: null },
+  ]);
+});
+
+test("legacy identity is assigned only on transactional adoption and rolls back with rejected source", () => {
+  const f = fixture();
+  setDeferredQueuedFollowups("web:default", [{ rowId: -1, queuedContent: "legacy", threadId: null, queuedAt: "2026-08-13T00:00:00.000Z" }]);
+  const before = f.snapshot();
+  const service = new QueuedFollowupLifecycleService();
+  expect(service.peekQueuedFollowupItem("web:default")).not.toHaveProperty("source_id");
+  expect(service.peekQueuedFollowupItem("web:default")).not.toHaveProperty("source_id");
+  expect(f.snapshot()).toEqual(before);
+  let rejectedId = "";
+  expect(() => f.db.transaction(() => acceptQueuedInputSource("web:default", -1, f.db, stored => {
+    rejectedId = stored.item.source_id;
+    expect(getDeferredQueuedFollowups("web:default")[0]!.source_id).toBe(rejectedId);
+    f.acceptQueued(stored);
+    throw Error("reject legacy adoption");
+  })).immediate()).toThrow("reject legacy adoption");
+  expect(f.snapshot()).toEqual(before);
+  expect(() => acceptQueuedInputSource("web:default", -1, f.db, f.acceptQueued)).toThrow("transaction");
+  expect(f.snapshot()).toEqual(before);
+  f.db.transaction(() => acceptQueuedInputSource("web:default", -1, f.db, f.acceptQueued)).immediate();
+  const adopted = service.peekQueuedFollowupItem("web:default")!;
+  expect(adopted.source_id).toMatch(/^source-[0-9a-f-]{36}$/);
+  expect(adopted.source_id).not.toBe(rejectedId);
+  f.db.transaction(() => acceptQueuedInputSource("web:default", -1, f.db, f.acceptQueued)).immediate();
+  expect(service.peekQueuedFollowupItem("web:default")).toEqual(adopted);
+  expect(f.db.query("SELECT source_id FROM service_effect_s01_sources").all()).toEqual([{ source_id: adopted.source_id }]);
+});
+
+for (const failure of ["throw", "async", "value", "owner-after", "abort"] as const) test(`HTTP queued ${failure} rolls back queue and EF without publication`, async () => {
+  let checks = 0;
+  const f = fixture(undefined, () => ++checks !== (failure === "owner-after" ? 2 : -1));
+  f.busy(true);
+  const abort = new AbortController();
+  f.channel.getQueuedInputSourceAdmission = () => stored => {
+    f.acceptQueued(stored);
+    if (failure === "async") return Promise.reject(Error("private detail")) as never;
+    if (failure === "value") return 123 as never;
+    if (failure === "abort") { abort.abort(); return; }
+    if (failure === "throw") throw Error("private detail");
+  };
+  const before = f.snapshot();
+  const response = await f.route({ content: "rejected follow-up" }, abort.signal);
+  expect(response.ok).toBe(false);
+  expect(await response.text()).not.toContain("private detail");
+  expect(f.snapshot()).toEqual(before);
+  expect(f.channel.getQueuedFollowupItems("web:default")).toEqual([]);
+  expect(f.events).toEqual([]); expect(f.jobs).toEqual([]);
+  f.channel.getQueuedInputSourceAdmission = () => f.acceptQueued;
+  f.expectSources(1);
+  expect((await f.route({ content: "accepted after rollback" })).status).toBe(201);
+  expect(f.channel.peekQueuedFollowupItem("web:default")!.rowId).toBe(-1);
+});
+
+test("queued retry captures selector once and preserves intervening queue mutation", async () => {
+  const f = fixture(); f.busy(true);
+  let selections = 0, attempts = 0;
+  const attemptedSourceIds: string[] = [];
+  f.channel.getQueuedInputSourceAdmission = () => { selections++; return stored => {
+    attemptedSourceIds.push(stored.item.source_id);
+    f.acceptQueued(stored);
+    if (++attempts === 1) {
+      setTimeout(() => { f.channel.enqueueQueuedFollowupItem("web:default", 0, "intervening"); }, 0);
+      throw Object.assign(Error("retry"), { code: "SQLITE_BUSY" });
+    }
+  }; };
+  f.expectSources(1);
+  expect((await f.route({ content: "retried" })).status).toBe(201);
+  expect(selections).toBe(1); expect(attempts).toBe(2);
+  expect(new Set(attemptedSourceIds).size).toBe(2);
+  expect(f.db.query("SELECT source_id FROM service_effect_s01_sources").all()).toEqual([{ source_id: attemptedSourceIds[1] }]);
+  expect(f.channel.getQueuedFollowupItems("web:default").map(item => [item.rowId, item.queuedContent])).toEqual([[-1, "intervening"], [-2, "retried"]]);
+  expect(f.db.query("SELECT source_id FROM service_effect_s01_sources").all()).toEqual([
+    { source_id: f.channel.getQueuedFollowupItems("web:default")[1]!.source_id },
+  ]);
+});
+
+test("queued host callback is captured before body await and cannot be replaced", async () => {
+  const f = fixture(); f.busy(true); f.expectSources(1);
+  let selected = 0, release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  f.channel.getQueuedInputSourceAdmission = () => { selected++; return f.acceptQueued; };
+  const req = new Request("http://fixture/agent/default/message", { method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" },
+    body: new ReadableStream({ async pull(controller) { await gate; controller.enqueue(new TextEncoder().encode(JSON.stringify({ content: "captured queue input" }))); controller.close(); } }) });
+  const pending = f.channel.handleRequest(req);
+  for (let n = 0; n < 100 && !selected; n++) await Bun.sleep(0);
+  expect(selected).toBe(1);
+  f.channel.getQueuedInputSourceAdmission = () => { throw Error("replacement selector"); };
+  release();
+  expect((await pending).status).toBe(201);
+  expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toHaveLength(1);
+});
+
+test("manual queue command does not adopt ordinary queued source hook", async () => {
+  const f = fixture(); f.busy(true, true);
+  f.channel.getQueuedInputSourceAdmission = () => () => { throw Error("command must not be adopted"); };
+  expect((await f.route({ content: "/queue manual command" })).status).toBe(201);
+  expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toEqual([]);
+});
+
 for (const failure of ["selection", "pending", "wait"] as const) test(`worker ${failure} retains lane and recovery marker without legacy`, async () => {
   const f = fixture();
   let legacy = 0;
@@ -217,7 +475,7 @@ const hasEngine = existsSync(new URL("../../../durable-engine/node_modules/@eare
 test("required engine integration prerequisite cannot silently skip", () => {
   if (process.env.PICLAW_REQUIRE_DURABLE_ENGINE === "1") expect(hasEngine).toBe(true);
 });
-for (const pending of [false, true]) test.skipIf(!hasEngine)(`HTTP accepted ordinary message uses current worker and real engine exactly once; pending=${pending}`, async () => {
+for (const queuedInput of [false, true]) for (const pending of [false, true]) test.skipIf(!hasEngine)(`HTTP accepted message uses current worker and real engine exactly once; queued=${queuedInput}; pending=${pending}`, async () => {
   const { HostConversationRuntime, BunSqliteDatabase, createHostDurableBindings, initializeHostDurableBindings } = await import("../../../durable-engine/src/index.js");
   const { SqliteStorage } = await import("../../../durable-engine/qualification/sqlite.ts");
   const { context, openFixture } = await import("../../../../qualification/pi-durable-130/src/fixture.js");
@@ -250,7 +508,9 @@ for (const pending of [false, true]) test.skipIf(!hasEngine)(`HTTP accepted ordi
     },
     bindings: createHostDurableBindings(f.db, { domain: "queue-test", incarnation: "queue-test", assertOwner: assert, manifest,
       async resolveContent(ref) {
-        const row = f.db.query("SELECT content FROM messages WHERE rowid=?").get(Number(ref.split(":")[1])) as { content: string };
+        const row = (ref.startsWith('queued-source:')
+          ? f.db.query('SELECT content FROM messages WHERE id=? AND chat_jid=?').get(ref.slice('queued-source:'.length), 'web:default')
+          : f.db.query("SELECT content FROM messages WHERE rowid=?").get(Number(ref.split(":")[1]))) as { content: string };
         return row.content;
       } }),
     authorizeScheduling() { assert(); }, putAnswer(ref, text) { payloads.putText(ref, text); },
@@ -269,10 +529,36 @@ for (const pending of [false, true]) test.skipIf(!hasEngine)(`HTTP accepted ordi
   f.channel.dispatchAcceptedInput = createDurableQueueDispatch({ ...lifecycle, work: f.work, adapter: selectedAdapter, branchId: "main", assertCurrentWriter: assert });
   let legacyCalls = 0;
   (f.channel.agentPool as any).runAgent = () => { legacyCalls++; throw Error("legacy forbidden"); };
+  const resumeQueued = f.channel.resumeChat.bind(f.channel);
   f.channel.resumeChat = () => {};
   try {
     f.expectSources(1);
+    if (queuedInput) {
+      f.busy(true);
+      f.channel.getQueuedInputSourceAdmission = () => f.acceptQueued;
+      f.channel.getQueuedInputMaterialization = () => ({ item, message, rowId, database }) => {
+        expect(database.inTransaction).toBe(true);
+        const source = f.work.getAcceptedSource('web:default', item.source_id);
+        expect(source?.payloadRef).toBe(`queued-source:${message.id}`);
+        const { source_accepted, materializeRetries, ...immutableInput } = item;
+        expect(source?.provenanceRef).toBe(`engine:host-selected:${hashCanonicalRequest(JSON.parse(JSON.stringify(immutableInput)) as CanonicalJsonValue)}`);
+        expect(message.id).toBe(item.source_id);
+        expect(database.query('SELECT id FROM messages WHERE rowid=?').get(rowId)).toEqual({ id: item.source_id });
+      };
+    }
     expect((await f.route({ content: "ordinary input", engine: "forged" })).status).toBe(201);
+    const originalSources = f.db.query('SELECT source_id, source_seq, payload_ref FROM service_effect_s01_sources').all();
+    if (queuedInput) {
+      expect(f.jobs).toHaveLength(0);
+      f.busy(false);
+      f.channel.resumeChat = resumeQueued;
+      const { materializeDeferredFollowups } = await import('../../../src/channels/web/runtime/process-chat-control-runtime.js');
+      expect((await materializeDeferredFollowups({ channel: f.channel as any, chatJid: 'web:default', agentId: 'default' })).status).toBe('resumed');
+      for (let n = 0; n < 200 && !f.jobs.length; n++) await Bun.sleep(1);
+      expect(f.jobs).toHaveLength(1);
+      expect(getDeferredQueuedFollowups('web:default')).toEqual([]);
+      expect(f.db.query('SELECT source_id, source_seq, payload_ref FROM service_effect_s01_sources').all()).toEqual(originalSources);
+    }
     let releases = 0;
     const original = f.jobs[0]!.task().then(() => { releases++; });
     if (pending) {
