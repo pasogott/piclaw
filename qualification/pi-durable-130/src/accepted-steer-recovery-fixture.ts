@@ -19,13 +19,15 @@ import { storeWebMessage } from "../../../runtime/src/channels/web/messaging/mes
 
 
 export type RecoveryCheckpoint = { generation: number; intentSourceId: string; primary: AcceptedInput; primaryId: number; b: { sourceId: string; sourceSeq: number }; committedIntentId?: number; intent: DurableConversationOperation; candidate?: { id: number; requestId?: string }; modelCalls: number; effects: number; };
-export async function acceptedSteerFixture(dir: string, boundary: "before-submit" | "committed-ack-lost", recovered?: RecoveryCheckpoint) {
+export async function acceptedSteerFixture(dir: string, boundary: "before-submit" | "committed-ack-lost", recovered?: RecoveryCheckpoint, queuePrimary = false) {
     process.env.PICLAW_DB_IN_MEMORY = "0";
-    const chatJid = `web:recovery:${basename(dir)}:${boundary}`, incarnation = `recovery:${basename(dir)}:${boundary}`;
+    const chatJid = `web:recovery:${basename(dir)}:${boundary}`;
     const path = join(dir, "candidate.sqlite");
     let owner = TestOwner.acquire(path);
     initDatabase();
     let db = getDb();
+    const primaryRow = (db.query('SELECT COALESCE(MAX(rowid),0)+1 AS id FROM messages').get() as { id: number }).id;
+    const incarnation = queuePrimary ? `message:${primaryRow}:1` : `recovery:${basename(dir)}:${boundary}`;
     const base = await openFixture({ get acquired() { return owner.acquired; } }, () => {}, () => SqliteStorage.open(new OwnedSqlite(owner)));
     await base.close();
     const manifest = [{ chatJid, branchId: "main", conversationId: base.root.id }];
@@ -41,7 +43,7 @@ export async function acceptedSteerFixture(dir: string, boundary: "before-submit
     const payloads = new InMemoryEffectPayloadResolver();
     let permit = false, authorizations = 0;
     const intentSourceId = recovered?.intentSourceId ?? `source-${crypto.randomUUID()}`;
-    const primaryRequestId = `primary:${incarnation}`;
+    const primaryRequestId = queuePrimary ? `message:${primaryRow}:${incarnation}:A` : `primary:${incarnation}`;
     const assert = () => owner.assert();
     function stores() {
       db.exec("PRAGMA foreign_keys=ON");
@@ -49,7 +51,9 @@ export async function acceptedSteerFixture(dir: string, boundary: "before-submit
       const terminal = value(createCurrentPiclawTerminalSettlementStore(db, payloads, { hitFault: () => false, recordTrace() {}, validateOwnership() { assert(); return true; } }));
       const bindings = createHostDurableBindings(db, { domain: incarnation, incarnation, manifest, assertOwner: assert,
         async resolveContent(ref) {
-          const row = db.query("SELECT content FROM messages WHERE id=? AND chat_jid=?").get(ref.replace(/^queued-source:/, ""), chatJid) as { content: string } | null;
+          const row = (ref.startsWith('message-row:')
+            ? db.query('SELECT content FROM messages WHERE rowid=? AND chat_jid=?').get(Number(ref.slice('message-row:'.length)), chatJid)
+            : db.query("SELECT content FROM messages WHERE id=? AND chat_jid=?").get(ref.replace(/^queued-source:/, ""), chatJid)) as { content: string } | null;
           if (!row) throw Error("Missing payload"); return row.content;
         } });
       return { work, terminal, bindings };
@@ -75,8 +79,9 @@ export async function acceptedSteerFixture(dir: string, boundary: "before-submit
 async function prepare() {
       storeChatMetadata(chatJid, at);
       const source = value(await ports.work.acceptSource(sealed({ effect: effect(`${incarnation}:A`), chatJid, sourceId: `${incarnation}:A`, kind: "message" as const,
-        payloadRef: `${incarnation}:A`, targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
+        payloadRef: queuePrimary ? `message-row:${primaryRow}` : `${incarnation}:A`, targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
       db.query("INSERT INTO messages(id,chat_jid,content,timestamp) VALUES (?,?,?,?)").run(source.sourceId, chatJid, "primary A", at);
+      if (queuePrimary) check.equal((db.query('SELECT rowid AS id FROM messages WHERE id=?').get(source.sourceId) as { id: number }).id, primaryRow);
       const claimed = value(await ports.work.claimNext(sealed({ effect: effect(`${incarnation}:claim`), chatJid, expectedFrontier: 0, newOperationId: incarnation, claimedAt: at })))!;
       const primary: AcceptedInput = { incarnation, conversationId: base.root.id, chatJid, branchId: "main", operationId: incarnation,
         sourceId: source.sourceId, sourceSeq: source.sourceSeq, payloadRef: source.payloadRef, requestId: primaryRequestId,
@@ -138,6 +143,7 @@ get committedIntentId() { return committedIntentId; }, set committedIntentId(v) 
 get permit() { return permit; }, set permit(v) { permit = v; },
 get authorizations() { return authorizations; }, set authorizations(v) { authorizations = v; },
 base,
+putAnswer(ref: string, text: string) { payloads.putText(ref, text); },
 path,
 generation,
 intentSourceId,
