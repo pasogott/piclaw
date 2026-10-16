@@ -23,6 +23,7 @@ export { observeProjection } from "./host-projection.js";
 export type { ProjectionBinding, ProjectionPorts } from "./host-projection.js";
 export { createScheduledRunDispatch } from "./host-scheduled-run.js";
 export type { ScheduledAgentInput, CurrentScheduledTask, ReadCurrentTask } from "./host-scheduled-run.js";
+export { prepareCopiedUpgrade } from "./copied-upgrade.js";
 export { HostCutoverController, initializeCutoverManifest } from "./host-cutover.js";
 export type {
   Phase, CutoverIdentity, CutoverRequest, Receipt, Manifest, CutoverPorts, Preparation,

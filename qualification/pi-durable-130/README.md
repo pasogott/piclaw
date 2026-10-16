@@ -850,3 +850,38 @@ Both issues are corrected. Full candidate verification passes 362 tests / 5,837
 assertions, with types, root static build and independent bounded review clear.
 This is cooperative same-process disk close/reopen, not a combined SIGKILL or
 production activation qualification. Runtime source is unchanged by this test.
+
+### Copied-byte upgrade preflight (inactive)
+
+`prepareCopiedUpgrade` in `runtime/durable-engine/src/copied-upgrade.ts` binds
+actual copied legacy JSONL and the existing rehearsal v1 host-manifest bytes to
+independently supplied exact SHA256 digests. It validates the complete tree,
+original host identities, persisted baselines and quiescent leaf contexts before
+its first possible journal write. It retains immutable input snapshots, not paths
+or a caller-mutatable prepared plan. The manifest remains caller-trusted provenance;
+this does not infer live source paths, prove copying, or choose new chat IDs.
+
+This fills the concrete copied-input-to-journal gap, not a second checkpoint
+framework: it reuses `HostCutoverController.preflight/begin/verify` and the public
+restartable tree importer. Existing phases remain source → copying (receipt null
+before import acknowledgement, populated afterward) → verified. Exact manifest
+bytes participate in the request key, so even a whitespace-only manifest change
+cannot silently reuse an existing checkpoint. The helper cannot flip the writer.
+Ownership before public storage open, a real source admission fence and authoritative
+drain/digest ports remain caller obligations. Public reopen may normalize/write.
+
+`copied-upgrade.test.ts` uses actual copied files and an owned disk store, loses
+acknowledgement after public import, closes/reopens candidate storage and opens a
+new journal connection. Retry preserves original session/chat/branch/source and
+durable IDs with exact public contexts, no duplicate forks, no tasks or effects.
+Changed input/digests/provenance/context plans reject; journal/rollback remain
+intact. Focused related qualification: 15 pass / 294 assertions across four files;
+both private package typechecks pass. No production selector, live profile access,
+automatic upgrade activation or post-new-work reverse conversion is added.
+
+Final copied-upgrade verification now passes the full candidate suite: 368 tests /
+5,879 assertions across 25 files. Both private-package typechecks pass. Independent
+review cleared complete history-derived root/branch mapping verification and the
+four committed-storage corruption cases. Standalone root aggregate typecheck
+still fails the previously recorded unrelated frontend diagnostic baseline; no
+frontend or baseline changes are included in this slice.

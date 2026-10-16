@@ -112,3 +112,45 @@ and root fast CI pass. Independent review cleared this bounded composition.
 This advances the factory portion of the next slice above, not production status
 of any row. Existing-worker wake-up/retry wiring and production adapter selection
 remain absent; migration, cutover and rollback acceptance are still open.
+
+### Copied-input preflight follow-up (after bce403058)
+
+Inspection of the current README, rehearsal, importer and cutover implementation
+found that persisted checkpoint/retry already exists. The missing HC-024 source
+precondition was an executable binding from actual copied history + host-manifest
+bytes to that checkpoint, rather than hand-assembled request hashes/callbacks.
+`E/copied-upgrade.ts` now creates that immutable, exact-SHA-validated plan and
+connects it to the existing journal and public import/context verification APIs.
+It does not install an automatic migrator or duplicate the checkpoint framework.
+
+`Q/copied-upgrade.test.ts` qualifies copied disk input, lost import acknowledgement,
+public storage and journal-connection reopen, identical IDs/contexts on retry,
+changed-manifest checkpoint refusal and rollback preservation. Related tests pass
+15 / 294 assertions; both private package types pass. HC-024 remains
+**host-binding-unqualified**: live owner/fence policy, production selection,
+general compatibility and post-new-work reconciliation are still incomplete.
+HC-009/PC-004/PC-015 remain **blocked-publicAPI**; no cancellation workaround.
+
+### Copied-upgrade P2 verification correction (uncommitted follow-up)
+
+`E/copied-upgrade.ts` now checks distinct branch conversation IDs, root/conversation
+receipt agreement, complete ordered source mappings, and actual public visible
+entry history against the privately prepared import plan. Audit JSON, model
+records, compaction heads, metadata-only mappings and inherited ancestor IDs are
+checked without private SQL. Identical leaf contexts cannot hide aliased branches
+or forged mappings, even when both receipt documents agree.
+
+Four public-document corruption tests reject missing root mappings, missing branch
+mappings, aliased conversations and matching forged root/conversation mappings.
+Each preserves the cutover journal, keeps rollback available and creates no extra
+conversation. The positive disk-reopen/lost-ACK case includes image, display-only
+metadata and compaction, retaining shared ancestor IDs and exactly two branches.
+
+Latest focused run: **68 pass, 0 fail, 774 assertions / 3 files**
+(`copied-upgrade.test.ts`, `migration.test.ts`, `host-controller.test.ts`);
+**6 copied-upgrade tests** pass. Engine and qualification typechecks pass;
+`git diff --check` passes. These are focused counts, not a full-suite receipt.
+Source/manifest byte handling, legacy 1.2 projection and importer writes are
+unchanged. No services, live state, network, pins, commit or push were touched;
+parent retains integration/commit ownership. HC-024 remains unqualified for
+production as stated above.
