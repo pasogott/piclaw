@@ -1108,3 +1108,26 @@ root fast CI passes 7,163 tests (74 baseline skips), plus 25 feature and 9 build
 tests. Private/runtime types and bounded independent review are clear. A concurrent
 full candidate attempt hit one existing binding-test timeout; unchanged sequential
 repeat passed. Application activation and other session mutations remain separate.
+
+### Existing runtime-lock ownership capability
+
+The application runtime lock now exposes strict exact-token ownership checks using
+boot/process-start identity, nonce, original inode and record bytes. No second owner
+ledger is added. All enabled acquirers refuse existing paths, including partial,
+malformed and stale records: this closes the cooperating-process publication and
+stale-cleanup races. Verified release preserves replaced/tampered records and logs
+failures. Disabled/legacy handles cannot claim strict durable authority.
+
+This intentionally replaces automatic stale cleanup with offline operator cleanup,
+including after SIGKILL or publication failure. It is conservative exclusion, not
+unattended restart recovery. A trusted lock directory, updated cooperating binaries
+and no concurrent external replacement remain required. The production durable
+backend is still unregistered.
+
+Ownership-focused tests pass 32 cases / 193 assertions; CLI integration explicitly
+proves stale refusal before disposable offline cleanup. Final root fast CI passes
+7,174 tests (74 baseline skips), plus 25 feature and 9 build tests; bounded source
+review is clear. Earlier full failures were corrected CLI fixture policy assumptions
+and README translation link parity, not ignored. Runtime types pass; aggregate
+frontend-baseline typechecking remains separately red as recorded. Candidate runtime
+source did not change in this slice; its prior full receipt remains historical.
