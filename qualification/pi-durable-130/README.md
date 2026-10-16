@@ -291,3 +291,24 @@ concurrent admission, preserve every system/tool context, qualify SIGKILL in the
 Plan hook, or support general add-on lifecycle migration. Model-provider final
 admission and other activation blockers above remain open. No production Plan
 adapter is registered.
+
+## Composed copied-chat fixture
+
+`vertical.test.ts` composes the real host 1.2 ModelRuntime, candidate model bridge,
+actual pinned Plan tool, guarded local tracked bash and real EF source/claim/
+terminal stores. Two copied legacy messages and existing host branch/timeline
+rows remain intact; the Plan snapshot stays fixed during tool rounds and changes
+for the next accepted operation. Cancellation during held authentication admits
+no additional synthetic model or tool effects. Terminal replay is idempotent.
+
+The combined suite has passed 149 tests / 1,360 assertions; after strict type
+integration and admission-contention normalization, the final focused owner +
+vertical run passed seven tests / 241 assertions and types. A SQLite busy timeout
+on contender admission is a fail-closed `owner busy` result, not permission to
+allocate or steal. The contender's zero-allocation invariant is unchanged.
+
+This is one serial fixture, not the production importer or extension bootstrap.
+Its fake provider checks authority cooperatively, so the real provider admission
+gap remains. No exhaustive database/log secret audit or cross-file transaction
+fence is claimed. Original chat/branch retention is tested on copied synthetic
+data only. Independent review cleared this bounded composition.

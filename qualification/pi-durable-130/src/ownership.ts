@@ -43,7 +43,11 @@ export class TestOwner {
       return new TestOwner(path, db, Object.freeze(token));
     } catch (error) {
       if (db.inTransaction) db.exec("ROLLBACK");
-      db.close(); throw error;
+      db.close();
+      if (error instanceof Error && "code" in error && error.code === "SQLITE_BUSY") {
+        throw new Error("owner busy: admission lock contention");
+      }
+      throw error;
     }
   }
   get acquired() { return same(this.db.query(`SELECT * FROM ${table} WHERE singleton=1`).get() as Row | null, this.token); }
