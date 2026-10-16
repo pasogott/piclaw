@@ -10,7 +10,7 @@ export type { HostToolEffectPort } from "./host-tools.js";
 export { createHostBashTool } from "./host-bash.js";
 export { BunSqliteDatabase } from "./bun-sqlite.js";
 export {
-  prepareLegacyImport, importCopiedLegacy, importCopiedLegacyTree,
+  prepareLegacyImport, prepareLegacyTreeImport, importCopiedLegacy, importCopiedLegacyTree,
   IMPORTER_VERSION, DEFAULT_IMPORT_LIMITS, DEFAULT_TREE_IMPORT_LIMITS,
   LegacyImportManifest, LegacyTreeImportManifest,
 } from "./legacy-import.js";

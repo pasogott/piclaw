@@ -256,7 +256,7 @@ export const LegacyTreeImportManifest = defineDoc<{ binding: LegacyTreeImportBin
 /** Every source record must belong to the single rooted tree, and EVERY leaf must
  * have an explicit host binding. Detached once before invoking any host bridge.
  * Separate host JSONL files must be assembled/validated by the caller, not inferred. */
-function prepareCopiedLegacyTree(input: CopiedLegacyTreeInput, bridge: GetLegacyContext) {
+export function prepareLegacyTreeImport(input: CopiedLegacyTreeInput, bridge: GetLegacyContext) {
   const { sourceJSONL, hostBranchBindings, maxEntries: requestedEntries,
     maxBytes: requestedBytes, maxBranches: requestedBranches } = input;
   const bindings = clone(hostBranchBindings);
@@ -332,7 +332,7 @@ function prepareCopiedLegacyTree(input: CopiedLegacyTreeInput, bridge: GetLegacy
  * until all branches are returned. No tasks, effects, selection policy or private APIs. */
 export async function importCopiedLegacyTree(conversation: Conversation, input: CopiedLegacyTreeInput,
   bridge: GetLegacyContext, assertOwnership: () => void, context: Context) {
-  const plan = prepareCopiedLegacyTree(input, bridge);
+  const plan = prepareLegacyTreeImport(input, bridge);
   assertOwnership();
   for (;;) {
     const result = await conversation.commit(async tx => {

@@ -627,3 +627,20 @@ focused binding/runtime/cutover tests pass 56 / 516 and both package typechecks
 pass. Source review cleared the collision correction and concrete adapter.
 General migration must resolve or reject unknown legacy pending ownership; this
 is not production schema initialization or admission registration.
+
+## Runnable copied-store rehearsal
+
+The application package provides a source-only rehearsal command; see
+`runtime/durable-engine/REHEARSAL.md`. It accepts an explicit copied JSONL file,
+strict hash/binding/baseline/quiescence manifest and a new destination. All
+preflight checks precede storage creation. Import stays paused and is closed and
+publicly reopened for verification. No provider, tools, production store or writer
+switch is activated. Private receipt/manifest artifacts distinguish incomplete
+from complete rehearsals. Source-copy truth and filesystem trust remain caller
+preconditions, not a hostile-filesystem sandbox.
+
+Three subprocess CLI tests exercise four-leaf context/identity preservation and
+fail-closed input/path/non-quiescence rejection. The full candidate suite passes
+339 tests / 5,377 assertions across twenty files and both typechecks; independent
+source review cleared the bounded command. This does not qualify installed
+production packaging or a live cutover.
