@@ -455,3 +455,25 @@ The complete candidate suite passes 225 tests / 2,436 assertions across fifteen
 files and strict types. Independent source review cleared the corrected public
 preflight and option-isolation boundaries. No live image/classifier accounts,
 paid operations, production registration or whole-migration acceptance is claimed.
+
+## Host deferred-operation references
+
+Deferred requests are opt-in through required host reference authority. Raw
+provider handles and conversion data remain host-owned; only sanitized public
+references cross into candidate state. Fetch and cancel validate exact model,
+provider, handle scope and current authority before host credential resolution.
+Cleanup cancellation has a separate explicit owner grant and can remain allowed
+when spending permission is withdrawn. Missing authority fails closed.
+
+The bridge delegates stream/fetch/cancel to actual host public ModelRuntime APIs.
+Public preflight snapshots model/handle/options before factory authentication;
+all subsequent checks use the immutable approved catalog model. Regression tests
+mutate caller objects during authorization/auth pauses and verify no substituted
+model dispatch. Private handles, callbacks, auth overrides and non-JSON options
+are rejected; failures remain static and no alternate account is selected.
+
+The combined candidate suite passes 273 tests / 4,464 assertions across fifteen
+files, with 93 focused model cases and strict types. Source review cleared the
+model-mutation fix. Bridge recreation uses the same retained host authority;
+production/process-persistent handle authority and whole durable recovery remain
+unqualified. The accepted provider-call microtask limitation is unchanged.

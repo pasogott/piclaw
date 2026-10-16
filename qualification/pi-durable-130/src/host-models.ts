@@ -1,17 +1,19 @@
 import {
-  createModels, createProvider, createAssistantMessageEventStream,
+  createModels, createProvider, createAssistantMessageEventStream, normalizeContext,
   type Api, type Model, type Models, type SimpleStreamOptions,
   type TranscriptContext, type AssistantMessage, type AnyModel, type ModelType,
   type ImageModel, type ImageApi, type ClassifierModel, type ClassifierApi,
   type ImagesContext, type ImagesOptions, type AssistantImages,
   type ClassifierContext, type ClassifierOptions, type ClassifierResult, type Usage,
+  type DeferredHandle, type DeferredFetchOptions, type DeferredCancelOptions,
 } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "../../../node_modules/@earendil-works/pi-coding-agent";
 
 export interface ModelRef { provider: string; id: string; type?: ModelType }
 type Operation = "chat" | "generateImages" | "classify";
 type HostPort = Pick<ModelRuntime, "getPhysicalModel" | "stream" | "streamSimple"> &
-  Partial<Pick<ModelRuntime, "getModelOfType" | "generateImages" | "classify">>;
+  Partial<Pick<ModelRuntime, "getModelOfType" | "generateImages" | "classify" | "streamDeferred" | "cancelDeferred">>;
+type DeferredOperation = "fetchDeferred" | "cancelDeferred";
 export interface HostModelPolicy {
   /** Includes host model approval and budget admission; never auth/login approval. */
   authorize(ref: ModelRef, kind: Operation, signal: AbortSignal): Promise<void>;
@@ -19,6 +21,18 @@ export interface HostModelPolicy {
   assertCurrent(ref: ModelRef, kind: Operation, signal: AbortSignal): void;
   /** Host must abort the grant generation on revocation (including in-flight work). */
   signal: AbortSignal;
+  /** Host-owned durable reference authority. Never persist provider conversion data.
+   * project must idempotently issue a non-secret reference; resolve must verify its operation/
+   * account scope, including after reopen. No bridge-local registry is authority.
+   * Cancel grants are explicit owner-cleanup grants, independent of spend approval.
+   */
+  deferred?: {
+    project(handle: DeferredHandle, model: ModelRef): DeferredHandle;
+    resolve(handle: DeferredHandle, model: ModelRef): DeferredHandle;
+    authorize(model: ModelRef, operation: DeferredOperation, handle: DeferredHandle, signal: AbortSignal): Promise<void>;
+    assertCurrent(model: ModelRef, operation: DeferredOperation, handle: DeferredHandle, signal: AbortSignal): void;
+    signal: AbortSignal;
+  };
 }
 
 // Only JSON data crosses package families; no provider/runtime/stream class is shared.
@@ -49,9 +63,10 @@ const optionKeys = new Set([
   "sessionId", "metadata", "timeoutMs", "websocketConnectTimeoutMs",
   "reasoning", "thinkingBudgets", "toolChoice", "maxRetryDelayMs", "maxRetries",
 ]);
-function requestOptions(options: SimpleStreamOptions = {}): SimpleStreamOptions {
+function requestOptions(options: SimpleStreamOptions = {}, deferred = false): SimpleStreamOptions {
+  if (Object.getPrototypeOf(options) !== Object.prototype) throw new Error("Only JSON data is qualified");
   for (const [key, value] of Object.entries(options)) {
-    if (key !== "signal" && value !== undefined && !optionKeys.has(key)) {
+    if (key !== "signal" && value !== undefined && !optionKeys.has(key) && !(deferred && key === "deferred")) {
       throw new Error(`Unqualified request option: ${key}`);
     }
   }
@@ -89,8 +104,8 @@ function operationOptions(operation: "generateImages" | "classify", options: Ima
 
 /** Qualification only: physical models; no credential transfer or production wiring.
  * 1.2 and 1.3 public Models declarations match. A 1.3 factory owns the complete
- * interface; operation callbacks adapt public host dispatch. Deferred execution is
- * unsupported, not a fallback. transformHeaders is a post-auth fence, NOT an
+ * interface; operation callbacks adapt public host dispatch. Deferred execution
+ * requires an explicit host reference authority. transformHeaders is a post-auth fence, NOT an
  * atomic send hook: the SDK awaits it and may dispatch in a later microtask.
  */
 export function createHostModels(
@@ -130,18 +145,88 @@ export function createHostModels(
       : { ...base, type: "chat", reasoning: model.reasoning,
         contextWindow: model.contextWindow, maxTokens: model.maxTokens }));
   });
+  const validatedChatModel = (model: Model<Api>): Model<Api> => {
+    // Validate a detached JSON snapshot, then use only the immutable host catalog.
+    const snapshot = freeze(data(model));
+    const listed = catalog.find((m) => (m.type ?? "chat") === "chat" &&
+      m.provider === snapshot.provider && m.id === snapshot.id);
+    if (!listed || (snapshot.type ?? "chat") !== "chat" || listed.api !== snapshot.api) {
+      throw new Error("Model not approved");
+    }
+    return listed as Model<Api>;
+  };
+  const publicHandle = (handle: DeferredHandle, model: Model<Api>) => {
+    const safe = data(handle);
+    if (Object.keys(safe).some((key) => !["provider", "modelId", "api", "id", "expiresAt", "pollAfterMs"].includes(key)) ||
+      safe.provider !== model.provider || safe.modelId !== model.id || safe.api !== model.api ||
+      typeof safe.id !== "string" || !safe.id ||
+      (safe.expiresAt !== undefined && typeof safe.expiresAt !== "number") ||
+      (safe.pollAfterMs !== undefined && typeof safe.pollAfterMs !== "number")) throw new Error("Invalid deferred reference");
+    return freeze(safe);
+  };
+  const deferredOptions = (options: DeferredFetchOptions = {}, cancel = false) => {
+    if (Object.getPrototypeOf(options) !== Object.prototype) throw new Error("Invalid options");
+    for (const [key, value] of Object.entries(options)) {
+      if (value !== undefined && !["signal", "timeoutMs", "maxRetries", "maxRetryDelayMs", ...(cancel ? [] : ["wait"])].includes(key)) throw new Error("Invalid options");
+    }
+    if (options.maxRetries !== undefined && options.maxRetries !== 0) throw new Error("Retries denied");
+    const { signal: _signal, ...rest } = options;
+    return { ...data(rest), maxRetries: 0 };
+  };
+  const projectMessage = (message: AssistantMessage, model: Model<Api>): AssistantMessage => {
+    const { deferred, ...rest } = message;
+    if (!deferred) return data(rest);
+    if (!policy.deferred) throw new Error("Deferred authority unavailable");
+    if (deferred.provider !== model.provider || deferred.modelId !== model.id || deferred.api !== model.api) throw new Error("Wrong deferred owner");
+    return { ...data(rest), deferred: publicHandle(policy.deferred.project(deferred, model), model) };
+  };
+  const deferredAdmission = async (model: Model<Api>, handle: DeferredHandle,
+    options: DeferredFetchOptions | undefined, operation: DeferredOperation) => {
+    model = validatedChatModel(model);
+    const safe = deferredOptions(options, operation === "cancelDeferred");
+    const reference = publicHandle(handle, model);
+    const authority = policy.deferred;
+    if (!authority) throw new Error("Deferred authority unavailable");
+    const signal = options?.signal ? AbortSignal.any([options.signal, authority.signal]) : authority.signal;
+    signal.throwIfAborted();
+    // Host scope verification happens before credentials are consulted.
+    const raw = authority.resolve(reference, model);
+    if (raw.provider !== model.provider || raw.modelId !== model.id || raw.api !== model.api) throw new Error("Wrong deferred owner");
+    await authority.authorize(model, operation, reference, signal);
+    const fence = () => { signal.throwIfAborted(); authority.assertCurrent(model, operation, reference, signal); };
+    fence();
+    const physical = hostModelRuntime120.getPhysicalModel(model.provider, model.id);
+    if (!physical || physical.provider !== model.provider || physical.id !== model.id || physical.api !== model.api) throw new Error("Model owner changed");
+    return { physical, raw, options: { ...safe, signal, transformHeaders: (headers: Record<string, string | null>) => { fence(); return headers; } } };
+  };
   const relay = (simple: boolean, model: Model<Api>, context: TranscriptContext,
-    options?: SimpleStreamOptions) => {
+    options?: SimpleStreamOptions, deferred?: { handle: DeferredHandle; options?: DeferredFetchOptions }) => {
     const output = createAssistantMessageEventStream();
     void (async () => {
       try {
+        model = validatedChatModel(model);
+        context = freeze(data(context));
+        if (deferred) {
+          if (!hostModelRuntime120.streamDeferred) throw new Error("Host operation unavailable");
+          const admitted = await deferredAdmission(model, deferred.handle, deferred.options, "fetchDeferred");
+          const stream = hostModelRuntime120.streamDeferred(admitted.physical, admitted.raw, admitted.options);
+          for await (const event of stream) {
+            if (event.type === "error") throw new Error("Host request failed");
+            output.push("message" in event ? { ...data({ ...event, message: undefined }), message: projectMessage(event.message, model) }
+              : "partial" in event ? { ...data({ ...event, partial: undefined }), partial: projectMessage(event.partial, model) } : data(event));
+          }
+          const result = await stream.result();
+          if (result.stopReason === "error" || result.stopReason === "aborted") throw new Error("Host request failed");
+          output.end(projectMessage(result, model));
+          return;
+        }
         const ref = { provider: model.provider, id: model.id };
         const listed = catalog.find((m) => (m.type ?? "chat") === "chat" && m.provider === ref.provider && m.id === ref.id);
         if ((model.type ?? "chat") !== "chat") throw new Error("Wrong model type");
         if (!listed || listed.api !== model.api) throw new Error("Model is not approved");
         const signal = options?.signal
           ? AbortSignal.any([options.signal, policy.signal]) : policy.signal;
-        const safeOptions = requestOptions(options);
+        const safeOptions = requestOptions(options, !!policy.deferred);
         signal.throwIfAborted();
         await policy.authorize(ref, "chat", signal);
         signal.throwIfAborted();
@@ -159,11 +244,12 @@ export function createHostModels(
           : hostModelRuntime120.stream(physical, data(context), hostOptions);
         for await (const event of stream) {
           if (event.type === "error") throw new Error("Host request failed");
-          output.push(data(event));
+          output.push("message" in event ? { ...data({ ...event, message: undefined }), message: projectMessage(event.message, model) }
+            : "partial" in event ? { ...data({ ...event, partial: undefined }), partial: projectMessage(event.partial, model) } : data(event));
         }
         const result = await stream.result();
         if (result.stopReason === "error" || result.stopReason === "aborted") throw new Error("Host request failed");
-        output.end(data(result));
+        output.end(projectMessage(result, model));
       } catch {
         // Host errors can contain credentials/headers. Do not export them.
         const error: AssistantMessage = { role: "assistant", content: [], api: model.api,
@@ -243,6 +329,15 @@ export function createHostModels(
         stopReason: "error", errorMessage: "Host model request failed", timestamp: Date.now() };
     }
   };
+  const fetchDeferred = (model: Model<Api>, handle: DeferredHandle, options?: DeferredFetchOptions) =>
+    relay(false, model, normalizeContext({ messages: [] }), undefined, { handle, options });
+  const cancelDeferred = async (model: Model<Api>, handle: DeferredHandle, options?: DeferredCancelOptions) => {
+    try {
+      if (!hostModelRuntime120.cancelDeferred) throw new Error("Host operation unavailable");
+      const admitted = await deferredAdmission(model, handle, options, "cancelDeferred");
+      await hostModelRuntime120.cancelDeferred(admitted.physical, admitted.raw, admitted.options);
+    } catch { throw new Error("Host deferred cancellation denied or failed"); }
+  };
   for (const id of new Set(catalog.map((model) => model.provider))) {
     backing.setProvider(createProvider({ id, models: catalog.filter((m) => m.provider === id),
       auth: { apiKey: { name: "Host-owned authority (not credentials)",
@@ -252,6 +347,7 @@ export function createHostModels(
       classifiers: Object.fromEntries(catalog.filter((m) => m.provider === id && m.type === "classifier")
         .map((m) => [m.api, { classify }])),
       api: {
+        fetchDeferred, cancelDeferred,
         stream: (model, context, options) => relay(false, model, context, options),
         streamSimple: (model, context, options) => relay(true, model, context, options),
       },
@@ -266,6 +362,10 @@ export function createHostModels(
         return () => { throw new Error("Host auth UI/mutation is a separate scope"); };
       }
       const value = Reflect.get(target, key);
+      // Bypass factory request preparation: no caller transforms/auth callbacks may run.
+      if (key === "streamDeferred") return fetchDeferred;
+      if (key === "fetchDeferred") return (model: Model<Api>, handle: DeferredHandle, options?: DeferredFetchOptions) => fetchDeferred(model, handle, options).result();
+      if (key === "cancelDeferred") return cancelDeferred;
       if (key === "generateImages" || key === "classify") return async (
         model: AnyModel, context: ImagesContext | ClassifierContext, options?: ImagesOptions | ClassifierOptions,
       ) => {
@@ -281,8 +381,9 @@ export function createHostModels(
         }
       };
       if (chatMethods.has(String(key))) return (model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions) => {
-        requestOptions(options);
-        return Reflect.apply(value, target, [model, context, options]);
+        const safeModel = validatedChatModel(model);
+        const safeOptions = requestOptions(options, !!policy.deferred);
+        return Reflect.apply(value, target, [safeModel, freeze(data(context)), { ...safeOptions, signal: options?.signal }]);
       };
       return typeof value === "function" ? value.bind(target) : value;
     },

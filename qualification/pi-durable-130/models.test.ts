@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import type { ModelRuntime as HostRuntime } from "../../node_modules/@earendil-works/pi-coding-agent";
 import type { Credential, CredentialStore, Model, TranscriptContext as HostTranscript, AssistantMessage } from "../../node_modules/@earendil-works/pi-ai";
 import type { Models, ImageModel, ClassifierModel, Api, ImageApi, ClassifierApi } from "@earendil-works/pi-ai";
@@ -21,7 +22,15 @@ function barrier() {
   const promise = new Promise<void>((resolve) => { release = resolve; });
   return { promise, release };
 }
-async function fixture(multimodal = false, keyless = false) {
+async function bounded(promise: Promise<void>) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([promise, new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("Fixture barrier not reached within 1500ms")), 1500);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+async function fixture(multimodal = false, keyless = false, deferred = false) {
   let stored: Credential | undefined = { type: "api_key", key: token };
   const requested: string[] = [];
   const credentials: CredentialStore = {
@@ -58,11 +67,31 @@ async function fixture(multimodal = false, keyless = false) {
       { type: "toolCall", id: "call-1", name: "fixture_tool", arguments: { value: 7 } }],
     usage: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 5,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+  const privateHandle = { provider: ref.provider, modelId: ref.id, api: model.api, id: "private-provider-id",
+    data: { token, conversion: "host-private" }, ...{ privateMarker: "host-private-marker" } };
+  // Synthetic host authority hashes an internal operation ID, never provider conversion data.
+  const reference = { provider: ref.provider, modelId: ref.id, api: model.api,
+    id: createHash("sha256").update("synthetic-owner/synthetic-operation").digest("hex") };
+  let known = false;
+  let cleanup = false;
+  let ownerAllowed = true;
+  if (deferred) policy.deferred = {
+    signal: generation.signal,
+    project: (raw) => { expect(raw).toBe(privateHandle); known = true; return reference; },
+    resolve: (handle) => {
+      if (!known || JSON.stringify(handle) !== JSON.stringify(reference) || !ownerAllowed) throw new Error(token);
+      return privateHandle;
+    },
+    authorize: async (_owner, kind) => { admissions.push(kind); if (!(kind === "cancelDeferred" && cleanup)) check(); },
+    assertCurrent: (_owner, kind) => { if (!ownerAllowed) throw new Error(token); if (!(kind === "cancelDeferred" && cleanup)) check(); },
+  };
   const run = (owner: Model<Api>, context: HostTranscript, options?: unknown) => {
     calls++; captured = { owner, context, options };
     const stream = createAssistantMessageEventStream();
-    stream.push({ type: "done", reason: "toolUse", message: structuredClone(message) });
-    stream.end(structuredClone(message));
+    const result = deferred ? { ...message, stopReason: "deferred" as const, deferred: privateHandle } : structuredClone(message);
+    if (deferred) stream.push({ type: "start", partial: result });
+    stream.push({ type: "done", reason: result.stopReason as "toolUse" | "deferred", message: result });
+    stream.end(result);
     return stream;
   };
   const image: ImageModel<ImageApi> = { ...model, type: "image", api: "synthetic-images", output: ["image", "text"],
@@ -71,8 +100,9 @@ async function fixture(multimodal = false, keyless = false) {
     cost: { ...model.cost, ...{ token } } };
   const classifier: ClassifierModel<ClassifierApi> = { ...image, type: "classifier", api: "synthetic-classifier", contextWindow: 2048 };
   const oneShot = (owner: unknown, ctx: unknown, options: unknown) => { calls++; captured = { owner, context: ctx, options }; };
-  runtime.registerNativeProvider({ id: ref.provider, name: "Synthetic", getModels: () => [model],
-    getAllModels: () => multimodal ? [model, image, classifier] : [model],
+  const unapproved = { ...model, id: "unapproved-model" };
+  runtime.registerNativeProvider({ id: ref.provider, name: "Synthetic", getModels: () => [model, unapproved],
+    getAllModels: () => multimodal ? [model, unapproved, image, classifier] : [model, unapproved],
     generateImages: async (owner, ctx, options) => {
       oneShot(owner, ctx, options);
       if (fail) throw new Error(token);
@@ -90,6 +120,18 @@ async function fixture(multimodal = false, keyless = false) {
           score: { type: "score", score: 0.7, confidence: 0.6 } }, usage: message.usage,
         ...{ token, cause: token, errorMessage: token } };
     },
+    fetchDeferred: (owner, handle, options) => {
+      expect(handle).toBe(privateHandle);
+      oneShot(owner, handle, options);
+      if (fail) throw new Error(token);
+      const stream = createAssistantMessageEventStream();
+      const result = { ...message, stopReason: "stop" as const };
+      stream.push({ type: "done", reason: "stop", message: result }); stream.end(result); return stream;
+    },
+    cancelDeferred: async (owner, handle, options) => {
+      expect(handle).toBe(privateHandle); oneShot(owner, handle, options);
+      if (fail) throw new Error(token);
+    },
     auth: { apiKey: { name: "Synthetic", check: async () => ({ type: "api_key" }),
       resolve: async ({ credential }) => {
         if (hold) { entered.release(); await held.promise; }
@@ -97,11 +139,15 @@ async function fixture(multimodal = false, keyless = false) {
         if (keyless) return { auth: {}, source: "synthetic-keyless" };
         return credential?.key ? { auth: { apiKey: credential.key, headers: { Authorization: `Bearer ${credential.key}` } } } : undefined;
       } } }, stream: run, streamSimple: run });
+  if (deferred) runtime.registerNativeProvider({ id: "unapproved-provider", name: "Unapproved",
+    getModels: () => [{ ...unapproved, provider: "unapproved-provider" }],
+    auth: {}, stream: run, streamSimple: run });
   const approvedModels = multimodal ? [ref, { ...ref, type: "image" as const }, { ...ref, type: "classifier" as const }] : [ref];
   const models: Models = createHostModels(runtime, approvedModels, policy);
   return { runtime, models, policy, requested, message, entered, held, admissions,
     model: models.getModel(ref.provider, ref.id)!,
     calls: () => calls, captured: () => captured,
+    cleanup: () => { cleanup = true; }, denyOwner: () => { ownerAllowed = false; },
     hold: () => { hold = true; }, fail: () => { fail = true; },
     revoke: () => { approved = false; }, exhaust: () => { budget = false; },
     abort: () => generation.abort(), onFence: (fn: () => void) => { onFence = fn; } };
@@ -137,7 +183,7 @@ for (const method of ["stream", "streamSimple", "complete", "completeSimple"] as
       const f = await fixture(); f.hold();
       const value = f.models[method](f.model, context);
       const result = "result" in value ? value.result() : value;
-      await f.entered.promise; f[reason](); f.held.release();
+      try { await bounded(f.entered.promise); f[reason](); } finally { f.held.release(); }
       expect((await result).stopReason).toBe("error");
       expect(f.calls()).toBe(0);
     });
@@ -215,7 +261,7 @@ for (const kind of ["image", "classifier"] as const) {
         const f = await fixture(true);
         if (held) f.hold(); else f[action]();
         const pending = invoke(f);
-        if (held) { await f.entered.promise; f[action](); f.held.release(); }
+        if (held) { try { await bounded(f.entered.promise); f[action](); } finally { f.held.release(); } }
         expect((await pending).stopReason).toBe("error"); expect(f.calls()).toBe(0);
       }
     });
@@ -334,6 +380,228 @@ test("non-JSON image bytes/class instances are denied rather than JSON-cloned", 
   expect((await f.models.generateImages(image, bad)).stopReason).toBe("error");
   expect(f.calls()).toBe(0);
 });
+
+for (const method of ["streamDeferred", "fetchDeferred", "cancelDeferred"] as const) {
+  const invoke = (f: Awaited<ReturnType<typeof fixture>>, handle: any, options?: any, direct = false, owner = f.model) => {
+    if (direct) {
+      const provider = f.models.getProvider(ref.provider)!;
+      return method === "cancelDeferred" ? provider.cancelDeferred!(owner, handle, options)
+        : provider.fetchDeferred!(owner, handle, options).result();
+    }
+    return method === "streamDeferred" ? f.models.streamDeferred(owner, handle, options).result()
+      : method === "fetchDeferred" ? f.models.fetchDeferred(owner, handle, options) : f.models.cancelDeferred(owner, handle, options);
+  };
+  const issue = async (f: Awaited<ReturnType<typeof fixture>>) => {
+    const stream = f.models.streamSimple(f.model, context, { deferred: true });
+    const events = []; for await (const event of stream) events.push(event);
+    const receipt = await stream.result();
+    expect(receipt.stopReason).toBe("deferred");
+    expect(JSON.stringify([events, receipt])).not.toContain(token);
+    expect(JSON.stringify([events, receipt])).not.toContain("private-provider-id");
+    expect(JSON.stringify([events, receipt])).not.toContain("host-private");
+    expect(receipt.deferred?.id).toMatch(/^[a-f0-9]{64}$/);
+    expect(receipt.deferred?.data).toBeUndefined();
+    return JSON.parse(JSON.stringify(receipt.deferred));
+  };
+  const denied = async (pending: ReturnType<typeof invoke>) => {
+    if (method === "cancelDeferred") {
+      let failure: unknown;
+      try { await pending; } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toBe("Host deferred cancellation denied or failed");
+    } else {
+      const result = await pending;
+      expect(result?.stopReason).toBe("error");
+      expect(JSON.stringify(result)).not.toContain(token);
+      expect(JSON.stringify(result)).not.toContain("host-private");
+    }
+  };
+  test(`${method}: host-issued safe JSON reference, actual root runtime dispatch and direct provider path`, async () => {
+    for (const direct of [false, true]) {
+      const f = await fixture(false, false, true); const handle = await issue(f);
+      const result = await invoke(f, handle, { timeoutMs: 100, maxRetryDelayMs: 0, ...(method === "cancelDeferred" ? {} : { wait: 0 }) }, direct);
+      if (method !== "cancelDeferred") expect(result?.stopReason).toBe("stop");
+      expect(f.calls()).toBe(2);
+      expect(f.captured().options).toMatchObject({ apiKey: token, maxRetries: 0, timeoutMs: 100 });
+      expect(f.admissions).toContain(method === "cancelDeferred" ? "cancelDeferred" : "fetchDeferred");
+    }
+  });
+  test(`${method}: unknown, swapped owner, private data and malformed references rejected before host auth`, async () => {
+    const f = await fixture(false, false, true); const handle = await issue(f); const reads = f.requested.length;
+    for (const direct of [false, true]) {
+      for (const bad of [{ ...handle, id: "forged" }, { ...handle, provider: "foreign" }, { ...handle, modelId: "foreign" },
+        { ...handle, api: "foreign" }, { ...handle, data: { token } }, { ...handle, id: Infinity }]) await denied(invoke(f, bad, undefined, direct));
+      for (const owner of [{ ...f.model, provider: "foreign" }, { ...f.model, id: "foreign" }, { ...f.model, type: "image" as const }]) {
+        await denied(invoke(f, handle, undefined, direct, owner as Model<Api>));
+      }
+    }
+    expect(f.calls()).toBe(1); expect(f.requested.length).toBe(reads);
+    f.denyOwner(); await denied(invoke(f, handle)); expect(f.calls()).toBe(1);
+  });
+  test(`${method}: transforms, credentials, callbacks, retries and non-JSON denied before admission`, async () => {
+    const f = await fixture(false, false, true); const handle = await issue(f); const reads = f.requested.length;
+    let callbacks = 0; const count = () => { callbacks++; return {}; };
+    for (const direct of [false, true]) for (const options of [{ transformHeaders: count }, { onPayload: count }, { onResponse: count },
+      { apiKey: token }, { headers: { Authorization: token } }, { env: {} }, { fetch: count }, { maxRetries: 1 },
+      { wait: Infinity }, { timeoutMs: new Date() }, { maxRetryDelayMs: count }]) await denied(invoke(f, handle, options, direct));
+    expect(callbacks).toBe(0); expect(f.calls()).toBe(1); expect(f.requested.length).toBe(reads);
+    expect(f.admissions).toHaveLength(1);
+  });
+  for (const action of ["revoke", "exhaust", "abort"] as const) test(`${method}: ${action} before and during held auth blocks dispatch`, async () => {
+    for (const held of [false, true]) {
+      const f = await fixture(false, false, true); const handle = await issue(f);
+      if (held) f.hold(); else f[action]();
+      const pending = invoke(f, handle);
+      // Bun's rejects matcher may synchronously wait: observe first, release, assert last.
+      void pending.catch(() => {});
+      if (held) { try { await bounded(f.entered.promise); f[action](); } finally { f.held.release(); } }
+      await denied(pending); expect(f.calls()).toBe(1);
+    }
+  });
+  test(`${method}: caller abort and host auth failure never dispatch or leak credentials`, async () => {
+    for (const action of ["fail", "logout", "callerAbort"] as const) {
+      const f = await fixture(false, false, true); const handle = await issue(f);
+      const caller = new AbortController();
+      if (action === "logout") await f.runtime.logout(ref.provider);
+      else if (action === "fail") f.fail(); else caller.abort();
+      await denied(invoke(f, handle, { signal: caller.signal }));
+      expect(f.calls()).toBe(1);
+      expect(f.requested.every((id) => id === ref.provider)).toBe(true);
+    }
+  });
+  test(`${method}: keyless host auth and caller cancellation preserve host signal`, async () => {
+    const f = await fixture(false, true, true); const handle = await issue(f);
+    const caller = new AbortController();
+    await invoke(f, handle, { signal: caller.signal });
+    expect(f.calls()).toBe(2);
+    expect(f.captured().options.apiKey).toBeUndefined();
+    expect(f.captured().options.signal.aborted).toBe(false);
+    caller.abort();
+    expect(f.captured().options.signal.aborted).toBe(true);
+  });
+  test(`${method}: revocation during bounded authority admission denies before host auth`, async () => {
+    const f = await fixture(false, false, true); const handle = await issue(f);
+    const entered = barrier(), held = barrier();
+    const original = f.policy.deferred!.authorize;
+    f.policy.deferred!.authorize = async (...args) => {
+      entered.release(); await held.promise; await original(...args);
+    };
+    const reads = f.requested.length;
+    const pending = invoke(f, handle); void pending.catch(() => {});
+    try { await bounded(entered.promise); f.revoke(); } finally { held.release(); }
+    await denied(pending);
+    expect(f.calls()).toBe(1); expect(f.requested.length).toBe(reads);
+  });
+  test(`${method}: caller model/handle/options mutation cannot change authority or physical owner`, async () => {
+    for (const direct of [false, true]) for (const phase of ["authority", "hostAuth"] as const)
+      for (const provider of [ref.provider, "unapproved-provider"]) {
+      const f = await fixture(false, false, true); const handle = await issue(f);
+      const owner = structuredClone(f.model);
+      const expected = structuredClone(owner);
+      const originalHandle = structuredClone(handle);
+      const options = { timeoutMs: 100, maxRetries: 0 };
+      const entered = barrier(), held = barrier();
+      const authority = f.policy.deferred!;
+      const seen: { model: unknown; handle: unknown }[] = [];
+      const resolve = authority.resolve, authorize = authority.authorize, current = authority.assertCurrent;
+      authority.resolve = (h, m) => { seen.push({ model: m, handle: h }); return resolve(h, m); };
+      authority.authorize = async (m, op, h, signal) => {
+        seen.push({ model: m, handle: h });
+        if (phase === "authority") { entered.release(); await held.promise; }
+        await authorize(m, op, h, signal);
+      };
+      authority.assertCurrent = (m, op, h, signal) => {
+        seen.push({ model: m, handle: h }); current(m, op, h, signal);
+      };
+      if (phase === "hostAuth") f.hold();
+      const pending = invoke(f, handle, options, direct, owner); void pending.catch(() => {});
+      try {
+        await bounded(phase === "authority" ? entered.promise : f.entered.promise);
+        owner.provider = provider; owner.id = "unapproved-model";
+        if (phase === "hostAuth") owner.api = "mutated-api";
+        handle.provider = "unapproved-provider"; handle.modelId = "unapproved-model"; handle.id = "swapped";
+        options.timeoutMs = 999;
+      } finally { held.release(); f.held.release(); }
+      const result = await pending;
+      if (method !== "cancelDeferred") expect(result?.stopReason).toBe("stop");
+      expect(f.calls()).toBe(2);
+      expect(f.captured().owner).toMatchObject({ ...ref, api: expected.api });
+      expect(f.captured().options.timeoutMs).toBe(100);
+      expect(seen.length).toBeGreaterThanOrEqual(3);
+      for (const item of seen) {
+        expect(item.model).toBe(seen[0]!.model);
+        expect(item.model).toEqual(expected);
+        expect(Object.isFrozen(item.model)).toBe(true);
+        expect(item.handle).toBe(seen[0]!.handle);
+        expect(item.handle).toEqual(originalHandle);
+        expect(Object.isFrozen(item.handle)).toBe(true);
+      }
+    }
+  });
+  test(`${method}: private authority errors are sanitized without dispatch`, async () => {
+    const f = await fixture(false, false, true); const handle = await issue(f);
+    const reads = f.requested.length;
+    f.policy.deferred!.authorize = async () => { throw new Error(`${token}/host-private-marker`); };
+    const pending = invoke(f, handle); void pending.catch(() => {});
+    await denied(pending);
+    expect(f.calls()).toBe(1); expect(f.requested.length).toBe(reads);
+  });
+  test(`${method}: post-auth provider failure is sanitized`, async () => {
+    const f = await fixture(false, false, true); const handle = await issue(f);
+    if (method === "cancelDeferred") f.runtime.getProvider(ref.provider)!.cancelDeferred = async () => { throw new Error(token); };
+    else f.runtime.getProvider(ref.provider)!.fetchDeferred = () => { throw new Error(token); };
+    await denied(invoke(f, handle));
+  });
+  test(`${method}: reopened bridge uses host-owned authority, not a local handle registry`, async () => {
+    const f = await fixture(false, false, true); const handle = await issue(f);
+    const reopened = { ...f, models: createHostModels(f.runtime, [ref], f.policy) };
+    await invoke(reopened, JSON.parse(JSON.stringify(handle)));
+    expect(f.calls()).toBe(2);
+    // This proves bridge recreation only, not production/process recovery storage.
+  });
+}
+for (const method of ["stream", "streamSimple", "complete", "completeSimple"] as const) {
+  test(`${method}: unsafe authority projection fails closed for initial deferred receipt`, async () => {
+    const f = await fixture(false, false, true);
+    f.policy.deferred!.project = (raw) => raw;
+    const value = f.models[method](f.model, context, { deferred: true });
+    const result = "result" in value ? await value.result() : await value;
+    expect(result.stopReason).toBe("error");
+    expect(JSON.stringify(result)).not.toContain(token);
+    expect(JSON.stringify(result)).not.toContain("private-provider-id");
+    expect(JSON.stringify(result)).not.toContain("host-private");
+    expect(result.deferred).toBeUndefined();
+  });
+}
+test("deferred cancel has explicit exact-owner cleanup grant after spend withdrawal", async () => {
+  const f = await fixture(false, false, true);
+  const handle = (await f.models.completeSimple(f.model, context, { deferred: true })).deferred!;
+  f.revoke(); f.exhaust(); f.cleanup();
+  expect((await f.models.fetchDeferred(f.model, handle)).stopReason).toBe("error");
+  await f.models.cancelDeferred(f.model, handle); expect(f.calls()).toBe(2);
+  f.denyOwner(); await expect(f.models.cancelDeferred(f.model, handle)).rejects.toThrow(); expect(f.calls()).toBe(2);
+});
+
+for (const method of ["stream", "streamSimple", "complete", "completeSimple"] as const) {
+  test(`${method}: public preflight snapshots before keyless factory auth yields`, async () => {
+    const f = await fixture(false, false, true);
+    const owner = structuredClone(f.model);
+    const ctx = structuredClone(context);
+    const options = { deferred: true, maxTokens: 42, metadata: { purpose: "original" } };
+    const value = f.models[method](owner, ctx, options);
+    owner.provider = "unapproved-provider"; owner.id = "unapproved-model"; owner.api = "mutated-api";
+    ctx.messages[0]!.content = "mutated"; options.maxTokens = 999; options.metadata.purpose = "mutated";
+    const result = "result" in value ? await value.result() : await value;
+    expect(result.stopReason).toBe("deferred");
+    expect(result.deferred).toMatchObject({ provider: ref.provider, modelId: ref.id, api: model.api });
+    expect(f.calls()).toBe(1);
+    expect(f.captured().owner).toMatchObject({ ...ref, api: model.api });
+    expect(JSON.stringify(f.captured().context.messages)).toContain("fixture");
+    expect(JSON.stringify(f.captured().context.messages)).not.toContain("mutated");
+    expect(f.captured().options).toMatchObject({ maxTokens: 42, metadata: { purpose: "original" } });
+    expect(f.admissions).toEqual([`${ref.provider}/${ref.id}/chat`]);
+  });
+}
 
 test("accepted limitation: public transformHeaders is awaited, not an atomic dispatch fence", async () => {
   const f = await fixture();
