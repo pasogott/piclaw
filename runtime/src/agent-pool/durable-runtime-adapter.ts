@@ -24,6 +24,7 @@ export interface DurableSessionPositionPort {
   readonly readPosition: () => Promise<string | null>;
   /** Persisted conversation choice only; never infer a model from provider responses. */
   readonly readModel?: () => Promise<string | null>;
+  readonly readTree?: () => Promise<import("../agent-control/session-tree-snapshot.js").SessionTreeSnapshot>;
 }
 
 export interface DurableConversationBinding {
@@ -52,6 +53,7 @@ export interface DurableConversationState {
  * must already be configured there. No 1.2 Models, SDK session or context crosses this port.
  * Reconciliation deliberately does not expose the engine's private answer/thinking evidence. */
 export interface DurableConversationRuntimePort {
+  readSessionTree?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<import("../agent-control/session-tree-snapshot.js").SessionTreeSnapshot>;
   readSessionPosition?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<string | null>;
   readSessionModel?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<string | null>;
   submit(input: DurableAcceptedInput): Promise<number>;
@@ -92,6 +94,7 @@ export function createDurableConversationAdapter(options: {
   const wait = runtime.wait?.bind(runtime), submitIntent = runtime.submitIntent?.bind(runtime);
   const readPosition = runtime.readSessionPosition?.bind(runtime);
   const readModel = runtime.readSessionModel?.bind(runtime);
+  const readTree = runtime.readSessionTree?.bind(runtime);
   function input(work: DurableConversationOperation, intent = false): DurableAcceptedInput {
     const { source, operation } = work.claimed;
     const binding = manifest.find(b => b.chatJid === source.chatJid && b.branchId === work.branchId);
@@ -114,7 +117,8 @@ export function createDurableConversationAdapter(options: {
       if (!binding || !sessionId || !readPosition) throw new Error("Durable session position unavailable");
       return Object.freeze({ sessionId, branchId,
         readPosition: () => readPosition({ ...binding, incarnation }),
-        readModel: readModel ? () => readModel({ ...binding, incarnation }) : undefined });
+        readModel: readModel ? () => readModel({ ...binding, incarnation }) : undefined,
+        readTree: readTree ? () => readTree({ ...binding, incarnation }) : undefined });
     },
     supportsIntent: !!submitIntent,
     validateIntent(work: DurableConversationOperation) { input(work, true); },

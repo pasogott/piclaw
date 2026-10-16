@@ -7,6 +7,9 @@ import { hashCanonicalRequest, type CanonicalJsonValue } from "../../../runtime/
 import type { ServiceWorkStore, AcceptCancellationRequest, OperationSnapshot } from "../../../runtime/src/service-effects/contracts/service-work-store.js";
 import type { TerminalSettlementStore, CommitTerminalRequest } from "../../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
 import { value, sealed, effect } from "./host-effects.js";
+import { LegacyImportManifest } from "./legacy-import.js";
+import { projectPublicHistory } from "./session-tree.js";
+import { buildSessionTreeSnapshot, type RootSessionTreeNode, type SessionTreeSnapshot } from "../../src/agent-control/session-tree-snapshot.js";
 
 /** Immutable host-persisted intent; never supplied as arbitrary user text. */
 export interface AcceptedInput {
@@ -208,6 +211,55 @@ export class HostConversationRuntime {
       if (!conversation) throw new Error("Missing existing conversation");
       const page = await conversation.entries({ order: "descending" }, 1, undefined, this.context); this.fence();
       return page.items[0] ? String(page.items[0].id) : null;
+    });
+  }
+  /** Fork-aware public history across the explicit imported host-session bindings only. */
+  readSessionTree(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<SessionTreeSnapshot> {
+    const copy = Object.freeze({ incarnation: binding.incarnation, chatJid: binding.chatJid,
+      branchId: binding.branchId, conversationId: binding.conversationId });
+    return this.observe(async () => {
+      const o = this.options;
+      if (copy.incarnation !== o.incarnation || !o.existingConversationIds.some(id => id === copy.conversationId) ||
+        o.conversationFor(copy.chatJid, copy.branchId) !== copy.conversationId) throw new Error("Host binding conflict");
+      this.fence();
+      const active = await this.harness.snapshot(LegacyImportManifest, copy.conversationId as unknown as ConversationId, this.context); this.fence();
+      const source = active?.binding;
+      const all = new Map<string, RootSessionTreeNode>();
+      let leafId: string | null = null;
+      let visibleLeafId: string | null = null;
+      for (const id of o.existingConversationIds) {
+        this.fence();
+        const manifest = await this.harness.snapshot(LegacyImportManifest, id, this.context); this.fence();
+        const imported = manifest?.binding ?? null;
+        if (id !== copy.conversationId && (!source || imported?.sourceSessionId !== source.sourceSessionId || imported.sourceHash !== source.sourceHash)) continue;
+        // Imported host identities are provenance, not the current host routing keys.
+        if (imported && imported.engineConversationId !== id) throw new Error("Host binding conflict");
+        const conversation = await this.harness.conversation(id, this.context); this.fence();
+        if (!conversation) throw new Error("Missing existing conversation");
+        const rows: import("@earendil-works/pi-durable").EntryRecord[] = [];
+        let cursor: import("@earendil-works/pi-durable").Cursor | undefined;
+        do {
+          this.fence();
+          const page = await conversation.entries({ order: "ascending" }, 100, cursor, this.context); this.fence();
+          rows.push(...page.items); cursor = page.next;
+        } while (cursor);
+        if (id === copy.conversationId) leafId = rows.length ? String(rows[rows.length - 1]!.id) : null;
+        const projected = projectPublicHistory(rows, imported);
+        if (id === copy.conversationId) visibleLeafId = projected.at(-1)?.entry.id ?? null;
+        for (const node of projected) {
+          const prior = all.get(node.entry.id);
+          if (prior && prior.entry.parentId !== node.entry.parentId) throw new Error("Conflicting durable tree ancestry");
+          if (!prior) all.set(node.entry.id, node);
+        }
+      }
+      const roots: RootSessionTreeNode[] = [];
+      for (const node of all.values()) {
+        const parent = node.entry.parentId === null ? undefined : all.get(node.entry.parentId);
+        if (node.entry.parentId !== null && !parent) throw new Error("Missing durable tree parent");
+        if (parent) parent.children.push(node); else roots.push(node);
+      }
+      this.fence();
+      return buildSessionTreeSnapshot({ getLeafId: () => leafId, getTree: () => roots }, { visibleLeafId });
     });
   }
   /** Read only the public persisted agent choice, not resolved host defaults or response metadata. */

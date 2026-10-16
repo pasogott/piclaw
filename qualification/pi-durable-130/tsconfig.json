@@ -15,6 +15,7 @@
     "src/**/*.ts",
     "../../runtime/src/types/gifenc.d.ts",
     "test.ts",
+    "db-tree.test.ts",
     "sqlite.test.ts",
     "host-handoff.test.ts",
     "runtime.test.ts",

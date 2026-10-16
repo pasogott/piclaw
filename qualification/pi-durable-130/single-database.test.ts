@@ -76,6 +76,16 @@ test("single physical database: accepted primary + attached intent, terminal ide
     let terminal = await f.runtime!.settle(primary);
     for (let n = 0; !terminal && n < 200; n++) { await Bun.sleep(5); terminal = await f.runtime!.settle(primary); }
     expect(terminal?.disposition).toBe("completed");
+    const tree = await app.getSessionTreeForChat(f.chatJid);
+    expect(tree.version).toBe(1);
+    expect(tree.flat).toBe(true);
+    expect(tree.leafId).toBe(await app.saveSessionPosition(f.chatJid));
+    expect(tree.nodes.some(node => node.role === "assistant" && node.detail === "single database answer")).toBe(true);
+    expect(tree.nodes.every(node => typeof node.id === "string")).toBe(true);
+    expect(JSON.stringify(tree)).not.toContain("thinking");
+    const treeCommand = await app.applyControlCommand(f.chatJid, { type: "tree" });
+    expect(treeCommand.status).toBe("success");
+    await expect(app.applyControlCommand(f.chatJid, { type: "tree", targetId: tree.leafId! })).rejects.toThrow("Durable history mutation unavailable");
     expect(value(await f.ports.work.getChatFrontier(f.chatJid)).consumedThroughSourceSeq).toBe(b.sourceSeq);
     const docId = await f.candidateStorage!.mintId<DocumentId>();
     await f.candidateStorage!.commit([{ type: "document.create", record: { id: docId, kind: "qualification.single-database", scope: { kind: "session" } }, content: { kind: "base", version: 1, value: { outcome: "same-file" } } }], context);
@@ -99,6 +109,8 @@ test("single physical database: accepted primary + attached intent, terminal ide
     const reopened = await f.open();
     const reopenedApp = facade(reopened);
     expect(await reopenedApp.saveSessionPosition(f.chatJid)).toBe(position);
+    expect(await reopenedApp.getSessionTreeForChat(f.chatJid)).toEqual(tree);
+    await expect(app.getSessionTreeForChat(f.chatJid)).rejects.toThrow("Runtime closed");
     expect(await reopenedApp.getCurrentModelLabel(f.chatJid)).toBe(persistedModel);
     await expect(app.getCurrentModelLabel(f.chatJid)).rejects.toThrow("Runtime closed");
     expect(reopenedApp.getSessionGenerationForChat(f.chatJid)).toBe("preserved-session-id");

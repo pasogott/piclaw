@@ -1047,3 +1047,23 @@ remain untouched with zero JSONL events. Legacy/facade tests pass 38 cases, full
 candidate verification passes 381 tests / 6,490 assertions, typechecks pass within
 the stated scope and bounded independent review is clear. Tree/history projection
 and branch mutation remain incomplete; no activation or new session file occurs.
+
+### Database-backed session tree
+
+The existing `/tree` reader now routes explicitly bound chats through the same
+captured durable-session port before any legacy factory. Public fork-aware history
+projects into the existing tree snapshot/widget contract; supported imported
+metadata retains provenance, thinking content is excluded and unsupported history
+rejects without JSONL fallback. Tree mutations remain unavailable.
+
+Exact public `leafId` remains the persisted position. Derived `visibleLeafId`
+highlights its visible ancestor when a hidden system row is at the head. Imported
+compaction/baseline pairs are deduplicated only with adjacent exact audit evidence;
+independent native compactions remain visible. Review caught both edge cases and
+regressions cover them. The shared-file fixture creates a fresh public import root
+so earlier histories remain untouched.
+
+Final candidate verification passes 383 tests / 6,538 assertions across 28 files;
+root fast CI and engine/runtime/qualification types pass. Focused root tree/handler/
+facade tests pass 65 cases. Independent bounded review is clear. This is read-only
+projection, not branch mutation, complete UI/browser qualification or activation.

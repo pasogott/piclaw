@@ -15,6 +15,7 @@ import { applyControlCommand, type AgentControlCommand, type AgentControlResult 
 import { handleModel } from "../agent-control/handlers/model.js";
 import { formatThinkingLevelForDisplay, getAvailableThinkingLevelsForModel, resolveThinkingAlias, THINKING_LEVELS } from "../agent-control/agent-control-helpers.js";
 import { buildSessionTreeSnapshot } from "../agent-control/session-tree-snapshot.js";
+import { renderSessionTreeWidget } from "../agent-control/handlers/tree.js";
 import { getLatestTokenUsageModel } from "../db.js";
 import { requireOwnedSessionExecution } from "./owned-session-access.js";
 import { getSessionThinkingPolicy } from './thinking-policy.js';
@@ -321,7 +322,7 @@ export class AgentRuntimeFacade {
     // Capture routing before any session factory is entered. Never fall back on port failure.
     this.durableSessions = new Map([...options.durableSessions ?? []].map(([chat, port]) =>
       [chat, Object.freeze({ sessionId: port.sessionId, branchId: port.branchId,
-        readPosition: port.readPosition.bind(port), readModel: port.readModel?.bind(port) })]));
+        readPosition: port.readPosition.bind(port), readModel: port.readModel?.bind(port), readTree: port.readTree?.bind(port) })]));
     const legacy = options.getOrCreateRuntime;
     this.options = { ...options, getOrCreateRuntime: chat => {
       if (this.durableSessions.has(chat)) return Promise.reject(new Error("Legacy session operation unavailable for durable conversation"));
@@ -334,6 +335,13 @@ export class AgentRuntimeFacade {
   }
 
   async applyControlCommand(chatJid: string, command: AgentControlCommand): Promise<AgentControlResult> {
+    if (this.durableSessions.has(chatJid)) {
+      if (command.type !== "tree" || command.targetId) throw new Error("Durable history mutation unavailable");
+      const tree = await this.getSessionTreeForChat(chatJid);
+      return renderSessionTreeWidget(tree, chatJid) ?? { status: "success", message: tree.nodes.length
+        ? ["Session tree:", ...tree.nodes.slice(command.mode === "head" ? command.offset ?? 0 : -(command.limit ?? 10), command.mode === "head" ? (command.offset ?? 0) + (command.limit ?? 10) : undefined).map(node => `${node.active ? "→ " : ""}${node.id} ${node.preview}`)].join("\n")
+        : "Tree is empty." };
+    }
     requireSingleUserDirectExecution("Direct control commands");
     revokeAddonLocalAgent(chatJid);
     const release = this.options.acquireCommandProtection?.(chatJid);
@@ -578,6 +586,15 @@ export class AgentRuntimeFacade {
     if (!entry) return null;
     const snapshot = buildSessionTreeSnapshot(entry.runtime.session.sessionManager);
     return { leafId: snapshot.leafId, total: snapshot.total };
+  }
+
+  async getSessionTreeForChat(chatJid: string): Promise<import("../agent-control/session-tree-snapshot.js").SessionTreeSnapshot> {
+    const durable = this.durableSessions.get(chatJid);
+    if (durable) {
+      if (!durable.readTree) throw new Error("Durable session tree unavailable");
+      return durable.readTree();
+    }
+    return buildSessionTreeSnapshot((await this.options.getOrCreateRuntime(chatJid)).session.sessionManager);
   }
 
   async saveSessionPosition(chatJid: string): Promise<string | null> {
