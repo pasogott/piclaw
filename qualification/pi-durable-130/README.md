@@ -242,11 +242,14 @@ files, plus strict TypeScript checks. These counts supersede earlier totals.
 with the host; the 1.3 catalog receives JSON metadata and static errors. Tests
 exercise successful streaming/tool/thinking data, denied approval/budget, held
 authentication revocation, logout and no alternative-account fallback. Deferred,
-image/classifier and login-control operations deliberately reject. **Activation
-blocker:** public `transformHeaders` is awaited before provider invocation; the
-negative test demonstrates a revoked provider may still be invoked with an
-aborted signal. This is not proof of a sent request, but the strict zero-call
-admission contract remains unqualified.
+image/classifier and login-control operations deliberately reject. **Accepted
+limitation (operator decision, 2026-10-16):** public `transformHeaders` is awaited
+before provider invocation. The negative test demonstrates that revocation in
+this narrow interval can still invoke a provider with an aborted signal. This
+is not proof of a sent request or charge. Keep approval/budget checks and abort
+signals; do not wait for upstream or add a dependency patch for this race alone.
+The strict zero-provider-call guarantee remains unproved. This decision does not
+waive other ownership, effect-fencing or migration requirements.
 
 `host-tools.ts` preserves prepared arguments, text/images, details, explicit
 errors and progress acknowledgements. Throwing callbacks produce static errors
@@ -288,9 +291,9 @@ SQLite reopen retain the snapshots.
 This is a serial, explicitly correlated qualification fixture, not a generic
 ExtensionAPI runtime. It does not discover unknown recovered operations, prove
 concurrent admission, preserve every system/tool context, qualify SIGKILL in the
-Plan hook, or support general add-on lifecycle migration. Model-provider final
-admission and other activation blockers above remain open. No production Plan
-adapter is registered.
+Plan hook, or support general add-on lifecycle migration. The narrow model-provider admission race is an accepted limitation; the other
+activation requirements above remain open. No production Plan adapter is
+registered.
 
 ## Composed copied-chat fixture
 
@@ -395,3 +398,23 @@ Remote transport remains disabled: no paired permissions, network send, live
 accounts or authorized review execution is qualified. JSON projection removes
 undefined metadata and is not a lossless preservation claim. This is not complete
 compatibility for either add-on or all installed add-ons.
+
+## Actual Delegate host-context qualification
+
+`delegate.test.ts` hash-pins the real Delegate 0.2.20 factory and runs its registered
+tool through the host bridge and public durable Harness. Private fixture SQLite
+approval starts deny-all; only the named fixture model is approved. A synthetic
+child executable exercises actual Delegate selection, JSON output parsing,
+thinking inheritance, `--no-session`, `--no-extensions`, read-only tool flags,
+persisted result/reopen without replay, pre-abort, setup deadline and owned POSIX
+process-group cancellation. No real provider, credential or MCP server is called.
+Late-update coverage explicitly invokes a retained callback after completion.
+The dead process cleanup target is removed after confirmed termination.
+
+The combined suite passes 190 tests / 1,997 assertions across fourteen files and
+strict types; source judge cleared this bounded path. Focused Delegate/model
+regressions also pass after the cleanup correction and accepted-risk relabel.
+This is not full Delegate activation or child authentication/MCP/fallback parity.
+The operator accepted the narrow provider-microtask race on 2026-10-16; retain
+its negative test and existing cancellation checks rather than patching the SDK
+or waiting for upstream. No other migration or effect guarantees are waived.

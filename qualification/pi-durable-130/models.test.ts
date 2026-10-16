@@ -152,7 +152,7 @@ test("complete factory interface denies non-chat, deferred, auth UI, overrides a
   expect(f.calls()).toBe(0);
 });
 
-test("ACTIVATION BLOCKER: public transformHeaders is awaited, not an atomic dispatch fence", async () => {
+test("accepted limitation: public transformHeaders is awaited, not an atomic dispatch fence", async () => {
   const f = await fixture();
   f.onFence(() => queueMicrotask(() => { f.revoke(); f.abort(); }));
   await f.models.completeSimple(f.model, context);
