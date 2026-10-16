@@ -543,3 +543,16 @@ verification passes 118 tests; the candidate suite passes 293 tests and types.
 Source review cleared the corrected composition. This is still an inactive
 caller-enforced writer contract, not production ingress wiring or a cross-file
 transaction. Arbitrary external effects and reverse conversion remain outside it.
+
+## Exact running cancellation boundary
+
+Public 1.3.0 transactions can inspect submission/run/task association atomically,
+but cannot mark task abort in that same transaction. A separate `abortTask` call
+leaves a window for steers to join the run; calling it inside a transaction would
+deadlock the mutation line. The runtime therefore does not use a read-then-abort,
+raw task write or conversation-wide fallback. Placed input remains `already_placed`.
+An additional public-API regression proves repeated cancellation of A neither
+aborts its task nor withdraws queued successor B; EF-S01 cancellation replay does
+not increment its version, and a late answer is suppressed at host settlement.
+Eleven runtime tests / 146 assertions and types pass. This explicitly remains
+missing running-cancellation support, not successful cancellation qualification.

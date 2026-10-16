@@ -4,7 +4,7 @@ import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { Harness } from "@earendil-works/pi-durable";
+import { Harness, LiveDoc, type Tx } from "@earendil-works/pi-durable";
 import { HostConversationRuntime, type AcceptedInput, type RuntimeOptions } from "./src/host-runtime.js";
 import { BunSqliteDatabase } from "./src/bun-sqlite.js";
 import { barrier, context, openFixture } from "./src/fixture.js";
@@ -106,6 +106,48 @@ async function setup(busy = false) {
   }
   return { dir, db, base, options, runtime, accept, drain, work, terminal, path, hooks, stats: () => ({ opens, releases, authorizations }), setOwner: (v: boolean) => { acquired = v; }, grantKnown: () => { allowKnown = true; }, loseCancellationAck: () => { loseCancellationAck = true; } };
 }
+
+test("runtime: public transaction reads exact run ownership but cannot atomically mark its abort; queued successor survives", async () => {
+  // Qualification of the installed PUBLIC contract, not a private Transaction cast or task-schema write.
+  // Fail typecheck if an upstream transactional abort becomes available so this gap is revisited.
+  const transactionalAbortUnavailable: "abortTask" extends keyof Tx ? false : true = true;
+  expect(transactionalAbortUnavailable).toBe(true);
+  const f = await openFixture({ acquired: true });
+  f.host.modelHold = barrier();
+  try {
+    const original = await f.submit("exact-running-A", "held original");
+    const successor = await f.submit("exact-queued-B", "unrelated successor");
+    const run = await f.root.commit(async tx => {
+      const submission = await tx.submissionByRequest(f.root.id, "exact-running-A");
+      const live = await tx.doc(LiveDoc, f.root.id);
+      expect(submission?.id).toBe(original.id);
+      expect(submission?.conversationId).toBe(f.root.id);
+      expect(submission?.status).toBe("placed");
+      expect(live.run?.inputs).toEqual([original.id]);
+      const task = await tx.task(live.run!.taskId);
+      expect(task?.conversationId).toBe(f.root.id);
+      expect(task?.abortRequested).toBe(false);
+      // Only detached contract values leave this commit; never retain a Draft.
+      return { taskId: live.run!.taskId };
+    }, context);
+    expect((await successor.status(context)).status).toBe("queued");
+    expect(await f.harness.abortSubmission(original.id, context, f.root.id)).toBe("already_placed");
+    expect(await f.harness.abortSubmission(original.id, context, f.root.id)).toBe("already_placed");
+    expect((await f.harness.getTask(run.taskId, context))?.abortRequested).toBe(false);
+    expect((await successor.status(context)).status).toBe("queued");
+    expect((await original.status(context)).status).toBe("placed");
+    expect(f.host.modelCalls).toBe(0);
+    f.host.modelHold.release();
+    await f.harness.waitForIdle(context);
+    expect((await original.status(context)).status).toBe("done");
+    expect((await successor.status(context)).status).toBe("done");
+    expect(f.host.modelCalls).toBe(2);
+    expect(f.host.credentialLookups).toBe(0);
+  } finally {
+    f.host.modelHold.release();
+    await f.close();
+  }
+});
 
 test("runtime: caller mutation during authorization cannot admit an unbound request", () => fixture(async f => {
   const input = await f.accept(), original = { ...input }, entered = barrier(), hold = barrier();
@@ -224,7 +266,14 @@ test("runtime: exact cancellation rejects wrong submission before accepting host
   // This host explicitly grants the known single operation's abort scheduling.
   f.grantKnown();
   expect(await f.runtime.cancel(input, submission, request)).toBe("already_placed");
-  expect(value(await f.work.getOperation(input.operationId))!.cancellation?.sourceSeq).toBe(cancel.sourceSeq);
+  const accepted = value(await f.work.getOperation(input.operationId))!;
+  expect(accepted.cancellation?.sourceSeq).toBe(cancel.sourceSeq);
+  // An accepted host decision is durable, but is NOT evidence that the running provider was aborted.
+  expect(await f.runtime.cancel(input, submission, request)).toBe("already_placed");
+  expect(value(await f.work.getOperation(input.operationId))!.version).toBe(accepted.version);
+  expect((await f.runtime.reconcile(input)).status?.status).toBe("placed");
+  expect(await f.runtime.settle(input)).toBeNull();
+  expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
   f.base.host.modelHold.release();
   const reopened = await f.drain();
   try {
