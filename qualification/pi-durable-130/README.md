@@ -375,3 +375,23 @@ matched/unmatched/overflow snapshots, stale identities and UTF-8/escaping bounds
 The source judge cleared the corrected bounded adapter. This is not a browser
 transport proof or complete thinking/tool/rich-message projection, and it does
 not grant settlement authority to a watch or complete #1650.
+
+## Actual host-service add-on round trip
+
+`addon-host-services.test.ts` hash-pins the actual Code Review 0.1.8 and Remote
+Peer 0.3.6 factory closures, copies them below the isolated candidate without the
+companion checkout's node_modules, and verifies dependency resolution. Public
+durable Harness calls the actual registered `code_review.dispatches` and
+`remote_peer.status`, persists results, and reopens without repeating tool or
+model execution. Host ALS supplies the invocation-local capability; wrong-chat
+and nonowner mutations are denied without changing the inspected service tables.
+The combined suite passes 189 tests / 1,928 assertions across thirteen files and
+types. Independent source review cleared this bounded path.
+
+The private test package pins Iroh 1.1.0 and its Linux x64 GNU binary explicitly;
+Bun did not materialize that transitive optional package from the upstream parent
+lock entry. This is a Linux qualification prerequisite, not a production change.
+Remote transport remains disabled: no paired permissions, network send, live
+accounts or authorized review execution is qualified. JSON projection removes
+undefined metadata and is not a lossless preservation claim. This is not complete
+compatibility for either add-on or all installed add-ons.

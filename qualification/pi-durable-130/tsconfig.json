@@ -24,6 +24,7 @@
     "bash-port.test.ts",
     "plan.test.ts",
     "vertical.test.ts",
-    "projection.test.ts"
+    "projection.test.ts",
+    "addon-host-services.test.ts"
   ]
 }
