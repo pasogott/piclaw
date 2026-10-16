@@ -17,6 +17,7 @@
     "../../runtime/src/types/web-push.d.ts",
     "test.ts",
     "db-tree.test.ts",
+    "idle-model.test.ts",
     "application-web.test.ts",
     "sqlite.test.ts",
     "host-handoff.test.ts",

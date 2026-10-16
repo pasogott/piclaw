@@ -12,7 +12,7 @@ import type { AgentSession, AgentSessionRuntime, ModelRegistry, ModelRuntime, Se
 import type { Api, Model, Provider } from "@earendil-works/pi-ai";
 
 import { applyControlCommand, type AgentControlCommand, type AgentControlResult } from "../agent-control/index.js";
-import { handleModel } from "../agent-control/handlers/model.js";
+import { handleModel, resolveControlModelSelection } from "../agent-control/handlers/model.js";
 import { formatThinkingLevelForDisplay, getAvailableThinkingLevelsForModel, resolveThinkingAlias, THINKING_LEVELS } from "../agent-control/agent-control-helpers.js";
 import { buildSessionTreeSnapshot } from "../agent-control/session-tree-snapshot.js";
 import { renderSessionTreeWidget } from "../agent-control/handlers/tree.js";
@@ -322,7 +322,7 @@ export class AgentRuntimeFacade {
     // Capture routing before any session factory is entered. Never fall back on port failure.
     this.durableSessions = new Map([...options.durableSessions ?? []].map(([chat, port]) =>
       [chat, Object.freeze({ sessionId: port.sessionId, branchId: port.branchId,
-        readPosition: port.readPosition.bind(port), readModel: port.readModel?.bind(port), readTree: port.readTree?.bind(port) })]));
+        readPosition: port.readPosition.bind(port), readModel: port.readModel?.bind(port), setModel: port.setModel?.bind(port), readTree: port.readTree?.bind(port) })]));
     const legacy = options.getOrCreateRuntime;
     this.options = { ...options, getOrCreateRuntime: chat => {
       if (this.durableSessions.has(chat)) return Promise.reject(new Error("Legacy session operation unavailable for durable conversation"));
@@ -336,6 +336,16 @@ export class AgentRuntimeFacade {
 
   async applyControlCommand(chatJid: string, command: AgentControlCommand): Promise<AgentControlResult> {
     if (this.durableSessions.has(chatJid)) {
+      if (command.type === "model") {
+        requireSingleUserDirectExecution("Direct model commands");
+        const port = this.durableSessions.get(chatJid)!;
+        if (!port.setModel) throw new Error("Durable model mutation unavailable");
+        if (command.compact) return { status: "error", message: "Durable model compaction unavailable" };
+        const selected = resolveControlModelSelection(this.options.modelRegistry, command);
+        if ("status" in selected) return selected;
+        await port.setModel({ provider: selected.provider, modelId: selected.id });
+        return { status: "success", message: `Model set to ${selected.provider}/${selected.id}.` };
+      }
       if (command.type !== "tree" || command.targetId) throw new Error("Durable history mutation unavailable");
       const tree = await this.getSessionTreeForChat(chatJid);
       return renderSessionTreeWidget(tree, chatJid) ?? { status: "success", message: tree.nodes.length

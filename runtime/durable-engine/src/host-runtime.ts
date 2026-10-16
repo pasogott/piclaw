@@ -1,5 +1,5 @@
 // INACTIVE application module. No bootstrap registration or production schema migration.
-import { AgentDoc, AssistantEntry, InboxDoc, LiveDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
+import { configure, AgentDoc, AssistantEntry, InboxDoc, LiveDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { awaitWithContext, withAbortSignal, withoutAbortSignal, type Context } from "@earendil-works/chord/context";
 import type { CurrentPiclawServiceWorkStore, FinishHarnessRequest } from "../../../runtime/src/service-effects/current-piclaw/service-work-store.js";
@@ -47,6 +47,8 @@ export interface MaterializedAnswer {
 }
 export interface RuntimeOptions {
   readonly incarnation: string;
+  /** Required for model SET: shared-file SQL guard, checked inside each storage transaction. */
+  readonly withIdleModelGuard?: <T>(body: () => Promise<T>) => Promise<T>;
   /** Caller already holds exclusive ownership of this entire store, not a per-chat lease.
    * Adapters/models/tools must fence effects themselves, including EF-S02 inside its SQL commit. */
   readonly owner: { assert(): void; release(): void | Promise<void> };
@@ -136,6 +138,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
   const { owner, work, terminal, bindings, harnessOptions: h, existingConversationIds,
     openStorage, conversationFor, authorizeScheduling, putAnswer, materializeAnswer, now, incarnation, sessionId, lane, generation } = o;
   return Object.freeze({ incarnation, sessionId, lane, generation, captured: true as const,
+    withIdleModelGuard: o.withIdleModelGuard?.bind(o),
     openStorage: openStorage.bind(o), conversationFor: conversationFor.bind(o),
     authorizeScheduling: authorizeScheduling.bind(o), putAnswer: putAnswer.bind(o),
     materializeAnswer: materializeAnswer?.bind(o), now: now.bind(o),
@@ -157,6 +160,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
 /** One caller-owned authority domain, not a global chat/user router. */
 export class HostConversationRuntime {
   private closed = false;
+  private changingModel = false;
   private closing?: Promise<void>;
   // Lifecycle joins only: not an input queue or admission/dedup authority.
   private readonly active = new Set<Promise<unknown>>();
@@ -166,6 +170,7 @@ export class HostConversationRuntime {
   private readonly observations = new AbortController();
   private observe<T>(body: () => Promise<T>): Promise<T> {
     this.fence();
+    if (this.changingModel) throw new Error("Model change in progress");
     const promise = body();
     this.active.add(promise);
     void promise.finally(() => this.active.delete(promise)).catch(() => {});
@@ -279,6 +284,51 @@ export class HostConversationRuntime {
       }, this.context); this.fence();
       return label;
     });
+  }
+  async setSessionModel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, model: { provider: string; modelId: string }): Promise<void> {
+    this.fence();
+    const o = this.options;
+    const id = o.existingConversationIds.find(id => id === binding.conversationId);
+    if (binding.incarnation !== o.incarnation || id === undefined || o.conversationFor(binding.chatJid, binding.branchId) !== id) throw new Error("Host binding conflict");
+    if (!o.withIdleModelGuard) throw new Error("Idle model guard unavailable");
+    if (this.changingModel || this.active.size) throw new Error("Runtime is not idle");
+    const choice = Object.freeze({ provider: model.provider, modelId: model.modelId });
+    const target = o.harnessOptions.models.getModel(choice.provider, choice.modelId);
+    if (!target || !Number.isFinite(target.contextWindow) || target.contextWindow <= 0 ||
+      !Number.isFinite(target.maxTokens) || target.maxTokens < 0) throw new Error("Model context unavailable");
+    this.changingModel = true;
+    const operation = (async () => {
+      const inspection = await this.harness.inspect(this.context); this.fence();
+      if (inspection.tasks.length || inspection.submissions.length) throw new Error("Runtime is not idle");
+      const conversation = await this.harness.conversation(id, this.context); this.fence();
+      if (!conversation) throw new Error("Missing existing conversation");
+      const view = await conversation.context(this.context); this.fence();
+      await o.withIdleModelGuard!(() => conversation.commit(async tx => {
+        this.fence();
+        for (const conversationId of o.existingConversationIds) {
+          if ((await tx.doc(InboxDoc, conversationId)).items.length || (await tx.doc(LiveDoc, conversationId)).run) throw new Error("Runtime is not idle");
+        }
+        // Candidate-only admission bound, NOT proof that the host's next full prompt fits.
+        // Dynamic sections cannot be bounded here without executing host prompt callbacks.
+        const registry = o.harnessOptions.registry.snapshot();
+        if (registry.sections().length) throw new Error("Dynamic prompt overhead unavailable");
+        const agent = await tx.doc(AgentDoc, id);
+        const tools = registry.tools().map(({ tool }) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
+        const bytes = new TextEncoder().encode(JSON.stringify([view.messages, agent, tools])).length;
+        const usage = view.messages.reduce((max, message) => message.role === "assistant"
+          ? Math.max(max, message.usage.input + message.usage.output + message.usage.cacheRead + message.usage.cacheWrite) : max, 0);
+        // One token per serialized UTF-8 byte plus framing and full output reserve is
+        // deliberately pessimistic for text; non-text/provider-specific overhead is unknown.
+        if (view.messages.some(message => typeof message.content !== "string" && message.content.some(block => block.type === "image")))
+          throw new Error("Non-text context overhead unavailable");
+        if (!Number.isFinite(usage) || Math.max(bytes, usage) + 8192 + target.maxTokens > target.contextWindow)
+          throw new Error("Candidate context bound exceeded; compact first");
+        await configure(tx, id, { model: choice });
+        this.fence();
+      }, this.context));
+    })();
+    this.active.add(operation);
+    try { await operation; } finally { this.active.delete(operation); this.changingModel = false; }
   }
   private port(intent: boolean) {
     const port = intent ? this.options.bindings.intents : this.options.bindings;

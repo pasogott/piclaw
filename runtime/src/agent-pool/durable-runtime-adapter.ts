@@ -24,6 +24,7 @@ export interface DurableSessionPositionPort {
   readonly readPosition: () => Promise<string | null>;
   /** Persisted conversation choice only; never infer a model from provider responses. */
   readonly readModel?: () => Promise<string | null>;
+  readonly setModel?: (model: { provider: string; modelId: string }) => Promise<void>;
   readonly readTree?: () => Promise<import("../agent-control/session-tree-snapshot.js").SessionTreeSnapshot>;
 }
 
@@ -55,6 +56,7 @@ export interface DurableConversationState {
 export interface DurableConversationRuntimePort {
   readSessionTree?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<import("../agent-control/session-tree-snapshot.js").SessionTreeSnapshot>;
   readSessionPosition?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<string | null>;
+  setSessionModel?(binding: DurableConversationBinding & { readonly incarnation: string }, model: { provider: string; modelId: string }): Promise<void>;
   readSessionModel?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<string | null>;
   submit(input: DurableAcceptedInput): Promise<number>;
   submitIntent?(input: DurableAcceptedInput): Promise<number>;
@@ -94,6 +96,7 @@ export function createDurableConversationAdapter(options: {
   const wait = runtime.wait?.bind(runtime), submitIntent = runtime.submitIntent?.bind(runtime);
   const readPosition = runtime.readSessionPosition?.bind(runtime);
   const readModel = runtime.readSessionModel?.bind(runtime);
+  const setModel = runtime.setSessionModel?.bind(runtime);
   const readTree = runtime.readSessionTree?.bind(runtime);
   function input(work: DurableConversationOperation, intent = false): DurableAcceptedInput {
     const { source, operation } = work.claimed;
@@ -118,6 +121,7 @@ export function createDurableConversationAdapter(options: {
       return Object.freeze({ sessionId, branchId,
         readPosition: () => readPosition({ ...binding, incarnation }),
         readModel: readModel ? () => readModel({ ...binding, incarnation }) : undefined,
+        setModel: setModel ? (model: { provider: string; modelId: string }) => setModel({ ...binding, incarnation }, { provider: model.provider, modelId: model.modelId }) : undefined,
         readTree: readTree ? () => readTree({ ...binding, incarnation }) : undefined });
     },
     supportsIntent: !!submitIntent,

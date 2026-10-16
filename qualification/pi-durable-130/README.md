@@ -1085,3 +1085,26 @@ focused combined regressions pass 11 tests / 518 assertions, qualification types
 pass and independent bounded review is clear. This is synthetic-provider, explicit
 fixture-port, in-process HTTP qualification—not production registration or complete
 compatibility/performance acceptance. No production runtime source changed.
+
+### Idle-only database model control
+
+Explicitly bound `/model` SET now shares the existing application resolver and
+routes through the captured durable-session port. It rejects accepted host work,
+public pending tasks/submissions and nonempty inboxes instead of changing the model
+of already-accepted input. A temporary runtime admission gate and an owned shared-
+file SQLite `BEGIN IMMEDIATE` guard protect public configure; no SDK metadata is
+written to obtain a lock. Missing guards and stale ownership fail closed.
+
+Review found that a retained root read transaction could hide earlier acceptance.
+Every guard phase now rejects such transactions; WAL and three phase-injection
+regressions verify the persisted model remains unchanged. Unknown/ambiguous models,
+concurrent changes, busy work and unsupported context estimates reject. Context-fit
+evidence is candidate-only, not a complete host prompt-overhead guarantee; dynamic
+sections and unqualified image overhead fail closed. No automatic compaction or
+history dropping is used.
+
+Final candidate verification passes 386 tests / 6,647 assertions across 30 files;
+root fast CI passes 7,163 tests (74 baseline skips), plus 25 feature and 9 build
+tests. Private/runtime types and bounded independent review are clear. A concurrent
+full candidate attempt hit one existing binding-test timeout; unchanged sequential
+repeat passed. Application activation and other session mutations remain separate.

@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { statSync } from "node:fs";
 import type { SqliteDatabase, SqliteExecutor, SqliteValue } from "@earendil-works/pi-durable/storage/sqlite";
 
 /** Inactive host bridge. The host must acquire ownership BEFORE construction. */
@@ -10,8 +11,38 @@ export class BunSqliteDatabase implements SqliteDatabase {
   private closing?: Promise<void>;
   private failure?: Error;
 
-  constructor(path: string) {
+  private idleGuard?: () => void;
+  private readonly identity?: ReturnType<typeof statSync>;
+  constructor(private readonly path: string, private readonly guard?: { root: Database; assertOwner(): void }) {
     this.db = new Database(path, { create: true, strict: true });
+    this.identity = guard ? statSync(path) : undefined;
+  }
+
+  /** Scope the next public storage transactions; checks run inside the candidate write lock. */
+  async withIdleModelGuard<T>(body: () => Promise<T>): Promise<T> {
+    if (!this.guard) return Promise.reject(new Error("Idle model guard unavailable"));
+    const guard = this.guard;
+    const check = () => {
+      // A root read transaction can retain an idle WAL snapshot even while this
+      // candidate holds BEGIN IMMEDIATE against newly committed host work.
+      if (guard.root.inTransaction) throw new Error("Root connection transaction active");
+      guard.assertOwner();
+      const rootPath = (guard.root.query("PRAGMA database_list").all() as { name: string; file: string }[]).find(r => r.name === "main")?.file;
+      if (!rootPath) throw new Error("Shared file required");
+      for (const path of [rootPath, this.path]) {
+        const current = statSync(path);
+        if (current.dev !== this.identity!.dev || current.ino !== this.identity!.ino) throw new Error("Shared database identity changed");
+      }
+      const busy = guard.root.query(`SELECT 1 FROM service_effect_s01_chats WHERE active_operation_id IS NOT NULL
+        UNION ALL SELECT 1 FROM service_effect_s01_sources WHERE state NOT IN ('consumed','disposed')
+        UNION ALL SELECT 1 FROM service_effect_s01_operations WHERE phase <> 'terminal'
+        UNION ALL SELECT 1 FROM service_effect_s01_queued_inputs WHERE state NOT IN ('consumed','disposed') LIMIT 1`).get();
+      if (guard.root.inTransaction) throw new Error("Root connection transaction active");
+      if (busy) throw new Error("Host work is not idle");
+    };
+    if (this.idleGuard) throw new Error("Idle model guard already active");
+    this.idleGuard = check;
+    try { check(); return await body(); } finally { this.idleGuard = undefined; }
   }
 
   private enqueue<T>(operation: () => T | Promise<T>): Promise<T> {
@@ -52,16 +83,19 @@ export class BunSqliteDatabase implements SqliteDatabase {
   }
 
   transaction<T>(callback: (tx: SqliteExecutor) => Promise<T>): Promise<T> {
+    const idle = this.idleGuard;
     return this.enqueue(async () => {
-      this.db.exec("BEGIN");
+      this.db.exec(this.guard ? "BEGIN IMMEDIATE" : "BEGIN");
       let active = true;
       const tx = this.executor(() => {
         if (!active) throw new Error("SQLite transaction handle expired");
       });
       try {
+        idle?.();
         let value: T;
         try { value = await this.callback.run(true, () => callback(tx)); }
         finally { active = false; }
+        idle?.();
         this.db.exec("COMMIT");
         return value;
       } catch (error) {
