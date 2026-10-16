@@ -97,6 +97,28 @@ export function createDurableQueueDispatch(options: {
   dispatch.waitForPending = async identity => {
     const { chatJid, messageId, rowId } = identity;
     while (!shutdown.aborted) {
+      // Subscribe BEFORE the SQL read: a terminal commit between read and registration
+      // must not strand the existing worker. Recheck SQL even for an earlier missed event.
+      const observation = new AbortController();
+      const signal = AbortSignal.any([shutdown, observation.signal]);
+      const released = new Promise<boolean>(resolve => {
+        const abort = () => { signal.removeEventListener("abort", abort); resolve(false); };
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) { abort(); return; }
+        try {
+          void event(identity, signal).then(() => {
+            signal.removeEventListener("abort", abort); resolve(true);
+          }, () => {
+            log.warn("Accepted input reconciliation event unavailable; awaiting shutdown", {
+              operation: "durable_queue.reconciliation_event_unavailable",
+            });
+          });
+        } catch {
+          log.warn("Accepted input reconciliation subscription unavailable; awaiting shutdown", {
+            operation: "durable_queue.reconciliation_subscription_unavailable",
+          });
+        }
+      });
       try {
         assert();
         const source = sourceFor(chatJid, messageId);
@@ -109,28 +131,19 @@ export function createDurableQueueDispatch(options: {
             operation.value.chatJid === chatJid && operation.value.primarySourceSeq === source.sourceSeq &&
             operation.value.claimedSourceSeqs.includes(source.sourceSeq) && current?.sourceSeq === source.sourceSeq &&
             ["consumed", "disposed"].includes(current.state) && frontier.ok &&
-            frontier.value.consumedThroughSourceSeq >= source.sourceSeq) return "settled";
+            frontier.value.consumedThroughSourceSeq >= source.sourceSeq) {
+            observation.abort();
+            return "settled";
+          }
         }
       } catch {
         log.warn("Accepted input observation unavailable; retaining pending ownership", {
           operation: "durable_queue.pending_observation_unavailable",
         });
       }
-      if (shutdown.aborted) break;
-      // Abort releases observation even if the host event remains unresolved. No dispatch replay.
-      const released = await new Promise<boolean>(resolve => {
-        const abort = () => { shutdown.removeEventListener("abort", abort); resolve(false); };
-        shutdown.addEventListener("abort", abort, { once: true });
-        if (shutdown.aborted) { abort(); return; }
-        void Promise.resolve().then(() => event(identity, shutdown)).then(() => {
-          shutdown.removeEventListener("abort", abort); resolve(true);
-        }, () => {
-          log.warn("Accepted input reconciliation event unavailable; awaiting shutdown", {
-            operation: "durable_queue.reconciliation_event_unavailable",
-          });
-        });
-      });
-      if (!released) return "pending";
+      const woke = await released;
+      observation.abort();
+      if (!woke || shutdown.aborted) return "pending";
     }
     return "pending";
   };

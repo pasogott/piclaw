@@ -809,3 +809,26 @@ source and additional-test reviews are clear.
 The factory is not registered or activated. Trusted adapters still supply actual
 exclusive ownership and accepted message reads. Worker wake-up/retry integration,
 production cutover and automatic existing-history migration remain incomplete.
+
+### Explicit retry and existing-worker notification
+
+The opt-in `createDurableRecoveryDispatch` bridge retains uncertain intent
+identities and joins concurrent retry calls. It uses the same accepted request ID
+through public submission/binding repair; failed attempts retain identity. The
+controller's explicit `reconcileRecovered()` rediscovers persisted work before
+retrying unbound intents and does not replay primary turns or implicitly resume.
+The existing queue observer subscribes before checking terminal SQL evidence and
+cancels the observation on completion, avoiding a lost reconciliation wake-up.
+
+Worker integration passes 47 cases and controller qualification passes 6 cases.
+Full candidate verification passes 361 tests / 5,796 assertions; root fast CI
+passes 7,143 tests (74 baseline skips), plus 25 feature and 9 build tests. Runtime
+and private-engine types pass; aggregate typecheck retains the unrelated audited
+frontend-baseline failure. Independent review cleared the bounded changes.
+The first concurrent full-gate attempt hit two existing materializer tests' five-
+second timeouts; the sequential full candidate repeat passed, without changing
+those tests or their limits.
+
+Boot-controller and current-worker integration still use separate fixtures. This
+is not a combined restart-to-worker qualification, production registration or
+activation. No new queue, legacy fallback or restored consumed queue row is used.

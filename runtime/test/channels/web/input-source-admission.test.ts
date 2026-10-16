@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { createDurableQueuedSteering } from '../../../src/agent-pool/durable-queued-steering.js';
+import { createDurableRecoveryDispatch } from '../../../src/agent-pool/durable-recovery-dispatch.js';
 import { storeWebMessage } from '../../../src/channels/web/messaging/message-store.js';
 import { createDurableQueueDispatch } from "../../../src/agent-pool/durable-queue-dispatch.js";
 import { createDurableConversationAdapter } from "../../../src/agent-pool/durable-runtime-adapter.js";
@@ -648,9 +649,11 @@ for (const [queuedInput, pending, steering] of [[false,false,false], [false,true
   }, context);
   const adapter = createDurableConversationAdapter({ incarnation: "queue-test", manifest, runtime });
   const shutdown = new AbortController();
-  let reconcile!: () => void;
-  const evidence = new Promise<void>(resolve => { reconcile = resolve; });
-  const lifecycle = { shutdown: shutdown.signal, waitForReconciliation: async () => { await evidence; } };
+  let repairs = 0;
+  const recoveryDispatch = createDurableRecoveryDispatch({ assertCurrentWriter: assert, shutdown: shutdown.signal,
+    async submitIntent(input) { repairs++; return adapter.submitIntent(input); } });
+  const reconcile = recoveryDispatch.onReconcile;
+  const lifecycle = { shutdown: shutdown.signal, waitForReconciliation: recoveryDispatch.waitForReconciliation };
   let pendingIntent: Parameters<typeof adapter.submitIntent>[0] | undefined;
   let accepted: Parameters<typeof adapter.settle>[0] | undefined;
   const selectedAdapter = pending ? { ...adapter, async wait(work: Parameters<typeof adapter.wait>[0], id: number) {
@@ -724,7 +727,7 @@ for (const [queuedInput, pending, steering] of [[false,false,false], [false,true
           if (steering === 'ack-lost') throw Error('lost dispatch ACK');
           return id;
         } },
-        onPendingIntent(input) { pendingIntent = input; },
+        onPendingIntent(input) { pendingIntent = input; recoveryDispatch.onPendingIntent(input); },
         chatJid: 'web:default', branchId: 'main', assertCurrentWriter: assert,
         runningBinding: { sessionId: 'queue-test', lane: 'main', watchGeneration: 1 },
         readQueued: id => getDeferredQueuedFollowups('web:default').find(item => item.rowId === id),
@@ -818,8 +821,16 @@ for (const [queuedInput, pending, steering] of [[false,false,false], [false,true
         expect(getDeferredQueuedFollowups('web:default')).toEqual([]);
         expect(f.db.query('SELECT id FROM messages WHERE id=?').get(queued.source_id!)).toEqual({ id: queued.source_id });
         expect(legacyCalls).toBe(0); expect(dispatches).toBe(1);
-        const candidate = await adapter.submitIntent(pendingIntent!);
-        expect(await adapter.submitIntent(pendingIntent!)).toBe(candidate);
+        const beforeRepair = f.snapshot();
+        owner = false;
+        await expect(recoveryDispatch.retryRecoveredWork()).rejects.toThrow('owner lost');
+        expect(f.snapshot()).toEqual(beforeRepair); expect(repairs).toBe(0);
+        owner = true;
+        const repairing = recoveryDispatch.retryRecoveredWork();
+        expect(recoveryDispatch.retryRecoveredWork()).toBe(repairing);
+        await repairing;
+        await recoveryDispatch.retryRecoveredWork();
+        expect(repairs).toBe(1);
         base.host.finalContent = [{ type: 'text', text: 'latest answer B' }];
         intentHold.release();
         // Explicit host-controller settlement; a queue observer never re-dispatches work.
@@ -869,6 +880,10 @@ for (const [queuedInput, pending, steering] of [[false,false,false], [false,true
     expect(f.db.query('SELECT * FROM service_effect_s02_commits').all()).toHaveLength(1);
     expect(f.db.query('SELECT * FROM messages WHERE is_bot_message=1').all()).toHaveLength(1);
     expect(base.host.modelCalls).toBe(steering ? 2 : 1);
+    // Settlement notification happened before this observer attached. Its SQL recheck
+    // must return without waiting for a second event (edge-triggered bridge, no replay).
+    expect(await Promise.race([f.channel.dispatchAcceptedInput.waitForPending({ chatJid: 'web:default', messageId: row.id, rowId: row.rowid }),
+      Bun.sleep(100).then(() => 'lost-wake')])).toBe('settled');
     const failedWait = createDurableQueueDispatch({ ...lifecycle, work: f.work, branchId: "main", assertCurrentWriter: assert,
       adapter: { ...adapter, async wait() { throw Error("uncertain wait"); } } });
     expect(await failedWait("web:default", row.id, row.rowid)!()).toBe("pending");
@@ -878,5 +893,5 @@ for (const [queuedInput, pending, steering] of [[false,false,false], [false,true
     expect(() => f.channel.dispatchAcceptedInput!("web:default", row.id, row.rowid)).toThrow("owner lost");
     expect(legacyCalls).toBe(0);
     owner = true;
-  } finally { owner = true; await adapter.close(); }
+  } finally { owner = true; shutdown.abort(); await adapter.close(); }
 }, 15000);

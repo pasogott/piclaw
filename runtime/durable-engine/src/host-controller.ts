@@ -106,17 +106,44 @@ export async function createHostController(config: HostControllerOptions, contex
     assert();
     if (manifest.length !== existingConversationIds.length || new Set(manifest.map(b => b.conversationId)).size !== manifest.length ||
       manifest.some(b => !existingConversationIds.includes(b.conversationId))) throw Error("Exact recovery manifest required");
-    const all: (typeof recovered)[number][] = [];
-    for (const binding of manifest) all.push(...await reconstituteAcceptedWork({ incarnation, binding,
-      runningBinding: { sessionId, lane, watchGeneration: generation }, assertOwner: assert,
-      work: recoveryWork, bindings: recoveryBindings, readAcceptedInput }));
-    recovered = Object.freeze(all);
+    async function scan() {
+      assert();
+      const all: (typeof recovered)[number][] = [];
+      for (const binding of manifest) all.push(...await reconstituteAcceptedWork({ incarnation, binding,
+        runningBinding: { sessionId, lane, watchGeneration: generation }, assertOwner: assert,
+        work: recoveryWork, bindings: recoveryBindings, readAcceptedInput }));
+      assert();
+      return Object.freeze(all);
+    }
+    recovered = await scan();
     ready = true;
     // Public Harness inspection covers the entire store, including unknown conversations.
     const { inspection } = await runtime.inspectAuthority();
     if (inspection.scheduling !== "paused") throw Error("Expected paused bootstrap");
     await authorizeRecoveredWork(inspection);
-    return Object.freeze({ runtime, recovered,
+    let retry: Promise<void> | undefined;
+    const activeRuntime = runtime;
+    // Explicit same-ID intent repair only. Never resume/wait or replay a primary model turn.
+    // Rescan SQL on every call: the bootstrap snapshot is not continuing source authority.
+    function reconcileRecovered(): Promise<void> {
+      if (retry) return retry;
+      retry = (async () => {
+        const current = await scan();
+        recovered = current;
+        await authorizeRecoveredWork((await activeRuntime.inspectAuthority()).inspection);
+        for (const entry of current) {
+          assert();
+          if (entry.role === "intent" && entry.binding?.submissionId == null)
+            await activeRuntime.submitIntent(entry.input);
+        }
+        assert();
+        // A new intent uses submitInput's existing whole-domain scheduling gate.
+        // Bound ACK repair never resumes. Do not inspect a running, changing task tree
+        // as though inspection and live snapshots were one atomic storage observation.
+      })().finally(() => { retry = undefined; });
+      return retry;
+    }
+    return Object.freeze({ runtime, recovered, reconcileRecovered,
       pendingIntentIds: Object.freeze(recovered.filter(e => e.role === "intent" && e.binding?.submissionId == null).map(e => e.input.requestId)),
       close: runtime.close.bind(runtime) });
   } catch (error) {

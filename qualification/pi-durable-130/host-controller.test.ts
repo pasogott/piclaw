@@ -7,6 +7,7 @@ import { TestOwner, OwnedSqlite } from "./src/ownership.js";
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { createHostController, type HostControllerOptions } from "../../runtime/durable-engine/src/host-controller.js";
 import { context } from "./src/fixture.js";
+import { createDurableRecoveryDispatch } from "../../runtime/src/agent-pool/durable-recovery-dispatch.js";
 import { at, value } from "./src/host-handoff.js";
 
 for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["background"],
@@ -102,7 +103,18 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
         expect(f.providerEntries).toBe(entries);
         f.base.host.modelHold?.release();
         const intent = controller.recovered[1]!.input;
-        const id = await controller.runtime.submitIntent(intent);
+        const shutdown = new AbortController();
+        const dispatch = createDurableRecoveryDispatch({ assertCurrentWriter: () => f.owner.assert(),
+          shutdown: shutdown.signal, reconcileRecovered: controller.reconcileRecovered,
+          async submitIntent() { throw Error('Boot recovery must use controller-owned identities'); } });
+        const wake = dispatch.waitForReconciliation({}, shutdown.signal);
+        const repair = dispatch.retryRecoveredWork();
+        expect(dispatch.retryRecoveredWork()).toBe(repair);
+        await repair;
+        await wake;
+        shutdown.abort();
+        const id = (await controller.runtime.reconcileIntent(intent)).submissionId!;
+        expect(id).not.toBeNull();
         // Lost ACK repair is deliberately not a progress grant.
         if (mode === "lost-ack") await controller.runtime.resume(primary, primaryId);
         let state = await controller.runtime.reconcileIntent(intent);
