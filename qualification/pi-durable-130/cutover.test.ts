@@ -5,12 +5,12 @@ import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile, readFile, copyFile } from "node:fs/promises";
 import { join } from "node:path";
 import { SessionManager, buildSessionContext, convertToLlm, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
-import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import type { ConversationId } from "@earendil-works/pi-durable";
+import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
+import type { ConversationId } from "../../runtime/durable-engine/qualification/durable.ts";
 import { TestOwner, OwnedSqlite } from "./src/ownership.js";
 import { barrier, context, openFixture } from "./src/fixture.js";
-import { importCopiedLegacyTree, LegacyTreeImportManifest, DEFAULT_TREE_IMPORT_LIMITS, type GetLegacyContext } from "./src/legacy-import.js";
-import { HostCutoverController, initializeCutoverManifest, type Manifest, type Receipt } from "./src/host-cutover.js";
+import { importCopiedLegacyTree, LegacyTreeImportManifest, DEFAULT_TREE_IMPORT_LIMITS, type GetLegacyContext } from "../../runtime/durable-engine/src/index.js";
+import { HostCutoverController, initializeCutoverManifest, type Manifest, type Receipt } from "../../runtime/durable-engine/src/index.js";
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const json = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const bridge: GetLegacyContext = (entries, leaf) => ({

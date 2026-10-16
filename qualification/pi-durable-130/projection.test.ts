@@ -1,10 +1,10 @@
 import "./src/test-guard.js";
 import { test, expect } from "bun:test";
-import { Harness, MemoryStorage, createRegistry, defineExtension, defineTool, watchEvents } from "@earendil-works/pi-durable";
-import { Type, createModels, createProvider, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
-import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
+import { Harness, MemoryStorage, createRegistry, defineExtension, defineTool, watchEvents } from "../../runtime/durable-engine/qualification/durable.ts";
+import { Type, createModels, createProvider, type AssistantMessage, type Model } from "../../runtime/durable-engine/qualification/ai.ts";
+import { AssistantMessageEventStream } from "../../runtime/durable-engine/qualification/event-stream.ts";
 import { context, barrier } from "./src/fixture.js";
-import { observeProjection, type ProjectionBinding } from "./src/host-projection.js";
+import { observeProjection, type ProjectionBinding } from "../../runtime/durable-engine/src/index.js";
 
 async function fixture(options: { holdTool?: boolean; streamUpdate?: boolean } = {}) {
   const hold = barrier(), partial = barrier(), toolEntered = barrier(), toolHold = barrier(), streamHold = barrier(), finalHold = barrier();

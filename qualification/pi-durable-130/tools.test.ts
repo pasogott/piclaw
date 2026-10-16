@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import type { ToolDefinition, ExtensionToolContext } from "../../node_modules/@earendil-works/pi-coding-agent";
-import { BACKGROUND_CONTEXT as context, withAbortSignal } from "@earendil-works/chord/context";
-import { Type, createModels, createProvider, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
-import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
-import { Harness, MemoryStorage, createRegistry, defineExtension, type ToolExecutionApi } from "@earendil-works/pi-durable";
-import { createHostTool, type HostToolEffectPort } from "./src/host-tools.ts";
+import { BACKGROUND_CONTEXT as context, withAbortSignal } from "../../runtime/durable-engine/qualification/context.ts";
+import { Type, createModels, createProvider, type AssistantMessage, type Model } from "../../runtime/durable-engine/qualification/ai.ts";
+import { AssistantMessageEventStream } from "../../runtime/durable-engine/qualification/event-stream.ts";
+import { Harness, MemoryStorage, createRegistry, defineExtension, type ToolExecutionApi } from "../../runtime/durable-engine/qualification/durable.ts";
+import { createHostTool, type HostToolEffectPort } from "../../runtime/durable-engine/src/index.js";
 
 const parameters = Type.Object({ value: Type.String() });
 type Details = { phase: string; privateJson?: { count: number; items: (string | null)[] } };

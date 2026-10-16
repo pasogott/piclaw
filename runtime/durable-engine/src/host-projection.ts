@@ -21,7 +21,7 @@ export interface ProjectionPorts {
 const LIMIT = 8192; // UTF-16 code units per retained draft, no transcript/tool-output retention.
 const MAX_PUBLICATION_BYTES = 65536; // Whole serialized payload, including escaping and host metadata.
 
-/** Qualification-only: existing UI namespace captured behind the actual EF-S08 sink.
+/** Inactive bridge: existing UI namespace captured behind the actual EF-S08 sink.
  * Unsupported thinking, argument edits, nested tools and error details fail closed.
  * Receipt order is local committed observation, NEVER durable delivery or settlement.
  */

@@ -1,12 +1,12 @@
 import { expect } from "bun:test";
 import { join } from "node:path";
-import { createModels, createProvider, type AssistantMessage, type Model, type TranscriptContext, type TSchema } from "@earendil-works/pi-ai";
-import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
-import { AssistantEntry, Harness, createRegistry, defineExtension, type ToolRegistration } from "@earendil-works/pi-durable";
-import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import type { JsonValue } from "@earendil-works/chord";
-import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { BunSqliteDatabase } from "./bun-sqlite.ts";
+import { createModels, createProvider, type AssistantMessage, type Model, type TranscriptContext, type TSchema } from "../../../runtime/durable-engine/qualification/ai.ts";
+import { AssistantMessageEventStream } from "../../../runtime/durable-engine/qualification/event-stream.ts";
+import { AssistantEntry, Harness, createRegistry, defineExtension, type ToolRegistration } from "../../../runtime/durable-engine/qualification/durable.ts";
+import { SqliteStorage } from "../../../runtime/durable-engine/qualification/sqlite.ts";
+import type { JsonValue } from "../../../runtime/durable-engine/qualification/chord.ts";
+import { BACKGROUND_CONTEXT as context } from "../../../runtime/durable-engine/qualification/context.ts";
+import { BunSqliteDatabase } from "../../../runtime/durable-engine/src/index.js";
 
 /** Qualification-only keyless provider; actual registered host tools, public graph. */
 export async function actualAddonGraph(dir: string, tools: ToolRegistration<TSchema, JsonValue>[], invocations: () => number, revoke: () => void, serviceData: () => unknown, delegate = false) {

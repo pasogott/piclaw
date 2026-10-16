@@ -3,15 +3,15 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { createBashTool, createLocalBashOperations, type BashOperations } from "../../node_modules/@earendil-works/pi-coding-agent";
-import { Type, createModels, createProvider, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
-import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
-import { Harness, createRegistry, defineExtension, defineTool, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
-import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { BunSqliteDatabase } from "./src/bun-sqlite.ts";
+import { Type, createModels, createProvider, type AssistantMessage, type Model } from "../../runtime/durable-engine/qualification/ai.ts";
+import { AssistantMessageEventStream } from "../../runtime/durable-engine/qualification/event-stream.ts";
+import { Harness, createRegistry, defineExtension, defineTool, type ConversationId, type SubmissionId } from "../../runtime/durable-engine/qualification/durable.ts";
+import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
+import { BunSqliteDatabase } from "../../runtime/durable-engine/src/index.js";
 import { barrier, context } from "./src/fixture.ts";
-import { withAbortSignal } from "@earendil-works/chord/context";
-import type { ToolExecutionApi } from "@earendil-works/pi-durable";
-import { createHostBashTool } from "./src/host-bash.ts";
+import { withAbortSignal } from "../../runtime/durable-engine/qualification/context.ts";
+import type { ToolExecutionApi } from "../../runtime/durable-engine/qualification/durable.ts";
+import { createHostBashTool } from "../../runtime/durable-engine/src/index.js";
 
 // Actual root Pi 1.2.0 SDK, not a candidate coding tool or copied executor.
 // The untouched public local backend remains BLOCKED as a host-effect port:

@@ -1,8 +1,19 @@
 import "./src/test-guard.js";
 import { describe, expect, test } from "bun:test";
-import { withCancel } from "@earendil-works/chord/context";
+import { withCancel } from "../../runtime/durable-engine/qualification/context.ts";
 import { barrier, context, openFixture } from "./src/fixture.js";
 import { verifyProvenance } from "./src/provenance.js";
+import { fileURLToPath } from "node:url";
+import { realpathSync, existsSync } from "node:fs";
+import * as AI from "../../runtime/durable-engine/qualification/ai.ts";
+import * as Durable from "../../runtime/durable-engine/qualification/durable.ts";
+import * as Context from "../../runtime/durable-engine/qualification/context.ts";
+import * as Sqlite from "../../runtime/durable-engine/qualification/sqlite.ts";
+import * as Testing from "../../runtime/durable-engine/qualification/testing.ts";
+import * as Chord from "../../runtime/durable-engine/qualification/chord.ts";
+import * as Codemode from "../../runtime/durable-engine/qualification/codemode.ts";
+import * as Telemetry from "../../runtime/durable-engine/qualification/telemetry.ts";
+import * as EventStream from "../../runtime/durable-engine/qualification/event-stream.ts";
 
 async function using(run: (fixture: Awaited<ReturnType<typeof openFixture>>) => Promise<void>) {
   const fixture = await openFixture({ acquired: true });
@@ -13,10 +24,42 @@ describe("Q1 public candidate MemoryStorage only", () => {
   test("independent public package graph is exactly 1.3.0", async () => {
     for (const name of ["chord", "pi-ai", "pi-codemode", "pi-durable"]) {
       // Package metadata is a filesystem read, not an unexported package subpath import.
-      const pkg = await Bun.file(new URL(`./node_modules/@earendil-works/${name}/package.json`, import.meta.url)).json();
+      const pkg = await Bun.file(new URL(`../../runtime/durable-engine/node_modules/@earendil-works/${name}/package.json`, import.meta.url)).json();
       expect(pkg.version).toBe("1.3.0");
-      expect(import.meta.resolve(`@earendil-works/${name}`)).toStartWith(new URL("./node_modules/", import.meta.url).href);
+      expect(import.meta.resolve(`../../runtime/durable-engine/node_modules/@earendil-works/${name}`)).toStartWith(new URL("../../runtime/durable-engine/node_modules/", import.meta.url).href);
     }
+  });
+  test("fixtures and engine share one physical public candidate graph", async () => {
+    // These packages expose import-only entrypoints: resolve with ESM conditions,
+    // not createRequire.resolve's require condition.
+    const anchored = (anchor: string) => ({ resolve: (specifier: string) => fileURLToPath(import.meta.resolve(specifier, anchor)) });
+    const engine = anchored(new URL("../../runtime/durable-engine/package.json", import.meta.url).href);
+    const durable = anchored(engine.resolve("@earendil-works/pi-durable"));
+    const ai = anchored(engine.resolve("@earendil-works/pi-ai"));
+    const codemode = anchored(engine.resolve("@earendil-works/pi-codemode"));
+    const bridges = {
+      "@earendil-works/pi-ai": AI, "@earendil-works/pi-durable": Durable,
+      "@earendil-works/chord/context": Context, "@earendil-works/chord": Chord,
+      "@earendil-works/pi-durable/storage/sqlite": Sqlite,
+      "@earendil-works/pi-durable/testing": Testing,
+      "@earendil-works/pi-codemode": Codemode, "@earendil-works/pi-telemetry": Telemetry,
+      "@earendil-works/pi-ai/utils/event-stream": EventStream,
+    };
+    for (const [specifier, bridge] of Object.entries(bridges)) {
+      const actual = await import(engine.resolve(specifier));
+      for (const key of Object.keys(bridge)) expect(actual[key]).toBe((bridge as Record<string, unknown>)[key]);
+      expect(existsSync(new URL(`./node_modules/${specifier.split("/").slice(0, 2).join("/")}`, import.meta.url))).toBe(false);
+    }
+    for (const specifier of ["@earendil-works/chord", "@earendil-works/chord/context", "@earendil-works/pi-ai", "@earendil-works/pi-codemode"]) {
+      expect(realpathSync(durable.resolve(specifier))).toBe(realpathSync(engine.resolve(specifier)));
+    }
+    expect(realpathSync(ai.resolve("@earendil-works/pi-telemetry"))).toBe(realpathSync(engine.resolve("@earendil-works/pi-telemetry")));
+    expect(realpathSync(codemode.resolve("@earendil-works/chord"))).toBe(realpathSync(engine.resolve("@earendil-works/chord")));
+    const actualAI = await import(durable.resolve("@earendil-works/pi-ai"));
+    const actualContext = await import(durable.resolve("@earendil-works/chord/context"));
+    expect(AI.createModels).toBe(actualAI.createModels);
+    expect(AI.ModelsError).toBe(actualAI.ModelsError);
+    expect(Context.BACKGROUND_CONTEXT).toBe(actualContext.BACKGROUND_CONTEXT);
   });
   test("registry-extracted candidate bytes match installed closure offline", async () => {
     const evidence = await verifyProvenance();

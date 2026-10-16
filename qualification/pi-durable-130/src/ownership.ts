@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
-import type { SqliteDatabase, SqliteExecutor, SqliteValue } from "@earendil-works/pi-durable/storage/sqlite";
-import { BunSqliteDatabase } from "./bun-sqlite.js";
+import type { SqliteDatabase, SqliteExecutor, SqliteValue } from "../../../runtime/durable-engine/qualification/sqlite.ts";
+import { BunSqliteDatabase } from "../../../runtime/durable-engine/src/index.js";
 
 type Row = { boot: string; pid: number; start: string; nonce: string; generation: number; active: number };
 const table = "qualification_process_owner";

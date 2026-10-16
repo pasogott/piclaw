@@ -5,12 +5,12 @@ import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { SessionManager as LegacyManager } from "@earendil-works/pi-coding-agent";
-import type { Message } from "@earendil-works/pi-ai";
-import { CompactionEntry, SystemEntry, defineDoc, type Conversation, type EntryId, type EntryDraft, type ConversationId } from "@earendil-works/pi-durable";
-import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { BunSqliteDatabase } from "./src/bun-sqlite.js";
+import type { Message } from "../../runtime/durable-engine/qualification/ai.ts";
+import { CompactionEntry, SystemEntry, defineDoc, type Conversation, type EntryId, type EntryDraft, type ConversationId } from "../../runtime/durable-engine/qualification/durable.ts";
+import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
+import { BunSqliteDatabase } from "../../runtime/durable-engine/src/index.js";
 import { barrier, context, openFixture } from "./src/fixture.js";
-import { importCopiedLegacyTree, LegacyTreeImportManifest, type CopiedLegacyTreeInput, importCopiedLegacy, prepareLegacyImport, LegacyImportManifest, type CopiedLegacyInput, type GetLegacyContext } from "./src/legacy-import.js";
+import { importCopiedLegacyTree, LegacyTreeImportManifest, type CopiedLegacyTreeInput, importCopiedLegacy, prepareLegacyImport, LegacyImportManifest, type CopiedLegacyInput, type GetLegacyContext } from "../../runtime/durable-engine/src/index.js";
 
 // Resolve ONLY the public current SDK export from root dependencies, never its internals.
 // The current package has an import-only export; createRequire.resolve cannot resolve it.

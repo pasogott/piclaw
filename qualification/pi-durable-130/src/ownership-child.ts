@@ -1,5 +1,5 @@
 import "./test-guard.js";
-import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+import { SqliteStorage } from "../../../runtime/durable-engine/qualification/sqlite.ts";
 import { TestOwner, OwnedSqlite } from "./ownership.js";
 import { openFixture, barrier } from "./fixture.js";
 import { assertPathWithinTestFilesystemIsolation } from "../../../runtime/scripts/test-filesystem-isolation.js";

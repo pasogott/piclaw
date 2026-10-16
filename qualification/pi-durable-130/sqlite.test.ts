@@ -2,10 +2,10 @@ import "./src/test-guard.js";
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { SqliteStorage, type SqliteExecutor } from "@earendil-works/pi-durable/storage/sqlite";
-import { registerStorageConformance } from "@earendil-works/pi-durable/testing";
-import { AssistantEntry } from "@earendil-works/pi-durable";
-import { BunSqliteDatabase } from "./src/bun-sqlite.js";
+import { SqliteStorage, type SqliteExecutor } from "../../runtime/durable-engine/qualification/sqlite.ts";
+import { registerStorageConformance } from "../../runtime/durable-engine/qualification/testing.ts";
+import { AssistantEntry } from "../../runtime/durable-engine/qualification/durable.ts";
+import { BunSqliteDatabase } from "../../runtime/durable-engine/src/index.js";
 import { barrier, context, openFixture } from "./src/fixture.js";
 
 async function disk(run: (path: string) => Promise<void>) {

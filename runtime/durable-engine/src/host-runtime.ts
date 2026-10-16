@@ -1,11 +1,11 @@
-// INACTIVE qualification module. No bootstrap registration or production schema migration.
+// INACTIVE application module. No bootstrap registration or production schema migration.
 import { AssistantEntry, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { Context } from "@earendil-works/chord/context";
 import { hashCanonicalRequest } from "../../../runtime/src/service-effects/contracts/common.js";
 import type { ServiceWorkStore, AcceptCancellationRequest, OperationSnapshot } from "../../../runtime/src/service-effects/contracts/service-work-store.js";
 import type { TerminalSettlementStore, CommitTerminalRequest } from "../../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
-import { value, sealed, effect } from "./host-handoff.js";
+import { value, sealed, effect } from "./host-effects.js";
 
 /** Immutable host-persisted intent; never supplied as arbitrary user text. */
 export interface AcceptedInput {
@@ -41,7 +41,7 @@ export interface RuntimeOptions {
   readonly terminal: TerminalSettlementStore;
   /** Host-owned durable mapping. Must atomically verify the accepted source, payload and immutable
    * operation/source/hash binding in the SAME host database. No Map-based admission/dedup.
-   * Production implementation/migration is NOT activated by this qualification module. */
+   * Production implementation/migration is NOT activated by this module. */
   readonly bindings: {
     getOrBind(input: AcceptedInput): Promise<{ content: string }>;
   };

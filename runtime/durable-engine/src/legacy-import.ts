@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import type { JsonValue, Context } from "@earendil-works/chord";
 import type { Message } from "@earendil-works/pi-ai";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { SessionEntry } from "../../../node_modules/@earendil-works/pi-coding-agent";
 import { CompactionEntry, SystemEntry, defineDoc, type Conversation, type EntryId, type ConversationId, type Tx } from "@earendil-works/pi-durable";
 type ObjectValue = Record<string, unknown>;
 function object(value: unknown): asserts value is ObjectValue {

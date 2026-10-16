@@ -102,7 +102,7 @@ function operationOptions(operation: "generateImages" | "classify", options: Ima
   return { timeoutMs: safe.timeoutMs, maxRetryDelayMs: safe.maxRetryDelayMs, ...extra, maxRetries: 0 };
 }
 
-/** Qualification only: physical models; no credential transfer or production wiring.
+/** Inactive bridge: physical models; no credential transfer or production wiring.
  * 1.2 and 1.3 public Models declarations match. A 1.3 factory owns the complete
  * interface; operation callbacks adapt public host dispatch. Deferred execution
  * requires an explicit host reference authority. transformHeaders is a post-auth fence, NOT an

@@ -2,15 +2,23 @@
 
 **Candidate in-place prototype qualification, not production integration or completion of #1650.**
 Base: Piclaw `4e08281bb6d3942e7560edabca8581acf556b138`; root still targets Pi 1.2.0.
-This private package has its own manifest, lock, node_modules and tsconfig. Do not
-mix handles, contexts or TypeBox objects across graphs. The candidate API may
+The inactive source-only engine owns the candidate manifest, lock and node_modules
+under `runtime/durable-engine`. This qualification package has only test/tooling
+dependencies. Its public re-export files in the engine's `qualification/` directory
+share the engine's physical candidate graph, including types; they contain no
+compatibility or wrapper logic. Do not mix handles, contexts or TypeBox objects
+with the root Pi 1.2.0 graph. The candidate API may
 change without notice; exact 1.3.0 byte evidence does not qualify future versions.
 
 ## Run
 
-From `qualification/pi-durable-130` in this worktree:
+From the worktree root, install the engine first, then the qualification tooling:
 
 ```sh
+cd runtime/durable-engine
+bun install --frozen-lockfile --ignore-scripts
+bun run typecheck
+cd ../../qualification/pi-durable-130
 bun install --frozen-lockfile --ignore-scripts
 bun run typecheck
 bun run test # isolated launcher: test.ts sqlite.test.ts host-handoff.test.ts migration.test.ts
@@ -71,8 +79,11 @@ of the five-package byte comparison.
 
 Installed family closure: durable depends on chord, ai and codemode at 1.3.0;
 ai additionally depends on telemetry 1.3.0. No coding-agent package is installed
-here. The full third-party dependency/version/SRI closure is in `bun.lock`;
-notable direct edges are typebox 1.3.27, quickjs-wasi 3.6.2, photon 0.3.3 and
+in the engine. The full third-party dependency/version/SRI closure is in
+`runtime/durable-engine/bun.lock`; engine overrides pin all five family members.
+No candidate-family dependency is installed by the qualification manifest/lock;
+its fixtures reach public APIs through engine-owned re-export files. Notable
+direct edges are typebox 1.3.27, quickjs-wasi 3.6.2, photon 0.3.3 and
 diff 8.0.4, plus ai's provider SDKs. Their presence is not a claim of execution
 or provider/QuickJS qualification.
 
@@ -84,7 +95,10 @@ AssistantMessageEventStream from its value subpath, not the root type export.
 Version checks read package.json by file URL, not an unexported package subpath.
 Host imports resolve to this worktree's `runtime/`: canonical request hashing,
 EffectIdentity, real service-work/terminal adapters and InMemoryEffectPayloadResolver.
-Host and candidate graphs remain separate. The root terminal runtime has the
+Host and candidate graphs remain separate; only JSON data crosses that boundary.
+The engine is source-only and inactive, not shipped by the root package's file list.
+Importing its entrypoint may read host configuration, but does not open storage,
+spawn processes, register an engine or access the network. The root terminal runtime has the
 optional guard described below; no schema, root dependency/pin, production flag
 or production registration changes.
 
@@ -573,3 +587,20 @@ Public final image/tool-call message shapes not supported by the assistant API
 are rejected, not silently flattened. The combined suite passes 314 tests / 4,931
 assertions across eighteen files plus strict types. Source review cleared this
 inactive rich-output path; no production materializer is registered.
+
+## Application-owned inactive engine package
+
+Reusable modules now live in `runtime/durable-engine`, not the qualification
+fixture directory. That private package owns the exact 1.3.0 dependency graph.
+Qualification imports engine-scoped public re-exports; it does not install a
+second candidate graph. Clean frozen installation, transitive ESM realpaths and
+export object identity are checked. Install/typecheck the engine package first,
+then install and run qualification. Root Pi 1.2 dependencies remain unchanged.
+
+The extracted candidate suite passes 315 tests / 5,133 assertions and both package
+typechecks. The full root gate passes after staging moved-file deletions so its
+Git-based entrypoint audit sees the final tree. Source review cleared the move.
+Importing the entrypoint does not open the execution store or register an engine;
+root configuration modules may still read settings during import. This package
+is source-only and excluded from the current root distribution: it is not yet a
+production packaging, installation or activation claim.

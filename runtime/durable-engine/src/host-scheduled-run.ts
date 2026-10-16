@@ -1,4 +1,4 @@
-// Qualification-only dispatch seam. EF-S07/root scheduler owns claims, renewal,
+// Inactive dispatch seam. EF-S07/root scheduler owns claims, renewal,
 // source acceptance, recurrence, terminal state and delivery. No queue or timer here.
 import type { ScheduledRunLease, ScheduledRunStore } from "../../../runtime/src/service-effects/contracts/scheduled-run-store.js";
 

@@ -14,6 +14,7 @@ on:
       - 'bun.lock'
       - 'BUN_VERSION'
       - 'qualification/pi-durable-130/**'
+      - 'runtime/durable-engine/**'
       - 'Makefile'
       - 'tsconfig*.json'
       - '.github/workflows/ci.yml'
@@ -28,6 +29,7 @@ on:
       - 'bun.lock'
       - 'BUN_VERSION'
       - 'qualification/pi-durable-130/**'
+      - 'runtime/durable-engine/**'
       - 'Makefile'
       - 'tsconfig*.json'
       - '.github/workflows/ci.yml'
@@ -74,6 +76,12 @@ jobs:
           ref: de92bc95b5b3bb1505beec9617d3b8a5e4fa92d3
           path: .qualification-addons
           persist-credentials: false
+
+      - name: Install inactive application durable engine
+        working-directory: runtime/durable-engine
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          bun run typecheck
 
       - name: Isolated pi-durable qualification
         working-directory: qualification/pi-durable-130

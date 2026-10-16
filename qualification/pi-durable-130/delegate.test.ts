@@ -5,11 +5,11 @@ import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, exis
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import type { ToolDefinition, ExtensionToolContext } from "../../node_modules/@earendil-works/pi-coding-agent";
-import type { TSchema } from "@earendil-works/pi-ai";
-import type { JsonValue } from "@earendil-works/chord";
-import type { ToolExecutionApi } from "@earendil-works/pi-durable";
-import { BACKGROUND_CONTEXT as context, withAbortSignal } from "@earendil-works/chord/context";
-import { createHostTool } from "./src/host-tools.ts";
+import type { TSchema } from "../../runtime/durable-engine/qualification/ai.ts";
+import type { JsonValue } from "../../runtime/durable-engine/qualification/chord.ts";
+import type { ToolExecutionApi } from "../../runtime/durable-engine/qualification/durable.ts";
+import { BACKGROUND_CONTEXT as context, withAbortSignal } from "../../runtime/durable-engine/qualification/context.ts";
+import { createHostTool } from "../../runtime/durable-engine/src/index.js";
 import { actualAddonGraph } from "./src/actual-addon-graph.ts";
 
 // Actual 0.2.20 closure, copied beside candidate dependencies, never live imports.

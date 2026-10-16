@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import type { ModelRuntime as HostRuntime } from "../../node_modules/@earendil-works/pi-coding-agent";
 import type { Credential, CredentialStore, Model, TranscriptContext as HostTranscript, AssistantMessage } from "../../node_modules/@earendil-works/pi-ai";
-import type { Models, ImageModel, ClassifierModel, Api, ImageApi, ClassifierApi } from "@earendil-works/pi-ai";
-import { createHostModels, type HostModelPolicy } from "./src/host-models.ts";
+import type { Models, ImageModel, ClassifierModel, Api, ImageApi, ClassifierApi } from "../../runtime/durable-engine/qualification/ai.ts";
+import { createHostModels, type HostModelPolicy } from "../../runtime/durable-engine/src/index.js";
 
 // These ESM-only public exports have no require condition; resolve from root.
 const root = new URL("../../package.json", import.meta.url).href;
@@ -11,7 +11,7 @@ const { ModelRuntime }: typeof import("../../node_modules/@earendil-works/pi-cod
   await import(import.meta.resolve("@earendil-works/pi-coding-agent", root));
 const { createAssistantMessageEventStream }: typeof import("../../node_modules/@earendil-works/pi-ai") =
   await import(import.meta.resolve("@earendil-works/pi-ai", root));
-import { normalizeContext } from "@earendil-works/pi-ai";
+import { normalizeContext } from "../../runtime/durable-engine/qualification/ai.ts";
 const ref = { provider: "qualification-provider", id: "qualification-model" };
 const token = "SYNTHETIC-HOST-ONLY-TOKEN";
 const model: Model<"openai-completions"> = { ...ref, name: "Qualification", api: "openai-completions",

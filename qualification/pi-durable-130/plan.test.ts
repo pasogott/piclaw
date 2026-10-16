@@ -8,14 +8,14 @@ import { tmpdir } from "node:os";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager, type ExtensionFactory } from "../../node_modules/@earendil-works/pi-coding-agent";
 import { createProvider as createLegacyProvider, createAssistantMessageEventStream as createLegacyStream, type Context as LegacyContext } from "../../node_modules/@earendil-works/pi-ai";
 import type { ToolDefinition, ExtensionToolContext } from "../../node_modules/@earendil-works/pi-coding-agent";
-import type { JsonValue } from "@earendil-works/chord";
-import { BACKGROUND_CONTEXT as context, awaitWithContext } from "@earendil-works/chord/context";
-import { createModels, createProvider, type AssistantMessage, type Model, type TSchema, type JsonObject } from "@earendil-works/pi-ai";
-import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
-import { Harness, MemoryStorage, createRegistry, defineExtension, type GenerationHooks, type ConversationId } from "@earendil-works/pi-durable";
-import { createHostTool } from "./src/host-tools.ts";
-import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { BunSqliteDatabase } from "./src/bun-sqlite.js";
+import type { JsonValue } from "../../runtime/durable-engine/qualification/chord.ts";
+import { BACKGROUND_CONTEXT as context, awaitWithContext } from "../../runtime/durable-engine/qualification/context.ts";
+import { createModels, createProvider, type AssistantMessage, type Model, type TSchema, type JsonObject } from "../../runtime/durable-engine/qualification/ai.ts";
+import { AssistantMessageEventStream } from "../../runtime/durable-engine/qualification/event-stream.ts";
+import { Harness, MemoryStorage, createRegistry, defineExtension, type GenerationHooks, type ConversationId } from "../../runtime/durable-engine/qualification/durable.ts";
+import { createHostTool } from "../../runtime/durable-engine/src/index.js";
+import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
+import { BunSqliteDatabase } from "../../runtime/durable-engine/src/index.js";
 
 // Standalone qualification, intentionally NOT silently skipped or in the default
 // package suite until CI supplies the companion checkout. No installed/live paths.

@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { SqliteDatabase, SqliteExecutor, SqliteValue } from "@earendil-works/pi-durable/storage/sqlite";
 
-/** Qualification-only bridge. The host must acquire ownership BEFORE construction. */
+/** Inactive host bridge. The host must acquire ownership BEFORE construction. */
 export class BunSqliteDatabase implements SqliteDatabase {
   private readonly db: Database;
   private readonly callback = new AsyncLocalStorage<boolean>();

@@ -1,24 +1,14 @@
 // Qualification only: no startup registration, scheduler, provider or production schema activation.
 import type { Database } from "bun:sqlite";
-import { AssistantEntry } from "@earendil-works/pi-durable";
+import { AssistantEntry } from "../../../runtime/durable-engine/qualification/durable.ts";
 import { context, type openFixture } from "./fixture.js";
-import { hashCanonicalRequest, type CanonicalJsonValue } from "../../../runtime/src/service-effects/contracts/common.js";
+import { hashCanonicalRequest } from "../../../runtime/src/service-effects/contracts/common.js";
 import type { ServiceWorkStore } from "../../../runtime/src/service-effects/contracts/service-work-store.js";
 import type { TerminalSettlementStore, CommitTerminalRequest } from "../../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
-import type { Result } from "../../../runtime/src/service-effects/contracts/result.js";
+import { value, effect, sealed } from "../../../runtime/durable-engine/src/host-effects.js";
+export { value, effect, sealed };
 
 export const at = "2026-10-15T12:00:00.000Z";
-export function value<T, E>(result: Result<T, E>): T {
-  if (!result.ok) throw new Error(JSON.stringify(result.error));
-  return result.value;
-}
-export function effect<O extends string | null = null>(key: string, operationId: O = null as O, sourceSeq: number | null = null) {
-  return { idempotencyKey: key, requestHash: "0".repeat(64), operationId, sourceSeq,
-    provenanceRef: "qualification:host-handoff", redactionClass: "private" as const };
-}
-export function sealed<T extends { effect: { requestHash: string } }>(request: T): T {
-  return { ...request, effect: { ...request.effect, requestHash: hashCanonicalRequest(JSON.parse(JSON.stringify(request)) as CanonicalJsonValue) } };
-}
 interface Intent { request_id: string; request_hash: string; content: string; incarnation: string; conversation_id: string; submission_id: string | null }
 type Fixture = Awaited<ReturnType<typeof openFixture>>;
 

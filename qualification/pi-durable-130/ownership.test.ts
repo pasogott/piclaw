@@ -3,7 +3,7 @@ import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { TestOwner, OwnedSqlite } from "./src/ownership.js";
 import { openFixture, context, barrier } from "./src/fixture.js";
 

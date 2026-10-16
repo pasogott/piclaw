@@ -1,7 +1,7 @@
-import { BACKGROUND_CONTEXT as context, awaitWithContext, withAbortSignal } from "@earendil-works/chord/context";
-import { Type, createModels, createProvider, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
-import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
-import { AssistantEntry, Harness, MemoryStorage, createRegistry, defineExtension, defineTool, type Submission, type Storage } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT as context, awaitWithContext, withAbortSignal } from "../../../runtime/durable-engine/qualification/context.ts";
+import { Type, createModels, createProvider, type AssistantMessage, type Model } from "../../../runtime/durable-engine/qualification/ai.ts";
+import { AssistantMessageEventStream } from "../../../runtime/durable-engine/qualification/event-stream.ts";
+import { AssistantEntry, Harness, MemoryStorage, createRegistry, defineExtension, defineTool, type Submission, type Storage } from "../../../runtime/durable-engine/qualification/durable.ts";
 import { hashCanonicalRequest, type EffectIdentity } from "../../../runtime/src/service-effects/contracts/common.js";
 
 export { context };

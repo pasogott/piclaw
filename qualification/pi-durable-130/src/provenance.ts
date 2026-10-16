@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 
 const base = resolve(import.meta.dir, "..");
 const manifestPath = join(base, "provenance.json");
+const engine = resolve(base, "../../runtime/durable-engine");
 const names = ["chord", "pi-ai", "pi-codemode", "pi-durable", "pi-telemetry"];
 type PackageEvidence = { name: string; version: string; tarball: string; sha1: string; integrity: string; files: Record<string, string> };
 type Evidence = { registry: string; recordedAt: string; packages: PackageEvidence[] };
@@ -29,12 +30,12 @@ function equal(actual: unknown, expected: unknown, label: string) {
 }
 export async function verifyProvenance() {
   const evidence: Evidence = await Bun.file(manifestPath).json();
-  const lock = Bun.JSON5.parse(await Bun.file(join(base, "bun.lock")).text()) as { packages: Record<string, unknown[]> };
+  const lock = Bun.JSON5.parse(await Bun.file(join(engine, "bun.lock")).text()) as { packages: Record<string, unknown[]> };
   equal(evidence.packages.map(p => p.name), names.map(n => `@earendil-works/${n}`), "package closure");
   for (const pkg of evidence.packages) {
     equal(pkg.version, "1.3.0", pkg.name);
     equal(lock.packages[pkg.name]?.at(-1), pkg.integrity, `${pkg.name} lock integrity`);
-    equal(await filesAt(join(base, "node_modules", pkg.name)), pkg.files, `${pkg.name} installed bytes`);
+    equal(await filesAt(join(engine, "node_modules", pkg.name)), pkg.files, `${pkg.name} installed bytes`);
   }
   return evidence;
 }
@@ -62,7 +63,7 @@ if (import.meta.main) {
       const child = Bun.spawn(["tar", "-xzf", archivePath, "-C", scratch], { env: { PATH: "/usr/bin:/bin" }, stdout: "ignore", stderr: "pipe" });
       if (await child.exited !== 0) throw new Error("Registry archive extraction failed");
       const files = await filesAt(join(scratch, "package"));
-      equal(await filesAt(join(base, "node_modules", fullName)), files, `${name} extracted vs installed all files`);
+      equal(await filesAt(join(engine, "node_modules", fullName)), files, `${name} extracted vs installed all files`);
       evidence.packages.push({ name: fullName, version: metadata.version, tarball: metadata.dist.tarball, sha1: metadata.dist.shasum, integrity: metadata.dist.integrity, files });
       await rm(join(scratch, "package"), { recursive: true });
       console.log(`${fullName}@1.3.0: verified ${Object.keys(files).length} files; SHA1 ${metadata.dist.shasum}; ${metadata.dist.integrity}`);

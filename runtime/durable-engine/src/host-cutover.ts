@@ -1,4 +1,4 @@
-// INACTIVE private qualification only. No bootstrap, engine open, queue or production migration.
+// INACTIVE application module. No bootstrap, engine open, queue or production migration.
 import type { Database } from "bun:sqlite";
 import { hashCanonicalRequest } from "../../../runtime/src/service-effects/contracts/common.js";
 export type Phase = "source" | "copying" | "verified" | "active" | "reconciliation_required";
@@ -33,7 +33,7 @@ function digest(value: string) { if (typeof value !== "string" || !/^[a-f0-9]{64
 function requestSnapshot(r: CutoverRequest) {
   return Object.freeze({ requestKey: ref(r.requestKey), sourceDigest: digest(r.sourceDigest), importHash: digest(r.importHash) });
 }
-/** Explicit fixture sidecar initializer, never invoked by controller construction. Caller enables FK. */
+/** Explicit sidecar initializer, never invoked by controller construction. Caller enables FK. */
 export function initializeCutoverManifest(db: Database) {
   safe(() => db.exec(`CREATE TABLE IF NOT EXISTS qualification_cutover_v1 (
     domain TEXT PRIMARY KEY, identity TEXT NOT NULL, request_hash TEXT NOT NULL, manifest TEXT NOT NULL);
