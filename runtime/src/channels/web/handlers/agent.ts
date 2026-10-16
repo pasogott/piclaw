@@ -1707,6 +1707,33 @@ async function processAuthorisedChat(
     processingMessageId: currentMessage.id,
   });
 
+  const coordinator = channel.dispatchAcceptedInput;
+  const pendingIdentity = Object.freeze({ chatJid, messageId: currentMessage.id,
+    rowId: getMessageRowIdById(chatJid, currentMessage.id) ?? 0 });
+  const waitForPending = coordinator?.waitForPending.bind(coordinator);
+  let acceptedDispatch: (() => Promise<"settled" | "pending">) | undefined;
+  try {
+    acceptedDispatch = coordinator?.(chatJid, currentMessage.id, pendingIdentity.rowId);
+  } catch {
+    // A fenced or unreadable persisted selection is not evidence of legacy ownership.
+    acceptedDispatch = async () => "pending";
+  }
+  if (acceptedDispatch) {
+    const { beginChatRun, endChatRun } = await import("../../../db/chat-cursors.js");
+    beginChatRun(chatJid, currentMessage.timestamp, { prevTs: prevCursor,
+      messageId: currentMessage.id, startedAt: new Date().toISOString() });
+    let result = await acceptedDispatch().catch(() => "pending" as const);
+    if (result === "pending") {
+      // The captured host port owns observation only. Shutdown must retain the recovery marker.
+      if (!waitForPending) throw new Error("Accepted dispatch requires host pending observation");
+      result = await waitForPending(pendingIdentity);
+      if (result === "pending") return;
+    }
+    endChatRun(chatJid);
+    channel.resumeChat(chatJid);
+    return;
+  }
+
   const persistedCommand = parseControlCommand(String(currentMessage.content || ""), getRoutingConfig().triggerPattern);
   if (isDeferredControlCommand(persistedCommand)) {
     const action = await executeDeferredControlCommand({

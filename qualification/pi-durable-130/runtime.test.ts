@@ -123,6 +123,68 @@ async function setup(busy = false) {
   return { dir, db, base, options, runtime, accept, drain, work, terminal, payloads, path, hooks, stats: () => ({ opens, releases, authorizations }), setOwner: (v: boolean) => { acquired = v; }, grantKnown: () => { allowKnown = true; }, loseCancellationAck: () => { loseCancellationAck = true; } };
 }
 
+test("runtime: close aborts unresolved observation before cooperative model cleanup and releases owner", () => fixture(async f => {
+  const input = await f.accept();
+  f.base.host.modelHold = barrier();
+  const id = await f.runtime.submit(input); f.grantKnown();
+  const waiting = f.runtime.wait(input, id);
+  const rejected = waiting.then(() => { throw Error("observation unexpectedly resolved"); }, error => { expect(error).toBeInstanceOf(Error); });
+  await Bun.sleep(20);
+  expect(f.stats().releases).toBe(0);
+  try {
+    await Promise.race([f.runtime.close(), Bun.sleep(1000).then(() => { throw Error("close blocked on observer"); })]);
+    await rejected;
+    expect(f.stats().releases).toBe(1);
+    expect(value(await f.work.getOperation(input.operationId))?.terminal).toBeNull();
+    expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+  } finally { f.base.host.modelHold.release(); }
+}));
+
+for (const cancellation of ["close", "caller"] as const) {
+  test(`runtime: ${cancellation} detaches wait during unresolved authorization without late progress`, () => fixture(async f => {
+    const input = await f.accept();
+    f.base.host.modelHold = barrier();
+    const id = await f.runtime.submit(input); f.grantKnown();
+    const entered = barrier(), hold = barrier(), controller = new AbortController();
+    f.hooks.authorize = async () => { entered.release(); await hold.promise; };
+    const waiting = f.runtime.wait(input, id, controller.signal);
+    const rejected = waiting.then(() => { throw Error("observation unexpectedly resolved"); }, error => { expect(error).toBeInstanceOf(Error); });
+    try {
+      await entered.promise;
+      const stopped = cancellation === "close" ? f.runtime.close() : (controller.abort(), rejected);
+      await Promise.race([stopped, Bun.sleep(1000).then(() => { throw Error("wait blocked on authorization"); })]);
+      await rejected;
+      expect(f.stats().releases).toBe(cancellation === "close" ? 1 : 0);
+      hold.release(); await Bun.sleep(20);
+      expect(f.base.host.modelCalls).toBe(0);
+      expect(value(await f.work.getOperation(input.operationId))?.terminal).toBeNull();
+      expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+      if (cancellation === "caller") {
+        // Observer cancellation is not submission cancellation: explicit progress still completes it.
+        f.hooks.authorize = undefined;
+        f.base.host.modelHold.release();
+        await f.runtime.wait(input, id);
+        expect((await f.runtime.reconcile(input)).status?.status).toBe("done");
+      }
+    } finally { hold.release(); f.base.host.modelHold.release(); }
+  }));
+}
+
+test("runtime: failed Harness storage cleanup never releases owner", () => fixture(async f => {
+  await f.runtime.close(); f.setOwner(true);
+  const storage = await f.options.openStorage();
+  const close = storage.close.bind(storage);
+  storage.close = async () => { throw Error("cleanup failed"); };
+  const runtime = await HostConversationRuntime.open({ ...f.options, openStorage: async () => storage }, context);
+  const before = f.stats().releases;
+  try {
+    await expect(runtime.close()).rejects.toThrow("cleanup failed");
+    expect(f.stats().releases).toBe(before);
+    await expect(runtime.close()).rejects.toThrow("cleanup failed");
+    expect(f.stats().releases).toBe(before);
+  } finally { await close(context); }
+}));
+
 for (const state of ["queued", "placed", "done"] as const) {
   for (const content of ["held seed", "different private seed"] as const) {
     test(`runtime: unowned ${state} request collision (${content === "held seed" ? "same" : "different"} content) cannot be adopted or progressed`, () => fixture(async f => {

@@ -61,6 +61,7 @@ export interface WebChannelLike
   queue: TaskQueueLike;
   /** Trusted host-only selection, captured before reading HTTP input; absent by default. */
   getInputSourceAdmission?(chatJid: string): WebUserMessageStoreOptions["acceptSource"];
+  dispatchAcceptedInput?: import("../../../agent-pool/durable-queue-dispatch.js").AcceptedQueueDispatch;
   admitUserMessage?(chatJid: string, content: string, mediaIds: number[], options: WebUserMessageStoreOptions,
     authorise: () => void, signal: AbortSignal, deferBeforeInsert?: () => boolean): Promise<InteractionRow | null>;
   agentPool: AgentPool & {

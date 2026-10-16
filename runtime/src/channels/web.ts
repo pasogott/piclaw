@@ -69,6 +69,7 @@ export interface WebChannelOpts {
   agentPool: AgentPool;
   /** Internal host coordinator only; never derived from request fields. */
   getInputSourceAdmission?: WebChannelLike["getInputSourceAdmission"];
+  dispatchAcceptedInput?: WebChannelLike["dispatchAcceptedInput"];
 }
 
 /** Web channel: HTTP/SSE server, API endpoints, and agent event bridge. */

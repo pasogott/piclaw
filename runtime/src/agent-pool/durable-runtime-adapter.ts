@@ -47,6 +47,7 @@ export interface DurableConversationRuntimePort {
   reconcile(input: DurableAcceptedInput): Promise<DurableConversationState>;
   cancel(input: DurableAcceptedInput, submissionId: number, request: AcceptCancellationRequest): Promise<"aborted" | "already_placed" | "settled" | "not_found">;
   resume(input: DurableAcceptedInput, submissionId: number): Promise<void>;
+  wait?(input: DurableAcceptedInput, submissionId: number, signal?: AbortSignal): Promise<void>;
   settle(input: DurableAcceptedInput): Promise<TerminalCommit | null>;
   close(): Promise<void>;
 }
@@ -76,6 +77,7 @@ export function createDurableConversationAdapter(options: {
   const submit = runtime.submit.bind(runtime), reconcile = runtime.reconcile.bind(runtime);
   const cancel = runtime.cancel.bind(runtime), resume = runtime.resume.bind(runtime);
   const settle = runtime.settle.bind(runtime), close = runtime.close.bind(runtime);
+  const wait = runtime.wait?.bind(runtime);
   function input(work: DurableConversationOperation): DurableAcceptedInput {
     const { source, operation } = work.claimed;
     const binding = manifest.find(b => b.chatJid === source.chatJid && b.branchId === work.branchId);
@@ -103,6 +105,10 @@ export function createDurableConversationAdapter(options: {
       return cancel(input(work), submissionId, request);
     },
     async resume(work: DurableConversationOperation, submissionId: number) { return resume(input(work), submissionId); },
+    async wait(work: DurableConversationOperation, submissionId: number, signal?: AbortSignal) {
+      if (!wait) throw new Error("Durable wait unsupported");
+      await wait(input(work), submissionId, signal);
+    },
     async settle(work: DurableConversationOperation) { return settle(input(work)); },
     close,
   });

@@ -1,7 +1,7 @@
 // INACTIVE application module. No bootstrap registration or production schema migration.
 import { AssistantEntry, InboxDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { Context } from "@earendil-works/chord/context";
+import { awaitWithContext, withAbortSignal, withoutAbortSignal, type Context } from "@earendil-works/chord/context";
 import { hashCanonicalRequest } from "../../../runtime/src/service-effects/contracts/common.js";
 import type { ServiceWorkStore, AcceptCancellationRequest, OperationSnapshot } from "../../../runtime/src/service-effects/contracts/service-work-store.js";
 import type { TerminalSettlementStore, CommitTerminalRequest } from "../../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
@@ -151,6 +151,7 @@ export class HostConversationRuntime {
   private closing?: Promise<void>;
   // Lifecycle joins only: not an input queue or admission/dedup authority.
   private readonly active = new Set<Promise<unknown>>();
+  private readonly observations = new AbortController();
   private observe<T>(body: () => Promise<T>): Promise<T> {
     this.fence();
     const promise = body();
@@ -317,6 +318,29 @@ export class HostConversationRuntime {
       await this.progress(); this.harness.resume();
     });
   }
+  /** Waiting grants store-wide scheduling, like resume; no timeout aborts running work. */
+  wait(input: AcceptedInput, submissionId: SubmissionId, signal?: AbortSignal): Promise<void> {
+    const copy = inputSnapshot(input);
+    const observation = withAbortSignal(signal ? AbortSignal.any([signal, this.observations.signal]) : this.observations.signal, this.context);
+    return this.observe(() => {
+      observation.abortSignal?.throwIfAborted();
+      const pending = (async () => {
+        await this.checked(copy); observation.abortSignal?.throwIfAborted();
+        const record = await this.record(copy); observation.abortSignal?.throwIfAborted();
+        if (!record || record.id !== submissionId) throw new Error("Exact submission required");
+        await this.progress(); observation.abortSignal?.throwIfAborted();
+        const handle = await this.harness.submission(submissionId, observation); this.fence();
+        observation.abortSignal?.throwIfAborted();
+        if (!handle) throw new Error("Missing submission");
+        await handle.wait(observation); this.fence();
+      })();
+      // Observe even a synchronous host callback's abort before awaitWithContext attaches.
+      void pending.catch(() => {});
+      // Detach the whole observer, including host authorization/lookup, not just handle.wait.
+      // Late continuations are fenced above; cancellation never aborts durable work.
+      return awaitWithContext(pending, observation);
+    });
+  }
   settle(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.settleInput(copy)); }
   private async settleInput(input: AcceptedInput) {
     const state = await this.readState(input), o = this.options;
@@ -360,9 +384,10 @@ export class HostConversationRuntime {
   close(): Promise<void> {
     if (this.closing) return this.closing;
     this.closed = true; // Seal admissions, preserve pending/unknown work; close does not enable scheduling.
+    this.observations.abort();
     return this.closing = (async () => {
       await Promise.allSettled([...this.active]);
-      await this.harness.close(this.context); // May wait for cooperative providers/tools; no bounded-close claim.
+      await this.harness.close(withoutAbortSignal(this.context)); // May wait for cooperative providers/tools; no bounded-close claim.
       await this.options.owner.release(); // Only after confirmed resource cleanup.
     })();
   }

@@ -87,7 +87,7 @@
       "semanticReaderOccurrences": 71
     },
     "docsDeploy": {
-      "referencedNames": 148,
+      "referencedNames": 149,
       "directReaderNames": 16,
       "directReaderOccurrences": 32,
       "helperReaderNames": 0,
@@ -1247,6 +1247,7 @@
           "helperReaders": 0,
           "semanticReaders": 0,
           "files": [
+            ".github/workflows/ci.yml",
             ".github/workflows/integration-gate.yml",
             "Makefile",
             "docs/compaction-models-and-deadlines.md",
@@ -3978,6 +3979,21 @@
           "semanticReaders": 0,
           "files": [
             "skel/.pi/skills/reload/restart-piclaw.sh"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
+      "name": "PICLAW_REQUIRE_DURABLE_ENGINE",
+      "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            ".github/workflows/ci.yml"
           ],
           "readerFiles": []
         }

@@ -254,6 +254,14 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
     );
   }
 
+  /** Concrete host lookup; does not admit work or create wake intents. */
+  getAcceptedSource(chatJid: string, sourceId: string): AcceptedSourceSnapshot | null {
+    const row = this.database.query(
+      "SELECT * FROM service_effect_s01_sources WHERE chat_jid = ? AND source_id = ?",
+    ).get(chatJid, sourceId);
+    return row ? sourceSnapshot(sourceRow(row as Record<string, unknown>)) : null;
+  }
+
   getChatFrontier(
     chatJid: string,
   ): Promise<ResultValue<ChatFrontierSnapshot, ServiceWorkError>> {

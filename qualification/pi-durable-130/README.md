@@ -644,3 +644,25 @@ fail-closed input/path/non-quiescence rejection. The full candidate suite passes
 339 tests / 5,377 assertions across twenty files and both typechecks; independent
 source review cleared the bounded command. This does not qualify installed
 production packaging or a live cutover.
+
+## Existing queue dispatch and observation cleanup
+
+An internal default-off worker hook maps the committed ordinary message row to
+its accepted source and claimed operation before dispatching through the host
+adapter. It uses the existing per-chat queue and never falls back to legacy after
+selecting accepted work. No public engine flag or production registration exists.
+Commands, follow-ups and steers are not silently redirected.
+
+Uncertain completion retains the existing inflight identity. A captured host
+reconciliation-event port requests fresh fenced SQL reads; only matching terminal
+operation/source/frontier evidence releases the original callback. Shutdown
+releases observation without clearing pending identity. The host must connect its
+shutdown signal and race-free outcome events; no second queue or timer is added.
+
+Runtime wait cancellation covers authorization and lookup as well as the public
+submission wait. Close aborts observations before draining and closing resources;
+late continuations cannot schedule, and failed cleanup does not release ownership.
+The candidate suite passes 343 tests and types. Hosted CI explicitly reruns the
+real HTTP-to-engine integration after installing the private engine; a missing
+prerequisite fails rather than silently skipping. This is ordinary-input inactive
+integration, not full steering, running cancellation or activation acceptance.
