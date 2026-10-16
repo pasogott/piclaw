@@ -734,3 +734,20 @@ explicit reconciliation: 124 focused tests / 1,149 assertions. The root gate pas
 diff review cleared this inactive slice. An installed recovery controller and
 pending-intent restart/reopen remain unqualified. This does not qualify exact
 running cancellation or complete #1650.
+
+### Pending intent clean-close/reopen rehearsal
+
+Disk-backed tests close both stores, acquire replacement ownership, reopen paused
+and reconcile the retained accepted identity. They cover attachment before intent
+submission and submission committed before acknowledgement loss. The second case
+captures the committed public submission ID before close and requires the same ID
+after reopen. A synchronous provider-entry observation runs before the hold, so
+paused-open and completed-retry checks cannot hide dispatch behind that hold.
+Public request records and binding snapshots remain unchanged on completed replay;
+settlement produces one host terminal commit and one answer.
+
+The two tests pass 80 assertions; the full candidate suite passes 351 tests /
+5,540 assertions across 21 files, with types and bounded independent review clear.
+This is a synthetic, same-process cooperative close/reopen rehearsal. It is not
+SIGKILL recovery, provider exactly-once execution, or an installed production
+recovery-controller qualification.
