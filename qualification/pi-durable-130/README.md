@@ -832,3 +832,21 @@ those tests or their limits.
 Boot-controller and current-worker integration still use separate fixtures. This
 is not a combined restart-to-worker qualification, production registration or
 activation. No new queue, legacy fallback or restored consumed queue row is used.
+
+### Combined disk reopen through the current queue worker
+
+A combined test now closes and reopens disk stores under replacement ownership,
+boots the explicit controller, and runs the actual `AgentQueue`/`processChat`
+worker. A test-only fault occurs after candidate submission commits but before
+host intent binding is written. The binding remains null across paused reopen;
+controller reconciliation repairs the original committed ID without another
+provider entry. The worker retains its lane and inflight marker until terminal
+SQL/event observation, then releases once. Completed retries retain one answer
+and terminal commit; terminal queries are scoped to the operation and chat.
+
+The first published test covered caller acknowledgement loss after binding and
+had an unscoped cross-test SQL assertion; it did not prove missing-binding repair.
+Both issues are corrected. Full candidate verification passes 362 tests / 5,837
+assertions, with types, root static build and independent bounded review clear.
+This is cooperative same-process disk close/reopen, not a combined SIGKILL or
+production activation qualification. Runtime source is unchanged by this test.

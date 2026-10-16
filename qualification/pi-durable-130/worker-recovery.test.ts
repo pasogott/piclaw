@@ -20,7 +20,7 @@ import { processChat } from '../../runtime/src/channels/web/handlers/agent.js';
 test('disk restart controller + current queue worker: lost ACK repair retains lane until terminal SQL/event', async () => {
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, 'worker-recovery-'));
   const oldMemory = process.env.PICLAW_DB_IN_MEMORY;
-  const f = await acceptedSteerFixture(dir, 'committed-ack-lost', undefined, true);
+  const f = await acceptedSteerFixture(dir, 'committed-ack-lost', undefined, true, { loseIntentBindingAck: true });
   const shutdown = new AbortController();
   let controller: Awaited<ReturnType<typeof createHostController>> | undefined;
   const queue = new AgentQueue();
@@ -29,6 +29,10 @@ test('disk restart controller + current queue worker: lost ACK repair retains la
     const row = f.db.query('SELECT rowid AS rowId, id FROM messages WHERE id=?').get(primary.sourceId) as { rowId: number; id: string };
     beginChatRun(f.chatJid, at, { prevTs: '', messageId: row.id, startedAt: at });
     const before = f.snapshot(), committedId = f.committedIntentId!, bootEntries = f.providerEntries;
+    // Public candidate request lookup proves the commit survived the lost host ACK.
+    const requestId = `queued-steer:${f.intentSourceId}`;
+    expect((await f.candidateStorage.submissionByRequest(f.base.root.id, requestId, context))?.id).toBe(committedId);
+    expect((await f.ports.bindings.findSource(f.chatJid, primary.sourceSeq + 1))?.submissionId).toBeNull();
     const oldOwner = f.owner;
     await f.runtime!.close(); f.runtime = undefined;
     oldOwner.releaseAfterClose(); // Actual candidate close precedes ownership release.
@@ -76,6 +80,8 @@ test('disk restart controller + current queue worker: lost ACK repair retains la
     const entries = f.providerEntries;
     expect(entries).toBe(bootEntries);
     const intent = controller.recovered[1]!.input;
+    expect((await f.ports.bindings.intents!.get(intent))?.submissionId).toBeNull();
+    expect(controller.pendingIntentIds).toContain(requestId);
     const recovery = createDurableRecoveryDispatch({ assertCurrentWriter: () => f.owner.assert(), shutdown: shutdown.signal,
       reconcileRecovered: controller.reconcileRecovered, async submitIntent() { throw Error('No fresh admission'); } });
     const adapter = createDurableConversationAdapter({ incarnation: f.incarnation,
@@ -91,36 +97,40 @@ test('disk restart controller + current queue worker: lost ACK repair retains la
     rollbackInflightRun(f.chatJid, '');
     const lane = `chat:${f.chatJid}`;
     const finished = barrier();
+    const entered = barrier(); f.entryObserved = entered;
     queue.enqueue(async () => { await processChat(channel, f.chatJid, 'default'); finished.release(); }, 'recovered-primary', lane);
     queue.enqueue(async () => { next++; }, 'behind-primary', lane);
     await observing.promise;
     expect(queue.isLaneBusy(lane)).toBe(true); expect(next).toBe(0); expect(releases).toBe(0);
     expect(getInflightRuns().find(x => x.chatJid === f.chatJid)?.messageId).toBe(row.id);
-    expect(f.db.query('SELECT * FROM service_effect_s02_commits').all()).toHaveLength(0);
+    expect(f.db.query('SELECT * FROM service_effect_s02_commits WHERE operation_id=? AND chat_jid=?').all(f.incarnation, f.chatJid)).toHaveLength(0);
+    await entered.promise; // The worker's explicit wait grants progress; observe its entry before repair.
     const workerEntries = f.providerEntries;
-    expect(workerEntries).toBe(entries + 1); // Entry hook runs BEFORE the held model callback.
+    expect(workerEntries).toBe(entries + 1);
     const repair = recovery.retryRecoveredWork(); expect(recovery.retryRecoveredWork()).toBe(repair); await repair;
     expect((await controller.runtime.reconcileIntent(intent)).submissionId).toBe(committedId);
+    expect((await f.ports.bindings.intents!.get(intent))?.submissionId).toBe(committedId);
     expect(f.providerEntries).toBe(workerEntries); // ACK repair is not a scheduling grant.
     expect(next).toBe(0); expect(releases).toBe(0);
+    expect(queue.isLaneBusy(lane)).toBe(true);
     f.base.host.modelHold?.release();
     for (let n = 0; n < 500 && !(await controller.runtime.settle(primary)); n++) await Bun.sleep(2);
-    expect(f.db.query('SELECT * FROM service_effect_s02_commits').all()).toHaveLength(1);
+    expect(f.db.query('SELECT * FROM service_effect_s02_commits WHERE operation_id=? AND chat_jid=?').all(f.incarnation, f.chatJid)).toHaveLength(1);
     recovery.onReconcile(); await finished.promise;
     for (let n = 0; n < 100 && !next; n++) await Bun.sleep(1);
     expect(next).toBe(1); expect(releases).toBe(1); expect(legacy).toBe(0);
     expect(getInflightRuns().filter(x => x.chatJid === f.chatJid)).toEqual([]);
     expect(getDeferredQueuedFollowups(f.chatJid)).toEqual([]);
-    expect(f.db.query('SELECT * FROM messages WHERE is_bot_message=1').all()).toHaveLength(1);
-    expect(f.db.query('SELECT state FROM service_effect_s01_sources ORDER BY source_seq').all()).toEqual([{ state: 'consumed' }, { state: 'consumed' }]);
+    expect(f.db.query('SELECT * FROM messages WHERE is_bot_message=1 AND chat_jid=?').all(f.chatJid)).toHaveLength(1);
+    expect(f.db.query('SELECT state FROM service_effect_s01_sources WHERE chat_jid=? ORDER BY source_seq').all(f.chatJid)).toEqual([{ state: 'consumed' }, { state: 'consumed' }]);
     // Deliberately attach AFTER terminal/event: no replayed event may be required.
     expect(await Promise.race([dispatch.waitForPending({ chatJid: f.chatJid, messageId: row.id, rowId: row.rowId }), Bun.sleep(100).then(() => 'lost-wake')])).toBe('settled');
     expect(await controller.runtime.submitIntent(intent)).toBe(committedId);
     expect(await dispatch(f.chatJid, row.id, row.rowId)!()).toBe('settled');
-    expect(f.db.query('SELECT * FROM service_effect_s02_commits').all()).toHaveLength(1);
-    expect(f.db.query('SELECT * FROM messages WHERE is_bot_message=1').all()).toHaveLength(1);
+    expect(f.db.query('SELECT * FROM service_effect_s02_commits WHERE operation_id=? AND chat_jid=?').all(f.incarnation, f.chatJid)).toHaveLength(1);
+    expect(f.db.query('SELECT * FROM messages WHERE is_bot_message=1 AND chat_jid=?').all(f.chatJid)).toHaveLength(1);
     expect(f.base.host.modelCalls).toBe(2); // Completed primary A was not replayed; only B entered.
-    expect(f.db.query('SELECT submission_id FROM piclaw_durable_intent_bindings_v1').all()).toEqual([{ submission_id: committedId }]);
+    expect(f.db.query('SELECT submission_id FROM piclaw_durable_intent_bindings_v1 WHERE operation_id=? AND chat_jid=?').all(f.incarnation, f.chatJid)).toEqual([{ submission_id: committedId }]);
     await controller.close(); expect(events).toEqual(['owner', 'storage', 'close', 'release']);
   } finally {
     shutdown.abort(); f.base.host.modelHold?.release(); await controller?.close(); await f.close();

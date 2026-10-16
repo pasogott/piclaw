@@ -19,7 +19,7 @@ import { storeWebMessage } from "../../../runtime/src/channels/web/messaging/mes
 
 
 export type RecoveryCheckpoint = { generation: number; intentSourceId: string; primary: AcceptedInput; primaryId: number; b: { sourceId: string; sourceSeq: number }; committedIntentId?: number; intent: DurableConversationOperation; candidate?: { id: number; requestId?: string }; modelCalls: number; effects: number; };
-export async function acceptedSteerFixture(dir: string, boundary: "before-submit" | "committed-ack-lost", recovered?: RecoveryCheckpoint, queuePrimary = false) {
+export async function acceptedSteerFixture(dir: string, boundary: "before-submit" | "committed-ack-lost", recovered?: RecoveryCheckpoint, queuePrimary = false, testConfig: { loseIntentBindingAck?: boolean } = {}) {
     process.env.PICLAW_DB_IN_MEMORY = "0";
     const chatJid = `web:recovery:${basename(dir)}:${boundary}`;
     const path = join(dir, "candidate.sqlite");
@@ -56,7 +56,25 @@ export async function acceptedSteerFixture(dir: string, boundary: "before-submit
             : db.query("SELECT content FROM messages WHERE id=? AND chat_jid=?").get(ref.replace(/^queued-source:/, ""), chatJid)) as { content: string } | null;
           if (!row) throw Error("Missing payload"); return row.content;
         } });
-      return { work, terminal, bindings };
+      const intents = bindings.intents!;
+      const faultBindings = testConfig.loseIntentBindingAck ? {
+        get: bindings.get.bind(bindings), bind: bindings.bind.bind(bindings),
+        getOrBind: bindings.getOrBind.bind(bindings), recordSubmission: bindings.recordSubmission.bind(bindings),
+        findSource: bindings.findSource.bind(bindings),
+        intents: {
+          get: intents.get.bind(intents), bind: intents.bind.bind(intents),
+          getOrBind: intents.getOrBind.bind(intents), list: intents.list.bind(intents),
+          async recordSubmission(input: AcceptedInput, id: Parameters<typeof intents.recordSubmission>[1]) {
+            if (!ackLost) {
+              committedIntentId = id;
+              ackLost = true;
+              throw Error(`ACK lost before host binding write for ${input.requestId}: ${id}`);
+            }
+            await intents.recordSubmission(input, id);
+          },
+        },
+      } : bindings;
+      return { work, terminal, bindings: faultBindings };
     }
     installTerminalSettlementCompositionSchema(db); initializeHostDurableBindings(db, assert);
     db.exec("CREATE TABLE IF NOT EXISTS recovery_fixture_identity (id TEXT PRIMARY KEY, input TEXT NOT NULL)");
@@ -102,6 +120,7 @@ async function prepare() {
           // Fixture controller's captured identity is persisted in the SAME materialization transaction.
           db.query("INSERT INTO recovery_fixture_identity VALUES (?,?)").run(incarnation, JSON.stringify(input));
         }, async submitIntent(input) {
+          if (testConfig.loseIntentBindingAck) return adapter.submitIntent(input);
           committedIntentId = await adapter.submitIntent(input);
           ackLost = true; // Reached only AFTER the public runtime submission succeeds.
           throw Error(`ACK lost after ${committedIntentId}`);
