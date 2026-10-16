@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { JsonValue, Context } from "@earendil-works/chord";
 import type { Message } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { CompactionEntry, SystemEntry, defineDoc, type Conversation, type EntryId } from "@earendil-works/pi-durable";
+import { CompactionEntry, SystemEntry, defineDoc, type Conversation, type EntryId, type ConversationId, type Tx } from "@earendil-works/pi-durable";
 type ObjectValue = Record<string, unknown>;
 function object(value: unknown): asserts value is ObjectValue {
   assert(value !== null && typeof value === "object" && !Array.isArray(value), "object required");
@@ -189,30 +189,7 @@ export async function importCopiedLegacy(conversation: Conversation, input: Copi
     }
     assert((await tx.scanEntries({ conversationId: conversation.id }, 1)).items.length === 0, "target must be empty");
     const mapping = new Map<string, EntryId>();
-    for (const [index, entry] of prepared.entries.entries()) {
-      assertOwnership();
-      const audit = await tx.appendEntry(conversation.id, { kind: "app.legacy-source", data: JSON.parse(JSON.stringify(entry)) });
-      let at = audit.id;
-      const model = [...prepared.projection.projected[index]!.messages];
-      if (entry.type === "message") {
-        assertOwnership();
-        at = entry.message.role === "system"
-          ? (await tx.appendEntry(SystemEntry, conversation.id, { model })).id
-          : (await tx.appendEntry(conversation.id, { kind: "app.legacy-message", model })).id;
-      } else if (entry.type === "compaction") {
-        const head = mapping.get(entry.firstKeptEntryId); assert(head, "unmapped compaction head");
-        assertOwnership();
-        at = (await tx.appendEntry(CompactionEntry, conversation.id, {
-          head, data: { reason: "manual" }, model: model.filter(m => m.role !== "system"),
-        })).id;
-        const baseline = model.filter(m => m.role === "system");
-        if (baseline.length) {
-          assertOwnership();
-          at = (await tx.appendEntry(SystemEntry, conversation.id, { model: baseline })).id;
-        }
-      }
-      mapping.set(entry.id, at);
-    }
+    await appendPrepared(tx, conversation.id, prepared, 0, mapping, assertOwnership);
     const binding: LegacyImportBinding = {
       schemaVersion: 3, importerVersion: IMPORTER_VERSION, sourceHash: prepared.sourceHash,
       chatJid: prepared.identity.chatJid, chatIncarnation: prepared.identity.chatIncarnation, branchId: prepared.identity.branchId,
@@ -223,4 +200,189 @@ export async function importCopiedLegacy(conversation: Conversation, input: Copi
     assertOwnership(); doc.binding = binding;
     assertOwnership(); return clone(binding);
   }, context);
+}
+
+async function appendPrepared(tx: Tx, conversationId: ConversationId,
+  prepared: ReturnType<typeof prepareCopiedLegacy>, start: number, mapping: Map<string, EntryId>,
+  assertOwnership: () => void) {
+    for (const [index, entry] of prepared.entries.entries()) {
+      if (index < start) continue;
+      assertOwnership();
+      const audit = await tx.appendEntry(conversationId, { kind: "app.legacy-source", data: JSON.parse(JSON.stringify(entry)) });
+      let at = audit.id;
+      const model = [...prepared.projection.projected[index]!.messages];
+      if (entry.type === "message") {
+        assertOwnership();
+        at = entry.message.role === "system"
+          ? (await tx.appendEntry(SystemEntry, conversationId, { model })).id
+          : (await tx.appendEntry(conversationId, { kind: "app.legacy-message", model })).id;
+      } else if (entry.type === "compaction") {
+        const head = mapping.get(entry.firstKeptEntryId); assert(head, "unmapped compaction head");
+        assertOwnership();
+        at = (await tx.appendEntry(CompactionEntry, conversationId, {
+          head, data: { reason: "manual" }, model: model.filter(m => m.role !== "system"),
+        })).id;
+        const baseline = model.filter(m => m.role === "system");
+        if (baseline.length) {
+          assertOwnership();
+          at = (await tx.appendEntry(SystemEntry, conversationId, { model: baseline })).id;
+        }
+      }
+      mapping.set(entry.id, at);
+    }
+}
+
+export const DEFAULT_TREE_IMPORT_LIMITS = { ...DEFAULT_IMPORT_LIMITS, maxBranches: 16 } as const;
+export type LegacyTreeHostBinding = Readonly<{
+  chatJid: string; chatIncarnation: string; branchId: string; hostBaseline: string;
+}>;
+export type CopiedLegacyTreeInput = Readonly<{
+  sourceJSONL: string;
+  /** Complete leaf-ID → original host identity map; no active-branch inference. */
+  hostBranchBindings: Readonly<Record<string, LegacyTreeHostBinding>>;
+  maxEntries?: number; maxBytes?: number; maxBranches?: number;
+}>;
+export type LegacyTreeImportBinding = {
+  importerVersion: number; sourceHash: string; sourceSessionId: string;
+  originalEntries: JsonValue[];
+  plannedBranches: { sourceLeafId: string; chatJid: string; chatIncarnation: string; branchId: string; hostBaseline: string }[];
+  branches: LegacyImportBinding[]; entries: Mapping[];
+};
+export const LegacyTreeImportManifest = defineDoc<{ binding: LegacyTreeImportBinding | null }>({
+  kind: "app.copied-legacy-tree-import", version: 1, scope: "conversation", history: "latest",
+  fork: "initial", initial: () => ({ binding: null }),
+});
+
+/** Every source record must belong to the single rooted tree, and EVERY leaf must
+ * have an explicit host binding. Detached once before invoking any host bridge.
+ * Separate host JSONL files must be assembled/validated by the caller, not inferred. */
+function prepareCopiedLegacyTree(input: CopiedLegacyTreeInput, bridge: GetLegacyContext) {
+  const { sourceJSONL, hostBranchBindings, maxEntries: requestedEntries,
+    maxBytes: requestedBytes, maxBranches: requestedBranches } = input;
+  const bindings = clone(hostBranchBindings);
+  object(bindings);
+  const maxEntries = requestedEntries ?? DEFAULT_TREE_IMPORT_LIMITS.maxEntries;
+  const maxBytes = requestedBytes ?? DEFAULT_TREE_IMPORT_LIMITS.maxBytes;
+  const maxBranches = requestedBranches ?? DEFAULT_TREE_IMPORT_LIMITS.maxBranches;
+  for (const limit of [maxEntries, maxBytes, maxBranches])
+    assert(Number.isSafeInteger(limit) && limit > 0, "invalid tree limit");
+  assert(typeof sourceJSONL === "string", "missing sourceJSONL");
+  assert(Buffer.byteLength(sourceJSONL, "utf8") <= maxBytes, "maxBytes exceeded");
+  const lines = sourceJSONL.trim().split("\n");
+  assert(lines.length > 1 && lines.length - 1 <= maxEntries, "maxEntries exceeded or empty source");
+  const [header, ...raw]: unknown[] = lines.map(line => JSON.parse(line, (_key, value: unknown) => {
+    assert(typeof value !== "number" || Number.isFinite(value), "non-finite JSON number");
+    return value;
+  }));
+  const records = new Map<string, ObjectValue>();
+  for (const entry of raw) {
+    object(entry); strings(entry, ["id"]);
+    assert(entry.id !== "" && !records.has(entry.id as string), "duplicate/empty source ID");
+    assert(entry.parentId === null || typeof entry.parentId === "string", "invalid parent ID");
+    records.set(entry.id as string, entry);
+  }
+  const parents = new Set<string>();
+  let roots = 0;
+  for (const entry of records.values()) {
+    if (entry.parentId === null) roots++;
+    else { assert(records.has(entry.parentId as string), "missing parent"); parents.add(entry.parentId as string); }
+  }
+  assert(roots === 1, "single root required");
+  const leaves = [...records.keys()].filter(id => !parents.has(id)).sort();
+  assert(leaves.length > 0 && leaves.length <= maxBranches, "maxBranches exceeded or cyclic source");
+  assert(Object.keys(bindings).length === leaves.length && leaves.every(id => Object.hasOwn(bindings, id)),
+    "complete bindings for ALL leaves required");
+  const visited = new Set<string>(), identities = new Set<string>();
+  const paths = leaves.map(leaf => {
+    const path: ObjectValue[] = [], seen = new Set<string>();
+    let id: string | null = leaf;
+    while (id !== null) {
+      assert(!seen.has(id), "cyclic source"); seen.add(id); visited.add(id);
+      const entry = records.get(id)!; path.push(entry); id = entry.parentId as string | null;
+    }
+    path.reverse();
+    const binding = bindings[leaf]!;
+    object(binding); keys(binding, ["chatJid", "chatIncarnation", "branchId", "hostBaseline"]);
+    strings(binding, ["chatJid", "chatIncarnation", "branchId", "hostBaseline"]);
+    assert(Object.values(binding).every(value => typeof value === "string" && value.length > 0), "empty host binding");
+    const identity = JSON.stringify([binding.chatJid, binding.chatIncarnation, binding.branchId]);
+    assert(!identities.has(identity), "duplicate host branch identity"); identities.add(identity);
+    return { path, binding };
+  });
+  assert(visited.size === records.size, "cyclic/disconnected source");
+  const plannedBranches = paths.map(({ binding }, index) => ({ sourceLeafId: leaves[index]!,
+    chatJid: binding.chatJid, chatIncarnation: binding.chatIncarnation,
+    branchId: binding.branchId, hostBaseline: binding.hostBaseline }));
+  const hashedInput = JSON.stringify({ importerVersion: IMPORTER_VERSION, sourceJSONL,
+    plannedBranches, maxEntries, maxBytes, maxBranches });
+  assert(Buffer.byteLength(hashedInput, "utf8") <= maxBytes, "maxBytes exceeded (source and host bindings)");
+  // Validate all paths using the SAME strict linear parser; no commits until all succeed.
+  const prepared = paths.map(({ path, binding }) => prepareCopiedLegacy({ ...binding,
+    sourceJSONL: [header, ...path].map(record => JSON.stringify(record)).join("\n"),
+    maxEntries, maxBytes,
+  }, bridge));
+  const sourceHash = createHash("sha256").update(hashedInput).digest("hex");
+  return { prepared, sourceHash, raw, plannedBranches };
+}
+
+/** Quiescent owned/fenced storage contract is identical to importCopiedLegacy.
+ * Public forks require committed anchors. Each branch is one atomic commit including
+ * fork, suffix, branch binding and root progress. Retry identical input after interruption;
+ * no fork can commit without its receipt. Keep partially imported storage offline
+ * until all branches are returned. No tasks, effects, selection policy or private APIs. */
+export async function importCopiedLegacyTree(conversation: Conversation, input: CopiedLegacyTreeInput,
+  bridge: GetLegacyContext, assertOwnership: () => void, context: Context) {
+  const plan = prepareCopiedLegacyTree(input, bridge);
+  assertOwnership();
+  for (;;) {
+    const result = await conversation.commit(async tx => {
+      assertOwnership();
+      const doc = await tx.doc(LegacyTreeImportManifest, conversation.id);
+      if (doc.binding) {
+        assert(doc.binding.sourceHash === plan.sourceHash, "tree import binding/content conflict");
+        if (doc.binding.branches.length === plan.prepared.length) {
+          assertOwnership(); return clone(doc.binding);
+        }
+      } else {
+        assert((await tx.scanEntries({ conversationId: conversation.id }, 1)).items.length === 0, "target must be empty");
+      }
+      const branches = clone(doc.binding?.branches ?? []);
+      const locations = new Map<string, { at: EntryId; conversationId: ConversationId }>();
+      for (const branch of branches) for (const entry of branch.entries)
+        if (!locations.has(entry.sourceEntryId)) locations.set(entry.sourceEntryId,
+          { at: entry.durableEntryId as EntryId, conversationId: branch.engineConversationId as ConversationId });
+      const prepared = plan.prepared[branches.length]!;
+      const mapping = new Map<string, EntryId>();
+      let start = 0, conversationId = conversation.id;
+      while (start < prepared.entries.length && locations.has(prepared.entries[start]!.id)) {
+        const entry = prepared.entries[start++]!;
+        mapping.set(entry.id, locations.get(entry.id)!.at);
+      }
+      if (start > 0) {
+        const parent = locations.get(prepared.entries[start - 1]!.id)!;
+        assertOwnership();
+        conversationId = (await tx.forkConversation(parent.conversationId, parent.at,
+          { ownership: { kind: "ownerless" } })).id;
+      }
+      await appendPrepared(tx, conversationId, prepared, start, mapping, assertOwnership);
+      for (const entry of prepared.entries.slice(start))
+        locations.set(entry.id, { at: mapping.get(entry.id)!, conversationId });
+      const binding: LegacyImportBinding = {
+        schemaVersion: 3, importerVersion: IMPORTER_VERSION, sourceHash: plan.sourceHash,
+        ...prepared.identity, sourceSessionId: prepared.sourceSessionId, sourceLeafId: prepared.sourceLeafId,
+        engineConversationId: conversationId, originalEntries: clone(prepared.entries) as unknown as JsonValue[],
+        entries: [...mapping].map(([sourceEntryId, durableEntryId]) => ({ sourceEntryId, durableEntryId })),
+      };
+      (await tx.doc(LegacyImportManifest, conversationId)).binding = binding;
+      branches.push(binding);
+    const treeBinding: LegacyTreeImportBinding = {
+      importerVersion: IMPORTER_VERSION, sourceHash: plan.sourceHash,
+      sourceSessionId: plan.prepared[0]!.sourceSessionId, originalEntries: clone(plan.raw) as JsonValue[],
+      plannedBranches: clone(plan.plannedBranches), branches, entries: [...locations].map(([sourceEntryId, location]) => ({ sourceEntryId, durableEntryId: location.at })),
+    };
+    assertOwnership(); doc.binding = treeBinding;
+    assertOwnership(); return clone(treeBinding);
+    }, context);
+    if (result.branches.length === plan.prepared.length) return result;
+  }
 }

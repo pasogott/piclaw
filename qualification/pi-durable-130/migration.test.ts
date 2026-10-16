@@ -10,7 +10,7 @@ import { CompactionEntry, SystemEntry, defineDoc, type Conversation, type EntryI
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { BunSqliteDatabase } from "./src/bun-sqlite.js";
 import { barrier, context, openFixture } from "./src/fixture.js";
-import { importCopiedLegacy, prepareLegacyImport, LegacyImportManifest, type CopiedLegacyInput, type GetLegacyContext } from "./src/legacy-import.js";
+import { importCopiedLegacyTree, LegacyTreeImportManifest, type CopiedLegacyTreeInput, importCopiedLegacy, prepareLegacyImport, LegacyImportManifest, type CopiedLegacyInput, type GetLegacyContext } from "./src/legacy-import.js";
 
 // Resolve ONLY the public current SDK export from root dependencies, never its internals.
 // The current package has an import-only export; createRequire.resolve cannot resolve it.
@@ -610,4 +610,177 @@ describe("H5 advanced actual public context qualification, independent of reject
     // Exact JSONL-only equality is NOT full host/model-context qualification in this case.
     expect(view.messages.some(m => m.role === "system")).toBe(false);
   }));
+});
+
+function treeFixture() {
+  const manager = advancedFixture(true);
+  const checkpoint = manager.getEntries().find(e => e.type === "compaction")!.id;
+  const before = manager.getEntries()[1]!.id;
+  const mainLeaf = manager.getLeafId()!;
+  manager.branch(checkpoint);
+  const sibling = manager.appendMessage({ role: "user", content: [{ type: "text", text: "Sibling image" },
+    { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" }], timestamp: 4000 });
+  manager.appendMessage(assistant(true));
+  manager.appendMessage({ role: "toolResult", toolCallId: "copied-call", toolName: "host_effect",
+    content: [{ type: "text", text: "completed sibling tool" }], isError: false, timestamp: 4001 });
+  const siblingLeaf = manager.appendCustomEntry("qualification.display", { original: "sibling audit" });
+  manager.branch(sibling);
+  manager.appendMessage({ role: "user", content: "Grandchild fork", timestamp: 4002 });
+  const grandchildLeaf = manager.appendCustomEntry("qualification.display", { original: "grandchild audit" });
+  manager.branch(before);
+  const earlyLeaf = manager.appendMessage({ role: "user", content: "Before compaction", timestamp: 4003 });
+  const leaves = [mainLeaf, siblingLeaf, grandchildLeaf, earlyLeaf];
+  const input: CopiedLegacyTreeInput = {
+    sourceJSONL: copied(manager).jsonl,
+    hostBranchBindings: Object.fromEntries(leaves.map((leaf, index) => [leaf, {
+      chatJid: `web:original-tree-${index}`, chatIncarnation: `original-incarnation-${index}`,
+      branchId: `original-host-branch-${index}`, hostBaseline: "Known original synthetic baseline",
+    }])),
+  };
+  return { manager, input, leaves };
+}
+async function checkTree(f: Fixture, fixture: ReturnType<typeof treeFixture>, receipt: Awaited<ReturnType<typeof importCopiedLegacyTree>>) {
+  expect(receipt.branches).toHaveLength(4);
+  expect(receipt.entries).toHaveLength(fixture.manager.getEntries().length);
+  expect(new Set(receipt.entries.map(e => e.durableEntryId)).size).toBe(receipt.entries.length);
+  expect(receipt.originalEntries).toEqual(JSON.parse(JSON.stringify(fixture.manager.getEntries())));
+  for (const branch of receipt.branches) {
+    const conversation = (await f.harness.conversation(branch.engineConversationId as ConversationId, context))!;
+    const expected = json(convertToLlm(buildSessionContext(fixture.manager.getEntries(), branch.sourceLeafId).messages));
+    expect((await conversation.context(context)).messages).toEqual(expected);
+    const host = fixture.input.hostBranchBindings[branch.sourceLeafId]!;
+    expect([branch.chatJid, branch.chatIncarnation, branch.branchId]).toEqual([host.chatJid, host.chatIncarnation, host.branchId]);
+    expect(branch.entries.map(e => e.sourceEntryId)).toEqual(fixture.manager.getBranch(branch.sourceLeafId).map(e => e.id));
+    for (const entry of branch.entries)
+      expect(entry.durableEntryId).toBe(receipt.entries.find(e => e.sourceEntryId === entry.sourceEntryId)!.durableEntryId);
+    expect((await f.harness.snapshot(LegacyImportManifest, conversation.id, context))!.binding).toEqual(branch);
+  }
+  const conversations = await f.root.commit(tx => tx.scanConversations({}, 100), context);
+  expect(conversations.items).toHaveLength(4);
+  let audits = 0;
+  for (const record of conversations.items) {
+    const c = (await f.harness.conversation(record.id, context))!;
+    const page = await c.entries({}, 100, undefined, context);
+    // Visible inherited entries occur on several paths, but have identical durable IDs.
+    for (const entry of page.items.filter(e => e.kind === "app.legacy-source")) {
+      const raw = entry.data as { id: string };
+      expect(receipt.entries.some(e => e.sourceEntryId === raw.id)).toBe(true);
+      audits++;
+    }
+  }
+  expect(audits).toBeGreaterThanOrEqual(receipt.entries.length);
+  expect(await f.harness.inspect(context)).toEqual({ scheduling: "paused", tasks: [], submissions: [] });
+  expect(f.host.effects + f.host.modelCalls + f.host.credentialLookups).toBe(0);
+}
+
+describe("restartable public full copied branch-tree importer", () => {
+  test("all four leaves, sibling/grandchild compaction, tools/images/audit, shared IDs and exact context", () => using(async f => {
+    const fixture = treeFixture();
+    const receipt = await importCopiedLegacyTree(f.root, fixture.input, publicContextBridge, () => {}, context);
+    await checkTree(f, fixture, receipt);
+    expect(await importCopiedLegacyTree(f.root, fixture.input, publicContextBridge, () => {}, context)).toEqual(receipt);
+    await checkTree(f, fixture, receipt);
+    await expect(importCopiedLegacyTree(f.root, { ...fixture.input, sourceJSONL: fixture.input.sourceJSONL + "\n" },
+      publicContextBridge, () => {}, context)).rejects.toThrow("content conflict");
+    const changed = json(fixture.input);
+    const leaf = fixture.leaves[0]!;
+    (changed.hostBranchBindings[leaf] as { branchId: string }).branchId = "changed-host-branch";
+    await expect(importCopiedLegacyTree(f.root, changed, publicContextBridge, () => {}, context)).rejects.toThrow("content conflict");
+  }));
+  test("fault after public Tx fork rolls back that branch; persisted root plan retries without duplicate forks", () => using(async f => {
+    const fixture = treeFixture(); let forks = 0;
+    const decorated: Conversation = Object.create(f.root);
+    decorated.commit = (callback, ctx) => f.root.commit(tx => callback(new Proxy(tx, {
+      get(target, key) {
+        if (key === "forkConversation") return async (...args: Parameters<typeof tx.forkConversation>) => {
+          await tx.forkConversation(...args); forks++;
+          throw new Error("fault after public fork before manifest");
+        };
+        const value = Reflect.get(target, key);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    })), ctx);
+    await expect(importCopiedLegacyTree(decorated, fixture.input, publicContextBridge, () => {}, context)).rejects.toThrow("fault after public fork");
+    expect(forks).toBe(1);
+    expect((await f.root.entries({}, 100, undefined, context)).items.length).toBeGreaterThan(0);
+    expect((await f.harness.snapshot(LegacyTreeImportManifest, f.root.id, context))!.binding!.branches).toHaveLength(1);
+    expect((await f.root.commit(tx => tx.scanConversations({}, 100), context)).items).toHaveLength(1);
+    const receipt = await importCopiedLegacyTree(f.root, fixture.input, publicContextBridge, () => {}, context);
+    expect(await importCopiedLegacyTree(f.root, fixture.input, publicContextBridge, () => {}, context)).toEqual(receipt);
+    await checkTree(f, fixture, receipt);
+  }));
+  test("SQLite reopen after lost acknowledgement of committed fork resumes root plan without duplicates", async () => {
+    const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "tree-import-sqlite-"));
+    const open = () => openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(new BunSqliteDatabase(join(dir, "tree.sqlite"))));
+    let f = await open();
+    try {
+      const fixture = treeFixture();
+      const decorated: Conversation = Object.create(f.root);
+      let commits = 0;
+      decorated.commit = async (callback, ctx) => {
+        const result = await f.root.commit(callback, ctx);
+        if (++commits === 2) throw new Error("lost acknowledgement after committed fork");
+        return result;
+      };
+      await expect(importCopiedLegacyTree(decorated, fixture.input, publicContextBridge, () => {}, context)).rejects.toThrow("lost acknowledgement");
+      const partial = (await f.harness.snapshot(LegacyTreeImportManifest, f.root.id, context))!.binding!;
+      expect(partial.branches).toHaveLength(2);
+      expect(partial.plannedBranches).toHaveLength(4);
+      expect((await f.root.commit(tx => tx.scanConversations({}, 100), context)).items).toHaveLength(2);
+      const changed = json(fixture.input);
+      (changed.hostBranchBindings[fixture.leaves[3]!] as { branchId: string }).branchId = "changed-unfinished-plan";
+      await expect(importCopiedLegacyTree(f.root, changed, publicContextBridge, () => {}, context)).rejects.toThrow("content conflict");
+      await f.close(); f = await open();
+      const receipt = await importCopiedLegacyTree(f.root, fixture.input, publicContextBridge, () => {}, context);
+      expect(receipt.branches.slice(0, 2)).toEqual(partial.branches);
+      await f.close(); f = await open();
+      expect(await importCopiedLegacyTree(f.root, fixture.input, publicContextBridge, () => {}, context)).toEqual(receipt);
+      await checkTree(f, fixture, receipt);
+    } finally { await f.close(); await rm(dir, { recursive: true, force: true }); }
+  });
+  test("detached nested host bindings survive bridge mutation; out-of-order records retain full tree", () => using(async f => {
+    const fixture = treeFixture(), original = json(fixture.input), mutable = json(fixture.input);
+    const records = original.sourceJSONL.trim().split("\n");
+    const reordered = { ...original, sourceJSONL: [records[0], ...records.slice(1).reverse()].join("\n") };
+    const receipt = await importCopiedLegacyTree(f.root, mutable, (...args) => {
+      (mutable.hostBranchBindings[fixture.leaves[0]!] as { branchId: string }).branchId = "mutated-by-host";
+      return publicContextBridge(...args);
+    }, () => {}, context);
+    expect(await importCopiedLegacyTree(f.root, original, publicContextBridge, () => {}, context)).toEqual(receipt);
+    const other = await f.harness.createConversation({ ownership: { kind: "ownerless" } }, context);
+    const second = await importCopiedLegacyTree(other, reordered, publicContextBridge, () => {}, context);
+    for (const branch of second.branches) {
+      const c = (await f.harness.conversation(branch.engineConversationId as ConversationId, context))!;
+      expect((await c.context(context)).messages).toEqual(json(convertToLlm(buildSessionContext(fixture.manager.getEntries(), branch.sourceLeafId).messages)));
+    }
+  }));
+  for (const invalid of ["missing-binding", "extra-binding", "duplicate-host", "duplicate-ID", "missing-parent", "cycle",
+    "two-roots", "unknown-record", "overflow", "entries-bound", "bytes-bound", "branches-bound", "bad-baseline"] as const) {
+    test(`whole-tree preflight rejects ${invalid} without any writes`, () => using(async f => {
+      const fixture = treeFixture(), input = json(fixture.input);
+      const bindings = input.hostBranchBindings as Record<string, { chatJid: string; chatIncarnation: string; branchId: string; hostBaseline: string }>;
+      const records = input.sourceJSONL.trim().split("\n").map(line => JSON.parse(line));
+      const leaf = fixture.leaves[0]!;
+      if (invalid === "missing-binding") delete bindings[leaf];
+      if (invalid === "extra-binding") bindings.extra = bindings[leaf]!;
+      if (invalid === "duplicate-host") bindings[fixture.leaves[1]!] = bindings[leaf]!;
+      if (invalid === "duplicate-ID") records[2].id = records[1].id;
+      if (invalid === "missing-parent") records[2].parentId = "missing";
+      if (invalid === "cycle") records[2].parentId = records[3].id;
+      if (invalid === "two-roots") records[2].parentId = null;
+      if (invalid === "unknown-record") records.at(-1).type = "future-record";
+      if (invalid === "overflow") records.at(-1).message.content = "OVERFLOW";
+      if (invalid === "bad-baseline") bindings[leaf]!.hostBaseline = "unsupported baseline";
+      const candidate = { ...input, sourceJSONL: records.map(r => JSON.stringify(r)).join("\n").replace('"OVERFLOW"', "1e400"),
+        ...(invalid === "entries-bound" ? { maxEntries: 2 } : {}),
+        ...(invalid === "bytes-bound" ? { maxBytes: 2 } : {}),
+        ...(invalid === "branches-bound" ? { maxBranches: 3 } : {}),
+      };
+      await expect(importCopiedLegacyTree(f.root, candidate, publicContextBridge, () => {}, context)).rejects.toThrow();
+      expect((await f.root.entries({}, 100, undefined, context)).items).toEqual([]);
+      expect(await f.harness.snapshot(LegacyTreeImportManifest, f.root.id, context)).toBeUndefined();
+      expect((await f.root.commit(tx => tx.scanConversations({}, 100), context)).items).toHaveLength(1);
+      expect(f.host.effects + f.host.modelCalls + f.host.credentialLookups).toBe(0);
+    }));
+  }
 });

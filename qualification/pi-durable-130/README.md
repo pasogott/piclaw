@@ -334,3 +334,24 @@ requires caller drain/ownership and final storage fencing. It rejects nonlinear
 full-tree histories, unsupported record semantics and missing baselines; large
 transaction performance and general migration are not qualified. No production
 importer is registered or allowed to touch existing live history.
+
+## Restartable copied branch-tree import
+
+`importCopiedLegacyTree` validates an entire rooted single-file v3 tree before
+writing: all source entries and leaves, explicit host bindings/baselines, bounds,
+cycles, missing parents and unsupported semantics. Default limits are 16 leaves,
+1,000 entries and 8 MiB. Shared ancestry is imported once, with original IDs and
+public durable fork checkpoints retained, including the positional baseline
+following compaction. Source and detached binding hashes reject changed retries.
+
+Public `Tx.forkConversation` cannot fork entries appended in the same transaction.
+Each branch therefore commits fork, suffix, binding and root progress atomically;
+repeated import resumes from that manifest. A real post-commit lost-ack test
+reopens and verifies no duplicate forks. Partial destinations stay offline until
+complete: this is per-branch atomicity, not whole-migration atomic visibility.
+
+The full isolated suite passes 179 tests / 1,831 assertions across eleven files,
+plus strict types. The tree module has 17 new cases and independent source-review
+approval. This remains quiescent copied-history qualification with caller-owned
+drain and final fencing, not live upgrade, production importer registration,
+add-on-state conversion, or rollout approval.
