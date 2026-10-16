@@ -19,7 +19,16 @@ import { createDurableQueuedSteering } from "../../../runtime/src/agent-pool/dur
 import { storeWebMessage } from "../../../runtime/src/channels/web/messaging/message-store.js";
 
 
-export type RecoveryCheckpoint = { generation: number; intentSourceId: string; primary: AcceptedInput; primaryId: number; b: { sourceId: string; sourceSeq: number }; committedIntentId?: number; intent: DurableConversationOperation; candidate?: { id: number; requestId?: string }; modelCalls: number; effects: number; };
+// Test-only forensic reads of the actual SDK tables; never write lifecycle state.
+// Normalize both sides before stdout JSON transport (SQLite BLOBs are Uint8Arrays).
+export async function sdkRecoverySnapshot(database: OwnedSqlite) {
+  const rows = await Promise.all(["entries", "submissions"].map(table => database.all(`SELECT rowid AS snapshot_rowid, * FROM ${table} ORDER BY id`)));
+  return JSON.parse(JSON.stringify(rows, (_key, value) => value instanceof Uint8Array
+    ? { sqliteBlobHex: Buffer.from(value).toString("hex") }
+    : typeof value === "bigint" ? { sqliteInteger: value.toString() } : value)) as Record<string, unknown>[][];
+}
+
+export type RecoveryCheckpoint = { sdkSnapshot?: Awaited<ReturnType<typeof sdkRecoverySnapshot>>; generation: number; intentSourceId: string; primary: AcceptedInput; primaryId: number; b: { sourceId: string; sourceSeq: number }; committedIntentId?: number; intent: DurableConversationOperation; candidate?: { id: number; requestId?: string }; modelCalls: number; effects: number; };
 export async function acceptedSteerFixture(dir: string, boundary: "before-submit" | "committed-ack-lost", recovered?: RecoveryCheckpoint, queuePrimary = false, testConfig: { loseIntentBindingAck?: boolean; sharedDatabase?: boolean } = {}) {
     process.env.PICLAW_DB_IN_MEMORY = "0";
     const chatJid = `web:recovery:${basename(dir)}:${boundary}`;
@@ -27,6 +36,10 @@ export async function acceptedSteerFixture(dir: string, boundary: "before-submit
     const path = testConfig.sharedDatabase ? hostPath : join(dir, "candidate.sqlite");
     let owner = TestOwner.acquire(path); // Shared mode owns the root file BEFORE either runtime connection opens.
     owner.assert();
+    if (testConfig.sharedDatabase && recovered) {
+      check.throws(() => getDb(), /Database not initialized/);
+      check.equal(owner.token.generation, recovered.generation + 1); // New owner BEFORE host or SDK initialization.
+    }
     initDatabase();
     let db = getDb();
     if (testConfig.sharedDatabase) {
@@ -37,7 +50,8 @@ export async function acceptedSteerFixture(dir: string, boundary: "before-submit
         return match ? [match[1]!] : [];
       })).concat("durable_schema");
       const rootNames = new Set((db.query("SELECT name FROM sqlite_master").all() as { name: string }[]).map(r => r.name));
-      check.deepEqual(sdkNames.filter(name => rootNames.has(name)), [], "Public SDK default schema collides with root schema; use public SqliteStorageOptions.prefix before opening");
+      // A same-file restart (or an earlier shared fixture) already has the SDK schema.
+      if (!rootNames.has("durable_schema")) check.deepEqual(sdkNames.filter(name => rootNames.has(name)), [], "Public SDK default schema collides with root schema; use public SqliteStorageOptions.prefix before opening");
     }
     const rootSchemaMigrations = db.query("SELECT * FROM core_schema_migrations ORDER BY name").all();
     let candidateDatabase: OwnedSqlite;

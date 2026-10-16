@@ -991,3 +991,17 @@ repeat passed unchanged. Root fast CI for the convergence changes passed 7,143
 plus 25 feature and 9 build tests (74 baseline skips), before the final test-only
 fixture identity/shared-file additions. Independent bounded convergence and shared-
 file reviews are clear. No live database, activation or services were changed.
+
+The single-file layout now also has two fixed SIGKILL qualifications: attached
+input before submission, and candidate commit before host binding write. The child
+holds ownership until killed; replacement ownership follows confirmed death and
+precedes host/SDK open. Ordered full SDK entry/submission rows are checkpointed in
+the live child and compared exactly after paused reopen, before explicit repair or
+resume. Same-ID binding repair adds no SDK records; completion leaves one answer
+and terminal commit. Integrity/FK and no-JSONL/no-extra-database checks still pass.
+
+Focused verification passes 7 tests / 387 assertions. Full candidate verification
+passes 380 tests / 6,440 assertions across 27 files, both private-package types pass,
+and independent bounded review is clear. Initial review caught the post-reopen
+baseline blind spot; the pre-kill snapshots close it. This covers two fixed windows,
+not arbitrary crash placement or production activation.
