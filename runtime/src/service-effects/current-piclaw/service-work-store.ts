@@ -47,7 +47,25 @@ export interface ServiceWorkAcceptanceRuntime extends ServiceWorkAdapterRuntime 
   validateAcceptance?: () => boolean;
 }
 
+/** Precommit failure: the transaction owner MUST let this escape and roll back. */
+export class EffectAdmissionError extends Error {
+  constructor(readonly tag: ServiceWorkErrorTag) {
+    super(`EF-S01 admission failed: ${tag}`);
+    this.name = "EffectAdmissionError";
+  }
+}
+
 class AcceptanceOwnershipError extends Error {}
+
+function mutationError(cause: unknown): ServiceWorkError {
+  return cause instanceof AcceptanceOwnershipError
+    ? serviceError("owner_conflict")
+    : cause instanceof CorruptStateError
+      ? serviceError("corrupt_state")
+      : isBusy(cause)
+        ? serviceError("storage_unavailable", "not_applied", true)
+        : serviceError("corrupt_state");
+}
 
 type MutationRequest = NormalisedMutationRequest;
 type MutationOutcome<T> =
@@ -156,6 +174,35 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
     return this.mutate("acceptSource", input, (request) =>
       this.applyAcceptSource(request as AcceptSourceRequest),
     );
+  }
+
+  /**
+   * Host-only synchronous precommit receipt, NOT a public applied EffectResult.
+   * Caller owns commit/rollback and acknowledgement. Pass its actual owned
+   * connection; another connection's transaction is never sufficient. Failures
+   * MUST escape the outer transaction. No lost-ack hook runs before commit.
+   */
+  acceptSourceInTransaction(
+    input: AcceptSourceRequest,
+    transactionDatabase: Database,
+  ): AcceptedSourceSnapshot {
+    if (transactionDatabase !== this.database || !this.database.inTransaction)
+      throw new EffectAdmissionError("owner_conflict");
+    const request = this.prepareMutation("acceptSource", input);
+    if (!request) throw new EffectAdmissionError("invalid_transition");
+    try {
+      const fault = this.fault("acceptSource", "before_effect");
+      if (!fault.ok || fault.injected)
+        throw new EffectAdmissionError("storage_unavailable");
+      const outcome = this.applyMutationWithinTransaction("acceptSource", request,
+        value => this.applyAcceptSource(value as AcceptSourceRequest));
+      if (!outcome.ok) throw new EffectAdmissionError(outcome.error._tag);
+      return outcome.value;
+    } catch (cause) {
+      if (cause instanceof EffectAdmissionError) throw cause;
+      throw new EffectAdmissionError(cause instanceof RollbackFault
+        ? "storage_unavailable" : mutationError(cause)._tag);
+    }
   }
 
   claimNext(
@@ -751,16 +798,8 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
     input: unknown,
     apply: (request: MutationRequest) => MutationOutcome<T>,
   ): Promise<ResultValue<T, ServiceWorkError>> {
-    const request = normaliseMutationRequest(method, input);
+    const request = this.prepareMutation(method, input);
     const effect = request?.effect;
-    this.trace(
-      method,
-      effect?.idempotencyKey ?? "invalid",
-      effect?.operationId ?? null,
-      effect?.sourceSeq ?? null,
-      null,
-      "call",
-    );
     if (!request || !effect)
       return this.fail(method, effect, serviceError("invalid_transition"));
 
@@ -775,28 +814,7 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
 
     try {
       const outcome = this.database
-        .transaction(() => {
-          const replay = this.readDecision<T>(
-            method,
-            effect.idempotencyKey,
-            effect.requestHash,
-          );
-          if (replay) return replay;
-          if (method === "acceptSource") this.validateAcceptance();
-          const value = apply(request);
-          if (!value.ok) return value;
-          const transactionFault = this.fault(method, "before_effect");
-          if (!transactionFault.ok || transactionFault.injected)
-            throw new RollbackFault();
-          this.writeDecision(
-            method,
-            effect.idempotencyKey,
-            effect.requestHash,
-            value.value,
-          );
-          if (method === "acceptSource") this.validateAcceptance();
-          return value;
-        })
+        .transaction(() => this.applyMutationWithinTransaction(method, request, apply))
         .immediate();
       if (!outcome.ok) return this.fail(method, effect, outcome.error);
 
@@ -819,16 +837,34 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
         outcome.duplicate ? "duplicate" : "ok",
       );
     } catch (cause) {
-      const error =
-        cause instanceof AcceptanceOwnershipError
-          ? serviceError("owner_conflict")
-          : cause instanceof CorruptStateError
-            ? serviceError("corrupt_state")
-            : isBusy(cause)
-              ? serviceError("storage_unavailable", "not_applied", true)
-              : serviceError("corrupt_state");
-      return this.fail(method, effect, error);
+      return this.fail(method, effect, mutationError(cause));
     }
+  }
+
+  private prepareMutation(method: MutationMethod, input: unknown): MutationRequest | null {
+    const request = normaliseMutationRequest(method, input);
+    const effect = request?.effect;
+    this.trace(method, effect?.idempotencyKey ?? "invalid", effect?.operationId ?? null,
+      effect?.sourceSeq ?? null, null, "call");
+    return request;
+  }
+
+  private applyMutationWithinTransaction<T>(
+    method: MutationMethod,
+    request: MutationRequest,
+    apply: (request: MutationRequest) => MutationOutcome<T>,
+  ): MutationOutcome<T> {
+    const effect = request.effect;
+    const replay = this.readDecision<T>(method, effect.idempotencyKey, effect.requestHash);
+    if (replay) return replay;
+    if (method === "acceptSource") this.validateAcceptance();
+    const value = apply(request);
+    if (!value.ok) return value;
+    const transactionFault = this.fault(method, "before_effect");
+    if (!transactionFault.ok || transactionFault.injected) throw new RollbackFault();
+    this.writeDecision(method, effect.idempotencyKey, effect.requestHash, value.value);
+    if (method === "acceptSource") this.validateAcceptance();
+    return value;
   }
 
   private validateAcceptance(): void {

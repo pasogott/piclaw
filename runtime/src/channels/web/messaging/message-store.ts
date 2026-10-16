@@ -26,6 +26,7 @@ import { getWebPreviewMaxChars, shouldPreviewWebContent } from "../../../db/web-
 import { scheduleLinkPreviews, type LinkPreviewChannel } from "../media/link-previews.js";
 import type { InteractionRow } from "../../../db.js";
 import type { NewMessage } from "../../../types.js";
+import type { Database } from "bun:sqlite";
 import { readAccessConfig } from "../../../core/config-access.js";
 import { requireOwnedSessionExecution } from "../../../agent-pool/owned-session-access.js";
 import { createUuid } from "../../../utils/ids.js";
@@ -50,6 +51,19 @@ export interface StoreWebMessageOptions {
   consumeDeferredFollowupRowId?: number | null;
   /** Fault-injection seam used to prove transaction rollback before consume. */
   beforeDeferredFollowupConsume?: () => void;
+}
+
+/** Host-only incoming admission options; never populated from HTTP fields. */
+export interface WebUserMessageStoreOptions extends StoreWebMessageOptions {
+  /**
+   * Runs after row/media writes on the SAME owned SQL connection, before commit.
+   * Trusted SQL-only, synchronous, retry-safe callback; return exactly undefined
+   * or throw on failure to roll back everything. Never schedule work after await:
+   * rollback cannot cancel arbitrary SQL in an asynchronous continuation.
+   * The message identity/timestamp are prepared once and stable across retries.
+   * Any receipt captured here is precommit only: do not publish/acknowledge here.
+   */
+  acceptSource?: (stored: Readonly<{ message: Readonly<NewMessage>; rowId: number; database: Database }>) => void;
 }
 
 /** Resolved parameters for storeWebMessage (after defaults applied). */
@@ -214,7 +228,7 @@ export function storeWebMessage(channel: LinkPreviewChannel, params: StoreWebMes
 }
 
 /** Single-user incoming messages only; every retry owns a complete atomic write. */
-export async function admitWebUserMessage(channel: LinkPreviewChannel, params: StoreWebMessageParams, options: StoreWebMessageOptions,
+export async function admitWebUserMessage(channel: LinkPreviewChannel, params: StoreWebMessageParams, options: WebUserMessageStoreOptions,
   authorise: (phase?: 'before' | 'after') => void, signal: AbortSignal, deferBeforeInsert?: () => boolean): Promise<InteractionRow | null> {
   if (params.isBot || readAccessConfig().mode !== 'single-user') throw Error('Incoming web admission requires single-user authority.');
   const database = getDb(), binding = getDatabaseBinding();
@@ -230,10 +244,18 @@ export async function admitWebUserMessage(channel: LinkPreviewChannel, params: S
     authorise(phase);
   };
   const prepared = prepareWebMessage(params, options);
+  const acceptSource = options.acceptSource;
   const committed = await admitSqliteWrite(database, () => {
     for (const mediaId of prepared.params.mediaIds) if (!getMediaInfoById(mediaId)) throw Error('Incoming media is unavailable.');
     if (deferBeforeInsert?.()) return null;
-    return writePreparedWebMessage(prepared);
+    const stored = writePreparedWebMessage(prepared);
+    const result: unknown = acceptSource?.({ message: stored.msg, rowId: stored.rowId, database });
+    if (result !== undefined) {
+      // Observe rejected promises/thenables without awaiting or exposing their payloads.
+      void Promise.resolve(result).then(() => undefined, () => undefined);
+      throw new Error('Source admission callback must be synchronous');
+    }
+    return stored;
   }, check, signal, 5000, assertBinding);
   return committed ? finishWebMessage(channel, committed) : null;
 }
