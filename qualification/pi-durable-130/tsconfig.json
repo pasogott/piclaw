@@ -19,6 +19,7 @@
     "host-handoff.test.ts",
     "runtime.test.ts",
     "host-recovery.test.ts",
+    "host-controller.test.ts",
     "migration.test.ts",
     "ownership.test.ts",
     "cross-store.test.ts",

@@ -787,3 +787,25 @@ with engine and qualification types passing. Root fast CI completed 7,143 tests
 still reports nine untouched frontend baseline-diagnostic differences; it is not
 claimed green. Independent review cleared the bounded passive helper, not a
 production controller or permission to resume.
+
+### Explicit owner-first controller
+
+The directly imported `createHostController` factory acquires host ownership before
+creating candidate storage and opening the Harness paused. It composes passive
+host discovery with public candidate reconciliation, validates the whole pending
+submission/task domain and rejects unknown inputs or independent/background tasks.
+Recovered unbound intents remain explicit retry work; authorisation reloads their
+bindings. It does not automatically dispatch or resume work.
+
+Shutdown seals admissions and joins observations before closing Harness/storage
+and releasing ownership. Failed or uncertain storage close retains the owner.
+Actual-engine tests cover ownership ordering, paused recovery, retry/deduplication,
+unknown input and real background-task refusal, callback capture, failed bootstrap
+and close failures during bootstrap/shutdown. Focused tests pass 8 cases / 162
+assertions; full candidate verification passes 361 tests / 5,792 assertions across
+23 files. Engine/qualification types and root fast CI pass; independent bounded
+source and additional-test reviews are clear.
+
+The factory is not registered or activated. Trusted adapters still supply actual
+exclusive ownership and accepted message reads. Worker wake-up/retry integration,
+production cutover and automatic existing-history migration remain incomplete.

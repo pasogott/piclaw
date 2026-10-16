@@ -1,5 +1,5 @@
 // INACTIVE application module. No bootstrap registration or production schema migration.
-import { AssistantEntry, InboxDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
+import { AssistantEntry, InboxDoc, LiveDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { awaitWithContext, withAbortSignal, withoutAbortSignal, type Context } from "@earendil-works/chord/context";
 import type { CurrentPiclawServiceWorkStore, FinishHarnessRequest } from "../../../runtime/src/service-effects/current-piclaw/service-work-store.js";
@@ -294,6 +294,18 @@ export class HostConversationRuntime {
   }
   /** Pure lookup/status/committed-entry reads. No wait/resume, terminal write or payload publication. */
   reconcile(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.readState(copy)); }
+  inspectAuthority() {
+    return this.observe(async () => {
+      const inspection = await this.harness.inspect(this.context); this.fence();
+      const runs = [];
+      for (const id of this.options.existingConversationIds) {
+        const live = await this.harness.snapshot(LiveDoc, id, this.context); this.fence();
+        if (live?.run) runs.push(live.run);
+      }
+      return { inspection, runs };
+    });
+  }
+  reconcileIntent(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.readState(copy, true)); }
   private async readState(input: AcceptedInput, intent = false) {
     const { operation, conversation } = await this.checked(input, intent);
     const record = await this.record(input, intent);

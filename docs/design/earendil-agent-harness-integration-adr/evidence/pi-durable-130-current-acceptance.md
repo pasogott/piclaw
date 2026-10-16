@@ -100,3 +100,15 @@ The missing code is concrete:
 Add only new composition tests: matching-manifest bootstrap and owner-before-open, mismatches/unknown recovered authority with zero dispatch, attached-but-unbound discovery, callback replacement during await, lost wake-up and shutdown/late event behaviour. Reuse the completed before-submit/ACK-lost recovery fixtures as existing evidence; do not rerun their matrix merely to restate it. The controller is useful source implementation, but does not make a production owner, live cutover or all PC rows accepted.
 
 Keep every selector/registration absent by default. No production dependency/pin, schema installation, services, live accounts/history, network, deployment or activation changes belong to this slice. Existing chats retain their host identities; broader offline migration compatibility, performance/resource budgets, production packaging, real ownership policy and post-new-work rollback/reverse conversion require separate bounded work. The missing public conditional-abort API stays explicit; no unsafe cancellation substitute is part of the controller.
+
+### Controller implementation follow-up
+
+The explicit, unregistered owner-first factory now exists in
+`runtime/durable-engine/src/host-controller.ts`. Actual-engine tests in
+`qualification/pi-durable-130/host-controller.test.ts` cover paused discovery,
+whole-domain rejection, unbound retry, owner-before-open and failure cleanup.
+Candidate verification: 361 tests / 5,792 assertions; engine/qualification types
+and root fast CI pass. Independent review cleared this bounded composition.
+This advances the factory portion of the next slice above, not production status
+of any row. Existing-worker wake-up/retry wiring and production adapter selection
+remain absent; migration, cutover and rollback acceptance are still open.
