@@ -3,6 +3,7 @@ import { type Storage, type HarnessInspection } from "@earendil-works/pi-durable
 import { withoutAbortSignal, type Context } from "@earendil-works/chord/context";
 import { HostConversationRuntime, type RuntimeOptions } from "./host-runtime.js";
 import { reconstituteAcceptedWork } from "./host-recovery.js";
+import type { HostCutoverController } from "./host-cutover.js";
 
 type Recovery = Parameters<typeof reconstituteAcceptedWork>[0];
 export interface HostOwnership {
@@ -40,7 +41,11 @@ export async function createHostController(config: HostControllerOptions, contex
     get: bindings.get.bind(bindings), intents: bindings.intents && Object.freeze({ ...bindings.intents,
       get: bindings.intents.get.bind(bindings.intents) }) });
   let lease: HostOwnership | undefined, storage: Storage | undefined, runtime: HostConversationRuntime | undefined;
-  let closedStorage = false, ready = false;
+  let closedStorage = false, ready = false, retainOwner = false, released = false;
+  async function releaseOwner() {
+    assert();
+    if (!released) { await lease!.release(); released = true; }
+  }
   let recovered: Awaited<ReturnType<typeof reconstituteAcceptedWork>> = [];
   const assert = () => { if (!lease) throw Error("Host owner unavailable"); lease.assertCurrentOwner(); };
   const deny = () => { throw Error("Unknown recovered candidate authority"); };
@@ -89,7 +94,7 @@ export async function createHostController(config: HostControllerOptions, contex
   // Start Runtime.open now: its existing snapshot captures runtime ports/options before await.
   // openStorage itself waits for acquisition, so no storage or Harness can precede ownership.
   const opening = HostConversationRuntime.open({ ...r,
-    owner: { assert() { if (lease) assert(); }, async release() { assert(); await lease!.release(); } },
+    owner: { assert() { if (lease) assert(); }, async release() { assert(); if (!retainOwner) await releaseOwner(); } },
     async openStorage() {
       const acquired = await acquire();
       lease = Object.freeze({ assertCurrentOwner: acquired.assertCurrentOwner.bind(acquired), release: acquired.release.bind(acquired) });
@@ -143,9 +148,41 @@ export async function createHostController(config: HostControllerOptions, contex
       })().finally(() => { retry = undefined; });
       return retry;
     }
-    return Object.freeze({ runtime, recovered, reconcileRecovered,
+    let rollbackAttempt: Promise<ReturnType<HostCutoverController["rollback"]>> | undefined;
+    let closing: Promise<void> | undefined;
+    /** Explicit inactive composition, one attempt only. Actual runtime resources close while
+     * the same exclusive owner remains held through the synchronous SQL writer transition.
+     * HostCutoverController still supplies its exact host frontier/drain checks. This does
+     * NOT prove historical candidate-only progress: activation-frontier proof is separate. */
+    function rollback(cutover: Pick<HostCutoverController, "prepareRollback" | "rollback">, revision: number) {
+      if (rollbackAttempt || closing) return Promise.reject(new Error("Controller already closing"));
+      const prepare = cutover.prepareRollback.bind(cutover), restore = cutover.rollback.bind(cutover);
+      retainOwner = true; // Synchronous: even a concurrent runtime.close cannot release the lease.
+      return rollbackAttempt = (async () => {
+        assert();
+        await activeRuntime.quiesceForRollback();
+        assert();
+        if (!closedStorage) throw Error("Candidate storage not closed");
+        if (prepare(revision).disposition !== "safe_to_restore") throw Error("Reconciliation required");
+        assert();
+        const result = restore(revision);
+        assert();
+        await releaseOwner();
+        return result;
+      })();
+    }
+    function close(): Promise<void> {
+      return closing ??= (async () => {
+        // Explicit abort after a failed SQL rollback may release only confirmed closed storage.
+        // Unknown/pending work or failed cleanup retains the owner and the cached failure.
+        if (rollbackAttempt) await rollbackAttempt.catch(() => {});
+        await activeRuntime.close();
+        if (retainOwner && !released && closedStorage) await releaseOwner();
+      })();
+    }
+    return Object.freeze({ runtime, recovered, reconcileRecovered, rollback,
       pendingIntentIds: Object.freeze(recovered.filter(e => e.role === "intent" && e.binding?.submissionId == null).map(e => e.input.requestId)),
-      close: runtime.close.bind(runtime) });
+      close });
   } catch (error) {
     if (runtime) await runtime.close();
     else {

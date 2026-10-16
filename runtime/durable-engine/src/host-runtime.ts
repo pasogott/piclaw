@@ -157,6 +157,9 @@ export class HostConversationRuntime {
   private closing?: Promise<void>;
   // Lifecycle joins only: not an input queue or admission/dedup authority.
   private readonly active = new Set<Promise<unknown>>();
+  // Observer detachment is not completion of an already-entered host callback.
+  // Only rollback joins these; ordinary close must keep its detach semantics.
+  private readonly underlyingWaits = new Set<Promise<unknown>>();
   private readonly observations = new AbortController();
   private observe<T>(body: () => Promise<T>): Promise<T> {
     this.fence();
@@ -376,8 +379,9 @@ export class HostConversationRuntime {
         if (!handle) throw new Error("Missing submission");
         await handle.wait(observation); this.fence();
       })();
+      this.underlyingWaits.add(pending);
       // Observe even a synchronous host callback's abort before awaitWithContext attaches.
-      void pending.catch(() => {});
+      void pending.finally(() => this.underlyingWaits.delete(pending)).catch(() => {});
       // Detach the whole observer, including host authorization/lookup, not just handle.wait.
       // Late continuations are fenced above; cancellation never aborts durable work.
       return awaitWithContext(pending, observation);
@@ -461,12 +465,27 @@ export class HostConversationRuntime {
       outboxIntents: [], committedAt: o.now() });
     const terminal = value(await o.terminal.commitTerminal(request)); this.fence(); return terminal;
   }
-  close(): Promise<void> {
+  /** Rollback-only shutdown: seal before yielding, join host calls, then reject ANY live
+   * public task/submission before Harness.close can cancel work. Failure stays sealed.
+   * This proves quiescence, NOT absence of historical candidate-only commits. */
+  quiesceForRollback(): Promise<void> {
+    if (this.closed) return Promise.reject(new Error("Runtime already closing"));
+    return this.shutdown(true);
+  }
+  close(): Promise<void> { return this.shutdown(false); }
+  private shutdown(requireQuiescent: boolean): Promise<void> {
     if (this.closing) return this.closing;
     this.closed = true; // Seal admissions, preserve pending/unknown work; close does not enable scheduling.
     this.observations.abort();
     return this.closing = (async () => {
       await Promise.allSettled([...this.active]);
+      if (requireQuiescent) {
+        await Promise.allSettled([...this.underlyingWaits]);
+        this.options.owner.assert();
+        const inspection = await this.harness.inspect(withoutAbortSignal(this.context));
+        this.options.owner.assert();
+        if (inspection.tasks.length || inspection.submissions.length) throw new Error("Candidate not quiescent");
+      }
       await this.harness.close(withoutAbortSignal(this.context)); // May wait for cooperative providers/tools; no bounded-close claim.
       await this.options.owner.release(); // Only after confirmed resource cleanup.
     })();

@@ -20,7 +20,7 @@ export async function openFixture(owner: { acquired: boolean }, allocated = () =
     modelAllowed: true, toolAllowed: true, modelCalls: 0, effects: 0, credentialLookups: 0,
     admissions: [] as EffectIdentity[], denials: [] as string[],
     modelHold: undefined as ReturnType<typeof barrier> | undefined,
-    onModelEnter: undefined as (() => void) | undefined,
+    onModelEnter: undefined as ((signal?: AbortSignal) => void) | undefined,
     finalContent: undefined as AssistantMessage["content"] | undefined,
     toolHold: undefined as ReturnType<typeof barrier> | undefined,
     toolEntered: barrier(),
@@ -55,7 +55,7 @@ export async function openFixture(owner: { acquired: boolean }, allocated = () =
   };
   let attempt = 0;
   const stream = (_model: unknown, transcript: { messages: readonly { role: string; content: unknown }[] }, options?: { signal?: AbortSignal }) => {
-    host.onModelEnter?.(); // Synchronous provider entry, before any synthetic hold or admission.
+    host.onModelEnter?.(options?.signal); // Synchronous provider entry, before any synthetic hold or admission.
     const output = new AssistantMessageEventStream();
     void (async () => {
       let message: AssistantMessage = {

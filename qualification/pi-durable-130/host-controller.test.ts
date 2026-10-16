@@ -6,24 +6,34 @@ import { acceptedSteerFixture } from "./src/accepted-steer-recovery-fixture.js";
 import { TestOwner, OwnedSqlite } from "./src/ownership.js";
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { createHostController, type HostControllerOptions } from "../../runtime/durable-engine/src/host-controller.js";
-import { context } from "./src/fixture.js";
+import { barrier, context } from "./src/fixture.js";
 import { createDurableRecoveryDispatch } from "../../runtime/src/agent-pool/durable-recovery-dispatch.js";
 import { at, value } from "./src/host-handoff.js";
+import { HostCutoverController, initializeCutoverManifest } from "../../runtime/durable-engine/src/host-cutover.js";
 
 for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["background"],
-  ["bootstrap-close-failure", "shutdown-close-failure"]] as const) {
+  ["bootstrap-close-failure", "shutdown-close-failure"],
+  ["rollback", "rollback-host-changed", "rollback-close-failure", "rollback-pending"],
+  ["rollback-held", "rollback-held-close", "rollback-close-first", "rollback-inflight"]] as const) {
   test(`explicit owner-first host controller: ${modes.join(" / ")}`, async () => {
     for (const mode of modes) {
     const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "host-controller-"));
     const oldMemory = process.env.PICLAW_DB_IN_MEMORY;
-    const f = await acceptedSteerFixture(dir, mode === "lost-ack" ? "committed-ack-lost" : "before-submit");
+    const f = await acceptedSteerFixture(dir, mode === "lost-ack" || mode === "rollback-pending" ? "committed-ack-lost" : "before-submit");
     let controller: Awaited<ReturnType<typeof createHostController>> | undefined;
     let actualClose: (() => Promise<void>) | undefined;
     let capturedLease: Parameters<HostControllerOptions["createStorage"]>[0] | undefined;
-    const closeFailure = mode === "bootstrap-close-failure" || mode === "shutdown-close-failure";
+    const rollbackMode = mode.startsWith("rollback");
+    const held = barrier(), entered = barrier();
+    let holdLookup = false;
+    let providerSignal: AbortSignal | undefined;
+    const providerEntered = barrier();
+    const closeFailure = mode === "bootstrap-close-failure" || mode === "shutdown-close-failure" || mode === "rollback-close-failure";
     try {
       const { primary, primaryId } = await f.prepare();
       await f.runtime!.close(); f.runtime = undefined;
+      const originalEnter = f.base.host.onModelEnter;
+      f.base.host.onModelEnter = signal => { originalEnter?.(signal); providerSignal = signal; providerEntered.release(); };
       f.db.exec("DROP TABLE recovery_fixture_identity");
       if (mode === "unknown" || mode === "bootstrap-close-failure" || mode === "background") {
         // Real public candidate admission, not a fabricated inspection. The host has no work for it.
@@ -61,6 +71,7 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
           expect(() => TestOwner.acquire(f.path)).toThrow("owner busy");
           const s = await SqliteStorage.open(new OwnedSqlite(f.owner));
           const close = s.close.bind(s);
+          if (rollbackMode) { capturedLease = lease; actualClose = () => close(context); }
           if (closeFailure) {
             capturedLease = lease;
             actualClose = () => close(context);
@@ -70,6 +81,15 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
           return s;
         },
         runtime: { incarnation: f.incarnation, ...f.ports,
+          work: { acceptSource: f.ports.work.acceptSource.bind(f.ports.work),
+            claimNext: f.ports.work.claimNext.bind(f.ports.work), appendIntent: f.ports.work.appendIntent.bind(f.ports.work),
+            recordQueuedInput: f.ports.work.recordQueuedInput.bind(f.ports.work),
+            getChatFrontier: f.ports.work.getChatFrontier.bind(f.ports.work),
+            listOpenOperations: f.ports.work.listOpenOperations.bind(f.ports.work), getOperation: async id => {
+            if (holdLookup) { entered.release(); await held.promise; }
+            return f.ports.work.getOperation(id);
+          }, acceptCancellation: f.ports.work.acceptCancellation.bind(f.ports.work),
+          bindHarness: f.ports.work.bindHarness.bind(f.ports.work), finishHarness: f.ports.work.finishHarness!.bind(f.ports.work) },
           harnessOptions: { models: f.base.models, registry: f.base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
           existingConversationIds: [mode === "failed-open" ? 999999 as typeof f.base.root.id : f.base.root.id],
           conversationFor: () => f.base.root.id, putAnswer() {}, sessionId: f.incarnation, lane: "main", generation: f.generation, now: () => at },
@@ -95,13 +115,13 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
         await expect(closing).rejects.toThrow("injected storage close failure");
         expect(controller.close()).toBe(closing);
         await expect(controller.close()).rejects.toThrow("injected storage close failure");
-      } else if (mode === "happy" || mode === "lost-ack") {
+      } else if (mode === "happy" || mode === "lost-ack" || rollbackMode) {
         controller = await pending;
         expect(controller.recovered[0]!.input).toEqual(primary);
-        expect(controller.pendingIntentIds).toEqual(mode === "happy" ? [`queued-steer:${f.intentSourceId}`] : []);
+        expect(controller.pendingIntentIds).toEqual(mode === "lost-ack" || mode === "rollback-pending" ? [] : [`queued-steer:${f.intentSourceId}`]);
         expect((await controller.runtime.inspectAuthority()).inspection.scheduling).toBe("paused");
         expect(f.providerEntries).toBe(entries);
-        f.base.host.modelHold?.release();
+        if (mode !== "rollback-pending" && mode !== "rollback-inflight") f.base.host.modelHold?.release();
         const intent = controller.recovered[1]!.input;
         const shutdown = new AbortController();
         const dispatch = createDurableRecoveryDispatch({ assertCurrentWriter: () => f.owner.assert(),
@@ -117,19 +137,112 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
         expect(id).not.toBeNull();
         // Lost ACK repair is deliberately not a progress grant.
         if (mode === "lost-ack") await controller.runtime.resume(primary, primaryId);
-        let state = await controller.runtime.reconcileIntent(intent);
-        for (let i = 0; i < 100 && state.status?.status !== "done"; i++) {
-          await Bun.sleep(5); state = await controller.runtime.reconcileIntent(intent);
+        if (mode === "rollback-inflight") {
+          await providerEntered.promise;
+          expect(providerSignal).toBeDefined();
+          expect(providerSignal!.aborted).toBe(false);
+          const live = await controller.runtime.inspectAuthority();
+          expect(live.inspection.tasks.length).toBeGreaterThan(0);
+          expect(live.inspection.submissions.length).toBeGreaterThan(0);
         }
-        expect(state.status?.status).toBe("done");
-        expect(await controller.runtime.submitIntent(intent)).toBe(id);
-        await controller.close();
+        if (mode !== "rollback-pending" && mode !== "rollback-inflight") {
+          let state = await controller.runtime.reconcileIntent(intent);
+          for (let i = 0; i < 100 && state.status?.status !== "done"; i++) {
+            await Bun.sleep(5); state = await controller.runtime.reconcileIntent(intent);
+          }
+          expect(state.status?.status).toBe("done");
+          expect(await controller.runtime.submitIntent(intent)).toBe(id);
+        }
+        if (rollbackMode) {
+          initializeCutoverManifest(f.db);
+          const digest = "a".repeat(64), receipt = { sourceDigest: digest, receiptHash: digest };
+          const cutover = new HostCutoverController(f.db, { domain: `rollback-${crypto.randomUUID()}`, incarnation: "host-A",
+            ownerGeneration: f.owner.token.generation, sourceEngineId: "legacy", candidateStoreRef: "candidate" }, {
+            assertOwner() { f.owner.assert(); }, assertCurrentWriter() { f.owner.assert(); },
+            checkDrained() { return { sourceDigest: digest, pending: 0, inflight: 0 }; },
+          });
+          let m = cutover.preflight({ requestKey: "rollback-test", sourceDigest: digest, importHash: digest });
+          m = await cutover.begin(m.revision, { async copy() { return receipt; }, async importCopied() { return receipt; } });
+          m = await cutover.verify(m.revision, async () => receipt);
+          m = cutover.commitWriter(m.revision);
+          if (mode === "rollback-host-changed") f.db.exec("DELETE FROM piclaw_durable_intent_bindings_v1");
+          const before = cutover.inspect();
+          const actualRollback = cutover.rollback.bind(cutover);
+          let flips = 0;
+          cutover.rollback = revision => {
+            f.owner.assert();
+            expect(events).toEqual(["owner", "storage", "close"]);
+            expect(() => TestOwner.acquire(f.path)).toThrow("owner busy");
+            flips++;
+            return actualRollback(revision);
+          };
+          let observer: Promise<void> | undefined;
+          let concurrentClose: Promise<void> | undefined;
+          if (mode === "rollback-held" || mode === "rollback-held-close" || mode === "rollback-close-first") {
+            holdLookup = true;
+            observer = controller.runtime.wait(primary, primaryId);
+            void observer.catch(() => {});
+            await entered.promise;
+          }
+          if (mode === "rollback-close-first") {
+            // Normal close detaches even an entered host lookup; rollback cannot join it later.
+            concurrentClose = controller.close();
+            await expect(controller.rollback(cutover, m.revision)).rejects.toThrow("Controller already closing");
+            await expect(observer!).rejects.toThrow();
+            await concurrentClose;
+            expect(flips).toBe(0);
+            expect(events).toEqual(["owner", "storage", "close", "release"]);
+            held.release();
+            continue;
+          }
+          const attempt = controller.rollback(cutover, m.revision);
+          if (observer) {
+            if (mode === "rollback-held-close") concurrentClose = controller.close();
+            await expect(observer).rejects.toThrow();
+            // Flush detached wrapper continuations while the underlying callback stays held.
+            await Bun.sleep(0);
+            expect(events).toEqual(["owner", "storage"]);
+            expect(cutover.inspect()).toEqual(before);
+            expect(flips).toBe(0);
+            f.owner.assert();
+            expect(() => TestOwner.acquire(f.path)).toThrow("owner busy");
+            held.release();
+          }
+          expect(() => controller!.runtime.reconcile(primary)).toThrow("Runtime closed");
+          await expect(controller.rollback(cutover, m.revision)).rejects.toThrow("Controller already closing");
+          if (mode === "rollback" || mode === "rollback-held" || mode === "rollback-held-close") {
+            expect((await attempt).writer).toBe("legacy");
+            expect(flips).toBe(1);
+            await concurrentClose;
+            await controller.close();
+          } else {
+            await expect(attempt).rejects.toThrow(mode === "rollback-pending" || mode === "rollback-inflight" ? "Candidate not quiescent" :
+              mode === "rollback-close-failure" ? "injected storage close failure" : "Reconciliation required");
+            expect(cutover.inspect()).toEqual(before);
+            expect(flips).toBe(0);
+            f.owner.assert();
+            expect(() => TestOwner.acquire(f.path)).toThrow("owner busy");
+            if (mode === "rollback-pending") {
+              expect(events).toEqual(["owner", "storage"]);
+              expect(f.providerEntries).toBe(entries);
+            }
+            if (mode === "rollback-inflight") {
+              expect(events).toEqual(["owner", "storage"]);
+              expect(providerSignal!.aborted).toBe(false);
+            }
+            // Explicit test teardown, not a rollback retry or work cancellation by the guard.
+            f.base.host.modelHold?.release();
+            await actualClose!(); actualClose = undefined;
+            await capturedLease!.release(); capturedLease = undefined;
+            controller = undefined;
+          }
+        } else await controller.close();
       } else {
         await expect(pending).rejects.toThrow(mode === "bootstrap-close-failure" ? "injected storage close failure" :
           mode === "unknown" || mode === "background" ? "Unknown recovered candidate authority" : "Missing manifest conversation");
         expect(f.providerEntries).toBe(entries);
       }
-      if (closeFailure) {
+      if (closeFailure && !rollbackMode) {
         expect(events).toEqual(["owner", "storage", "close-failed"]);
         f.owner.assert();
         expect(() => TestOwner.acquire(f.path)).toThrow("owner busy");
@@ -140,9 +253,12 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
         expect(events).toEqual(["owner", "storage", "close-failed", "release"]);
         const contender = TestOwner.acquire(f.path);
         contender.releaseAfterClose(); contender.closeConnection();
-      } else expect(events).toEqual(["owner", "storage", "close", "release"]);
+      } else if (mode === "rollback-close-failure") expect(events).toEqual(["owner", "storage", "close-failed", "release"]);
+      else if (mode === "rollback-pending" || mode === "rollback-inflight") expect(events).toEqual(["owner", "storage", "release"]);
+      else expect(events).toEqual(["owner", "storage", "close", "release"]);
     } finally {
-      if (closeFailure) {
+      held.release();
+      if (closeFailure || rollbackMode && controller === undefined) {
         await actualClose?.();
         await capturedLease?.release();
       } else await controller?.close();

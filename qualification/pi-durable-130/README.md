@@ -908,3 +908,32 @@ candidate-only progress or establish candidate-owner quiescence. Unsupported
 background activity, incomplete drain adapters or live-owner replacement invalidate
 that approval. Production rollback still requires owner-controlled seal/drain and
 public candidate progress evidence before writer switching. No activation occurs.
+
+### Explicit candidate-owner quiescence composition (inactive)
+
+The opt-in factory now exposes one-use `controller.rollback(cutover, revision)`.
+It seals runtime admissions synchronously, joins host calls, and inspects the whole
+public pending task/submission domain. Any live work is refused **before** Harness
+close, without aborting accepted work. For an empty domain, Harness/storage close
+while the real factory owner remains held; only then may the existing SQL rollback
+preflight and writer transition run. Successful rollback releases the owner.
+Failures retain it; explicit controller close after confirmed resource cleanup can
+abort a failed SQL rollback. Failed/uncertain cleanup stays sealed and retains its
+cached failure and owner. Ordinary close remains unchanged.
+
+This adds quiescence only, not public historical-progress evidence. In particular,
+a completed candidate-only commit absent from the host projection still requires a
+trusted persisted activation-frontier comparison, which is not implemented here.
+Do not treat this composition as general/production rollback safety. No boolean
+approval, proof registry, new journal, migration or activation is introduced.
+Factory tests use actual candidate pending work and actual cutover SQL transitions;
+the test drain adapter is intentionally bounded, not a production drain proof.
+
+Rollback quiescence follow-up: review found that detached wait observers could
+finish before an underlying host callback. Rollback now joins raw wait operations
+separately; ordinary close retains its observer-detachment semantics. Deterministic
+tests cover held callbacks, both close/rollback orderings and actual asynchronous
+provider refusal without abort. Focused controller verification passes 8 cases /
+190 assertions, full candidate verification passes 372 tests / 6,075 assertions,
+and both private-package types pass. Independent review cleared current quiescence
+only—not historical candidate progress, production rollback or a shutdown deadline.
