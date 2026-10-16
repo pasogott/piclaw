@@ -296,10 +296,13 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
       const intentId = `queued-steer:${request.sourceId}`;
       if (owned || this.database.query("SELECT 1 FROM service_effect_s01_intents WHERE operation_id=? AND intent_id=?")
         .get(operation.operation_id, intentId)) throw new EffectAdmissionError("owner_conflict");
-      const changed = this.database.query(`UPDATE service_effect_s01_sources SET state='claimed', target_operation_id=?
+      this.database.query(`UPDATE service_effect_s01_sources SET state='claimed', target_operation_id=?
         WHERE chat_jid=? AND source_seq=? AND source_id=? AND source_hash=? AND state='pending' AND target_operation_id IS NULL AND disposition_reason IS NULL`)
         .run(operation.operation_id, request.chatJid, source.source_seq, request.sourceId, request.sourceHash);
-      if (changed.changes !== 1) throw new EffectAdmissionError("invalid_transition");
+      // Bun's run().changes can include trigger writes on the full host schema.
+      // SQLite changes() is the direct CAS row count, excluding those triggers.
+      if ((this.database.query('SELECT changes() AS n').get() as { n: number }).n !== 1)
+        throw new EffectAdmissionError("invalid_transition");
       this.database.query("INSERT INTO service_effect_s01_operation_sources(chat_jid, operation_id, source_seq) VALUES (?, ?, ?)")
         .run(request.chatJid, operation.operation_id, source.source_seq);
       // Reuse S01 intent application/version CAS, without accepting another source.

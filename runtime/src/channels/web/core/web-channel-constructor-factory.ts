@@ -118,6 +118,7 @@ export interface WebChannelConstructorFactoryRuntimeOpts {
   getInputSourceAdmission?: WebChannelLike["getInputSourceAdmission"];
   getQueuedInputSourceAdmission?: WebChannelLike["getQueuedInputSourceAdmission"];
   getQueuedInputSourceWithdrawal?: WebChannelLike["getQueuedInputSourceWithdrawal"];
+  getAcceptedQueuedSteering?: WebChannelLike["getAcceptedQueuedSteering"];
   getQueuedInputMaterialization?: WebChannelLike["getQueuedInputMaterialization"];
   dispatchAcceptedInput?: WebChannelLike["dispatchAcceptedInput"];
 }

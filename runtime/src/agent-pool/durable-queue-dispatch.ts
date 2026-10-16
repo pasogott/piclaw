@@ -23,6 +23,8 @@ export function createDurableQueueDispatch(options: {
   adapter: ReturnType<typeof createDurableConversationAdapter>;
   branchId: string;
   assertCurrentWriter(): void;
+  /** Explicit host-owned runtime correlation; never inferred from input content. */
+  runningCorrelation?(submissionId: number): import('../service-effects/contracts/service-work-store.js').HarnessCorrelation;
   /** Host outcome event/barrier, not an HTTP result or a scheduling grant. Subscribe without
    * losing already committed outcomes. Resolution only requests a fresh fenced SQL read. */
   waitForReconciliation(identity: PendingInputIdentity, signal: AbortSignal): Promise<void>;
@@ -34,6 +36,7 @@ export function createDurableQueueDispatch(options: {
   const sourceFor = work.getAcceptedSource.bind(work), frontierFor = work.getChatFrontier.bind(work);
   const claim = work.claimNext.bind(work), operationFor = work.getOperation.bind(work);
   const event = options.waitForReconciliation.bind(options), shutdown = options.shutdown;
+  const correlation = options.runningCorrelation?.bind(options), bind = work.bindHarness.bind(work);
   const dispatch: AcceptedQueueDispatch = (chatJid, messageId, rowId) => {
     assert();
     const source = sourceFor(chatJid, messageId);
@@ -72,6 +75,16 @@ export function createDurableQueueDispatch(options: {
           return "pending";
         const accepted = { claimed: { source: currentSource, operation }, branchId, requestId, content };
         const id = await submit(accepted); assert();
+        if (correlation && !operation.harness) {
+          const harness = structuredClone(correlation(id));
+          if (harness.state !== 'running' || harness.harnessOperationId !== String(id)) return 'pending';
+          const request = { effect: { idempotencyKey: `running:${operationId}:${id}`, requestHash: '', operationId,
+            sourceSeq: source.sourceSeq, provenanceRef: source.provenanceRef, redactionClass: 'private' as const },
+            expectedVersion: operation.version, ...harness };
+          request.effect.requestHash = hashCanonicalRequest(request as unknown as CanonicalJsonValue);
+          const bound = await bind(request); assert();
+          if (!bound.ok) return 'pending';
+        }
         await wait(accepted, id, shutdown); assert();
         if (shutdown.aborted) return "pending";
         return await settle(accepted) ? "settled" : "pending";

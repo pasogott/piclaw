@@ -1,5 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createDurableQueuedSteering } from '../../../src/agent-pool/durable-queued-steering.js';
+import { storeWebMessage } from '../../../src/channels/web/messaging/message-store.js';
 import { createDurableQueueDispatch } from "../../../src/agent-pool/durable-queue-dispatch.js";
 import { createDurableConversationAdapter } from "../../../src/agent-pool/durable-runtime-adapter.js";
 import { join } from "node:path";
@@ -147,7 +149,9 @@ test('steer never invokes registered withdrawal or creates legacy work for accep
   const item = getDeferredQueuedFollowups('web:default')[0]!;
   let calls = 0; f.channel.getQueuedInputSourceWithdrawal = () => () => { calls++; };
   const before = f.snapshot(), jobs = f.jobs.length;
-  expect((await f.remove(item.rowId, '/agent/queue-steer')).status).toBe(500);
+  const response = await f.remove(item.rowId, '/agent/queue-steer');
+  expect(response.status).toBe(500);
+  expect(await response.json()).toEqual({ error: 'Accepted input requires host cancellation' });
   expect(calls).toBe(0); expect(f.snapshot()).toEqual(before); expect(f.jobs.length).toBe(jobs);
 });
 
@@ -213,6 +217,7 @@ test("HTTP default is off, including forged engine and callback fields", async (
   expect(f.channel.getInputSourceAdmission).toBeUndefined();
   expect(f.channel.getQueuedInputSourceAdmission).toBeUndefined();
   expect(f.channel.dispatchAcceptedInput).toBeUndefined();
+  expect(f.channel.getAcceptedQueuedSteering).toBeUndefined();
   const response = await f.route({ content: "ordinary input", engine: "durable", acceptSource: "forged", getInputSourceAdmission: "forged" });
   expect(response.status).toBe(201);
   expect(f.db.query("SELECT * FROM messages").all()).toHaveLength(1);
@@ -600,15 +605,15 @@ const hasEngine = existsSync(new URL("../../../durable-engine/node_modules/@eare
 test("required engine integration prerequisite cannot silently skip", () => {
   if (process.env.PICLAW_REQUIRE_DURABLE_ENGINE === "1") expect(hasEngine).toBe(true);
 });
-for (const queuedInput of [false, true]) for (const pending of [false, true]) test.skipIf(!hasEngine)(`HTTP accepted message uses current worker and real engine exactly once; queued=${queuedInput}; pending=${pending}`, async () => {
+for (const [queuedInput, pending, steering] of [[false,false,false], [false,true,false], [true,false,false], [true,true,false], [false,false,true], [false,false,'ack-lost'], [false,false,'stale-target']] as const) test.skipIf(!hasEngine)(`HTTP accepted message uses current worker and real engine exactly once; queued=${queuedInput}; pending=${pending}; steering=${steering}`, async () => {
   const { HostConversationRuntime, BunSqliteDatabase, createHostDurableBindings, initializeHostDurableBindings } = await import("../../../durable-engine/src/index.js");
   const { SqliteStorage } = await import("../../../durable-engine/qualification/sqlite.ts");
-  const { context, openFixture } = await import("../../../../qualification/pi-durable-130/src/fixture.js");
+  const { context, openFixture, barrier } = await import("../../../../qualification/pi-durable-130/src/fixture.js");
   const { installTerminalSettlementCompositionSchema } = await import("../../../src/service-effects/current-piclaw/terminal-settlement-schema.js");
   const { createCurrentPiclawTerminalSettlementStore } = await import("../../../src/service-effects/current-piclaw/terminal-settlement-store.js");
   const { InMemoryEffectPayloadResolver } = await import("../../../src/service-effects/testing/in-memory-payload-resolver.js");
   let callback: WebUserMessageStoreOptions["acceptSource"];
-  const f = fixture(() => callback);
+  const f = fixture(() => callback, () => true);
   callback = f.accept;
   installTerminalSettlementCompositionSchema(f.db);
   const path = join(process.env.PICLAW_WORKSPACE!, "engine.sqlite");
@@ -646,12 +651,14 @@ for (const queuedInput of [false, true]) for (const pending of [false, true]) te
   let reconcile!: () => void;
   const evidence = new Promise<void>(resolve => { reconcile = resolve; });
   const lifecycle = { shutdown: shutdown.signal, waitForReconciliation: async () => { await evidence; } };
+  let pendingIntent: Parameters<typeof adapter.submitIntent>[0] | undefined;
   let accepted: Parameters<typeof adapter.settle>[0] | undefined;
   const selectedAdapter = pending ? { ...adapter, async wait(work: Parameters<typeof adapter.wait>[0], id: number) {
     await adapter.wait(work, id);
     if (!accepted) { accepted = work; throw Error("lost wait acknowledgement"); }
   } } : adapter;
-  f.channel.dispatchAcceptedInput = createDurableQueueDispatch({ ...lifecycle, work: f.work, adapter: selectedAdapter, branchId: "main", assertCurrentWriter: assert });
+  f.channel.dispatchAcceptedInput = createDurableQueueDispatch({ ...lifecycle, work: f.work, adapter: selectedAdapter, branchId: "main", assertCurrentWriter: assert,
+    ...(steering ? { runningCorrelation: (id: number) => ({ sessionId: 'queue-test', lane: 'main', harnessOperationId: String(id), state: 'running' as const, watchGeneration: 1 }) } : {}) });
   let legacyCalls = 0;
   (f.channel.agentPool as any).runAgent = () => { legacyCalls++; throw Error("legacy forbidden"); };
   const resumeQueued = f.channel.resumeChat.bind(f.channel);
@@ -693,7 +700,144 @@ for (const queuedInput of [false, true]) for (const pending of [false, true]) te
       expect(f.db.query('SELECT source_id, source_seq, payload_ref FROM service_effect_s01_sources').all()).toEqual(originalSources);
     }
     let releases = 0;
+    const hold = barrier(), intentHold = barrier();
+    if (steering) base.host.modelHold = hold;
     const original = f.jobs[0]!.task().then(() => { releases++; });
+    if (steering) {
+      for (let n = 0; n < 500; n++) {
+        const active = await f.work.getChatFrontier('web:default');
+        const op = active.ok && active.value.activeOperationId ? await f.work.getOperation(active.value.activeOperationId) : null;
+        if (op?.ok && op.value?.harness?.state === 'running') break;
+        await Bun.sleep(1);
+      }
+      f.busy(true, true); f.expectSources(2);
+      f.channel.getQueuedInputSourceAdmission = () => f.acceptQueued;
+      expect((await f.route({ content: 'accepted B' })).status).toBe(201);
+      const queued = getDeferredQueuedFollowups('web:default')[0]!;
+      const before = f.work.getAcceptedSource('web:default', queued.source_id!)!;
+      let stale = true;
+      let dispatches = 0;
+      const coordinator = createDurableQueuedSteering({ work: f.work,
+        adapter: { ...adapter, async submitIntent(input) {
+          dispatches++;
+          const id = await adapter.submitIntent(input);
+          if (steering === 'ack-lost') throw Error('lost dispatch ACK');
+          return id;
+        } },
+        onPendingIntent(input) { pendingIntent = input; },
+        chatJid: 'web:default', branchId: 'main', assertCurrentWriter: assert,
+        runningBinding: { sessionId: 'queue-test', lane: 'main', watchGeneration: 1 },
+        readQueued: id => getDeferredQueuedFollowups('web:default').find(item => item.rowId === id),
+        validatePayload: ({ item }) => {
+          const { source_accepted, materializeRetries, ...immutable } = item;
+          expect(f.work.getAcceptedSource('web:default', item.source_id)?.provenanceRef).toBe(`engine:host-selected:${hashCanonicalRequest(JSON.parse(JSON.stringify(immutable)) as CanonicalJsonValue)}`);
+        },
+        materialize: (item, accept) => storeWebMessage(f.channel as any, { chatJid: 'web:default', content: item.queuedContent,
+          isBot: false, mediaIds: item.mediaIds ?? [], agentId: 'default', agentName: 'Fixture' }, {
+          contentBlocks: item.contentBlocks, linkPreviews: item.linkPreviews, threadId: item.threadId,
+          screenHint: item.screenHint, isSteeringMessage: true, consumeDeferredFollowupRowId: item.rowId,
+          materializeQueuedSource: stored => {
+            accept(stored);
+            // Prove attachment, timeline insert and queue consumption share rollback.
+            if (stale) throw Error('private post-attachment failure');
+          } }),
+      });
+      f.channel.getAcceptedQueuedSteering = () => coordinator;
+      const click = () => f.channel.handleRequest(new Request('http://fixture/agent/queue-steer', { method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: 'http://fixture' }, body: JSON.stringify({ row_id: queued.rowId }) }));
+      if (steering === 'stale-target') {
+        // Finish through the host lifecycle API, never by editing operation SQL.
+        const frontier = await f.work.getChatFrontier('web:default');
+        if (!frontier.ok || !frontier.value.activeOperationId) throw Error('active operation');
+        const current = await f.work.getOperation(frontier.value.activeOperationId);
+        if (!current.ok || !current.value?.harness) throw Error('running harness');
+        const finish = { effect: { idempotencyKey: 'stale-target-finish', requestHash: '',
+          operationId: current.value.operationId, sourceSeq: current.value.primarySourceSeq,
+          provenanceRef: 'host:test', redactionClass: 'private' as const },
+          expectedVersion: current.value.version, expectedHarness: current.value.harness };
+        finish.effect.requestHash = hashCanonicalRequest({ method: 'finishHarness.v1', ...finish } as unknown as CanonicalJsonValue);
+        expect((await f.work.finishHarness(finish)).ok).toBe(true);
+        const unchanged = f.snapshot(), queue = getDeferredQueuedFollowups('web:default'), events = [...f.events];
+        const operations = f.db.query('SELECT * FROM service_effect_s01_operations').all();
+        const denied = await click();
+        expect(denied.status).toBe(500);
+        expect(await denied.json()).toEqual({ error: 'Accepted steering is unavailable.' });
+        expect(f.snapshot()).toEqual(unchanged);
+        expect(getDeferredQueuedFollowups('web:default')).toEqual(queue);
+        expect(f.db.query('SELECT * FROM service_effect_s01_operations').all()).toEqual(operations);
+        expect(f.events).toEqual(events); expect(dispatches).toBe(0);
+        hold.release(); await original;
+        expect(f.work.getAcceptedSource('web:default', queued.source_id!)?.state).toBe('pending');
+        expect(getDeferredQueuedFollowups('web:default')).toEqual(queue);
+        expect(f.db.query('SELECT * FROM service_effect_s02_commits').all()).toHaveLength(1);
+        expect(base.host.modelCalls).toBe(1); expect(legacyCalls).toBe(0);
+        return;
+      }
+      const unchanged = f.snapshot(), queuedBefore = getDeferredQueuedFollowups('web:default');
+      const eventsBefore = [...f.events];
+      const operationsBefore = f.db.query('SELECT * FROM service_effect_s01_operations').all();
+      expect((await click()).status).toBe(500);
+      expect(f.snapshot()).toEqual(unchanged);
+      expect(f.events).toEqual(eventsBefore);
+      expect(dispatches).toBe(0);
+      expect(getDeferredQueuedFollowups('web:default')).toEqual(queuedBefore);
+      expect(f.db.query('SELECT * FROM service_effect_s01_operations').all()).toEqual(operationsBefore);
+      owner = true; stale = false;
+      const response = await click(); expect(response.status).toBe(201);
+      expect(await response.json()).toMatchObject({ queued: 'steer', steering_delivery: 'pending', removed: true });
+      expect(getDeferredQueuedFollowups('web:default')).toEqual([]);
+      const claimed = f.work.getAcceptedSource('web:default', queued.source_id!)!;
+      expect(claimed.sourceSeq).toBe(before.sourceSeq); expect(claimed.state).toBe('claimed');
+      expect(f.db.query('SELECT id FROM messages WHERE id=?').get(queued.source_id!)).toEqual({ id: queued.source_id });
+      expect(releases).toBe(0);
+      const committed = f.snapshot(), published = [...f.events];
+      expect((await (await click()).json()).removed).toBe(false);
+      expect(f.snapshot()).toEqual(committed); expect(f.events).toEqual(published);
+      expect(dispatches).toBe(1);
+      if (steering === 'ack-lost') {
+        for (let n = 0; n < 500 && !pendingIntent; n++) await Bun.sleep(1);
+        expect(pendingIntent).toBeDefined();
+        base.host.modelHold = intentHold;
+        base.host.finalContent = [{ type: 'text', text: 'primary answer A' }];
+        hold.release();
+        // Primary finishes while the committed intent has no observed host receipt.
+        for (let n = 0; n < 500; n++) {
+          const primary = f.db.query('SELECT rowid, id FROM messages WHERE is_bot_message=0 ORDER BY rowid').get() as { rowid: number; id: string };
+          const source = f.work.getAcceptedSource('web:default', primary.id)!;
+          const op = await f.work.getOperation(`message:${primary.rowid}:${source.sourceSeq}`);
+          const primaryInput = { claimed: { source, operation: op.ok ? op.value! : (() => { throw Error('operation'); })() },
+            branchId: 'main', requestId: `message:${primary.rowid}:${primary.id}`, content: 'ordinary input' };
+          const state = await adapter.reconcile(primaryInput);
+          if (state.status?.status === 'done') break;
+          await Bun.sleep(1);
+        }
+        await Bun.sleep(10);
+        expect(releases).toBe(0);
+        expect(f.db.query('SELECT * FROM service_effect_s02_commits').all()).toHaveLength(0);
+        expect(f.work.getAcceptedSource('web:default', queued.source_id!)?.state).toBe('claimed');
+        expect(getDeferredQueuedFollowups('web:default')).toEqual([]);
+        expect(f.db.query('SELECT id FROM messages WHERE id=?').get(queued.source_id!)).toEqual({ id: queued.source_id });
+        expect(legacyCalls).toBe(0); expect(dispatches).toBe(1);
+        const candidate = await adapter.submitIntent(pendingIntent!);
+        expect(await adapter.submitIntent(pendingIntent!)).toBe(candidate);
+        base.host.finalContent = [{ type: 'text', text: 'latest answer B' }];
+        intentHold.release();
+        // Explicit host-controller settlement; a queue observer never re-dispatches work.
+        const primary = f.db.query('SELECT rowid, id FROM messages WHERE is_bot_message=0 ORDER BY rowid').get() as { rowid: number; id: string };
+        const source = f.work.getAcceptedSource('web:default', primary.id)!;
+        const op = await f.work.getOperation(`message:${primary.rowid}:${source.sourceSeq}`);
+        if (!op.ok || !op.value) throw Error('operation');
+        const input = { claimed: { source, operation: op.value }, branchId: 'main',
+          requestId: `message:${primary.rowid}:${primary.id}`, content: 'ordinary input' };
+        for (let n = 0; n < 500 && !(await adapter.settle(input)); n++) await Bun.sleep(1);
+        reconcile(); // retained event resolves even if committed before listener subscription
+      }
+      for (let n = 0; n < 500; n++) {
+        if (f.db.query('SELECT * FROM piclaw_durable_intent_bindings_v1 WHERE submission_id IS NOT NULL').all().length) break;
+        await Bun.sleep(1);
+      }
+      hold.release();
+    }
     if (pending) {
       for (let n = 0; n < 200 && !accepted; n++) await Bun.sleep(1);
       expect(accepted).toBeDefined();
@@ -704,23 +848,32 @@ for (const queuedInput of [false, true]) for (const pending of [false, true]) te
     }
     await original;
     expect(releases).toBe(1);
-    expect(base.host.modelCalls).toBe(1);
+    expect(base.host.modelCalls).toBe(steering ? 2 : 1);
     expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(1);
     expect(f.db.query("SELECT * FROM messages WHERE is_bot_message=1").all()).toHaveLength(1);
+    if (steering) {
+      const frontier = await f.work.getChatFrontier('web:default');
+      expect(frontier.ok && frontier.value.consumedThroughSourceSeq).toBe(2);
+      expect(f.db.query('SELECT state FROM service_effect_s01_sources ORDER BY source_seq').all()).toEqual([{ state: 'consumed' }, { state: 'consumed' }]);
+      const operation = f.db.query('SELECT operation_id FROM service_effect_s01_operations').get() as { operation_id: string };
+      const state = await f.work.getOperation(operation.operation_id);
+      expect(state.ok && state.value?.claimedSourceSeqs).toEqual([1, 2]);
+      if (steering === 'ack-lost') expect(f.db.query('SELECT content FROM messages WHERE is_bot_message=1').get()).toEqual({ content: 'latest answer B' });
+    }
     await f.jobs[0]!.task();
-    expect(base.host.modelCalls).toBe(1);
+    expect(base.host.modelCalls).toBe(steering ? 2 : 1);
     expect(legacyCalls).toBe(0);
     const row = f.db.query("SELECT rowid, id FROM messages WHERE is_bot_message=0").get() as { rowid: number; id: string };
     const retry = f.channel.dispatchAcceptedInput("web:default", row.id, row.rowid)!;
     expect(await retry()).toBe("settled");
-    expect(base.host.modelCalls).toBe(1);
+    expect(f.db.query('SELECT * FROM service_effect_s02_commits').all()).toHaveLength(1);
+    expect(f.db.query('SELECT * FROM messages WHERE is_bot_message=1').all()).toHaveLength(1);
+    expect(base.host.modelCalls).toBe(steering ? 2 : 1);
     const failedWait = createDurableQueueDispatch({ ...lifecycle, work: f.work, branchId: "main", assertCurrentWriter: assert,
       adapter: { ...adapter, async wait() { throw Error("uncertain wait"); } } });
     expect(await failedWait("web:default", row.id, row.rowid)!()).toBe("pending");
     expect(legacyCalls).toBe(0);
-    f.db.query("UPDATE service_effect_s01_sources SET kind='scheduled_agent'").run();
-    expect(() => failedWait("web:default", row.id, row.rowid)).toThrow("identity conflict");
-    f.db.query("UPDATE service_effect_s01_sources SET kind='message'").run();
+    expect(() => failedWait("web:default", row.id, row.rowid + 1000)).toThrow("identity conflict");
     owner = false;
     expect(() => f.channel.dispatchAcceptedInput!("web:default", row.id, row.rowid)).toThrow("owner lost");
     expect(legacyCalls).toBe(0);

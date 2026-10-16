@@ -721,6 +721,16 @@ phases using raw SQL. Latest-answer selection cannot refresh the initial operati
 version fence: newly attached inputs invalidate that entire settlement attempt.
 
 Candidate qualification passes 349 tests / 5,460 assertions and types. Source
-review cleared the corrected version race and bounded lifecycle. Actual queue
-steer UI/coordinator dispatch remains disabled; this does not qualify exact
+review cleared the corrected version race and bounded lifecycle. The queue-steer route now accepts an optional, host-only coordinator. It is not
+registered by default. The coordinator attaches the accepted source, materialises
+its timeline row and consumes its queue row in one transaction, then dispatches
+the same identity through `submitIntent`. Lost acknowledgements retain claimed
+work for explicit host reconciliation, never legacy replay.
+
+Actual HTTP-to-engine tests cover held primary plus queued input, rollback after
+attachment, finished-target rejection, duplicates and lost acknowledgement with
+explicit reconciliation: 124 focused tests / 1,149 assertions. The root gate passes
+7,142 tests (74 baseline skips), plus 25 feature and 9 build tests. Independent
+diff review cleared this inactive slice. An installed recovery controller and
+pending-intent restart/reopen remain unqualified. This does not qualify exact
 running cancellation or complete #1650.

@@ -62,6 +62,7 @@ export interface WebChannelLike
   /** Trusted host-only selection, captured before reading HTTP input; absent by default. */
   getInputSourceAdmission?(chatJid: string): WebUserMessageStoreOptions["acceptSource"];
   /** Default-off trusted SQL materialization binding; not an HTTP selection. */
+  getAcceptedQueuedSteering?(chatJid: string): import('../../../agent-pool/durable-queued-steering.js').AcceptedQueuedSteering | undefined;
   getQueuedInputMaterialization?(chatJid: string): import('../messaging/message-store.js').QueuedInputMaterialization | undefined;
   getQueuedInputSourceWithdrawal?(chatJid: string): import("../runtime/queued-followup-lifecycle-service.js").QueuedInputSourceAdmission | undefined;
   getQueuedInputSourceAdmission?(chatJid: string): import("../runtime/queued-followup-lifecycle-service.js").QueuedInputSourceAdmission | undefined;

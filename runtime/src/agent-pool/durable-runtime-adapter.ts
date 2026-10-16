@@ -44,6 +44,7 @@ export interface DurableConversationState {
  * Reconciliation deliberately does not expose the engine's private answer/thinking evidence. */
 export interface DurableConversationRuntimePort {
   submit(input: DurableAcceptedInput): Promise<number>;
+  submitIntent?(input: DurableAcceptedInput): Promise<number>;
   reconcile(input: DurableAcceptedInput): Promise<DurableConversationState>;
   cancel(input: DurableAcceptedInput, submissionId: number, request: AcceptCancellationRequest): Promise<"aborted" | "already_placed" | "settled" | "not_found">;
   resume(input: DurableAcceptedInput, submissionId: number): Promise<void>;
@@ -77,14 +78,15 @@ export function createDurableConversationAdapter(options: {
   const submit = runtime.submit.bind(runtime), reconcile = runtime.reconcile.bind(runtime);
   const cancel = runtime.cancel.bind(runtime), resume = runtime.resume.bind(runtime);
   const settle = runtime.settle.bind(runtime), close = runtime.close.bind(runtime);
-  const wait = runtime.wait?.bind(runtime);
-  function input(work: DurableConversationOperation): DurableAcceptedInput {
+  const wait = runtime.wait?.bind(runtime), submitIntent = runtime.submitIntent?.bind(runtime);
+  function input(work: DurableConversationOperation, intent = false): DurableAcceptedInput {
     const { source, operation } = work.claimed;
     const binding = manifest.find(b => b.chatJid === source.chatJid && b.branchId === work.branchId);
     if (!binding) throw new Error("Unknown durable conversation binding");
     if (!["message", "scheduled_agent"].includes(source.kind) ||
       !["claimed", "consumed"].includes(source.state) || operation.chatJid !== source.chatJid ||
-      operation.primarySourceSeq !== source.sourceSeq || !operation.claimedSourceSeqs.includes(source.sourceSeq))
+      (intent ? operation.primarySourceSeq === source.sourceSeq : operation.primarySourceSeq !== source.sourceSeq) ||
+      !operation.claimedSourceSeqs.includes(source.sourceSeq))
       throw new Error("Expected claimed primary durable input");
     if (!work.requestId || work.requestId.length > 1024 || typeof work.content !== "string")
       throw new Error("Invalid durable request");
@@ -94,6 +96,12 @@ export function createDurableConversationAdapter(options: {
       requestHash: hashCanonicalRequest({ type: "input", requestId: work.requestId, content: work.content }) });
   }
   return Object.freeze({
+    supportsIntent: !!submitIntent,
+    validateIntent(work: DurableConversationOperation) { input(work, true); },
+    async submitIntent(work: DurableConversationOperation) {
+      if (!submitIntent) throw new Error("Durable intent unsupported");
+      return submitIntent(input(work, true));
+    },
     async submit(work: DurableConversationOperation) { return submit(input(work)); },
     async reconcile(work: DurableConversationOperation): Promise<DurableConversationState> {
       const state = await reconcile(input(work));
