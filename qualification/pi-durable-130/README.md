@@ -751,3 +751,17 @@ The two tests pass 80 assertions; the full candidate suite passes 351 tests /
 This is a synthetic, same-process cooperative close/reopen rehearsal. It is not
 SIGKILL recovery, provider exactly-once execution, or an installed production
 recovery-controller qualification.
+
+The same recovery fixture also covers two real child-process SIGKILL boundaries:
+after attachment before submission, and after submission commits before its
+acknowledgement. The child retains ownership until killed; replacement ownership
+is acquired only after confirmed death and before storage construction. Recovery
+preserves the checkpointed identity and, where committed, the submission ID.
+These are two fixed post-commit windows, not arbitrary crash placement.
+
+Full candidate verification now passes 353 tests / 5,630 assertions. The combined
+recovery/ownership suite passes 10 tests / 197 assertions in each of three final
+repeats, and types pass. An earlier unchanged ownership-contender test returned
+zero admitted contenders before a passing rerun; the cause remains unknown.
+Bounded independent review cleared the crash-window tests. Production controller
+integration and general cutover/rollback acceptance remain unqualified.
