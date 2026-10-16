@@ -1,0 +1,109 @@
+// INACTIVE application seam. No engine imports, bootstrap registration or AgentSession emulation.
+import { hashCanonicalRequest } from "../service-effects/contracts/common.js";
+import type { AcceptCancellationRequest, ClaimedOperation, OperationSnapshot } from "../service-effects/contracts/service-work-store.js";
+import type { TerminalCommit } from "../service-effects/contracts/terminal-settlement-store.js";
+
+/** Data-only subset of the durable package's public AcceptedInput contract. */
+export interface DurableAcceptedInput {
+  readonly incarnation: string;
+  readonly conversationId: number;
+  readonly chatJid: string;
+  readonly branchId: string;
+  readonly operationId: string;
+  readonly sourceSeq: number;
+  readonly sourceId: string;
+  readonly payloadRef: string;
+  readonly requestId: string;
+  readonly requestHash: string;
+}
+
+export interface DurableConversationBinding {
+  readonly chatJid: string;
+  readonly branchId: string;
+  readonly conversationId: number;
+}
+
+/** Already accepted/claimed host work, not a prompt or an admission request. */
+export interface DurableConversationOperation {
+  readonly claimed: ClaimedOperation;
+  readonly branchId: string;
+  readonly requestId: string;
+  /** Used only to hash the existing payload; the engine resolves and verifies payloadRef itself. */
+  readonly content: string;
+}
+
+export interface DurableConversationState {
+  readonly operation: OperationSnapshot;
+  readonly submissionId: number | null;
+  readonly status: { readonly type: string; readonly status: string } | null;
+}
+
+/** Structurally satisfied by the public HostConversationRuntime. Construction stays with the
+ * caller: owner, EF-S01/02, SQL bindings, manifest, storage, policy and private 1.3 context/models
+ * must already be configured there. No 1.2 Models, SDK session or context crosses this port.
+ * Reconciliation deliberately does not expose the engine's private answer/thinking evidence. */
+export interface DurableConversationRuntimePort {
+  submit(input: DurableAcceptedInput): Promise<number>;
+  reconcile(input: DurableAcceptedInput): Promise<DurableConversationState>;
+  cancel(input: DurableAcceptedInput, submissionId: number, request: AcceptCancellationRequest): Promise<"aborted" | "already_placed" | "settled" | "not_found">;
+  resume(input: DurableAcceptedInput, submissionId: number): Promise<void>;
+  settle(input: DurableAcceptedInput): Promise<TerminalCommit | null>;
+  close(): Promise<void>;
+}
+
+/** Map existing host work to one explicitly opened authority domain. The supplied manifest must
+ * be the same validated import manifest used to open the runtime; no root conversation is created.
+ * This does not admit work, queue/poll, grant scheduling, publish output or select an engine.
+ * All durable authority and replay/version checks remain in the runtime's host effects.
+ * close delegates store cleanup/owner release to that runtime, never releases ownership itself. */
+export function createDurableConversationAdapter(options: {
+  readonly incarnation: string;
+  readonly manifest: readonly DurableConversationBinding[];
+  readonly runtime: DurableConversationRuntimePort;
+}) {
+  const { incarnation, runtime } = options;
+  if (!incarnation || !options.manifest.length) throw new Error("Explicit durable identity and manifest required");
+  const manifest = options.manifest.map(({ chatJid, branchId, conversationId }) => {
+    if (!chatJid || !branchId || !Number.isSafeInteger(conversationId) || conversationId <= 0)
+      throw new Error("Invalid durable conversation binding");
+    return Object.freeze({ chatJid, branchId, conversationId });
+  });
+  if (manifest.some((binding, index) => manifest.slice(0, index).some(prior =>
+    prior.chatJid === binding.chatJid && prior.branchId === binding.branchId)))
+    throw new Error("Ambiguous durable conversation binding");
+
+  // Capture receivers: later replacement of caller properties cannot redirect this adapter.
+  const submit = runtime.submit.bind(runtime), reconcile = runtime.reconcile.bind(runtime);
+  const cancel = runtime.cancel.bind(runtime), resume = runtime.resume.bind(runtime);
+  const settle = runtime.settle.bind(runtime), close = runtime.close.bind(runtime);
+  function input(work: DurableConversationOperation): DurableAcceptedInput {
+    const { source, operation } = work.claimed;
+    const binding = manifest.find(b => b.chatJid === source.chatJid && b.branchId === work.branchId);
+    if (!binding) throw new Error("Unknown durable conversation binding");
+    if (!["message", "scheduled_agent"].includes(source.kind) ||
+      !["claimed", "consumed"].includes(source.state) || operation.chatJid !== source.chatJid ||
+      operation.primarySourceSeq !== source.sourceSeq || !operation.claimedSourceSeqs.includes(source.sourceSeq))
+      throw new Error("Expected claimed primary durable input");
+    if (!work.requestId || work.requestId.length > 1024 || typeof work.content !== "string")
+      throw new Error("Invalid durable request");
+    return Object.freeze({ incarnation, conversationId: binding.conversationId, chatJid: source.chatJid,
+      branchId: binding.branchId, operationId: operation.operationId, sourceSeq: source.sourceSeq,
+      sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: work.requestId,
+      requestHash: hashCanonicalRequest({ type: "input", requestId: work.requestId, content: work.content }) });
+  }
+  return Object.freeze({
+    async submit(work: DurableConversationOperation) { return submit(input(work)); },
+    async reconcile(work: DurableConversationOperation): Promise<DurableConversationState> {
+      const state = await reconcile(input(work));
+      // Project the reviewed root contract, not the engine's raw private answer object.
+      return { operation: state.operation, submissionId: state.submissionId,
+        status: state.status === null ? null : { type: state.status.type, status: state.status.status } };
+    },
+    async cancel(work: DurableConversationOperation, submissionId: number, request: AcceptCancellationRequest) {
+      return cancel(input(work), submissionId, request);
+    },
+    async resume(work: DurableConversationOperation, submissionId: number) { return resume(input(work), submissionId); },
+    async settle(work: DurableConversationOperation) { return settle(input(work)); },
+    close,
+  });
+}
