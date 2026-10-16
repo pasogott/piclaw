@@ -23,6 +23,7 @@
     "tools.test.ts",
     "bash-port.test.ts",
     "plan.test.ts",
-    "vertical.test.ts"
+    "vertical.test.ts",
+    "projection.test.ts"
   ]
 }

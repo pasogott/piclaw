@@ -355,3 +355,23 @@ plus strict types. The tree module has 17 new cases and independent source-revie
 approval. This remains quiescent copied-history qualification with caller-owned
 drain and final fencing, not live upgrade, production importer registration,
 add-on-state conversion, or rollout approval.
+
+## Observation-only host projection
+
+`host-projection.ts` maps public durable observations through the actual EF-S08
+sink to existing bounded `agent_draft` payloads. Explicit accepted submission and
+host operation bindings, owner/watch-generation checks, ordered receipts and a
+required sanitizer remain authoritative. Snapshots reset drafts; text is accepted
+only from public generation snapshots or live text deltas. Ambiguous appended
+assistant `message_start`/`message_end` text is ignored. Final-only text remains
+settlement-owned. No invented thinking phase, terminal commit or delivery intent
+is produced by this observer. Serialized publications are limited to 65,536 UTF-8
+bytes, including escaping and metadata.
+
+The complete candidate suite passes 188 tests / 1,865 assertions across twelve
+files plus strict types. Nine projection tests include real public watch events,
+actual host sink, a forged assistant-bearing write during a held tool round,
+matched/unmatched/overflow snapshots, stale identities and UTF-8/escaping bounds.
+The source judge cleared the corrected bounded adapter. This is not a browser
+transport proof or complete thinking/tool/rich-message projection, and it does
+not grant settlement authority to a watch or complete #1650.
