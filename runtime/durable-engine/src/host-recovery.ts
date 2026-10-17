@@ -22,7 +22,7 @@ export async function reconstituteAcceptedWork(options: {
   runningBinding: Readonly<{ sessionId: string; lane: string; watchGeneration: number }>;
   assertOwner(): void;
   work: Pick<CurrentPiclawServiceWorkStore, "listOpenOperations" | "getOperation" | "getSourceBySeq" | "getQueuedInputIntent">;
-  bindings: ReturnType<typeof createHostDurableBindings>;
+  bindings: Omit<ReturnType<typeof createHostDurableBindings>, "resolveConversation"> & Partial<Pick<ReturnType<typeof createHostDurableBindings>, "resolveConversation">>;
   readAcceptedInput(source: AcceptedSourceSnapshot): Promise<DurableConversationOperation>;
 }): Promise<readonly Readonly<{ role: "primary" | "intent"; input: AcceptedInput; binding: HostInputBinding | null; work: DurableConversationOperation }>[]> {
   const incarnation = options.incarnation, scope = Object.freeze({ ...options.binding });
@@ -54,7 +54,7 @@ export async function reconstituteAcceptedWork(options: {
       for (const seq of operation.claimedSourceSeqs) {
         const source = sourceFor(scope.chatJid, seq); assert();
         const role = seq === operation.primarySourceSeq ? "primary" : "intent";
-        if (!source || !["claimed", "consumed"].includes(source.state) || source.kind !== "message" ||
+        if (!source || !["claimed", "consumed"].includes(source.state) || (source.kind !== "message" && !(role === "primary" && source.kind === "scheduled_agent")) ||
           (role === "intent" && (!h || source.targetOperationId !== operation.operationId ||
             source.payloadRef !== `queued-source:${source.sourceId}`))) return deny();
         const proof = role === "intent" ? queuedIntent(operation.operationId, source) : null;
@@ -68,7 +68,9 @@ export async function reconstituteAcceptedWork(options: {
           loaded.branchId !== scope.branchId || typeof loaded.content !== "string") return deny();
         const requestId = stored?.requestId ?? proof!.intentId;
         if (loaded.requestId !== requestId || (role === "intent" && requestId !== proof!.intentId)) return deny();
-        const input = inputSnapshot({ incarnation, ...scope, operationId: operation.operationId,
+        const scheduledId = source.kind === "scheduled_agent" && stored && options.bindings.resolveConversation?.(stored);
+        if (source.kind === "scheduled_agent" && !scheduledId) return deny();
+        const input = inputSnapshot({ incarnation, ...scope, ...(scheduledId ? { conversationId: scheduledId } : {}), operationId: operation.operationId,
           sourceSeq: seq, sourceId: source.sourceId, payloadRef: source.payloadRef, requestId,
           requestHash: hashCanonicalRequest({ type: "input", requestId, content: loaded.content }) });
         if (stored && (Object.entries(input).some(([key, value]) => stored[key as keyof AcceptedInput] !== value) ||

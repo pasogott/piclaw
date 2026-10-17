@@ -216,6 +216,7 @@ export interface RetrySettingsProvider {
 export interface AgentPoolOptions {
   /** Select the durable backend for the entire pool. Captured bindings are exhaustive;
    * even an empty map disables all legacy session construction. No HTTP selection. */
+  dispatchScheduledAgent?: (lease: import("../service-effects/contracts/scheduled-run-store.js").ScheduledRunLease) => Promise<AgentOutput>;
   getDurableSession?: (chatJid: string) => import("./durable-runtime-adapter.js").DurableSessionPositionPort | undefined;
   createSession?: (chatJid: string, sessionDir: string) => Promise<AgentSessionRuntime>;
   createSideSession?: (chatJid: string, sessionDir: string) => Promise<AgentSessionRuntime>;

@@ -40,6 +40,7 @@
     "addon-host-services.test.ts",
     "delegate.test.ts",
     "scheduled.test.ts",
+    "scheduled-allocation.test.ts",
     "cutover.test.ts",
     "cutover-runtime.test.ts",
     "host-grep.test.ts"

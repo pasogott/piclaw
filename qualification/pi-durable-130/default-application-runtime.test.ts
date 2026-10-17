@@ -10,7 +10,7 @@ import { RuntimeStartupCleanupError } from "../../runtime/src/runtime/startup-cl
 import { main } from "../../runtime/src/runtime.js";
 import { createDefaultRuntimeBootstrapDeps } from "../../runtime/src/runtime/bootstrap.js";
 import { storeChatMetadata, storeMessage } from "../../runtime/src/db.js";
-import { mkdirSync, writeFileSync, readFileSync, copyFileSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, symlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { extensionKvSet, extensionKvGet } from "../../runtime/src/db/extension-kv.js";
 import { join } from "node:path";
@@ -26,6 +26,10 @@ import { BACKGROUND_CONTEXT as context } from "../../runtime/durable-engine/qual
 import { createHostModels } from "../../runtime/durable-engine/src/host-models.js";
 import { createHostBuiltinTools } from "../../runtime/durable-engine/src/host-builtins.js";
 import { HostConversationRuntime } from "../../runtime/durable-engine/src/host-runtime.js";
+import { createCurrentPiclawScheduledRunStore } from "../../runtime/src/service-effects/current-piclaw/scheduled-run-store.js";
+import { createTask } from "../../runtime/src/db/tasks.js";
+import { saveBudgetCap, setBudgetCapEnabled } from "../../runtime/src/db/budget-limits.js";
+import { pollScheduledRunsOnce, stopSchedulerLoop } from "../../runtime/src/task-scheduler.js";
 import { createPlanKvAuthority } from "../../runtime/durable-engine/src/host-plan-tool.js";
 
 function factoryTest(scenario: string, name: string, body: () => Promise<void>) {
@@ -92,7 +96,7 @@ for (const uncertain of [false, true]) factoryTest(`cleanup-${uncertain}`, `actu
   }
 });
 
-for (const scenario of ["public-conversations", "custom-subset", "pending-host", "native-plan"] as const) factoryTest(scenario, scenario === "custom-subset"
+for (const scenario of ["public-conversations", "custom-subset", "pending-host", "native-plan", "native-scheduler"] as const) factoryTest(scenario, scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -103,6 +107,8 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   initDatabase();
   const root = getDb(); root.exec("PRAGMA foreign_keys=ON");
   let calls = 0;
+  let onProviderResponse: (() => void) | undefined;
+  let onCredentialResolve: (() => Promise<void>) | undefined;
   const model = { provider: "synthetic", id: "approved", name: "Approved", api: "openai-completions", baseUrl: "https://invalid.invalid", input: ["text"], reasoning: false, contextWindow: 10000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   const requested: string[] = [];
   const planRequests: string[] = [];
@@ -141,6 +147,7 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
       content: step ? [{ type: "toolCall" as const, id: `factory-tool-${calls}`, name: step.name, arguments: step.arguments }]
         : [{ type: "text" as const, text: "factory synthetic reply" }], stopReason: step ? "toolUse" as const : "stop" as const, timestamp: Date.now(),
       usage: { input: 5, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 10, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+    onProviderResponse?.();
     stream.push({ type: "done", reason: message.stopReason, message }); stream.end(message); return stream;
   };
   const credentialStore: RuntimeModelServices["credentialStore"] = { read: async provider => provider === model.provider ? { type: "api_key", key: "synthetic-only" } : undefined,
@@ -149,7 +156,7 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
     credentials: credentialStore,
     allowModelNetwork: false, refreshOnCreate: false });
   runtime.registerNativeProvider({ id: model.provider, name: "Synthetic", getModels: () => [model, modelB] as any,
-    auth: { apiKey: { name: "Synthetic", check: async () => ({ type: "api_key" }), resolve: async () => ({ auth: { apiKey: "synthetic-only" }, source: "synthetic" }) } },
+    auth: { apiKey: { name: "Synthetic", check: async () => ({ type: "api_key" }), resolve: async () => { await onCredentialResolve?.(); return { auth: { apiKey: "synthetic-only" }, source: "synthetic" }; } } },
     stream: stream as any, streamSimple: stream as any });
   // Native registration starts an asynchronous refresh; finish it before
   // reading the synchronous authenticated catalog on a genuinely cold start.
@@ -206,6 +213,116 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   const bound = backend.bind({ queue: base.queue, agentPool: pool });
   const channel = new WebChannel(bound);
   channel.broadcastEvent = () => {};
+  if (scenario === "native-scheduler") {
+    const prohibited = [spyOn(pool, "runAgent"), spyOn(pool, "saveSessionPosition"), spyOn(pool, "restoreSessionPosition"), spyOn(pool, "getCurrentModelLabel")];
+    prohibited.forEach(spy => spy.mockImplementation(() => { throw Error("legacy scheduler path"); }));
+    const delivered: string[] = [];
+    const scheduledStore = createCurrentPiclawScheduledRunStore(root, { hitFault: () => false, recordTrace() {} });
+    if (!scheduledStore.ok) throw Error("Scheduled store unavailable");
+    try {
+      storeChatMetadata("web:scheduled-dynamic", new Date().toISOString());
+      await bound.prepareInputSourceAdmission!("web:scheduled-dynamic");
+      for (const [index, chat] of ["web:default", "web:scheduled-dynamic", "web:default"].entries()) {
+        if (index === 2) {
+          const message = { id: "scheduler-main-seed", chat_jid: chat, sender: "user", sender_name: "User", content: "main history", timestamp: new Date().toISOString(), is_from_me: false, is_bot_message: false };
+          const row = root.transaction(() => { const id = storeMessage(message); bound.getInputSourceAdmission!(chat)({ message, rowId: id, database: root }); return id; })();
+          expect(await bound.dispatchAcceptedInput!(chat, message.id, row!)!()).toBe("settled");
+        }
+        const port = backend.sessionOptions.getDurableSession!(chat)!;
+        const position = await port.readPosition();
+        const before = JSON.stringify(root.query("SELECT * FROM entries WHERE conversation_id=(SELECT conversation_id FROM piclaw_durable_bindings_v1 WHERE source_id='scheduler-main-seed') ORDER BY id").all());
+        const due = new Date(Date.now() - 1000).toISOString(), id = `native-schedule-${index}`;
+        createTask({ id, chat_jid: chat, prompt: "scheduled real consumer", schedule_type: "once", schedule_value: due, next_run: due, status: "active", notify_on_complete: false, created_at: due });
+        await pollScheduledRunsOnce({ queue: base.queue, agentPool: pool, sendMessage: async (_chat, text) => { delivered.push(text); } }, scheduledStore.value);
+        const deadline = Date.now() + 5000;
+        while (!root.query("SELECT 1 FROM service_effect_s07_occurrences WHERE task_id=? AND state='completed'").get(id) && Date.now() < deadline) await Bun.sleep(10);
+        expect(root.query("SELECT state FROM service_effect_s07_occurrences WHERE task_id=?").get(id)).toEqual({ state: "completed" });
+        expect(await port.readPosition()).toBe(position);
+        expect(JSON.stringify(root.query("SELECT * FROM entries WHERE conversation_id=(SELECT conversation_id FROM piclaw_durable_bindings_v1 WHERE source_id='scheduler-main-seed') ORDER BY id").all())).toBe(before);
+        if (!delivered.at(-1)) throw Error(JSON.stringify(root.query("SELECT * FROM task_run_logs WHERE task_id=?").all(id)));
+        expect(delivered.at(-1)).toBe("factory synthetic reply");
+      }
+      expect(delivered).toHaveLength(3);
+      expect(root.query("SELECT COUNT(*) AS n FROM task_run_logs WHERE task_id LIKE 'native-schedule-%' AND status='success'").get()).toEqual({ n: 3 });
+      // Exercise the actual scheduler/AgentPool consumer, not a budget stub.
+      // Even a positive allowance is unqualified without per-request binding.
+      for (const [index, amount] of [0, 1_000_000].entries()) {
+        const due = new Date(Date.now() - 1000).toISOString(), id = `native-budget-denied-${index}`;
+        const cap = saveBudgetCap({ scope: "scheduled_run", metric: "api_usd_micros", amount, scheduledTaskId: id }, root);
+        const beforeCalls = calls, beforeForks = root.query("SELECT COUNT(*) AS n FROM conversations").get();
+        createTask({ id, chat_jid: "web:default", prompt: "must not dispatch", schedule_type: "once", schedule_value: due, next_run: due, status: "active", notify_on_complete: false, created_at: due });
+        await pollScheduledRunsOnce({ queue: base.queue, agentPool: pool, sendMessage: async (_chat, text) => { delivered.push(text); } }, scheduledStore.value);
+        const deadline = Date.now() + 5000;
+        while (!root.query("SELECT 1 FROM task_run_logs WHERE task_id=?").get(id) && Date.now() < deadline) await Bun.sleep(10);
+        expect(root.query("SELECT status,error FROM task_run_logs WHERE task_id=?").get(id)).toEqual({ status: "error", error: "Native scheduled budget admission unavailable" });
+        expect(calls).toBe(beforeCalls);
+        expect(root.query("SELECT COUNT(*) AS n FROM conversations").get()).toEqual(beforeForks);
+        expect(delivered).toHaveLength(3);
+        setBudgetCapEnabled(cap.id, false, root);
+      }
+      // Enable a real cap after the first admitted provider effect. Neither the
+      // returned write nor the next provider request may use the stale grant.
+      const midrunId = "native-budget-midrun", target = join(workspace, "scheduled-budget-must-not-write.txt");
+      const cap = saveBudgetCap({ scope: "scheduled_run", metric: "api_usd_micros", amount: 1_000_000, scheduledTaskId: midrunId }, root);
+      setBudgetCapEnabled(cap.id, false, root);
+      toolSequence = [{ name: "write", arguments: { path: target, content: "forbidden" } }];
+      const beforeMidrun = calls;
+      onProviderResponse = () => { onProviderResponse = undefined; setBudgetCapEnabled(cap.id, true, root); };
+      const due = new Date(Date.now() - 1000).toISOString();
+      createTask({ id: midrunId, chat_jid: "web:default", prompt: "write then reply", schedule_type: "once", schedule_value: due, next_run: due, status: "active", notify_on_complete: false, created_at: due });
+      await pollScheduledRunsOnce({ queue: base.queue, agentPool: pool, sendMessage: async (_chat, text) => { delivered.push(text); } }, scheduledStore.value);
+      const deadline = Date.now() + 5000;
+      while (!root.query("SELECT 1 FROM task_run_logs WHERE task_id=?").get(midrunId) && Date.now() < deadline) await Bun.sleep(10);
+      expect(calls).toBe(beforeMidrun + 1);
+      expect(existsSync(target)).toBe(false);
+      expect(delivered).toHaveLength(3);
+      expect(root.query("SELECT status FROM task_run_logs WHERE task_id=?").get(midrunId)).toEqual({ status: "error" });
+      setBudgetCapEnabled(cap.id, false, root);
+      // Credential resolution awaits after source capture: the post-auth fence
+      // must reject a newly enabled cap before the synthetic provider is called.
+      const credentialId = "native-budget-credentials";
+      const credentialCap = saveBudgetCap({ scope: "scheduled_run", metric: "api_usd_micros", amount: 1_000_000, scheduledTaskId: credentialId }, root);
+      setBudgetCapEnabled(credentialCap.id, false, root);
+      let credentialBarrierHit = false;
+      onCredentialResolve = async () => {
+        onCredentialResolve = undefined;
+        await Bun.sleep(0);
+        credentialBarrierHit = true;
+        setBudgetCapEnabled(credentialCap.id, true, root);
+      };
+      const beforeCredentials = calls, credentialDue = new Date(Date.now() - 1000).toISOString();
+      createTask({ id: credentialId, chat_jid: "web:default", prompt: "must not send after auth", schedule_type: "once", schedule_value: credentialDue, next_run: credentialDue, status: "active", notify_on_complete: false, created_at: credentialDue });
+      await pollScheduledRunsOnce({ queue: base.queue, agentPool: pool, sendMessage: async (_chat, text) => { delivered.push(text); } }, scheduledStore.value);
+      const credentialDeadline = Date.now() + 5000;
+      while (!root.query("SELECT 1 FROM task_run_logs WHERE task_id=?").get(credentialId) && Date.now() < credentialDeadline) await Bun.sleep(10);
+      expect(credentialBarrierHit).toBe(true);
+      expect(calls).toBe(beforeCredentials);
+      expect(delivered).toHaveLength(3);
+      expect(root.query("SELECT status FROM task_run_logs WHERE task_id=?").get(credentialId)).toEqual({ status: "error" });
+      setBudgetCapEnabled(credentialCap.id, false, root);
+      // Only the ordinary seed message publishes through EF-S02; scheduled delivery
+      // belongs to EF-S07 and must not create a second timeline answer.
+      expect(root.query("SELECT COUNT(*) AS n FROM messages WHERE is_bot_message=1").get()).toEqual({ n: 1 });
+      await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
+      backend = await createDefaultApplicationRuntime(owner, async () => services);
+      const reopenedBase = createRuntimeBaseServices({ dataDir: workspace });
+      const reopenedPool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
+      const reopened = backend.bind({ queue: reopenedBase.queue, agentPool: reopenedPool });
+      try {
+        const message = { id: "scheduler-after-reopen", chat_jid: "web:default", sender: "user", sender_name: "User", content: "ordinary message after scheduled forks", timestamp: new Date().toISOString(), is_from_me: false, is_bot_message: false };
+        const row = root.transaction(() => { const id = storeMessage(message); reopened.getInputSourceAdmission!(message.chat_jid)({ message, rowId: id, database: root }); return id; })();
+        expect(await reopened.dispatchAcceptedInput!(message.chat_jid, message.id, row!)!()).toBe("settled");
+        expect(root.query("SELECT COUNT(*) AS n FROM messages WHERE is_bot_message=1").get()).toEqual({ n: 2 });
+      } finally { await reopenedBase.queue.shutdown(); await reopenedPool.shutdown(); }
+      prohibited.forEach(spy => expect(spy).not.toHaveBeenCalled());
+      sdkSpies.forEach(spy => expect(spy).not.toHaveBeenCalled());
+    } finally {
+      stopSchedulerLoop(); prohibited.forEach(spy => spy.mockRestore());
+      await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
+      sdkSpies.forEach(spy => spy.mockRestore()); owner.release(); closeDatabase();
+    }
+    return;
+  }
   const assertContext = async (contextWindow: number) => {
     const before = calls;
     channel.setContextUsage("web:default", { tokens: 999, contextWindow: 10000, percent: 9.99, sessionGeneration: first!.sessionId });

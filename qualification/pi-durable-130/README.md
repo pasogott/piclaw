@@ -1,3 +1,99 @@
+# Native scheduler adoption — bounded source follow-up over `31dd88ebd`
+
+The default backend now routes agent schedules through real AgentPool
+`dispatchScheduledAgent` and `executeScheduledTask` into the public SDK fork
+allocator. The allocator checks the actual EF-S07 lease/revision/source, persists
+correlation in the existing binding table and uses the same physical application
+database. EF-S07 owns scheduled task logs and result delivery; scheduled settlement
+creates no EF-S02 timeline answer. Ordinary main-chat execution is unchanged.
+
+`default-application-runtime.test.ts`, selected with
+`PICLAW_DEFAULT_FACTORY_CASE=native-scheduler`, exercises real default bootstrap,
+AgentPool and `pollScheduledRunsOnce` with a keyless synthetic provider. Its
+registered test title is `default factory prepares and reopens real startup-known
+public conversations; refuses legacy before models`. It covers an empty main,
+a dynamically added chat root and a nonempty main, with unchanged main position
+and history, three successful scheduled logs/results, close/reopen and a subsequent
+ordinary message producing exactly one further ordinary answer. Spies reject any
+legacy `runAgent`, save/restore, model-label lookup or SessionManager construction.
+The test selector identifies this scenario; the shared title alone does not.
+
+`scheduled-allocation.test.ts` is separately titled `allocation-only helper (fake
+runAgent): source-bound lease, rollback, public fork, forged route denied`. It uses
+a fake `runAgent` and qualifies allocation only. It is not actual scheduler
+consumer proof.
+
+## Admission and side-effect limits
+
+- Scheduled model overrides explicitly reject with `Scheduled model override
+  unavailable`; fork-local override validation is incomplete.
+- Applicable enabled instance/provider or matching scheduled-task caps, including
+  zero and positive amounts, reject before fork allocation with `Native scheduled
+  budget admission unavailable`. Task-work caps do not authorise a new occurrence;
+  other scheduled tasks' caps do not apply. There is no qualified native
+  per-request scheduled budget attribution, reservation or accounting.
+- Exact scheduled binding resolution and captured-source guards reread current
+  authority/caps during execution. All seven host builtins capture actual public
+  run/tool-slot provenance and recheck at their filesystem/process effects.
+  `GenerationHooks.beforeRequest` captures actual run provenance against the SDK
+  hook abort signal; the host bridge retains its request guard through the
+  post-credential `transformHeaders` check. Failure denies that request without
+  permanently aborting the shared model lifetime.
+- The native scenario enables a cap after the first synthetic provider response:
+  the returned write never reaches the filesystem, a second provider invocation
+  does not occur, the run logs an error and no result is delivered. Its separate
+  asynchronous credential-resolution barrier enables a cap after capture and
+  verifies zero provider invocations and no delivery. These are current-source
+  checks, not per-request budget accounting or atomic provider-send cancellation.
+  The existing accepted microtask gap after awaited `transformHeaders` is
+  unchanged. Host fencing does not cancel an exact running SDK task.
+- Reopen validates persisted source/operation/fork provenance, including completed
+  scheduled bindings. Only an exact persisted terminal receipt permits ignoring a
+  stale inspected task. Unknown/background authority still fails closed; automatic
+  accepted-agent takeover and arbitrary scheduled process-crash recovery are
+  unqualified.
+
+## Existing receipts and running gates
+
+Receipts are under `/workspace/reviews/durable-1650/`; no tests or network requests
+were made for this documentation refresh.
+
+- `scheduled-midrun-focused.log`: 95 pass, 0 fail, 2,474 assertions across
+  `default-application-runtime.test.ts` (native-scheduler selector), `models.test.ts`
+  and `scheduled-allocation.test.ts`. This mixed focused total is not the full
+  default suite or 95 actual-native scenarios. The final native source contains
+  both mid-run and asynchronous credential-boundary assertions.
+- `scheduled-midrun-effect-final.log`: 117 pass, 0 fail, 2,565 assertions across
+  bash, builtin and model bridge tests; component effect-fence evidence, separate
+  from actual native consumer proof. Overlapping counts are not additive.
+- Parent `31dd88ebd`: candidate 456 pass; root 7,311 pass, 74 baseline skips,
+  0 fail, plus 25 feature and 9 build tests (`context-window-final-candidate.log`,
+  `context-window-final-root.log`). Exact-head hosted run `39061392219` succeeded
+  according to the supplied verified receipt. These results predate this scheduler
+  source follow-up.
+- Final simplified scheduler tree: 458 candidate tests / 6,990 assertions pass
+  (`scheduler-simplified-candidate.log`); root 7,294 pass, 74 baseline skips,
+  0 fail, plus 25 feature and 9 build tests, `EXIT_CODE=0`
+  (`scheduler-simplified-root.log`). All three scoped typechecks pass.
+- Removed the unused public allocation API. Backend selection uses the actual
+  dispatch result; native work is joined before returning after revocation.
+  Legacy branch restoration and native isolation regressions pass.
+
+PC-012 is now bounded source-qualified: the production consumer exists and the
+actual native scenario exercises it. Full scheduler parity/acceptance still needs
+model overrides, native request budgets, cancellation and recovery qualification.
+The [45-requirement assessment](../../docs/design/earendil-agent-harness-integration-adr/evidence/pi-durable-130-acceptance-current-20261017.md)
+now counts 22 source-qualified, 17 fixture-only, 3 blocked-publicAPI and
+3 migration/perf-unverified rows. HC-019 usage and PC-018 general internal ingress
+stay fixture-only; PC-008 does not qualify arbitrary scheduled crash recovery.
+
+`stash@{0}` (`scheduler-allocation-current`) is an older allocation snapshot already
+applied to this dirty tree; it is not a complete snapshot of current scheduler work.
+`stash@{1}` preserves incomplete native Delegate/Code Review work, excluded here.
+Stale module comments saying inactive/unregistered are superseded by the actual
+default call graph; source comments were not edited during frozen-code gates.
+No activation, migration, deployment, restart or live-state change occurred.
+
 # Native context metadata follow-up — 17 October 2026
 
 The async context reader captures the bound session before awaiting the existing
@@ -36,7 +132,8 @@ medians are 0.475/2.574/7.430 ms; native model/window metadata medians are
 0.077/0.053/0.043 ms. These five-sample observations do not establish production
 performance acceptance. See the [persistent method, raw samples and digests](../../docs/evidence/pi-durable-130-tree-read-performance-20261017.md);
 the harness is external to the repository and clone-only reproduction is missing.
-All 45 acceptance statuses remain unchanged.
+At that context-only checkpoint all 45 acceptance statuses were unchanged; the
+scheduler section above records the subsequent bounded PC-012 change.
 
 # Session-tree summary follow-up — 17 October 2026
 

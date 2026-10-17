@@ -71,7 +71,7 @@ export async function createHostController(config: HostControllerOptions, contex
     // with no corresponding host operation. A caller-supplied approval cannot bypass this.
     if (inspection.submissions.some(s => !known.has(s.id))) return deny();
     const roots = new Set<number>();
-    const { runs } = await runtime.inspectAuthority(); assert();
+    const { runs } = await runtime.inspectAuthority(recovered.map(entry => entry.input)); assert();
     for (const run of runs) {
       if (!run.inputs.length || run.inputs.some(id => !known.has(id))) return deny();
       roots.add(run.taskId);
@@ -80,6 +80,10 @@ export async function createHostController(config: HostControllerOptions, contex
     // Background/independent/unknown tasks never inherit blanket conversation authority.
     const tasks = new Map(inspection.tasks.map(t => [Number(t.record.id), t.record]));
     for (const { record } of inspection.tasks) {
+      // A running harness may retire this inspected task before LiveDoc is read.
+      // Only a persisted terminal receipt removes it from the live authority domain.
+      if (await runtime.isTaskTerminal(record.id)) { assert(); continue; }
+      assert();
       let current = record;
       const seen = new Set<number>();
       while (!roots.has(current.id)) {

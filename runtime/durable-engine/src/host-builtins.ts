@@ -23,6 +23,7 @@ export function createHostBuiltinTools(options: {
   shellPath?: () => string | undefined;
   signal?: AbortSignal;
   names?: readonly string[];
+  captureSourceGuard?: (call: { conversationId: import("@earendil-works/pi-durable").ConversationId; taskId: import("@earendil-works/pi-durable").TaskId; toolCallId: string }) => Promise<() => void>;
 }) {
   // Capture the approved callback, not a mutable caller-owned options object.
   // Its closure still observes live owner/lifetime state on every effect.
@@ -84,7 +85,7 @@ export function createHostBuiltinTools(options: {
     }
   };
   return names.map(name => {
-    if (name === "bash") return createHostBashTool({ cwd, shellPath, authority: { assertAllowed: assertAuthority } });
+    if (name === "bash") return createHostBashTool({ cwd, shellPath, authority: { assertAllowed: assertAuthority }, captureSourceGuard: options.captureSourceGuard });
     const schema = build(name, assertAuthority);
     return createHostTool(schema, {
       authority: { check: assertAuthority }, effectFence: "host-effect-port",
@@ -92,8 +93,10 @@ export function createHostBuiltinTools(options: {
         const signals = [lifetime, call.signal].filter((signal): signal is AbortSignal => !!signal);
         const signal = signals.length ? AbortSignal.any(signals) : undefined;
         let pending: Promise<unknown> | undefined;
-        const tool = build(name, call.assertAllowed, signal, operation => { pending = operation; });
-        call.assertAllowed();
+        const sourceGuard = options.captureSourceGuard ? await options.captureSourceGuard(call) : undefined;
+        const assert = () => { call.assertAllowed(); sourceGuard?.(); };
+        const tool = build(name, assert, signal, operation => { pending = operation; });
+        assert();
         // These SDK builtins use their captured cwd without an extension context.
         // No session, extension host, nested tool access or private state is fabricated.
         try { return await tool.execute(call.toolCallId, args, signal, call.onUpdate, undefined as never); }

@@ -15,6 +15,8 @@ type HostPort = Pick<ModelRuntime, "getPhysicalModel" | "stream" | "streamSimple
   Partial<Pick<ModelRuntime, "getModelOfType" | "generateImages" | "classify" | "streamDeferred" | "cancelDeferred">>;
 type DeferredOperation = "fetchDeferred" | "cancelDeferred";
 export interface HostModelPolicy {
+  /** Invocation-local source fence retained through asynchronous credential resolution. */
+  captureSourceGuard?(signal: AbortSignal | undefined): () => void;
   /** Includes host model approval and budget admission; never auth/login approval. */
   authorize(ref: ModelRef, kind: Operation, signal: AbortSignal): Promise<void>;
   /** Synchronous approval/budget-generation check after host auth has resolved. */
@@ -220,6 +222,8 @@ export function createHostModels(
           output.end(projectMessage(result, model));
           return;
         }
+        const assertSource = policy.captureSourceGuard?.(options?.signal) ?? (() => {});
+        assertSource();
         const ref = { provider: model.provider, id: model.id };
         const listed = catalog.find((m) => (m.type ?? "chat") === "chat" && m.provider === ref.provider && m.id === ref.id);
         if ((model.type ?? "chat") !== "chat") throw new Error("Wrong model type");
@@ -230,12 +234,14 @@ export function createHostModels(
         signal.throwIfAborted();
         await policy.authorize(ref, "chat", signal);
         signal.throwIfAborted();
+        assertSource();
         policy.assertCurrent(ref, "chat", signal);
         // Resolve the physical owner again, never accept caller model overrides/routing.
         const physical = hostModelRuntime120.getPhysicalModel(ref.provider, ref.id);
         if (!physical || physical.api !== listed.api) throw new Error("Model owner changed");
         const hostOptions = { ...safeOptions, signal, transformHeaders: (headers: Record<string, string | null>) => {
           signal.throwIfAborted();
+          assertSource();
           policy.assertCurrent(ref, "chat", signal);
           return headers; // Host-only closure: never sent to 1.3 or a caller callback.
         } };

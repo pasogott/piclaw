@@ -111,8 +111,26 @@ export function assertFreshApplicationHistory(root: ReturnType<typeof getDb>, se
   }
   if (mapping) for (const table of ["piclaw_durable_bindings_v1", "piclaw_durable_intent_bindings_v1"]) {
     if (!exists(table)) continue;
-    const rows = root.query(`SELECT domain, incarnation, chat_jid, branch_id, conversation_id FROM ${table}`).all() as { domain: string; incarnation: string; chat_jid: string; branch_id: string; conversation_id: number }[];
-    if (rows.some(row => row.domain !== mapping!.domain || row.incarnation !== mapping!.domain || !mapping!.bindings.some(b => b.chatJid === row.chat_jid && b.branchId === row.branch_id && b.conversationId === row.conversation_id))) throw Error("Invalid durable application routing provenance");
+    const rows = root.query(`SELECT domain, incarnation, chat_jid, branch_id, conversation_id, operation_id, source_seq FROM ${table}`).all() as { domain: string; incarnation: string; chat_jid: string; branch_id: string; conversation_id: number; operation_id: string; source_seq: number }[];
+    for (const row of rows) {
+      const scope = mapping.bindings.find(b => b.chatJid === row.chat_jid && b.branchId === row.branch_id);
+      if (row.domain !== mapping.domain || row.incarnation !== mapping.domain || !scope) throw Error("Invalid durable application routing provenance");
+      if (scope.conversationId === row.conversation_id) continue;
+      // Scheduled forks are not main conversation routes. Validate their persisted
+      // EF-S07/EF-S01 allocation provenance, including already completed occurrences.
+      const scheduled = table === "piclaw_durable_bindings_v1" && exists("service_effect_s07_occurrences") && root.query(`SELECT 1 FROM piclaw_durable_bindings_v1 b
+        JOIN service_effect_s01_sources s ON s.chat_jid=b.chat_jid AND s.source_seq=b.source_seq AND s.source_id=b.source_id AND s.payload_ref=b.payload_ref
+        JOIN service_effect_s07_occurrences r ON r.run_id=s.source_id AND r.operation_id=b.operation_id AND r.accepted_source_seq=s.source_seq
+        JOIN service_effect_s01_operation_sources os ON os.operation_id=b.operation_id AND os.chat_jid=b.chat_jid AND os.source_seq=b.source_seq
+        JOIN service_effect_s01_operations o ON o.operation_id=b.operation_id AND o.chat_jid=b.chat_jid AND o.primary_source_seq=b.source_seq
+        JOIN conversations c ON c.id=b.conversation_id
+        WHERE b.domain=? AND b.incarnation=? AND b.operation_id=? AND b.source_seq=? AND b.conversation_id=?
+          AND s.kind='scheduled_agent' AND b.request_id='scheduled:' || r.run_id
+          AND c.owner_conversation_id IS NULL AND c.owner_task_id IS NULL
+          AND (json_extract(c.record,'$.parent.conversationId') IS NULL OR json_extract(c.record,'$.parent.conversationId')=?)`)
+        .get(mapping.domain, mapping.domain, row.operation_id, row.source_seq, row.conversation_id, scope.conversationId);
+      if (!scheduled) throw Error("Invalid durable application routing provenance");
+    }
   }
 }
 
@@ -174,7 +192,9 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     }
     if (toolUpgrades.length) { assert(); assertToolUpgradeIdle(root); }
   }
+  const requestGuards = new WeakMap<AbortSignal, () => void>();
   const models = createHostModels(host.modelRuntime, available.map(model => ({ provider: model.provider, id: model.id })), { signal: lifetime.signal,
+    captureSourceGuard(signal) { return signal ? requestGuards.get(signal) ?? (() => {}) : () => {}; },
     async authorize(model, _kind, signal) { check(model, signal); }, assertCurrent(model, _kind, signal) { check(model, signal); } });
   const registry = createRegistry();
   // Existing host SDK definitions, never durable's independent coding tools.
@@ -184,7 +204,29 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     if (!captureRuntime) throw Error("Host capture runtime unavailable");
     return captureRuntime;
   };
-  const tools = createHostBuiltinTools({ cwd: WORKSPACE_DIR, authority: { assertAllowed() {
+  const isScheduled = (id: ConversationId) => !!root.query("SELECT 1 FROM piclaw_durable_bindings_v1 b JOIN service_effect_s01_sources s ON s.chat_jid=b.chat_jid AND s.source_seq=b.source_seq WHERE b.conversation_id=? AND s.kind='scheduled_agent'").get(id);
+  registry.install(defineExtension({ name: "app.host-scheduled-source", hooks: [{ task: "pi.generation", handlers: {
+    async beforeRequest(_request: Parameters<NonNullable<import("@earendil-works/pi-durable").GenerationHooks["beforeRequest"]>>[0], api: Parameters<NonNullable<import("@earendil-works/pi-durable").GenerationHooks["beforeRequest"]>>[1], hookContext: Parameters<NonNullable<import("@earendil-works/pi-durable").GenerationHooks["beforeRequest"]>>[2]) {
+      if (!isScheduled(api.conversationId)) return;
+      let guard: () => void;
+      try {
+        const captured = await runtime().captureRunSource(api.conversationId, api.taskId);
+        guard = () => runtime().assertCapturedSourceCurrent(captured.inputs);
+      } catch (error) {
+        // Deny this request through the model result, not an infrastructure hook fault
+        // or a permanent abort of the shared model lifetime.
+        guard = () => { throw error; };
+      }
+      if (!hookContext.abortSignal) throw Error("Scheduled request signal unavailable");
+      requestGuards.set(hookContext.abortSignal, guard);
+    },
+  } }] }));
+  const tools = createHostBuiltinTools({ cwd: WORKSPACE_DIR,
+    async captureSourceGuard(call) {
+      if (!isScheduled(call.conversationId)) return () => {};
+      const captured = await runtime().captureToolSource(call.conversationId, call.taskId, call.toolCallId);
+      return () => runtime().assertCapturedSourceCurrent(captured.inputs);
+    }, authority: { assertAllowed() {
     assert(); lifetime.signal.throwIfAborted();
     if (readAccessConfig().mode !== "single-user") throw Error("Host tool permission denied");
   } }, signal: lifetime.signal, shellPath: () => settings.getShellPath(), names: defaultToolNames });

@@ -1,5 +1,13 @@
 // INACTIVE application-owned correlation store. No database opens or automatic migrations.
 import type { Database } from "bun:sqlite";
+import { listBudgetCaps } from "../../src/db/budget-limits.js";
+
+/** Native schedules have no qualified per-request reservation authority yet. */
+export function assertNativeScheduledBudgetAvailable(root: Database, taskId: string): void {
+  if (listBudgetCaps({ enabledOnly: true }, root).some(cap =>
+    cap.scope !== "task" && (cap.scope !== "scheduled_run" || cap.scheduled_task_id === taskId)))
+    throw Error("Native scheduled budget admission unavailable");
+}
 import { assertHostSchema, initializeHostSchemaTables } from "./host-schema.js";
 import { getQueuedInputIntent } from "../../src/service-effects/current-piclaw/queued-input-intent.js";
 import type { ConversationId, SubmissionId } from "@earendil-works/pi-durable";
@@ -37,6 +45,7 @@ type Row = { conversation_id: ConversationId; chat_jid: string; branch_id: strin
  * The owner callback must fence this whole store; no distributed atomicity is claimed. */
 export function createHostDurableBindings(db: Database, options: HostBindingOptions): HostDurableBindings & {
   findSource(chatJid: string, sourceSeq: number): Promise<HostInputBinding | null>;
+  resolveConversation(input: AcceptedInput): ConversationId | undefined;
 } {
   const domain = identity(options.domain), incarnation = identity(options.incarnation);
   const assertOwner = options.assertOwner.bind(options), resolveContent = options.resolveContent.bind(options);
@@ -44,10 +53,30 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
     branchId: identity(b.branchId), conversationId: b.conversationId }));
   const lookup = options.getConversationBinding?.bind(options) ?? ((chat: string, branch: string) => manifest.find(b => b.chatJid === chat && b.branchId === branch));
   assertOwner();
+  function resolveConversation(input: AcceptedInput): ConversationId | undefined {
+    assertOwner();
+    const i = inputSnapshot(input), root = lookup(i.chatJid, i.branchId)?.conversationId;
+    if (i.incarnation !== incarnation || !root || i.conversationId === root) return undefined;
+    if (!db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='service_effect_s07_occurrences'").get()) return undefined;
+    const row = db.query(`SELECT b.*, r.task_id FROM piclaw_durable_bindings_v1 b
+      JOIN service_effect_s01_sources s ON s.chat_jid=b.chat_jid AND s.source_seq=b.source_seq
+      JOIN service_effect_s07_occurrences r ON r.run_id=s.source_id AND r.operation_id=b.operation_id AND r.accepted_source_seq=s.source_seq
+      JOIN service_effect_s07_tasks h ON h.task_id=r.task_id AND h.current_revision=r.task_revision AND h.status='active' AND h.next_run_at=r.scheduled_for
+      JOIN service_effect_s01_operations o ON o.operation_id=b.operation_id AND o.chat_jid=b.chat_jid AND o.primary_source_seq=b.source_seq
+      JOIN service_effect_s01_chats ch ON ch.chat_jid=b.chat_jid AND ch.active_operation_id=o.operation_id
+      WHERE b.domain=? AND b.incarnation=? AND b.operation_id=? AND b.source_seq=?
+        AND s.kind='scheduled_agent' AND s.state='claimed' AND s.source_id=? AND s.payload_ref=?
+        AND r.state='source_bound' AND r.lease_expires_at>? AND o.phase IN ('claimed','executing','settling')`)
+      .get(domain, incarnation, i.operationId, i.sourceSeq, i.sourceId, i.payloadRef, new Date().toISOString()) as (Row & { task_id: string }) | null;
+    if (!row || row.conversation_id === root || row.chat_jid !== i.chatJid || row.branch_id !== i.branchId ||
+      row.conversation_id !== i.conversationId || row.request_id !== i.requestId || row.request_hash !== i.requestHash) return undefined;
+    assertNativeScheduledBudgetAvailable(db, row.task_id);
+    return row.conversation_id;
+  }
   function capture(input: AcceptedInput) {
     const i = inputSnapshot(input);
     assertOwner();
-    if (i.incarnation !== incarnation || lookup(i.chatJid, i.branchId)?.conversationId !== i.conversationId) throw conflict();
+    if (i.incarnation !== incarnation || (lookup(i.chatJid, i.branchId)?.conversationId !== i.conversationId && resolveConversation(i) !== i.conversationId)) throw conflict();
     return i;
   }
   function makePort(intent = false) {
@@ -147,7 +176,7 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
     },
   });
   }
-  return Object.freeze({ ...makePort(), intents: makePort(true),
+  return Object.freeze({ ...makePort(), intents: makePort(true), resolveConversation,
     async findSource(chatJid: string, sourceSeq: number) {
       assertOwner();
       assertHostSchema(db);

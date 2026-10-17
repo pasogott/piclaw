@@ -15,9 +15,12 @@ import { createDurableRecoveryDispatch } from "../../src/agent-pool/durable-reco
 import { hashCanonicalRequest, type CanonicalJsonValue } from "../../src/service-effects/contracts/common.js";
 import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { createHostController, type HostControllerOptions } from "./host-controller.js";
-import { createHostDurableBindings } from "./host-bindings.js";
+import { createHostDurableBindings, assertNativeScheduledBudgetAvailable } from "./host-bindings.js";
 import { assertHostSchema, initializeHostSchema } from "./host-schema.js";
 import { value } from "./host-effects.js";
+import { hashScheduledLeaseToken } from "../../src/service-effects/current-piclaw/scheduled-run-values.js";
+import type { ScheduledRunLease } from "../../src/service-effects/contracts/scheduled-run-store.js";
+import type { AcceptedInput } from "./host-runtime.js";
 
 type Manifest = HostControllerOptions["recovery"]["manifest"];
 /** Validate existing host routing before any import/journal/schema write. */
@@ -100,8 +103,15 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     const terminal = value(createCurrentPiclawTerminalSettlementStore(root, config.answers.resolver,
       { hitFault: () => false, recordTrace() {}, validateOwnership() { assert(); return true; } }));
     // Resolve only actual root messages and verify both accepted reference and source identity.
-    async function content(ref: string, input: { chatJid: string; sourceId: string }) {
+    async function content(ref: string, input: AcceptedInput | { chatJid: string; sourceId: string }) {
       assert();
+      if ("conversationId" in input && bindings.resolveConversation(input) === input.conversationId) {
+        const row = root.query(`SELECT t.prompt FROM scheduled_tasks t
+          JOIN service_effect_s07_occurrences r ON r.task_id=t.id AND r.task_revision=t.revision AND r.scheduled_for=t.next_run
+          WHERE r.run_id=? AND r.operation_id=? AND r.accepted_source_seq=? AND t.chat_jid=? AND t.status='active'`).get(input.sourceId, input.operationId, input.sourceSeq, input.chatJid) as { prompt: string } | null;
+        if (!row) throw Error("Unverified scheduled payload");
+        return row.prompt;
+      }
       const row = (/^message-row:[1-9][0-9]*$/.test(ref)
         ? root.query("SELECT id, content FROM messages WHERE rowid=? AND chat_jid=?").get(Number(ref.slice(12)), input.chatJid)
         : ref === `queued-source:${input.sourceId}`
@@ -115,10 +125,11 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       runtime: { ...r, work, terminal, bindings, putAnswer: config.answers.put.bind(config.answers),
         withIdleModelGuard: body => candidateDatabase.withIdleModelGuard(body),
         existingConversationIds: manifest.map(b => b.conversationId),
+        operationConversationFor: input => bindings.resolveConversation(input),
         conversationFor(chat, branch) { const b = lookup(chat, branch); if (!b) throw Error("Unbound conversation"); return b.conversationId; } },
       recovery: { manifest, work, bindings, async readAcceptedInput(source) {
         assert();
-        if (source.kind !== "message") throw Error("Unsupported recovered source");
+        if (source.kind !== "message" && source.kind !== "scheduled_agent") throw Error("Unsupported recovered source");
         const binding = await bindings.findSource(source.chatJid, source.sourceSeq);
         const operationId = binding?.operationId ?? source.targetOperationId;
         if (!operationId) throw Error("Missing recovered operation identity");
@@ -126,7 +137,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         const scope = routeIndex.get(source.chatJid);
         if (!operation || !scope) throw Error("Missing recovered operation");
         return { claimed: { source, operation }, branchId: scope.branchId,
-          requestId: binding?.requestId ?? `queued-steer:${source.sourceId}`, content: await content(source.payloadRef, source) };
+          requestId: binding?.requestId ?? `queued-steer:${source.sourceId}`, content: await content(source.payloadRef, source.kind === "scheduled_agent" && binding ? binding : source) };
       } },
     }, context);
     const activeController = controller;
@@ -197,9 +208,84 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       preparing.set(chat, promise); return promise;
     }
     let bound = false, closing: Promise<void> | undefined;
+    async function allocateScheduledConversation(raw: ScheduledRunLease): Promise<AcceptedInput> {
+      const lease = structuredClone(raw), record = lease.record;
+      const scope = routeIndex.get(lease.task.chatJid);
+      if (!scope || lease.task.kind !== "agent") throw Error("Unbound scheduled root");
+      const read = () => {
+        assertLive();
+        const row = root.query(`SELECT s.source_seq,s.source_id,s.payload_ref,o.operation_id,t.prompt,v.snapshot_json
+          FROM service_effect_s07_occurrences r
+          JOIN service_effect_s07_tasks h ON h.task_id=r.task_id AND h.current_revision=r.task_revision AND h.status='active' AND h.next_run_at=r.scheduled_for
+          JOIN service_effect_s07_task_revisions v ON v.task_id=r.task_id AND v.revision=r.task_revision
+          JOIN scheduled_tasks t ON t.id=r.task_id AND t.revision=r.task_revision AND t.status='active' AND t.next_run=r.scheduled_for
+          JOIN service_effect_s01_sources s ON s.chat_jid=t.chat_jid AND s.source_seq=r.accepted_source_seq AND s.source_id=r.run_id
+          JOIN service_effect_s01_operation_sources os ON os.chat_jid=s.chat_jid AND os.source_seq=s.source_seq AND os.operation_id=r.operation_id
+          JOIN service_effect_s01_operations o ON o.operation_id=r.operation_id AND o.primary_source_seq=s.source_seq AND o.phase IN ('claimed','executing')
+          JOIN service_effect_s01_chats c ON c.chat_jid=s.chat_jid AND c.active_operation_id=o.operation_id
+          WHERE r.run_id=? AND r.state='source_bound' AND r.worker_id=? AND r.attempt=? AND r.task_revision=?
+            AND r.lease_token_hash=? AND r.lease_expires_at>? AND s.kind='scheduled_agent' AND s.state='claimed'
+            AND s.chat_jid=? AND s.payload_ref=?`)
+          .get(record.runId, record.workerId, record.attempt, record.taskRevision, hashScheduledLeaseToken(lease.leaseToken), r.now(),
+            scope.chatJid, lease.task.payloadRef) as
+            { source_seq: number; source_id: string; payload_ref: string; operation_id: string; prompt: string; snapshot_json: string } | null;
+        if (!row || hashCanonicalRequest(JSON.parse(row.snapshot_json)) !== hashCanonicalRequest(lease.task as unknown as CanonicalJsonValue)) throw Error("Scheduled source authority unavailable");
+        return row;
+      };
+      const source = read(), requestId = `scheduled:${record.runId}`;
+      const base = { incarnation: r.incarnation, chatJid: scope.chatJid, branchId: scope.branchId,
+        operationId: source.operation_id, sourceSeq: source.source_seq, sourceId: source.source_id,
+        payloadRef: source.payload_ref, requestId,
+        requestHash: hashCanonicalRequest({ type: "input", requestId, content: source.prompt }) };
+      const prior = await bindings.findSource(scope.chatJid, source.source_seq);
+      read();
+      if (prior) {
+        if (Object.entries(base).some(([key, val]) => prior[key as keyof AcceptedInput] !== val)) throw Error("Scheduled binding conflict");
+        return prior;
+      }
+      let conversationId: import("@earendil-works/pi-durable").ConversationId | undefined, persisted = false;
+      await candidateDatabase.withHostSourceGuard(() => { read(); }, async tx => {
+        if (conversationId === undefined || persisted) return;
+        await tx.run(`INSERT INTO piclaw_durable_bindings_v1
+          (domain,incarnation,conversation_id,chat_jid,branch_id,operation_id,source_seq,source_id,payload_ref,request_id,request_hash)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?)`, r.incarnation, r.incarnation, conversationId, base.chatJid, base.branchId,
+          base.operationId, base.sourceSeq, base.sourceId, base.payloadRef, base.requestId, base.requestHash);
+        persisted = true;
+      }, () => runtime.allocateScheduledFork(scope.conversationId, id => { conversationId = id; }));
+      if (conversationId === undefined || !persisted) throw Error("Scheduled fork not published");
+      return Object.freeze({ ...base, conversationId });
+    }
+    async function dispatchScheduledAgent(lease: ScheduledRunLease): Promise<import("../../src/agent-pool.js").AgentOutput> {
+      assertLive();
+      // Model overrides require separate fork-local host validation; never mutate the root.
+      if (lease.task.modelLabel) throw Error("Scheduled model override unavailable");
+      // The native SDK task does not yet carry the host's per-request budget
+      // reservation authority. Never treat ALS or an interactive root work ID
+      // as proof of scheduled admission. Until that binding is qualified, only
+      // schedules without an applicable enabled cap may allocate a fork.
+      assertNativeScheduledBudgetAvailable(root, lease.task.taskId);
+      const input = await allocateScheduledConversation(lease);
+      const id = await runtime.submit(input); assertLive();
+      const operation = value(await work.getOperation(input.operationId));
+      if (!operation) throw Error("Missing scheduled operation");
+      if (!operation.harness) {
+        const request = { effect: { idempotencyKey: `running:${input.operationId}:${id}`, requestHash: "", operationId: input.operationId,
+          sourceSeq: input.sourceSeq, provenanceRef: `scheduled_run:${input.sourceId}`, redactionClass: "private" as const },
+          expectedVersion: operation.version, sessionId: r.sessionId, lane: r.lane, harnessOperationId: String(id),
+          state: "running" as const, watchGeneration: r.generation };
+        request.effect.requestHash = hashCanonicalRequest(request as unknown as CanonicalJsonValue);
+        value(await work.bindHarness(request)); assertLive();
+      }
+      await runtime.wait(input, id, shutdown.signal); assertLive();
+      const state = await runtime.reconcile(input);
+      if (!state.answer) throw Error("Scheduled answer unavailable");
+      if (!await runtime.settle(input)) throw Error("Scheduled settlement pending");
+      return { status: "success", result: state.answer.text };
+    }
     return Object.freeze({
       /** Construct pool first from this snapshot, then bind its existing channel constructor. */
-      sessionOptions: Object.freeze({ getDurableSession }),
+      sessionOptions: Object.freeze({ getDurableSession, dispatchScheduledAgent }),
+      allocateScheduledConversation,
       bind(options: Pick<WebChannelOpts, "queue" | "agentPool">): Readonly<WebChannelOpts> {
         assert(); if (bound || closing) throw Error("Application bundle already bound or closing");
         bound = true;

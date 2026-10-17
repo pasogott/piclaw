@@ -108,6 +108,52 @@ test("scheduler stops after each agent await or rejection without later restorat
   });
 });
 
+test("native dispatch joins a rejecting promise after synchronous authority revocation without settlement", async () => {
+  await fixture(async (configure) => {
+    const current = task(), h = harness();
+    const entered = Promise.withResolvers<void>();
+    const native = Promise.withResolvers<Awaited<ReturnType<SchedulerDeps["agentPool"]["runAgent"]>>>();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => { unhandled.push(error); };
+    let atDispatch = "", finished = false;
+    h.deps.agentPool.dispatchScheduledAgent = (lease) => {
+      expect(lease.record.taskId).toBe(current.id);
+      h.calls.push("native");
+      atDispatch = snapshot();
+      // Revocation happens before dispatch returns, not at a later await.
+      configure("family-shared");
+      entered.resolve();
+      return native.promise;
+    };
+    process.on("unhandledRejection", onUnhandled);
+    let running: Promise<void> | undefined;
+    try {
+      await pollScheduledRunsOnce(h.deps, store());
+      expect(h.queued).toHaveLength(1);
+      running = h.queued[0]().then(() => { finished = true; });
+      await entered.promise;
+      await Bun.sleep(0);
+      // The queue-owned callback must remain active until native work settles.
+      expect(finished).toBe(false);
+      expect(h.calls).toEqual(["native"]);
+      expect(snapshot()).toBe(atDispatch);
+      native.reject(new Error("native rejected after authority revocation"));
+      await running;
+      await Bun.sleep(0);
+      expect(finished).toBe(true);
+      expect(unhandled).toEqual([]);
+      expect(h.calls).toEqual(["native"]);
+      // No result log, delivery, restoration, completion, or source settlement.
+      expect(snapshot()).toBe(atDispatch);
+    } finally {
+      native.reject(new Error("native regression cleanup"));
+      await running;
+      await Bun.sleep(0);
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+});
+
 test("internal task model setup cannot continue into Dream after a mode change", async () => {
   await fixture(async (configure) => {
     for (const stage of ["model", "switch"]) {

@@ -12,6 +12,7 @@ export function createHostBashTool(options: {
   authority: { assertAllowed(): void };
   shellPath?: TrackedBashOperationsOptions["shellPath"];
   toolOptions?: Omit<BashToolOptions, "operations" | "shellPath">;
+  captureSourceGuard?: (call: { conversationId: import("@earendil-works/pi-durable").ConversationId; taskId: import("@earendil-works/pi-durable").TaskId; toolCallId: string }) => Promise<() => void>;
 }) {
   const schema = createBashTool(options.cwd, options.toolOptions);
   return defineTool({
@@ -19,6 +20,9 @@ export function createHostBashTool(options: {
     structuredOutputSchema: schema.outputSchema,
     callers: ["model"], replay: "unsafe",
     async execute(args, api, context) {
+      const sourceGuard = options.captureSourceGuard
+        ? await options.captureSourceGuard({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId })
+        : undefined;
       let active = true;
       let progressFailed = false;
       const controller = new AbortController();
@@ -29,7 +33,7 @@ export function createHostBashTool(options: {
       };
       const assertAllowed = () => {
         if (!active || progressFailed || signal.aborted) throw new Error("Bash execution no longer authorized");
-        try { options.authority.assertAllowed(); }
+        try { options.authority.assertAllowed(); sourceGuard?.(); }
         catch { throw new Error("Bash execution no longer authorized"); }
       };
       const tool = createBashTool(options.cwd, {

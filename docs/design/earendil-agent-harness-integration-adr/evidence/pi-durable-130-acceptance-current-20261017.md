@@ -1,11 +1,11 @@
-# #1650 acceptance after 8dcf4dd73 — 17 October 2026
+# #1650 acceptance: scheduler source follow-up over 31dd88ebd — 17 October 2026
 
 The default application now selects the public durable engine in source; fleet/live acceptance and existing-chat migration are incomplete. The 45 requirements below retain their original IDs and titles. None is an unconditional fleet acceptance claim.
 
 ## Source and evidence boundary
 
-- Worktree: `/workspace/tmp/durable-1650`; published HEAD `8dcf4dd73d88150e5da5e869d480e006d4714b59` includes the session-tree summary. The previous basis was published Plan HEAD `7315c221e80788c68b0af38bbc82e8200fe5141c` plus eleven dirty summary files; that summary is now published. Native context metadata and public-projection fixes are a source follow-up over `8dcf4dd73`, qualified locally for publication in this follow-up. Its exact commit is recorded by Git.
-- Native Delegate and Code Review work is parked in `stash@{0}` (`park incomplete native Delegate and Code Review adoption; blocked accounting/shared-db services`). It is absent from this assessment's implementation. Earlier WIP checkpoints for those tools do not qualify the current tree.
+- Worktree: `/workspace/tmp/durable-1650`; HEAD `31dd88ebd989e7ef01618bb390d6357b158691ed` includes native context metadata/public projection, following summary `8dcf4dd73` and Plan `7315c221e`. Scheduler adoption is a dirty source follow-up over `31dd88ebd`; its final commit and full-gate results are not yet recorded here.
+- `stash@{0}` (`scheduler-allocation-current`) is an older allocation-only snapshot already applied to the dirty tree, not a complete snapshot of current scheduler work. Native Delegate and Code Review work is preserved in `stash@{1}` (`park incomplete native Delegate and Code Review adoption; blocked accounting/shared-db services`) and excluded here. Earlier WIP checkpoints for those tools do not qualify the current tree.
 - `runtime/src/runtime.ts` acquires strict ownership. `runtime/src/runtime/bootstrap.ts` supplies `prepareApplicationBackend` by default and loads the fixed `runtime/durable-engine/src/default-application-runtime.ts` entry before AgentPool/WebChannel. Missing candidate dependencies fail explicitly; there is no production legacy fallback. Statements that production registration or default selection are absent are obsolete.
 - The private engine still owns isolated Pi/Chord 1.3.0 pins and its lock. The root package still uses Pi 1.2.0 host definitions/model services. Source default adoption does not establish distributed-package installation or live activation. No fleet rollout, installed-package replacement, live provider acceptance or service restart is recorded here.
 - The default supports Linux/single-user policy, fresh durable history and validated durable reopen. Legacy session files, old message history and unverified storage provenance fail preflight before model/SDK construction. Existing chats must retain their original chat/branch/session identities; fresh-chat success does not meet that migration obligation.
@@ -15,8 +15,8 @@ Paths in the table are repository-relative: `E/` = `runtime/durable-engine/src/`
 
 | Status | Scope | Rows |
 | --- | --- | ---: |
-| source-qualified | Application source composes the named path; existing tests qualify only the stated subset. Wider assertions and live acceptance still need evidence. | 21 |
-| fixture-only | Selected semantic/component fixtures exist; the full requirement has no qualified application path or matrix. An explicit missing case is not a pass. | 18 |
+| source-qualified | Application source composes the named path; existing tests qualify only the stated subset. Wider assertions and live acceptance still need evidence. | 22 |
+| fixture-only | Selected semantic/component fixtures exist; the full requirement has no qualified application path or matrix. An explicit missing case is not a pass. | 17 |
 | blocked-publicAPI | The selected public API lacks exact conditional running-task cancellation. | 3 |
 | migration/perf-unverified | Copied recovery/import/backend evidence does not qualify existing-chat cutover, general compatibility or resource bounds. | 3 |
 
@@ -58,11 +58,11 @@ This is the single current HC/PC table. The [earlier acceptance report](pi-durab
 | PC-005 | Stale cancellation | fixture-only | `Q/runtime.test.ts` | Wrong submission/repeated cancellation leave selected successor intact; full running cancellation depends on PC-004. |
 | PC-006 | Late completion after cancellation | source-qualified | `E/host-runtime.ts`; `Q/host-handoff.test.ts`, `Q/cutover-runtime.test.ts`, `Q/runtime.test.ts` | Host cancellation suppresses late success/settlement publication in selected races; no provider/task interruption claim. |
 | PC-007 | Terminal commit fault matrix | source-qualified | `E/application-bootstrap.ts`; `SE/terminal-settlement-atomicity-races.test.ts`, `SE/terminal-settlement-payload-redaction.test.ts`, `Q/host-handoff.test.ts` | Actual EF-S02 owner/atomic settlement is composed; arbitrary cross-file fault placement and live delivery matrix are unqualified. |
-| PC-008 | Restart with open run | source-qualified | `E/host-controller.ts`, `E/host-recovery.ts`, `A/durable-recovery-dispatch.ts`; `Q/host-controller.test.ts`, `Q/worker-recovery.test.ts`, `Q/single-database.test.ts` | Persisted identity discovery, paused whole-domain authorisation and worker events now exist. Unknown/background work fails closed; arbitrary crash/external exactly-once acceptance is unproved. |
+| PC-008 | Restart with open run | source-qualified | `E/host-controller.ts`, `E/host-recovery.ts`, `A/durable-recovery-dispatch.ts`; `Q/host-controller.test.ts`, `Q/worker-recovery.test.ts`, `Q/single-database.test.ts`, native scheduler scenario in `Q/default-application-runtime.test.ts` | Bounded identity discovery, paused authorisation and completed-schedule reopen work. Unknown/background work fails closed; automatic accepted-agent takeover, arbitrary scheduled crash recovery and external exactly-once acceptance are unqualified. |
 | PC-009 | Pending steer restart | source-qualified | `E/host-recovery.ts`, `E/application-bootstrap.ts`; `Q/accepted-steer-recovery.test.ts`, `Q/host-recovery.test.ts`, `Q/worker-recovery.test.ts` | Clean reopen and both SIGKILL windows are existing evidence; application recovery reads real host records. Arbitrary windows/all-ingress FIFO are unqualified; fixture-only identity table is no longer the sole source implementation. |
 | PC-010 | Protected hand-off | fixture-only | `SE/service-work-store-contracts.test.ts`, `RT/channels/web/messaging/starting-turn-steering.test.ts`, `Q/plan.test.ts` | Host/selected Plan lifecycle evidence does not qualify candidate reset/protected hand-off→exactly one successor end to end. |
 | PC-011 | Mutation containment | fixture-only | `E/host-tools.ts`, `E/host-builtins.ts`; `Q/tools.test.ts`, `Q/bash-port.test.ts`, `Q/host-builtins.test.ts` | Selected effect fencing works; unsafe interrupted effects, all installed ports and reload containment/reconciliation remain incomplete. |
-| PC-012 | Scheduler agent task | fixture-only | `E/host-scheduled-run.ts`; `Q/scheduled.test.ts` | Real EF-S07 agent occurrence/revision/pause/renewal fixtures do not qualify mainstream scheduler routing, main-chat save/restore or all stale delivery cases. |
+| PC-012 | Scheduler agent task | source-qualified | `runtime/src/task-scheduler.ts` `executeScheduledTask`, `runtime/src/agent-pool.ts` `dispatchScheduledAgent`, `E/application-bootstrap.ts`, `E/host-bindings.ts`; `Q/default-application-runtime.test.ts` selector `native-scheduler`, `Q/scheduled.test.ts` | Actual default native consumer uses public forks, preserves empty/dynamic/nonempty main history, reopens and accepts subsequent ordinary input; EF-S07 alone logs/delivers scheduled results. Model overrides reject; enabled caps deny allocation, with bounded mid-run/post-auth rechecks but no request budget accounting. Cancellation, automatic accepted-agent takeover, arbitrary crash and complete stale-delivery parity are unqualified. Allocation-only fake `runAgent` tests are not actual consumer proof. |
 | PC-013 | Scheduler shell task | fixture-only | `Q/scheduled.test.ts`, `runtime/src/task-scheduler.ts` | Candidate agent dispatch rejects shell; retained shell regression path does not establish candidate-mode Pushover/delivery equivalence. |
 | PC-014 | Stale SSE generation | source-qualified | `E/host-projection.ts`; `Q/projection.test.ts` | Actual EF-S08 owner/generation/receipt filtering drops stale observations; full browser SSE/reconnect remains unqualified. |
 | PC-015 | Mobile Abort | blocked-publicAPI | `E/host-runtime.ts`; `Q/runtime.test.ts` | No candidate mobile→exact running-task abort proof; same API gap as PC-004. Legacy mobile tests cannot fill it. |
@@ -88,6 +88,56 @@ Seven guarded Linux builtins (`read`, `bash`, `edit`, `write`, `find`, `ls`, `gr
 
 Approved installed Plan uses `E/host-extension-catalog.ts`, `E/host-plan-tool.ts` and native `E/host-plan-prompt.ts` `GenerationHooks.beforeRequest`. Public task/tool/source evidence bounds invocation-local chat KV authority. The hook refreshes request-only Plan state on each provider request; it does not emulate legacy SessionManager/ExtensionContext or persist invented hidden entries. Shared `runtime/src/db/register-extension-kv.ts` and the existing authority router replace duplicate registration. Canonical version/content/object checks and process-local path poisoning reject unsupported or stale SDK-cached factories. Only approved Plan is qualified; other installed lifecycle/tool contributions fail startup explicitly. Candidate Delegate/Code Review factory tests in `Q/delegate.test.ts` and `Q/addon-host-services.test.ts` do not establish native default adoption.
 
+## Bounded native scheduler consumer
+
+The default source path is EF-S07 polling → `executeScheduledTask` → real AgentPool
+`dispatchScheduledAgent` → application bootstrap dispatch → public SDK fork
+allocation/submission. The allocator rechecks the actual lease, task revision,
+claimed source and operation, then writes correlation to the existing binding table
+in the same physical application database. Main-chat execution/history is preserved;
+no legacy save/restore or model-label lookup runs. EF-S07 owns scheduled logs and
+result delivery. Scheduled terminal settlement emits no EF-S02 timeline answer.
+
+The actual `Q/default-application-runtime.test.ts` selector
+`PICLAW_DEFAULT_FACTORY_CASE=native-scheduler` uses real default bootstrap,
+AgentPool and `pollScheduledRunsOnce` with a synthetic keyless provider. Its shared
+title is `default factory prepares and reopens real startup-known public
+conversations; refuses legacy before models`. Assertions cover empty main,
+dynamically added root, nonempty main, unchanged main position/history, three
+successful logs/results, reopen and a subsequent ordinary message with exactly one
+further ordinary answer. Legacy `runAgent`/save/restore/model-label and SessionManager
+spies remain unused. `Q/scheduled-allocation.test.ts` explicitly uses fake `runAgent`;
+its lease/rollback/public-fork/forged-route checks qualify allocation only.
+
+`Scheduled model override unavailable` explicitly rejects overrides before dispatch.
+Applicable enabled instance/provider or matching scheduled-task caps reject before
+fork allocation with `Native scheduled budget admission unavailable`, including
+zero and positive allowances. Task-work caps do not grant a new occurrence authority;
+other scheduled tasks' caps do not apply. Per-request native scheduled budget
+attribution, reservation and accounting are incomplete.
+
+Current exact scheduled binding resolution rechecks source/operation/revision/lease
+and caps. All seven host builtins capture actual public run/tool-slot provenance and
+recheck at filesystem/process effects. Native `GenerationHooks.beforeRequest`
+captures actual run provenance against the hook abort signal; the model bridge
+carries the request guard into post-credential `transformHeaders`. The actual native
+scenario enables a cap after one provider response and verifies no write, no second
+provider invocation, an error log and no delivery. A separate asynchronous credential
+barrier enables a cap after capture and verifies zero provider invocations and no
+delivery. Denial fails that request without aborting shared model lifetime. The
+accepted microtask gap after awaited `transformHeaders` is unchanged; these checks
+do not provide atomic network cancellation or an exact running-task abort.
+
+Startup validates persisted scheduled source/operation/fork provenance, including
+completed occurrences. A stale inspected task is ignored only after reading its
+exact persisted public terminal receipt. Unknown/background authority still rejects.
+Automatic accepted-agent takeover and arbitrary scheduled process-crash recovery
+are unqualified. PC-012 meets the bounded source-qualified definition, with incomplete
+model/budget/cancellation/recovery acceptance stated above. PC-018 general ingress
+and HC-019 usage retain fixture-only status. Stale inactive/unregistered module
+comments are superseded by this default call graph; frozen-gate source comments
+were left untouched.
+
 ## Existing verification receipts
 
 No tests were rerun and no network/CI queries were made for this refresh.
@@ -105,13 +155,17 @@ No tests were rerun and no network/CI queries were made for this refresh.
 | Native context HTTP projection P2 fix | `context-window-public-projection-tests.log`, `context-window-public-projection-types.log` | 24 pass, 0 fail, 411 assertions, 2 files; runtime typecheck passes. Bounded independent review READY after this fix. |
 | Native context scoped types | `context-window-root-types.log`, `context-window-engine-types.log`, `context-window-qualification-types.log` | All three pass. Earlier parallel engine exit 137 was followed by a passing rerun. |
 | Native context final root gate | `context-window-final-root.log` | 7,311 pass, 74 baseline skips, 0 fail; 25 feature + 9 build tests pass; `EXIT_CODE=0`. |
+| Published native context parent `31dd88ebd` — hosted CI | Supplied verified exact-head receipt, run `39061392219` | SUCCESS; not re-fetched during this docs-only refresh. The 456 candidate / 7,311 root + 25 feature + 9 build results above belong to this parent, not the scheduler follow-up. |
+| Scheduler mixed focused follow-up over `31dd88ebd` | `scheduled-midrun-focused.log` | 95 pass, 0 fail, 2,474 assertions across 3 files: actual default `native-scheduler` scenario, model tests and allocation-only tests. Not the full default suite or 95 actual-native cases; no additive aggregation. |
+| Scheduler component effect fences | `scheduled-midrun-effect-final.log` | 117 pass, 0 fail, 2,565 assertions across bash/builtin/model tests. Separate component evidence; overlapping model counts are not additive. |
+| Scheduler final simplified source | `scheduler-simplified-candidate.log`, `scheduler-simplified-root.log` | 458 candidate tests / 6,990 assertions; root 7,294 pass, 74 baseline skips, 0 fail; 25 feature + 9 build tests pass; `EXIT_CODE=0`. All three scoped types pass. |
 | Accepted-steer crash matrix | `accepted-steer-crash-checkpoint.md`, `accepted-steer-crash-full.log`, `accepted-steer-crash-repeat-{1,2,3}.log` | Existing attachment-before-submit and submission-before-ACK SIGKILL cases retained. No repeat run. No arbitrary mid-commit, paid-provider exactly-once or power-loss guarantee. |
 
 Historical failed, interrupted and superseded runs remain in their original receipts/README. Early six-tool/grep-blocked, legacy-default and controller-missing checkpoints describe earlier source; the current code and final registered-suite receipts above supersede those implementation statements.
 
 ## Bounded tree and native context reads
 
-The existing external run passed 18,716 assertions on synthetic native histories using actual public SDK SQLite storage, a borrowed physical root, real host effect/binding composition, `HostConversationRuntime`, the durable adapter and `AgentRuntimeFacade`. It did not use default application bootstrap/runtimeFactory or providers. All 45 row statuses above are unchanged: 21 source-qualified, 18 fixture-only, 3 blocked-publicAPI and 3 migration/perf-unverified.
+The existing external run passed 18,716 assertions on synthetic native histories using actual public SDK SQLite storage, a borrowed physical root, real host effect/binding composition, `HostConversationRuntime`, the durable adapter and `AgentRuntimeFacade`. It did not use default application bootstrap/runtimeFactory or providers. These read measurements do not change acceptance statuses. With bounded scheduler source adoption, the 45 rows now total 22 source-qualified, 17 fixture-only, 3 blocked-publicAPI and 3 migration/perf-unverified.
 
 | Native entries | Warm tree median ms | Warm tree p95 ms (n=5) | First tree read after reopen ms | Warm facade context metadata median ms |
 | ---: | ---: | ---: | ---: | ---: |
@@ -126,7 +180,7 @@ Original public entry IDs, linear ancestry, parent/child counts, full snapshot e
 ## Remaining acceptance work
 
 1. Close the exact-running-abort public API gap for HC-009/PC-004/PC-015 or obtain an explicit requirement decision. Host cancellation/publication fencing is already distinct; no unsafe substitute is proposed.
-2. Complete service/terminal-effect (STE) acceptance across all ingress and producer paths: scheduler, trusted internal and cross-session input, protected hand-offs, mobile cancellation and goal/checkpoint races. EF-S01/02/05/07/08 keep their acceptance, terminal, delivery, scheduler and projection authorities. Task outcomes/watches cannot replace terminal or delivery receipts.
+2. Complete scheduler model overrides and native per-request budget attribution/reservation/accounting, exact cancellation, accepted-agent takeover and arbitrary-crash/stale-delivery qualification. The actual consumer and cap-denial checks above do not complete those requirements. Complete service/terminal-effect (STE) acceptance across general trusted internal and cross-session input, protected hand-offs, mobile cancellation and goal/checkpoint races. EF-S01/02/05/07/08 keep their acceptance, terminal, delivery, scheduler and projection authorities. Task outcomes/watches cannot replace terminal or delivery receipts.
 3. Qualify remaining semantic matrices: parallel ordering, safe replay, retry/budgets, corruption, deferred live-provider recovery, reload, usage accounting and automatic/background/overflow compaction. Existing bounded source/component results do not supply those matrices.
 4. Qualify supported installed add-ons through native source paths. Delegate/Code Review WIP is stashed; do not count its review checkpoints as current implementation. Remote networking/auth, MCP/SSH effects and general lifecycle/state compatibility need separate evidence.
 5. Keep migration last. Preserve existing host chat/branch/session identities; qualify compatibility totality, guarded cutover and reverse conversion after new work. `E/host-controller.ts` deliberately rejects checkpoint/rollback proof without public storage identity and historical frontier; copied host-only rollback success does not remove this limitation.

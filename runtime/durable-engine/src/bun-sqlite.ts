@@ -13,6 +13,15 @@ export class BunSqliteDatabase implements SqliteDatabase {
   private failure?: Error;
 
   private idleGuard?: () => void;
+  private readonly sourceScope = new AsyncLocalStorage<{ check(): void; persist(tx: SqliteExecutor): Promise<void> }>();
+  private allocatingSource = false;
+
+  /** Compose public SDK writes and host correlation in the same physical transaction. */
+  async withHostSourceGuard<T>(check: () => void, persist: (tx: SqliteExecutor) => Promise<void>, body: () => Promise<T>): Promise<T> {
+    if (!this.guard || this.allocatingSource || this.idleGuard) throw Error("Host source guard unavailable");
+    this.allocatingSource = true;
+    try { check(); return await this.sourceScope.run({ check, persist }, body); } finally { this.allocatingSource = false; }
+  }
   private readonly identity?: ReturnType<typeof statSync>;
   constructor(private readonly path: string, private readonly guard?: { root: Database; assertOwner(): void; fenceTransactions?: boolean }) {
     guard?.assertOwner();
@@ -62,7 +71,7 @@ export class BunSqliteDatabase implements SqliteDatabase {
       if (guard.root.inTransaction) throw new Error("Root connection transaction active");
       if (busy) throw new Error("Host work is not idle");
     };
-    if (this.idleGuard) throw new Error("Idle model guard already active");
+    if (this.idleGuard || this.allocatingSource) throw new Error("Idle model guard already active");
     this.idleGuard = check;
     try { check(); return await body(); } finally { this.idleGuard = undefined; }
   }
@@ -106,7 +115,7 @@ export class BunSqliteDatabase implements SqliteDatabase {
   }
 
   transaction<T>(callback: (tx: SqliteExecutor) => Promise<T>): Promise<T> {
-    const idle = this.idleGuard;
+    const idle = this.idleGuard, source = this.sourceScope.getStore();
     return this.enqueue(async () => {
       this.db.exec(this.guard ? "BEGIN IMMEDIATE" : "BEGIN");
       let active = true, committed = false;
@@ -115,10 +124,11 @@ export class BunSqliteDatabase implements SqliteDatabase {
         if (this.guard?.fenceTransactions) this.guard.assertOwner();
       });
       try {
-        idle?.();
-        let value: T;
-        try { value = await this.callback.run(true, () => callback(tx)); }
-        finally { active = false; }
+        idle?.(); source?.check();
+        const value = await this.callback.run(true, () => callback(tx));
+        await source?.persist(tx);
+        source?.check();
+        active = false;
         idle?.();
         if (this.guard?.fenceTransactions) this.guard.assertOwner();
         this.db.exec("COMMIT");
@@ -126,6 +136,7 @@ export class BunSqliteDatabase implements SqliteDatabase {
         if (this.guard?.fenceTransactions) this.guard.assertOwner();
         return value;
       } catch (error) {
+        active = false;
         if (committed) throw error;
         // Explicit SQL, never Bun's synchronous transaction(callback) helper.
         try { this.db.exec("ROLLBACK"); }

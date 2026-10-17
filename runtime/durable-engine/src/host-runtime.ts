@@ -61,6 +61,8 @@ export interface RuntimeOptions {
    * Production implementation/migration is NOT activated by this module. */
   readonly bindings: HostDurableBindings;
   readonly conversationFor: (chatJid: string, branchId: string) => ConversationId;
+  /** Trusted persisted scheduled-source route, never a caller-selected conversation. */
+  readonly operationConversationFor?: (input: AcceptedInput) => ConversationId | undefined;
   /** All IDs must come from a caller-validated, quiescent import manifest. Never creates root. */
   readonly existingConversationIds: readonly ConversationId[];
   /** Harness scheduling is store-wide. Host must validate EVERY live task/submission's current
@@ -140,6 +142,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
   return Object.freeze({ incarnation, sessionId, lane, generation, captured: true as const,
     withIdleModelGuard: o.withIdleModelGuard?.bind(o),
     openStorage: openStorage.bind(o), conversationFor: conversationFor.bind(o),
+    operationConversationFor: o.operationConversationFor?.bind(o),
     authorizeScheduling: authorizeScheduling.bind(o), putAnswer: putAnswer.bind(o),
     materializeAnswer: materializeAnswer?.bind(o), now: now.bind(o),
     owner: Object.freeze({ assert: owner.assert.bind(owner), release: owner.release.bind(owner) }),
@@ -220,6 +223,36 @@ export class HostConversationRuntime {
       (this.options.existingConversationIds as ConversationId[]).push(binding.conversationId);
       return binding;
     });
+  }
+  /** Allocation only; EF-S07 continues to own execution, result and recurrence. */
+  allocateScheduledFork(parentId: ConversationId, allocated: (id: ConversationId) => void): Promise<ConversationId> {
+    return this.observe(() => this.harness.commit(async tx => {
+      this.fence();
+      if (!this.options.existingConversationIds.includes(parentId)) throw Error("Unknown scheduled root");
+      const page = await tx.scanEntries({ conversationId: parentId, order: "descending" }, 1);
+      const head = page.items[0];
+      const fork = head ? await tx.forkConversation(parentId, head.id, { ownership: { kind: "ownerless" } })
+        : await tx.createConversation({ ownership: { kind: "ownerless" } });
+      // Empty roots have no public fork point. Copy only configuration, never fabricate an entry.
+      const agent = await tx.doc(AgentDoc, parentId);
+      const isolated = await tx.doc(AgentDoc, fork.id);
+      Object.assign(isolated, JSON.parse(JSON.stringify(agent)));
+      this.fence(); allocated(fork.id);
+      return fork.id;
+    }, this.context));
+  }
+  private routed(input: AcceptedInput): boolean {
+    const o = this.options;
+    return o.operationConversationFor?.(input) === input.conversationId ||
+      (o.existingConversationIds.includes(input.conversationId) && o.conversationFor(input.chatJid, input.branchId) === input.conversationId);
+  }
+  private async assertPublicRoute(input: AcceptedInput): Promise<void> {
+    if (this.options.existingConversationIds.includes(input.conversationId)) return;
+    const record = await this.harness.commit(tx => tx.conversation(input.conversationId), this.context);
+    this.fence();
+    const root = this.options.conversationFor(input.chatJid, input.branchId);
+    // Empty-root allocations have no public fork point; their atomic host binding is identity.
+    if (!record || (record.parent && record.parent.conversationId !== root)) throw Error("Host binding conflict");
   }
   private fence() {
     if (this.closed) throw new Error("Runtime closed");
@@ -468,6 +501,11 @@ export class HostConversationRuntime {
   captureToolSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId, callId: string) {
     return this.captureSource(conversationId, taskId, callId);
   }
+  /** Recheck captured source routing synchronously at a host effect boundary. */
+  assertCapturedSourceCurrent(inputs: readonly HostInputBinding[]): void {
+    this.fence();
+    for (const input of inputs) if (!this.routed(input)) throw Error("Host binding conflict");
+  }
   /** Read-only generation provenance, including the first request before host ACK. */
   captureRunSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId) {
     return this.captureSource(conversationId, taskId);
@@ -477,7 +515,6 @@ export class HostConversationRuntime {
   }> {
     return this.observe(async () => {
       const o = this.options;
-      if (!o.existingConversationIds.includes(conversationId)) throw Error("Host binding conflict");
       const live = await this.harness.snapshot(LiveDoc, conversationId, this.context); this.fence();
       if (!live?.run || !(callId === undefined ? live.run.taskId === taskId : live.tools?.some(slot => slot.taskId === taskId && slot.callId === callId && slot.status === "running")) || !live.run.inputs.length)
         throw Error("Exact host tool run required");
@@ -494,7 +531,8 @@ export class HostConversationRuntime {
           throw Error("Exact host accepted input required");
         const input = inputSnapshot(data as unknown as AcceptedInput);
         if (input.conversationId !== conversationId || input.requestId !== record.requestId || input.incarnation !== o.incarnation ||
-          o.conversationFor(input.chatJid, input.branchId) !== conversationId) throw Error("Host binding conflict");
+          !this.routed(input)) throw Error("Host binding conflict");
+        await this.assertPublicRoute(input);
         const bound = await this.port(data.role === "intent").get(input); this.fence();
         if (!bound || (bound.submissionId !== submissionId && !(callId === undefined && bound.submissionId === null && data.role === "primary"))) throw Error("Host binding conflict");
         const current = value(await o.work.getOperation(input.operationId)); this.fence();
@@ -520,8 +558,8 @@ export class HostConversationRuntime {
   private async checked(input: AcceptedInput, intent = false) {
     this.fence();
     const o = this.options;
-    if (input.incarnation !== o.incarnation || !o.existingConversationIds.includes(input.conversationId) ||
-      o.conversationFor(input.chatJid, input.branchId) !== input.conversationId) throw new Error("Host binding conflict");
+    if (input.incarnation !== o.incarnation || !this.routed(input)) throw new Error("Host binding conflict");
+    await this.assertPublicRoute(input);
     const operation = value(await o.work.getOperation(input.operationId)); this.fence();
     if (!operation || operation.chatJid !== input.chatJid ||
       (intent ? operation.primarySourceSeq === input.sourceSeq : operation.primarySourceSeq !== input.sourceSeq) ||
@@ -626,11 +664,25 @@ export class HostConversationRuntime {
   }
   /** Pure lookup/status/committed-entry reads. No wait/resume, terminal write or payload publication. */
   reconcile(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.readState(copy), true); }
-  inspectAuthority() {
+  /** Inspection and live documents are separate public observations. A task that
+   * retired between them is no longer scheduling authority; require its durable receipt. */
+  isTaskTerminal(id: import("@earendil-works/pi-durable").TaskId) {
+    return this.observe(async () => {
+      const task = await this.harness.getTask(id, this.context); this.fence();
+      return task?.state.status === "terminal";
+    }, true);
+  }
+  inspectAuthority(additional: readonly AcceptedInput[] = []) {
     return this.observe(async () => {
       const inspection = await this.harness.inspect(this.context); this.fence();
       const runs = [];
-      for (const id of this.options.existingConversationIds) {
+      const ids = new Set(this.options.existingConversationIds);
+      for (const input of additional) {
+        if (!ids.has(input.conversationId)) {
+          await this.checked(inputSnapshot(input)); ids.add(input.conversationId);
+        }
+      }
+      for (const id of ids) {
         const live = await this.harness.snapshot(LiveDoc, id, this.context); this.fence();
         if (live?.run) runs.push(live.run);
       }
@@ -784,7 +836,9 @@ export class HostConversationRuntime {
       if (!current || current.version !== operation.version || current.cancellation || current.terminal)
         throw new Error("Operation changed during answer materialization");
     }
-    const timeline: CommitTerminalRequest["timeline"] = cancelled
+    // Scheduled delivery belongs to EF-S07, not the ordinary-message terminal publisher.
+    const scheduled = o.operationConversationFor?.(input) === input.conversationId;
+    const timeline: CommitTerminalRequest["timeline"] = cancelled || scheduled
       ? { mode: "none", placeholderRowId: null, chatJid: input.chatJid, contentRef: null, threadId: null, mediaIds: [], contentBlocksRef: null }
       : { mode: "insert", placeholderRowId: null, chatJid: input.chatJid, ...materialized, threadId: null };
     const request: CommitTerminalRequest = sealed({ effect: effect(`runtime:terminal:${input.requestId}`, input.operationId, input.sourceSeq),

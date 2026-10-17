@@ -332,7 +332,17 @@ export class AgentPool {
   private sideStreamSimple?: NonNullable<AgentPoolOptions["sideStreamSimple"]>;
   private readonly config = getSessionPoolConfig();
 
+  private readonly scheduledDispatch: AgentPoolOptions["dispatchScheduledAgent"];
+  private readonly durableApplication: boolean;
+  dispatchScheduledAgent(lease: import("./service-effects/contracts/scheduled-run-store.js").ScheduledRunLease): Promise<AgentOutput> | undefined {
+    if (this.scheduledDispatch) return this.scheduledDispatch(lease);
+    if (this.durableApplication) throw new Error("Durable scheduled dispatcher unavailable");
+    return undefined;
+  }
+
   constructor(options: AgentPoolOptions) {
+    this.scheduledDispatch = options.dispatchScheduledAgent?.bind(options);
+    this.durableApplication = options.getDurableSession !== undefined;
     if (!options.credentialStore || !options.modelRuntime) {
       throw new Error("AgentPool requires shared credentialStore and modelRuntime services");
     }

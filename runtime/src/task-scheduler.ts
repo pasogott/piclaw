@@ -315,6 +315,7 @@ async function executeScheduledTask(
   deps: SchedulerDeps,
   options: { advanceTask?: boolean },
   claimActive: () => boolean = () => true,
+  scheduledLease?: ScheduledRunLease,
 ): Promise<ScheduledTaskRunOutcome> {
   if (!canRunLegacyScheduledWork()) return unsupportedScheduledRun();
   // Once denied, finally/catch paths must not restore models or persist results.
@@ -390,17 +391,17 @@ async function executeScheduledTask(
         }
       }
     } else {
-      // Save session position so we can restore after the task.
-      // This isolates the task's prompt/response in a side branch of the session
-      // tree, preventing context pollution of the user's conversation.
-      const savedLeafId = await deps.agentPool.saveSessionPosition(task.chat_jid);
       if (!mayContinue()) return unsupportedScheduledRun();
-      const savedModel = await deps.agentPool.getCurrentModelLabel(task.chat_jid);
-      if (!mayContinue()) return unsupportedScheduledRun();
+      // A durable dispatcher returns its isolated run; a legacy pool returns undefined.
+      const native = scheduledLease ? deps.agentPool.dispatchScheduledAgent?.(scheduledLease) : undefined;
+      const savedLeafId = native ? null : await deps.agentPool.saveSessionPosition(task.chat_jid);
+      if (!native && !mayContinue()) return unsupportedScheduledRun();
+      const savedModel = native ? null : await deps.agentPool.getCurrentModelLabel(task.chat_jid);
+      if (!native && !mayContinue()) return unsupportedScheduledRun();
 
       try {
         // Switch model if task specifies one.
-        if (task.model) {
+        if (!native && task.model) {
           if (!savedModel || savedModel !== task.model) {
             error = await switchTaskModel(task, deps);
             if (!mayContinue()) return unsupportedScheduledRun();
@@ -408,11 +409,13 @@ async function executeScheduledTask(
         }
 
         if (!error) {
-          const out = await deps.agentPool.runAgent(task.prompt, task.chat_jid, {
+          // Once started, native work must be joined even if authority is revoked.
+          if (!native && !mayContinue()) return unsupportedScheduledRun();
+          const out = await (native ?? deps.agentPool.runAgent(task.prompt, task.chat_jid, {
             budgetWorkId,
             budgetExecutionKind: "scheduled",
             budgetScheduledTaskId: task.id,
-          });
+          }));
           if (!mayContinue()) return unsupportedScheduledRun();
           const recoverySummary = formatRecoverySummary(out.recovery);
           if (out.status === "error") {
@@ -438,7 +441,7 @@ async function executeScheduledTask(
       } finally {
         // Navigate back to the saved position — the task's prompt and response
         // stay in a side branch and won't pollute the user's conversation context.
-        if (mayContinue()) {
+        if (!native && mayContinue()) {
           await deps.agentPool.restoreSessionPosition(task.chat_jid, savedLeafId);
           // Restore the original model only while the legacy path is still allowed.
           if (mayContinue()) await restoreOriginalModel(task, deps, savedModel, mayContinue);
@@ -842,7 +845,7 @@ async function runClaimedScheduledTask(
       }
     }
 
-    const outcome = await executeScheduledTask(task, deps, { advanceTask: false }, () => controller.valid);
+    const outcome = await executeScheduledTask(task, deps, { advanceTask: false }, () => controller.valid, controller.lease);
     if (outcome.status === "skipped" && outcome.error !== null) { controller.stop(); return; }
     if (!mayContinueClaim(controller)) return;
     if (outcome.status === "skipped") {
