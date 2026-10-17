@@ -20,19 +20,22 @@ function child(path: string) {
     if (process.env[key]) env[key] = process.env[key]!;
   }
   const processChild = Bun.spawn([process.execPath, "src/ownership-child.ts", "--qualification-owner-child", path],
-    { cwd: import.meta.dir, env, stdout: "pipe", stderr: "pipe" });
-  const ready = (async () => {
-    const reader = processChild.stdout.getReader();
-    let text = "";
+    { cwd: import.meta.dir, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  const reader = processChild.stdout.getReader();
+  const stderr = new Response(processChild.stderr).text();
+  let text = "";
+  async function readRecord() {
     while (!text.includes("\n")) {
       const next = await reader.read();
-      if (next.done) throw new Error(`child exited: ${text} ${await new Response(processChild.stderr).text()}`);
+      if (next.done) throw new Error(`child exited: ${text} ${await stderr}`);
       text += new TextDecoder().decode(next.value);
     }
-    reader.releaseLock();
-    return JSON.parse(text.split("\n")[0]!);
-  })();
-  return { process: processChild, ready };
+    const end = text.indexOf("\n");
+    const record = JSON.parse(text.slice(0, end));
+    text = text.slice(end + 1);
+    return record;
+  }
+  return { process: processChild, ready: readRecord(), readRecord, stderr };
 }
 
 test("same-process duplicate owner denied before storage construction; exact stale token cannot reopen", () => fixture(async path => {
@@ -78,12 +81,42 @@ test("owner check inside facade transaction rolls back token change AND candidat
   } finally { await db.close(); owner.releaseAfterClose(); owner.closeConnection(); }
 }));
 
+test("diagnostic: contender reserved lock overlaps acquired owner's deferred storage migration", () => fixture(async path => {
+  const owner = TestOwner.acquire(path);
+  const contender = new Database(path, { strict: true });
+  const db = new OwnedSqlite(owner);
+  try {
+    contender.exec("BEGIN IMMEDIATE");
+    contender.query("SELECT * FROM qualification_process_owner").get();
+    let failure: unknown;
+    try { await SqliteStorage.open(db); } catch (error) { failure = error; }
+    console.log(JSON.stringify({ diagnostic: "contender-held-BEGIN-IMMEDIATE", error: String(failure),
+      stack: failure instanceof Error ? failure.stack : undefined }));
+    expect(String(failure)).toContain("database is locked");
+  } finally {
+    contender.exec("ROLLBACK"); contender.close(); await db.close(); owner.releaseAfterClose(); owner.closeConnection();
+  }
+}));
+
 test("two child contenders: one opens; SIGSTOP is not death; SIGKILL recovers paused before model resume", () => fixture(async path => {
   const children = [child(path), child(path)];
   let owner: TestOwner | undefined;
   let current: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    const results = await Promise.all(children.map(c => c.ready));
+    const acquisition = await Promise.all(children.map(c => c.ready));
+    const results = await Promise.all(children.map(async (c, i) => {
+      if (acquisition[i].phase !== "acquired") return acquisition[i];
+      c.process.stdin.write("open\n");
+      c.process.stdin.end();
+      return c.readRecord();
+    }));
+    if (results.filter(r => r.admitted).length !== 1) {
+      for (const c of children) c.process.kill("SIGKILL");
+      const stderr = await Promise.all(children.map(c => c.stderr));
+      throw new Error(`expected exactly one successful opener: ${JSON.stringify({ acquisition, results, stderr })}`);
+    }
+    expect(acquisition.filter(r => r.leaseAcquired)).toHaveLength(1);
+    expect(results.filter(r => r.leaseAcquired)).toHaveLength(1);
     expect(results.filter(r => r.admitted)).toHaveLength(1);
     const winner = children[results.findIndex(r => r.admitted)]!;
     expect(results.find(r => !r.admitted).constructions).toBe(0);

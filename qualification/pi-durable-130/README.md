@@ -1315,3 +1315,17 @@ passes 82 cases, runtime types and bounded independent review pass, and full roo
 fast CI passes with EXIT_CODE=0. The gate caught a silent rejection observer, replaced
 with diagnostic warning before the successful repeat. No new queue, ledger, JSONL
 persistence, application activation or live-state change is introduced.
+
+Ownership contender qualification now separates real lease acquisition from SDK
+storage initialization. Both children attempt exclusive acquisition; only after the
+loser has rolled back/closed does the parent permit opening. Successful admission
+still requires actual storage/Harness open and submission, with exactly one lease
+and one opener. A deterministic negative case demonstrates the unsupported SQLite
+read-to-write upgrade overlap rather than hiding it with retries or longer budgets.
+SIGSTOP denial and killed/reaped recovery remain tested.
+
+Ten serial paired runs and the full candidate suite pass: 390 tests / 6,925 assertions
+across 30 files, with types and bounded independent review clear. This proves the
+fixture's exclusivity and fixed crash recovery, not availability under every startup
+interleaving. The historical hosted zero-opener cause cannot be established from its
+old missing diagnostics; future failures include phase/error/stderr evidence.
