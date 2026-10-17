@@ -360,8 +360,8 @@ export class AgentPool {
       workspaceDir: WORKSPACE_DIR,
       mainSessionMaxSize: this.config.mainSessionPoolMaxSize,
       bashOperations: this.bashOperations,
-      durableSessions: options.durableSessions,
-      ...(options.durableSessions === undefined ? {
+      getDurableSession: options.getDurableSession,
+      ...(options.getDurableSession === undefined ? {
         createSession: options.createSession,
         createSideSession: options.createSideSession,
       } : {}),
@@ -408,7 +408,7 @@ export class AgentPool {
     runtimeInterop.removeLogSink = removeLogSink;
     runtimeInterop.getKeychainEntry = getKeychainEntry;
     try { migrateProxmoxPortainerToKv(); } catch (e) { void e; /* migration is best-effort */ }
-    if (options.durableSessions === undefined) mkdirSync(SESSIONS_DIR, { recursive: true });
+    if (options.getDurableSession === undefined) mkdirSync(SESSIONS_DIR, { recursive: true });
     mkdirSync(this.logsDir, { recursive: true });
     const agentLogConfig = getAgentLogConfig();
     startAgentLogCleanup(this.logsDir, agentLogConfig.retentionMs, agentLogConfig.cleanupIntervalMs);

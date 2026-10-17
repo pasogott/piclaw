@@ -81,6 +81,7 @@ export interface DurableConversationRuntimePort {
 export function createDurableConversationAdapter(options: {
   readonly incarnation: string;
   readonly manifest: readonly DurableConversationBinding[];
+  readonly getConversationBinding?: (chat: string, branch: string) => DurableConversationBinding | undefined;
   readonly runtime: DurableConversationRuntimePort;
 }) {
   const { incarnation, runtime } = options;
@@ -94,6 +95,7 @@ export function createDurableConversationAdapter(options: {
     prior.chatJid === binding.chatJid && prior.branchId === binding.branchId)))
     throw new Error("Ambiguous durable conversation binding");
 
+  const lookup = options.getConversationBinding?.bind(options) ?? ((chat: string, branch: string) => manifest.find(b => b.chatJid === chat && b.branchId === branch));
   // Capture receivers: later replacement of caller properties cannot redirect this adapter.
   const submit = runtime.submit.bind(runtime), reconcile = runtime.reconcile.bind(runtime);
   const cancel = runtime.cancel.bind(runtime), resume = runtime.resume.bind(runtime);
@@ -107,7 +109,7 @@ export function createDurableConversationAdapter(options: {
   const readTree = runtime.readSessionTree?.bind(runtime);
   function input(work: DurableConversationOperation, intent = false): DurableAcceptedInput {
     const { source, operation } = work.claimed;
-    const binding = manifest.find(b => b.chatJid === source.chatJid && b.branchId === work.branchId);
+    const binding = lookup(source.chatJid, work.branchId);
     if (!binding) throw new Error("Unknown durable conversation binding");
     if (!["message", "scheduled_agent"].includes(source.kind) ||
       !["claimed", "consumed"].includes(source.state) || operation.chatJid !== source.chatJid ||
@@ -123,7 +125,7 @@ export function createDurableConversationAdapter(options: {
   }
   return Object.freeze({
     sessionPosition(chatJid: string, branchId: string, sessionId: string): DurableSessionPositionPort {
-      const binding = manifest.find(b => b.chatJid === chatJid && b.branchId === branchId);
+      const binding = lookup(chatJid, branchId);
       if (!binding || !sessionId || !readPosition) throw new Error("Durable session position unavailable");
       return Object.freeze({ sessionId, branchId,
         readPosition: () => readPosition({ ...binding, incarnation }),

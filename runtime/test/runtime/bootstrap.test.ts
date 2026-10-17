@@ -565,7 +565,7 @@ for (const uncertain of [false, true]) test(`backend startup cleanup retains own
   const acquire = () => acquireRuntimeLock({ lockPath: join(dir, "owner"), strictOwnership: true, disabled: false });
   const owner = acquire();
   const events: string[] = [];
-  const sessionOptions = Object.freeze({ durableSessions: new Map() });
+  const sessionOptions = Object.freeze({ getDurableSession: () => undefined });
   const bind = (options: any) => options;
   try {
     const deps = bootstrapDepsForFailure({

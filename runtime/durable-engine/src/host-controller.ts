@@ -30,7 +30,7 @@ export async function createHostController(config: HostControllerOptions, contex
   const r = config.runtime, recovery = config.recovery;
   const { incarnation, sessionId, lane, generation } = r;
   const existingConversationIds = Object.freeze([...r.existingConversationIds]);
-  const manifest = Object.freeze(recovery.manifest.map(b => Object.freeze({ ...b })));
+  const manifest = recovery.manifest.map(b => Object.freeze({ ...b }));
   const readAcceptedInput = recovery.readAcceptedInput.bind(recovery);
   const work = recovery.work;
   const recoveryWork = Object.freeze({ listOpenOperations: work.listOpenOperations.bind(work),
@@ -194,6 +194,12 @@ export async function createHostController(config: HostControllerOptions, contex
       })();
     }
     return Object.freeze({ runtime, recovered, reconcileRecovered, checkpointCutover, rollback,
+      async addConversation<T extends Recovery["binding"]>(create: Parameters<typeof activeRuntime.addConversation<T>>[0], beforeCommit?: () => void) {
+        assert();
+        const binding = await activeRuntime.addConversation(create, beforeCommit); assert();
+        manifest.push(Object.freeze({ ...binding }));
+        return binding;
+      },
       pendingIntentIds: Object.freeze(recovered.filter(e => e.role === "intent" && e.binding?.submissionId == null).map(e => e.input.requestId)),
       close });
   } catch (error) {

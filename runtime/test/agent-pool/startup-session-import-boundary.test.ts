@@ -46,7 +46,7 @@ for (const mode of ["durable", "legacy"] as const) {
       initDatabase();
       const mode = ${JSON.stringify(mode)};
       const pool = new AgentPool({ ...createAgentPoolModelOptions(),
-        ...(mode === "durable" ? { durableSessions: new Map() } : {}) });
+        ...(mode === "durable" ? { getDurableSession: () => undefined } : {}) });
       try {
         if (attempts.length) throw new Error("Construction evaluated a forbidden local module");
         if (mode === "durable") {

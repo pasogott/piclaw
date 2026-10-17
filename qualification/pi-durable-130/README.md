@@ -1533,3 +1533,24 @@ Final candidate verification passes 426 tests / 6,784 assertions; root fast CI p
 All three scoped typechecks, cycle checks and bounded independent review pass.
 This is a source-default replacement only: no install, live activation, restart,
 existing-history mutation or migration was performed. Migration remains last.
+
+### Normal post-startup conversation creation
+
+The default backend now owns a readonly session lookup rather than copied routing
+maps. Validated normal web input prepares a route before host message acceptance.
+One public transaction creates/configures the conversation and persists identity
+and canonical mapping, then scheduling/recovery scope and routing publish together.
+Same-chat preparations are single-flight. Proven pre-transaction failures can retry;
+once commit may have occurred, rejection remains fail-closed until reopen recovery.
+
+Actual concurrent first HTTP posts produce one conversation and two separately
+consumed inputs/answers. Restored model availability retries without restart. Held
+preparation racing stop/close cannot publish a route or write after completed close;
+malformed, empty, command and unauthorized requests leave routing unchanged. Reopen
+preserves the committed route and original new session identity without JSONL.
+
+Final candidate verification passes 426 tests / 6,784 assertions, root fast CI passes
+with EXIT_CODE=0, focused root tests pass 72 cases / 409 assertions, and bounded
+independent review is clear. Earlier candidate attempts hit existing elapsed limits;
+no timeout/assertion was weakened. This removes startup-known-chat-only routing,
+not the remaining full host-tool/add-on compatibility gap. Migration remains last.

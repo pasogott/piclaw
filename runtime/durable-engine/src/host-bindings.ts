@@ -11,6 +11,7 @@ export interface HostBindingOptions {
   readonly incarnation: string;
   readonly assertOwner: () => void;
   readonly manifest: readonly { readonly chatJid: string; readonly branchId: string; readonly conversationId: ConversationId }[];
+  readonly getConversationBinding?: (chat: string, branch: string) => { conversationId: ConversationId } | undefined;
   /** Resolve the EXISTING host payload. Never persist another plaintext copy here. */
   readonly resolveContent: (payloadRef: string, input: AcceptedInput) => Promise<string>;
 }
@@ -41,12 +42,12 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
   const assertOwner = options.assertOwner.bind(options), resolveContent = options.resolveContent.bind(options);
   const manifest = options.manifest.map(b => Object.freeze({ chatJid: identity(b.chatJid),
     branchId: identity(b.branchId), conversationId: b.conversationId }));
+  const lookup = options.getConversationBinding?.bind(options) ?? ((chat: string, branch: string) => manifest.find(b => b.chatJid === chat && b.branchId === branch));
   assertOwner();
   function capture(input: AcceptedInput) {
     const i = inputSnapshot(input);
     assertOwner();
-    if (i.incarnation !== incarnation || !manifest.some(b => b.chatJid === i.chatJid &&
-      b.branchId === i.branchId && b.conversationId === i.conversationId)) throw conflict();
+    if (i.incarnation !== incarnation || lookup(i.chatJid, i.branchId)?.conversationId !== i.conversationId) throw conflict();
     return i;
   }
   function makePort(intent = false) {

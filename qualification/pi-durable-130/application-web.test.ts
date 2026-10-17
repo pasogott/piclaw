@@ -346,7 +346,7 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
     }));
     expect(unboundResponse.status).toBeGreaterThanOrEqual(400);
     expect(db.query("SELECT count(*) AS n FROM messages WHERE chat_jid=?").get(unbound)).toEqual({ n: 0 });
-    expect(bundle.sessionOptions.durableSessions.has(unbound)).toBe(false);
+    expect(!!bundle.sessionOptions.getDurableSession(unbound)).toBe(false);
     expect(db.query("SELECT count(*) AS n FROM service_effect_s01_sources WHERE chat_jid=?").get(unbound)).toEqual({ n: 0 });
     expect(db.query("SELECT count(*) AS n FROM service_effect_s01_operations WHERE chat_jid=?").get(unbound)).toEqual({ n: 0 });
     expect(() => bundle.bind({ queue, agentPool: pool })).toThrow("already bound");

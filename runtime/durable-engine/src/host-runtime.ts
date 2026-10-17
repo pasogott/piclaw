@@ -150,7 +150,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
       intents: bindings.intents && Object.freeze({ get: bindings.intents.get.bind(bindings.intents),
         bind: bindings.intents.bind.bind(bindings.intents), getOrBind: bindings.intents.getOrBind.bind(bindings.intents),
         recordSubmission: bindings.intents.recordSubmission.bind(bindings.intents), list: bindings.intents.list.bind(bindings.intents) }) }),
-    existingConversationIds: Object.freeze([...existingConversationIds]),
+    existingConversationIds: [...existingConversationIds],
     // Catalogs and settings are intentionally live host APIs; detach their containing options only.
     harnessOptions: Object.freeze({ models: h.models, registry: h.registry, settings: h.settings,
       env: h.env?.bind(h), conversationCreated: h.conversationCreated?.bind(h), now: h.now?.bind(h), onReport: h.onReport?.bind(h) }),
@@ -208,6 +208,18 @@ export class HostConversationRuntime {
       if (harness) await harness.close(context); else await storage.close(context);
       throw error;
     }
+  }
+  /** Backend-owned public commit; publish only after storage accepts the whole transaction. */
+  addConversation<T extends { conversationId: ConversationId }>(create: (tx: import("@earendil-works/pi-durable").Tx) => Promise<T>, beforeCommit?: () => void): Promise<T> {
+    return this.observe(async () => {
+      const root = await this.harness.conversation(1 as ConversationId, this.context); this.fence();
+      if (!root) throw Error("Missing application root");
+      beforeCommit?.();
+      const binding = await root.commit(async tx => { this.fence(); const result = await create(tx); this.fence(); return result; }, this.context);
+      this.fence();
+      (this.options.existingConversationIds as ConversationId[]).push(binding.conversationId);
+      return binding;
+    });
   }
   private fence() {
     if (this.closed) throw new Error("Runtime closed");

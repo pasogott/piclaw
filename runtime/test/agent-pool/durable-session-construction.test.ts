@@ -33,17 +33,17 @@ for (const empty of [false, true]) {
     let pool: AgentPool | undefined;
     let services: ReturnType<typeof createAgentPoolServices> | undefined;
     try {
-      const options = Object.assign({}, model, { durableSessions });
+      const options = Object.assign({}, model, { getDurableSession: (chat: string) => durableSessions.get(chat) });
       Object.defineProperties(options, Object.getOwnPropertyDescriptors(compatibility));
       pool = new AgentPool(options);
       const serviceOptions = Object.assign({}, {
         pool: new Map(), sidePool: new Map(), activeForkBaseLeafByChat: new Map(),
         authStorage: model.credentialStore, modelRuntime: model.modelRuntime,
-        modelRegistry: model.modelRegistry!, settingsManager: SettingsManager.inMemory(), workspaceDir: process.env.PICLAW_WORKSPACE!, durableSessions,
+        modelRegistry: model.modelRegistry!, settingsManager: SettingsManager.inMemory(), workspaceDir: process.env.PICLAW_WORKSPACE!, getDurableSession: (chat: string) => durableSessions.get(chat),
       });
       Object.defineProperties(serviceOptions, Object.getOwnPropertyDescriptors(compatibility));
       services = createAgentPoolServices(serviceOptions);
-      durableSessions.clear(); // Backend selection and captured routing survive caller mutation.
+      // Backend-owned lookup remains live for post-startup routes.
       for (const chat of ["web:bound", "web:unknown"]) {
         await expect(pool.getSessionForIntrospection(chat)).rejects.toThrow("Durable application does not construct legacy sessions");
         await expect(services.sessionManager.getOrCreate(chat)).rejects.toThrow("Durable application does not construct legacy sessions");

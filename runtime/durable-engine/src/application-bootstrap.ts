@@ -53,6 +53,8 @@ export interface ApplicationBootstrapOptions {
   /** Original host session identities, not a new bootstrap-generated identity. */
   sessions: ReadonlyMap<string, string>;
   offlineInitialize?: boolean;
+  assertConversationAvailable?: () => void;
+  createConversation?: (tx: import("@earendil-works/pi-durable").Tx, chatJid: string, branchId: string) => Promise<Manifest[number] & { sessionId: string }>;
   runtime: Pick<HostControllerOptions["runtime"], "incarnation" | "sessionId" | "lane" | "generation" | "harnessOptions" | "now">;
   /** Existing application payload store, with immutable answer references. */
   answers: { resolver: EffectPayloadResolver; put(ref: string, text: string): void | Promise<void> };
@@ -65,6 +67,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
   assert();
   const root = config.root, path = config.path, r = { ...config.runtime };
   const wrapWait = config.wrapWait;
+  const createConversation = config.createConversation?.bind(config);
   let database: BunSqliteDatabase | undefined;
   let controller: Awaited<ReturnType<typeof createHostController>> | undefined;
   try {
@@ -82,7 +85,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
   // Root branches already have distinct chat JIDs (UNIQUE in chat_branches).
   // Never invent a branch or choose a first/default row for an existing chat.
   assertApplicationBranchRoutes(root, manifest);
-  const routes = new Map(manifest.map(b => [b.chatJid, b.branchId]));
+  const routeIndex = new Map(manifest.map(b => [b.chatJid, Object.freeze({ ...b, sessionId: sessions.get(b.chatJid)! })]));
+  const lookup = (chat: string, branch: string) => { const b = routeIndex.get(chat); return b?.branchId === branch ? b : undefined; };
   if (root.inTransaction || (root.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys !== 1)
     throw Error("Open idle FK-enabled root connection required");
   // Verify physical identity BEFORE any optional host schema mutation.
@@ -103,13 +107,13 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       if (!row || row.id !== input.sourceId) throw Error("Unverified application payload");
       return row.content;
     }
-    const bindings = createHostDurableBindings(root, { domain: r.incarnation, incarnation: r.incarnation, manifest, assertOwner: assert, resolveContent: content });
+    const bindings = createHostDurableBindings(root, { domain: r.incarnation, incarnation: r.incarnation, manifest, getConversationBinding: lookup, assertOwner: assert, resolveContent: content });
     controller = await createHostController({ acquireOwnership: async () => lease,
       createStorage: async () => SqliteStorage.open(candidateDatabase),
       runtime: { ...r, work, terminal, bindings, putAnswer: config.answers.put.bind(config.answers),
         withIdleModelGuard: body => candidateDatabase.withIdleModelGuard(body),
         existingConversationIds: manifest.map(b => b.conversationId),
-        conversationFor(chat, branch) { const b = manifest.find(b => b.chatJid === chat && b.branchId === branch); if (!b) throw Error("Unbound conversation"); return b.conversationId; } },
+        conversationFor(chat, branch) { const b = lookup(chat, branch); if (!b) throw Error("Unbound conversation"); return b.conversationId; } },
       recovery: { manifest, work, bindings, async readAcceptedInput(source) {
         assert();
         if (source.kind !== "message") throw Error("Unsupported recovered source");
@@ -117,7 +121,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         const operationId = binding?.operationId ?? source.targetOperationId;
         if (!operationId) throw Error("Missing recovered operation identity");
         const operation = value(await work.getOperation(operationId));
-        const scope = manifest.find(b => b.chatJid === source.chatJid);
+        const scope = routeIndex.get(source.chatJid);
         if (!operation || !scope) throw Error("Missing recovered operation");
         return { claimed: { source, operation }, branchId: scope.branchId,
           requestId: binding?.requestId ?? `queued-steer:${source.sourceId}`, content: await content(source.payloadRef, source) };
@@ -131,17 +135,17 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       const member = Reflect.get(target, key, target);
       return typeof member === "function" ? member.bind(target) : member;
     } }) : runtime;
-    const adapter = createDurableConversationAdapter({ incarnation: r.incarnation, manifest, runtime: runtimePort });
+    const adapter = createDurableConversationAdapter({ incarnation: r.incarnation, manifest, getConversationBinding: lookup, runtime: runtimePort });
     const shutdown = new AbortController();
     const recovery = createDurableRecoveryDispatch({ assertCurrentWriter: assert, submitIntent: input => adapter.submitIntent(input),
       reconcileRecovered: controller.reconcileRecovered, shutdown: shutdown.signal });
     const dispatch = createDurableQueueDispatch({ work, adapter, branchId: chat => {
-      const branch = routes.get(chat); if (!branch) throw Error("Unbound application branch"); return branch;
+      const branch = routeIndex.get(chat)?.branchId; if (!branch) throw Error("Unbound application branch"); return branch;
     }, assertCurrentWriter: assert,
       runningCorrelation: id => ({ sessionId: r.sessionId, lane: r.lane, harnessOperationId: String(id), state: "running", watchGeneration: r.generation }),
       shutdown: shutdown.signal, waitForReconciliation: recovery.waitForReconciliation });
     const getInputSourceAdmission: NonNullable<WebChannelOpts["getInputSourceAdmission"]> = chat => {
-      assert(); if (!chats.has(chat)) throw Error("Unbound application conversation");
+      assert(); if (!routeIndex.has(chat)) throw Error("Unbound application conversation");
       return ({ message, rowId, database: connection }) => {
         assert(); if (connection !== root || !root.inTransaction) throw Error("Root admission transaction required");
         const input = { effect: { idempotencyKey: message.id, requestHash: "", operationId: null, sourceSeq: null,
@@ -152,28 +156,56 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         work.acceptSourceInTransaction(input, connection); assert();
       };
     };
-    const positions = new Map(manifest.map(b => [b.chatJid, adapter.sessionPosition(b.chatJid, b.branchId, sessions.get(b.chatJid)!)]));
-    const readonlyPositions: ReadonlyMap<string, ReturnType<typeof adapter.sessionPosition>> = Object.freeze({
-      get size() { return positions.size; }, get: positions.get.bind(positions), has: positions.has.bind(positions),
-      entries: positions.entries.bind(positions), keys: positions.keys.bind(positions), values: positions.values.bind(positions),
-      [Symbol.iterator]: positions[Symbol.iterator].bind(positions),
-      forEach(callback: (value: ReturnType<typeof adapter.sessionPosition>, key: string, map: ReadonlyMap<string, ReturnType<typeof adapter.sessionPosition>>) => void, thisArg?: unknown) {
-        positions.forEach((value, key) => callback.call(thisArg, value, key, readonlyPositions));
-      },
-    });
+    const getDurableSession = (chat: string) => {
+      const binding = routeIndex.get(chat);
+      return binding && adapter.sessionPosition(chat, binding.branchId, binding.sessionId);
+    };
+    const preparing = new Map<string, Promise<void>>();
+    const assertLive = () => { assert(); if (closing || shutdown.signal.aborted) throw Error("Application closing"); };
+    function prepareInputSourceAdmission(chat: string): Promise<void> {
+      assert();
+      if (closing || shutdown.signal.aborted) return Promise.reject(Error("Application closing"));
+      if (routeIndex.has(chat)) return Promise.resolve();
+      const pending = preparing.get(chat); if (pending) return pending;
+      let committedPossible = false;
+      const promise = (async () => {
+        config.assertConversationAvailable?.();
+        if (!createConversation) throw Error("Unbound application conversation");
+        const row = root.query("SELECT branch_id FROM chat_branches WHERE chat_jid=? AND root_chat_jid=? AND parent_branch_id IS NULL AND archived_at IS NULL").get(chat, chat) as { branch_id: string } | null;
+        if (!row || !canonical(chat)) throw Error("Existing root branch required");
+        const binding = await activeController.addConversation(async tx => {
+          assertLive();
+          const current = root.query("SELECT branch_id FROM chat_branches WHERE chat_jid=? AND root_chat_jid=? AND parent_branch_id IS NULL AND archived_at IS NULL").get(chat, chat) as { branch_id: string } | null;
+          if (current?.branch_id !== row.branch_id) throw Error("Root branch changed");
+          const created = await createConversation(tx, chat, row.branch_id);
+          assertLive();
+          return created;
+        }, () => { assertLive(); committedPossible = true; });
+        assertLive();
+        // One publication point. Every ingress and session lookup uses this record.
+        routeIndex.set(chat, Object.freeze({ ...binding }));
+      })().then(() => { if (preparing.get(chat) === promise) preparing.delete(chat); }, error => {
+        // Only failures proven to precede the public commit attempt are retryable.
+        // Any rejection after that boundary (including publication) is uncertain.
+        if (!committedPossible && preparing.get(chat) === promise) preparing.delete(chat);
+        throw error;
+      });
+      // Uncertain failures require reopening from the canonical SDK mapping.
+      preparing.set(chat, promise); return promise;
+    }
     let bound = false, closing: Promise<void> | undefined;
     return Object.freeze({
       /** Construct pool first from this snapshot, then bind its existing channel constructor. */
-      sessionOptions: Object.freeze({ durableSessions: readonlyPositions }),
+      sessionOptions: Object.freeze({ getDurableSession }),
       bind(options: Pick<WebChannelOpts, "queue" | "agentPool">): Readonly<WebChannelOpts> {
         assert(); if (bound || closing) throw Error("Application bundle already bound or closing");
         bound = true;
-        return Object.freeze({ ...options, getInputSourceAdmission, dispatchAcceptedInput: dispatch });
+        return Object.freeze({ ...options, prepareInputSourceAdmission, getInputSourceAdmission, dispatchAcceptedInput: dispatch });
       },
       /** Continue the existing command worker's same-task settlement; no queue replay. */
       reconcileMaintenance(chatJid: string): Promise<void> {
         assert();
-        const position = positions.get(chatJid);
+        const position = getDurableSession(chatJid);
         if (!position?.reconcileMaintenance) throw Error("Unbound maintenance reconciliation");
         return position.reconcileMaintenance();
       },

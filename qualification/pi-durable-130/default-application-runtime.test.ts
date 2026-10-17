@@ -3,10 +3,13 @@ import { expect, test, spyOn } from "bun:test";
 import { SessionManager, SettingsManager, ModelRuntime, ModelRegistry } from "../../node_modules/@earendil-works/pi-coding-agent";
 import { getPiclawAgentDir } from "../../runtime/src/core/agent-dir.js";
 import { BunSqliteDatabase } from "../../runtime/durable-engine/src/bun-sqlite.js";
+import { AgentPool } from "../../runtime/src/agent-pool.js";
+import { WebChannel } from "../../runtime/src/channels/web.js";
+import { createRuntimeBaseServices } from "../../runtime/src/runtime/composition.js";
 import { RuntimeStartupCleanupError } from "../../runtime/src/runtime/startup-cleanup-error.js";
 import { main } from "../../runtime/src/runtime.js";
 import { createDefaultRuntimeBootstrapDeps } from "../../runtime/src/runtime/bootstrap.js";
-import { storeMessage } from "../../runtime/src/db.js";
+import { storeChatMetadata, storeMessage } from "../../runtime/src/db.js";
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
@@ -35,7 +38,7 @@ function factoryTest(scenario: string, name: string, body: () => Promise<void>) 
       if (code !== 0) throw Error(`Isolated default factory ${scenario}:\n${out}\n${err}`);
       expect(code).toBe(0);
     } finally { isolation.cleanup(); }
-  });
+  }, 30_000);
 }
 
 for (const uncertain of [false, true]) factoryTest(`cleanup-${uncertain}`, `actual preparation → bootstrap → main retains owner only for uncertain close=${uncertain}`, async () => {
@@ -98,9 +101,10 @@ factoryTest("public-conversations", "default factory prepares and reopens real s
       usage: { input: 5, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 10, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
     stream.push({ type: "done", reason: "stop", message }); stream.end(message); return stream;
   };
+  const credentialStore: RuntimeModelServices["credentialStore"] = { read: async provider => provider === model.provider ? { type: "api_key", key: "synthetic-only" } : undefined,
+    list: async () => [{ providerId: model.provider, type: "api_key" }], modify: async () => undefined, delete: async () => {} };
   const runtime = await ModelRuntime.create({ modelsPath: null, modelsStore: { read: async () => undefined, write: async () => {}, delete: async () => {} },
-    credentials: { read: async provider => provider === model.provider ? { type: "api_key", key: "synthetic-only" } : undefined,
-      list: async () => [{ providerId: model.provider, type: "api_key" }], modify: async () => undefined, delete: async () => {} },
+    credentials: credentialStore,
     allowModelNetwork: false, refreshOnCreate: false });
   runtime.registerNativeProvider({ id: model.provider, name: "Synthetic", getModels: () => [model, modelB] as any,
     auth: { apiKey: { name: "Synthetic", check: async () => ({ type: "api_key" }), resolve: async () => ({ auth: { apiKey: "synthetic-only" }, source: "synthetic" }) } },
@@ -119,10 +123,14 @@ factoryTest("public-conversations", "default factory prepares and reopens real s
   expect(SettingsManager.create(workspace, getPiclawAgentDir()).getDefaultModel()).toBe(model.id);
   const sdkSpies = [spyOn(SessionManager, "create"), spyOn(SessionManager, "open"), spyOn(SessionManager, "inMemory")];
   let backend = await createDefaultApplicationRuntime(owner, async () => services);
-  expect(backend.sessionOptions.durableSessions?.has("web:default")).toBe(true);
-  const first = backend.sessionOptions.durableSessions?.get("web:default");
+  expect(!!backend.sessionOptions.getDurableSession?.("web:default")).toBe(true);
+  const first = backend.sessionOptions.getDurableSession?.("web:default");
   expect(first).toBeDefined(); expect(calls).toBe(0);
-  const bound = backend.bind({ queue: {}, agentPool: {} } as Parameters<typeof backend.bind>[0]);
+  const base = createRuntimeBaseServices({ dataDir: workspace });
+  const pool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
+  const bound = backend.bind({ queue: base.queue, agentPool: pool });
+  const channel = new WebChannel(bound);
+  channel.broadcastEvent = () => {};
   expect(() => bound.getInputSourceAdmission!("web:newcomer")).toThrow("Unbound");
   const message = { id: "factory-input", chat_jid: "web:default", sender: "user", sender_name: "User", content: "hello factory", timestamp: new Date().toISOString(), is_from_me: false, is_bot_message: false };
   const rowId = root.transaction(() => {
@@ -135,7 +143,73 @@ factoryTest("public-conversations", "default factory prepares and reopens real s
   // Tiny history is correctly below the public compaction policy's retained window.
   expect(await first!.compact!("Summarize")).toEqual({ compacted: false });
   expect(calls).toBe(1);
+  const newcomer = "web:newcomer";
+  storeChatMetadata(newcomer, new Date().toISOString());
+  storeChatMetadata("web:rejected", new Date().toISOString());
+  const snapshot = root.serialize();
+  const failedAdmission = spyOn(modelRegistry, "getAvailable").mockReturnValue([]);
+  try { await expect(bound.prepareInputSourceAdmission!("web:rejected")).rejects.toThrow("Host model no longer available"); }
+  finally { failedAdmission.mockRestore(); }
+  expect(root.serialize()).toEqual(snapshot);
+  expect(backend.sessionOptions.getDurableSession!("web:rejected")).toBeUndefined();
+  const beforeRetry = (root.query("SELECT count(*) AS n FROM conversations").get() as { n: number }).n;
+  await bound.prepareInputSourceAdmission!("web:rejected");
+  const retried = backend.sessionOptions.getDurableSession!("web:rejected")!;
+  expect(retried).toBeDefined();
+  expect(await retried.readPosition()).toBeNull();
+  await bound.prepareInputSourceAdmission!("web:rejected");
+  expect((root.query("SELECT count(*) AS n FROM conversations").get() as { n: number }).n).toBe(beforeRetry + 1);
+  const post = (chat: string, content: string) => channel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(chat)}`, {
+    method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: JSON.stringify({ content }),
+  }));
+  const httpChat = "web:actual-http";
+  storeChatMetadata(httpChat, new Date().toISOString());
+  const beforeHttp = root.serialize();
+  expect((await channel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(httpChat)}`, {
+    method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: "{",
+  }))).status).toBe(400);
+  expect((await post(httpChat, "")).status).toBe(400);
+  expect((await post(httpChat, "/settings")).status).toBe(503);
+  expect(root.serialize()).toEqual(beforeHttp);
+  const auth = spyOn(channel.authGateway, "isAuthEnabled").mockReturnValue(true);
+  const principal = spyOn(channel.authGateway, "getPrincipal").mockReturnValue(null);
+  try { expect((await post(httpChat, "unauthorized")).status).toBeGreaterThanOrEqual(400); }
+  finally { principal.mockRestore(); auth.mockRestore(); }
+  expect(root.serialize()).toEqual(beforeHttp);
+  const beforeConcurrent = (root.query("SELECT count(*) AS n FROM conversations").get() as { n: number }).n;
+  const queueBefore = base.queue.getMetrics();
+  const callsBeforeHttp = calls;
+  const responses = await Promise.all([post(httpChat, "normal HTTP input one"), post(httpChat, "normal HTTP input two")]);
+  expect(responses.map(response => response.status)).toEqual([201, 201]);
+  for (let i = 0; i < 500 && (base.queue.isLaneBusy(`chat:${httpChat}`) || base.queue.isLaneBusy(httpChat)); i++) await Bun.sleep(10);
+  base.queue.assertLegacyCaptureDrained();
+  expect(root.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1").all(httpChat)).toEqual([{ content: "factory synthetic reply" }, { content: "factory synthetic reply" }]);
+  const sources = root.query("SELECT source_id, state FROM service_effect_s01_sources WHERE chat_jid=? ORDER BY source_seq").all(httpChat) as { source_id: string; state: string }[];
+  expect(sources).toHaveLength(2);
+  expect(new Set(sources.map(source => source.source_id)).size).toBe(2);
+  expect(sources.map(source => source.state)).toEqual(["consumed", "consumed"]);
+  expect(root.query("SELECT id FROM messages WHERE chat_jid=? AND is_bot_message=0 ORDER BY rowid").all(httpChat)).toEqual(sources.map(source => ({ id: source.source_id })));
+  expect((root.query("SELECT count(*) AS n FROM conversations").get() as { n: number }).n).toBe(beforeConcurrent + 1);
+  expect(calls - callsBeforeHttp).toBe(2);
+  // The normal processChat finalizer also schedules one empty backlog drain.
+  expect(base.queue.getMetrics().enqueued - queueBefore.enqueued).toBe(3);
+  expect(base.queue.getMetrics().started - queueBefore.started).toBe(3);
+  expect(base.queue.getMetrics().succeeded - queueBefore.succeeded).toBe(3);
+  expect(base.queue.getMetrics().retriesScheduled - queueBefore.retriesScheduled).toBe(0);
+  expect(backend.sessionOptions.getDurableSession!(httpChat)).toBeDefined();
+  const before = (root.query("SELECT count(*) AS n FROM conversations").get() as { n: number }).n;
+  await Promise.all([bound.prepareInputSourceAdmission!(newcomer), bound.prepareInputSourceAdmission!(newcomer)]);
+  const newPort = backend.sessionOptions.getDurableSession!(newcomer)!;
+  expect(newPort).toBeDefined();
+  expect((root.query("SELECT count(*) AS n FROM conversations").get() as { n: number }).n).toBe(before + 1);
+  const newMessage = { ...message, id: "newcomer-first", chat_jid: newcomer };
+  const newRow = root.transaction(() => { const rowId = storeMessage(newMessage); bound.getInputSourceAdmission!(newcomer)({ message: newMessage, rowId, database: root }); return rowId; })();
+  expect(await bound.dispatchAcceptedInput!(newcomer, newMessage.id, newRow!)!()).toBe("settled");
+  expect(await newPort.readPosition()).not.toBeNull();
+  expect(root.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1").get(newcomer)).toEqual({ content: "factory synthetic reply" });
+  await expect(bound.prepareInputSourceAdmission!("web:missing-root")).rejects.toThrow("Existing root branch required");
   const originalDoc = root.query("SELECT content FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE kind='\"app.application-conversations\"') ORDER BY seq DESC LIMIT 1").get() as { content: string };
+  await channel.stop(); await base.queue.shutdown(); await pool.shutdown();
   backend.stop(); await backend.close();
   // Successful SDK initialization followed by a failed close must also retain
   // main's owner while bootstrap still has no backend to clean up.
@@ -164,8 +238,10 @@ factoryTest("public-conversations", "default factory prepares and reopens real s
   settings.setDefaultModelAndProvider(modelB.provider, modelB.id);
   await settings.flush();
   backend = await createDefaultApplicationRuntime(owner, async () => services);
-  expect(backend.sessionOptions.durableSessions?.has("web:default")).toBe(true);
-  expect(backend.sessionOptions.durableSessions?.get("web:default")?.sessionId).toBe(first?.sessionId);
+  expect(!!backend.sessionOptions.getDurableSession?.("web:default")).toBe(true);
+  expect(backend.sessionOptions.getDurableSession?.("web:default")?.sessionId).toBe(first?.sessionId);
+  expect(backend.sessionOptions.getDurableSession!(newcomer)?.sessionId).toBe(newPort.sessionId);
+  expect(backend.sessionOptions.getDurableSession!(newcomer)?.branchId).toBe(newPort.branchId);
   const rebound = backend.bind({ queue: {}, agentPool: {} } as Parameters<typeof backend.bind>[0]);
   const next = { ...message, id: "factory-input-after-default-change", content: "continue A" };
   const nextRow = root.transaction(() => {
@@ -174,8 +250,78 @@ factoryTest("public-conversations", "default factory prepares and reopens real s
     return rowId;
   })();
   expect(await rebound.dispatchAcceptedInput!(next.chat_jid, next.id, nextRow!)!()).toBe("settled");
-  expect(requested).toEqual([model.id, model.id]);
+  expect(requested).toEqual([model.id, model.id, model.id, model.id, model.id]);
+  // Lose the provider acknowledgement AFTER the real public transaction commits.
+  // No partial route is published and a retry cannot create another identity.
+  const uncertainChat = "web:lost-create-ack";
+  storeChatMetadata(uncertainChat, new Date().toISOString());
+  const beforeUncertain = (root.query("SELECT count(*) AS n FROM conversations").get() as { n: number }).n;
+  const actualTransaction = BunSqliteDatabase.prototype.transaction;
+  const lostAck = Error("lost create commit acknowledgement");
+  let lostAcknowledgements = 0;
+  const fault = spyOn(BunSqliteDatabase.prototype, "transaction").mockImplementation(async function (this: BunSqliteDatabase, ...args) {
+    const result = await actualTransaction.apply(this, args);
+    if ((root.query("SELECT count(*) AS n FROM conversations").get() as { n: number }).n > beforeUncertain) {
+      lostAcknowledgements++; throw lostAck;
+    }
+    return result;
+  });
+  try {
+    await expect(rebound.prepareInputSourceAdmission!(uncertainChat)).rejects.toThrow();
+    await expect(rebound.prepareInputSourceAdmission!(uncertainChat)).rejects.toThrow();
+    expect(lostAcknowledgements).toBe(1);
+    expect(backend.sessionOptions.getDurableSession!(uncertainChat)).toBeUndefined();
+    expect((root.query("SELECT count(*) AS n FROM conversations").get() as { n: number }).n).toBe(beforeUncertain + 1);
+  } finally { fault.mockRestore(); }
   backend.stop(); await backend.close();
+  backend = await createDefaultApplicationRuntime(owner, async () => services);
+  const recoveredCreate = backend.sessionOptions.getDurableSession!(uncertainChat)!;
+  expect(recoveredCreate).toBeDefined();
+  const recoveredIdentity = { sessionId: recoveredCreate.sessionId, branchId: recoveredCreate.branchId };
+  backend.stop(); await backend.close();
+  backend = await createDefaultApplicationRuntime(owner, async () => services);
+  expect(backend.sessionOptions.getDurableSession!(uncertainChat)).toMatchObject(recoveredIdentity);
+  expect((root.query("SELECT count(*) AS n FROM conversations").get() as { n: number }).n).toBe(beforeUncertain + 1);
+  backend.stop(); await backend.close();
+  // Hold the real adapter's public SDK transaction callback, not a model lookup
+  // (the latter is synchronous). Stop/close must fence it before it can publish.
+  for (const shutdown of ["stop", "close"] as const) {
+    backend = await createDefaultApplicationRuntime(owner, async () => services);
+    const raceChat = `web:prepare-${shutdown}`;
+    storeChatMetadata(raceChat, new Date().toISOString());
+    const raceBound = backend.bind({ queue: base.queue, agentPool: pool });
+    const raceChannel = new WebChannel(raceBound);
+    raceChannel.broadcastEvent = () => {};
+    const beforeRace = root.serialize();
+    let entered!: () => void, release!: () => void;
+    const inside = new Promise<void>(resolve => { entered = resolve; });
+    const hold = new Promise<void>(resolve => { release = resolve; });
+    const gate = spyOn(BunSqliteDatabase.prototype, "transaction").mockImplementationOnce(function (this: BunSqliteDatabase, callback) {
+      return actualTransaction.call(this, async tx => { entered(); await hold; return callback(tx); });
+    });
+    const pending = raceBound.prepareInputSourceAdmission!(raceChat).then(() => null, error => error);
+    await inside;
+    let closed = false;
+    let closing: Promise<void> | undefined;
+    if (shutdown === "stop") backend.stop();
+    else closing = backend.close().then(() => { closed = true; });
+    await Bun.sleep(0);
+    expect(closed).toBe(false);
+    expect(backend.sessionOptions.getDurableSession!(raceChat)).toBeUndefined();
+    release();
+    try {
+      expect(await pending).toBeInstanceOf(Error);
+      await (closing ?? backend.close());
+    } finally { gate.mockRestore(); }
+    expect(backend.sessionOptions.getDurableSession!(raceChat)).toBeUndefined();
+    expect(root.serialize()).toEqual(beforeRace);
+    const response = await raceChannel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(raceChat)}`, {
+      method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: JSON.stringify({ content: "after shutdown" }),
+    }));
+    expect(response.status).toBe(503);
+    expect(root.serialize()).toEqual(beforeRace);
+    await raceChannel.stop();
+  }
   const beforeUnapproved = root.serialize();
   const catalog = spyOn(modelRegistry, "getAvailable").mockReturnValue([modelB] as any);
   try {

@@ -680,11 +680,16 @@ export async function handleAgentMessage(
   catch { return channel.json({ error: 'Input authority is unavailable.' }, 403); }
   // Pin the trusted host selection to this route before any body read/await.
   // Request contents cannot select an engine or replace this SQL-only callback.
+  const prepareAdmission = channel.prepareInputSourceAdmission?.bind(channel);
+  const lookupAdmission = channel.getInputSourceAdmission?.bind(channel);
+  const lookupQueuedAdmission = channel.getQueuedInputSourceAdmission?.bind(channel);
   let acceptSource: ReturnType<NonNullable<WebChannelLike["getInputSourceAdmission"]>>;
   let acceptQueuedSource: ReturnType<NonNullable<WebChannelLike["getQueuedInputSourceAdmission"]>>;
   try {
-    acceptSource = channel.getInputSourceAdmission?.(chatJid);
-    acceptQueuedSource = channel.getQueuedInputSourceAdmission?.(chatJid);
+    if (!prepareAdmission) {
+      acceptSource = lookupAdmission?.(chatJid);
+      acceptQueuedSource = lookupQueuedAdmission?.(chatJid);
+    }
   }
   catch { return channel.json({ error: 'Input admission could not be confirmed.' }, 503); }
   if (internalAuthority) {
@@ -747,6 +752,17 @@ export async function handleAgentMessage(
   const themeCommand = handleUiThemeCommand(trimmed);
   const metersCommand = handleUiMetersCommand(trimmed);
   const isSettingsCommand = /^\/settings\s*$/i.test(trimmed);
+  if (prepareAdmission) {
+    try {
+      revalidateInputAuthority();
+      if (!command && !themeCommand && !metersCommand && !isSettingsCommand && !isSlashCommandInvocation(content)) {
+        await prepareAdmission(chatJid);
+        revalidateInputAuthority();
+      }
+      acceptSource = lookupAdmission?.(chatJid);
+      acceptQueuedSource = lookupQueuedAdmission?.(chatJid);
+    } catch { return channel.json({ error: 'Input admission could not be confirmed.' }, 503); }
+  }
   const isStreaming = typeof channel.agentPool.isStreaming === "function"
     ? channel.agentPool.isStreaming(chatJid)
     : false;

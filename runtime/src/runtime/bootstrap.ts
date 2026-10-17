@@ -8,7 +8,7 @@ import type { WebChannelOpts } from "../channels/web.js";
 
 /** One prepared backend, owned by bootstrap from construction through queue join. */
 export interface RuntimeBackend {
-  readonly sessionOptions: Readonly<Pick<AgentPoolOptions, "durableSessions">>;
+  readonly sessionOptions: Readonly<Pick<AgentPoolOptions, "getDurableSession">>;
   readonly bind: (options: Pick<WebChannelOpts, "queue" | "agentPool">) => Readonly<WebChannelOpts>;
   /** Wake queue-owned observers before queue join; do not dispose storage yet. */
   stop(): void;

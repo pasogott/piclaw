@@ -39,7 +39,7 @@ export interface AgentPoolServiceFactoryOptions extends AgentPoolLogHooks {
   workspaceDir: string;
   mainSessionMaxSize?: number | null;
   bashOperations?: AgentBashOperations;
-  durableSessions?: AgentPoolOptions["durableSessions"];
+  getDurableSession?: AgentPoolOptions["getDurableSession"];
   createSession?: AgentPoolOptions["createSession"];
   createSideSession?: AgentPoolOptions["createSideSession"];
 }
@@ -78,7 +78,7 @@ async function resolveSessionExtensionFactories(chatJid: string): Promise<Extens
  * Keeps constructor wiring in one place so AgentPool itself remains a thin façade.
  */
 export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions): AgentPoolServices {
-  const durableSessions = options.durableSessions === undefined ? undefined : new Map(options.durableSessions);
+  const getDurableSession = options.getDurableSession?.bind(options);
   const attachments = getAttachmentRegistry();
   const sessionBinder = new AgentSessionBinder({
     pool: options.pool,
@@ -103,7 +103,7 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
   let branchManager: AgentBranchManager;
   const runtimeFacade = new AgentRuntimeFacade({
     pool: options.pool,
-    durableSessions,
+    getDurableSession,
     acquireCommandProtection: chatJid => sessionManager.acquireEvictionProtection(chatJid),
     getOrCreateRuntime: (chatJid) => sessionManager.getOrCreate(chatJid),
     modelRegistry: options.modelRegistry,
@@ -129,7 +129,7 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     onWarn: options.onWarn,
   });
   sessionManager = new AgentSessionManager({
-    durableSessions,
+    getDurableSession,
     modelRegistry: options.modelRegistry,
     pool: options.pool,
     sidePool: options.sidePool,
@@ -137,7 +137,7 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     settingsManager: options.settingsManager,
     mainSessionMaxSize: options.mainSessionMaxSize,
     // Compatibility construction is absent from the selected durable backend.
-    ...(durableSessions === undefined ? {
+    ...(getDurableSession === undefined ? {
     createSession: options.createSession,
     createSideSession: options.createSideSession,
     createDefaultTools: () => toolFactory.createDefaultTools(),

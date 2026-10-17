@@ -46,7 +46,7 @@ const RECENT_USE_EVICTION_GRACE_MS = 1_000;
 
 /** Dependencies required to manage AgentPool session lifecycles. */
 export interface AgentSessionManagerOptions {
-  durableSessions?: import("./contracts.js").AgentPoolOptions["durableSessions"];
+  getDurableSession?: import("./contracts.js").AgentPoolOptions["getDurableSession"];
   pool: Map<string, PoolEntry>;
   sidePool: Map<string, PoolEntry>;
   createSession?: (chatJid: string, sessionDir: string) => Promise<AgentSessionRuntime>;
@@ -118,7 +118,7 @@ export class AgentSessionManager {
   constructor(private readonly options: AgentSessionManagerOptions) {}
 
   private assertLegacySession(): void {
-    if (this.options.durableSessions !== undefined) throw new Error("Durable application does not construct legacy sessions");
+    if (this.options.getDurableSession !== undefined) throw new Error("Durable application does not construct legacy sessions");
   }
 
   /** Read-only capture also requires an external all-controller admission fence. */
@@ -602,7 +602,7 @@ export class AgentSessionManager {
   }
 
   prewarm(chatJid: string, options: { priority?: boolean; mode?: "full" | "lightweight" } = {}): boolean {
-    if (this.options.durableSessions !== undefined) return false;
+    if (this.options.getDurableSession !== undefined) return false;
     // Queue provenance must be durable before background multi-user hydration is enabled.
     if (readAccessConfig().mode !== "single-user") return false;
     if (this.isShuttingDown || this.mcpAdmissionsBlocked) return false;

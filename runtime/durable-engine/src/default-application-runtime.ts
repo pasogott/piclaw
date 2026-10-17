@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { apply } from "@earendil-works/chord/delta";
-import { Harness, createRegistry, defineDoc, type ConversationId } from "@earendil-works/pi-durable";
+import { Harness, configure, createRegistry, defineDoc, type ConversationId } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { SettingsManager } from "../../../node_modules/@earendil-works/pi-coding-agent";
 import type { RuntimeModelServices } from "../../src/agent-pool/model-services.js";
@@ -186,6 +186,21 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const bundle = await createApplicationBootstrapBundle({ root, path, ownership, offlineInitialize: true, answers,
     manifest: mapping.bindings.map(({ chatJid, branchId, conversationId }) => ({ chatJid, branchId, conversationId: conversationId as ConversationId })),
     sessions: new Map(mapping.bindings.map(binding => [binding.chatJid, binding.sessionId])),
+    assertConversationAvailable() { check(ref, lifetime.signal); },
+    async createConversation(tx, chatJid, branchId) {
+      assert(); check(ref, lifetime.signal);
+      const doc = await tx.doc(ApplicationConversations, 1 as ConversationId);
+      if (doc.domain !== mapping.domain || doc.bindings.some(b => b.chatJid === chatJid || b.branchId === branchId)) throw Error("Application mapping conflict");
+      const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
+      await configure(tx, conversation.id, { model: { provider: ref.provider, modelId: ref.id }, tools: [bash] });
+      const binding = { chatJid, branchId, conversationId: conversation.id, sessionId: crypto.randomUUID() };
+      const identity = { domain: mapping.domain, chatJid, branchId, sessionId: binding.sessionId };
+      const token = defineDoc({ kind: "app.application-identity", version: 1, scope: "conversation", history: "latest", fork: "initial", initial: () => identity });
+      await tx.doc(token, conversation.id);
+      doc.bindings.push(binding);
+      assert(); check(ref, lifetime.signal);
+      return Object.freeze(binding);
+    },
     runtime: { incarnation: mapping.domain, sessionId: mapping.domain, lane: "main", generation: 1, now: () => new Date().toISOString(), harnessOptions } }, context);
   return { sessionOptions: bundle.sessionOptions, bind: bundle.bind,
     stop() { lifetime.abort(); bundle.stop(); }, async close() { lifetime.abort(); await bundle.close(); } };

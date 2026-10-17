@@ -74,9 +74,9 @@ function createFacade(overrides: Partial<ConstructorParameters<typeof AgentRunti
 test("current model uses captured durable port and rejects unbound chats without legacy fallback", async () => {
   const port = { sessionId: "session", branchId: "main", readPosition: async () => null,
     readModel: async () => "persisted/model" };
-  const fixture = createFacade({ durableSessions: new Map([["bound", port],
-    ["unsupported", { sessionId: "other", branchId: "main", readPosition: async () => null }]]) });
-  port.readModel = async () => "replaced/model";
+  const ports = new Map([["bound", Object.freeze(port)],
+    ["unsupported", Object.freeze({ sessionId: "other", branchId: "main", readPosition: async () => null })]]);
+  const fixture = createFacade({ getDurableSession: chat => ports.get(chat) });
   expect(await fixture.facade.getCurrentModelLabel("bound")).toBe("persisted/model");
   await expect(fixture.facade.getCurrentModelLabel("unsupported")).rejects.toThrow("Durable session model unavailable");
   fixture.pool.set("legacy", { runtime: createRuntime({ model: { provider: "legacy", id: "model" } }), lastUsed: 0 });
