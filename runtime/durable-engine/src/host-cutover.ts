@@ -4,7 +4,11 @@ import { initializeHostSchemaTables } from "./host-schema.js";
 import { hashCanonicalRequest, type CanonicalJsonValue } from "../../../runtime/src/service-effects/contracts/common.js";
 export type Phase = "source" | "copying" | "verified" | "active" | "reconciliation_required";
 export interface CutoverIdentity { domain: string; incarnation: string; ownerGeneration: number; sourceEngineId: string; candidateStoreRef: string }
-export interface CutoverRequest { requestKey: string; sourceDigest: string; importHash: string }
+export interface CopiedInstallationBinding {
+  kind: "copied-installation"; version: 2;
+  sources: readonly { originalSessionId: string; sourceSHA256: string; manifestSHA256: string; importHash: string; rootId: number }[];
+}
+export interface CutoverRequest { requestKey: string; sourceDigest: string; importHash: string; installation?: CopiedInstallationBinding }
 export interface Receipt { sourceDigest: string; receiptHash: string }
 interface RollbackCheckpoint { digest: string; accepted: readonly { sourceId: string; evidenceHash: string }[] }
 export interface Manifest { phase: Phase; revision: number; writer: string; postCutoverCount: number; request: CutoverRequest; receipt: Receipt | null;
@@ -40,7 +44,18 @@ function ref(value: string) {
 }
 function digest(value: string) { if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) throw fail(); return value; }
 function requestSnapshot(r: CutoverRequest) {
-  return Object.freeze({ requestKey: ref(r.requestKey), sourceDigest: digest(r.sourceDigest), importHash: digest(r.importHash) });
+  const base = { requestKey: ref(r.requestKey), sourceDigest: digest(r.sourceDigest), importHash: digest(r.importHash) };
+  if (r.installation === undefined) return Object.freeze(base); // Preserve exact v1 request hashes.
+  const binding = r.installation;
+  if (binding.kind !== "copied-installation" || binding.version !== 2 || !binding.sources.length) throw fail();
+  const sources = binding.sources.map(s => {
+    if (typeof s.originalSessionId !== "string" || !s.originalSessionId.length || s.originalSessionId !== s.originalSessionId.trim() ||
+      !Number.isSafeInteger(s.rootId) || s.rootId <= 0) throw fail();
+    return Object.freeze({ originalSessionId: s.originalSessionId, sourceSHA256: digest(s.sourceSHA256),
+      manifestSHA256: digest(s.manifestSHA256), importHash: digest(s.importHash), rootId: s.rootId });
+  });
+  if (new Set(sources.map(s => s.rootId)).size !== sources.length || new Set(sources.map(s => s.originalSessionId)).size !== sources.length) throw fail();
+  return Object.freeze({ ...base, installation: Object.freeze({ kind: "copied-installation" as const, version: 2 as const, sources: Object.freeze(sources) }) });
 }
 /** Explicit sidecar initializer, never invoked by controller construction. Caller enables FK. */
 export function initializeCutoverManifest(db: Database, assertOwner: () => void = () => {}) {

@@ -19,6 +19,8 @@ import { storeChatMetadata } from "../../runtime/src/db.js";
 import { BunSqliteDatabase } from "../../runtime/durable-engine/src/bun-sqlite.js";
 import { applicationOwnership } from "../../runtime/durable-engine/src/application-bootstrap.js";
 import { HostCutoverController, initializeCutoverManifest } from "../../runtime/durable-engine/src/host-cutover.js";
+import { copiedInstallationSourceDigest } from "../../runtime/durable-engine/src/copied-installation.js";
+import { LegacyTreeImportManifest } from "../../runtime/durable-engine/src/legacy-import.js";
 import { upgradeCapturedRuntime } from "../../runtime/durable-engine/src/runtime-upgrade-workflow.js";
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { openFixture, context } from "./src/fixture.js";
@@ -31,7 +33,7 @@ const mutations = {
   security: "INSERT INTO web_sessions(token,user_id,created_at,expires_at) VALUES ('frontier-probe','default','now','later')",
   terminal: "INSERT INTO service_effect_s01_chats(chat_jid) VALUES ('frontier-probe')",
 };
-const scenarios = ["happy", "happy-forks", "zero", "unselected", "multiple", "released", "changed-after-open", "released-after-open",
+const scenarios = ["happy", "happy-forks", "happy-multiple", "happy-multiple-retry", "zero", "unselected", "multiple", "released", "changed-after-open", "released-after-open",
   ...Object.keys(mutations).flatMap(name => [`host-${name}-open`, `host-${name}-close`])];
 for (const scenario of scenarios.filter(name => !process.env.PICLAW_WORKFLOW_CASE || name === process.env.PICLAW_WORKFLOW_CASE))
   test(`actual runtime capture → owned upgrade: ${scenario}`, async () => {
@@ -93,7 +95,7 @@ for (const scenario of scenarios.filter(name => !process.env.PICLAW_WORKFLOW_CAS
     let watcher: ReturnType<typeof watch> | undefined;
     try {
       const runtime = await ready.promise;
-      for (let index = 0; index < (scenario === "zero" ? 0 : scenario === "multiple" ? 2 : 1); index++) {
+      for (let index = 0; index < (scenario === "zero" ? 0 : scenario.includes("multiple") ? 2 : 1); index++) {
         const chat = `web:workflow:${index}`; storeChatMetadata(chat, new Date().toISOString());
         const manager = SessionManager.inMemory(dir, { id: `original-${index}` });
         manager.appendMessage({ role: "system", content: `original baseline\n\n<cwd>\n${dir}\n</cwd>`, timestamp: 1 });
@@ -122,17 +124,36 @@ for (const scenario of scenarios.filter(name => !process.env.PICLAW_WORKFLOW_CAS
       jsonl = (["create", "open", "continueRecent"] as const).map(name => spyOn(SessionManager, name).mockImplementation(() => { throw Error("JSONL factories forbidden after preparation"); }));
       const preparation = await runtime.prepareLegacyMigration("workflow-next");
       const captured = await preparation.capture();
+      if (scenario.startsWith("happy-multiple")) {
+        expect(captured.inputs).toHaveLength(2); expect(captured.unselectedSourcePaths).toEqual([]);
+        expect([...new Set(captured.identities.map(i => i.originalSessionId))].sort()).toEqual(["original-0", "original-1"]);
+        expect(captured.inputs.map(i => JSON.parse(i.sourceJSONL.split("\n")[0]!).id).sort()).toEqual(["original-0", "original-1"]);
+      }
+      const roots = new Map<string, import("../../runtime/durable-engine/qualification/durable.js").ConversationId>();
+      if (scenario.startsWith("happy-multiple")) {
+        const database = new BunSqliteDatabase(path, { root: db, assertOwner: () => lock.assertCurrentOwner() });
+        importer = await openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(database));
+        for (const input of captured.inputs) roots.set(input.expected.sourceSHA256,
+          (await importer.harness.createConversation({ ownership: { kind: "ownerless" }, agent: { model: { provider: "qualification", modelId: "synthetic" } } }, context)).id);
+        await importer.close();
+      }
       initializeCutoverManifest(db, () => lock.assertCurrentOwner());
       const identity = { domain: "workflow-next", incarnation: "workflow-next", ownerGeneration: 7, sourceEngineId: "legacy", candidateStoreRef: "candidate" };
       const cutover = new HostCutoverController(db, identity, { assertOwner() { lock.assertCurrentOwner(); }, assertCurrentWriter(writer) {
         const row = db.query("SELECT manifest FROM qualification_cutover_v1 WHERE domain=?").get(identity.domain) as { manifest: string } | null;
         expect(writer).toBe(row ? JSON.parse(row.manifest).writer : "legacy");
-      }, checkDrained() { preparation.assertAdmissionGuard(); return { sourceDigest: captured.inputs[0]?.expected.sourceSHA256 ?? "empty", pending: 0, inflight: 0 }; } });
+      }, checkDrained() { preparation.assertAdmissionGuard(); return { sourceDigest: roots.size ? copiedInstallationSourceDigest(captured.inputs) : captured.inputs[0]?.expected.sourceSHA256 ?? "empty", pending: 0, inflight: 0 }; } });
+      const flip = spyOn(cutover, "commitWriter");
       const before = db.serialize(), bytes = files[0] ? readFileSync(files[0]) : Buffer.alloc(0); let opens = 0;
       const jsonlBefore = readdirSync(SESSIONS_DIR, { recursive: true }).map(String).filter(p => p.endsWith(".jsonl")).sort();
       if (scenario === "released") preparation.release();
       const answers = new Map<string, string>();
-      const upgrade = upgradeCapturedRuntime({ preparation, cutover, application: { root: db, path, ownership: applicationOwnership(lock), offlineInitialize: true,
+      let failedOnce = false;
+      let firstReceipt: string | undefined;
+      let firstEntries: string | undefined;
+      let secondReceipt: string | undefined;
+      let allocations = 0;
+      const performUpgrade = () => upgradeCapturedRuntime({ preparation, cutover, importRoots: roots.size ? roots : undefined, application: { root: db, path, ownership: applicationOwnership(lock), offlineInitialize: true,
         answers: { put(ref: string, text: string) { answers.set(ref, text); }, resolver: { async resolve(ref: string) {
           const bytes = new TextEncoder().encode(answers.get(ref)!);
           return { ref, bytes, byteLength: bytes.length, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"), mediaType: "text/plain", redactionClass: "private" as const };
@@ -145,11 +166,52 @@ for (const scenario of scenarios.filter(name => !process.env.PICLAW_WORKFLOW_CAS
           if (scenario === "released-after-open") preparation.release();
           const mutation = mutations[scenario.split("-")[1] as keyof typeof mutations];
           if (scenario.startsWith("host-") && scenario.endsWith("-open")) db.exec(mutation);
-          return { database, harness: importer.harness, conversation: importer.root, async close() {
+          const create = importer.harness.createConversation.bind(importer.harness);
+          spyOn(importer.harness, "createConversation").mockImplementation((...args) => { allocations++; return create(...args); });
+          const ordered = [...captured.inputs].sort((a, b) => JSON.parse(a.sourceJSONL.split("\n")[0]!).id.localeCompare(JSON.parse(b.sourceJSONL.split("\n")[0]!).id));
+          const rootId = roots.get(ordered[0]!.expected.sourceSHA256);
+          const conversation = rootId ? (await importer.harness.conversation(rootId, context))! : importer.root;
+          if (scenario === "happy-multiple-retry" && !failedOnce) {
+            const original = importer.harness.conversation.bind(importer.harness);
+            spyOn(importer.harness, "conversation").mockImplementation(async (id, ctx) => {
+              const handle = await original(id, ctx);
+              if (handle && id === roots.get(ordered[1]!.expected.sourceSHA256)) {
+                const commit = handle.commit.bind(handle);
+                spyOn(handle, "commit").mockImplementation(async (...args) => {
+                  const result = await commit(...args);
+                  const receipt = await importer!.harness.snapshot(LegacyTreeImportManifest, id, context);
+                  if (!failedOnce && receipt?.binding) {
+                    secondReceipt = JSON.stringify(receipt); failedOnce = true; throw Error("lost import ACK");
+                  }
+                  return result;
+                });
+              }
+              return handle;
+            });
+          }
+          return { database, harness: importer.harness, conversation, async close() {
+            if (scenario === "happy-multiple-retry" && failedOnce) {
+              const currentReceipt = JSON.stringify(await importer!.harness.snapshot(LegacyTreeImportManifest, conversation.id, context));
+              if (!firstReceipt) firstReceipt = currentReceipt;
+              else expect(currentReceipt).toEqual(firstReceipt);
+              const entries = JSON.stringify(await conversation.commit(tx => tx.scanEntries({ conversationId: conversation.id, order: "ascending" }, 100), context));
+              if (!firstEntries) firstEntries = entries;
+              else expect(entries).toEqual(firstEntries); // First source not replayed.
+              expect(JSON.stringify(await importer!.harness.snapshot(LegacyTreeImportManifest, roots.get(ordered[1]!.expected.sourceSHA256)!, context))).toEqual(secondReceipt!);
+            }
             await importer!.close();
             if (scenario.startsWith("host-") && scenario.endsWith("-close")) db.exec(mutation);
           } };
         } }, context);
+      let upgrade = performUpgrade();
+      if (scenario === "happy-multiple-retry") {
+        await expect(upgrade).rejects.toThrow();
+        expect(cutover.inspect()?.phase).toBe("copying");
+        lock.assertCurrentOwner(); preparation.assertAdmissionGuard();
+        // Retry must use the same persisted assignments, never fresh root allocation.
+        expect(cutover.inspect()?.request.installation?.sources.map(s => s.rootId).sort()).toEqual([...roots.values()].sort());
+        upgrade = performUpgrade();
+      }
       if (!scenario.startsWith("happy")) {
         await expect(upgrade).rejects.toThrow(scenario.startsWith("host-") ? "Legacy host frontier changed" : scenario === "changed-after-open" ? "Legacy source changed" : scenario.includes("released") ? "released" : "Unsupported runtime upgrade inventory");
         if (scenario.startsWith("host-")) {
@@ -163,6 +225,13 @@ for (const scenario of scenarios.filter(name => !process.env.PICLAW_WORKFLOW_CAS
         if (scenario === "zero" || scenario === "unselected" || scenario === "multiple" || scenario === "released") { expect(opens).toBe(0); expect(db.serialize()).toEqual(before); }
       } else {
         bundle = await upgrade; expect(cutover.inspect()?.phase).toBe("active");
+        expect(flip).toHaveBeenCalledTimes(1);
+        expect(db.query("SELECT count(*) AS n FROM qualification_cutover_v1").get()).toEqual({ n: 1 });
+        if (scenario === "happy-multiple-retry") {
+          expect(failedOnce).toBe(true); expect(firstReceipt).toBeDefined(); expect(secondReceipt).toBeDefined();
+          expect(allocations).toBe(0);
+          expect(cutover.inspect()?.revision).toBe(5);
+        }
         expect(readFileSync(files[0]!)).toEqual(bytes);
         expect(importer!.host.modelCalls).toBe(0);
         const candidateQueue = new AgentQueue();
@@ -182,18 +251,18 @@ for (const scenario of scenarios.filter(name => !process.env.PICLAW_WORKFLOW_CAS
           expect(db.query("SELECT payload_ref FROM service_effect_s01_sources WHERE source_id=?").get(row.id)).toEqual({ payload_ref: `message-row:${row.rowid}` });
           expect(candidatePool.getSessionGenerationForChat("web:workflow:0")).toBe("original-0");
           expect(await candidatePool.getCurrentModelLabel("web:workflow:0")).toBe("qualification/synthetic");
-          if (scenario === "happy-forks") {
+          if (scenario === "happy-forks" || scenario.startsWith("happy-multiple")) {
             const siblingResponse = await channel.handleRequest(new Request("http://fixture/agent/default/message?chat_jid=web%3Aworkflow%3A1", {
               method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: JSON.stringify({ content: "continue sibling chat" }),
             }));
             expect(siblingResponse.status).toBe(201);
             for (let i = 0; i < 500 && candidateQueue.isLaneBusy("chat:web:workflow:1"); i++) await Bun.sleep(5);
             expect(candidateQueue.isLaneBusy("chat:web:workflow:1")).toBe(false);
-            expect(candidatePool.getSessionGenerationForChat("web:workflow:1")).toBe("original-0");
+            expect(candidatePool.getSessionGenerationForChat("web:workflow:1")).toBe(scenario.startsWith("happy-multiple") ? "original-1" : "original-0");
             expect(db.query("SELECT content FROM messages WHERE chat_jid='web:workflow:1' AND is_bot_message=1").all()).toEqual([{ content: "synthetic answer" }]);
             expect(db.query("SELECT 1 FROM service_effect_s02_commits WHERE chat_jid='web:workflow:1'").all()).toHaveLength(1);
           }
-          expect(policy.host.modelCalls).toBe(scenario === "happy-forks" ? 2 : 1);
+          expect(policy.host.modelCalls).toBe(scenario === "happy-forks" || scenario.startsWith("happy-multiple") ? 2 : 1);
           expect(policy.host.credentialLookups).toBe(0);
           expect(readdirSync(SESSIONS_DIR, { recursive: true }).map(String).filter(p => p.endsWith(".jsonl")).sort()).toEqual(jsonlBefore);
           preparation.assertAdmissionGuard();
@@ -213,4 +282,4 @@ for (const scenario of scenarios.filter(name => !process.env.PICLAW_WORKFLOW_CAS
       complete(); await running; registration.mockRestore();
       closeDatabase(); lock.release(); rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 20000);

@@ -8,6 +8,7 @@ import { SessionManager, buildSessionContext, convertToLlm, sessionEntryToContex
 import { SqliteStorage, SQLITE_MIGRATIONS, CURRENT_SQLITE_SCHEMA_VERSION } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { STORE_DIR } from "../../runtime/src/core/config.js";
 import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
+import { prepareCopiedInstallation } from "../../runtime/durable-engine/src/copied-installation.js";
 import { prepareCopiedUpgrade, prepareCopiedApplicationUpgrade } from "../../runtime/durable-engine/src/copied-upgrade.ts";
 import { HostCutoverController, initializeCutoverManifest, LegacyTreeImportManifest, LegacyImportManifest, type GetLegacyContext } from "../../runtime/durable-engine/src/index.ts";
 import { TestOwner, OwnedSqlite } from "./src/ownership.ts";
@@ -88,6 +89,39 @@ async function setup(sharedDatabase = false, mainOnly = false) {
   const controller = new HostCutoverController(db, identity, ports);
   return { dir, path, owner, db, base, bytes, manifest, expected, controller, identity, ports, host, candidateDatabase, hostSnapshot, originalHost };
 }
+test("installation: every source validated before writes; deterministic identity pins roots and rejects duplicates", () => using(async f => {
+  const secondSource = Buffer.from(f.bytes.toString().replace('"id":"existing-session"', '"id":"second-session"'));
+  const secondHost = { ...f.host, expectedSourceSHA256: sha(secondSource), hostBranchBindings:
+    Object.fromEntries(Object.entries(f.host.hostBranchBindings).map(([leaf, identity]) => [leaf, { ...identity, chatJid: "web:second" }])) };
+  const manifest = Buffer.from(JSON.stringify(secondHost));
+  const first = { sourceJSONL: f.bytes.toString(), manifestJSON: f.manifest.toString(), expected: f.expected };
+  const second = { sourceJSONL: secondSource.toString(), manifestJSON: manifest.toString(), expected: { sourceSHA256: sha(secondSource), manifestSHA256: sha(manifest) } };
+  const root = await f.base.harness.createConversation({ ownership: { kind: "ownerless" } }, context);
+  const roots = new Map([[f.expected.sourceSHA256, f.base.root.id], [second.expected.sourceSHA256, root.id]]);
+  const before = f.db.serialize();
+  const plan = prepareCopiedInstallation([first, second], roots, bridge);
+  expect(prepareCopiedInstallation([second, first], roots, bridge).request).toEqual(plan.request);
+  expect(prepareCopiedInstallation([first, second], new Map([[f.expected.sourceSHA256, root.id], [second.expected.sourceSHA256, f.base.root.id]]), bridge).request).not.toEqual(plan.request);
+  const unsupported = Buffer.from(JSON.stringify({ ...secondHost, pending: 1 }));
+  expect(() => prepareCopiedInstallation([first, { ...second, manifestJSON: unsupported.toString(), expected: { ...second.expected, manifestSHA256: sha(unsupported) } }], roots, bridge)).toThrow();
+  expect(() => prepareCopiedInstallation([first, first], roots, bridge)).toThrow("Duplicate installation session");
+  const conflict = Buffer.from(JSON.stringify({ ...secondHost, hostBranchBindings: f.host.hostBranchBindings }));
+  expect(() => prepareCopiedInstallation([first, { ...second, manifestJSON: conflict.toString(), expected: { ...second.expected, manifestSHA256: sha(conflict) } }], roots, bridge)).toThrow("Conflicting installation branch/chat");
+  expect(() => prepareCopiedInstallation([first, second], new Map([[first.expected.sourceSHA256, root.id], [second.expected.sourceSHA256, root.id]]), bridge)).toThrow("Invalid installation roots");
+  expect(() => prepareCopiedInstallation([first, second], new Map([[first.expected.sourceSHA256, root.id]]), bridge)).toThrow("Exact installation root assignments");
+  expect(() => prepareCopiedInstallation([first, second], new Map([[first.expected.sourceSHA256, root.id], ["wrong-source", f.base.root.id]]), bridge)).toThrow("Invalid installation roots");
+  const missing = prepareCopiedInstallation([first, second], new Map([[first.expected.sourceSHA256, f.base.root.id], [second.expected.sourceSHA256, 999999999 as typeof root.id]]), bridge);
+  await expect(missing.validateImporter(f.base.harness, f.base.root.id, context)).rejects.toThrow("Missing installation root");
+  await expect(plan.validateImporter(f.base.harness, root.id, context)).rejects.toThrow("Installation importer root conflict");
+  expect(f.db.serialize()).toEqual(before); expect(f.controller.inspect()).toBeNull();
+  expect(await f.base.harness.snapshot(LegacyTreeImportManifest, f.base.root.id, context)).toBeUndefined();
+  expect(await f.base.harness.snapshot(LegacyTreeImportManifest, root.id, context)).toBeUndefined();
+  const controller = new HostCutoverController(f.db, f.identity, { ...f.ports, checkDrained: () => ({ sourceDigest: plan.request.sourceDigest, pending: 0, inflight: 0 }) });
+  plan.checkpoint(controller);
+  const pinned = f.db.serialize();
+  const swapped = prepareCopiedInstallation([first, second], new Map([[first.expected.sourceSHA256, root.id], [second.expected.sourceSHA256, f.base.root.id]]), bridge);
+  expect(() => swapped.checkpoint(controller)).toThrow(); expect(f.db.serialize()).toEqual(pinned);
+}, true));
 test("application upgrade bindings: reject valid unsupported branches before journal/import writes", () => using(async f => {
   expect(() => prepareCopiedApplicationUpgrade(f.bytes, f.manifest, f.expected, bridge))
     .toThrow("ambiguous same-chat branches are unsupported");

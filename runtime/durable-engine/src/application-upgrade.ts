@@ -7,7 +7,7 @@ import type { HostCutoverController } from "./host-cutover.js";
 import type { BunSqliteDatabase } from "./bun-sqlite.js";
 
 export interface ApplicationUpgradeOptions {
-  plan: ReturnType<typeof prepareCopiedApplicationUpgrade>;
+  plan: ReturnType<typeof prepareCopiedApplicationUpgrade> | ReturnType<typeof import("./copied-installation.js").prepareCopiedInstallation>;
   cutover: HostCutoverController;
   /** Owned capture workflow only: full source check outside transactions. */
   validatePreparation?: () => void;
@@ -41,12 +41,16 @@ export async function upgradeApplication(options: ApplicationUpgradeOptions, con
     plan.assertApplicationScope(application.runtime.incarnation, application.runtime.sessionId);
     plan.assertApplicationBranches(application.root);
     let journal = cutover.inspectApplication(application.root, application.runtime.incarnation, plan.request);
+    if ("validateImporter" in plan) {
+      await plan.validateImporter(harness, conversation.id, context);
+      assert(); validate?.();
+    }
     if (!journal || journal.phase === "source" || journal.phase === "copying") {
       journal = plan.checkpoint(cutover);
       validate?.();
       journal = await cutover.begin(journal.revision, {
         async copy() { assert(); return { sourceDigest: plan.request.sourceDigest, receiptHash: plan.request.importHash }; },
-        importCopied: () => plan.importCopied(conversation, assert, context),
+        importCopied: () => plan.importCopied(conversation, assert, context, harness),
       });
     }
     assert(); validate?.();

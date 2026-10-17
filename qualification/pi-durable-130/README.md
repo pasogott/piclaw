@@ -1378,3 +1378,25 @@ plus 25 feature and 9 build tests with final build footer; its interrupted wrapp
 recorded no exit code. An earlier concurrent candidate attempt had one existing
 binding-test timeout; unchanged sequential repeat passed. Production selection,
 multiple-source installation migration and remaining compatibility are not complete.
+
+### Multiple captured source sessions, one transition
+
+Captured upgrade now supports multiple complete source sessions in the same database.
+All inputs, identities and caller-assigned existing roots are validated before the
+journal/import stage. Canonically ordered source hashes, manifest hashes and root
+assignments are pinned in one optional v2 installation request in the existing
+journal; the absent-installation v1 request/hash remains compatible. Roots are not
+allocated during retry, and ambiguous/unselected history remains fail-closed.
+
+One paused importer verifies every tree and combines original chat/session bindings
+into one bundle before a single writer flip. The real two-source test continues both
+original chats through normal HTTP. A lost acknowledgement after the second import
+commits preserves both receipts, assigned IDs and first-source history on retry.
+Invalid/aliased roots and unsupported later sources reject before journaling.
+
+Final candidate verification passes 414 tests / 6,975 assertions across 32 files;
+focused migration/cutover regressions pass 42 cases / 406 assertions. Engine,
+qualification and targeted runtime types, full root fast CI and bounded independent
+review pass. Aggregate frontend-baseline typechecking remains separately red as
+recorded. This closes bounded captured-source coverage, not automatic root discovery,
+all historical-file migration, installed add-on compatibility or production activation.

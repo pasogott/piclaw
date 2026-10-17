@@ -76,6 +76,8 @@ function prepareUpgrade(sourceBytes: Uint8Array, manifestBytes: Uint8Array,
   const receipt = Object.freeze({ sourceDigest: sourceSHA256, receiptHash: plan.sourceHash });
   return Object.freeze({
     sourceSHA256, manifestSHA256, request,
+    sourceSessionId: plan.prepared[0]!.sourceSessionId,
+    identities: Object.freeze(plan.prepared.map(branch => Object.freeze({ ...branch.identity }))),
     assertApplicationBranches(root: import("bun:sqlite").Database) {
       assert(application, "Application plan required");
       assertApplicationBranchRoutes(root, plan.prepared.map(branch => branch.identity));
