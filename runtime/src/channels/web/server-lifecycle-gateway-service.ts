@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { CdpViewConnection, closeCdpViewConnections } from './cdp-view.js';
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { ServerWebSocket } from "bun";
@@ -135,6 +136,7 @@ export class WebServerLifecycleGatewayService {
   linkPreviewCachePurgeTimer: unknown | null = null;
   private accepting = true;
   private readonly entered = new Set<Promise<unknown>>();
+  private readonly admissionContext = new AsyncLocalStorage<{ active: boolean }>();
   private drainPromise: Promise<void> | null = null;
   private stopPromise: Promise<void> | null = null;
   private startPromise: Promise<void> | null = null;
@@ -288,21 +290,38 @@ export class WebServerLifecycleGatewayService {
   sealAdmissions(): Promise<void> {
     this.accepting = false;
     this.startupAbort.abort();
-    return this.drainPromise ??= Promise.allSettled([...this.entered]).then(() => {});
+    return this.drainPromise ??= this.drainEntered();
+  }
+
+  private async drainEntered(): Promise<void> {
+    // An accepted request may enter a nested in-process dispatch while unwinding.
+    while (this.entered.size) await Promise.allSettled([...this.entered]);
+  }
+
+  /** Same permanent fence for trusted in-process input/control, not output. */
+  runInternalDispatch<T>(dispatch: () => T | Promise<T>): Promise<T> {
+    if (!this.accepting && !this.admissionContext.getStore()?.active)
+      return Promise.reject(new Error("Web admission is sealed; internal dispatch is unavailable."));
+    return this.joinEntered(dispatch);
   }
 
   private joinEntered<T>(run: () => T | Promise<T>): Promise<T> {
     // Register before invoking user code, including callbacks that throw.
     const completion = Promise.withResolvers<void>();
     this.entered.add(completion.promise);
-    return (async () => {
+    const context = { active: true };
+    return this.admissionContext.run(context, async () => {
       try { return await run(); }
-      finally { this.entered.delete(completion.promise); completion.resolve(); }
-    })();
+      finally {
+        context.active = false;
+        this.entered.delete(completion.promise); completion.resolve();
+      }
+    });
   }
 
   handleRequest(req: Request, dispatch: () => Promise<Response>): Promise<Response> {
-    if (!this.accepting) return Promise.resolve(this.deps.json({ error: 'Web channel is stopping.' }, 503));
+    if (!this.accepting && !this.admissionContext.getStore()?.active)
+      return Promise.resolve(this.deps.json({ error: 'Web channel is stopping.' }, 503));
     return this.joinEntered(dispatch);
   }
 

@@ -13,6 +13,8 @@ describe("web channel lifecycle/special surface service", () => {
       {
         serverLifecycleGateway: {
           sealAdmissions: async () => {},
+          handleRequest: (_req, dispatch) => dispatch(),
+          runInternalDispatch: async dispatch => await dispatch(),
           server,
           start: async () => {
             calls.push("start");

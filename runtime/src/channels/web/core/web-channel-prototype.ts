@@ -38,6 +38,7 @@ export interface WebChannelPrototypeMembers extends WebChannelLike {
   start(): Promise<void>;
   stop(): Promise<void>;
   sealAdmissions(): Promise<void>;
+  runInternalDispatch<T>(dispatch: () => T | Promise<T>): Promise<T>;
   handleFetch(req: Request, server?: Bun.Server<WebSocketSessionData>): Promise<Response | undefined>;
   handleRequest(req: Request): Promise<Response>;
   enqueueAgentMessage(request: RuntimeAgentMessageRequest): Promise<RuntimeAgentMessageResult>;
@@ -144,6 +145,12 @@ export function installWebChannelPrototype(
       writable: true,
       value: withLifecycleSpecialSurface(defaults, (service) => service.sealAdmissions()),
     },
+    runInternalDispatch: {
+      configurable: true,
+      writable: true,
+      value: withLifecycleSpecialSurface(defaults, <T>(service: WebChannelLifecycleSpecialSurfaceService, dispatch: () => T | Promise<T>) =>
+        service.runInternalDispatch(dispatch)),
+    },
     sendMessage: {
       configurable: true,
       writable: true,
@@ -162,8 +169,9 @@ export function installWebChannelPrototype(
     enqueueAgentMessage: {
       configurable: true,
       writable: true,
-      value: withRuntimePublicSurface(async (service, request: RuntimeAgentMessageRequest): Promise<RuntimeAgentMessageResult> =>
-        await service.enqueueAgentMessage(request)),
+      value: function(this: WebChannelPrototypeMembers, request: RuntimeAgentMessageRequest): Promise<RuntimeAgentMessageResult> {
+        return this.runInternalDispatch(() => getRuntimePublicSurfaceService(this).enqueueAgentMessage(request));
+      },
     },
     queueFollowupPlaceholder: {
       configurable: true,

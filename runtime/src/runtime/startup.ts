@@ -413,7 +413,7 @@ function resolveSessionControlTarget(agentPool: AgentPool, request: SessionContr
 }
 
 function registerSessionControlHandler(agentPool: AgentPool, web: WebChannel): void {
-  setSessionControlHandler(async (request): Promise<SessionControlResult> => {
+  setSessionControlHandler((request) => web.runInternalDispatch(async (): Promise<SessionControlResult> => {
     if (getSessionIsolationLevel() === "full") throw new Error("Session isolation is full; session_control is disabled.");
     if (readAccessConfig().mode !== "single-user") return inspectOwnedSession(agentPool, request);
     const target = resolveSessionControlTarget(agentPool, request);
@@ -513,7 +513,7 @@ function registerSessionControlHandler(agentPool: AgentPool, web: WebChannel): v
 
     const after = await buildSessionControlSnapshot(agentPool, target.chatJid);
     return { ok: true, ...base, before, after, message, ...extra };
-  });
+  }));
 }
 
 export function runWebStartupRecoveryBootstrap(

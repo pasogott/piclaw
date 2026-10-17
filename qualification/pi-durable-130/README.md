@@ -1283,3 +1283,18 @@ diagnostic logging before the successful repeat.
 These are real lifecycle prerequisites, not a composed migration admission lease or
 complete ingress inventory. No production activation, service restart, live-state
 change, additional queue/database or ongoing JSONL persistence is introduced.
+
+### Internal callback admission joins
+
+Real direct chat relay, add-on enqueue and startup-installed session-control callbacks
+now enter the same WebChannel admission gate. Every callback owns an expiring
+async-local permit; accepted nested work joins the drain even if it outlives its
+parent, while detached stale contexts cannot reopen admission after sealing.
+No queue/pool shutdown or global migration lease is implied.
+
+Focused verification passes 107 tests / 672 assertions, runtime types and bounded
+independent review pass. Full root fast CI passes with EXIT_CODE=0 after updating
+an old delegation stub to provide the required guarded gateway method. Real rejection
+and nested-drain tests remain enabled; production does not gain an unguarded fallback.
+Full producer/ingress inventory and non-destructive accepted-work drain still need
+runtime-owned coordinator composition before resident migration capture is safe.
