@@ -30,8 +30,9 @@ const definitions = [
     domain TEXT NOT NULL REFERENCES qualification_cutover_v1(domain), operation_id TEXT NOT NULL,
     content_hash TEXT NOT NULL, PRIMARY KEY(domain,operation_id))`,
 ] as const;
-const names = ["piclaw_durable_bindings_v1", "piclaw_durable_intent_bindings_v1",
+export const hostDurableTableNames = ["piclaw_durable_bindings_v1", "piclaw_durable_intent_bindings_v1",
   "qualification_cutover_v1", "qualification_cutover_work_v1"] as const;
+const names = hostDurableTableNames;
 export class UnsupportedHostSchemaError extends Error {
   constructor() { super("Unsupported host schema"); this.name = "UnsupportedHostSchemaError"; }
 }

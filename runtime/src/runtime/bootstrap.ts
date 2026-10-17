@@ -15,6 +15,8 @@ import type { LegacyCaptureCoordinator } from "../agent-pool/legacy-authority-ca
 
 export interface RuntimeMigrationPreparation {
   coordinator: LegacyCaptureCoordinator;
+  /** Transaction-safe admission/owner check; no filesystem or frontier SQL. */
+  assertAdmissionGuard(): void;
   capture(): ReturnType<AgentPool["captureLegacyUpgradeBindings"]>;
   /** Invalidates the capability, but never resumes the old application. */
   release(): void;
@@ -336,6 +338,12 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
             drained = true;
             coordinator.assertSealedAndDrained();
             return Object.freeze({ coordinator,
+              assertAdmissionGuard() {
+                checkOwner(); assert(drained, "Migration ingress has not drained");
+                assert(getInstalledAddonRuntimeEntries().length === 0 && !getChatTransport("bang") &&
+                  (!getChatTransport("local") || getChatTransport("local")!.id === "local"), "Ingress registry changed");
+                installedQueue.assertLegacyCaptureDrained(); installedPool.assertLegacyCaptureIdle(); checkOwner();
+              },
               capture: () => installedPool.captureLegacyUpgradeBindings({ root: getDb(), legacySessionRoot: SESSIONS_DIR,
                 owner, queue: installedQueue, coordinator }),
               release() { valid = false; },

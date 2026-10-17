@@ -159,11 +159,12 @@ export function inventoryLegacySources(options: {
       ...((directoryChats.get(chatJid.replace(/[^a-zA-Z0-9._-]/g, "_"))?.length ?? 0) > 1 ? ["Sanitized legacy directory aliases multiple chats"] : []),
     ]),
   })));
-  const revalidate = () => {
+  // Candidate journal/SDK writes legitimately change the whole database after
+  // preflight. Retain a separate read-only source check for the owned upgrade.
+  const revalidateSources = () => {
     assertAutocommit();
     assertOwner();
     assert(realpathSync(legacySessionRoot) === canonicalRoot, "Legacy root changed");
-    assert(frontier() === dbSHA256, "Root DB frontier changed");
     for (const [dir, captured] of directories) {
       assert(realpathSync(dir) === captured.canonical, `Legacy directory path changed: ${dir}`);
       assert(listing(dir) === captured.names, `Legacy directory changed: ${dir}`);
@@ -174,11 +175,15 @@ export function inventoryLegacySources(options: {
       assert(before === source.fileStamp && stamp(source.canonicalPath) === before && sha(bytes) === source.sourceSHA256,
         `Legacy source changed: ${source.canonicalPath}`);
     }
-    assert(frontier() === dbSHA256, "Root DB frontier changed");
     assertOwner();
     assertAutocommit();
   };
+  const revalidate = () => {
+    assert(frontier() === dbSHA256, "Root DB frontier changed");
+    revalidateSources();
+    assert(frontier() === dbSHA256, "Root DB frontier changed");
+  };
   revalidate();
   return Object.freeze({ status: "BLOCKED" as const, preparable: false as const, dbSHA256, sources, references,
-    unboundSourcePaths: Object.freeze(sources.filter(s => !s.chatJids.length).map(s => s.canonicalPath)), revalidate });
+    unboundSourcePaths: Object.freeze(sources.filter(s => !s.chatJids.length).map(s => s.canonicalPath)), revalidate, revalidateSources });
 }

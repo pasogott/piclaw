@@ -148,6 +148,14 @@ function prepareCopiedLegacy(input: CopiedLegacyInput, getLegacyContext: GetLega
         object(entry.systemMessage); keys(entry.systemMessage, ["role", "content", "timestamp"]);
         assert(entry.systemMessage.role === "system"); strings(entry.systemMessage, ["content"]); finite(entry.systemMessage.timestamp);
       }
+    } else if (entry.type === "thinking_level_change") {
+      keys(entry, ["type", "id", "parentId", "timestamp", "thinkingLevel"]);
+      assert(["off", "minimal", "low", "medium", "high", "xhigh"].includes(entry.thinkingLevel as string), "unsupported thinking level");
+      assert(pending.length === 0, "inflight tools");
+    } else if (entry.type === "model_change") {
+      keys(entry, ["type", "id", "parentId", "timestamp", "provider", "modelId"]);
+      strings(entry, ["provider", "modelId"]);
+      assert(pending.length === 0, "inflight tools");
     } else if (entry.type === "custom") {
       keys(entry, ["type", "id", "parentId", "timestamp", "customType", "data"]);
       assert(entry.customType === "qualification.display", "unsupported extension state");

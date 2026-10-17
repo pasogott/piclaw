@@ -19,6 +19,8 @@
     "db-tree.test.ts",
     "idle-model.test.ts",
     "application-web.test.ts",
+    "runtime-upgrade-workflow.test.ts",
+    "host-frontier.test.ts",
     "sqlite.test.ts",
     "host-handoff.test.ts",
     "runtime.test.ts",

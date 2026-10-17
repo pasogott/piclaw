@@ -7,6 +7,7 @@ import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import type { AgentQueue } from "../queue.js";
 import type { PoolEntry } from "./session-manager.js";
 import { inventoryLegacySources } from "./legacy-source-inventory.js";
+import { snapshotLegacyHostFrontier } from "./legacy-host-frontier.js";
 
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const json = (value: unknown) => JSON.stringify(value);
@@ -41,6 +42,8 @@ export async function captureResidentLegacyUpgradeBindings(options: LegacyCaptur
   const migrationIncarnation = incarnation();
   assert(migrationIncarnation && migrationIncarnation.trim() === migrationIncarnation, "Missing migration controller identity");
   const inventory = inventoryLegacySources(options);
+  const legacyFrontier = () => snapshotLegacyHostFrontier(options.root);
+  const capturedFrontier = legacyFrontier();
   const snapshots = inventory.references.map(reference => {
     const entry = pool.get(reference.chatJid);
     assert(entry, `Missing resident legacy authority: ${reference.chatJid}`);
@@ -113,11 +116,22 @@ export async function captureResidentLegacyUpgradeBindings(options: LegacyCaptur
       expected: Object.freeze({ sourceSHA256: source.sourceSHA256, manifestSHA256: sha(manifestJSON) }) }));
   }
   revalidate();
+  // Unlike revalidate(), this permits candidate-only journal/SDK/schema writes,
+  // never changes to the original host routing, history or selected authority.
+  const revalidateForUpgrade = () => {
+    check();
+    assert.equal(incarnation(), migrationIncarnation, "Migration controller identity changed");
+    assert.equal(legacyFrontier(), capturedFrontier, "Legacy host frontier changed");
+    snapshots.forEach(snapshot => snapshot.revalidate());
+    inventory.revalidateSources();
+    snapshots.forEach(snapshot => snapshot.revalidate());
+    check();
+  };
   return Object.freeze({ dbSHA256: inventory.dbSHA256, migrationIncarnation,
     legacyIncarnation: null, inputs: Object.freeze(inputs),
     unselectedSourcePaths: Object.freeze(inventory.sources.filter(source => !snapshots.some(s => s.source === source))
       .map(source => source.canonicalPath)),
     identities: Object.freeze(snapshots.map(({ reference, captured }) => Object.freeze({ chatJid: reference.chatJid,
       branchId: reference.branchId, originalSessionId: captured.sessionId, selectedLeafId: captured.leaf,
-      migrationIncarnation, legacyIncarnation: null }))), revalidate });
+      migrationIncarnation, legacyIncarnation: null }))), revalidate, revalidateForUpgrade });
 }

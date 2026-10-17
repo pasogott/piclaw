@@ -1348,3 +1348,33 @@ independent bounded review and the full root fast gate pass with EXIT_CODE=0.
 This is inspection-only base-runtime composition. Installed autonomous add-ons and
 unsupported ingress remain refused; automatic selection, full migration activation,
 critical compatibility and performance acceptance remain incomplete.
+
+### Resident capture to guarded upgrade workflow
+
+The explicit `upgradeCapturedRuntime` workflow now joins the real bootstrap-owned
+migration preparation/capture capability to copied-input preflight and guarded
+application upgrade. It supports exactly one captured source session with all its
+selected chat branches/leaves. Zero/multiple inputs and any unselected history
+reject before importer/journal writes; this is not installation-wide automation.
+
+Original snapshot validation precedes writes. During import, an exact allowlist
+permits known SDK/correlation/journal writes while protecting all other host schema
+and data, including settings, security, terminal evidence and implicit row identities.
+Non-finite REAL values remain distinguishable. Owner/admission checks continue
+through async stages and the final writer transaction; original source authority
+is revalidated before activation. Failure retains sealed preparation/global ownership.
+No new database, queue, ledger or ongoing JSONL persistence is used.
+
+Actual-bootstrap tests continue the original imported chat and sibling through the
+returned bundle's real AgentPool/WebChannel HTTP path, and reject changes to source,
+capability, routing/preferences/security/terminal state and message row identities.
+Focused frontier regressions cover shadowed aliases, WITHOUT ROWID and infinities.
+Review caught and closed incomplete host-table coverage and encoder gaps.
+
+Final sequential candidate verification passes 411 tests / 6,957 assertions across
+32 files; engine, qualification and root runtime types pass, and bounded independent
+review is clear. The surviving root gate completed 7,275 tests (74 baseline skips)
+plus 25 feature and 9 build tests with final build footer; its interrupted wrapper
+recorded no exit code. An earlier concurrent candidate attempt had one existing
+binding-test timeout; unchanged sequential repeat passed. Production selection,
+multiple-source installation migration and remaining compatibility are not complete.

@@ -138,12 +138,13 @@ export class HostCutoverController {
     } catch { throw fail(); }
   }
   /** Returns candidateReady data; caller alone may subsequently open the inactive host runtime. */
-  commitWriter(expectedRevision: number) {
+  commitWriter(expectedRevision: number, assertAdmissionGuard?: () => void) {
     return this.change(expectedRevision, ["verified"], m => {
+      assertAdmissionGuard?.();
       this.drained(m.request); if (!m.receipt) throw fail();
       m.rollbackCheckpoint = this.rollbackFrontier();
       m.phase = "active"; m.writer = this.identity.candidateStoreRef;
-    });
+    }, assertAdmissionGuard);
   }
   /** Call in the host acceptance transaction with the actual immutable operation binding.
    * Trusted caller port, not a queue. Does not deduplicate timeline publication or effects. */

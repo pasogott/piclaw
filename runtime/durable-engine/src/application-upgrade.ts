@@ -9,6 +9,10 @@ import type { BunSqliteDatabase } from "./bun-sqlite.js";
 export interface ApplicationUpgradeOptions {
   plan: ReturnType<typeof prepareCopiedApplicationUpgrade>;
   cutover: HostCutoverController;
+  /** Owned capture workflow only: full source check outside transactions. */
+  validatePreparation?: () => void;
+  /** Transaction-safe actual runtime admission capability. */
+  assertAdmissionGuard?: () => void;
   application: Omit<ApplicationBootstrapOptions, "manifest" | "sessions">;
   /** Already-owned, paused public SDK conversation on this application's database.
    * close must join/close the harness and its connection, never the global owner/root. */
@@ -21,6 +25,8 @@ export interface ApplicationUpgradeOptions {
  * Once accepted work changes that baseline this intentionally fails closed. */
 export async function upgradeApplication(options: ApplicationUpgradeOptions, context: Context) {
   const { plan, cutover, importer } = options;
+  const validate = options.validatePreparation?.bind(options);
+  const admission = options.assertAdmissionGuard?.bind(options);
   const application = { ...options.application, runtime: { ...options.application.runtime } };
   const capturedCloseImporter = importer.close.bind(importer);
   let importerClosing: Promise<void> | undefined;
@@ -28,34 +34,39 @@ export async function upgradeApplication(options: ApplicationUpgradeOptions, con
   const { database, harness, conversation } = importer;
   let bundle: Awaited<ReturnType<typeof createApplicationBootstrapBundle>> | undefined;
   let lease: ReturnType<ApplicationBootstrapOptions["ownership"]["borrow"]> | undefined;
-  const assert = () => { if (!lease) throw Error("Application ownership unavailable"); lease.assertCurrentOwner(); };
+  const assert = () => { if (!lease) throw Error("Application ownership unavailable"); lease.assertCurrentOwner(); admission?.(); };
   try {
     lease = application.ownership.borrow();
-    assert(); database.assertApplicationRoot(application.root);
+    assert(); validate?.(); database.assertApplicationRoot(application.root);
     plan.assertApplicationScope(application.runtime.incarnation, application.runtime.sessionId);
     plan.assertApplicationBranches(application.root);
     let journal = cutover.inspectApplication(application.root, application.runtime.incarnation, plan.request);
     if (!journal || journal.phase === "source" || journal.phase === "copying") {
       journal = plan.checkpoint(cutover);
+      validate?.();
       journal = await cutover.begin(journal.revision, {
         async copy() { assert(); return { sourceDigest: plan.request.sourceDigest, receiptHash: plan.request.importHash }; },
         importCopied: () => plan.importCopied(conversation, assert, context),
       });
     }
-    if (journal.phase === "copying")
+    assert(); validate?.();
+    if (journal.phase === "copying") {
       journal = await cutover.verify(journal.revision, () => plan.verify(harness, conversation.id, context));
+      assert(); validate?.();
+    }
     if ((journal.phase !== "verified" && journal.phase !== "active") ||
       journal.receipt?.sourceDigest !== plan.request.sourceDigest || journal.receipt.receiptHash !== plan.request.importHash)
       throw Error("Application upgrade journal conflict");
     const bindings = await plan.verifyBindings(harness, conversation.id, context);
-    assert();
+    assert(); validate?.();
     await closeImporter();
+    assert(); validate?.();
     bundle = await createApplicationBootstrapBundle({ ...application, ...bindings }, context);
-    assert();
+    assert(); validate?.();
     const current = cutover.inspectApplication(application.root, application.runtime.incarnation, plan.request);
     if (!current || current.revision !== journal.revision || current.phase !== journal.phase)
       throw Error("Application upgrade journal changed");
-    if (current.phase === "verified") cutover.commitWriter(current.revision);
+    if (current.phase === "verified") cutover.commitWriter(current.revision, admission);
     const active = cutover.inspectApplication(application.root, application.runtime.incarnation, plan.request);
     if (active?.phase !== "active") throw Error("Application writer not active");
     assert();
