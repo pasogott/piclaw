@@ -1213,3 +1213,23 @@ and shared tree history in one database without JSONL. Wrong persisted bindings
 reject. Final candidate verification passes 389 tests / 6,922 assertions; root fast
 CI, engine/qualification types and bounded independent review pass. This adds
 preserved routing only, not branch mutation, automatic inventory or activation.
+
+### Read-only installation source inventory
+
+The application-owned inventory enumerates persisted chats/branches/message-chat
+identities and configured legacy input files under strict ownership. It retains
+immutable bytes/hashes, shared-file associations and discovered leaves, confines
+paths, and revalidates both database and source frontiers. Active root read
+transactions reject; the WAL regression prevents stale snapshots hiding later
+acceptance. Valid fork headers, usage and bash records are understood; unsupported
+records remain explicit per-file blockers with their bytes preserved.
+
+The actual root schema lacks authoritative persisted session-file, selected-leaf,
+incarnation and baseline bindings. Inventory therefore reports BLOCKED/non-preparable
+for existing chats, including empty ones. It does not choose recent files, fabricate
+summaries or reconstruct history from timeline messages. Completing those source
+bindings is still required for automatic migration; this is not readiness evidence.
+
+Focused inventory tests pass 9 cases / 47 assertions; runtime types, root fast CI
+and bounded independent review pass. No journal/import writes, JSONL session writes,
+new database/ledger, activation or live-state access occurs.
