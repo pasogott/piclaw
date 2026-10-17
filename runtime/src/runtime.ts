@@ -25,7 +25,7 @@ export interface RuntimeMainDeps {
 
 /** Boot all subsystems (DB, channels, agent pool, scheduler) and enter the main loop. */
 export async function main(deps: RuntimeMainDeps = {
-  acquireLock: acquireRuntimeLock,
+  acquireLock: () => acquireRuntimeLock({ strictOwnership: true }),
   createBootstrapDeps: () => createDefaultRuntimeBootstrapDeps(createRuntimeBaseServices({ dataDir: DATA_DIR })),
 }): Promise<void> {
   const runtimeLock = deps.acquireLock();

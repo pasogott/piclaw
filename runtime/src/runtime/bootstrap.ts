@@ -105,7 +105,7 @@ export interface RuntimeBootstrapDefaultBaseServices extends RuntimeBootstrapBas
 
 export interface RuntimeBootstrapDeps {
   base: RuntimeBootstrapBaseServices;
-  /** Explicit internal injection only. No discovery, imports or activation by default. */
+  /** Production durable preparation; absence is reserved for explicitly injected legacy test dependencies. */
   prepareApplicationBackend?: (owner: RuntimeLockHandle) => Promise<RuntimeBackend>;
   /** Internal inspection only; absent in production composition. No source selector. */
   migrationInspection?: { onReady(context: RuntimeBootstrapContext): void };
@@ -159,14 +159,34 @@ function logBackgroundRefreshResult(result: ModelRefreshResult): void {
 }
 
 /** Build default runtime bootstrap dependencies from production modules. */
+// Trusted package boundary: never a user-configurable plugin or source selector.
+const MODULE_PATH = new URL("../../durable-engine/src/default-application-runtime.ts", import.meta.url).href;
+async function prepareDefaultApplicationBackend(owner: RuntimeLockHandle, models: () => ReturnType<typeof createRuntimeModelServices>): Promise<RuntimeBackend> {
+  let engine: { createDefaultApplicationRuntime?: unknown };
+  try { engine = await import(MODULE_PATH); }
+  catch (cause) {
+    // Only diagnose missing candidate packages. Evaluation failures retain their exact identity.
+    if (cause instanceof Error && /Cannot find package ['"]@earendil-works\/(?:pi-durable|chord|pi-codemode|pi-telemetry|pi-ai)['"]/.test(cause.message))
+      throw new Error("Durable engine unavailable. Install runtime/durable-engine dependencies before starting Piclaw; legacy fallback is disabled.", { cause });
+    throw cause;
+  }
+  if (typeof engine.createDefaultApplicationRuntime !== "function") throw new Error("Durable engine contract missing createDefaultApplicationRuntime");
+  return engine.createDefaultApplicationRuntime(owner, models);
+}
+
 export function createDefaultRuntimeBootstrapDeps(
   base: RuntimeBootstrapDefaultBaseServices,
   prepareApplicationBackend?: RuntimeBootstrapDeps["prepareApplicationBackend"],
 ): RuntimeBootstrapDeps {
   let refreshCoordinator: ModelRefreshCoordinator | null = null;
+  let modelServicesPromise: ReturnType<typeof createRuntimeModelServices> | undefined;
+  const models = () => modelServicesPromise ??= createRuntimeModelServices();
   return {
     base,
-    prepareApplicationBackend,
+    prepareApplicationBackend: prepareApplicationBackend ?? (async owner => {
+      // Engine performs history/ownership preflight before realizing the host model stack.
+      return prepareDefaultApplicationBackend(owner, models);
+    }),
     assistantName: getIdentityConfig().assistantName,
     triggerPattern: getRoutingConfig().triggerPattern,
     pollIntervalMs: getRuntimeTimingConfig().pollIntervalMs,
@@ -175,7 +195,7 @@ export function createDefaultRuntimeBootstrapDeps(
     hydrateMcpCredentials: () => hydrateMcpKeychainCredentials(WORKSPACE_DIR),
     clearMcpCredentials: clearHydratedMcpCredentials,
     createAgentPool: async (sessionOptions) => {
-      const modelServices = await createRuntimeModelServices();
+      const modelServices = await models();
       installRuntimeModelExecutor(modelServices.modelRuntime);
       registerGitHubCopilotDynamicModels(modelServices.modelRuntime);
       const agentPool = new AgentPool({

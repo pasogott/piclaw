@@ -1504,3 +1504,32 @@ gate passes unchanged limits with EXIT_CODE=0. Prior concurrent attempts hit exi
 elapsed limits and remain recorded. Runtime types and bounded review pass.
 This is local import cleanup, not the default durable backend switch. Migration
 remains parked; direct default replacement and legacy deletion remain the priority.
+
+### Source default is the mainstream durable backend
+
+The production default dependency factory now prepares the mainstream durable
+application runtime before constructing AgentPool/WebChannel. Main requires strict
+ownership. One fixed package-boundary loader lives in bootstrap; the redundant
+loader module was removed after the cycle gate caught its bootstrap back-edge.
+There is no default legacy-session fallback. Missing engine packages fail with
+installation guidance; dependency evaluation errors retain their cause.
+
+Fresh startup-known chats use canonical public SDK routing/identity documents in
+the same host database. Reopen validates scope and persisted agent choices against
+the captured authenticated host model catalogue, preserving model A when the host
+default changes to B. Unapproved persisted choices reject without rewriting them.
+The real host model bridge and tracked bash are used. Unknown post-startup chats
+and the full host tool/add-on set remain unfinished; no parity is claimed.
+
+Legacy history/files are refused before engine/model construction, without migration
+or reset. Initialization cleanup is confirmed before ordinary errors propagate;
+uncertain cleanup raises the shared error so actual main retains global ownership.
+Actual factory→bootstrap→main fault tests cover that path and ordered error causes.
+Factory cases use separate cold-process fixtures rather than polluting other shared-
+database recovery tests.
+
+Final candidate verification passes 426 tests / 6,784 assertions; root fast CI passes
+7,287 tests (74 baseline skips), plus 25 feature and 9 build tests, EXIT_CODE=0.
+All three scoped typechecks, cycle checks and bounded independent review pass.
+This is a source-default replacement only: no install, live activation, restart,
+existing-history mutation or migration was performed. Migration remains last.

@@ -477,7 +477,7 @@ describe("runtime bootstrap", () => {
     expect(deps.triggerPattern).toBeInstanceOf(RegExp);
     expect(typeof deps.hydrateMcpCredentials).toBe("function");
     expect(typeof deps.clearMcpCredentials).toBe("function");
-    expect(deps.prepareApplicationBackend).toBeUndefined();
+    expect(typeof deps.prepareApplicationBackend).toBe("function");
     expect(typeof deps.createAgentPool).toBe("function");
     expect(typeof deps.startRuntimeLoop).toBe("function");
   });

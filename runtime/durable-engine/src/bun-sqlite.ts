@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { statSync } from "node:fs";
+import { RuntimeStartupCleanupError } from "../../src/runtime/startup-cleanup-error.js";
 import type { SqliteDatabase, SqliteExecutor, SqliteValue } from "@earendil-works/pi-durable/storage/sqlite";
 
 /** Inactive host bridge. The host must acquire ownership BEFORE construction. */
@@ -23,7 +24,12 @@ export class BunSqliteDatabase implements SqliteDatabase {
         throw new Error("Shared database identity required");
     }
     this.db = new Database(path, { create: !guard, strict: true });
-    this.db.exec("PRAGMA foreign_keys=ON");
+    try { this.db.exec("PRAGMA foreign_keys=ON"); }
+    catch (error) {
+      try { this.db.close(); }
+      catch (cleanupError) { throw new RuntimeStartupCleanupError([error, cleanupError], "SQLite construction cleanup uncertain"); }
+      throw error;
+    }
   }
 
   /** Trusted importer connection must borrow the exact application root. */
