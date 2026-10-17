@@ -24,8 +24,10 @@ const ApplicationConversations = defineDoc({ kind: "app.application-conversation
   scope: "conversation", history: "latest", fork: "initial", initial: () => ({ version: 1, domain: "", bindings: [] as { chatJid: string; branchId: string; conversationId: number; sessionId: string }[] }) });
 
 type ApplicationMapping = { version: number; domain: string; bindings: { chatJid: string; branchId: string; conversationId: number; sessionId: string }[] };
-const defaultToolNames = ["read", "bash", "edit", "write", "find", "ls"] as const;
-const isOldDefault = (tools: unknown) => Array.isArray(tools) && tools.length === 1 && tools[0] === "bash";
+const defaultToolNames = ["read", "bash", "edit", "write", "find", "ls", "grep"] as const;
+const isOldDefault = (tools: unknown) => Array.isArray(tools) &&
+  ((tools.length === 1 && tools[0] === "bash") ||
+    (tools.length === 6 && defaultToolNames.slice(0, 6).every((name, i) => tools[i] === name)));
 
 /** Read-only preflight, before Harness.open can normalize pending work. All
  * configuration writes still go through public configure in one SDK commit. */

@@ -349,6 +349,7 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host"]
     { name: "write", arguments: { path: "factory-tool-output.txt", content: "written by host tool" } },
     { name: "find", arguments: { pattern: "factory-tool-*.txt" } },
     { name: "ls", arguments: { path: "." } },
+    { name: "grep", arguments: { pattern: "after", path: "factory-tool-input.txt" } },
     { name: "bash", arguments: { command: "printf factory-tool-bash" } },
   ];
   const toolInput = { ...message, id: "factory-tool-input", content: "Run the synthetic host tool sequence" };
@@ -367,9 +368,10 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host"]
   expect(toolEntries).toContain("factory-tool-output.txt");
   // Inspect results delivered back to the actual public model adapter: merely
   // draining the call queue would also succeed when a requested tool is absent.
-  for (const name of ["read", "edit", "write", "find", "ls", "bash"]) {
+  for (const name of ["read", "edit", "write", "find", "ls", "bash", "grep"]) {
     const result = [...observedResults.values()].find(result => result.toolName === name);
     expect(result).toBeDefined(); expect(result!.isError).not.toBe(true);
+    if (name === "grep") expect(JSON.stringify(result!.content)).toContain("factory-tool-input.txt:1: after");
     if (name === "find" || name === "ls") expect(JSON.stringify(result!.content)).toContain("factory-tool-output.txt");
   }
   // Lose the provider acknowledgement AFTER the real public transaction commits.
@@ -396,7 +398,7 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host"]
   } finally { fault.mockRestore(); }
   backend.stop(); await backend.close();
   const upgraded = await inspectStored(false);
-  for (const [id, state] of seeded) expect(upgraded.get(id)).toEqual({ ...(state as object), tools: ["read", "bash", "edit", "write", "find", "ls"] });
+  for (const [id, state] of seeded) expect(upgraded.get(id)).toEqual({ ...(state as object), tools: ["read", "bash", "edit", "write", "find", "ls", "grep"] });
   backend = await createDefaultApplicationRuntime(owner, async () => services);
   const recoveredCreate = backend.sessionOptions.getDurableSession!(uncertainChat)!;
   expect(recoveredCreate).toBeDefined();

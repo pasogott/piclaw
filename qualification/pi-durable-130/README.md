@@ -1622,3 +1622,25 @@ Final candidate verification passes 436 tests / 6,830 assertions across 35 files
 root fast CI, all three scoped types and bounded independent review pass. Review
 caught blocking find and unchanged old selections; both are fixed with regressions.
 No SDK-private patch, new queue/database, ongoing JSONL or migration work is added.
+
+### Shared guarded grep completes the Linux built-in set
+
+Root tools and durable built-ins now share one host-owned grep implementation,
+retaining public SDK schema/metadata/renderers and exported truncation contracts.
+Execution uses installed rg with no shell or download. Find and grep share one
+bounded asynchronous process helper with effect-time authority, process-group abort
+and joined readers/exit. Scalar arguments are snapshotted before validation/await;
+review found and closed caller-mutation drift with an SDK-oracle regression.
+
+The default Linux set now includes read, bash, edit, write, grep, find and ls.
+Recognised previous defaults converge using existing guarded configuration; custom
+subsets remain intact. Oracle tests cover regex/literal/context/glob/file/no-match,
+limits, long lines and errors. Real default-provider execution greps the edited
+file; revocation-before-spawn and abort/overflow/stderr cleanup are verified.
+
+Final candidate verification passes 443 tests / 6,867 assertions across 36 files;
+all three scoped typechecks, bounded independent review and full root fast CI pass.
+The first root run hit the existing image-processing five-second timeout; unchanged
+repeat passes without changing limits. Grep tests are explicitly registered in both
+qualification test command and types. No SDK-private patch, parallel process manager,
+ongoing JSONL, migration, deployment or live-state operation is introduced.

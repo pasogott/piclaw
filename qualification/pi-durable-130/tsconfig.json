@@ -40,6 +40,7 @@
     "delegate.test.ts",
     "scheduled.test.ts",
     "cutover.test.ts",
-    "cutover-runtime.test.ts"
+    "cutover-runtime.test.ts",
+    "host-grep.test.ts"
   ]
 }

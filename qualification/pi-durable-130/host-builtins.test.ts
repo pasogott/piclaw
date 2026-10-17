@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context, withAbortSignal } from "../../runtime/durable-engine/qualification/context.ts";
-import { createHostBuiltinTools, unavailableHostBuiltins } from "../../runtime/durable-engine/src/host-builtins.ts";
+import { createHostBuiltinTools } from "../../runtime/durable-engine/src/host-builtins.ts";
 
 import { listTrackedProcesses, killProcessTree } from "../../runtime/src/utils/process-tracker.js";
 
@@ -71,7 +71,7 @@ test("existing host builtins execute read/write/edit/ls/find/bash with actual fi
   const tools = createHostBuiltinTools({ cwd, authority: { assertAllowed() {} } });
   const run = (name: string, args: unknown) => tools.find(tool => tool.name === name)!.execute(args as never, api as never, context);
   try {
-    expect(tools.map(tool => tool.name)).toEqual(["read", "bash", "edit", "write", "find", "ls"]);
+    expect(tools.map(tool => tool.name)).toEqual(["read", "bash", "edit", "write", "find", "ls", "grep"]);
     await run("write", { path: "nested/a.txt", content: "before" });
     expect((await run("read", { path: "nested/a.txt" })).output).toEqual([{ type: "text", text: "before" }]);
     const edited = await run("edit", { path: "nested/a.txt", edits: [{ oldText: "before", newText: "after" }] });
@@ -81,8 +81,7 @@ test("existing host builtins execute read/write/edit/ls/find/bash with actual fi
     expect(JSON.stringify((await run("find", { pattern: "*.txt" })).output)).toContain("nested/a.txt");
     expect(JSON.stringify((await run("bash", { command: "printf host-builtin-bash" })).output)).toContain("host-builtin-bash");
     for (const tool of tools) expect(tool.replay).toBe("unsafe");
-    expect(() => createHostBuiltinTools({ cwd, authority: { assertAllowed() {} }, names: ["grep"] })).toThrow("effect-time spawn");
-    expect(unavailableHostBuiltins.grep).toContain("spawn");
+    expect(JSON.stringify((await run("grep", { pattern: "after", path: "nested" })).output)).toContain("a.txt:1: after");
     expect(createHostBuiltinTools({ cwd, authority: { assertAllowed() {} }, names: ["read"] }).map(tool => tool.name)).toEqual(["read"]);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });

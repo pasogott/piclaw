@@ -8,15 +8,8 @@ import type { JsonValue } from "@earendil-works/chord";
 import type { TSchema } from "@earendil-works/pi-ai";
 import { createHostTool } from "./host-tools.js";
 import { createHostBashTool } from "./host-bash.js";
-import { killProcessTree, registerProcess, unregisterProcess } from "../../src/utils/process-tracker.js";
-
-/** Public SDK grep has no spawn operation port: its internal spawn follows awaits.
- * Never admit it using a dispatch-only guard. PowerShell is not a Linux default.
- * Add-ons and scheduled/nested tools require their own qualified effect ports.
- */
-export const unavailableHostBuiltins = Object.freeze({
-  grep: "Public SDK grep has no effect-time spawn operation port",
-});
+import { runHostToolProcess } from "../../src/agent-pool/host-tool-process.js";
+import { createHostGrepDefinition } from "../../src/agent-pool/host-grep.js";
 
 /** Existing public host definitions, with fresh invocation-local operation ports.
  * Synchronous filesystem calls deliberately close the check/async-write gap: the
@@ -35,7 +28,7 @@ export function createHostBuiltinTools(options: {
   // Its closure still observes live owner/lifetime state on every effect.
   const { cwd, shellPath, signal: lifetime } = options;
   const assertAuthority = options.authority.assertAllowed.bind(options.authority);
-  const names = [...(options.names ?? ["read", "bash", "edit", "write", "find", "ls"])];
+  const names = [...(options.names ?? ["read", "bash", "edit", "write", "find", "ls", "grep"])];
   type Definition = ToolDefinition<TSchema, JsonValue>;
   const build = (name: string, assert: () => void, signal?: AbortSignal, track: (pending: Promise<unknown>) => void = () => {}): Definition => {
     const readFile = async (path: string) => { assert(); return readFileSync(path); };
@@ -66,6 +59,7 @@ export function createHostBuiltinTools(options: {
       case "ls": return createLsToolDefinition(cwd, { operations: {
         exists, stat, readdir: path => { assert(); return readdirSync(path); },
       } }) as unknown as Definition;
+      case "grep": return createHostGrepDefinition(cwd, assert) as unknown as Definition;
       case "find": return createFindToolDefinition(cwd, { operations: {
         exists, glob(pattern, cwd, { ignore, limit }) {
           const pending = (async () => {
@@ -78,41 +72,15 @@ export function createHostBuiltinTools(options: {
           args.push("--", pattern, cwd);
           // No shell or SDK download path. Admission and the actual spawn share
           // one turn; the invocation/lifetime signal owns the tracked group.
-          assert(); signal?.throwIfAborted();
-          const child = Bun.spawn([binary, ...args], { cwd, detached: true, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-          registerProcess(child.pid);
-          const kill = () => killProcessTree(child.pid);
-          signal?.addEventListener("abort", kill, { once: true });
-          let bytes = 0;
-          const consume = async (stream: ReadableStream<Uint8Array>, capture: boolean) => {
-            const chunks: Uint8Array[] = [];
-            for await (const chunk of stream) {
-              bytes += chunk.byteLength;
-              if (bytes > 1024 * 1024) { kill(); throw Error("Host find output exceeded limit"); }
-              if (capture) chunks.push(chunk);
-            }
-            return capture ? Buffer.concat(chunks).toString("utf8") : "";
-          };
-          try {
-            // Join both readers AND process exit, including overflow/abort. Never
-            // leave a live child or a rejected reader behind on the failure path.
-            const [out, err, exit] = await Promise.allSettled([
-              consume(child.stdout, true), consume(child.stderr, false), child.exited,
-            ]);
-            assert(); signal?.throwIfAborted();
-            if (out.status !== "fulfilled" || err.status !== "fulfilled" || exit.status !== "fulfilled" || exit.value !== 0)
-              throw Error("Host find failed");
-            return out.value.trim().split("\n").filter(Boolean);
-          } finally {
-            signal?.removeEventListener("abort", kill);
-            unregisterProcess(child.pid);
-          }
+          const result = await runHostToolProcess(binary, args, cwd, assert, signal);
+          if (result.code !== 0) throw Error("Host find failed");
+          return result.stdout.trim().split("\n").filter(Boolean);
           })();
           track(pending);
           return pending;
         },
       } }) as unknown as Definition;
-      default: throw Error(`Host builtin unavailable: ${name}: ${unavailableHostBuiltins[name as keyof typeof unavailableHostBuiltins] ?? "no qualified effect port"}`);
+      default: throw Error(`Host builtin unavailable: ${name}: no qualified effect port`);
     }
   };
   return names.map(name => {
