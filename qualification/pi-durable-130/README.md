@@ -1554,3 +1554,71 @@ with EXIT_CODE=0, focused root tests pass 72 cases / 409 assertions, and bounded
 independent review is clear. Earlier candidate attempts hit existing elapsed limits;
 no timeout/assertion was weakened. This removes startup-known-chat-only routing,
 not the remaining full host-tool/add-on compatibility gap. Migration remains last.
+
+### Host builtin convergence: discrepancy closeout (HEAD `6b04df9a9` + WIP)
+
+The actual implementation uses **one guarded public SDK commit**, not an extension
+that captures tools before configuration. Read-only preflight identifies the old
+factory selection. Under owned same-file `BEGIN IMMEDIATE`, `app.commit` checks
+SDK/host idleness, rereads every affected `AgentDoc` via `tx.doc`, and requires its
+tools still to be exactly `["bash"]` before any `configure` call. All affected
+conversations are then configured through public `configure(tx, id, { tools })`
+inside that single transaction. Ownership/idleness are checked again before return;
+the storage guard also fences commit. The final root-connection idle check cannot
+see uncommitted SDK writes, but scheduling is paused during preparation and this
+configuration changes tools only: no model run is scheduled by that loop. It is
+not a separate per-conversation write or a private document rewrite.
+
+The canonical v1 factory never offered tool-selection controls. Consequently its
+exact old `["bash"]` selection is admitted for convergence, although identical
+user-authored bash-only state is semantically indistinguishable. This is a scoped
+v1 compatibility decision, not a claim to detect user intent. Other known builtin
+subsets (for example `["read"]`) are preserved; unknown/custom/add-on tool names
+reject as unavailable rather than being silently stripped. Full add-on parity
+remains unqualified.
+
+Two additional real cold-process factory regressions now pass:
+
+- Publicly persist `["read"]` plus thinking/instructions/extensions; change the
+  host default model and reopen. Entire public AgentDoc state, model selection,
+  history and identity revisions remain unchanged, with original route identities.
+- Publicly persist the genuine old bash-only factory state with a real accepted,
+  still-pending host source. Factory rejects before any SDK storage transaction
+  (therefore before public configure), with an identical serialized SQL byte
+  snapshot and separately identical AgentDoc revision/history bytes. No model runs.
+  This case has no SDK-open normalization; for a future pending-SDK-work case,
+  legitimate open normalization must not be mistaken for an agent-tool mutation.
+
+Final focused receipt: **13 pass, 0 fail across 2 files** (5 isolated factory
+cases, 8 host-builtin cases; 49 parent-process assertions, child assertions are not
+included in that parent count). Existing genuine bash-only positive convergence
+and successful six-tool model-visible chain still pass. Qualification types,
+engine types and `make build-ts` all pass. Logs: `artifacts/tool-convergence-tests.log`,
+`artifacts/tool-convergence-types.log`, `artifacts/tool-convergence-engine-types.log`,
+`artifacts/tool-convergence-runtime-types.log`. Earlier full-suite totals above are
+historical, not a claim of a new full-suite run. The initial new test expected the
+wrong host-source state label (`accepted`); corrected to actual `pending`, then
+rerun green. No implementation source change was needed for this closeout.
+No live/network/service/pin/commit/push/migration changes were made.
+
+### Default host built-ins replace bash-only execution
+
+The default runtime now binds `read`, `bash`, `edit`, `write`, `find` and `ls` through
+the existing host bridge. Filesystem operations validate invocation authority at
+the actual synchronous effect after SDK awaits. Find uses an asynchronous guarded
+installed-fd process with abort, bounded output and child/readers joining; it does
+not block the event loop or download executables. Bash retains tracked spawn guards.
+The actual default-provider test executes the complete six-tool chain.
+
+Known canonical v1 bash-only selections converge through one guarded public commit,
+with idle/ownership checks and re-reading the old default before configuring all
+affected agents. Persisted model/thinking/history/identity and explicit custom
+subsets remain unchanged; pending work rejects without mutation. Grep is still
+unavailable because its old SDK implementation lacks effect-time spawn injection;
+this is not full seven-tool Linux parity. Replay remains unsafe, PowerShell is
+outside Linux policy, and installed add-ons still need qualification.
+
+Final candidate verification passes 436 tests / 6,830 assertions across 35 files;
+root fast CI, all three scoped types and bounded independent review pass. Review
+caught blocking find and unchanged old selections; both are fixed with regressions.
+No SDK-private patch, new queue/database, ongoing JSONL or migration work is added.

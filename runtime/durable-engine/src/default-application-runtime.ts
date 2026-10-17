@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { apply } from "@earendil-works/chord/delta";
-import { Harness, configure, createRegistry, defineDoc, type ConversationId } from "@earendil-works/pi-durable";
+import { Harness, AgentDoc, configure, createRegistry, defineDoc, defineExtension, type ConversationId } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { SettingsManager } from "../../../node_modules/@earendil-works/pi-coding-agent";
 import type { RuntimeModelServices } from "../../src/agent-pool/model-services.js";
@@ -17,12 +17,46 @@ import { installTerminalSettlementCompositionSchema } from "../../src/service-ef
 import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { applicationOwnership, createApplicationBootstrapBundle } from "./application-bootstrap.js";
 import { createHostModels } from "./host-models.js";
-import { createHostBashTool } from "./host-bash.js";
+import { createHostBuiltinTools } from "./host-builtins.js";
+import { readAccessConfig } from "../../src/core/config-access.js";
 
 const ApplicationConversations = defineDoc({ kind: "app.application-conversations", version: 1,
   scope: "conversation", history: "latest", fork: "initial", initial: () => ({ version: 1, domain: "", bindings: [] as { chatJid: string; branchId: string; conversationId: number; sessionId: string }[] }) });
 
 type ApplicationMapping = { version: number; domain: string; bindings: { chatJid: string; branchId: string; conversationId: number; sessionId: string }[] };
+const defaultToolNames = ["read", "bash", "edit", "write", "find", "ls"] as const;
+const isOldDefault = (tools: unknown) => Array.isArray(tools) && tools.length === 1 && tools[0] === "bash";
+
+/** Read-only preflight, before Harness.open can normalize pending work. All
+ * configuration writes still go through public configure in one SDK commit. */
+function storedDocument(root: ReturnType<typeof getDb>, id: number): any {
+  let value: unknown;
+  const revisions = root.query("SELECT kind, version, content FROM document_revisions WHERE document_id=? ORDER BY seq").all(id) as { kind: string; version: number; content: string }[];
+  for (const revision of revisions) {
+    if (revision.version !== 1) throw Error("Invalid persisted document version");
+    if (revision.kind === "base") value = JSON.parse(revision.content);
+    else if (revision.kind === "delta" && value) value = apply(value, JSON.parse(revision.content));
+    else throw Error("Invalid persisted document");
+  }
+  if (!value) throw Error("Invalid persisted document");
+  return value;
+}
+function assertToolUpgradeIdle(root: ReturnType<typeof getDb>): void {
+  if (root.inTransaction) throw Error("Root connection transaction active");
+  if (root.query("SELECT 1 FROM tasks WHERE status <> 'terminal' UNION ALL SELECT 1 FROM submissions WHERE status IN ('queued','placed') LIMIT 1").get())
+    throw Error("Host tool upgrade requires idle SDK work");
+  const docs = root.query(`SELECT id, kind FROM documents WHERE kind IN ('"pi.inbox"','"pi.live"') AND retired_at IS NULL`).all() as { id: number; kind: string }[];
+  for (const doc of docs) {
+    const state = storedDocument(root, doc.id);
+    if (doc.kind === '"pi.inbox"' ? state.items?.length : state.run) throw Error("Host tool upgrade requires idle SDK work");
+  }
+  const exists = (table: string) => !!root.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table);
+  if (exists("service_effect_s01_chats") && root.query(`SELECT 1 FROM service_effect_s01_chats WHERE active_operation_id IS NOT NULL
+    UNION ALL SELECT 1 FROM service_effect_s01_sources WHERE state NOT IN ('consumed','disposed')
+    UNION ALL SELECT 1 FROM service_effect_s01_operations WHERE phase <> 'terminal'
+    UNION ALL SELECT 1 FROM service_effect_s01_queued_inputs WHERE state NOT IN ('consumed','disposed') LIMIT 1`).get())
+    throw Error("Host tool upgrade requires idle host work");
+}
 function validateApplicationMapping(root: ReturnType<typeof getDb>, value: unknown): asserts value is ApplicationMapping {
   const m = value as ApplicationMapping;
   const canonical = (v: unknown): v is string => typeof v === "string" && !!v && v === v.trim();
@@ -77,6 +111,7 @@ export function assertFreshApplicationHistory(root: ReturnType<typeof getDb>, se
 /** Mainstream source factory. Only startup-known chats are admitted; unknown chats fail closed. */
 export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, getModels: () => Promise<RuntimeModelServices>): Promise<RuntimeBackend> {
   if (process.platform !== "linux") throw Error("Durable application ownership is qualified only on Linux");
+  if (readAccessConfig().mode !== "single-user") throw Error("Durable host builtins require single-user policy; family effect ports are not qualified");
   const ownership = applicationOwnership(owner);
   const assert = () => owner.assertCurrentOwner();
   const root = getDb();
@@ -100,26 +135,35 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     const physical = host.modelRuntime.getPhysicalModel(model.provider, model.id);
     if (physical?.provider !== model.provider || physical.id !== model.id) throw Error("Host model no longer available");
   };
+  const toolUpgrades: number[] = [];
   // Validate stored choices without opening/writing SDK documents or bundle ports.
   if (root.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='documents'").get()) {
-    const docs = root.query(`SELECT id FROM documents WHERE kind='"pi.agent"' AND retired_at IS NULL`).all() as { id: number }[];
+    const manifest = root.query(`SELECT id FROM documents WHERE kind='"app.application-conversations"' AND owner_id=1 AND retired_at IS NULL`).get() as { id: number };
+    const mapping = storedDocument(root, manifest.id) as ApplicationMapping;
+    const active = new Set([1, ...mapping.bindings.map(binding => binding.conversationId)]);
+    const docs = root.query(`SELECT id, owner_id, scope_kind FROM documents WHERE kind='"pi.agent"' AND retired_at IS NULL`).all() as { id: number; owner_id: number; scope_kind: string }[];
     for (const doc of docs) {
-      let stored: { model?: { provider: string; modelId: string } } | undefined;
-      const revisions = root.query("SELECT kind, content FROM document_revisions WHERE document_id=? ORDER BY seq").all(doc.id) as { kind: string; content: string }[];
-      for (const revision of revisions) {
-        if (revision.kind === "base") stored = JSON.parse(revision.content);
-        else if (revision.kind === "delta" && stored) stored = apply(stored, JSON.parse(revision.content));
-        else throw Error("Invalid persisted agent document");
-      }
-      if (stored?.model && !available.some(model => model.provider === stored.model!.provider && model.id === stored.model!.modelId))
+      const stored = storedDocument(root, doc.id) as { model?: { provider: string; modelId: string }; tools?: unknown };
+      if (stored.model && !available.some(model => model.provider === stored.model!.provider && model.id === stored.model!.modelId))
         throw Error("Persisted host model not approved");
+      if (doc.scope_kind !== "conversation" || !active.has(doc.owner_id)) continue;
+      if (Array.isArray(stored.tools) && stored.tools.some(name => !defaultToolNames.includes(name)))
+        throw Error("Persisted host tool not available");
+      // Only the recognised previous factory default converges. Explicit custom
+      // subsets/filters, modelTools, instructions and extensions remain intact.
+      if (isOldDefault(stored.tools)) toolUpgrades.push(doc.owner_id);
     }
+    if (toolUpgrades.length) { assert(); assertToolUpgradeIdle(root); }
   }
   const models = createHostModels(host.modelRuntime, available.map(model => ({ provider: model.provider, id: model.id })), { signal: lifetime.signal,
     async authorize(model, _kind, signal) { check(model, signal); }, assertCurrent(model, _kind, signal) { check(model, signal); } });
   const registry = createRegistry();
-  // Real host tracked-bash/keychain operations, not durable's independent coding tools.
-  const bash = createHostBashTool({ cwd: WORKSPACE_DIR, authority: { assertAllowed: assert }, shellPath: () => settings.getShellPath() });
+  // Existing host SDK definitions, never durable's independent coding tools.
+  const tools = createHostBuiltinTools({ cwd: WORKSPACE_DIR, authority: { assertAllowed() {
+    assert(); lifetime.signal.throwIfAborted();
+    if (readAccessConfig().mode !== "single-user") throw Error("Host tool permission denied");
+  } }, signal: lifetime.signal, shellPath: () => settings.getShellPath(), names: defaultToolNames });
+  registry.install(defineExtension({ name: "app.host-builtins", tools }));
   const harnessOptions = { models, registry, settings: { retry: { enabled: false } } };
   const path = (root.query("PRAGMA database_list").all() as { name: string; file: string }[]).find(row => row.name === "main")?.file;
   if (!path) throw Error("Durable default requires a file-backed application database");
@@ -131,7 +175,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   try {
     assert();
     harness = await Harness.open(await SqliteStorage.open(storage), harnessOptions, context);
-    const app = await harness.root(context, { agent: { model: { provider: ref.provider, modelId: ref.id }, tools: [bash] } });
+    const app = await harness.root(context, { agent: { model: { provider: ref.provider, modelId: ref.id }, tools } });
     // The SDK document is the sole routing authority; host binding tables link accepted sources only.
     mapping = await app.commit(async tx => {
       const doc = await tx.doc(ApplicationConversations, app.id);
@@ -144,7 +188,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       const bindings = [] as typeof mapping.bindings;
       for (const chat of chats) {
         assert();
-        const conversation = await harness.createConversation({ ownership: { kind: "ownerless" }, agent: { model: { provider: ref.provider, modelId: ref.id }, tools: [bash] } }, context);
+        const conversation = await harness.createConversation({ ownership: { kind: "ownerless" }, agent: { model: { provider: ref.provider, modelId: ref.id }, tools } }, context);
         bindings.push({ chatJid: chat.jid, branchId: chat.branch_id, conversationId: conversation.id, sessionId: crypto.randomUUID() });
       }
       mapping = { version: 1, domain: crypto.randomUUID(), bindings };
@@ -158,6 +202,21 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       await app.commit(async tx => { const doc = await tx.doc(ApplicationConversations, app.id); Object.assign(doc, mapping); }, context);
     }
     validateApplicationMapping(root, mapping);
+    if (toolUpgrades.length) {
+      // Same-file BEGIN IMMEDIATE fences host admissions for the whole public
+      // commit. Repeat global SDK/host preflight under that lock before ANY
+      // configuration, not one conversation at a time after partial writes.
+      await storage.withIdleModelGuard(() => app.commit(async tx => {
+        assert(); assertToolUpgradeIdle(root);
+        for (const id of toolUpgrades) {
+          const agent = await tx.doc(AgentDoc, id as ConversationId);
+          if (!isOldDefault(agent.tools)) throw Error("Persisted host tool selection changed");
+        }
+        assert(); assertToolUpgradeIdle(root);
+        for (const id of toolUpgrades) await configure(tx, id as ConversationId, { tools });
+        assert(); assertToolUpgradeIdle(root);
+      }, context));
+    }
   } catch (error) { failed = true; primary = error; }
   // Harness.open may allocate storage before rejecting; the application connection
   // is ours even when no harness was returned. Confirm both layers closed.
@@ -192,7 +251,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       const doc = await tx.doc(ApplicationConversations, 1 as ConversationId);
       if (doc.domain !== mapping.domain || doc.bindings.some(b => b.chatJid === chatJid || b.branchId === branchId)) throw Error("Application mapping conflict");
       const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
-      await configure(tx, conversation.id, { model: { provider: ref.provider, modelId: ref.id }, tools: [bash] });
+      await configure(tx, conversation.id, { model: { provider: ref.provider, modelId: ref.id }, tools });
       const binding = { chatJid, branchId, conversationId: conversation.id, sessionId: crypto.randomUUID() };
       const identity = { domain: mapping.domain, chatJid, branchId, sessionId: binding.sessionId };
       const token = defineDoc({ kind: "app.application-identity", version: 1, scope: "conversation", history: "latest", fork: "initial", initial: () => identity });

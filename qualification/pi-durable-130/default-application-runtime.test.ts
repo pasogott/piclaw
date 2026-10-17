@@ -18,6 +18,11 @@ import { createDefaultApplicationRuntime } from "../../runtime/durable-engine/sr
 import { createAssistantMessageEventStream } from "../../node_modules/@earendil-works/pi-ai";
 import type { RuntimeModelServices } from "../../runtime/src/agent-pool/model-services.js";
 import { ensureTestFilesystemIsolation } from "../../runtime/scripts/test-filesystem-isolation.js";
+import { Harness, AgentDoc, InboxDoc, configure, createRegistry, defineTask, defineExtension, type ConversationId } from "../../runtime/durable-engine/qualification/durable.ts";
+import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
+import { BACKGROUND_CONTEXT as context } from "../../runtime/durable-engine/qualification/context.ts";
+import { createHostModels } from "../../runtime/durable-engine/src/host-models.js";
+import { createHostBuiltinTools } from "../../runtime/durable-engine/src/host-builtins.js";
 
 function factoryTest(scenario: string, name: string, body: () => Promise<void>) {
   const selected = process.env.PICLAW_DEFAULT_FACTORY_CASE;
@@ -83,7 +88,11 @@ for (const uncertain of [false, true]) factoryTest(`cleanup-${uncertain}`, `actu
   }
 });
 
-factoryTest("public-conversations", "default factory prepares and reopens real startup-known public conversations; refuses legacy before models", async () => {
+for (const scenario of ["public-conversations", "custom-subset", "pending-host"] as const) factoryTest(scenario, scenario === "custom-subset"
+  ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
+  : scenario === "pending-host"
+    ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
+    : "default factory prepares and reopens real startup-known public conversations; refuses legacy before models", async () => {
   process.env.PICLAW_DB_IN_MEMORY = "0";
   const workspace = process.env.PICLAW_WORKSPACE!;
   const owner = acquireRuntimeLock({ lockPath: join(workspace, "default-owner.lock"), strictOwnership: true, disabled: false });
@@ -92,14 +101,20 @@ factoryTest("public-conversations", "default factory prepares and reopens real s
   let calls = 0;
   const model = { provider: "synthetic", id: "approved", name: "Approved", api: "openai-completions", baseUrl: "https://invalid.invalid", input: ["text"], reasoning: false, contextWindow: 10000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   const requested: string[] = [];
+  let toolSequence: { name: string; arguments: Record<string, unknown> }[] | undefined;
   const modelB = { ...model, id: "approved-b" };
-  const stream = (physical: typeof model) => {
+  const observedResults = new Map<string, { toolName: string; isError?: boolean; content: unknown }>();
+  const stream = (physical: typeof model, input: { messages: { role: string; toolCallId?: string; toolName?: string; isError?: boolean; content: unknown }[] }) => {
+    for (const result of input.messages) if (result.role === "toolResult" && result.toolCallId && result.toolName)
+      observedResults.set(result.toolCallId, { toolName: result.toolName, isError: result.isError, content: result.content });
     requested.push(physical.id);
     calls++; const stream = createAssistantMessageEventStream();
+    const step = toolSequence?.shift();
     const message = { role: "assistant" as const, api: "openai-completions" as const, provider: physical.provider, model: physical.id,
-      content: [{ type: "text" as const, text: "factory synthetic reply" }], stopReason: "stop" as const, timestamp: Date.now(),
+      content: step ? [{ type: "toolCall" as const, id: `factory-tool-${calls}`, name: step.name, arguments: step.arguments }]
+        : [{ type: "text" as const, text: "factory synthetic reply" }], stopReason: step ? "toolUse" as const : "stop" as const, timestamp: Date.now(),
       usage: { input: 5, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 10, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
-    stream.push({ type: "done", reason: "stop", message }); stream.end(message); return stream;
+    stream.push({ type: "done", reason: message.stopReason, message }); stream.end(message); return stream;
   };
   const credentialStore: RuntimeModelServices["credentialStore"] = { read: async provider => provider === model.provider ? { type: "api_key", key: "synthetic-only" } : undefined,
     list: async () => [{ providerId: model.provider, type: "api_key" }], modify: async () => undefined, delete: async () => {} };
@@ -209,6 +224,15 @@ factoryTest("public-conversations", "default factory prepares and reopens real s
   expect(root.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1").get(newcomer)).toEqual({ content: "factory synthetic reply" });
   await expect(bound.prepareInputSourceAdmission!("web:missing-root")).rejects.toThrow("Existing root branch required");
   const originalDoc = root.query("SELECT content FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE kind='\"app.application-conversations\"') ORDER BY seq DESC LIMIT 1").get() as { content: string };
+  if (scenario === "pending-host") {
+    // A real accepted host source, deliberately not dispatched or consumed.
+    const pending = { ...message, id: "pending-tool-upgrade", content: "must remain pending" };
+    root.transaction(() => {
+      const rowId = storeMessage(pending);
+      bound.getInputSourceAdmission!(pending.chat_jid)({ message: pending, rowId, database: root });
+    })();
+    expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id=?").get(pending.id)).toEqual({ state: "pending" });
+  }
   await channel.stop(); await base.queue.shutdown(); await pool.shutdown();
   backend.stop(); await backend.close();
   // Successful SDK initialization followed by a failed close must also retain
@@ -235,9 +259,74 @@ factoryTest("public-conversations", "default factory prepares and reopens real s
     closeSpy.mockRestore();
     for (const resource of captured) await actualClose.call(resource);
   }
+  // Seed the GENUINE old factory selection through public configure before
+  // reopening the new factory. Merely closing/reopening a six-tool fixture
+  // would not exercise persisted-tool convergence at all.
+  const path = (root.query("PRAGMA database_list").all() as { name: string; file: string }[]).find(row => row.name === "main")!.file;
+  const modelPort = createHostModels(runtime, [model, modelB].map(({ provider, id }) => ({ provider, id })), {
+    signal: new AbortController().signal,
+    async authorize() { owner.assertCurrentOwner(); }, assertCurrent() { owner.assertCurrentOwner(); },
+  });
+  const inspectStored = async (seed: boolean) => {
+    const harness = await Harness.open(await SqliteStorage.open(new BunSqliteDatabase(path, { root, assertOwner: () => owner.assertCurrentOwner(), fenceTransactions: true })),
+      { models: modelPort, registry: createRegistry() }, context);
+    try {
+      const app = await harness.root(context);
+      return await app.commit(async tx => {
+        const states = new Map<number, unknown>();
+        for (const { id } of root.query("SELECT id FROM conversations ORDER BY id").all() as { id: number }[]) {
+          if (seed) await configure(tx, id as ConversationId, { tools: createHostBuiltinTools({ cwd: workspace, names: scenario === "custom-subset" ? ["read"] : ["bash"], authority: { assertAllowed() { owner.assertCurrentOwner(); } } }),
+            thinkingLevel: "low", instructions: "preserve these instructions", extensions: [defineExtension({ name: "app.host-builtins" })] });
+          states.set(id, JSON.parse(JSON.stringify(await tx.doc(AgentDoc, id as ConversationId))));
+        }
+        return states;
+      }, context);
+    } finally { await harness.close(context); }
+  };
+  const seeded = await inspectStored(true);
+  for (const state of seeded.values()) expect(state).toMatchObject({ tools: [scenario === "custom-subset" ? "read" : "bash"], model: { provider: model.provider, modelId: model.id },
+    thinkingLevel: "low", instructions: "preserve these instructions" });
+  if (scenario === "pending-host") {
+    // Preflight rejects BEFORE SDK open/configure: a complete SQL byte snapshot
+    // is valid here (no SDK pending-document normalization has taken place).
+    const bytes = root.serialize();
+    const callsBeforeRejection = calls;
+    const agentBytes = JSON.stringify(root.query(`SELECT * FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE kind='"pi.agent"') ORDER BY document_id, seq`).all());
+    const historyBytes = JSON.stringify(root.query("SELECT * FROM entries ORDER BY id").all());
+    const transaction = spyOn(BunSqliteDatabase.prototype, "transaction");
+    try {
+      await expect(createDefaultApplicationRuntime(owner, async () => services)).rejects.toThrow("Host tool upgrade requires idle host work");
+      expect(transaction).not.toHaveBeenCalled(); // No public configure commit.
+      expect(root.serialize()).toEqual(bytes);
+      expect(JSON.stringify(root.query(`SELECT * FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE kind='"pi.agent"') ORDER BY document_id, seq`).all())).toBe(agentBytes);
+      expect(JSON.stringify(root.query("SELECT * FROM entries ORDER BY id").all())).toBe(historyBytes);
+      expect(calls).toBe(callsBeforeRejection);
+    } finally { transaction.mockRestore(); }
+    for (const spy of sdkSpies) { expect(spy).not.toHaveBeenCalled(); spy.mockRestore(); }
+    closeDatabase(); owner.release(); return;
+  }
+  const historyBeforeUpgrade = root.query("SELECT * FROM entries ORDER BY id").all();
+  const identitiesBeforeUpgrade = root.query(`SELECT * FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE kind='"app.application-identity"') ORDER BY document_id, seq`).all();
+  const callsBeforeUpgrade = calls;
   settings.setDefaultModelAndProvider(modelB.provider, modelB.id);
   await settings.flush();
   backend = await createDefaultApplicationRuntime(owner, async () => services);
+  expect(calls).toBe(callsBeforeUpgrade);
+  expect(root.query("SELECT * FROM entries ORDER BY id").all()).toEqual(historyBeforeUpgrade);
+  expect(root.query(`SELECT * FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE kind='"app.application-identity"') ORDER BY document_id, seq`).all()).toEqual(identitiesBeforeUpgrade);
+  if (scenario === "custom-subset") {
+    expect(backend.sessionOptions.getDurableSession!("web:default")?.sessionId).toBe(first?.sessionId);
+    expect(backend.sessionOptions.getDurableSession!(newcomer)).toMatchObject({ sessionId: newPort.sessionId, branchId: newPort.branchId });
+    backend.stop(); await backend.close();
+    expect(await inspectStored(false)).toEqual(seeded); // Includes tools/model/thinking/instructions/extensions, not just tool count.
+    expect(root.query("SELECT * FROM entries ORDER BY id").all()).toEqual(historyBeforeUpgrade);
+    expect(root.query(`SELECT * FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE kind='"app.application-identity"') ORDER BY document_id, seq`).all()).toEqual(identitiesBeforeUpgrade);
+    expect(calls).toBe(callsBeforeUpgrade);
+    for (const spy of sdkSpies) { expect(spy).not.toHaveBeenCalled(); spy.mockRestore(); }
+    closeDatabase(); owner.release(); return;
+  }
+  // Read public stored state only after the active controller is closed below;
+  // model-visible success for all six tools is exercised through this backend.
   expect(!!backend.sessionOptions.getDurableSession?.("web:default")).toBe(true);
   expect(backend.sessionOptions.getDurableSession?.("web:default")?.sessionId).toBe(first?.sessionId);
   expect(backend.sessionOptions.getDurableSession!(newcomer)?.sessionId).toBe(newPort.sessionId);
@@ -251,6 +340,38 @@ factoryTest("public-conversations", "default factory prepares and reopens real s
   })();
   expect(await rebound.dispatchAcceptedInput!(next.chat_jid, next.id, nextRow!)!()).toBe("settled");
   expect(requested).toEqual([model.id, model.id, model.id, model.id, model.id]);
+  // Normal accepted input through the actual default factory, not a standalone
+  // tool harness: the synthetic provider requests existing host builtin calls.
+  writeFileSync(join(workspace, "factory-tool-input.txt"), "before");
+  toolSequence = [
+    { name: "read", arguments: { path: "factory-tool-input.txt" } },
+    { name: "edit", arguments: { path: "factory-tool-input.txt", edits: [{ oldText: "before", newText: "after" }] } },
+    { name: "write", arguments: { path: "factory-tool-output.txt", content: "written by host tool" } },
+    { name: "find", arguments: { pattern: "factory-tool-*.txt" } },
+    { name: "ls", arguments: { path: "." } },
+    { name: "bash", arguments: { command: "printf factory-tool-bash" } },
+  ];
+  const toolInput = { ...message, id: "factory-tool-input", content: "Run the synthetic host tool sequence" };
+  const toolRow = root.transaction(() => {
+    const rowId = storeMessage(toolInput);
+    rebound.getInputSourceAdmission!(toolInput.chat_jid)({ message: toolInput, rowId, database: root });
+    return rowId;
+  })();
+  expect(await rebound.dispatchAcceptedInput!(toolInput.chat_jid, toolInput.id, toolRow!)!()).toBe("settled");
+  expect(toolSequence).toEqual([]); toolSequence = undefined;
+  expect(readFileSync(join(workspace, "factory-tool-input.txt"), "utf8")).toBe("after");
+  expect(readFileSync(join(workspace, "factory-tool-output.txt"), "utf8")).toBe("written by host tool");
+  const toolEntries = JSON.stringify(root.query("SELECT * FROM entries").all());
+  expect(toolEntries).toContain("factory-tool-bash");
+  expect(toolEntries).toContain("Successfully wrote");
+  expect(toolEntries).toContain("factory-tool-output.txt");
+  // Inspect results delivered back to the actual public model adapter: merely
+  // draining the call queue would also succeed when a requested tool is absent.
+  for (const name of ["read", "edit", "write", "find", "ls", "bash"]) {
+    const result = [...observedResults.values()].find(result => result.toolName === name);
+    expect(result).toBeDefined(); expect(result!.isError).not.toBe(true);
+    if (name === "find" || name === "ls") expect(JSON.stringify(result!.content)).toContain("factory-tool-output.txt");
+  }
   // Lose the provider acknowledgement AFTER the real public transaction commits.
   // No partial route is published and a retry cannot create another identity.
   const uncertainChat = "web:lost-create-ack";
@@ -274,6 +395,8 @@ factoryTest("public-conversations", "default factory prepares and reopens real s
     expect((root.query("SELECT count(*) AS n FROM conversations").get() as { n: number }).n).toBe(beforeUncertain + 1);
   } finally { fault.mockRestore(); }
   backend.stop(); await backend.close();
+  const upgraded = await inspectStored(false);
+  for (const [id, state] of seeded) expect(upgraded.get(id)).toEqual({ ...(state as object), tools: ["read", "bash", "edit", "write", "find", "ls"] });
   backend = await createDefaultApplicationRuntime(owner, async () => services);
   const recoveredCreate = backend.sessionOptions.getDurableSession!(uncertainChat)!;
   expect(recoveredCreate).toBeDefined();
