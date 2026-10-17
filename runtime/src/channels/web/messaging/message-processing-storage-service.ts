@@ -7,6 +7,7 @@
  */
 
 import type { InteractionRow } from "../../../db.js";
+import { isSlashCommandInvocation } from "../../../agent-pool/slash-command.js";
 import { processChat as processAgentChat } from "../handlers/agent.js";
 import type { LinkPreviewChannel } from "../media/link-previews.js";
 import {
@@ -106,6 +107,8 @@ export class WebMessageProcessingStorageService {
         removeProtectedContinuationForSourceMessageId: options.removeProtectedContinuationForSourceMessageId,
         consumeDeferredFollowupRowId: options.consumeDeferredFollowupRowId,
         materializeQueuedSource,
+        acceptMaterializedSource: !isBot && typeof options.consumeDeferredFollowupRowId === 'number' && !isSlashCommandInvocation(content.trim())
+          ? this.channel.getInputSourceAdmission?.(chatJid) : undefined,
       },
     );
     recordTimelineInteraction(interaction);

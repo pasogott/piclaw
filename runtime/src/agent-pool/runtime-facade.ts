@@ -348,6 +348,8 @@ export class AgentRuntimeFacade {
             sessionGeneration: port.sessionId,
             contextUsage: { tokens: null, contextWindow: null, percent: null, sessionGeneration: port.sessionId,
               source: "durable_context", phase: "after_manual_compaction" } };
+        } catch (error) {
+          return { status: "error", message: error instanceof Error ? error.message : "Compaction failed." };
         } finally { release?.(); }
       }
       if (command.type === "model") {

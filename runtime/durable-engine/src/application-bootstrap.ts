@@ -168,6 +168,13 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         bound = true;
         return Object.freeze({ ...options, getInputSourceAdmission, dispatchAcceptedInput: dispatch });
       },
+      /** Continue the existing command worker's same-task settlement; no queue replay. */
+      reconcileMaintenance(chatJid: string): Promise<void> {
+        assert();
+        const position = positions.get(chatJid);
+        if (!position?.reconcileMaintenance) throw Error("Unbound maintenance reconciliation");
+        return position.reconcileMaintenance();
+      },
       retryRecoveredWork: recovery.retryRecoveredWork,
       onPendingIntent: recovery.onPendingIntent,
       close() { return closing ??= (async () => { shutdown.abort(); await activeController.close(); })(); },

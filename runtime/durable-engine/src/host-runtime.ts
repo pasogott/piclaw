@@ -164,6 +164,11 @@ export class HostConversationRuntime {
   private authorizingMaintenance = false;
   private maintenance?: Promise<unknown>;
   private maintenanceTaskId?: number;
+  private pendingMaintenance?: {
+    binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number };
+    reconcile: () => Promise<void>;
+    attempt?: Promise<void>;
+  };
   private closing?: Promise<void>;
   // Lifecycle joins only: not an input queue or admission/dedup authority.
   private readonly active = new Set<Promise<unknown>>();
@@ -347,6 +352,8 @@ export class HostConversationRuntime {
     this.changingModel = true; // Claim before the first await, across the entire authority domain.
     const context = withoutAbortSignal(this.context);
     const assertOwner = () => o.owner.assert(); // Close seals callers but joins this maintenance.
+    let admitted = false, terminalFailure = false;
+    let settleTask: (() => Promise<{ compacted: boolean }>) | undefined;
     const operation = (async () => {
       const inspection = await this.harness.inspect(context); assertOwner();
       if (inspection.tasks.length || inspection.submissions.length) throw new Error("Runtime is not idle");
@@ -365,38 +372,84 @@ export class HostConversationRuntime {
         }, context);
         const current = await this.harness.inspect(context); assertOwner();
         if (current.tasks.length || current.submissions.length) throw new Error("Runtime is not idle");
+        admitted = true; // A lost admission ACK is also uncertain, never permission to resubmit.
         return conversation.compact(instructions, context);
       }); // Release SQL guard at admission, never across provider execution or summary writes.
       this.maintenanceTaskId = taskId;
       assertOwner();
-      const task = await this.harness.waitForTask(taskId, context); assertOwner();
-      if (task.state.outcome.status !== "completed") throw new Error("Compaction did not complete");
-      const result = task.state.outcome.result;
-      let entryId = result.entryId;
-      if (result.submissionId !== undefined) {
-        const submission = await this.harness.submission(result.submissionId, context); assertOwner();
-        if (!submission) throw new Error("Missing compaction write");
-        const settled = await submission.wait(context); assertOwner();
-        if (settled.type !== "write" || settled.status !== "done" || settled.conversationId !== id || settled.entry === undefined) throw new Error("Compaction write not placed");
-        entryId = settled.entry;
-      }
-      if (entryId !== undefined) {
-        const entry = await conversation.commit(tx => tx.entry(entryId!), context); assertOwner();
-        const view = await conversation.context(context); assertOwner();
-        if (!entry || entry.conversationId !== id || entry.kind !== "pi.compaction" || view.head?.id !== entryId) throw new Error("Compaction context not committed");
-      }
-      return { compacted: entryId !== undefined };
+      settleTask = async () => {
+        const task = await this.harness.waitForTask(taskId, context); assertOwner();
+        if (task.state.outcome.status !== "completed") {
+          terminalFailure = true;
+          throw new Error("Compaction did not complete");
+        }
+        const result = task.state.outcome.result;
+        let entryId = result.entryId;
+        if (result.submissionId !== undefined) {
+          const submission = await this.harness.submission(result.submissionId, context); assertOwner();
+          if (!submission) throw new Error("Missing compaction write");
+          const settled = await submission.wait(context); assertOwner();
+          if (settled.type === "write" && settled.status === "unanswered") {
+            terminalFailure = true;
+            throw new Error("Compaction write failed");
+          }
+          if (settled.type !== "write" || settled.status !== "done" || settled.conversationId !== id || settled.entry === undefined) throw new Error("Compaction write not placed");
+          entryId = settled.entry;
+        }
+        if (entryId !== undefined) {
+          const entry = await conversation.commit(tx => tx.entry(entryId!), context); assertOwner();
+          const view = await conversation.context(context); assertOwner();
+          if (!entry || entry.conversationId !== id || entry.kind !== "pi.compaction" || view.head?.id !== entryId) throw new Error("Compaction context not committed");
+        }
+        return { compacted: entryId !== undefined };
+      };
+      return settleTask();
     })();
     this.active.add(operation);
-    // A rejected wait may leave a known task running. Keep exclusion until close/reopen's
-    // public whole-domain authority scan; never silently resume unknown maintenance.
-    this.maintenance = operation.then(() => { this.changingModel = false; }, async () => {
+    // Observe both outcomes without creating an unhandled rejected cleanup promise.
+    void operation.then(() => this.active.delete(operation), () => this.active.delete(operation));
+    const settlement = operation.catch(error => {
+      if (!admitted || terminalFailure) throw error;
+      // Infrastructure observations cannot finish the command. Retain its original
+      // promise, command protection and queue worker until explicit same-task repair.
+      return new Promise<{ compacted: boolean }>((resolve, reject) => {
+        this.pendingMaintenance = { binding: copy, reconcile: async () => {
+          if (!settleTask) throw new Error("Compaction admission uncertain; owner retained");
+          try {
+            const result = await settleTask();
+            this.pendingMaintenance = undefined;
+            resolve(result);
+          } catch (error) {
+            if (terminalFailure) { this.pendingMaintenance = undefined; reject(error); }
+            else throw error; // Leave the owned command pending on another read failure.
+          }
+        } };
+      });
+    });
+    this.maintenance = settlement.then(() => { this.changingModel = false; }, async () => {
       try {
         const current = await this.harness.inspect(context); assertOwner();
         if (!current.tasks.length && !current.submissions.length) this.changingModel = false;
-      } catch { /* retain exclusion and owner until close */ }
-    }).finally(() => { this.active.delete(operation); }).catch(() => {});
-    return awaitWithContext(operation, withAbortSignal(signal ?? new AbortController().signal, context));
+      } catch { this.changingModel = true; } // An unreadable domain retains exclusion and ownership.
+    });
+    return awaitWithContext(settlement, withAbortSignal(signal ?? new AbortController().signal, context));
+  }
+  /** Explicit observation repair only: no task submission, provider retry or new queue. */
+  reconcileMaintenance(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<void> {
+    this.fence();
+    const pending = this.pendingMaintenance;
+    if (!pending) return Promise.resolve();
+    if (binding.incarnation !== pending.binding.incarnation || binding.chatJid !== pending.binding.chatJid ||
+      binding.branchId !== pending.binding.branchId || binding.conversationId !== pending.binding.conversationId)
+      throw new Error("Host binding conflict");
+    if (pending.attempt) return pending.attempt;
+    const attempt = pending.reconcile().finally(() => {
+      pending.attempt = undefined;
+      this.active.delete(attempt);
+    });
+    pending.attempt = attempt;
+    this.active.add(attempt);
+    return attempt;
   }
   private port(intent: boolean) {
     const port = intent ? this.options.bindings.intents : this.options.bindings;
@@ -693,7 +746,11 @@ export class HostConversationRuntime {
     this.closed = true; // Seal admissions, preserve pending/unknown work; close does not enable scheduling.
     this.observations.abort();
     return this.closing = (async () => {
+      // An uncertain observation repair may itself be waiting on a held task.
+      // Reject before joining it; known in-progress maintenance still joins below.
+      if (this.pendingMaintenance) throw new Error(`Maintenance settlement uncertain (task ${this.maintenanceTaskId ?? "admission uncertain"}); owner retained`);
       await Promise.allSettled([...this.active]);
+      if (this.pendingMaintenance) throw new Error(`Maintenance settlement uncertain (task ${this.maintenanceTaskId ?? "admission uncertain"}); owner retained`);
       if (this.maintenance) {
         await this.maintenance;
         this.options.owner.assert();

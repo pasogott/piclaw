@@ -18,13 +18,22 @@ import { installTerminalSettlementCompositionSchema } from "../../runtime/src/se
 import { BunSqliteDatabase } from "../../runtime/durable-engine/src/bun-sqlite.js";
 import { applicationOwnership, createApplicationBootstrapBundle } from "../../runtime/durable-engine/src/application-bootstrap.js";
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
+import { Harness } from "../../runtime/durable-engine/qualification/durable.ts";
 import { openFixture, context, barrier } from "./src/fixture.js";
 import { resetRateLimiterStateForTests } from "../../runtime/src/channels/web/http/rate-limit.js";
 import { upgradeApplication } from "../../runtime/durable-engine/src/application-upgrade.js";
 import { HostCutoverController, initializeCutoverManifest } from "../../runtime/durable-engine/src/host-cutover.js";
 
 // The runtime acquires the actual strict lock BEFORE root/SDK initialization. No TestOwner.
-for (const [failWait, forks] of [[false, false], [false, true], [true, false]] as const) test(`application bundle binds real pool/channel; lost wait ACK=${failWait}; preserved forks=${forks}`, async () => {
+for (const [failWait, forks, deferred] of [[false, false, undefined], [false, true, undefined],
+  [false, false, "success"], [false, false, "failure"],
+  [false, false, "uncertain-success"], [false, false, "uncertain-failure"], [true, false, undefined]] as const) test(`application bundle binds real pool/channel; lost wait ACK=${failWait}; preserved forks=${forks}; deferred=${deferred}`, async () => {
+  const compactSucceeds = deferred === "success" || deferred === "uncertain-success";
+  const uncertain = deferred?.startsWith("uncertain-");
+  const compactHold = barrier(), compactEntered = barrier(), waitLost = barrier();
+  let taskObservation: Promise<unknown> | undefined;
+  let compactHarness: Harness | undefined;
+  let compactWaitSpy: ReturnType<typeof spyOn<Harness, "waitForTask">> | undefined;
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "application-bundle-"));
   const lock = acquireRuntimeLock({ lockPath: join(dir, "runtime.lock"), strictOwnership: true, disabled: false });
   const ownership = applicationOwnership(lock);
@@ -267,7 +276,14 @@ for (const [failWait, forks] of [[false, false], [false, true], [true, false]] a
     expect(cutover.inspect()).toEqual(beforeRetry);
   }
   const begin = spyOn(cutover, "begin");
-  const bundle = await upgradeApplication({ plan: upgrade, cutover, application, importer: await importer() }, context);
+  const originalOpen = Harness.open;
+  const openSpy = spyOn(Harness, "open").mockImplementation(async (...args) => {
+    compactHarness = await originalOpen(...args);
+    return compactHarness;
+  });
+  let bundle: Awaited<ReturnType<typeof upgradeApplication>>;
+  try { bundle = await upgradeApplication({ plan: upgrade, cutover, application, importer: await importer() }, context); }
+  finally { openSpy.mockRestore(); }
   if (!failWait && !forks) { expect(begin).not.toHaveBeenCalled(); expect(cutover.inspect()).toEqual(beforeRetry); }
   else expect(begin).toHaveBeenCalledTimes(1);
   begin.mockRestore();
@@ -280,7 +296,9 @@ for (const [failWait, forks] of [[false, false], [false, true], [true, false]] a
     createSession: async () => { throw Error("Legacy forbidden"); } });
   try {
     const ports = bundle.bind({ queue, agentPool: pool });
-    const channel = new WebChannel(ports); channel.broadcastEvent = () => {};
+    const channel = new WebChannel(ports);
+    const events: { type: string; data: any }[] = [];
+    channel.broadcastEvent = (type, data) => { events.push({ type, data }); };
     // Actual pool/channel composition must leave B on the ordinary legacy path,
     // BEFORE any throwing legacy factory runs: no durable admission or claim.
     expect(channel.getInputSourceAdmission?.(unbound)).toBeUndefined();
@@ -299,7 +317,63 @@ for (const [failWait, forks] of [[false, false], [false, true], [true, false]] a
     expect(row.content).toBe("normal application input");
     expect(db.query("SELECT payload_ref FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?").get(chat, row.id)).toEqual({ payload_ref: `message-row:${row.rowid}` });
     expect(queue.isLaneBusy(`chat:${chat}`)).toBe(true);
+    if (deferred) {
+      const queued = await channel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(chat)}`, {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: JSON.stringify({ content: "/compact" }),
+      }));
+      expect(queued.status).toBe(201);
+      expect(await queued.json()).toMatchObject({ queued: "followup" });
+      expect(db.query("SELECT * FROM service_effect_s01_sources WHERE chat_jid=?").all(chat)).toHaveLength(1);
+      if (uncertain) {
+        const originalWait = compactHarness!.waitForTask.bind(compactHarness!);
+        let failures = 2;
+        compactWaitSpy = spyOn(compactHarness!, "waitForTask").mockImplementation((...args) => {
+          if (failures-- > 0) {
+            const observation = originalWait(...args);
+            taskObservation = observation;
+            void observation.catch(() => {});
+            waitLost.release();
+            return Promise.reject(Error("task observation unavailable"));
+          }
+          return originalWait(...args);
+        });
+      }
+      base.host.onModelEnter = () => {
+        if (uncertain) { base.host.modelHold = compactHold; compactEntered.release(); }
+        expect(db.query("SELECT phase FROM service_effect_s01_operations WHERE chat_jid=?").all(chat)).toEqual([{ phase: "terminal" }]);
+        expect(db.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1").all(chat)).toEqual([{ content: "synthetic answer" }]);
+        base.host.finalContent = [{ type: "text", text: "deferred application summary" }];
+        base.host.modelAllowed = compactSucceeds;
+      };
+    }
     hold.release();
+    if (uncertain) {
+      await waitLost.promise; await compactEntered.promise; await Bun.sleep(10);
+      const cursor = db.query("SELECT * FROM chat_cursors WHERE chat_jid=?").get(chat);
+      const assertPending = () => {
+        expect(queue.isLaneBusy(`chat:${chat}`)).toBe(true);
+        expect(channel.getAgentStatus(chat)?.type).toBe("intent");
+        expect(events.filter(e => e.type === "agent_status" && ["done", "error"].includes(e.data.type))).toHaveLength(0);
+        expect(db.query("SELECT * FROM chat_cursors WHERE chat_jid=?").get(chat)).toEqual(cursor);
+        expect(db.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1").all(chat)).toEqual([{ content: "synthetic answer" }]);
+        expect(base.host.modelCalls).toBe(1);
+      };
+      assertPending();
+      await expect(bundle.reconcileMaintenance(chat)).rejects.toThrow("task observation unavailable");
+      assertPending(); // Another read failure is still not a command failure.
+      compactHold.release();
+      await taskObservation;
+      await Bun.sleep(10);
+      // Even terminal task state is not a receipt until public summary reconciliation.
+      expect(queue.isLaneBusy(`chat:${chat}`)).toBe(true);
+      expect(channel.getAgentStatus(chat)?.type).toBe("intent");
+      expect(db.query("SELECT * FROM chat_cursors WHERE chat_jid=?").get(chat)).toEqual(cursor);
+      expect(db.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1").all(chat)).toHaveLength(1);
+      await bundle.reconcileMaintenance(chat);
+      expect(compactWaitSpy!.mock.calls).toHaveLength(3);
+      expect(new Set(compactWaitSpy!.mock.calls.map(args => args[0])).size).toBe(1);
+      compactWaitSpy!.mockRestore(); compactWaitSpy = undefined;
+    }
     if (failWait) {
       await failed.promise; await Bun.sleep(20);
       expect(queue.isLaneBusy(`chat:${chat}`)).toBe(true);
@@ -309,15 +383,126 @@ for (const [failWait, forks] of [[false, false], [false, true], [true, false]] a
     } else {
       for (let n = 0; n < 500 && queue.isLaneBusy(`chat:${chat}`); n++) await Bun.sleep(5);
       expect(queue.isLaneBusy(`chat:${chat}`)).toBe(false);
-      expect(db.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1").all(chat)).toEqual([{ content: "synthetic answer" }]);
+      const answers = db.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1 ORDER BY rowid").all(chat) as { content: string }[];
+      expect(answers[0]).toEqual({ content: "synthetic answer" });
+      expect(answers).toHaveLength(deferred ? 2 : 1);
+      if (deferred) expect(answers[1].content).toContain(compactSucceeds ? "Context compacted" : "did not complete");
       expect(db.query("SELECT operation_id FROM service_effect_s02_commits WHERE chat_jid=?").all(chat)).toEqual([{ operation_id: `message:${row.rowid}:1` }]);
     }
     expect(await pool.getCurrentModelLabel(chat)).toBe("qualification/synthetic");
     expect(pool.getSessionGenerationForChat(chat)).toBe("preserved-session");
     expect(await pool.saveSessionPosition(chat)).not.toBeNull();
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
-    expect(base.host.modelCalls).toBe(1); expect(base.host.credentialLookups).toBe(0);
-    if (!failWait && !forks) {
+    expect(base.host.modelCalls).toBe(compactSucceeds ? 2 : 1); expect(base.host.credentialLookups).toBe(0);
+    if (deferred) {
+      base.host.modelAllowed = true; base.host.onModelEnter = undefined; base.host.modelHold = undefined;
+      base.host.finalContent = [{ type: "text", text: "followup answer" }];
+      const follow = await channel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(chat)}`, {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: JSON.stringify({ content: "continue after deferred compact" }),
+      }));
+      expect(follow.status).toBe(201);
+      for (let n = 0; n < 500 && queue.isLaneBusy(`chat:${chat}`); n++) await Bun.sleep(5);
+      expect(queue.isLaneBusy(`chat:${chat}`)).toBe(false);
+      expect(db.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1 ORDER BY rowid DESC LIMIT 1").get(chat)).toEqual({ content: "followup answer" });
+      // Prove the NEXT provider actually receives the checkpoint, not a UI tree projection.
+      expect(base.host.transcripts.at(-1)?.includes("deferred application summary")).toBe(compactSucceeds);
+      expect(base.host.modelCalls).toBe(compactSucceeds ? 3 : 2);
+      expect(db.query("SELECT phase FROM service_effect_s01_operations WHERE chat_jid=?").all(chat))
+        .toEqual([{ phase: "terminal" }, { phase: "terminal" }]);
+      expect(db.query("SELECT operation_id FROM service_effect_s02_commits WHERE chat_jid=?").all(chat)).toHaveLength(2);
+      const compactEvents = events.filter(e => e.type === "agent_status" && e.data.title === "Compacting context");
+      expect(compactEvents).toHaveLength(1);
+      expect(events.filter(e => e.type === "agent_status" && e.data.turn_id === compactEvents[0].data.turn_id).at(-1)?.data.type)
+        .toBe(compactSucceeds ? "done" : "error");
+      expect(channel.getQueuedFollowupCount(chat)).toBe(0);
+
+      // A following accepted input already queued behind maintenance must get ONE
+      // provider answer and terminal settlement, including after provider failure.
+      const holdAgain = barrier(), enteredAgain = barrier();
+      base.host.modelHold = holdAgain;
+      base.host.onModelEnter = () => enteredAgain.release();
+      const post = (content: string) => channel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(chat)}`, {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: JSON.stringify({ content }),
+      }));
+      const callsBefore = base.host.modelCalls;
+      expect((await post("held primary again")).status).toBe(201);
+      await enteredAgain.promise;
+      let nextEntry = 0;
+      const compactEnteredAgain = barrier(), compactHoldAgain = barrier();
+      if (uncertain) {
+        const originalWait = compactHarness!.waitForTask.bind(compactHarness!);
+        compactWaitSpy = spyOn(compactHarness!, "waitForTask").mockImplementationOnce((...args) => {
+          const observation = originalWait(...args);
+          taskObservation = observation;
+          void observation.catch(() => {});
+          return Promise.reject(Error("second task observation unavailable"));
+        });
+      }
+      base.host.onModelEnter = () => {
+        nextEntry++;
+        if (nextEntry === 1 && uncertain) { base.host.modelHold = compactHoldAgain; compactEnteredAgain.release(); }
+        base.host.modelAllowed = nextEntry !== 1 || compactSucceeds;
+        base.host.finalContent = [{ type: "text", text: nextEntry === 1 ? "second deferred summary" : "accepted followup answer" }];
+      };
+      try {
+        expect(await (await post("/compact")).json()).toMatchObject({ queued: "followup" });
+        expect(await (await post("accepted behind compact")).json()).toMatchObject({ queued: "followup" });
+      } finally { holdAgain.release(); }
+      if (uncertain) {
+        try {
+          await compactEnteredAgain.promise; await Bun.sleep(10);
+          const cursor = db.query("SELECT * FROM chat_cursors WHERE chat_jid=?").get(chat);
+          expect(channel.getQueuedFollowupCount(chat)).toBe(1);
+          expect(channel.getAgentStatus(chat)?.type).toBe("intent");
+          expect(queue.isLaneBusy(`chat:${chat}`)).toBe(true);
+          expect(nextEntry).toBe(1);
+          expect(base.host.modelCalls - callsBefore).toBe(1); // Only the primary, not the held summary/follow-up.
+          compactHoldAgain.release();
+          await taskObservation; await Bun.sleep(10);
+          expect(nextEntry).toBe(1);
+          expect(channel.getQueuedFollowupCount(chat)).toBe(1);
+          expect(channel.getAgentStatus(chat)?.type).toBe("intent");
+          expect(db.query("SELECT * FROM chat_cursors WHERE chat_jid=?").get(chat)).toEqual(cursor);
+          await bundle.reconcileMaintenance(chat);
+        } finally { compactHoldAgain.release(); compactWaitSpy!.mockRestore(); compactWaitSpy = undefined; }
+      }
+      for (let n = 0; n < 500 && queue.isLaneBusy(`chat:${chat}`); n++) await Bun.sleep(5);
+      expect(queue.isLaneBusy(`chat:${chat}`)).toBe(false);
+      expect(nextEntry).toBe(2); // one compaction attempt, ONE following provider answer
+      expect(base.host.modelCalls - callsBefore).toBe(compactSucceeds ? 3 : 2);
+      expect(db.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1 ORDER BY rowid").all(chat)).toEqual([
+        { content: "synthetic answer" },
+        { content: compactSucceeds ? "Context compacted." : "Compaction did not complete" },
+        { content: "followup answer" }, { content: "followup answer" },
+        { content: compactSucceeds ? "Context compacted." : "Compaction did not complete" },
+        { content: "accepted followup answer" },
+      ]);
+      expect(base.host.transcripts.at(-1)?.includes("second deferred summary")).toBe(compactSucceeds);
+      expect(db.query("SELECT phase FROM service_effect_s01_operations WHERE chat_jid=?").all(chat))
+        .toEqual(Array.from({ length: 4 }, () => ({ phase: "terminal" })));
+      expect(db.query("SELECT operation_id FROM service_effect_s02_commits WHERE chat_jid=?").all(chat)).toHaveLength(4);
+      expect(db.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid=?").all(chat))
+        .toEqual(Array.from({ length: 4 }, () => ({ state: "consumed" })));
+      const reader = await Harness.open(await SqliteStorage.open(new BunSqliteDatabase(path, { root: db, assertOwner: () => lock.assertCurrentOwner() })), options.runtime.harnessOptions, context);
+      try {
+        const conversation = (await reader.conversation(importedRoot.id, context))!;
+        const view = await conversation.context(context);
+        // Candidate messages may wrap content in typed blocks; compare text
+        // semantics rather than assuming the legacy content:string shape.
+        const texts = (value: unknown): string[] => typeof value === "string" ? [value]
+          : Array.isArray(value) ? value.flatMap(texts)
+          : value && typeof value === "object" ? Object.values(value).flatMap(texts) : [];
+        expect(texts(view.messages).join("\n")).toContain("accepted followup answer");
+      } finally { await reader.close(context); }
+      const allCompactTurns = events.filter(e => e.type === "agent_status" && e.data.title === "Compacting context");
+      expect(allCompactTurns).toHaveLength(2);
+      for (const intent of allCompactTurns) {
+        expect(events.filter(e => e.type === "agent_status" && e.data.turn_id === intent.data.turn_id).map(e => e.data.type))
+          .toEqual(["intent", compactSucceeds ? "done" : "error"]);
+      }
+      expect(channel.getQueuedFollowupCount(chat)).toBe(0);
+    }
+    if (!failWait && !forks && !deferred) {
       base.host.modelHold = undefined;
       base.host.finalContent = [{ type: "text", text: "application summary checkpoint" }];
       const response = await channel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(chat)}`, {
@@ -378,6 +563,7 @@ for (const [failWait, forks] of [[false, false], [false, true], [true, false]] a
     expect(files.filter(p => /\.jsonl$/i.test(p))).toEqual([]);
     expect(files.filter(p => /\.(db|sqlite)$/i.test(p))).toEqual([".piclaw/store/messages.db"]);
   } finally {
+    compactWaitSpy?.mockRestore(); compactHold.release();
     const stopping = queue.shutdown(); const closing = bundle.close();
     await stopping; await pool.shutdown(); await closing;
     lock.assertCurrentOwner(); // Other application components are still live.

@@ -290,8 +290,10 @@ describe("process chat control runtime", () => {
       sessionGeneration: "session-new",
       reset: true,
     }]);
-    expect(statusUpdates).toHaveLength(1);
-    expect(statusUpdates[0]).toMatchObject({
+    expect(statusUpdates).toHaveLength(3);
+    expect(statusUpdates.map(status => status.type)).toEqual(["intent", "context_usage", "done"]);
+    expect(new Set(statusUpdates.map(status => status.turn_id)).size).toBe(1);
+    expect(statusUpdates[1]).toMatchObject({
       type: "context_usage",
       context_reset: true,
       sessionGeneration: "session-new",

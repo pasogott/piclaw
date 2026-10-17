@@ -1423,3 +1423,26 @@ EXIT_CODE=0. Private types and bounded independent review pass. Deferred-command
 automatic/protected handoff and infrastructure-failure recovery qualification remain
 open; this does not complete compaction or production acceptance. No ongoing JSONL,
 additional database/queue, activation or live provider operation occurs.
+
+### Deferred compact and uncertain maintenance
+
+Busy bound `/compact` now uses the existing follow-up queue and native compaction
+intent/result flow; unbound legacy immediate behaviour is unchanged. Normal deferred
+text materialisation admits its durable source inside the existing message/queue-
+consumption transaction. Commands and already-accepted sources are excluded.
+
+Confirmed provider failure produces a truthful terminal error. Infrastructure
+uncertainty instead retains command protection, intent, cursor and worker ownership
+until explicit scoped reconciliation observes the same public task/write settlement.
+No compaction is resubmitted. Close rejects uncertain maintenance before joining a
+blocked reconciliation, retaining ownership; known ongoing maintenance still joins.
+The application bundle exposes reconciliation through the same captured binding.
+
+Real web/queue tests cover deferred success, provider failure, following input using
+the summary, wait/read uncertainty, cross-domain rejection and close ordering, with
+no legacy/JSONL fallback or duplicate input/publication. Final candidate verification
+passes 423 tests / 8,002 assertions; all three scoped typechecks and bounded review
+pass. The surviving root gate completed 7,275 tests (74 baseline skips), plus 25
+feature and 9 build tests with final build footer; the interrupted wrapper recorded
+no exit code. Earlier failures and the legacy-immediate regression remain recorded;
+no timeouts or assertions were weakened. Automatic/protected compaction remains open.

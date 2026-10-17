@@ -65,6 +65,8 @@ export interface StoreWebMessageOptions {
   beforeDeferredFollowupConsume?: () => void;
   /** Captured host callback only; never sourced from request/content blocks. */
   materializeQueuedSource?: QueuedInputMaterialization;
+  /** Admit a legacy queued row atomically when it becomes durable normal input. */
+  acceptMaterializedSource?: WebUserMessageStoreOptions["acceptSource"];
 }
 
 /** Host-only incoming admission options; never populated from HTTP fields. */
@@ -236,6 +238,13 @@ function writePreparedWebMessage(prepared: PreparedWebMessage): CommittedWebMess
       if (result !== undefined) {
         void Promise.resolve(result).then(() => undefined, () => undefined);
         throw Error('Queued materialization callback must be synchronous');
+      }
+    }
+    if (!queuedItem.source_accepted) {
+      const result: unknown = options.acceptMaterializedSource?.({ message: { ...msg }, rowId, database: getDb() });
+      if (result !== undefined) {
+        void Promise.resolve(result).then(() => undefined, () => undefined);
+        throw Error('Queued admission callback must be synchronous');
       }
     }
     queued.splice(queueIndex, 1);

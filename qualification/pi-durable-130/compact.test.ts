@@ -1,5 +1,5 @@
 import "./src/test-guard.js";
-import { test, expect } from "bun:test";
+import { test, expect, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -122,4 +122,148 @@ test("public manual compact: real model summary, idle admission, observer detach
     await harness.close(context); runtime = await HostConversationRuntime.open(config, context);
     await expect(runtime.compactSession(binding)).rejects.toThrow("not idle");
   } finally { if (root.inTransaction) root.exec("ROLLBACK"); if (runtime) await runtime.close(); root.close(); owner.releaseAfterClose(); owner.closeConnection(); await rm(dir, { recursive: true, force: true }); }
+}, 20000);
+
+for (const failure of ["wait", "summary", "close", "close-reconcile"] as const) test(`maintenance ${failure} observation failure retains command protection until verified settlement`, async () => {
+  const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "compact-observation-"));
+  const path = join(dir, "shared.db"), owner = TestOwner.acquire(path), root = new Database(path);
+  installServiceWorkSchema(root);
+  let sql!: BunSqliteDatabase;
+  const openStorage = () => {
+    sql = new BunSqliteDatabase(path, { root, assertOwner: () => owner.assert() });
+    return SqliteStorage.open(sql);
+  };
+  const f = await openFixture(owner, () => {}, openStorage), id = f.root.id;
+  for (let n = 0; n < 3; n++) await (await f.submit(`history-${n}`, "detail ".repeat(100))).wait(context);
+  await f.close();
+  const unused = async () => { throw Error("legacy/effect forbidden"); };
+  const binding = { incarnation: "observations", chatJid: "web:observations", branchId: "main", conversationId: id };
+  let releases = 0, protections = 0, completed = false;
+  let ownedHarness!: Harness;
+  const originalOpen = Harness.open;
+  const openSpy = spyOn(Harness, "open").mockImplementation(async (...args) => {
+    ownedHarness = await originalOpen(...args); return ownedHarness;
+  });
+  let runtime!: HostConversationRuntime;
+  try {
+    runtime = await HostConversationRuntime.open({ incarnation: binding.incarnation,
+      owner: { assert: () => owner.assert(), release() { releases++; } }, openStorage,
+      withIdleModelGuard: body => sql.withIdleModelGuard(body),
+      harnessOptions: { models: f.models, registry: f.registry,
+        settings: { retry: { enabled: false }, compaction: { enabled: false, keepRecentTokens: 1 } } },
+      work: { getOperation: unused, acceptCancellation: unused, bindHarness: unused } as any,
+      terminal: { getTerminal: unused, commitTerminal: unused } as any,
+      bindings: { get: unused, bind: unused, getOrBind: unused, recordSubmission: unused },
+      conversationFor: () => id, existingConversationIds: [id], authorizeScheduling() {},
+      putAnswer: unused, sessionId: "original", lane: "observations", generation: 1, now: () => new Date(0).toISOString(),
+    }, context);
+  } finally { openSpy.mockRestore(); }
+  const closeSpy = spyOn(ownedHarness, "close");
+  const adapter = createDurableConversationAdapter({ incarnation: binding.incarnation, manifest: [binding], runtime });
+  const position = adapter.sessionPosition(binding.chatJid, binding.branchId, "original");
+  const facade = new AgentRuntimeFacade({ pool: new Map(), durableSessions: new Map([[binding.chatJid, position]]),
+    getOrCreateRuntime: unused, modelRegistry: { getAll: () => f.models.getModels() } as any, modelRuntime: {} as any,
+    authPath: "unused", clearAttachments() {}, refreshRuntime: unused,
+    acquireCommandProtection() { protections++; return () => { protections--; }; } });
+  const hold = barrier(), entered = barrier(), readFailed = barrier();
+  f.host.modelHold = hold; f.host.onModelEnter = () => entered.release();
+  f.host.finalContent = [{ type: "text", text: "one verified checkpoint" }];
+  const originalWait = ownedHarness.waitForTask.bind(ownedHarness);
+  let underlying!: Promise<unknown>;
+  const waitSpy = spyOn(ownedHarness, "waitForTask").mockImplementationOnce((...args) => {
+    const observation = originalWait(...args);
+    underlying = observation;
+    if (failure === "summary") return observation;
+    void observation.catch(() => {});
+    readFailed.release();
+    return Promise.reject(Error("wait infrastructure failed"));
+  });
+  const conversation = (await ownedHarness.conversation(id, context))!;
+  const conversationSpy = spyOn(ownedHarness, "conversation").mockResolvedValue(conversation);
+  const contextSpy = failure === "summary" ? spyOn(conversation, "context").mockImplementationOnce(() => {
+    readFailed.release(); return Promise.reject(Error("context read failed"));
+  }) : undefined;
+  try {
+    const result = facade.applyControlCommand(binding.chatJid, { type: "compact", raw: "/compact" }).then(value => { completed = true; return value; });
+    await entered.promise; await Bun.sleep(10);
+    expect(protections).toBe(1); expect(completed).toBe(false);
+    expect(() => runtime.compactSession(binding)).toThrow("not idle");
+    await expect(runtime.setSessionModel(binding, { provider: "qualification", modelId: "synthetic" })).rejects.toThrow("not idle");
+    if (failure === "close" || failure === "close-reconcile") {
+      await readFailed.promise;
+      let repair: Promise<void> | undefined;
+      if (failure === "close-reconcile") {
+        const repairing = barrier();
+        waitSpy.mockImplementationOnce((...args) => {
+          const observation = originalWait(...args);
+          repairing.release();
+          return observation;
+        });
+        repair = position.reconcileMaintenance!();
+        await repairing.promise; // Repair is inside the real public wait, provider held.
+      }
+      const closing = runtime.close();
+      expect(runtime.close()).toBe(closing);
+      const closed = closing.then(() => "resolved", error => error.message);
+      // A deterministic microtask barrier, not a wall-clock shutdown deadline.
+      const barrierReached = (async () => {
+        for (let n = 0; n < 32; n++) await Promise.resolve();
+        return "still waiting for held provider";
+      })();
+      expect(await Promise.race([closed, barrierReached])).toContain("settlement uncertain");
+      await expect(closing).rejects.toThrow("settlement uncertain");
+      expect(releases).toBe(0); owner.assert();
+      expect(protections).toBe(1); expect(completed).toBe(false);
+      expect(() => runtime.reconcileMaintenance(binding)).toThrow("Runtime closed");
+      hold.release(); await underlying;
+      if (repair) {
+        await repair;
+        expect(await result).toMatchObject({ status: "success", message: "Context compacted." });
+        expect(protections).toBe(0); expect(completed).toBe(true);
+        expect(waitSpy.mock.calls).toHaveLength(2);
+        expect(waitSpy.mock.calls[0][0]).toBe(waitSpy.mock.calls[1][0]);
+      }
+      // Even a completed in-flight repair cannot reopen this sealed runtime or
+      // turn the memoized close rejection into permission for resource cleanup.
+      expect(runtime.close()).toBe(closing);
+      await expect(runtime.close()).rejects.toThrow("settlement uncertain");
+      expect(() => runtime.reconcileMaintenance(binding)).toThrow("Runtime closed");
+      expect(releases).toBe(0); owner.assert();
+      expect(closeSpy).not.toHaveBeenCalled();
+      expect(() => TestOwner.acquire(path)).toThrow("owner busy");
+      return;
+    }
+    hold.release(); await underlying; await readFailed.promise; await Bun.sleep(10);
+    expect(protections).toBe(1); expect(completed).toBe(false);
+    for (const wrong of [{ incarnation: "other-domain" }, { chatJid: "web:other" },
+      { branchId: "wrong" }, { conversationId: id + 1 }]) {
+      expect(() => runtime.reconcileMaintenance({ ...binding, ...wrong })).toThrow("binding conflict");
+    }
+    // The data-only position captured its method/receiver before caller mutation.
+    const redirected = spyOn(runtime, "reconcileMaintenance").mockImplementation(() => {
+      throw Error("Replaced reconciliation must not run");
+    });
+    try {
+      // Concurrent repairs share the same public wait and settle the original command once.
+      const first = position.reconcileMaintenance!(), second = position.reconcileMaintenance!();
+      expect(first).toBe(second);
+      await first;
+      expect(redirected).not.toHaveBeenCalled();
+    } finally { redirected.mockRestore(); }
+    expect(await result).toMatchObject({ status: "success", message: "Context compacted." });
+    expect(protections).toBe(0);
+    const calls = waitSpy.mock.calls;
+    expect(calls).toHaveLength(2); expect(calls[0][0]).toBe(calls[1][0]);
+    await position.reconcileMaintenance!(); expect(waitSpy.mock.calls).toHaveLength(2);
+    const rows = await conversation.entries({ order: "ascending" }, 100, undefined, context);
+    expect(rows.items.filter(entry => entry.kind === "pi.compaction")).toHaveLength(1);
+    expect(f.host.modelCalls).toBe(4); // Three history turns and exactly one summary.
+    await runtime.close(); expect(releases).toBe(1);
+  } finally {
+    hold.release(); waitSpy.mockRestore(); contextSpy?.mockRestore(); conversationSpy.mockRestore(); closeSpy.mockRestore();
+    // Test-only teardown of the deliberately sealed/uncertain runtime; production
+    // close must NOT use this bypass or release its owner on unverified settlement.
+    if (failure === "close" || failure === "close-reconcile") await ownedHarness.close(context); else await runtime.close();
+    root.close(); owner.releaseAfterClose(); owner.closeConnection(); await rm(dir, { recursive: true, force: true });
+  }
 }, 20000);

@@ -1029,6 +1029,13 @@ export async function handleAgentMessage(
     );
   }
 
+  // Bound durable maintenance must follow the accepted primary's terminal
+  // settlement. Reuse the host selector captured before body awaits, without
+  // invoking source admission for a command. Legacy compaction stays immediate.
+  if (command?.type === "compact" && acceptSource !== undefined && isActive) {
+    return queueDeferredFollowup(content, { source: "web.compose", browserContext: browserObservability, wakeIfIdle: true });
+  }
+
   // Model/thinking commands: execute without writing to the timeline,
   // EXCEPT for bare /model (list) and bare /thinking (query) which should
   // surface their table/output as a timeline message like /theme does.
