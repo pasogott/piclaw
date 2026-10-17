@@ -1,10 +1,10 @@
-# #1650 acceptance: bounded Code Review local writes over 2641f073f — 17 October 2026
+# #1650 acceptance: all nine Code Review actions over 1d6ad39de — 17 October 2026
 
 The default application now selects the public durable engine in source; fleet/live acceptance and existing-chat migration are incomplete. The 45 requirements below retain their original IDs and titles. None is an unconditional fleet acceptance claim.
 
 ## Source and evidence boundary
 
-- Worktree: `/workspace/tmp/durable-1650`; HEAD `2641f073f` with native-write WIP. Add-on PR #208 source and qualification CI checkout select `10e8580ca42f0f9b94006598f642d72c70be8420`. The final candidate passes 485 tests / 7,182 assertions, exit 0; root passes 7,312 tests plus 25 feature and 9 build tests, exit 0. Exact-head hosted qualification is separate. Published Delegate `ea2d1416e`, its documentation `7150dd6a2` and supplied green hosted run `39073316535` retain their earlier boundaries.
+- Worktree: `/workspace/tmp/durable-1650`; HEAD `1d6ad39de` with four implementation/fixture WIP files plus CI. Add-on PR #208 source and qualification CI checkout select `d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f`. All nine model-tool actions are admitted. Full add-on qualification passes 206 tests with 3 skips; the current candidate passes 485 tests / 7,182 assertions and the root gate passes 7,294 tests plus 25 feature and 9 build tests, exit 0. Earlier 485-candidate / 7,312-root + 25 feature + 9 build passes belong to the older local-write source. Exact-head hosted qualification is separate. Published Delegate `ea2d1416e`, its documentation `7150dd6a2` and supplied green hosted run `39073316535` retain their earlier boundaries.
 - The old stashed Delegate/Code Review work and refusal checkpoints do not qualify this implementation. Older uncommitted Delegate WIP stays separate and unapproved. The actual default factory admits the bounded installed Delegate profile and native Code Review reads/local mutations below.
 - `runtime/src/runtime.ts` acquires strict ownership. `runtime/src/runtime/bootstrap.ts` supplies `prepareApplicationBackend` by default and loads the fixed `runtime/durable-engine/src/default-application-runtime.ts` entry before AgentPool/WebChannel. Missing candidate dependencies fail explicitly; there is no production legacy fallback. Statements that production registration or default selection are absent are obsolete.
 - The private engine still owns isolated Pi/Chord 1.3.0 pins and its lock. The root package still uses Pi 1.2.0 host definitions/model services. Source default adoption does not establish distributed-package installation or live activation. No fleet rollout, installed-package replacement, live provider acceptance or service restart is recorded here.
@@ -27,7 +27,7 @@ This is the single current HC/PC table. The [earlier acceptance report](pi-durab
 | ID | Original requirement | Status | Exact source / existing test evidence | What remains |
 | --- | --- | --- | --- | --- |
 | HC-001 | Simple prompt | source-qualified | `E/default-application-runtime.ts`, `E/application-bootstrap.ts`; `Q/default-application-runtime.test.ts`, `Q/application-web.test.ts` | Actual default synthetic HTTP acceptance→answer→EF-S02/reopen works; live authenticated providers and rollout are unverified. |
-| HC-002 | Tool prompt | source-qualified | `E/host-builtins.ts`, `E/host-plan-tool.ts`, `E/host-code-review-tool.ts`; `Q/host-builtins.test.ts`, `Q/host-grep.test.ts`, `Q/default-application-runtime.test.ts` | Seven Linux host builtins, approved Plan, bounded native Delegate and source-bound Code Review reads plus reply/edit/deleteMessage/resolve are admitted. Full Code Review jobs, general SSH/MCP/add-on tools, family policy and full installed parity are unqualified. |
+| HC-002 | Tool prompt | source-qualified | `E/host-builtins.ts`, `E/host-plan-tool.ts`, `E/host-code-review-tool.ts`; `Q/host-builtins.test.ts`, `Q/host-grep.test.ts`, `Q/default-application-runtime.test.ts` | Seven Linux host builtins, approved Plan, bounded native Delegate and all nine source-bound Code Review actions, including synchronous assigned-item `work`, are admitted. Operator/browser dispatch queue/delivery through durable ingress, general SSH/MCP/add-on tools, family policy and full installed parity are unqualified. |
 | HC-003 | Parallel tools | fixture-only | `Q/tools.test.ts`; ordering obligation in `earendil-100-durable-crosswalk.md` | Preparation/results do not prove completion-order raw commits versus call-order context/projection. No dedicated candidate ordering oracle. |
 | HC-004 | Safe replay | fixture-only | `E/host-tools.ts`; `Q/tools.test.ts` | Explicit safe-policy tests do not supply crash/redeclaration/idempotency/replay-authorisation matrix. Default host builtins remain unsafe. |
 | HC-005 | Never replay | fixture-only | `Q/sqlite.test.ts`, `Q/bash-port.test.ts` | Selected executing unsafe calls do not rerun on reopen; arbitrary external mutation/unknown-outcome reconciliation needs per-effect policy. |
@@ -88,23 +88,27 @@ Seven guarded Linux builtins (`read`, `bash`, `edit`, `write`, `find`, `ls`, `gr
 
 Approved installed Plan uses `E/host-extension-catalog.ts`, `E/host-plan-tool.ts` and native `E/host-plan-prompt.ts` `GenerationHooks.beforeRequest`. Public task/tool/source evidence bounds invocation-local chat KV authority. The hook refreshes request-only Plan state on each provider request; it does not emulate legacy SessionManager/ExtensionContext or persist invented hidden entries. Shared `runtime/src/db/register-extension-kv.ts` and the existing authority router replace duplicate registration. Canonical version/content/object checks and process-local path poisoning reject unsupported or stale SDK-cached factories. Approved Plan, bounded installed Delegate and bounded Code Review reads/local mutations have native default paths; other installed lifecycle/tool contributions fail startup explicitly. Historical Delegate/Code Review fixtures in `Q/delegate.test.ts` and `Q/addon-host-services.test.ts` do not qualify the new default Delegate path.
 
-## Bounded native Code Review reads and local writes
+## Current native Code Review: all nine actions
 
 The actual default factory installs `E/host-code-review-tool.ts` using the add-on's
 public `createCodeReviewTool` factory. Extraction removed duplicate declaration
 and execution from the old add-on index. The direct operator API and native reads/writes
 share its backend on the borrowed physical application root. Legacy `reviewAction`
 and the native factory use the same static synchronous `runCodeReviewMutation`
-helper and service methods; the helper replaces 72 duplicate legacy case lines.
-No extra queue or job ledger was added. Fifteen namespaced
+helper and service methods. The old duplicate `work` case was removed; the current
+add-on source delta is 30 lines in / 30 out. The native profile reuses the original
+registered declaration and description after removing its custom description.
+No parallel UX, extra queue or job ledger was added. Fifteen namespaced
 `addon_code_review_` data tables and `addon_code_review_schema` hold add-on data.
 The borrowed path opens no second database, leaves host PRAGMAs and
 `PRAGMA user_version` untouched and never closes the root connection. The legacy
 standalone `reviews.db` path stays for compatibility; native source does not use it.
 
-`dispatches`, `dispatch`, `threads`, `thread`, `reply`, `edit`, `deleteMessage`
-and `resolve` are admitted. `work` and caller authority overrides refuse before
-capture or service lookup. Root-owned exact
+All nine actions are admitted: `dispatches`, `dispatch`, `thread`, `threads`,
+`reply`, `edit`, `deleteMessage`, `resolve` and `work`. `work` is a pure synchronous
+assigned-item state mutation through `updateWork`; it creates no provider request,
+job, worker or delivery. Assignment epoch, current dispatch, item and thread versions
+bound the change. Caller authority overrides refuse before capture or service lookup. Root-owned exact
 accepted source/tool-call provenance, the current claimed operation/running harness,
 the original message's single `addon_local_dispatch` marker and
 `addon_local_dispatch_authorities` SQL establish the grant. Chat, incarnation,
@@ -123,13 +127,30 @@ source reviews are READY after the callback capture fix and coverage gaps were f
 
 The catalogue checks 13 backend source files, resolution, declaration and registered
 objects against published add-on commit
-`10e8580ca42f0f9b94006598f642d72c70be8420` (add-on PR #208), branch
+`d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f` (add-on PR #208), branch
 `implement/durable-code-review-1650`. Qualification CI checks out this exact source
 and supplies `DURABLE_CODE_REVIEW_ROOT`. Package version remains 0.1.8; no dependency
 upgrade, live installation or version release occurred. Source hashes stay frozen
 while gates run; the source/CI checkout is separate from installed dependencies.
 
-Current local-write receipts:
+Current all-nine receipts:
+
+- `code-review-work-actual.log`: actual-default 1 pass / 59 assertions, including
+  `work` → `in_progress`, stale-item and cross-chat denial, `completed` after the
+  agent's own resolution, physical root close/reopen and a fresh native read.
+- `code-review-work-addon.log`: focused add-on 44 pass / 405 assertions.
+- `code-review-work-addon-full.log`: 206 pass, 3 skip, 0 fail, 2,602 assertions,
+  60 files, 86.35 seconds, `EXIT_CODE=0`.
+- `code-review-work-{root,engine,qualification}-types.log` and
+  `code-review-work-addon-scoped-types.log`: three core typechecks and scoped
+  add-on types pass. Bounded scope review is READY.
+- `code-review-work-final-candidate.log`: 485 pass / 7,182 assertions; inner
+  candidate run completed normally without an outer exit-code receipt.
+  `code-review-work-final-root.log`: 7,294 pass, 74 baseline skips, 0 fail;
+  25 feature + 9 build tests pass; `EXIT_CODE=0`.
+
+Historical local-write receipts at core `2641f073f` and add-on `10e8580`, before
+all-nine WIP over `1d6ad39de` (their `work` refusal describes older source):
 
 - `code-review-write-actual.log`: actual-default 1 pass / 52 assertions, covering
   reply/idempotent replay, stale and cross-chat denial, edit/delete/resolve,
@@ -164,10 +185,12 @@ files; its interrupted wrapper supplied no exit-code receipt. Root gate
 
 HC-002 already had bounded source qualification. All 45 statuses stay unchanged:
 22 source-qualified, 17 fixture-only, 3 blocked-publicAPI and 3 migration/perf-unverified.
-The single `work` action's job state, native worker, delivery and meaningful
-request budgets still need qualification for full Code Review work; `work` is
-refused. Local mutations above do not complete that acceptance. Existing review-store migration stays
-last; no conversion ran. No tests, code, CI, network, services, pins, live state,
+Full API/tool source adoption does not qualify every PC row. Operator/browser
+dispatch queue and delivery through durable ingress still need representative
+acceptance. Earlier root direct-API tests and the actual new shared read establish
+bounded core behaviour without a provider; they do not establish that ingress/delivery
+path. No missing `work` worker is required. Existing review-store migration stays
+last: preserve the old `reviews.db`; no copy or conversion ran. No tests, code, CI, network, services, pins, live state,
 migration, commits or pushes changed during this documentation refresh.
 
 ## Bounded native Delegate consumer
@@ -326,7 +349,7 @@ Original public entry IDs, linear ancestry, parent/child counts, full snapshot e
 1. Close the exact-running-abort public API gap for HC-009/PC-004/PC-015 or obtain an explicit requirement decision. Host cancellation/publication fencing is already distinct; no unsafe substitute is proposed.
 2. Complete scheduler model overrides and native per-request budget attribution/reservation/accounting, exact cancellation, accepted-agent takeover and arbitrary-crash/stale-delivery qualification. The actual consumer and cap-denial checks above do not complete those requirements. Complete service/terminal-effect (STE) acceptance across general trusted internal and cross-session input, protected hand-offs, mobile cancellation and goal/checkpoint races. EF-S01/02/05/07/08 keep their acceptance, terminal, delivery, scheduler and projection authorities. Task outcomes/watches cannot replace terminal or delivery receipts.
 3. Qualify remaining semantic matrices: parallel ordering, safe replay, retry/budgets, corruption, deferred live-provider recovery, reload, usage accounting and automatic/background/overflow compaction. Existing bounded source/component results do not supply those matrices.
-4. Extend bounded native Delegate beyond the read-only same-parent-model profile: qualify request budgets/accounting, wider models/tools, attachments/deadlines and recovery. Obtain completed current Code Review candidate/root receipts; qualify the single `work` action's job state, native worker, meaningful request budgets and delivery for full jobs. Bounded native reads/local mutations above do not qualify those paths. Remote networking/auth, MCP/SSH effects and general lifecycle/state compatibility need separate evidence.
+4. Extend bounded native Delegate beyond the read-only same-parent-model profile: explicit model selection, deadlines, attachments and enabled budget caps currently reject. Qualify request accounting, wider tools and recovery. Obtain completed current Code Review candidate/root receipts and representative operator/browser dispatch queue/delivery acceptance through durable ingress. All nine model-tool actions are implemented; synchronous `work` needs no new worker/provider/job. Remote networking/auth, MCP/SSH effects and other add-on/event lifecycle/state compatibility need separate evidence.
 5. Keep migration last. Preserve existing host chat/branch/session identities; qualify compatibility totality, guarded cutover and reverse conversion after new work. `E/host-controller.ts` deliberately rejects checkpoint/rollback proof without public storage identity and historical frontier; copied host-only rollback success does not remove this limitation.
 6. Extend the bounded read evidence to production-scale restore/tree reads, storage growth, latency, memory and ownership/resource behaviour; supply a portable harness before clone-only reproduction is possible. Package/install, canary, live providers, fleet activation and rollback execution require separate approval and evidence.
 

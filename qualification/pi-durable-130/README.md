@@ -1,4 +1,58 @@
-# Native Code Review local writes — source follow-up over `2641f073f`
+# Current native Code Review: all nine model-tool actions — 17 October 2026
+
+The actual default factory admits all nine registered Code Review actions:
+`dispatches`, `dispatch`, `thread`, `threads`, `reply`, `edit`, `deleteMessage`,
+`resolve` and `work`. The native profile reuses the original registered declaration
+and description; its custom description was removed. No parallel UX was added.
+
+`work` synchronously changes assigned-item state through `updateWork`. It creates
+no provider request, job, worker or delivery. Legacy `reviewAction` and the native
+factory use the same `runCodeReviewMutation` helper; the old duplicate `work` case
+was removed. The add-on source delta is 30 lines in / 30 out. The existing root
+`IMMEDIATE` transaction checks current accepted source/harness and trusted dispatch
+authority before and after mutation. Assignment epoch, current dispatch, item and
+thread versions bound the state change. Idempotent receipts recheck authority;
+revocation before root commit rolls back the mutation and receipt.
+
+Core `/workspace/tmp/durable-1650` HEAD is `1d6ad39de` with four implementation/fixture
+WIP files plus CI. Add-on PR #208 and the core qualification CI checkout select
+`d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f`. This qualifies source only; installed
+package pins and versions are unchanged. No live installation or hosted success
+is established by these receipts.
+
+Existing receipts under `/workspace/reviews/durable-1650/`:
+
+- `code-review-work-actual.log`: actual-default 1 pass / 59 assertions, including
+  `work` → `in_progress`, stale-item and cross-chat denial, `completed` after the
+  agent's own resolution, physical database close/reopen and a fresh native read.
+- `code-review-work-addon.log`: focused add-on 44 pass / 405 assertions.
+- `code-review-work-addon-full.log`: 206 pass, 3 skip, 0 fail, 2,602 assertions,
+  60 files, 86.35 seconds, `EXIT_CODE=0`.
+- `code-review-work-{root,engine,qualification}-types.log` and
+  `code-review-work-addon-scoped-types.log`: three core typechecks and scoped
+  add-on types pass. Bounded scope review is READY.
+- `code-review-work-final-candidate.log`: 485 pass / 7,182 assertions; inner
+  candidate run completed normally without an outer exit-code receipt.
+  `code-review-work-final-root.log`: 7,294 pass, 74 baseline skips, 0 fail;
+  25 feature + 9 build tests pass; `EXIT_CODE=0`.
+
+All 45 IDs/statuses stay unchanged: 22 source-qualified, 17 fixture-only,
+3 blocked-publicAPI and 3 migration/perf-unverified. Full API/tool source adoption
+does not qualify every PC row. Operator/browser dispatch queue and delivery through
+durable ingress still need representative acceptance. Earlier root direct-API tests
+and the actual new shared read establish bounded core behaviour without a provider;
+they do not establish that ingress/delivery path. No missing `work` worker is required.
+Delegate explicit model selection, deadlines, attachments and enabled budget caps
+still reject; scheduler model overrides and caps, other add-ons/events, exact atomic
+current-task cancellation, the 17 fixture-only requirements and production performance
+still need acceptance. Migration stays last: preserve the old `reviews.db`; no copy
+or conversion ran. This refresh changes documentation only, with no code/test/network,
+CI/service/pin/version, commit or live-state changes and no test reruns.
+
+# Historical native Code Review local writes — source over `2641f073f`, add-on `10e8580`
+
+The following eight-action receipts predate the current all-nine source above;
+`work` refusal and proposed worker requirements below describe that older checkpoint.
 
 The actual default factory admits `dispatches`, `dispatch`, `threads`, `thread`,
 `reply`, `edit`, `deleteMessage` and `resolve`. The public add-on factory and legacy

@@ -26,8 +26,8 @@ const approvedDelegateFiles = Object.freeze({
 // Candidate source profile; qualification tests exercise every backend import.
 const approvedCodeReviewFiles = Object.freeze({
   "index.ts": "9816235d0418bb6f94f9dd0b99edc37f757cc3a72c50506d014cf267c90c0381",
-  "tool.ts": "bfaa5292b92a07f263fc9e300cd7eb3492d20c96c1740ad83331ffd1f6d20e26",
-  "runtime.ts": "48efdf0ea125e8ad13021f09770d6cd6c0ae7653a51c2bb1d178fc0d91d265d8",
+  "tool.ts": "4573abb088c0ccdc46dc159f12ed5467c8a54d87b271ca0829a94d2fcf7e5ca3",
+  "runtime.ts": "284b88d0e3466ddc710d228969f7cb23a34d1cdc059f5169c3c39754c6710127",
   "anchors.ts": "0c1504ff42fdd49b1d320fae4d8eafbf969a5dadb7d867cdc8fb81d737242453",
   "contracts.ts": "f1a6eaf8ad1d4b532ccb509b287991668ce8368a0167cd9e8bf83c2dea727f10",
   "database.ts": "18ea9fa1d0a5f7e215429d5fc563dcd166314e1ce8f96fe6a0350c93dabe6558",

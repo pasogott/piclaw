@@ -21,7 +21,7 @@ export interface CodeReviewNativeExports {
   setReviewDatabaseSource(source: { database: Database; assertOwner(): void }): () => void;
   closeReviewServices(): void;
 }
-const unavailable = () => ({ content: [{ type: "text" as const, text: "Code Review writes/unscoped reads unavailable while durable worker unqualified." }],
+const unavailable = () => ({ content: [{ type: "text" as const, text: "Unsupported Code Review action or arguments." }],
   details: { status: "unavailable" }, isError: true });
 
 /** The installed PUBLIC factory owns schema and read execution. This adapter
@@ -34,16 +34,16 @@ export function createHostCodeReviewTool(addon: CodeReviewNativeExports, options
 }) {
   const definition = addon.createCodeReviewTool({ async resolve() { throw Error("Invocation-local Code Review authority required"); } });
   if (definition.name !== "code_review") throw Error("Expected installed Code Review tool");
-  return createHostTool({ ...definition, description: "Read assigned Code Review dispatches and threads; reply, edit/delete own messages and resolve assigned threads. Work lifecycle unavailable." }, {
+  return createHostTool(definition, {
     authority: { check: options.assertOwner }, effectFence: "host-effect-port", replay: "unsafe",
     async invoke(args, call) {
       call.assertAllowed();
       if (!args || typeof args !== "object" || (Object.getPrototypeOf(args) !== Object.prototype && Object.getPrototypeOf(args) !== null))
         throw Error("Plain Code Review arguments required");
       const params = structuredClone(args) as Record<string, unknown>;
-      // Work/dispatch lifecycle and client authority remain unavailable before SQL.
-      const writing = ["reply", "edit", "deleteMessage", "resolve"].includes(String(params.action));
-      const allowed = writing ? ["action", "reviewId", "dispatchId", "threadId", "messageId", "requestId", "expectedVersion", "assignmentEpoch", "body", "explanation", "evidence", "fileId", "confirm"] : ["action", "dispatchId", "reviewId", "threadId", "after", "limit"];
+      // Reject unknown actions and client authority before SQL.
+      const writing = ["reply", "edit", "deleteMessage", "resolve", "work"].includes(String(params.action));
+      const allowed = writing ? ["action", "reviewId", "dispatchId", "threadId", "messageId", "requestId", "expectedVersion", "assignmentEpoch", "body", "explanation", "evidence", "fileId", "confirm", "state", "itemVersion", "threadVersion"] : ["action", "dispatchId", "reviewId", "threadId", "after", "limit"];
       if ((!writing && !["dispatches", "dispatch", "threads", "thread"].includes(String(params.action))) ||
         Object.keys(params).some(key => !allowed.includes(key))) return unavailable();
       const captured = await options.runtime().captureToolSource(call.conversationId, call.taskId, call.toolCallId);

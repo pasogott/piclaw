@@ -82,7 +82,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: rcarmo/piclaw-addons
-          ref: 10e8580ca42f0f9b94006598f642d72c70be8420
+          ref: d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f
           path: .qualification-addons
           persist-credentials: false
 
