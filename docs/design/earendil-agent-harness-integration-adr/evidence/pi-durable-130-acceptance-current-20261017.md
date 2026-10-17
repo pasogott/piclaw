@@ -127,17 +127,21 @@ types is separate cleanup, not required for these guards.
 Existing receipts: actual default two-child scenario 31 assertions; denied provider
 25; supplied current cap/provider revocation follow-ups 38 each; source/factory
 7 tests / 55 assertions; Delegate catalogue seven cases. The combined factory/
-catalogue scope has 30 cases including Plan; its earlier log has 28 pass / 2 fail.
+catalogue scope passes 30 cases including Plan; earlier failed logs are historical.
 Earlier individual revocation logs failed overbroad error-string assertions.
 The initial full candidate has 480 cases, 478 pass and two disk-test 5,000 ms
 timeouts (`native-delegate-final-candidate.log`, exit 1). Focused disk repeat passes
-42 / 329 (`native-delegate-disk-repeat.log`). Full
-`native-delegate-repeat-candidate.log` is IN PROGRESS at this checkpoint; root
-follows. All three scoped typechecks pass. Latest hosted status is unknown;
-no network queries or tests were run for this refresh. Published scheduler
+42 / 329 (`native-delegate-disk-repeat.log`). The second full candidate has
+479 pass and one different disk timeout. Final serial candidate
+`native-delegate-serial-candidate.log` passes 480 tests / 7,163 assertions,
+`EXIT_CODE=0`. Inner root gate `native-delegate-root-independent.log` completes
+normally: 7,312 pass, 74 baseline skips, 0 fail, plus 25 feature and 9 build tests.
+Its interrupted outer wrapper supplied no exit-code receipt. All three scoped
+typechecks pass. Published native Delegate adoption is `ea2d1416e`; its hosted
+result is not recorded here. Published scheduler
 `a89afe02f` has 458 candidate and 7,294 root + 25 feature + 9 build passes;
-`175032611` native-parallel has 462 candidate passes. Neither qualifies the dirty
-adoption tree's full gates.
+`175032611` native-parallel has 462 candidate passes. Those older results retain
+their own source boundaries.
 
 The 45 row statuses stay 22 source-qualified, 17 fixture-only, 3 blocked-publicAPI
 and 3 migration/perf-unverified. HC-002 already had bounded source qualification.
