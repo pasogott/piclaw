@@ -84,7 +84,7 @@ jobs:
           bun run typecheck
 
       - name: Required accepted-source engine integration
-        run: bun run test:local --cwd runtime --env PICLAW_DB_IN_MEMORY=1 --env PICLAW_REQUIRE_DURABLE_ENGINE=1 -- bun test test/channels/web/input-source-admission.test.ts
+        run: bun run test:local --cwd runtime --env PICLAW_DB_IN_MEMORY=1 --env PICLAW_REQUIRE_DURABLE_ENGINE=1 -- bun test test/channels/web/input-source-admission.test.ts test/agent-pool/legacy-authority-capture.test.ts
 
       - name: Isolated pi-durable qualification
         working-directory: qualification/pi-durable-130

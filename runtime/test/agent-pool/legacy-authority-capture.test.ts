@@ -2,7 +2,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import Database from "bun:sqlite";
 import { SessionManager, buildSessionContext, convertToLlm, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
 import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initDatabase, getDb } from "../../src/db/connection.js";
@@ -145,8 +145,12 @@ for (const later of [false, true]) {
   });
 }
 
+const hasDurableEngine = existsSync(new URL("../../durable-engine/node_modules/@earendil-works/pi-durable/package.json", import.meta.url));
+if (process.env.PICLAW_REQUIRE_DURABLE_ENGINE === "1") {
+  test("resident capture requires the installed application durable engine", () => expect(hasDurableEngine).toBe(true));
+}
 for (const persisted of [false, true]) {
-  test(`capture feeds actual copied application preparation: ${persisted ? "persisted original baseline prepares" : "current-only baseline is rejected"}`, async () => {
+  test.skipIf(!hasDurableEngine)(`capture feeds actual copied application preparation: ${persisted ? "persisted original baseline prepares" : "current-only baseline is rejected"}`, async () => {
     const f = fixture(false, persisted), bytes = readFileSync(f.file), before = f.root.serialize();
     const captured = await f.capture(), input = captured.inputs[0]!;
     const { prepareCopiedApplicationUpgrade } = await import("../../durable-engine/src/copied-upgrade.js");
