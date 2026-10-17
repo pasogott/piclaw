@@ -15,6 +15,7 @@ export interface CodeReviewNativeExports {
       chatIncarnation: string; reference: { addonId: "code-review"; intentId: string } };
     workspaceRoot: string;
     assertCurrent(): void;
+    write?<T>(body: () => T): T;
   }> }): ToolDefinition<TSchema, JsonValue>;
   reviewService(): unknown;
   setReviewDatabaseSource(source: { database: Database; assertOwner(): void }): () => void;
@@ -33,18 +34,20 @@ export function createHostCodeReviewTool(addon: CodeReviewNativeExports, options
 }) {
   const definition = addon.createCodeReviewTool({ async resolve() { throw Error("Invocation-local Code Review authority required"); } });
   if (definition.name !== "code_review") throw Error("Expected installed Code Review tool");
-  return createHostTool({ ...definition, description: "Read current assigned Code Review dispatches and threads. Writes unavailable while durable worker unqualified." }, {
+  return createHostTool({ ...definition, description: "Read assigned Code Review dispatches and threads; reply, edit/delete own messages and resolve assigned threads. Work lifecycle unavailable." }, {
     authority: { check: options.assertOwner }, effectFence: "host-effect-port", replay: "unsafe",
     async invoke(args, call) {
       call.assertAllowed();
       if (!args || typeof args !== "object" || (Object.getPrototypeOf(args) !== Object.prototype && Object.getPrototypeOf(args) !== null))
         throw Error("Plain Code Review arguments required");
       const params = structuredClone(args) as Record<string, unknown>;
-      // Refuse writes/authority fields before capture, service lookup, or SQL.
-      if (!["dispatches", "dispatch", "threads", "thread"].includes(String(params.action)) ||
-        Object.keys(params).some(key => !["action", "dispatchId", "reviewId", "threadId", "after", "limit"].includes(key))) return unavailable();
+      // Work/dispatch lifecycle and client authority remain unavailable before SQL.
+      const writing = ["reply", "edit", "deleteMessage", "resolve"].includes(String(params.action));
+      const allowed = writing ? ["action", "reviewId", "dispatchId", "threadId", "messageId", "requestId", "expectedVersion", "assignmentEpoch", "body", "explanation", "evidence", "fileId", "confirm"] : ["action", "dispatchId", "reviewId", "threadId", "after", "limit"];
+      if ((!writing && !["dispatches", "dispatch", "threads", "thread"].includes(String(params.action))) ||
+        Object.keys(params).some(key => !allowed.includes(key))) return unavailable();
       const captured = await options.runtime().captureToolSource(call.conversationId, call.taskId, call.toolCallId);
-      const authority = createPlanKvAuthority(options.root, captured, () => { call.assertAllowed(); options.assertOwner(); }, true);
+      const authority = createPlanKvAuthority(options.root, captured, () => { call.assertAllowed(); options.assertOwner(); }, !writing);
       const primary = captured.inputs.find(input => input.sourceSeq === captured.operation.primarySourceSeq);
       const workspaceRoot = realpathSync(options.cwd);
       const check = () => {
@@ -80,11 +83,15 @@ export function createHostCodeReviewTool(addon: CodeReviewNativeExports, options
       const native = addon.createCodeReviewTool({ async resolve() {
         check();
         if (resolveReference() !== intentId) throw Error("Code Review dispatch changed");
-        return { service: addon.reviewService(), workspaceRoot,
-          identity: { ownerId: "default", actorId: primary!.branchId, kind: "agent", workspaceId: createHash("sha256").update(workspaceRoot).digest("hex"),
-            chatId: primary!.chatJid, chatIncarnation: primary!.branchId, reference: { addonId: "code-review", intentId } },
-          assertCurrent() { check(); if (resolveReference() !== intentId) throw Error("Code Review dispatch changed"); },
-        };
+        const assertCurrent = () => { check(); if (resolveReference() !== intentId) throw Error("Code Review dispatch changed"); };
+        return Object.freeze({ service: addon.reviewService(), workspaceRoot,
+          identity: Object.freeze({ ownerId: "default", actorId: primary!.branchId, kind: "agent" as const, workspaceId: createHash("sha256").update(workspaceRoot).digest("hex"),
+            chatId: primary!.chatJid, chatIncarnation: primary!.branchId, reference: Object.freeze({ addonId: "code-review" as const, intentId }) }),
+          assertCurrent,
+          ...(writing ? { write: <T>(body: () => T): T => authority.write(() => {
+            assertCurrent(); const result = body(); assertCurrent(); return result;
+          }) } : {}),
+        });
       } });
       const result = await native.execute(call.toolCallId, params, call.signal, call.onUpdate, undefined as never);
       check();

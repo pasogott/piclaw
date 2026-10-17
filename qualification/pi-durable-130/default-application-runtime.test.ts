@@ -116,7 +116,7 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   const model = { provider: "synthetic", id: "approved", name: "Approved", api: "openai-completions", baseUrl: "https://invalid.invalid", input: ["text"], reasoning: false, contextWindow: 10000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   const requested: string[] = [];
   const planRequests: string[] = [];
-  let toolSequence: { name: string; arguments: Record<string, unknown> }[] | undefined;
+  let toolSequence: { name: string; arguments: Record<string, unknown> | (() => Record<string, unknown>) }[] | undefined;
   const reviewPackage = scenario === "native-code-review" ? installCodeReviewFixture(workspace) : undefined;
   if (scenario === "native-plan") {
     const source = process.env.DURABLE_ADDONS_ROOT;
@@ -187,7 +187,7 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
     }
     const step = toolSequence?.shift();
     const message = { role: "assistant" as const, api: "openai-completions" as const, provider: physical.provider, model: physical.id,
-      content: firstDelegate ? (revokeDelegate ? ["A"] : ["A", "B"]).map(id => ({ type: "toolCall" as const, id, name: "delegate", arguments: { prompt: "NATIVE_DELEGATE_CHILD", tools: "read_only" } })) : child && revokeDelegate && !input.messages.some(message => message.role === "toolResult") ? [{ type: "toolCall" as const, id: "child-private-read", name: "read", arguments: { path: childReadPath } }] : step ? [{ type: "toolCall" as const, id: `factory-tool-${calls}`, name: step.name, arguments: step.arguments }]
+      content: firstDelegate ? (revokeDelegate ? ["A"] : ["A", "B"]).map(id => ({ type: "toolCall" as const, id, name: "delegate", arguments: { prompt: "NATIVE_DELEGATE_CHILD", tools: "read_only" } })) : child && revokeDelegate && !input.messages.some(message => message.role === "toolResult") ? [{ type: "toolCall" as const, id: "child-private-read", name: "read", arguments: { path: childReadPath } }] : step ? [{ type: "toolCall" as const, id: `factory-tool-${calls}`, name: step.name, arguments: typeof step.arguments === "function" ? step.arguments() : step.arguments }]
         : [{ type: "text" as const, text: "factory synthetic reply" }], stopReason: step || firstDelegate || (child && revokeDelegate && !input.messages.some(message => message.role === "toolResult")) ? "toolUse" as const : "stop" as const, timestamp: Date.now(),
       usage: { input: 5, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 10, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
     onProviderResponse?.();
@@ -454,16 +454,25 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
     toolSequence = [
       { name: "code_review", arguments: { action: "thread", threadId: thread.threadId } },
       { name: "code_review", arguments: { action: "thread", threadId: otherThread.threadId } },
-      { name: "code_review", arguments: { action: "reply", threadId: thread.threadId, body: "MUST_NOT_WRITE" } },
+      { name: "code_review", arguments: { action: "reply", threadId: thread.threadId, body: "NATIVE_REPLY", requestId: "native-reply", expectedVersion: 1, assignmentEpoch: service.getThread(who, thread.threadId).assignment_epoch } },
+      { name: "code_review", arguments: { action: "reply", threadId: thread.threadId, body: "NATIVE_REPLY", requestId: "native-reply", expectedVersion: 1, assignmentEpoch: service.getThread(who, thread.threadId).assignment_epoch } },
+      { name: "code_review", arguments: { action: "reply", threadId: thread.threadId, body: "STALE_MUST_NOT_WRITE", requestId: "native-stale", expectedVersion: 1, assignmentEpoch: service.getThread(who, thread.threadId).assignment_epoch } },
+      { name: "code_review", arguments: { action: "reply", threadId: otherThread.threadId, body: "CROSS_CHAT_MUST_NOT_WRITE", requestId: "native-cross", expectedVersion: 1, assignmentEpoch: service.getThread(who, otherThread.threadId).assignment_epoch } },
+      { name: "code_review", arguments: () => ({ action: "edit", messageId: service.getThread(who, thread.threadId).messages.at(-1).id, body: "NATIVE_EDIT", requestId: "native-edit", expectedVersion: 1, assignmentEpoch: service.getThread(who, thread.threadId).assignment_epoch }) },
+      { name: "code_review", arguments: () => ({ action: "deleteMessage", messageId: service.getThread(who, thread.threadId).messages.at(-1).id, confirm: true, requestId: "native-delete", expectedVersion: 2, assignmentEpoch: service.getThread(who, thread.threadId).assignment_epoch }) },
+      { name: "code_review", arguments: () => ({ action: "resolve", threadId: thread.threadId, fileId: review.files[0], explanation: "NATIVE_RESOLUTION", evidence: ["local test"], requestId: "native-resolve", expectedVersion: service.getThread(who, thread.threadId).version, assignmentEpoch: service.getThread(who, thread.threadId).assignment_epoch }) },
+      { name: "code_review", arguments: { action: "work", dispatchId: submitted.dispatchId, state: "completed" } },
     ];
     expect(await bound.dispatchAcceptedInput!(message.chat_jid, message.id, row)!()).toBe("settled");
     expect(observedResults.get("factory-tool-1")).toMatchObject({ toolName: "code_review" });
     expect(JSON.stringify(observedResults.get("factory-tool-1"))).toContain("NATIVE_SAVED_REVIEW_THREAD");
     expect(observedResults.get("factory-tool-2")).toMatchObject({ isError: true });
     expect(JSON.stringify(observedResults.get("factory-tool-2"))).not.toContain(secret);
-    expect(observedResults.get("factory-tool-3")).toMatchObject({ isError: true });
-    expect(JSON.stringify(observedResults.get("factory-tool-3"))).toContain("unavailable");
-    expect(service.getThread(who, thread.threadId).messages).toHaveLength(1);
+    for (const id of [3, 4, 7, 8, 9]) expect(observedResults.get(`factory-tool-${id}`)?.isError).not.toBe(true);
+    expect(observedResults.get("factory-tool-3")?.content).toEqual(observedResults.get("factory-tool-4")?.content);
+    for (const id of [5, 6, 10]) expect(observedResults.get(`factory-tool-${id}`)).toMatchObject({ isError: true });
+    expect(service.getThread(who, thread.threadId)).toMatchObject({ state: "resolved", version: 5 });
+    expect(service.getThread(who, thread.threadId).messages).toHaveLength(3);
     expect(JSON.stringify(service.getThread(who, thread.threadId).messages)).not.toContain("MUST_NOT_WRITE");
     expect(service.getThread(who, otherThread.threadId).messages).toHaveLength(1);
     for (const text of [JSON.stringify(root.query("SELECT * FROM entries").all()), planRequests.join("\n"), JSON.stringify(root.query("SELECT content FROM messages WHERE is_bot_message=1").all())]) {
@@ -480,7 +489,7 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
     const reopenedService = api.reviewService();
     expect(reopenedService).not.toBe(service);
     expect(reopenedService.database.db).toBe(root);
-    expect(reopenedService.getThread(who, thread.threadId).messages).toHaveLength(1);
+    expect(reopenedService.getThread(who, thread.threadId).messages).toHaveLength(3);
     expect(["foreign_keys", "journal_mode"].map(name => root.query(`PRAGMA ${name}`).get())).toEqual(pragmas);
     const reopenedBase = createRuntimeBaseServices({ dataDir: workspace });
     const reopenedPool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
@@ -509,7 +518,7 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
       toolSequence = [{ name: "code_review", arguments: { action: "thread", threadId: freshThread.threadId } }];
       expect(await reopened.dispatchAcceptedInput!(target.chatId, freshMessage.id, freshRow)!()).toBe("settled");
       expect([...observedResults.values()].some(result => result.toolName === "code_review" && !result.isError && JSON.stringify(result.content).includes("NATIVE_REOPENED_THREAD"))).toBe(true);
-      expect(reopenedService.getThread(who, thread.threadId).messages).toHaveLength(1);
+      expect(reopenedService.getThread(who, thread.threadId).messages).toHaveLength(3);
       expect(Array.from(new Bun.Glob("**/reviews.db").scanSync({ cwd: workspace, dot: true, onlyFiles: true }))).toEqual([]);
     } finally {
       await reopenedChannel.stop(); await reopenedBase.queue.shutdown(); await reopenedPool.shutdown(); backend.stop(); await backend.close();

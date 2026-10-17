@@ -1,4 +1,64 @@
-# Native Code Review adoption — source follow-up over `7150dd6a2`
+# Native Code Review local writes — source follow-up over `2641f073f`
+
+The actual default factory admits `dispatches`, `dispatch`, `threads`, `thread`,
+`reply`, `edit`, `deleteMessage` and `resolve`. The public add-on factory and legacy
+`reviewAction` call the same synchronous `runCodeReviewMutation` helper and service
+methods. The helper replaces 72 lines of duplicate legacy mutation cases. Native
+writes use the existing borrowed application root; no extra queue or job ledger
+was added. `work` still refuses before service lookup.
+
+## Mutation authority and rollback
+
+The adapter captures the exact accepted EF-S01 source, running public tool call,
+claimed operation, current harness/version and original trusted local-dispatch
+marker. Caller fields cannot replace the dispatch-bound identity. Arguments are
+cloned before awaiting policy resolution; the returned authority and nested
+identity/reference are frozen. The existing `createPlanKvAuthority` write wrapper
+opens a root `IMMEDIATE` transaction. Current source/harness and trusted dispatch
+scope checks run inside it before and after the synchronous mutation. A revoked
+owner or stale source denies the write; post-callback revocation rolls back nested
+store transactions, including messages, versions, events and request receipts.
+An existing request receipt cannot bypass renewed authority checks.
+
+## Current source and supplied receipts
+
+Core HEAD is `2641f073f` with native-write WIP. Add-on PR #208 source and the
+qualification CI checkout select
+`10e8580ca42f0f9b94006598f642d72c70be8420`. Source hashes are frozen while gates run.
+This checkout qualifies source; it does not change the installed dependency or
+establish deployment, migration or hosted CI success.
+
+Existing receipts under `/workspace/reviews/durable-1650/`:
+
+- `code-review-write-actual.log`: 1 actual-default scenario passes 52 assertions:
+  reply, idempotent replay, stale/cross-chat denial, edit, delete, resolve and
+  refused `work`; persisted reads still work after physical close/reopen.
+- `native-tool-mutation.test.ts`: four real-backend cases cover revocation after
+  asynchronous policy resolution, revocation before root commit with nested-store
+  rollback, revoked request-receipt replay and caller identity override denial.
+  The supplied focused add-on scope passes 28 tests / 262 assertions.
+- `code-review-write-addon-final.log`: 202 pass, 3 skip, 0 fail, 2,568 assertions
+  across 60 files in 86.19 seconds, `EXIT_CODE=0`. Add-on types pass.
+- `code-review-write-{root,engine,qualification}-types.log`: all three core
+  typechecks pass. Independent bounded local-mutation review is READY with no
+  P1/P2 findings; it does not qualify budgets or new LLM execution.
+- `code-review-write-final-candidate.log`: 485 pass, 0 fail, 7,182 assertions,
+  `EXIT_CODE=0`. `code-review-write-final-root.log`: 7,312 pass, 74 baseline
+  skips, 0 fail; 25 feature + 9 build tests pass; `EXIT_CODE=0`.
+
+All 45 statuses stay 22 source-qualified, 17 fixture-only, 3 blocked-publicAPI and
+3 migration/perf-unverified. HC-002 expands its bounded source scope to local
+review mutations. Full Code Review work still needs the single `work` action's
+job state, native worker, delivery and meaningful request budgets. Scheduler model
+overrides/request caps and generic exact-running abort gaps also remain.
+Existing `reviews.db` migration stays last; the store is preserved. No tests,
+network, service operations, CI/pin edits, deployment, migration, commits or pushes
+ran for this documentation refresh.
+
+# Native Code Review reads — historical source at `2641f073f`
+
+The following receipts qualify the older read-only profile at add-on `a1a165c`;
+the write-source receipts above have a separate boundary.
 
 The actual default factory now admits bounded installed Code Review reads through
 `runtime/durable-engine/src/host-code-review-tool.ts`. The add-on public
@@ -13,8 +73,9 @@ unused by this native source path. No existing review store was converted.
 
 ## Read authority and lifecycle
 
-Only `dispatches`, `dispatch`, `threads` and `thread` are admitted. Writes and
-caller-supplied authority fields refuse before source capture or service lookup.
+At this read-only checkpoint, only `dispatches`, `dispatch`, `threads` and `thread`
+were admitted. Writes and caller-supplied authority fields refused before source
+capture or service lookup.
 The root adapter captures the exact public running tool call, accepted source,
 current claimed operation and running harness. It reads the original accepted
 message's single `addon_local_dispatch` marker and verifies its content hash,
@@ -64,8 +125,9 @@ Existing receipts under `/workspace/reviews/durable-1650/`:
 
 The 45 statuses stay 22 source-qualified, 17 fixture-only, 3 blocked-publicAPI
 and 3 migration/perf-unverified. HC-002 already had bounded source qualification
-and now includes native Code Review reads. A full Code Review job still needs
-native review writes/dispatch workers, request budget and delivery qualification.
+and now includes native Code Review reads. These read-only receipts did not qualify native review writes, dispatch workers,
+request budgets or delivery. The local-write follow-up above qualifies only its
+stated mutation scope.
 Existing `reviews.db` migration stays last. No migration or live activation ran.
 
 Published native Delegate is `ea2d1416e`; its receipt documentation is
