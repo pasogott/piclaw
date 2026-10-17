@@ -116,6 +116,15 @@ export class AgentSessionManager {
 
   constructor(private readonly options: AgentSessionManagerOptions) {}
 
+  /** Read-only capture also requires an external all-controller admission fence. */
+  assertLegacyCaptureIdle(): void {
+    if (this.isShuttingDown || this.mcpSnapshotInFlight || this.hasActiveMemoryReclamationWork() ||
+      this.queuedPrewarms.size || this.prewarmLoopActive || this.failedMcpDisposals.size ||
+      [...this.options.pool.values(), ...this.options.sidePool.values()].some(({ runtime }) =>
+        runtime.session.isRetrying || runtime.session.hasPendingBashMessages || runtime.session.pendingMessageCount > 0))
+      throw new Error("Legacy pool lifecycle/agent work has not drained");
+  }
+
   /** Synchronous full GC must not interrupt protected runs or lifecycle work. */
   hasActiveMemoryReclamationWork(): boolean {
     return this.evictionProtectionCounts.size > 0 || this.prewarmInFlight.size > 0

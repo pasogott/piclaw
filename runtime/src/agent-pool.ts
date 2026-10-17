@@ -23,6 +23,7 @@
 
 import { existsSync, mkdirSync, readFileSync, statSync } from "fs";
 import { join } from "path";
+import { captureResidentLegacyUpgradeBindings } from "./agent-pool/legacy-authority-capture.js";
 import {
   type AgentSession,
   type AgentSessionRuntime,
@@ -286,6 +287,10 @@ export function createKnownModelCostResolver(agentDir: string): (provider: strin
  * process-spawn overhead, conversation context already loaded.
  */
 export class AgentPool {
+  /** Explicit read-only resident capture; never selects or constructs a session. */
+  captureLegacyUpgradeBindings(options: import("./agent-pool/legacy-authority-capture.js").LegacyCaptureOptions) {
+    return captureResidentLegacyUpgradeBindings(options, this.pool, () => this.sessionManager.assertLegacyCaptureIdle());
+  }
   inspectMcpSettings(policy?: unknown) { return this.mcpSettings.inspect(policy); }
   inspectMcpServers(edit?: unknown) { return this.mcpSettings.inspectServers(edit); }
   applyMcpServers(input: { revision: string; acknowledgeInterruptions: boolean }, authorise: () => void, signal: AbortSignal) {

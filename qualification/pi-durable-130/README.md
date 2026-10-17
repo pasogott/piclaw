@@ -1233,3 +1233,24 @@ bindings is still required for automatic migration; this is not readiness eviden
 Focused inventory tests pass 9 cases / 47 assertions; runtime types, root fast CI
 and bounded independent review pass. No journal/import writes, JSONL session writes,
 new database/ledger, activation or live-state access occurs.
+
+### Resident legacy migration authority capture
+
+`AgentPool.captureLegacyUpgradeBindings` now captures actual resident session/file,
+selected leaf, original session and current prompt under strict ownership and a
+sealed/drained coordinator capability. It does not open a guessed session, choose
+the newest file or create migration authority from filenames. Queue/pool activity,
+root autocommit/frontier, live session state, source bytes and canonical resident
+filename binding are rechecked after filesystem awaits and on later revalidation.
+External alias retargeting rejects; every selected file leaf needs resident authority.
+
+Current prompt capture alone is not an original persisted baseline. The real upgrade
+preparation rejects that case; a genuinely persisted-baseline fixture yields a
+preparable plan without capture writes. Missing resident authority still fails
+closed, so this is not complete offline or automatic installation migration.
+
+Focused verification passes 37 tests / 123 assertions; runtime types/build and
+bounded independent review pass. The surviving interrupted root fast gate completed
+7,203 tests (74 baseline skips), plus 25 feature and 9 build tests without failures
+and with the final build footer. Its interrupted wrapper recorded no exit code.
+No importer/journal writes, ongoing JSONL, activation or live-state changes occur.

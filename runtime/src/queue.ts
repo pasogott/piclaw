@@ -129,6 +129,13 @@ export class AgentQueue {
     return Boolean(lane?.running || lane?.pending.length);
   }
 
+  /** Actual queue state, including delayed retries and the next-tick start window. */
+  assertLegacyCaptureDrained(): void {
+    if (this.retryingIds.size || this.retryTimers.size || [...this.lanes.values()].some(lane =>
+      lane.running || lane.current || lane.runningPromise || lane.pending.length))
+      throw new Error("Legacy queue has not drained");
+  }
+
   /** Convenience wrapper that prefixes the id with "task:" for scheduled tasks. */
   enqueueTask(taskId: string, fn: () => Promise<void>, laneKey?: string): void {
     this.enqueue(fn, `task:${taskId}`, laneKey);
