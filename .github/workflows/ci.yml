@@ -63,6 +63,15 @@ jobs:
         with:
           bun-version: ${{ steps.bun-version.outputs.version }}
 
+      - name: Install host tool executables
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fd-find ripgrep
+          command -v fdfind
+          command -v rg
+          fdfind --version
+          rg --version
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
