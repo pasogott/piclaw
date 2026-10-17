@@ -161,6 +161,9 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
 export class HostConversationRuntime {
   private closed = false;
   private changingModel = false;
+  private authorizingMaintenance = false;
+  private maintenance?: Promise<unknown>;
+  private maintenanceTaskId?: number;
   private closing?: Promise<void>;
   // Lifecycle joins only: not an input queue or admission/dedup authority.
   private readonly active = new Set<Promise<unknown>>();
@@ -168,9 +171,9 @@ export class HostConversationRuntime {
   // Only rollback joins these; ordinary close must keep its detach semantics.
   private readonly underlyingWaits = new Set<Promise<unknown>>();
   private readonly observations = new AbortController();
-  private observe<T>(body: () => Promise<T>): Promise<T> {
+  private observe<T>(body: () => Promise<T>, authorityRead = false): Promise<T> {
     this.fence();
-    if (this.changingModel) throw new Error("Model change in progress");
+    if (this.changingModel && !(authorityRead && this.authorizingMaintenance)) throw new Error("Runtime maintenance in progress");
     const promise = body();
     this.active.add(promise);
     void promise.finally(() => this.active.delete(promise)).catch(() => {});
@@ -330,6 +333,71 @@ export class HostConversationRuntime {
     this.active.add(operation);
     try { await operation; } finally { this.active.delete(operation); this.changingModel = false; }
   }
+  /** Explicit idle-only maintenance. Observer cancellation never cancels or releases the owned task. */
+  compactSession(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, instructions?: string, signal?: AbortSignal): Promise<{ compacted: boolean }> {
+    this.fence();
+    const o = this.options;
+    const copy = Object.freeze({ incarnation: binding.incarnation, chatJid: binding.chatJid, branchId: binding.branchId, conversationId: binding.conversationId });
+    const id = o.existingConversationIds.find(id => id === copy.conversationId);
+    if (copy.incarnation !== o.incarnation || id === undefined || o.conversationFor(copy.chatJid, copy.branchId) !== id) throw new Error("Host binding conflict");
+    if (instructions !== undefined && (typeof instructions !== "string" || instructions.length > 65536)) throw new Error("Invalid compact instructions");
+    if (!o.withIdleModelGuard) throw new Error("Idle model guard unavailable");
+    if (this.changingModel || this.active.size) throw new Error("Runtime is not idle");
+    signal?.throwIfAborted();
+    this.changingModel = true; // Claim before the first await, across the entire authority domain.
+    const context = withoutAbortSignal(this.context);
+    const assertOwner = () => o.owner.assert(); // Close seals callers but joins this maintenance.
+    const operation = (async () => {
+      const inspection = await this.harness.inspect(context); assertOwner();
+      if (inspection.tasks.length || inspection.submissions.length) throw new Error("Runtime is not idle");
+      this.authorizingMaintenance = true;
+      try { await o.authorizeScheduling(inspection); } finally { this.authorizingMaintenance = false; }
+      assertOwner();
+      const conversation = await this.harness.conversation(id, context); assertOwner();
+      if (!conversation) throw new Error("Missing existing conversation");
+      const taskId = await o.withIdleModelGuard!(async () => {
+        // Same Session line and same-file BEGIN IMMEDIATE checks before task admission.
+        await conversation.commit(async tx => {
+          assertOwner();
+          for (const conversationId of o.existingConversationIds) {
+            if ((await tx.doc(InboxDoc, conversationId)).items.length || (await tx.doc(LiveDoc, conversationId)).run) throw new Error("Runtime is not idle");
+          }
+        }, context);
+        const current = await this.harness.inspect(context); assertOwner();
+        if (current.tasks.length || current.submissions.length) throw new Error("Runtime is not idle");
+        return conversation.compact(instructions, context);
+      }); // Release SQL guard at admission, never across provider execution or summary writes.
+      this.maintenanceTaskId = taskId;
+      assertOwner();
+      const task = await this.harness.waitForTask(taskId, context); assertOwner();
+      if (task.state.outcome.status !== "completed") throw new Error("Compaction did not complete");
+      const result = task.state.outcome.result;
+      let entryId = result.entryId;
+      if (result.submissionId !== undefined) {
+        const submission = await this.harness.submission(result.submissionId, context); assertOwner();
+        if (!submission) throw new Error("Missing compaction write");
+        const settled = await submission.wait(context); assertOwner();
+        if (settled.type !== "write" || settled.status !== "done" || settled.conversationId !== id || settled.entry === undefined) throw new Error("Compaction write not placed");
+        entryId = settled.entry;
+      }
+      if (entryId !== undefined) {
+        const entry = await conversation.commit(tx => tx.entry(entryId!), context); assertOwner();
+        const view = await conversation.context(context); assertOwner();
+        if (!entry || entry.conversationId !== id || entry.kind !== "pi.compaction" || view.head?.id !== entryId) throw new Error("Compaction context not committed");
+      }
+      return { compacted: entryId !== undefined };
+    })();
+    this.active.add(operation);
+    // A rejected wait may leave a known task running. Keep exclusion until close/reopen's
+    // public whole-domain authority scan; never silently resume unknown maintenance.
+    this.maintenance = operation.then(() => { this.changingModel = false; }, async () => {
+      try {
+        const current = await this.harness.inspect(context); assertOwner();
+        if (!current.tasks.length && !current.submissions.length) this.changingModel = false;
+      } catch { /* retain exclusion and owner until close */ }
+    }).finally(() => { this.active.delete(operation); }).catch(() => {});
+    return awaitWithContext(operation, withAbortSignal(signal ?? new AbortController().signal, context));
+  }
   private port(intent: boolean) {
     const port = intent ? this.options.bindings.intents : this.options.bindings;
     if (!port) throw new Error("Accepted intent bindings required");
@@ -405,9 +473,23 @@ export class HostConversationRuntime {
     const inspection = await this.harness.inspect(this.context); this.fence();
     await this.options.authorizeScheduling(inspection); this.fence();
   }
-  submit(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.submitInput(copy)); }
+  submit(input: AcceptedInput) { const copy = inputSnapshot(input); return this.admitInput(copy); }
   /** Targets the accepted host operation, NOT an exact physical model generation. */
-  submitIntent(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.submitInput(copy, true)); }
+  submitIntent(input: AcceptedInput) { const copy = inputSnapshot(input); return this.admitInput(copy, true); }
+  private async admitInput(input: AcceptedInput, intent = false) {
+    this.fence();
+    // Join only owned compaction completion, never its detachable observer. This wait
+    // is not active work: maintenance must finish before normal admission can begin.
+    // A failed/uncertain maintenance keeps changingModel set and observe rejects;
+    // close seals this waiter too. checked() revalidates the captured source/owner.
+    while (this.changingModel && this.maintenance) {
+      const maintenance = this.maintenance;
+      await maintenance;
+      this.fence();
+      if (this.maintenance === maintenance) break;
+    }
+    return this.observe(() => this.submitInput(input, intent));
+  }
   private async submitInput(input: AcceptedInput, intent = false) {
     const port = this.port(intent);
     const { operation, conversation, content } = await this.checked(input, intent);
@@ -429,7 +511,7 @@ export class HostConversationRuntime {
     return submission.id;
   }
   /** Pure lookup/status/committed-entry reads. No wait/resume, terminal write or payload publication. */
-  reconcile(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.readState(copy)); }
+  reconcile(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.readState(copy), true); }
   inspectAuthority() {
     return this.observe(async () => {
       const inspection = await this.harness.inspect(this.context); this.fence();
@@ -439,9 +521,9 @@ export class HostConversationRuntime {
         if (live?.run) runs.push(live.run);
       }
       return { inspection, runs };
-    });
+    }, true);
   }
-  reconcileIntent(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.readState(copy, true)); }
+  reconcileIntent(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.readState(copy, true), true); }
   private async readState(input: AcceptedInput, intent = false) {
     const { operation, conversation } = await this.checked(input, intent);
     const record = await this.record(input, intent);
@@ -612,6 +694,13 @@ export class HostConversationRuntime {
     this.observations.abort();
     return this.closing = (async () => {
       await Promise.allSettled([...this.active]);
+      if (this.maintenance) {
+        await this.maintenance;
+        this.options.owner.assert();
+        const inspection = await this.harness.inspect(withoutAbortSignal(this.context));
+        if (inspection.tasks.length || inspection.submissions.length)
+          throw new Error(`Maintenance not quiescent (task ${this.maintenanceTaskId ?? "admission uncertain"}); owner retained`);
+      }
       if (requireQuiescent) {
         await Promise.allSettled([...this.underlyingWaits]);
         this.options.owner.assert();

@@ -322,7 +322,7 @@ export class AgentRuntimeFacade {
     // Capture routing before any session factory is entered. Never fall back on port failure.
     this.durableSessions = new Map([...options.durableSessions ?? []].map(([chat, port]) =>
       [chat, Object.freeze({ sessionId: port.sessionId, branchId: port.branchId,
-        readPosition: port.readPosition.bind(port), readModel: port.readModel?.bind(port), setModel: port.setModel?.bind(port), readTree: port.readTree?.bind(port) })]));
+        readPosition: port.readPosition.bind(port), readModel: port.readModel?.bind(port), setModel: port.setModel?.bind(port), compact: port.compact?.bind(port), readTree: port.readTree?.bind(port) })]));
     const legacy = options.getOrCreateRuntime;
     this.options = { ...options, getOrCreateRuntime: chat => {
       if (this.durableSessions.has(chat)) return Promise.reject(new Error("Legacy session operation unavailable for durable conversation"));
@@ -336,6 +336,20 @@ export class AgentRuntimeFacade {
 
   async applyControlCommand(chatJid: string, command: AgentControlCommand): Promise<AgentControlResult> {
     if (this.durableSessions.has(chatJid)) {
+      if (command.type === "compact") {
+        requireSingleUserDirectExecution("Direct control commands");
+        const port = this.durableSessions.get(chatJid)!;
+        if (!port.compact) throw new Error("Durable compaction unavailable");
+        revokeAddonLocalAgent(chatJid);
+        const release = this.options.acquireCommandProtection?.(chatJid);
+        try {
+          const result = await port.compact(command.instructions?.trim() || undefined);
+          return { status: "success", message: result.compacted ? "Context compacted." : "Nothing to compact.",
+            sessionGeneration: port.sessionId,
+            contextUsage: { tokens: null, contextWindow: null, percent: null, sessionGeneration: port.sessionId,
+              source: "durable_context", phase: "after_manual_compaction" } };
+        } finally { release?.(); }
+      }
       if (command.type === "model") {
         requireSingleUserDirectExecution("Direct model commands");
         const port = this.durableSessions.get(chatJid)!;

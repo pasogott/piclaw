@@ -24,7 +24,7 @@ import { upgradeApplication } from "../../runtime/durable-engine/src/application
 import { HostCutoverController, initializeCutoverManifest } from "../../runtime/durable-engine/src/host-cutover.js";
 
 // The runtime acquires the actual strict lock BEFORE root/SDK initialization. No TestOwner.
-for (const [failWait, forks] of [[false, false], [true, false], [false, true]] as const) test(`application bundle binds real pool/channel; lost wait ACK=${failWait}; preserved forks=${forks}`, async () => {
+for (const [failWait, forks] of [[false, false], [false, true], [true, false]] as const) test(`application bundle binds real pool/channel; lost wait ACK=${failWait}; preserved forks=${forks}`, async () => {
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "application-bundle-"));
   const lock = acquireRuntimeLock({ lockPath: join(dir, "runtime.lock"), strictOwnership: true, disabled: false });
   const ownership = applicationOwnership(lock);
@@ -95,7 +95,7 @@ for (const [failWait, forks] of [[false, false], [true, false], [false, true]] a
     ...importedBindings, sessions: new Map(importedBindings.sessions),
     offlineInitialize: true, answers,
     runtime: { incarnation, sessionId: "preserved-session", lane: "main", generation: 1, now: () => new Date().toISOString(),
-      harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } } },
+      harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false, keepRecentTokens: 1 } } } },
   } satisfies Parameters<typeof createApplicationBootstrapBundle>[0];
   if (!failWait && !forks) {
     let published = 0;
@@ -317,7 +317,28 @@ for (const [failWait, forks] of [[false, false], [true, false], [false, true]] a
     expect(await pool.saveSessionPosition(chat)).not.toBeNull();
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
     expect(base.host.modelCalls).toBe(1); expect(base.host.credentialLookups).toBe(0);
+    if (!failWait && !forks) {
+      base.host.modelHold = undefined;
+      base.host.finalContent = [{ type: "text", text: "application summary checkpoint" }];
+      const response = await channel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(chat)}`, {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: JSON.stringify({ content: "/compact" }),
+      }));
+      expect(response.status).toBe(201);
+      expect(JSON.stringify(db.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1").all(chat))).toContain("Context compacted");
+      expect(base.host.modelCalls).toBe(2);
+      expect(pool.getSessionGenerationForChat(chat)).toBe("preserved-session");
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    }
     if (forks) {
+      // REAL shared-runtime regression: A's HTTP compact holds maintenance while
+      // B's normal HTTP input is accepted and claimed by its existing queue worker.
+      const compactEntered = barrier(), compactHold = barrier();
+      base.host.modelHold = compactHold;
+      base.host.onModelEnter = () => compactEntered.release();
+      const compactResponse = channel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(chat)}`, {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: JSON.stringify({ content: "/compact" }),
+      }));
+      await compactEntered.promise;
       // Caller-owned maps/options cannot redirect captured routes after publication.
       options.sessions.set(chat, "redirected-session");
       const route = importedBindings.manifest.find(b => b.chatJid === sibling)!;
@@ -325,6 +346,15 @@ for (const [failWait, forks] of [[false, false], [true, false], [false, true]] a
         method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: JSON.stringify({ content: "sibling input" }),
       }));
       expect(response.status).toBe(201);
+      try {
+        for (let n = 0; n < 500 && !(db.query("SELECT operation_id FROM service_effect_s01_operations WHERE chat_jid=?").get(sibling)); n++) await Bun.sleep(5);
+        expect(db.query("SELECT operation_id FROM service_effect_s01_operations WHERE chat_jid=?").all(sibling)).toHaveLength(1);
+        expect(queue.isLaneBusy(`chat:${sibling}`)).toBe(true);
+        expect(db.query("SELECT inflight_message_id FROM chat_cursors WHERE chat_jid=?").get(sibling)).not.toEqual({ inflight_message_id: null });
+        expect(db.query("SELECT * FROM service_effect_s02_commits WHERE chat_jid=?").all(sibling)).toHaveLength(0);
+        expect(base.host.modelCalls).toBe(1);
+      } finally { compactHold.release(); }
+      expect((await compactResponse).status).toBe(201);
       for (let n = 0; n < 500 && queue.isLaneBusy(`chat:${sibling}`); n++) await Bun.sleep(5);
       expect(queue.isLaneBusy(`chat:${sibling}`)).toBe(false);
       expect(pool.getSessionGenerationForChat(sibling)).toBe("preserved-session");
@@ -336,7 +366,13 @@ for (const [failWait, forks] of [[false, false], [true, false], [false, true]] a
       expect(tree.nodes.some(n => n.detail === "original answer")).toBe(true);
       expect(tree.nodes.some(n => n.detail === "sibling original answer")).toBe(true);
       expect((await pool.applyControlCommand(sibling, { type: "tree", raw: "/tree" })).status).toBe("success");
-      expect(base.host.modelCalls).toBe(2);
+      expect(base.host.modelCalls).toBe(3); // original A, compact A, exactly one B
+      expect(db.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1").all(sibling)).toEqual([{ content: "synthetic answer" }]);
+      expect(db.query("SELECT * FROM service_effect_s02_commits WHERE chat_jid=?").all(sibling)).toHaveLength(1);
+      expect(db.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid=?").all(sibling)).toEqual([{ state: "consumed" }]);
+      expect(db.query("SELECT inflight_message_id FROM chat_cursors WHERE chat_jid=?").get(sibling)).toEqual({ inflight_message_id: null });
+      expect(db.query("SELECT * FROM piclaw_durable_bindings_v1 WHERE domain=? AND chat_jid=?").all(incarnation, sibling)).toHaveLength(1);
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled();
     }
     const files = readdirSync(process.env.PICLAW_WORKSPACE!, { recursive: true }).map(String);
     expect(files.filter(p => /\.jsonl$/i.test(p))).toEqual([]);

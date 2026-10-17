@@ -18,6 +18,7 @@
     "test.ts",
     "db-tree.test.ts",
     "idle-model.test.ts",
+    "compact.test.ts",
     "application-web.test.ts",
     "runtime-upgrade-workflow.test.ts",
     "host-frontier.test.ts",

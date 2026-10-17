@@ -25,6 +25,7 @@ export interface DurableSessionPositionPort {
   /** Persisted conversation choice only; never infer a model from provider responses. */
   readonly readModel?: () => Promise<string | null>;
   readonly setModel?: (model: { provider: string; modelId: string }) => Promise<void>;
+  readonly compact?: (instructions?: string) => Promise<{ compacted: boolean }>;
   readonly readTree?: () => Promise<import("../agent-control/session-tree-snapshot.js").SessionTreeSnapshot>;
 }
 
@@ -54,6 +55,7 @@ export interface DurableConversationState {
  * must already be configured there. No 1.2 Models, SDK session or context crosses this port.
  * Reconciliation deliberately does not expose the engine's private answer/thinking evidence. */
 export interface DurableConversationRuntimePort {
+  compactSession?(binding: DurableConversationBinding & { readonly incarnation: string }, instructions?: string): Promise<{ compacted: boolean }>;
   readSessionTree?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<import("../agent-control/session-tree-snapshot.js").SessionTreeSnapshot>;
   readSessionPosition?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<string | null>;
   setSessionModel?(binding: DurableConversationBinding & { readonly incarnation: string }, model: { provider: string; modelId: string }): Promise<void>;
@@ -97,6 +99,7 @@ export function createDurableConversationAdapter(options: {
   const readPosition = runtime.readSessionPosition?.bind(runtime);
   const readModel = runtime.readSessionModel?.bind(runtime);
   const setModel = runtime.setSessionModel?.bind(runtime);
+  const compact = runtime.compactSession?.bind(runtime);
   const readTree = runtime.readSessionTree?.bind(runtime);
   function input(work: DurableConversationOperation, intent = false): DurableAcceptedInput {
     const { source, operation } = work.claimed;
@@ -122,6 +125,7 @@ export function createDurableConversationAdapter(options: {
         readPosition: () => readPosition({ ...binding, incarnation }),
         readModel: readModel ? () => readModel({ ...binding, incarnation }) : undefined,
         setModel: setModel ? (model: { provider: string; modelId: string }) => setModel({ ...binding, incarnation }, { provider: model.provider, modelId: model.modelId }) : undefined,
+        compact: compact ? (instructions?: string) => compact({ ...binding, incarnation }, instructions) : undefined,
         readTree: readTree ? () => readTree({ ...binding, incarnation }) : undefined });
     },
     supportsIntent: !!submitIntent,

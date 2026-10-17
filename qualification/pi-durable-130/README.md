@@ -1400,3 +1400,26 @@ qualification and targeted runtime types, full root fast CI and bounded independ
 review pass. Aggregate frontend-baseline typechecking remains separately red as
 recorded. This closes bounded captured-source coverage, not automatic root discovery,
 all historical-file migration, installed add-on compatibility or production activation.
+
+### Idle-only explicit manual compaction
+
+Bound `/compact` now uses public `Conversation.compact`, whole-domain idle and
+scheduling checks, shared-file admission fencing and the existing command/result
+surfaces. It waits for the public task plus any summary-write submission/entry before
+success. No-op is reported truthfully; unknown usage remains null. Model-plus-compact
+and automatic compaction remain unavailable in this slice.
+
+Review found accepted input in another chat could strand behind maintenance. Submit
+and intent paths now capture immutable identities, wait for actual owned maintenance
+outside active-operation tracking, then revalidate through normal idempotent admission.
+A cancelled observer cannot release that gate; uncertain maintenance and close remain
+fail-closed. The real two-chat HTTP/queue regression proves claimed B waits during A's
+compaction, then produces exactly one submission/terminal publication and releases
+its worker without restart or legacy fallback.
+
+Final candidate verification passes 415 tests / 7,033 assertions across 33 files;
+root fast CI passes 7,275 tests (74 baseline skips), plus 25 feature and 9 build tests,
+EXIT_CODE=0. Private types and bounded independent review pass. Deferred-command,
+automatic/protected handoff and infrastructure-failure recovery qualification remain
+open; this does not complete compaction or production acceptance. No ongoing JSONL,
+additional database/queue, activation or live provider operation occurs.
