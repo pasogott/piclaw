@@ -4,6 +4,7 @@ import { join, resolve, relative, isAbsolute } from "node:path";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
+import type { CodeReviewNativeExports } from "./host-code-review-tool.js";
 export interface PlanPromptExports {
   loadSessionPlan(chatJid: string): { chat_jid: string; markdown: string; updated_at: string | null };
   buildPlanSystemPrompt(plan: ReturnType<PlanPromptExports["loadSessionPlan"]>): string;
@@ -22,8 +23,26 @@ const approvedDelegateFiles = Object.freeze({
   "delegate.ts": "5466936c43f79c4159d75179c9f6a3f1d8d3439000e388902b321d8e7de9c923",
   "compat/extension-kv.ts": "20408155132b8b86975100f0df7fe03a57ad74d2e4bb8d30f13e2a893441d651",
 });
+// Candidate source profile; qualification tests exercise every backend import.
+const approvedCodeReviewFiles = Object.freeze({
+  "index.ts": "9816235d0418bb6f94f9dd0b99edc37f757cc3a72c50506d014cf267c90c0381",
+  "tool.ts": "877a625fca29bbd7054b2770f58dfddee2e794c4ef917929d882c3dc7c202e34",
+  "runtime.ts": "04a45afecb09661db0b5543106e165a122aa97d1482ec44ce13d591bca8592e6",
+  "anchors.ts": "0c1504ff42fdd49b1d320fae4d8eafbf969a5dadb7d867cdc8fb81d737242453",
+  "contracts.ts": "f1a6eaf8ad1d4b532ccb509b287991668ce8368a0167cd9e8bf83c2dea727f10",
+  "database.ts": "18ea9fa1d0a5f7e215429d5fc563dcd166314e1ce8f96fe6a0350c93dabe6558",
+  "dispatch.ts": "1d4a07bfc627840b125c7eca6ed8f04ee433a39cb3de29728950b34c29c3bc40",
+  "host.ts": "5d8db59386fabeda32bb65b4db97e13aa03d5bf98adf7d91b67077d37dd618a2",
+  "markdown.ts": "ab04e2573e426cbb0aad7975eafbb058db1a5e29355c35df485253ebd6a7520b",
+  "render-source.ts": "200645c447550f5a33b472f4c6962a272b574ee23a2a74f59572d8a69c9cd2d0",
+  "source.ts": "0e36085e06fa41f3dd5107e13ce7a5296cb037ddc2c009c7228adec226e76a60",
+  "store.ts": "f8a2977d1376c43c3e576c8c471433c1c77083bc40ebd79a1f663162d4a2d5ff",
+  "validation.ts": "6520c981ea388f70e0278cf73583e0c80871aa346b2abd50dab3003d90c9d1a8",
+});
 const profiles = {
   plan: { name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.25", files: approvedPlanFiles, shadows: ["compat/chat-context.js", "compat/extension-kv.js", "compat/package.json"], events: ["before_agent_start"] },
+  code_review: { name: "@rcarmo/piclaw-addon-code-review", version: "0.1.8", files: approvedCodeReviewFiles,
+    shadows: [...Object.keys(approvedCodeReviewFiles).flatMap(file => [file.replace(/\.ts$/, ".js"), file.replace(/\.ts$/, ".json"), file.replace(/\.ts$/, "/index.js"), file.replace(/\.ts$/, "/package.json")])], events: ["resources_discover"] },
   delegate: { name: "@rcarmo/piclaw-addon-delegate", version: "0.2.20", files: approvedDelegateFiles, shadows: ["delegate.js", "delegate.json", "delegate/index.js", "delegate/package.json", "compat/extension-kv.js", "compat/package.json"], events: ["session_start", "model_select", "before_agent_start"] },
 } as const;
 type Profile = keyof typeof profiles;
@@ -95,12 +114,12 @@ function qualifyInstalled(catalog: LoadExtensionsResult, cwd: string, kind: Prof
   const [extension, { source, definition, execute, declaration, handlerMap, handlers }] = candidates[0]!;
   const assertCurrent = () => {
     if (!catalog.extensions.includes(extension) || resolve(extension.resolvedPath) !== source.entry ||
-      !sameSource(source, captureApprovedPlan(cwd, getInstalledAddonExtensionPaths(cwd), kind))) throw Error(`Installed ${kind === "plan" ? "Plan" : "Delegate"} source changed`);
+      !sameSource(source, captureApprovedPlan(cwd, getInstalledAddonExtensionPaths(cwd), kind))) throw Error(`Installed ${kind === "plan" ? "Plan" : kind === "delegate" ? "Delegate" : "Code Review"} source changed`);
     if (!definition || definition.name !== kind || extension.tools.size !== 1 || extension.tools.get(kind)?.definition !== definition || definition.execute !== execute || JSON.stringify(definition) !== declaration || extension.handlers !== handlerMap ||
       extension.handlers.size !== profile.events.length || profile.events.some(event => {
         const current = extension.handlers.get(event) ?? [], prior = handlers.get(event) ?? [];
         return !prior.length || current.length !== prior.length || current.some((handler, i) => handler !== prior[i]);
-      }) || extension.commands.size || extension.shortcuts.size) throw Error(`Unqualified ${kind === "plan" ? "Plan" : "Delegate"} capabilities`);
+      }) || extension.commands.size || extension.shortcuts.size) throw Error(`Unqualified ${kind === "plan" ? "Plan" : kind === "delegate" ? "Delegate" : "Code Review"} capabilities`);
   };
   assertCurrent();
   return Object.freeze({ extension, source, definition: definition!, assertCurrent });
@@ -127,6 +146,26 @@ export async function qualifyInstalledDelegate(catalog: LoadExtensionsResult, cw
   if (typeof exports.buildModelCandidates !== "function") throw Error("Delegate policy export required");
   return Object.freeze({ ...qualified, buildModelCandidates: exports.buildModelCandidates,
     nativeLifecycle: Object.freeze({ kind: "native-parent-model-read-only" as const, events: profiles.delegate.events }) });
+}
+
+export async function qualifyInstalledCodeReview(catalog: LoadExtensionsResult, cwd: string) {
+  const qualified = qualifyInstalled(catalog, cwd, "code_review");
+  if (!qualified) return undefined;
+  // Native import is the same canonical runtime module used by startup and the
+  // direct add-on API. Legacy loader execute is never called by the native port.
+  const exports = await import(pathToFileURL(qualified.source.entry).href) as Partial<CodeReviewNativeExports>;
+  qualified.assertCurrent();
+  const names = ["createCodeReviewTool", "reviewService", "setReviewDatabaseSource", "closeReviewServices"] as const;
+  if (names.some(name => typeof exports[name] !== "function")) throw Error("Code Review public native exports required");
+  const addon = Object.freeze(Object.fromEntries(names.map(name => [name, exports[name]]))) as unknown as CodeReviewNativeExports;
+  const native = addon.createCodeReviewTool({ async resolve() { throw Error("Invocation-local review scope required"); } });
+  const declaration = (value: Pick<typeof native, "name" | "label" | "description" | "parameters">) => JSON.stringify({ name: value.name, label: value.label, description: value.description, parameters: value.parameters });
+  if (declaration(native) !== declaration(qualified.definition)) throw Error("Code Review native/legacy declarations differ");
+  const assertCurrent = () => {
+    qualified.assertCurrent();
+    if (names.some(name => exports[name] !== addon[name])) throw Error("Code Review public exports changed");
+  };
+  return Object.freeze({ ...qualified, assertCurrent, addon });
 }
 
 /** The public Pi registry, not a second registerTool implementation. Factories
@@ -179,17 +218,20 @@ export async function loadApplicationExtensionCatalog(options: {
  * hooks through a fabricated AgentSession context. Keep all diagnostics so a
  * successful startup can never silently mean missing installed capabilities.
  */
-export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensionsResult, plan?: Awaited<ReturnType<typeof qualifyInstalledPlan>>, delegate?: Awaited<ReturnType<typeof qualifyInstalledDelegate>>): void {
-  plan?.assertCurrent(); delegate?.assertCurrent();
+export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensionsResult, plan?: Awaited<ReturnType<typeof qualifyInstalledPlan>>, delegate?: Awaited<ReturnType<typeof qualifyInstalledDelegate>>, codeReview?: Awaited<ReturnType<typeof qualifyInstalledCodeReview>>): void {
+  plan?.assertCurrent(); delegate?.assertCurrent(); codeReview?.assertCurrent();
   const blocked: string[] = catalog.errors.map(error => `${error.path}: extension load failed`);
   for (const extension of catalog.extensions) {
     for (const { definition } of extension.tools.values()) {
       if (extension === plan?.extension && definition === plan.definition) continue;
       if (extension === delegate?.extension && definition === delegate.definition) continue;
+      if (extension === codeReview?.extension && definition === codeReview.definition) continue;
       blocked.push(`${definition.name}: no operation-owned host effect port`);
     }
     for (const event of extension.handlers.keys()) {
       if (extension === plan?.extension && event === "before_agent_start") continue;
+      // Static skill discovery only: no session lifecycle or fabricated context.
+      if (extension === codeReview?.extension && event === "resources_discover") continue;
       if (extension === delegate?.extension && delegate.nativeLifecycle.events.some(allowed => allowed === event)) continue;
       blocked.push(`${extension.path}: ${event} lifecycle not bound to durable host`);
     }

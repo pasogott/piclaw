@@ -1,4 +1,80 @@
-# Native Delegate adoption — bounded dirty source over `175032611`
+# Native Code Review adoption — source follow-up over `7150dd6a2`
+
+The actual default factory now admits bounded installed Code Review reads through
+`runtime/durable-engine/src/host-code-review-tool.ts`. The add-on public
+`createCodeReviewTool` factory owns the declaration and read execution; extraction
+removed the duplicate declaration/execution from its old index. Native reads and
+the direct operator add-on API use the same backend and borrowed application root
+connection. No second database is opened. Fifteen `addon_code_review_` data tables
+and `addon_code_review_schema` isolate its schema; the borrowed path neither reads
+nor writes host `PRAGMA user_version`, changes host PRAGMAs nor closes the root.
+The standalone `reviews.db` path stays available for legacy compatibility and is
+unused by this native source path. No existing review store was converted.
+
+## Read authority and lifecycle
+
+Only `dispatches`, `dispatch`, `threads` and `thread` are admitted. Writes and
+caller-supplied authority fields refuse before source capture or service lookup.
+The root adapter captures the exact public running tool call, accepted source,
+current claimed operation and running harness. It reads the original accepted
+message's single `addon_local_dispatch` marker and verifies its content hash,
+chat/incarnation and intent against `addon_local_dispatch_authorities`. Current
+source/assignment SQL and the add-on's dispatch/thread scope checks bound reads.
+Model-supplied IDs select data within that grant; they cannot grant access.
+Unscoped and peer-message sources reject.
+
+The database binding captures the original owner callback. Backend close releases
+and revokes that binding before joining closure. Old services and awaited enqueue
+continuations retain their old grant and fail closed after release; a later
+backend cannot lend them its new authority. The add-on public factory rechecks
+invocation-local authority around awaited reads; no fabricated legacy session or
+ExtensionContext runs. Supplied bounded source reviews are READY after the callback
+capture fix and missing-case coverage.
+
+## Exact source and existing receipts
+
+The catalogue checks 13 backend source files, canonical resolution, declaration
+and registered objects against public add-on source
+`a1a165c0ba9ea051584f828392c5061cda91dd2a`, branch
+`implement/durable-code-review-1650`. The qualification CI checkout selects that
+exact source and supplies `DURABLE_CODE_REVIEW_ROOT`; this is source qualification,
+with no dependency upgrade, live installation or version release. The add-on
+package version stays 0.1.8. No future core commit is assigned to this source
+follow-up over `7150dd6a2`.
+
+Existing receipts under `/workspace/reviews/durable-1650/`:
+
+- `code-review-physical-reopen.log`: actual default native scenario, 1 pass /
+  44 assertions. All old runtime objects close, the physical root closes and
+  reopens, and a fresh backend reads a newly scoped dispatch. A real existing
+  other-chat thread/dispatch is denied and its secret stays out of results,
+  provider transcripts, entries and bot messages. Refused writes leave saved
+  review messages unchanged; the fixture creates no `reviews.db`.
+- Catalogue: 4 pass / 18 assertions in `/tmp/review-catalog-debug.log`.
+- `code-review-extracted-final-addon.log`: 198 pass, 3 skip, 0 fail,
+  2,525 assertions across 59 files, 84.08 seconds, `EXIT_CODE=0`.
+  `code-review-extracted-final-types.log` records passing add-on types after
+  factory extraction. These add-on results are separate from native job acceptance.
+- `code-review-final-{root,engine,qualification}-types.log`: all three scoped
+  core typechecks passed according to the supplied receipts.
+- `code-review-final-candidate.log`: 485 pass, 0 fail, 7,182 assertions across
+  42 files. The interrupted wrapper supplied no exit-code receipt.
+- `code-review-final-root.log`: 7,312 pass, 74 baseline skips, 0 fail, plus
+  25 feature and 9 build tests; `EXIT_CODE=0`.
+
+The 45 statuses stay 22 source-qualified, 17 fixture-only, 3 blocked-publicAPI
+and 3 migration/perf-unverified. HC-002 already had bounded source qualification
+and now includes native Code Review reads. A full Code Review job still needs
+native review writes/dispatch workers, request budget and delivery qualification.
+Existing `reviews.db` migration stays last. No migration or live activation ran.
+
+Published native Delegate is `ea2d1416e`; its receipt documentation is
+`7150dd6a2`, with supplied exact-head hosted run `39073316535` green. Older
+uncommitted Delegate WIP is separate and unapproved. Stale inactive comments in
+modules were left untouched during code gates. No code, tests, CI, network,
+services, pins, live state, migration, commits or pushes changed in this refresh.
+
+# Native Delegate adoption — historical source follow-up over `175032611`
 
 The actual default factory now admits the approved installed Delegate 0.2.20
 schema and policy through `createHostDelegateTool` in
@@ -70,8 +146,9 @@ pass (`native-delegate-effect-{root,engine,qualification}-types.log`).
 
 Published scheduler `a89afe02f` has candidate 458 and root 7,294 + 25 feature +
 9 build passes; native-parallel parent `175032611` has candidate 462 passes.
-Those receipts predate dirty native Delegate adoption. Latest hosted status is
-unknown and was not queried. The 45 assessment stays 22 source-qualified,
+Those receipts predate native Delegate adoption. Its later publication and
+supplied hosted receipt are recorded in the Code Review source section above;
+no network query ran for this refresh. The 45 assessment stays 22 source-qualified,
 17 fixture-only, 3 blocked-publicAPI and 3 migration/perf-unverified; HC-002 was
 already bounded source-qualified. Public SDK `abortTask` exists, but lacks an
 atomic condition against the exact current running task. HC-009/PC-004/PC-015

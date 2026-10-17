@@ -32,6 +32,9 @@ import { createTask } from "../../runtime/src/db/tasks.js";
 import { saveBudgetCap, setBudgetCapEnabled } from "../../runtime/src/db/budget-limits.js";
 import { pollScheduledRunsOnce, stopSchedulerLoop } from "../../runtime/src/task-scheduler.js";
 import { createPlanKvAuthority } from "../../runtime/durable-engine/src/host-plan-tool.js";
+import { installCodeReviewFixture } from "./code-review-fixture.ts";
+import { withAddonLocalDispatch, bindAddonLocalDispatchRequest, getAddonLocalDispatchBlock, verifyAddonLocalMessage } from "../../runtime/src/addons/local-dispatch.js";
+import { admitAddonLocalRequest, withAddonLocalRequest } from "../../runtime/src/addons/local-context.js";
 
 function factoryTest(scenario: string, name: string, body: () => Promise<void>) {
   const selected = process.env.PICLAW_DEFAULT_FACTORY_CASE;
@@ -97,7 +100,7 @@ for (const uncertain of [false, true]) factoryTest(`cleanup-${uncertain}`, `actu
   }
 });
 
-for (const scenario of ["public-conversations", "custom-subset", "pending-host", "native-plan", "native-scheduler", "native-delegate", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider"] as const) factoryTest(scenario, scenario === "custom-subset"
+for (const scenario of ["public-conversations", "custom-subset", "pending-host", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider"] as const) factoryTest(scenario, scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -106,7 +109,7 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   const workspace = process.env.PICLAW_WORKSPACE!;
   const owner = acquireRuntimeLock({ lockPath: join(workspace, "default-owner.lock"), strictOwnership: true, disabled: false });
   initDatabase();
-  const root = getDb(); root.exec("PRAGMA foreign_keys=ON");
+  let root = getDb(); root.exec("PRAGMA foreign_keys=ON");
   let calls = 0;
   let onProviderResponse: (() => void) | undefined;
   let onCredentialResolve: (() => Promise<void>) | undefined;
@@ -114,6 +117,7 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   const requested: string[] = [];
   const planRequests: string[] = [];
   let toolSequence: { name: string; arguments: Record<string, unknown> }[] | undefined;
+  const reviewPackage = scenario === "native-code-review" ? installCodeReviewFixture(workspace) : undefined;
   if (scenario === "native-plan") {
     const source = process.env.DURABLE_ADDONS_ROOT;
     if (!source) throw Error("DURABLE_ADDONS_ROOT required");
@@ -405,6 +409,114 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   await expect(pool.getContextUsageForChat("web:unbound-context")).rejects.toThrow("Durable application does not construct legacy sessions");
   expect(() => bound.getInputSourceAdmission!("web:newcomer")).toThrow("Unbound");
   const message = { id: "factory-input", chat_jid: "web:default", sender: "user", sender_name: "User", content: "hello factory", timestamp: new Date().toISOString(), is_from_me: false, is_bot_message: false };
+  if (reviewPackage) {
+    const api = await import(join(reviewPackage, "runtime.ts"));
+    const service = api.reviewService();
+    expect(service.database.db).toBe(root);
+    const request = new Request("http://fixture/agent/addons/api/code-review/action", { method: "POST" });
+    admitAddonLocalRequest(request, { userId: "default", mode: "single-user" } as any, () => true);
+    let review: any, thread: any;
+    writeFileSync(join(workspace, "review-source.ts"), "const saved = true;\n");
+    await withAddonLocalRequest(request, async ctx => {
+      expect(ctx!.ownerId).toBe("default");
+      const invoke = async (body: unknown) => {
+        const response = await api.handleReviewRequest(body, request, ctx);
+        expect(response.ok).toBe(true); return response.result;
+      };
+      review = await invoke({ action: "create", path: "review-source.ts", title: "Native review", target: { chatId: "web:default" }, requestId: "review-create" });
+      thread = await invoke({ action: "comment", reviewId: review.reviewId, fileId: review.files[0], side: "source", body: "NATIVE_SAVED_REVIEW_THREAD", requestId: "review-comment" });
+    });
+    const target = { chatId: "web:default", incarnation: first!.branchId, label: "Default" };
+    const who = { ownerId: "default", actorId: "default", kind: "operator", workspaceId: createHash("sha256").update(workspace).digest("hex") };
+    const submitted = service.submit(who, review.reviewId, { target, items: [{ threadId: thread.threadId, version: 1 }] }, { requestId: "review-send" });
+    let row!: number;
+    await service.deliver(who, submitted.dispatchId, { async enqueue(input: any) {
+      message.content = input.content;
+      await withAddonLocalDispatch({ chatJid: target.chatId, incarnation: target.incarnation }, input.content, input.reference, async () => {
+        const req = new Request("http://fixture/internal"); bindAddonLocalDispatchRequest(req, target.chatId, input.content);
+        const marked = { ...message, content_blocks: [getAddonLocalDispatchBlock(req, target.chatId, input.content)!] };
+        expect(verifyAddonLocalMessage(target.chatId, marked)?.reference?.intentId).toBe(submitted.dispatchId);
+        row = root.transaction(() => { const id = storeMessage(marked); bound.getInputSourceAdmission!(target.chatId)({ message: marked, rowId: id, database: root }); return id; })()!;
+      });
+      return { status: "accepted", rowId: row };
+    } });
+    storeChatMetadata("web:review-other", new Date().toISOString());
+    await bound.prepareInputSourceAdmission!("web:review-other");
+    const otherTarget = { chatId: "web:review-other", incarnation: backend.sessionOptions.getDurableSession!("web:review-other")!.branchId, label: "Other" };
+    const secret = "SECRET_OTHER_CHAT_REVIEW";
+    const otherReview = service.createFromCapture(who, { title: "Other review", focusPath: "other.ts", target: otherTarget }, {
+      workspaceId: who.workspaceId, worktreeId: "other-tree", mode: "source", base: null, head: null, capturedAt: new Date().toISOString(),
+      files: [{ oldPath: null, newPath: "other.ts", oldText: null, newText: secret, change: "source", fileIdentity: "other-inode" }],
+    }, { requestId: "other-create" });
+    const otherThread = service.createThread(who, otherReview.reviewId, { fileId: otherReview.files[0], side: "source", body: secret }, { requestId: "other-comment" });
+    const otherDispatch = service.submit(who, otherReview.reviewId, { target: otherTarget, items: [{ threadId: otherThread.threadId, version: 1 }] }, { requestId: "other-send" });
+    expect(service.inspectDispatch(who, otherDispatch.dispatchId)).toBeDefined();
+    toolSequence = [
+      { name: "code_review", arguments: { action: "thread", threadId: thread.threadId } },
+      { name: "code_review", arguments: { action: "thread", threadId: otherThread.threadId } },
+      { name: "code_review", arguments: { action: "reply", threadId: thread.threadId, body: "MUST_NOT_WRITE" } },
+    ];
+    expect(await bound.dispatchAcceptedInput!(message.chat_jid, message.id, row)!()).toBe("settled");
+    expect(observedResults.get("factory-tool-1")).toMatchObject({ toolName: "code_review" });
+    expect(JSON.stringify(observedResults.get("factory-tool-1"))).toContain("NATIVE_SAVED_REVIEW_THREAD");
+    expect(observedResults.get("factory-tool-2")).toMatchObject({ isError: true });
+    expect(JSON.stringify(observedResults.get("factory-tool-2"))).not.toContain(secret);
+    expect(observedResults.get("factory-tool-3")).toMatchObject({ isError: true });
+    expect(JSON.stringify(observedResults.get("factory-tool-3"))).toContain("unavailable");
+    expect(service.getThread(who, thread.threadId).messages).toHaveLength(1);
+    expect(JSON.stringify(service.getThread(who, thread.threadId).messages)).not.toContain("MUST_NOT_WRITE");
+    expect(service.getThread(who, otherThread.threadId).messages).toHaveLength(1);
+    for (const text of [JSON.stringify(root.query("SELECT * FROM entries").all()), planRequests.join("\n"), JSON.stringify(root.query("SELECT content FROM messages WHERE is_bot_message=1").all())]) {
+      expect(text).not.toContain(secret);
+    }
+    await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
+    expect(() => service.database.get("SELECT 1")).toThrow("closed");
+    const oldRoot = root;
+    const pragmas = ["foreign_keys", "journal_mode"].map(name => root.query(`PRAGMA ${name}`).get());
+    closeDatabase(); initDatabase(); root = getDb();
+    expect(root).not.toBe(oldRoot);
+    expect(() => oldRoot.query("SELECT 1").get()).toThrow();
+    backend = await createDefaultApplicationRuntime(owner, async () => services);
+    const reopenedService = api.reviewService();
+    expect(reopenedService).not.toBe(service);
+    expect(reopenedService.database.db).toBe(root);
+    expect(reopenedService.getThread(who, thread.threadId).messages).toHaveLength(1);
+    expect(["foreign_keys", "journal_mode"].map(name => root.query(`PRAGMA ${name}`).get())).toEqual(pragmas);
+    const reopenedBase = createRuntimeBaseServices({ dataDir: workspace });
+    const reopenedPool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
+    const reopened = backend.bind({ queue: reopenedBase.queue, agentPool: reopenedPool });
+    const reopenedChannel = new WebChannel(reopened); reopenedChannel.broadcastEvent = () => {};
+    try {
+      const freshReview = reopenedService.createFromCapture(who, { title: "Reopened review", focusPath: "fresh.ts", target }, {
+        workspaceId: who.workspaceId, worktreeId: "fresh-tree", mode: "source", base: null, head: null, capturedAt: new Date().toISOString(),
+        files: [{ oldPath: null, newPath: "fresh.ts", oldText: null, newText: "fresh saved\n", change: "source", fileIdentity: "fresh-inode" }],
+      }, { requestId: "fresh-create" });
+      const freshThread = reopenedService.createThread(who, freshReview.reviewId, { fileId: freshReview.files[0], side: "source", body: "NATIVE_REOPENED_THREAD" }, { requestId: "fresh-comment" });
+      const freshDispatch = reopenedService.submit(who, freshReview.reviewId, { target, items: [{ threadId: freshThread.threadId, version: 1 }] }, { requestId: "fresh-send" });
+      const freshMessage = { ...message, id: "factory-review-reopened" };
+      let freshRow!: number;
+      await reopenedService.deliver(who, freshDispatch.dispatchId, { async enqueue(input: any) {
+        freshMessage.content = input.content;
+        await withAddonLocalDispatch({ chatJid: target.chatId, incarnation: target.incarnation }, input.content, input.reference, async () => {
+          const req = new Request("http://fixture/internal"); bindAddonLocalDispatchRequest(req, target.chatId, input.content);
+          const marked = { ...freshMessage, content_blocks: [getAddonLocalDispatchBlock(req, target.chatId, input.content)!] };
+          expect(verifyAddonLocalMessage(target.chatId, marked)?.reference?.intentId).toBe(freshDispatch.dispatchId);
+          freshRow = root.transaction(() => { const id = storeMessage(marked); reopened.getInputSourceAdmission!(target.chatId)({ message: marked, rowId: id, database: root }); return id; })()!;
+        });
+        return { status: "accepted", rowId: freshRow };
+      } });
+      observedResults.clear();
+      toolSequence = [{ name: "code_review", arguments: { action: "thread", threadId: freshThread.threadId } }];
+      expect(await reopened.dispatchAcceptedInput!(target.chatId, freshMessage.id, freshRow)!()).toBe("settled");
+      expect([...observedResults.values()].some(result => result.toolName === "code_review" && !result.isError && JSON.stringify(result.content).includes("NATIVE_REOPENED_THREAD"))).toBe(true);
+      expect(reopenedService.getThread(who, thread.threadId).messages).toHaveLength(1);
+      expect(Array.from(new Bun.Glob("**/reviews.db").scanSync({ cwd: workspace, dot: true, onlyFiles: true }))).toEqual([]);
+    } finally {
+      await reopenedChannel.stop(); await reopenedBase.queue.shutdown(); await reopenedPool.shutdown(); backend.stop(); await backend.close();
+    }
+    expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
+    sdkSpies.forEach(spy => spy.mockRestore()); owner.release(); closeDatabase(); return;
+  }
   const rowId = root.transaction(() => {
     const rowId = storeMessage(message);
     bound.getInputSourceAdmission!("web:default")({ message, rowId, database: root });

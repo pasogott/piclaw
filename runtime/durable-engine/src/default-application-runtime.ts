@@ -18,10 +18,11 @@ import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { applicationOwnership, createApplicationBootstrapBundle } from "./application-bootstrap.js";
 import { createHostModels } from "./host-models.js";
 import { createHostBuiltinTools } from "./host-builtins.js";
-import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
+import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
 import { createHostDelegateTool } from "./host-delegate-tool.js";
 import { extensionKvGet } from "../../src/db/extension-kv.js";
 import { createHostPlanTool } from "./host-plan-tool.js";
+import { createHostCodeReviewTool } from "./host-code-review-tool.js";
 import { createHostPlanPrompt } from "./host-plan-prompt.js";
 import type { HostConversationRuntime } from "./host-runtime.js";
 import { readAccessConfig } from "../../src/core/config-access.js";
@@ -152,10 +153,11 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const catalog = await loadApplicationExtensionCatalog({ cwd: WORKSPACE_DIR, agentDir: getPiclawAgentDir(), settingsManager: settings });
   const plan = await qualifyInstalledPlan(catalog, WORKSPACE_DIR);
   const delegate = await qualifyInstalledDelegate(catalog, WORKSPACE_DIR);
-  try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan, delegate); }
+  const codeReview = await qualifyInstalledCodeReview(catalog, WORKSPACE_DIR);
+  try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan, delegate, codeReview); }
   finally { catalog.runtime.invalidate("Application extension preflight ended"); }
-  const applicationToolNames: readonly string[] = [...defaultToolNames, ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : [])];
-  const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || ((!!plan || !!delegate) && Array.isArray(tools) &&
+  const applicationToolNames: readonly string[] = [...defaultToolNames, ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : [])];
+  const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || ((!!plan || !!delegate || !!codeReview) && Array.isArray(tools) &&
     tools.length === defaultToolNames.length && defaultToolNames.every((name, index) => tools[index] === name));
   const host = await getModels(); assert();
   const provider = settings.getDefaultProvider(), modelId = settings.getDefaultModel();
@@ -168,6 +170,10 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   if (!selected) throw Error("Durable startup requires an available host default model");
   const ref = { provider: selected.provider, id: selected.id };
   const lifetime = new AbortController();
+  const releaseReviewSource = codeReview?.addon.setReviewDatabaseSource({ database: root, assertOwner: assert });
+  try {
+  // Allocate/recover the shared namespace before any accepted task or API read.
+  codeReview?.addon.reviewService();
   const check = (model: { provider: string; id: string }, signal: AbortSignal) => {
     assert(); signal.throwIfAborted();
     if (!available.some(entry => entry.provider === model.provider && entry.id === model.id)) throw Error("Host model not approved");
@@ -249,6 +255,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   if (plan) tools.push(createHostPlanTool(plan.definition as Parameters<typeof createHostPlanTool>[0], { root, assertOwner: () => {
     assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent();
   }, runtime }));
+  if (codeReview) tools.push(createHostCodeReviewTool(codeReview.addon, { root, cwd: WORKSPACE_DIR, runtime,
+    assertOwner() { assert(); lifetime.signal.throwIfAborted(); codeReview.assertCurrent(); } }));
   if (delegate) {
     const readers = tools.filter(tool => ["read", "grep", "find", "ls"].includes(tool.name));
     const readerExtension = defineExtension({ name: "app.host-delegate-readers", tools: readers });
@@ -366,5 +374,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
     runtime: { incarnation: mapping.domain, sessionId: mapping.domain, lane: "main", generation: 1, now: () => new Date().toISOString(), harnessOptions } }, context);
   return { sessionOptions: bundle.sessionOptions, bind: bundle.bind,
-    stop() { lifetime.abort(); bundle.stop(); }, async close() { lifetime.abort(); await bundle.close(); } };
+    stop() { lifetime.abort(); bundle.stop(); }, async close() {
+      lifetime.abort(); releaseReviewSource?.(); await bundle.close();
+    } };
+  } catch (error) { lifetime.abort(); releaseReviewSource?.(); throw error; }
 }

@@ -16,6 +16,8 @@
     "../../runtime/src/types/gifenc.d.ts",
     "../../runtime/src/types/web-push.d.ts",
     "test.ts",
+    "code-review-fixture.ts",
+    "installed-code-review-catalog.test.ts",
     "db-tree.test.ts",
     "idle-model.test.ts",
     "compact.test.ts",

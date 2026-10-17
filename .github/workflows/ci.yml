@@ -82,7 +82,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: rcarmo/piclaw-addons
-          ref: de92bc95b5b3bb1505beec9617d3b8a5e4fa92d3
+          ref: a1a165c0ba9ea051584f828392c5061cda91dd2a
           path: .qualification-addons
           persist-credentials: false
 
@@ -99,6 +99,7 @@ jobs:
         working-directory: qualification/pi-durable-130
         env:
           DURABLE_ADDONS_ROOT: ${{ github.workspace }}/.qualification-addons
+          DURABLE_CODE_REVIEW_ROOT: ${{ github.workspace }}/.qualification-addons
         run: |
           bun install --frozen-lockfile --ignore-scripts
           bun run typecheck
