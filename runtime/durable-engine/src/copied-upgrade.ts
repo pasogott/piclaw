@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import type { Context } from "@earendil-works/chord";
 import { CompactionEntry, SystemEntry, type Conversation, type ConversationId, type Harness, type EntryRecord } from "@earendil-works/pi-durable";
 import { HostCutoverController } from "./host-cutover.js";
+import type { ApplicationBootstrapOptions } from "./application-bootstrap.js";
 import { importCopiedLegacyTree, prepareLegacyTreeImport, LegacyTreeImportManifest, LegacyImportManifest, IMPORTER_VERSION,
   type CopiedLegacyTreeInput, type GetLegacyContext } from "./legacy-import.js";
 const sha = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -15,6 +16,32 @@ const sha = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).d
  * Bridge must be the trusted public legacy projection; no caller-prepared plan is accepted. */
 export function prepareCopiedUpgrade(sourceBytes: Uint8Array, manifestBytes: Uint8Array,
   expected: { sourceSHA256: string; manifestSHA256: string }, bridge: GetLegacyContext) {
+  const prepared = prepareUpgrade(sourceBytes, manifestBytes, expected, bridge, false);
+  return Object.freeze({ ...prepared, async verify(...args: Parameters<typeof prepared.verify>) {
+    return (await prepared.verify(...args)).receipt;
+  } });
+}
+
+/** Default-off prerequisite for existing-chat application bootstrap. Validates ALL leaves
+ * before callers can checkpoint/import. No writer switch, storage open or published ports.
+ * Only verified public receipts supply durable IDs and original host session identities. */
+export function prepareCopiedApplicationUpgrade(sourceBytes: Uint8Array, manifestBytes: Uint8Array,
+  expected: { sourceSHA256: string; manifestSHA256: string }, bridge: GetLegacyContext) {
+  const prepared = prepareUpgrade(sourceBytes, manifestBytes, expected, bridge, true);
+  return Object.freeze({ ...prepared, async verify(...args: Parameters<typeof prepared.verify>) {
+    return (await prepared.verify(...args)).receipt;
+  }, async verifyBindings(...args: Parameters<typeof prepared.verify>): Promise<Pick<ApplicationBootstrapOptions, "manifest" | "sessions">> {
+    const { binding } = await prepared.verify(...args);
+    return Object.freeze({
+      manifest: Object.freeze(binding.branches.map(branch => Object.freeze({ chatJid: branch.chatJid,
+        branchId: branch.branchId, conversationId: branch.engineConversationId as ConversationId }))),
+      sessions: new Map(binding.branches.map(branch => [branch.chatJid, branch.sourceSessionId])),
+    });
+  } });
+}
+
+function prepareUpgrade(sourceBytes: Uint8Array, manifestBytes: Uint8Array,
+  expected: { sourceSHA256: string; manifestSHA256: string }, bridge: GetLegacyContext, application: boolean) {
   // Copy caller-owned buffers once; retain only immutable strings and private parsed data.
   const source = Buffer.from(sourceBytes), manifest = Buffer.from(manifestBytes);
   const sourceSHA256 = sha(source), manifestSHA256 = sha(manifest);
@@ -36,6 +63,13 @@ export function prepareCopiedUpgrade(sourceBytes: Uint8Array, manifestBytes: Uin
     const last = branch.projection.messages.at(-1);
     assert(last?.role === "assistant" && last.stopReason === "stop", "copied leaf not quiescent");
   }
+  // Bootstrap cannot route legacy forks yet. Never discard a leaf or rename its branch.
+  // Fail before the first journal/import write, even if every individual history is valid.
+  const canonical = (id: string) => id.length > 0 && id === id.trim();
+  if (application && (new Set(plan.prepared.map(branch => branch.identity.chatJid)).size !== plan.prepared.length ||
+    plan.prepared.some(branch => branch.identity.branchId !== "main" ||
+      !canonical(branch.identity.chatJid) || !canonical(branch.sourceSessionId))))
+    throw Error("Copied application upgrade supports exact main-branch histories only; legacy branch routing is not supported");
   // Bind exact manifest bytes too: whitespace/provenance changes cannot silently reuse intent.
   const request = Object.freeze({ requestKey: `copied:${sha(JSON.stringify([sourceSHA256, manifestSHA256]))}`,
     sourceDigest: sourceSHA256, importHash: plan.sourceHash });
@@ -116,7 +150,7 @@ export function prepareCopiedUpgrade(sourceBytes: Uint8Array, manifestBytes: Uin
         ({ sourceEntryId, durableEntryId: location.id })), "incomplete copied tree mapping");
       assert.equal(locations.size, plan.raw.length, "incomplete copied source coverage");
       assert.deepEqual(await harness.inspect(context), { scheduling: "paused", tasks: [], submissions: [] });
-      return receipt;
+      return { receipt, binding };
     },
   });
 }

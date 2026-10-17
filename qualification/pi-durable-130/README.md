@@ -1155,3 +1155,22 @@ web-push declaration rather than requiring external compiler arguments. Independ
 bounded review is clear. The first root run hit one image-processing timeout; an
 unchanged full repeat passed. This bundle remains default-off and is not automatic
 migration, complete compatibility or production activation qualification.
+
+### Verified legacy receipts to application bindings
+
+`prepareCopiedApplicationUpgrade` now preflights existing histories and rejects
+unsupported non-main/duplicate-chat routing before checkpoint/import writes. Its
+`verifyBindings` derives bootstrap manifests and original session identities only
+after complete public receipt/history/context verification. Existing IDs come from
+those verified receipts; no manual reconstruction or new-chat-only shortcut is used.
+
+Tests cover lost import acknowledgement, database/journal reopen with identical IDs,
+corrupted receipts and unsupported scope. Real AgentPool/WebChannel tests now use
+automatically derived imported bindings and continue the same original chat in one
+database without JSONL. Final candidate verification passes 388 tests / 6,710
+assertions; focused tests pass 11 cases / 197 assertions, both private-package types
+pass and bounded independent review is clear.
+
+This is a prerequisite, not guarded cutover: generation-fenced begin/verify/writer
+switch, unpublished paused-bootstrap cleanup and safe port publication still need
+composition. Production selection remains default-off.

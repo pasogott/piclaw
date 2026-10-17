@@ -8,7 +8,7 @@ import { SessionManager, buildSessionContext, convertToLlm, sessionEntryToContex
 import { SqliteStorage, SQLITE_MIGRATIONS, CURRENT_SQLITE_SCHEMA_VERSION } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { STORE_DIR } from "../../runtime/src/core/config.js";
 import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
-import { prepareCopiedUpgrade } from "../../runtime/durable-engine/src/copied-upgrade.ts";
+import { prepareCopiedUpgrade, prepareCopiedApplicationUpgrade } from "../../runtime/durable-engine/src/copied-upgrade.ts";
 import { HostCutoverController, initializeCutoverManifest, LegacyTreeImportManifest, LegacyImportManifest, type GetLegacyContext } from "../../runtime/durable-engine/src/index.ts";
 import { TestOwner, OwnedSqlite } from "./src/ownership.ts";
 import { context, openFixture } from "./src/fixture.ts";
@@ -16,11 +16,11 @@ const sha = (v: Uint8Array) => createHash("sha256").update(v).digest("hex");
 const json = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const bridge: GetLegacyContext = (entries, leaf) => ({ messages: json(convertToLlm(buildSessionContext([...entries], leaf).messages)),
   projected: entries.map(entry => ({ sourceEntryId: entry.id, messages: json(convertToLlm(sessionEntryToContextMessages(entry))) })) });
-async function using(run: (f: Awaited<ReturnType<typeof setup>>) => Promise<void>) {
-  const f = await setup();
+async function using(run: (f: Awaited<ReturnType<typeof setup>>) => Promise<void>, mainOnly = false) {
+  const f = await setup(false, mainOnly);
   try { await run(f); } finally { await f.base.close(); f.owner.releaseAfterClose(); f.db.close(); f.owner.closeConnection(); await rm(f.dir, { recursive: true, force: true }); }
 }
-async function setup(sharedDatabase = false) {
+async function setup(sharedDatabase = false, mainOnly = false) {
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "upgrade-"));
   const path = sharedDatabase ? join(STORE_DIR, "messages.db") : join(dir, "owned.sqlite");
   const manager = SessionManager.inMemory(dir, { id: "existing-session" });
@@ -30,11 +30,13 @@ async function setup(sharedDatabase = false) {
   const shared = manager.appendCompaction("Copied summary, never regenerated", user, 100, { copied: true }, true);
   const answer = () => manager.appendMessage({ role: "assistant", api: "openai-completions", provider: "never", model: "never", content: [{ type: "text", text: "historical" }], stopReason: "stop", timestamp: 3,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
-  const left = answer(); manager.branch(shared); const right = answer();
+  const left = answer();
+  if (!mainOnly) manager.branch(shared);
+  const leaves = mainOnly ? [left] : [left, answer()];
   const source = Buffer.from([manager.getHeader(), ...manager.getEntries()].map(v => JSON.stringify(v)).join("\n") + "\n");
   const chatJid = sharedDatabase ? `web:existing-${crypto.randomUUID()}` : "web:existing";
   const host = { version: 1, sourceCopied: true, expectedSourceSHA256: sha(source), pending: 0, inflight: 0,
-    hostBranchBindings: Object.fromEntries([left, right].map((leaf, i) => [leaf, { chatJid: sharedDatabase && i === 1 ? `${chatJid}-right` : chatJid, chatIncarnation: "existing-incarnation", branchId: `${chatJid}-${i}`, hostBaseline: "persisted baseline" }])) };
+    hostBranchBindings: Object.fromEntries(leaves.map((leaf, i) => [leaf, { chatJid: sharedDatabase && i === 1 ? `${chatJid}-right` : chatJid, chatIncarnation: "existing-incarnation", branchId: mainOnly ? "main" : `${chatJid}-${i}`, hostBaseline: "persisted baseline" }])) };
   if (!sharedDatabase) {
     await writeFile(join(dir, "copy.jsonl"), source); await writeFile(join(dir, "host.json"), JSON.stringify(host));
   }
@@ -86,6 +88,45 @@ async function setup(sharedDatabase = false) {
   const controller = new HostCutoverController(db, identity, ports);
   return { dir, path, owner, db, base, bytes, manifest, expected, controller, identity, ports, host, candidateDatabase, hostSnapshot, originalHost };
 }
+test("application upgrade bindings: reject valid unsupported branches before journal/import writes", () => using(async f => {
+  expect(() => prepareCopiedApplicationUpgrade(f.bytes, f.manifest, f.expected, bridge))
+    .toThrow("main-branch histories only");
+  expect(f.controller.inspect()).toBeNull();
+  expect(await f.base.harness.snapshot(LegacyTreeImportManifest, f.base.root.id, context)).toBeUndefined();
+}));
+test("application upgrade bindings: verified original IDs survive lost import ACK and journal reopen", () => using(async f => {
+  const plan = prepareCopiedApplicationUpgrade(f.bytes, f.manifest, f.expected, bridge);
+  await expect(plan.verifyBindings(f.base.harness, f.base.root.id, context)).rejects.toThrow();
+  const checkpoint = plan.checkpoint(f.controller);
+  await expect(f.controller.begin(checkpoint.revision, {
+    async copy() { return { sourceDigest: plan.sourceSHA256, receiptHash: plan.request.importHash }; },
+    async importCopied() { await plan.importCopied(f.base.root, () => f.owner.assert(), context); throw Error("lost ACK"); },
+  })).rejects.toThrow();
+  const before = await f.base.harness.snapshot(LegacyTreeImportManifest, f.base.root.id, context);
+  const rootId = f.base.root.id;
+  await f.base.close();
+  const reopened = await openFixture(f.owner, () => {}, () => SqliteStorage.open(new OwnedSqlite(f.owner)));
+  const journal = new Database(f.path, { strict: true });
+  try {
+    const controller = new HostCutoverController(journal, f.identity, f.ports);
+    const root = (await reopened.harness.conversation(rootId, context))!;
+    const imported = await controller.begin(plan.checkpoint(controller).revision, {
+      async copy() { return { sourceDigest: plan.sourceSHA256, receiptHash: plan.request.importHash }; },
+      importCopied: () => plan.importCopied(root, () => f.owner.assert(), context),
+    });
+    const bindings = await plan.verifyBindings(reopened.harness, rootId, context);
+    expect(bindings.manifest).toEqual([{ chatJid: "web:existing", branchId: "main", conversationId: rootId }]);
+    expect([...bindings.sessions]).toEqual([["web:existing", "existing-session"]]);
+    const verified = await controller.verify(imported.revision, () => plan.verify(reopened.harness, rootId, context));
+    expect(verified.writer).toBe("legacy");
+    expect(await reopened.harness.snapshot(LegacyTreeImportManifest, rootId, context)).toEqual(before);
+    expect((await root.commit(tx => tx.scanConversations({}, 100), context)).items).toHaveLength(1);
+    await root.commit(async tx => { (await tx.doc(LegacyTreeImportManifest, rootId)).binding!.branches[0]!.entries = []; }, context);
+    await expect(plan.verifyBindings(reopened.harness, rootId, context)).rejects.toThrow();
+    expect(controller.inspect()).toEqual(verified);
+    expect(reopened.host.modelCalls).toBe(0);
+  } finally { await reopened.close(); journal.close(); }
+}, true));
 test("copied upgrade: exact bytes checkpoint before import; lost acknowledgement and disk/public reopen preserve all IDs", () => using(async f => {
   const plan = prepareCopiedUpgrade(f.bytes, f.manifest, f.expected, bridge);
   f.bytes.fill(0); f.manifest.fill(0); // No retained caller buffers.

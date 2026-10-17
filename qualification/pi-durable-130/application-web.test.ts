@@ -5,7 +5,8 @@ import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager, buildSessionContext, convertToLlm, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
+import { prepareCopiedApplicationUpgrade } from "../../runtime/durable-engine/src/copied-upgrade.js";
 import { AgentPool } from "../../runtime/src/agent-pool.js";
 import { AgentQueue } from "../../runtime/src/queue.js";
 import { WebChannel } from "../../runtime/src/channels/web.js";
@@ -35,8 +36,27 @@ for (const failWait of [false, true]) test(`application bundle binds real pool/c
   const path = (db.query("PRAGMA database_list").all() as { name: string; file: string }[]).find(r => r.name === "main")!.file;
   const storage = new BunSqliteDatabase(path, { root: db, assertOwner: () => lock.assertCurrentOwner() });
   const base = await openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(storage));
-  await base.close(); installTerminalSettlementCompositionSchema(db);
   const chat = `web:bundle:${crypto.randomUUID()}`;
+  const manager = SessionManager.inMemory(dir, { id: "preserved-session" });
+  manager.appendMessage({ role: "system", content: "original baseline", timestamp: 1 });
+  const leaf = manager.appendMessage({ role: "assistant", api: "openai-completions", provider: "never", model: "never",
+    content: [{ type: "text", text: "original answer" }], stopReason: "stop", timestamp: 2,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+  const source = Buffer.from([manager.getHeader(), ...manager.getEntries()].map(v => JSON.stringify(v)).join("\n") + "\n");
+  const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+  const manifest = Buffer.from(JSON.stringify({ version: 1, sourceCopied: true, expectedSourceSHA256: sha(source), pending: 0, inflight: 0,
+    hostBranchBindings: { [leaf]: { chatJid: chat, chatIncarnation: "application-test", branchId: "main", hostBaseline: "original baseline" } } }));
+  const json = <T>(v: T): T => JSON.parse(JSON.stringify(v));
+  const upgrade = prepareCopiedApplicationUpgrade(source, manifest, { sourceSHA256: sha(source), manifestSHA256: sha(manifest) }, (entries, leaf) => ({
+    messages: json(convertToLlm(buildSessionContext([...entries], leaf).messages)),
+    projected: entries.map(entry => ({ sourceEntryId: entry.id, messages: json(convertToLlm(sessionEntryToContextMessages(entry))) })),
+  }));
+  const importedRoot = await base.harness.createConversation({ ownership: { kind: "ownerless" },
+    agent: { model: { provider: "qualification", modelId: "synthetic" } } }, context);
+  await upgrade.importCopied(importedRoot, () => lock.assertCurrentOwner(), context);
+  const importedBindings = await upgrade.verifyBindings(base.harness, importedRoot.id, context);
+  expect(importedBindings.manifest).toEqual([{ chatJid: chat, branchId: "main", conversationId: importedRoot.id }]);
+  await base.close(); installTerminalSettlementCompositionSchema(db);
   const unbound = `${chat}:unbound`;
   storeChatMetadata(chat, new Date().toISOString());
   storeChatMetadata(unbound, new Date().toISOString());
@@ -50,7 +70,7 @@ for (const failWait of [false, true]) test(`application bundle binds real pool/c
   const failed = barrier();
   const options = { root: db, path, ownership,
     wrapWait: failWait ? wait => async (...args) => { await wait(...args); failed.release(); throw Error("lost wait ACK"); } : undefined,
-    manifest: [{ chatJid: chat, branchId: "main", conversationId: base.root.id }], sessions: new Map([[chat, "preserved-session"]]),
+    ...importedBindings, sessions: new Map(importedBindings.sessions),
     offlineInitialize: true, answers,
     runtime: { incarnation: "application-test", sessionId: "preserved-session", lane: "main", generation: 1, now: () => new Date().toISOString(),
       harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } } },
