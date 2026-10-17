@@ -1,3 +1,84 @@
+# Native Delegate adoption — bounded dirty source over `175032611`
+
+The actual default factory now admits the approved installed Delegate 0.2.20
+schema and policy through `createHostDelegateTool` in
+`runtime/durable-engine/src/host-delegate-tool.ts`. It creates SDK task-owned
+public child conversations in the existing application SQLite database. The
+installed legacy `execute` and lifecycle handlers never run on this durable path;
+there is no CLI child or SessionManager/ExtensionContext emulation. Earlier parked
+Delegate refusal checkpoints describe a different implementation.
+
+## Authority and supported profile
+
+`HostConversationRuntime.captureToolSource` checks the exact public running MODEL
+tool slot/call. For a child, public task ownership leads to the live, unaborted
+parent `pi.tool` task and committed assistant `delegate` call. It rejects recursive
+task-owned parents. Accepted input records resolve to EF-S01 bindings and the
+current executing, claimed, uncancelled source/operation and exact running harness.
+A busy parent or conversation ancestry alone grants no authority.
+
+The child inherits only the parent's exact provider/model and thinking level.
+The actual installed `buildModelCandidates` applies Settings approval, ordered
+classification and exclusions; current host model/provider availability also
+applies. Checks run before child creation and after settlement. Generation source
+capture carries the guard through model authorisation and post-credential
+`transformHeaders`; child reader effects recheck captured source and model policy.
+
+- Readers: `read`, `grep`, `find`, `ls`, including explicit subsets. No recursive
+  Delegate, parent history or Plan prompt enters the fresh self-contained child.
+- Omitted model or the exact parent provider/model is supported. Other models,
+  `standard`/`full` tools, nonempty `files` and every `timeout_sec` reject explicitly.
+- Supported `task_category`: `quick`, `summarize`, `code`, `analyze`, `reason`.
+  `judge` and unknown options reject. Categories do not select a different model.
+- Any enabled cap in the root `budget_caps` table denies before child creation
+  and at each source/model effect guard, including zero and positive amounts.
+  This conservative profile also denies unrelated caps. It supplies no native
+  child request reservation, attribution or accounting proof.
+- Parallel Delegate tool calls create independent task-owned children. No numeric
+  global concurrency setting or additional queue is introduced.
+
+`host-extension-catalog.ts` binds approval to canonical installed paths, version,
+content hashes, module resolution and exact registered definition/handler objects.
+Changed source or registration rejects; process-local cache poisoning prevents
+restored bytes from blessing an uncertain previously cached factory. Source
+admission now covers Delegate at startup. The generation hook's historical name
+`app.host-scheduled-source` now covers all sources; renaming it is cleanup, not a
+functional prerequisite. Shared profile types still carrying Plan names could be
+simplified separately.
+
+The parent CLI implementation remains available on the separate legacy path.
+The durable implementation never calls it. Removing the add-on package or old
+runner requires fleet legacy migration; this change does not remove them.
+
+## Existing receipts and unfinished gates
+
+Receipts live under `/workspace/reviews/durable-1650/`; none was rerun for this
+refresh. The actual-default synthetic two-child scenario passes 31 assertions
+(`native-delegate-effect-test.log`); provider-denied admission passes 25
+(`native-delegate-denied-effect-test.log`). Current cap/provider revocation cases
+have 38 assertions each in the supplied follow-up receipt. Earlier individual
+revocation logs failed overbroad error-string assertions and are historical
+failures, not passing receipts. Source/factory tests pass 7 / 55 assertions
+(`native-delegate-owned-tests.log`); installed Delegate catalogue tests have seven
+cases. The current combined factory/catalogue scope has 30 cases including Plan;
+the final `native-delegate-effect-factory-catalog-regressions.log` records 30 pass, 0 fail. Earlier failed receipts remain historical.
+
+`native-delegate-final-candidate.log` records 480 cases: 478 pass and two disk-test
+5,000 ms timeouts, exit 1. Focused disk repeat
+`native-delegate-disk-repeat.log` passes 42 / 329 assertions. A second full candidate (`native-delegate-repeat-candidate.log`) timed out in one different existing disk test: 479 pass, 1 fail. Final serial candidate `native-delegate-serial-candidate.log` passes 480 tests / 7,163 assertions across 41 files, `EXIT_CODE=0`. Inner root gate `native-delegate-root-independent.log` completes normally with 7,312 pass, 74 baseline skips, 0 fail, plus 25 feature and 9 build tests. The interrupted outer wrapper did not record an exit code; none is inferred. All three scoped typechecks
+pass (`native-delegate-effect-{root,engine,qualification}-types.log`).
+
+Published scheduler `a89afe02f` has candidate 458 and root 7,294 + 25 feature +
+9 build passes; native-parallel parent `175032611` has candidate 462 passes.
+Those receipts predate dirty native Delegate adoption. Latest hosted status is
+unknown and was not queried. The 45 assessment stays 22 source-qualified,
+17 fixture-only, 3 blocked-publicAPI and 3 migration/perf-unverified; HC-002 was
+already bounded source-qualified. Public SDK `abortTask` exists, but lacks an
+atomic condition against the exact current running task. HC-009/PC-004/PC-015
+still lack that guarantee; owning and aborting a known child task does not fill it.
+No activation, migration, network, tests, service changes, pins, commits or pushes
+occurred during this documentation refresh.
+
 # Native parallel Delegate feasibility — 17 October 2026
 
 `native-delegate-parallel.test.ts` uses the public SDK foreground-subagent pattern

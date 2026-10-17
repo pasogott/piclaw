@@ -1,11 +1,11 @@
-# #1650 acceptance: scheduler source follow-up over 31dd88ebd — 17 October 2026
+# #1650 acceptance: bounded native Delegate over 175032611 — 17 October 2026
 
 The default application now selects the public durable engine in source; fleet/live acceptance and existing-chat migration are incomplete. The 45 requirements below retain their original IDs and titles. None is an unconditional fleet acceptance claim.
 
 ## Source and evidence boundary
 
-- Worktree: `/workspace/tmp/durable-1650`; HEAD `31dd88ebd989e7ef01618bb390d6357b158691ed` includes native context metadata/public projection, following summary `8dcf4dd73` and Plan `7315c221e`. Scheduler adoption is a dirty source follow-up over `31dd88ebd`; its final commit and full-gate results are not yet recorded here.
-- `stash@{0}` (`scheduler-allocation-current`) is an older allocation-only snapshot already applied to the dirty tree, not a complete snapshot of current scheduler work. Native Delegate and Code Review work is preserved in `stash@{1}` (`park incomplete native Delegate and Code Review adoption; blocked accounting/shared-db services`) and excluded here. Earlier WIP checkpoints for those tools do not qualify the current tree.
+- Worktree: `/workspace/tmp/durable-1650`; HEAD `175032611` contains native parallel feasibility after published scheduler `a89afe02f`. Native Delegate adoption is dirty source over that HEAD; the final serial candidate passes 480 tests and the inner root gate passes 7,312 tests plus 25 feature and 9 build tests. Earlier context, summary and Plan receipts retain their own source boundaries.
+- The old stashed Delegate/Code Review implementation and its refusal checkpoints do not qualify this implementation. The current default factory now admits the bounded installed Delegate profile below; Code Review has no qualified native default path.
 - `runtime/src/runtime.ts` acquires strict ownership. `runtime/src/runtime/bootstrap.ts` supplies `prepareApplicationBackend` by default and loads the fixed `runtime/durable-engine/src/default-application-runtime.ts` entry before AgentPool/WebChannel. Missing candidate dependencies fail explicitly; there is no production legacy fallback. Statements that production registration or default selection are absent are obsolete.
 - The private engine still owns isolated Pi/Chord 1.3.0 pins and its lock. The root package still uses Pi 1.2.0 host definitions/model services. Source default adoption does not establish distributed-package installation or live activation. No fleet rollout, installed-package replacement, live provider acceptance or service restart is recorded here.
 - The default supports Linux/single-user policy, fresh durable history and validated durable reopen. Legacy session files, old message history and unverified storage provenance fail preflight before model/SDK construction. Existing chats must retain their original chat/branch/session identities; fresh-chat success does not meet that migration obligation.
@@ -27,7 +27,7 @@ This is the single current HC/PC table. The [earlier acceptance report](pi-durab
 | ID | Original requirement | Status | Exact source / existing test evidence | What remains |
 | --- | --- | --- | --- | --- |
 | HC-001 | Simple prompt | source-qualified | `E/default-application-runtime.ts`, `E/application-bootstrap.ts`; `Q/default-application-runtime.test.ts`, `Q/application-web.test.ts` | Actual default synthetic HTTP acceptance→answer→EF-S02/reopen works; live authenticated providers and rollout are unverified. |
-| HC-002 | Tool prompt | source-qualified | `E/host-builtins.ts`, `E/host-plan-tool.ts`; `Q/host-builtins.test.ts`, `Q/host-grep.test.ts`, `Q/default-application-runtime.test.ts` | Seven Linux host builtins and approved Plan are admitted; general SSH/MCP/add-on tools, family policy and full installed parity are unqualified. |
+| HC-002 | Tool prompt | source-qualified | `E/host-builtins.ts`, `E/host-plan-tool.ts`; `Q/host-builtins.test.ts`, `Q/host-grep.test.ts`, `Q/default-application-runtime.test.ts` | Seven Linux host builtins, approved Plan and bounded native Delegate are admitted; see the Delegate section. General SSH/MCP/add-on tools, family policy and full installed parity are unqualified. |
 | HC-003 | Parallel tools | fixture-only | `Q/tools.test.ts`; ordering obligation in `earendil-100-durable-crosswalk.md` | Preparation/results do not prove completion-order raw commits versus call-order context/projection. No dedicated candidate ordering oracle. |
 | HC-004 | Safe replay | fixture-only | `E/host-tools.ts`; `Q/tools.test.ts` | Explicit safe-policy tests do not supply crash/redeclaration/idempotency/replay-authorisation matrix. Default host builtins remain unsafe. |
 | HC-005 | Never replay | fixture-only | `Q/sqlite.test.ts`, `Q/bash-port.test.ts` | Selected executing unsafe calls do not rerun on reopen; arbitrary external mutation/unknown-outcome reconciliation needs per-effect policy. |
@@ -86,7 +86,65 @@ The native context follow-up captures the bound session before awaiting the exis
 
 Seven guarded Linux builtins (`read`, `bash`, `edit`, `write`, `find`, `ls`, `grep`) are now the source default. Root and durable grep share `A/host-grep.ts`; find/grep share `A/host-tool-process.ts`. Guards execute at selected actual filesystem/spawn boundaries; recognised previous defaults converge only under idle/owner checks. Custom subsets and model/history identity survive. This is single-user policy, without a new filesystem sandbox or general add-on grant.
 
-Approved installed Plan uses `E/host-extension-catalog.ts`, `E/host-plan-tool.ts` and native `E/host-plan-prompt.ts` `GenerationHooks.beforeRequest`. Public task/tool/source evidence bounds invocation-local chat KV authority. The hook refreshes request-only Plan state on each provider request; it does not emulate legacy SessionManager/ExtensionContext or persist invented hidden entries. Shared `runtime/src/db/register-extension-kv.ts` and the existing authority router replace duplicate registration. Canonical version/content/object checks and process-local path poisoning reject unsupported or stale SDK-cached factories. Only approved Plan is qualified; other installed lifecycle/tool contributions fail startup explicitly. Candidate Delegate/Code Review factory tests in `Q/delegate.test.ts` and `Q/addon-host-services.test.ts` do not establish native default adoption.
+Approved installed Plan uses `E/host-extension-catalog.ts`, `E/host-plan-tool.ts` and native `E/host-plan-prompt.ts` `GenerationHooks.beforeRequest`. Public task/tool/source evidence bounds invocation-local chat KV authority. The hook refreshes request-only Plan state on each provider request; it does not emulate legacy SessionManager/ExtensionContext or persist invented hidden entries. Shared `runtime/src/db/register-extension-kv.ts` and the existing authority router replace duplicate registration. Canonical version/content/object checks and process-local path poisoning reject unsupported or stale SDK-cached factories. Approved Plan and the bounded installed Delegate profile below have native default paths; other installed lifecycle/tool contributions fail startup explicitly. Historical Delegate/Code Review fixtures in `Q/delegate.test.ts` and `Q/addon-host-services.test.ts` do not qualify the new default Delegate path.
+
+## Bounded native Delegate consumer
+
+The actual default factory loads the canonical installed Delegate 0.2.20 declaration
+and `buildModelCandidates` policy, then installs `E/host-delegate-tool.ts`.
+It never calls legacy `execute`, lifecycle handlers, CLI children or a fabricated
+SessionManager/ExtensionContext. Public SDK task-owned child conversations use the
+same physical application database. Legacy CLI code and the add-on package stay
+for the separate legacy path until fleet legacy migration permits removal.
+
+`E/host-runtime.ts` captures the exact public running MODEL tool slot and call.
+Child public ownership resolves to its live, unaborted parent `pi.tool` task and
+committed assistant `delegate` call; task-owned parents cannot recurse. Public
+accepted records resolve to EF-S01 bindings, current executing claimed uncancelled
+source/operation and exact running harness. Busy-chat lookup grants no authority.
+Captured-source checks run at child admission, generation/model boundaries and
+reader effects. Current provider availability, Settings approval and the installed
+ordered classification/exclusion policy apply before creation and after settlement,
+and through model post-auth `transformHeaders` and tool-effect guards.
+
+Only the exact parent model is inherited. Children have fresh self-contained
+history, parent thinking level and `read`/`grep`/`find`/`ls` or explicit subsets;
+no recursion or Plan prompt. Categories `quick`, `summarize`, `code`, `analyze`,
+`reason` are accepted without model reselection; `judge`, other models/options,
+nonempty files and explicit deadlines reject. Any enabled root budget cap denies
+before creation and at each source/model guard. This conservative profile also
+denies unrelated caps; per-request child accounting is unqualified. Parallel tool
+calls use independent owned children, with no numeric global concurrency setting
+or second queue.
+
+Catalogue approval checks canonical paths, content hashes, module resolution and
+registered definition/handler objects. Changed source rejects; process-local path
+poisoning blocks uncertain cached factories even after bytes are restored. Startup
+source admission includes Delegate. `app.host-scheduled-source` is now an all-source
+generation hook despite its stale name; renaming it and Plan-named shared profile
+types is separate cleanup, not required for these guards.
+
+Existing receipts: actual default two-child scenario 31 assertions; denied provider
+25; supplied current cap/provider revocation follow-ups 38 each; source/factory
+7 tests / 55 assertions; Delegate catalogue seven cases. The combined factory/
+catalogue scope has 30 cases including Plan; its earlier log has 28 pass / 2 fail.
+Earlier individual revocation logs failed overbroad error-string assertions.
+The initial full candidate has 480 cases, 478 pass and two disk-test 5,000 ms
+timeouts (`native-delegate-final-candidate.log`, exit 1). Focused disk repeat passes
+42 / 329 (`native-delegate-disk-repeat.log`). Full
+`native-delegate-repeat-candidate.log` is IN PROGRESS at this checkpoint; root
+follows. All three scoped typechecks pass. Latest hosted status is unknown;
+no network queries or tests were run for this refresh. Published scheduler
+`a89afe02f` has 458 candidate and 7,294 root + 25 feature + 9 build passes;
+`175032611` native-parallel has 462 candidate passes. Neither qualifies the dirty
+adoption tree's full gates.
+
+The 45 row statuses stay 22 source-qualified, 17 fixture-only, 3 blocked-publicAPI
+and 3 migration/perf-unverified. HC-002 already had bounded source qualification.
+The public SDK exposes `abortTask` for a known task. It lacks an atomic condition
+against the exact current running task; read-then-abort cannot provide that
+condition. HC-009/PC-004/PC-015 retain their exact-running cancellation gap.
+Foreground child cancellation and host publication fencing do not fill it.
 
 ## Bounded native scheduler consumer
 
@@ -182,7 +240,7 @@ Original public entry IDs, linear ancestry, parent/child counts, full snapshot e
 1. Close the exact-running-abort public API gap for HC-009/PC-004/PC-015 or obtain an explicit requirement decision. Host cancellation/publication fencing is already distinct; no unsafe substitute is proposed.
 2. Complete scheduler model overrides and native per-request budget attribution/reservation/accounting, exact cancellation, accepted-agent takeover and arbitrary-crash/stale-delivery qualification. The actual consumer and cap-denial checks above do not complete those requirements. Complete service/terminal-effect (STE) acceptance across general trusted internal and cross-session input, protected hand-offs, mobile cancellation and goal/checkpoint races. EF-S01/02/05/07/08 keep their acceptance, terminal, delivery, scheduler and projection authorities. Task outcomes/watches cannot replace terminal or delivery receipts.
 3. Qualify remaining semantic matrices: parallel ordering, safe replay, retry/budgets, corruption, deferred live-provider recovery, reload, usage accounting and automatic/background/overflow compaction. Existing bounded source/component results do not supply those matrices.
-4. Qualify supported installed add-ons through native source paths. Delegate/Code Review WIP is stashed; do not count its review checkpoints as current implementation. Remote networking/auth, MCP/SSH effects and general lifecycle/state compatibility need separate evidence.
+4. Extend bounded native Delegate beyond the read-only same-parent-model profile: qualify request budgets/accounting, wider models/tools, attachments/deadlines and recovery. Complete current full gates. Code Review, remote networking/auth, MCP/SSH effects and general lifecycle/state compatibility need separate evidence.
 5. Keep migration last. Preserve existing host chat/branch/session identities; qualify compatibility totality, guarded cutover and reverse conversion after new work. `E/host-controller.ts` deliberately rejects checkpoint/rollback proof without public storage identity and historical frontier; copied host-only rollback success does not remove this limitation.
 6. Extend the bounded read evidence to production-scale restore/tree reads, storage growth, latency, memory and ownership/resource behaviour; supply a portable harness before clone-only reproduction is possible. Package/install, canary, live providers, fleet activation and rollback execution require separate approval and evidence.
 

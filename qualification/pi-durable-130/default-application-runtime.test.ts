@@ -12,6 +12,7 @@ import { createDefaultRuntimeBootstrapDeps } from "../../runtime/src/runtime/boo
 import { storeChatMetadata, storeMessage } from "../../runtime/src/db.js";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, symlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
+import * as hostFs from "node:fs";
 import { extensionKvSet, extensionKvGet } from "../../runtime/src/db/extension-kv.js";
 import { join } from "node:path";
 import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
@@ -96,7 +97,7 @@ for (const uncertain of [false, true]) factoryTest(`cleanup-${uncertain}`, `actu
   }
 });
 
-for (const scenario of ["public-conversations", "custom-subset", "pending-host", "native-plan", "native-scheduler"] as const) factoryTest(scenario, scenario === "custom-subset"
+for (const scenario of ["public-conversations", "custom-subset", "pending-host", "native-plan", "native-scheduler", "native-delegate", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider"] as const) factoryTest(scenario, scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -132,6 +133,35 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
     extensionKvSet("plan-sidebar", "plan", { chat_jid: "web:default", markdown: "- [ ] NATIVE_PLAN_OLD", updated_at: "2026-01-01" }, "chat", "web:default");
     toolSequence = [{ name: "plan", arguments: { action: "update", plan: [{ step: "NATIVE_PLAN_NEW", status: "in_progress" }] } }];
   }
+  const revokeDelegate = scenario === "native-delegate-revoke-cap" || scenario === "native-delegate-revoke-provider";
+  const nativeDelegate = scenario === "native-delegate" || scenario === "native-delegate-denied" || revokeDelegate;
+  const sentinel = "PRIVATE_NATIVE_DELEGATE_READ_SENTINEL";
+  const childReadPath = join(workspace, "delegate-private-read.txt");
+  if (revokeDelegate) writeFileSync(childReadPath, sentinel);
+  if (nativeDelegate) {
+    const source = process.env.DURABLE_ADDONS_ROOT;
+    if (!source) throw Error("DURABLE_ADDONS_ROOT required");
+    const pkg = join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-delegate");
+    mkdirSync(join(pkg, "compat"), { recursive: true });
+    for (const [file, hash] of Object.entries({
+      "index.ts": "73563d26795cbab5cd92e8d5f8dabe3d7477fa11dff35e0ed8b21d9ec3f5ab51",
+      "delegate.ts": "5466936c43f79c4159d75179c9f6a3f1d8d3439000e388902b321d8e7de9c923",
+      "compat/extension-kv.ts": "20408155132b8b86975100f0df7fe03a57ad74d2e4bb8d30f13e2a893441d651",
+    })) {
+      const path = join(source, "addons/delegate", file);
+      expect(createHash("sha256").update(readFileSync(path)).digest("hex")).toBe(hash);
+      copyFileSync(path, join(pkg, file));
+    }
+    symlinkSync(join(import.meta.dir, "../../node_modules"), join(pkg, "node_modules"));
+    const manifest = JSON.parse(readFileSync(join(source, "addons/delegate/package.json"), "utf8"));
+    expect(manifest.name).toBe("@rcarmo/piclaw-addon-delegate"); expect(manifest.version).toBe("0.2.20");
+    writeFileSync(join(pkg, "package.json"), JSON.stringify(manifest));
+    model.id = "gpt-6.1-sol";
+    extensionKvSet("delegate", "config", { searchable_providers: scenario !== "native-delegate-denied" ? [model.provider] : [], excluded_providers: [], excluded_models: [] }, "global");
+  }
+  let childRequests = 0;
+  let releaseChildren!: () => void;
+  const bothChildren = new Promise<void>(resolve => { releaseChildren = resolve; });
   // Leave room for the real built-in schemas and idle-model framing reserve.
   model.contextWindow = 100000;
   const modelB = { ...model, id: "approved-b", contextWindow: 200000 };
@@ -142,13 +172,25 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
     requested.push(physical.id);
     planRequests.push(JSON.stringify(input));
     calls++; const stream = createAssistantMessageEventStream();
+    const child = nativeDelegate && JSON.stringify(input.messages.findLast(message => message.role === "user")?.content).includes("NATIVE_DELEGATE_CHILD");
+    const firstDelegate = nativeDelegate && !child && !input.messages.some(message => message.role === "toolResult");
+    if (child) {
+      childRequests++;
+      expect(JSON.stringify(input)).not.toContain("hello factory");
+      expect(JSON.stringify(input)).not.toContain('"name":"delegate"');
+      expect(JSON.stringify(input)).not.toContain('"name":"plan"');
+      if (childRequests === (revokeDelegate ? 1 : 2)) releaseChildren();
+    }
     const step = toolSequence?.shift();
     const message = { role: "assistant" as const, api: "openai-completions" as const, provider: physical.provider, model: physical.id,
-      content: step ? [{ type: "toolCall" as const, id: `factory-tool-${calls}`, name: step.name, arguments: step.arguments }]
-        : [{ type: "text" as const, text: "factory synthetic reply" }], stopReason: step ? "toolUse" as const : "stop" as const, timestamp: Date.now(),
+      content: firstDelegate ? (revokeDelegate ? ["A"] : ["A", "B"]).map(id => ({ type: "toolCall" as const, id, name: "delegate", arguments: { prompt: "NATIVE_DELEGATE_CHILD", tools: "read_only" } })) : child && revokeDelegate && !input.messages.some(message => message.role === "toolResult") ? [{ type: "toolCall" as const, id: "child-private-read", name: "read", arguments: { path: childReadPath } }] : step ? [{ type: "toolCall" as const, id: `factory-tool-${calls}`, name: step.name, arguments: step.arguments }]
+        : [{ type: "text" as const, text: "factory synthetic reply" }], stopReason: step || firstDelegate || (child && revokeDelegate && !input.messages.some(message => message.role === "toolResult")) ? "toolUse" as const : "stop" as const, timestamp: Date.now(),
       usage: { input: 5, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 10, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
     onProviderResponse?.();
-    stream.push({ type: "done", reason: message.stopReason, message }); stream.end(message); return stream;
+    void (async () => {
+      if (child) await bothChildren;
+      stream.push({ type: "done", reason: message.stopReason, message }); stream.end(message);
+    })(); return stream;
   };
   const credentialStore: RuntimeModelServices["credentialStore"] = { read: async provider => provider === model.provider ? { type: "api_key", key: "synthetic-only" } : undefined,
     list: async () => [{ providerId: model.provider, type: "api_key" }], modify: async () => undefined, delete: async () => {} };
@@ -201,6 +243,33 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
         throw rollback;
       })()).toThrow(rollback);
       authority.assertCurrent();
+      return captured;
+    }));
+  }
+  let childSourceCaptures = 0;
+  let sentinelReads = 0;
+  if (revokeDelegate) {
+    const actualRead = hostFs.readFileSync;
+    captureSpies.push(spyOn(hostFs, "readFileSync").mockImplementation(((path: unknown, ...args: unknown[]) => {
+      if (String(path) === childReadPath) sentinelReads++;
+      return (actualRead as Function)(path, ...args);
+    }) as typeof hostFs.readFileSync));
+    // Prove the spy observes the same static fs binding used by host-builtins.
+    expect(readFileSync(childReadPath, "utf8")).toBe(sentinel);
+    expect(sentinelReads).toBe(1);
+    sentinelReads = 0;
+    const captureTool = HostConversationRuntime.prototype.captureToolSource;
+    captureSpies.push(spyOn(HostConversationRuntime.prototype, "captureToolSource").mockImplementation(async function (this: HostConversationRuntime, ...args) {
+      const captured = await captureTool.apply(this, args);
+      if (captured.delegateModel) {
+        expect(args[2]).toBe("child-private-read");
+        expect(captured.delegateModel).toMatchObject({ provider: model.provider, modelId: model.id });
+        childSourceCaptures++;
+        // The real capture has already admitted this model. Revoke across its
+        // await boundary, before the default factory returns its effect guard.
+        if (scenario === "native-delegate-revoke-cap") saveBudgetCap({ scope: "instance_daily", metric: "api_usd_micros", amount: 0, timezone: "UTC" }, root);
+        else extensionKvSet("delegate", "config", { searchable_providers: [], excluded_providers: [], excluded_models: [] }, "global");
+      }
       return captured;
     }));
   }
@@ -343,9 +412,44 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   })();
   const dispatch = bound.dispatchAcceptedInput!("web:default", message.id, rowId!);
   expect(dispatch).toBeDefined(); expect(await dispatch!()).toBe("settled");
+  if (nativeDelegate) {
+    if (revokeDelegate) {
+      expect(childSourceCaptures).toBe(1);
+      expect(childRequests).toBe(2);
+      expect(calls).toBe(4);
+      expect(sentinelReads).toBe(0);
+      expect(requested).toEqual([model.id, model.id, model.id, model.id]);
+      expect(root.query("SELECT id FROM conversations WHERE owner_task_id IS NOT NULL").all()).toHaveLength(1);
+      const entries = JSON.stringify(root.query("SELECT * FROM entries").all());
+      expect(entries).not.toContain(sentinel);
+      expect(planRequests.join("\n")).not.toContain(sentinel);
+      expect(observedResults.size).toBe(2);
+      expect(observedResults.get("child-private-read")).toMatchObject({ toolName: "read", isError: true });
+      expect(JSON.stringify(observedResults.get("child-private-read"))).toContain("Host tool execution failed");
+      expect(JSON.stringify(observedResults.get("child-private-read"))).not.toContain(sentinel);
+      expect(observedResults.get("A")).toMatchObject({ toolName: "delegate", isError: true });
+      expect(JSON.stringify(observedResults.get("child-private-read"))).not.toContain("Native Delegate model not approved");
+      expect(JSON.stringify(observedResults.get("child-private-read"))).not.toContain("Native Delegate budget admission unavailable");
+      expect(JSON.stringify(root.query("SELECT content FROM messages WHERE is_bot_message=1").all())).not.toContain(sentinel);
+      expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
+      captureSpies.forEach(spy => spy.mockRestore());
+      await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close(); owner.release(); closeDatabase();
+      sdkSpies.forEach(spy => spy.mockRestore());
+      return;
+    }
+    expect(childRequests).toBe(scenario === "native-delegate" ? 2 : 0);
+    expect(calls).toBe(scenario === "native-delegate" ? 4 : 2);
+    const children = root.query("SELECT id, owner_task_id FROM conversations WHERE owner_task_id IS NOT NULL").all();
+    expect(children).toHaveLength(scenario === "native-delegate" ? 2 : 0);
+    expect(observedResults.size).toBe(2);
+    for (const result of observedResults.values()) expect(!!result.isError).toBe(scenario !== "native-delegate");
+    await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close(); owner.release(); closeDatabase();
+    sdkSpies.forEach(spy => spy.mockRestore());
+    return;
+  }
   if (scenario === "native-plan") {
     expect(calls).toBe(2);
-    expect(realRunCaptures).toBe(2); expect(realToolCaptures).toBe(1);
+    expect(realRunCaptures).toBe(4); expect(realToolCaptures).toBe(1);
     captureSpies.forEach(spy => spy.mockRestore());
     expect(planRequests[0]).toContain("NATIVE_PLAN_OLD");
     expect(planRequests[1]).toContain("NATIVE_PLAN_NEW");

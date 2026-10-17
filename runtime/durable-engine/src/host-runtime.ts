@@ -30,6 +30,8 @@ export interface HostInputBinding extends AcceptedInput {
 export interface HostDurableBindings {
   /** Optional until the host explicitly supports accepted intents. */
   readonly intents?: HostDurableBindings & { list(input: AcceptedInput): Promise<readonly HostInputBinding[]> };
+  /** Host EF-S01 synchronous effect-boundary guard; never queries SDK tables. */
+  assertSourceCurrent?(input: AcceptedInput): void;
   get(input: AcceptedInput): Promise<HostInputBinding | null>;
   bind(input: AcceptedInput): Promise<HostInputBinding>;
   getOrBind(input: AcceptedInput): Promise<{ content: string }>;
@@ -148,7 +150,8 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
     owner: Object.freeze({ assert: owner.assert.bind(owner), release: owner.release.bind(owner) }),
     work: Object.freeze({ getOperation: work.getOperation.bind(work), acceptCancellation: work.acceptCancellation.bind(work), bindHarness: work.bindHarness.bind(work), finishHarness: work.finishHarness?.bind(work) }),
     terminal: Object.freeze({ getTerminal: terminal.getTerminal.bind(terminal), commitTerminal: terminal.commitTerminal.bind(terminal) }),
-    bindings: Object.freeze({ get: bindings.get.bind(bindings), bind: bindings.bind.bind(bindings),
+    bindings: Object.freeze({ assertSourceCurrent: bindings.assertSourceCurrent?.bind(bindings),
+      get: bindings.get.bind(bindings), bind: bindings.bind.bind(bindings),
       getOrBind: bindings.getOrBind.bind(bindings), recordSubmission: bindings.recordSubmission.bind(bindings),
       intents: bindings.intents && Object.freeze({ get: bindings.intents.get.bind(bindings.intents),
         bind: bindings.intents.bind.bind(bindings.intents), getOrBind: bindings.intents.getOrBind.bind(bindings.intents),
@@ -504,7 +507,10 @@ export class HostConversationRuntime {
   /** Recheck captured source routing synchronously at a host effect boundary. */
   assertCapturedSourceCurrent(inputs: readonly HostInputBinding[]): void {
     this.fence();
-    for (const input of inputs) if (!this.routed(input)) throw Error("Host binding conflict");
+    for (const input of inputs) {
+      if (!this.routed(input)) throw Error("Host binding conflict");
+      this.options.bindings.assertSourceCurrent?.(input);
+    }
   }
   /** Read-only generation provenance, including the first request before host ACK. */
   captureRunSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId) {
@@ -512,12 +518,37 @@ export class HostConversationRuntime {
   }
   private captureSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId, callId?: string): Promise<{
     inputs: readonly HostInputBinding[]; operation: OperationSnapshot;
+    delegateModel?: { provider: string; modelId: string };
   }> {
     return this.observe(async () => {
       const o = this.options;
       const live = await this.harness.snapshot(LiveDoc, conversationId, this.context); this.fence();
       if (!live?.run || !(callId === undefined ? live.run.taskId === taskId : live.tools?.some(slot => slot.taskId === taskId && slot.callId === callId && slot.status === "running")) || !live.run.inputs.length)
         throw Error("Exact host tool run required");
+      // A native foreground child has its own pi.user input, not a new host
+      // acceptance. Follow only public task ownership back to the exact live
+      // MODEL Delegate slot; neither ancestry nor a busy parent grants authority.
+      const owned = await this.harness.commit(async tx => {
+        const conversation = await tx.conversation(conversationId);
+        if (!conversation?.owner) return undefined;
+        const owner = conversation.owner;
+        const task = await tx.task(owner.taskId);
+        if (!task || task.kind !== "pi.tool" || task.conversationId !== owner.conversationId ||
+          task.state.status === "terminal" || task.abortRequested) throw Error("Live Delegate owner required");
+        const input = task.input as Partial<import("@earendil-works/pi-durable").ToolTaskInput>;
+        if (input.kind !== "model" || !input.callId || input.assistant === undefined) throw Error("Model Delegate owner required");
+        const assistant = await tx.entry(input.assistant);
+        const calls = assistant?.model?.flatMap(message => message.role === "assistant" ? message.content.filter(part => part.type === "toolCall") : []) ?? [];
+        if (assistant?.conversationId !== owner.conversationId || !calls.some(call => call.id === input.callId && call.name === "delegate"))
+          throw Error("Exact Delegate owner required");
+        // Delegation is foreground and non-recursive. A task-owned parent cannot
+        // manufacture an accepted-input chain through another Delegate call.
+        if ((await tx.conversation(owner.conversationId))?.owner) throw Error("Recursive Delegate source denied");
+        const model = (await tx.doc(AgentDoc, conversationId)).model;
+        if (!model) throw Error("Delegate model required");
+        return { ...owner, callId: input.callId, model: Object.freeze({ ...model }) };
+      }, this.context); this.fence();
+      if (owned) return { ...await this.captureSource(owned.conversationId, owned.taskId, owned.callId), delegateModel: owned.model };
       const inputs: HostInputBinding[] = [];
       let operation: OperationSnapshot | undefined;
       for (const submissionId of live.run.inputs) {

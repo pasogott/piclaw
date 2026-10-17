@@ -177,6 +177,22 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
   });
   }
   return Object.freeze({ ...makePort(), intents: makePort(true), resolveConversation,
+    assertSourceCurrent(input: AcceptedInput) {
+      const i = capture(input);
+      assertHostSchema(db);
+      // Unlike correlation replay, an effect requires a currently executing,
+      // uncancelled operation and its exact still-claimed accepted source.
+      const current = db.query(`SELECT 1 FROM service_effect_s01_sources s
+        JOIN service_effect_s01_operation_sources c ON c.chat_jid=s.chat_jid AND c.source_seq=s.source_seq
+        JOIN service_effect_s01_operations o ON o.operation_id=c.operation_id AND o.chat_jid=s.chat_jid
+        JOIN service_effect_s01_chats ch ON ch.chat_jid=o.chat_jid AND ch.active_operation_id=o.operation_id
+        WHERE s.chat_jid=? AND s.source_seq=? AND s.source_id=? AND s.payload_ref=?
+          AND s.state='claimed' AND o.operation_id=? AND o.phase='executing'
+          AND o.cancellation_source_id IS NULL AND o.terminal_disposition IS NULL`)
+        .get(i.chatJid, i.sourceSeq, i.sourceId, i.payloadRef, i.operationId);
+      if (!current) throw Error("Host operation authority unavailable");
+      assertOwner();
+    },
     async findSource(chatJid: string, sourceSeq: number) {
       assertOwner();
       assertHostSchema(db);

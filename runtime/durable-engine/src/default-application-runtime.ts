@@ -18,7 +18,9 @@ import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { applicationOwnership, createApplicationBootstrapBundle } from "./application-bootstrap.js";
 import { createHostModels } from "./host-models.js";
 import { createHostBuiltinTools } from "./host-builtins.js";
-import { loadApplicationExtensionCatalog, qualifyInstalledPlan, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
+import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
+import { createHostDelegateTool } from "./host-delegate-tool.js";
+import { extensionKvGet } from "../../src/db/extension-kv.js";
 import { createHostPlanTool } from "./host-plan-tool.js";
 import { createHostPlanPrompt } from "./host-plan-prompt.js";
 import type { HostConversationRuntime } from "./host-runtime.js";
@@ -149,10 +151,11 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   // writes. Never silently start with seven tools when installed tools exist.
   const catalog = await loadApplicationExtensionCatalog({ cwd: WORKSPACE_DIR, agentDir: getPiclawAgentDir(), settingsManager: settings });
   const plan = await qualifyInstalledPlan(catalog, WORKSPACE_DIR);
-  try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan); }
+  const delegate = await qualifyInstalledDelegate(catalog, WORKSPACE_DIR);
+  try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan, delegate); }
   finally { catalog.runtime.invalidate("Application extension preflight ended"); }
-  const applicationToolNames: readonly string[] = [...defaultToolNames, ...(plan ? ["plan"] : [])];
-  const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || (!!plan && Array.isArray(tools) &&
+  const applicationToolNames: readonly string[] = [...defaultToolNames, ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : [])];
+  const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || ((!!plan || !!delegate) && Array.isArray(tools) &&
     tools.length === defaultToolNames.length && defaultToolNames.every((name, index) => tools[index] === name));
   const host = await getModels(); assert();
   const provider = settings.getDefaultProvider(), modelId = settings.getDefaultModel();
@@ -192,6 +195,16 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     }
     if (toolUpgrades.length) { assert(); assertToolUpgradeIdle(root); }
   }
+  // Restricted native profile: inherit only the approved parent model. The
+  // installed add-on's own classification/exclusion policy remains authoritative.
+  const assertDelegateModel = (model: { provider: string; modelId: string }) => {
+    if (!delegate) throw Error("Native Delegate unavailable");
+    delegate.assertCurrent(); check({ provider: model.provider, id: model.modelId }, lifetime.signal);
+    if (root.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native Delegate budget admission unavailable");
+    const config = extensionKvGet("delegate", "config", "global");
+    const candidate = { provider: model.provider, id: model.modelId, fullId: `${model.provider}/${model.modelId}` };
+    if (!delegate.buildModelCandidates([candidate], config).some(entry => entry.id === candidate.fullId)) throw Error("Native Delegate model not approved");
+  };
   const requestGuards = new WeakMap<AbortSignal, () => void>();
   const models = createHostModels(host.modelRuntime, available.map(model => ({ provider: model.provider, id: model.id })), { signal: lifetime.signal,
     captureSourceGuard(signal) { return signal ? requestGuards.get(signal) ?? (() => {}) : () => {}; },
@@ -204,14 +217,15 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     if (!captureRuntime) throw Error("Host capture runtime unavailable");
     return captureRuntime;
   };
-  const isScheduled = (id: ConversationId) => !!root.query("SELECT 1 FROM piclaw_durable_bindings_v1 b JOIN service_effect_s01_sources s ON s.chat_jid=b.chat_jid AND s.source_seq=b.source_seq WHERE b.conversation_id=? AND s.kind='scheduled_agent'").get(id);
   registry.install(defineExtension({ name: "app.host-scheduled-source", hooks: [{ task: "pi.generation", handlers: {
     async beforeRequest(_request: Parameters<NonNullable<import("@earendil-works/pi-durable").GenerationHooks["beforeRequest"]>>[0], api: Parameters<NonNullable<import("@earendil-works/pi-durable").GenerationHooks["beforeRequest"]>>[1], hookContext: Parameters<NonNullable<import("@earendil-works/pi-durable").GenerationHooks["beforeRequest"]>>[2]) {
-      if (!isScheduled(api.conversationId)) return;
       let guard: () => void;
       try {
         const captured = await runtime().captureRunSource(api.conversationId, api.taskId);
-        guard = () => runtime().assertCapturedSourceCurrent(captured.inputs);
+        guard = () => {
+          runtime().assertCapturedSourceCurrent(captured.inputs);
+          if (captured.delegateModel) assertDelegateModel(captured.delegateModel);
+        };
       } catch (error) {
         // Deny this request through the model result, not an infrastructure hook fault
         // or a permanent abort of the shared model lifetime.
@@ -223,9 +237,11 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   } }] }));
   const tools = createHostBuiltinTools({ cwd: WORKSPACE_DIR,
     async captureSourceGuard(call) {
-      if (!isScheduled(call.conversationId)) return () => {};
       const captured = await runtime().captureToolSource(call.conversationId, call.taskId, call.toolCallId);
-      return () => runtime().assertCapturedSourceCurrent(captured.inputs);
+      return () => {
+        runtime().assertCapturedSourceCurrent(captured.inputs);
+        if (captured.delegateModel) assertDelegateModel(captured.delegateModel);
+      };
     }, authority: { assertAllowed() {
     assert(); lifetime.signal.throwIfAborted();
     if (readAccessConfig().mode !== "single-user") throw Error("Host tool permission denied");
@@ -233,6 +249,21 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   if (plan) tools.push(createHostPlanTool(plan.definition as Parameters<typeof createHostPlanTool>[0], { root, assertOwner: () => {
     assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent();
   }, runtime }));
+  if (delegate) {
+    const readers = tools.filter(tool => ["read", "grep", "find", "ls"].includes(tool.name));
+    const readerExtension = defineExtension({ name: "app.host-delegate-readers", tools: readers });
+    registry.install(readerExtension);
+    tools.push(createHostDelegateTool(delegate.definition as Parameters<typeof createHostDelegateTool>[0], {
+      assertCurrent() { assert(); lifetime.signal.throwIfAborted(); delegate.assertCurrent(); }, runtime,
+      async selectModel(args, parent) {
+        if (!parent) throw Error("Delegate parent model required");
+        const fullId = `${parent.provider}/${parent.modelId}`;
+        if (args.model !== undefined && args.model !== fullId) throw Error("Native Delegate supports parent model inheritance only");
+        if (args.task_category !== undefined && !["quick", "summarize", "code", "analyze", "reason"].includes(String(args.task_category))) throw Error("Native Delegate task category not qualified");
+        assertDelegateModel(parent); return parent;
+      }, assertModelCurrent: assertDelegateModel, readonlyTools: readers, readonlyExtensions: [readerExtension],
+    }));
+  }
   registry.install(defineExtension({ name: "app.host-builtins", tools }));
   if (plan) registry.install(createHostPlanPrompt(plan.addon, { root, runtime,
     assertOwner() { assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent(); }, failClosed(error) { lifetime.abort(error); } }));
