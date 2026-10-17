@@ -268,7 +268,7 @@ for (const scenario of scenarios.filter(name => !process.env.PICLAW_WORKFLOW_CAS
           preparation.assertAdmissionGuard();
           await Bun.sleep(20);
           expect(writes).toEqual([]);
-          expect(bundle.sessionOptions.durableSessions.has("web:workflow:0")).toBe(true);
+          expect(!!bundle.sessionOptions.getDurableSession("web:workflow:0")).toBe(true);
           expect(readFileSync(files[0]!)).toEqual(bytes);
           for (const spy of jsonl) expect(spy).not.toHaveBeenCalled();
           await channel.stop();
