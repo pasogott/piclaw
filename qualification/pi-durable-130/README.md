@@ -1197,3 +1197,19 @@ bounded review is clear. An earlier full attempt hit five five-second timeouts;
 unchanged sequential repeat passed. This is explicit main-branch-only composition,
 not automatic installation discovery, branch-complete migration, production
 registration or activation. No new journal, queue, database or session JSONL is used.
+
+### Preserved existing branch routing
+
+Application upgrade and bootstrap now accept original non-main branch identities
+for distinct original chat JIDs. Each non-main binding must match the exact existing
+unarchived `chat_branches` row before journal/import writes and again before bundle
+construction. Dispatch selects its captured manifest branch, not an implicit main.
+Multiple source leaves for the same chat remain unsupported and reject before writes;
+no branch is discarded, renamed or sent through a new routing interface.
+
+The real AgentPool/WebChannel test imports two original sibling branches and
+continues both independently with their original chats, sessions, durable bindings
+and shared tree history in one database without JSONL. Wrong persisted bindings
+reject. Final candidate verification passes 389 tests / 6,922 assertions; root fast
+CI, engine/qualification types and bounded independent review pass. This adds
+preserved routing only, not branch mutation, automatic inventory or activation.

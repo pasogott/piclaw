@@ -24,7 +24,7 @@ import { upgradeApplication } from "../../runtime/durable-engine/src/application
 import { HostCutoverController, initializeCutoverManifest } from "../../runtime/durable-engine/src/host-cutover.js";
 
 // The runtime acquires the actual strict lock BEFORE root/SDK initialization. No TestOwner.
-for (const failWait of [false, true]) test(`application bundle binds real pool/channel; lost wait ACK=${failWait}`, async () => {
+for (const [failWait, forks] of [[false, false], [true, false], [false, true]] as const) test(`application bundle binds real pool/channel; lost wait ACK=${failWait}; preserved forks=${forks}`, async () => {
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "application-bundle-"));
   const lock = acquireRuntimeLock({ lockPath: join(dir, "runtime.lock"), strictOwnership: true, disabled: false });
   const ownership = applicationOwnership(lock);
@@ -42,13 +42,30 @@ for (const failWait of [false, true]) test(`application bundle binds real pool/c
   const incarnation = `application-${crypto.randomUUID()}`;
   const manager = SessionManager.inMemory(dir, { id: "preserved-session" });
   manager.appendMessage({ role: "system", content: "original baseline", timestamp: 1 });
+  const shared = manager.getLeafId()!;
   const leaf = manager.appendMessage({ role: "assistant", api: "openai-completions", provider: "never", model: "never",
     content: [{ type: "text", text: "original answer" }], stopReason: "stop", timestamp: 2,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+  const sibling = `${chat}:sibling`;
+  if (forks) {
+    storeChatMetadata(chat, new Date().toISOString());
+    storeChatMetadata(sibling, new Date().toISOString());
+  }
+  const originalBranch = (jid: string) => (db.query("SELECT branch_id FROM chat_branches WHERE chat_jid=?").get(jid) as { branch_id: string }).branch_id;
+  const branchId = forks ? originalBranch(chat) : "main";
+  const siblingBranchId = forks ? originalBranch(sibling) : "unused";
+  let siblingLeaf: string | undefined;
+  if (forks) {
+    manager.branch(shared);
+    siblingLeaf = manager.appendMessage({ role: "assistant", api: "openai-completions", provider: "never", model: "never",
+      content: [{ type: "text", text: "sibling original answer" }], stopReason: "stop", timestamp: 3,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+  }
   const source = Buffer.from([manager.getHeader(), ...manager.getEntries()].map(v => JSON.stringify(v)).join("\n") + "\n");
   const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
   const manifest = Buffer.from(JSON.stringify({ version: 1, sourceCopied: true, expectedSourceSHA256: sha(source), pending: 0, inflight: 0,
-    hostBranchBindings: { [leaf]: { chatJid: chat, chatIncarnation: incarnation, branchId: "main", hostBaseline: "original baseline" } } }));
+    hostBranchBindings: { [leaf]: { chatJid: chat, chatIncarnation: incarnation, branchId, hostBaseline: "original baseline" },
+      ...(siblingLeaf ? { [siblingLeaf]: { chatJid: sibling, chatIncarnation: incarnation, branchId: siblingBranchId, hostBaseline: "original baseline" } } : {}) } }));
   const json = <T>(v: T): T => JSON.parse(JSON.stringify(v));
   const upgrade = prepareCopiedApplicationUpgrade(source, manifest, { sourceSHA256: sha(source), manifestSHA256: sha(manifest) }, (entries, leaf) => ({
     messages: json(convertToLlm(buildSessionContext([...entries], leaf).messages)),
@@ -58,7 +75,9 @@ for (const failWait of [false, true]) test(`application bundle binds real pool/c
     agent: { model: { provider: "qualification", modelId: "synthetic" } } }, context);
   await upgrade.importCopied(importedRoot, () => lock.assertCurrentOwner(), context);
   const importedBindings = await upgrade.verifyBindings(base.harness, importedRoot.id, context);
-  expect(importedBindings.manifest).toEqual([{ chatJid: chat, branchId: "main", conversationId: importedRoot.id }]);
+  if (!forks) expect(importedBindings.manifest[0]).toEqual({ chatJid: chat, branchId, conversationId: importedRoot.id });
+  expect(importedBindings.manifest).toHaveLength(forks ? 2 : 1);
+  if (forks) expect(importedBindings.manifest.map(b => b.branchId).sort()).toEqual([branchId, siblingBranchId].sort());
   await base.close(); installTerminalSettlementCompositionSchema(db);
   const unbound = `${chat}:unbound`;
   storeChatMetadata(chat, new Date().toISOString());
@@ -78,7 +97,7 @@ for (const failWait of [false, true]) test(`application bundle binds real pool/c
     runtime: { incarnation, sessionId: "preserved-session", lane: "main", generation: 1, now: () => new Date().toISOString(),
       harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } } },
   } satisfies Parameters<typeof createApplicationBootstrapBundle>[0];
-  if (!failWait) {
+  if (!failWait && !forks) {
     let published = 0;
     const invalidScopes = [
       { sessions: new Map([[chat, "preserved-session"], [unbound, "extra-session"]]) },
@@ -94,7 +113,7 @@ for (const failWait of [false, true]) test(`application bundle binds real pool/c
     for (const invalid of invalidScopes) {
       await expect(createApplicationBootstrapBundle({ ...options, ...invalid }, context).then(bundle => {
         published++; return bundle.close();
-      })).rejects.toThrow("Exact main-branch application manifest required");
+      })).rejects.toThrow("Exact application branch manifest required");
       expect(published).toBe(0);
       expect(db.query("SELECT count(*) AS n FROM service_effect_s01_sources WHERE chat_jid IN (?,?)").get(chat, unbound)).toEqual({ n: 0 });
       expect(db.query("SELECT count(*) AS n FROM service_effect_s01_operations WHERE chat_jid IN (?,?)").get(chat, unbound)).toEqual({ n: 0 });
@@ -136,7 +155,7 @@ for (const failWait of [false, true]) test(`application bundle binds real pool/c
     const conversation = (await fixture.harness.conversation(importedRoot.id, context))!;
     return { database, harness: fixture.harness, conversation, close: fixture.close };
   }
-  if (!failWait) {
+  if (!failWait && !forks) {
     for (const runtime of [{ ...application.runtime, incarnation: "wrong-domain" },
       { ...application.runtime, sessionId: "invented-session" }]) {
       await expect(upgradeApplication({ plan: upgrade, cutover, application: { ...application, runtime },
@@ -228,8 +247,16 @@ for (const failWait of [false, true]) test(`application bundle binds real pool/c
       if (failedCandidate) await close.call(failedCandidate);
     }
   }
+  if (forks) {
+    const captured = db.query("SELECT branch_id FROM chat_branches WHERE chat_jid=?").get(chat);
+    db.query("UPDATE chat_branches SET branch_id=? WHERE chat_jid=?").run("wrong-original-branch", chat);
+    await expect(upgradeApplication({ plan: upgrade, cutover, application, importer: await importer() }, context))
+      .rejects.toThrow("Exact application branch manifest required");
+    expect(cutover.inspect()).toBeNull();
+    db.query("UPDATE chat_branches SET branch_id=? WHERE chat_jid=?").run((captured as { branch_id: string }).branch_id, chat);
+  }
   const beforeRetry = cutover.inspect();
-  if (!failWait) {
+  if (!failWait && !forks) {
     const alteredManifest = Buffer.from(manifest.toString() + "\n");
     const other = prepareCopiedApplicationUpgrade(source, alteredManifest,
       { sourceSHA256: sha(source), manifestSHA256: sha(alteredManifest) }, (entries, leaf) => ({
@@ -241,7 +268,7 @@ for (const failWait of [false, true]) test(`application bundle binds real pool/c
   }
   const begin = spyOn(cutover, "begin");
   const bundle = await upgradeApplication({ plan: upgrade, cutover, application, importer: await importer() }, context);
-  if (!failWait) { expect(begin).not.toHaveBeenCalled(); expect(cutover.inspect()).toEqual(beforeRetry); }
+  if (!failWait && !forks) { expect(begin).not.toHaveBeenCalled(); expect(cutover.inspect()).toEqual(beforeRetry); }
   else expect(begin).toHaveBeenCalledTimes(1);
   begin.mockRestore();
   expect(cutover.inspect()?.phase).toBe("active");
@@ -290,6 +317,27 @@ for (const failWait of [false, true]) test(`application bundle binds real pool/c
     expect(await pool.saveSessionPosition(chat)).not.toBeNull();
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
     expect(base.host.modelCalls).toBe(1); expect(base.host.credentialLookups).toBe(0);
+    if (forks) {
+      // Caller-owned maps/options cannot redirect captured routes after publication.
+      options.sessions.set(chat, "redirected-session");
+      const route = importedBindings.manifest.find(b => b.chatJid === sibling)!;
+      const response = await channel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(sibling)}`, {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: JSON.stringify({ content: "sibling input" }),
+      }));
+      expect(response.status).toBe(201);
+      for (let n = 0; n < 500 && queue.isLaneBusy(`chat:${sibling}`); n++) await Bun.sleep(5);
+      expect(queue.isLaneBusy(`chat:${sibling}`)).toBe(false);
+      expect(pool.getSessionGenerationForChat(sibling)).toBe("preserved-session");
+      expect(pool.getSessionGenerationForChat(chat)).toBe("preserved-session");
+      expect(db.query("SELECT chat_jid,branch_id,conversation_id FROM piclaw_durable_bindings_v1 WHERE domain=? ORDER BY chat_jid").all(incarnation))
+        .toEqual(importedBindings.manifest.map(b => ({ chat_jid: b.chatJid, branch_id: b.branchId, conversation_id: b.conversationId })).sort((a,b) => a.chat_jid.localeCompare(b.chat_jid)));
+      expect(route.branchId).not.toBe("main");
+      const tree = await pool.getSessionTreeForChat(chat);
+      expect(tree.nodes.some(n => n.detail === "original answer")).toBe(true);
+      expect(tree.nodes.some(n => n.detail === "sibling original answer")).toBe(true);
+      expect((await pool.applyControlCommand(sibling, { type: "tree", raw: "/tree" })).status).toBe("success");
+      expect(base.host.modelCalls).toBe(2);
+    }
     const files = readdirSync(process.env.PICLAW_WORKSPACE!, { recursive: true }).map(String);
     expect(files.filter(p => /\.jsonl$/i.test(p))).toEqual([]);
     expect(files.filter(p => /\.(db|sqlite)$/i.test(p))).toEqual([".piclaw/store/messages.db"]);

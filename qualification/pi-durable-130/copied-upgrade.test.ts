@@ -90,7 +90,7 @@ async function setup(sharedDatabase = false, mainOnly = false) {
 }
 test("application upgrade bindings: reject valid unsupported branches before journal/import writes", () => using(async f => {
   expect(() => prepareCopiedApplicationUpgrade(f.bytes, f.manifest, f.expected, bridge))
-    .toThrow("main-branch histories only");
+    .toThrow("ambiguous same-chat branches are unsupported");
   expect(f.controller.inspect()).toBeNull();
   expect(await f.base.harness.snapshot(LegacyTreeImportManifest, f.base.root.id, context)).toBeUndefined();
 }));

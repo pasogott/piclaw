@@ -21,7 +21,7 @@ export type AcceptedQueueDispatch = {
 export function createDurableQueueDispatch(options: {
   work: CurrentPiclawServiceWorkStore;
   adapter: ReturnType<typeof createDurableConversationAdapter>;
-  branchId: string;
+  branchId: string | ((chatJid: string) => string);
   assertCurrentWriter(): void;
   /** Explicit host-owned runtime correlation; never inferred from input content. */
   runningCorrelation?(submissionId: number): import('../service-effects/contracts/service-work-store.js').HarnessCorrelation;
@@ -30,7 +30,8 @@ export function createDurableQueueDispatch(options: {
   waitForReconciliation(identity: PendingInputIdentity, signal: AbortSignal): Promise<void>;
   shutdown: AbortSignal;
 }): AcceptedQueueDispatch {
-  const { work, adapter, branchId } = options;
+  const { work, adapter, branchId: route } = options;
+  const branchFor = typeof route === "function" ? route.bind(options) : () => route;
   const assert = options.assertCurrentWriter.bind(options);
   const submit = adapter.submit.bind(adapter), wait = adapter.wait.bind(adapter), settle = adapter.settle.bind(adapter);
   const sourceFor = work.getAcceptedSource.bind(work), frontierFor = work.getChatFrontier.bind(work);
@@ -46,6 +47,7 @@ export function createDurableQueueDispatch(options: {
       { id: string; chat_jid: string; content: string } | null;
     if (!message || message.id !== messageId || message.chat_jid !== chatJid || source.kind !== "message" ||
       !matchesPayloadRef(source.payloadRef, messageId, rowId)) throw new Error("Accepted queue identity conflict");
+    const branchId = branchFor(chatJid);
     const content = message.content, requestId = `message:${rowId}:${source.sourceId}`;
     const requestHash = hashCanonicalRequest({ type: "input", requestId, content });
     return async () => {

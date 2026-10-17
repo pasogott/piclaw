@@ -15,7 +15,7 @@ export interface ApplicationUpgradeOptions {
   importer: { database: BunSqliteDatabase; harness: Harness; conversation: Conversation; close(): Promise<void> };
 }
 
-/** Main-branch histories only. No automatic resume, binding, rollback or publication.
+/** Preserved one-branch-per-chat histories. No automatic resume, binding, rollback or publication.
  * A lost writer-commit acknowledgement leaves the active journal intact; retry verifies
  * the same public baseline and candidate writer without re-running begin on active.
  * Once accepted work changes that baseline this intentionally fails closed. */
@@ -33,6 +33,7 @@ export async function upgradeApplication(options: ApplicationUpgradeOptions, con
     lease = application.ownership.borrow();
     assert(); database.assertApplicationRoot(application.root);
     plan.assertApplicationScope(application.runtime.incarnation, application.runtime.sessionId);
+    plan.assertApplicationBranches(application.root);
     let journal = cutover.inspectApplication(application.root, application.runtime.incarnation, plan.request);
     if (!journal || journal.phase === "source" || journal.phase === "copying") {
       journal = plan.checkpoint(cutover);

@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import type { Context } from "@earendil-works/chord";
 import { CompactionEntry, SystemEntry, type Conversation, type ConversationId, type Harness, type EntryRecord } from "@earendil-works/pi-durable";
 import { HostCutoverController } from "./host-cutover.js";
-import type { ApplicationBootstrapOptions } from "./application-bootstrap.js";
+import { assertApplicationBranchRoutes, type ApplicationBootstrapOptions } from "./application-bootstrap.js";
 import { importCopiedLegacyTree, prepareLegacyTreeImport, LegacyTreeImportManifest, LegacyImportManifest, IMPORTER_VERSION,
   type CopiedLegacyTreeInput, type GetLegacyContext } from "./legacy-import.js";
 const sha = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -63,19 +63,23 @@ function prepareUpgrade(sourceBytes: Uint8Array, manifestBytes: Uint8Array,
     const last = branch.projection.messages.at(-1);
     assert(last?.role === "assistant" && last.stopReason === "stop", "copied leaf not quiescent");
   }
-  // Bootstrap cannot route legacy forks yet. Never discard a leaf or rename its branch.
-  // Fail before the first journal/import write, even if every individual history is valid.
+  // One captured route per chat. Root sibling branches have distinct chat JIDs.
+  // Same-chat leaves remain unsupported: never discard a leaf or choose the first.
   const canonical = (id: string) => id.length > 0 && id === id.trim();
   if (application && (new Set(plan.prepared.map(branch => branch.identity.chatJid)).size !== plan.prepared.length ||
-    plan.prepared.some(branch => branch.identity.branchId !== "main" ||
+    plan.prepared.some(branch => !canonical(branch.identity.branchId) ||
       !canonical(branch.identity.chatJid) || !canonical(branch.sourceSessionId))))
-    throw Error("Copied application upgrade supports exact main-branch histories only; legacy branch routing is not supported");
+    throw Error("Copied application upgrade requires one canonical branch per chat; ambiguous same-chat branches are unsupported");
   // Bind exact manifest bytes too: whitespace/provenance changes cannot silently reuse intent.
   const request = Object.freeze({ requestKey: `copied:${sha(JSON.stringify([sourceSHA256, manifestSHA256]))}`,
     sourceDigest: sourceSHA256, importHash: plan.sourceHash });
   const receipt = Object.freeze({ sourceDigest: sourceSHA256, receiptHash: plan.sourceHash });
   return Object.freeze({
     sourceSHA256, manifestSHA256, request,
+    assertApplicationBranches(root: import("bun:sqlite").Database) {
+      assert(application, "Application plan required");
+      assertApplicationBranchRoutes(root, plan.prepared.map(branch => branch.identity));
+    },
     assertApplicationScope(incarnation: string, sessionId: string) {
       assert(application && plan.prepared.every(branch => branch.identity.chatIncarnation === incarnation &&
         branch.sourceSessionId === sessionId), "Copied application identity conflict");

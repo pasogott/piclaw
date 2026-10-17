@@ -18,6 +18,16 @@ import { assertHostSchema, initializeHostSchema } from "./host-schema.js";
 import { value } from "./host-effects.js";
 
 type Manifest = HostControllerOptions["recovery"]["manifest"];
+/** Validate existing host routing before any import/journal/schema write. */
+export function assertApplicationBranchRoutes(root: Database, manifest: readonly { chatJid: string; branchId: string }[]) {
+  for (const binding of manifest) {
+    const row = root.query("SELECT branch_id, archived_at FROM chat_branches WHERE chat_jid=?").get(binding.chatJid) as
+      { branch_id: string; archived_at: string | null } | null;
+    // Keep the existing explicit synthetic main binding contract unchanged.
+    if (binding.branchId !== "main" && (!row || row.branch_id !== binding.branchId || row.archived_at !== null))
+      throw Error("Exact application branch manifest required");
+  }
+}
 /** Borrowing seals only this controller scope. The application keeps the original lock
  * handle and releases it AFTER all services, root DB and other components shut down. */
 export function applicationOwnership(lock: RuntimeLockHandle) {
@@ -65,8 +75,12 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
   if (!manifest.length || chats.size !== manifest.length || sessions.size !== chats.size ||
     [...sessions].some(([chat, session]) => !canonical(chat) || !chats.has(chat) || !canonical(session)) ||
     new Set(manifest.map(b => b.conversationId)).size !== manifest.length ||
-    manifest.some(b => !canonical(b.chatJid) || b.branchId !== "main" || !sessions.has(b.chatJid) || !Number.isSafeInteger(b.conversationId) || b.conversationId <= 0))
-    throw Error("Exact main-branch application manifest required");
+    manifest.some(b => !canonical(b.chatJid) || !canonical(b.branchId) || !sessions.has(b.chatJid) || !Number.isSafeInteger(b.conversationId) || b.conversationId <= 0))
+    throw Error("Exact application branch manifest required");
+  // Root branches already have distinct chat JIDs (UNIQUE in chat_branches).
+  // Never invent a branch or choose a first/default row for an existing chat.
+  assertApplicationBranchRoutes(root, manifest);
+  const routes = new Map(manifest.map(b => [b.chatJid, b.branchId]));
   if (root.inTransaction || (root.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys !== 1)
     throw Error("Open idle FK-enabled root connection required");
   // Verify physical identity BEFORE any optional host schema mutation.
@@ -119,7 +133,9 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     const shutdown = new AbortController();
     const recovery = createDurableRecoveryDispatch({ assertCurrentWriter: assert, submitIntent: input => adapter.submitIntent(input),
       reconcileRecovered: controller.reconcileRecovered, shutdown: shutdown.signal });
-    const dispatch = createDurableQueueDispatch({ work, adapter, branchId: "main", assertCurrentWriter: assert,
+    const dispatch = createDurableQueueDispatch({ work, adapter, branchId: chat => {
+      const branch = routes.get(chat); if (!branch) throw Error("Unbound application branch"); return branch;
+    }, assertCurrentWriter: assert,
       runningCorrelation: id => ({ sessionId: r.sessionId, lane: r.lane, harnessOperationId: String(id), state: "running", watchGeneration: r.generation }),
       shutdown: shutdown.signal, waitForReconciliation: recovery.waitForReconciliation });
     const getInputSourceAdmission: NonNullable<WebChannelOpts["getInputSourceAdmission"]> = chat => {
