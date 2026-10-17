@@ -126,7 +126,9 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
     extensionKvSet("plan-sidebar", "plan", { chat_jid: "web:default", markdown: "- [ ] NATIVE_PLAN_OLD", updated_at: "2026-01-01" }, "chat", "web:default");
     toolSequence = [{ name: "plan", arguments: { action: "update", plan: [{ step: "NATIVE_PLAN_NEW", status: "in_progress" }] } }];
   }
-  const modelB = { ...model, id: "approved-b" };
+  // Leave room for the real built-in schemas and idle-model framing reserve.
+  model.contextWindow = 100000;
+  const modelB = { ...model, id: "approved-b", contextWindow: 200000 };
   const observedResults = new Map<string, { toolName: string; isError?: boolean; content: unknown }>();
   const stream = (physical: typeof model, input: { messages: { role: string; toolCallId?: string; toolName?: string; isError?: boolean; content: unknown }[] }) => {
     for (const result of input.messages) if (result.role === "toolResult" && result.toolCallId && result.toolName)
@@ -204,6 +206,17 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   const bound = backend.bind({ queue: base.queue, agentPool: pool });
   const channel = new WebChannel(bound);
   channel.broadcastEvent = () => {};
+  const assertContext = async (contextWindow: number) => {
+    const before = calls;
+    channel.setContextUsage("web:default", { tokens: 999, contextWindow: 10000, percent: 9.99, sessionGeneration: first!.sessionId });
+    const response = await channel.handleRequest(new Request("http://fixture/agent/context?chat_jid=web%3Adefault"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ tokens: null, contextWindow, percent: null, sessionGeneration: first!.sessionId });
+    expect(calls).toBe(before);
+    expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
+  };
+  await assertContext(100000);
+  await expect(pool.getContextUsageForChat("web:unbound-context")).rejects.toThrow("Durable application does not construct legacy sessions");
   expect(() => bound.getInputSourceAdmission!("web:newcomer")).toThrow("Unbound");
   const message = { id: "factory-input", chat_jid: "web:default", sender: "user", sender_name: "User", content: "hello factory", timestamp: new Date().toISOString(), is_from_me: false, is_bot_message: false };
   const rowId = root.transaction(() => {
@@ -242,6 +255,11 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   // Tiny history is correctly below the public compaction policy's retained window.
   expect(await first!.compact!("Summarize")).toEqual({ compacted: false });
   expect(calls).toBe(1);
+  await assertContext(100000);
+  await first!.setModel!({ provider: modelB.provider, modelId: modelB.id });
+  await assertContext(200000);
+  await first!.setModel!({ provider: model.provider, modelId: model.id });
+  await assertContext(100000);
   const newcomer = "web:newcomer";
   storeChatMetadata(newcomer, new Date().toISOString());
   storeChatMetadata("web:rejected", new Date().toISOString());

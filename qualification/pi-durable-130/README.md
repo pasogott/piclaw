@@ -1,3 +1,43 @@
+# Native context metadata follow-up — 17 October 2026
+
+The async context reader captures the bound session before awaiting the existing
+public persisted-model reader. It resolves that physical provider/model through
+the owned synchronous host model runtime, without provider IO or catalog warming.
+Only positive finite registered context windows are reported; missing model or
+metadata means `contextWindow: null`. Native `tokens` and `percent` remain null:
+cumulative public usage/history is not a current-context estimate.
+
+An internal optional `tokensAreAuthoritative: true` marks these known-unknown
+counts so the context endpoint cannot revive stale same-generation stored
+estimates after compaction. Public context/status, family GET/PATCH model-control,
+branches and widget state JSON/SSE projections omit the hint and other private
+fields; the shared public projection allowlists public fields only. Legacy stored
+fallback remains unchanged. Unbound chats, unavailable readers and stale owners
+fail without constructing legacy sessions. No new state, tables or ports.
+
+This source follow-up builds on published summary HEAD `8dcf4dd73`. Receipts under
+`/workspace/reviews/durable-1650/`:
+
+- Candidate: 456 pass, 0 fail, 6,974 assertions
+  (`context-window-final-candidate.log`).
+- Focused root: 60 pass, 0 fail, 325 assertions
+  (`context-window-root-tests.log`).
+- HTTP projection P2 fix: 24 pass, 0 fail, 411 assertions
+  (`context-window-public-projection-tests.log`); bounded review READY after fix.
+- Runtime, engine and qualification types pass (`context-window-{root,engine,qualification}-types.log`);
+  projection runtime types pass (`context-window-public-projection-types.log`).
+- Final root gate: 7,311 pass, 74 baseline skips, 0 fail; 25 feature and
+  9 build tests pass, `EXIT_CODE=0` (`context-window-final-root.log`).
+
+Bounded existing performance evidence covers 100/1,000/2,000 synthetic native
+entries through actual SDK SQLite, borrowed root, HostConversationRuntime and the
+facade, without default application bootstrap or provider execution. Warm tree
+medians are 0.475/2.574/7.430 ms; native model/window metadata medians are
+0.077/0.053/0.043 ms. These five-sample observations do not establish production
+performance acceptance. See the [persistent method, raw samples and digests](../../docs/evidence/pi-durable-130-tree-read-performance-20261017.md);
+the harness is external to the repository and clone-only reproduction is missing.
+All 45 acceptance statuses remain unchanged.
+
 # Session-tree summary follow-up — 17 October 2026
 
 The application summary now awaits the existing public tree reader, preserves the
@@ -5,7 +45,8 @@ exact raw head, and counts visible nodes. Startup/session-control callers await
 the result; GET `/agent/context` includes it without changing active turn status.
 The separate legacy summary calculation and durable null placeholder are removed.
 
-On the isolated summary source tree over `7315c221e`:
+The isolated summary source over Plan `7315c221e` is now published as
+`8dcf4dd73`. Existing source receipts:
 
 - Candidate suite: 456 pass, 0 fail, 6,974 assertions, 37 files
   (`tree-summary-isolated-candidate.log`).
@@ -18,7 +59,8 @@ On the isolated summary source tree over `7315c221e`:
 
 Receipts are under `/workspace/reviews/durable-1650/`. Unfinished native Delegate
 and Code Review work is parked separately, excluded from this tree and these
-results. No live activation or migration occurred. The
+results. Summary exact-head hosted CI run `39059477545` completed successfully
+for `8dcf4dd73`. No live activation or migration occurred. The
 [45-requirement assessment](../../docs/design/earendil-agent-harness-integration-adr/evidence/pi-durable-130-acceptance-current-20261017.md)
 separates source qualification from fixture-only and unresolved acceptance work.
 

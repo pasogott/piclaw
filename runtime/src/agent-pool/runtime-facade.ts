@@ -590,13 +590,27 @@ export class AgentRuntimeFacade {
     }
   }
 
-  getContextUsageForChat(chatJid: string): {
+  async getContextUsageForChat(chatJid: string): Promise<{
     tokens: number | null;
-    contextWindow: number;
+    contextWindow: number | null;
     percent: number | null;
     sessionGeneration?: string;
-  } | null {
-    if (this.options.getDurableSession !== undefined) return null;
+    /** Unknown counts from this reader must not be replaced by stored estimates. */
+    tokensAreAuthoritative?: true;
+  } | null> {
+    if (this.options.getDurableSession !== undefined) {
+      const binding = this.getDurableSession(chatJid);
+      if (!binding) throw new Error("Durable application does not construct legacy sessions");
+      if (!binding.readModel) throw new Error("Durable model reader unavailable");
+      const label = await binding.readModel();
+      const separator = label?.indexOf("/") ?? -1;
+      const physical = label && separator > 0
+        ? this.options.modelRuntime.getPhysicalModel(label.slice(0, separator), label.slice(separator + 1))
+        : undefined;
+      const window = physical?.contextWindow;
+      return { tokens: null, contextWindow: typeof window === "number" && Number.isFinite(window) && window > 0 ? window : null,
+        percent: null, sessionGeneration: binding.sessionId, tokensAreAuthoritative: true };
+    }
     const entry = this.options.pool.get(chatJid);
     if (!entry) return null;
     const session = entry.runtime.session;

@@ -625,9 +625,10 @@ export class AgentPool {
   /** Return the current context token usage for a chat session, or null if unknown. */
   async getContextUsageForChat(chatJid: string): Promise<{
     tokens: number | null;
-    contextWindow: number;
+    contextWindow: number | null;
     percent: number | null;
     sessionGeneration?: string;
+    tokensAreAuthoritative?: true;
   } | null> {
     return this.runtimeFacade.getContextUsageForChat(chatJid);
   }

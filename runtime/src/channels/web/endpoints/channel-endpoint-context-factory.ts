@@ -156,6 +156,9 @@ export function createWebChannelEndpointContexts(
               ? storedUsage
               : null;
 
+            // Durable readers know that current counts are unknown, including after
+            // compaction. A same-session stored estimate cannot make them current.
+            if (currentRuntimeUsage?.tokensAreAuthoritative) return currentRuntimeUsage;
             if (currentRuntimeUsage?.tokens !== null && currentRuntimeUsage?.tokens !== undefined) return currentRuntimeUsage;
             if (currentStoredUsage?.tokens !== null && currentStoredUsage?.tokens !== undefined) return currentStoredUsage;
             if (currentRuntimeUsage) return currentRuntimeUsage;

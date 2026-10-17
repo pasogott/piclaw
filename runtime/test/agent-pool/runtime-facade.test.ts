@@ -107,6 +107,39 @@ test("tree summaries await captured public readers, preserve raw head and reject
   expect(await normal.facade.getSessionTreeSummaryForChat("legacy")).toEqual({ leafId: "raw", total: 0 });
 });
 
+test("durable context uses the captured persisted model and synchronous physical metadata only", async () => {
+  let label: string | null = "provider/model/with/slash";
+  let window: number | undefined = 12345;
+  let release!: () => void;
+  let hold: Promise<void> = Promise.resolve();
+  const port = { sessionId: "generation", branchId: "main", readPosition: async () => null,
+    readModel: async () => { await hold; return label; } };
+  const ports = new Map([["bound", port], ["missing", { sessionId: "missing", branchId: "main", readPosition: async () => null }]]);
+  const fixture = createFacade({ getDurableSession: chat => ports.get(chat),
+    getOrCreateRuntime: async () => { throw Error("legacy forbidden"); },
+    modelRuntime: { getPhysicalModel: (provider: string, id: string) => {
+      expect(provider).toBe("provider"); expect(id).toBe("model/with/slash");
+      return window === undefined ? undefined : { contextWindow: window };
+    } } as any });
+  const expected = { tokens: null, contextWindow: 12345, percent: null, sessionGeneration: "generation", tokensAreAuthoritative: true };
+  expect(await fixture.facade.getContextUsageForChat("bound")).toEqual(expected);
+  for (window of [0, -1, NaN, Infinity, undefined]) {
+    expect(await fixture.facade.getContextUsageForChat("bound")).toEqual({ ...expected, contextWindow: null });
+  }
+  label = null;
+  expect(await fixture.facade.getContextUsageForChat("bound")).toEqual({ ...expected, contextWindow: null });
+  await expect(fixture.facade.getContextUsageForChat("missing")).rejects.toThrow("Durable model reader unavailable");
+  await expect(fixture.facade.getContextUsageForChat("unknown")).rejects.toThrow("Durable application does not construct legacy sessions");
+  label = "provider/model/with/slash"; window = 54321;
+  hold = new Promise<void>(resolve => { release = resolve; });
+  const pending = fixture.facade.getContextUsageForChat("bound");
+  ports.set("bound", { ...port, sessionId: "replacement" });
+  release();
+  expect(await pending).toEqual({ ...expected, contextWindow: 54321 });
+  ports.set("bound", { ...port, readModel: async () => { throw Error("Stale owner"); } });
+  await expect(fixture.facade.getContextUsageForChat("bound")).rejects.toThrow("Stale owner");
+});
+
 test("AgentRuntimeFacade reports available models and context usage", async () => {
   let refreshCalls = 0;
   const session = {
@@ -168,7 +201,7 @@ test("AgentRuntimeFacade reports available models and context usage", async () =
   ]);
   expect(available.thinking_level).toBe("high");
   expect(available.supports_thinking).toBe(true);
-  expect(fixture.facade.getContextUsageForChat("web:default")).toEqual({
+  expect(await fixture.facade.getContextUsageForChat("web:default")).toEqual({
     tokens: 10,
     contextWindow: 100,
     percent: 10,

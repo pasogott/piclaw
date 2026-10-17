@@ -337,6 +337,7 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
   const queue = runtimeBase.queue;
   try {
     const readSummary = async () => {
+      channel.setContextUsage(chat, { tokens: 999, contextWindow: 10000, percent: 9.99, sessionGeneration: "preserved-session" });
       const response = await channel.handleRequest(new Request(`http://fixture/agent/context?chat_jid=${encodeURIComponent(chat)}`));
       expect(response.status).toBe(200);
       const payload = await response.json() as { sessionTree: { leafId: string | null; total: number }; sessionGeneration: string };
@@ -344,6 +345,7 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
       expect(payload.sessionTree).toEqual({ leafId: tree.leafId, total: tree.total });
       expect(payload.sessionTree.total).toBeGreaterThan(0);
       expect(payload.sessionGeneration).toBe("preserved-session");
+      expect(payload).toMatchObject({ tokens: null, percent: null });
       return payload.sessionTree;
     };
     const initialSummary = await readSummary();
