@@ -303,6 +303,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       stop() { shutdown.abort(); },
       close() { return closing ??= (async () => { shutdown.abort(); await activeController.close(); })(); },
     } satisfies RuntimeBackend & {
+      allocateScheduledConversation(lease: ScheduledRunLease): Promise<AcceptedInput>;
       reconcileMaintenance(chatJid: string): Promise<void>;
       retryRecoveredWork: typeof recovery.retryRecoveredWork;
       onPendingIntent: typeof recovery.onPendingIntent;

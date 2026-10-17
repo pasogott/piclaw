@@ -1,3 +1,23 @@
+# Native parallel Delegate feasibility — 17 October 2026
+
+`native-delegate-parallel.test.ts` uses the public SDK foreground-subagent pattern
+with two task-owned conversations. Both synthetic providers enter before either
+is released. Four cases pass: concurrent execution with clean close/reopen and
+stable child/request identities, cancellation of one child without stopping its
+sibling, parent cancellation draining children, and model denial without creating
+children. Child thinking and private prompts do not enter the parent tool result.
+
+The focused proof passes 4 tests / 85 assertions. The registered candidate suite
+passes 462 tests / 7,075 assertions across 39 files (`native-parallel-full-candidate.log`),
+and all three scoped typechecks pass. The bundle-local allocation method is typed
+locally; the removed public backend allocation API stays removed.
+
+This is a synthetic one-SDK-SQLite proof, not installed Delegate adoption. Clean
+reopen replays physical provider calls; it does not establish exactly-once billing.
+Production integration still needs parent-call provenance, model/credential policy,
+per-request accounting, and bounded concurrent admission through the existing host.
+No CLI child is launched. No live activation or migration occurred.
+
 # Native scheduler adoption — bounded source follow-up over `31dd88ebd`
 
 The default backend now routes agent schedules through real AgentPool
