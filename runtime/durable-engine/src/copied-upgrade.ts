@@ -76,6 +76,10 @@ function prepareUpgrade(sourceBytes: Uint8Array, manifestBytes: Uint8Array,
   const receipt = Object.freeze({ sourceDigest: sourceSHA256, receiptHash: plan.sourceHash });
   return Object.freeze({
     sourceSHA256, manifestSHA256, request,
+    assertApplicationScope(incarnation: string, sessionId: string) {
+      assert(application && plan.prepared.every(branch => branch.identity.chatIncarnation === incarnation &&
+        branch.sourceSessionId === sessionId), "Copied application identity conflict");
+    },
     checkpoint(controller: HostCutoverController) { return controller.preflight(request); },
     async importCopied(root: Conversation, assertOwner: () => void, context: Context) {
       const binding = await importCopiedLegacyTree(root, input, bridge, assertOwner, context);

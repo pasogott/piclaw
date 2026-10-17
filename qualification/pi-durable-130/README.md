@@ -1174,3 +1174,26 @@ pass and bounded independent review is clear.
 This is a prerequisite, not guarded cutover: generation-fenced begin/verify/writer
 switch, unpublished paused-bootstrap cleanup and safe port publication still need
 composition. Production selection remains default-off.
+
+### Guarded explicit application upgrade transition
+
+`upgradeApplication` composes the existing copied plan, generation-fenced cutover
+controller and application bootstrap. It validates physical database/scope/request
+identity, imports and verifies complete receipts, closes the importer, opens an
+unpublished paused bundle and commits the writer transition before returning it.
+Active lost-ACK retries verify the same baseline and skip begin/commit. Failure
+closes unpublished resources without rolling back candidate commits or releasing
+the application's owner/root database.
+
+Cleanup preserves the primary error unchanged when it succeeds, or reports it
+first with cleanup failures in AggregateError. Tests cover actual writer commit
+followed by lost acknowledgement and failed bundle close: journal remains active,
+no bundle escapes, owner/root remain held, and real resources are cleaned up.
+Importer close is captured and attempted at most once, including when it throws.
+
+Final candidate verification passes 388 tests / 6,843 assertions; focused tests pass
+19 cases, broader regressions 38, both private-package types pass and independent
+bounded review is clear. An earlier full attempt hit five five-second timeouts;
+unchanged sequential repeat passed. This is explicit main-branch-only composition,
+not automatic installation discovery, branch-complete migration, production
+registration or activation. No new journal, queue, database or session JSONL is used.

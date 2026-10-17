@@ -20,6 +20,8 @@ import { applicationOwnership, createApplicationBootstrapBundle } from "../../ru
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { openFixture, context, barrier } from "./src/fixture.js";
 import { resetRateLimiterStateForTests } from "../../runtime/src/channels/web/http/rate-limit.js";
+import { upgradeApplication } from "../../runtime/durable-engine/src/application-upgrade.js";
+import { HostCutoverController, initializeCutoverManifest } from "../../runtime/durable-engine/src/host-cutover.js";
 
 // The runtime acquires the actual strict lock BEFORE root/SDK initialization. No TestOwner.
 for (const failWait of [false, true]) test(`application bundle binds real pool/channel; lost wait ACK=${failWait}`, async () => {
@@ -37,6 +39,7 @@ for (const failWait of [false, true]) test(`application bundle binds real pool/c
   const storage = new BunSqliteDatabase(path, { root: db, assertOwner: () => lock.assertCurrentOwner() });
   const base = await openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(storage));
   const chat = `web:bundle:${crypto.randomUUID()}`;
+  const incarnation = `application-${crypto.randomUUID()}`;
   const manager = SessionManager.inMemory(dir, { id: "preserved-session" });
   manager.appendMessage({ role: "system", content: "original baseline", timestamp: 1 });
   const leaf = manager.appendMessage({ role: "assistant", api: "openai-completions", provider: "never", model: "never",
@@ -45,7 +48,7 @@ for (const failWait of [false, true]) test(`application bundle binds real pool/c
   const source = Buffer.from([manager.getHeader(), ...manager.getEntries()].map(v => JSON.stringify(v)).join("\n") + "\n");
   const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
   const manifest = Buffer.from(JSON.stringify({ version: 1, sourceCopied: true, expectedSourceSHA256: sha(source), pending: 0, inflight: 0,
-    hostBranchBindings: { [leaf]: { chatJid: chat, chatIncarnation: "application-test", branchId: "main", hostBaseline: "original baseline" } } }));
+    hostBranchBindings: { [leaf]: { chatJid: chat, chatIncarnation: incarnation, branchId: "main", hostBaseline: "original baseline" } } }));
   const json = <T>(v: T): T => JSON.parse(JSON.stringify(v));
   const upgrade = prepareCopiedApplicationUpgrade(source, manifest, { sourceSHA256: sha(source), manifestSHA256: sha(manifest) }, (entries, leaf) => ({
     messages: json(convertToLlm(buildSessionContext([...entries], leaf).messages)),
@@ -72,7 +75,7 @@ for (const failWait of [false, true]) test(`application bundle binds real pool/c
     wrapWait: failWait ? wait => async (...args) => { await wait(...args); failed.release(); throw Error("lost wait ACK"); } : undefined,
     ...importedBindings, sessions: new Map(importedBindings.sessions),
     offlineInitialize: true, answers,
-    runtime: { incarnation: "application-test", sessionId: "preserved-session", lane: "main", generation: 1, now: () => new Date().toISOString(),
+    runtime: { incarnation, sessionId: "preserved-session", lane: "main", generation: 1, now: () => new Date().toISOString(),
       harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } } },
   } satisfies Parameters<typeof createApplicationBootstrapBundle>[0];
   if (!failWait) {
@@ -114,10 +117,136 @@ for (const failWait of [false, true]) test(`application bundle binds real pool/c
     expect(db.inTransaction).toBe(false);
     await rm(wrongPath);
   }
-  const opening = createApplicationBootstrapBundle(options, context);
-  // Mutation after entry must not widen the captured admission/session scope.
-  options.sessions.set(unbound, "late-extra-session");
-  const bundle = await opening;
+  initializeCutoverManifest(db, () => lock.assertCurrentOwner());
+  const identity = { domain: incarnation, incarnation, ownerGeneration: 7,
+    sourceEngineId: "legacy", candidateStoreRef: "candidate" };
+  const cutover = new HostCutoverController(db, identity, {
+    assertOwner(actual) { lock.assertCurrentOwner(); expect(actual).toEqual(identity); },
+    assertCurrentWriter(writer) {
+      const row = db.query("SELECT manifest FROM qualification_cutover_v1 WHERE domain=?").get(identity.domain) as { manifest: string } | null;
+      expect(writer).toBe(row ? JSON.parse(row.manifest).writer : "legacy");
+    },
+    checkDrained() { return { sourceDigest: sha(source), pending: 0, inflight: 0 }; },
+  });
+  const { manifest: _manifest, sessions: _sessions, ...application } = options;
+  async function importer() {
+    lock.assertCurrentOwner();
+    const database = new BunSqliteDatabase(path, { root: db, assertOwner: () => lock.assertCurrentOwner() });
+    const fixture = await openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(database));
+    const conversation = (await fixture.harness.conversation(importedRoot.id, context))!;
+    return { database, harness: fixture.harness, conversation, close: fixture.close };
+  }
+  if (!failWait) {
+    for (const runtime of [{ ...application.runtime, incarnation: "wrong-domain" },
+      { ...application.runtime, sessionId: "invented-session" }]) {
+      await expect(upgradeApplication({ plan: upgrade, cutover, application: { ...application, runtime },
+        importer: await importer() }, context)).rejects.toThrow("Copied application identity conflict");
+      expect(cutover.inspect()).toBeNull(); lock.assertCurrentOwner();
+    }
+    const importerCloseFailure = Error("importer close failed");
+    const closingImporter = await importer();
+    let importerCloseCalls = 0;
+    const realImporterClose = closingImporter.close;
+    closingImporter.close = async () => { importerCloseCalls++; await realImporterClose(); throw importerCloseFailure; };
+    await expect(upgradeApplication({ plan: upgrade, cutover, application, importer: closingImporter }, context))
+      .rejects.toBe(importerCloseFailure);
+    expect(importerCloseCalls).toBe(1);
+    expect(cutover.inspect()?.phase).toBe("verified");
+    const cleanupImporter = await importer();
+    let cleanupCloseCalls = 0;
+    const realCleanupClose = cleanupImporter.close;
+    cleanupImporter.close = async () => { cleanupCloseCalls++; await realCleanupClose(); throw importerCloseFailure; };
+    let cleanupError: unknown;
+    try {
+      await upgradeApplication({ plan: upgrade, cutover,
+        application: { ...application, runtime: { ...application.runtime, incarnation: "wrong-domain" } },
+        importer: cleanupImporter }, context);
+    } catch (error) { cleanupError = error; }
+    expect(cleanupError).toBeInstanceOf(AggregateError);
+    const cleanupErrors = (cleanupError as AggregateError).errors;
+    expect(cleanupErrors).toHaveLength(2);
+    expect(cleanupErrors[0].message).toBe("Copied application identity conflict");
+    expect(cleanupErrors[1]).toBe(importerCloseFailure);
+    expect(cleanupCloseCalls).toBe(1);
+    const wrongPath = join(dir, "bootstrap-failure.db");
+    new Database(wrongPath).close();
+    let escaped = 0;
+    await expect(upgradeApplication({ plan: upgrade, cutover, application: { ...application, path: wrongPath },
+      importer: await importer() }, context).then(async result => { escaped++; await result.close(); })).rejects.toThrow("Shared database identity required");
+    expect(escaped).toBe(0);
+    expect(cutover.inspect()?.phase).toBe("verified");
+    expect(cutover.inspect()?.writer).toBe("legacy");
+    lock.assertCurrentOwner(); expect(db.query("SELECT 1 AS alive").get()).toEqual({ alive: 1 });
+    await rm(wrongPath);
+    const open = SqliteStorage.open.bind(SqliteStorage);
+    const opened: unknown[] = [];
+    const openSpy = spyOn(SqliteStorage, "open").mockImplementation(async (...args) => {
+      const result = await open(...args); opened.push(result); return result;
+    });
+    const commit = cutover.commitWriter.bind(cutover);
+    const close = BunSqliteDatabase.prototype.close;
+    const closed: BunSqliteDatabase[] = [];
+    const primaryFailure = Error("lost writer commit ACK");
+    const bundleCloseFailure = Error("candidate bundle close failed");
+    let committed: ReturnType<typeof cutover.inspect> = null;
+    let failedCandidate: BunSqliteDatabase | undefined;
+    const closeSpy = spyOn(BunSqliteDatabase.prototype, "close").mockImplementation(async function (this: BunSqliteDatabase) {
+      if (committed && !failedCandidate) {
+        failedCandidate = this;
+        // Fail BEFORE the actual close so teardown proves the real resource is released.
+        throw bundleCloseFailure;
+      }
+      await close.call(this); closed.push(this);
+    });
+    const commitSpy = spyOn(cutover, "commitWriter").mockImplementation(revision => {
+      // Two actual SDK opens: importer, then unpublished paused application.
+      expect(opened).toHaveLength(2); expect(closed).toHaveLength(1);
+      const active = commit(revision); expect(active.writer).toBe("candidate");
+      committed = cutover.inspect();
+      throw primaryFailure;
+    });
+    try {
+      let failure: unknown;
+      try {
+        await upgradeApplication({ plan: upgrade, cutover, application, importer: await importer() }, context)
+          .then(async result => { escaped++; await result.close(); });
+      } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toHaveLength(2);
+      expect((failure as AggregateError).errors[0]).toBe(primaryFailure);
+      expect((failure as AggregateError).errors[1]).toBe(bundleCloseFailure);
+      expect(escaped).toBe(0); expect(closed).toHaveLength(1);
+      expect(failedCandidate).toBeDefined();
+      expect(cutover.inspect()).toEqual(committed);
+      lock.assertCurrentOwner();
+      expect(db.query("SELECT 1 AS alive").get()).toEqual({ alive: 1 });
+      expect(cutover.inspect()?.phase).toBe("active");
+      expect(cutover.inspect()?.writer).toBe("candidate");
+      expect(base.host.modelCalls).toBe(0);
+    } finally {
+      commitSpy.mockRestore(); openSpy.mockRestore(); closeSpy.mockRestore();
+      if (failedCandidate) await close.call(failedCandidate);
+    }
+  }
+  const beforeRetry = cutover.inspect();
+  if (!failWait) {
+    const alteredManifest = Buffer.from(manifest.toString() + "\n");
+    const other = prepareCopiedApplicationUpgrade(source, alteredManifest,
+      { sourceSHA256: sha(source), manifestSHA256: sha(alteredManifest) }, (entries, leaf) => ({
+        messages: json(convertToLlm(buildSessionContext([...entries], leaf).messages)),
+        projected: entries.map(entry => ({ sourceEntryId: entry.id, messages: json(convertToLlm(sessionEntryToContextMessages(entry))) })),
+      }));
+    await expect(upgradeApplication({ plan: other, cutover, application, importer: await importer() }, context)).rejects.toThrow("Cutover rejected");
+    expect(cutover.inspect()).toEqual(beforeRetry);
+  }
+  const begin = spyOn(cutover, "begin");
+  const bundle = await upgradeApplication({ plan: upgrade, cutover, application, importer: await importer() }, context);
+  if (!failWait) { expect(begin).not.toHaveBeenCalled(); expect(cutover.inspect()).toEqual(beforeRetry); }
+  else expect(begin).toHaveBeenCalledTimes(1);
+  begin.mockRestore();
+  expect(cutover.inspect()?.phase).toBe("active");
+  lock.assertCurrentOwner();
+  expect(db.query("SELECT count(*) AS n FROM messages WHERE chat_jid=?").get(chat)).toEqual({ n: 0 });
   const spies = (["create", "open", "continueRecent"] as const).map(name => spyOn(SessionManager, name).mockImplementation(() => { throw Error("JSONL forbidden"); }));
   const queue = new AgentQueue();
   const pool = new AgentPool({ ...createAgentPoolModelOptions(), ...bundle.sessionOptions,

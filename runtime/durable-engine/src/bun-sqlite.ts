@@ -26,6 +26,14 @@ export class BunSqliteDatabase implements SqliteDatabase {
     this.db.exec("PRAGMA foreign_keys=ON");
   }
 
+  /** Trusted importer connection must borrow the exact application root. */
+  assertApplicationRoot(root: Database): void {
+    this.guard?.assertOwner();
+    if (!this.guard || this.guard.root !== root || this.closing) throw new Error("Shared application root required");
+    const current = statSync(this.path);
+    if (current.dev !== this.identity!.dev || current.ino !== this.identity!.ino) throw new Error("Shared database identity changed");
+  }
+
   /** Scope the next public storage transactions; checks run inside the candidate write lock. */
   async withIdleModelGuard<T>(body: () => Promise<T>): Promise<T> {
     if (!this.guard) return Promise.reject(new Error("Idle model guard unavailable"));

@@ -71,6 +71,19 @@ export class HostCutoverController {
     return m;
   }
   inspect(): Manifest | null { return safe(() => { this.owner(); const row = this.read(); return row ? this.manifest(row.manifest) : null; }); }
+  /** Application composition reuses this controller's trusted generation and SQL fence. */
+  inspectApplication(root: Database, incarnation: string, request: CutoverRequest): Manifest | null {
+    return safe(() => {
+      if (root !== this.db || this.identity.domain !== incarnation || this.identity.incarnation !== incarnation) throw fail();
+      this.owner();
+      const row = this.read();
+      if (row && row.request_hash !== hashCanonicalRequest(requestSnapshot(request))) throw fail();
+      const m = row ? this.manifest(row.manifest) : null;
+      this.ports.assertCurrentWriter(m?.writer ?? this.identity.sourceEngineId);
+      if (m && m.writer !== (m.phase === "active" ? this.identity.candidateStoreRef : this.identity.sourceEngineId)) throw fail();
+      this.owner(); return m;
+    });
+  }
   private drained(r: CutoverRequest) {
     const { sourceDigest, pending, inflight } = this.ports.checkDrained();
     if (sourceDigest !== r.sourceDigest || pending !== 0 || inflight !== 0) throw fail();
