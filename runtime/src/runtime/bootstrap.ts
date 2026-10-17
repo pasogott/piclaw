@@ -3,6 +3,25 @@
  */
 
 import { AgentPool } from "../agent-pool.js";
+import assert from "node:assert/strict";
+import { WebChannel } from "../channels/web.js";
+import { AgentQueue } from "../queue.js";
+import { getDb, getNewMessages } from "../db.js";
+import { SESSIONS_DIR } from "../core/config.js";
+import { getInstalledAddonRuntimeEntries } from "../addons/runtime-contributions.js";
+import type { RuntimeLockHandle } from "./single-instance.js";
+import { getChatTransport } from "../extensions/chat-transport-registry.js";
+import type { LegacyCaptureCoordinator } from "../agent-pool/legacy-authority-capture.js";
+
+export interface RuntimeMigrationPreparation {
+  coordinator: LegacyCaptureCoordinator;
+  capture(): ReturnType<AgentPool["captureLegacyUpgradeBindings"]>;
+  /** Invalidates the capability, but never resumes the old application. */
+  release(): void;
+}
+export interface RuntimeBootstrapContext {
+  prepareLegacyMigration(migrationIncarnation: string): Promise<RuntimeMigrationPreparation>;
+}
 import { createRuntimeModelServices } from "../agent-pool/model-services.js";
 import { installRuntimeModelExecutor } from "../extensions/model-execution-runtime.js";
 import { registerGitHubCopilotDynamicModels } from "../extensions/github-copilot-dynamic-models.js";
@@ -71,6 +90,8 @@ export interface RuntimeBootstrapDefaultBaseServices extends RuntimeBootstrapBas
 
 export interface RuntimeBootstrapDeps {
   base: RuntimeBootstrapBaseServices;
+  /** Internal inspection only; absent in production composition. No source selector. */
+  migrationInspection?: { onReady(context: RuntimeBootstrapContext): void };
   assistantName: string;
   triggerPattern: RegExp;
   pollIntervalMs: number;
@@ -175,13 +196,14 @@ export function createDefaultRuntimeBootstrapDeps(base: RuntimeBootstrapDefaultB
 }
 
 /** Bootstrap and run all runtime subsystems in production order. */
-export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void> {
+export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?: RuntimeLockHandle): Promise<void> {
   const { queue, state } = deps.base;
   // Owned by this bootstrap instance, not by the forever-awaited coordinator.
   const shutdownCompletion = createShutdownCompletion();
   const messageLoopController = new AbortController();
   let messageLoop: Promise<void> | undefined;
   let messageLoopStop: Promise<void> | undefined;
+  let migrationHold = false;
   const stopMessageLoop = (): Promise<void> => {
     messageLoopController.abort();
     return messageLoopStop ??= messageLoop ?? Promise.resolve();
@@ -246,15 +268,93 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
       pollIntervalMs: deps.pollIntervalMs,
       signal: messageLoopController.signal,
     });
+    if (deps.migrationInspection) {
+      let preparation: Promise<RuntimeMigrationPreparation> | undefined;
+      const context: RuntimeBootstrapContext = Object.freeze({
+        prepareLegacyMigration(migrationIncarnation: string): Promise<RuntimeMigrationPreparation> {
+          if (preparation) return preparation;
+          // Preflight has no sealing effects. The owner is main's actual acquired
+          // handle, never a caller's certificate or a second ownership ledger.
+          try {
+            assert(runtimeOwner?.enabled && runtimeOwner.strictOwnership, "Strict runtime owner required");
+            runtimeOwner.assertCurrentOwner();
+            assert(!familyMode, "Family ingress is not migration-qualified");
+            const installedChannels = [web, ...(pushover ? [pushover] : [])];
+            assert(installedChannels.every(channel => channel === web && channel instanceof WebChannel),
+              "Unsupported installed channel");
+            // Autonomous add-on writers/transports are outside Web's admission
+            // contract. Production add-on compatibility is NOT certified here.
+            assert(getInstalledAddonRuntimeEntries().length === 0, "Installed add-ons are not migration-qualified");
+            assert(!getChatTransport("bang") && (!getChatTransport("local") || getChatTransport("local")!.id === "local"),
+              "Unsupported registered transport");
+            assert(queue instanceof AgentQueue && agentPool instanceof AgentPool, "Installed capture services required");
+            assert(migrationIncarnation && migrationIncarnation.trim() === migrationIncarnation, "Missing migration controller identity");
+          } catch (error) { return Promise.reject(error); }
+          const owner = runtimeOwner!;
+          const installedQueue = queue as AgentQueue;
+          const installedPool = agentPool as AgentPool;
+          const installedWeb = web as WebChannel;
+          // Set before initiating any stop: even failed migration must keep the
+          // application lifetime/global owner held until certified shutdown.
+          migrationHold = true;
+          let valid = true, drained = false;
+          const checkOwner = () => { owner.assertCurrentOwner(); assert(valid, "Migration capability released"); };
+          const checkFrontier = () => {
+            checkOwner();
+            assert(getInstalledAddonRuntimeEntries().length === 0 && !getChatTransport("bang") &&
+              (!getChatTransport("local") || getChatTransport("local")!.id === "local"), "Ingress registry changed");
+            const root = getDb();
+            assert(!root.inTransaction, "Root DB transaction active");
+            assert(!root.query("SELECT 1 FROM service_effect_s01_sources WHERE state NOT IN ('consumed','disposed') LIMIT 1").get(), "Pending S01 sources");
+            assert(!root.query("SELECT 1 FROM service_effect_s01_operations WHERE phase <> 'terminal' LIMIT 1").get(), "Nonterminal S01 operations");
+            assert(!root.query("SELECT 1 FROM chat_cursors WHERE preflight_message_id IS NOT NULL OR inflight_message_id IS NOT NULL OR (queued_followups_json IS NOT NULL AND queued_followups_json <> '[]') LIMIT 1").get(), "Unsettled legacy chat cursors");
+            const jids = (root.query("SELECT jid FROM chats UNION SELECT chat_jid AS jid FROM messages").all() as { jid: string }[]).map(row => row.jid);
+            assert(getNewMessages(jids, state.lastTimestamp, deps.assistantName).messages.length === 0, "Unread accepted legacy messages");
+            installedPool.assertLegacyCaptureIdle();
+            checkOwner();
+          };
+          const coordinator: LegacyCaptureCoordinator = Object.freeze({
+            assertSealedAndDrained() { checkOwner(); assert(drained, "Migration ingress has not drained"); installedQueue.assertLegacyCaptureDrained(); checkFrontier(); },
+            migrationIncarnation() { checkOwner(); return migrationIncarnation; },
+          });
+          preparation = (async () => {
+            checkOwner();
+            // sealAdmissions closes synchronously, before any producer stops.
+            const webJoin = installedWeb.sealAdmissions();
+            const pollerJoin = stopMessageLoop();
+            const schedulerJoin = Promise.resolve(deps.stopSchedulerLoop());
+            const ipcJoin = deps.stopIpcWatcher();
+            checkOwner();
+            await Promise.all([webJoin, pollerJoin, schedulerJoin, ipcJoin]);
+            checkOwner();
+            // Accepted producer callbacks may enqueue until their joins finish.
+            const queueJoin = installedQueue.sealAndDrain();
+            checkOwner();
+            await queueJoin.joined;
+            checkOwner();
+            checkFrontier();
+            drained = true;
+            coordinator.assertSealedAndDrained();
+            return Object.freeze({ coordinator,
+              capture: () => installedPool.captureLegacyUpgradeBindings({ root: getDb(), legacySessionRoot: SESSIONS_DIR,
+                owner, queue: installedQueue, coordinator }),
+              release() { valid = false; },
+            });
+          })();
+          return preparation;
+        },
+      });
+      deps.migrationInspection.onReady(context);
+    }
     await messageLoop;
     // A joined producer is not a disposed application. In particular, an
     // injected process.exit may return while shutdown is still unwinding.
-    if (messageLoopController.signal.aborted) await shutdownCompletion.promise;
+    if (migrationHold || messageLoopController.signal.aborted) await shutdownCompletion.promise;
   } catch (error) {
     deps.clearMcpCredentials(hydratedMcpCredentials);
     // Rejection here would run main's finally and release the global owner.
     // An uncertain shutdown must remain owned until certified safe cleanup.
-    if (messageLoopController.signal.aborted) await shutdownCompletion.promise;
+    if (migrationHold || messageLoopController.signal.aborted) await shutdownCompletion.promise;
     throw error;
   }
 }

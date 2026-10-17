@@ -1329,3 +1329,22 @@ across 30 files, with types and bounded independent review clear. This proves th
 fixture's exclusivity and fixed crash recovery, not availability under every startup
 interleaving. The historical hosted zero-opener cause cannot be established from its
 old missing diagnostics; future failures include phase/error/stderr evidence.
+
+### Runtime-owned inspection migration coordinator
+
+Actual runtime bootstrap now exposes a default-absent migration-inspection context
+bound to its acquired strict owner, installed Web/worker handles, queue and resident
+pool. It rejects unsupported installed channels/add-ons/transports before sealing,
+seals Web admission synchronously, joins producers, then non-destructively drains
+accepted queue work. Owner, ingress qualification, root autocommit, source/operation
+frontiers, legacy cursors, unread messages and pool idleness are rechecked before
+resident capture and across later assertions. Application lifetime remains held;
+release invalidates the capability without resuming producers or releasing ownership.
+
+Review caught a missing late local-transport check; preflight and frontier checks
+now agree, with during-await and post-preparation mutation regressions. Focused
+bootstrap/capture/startup tests pass 50 cases / 198 assertions; runtime types,
+independent bounded review and the full root fast gate pass with EXIT_CODE=0.
+This is inspection-only base-runtime composition. Installed autonomous add-ons and
+unsupported ingress remain refused; automatic selection, full migration activation,
+critical compatibility and performance acceptance remain incomplete.

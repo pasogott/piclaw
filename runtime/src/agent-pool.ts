@@ -287,6 +287,7 @@ export function createKnownModelCostResolver(agentDir: string): (provider: strin
  * process-spawn overhead, conversation context already loaded.
  */
 export class AgentPool {
+  assertLegacyCaptureIdle(): void { this.sessionManager.assertLegacyCaptureIdle(); }
   /** Explicit read-only resident capture; never selects or constructs a session. */
   captureLegacyUpgradeBindings(options: import("./agent-pool/legacy-authority-capture.js").LegacyCaptureOptions) {
     return captureResidentLegacyUpgradeBindings(options, this.pool, () => this.sessionManager.assertLegacyCaptureIdle());

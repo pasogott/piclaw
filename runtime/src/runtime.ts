@@ -38,7 +38,7 @@ export async function main(deps: RuntimeMainDeps = {
         onShutdownComplete?.();
         runtimeLock.markSafeReleaseOnExit();
       },
-    });
+    }, runtimeLock);
   } finally {
     runtimeLock.release();
   }

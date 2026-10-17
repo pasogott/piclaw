@@ -608,6 +608,12 @@ export async function startWebChannel(queue: AgentQueue, agentPool: AgentPool): 
   queueStartupSessionWarmup(agentPool, resolveStartupSessionWarmupOptions());
   runWebStartupRecoveryBootstrap(web, () => {
     recoverPendingRestartHandoffs(web);
+  }, (resume) => {
+    setTimeout(() => {
+      void web.runInternalDispatch(resume).catch((error) => {
+        log.info("Deferred startup recovery not admitted", { error: String(error) });
+      });
+    }, 0);
   });
 
   // Wire session_control separately from chat relay. This tool controls target
