@@ -8,9 +8,11 @@ import { createHash } from "node:crypto";
 import { SessionManager, buildSessionContext, convertToLlm, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
 import { prepareCopiedApplicationUpgrade } from "../../runtime/durable-engine/src/copied-upgrade.js";
 import { AgentPool } from "../../runtime/src/agent-pool.js";
-import { AgentQueue } from "../../runtime/src/queue.js";
+import { __setRuntimeModelExecutorForTests } from "../../runtime/src/extensions/model-execution-runtime.js";
+import { resetAddonRuntimeContributionsForTests } from "../../runtime/src/addons/runtime-contributions.js";
 import { WebChannel } from "../../runtime/src/channels/web.js";
-import { createAgentPoolModelOptions } from "../../runtime/test/model-services-fixture.js";
+import { bootstrapRuntime, createDefaultRuntimeBootstrapDeps } from "../../runtime/src/runtime/bootstrap.js";
+import { createRuntimeBaseServices } from "../../runtime/src/runtime/composition.js";
 import { acquireRuntimeLock } from "../../runtime/src/runtime/single-instance.js";
 import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
 import { storeChatMetadata } from "../../runtime/src/db.js";
@@ -23,11 +25,32 @@ import { openFixture, context, barrier } from "./src/fixture.js";
 import { resetRateLimiterStateForTests } from "../../runtime/src/channels/web/http/rate-limit.js";
 import { upgradeApplication } from "../../runtime/durable-engine/src/application-upgrade.js";
 import { HostCutoverController, initializeCutoverManifest } from "../../runtime/durable-engine/src/host-cutover.js";
+import { ensureTestFilesystemIsolation } from "../../runtime/scripts/test-filesystem-isolation.js";
 
 // The runtime acquires the actual strict lock BEFORE root/SDK initialization. No TestOwner.
 for (const [failWait, forks, deferred] of [[false, false, undefined], [false, true, undefined],
   [false, false, "success"], [false, false, "failure"],
-  [false, false, "uncertain-success"], [false, false, "uncertain-failure"], [true, false, undefined]] as const) test(`application bundle binds real pool/channel; lost wait ACK=${failWait}; preserved forks=${forks}; deferred=${deferred}`, async () => {
+  [false, false, "uncertain-success"], [false, false, "uncertain-failure"], [true, false, undefined]] as const) {
+  const scenario = `${failWait}:${forks}:${deferred}`;
+  if (process.env.PICLAW_APPLICATION_CASE && process.env.PICLAW_APPLICATION_CASE !== scenario) continue;
+  test(`application bundle binds real pool/channel; lost wait ACK=${failWait}; preserved forks=${forks}; deferred=${deferred}`, async () => {
+  if (!process.env.PICLAW_APPLICATION_CASE) {
+    // A cold application start owns process-global runtime registries and its whole
+    // database. Never delete messages alone: reused rowids collide with retained
+    // durable operation IDs (message:<rowid>:<sourceSeq>) from the previous case.
+    const env = { ...process.env };
+    delete env.PICLAW_TEST_FS_ISOLATION_ACTIVE; delete env.PICLAW_TEST_FS_ISOLATION_ROOT;
+    const isolation = ensureTestFilesystemIsolation(env);
+    try {
+      const child = Bun.spawn([process.execPath, "test", import.meta.path], {
+        cwd: import.meta.dir, env: { ...env, PICLAW_APPLICATION_CASE: scenario }, stdout: "pipe", stderr: "pipe",
+      });
+      const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      if (code !== 0) throw Error(`Isolated application ${scenario}:\n${out}\n${err}`);
+      expect(code).toBe(0);
+    } finally { isolation.cleanup(); }
+    return;
+  }
   const compactSucceeds = deferred === "success" || deferred === "uncertain-success";
   const uncertain = deferred?.startsWith("uncertain-");
   const compactHold = barrier(), compactEntered = barrier(), waitLost = barrier();
@@ -275,28 +298,44 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
     await expect(upgradeApplication({ plan: other, cutover, application, importer: await importer() }, context)).rejects.toThrow("Cutover rejected");
     expect(cutover.inspect()).toEqual(beforeRetry);
   }
-  const begin = spyOn(cutover, "begin");
   const originalOpen = Harness.open;
   const openSpy = spyOn(Harness, "open").mockImplementation(async (...args) => {
     compactHarness = await originalOpen(...args);
     return compactHarness;
   });
-  let bundle: Awaited<ReturnType<typeof upgradeApplication>>;
-  try { bundle = await upgradeApplication({ plan: upgrade, cutover, application, importer: await importer() }, context); }
-  finally { openSpy.mockRestore(); }
-  if (!failWait && !forks) { expect(begin).not.toHaveBeenCalled(); expect(cutover.inspect()).toEqual(beforeRetry); }
-  else expect(begin).toHaveBeenCalledTimes(1);
-  begin.mockRestore();
-  expect(cutover.inspect()?.phase).toBe("active");
+  const spies = (["create", "open", "continueRecent"] as const).map(name => spyOn(SessionManager, name).mockImplementation(() => { throw Error("JSONL forbidden"); }));
+  let bundle!: Awaited<ReturnType<typeof createApplicationBootstrapBundle>>;
+  let pool!: AgentPool, channel!: WebChannel;
+  const runtimeBase = createRuntimeBaseServices({ dataDir: dir });
+  const ready = barrier();
+  let shutdown!: (signal: string) => Promise<void>;
+  const startSpy = spyOn(WebChannel.prototype, "start").mockImplementation(async function(this: WebChannel) {
+    channel = this; // No listener: exercise ordinary HTTP handler in-process.
+  });
+  const runtimeDeps = createDefaultRuntimeBootstrapDeps(runtimeBase, async owner => {
+    expect(owner).toBe(lock); owner.assertCurrentOwner();
+    return bundle = await createApplicationBootstrapBundle(options, context);
+  });
+  __setRuntimeModelExecutorForTests(null);
+  resetAddonRuntimeContributionsForTests();
+  const running = bootstrapRuntime({ ...runtimeDeps,
+    initializeRuntimeEnvironment: () => {}, hydrateMcpCredentials: async () => [], clearMcpCredentials: () => {},
+    startBackgroundModelRefresh: () => {}, startOptionalPushoverChannel: async () => null,
+    registerRuntimeShutdownSignals: (_registrar, handler) => { shutdown = handler; }, startRuntimeWorkers: () => {},
+    stopIpcWatcher: async () => {}, stopSchedulerLoop: () => {}, stopOptionalProviders: () => {},
+    startRuntimeLoop: async ({ agentPool, signal }) => {
+      pool = agentPool as AgentPool; ready.release();
+      await new Promise<void>(resolve => signal!.addEventListener("abort", () => resolve(), { once: true }));
+    },
+  }, lock);
+  try { await Promise.race([ready.promise, running.then(() => { throw Error("Bootstrap ended before ready"); })]); }
+  finally { openSpy.mockRestore(); startSpy.mockRestore(); }
+  // Let the existing deferred startup recovery scan finish before new input.
+  await Bun.sleep(10);
   lock.assertCurrentOwner();
   expect(db.query("SELECT count(*) AS n FROM messages WHERE chat_jid=?").get(chat)).toEqual({ n: 0 });
-  const spies = (["create", "open", "continueRecent"] as const).map(name => spyOn(SessionManager, name).mockImplementation(() => { throw Error("JSONL forbidden"); }));
-  const queue = new AgentQueue();
-  const pool = new AgentPool({ ...createAgentPoolModelOptions(), ...bundle.sessionOptions,
-    createSession: async () => { throw Error("Legacy forbidden"); } });
+  const queue = runtimeBase.queue;
   try {
-    const ports = bundle.bind({ queue, agentPool: pool });
-    const channel = new WebChannel(ports);
     const events: { type: string; data: any }[] = [];
     channel.broadcastEvent = (type, data) => { events.push({ type, data }); };
     // Actual pool/channel composition must leave B on the ordinary legacy path,
@@ -564,8 +603,9 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
     expect(files.filter(p => /\.(db|sqlite)$/i.test(p))).toEqual([".piclaw/store/messages.db"]);
   } finally {
     compactWaitSpy?.mockRestore(); compactHold.release();
-    const stopping = queue.shutdown(); const closing = bundle.close();
-    await stopping; await pool.shutdown(); await closing;
+    const exit = spyOn(process, "exit").mockImplementation(() => undefined as never);
+    try { await shutdown("fixture"); await running; }
+    finally { exit.mockRestore(); }
     lock.assertCurrentOwner(); // Other application components are still live.
     expect(() => bundle.bind({ queue, agentPool: pool })).toThrow("sealed");
     expect(db.query("SELECT 1 AS alive").get()).toEqual({ alive: 1 });
@@ -574,3 +614,4 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
     await rm(dir, { recursive: true, force: true });
   }
 }, 20000);
+}

@@ -3,6 +3,19 @@
  */
 
 import { AgentPool } from "../agent-pool.js";
+import type { AgentPoolOptions } from "../agent-pool.js";
+import type { WebChannelOpts } from "../channels/web.js";
+
+/** One prepared backend, owned by bootstrap from construction through queue join. */
+export interface RuntimeBackend {
+  readonly sessionOptions: Readonly<Pick<AgentPoolOptions, "durableSessions">>;
+  readonly bind: (options: Pick<WebChannelOpts, "queue" | "agentPool">) => Readonly<WebChannelOpts>;
+  /** Wake queue-owned observers before queue join; do not dispose storage yet. */
+  stop(): void;
+  /** Close the borrowed scope after queue join, never the application's global owner. */
+  close(): Promise<void>;
+}
+export { RuntimeStartupCleanupError } from "./shutdown.js";
 import assert from "node:assert/strict";
 import { WebChannel } from "../channels/web.js";
 import { AgentQueue } from "../queue.js";
@@ -47,7 +60,7 @@ import { registerRuntimeShutdownSignals } from "./composition.js";
 import { startRuntimeLoop, type StartRuntimeLoopDeps } from "./coordinator.js";
 import { ModelRefreshCoordinator, type ModelRefreshResult } from "./model-refresh.js";
 import { registerOptionalProviders, stopOptionalProviders } from "./provider-bootstrap.js";
-import { createShutdownHandler, type ShutdownDeps } from "./shutdown.js";
+import { createShutdownHandler, RuntimeStartupCleanupError, type ShutdownDeps } from "./shutdown.js";
 import { createShutdownCompletion, registerShutdownHandler } from "./shutdown-registry.js";
 import {
   initializeRuntimeEnvironment,
@@ -92,6 +105,8 @@ export interface RuntimeBootstrapDefaultBaseServices extends RuntimeBootstrapBas
 
 export interface RuntimeBootstrapDeps {
   base: RuntimeBootstrapBaseServices;
+  /** Explicit internal injection only. No discovery, imports or activation by default. */
+  prepareApplicationBackend?: (owner: RuntimeLockHandle) => Promise<RuntimeBackend>;
   /** Internal inspection only; absent in production composition. No source selector. */
   migrationInspection?: { onReady(context: RuntimeBootstrapContext): void };
   assistantName: string;
@@ -101,8 +116,8 @@ export interface RuntimeBootstrapDeps {
   initializeRuntimeEnvironment(state: RuntimeBootstrapState): { effectiveMode: "single-user" | "family-shared" } | void;
   hydrateMcpCredentials(): Promise<HydratedMcpCredential[]>;
   clearMcpCredentials(entries: HydratedMcpCredential[]): void;
-  createAgentPool(): Promise<RuntimeBootstrapAgentPool>;
-  startWebChannel(queue: RuntimeBootstrapQueue, agentPool: RuntimeBootstrapAgentPool): Promise<RuntimeBootstrapWeb>;
+  createAgentPool(sessionOptions?: RuntimeBackend["sessionOptions"]): Promise<RuntimeBootstrapAgentPool>;
+  startWebChannel(queue: RuntimeBootstrapQueue, agentPool: RuntimeBootstrapAgentPool, bind?: RuntimeBackend["bind"]): Promise<RuntimeBootstrapWeb>;
   startBackgroundModelRefresh(agentPool: RuntimeBootstrapAgentPool): void;
   startOptionalPushoverChannel(): Promise<RuntimeBootstrapPushover | null>;
   createShutdownHandler(deps: ShutdownDeps): (signal: string) => Promise<void>;
@@ -144,10 +159,14 @@ function logBackgroundRefreshResult(result: ModelRefreshResult): void {
 }
 
 /** Build default runtime bootstrap dependencies from production modules. */
-export function createDefaultRuntimeBootstrapDeps(base: RuntimeBootstrapDefaultBaseServices): RuntimeBootstrapDeps {
+export function createDefaultRuntimeBootstrapDeps(
+  base: RuntimeBootstrapDefaultBaseServices,
+  prepareApplicationBackend?: RuntimeBootstrapDeps["prepareApplicationBackend"],
+): RuntimeBootstrapDeps {
   let refreshCoordinator: ModelRefreshCoordinator | null = null;
   return {
     base,
+    prepareApplicationBackend,
     assistantName: getIdentityConfig().assistantName,
     triggerPattern: getRoutingConfig().triggerPattern,
     pollIntervalMs: getRuntimeTimingConfig().pollIntervalMs,
@@ -155,7 +174,7 @@ export function createDefaultRuntimeBootstrapDeps(base: RuntimeBootstrapDefaultB
     initializeRuntimeEnvironment: () => initializeRuntimeEnvironment(base.state),
     hydrateMcpCredentials: () => hydrateMcpKeychainCredentials(WORKSPACE_DIR),
     clearMcpCredentials: clearHydratedMcpCredentials,
-    createAgentPool: async () => {
+    createAgentPool: async (sessionOptions) => {
       const modelServices = await createRuntimeModelServices();
       installRuntimeModelExecutor(modelServices.modelRuntime);
       registerGitHubCopilotDynamicModels(modelServices.modelRuntime);
@@ -163,6 +182,7 @@ export function createDefaultRuntimeBootstrapDeps(base: RuntimeBootstrapDefaultB
         credentialStore: modelServices.credentialStore,
         modelRuntime: modelServices.modelRuntime,
         modelRegistry: modelServices.modelRegistry,
+        ...sessionOptions,
       });
       refreshCoordinator = new ModelRefreshCoordinator({
         modelRuntime: modelServices.modelRuntime,
@@ -170,7 +190,7 @@ export function createDefaultRuntimeBootstrapDeps(base: RuntimeBootstrapDefaultB
       });
       return agentPool;
     },
-    startWebChannel: (queue, agentPool) => startWebChannel(queue as Parameters<typeof startWebChannel>[0], agentPool as Parameters<typeof startWebChannel>[1]),
+    startWebChannel: (queue, agentPool, bind) => startWebChannel(queue as Parameters<typeof startWebChannel>[0], agentPool as Parameters<typeof startWebChannel>[1], bind),
     startBackgroundModelRefresh: (agentPool) => {
       void (async () => {
         await registerOptionalProviders(agentPool);
@@ -200,6 +220,11 @@ export function createDefaultRuntimeBootstrapDeps(base: RuntimeBootstrapDefaultB
 /** Bootstrap and run all runtime subsystems in production order. */
 export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?: RuntimeLockHandle): Promise<void> {
   const { queue, state } = deps.base;
+  const prepareApplicationBackend = deps.prepareApplicationBackend;
+  let backend: RuntimeBackend | undefined;
+  let partialPool: RuntimeBootstrapAgentPool | undefined;
+  let partialWeb: RuntimeBootstrapWeb | undefined;
+  let published = false;
   // Owned by this bootstrap instance, not by the forever-awaited coordinator.
   const shutdownCompletion = createShutdownCompletion();
   const messageLoopController = new AbortController();
@@ -208,6 +233,7 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
   let migrationHold = false;
   const stopMessageLoop = (): Promise<void> => {
     messageLoopController.abort();
+    backend?.stop();
     return messageLoopStop ??= messageLoop ?? Promise.resolve();
   };
 
@@ -215,10 +241,15 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
   const familyMode = access?.effectiveMode === "family-shared";
   const hydratedMcpCredentials = familyMode ? [] : await deps.hydrateMcpCredentials();
   try {
-    const agentPool = await deps.createAgentPool();
+    if (prepareApplicationBackend) {
+      assert(runtimeOwner?.enabled && runtimeOwner.strictOwnership, "Strict runtime owner required");
+      runtimeOwner.assertCurrentOwner();
+      backend = await prepareApplicationBackend(runtimeOwner);
+    }
+    const agentPool = partialPool = await deps.createAgentPool(backend?.sessionOptions);
     deps.log("=== Piclaw - Pi Coding Agent Assistant ===");
 
-    const web = await deps.startWebChannel(queue, agentPool);
+    const web = partialWeb = await deps.startWebChannel(queue, agentPool, backend?.bind);
     const pushover = familyMode ? null : await deps.startOptionalPushoverChannel();
     if (!familyMode) deps.startBackgroundModelRefresh(agentPool);
 
@@ -231,6 +262,7 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
       stopMessageLoop,
       stopSchedulerLoop: deps.stopSchedulerLoop,
       stopOptionalProviders: deps.stopOptionalProviders,
+      closeApplicationBackend: backend ? () => backend!.close() : undefined,
       onShutdownComplete: () => {
         deps.onShutdownComplete?.();
         shutdownCompletion.complete();
@@ -243,6 +275,7 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
         deps.clearMcpCredentials(hydratedMcpCredentials);
       }
     };
+    published = true;
     registerShutdownHandler(shutdown);
     deps.registerRuntimeShutdownSignals(deps.signalRegistrar, shutdown);
 
@@ -360,9 +393,22 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
     if (migrationHold || messageLoopController.signal.aborted) await shutdownCompletion.promise;
   } catch (error) {
     deps.clearMcpCredentials(hydratedMcpCredentials);
+    if (backend && !published) {
+      try {
+        if (error instanceof RuntimeStartupCleanupError) throw error;
+        backend.stop();
+        await partialWeb?.stop();
+        await queue.shutdown();
+        await partialPool?.shutdown();
+        await backend.close();
+      } catch (cleanupError) {
+        throw new RuntimeStartupCleanupError([error, cleanupError], "Application backend startup cleanup uncertain");
+      }
+    }
     // Rejection here would run main's finally and release the global owner.
     // An uncertain shutdown must remain owned until certified safe cleanup.
     if (migrationHold || messageLoopController.signal.aborted) await shutdownCompletion.promise;
+    if (backend && published) throw new RuntimeStartupCleanupError([error], "Published application backend cleanup uncertain");
     throw error;
   }
 }

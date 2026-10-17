@@ -13,7 +13,7 @@
  */
 
 import { DATA_DIR } from "./core/config.js";
-import { bootstrapRuntime, createDefaultRuntimeBootstrapDeps, type RuntimeBootstrapDeps } from "./runtime/bootstrap.js";
+import { bootstrapRuntime, createDefaultRuntimeBootstrapDeps, RuntimeStartupCleanupError, type RuntimeBootstrapDeps } from "./runtime/bootstrap.js";
 import { createRuntimeBaseServices } from "./runtime/composition.js";
 import { acquireRuntimeLock } from "./runtime/single-instance.js";
 
@@ -29,6 +29,7 @@ export async function main(deps: RuntimeMainDeps = {
   createBootstrapDeps: () => createDefaultRuntimeBootstrapDeps(createRuntimeBaseServices({ dataDir: DATA_DIR })),
 }): Promise<void> {
   const runtimeLock = deps.acquireLock();
+  let retain = false;
   try {
     const bootstrapDeps = deps.createBootstrapDeps();
     const onShutdownComplete = bootstrapDeps.onShutdownComplete;
@@ -39,7 +40,10 @@ export async function main(deps: RuntimeMainDeps = {
         runtimeLock.markSafeReleaseOnExit();
       },
     }, runtimeLock);
+  } catch (error) {
+    retain = error instanceof RuntimeStartupCleanupError;
+    throw error;
   } finally {
-    runtimeLock.release();
+    if (!retain) runtimeLock.release();
   }
 }

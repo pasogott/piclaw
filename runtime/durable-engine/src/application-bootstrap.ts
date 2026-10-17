@@ -3,6 +3,8 @@ import type { Database } from "bun:sqlite";
 import type { Context } from "@earendil-works/chord/context";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import type { RuntimeLockHandle } from "../../src/runtime/single-instance.js";
+import type { RuntimeBackend } from "../../src/runtime/bootstrap.js";
+import { RuntimeStartupCleanupError } from "../../src/runtime/startup-cleanup-error.js";
 import type { WebChannelOpts } from "../../src/channels/web.js";
 import type { EffectPayloadResolver } from "../../src/service-effects/contracts/payload-resolver.js";
 import { createCurrentPiclawServiceWorkStore } from "../../src/service-effects/current-piclaw/service-work-store.js";
@@ -177,11 +179,21 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       },
       retryRecoveredWork: recovery.retryRecoveredWork,
       onPendingIntent: recovery.onPendingIntent,
+      stop() { shutdown.abort(); },
       close() { return closing ??= (async () => { shutdown.abort(); await activeController.close(); })(); },
+    } satisfies RuntimeBackend & {
+      reconcileMaintenance(chatJid: string): Promise<void>;
+      retryRecoveredWork: typeof recovery.retryRecoveredWork;
+      onPendingIntent: typeof recovery.onPendingIntent;
     });
   } catch (error) {
-    if (controller) await controller.close();
-    else await database?.close();
-    lease.release(); throw error;
+    try {
+      if (controller) await controller.close();
+      else await database?.close();
+      lease.release();
+    } catch (cleanupError) {
+      throw new RuntimeStartupCleanupError([error, cleanupError], "Application backend preparation cleanup uncertain");
+    }
+    throw error;
   }
 }

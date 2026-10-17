@@ -7,7 +7,8 @@ import { setAddonOperationHost } from "../addons/runtime-contributions.js";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "fs";
 import { dirname, join, resolve } from "path";
 import type { AgentPool } from "../agent-pool.js";
-import { WebChannel } from "../channels/web.js";
+import { WebChannel, type WebChannelOpts } from "../channels/web.js";
+import { RuntimeStartupCleanupError } from "./shutdown.js";
 import { PushoverChannel } from "../channels/pushover.js";
 import { setMessagesPostFn } from "../extensions/messages-crud.js";
 import { setChatToolRelayFn } from "../extensions/chat-tool.js";
@@ -566,8 +567,13 @@ export async function initializeWebAddonMessagingRuntime(
 }
 
 /** Start web channel and run immediate crash-recovery bootstrap. */
-export async function startWebChannel(queue: AgentQueue, agentPool: AgentPool): Promise<WebChannel> {
-  const web = new WebChannel({ queue, agentPool });
+export async function startWebChannel(
+  queue: AgentQueue, agentPool: AgentPool,
+  bind?: (options: Pick<WebChannelOpts, "queue" | "agentPool">) => Readonly<WebChannelOpts>,
+): Promise<WebChannel> {
+  const options = { queue, agentPool };
+  const web = new WebChannel(bind ? bind(options) : options);
+  try {
   await web.start();
   // office-viewer route removed: now registered by @rcarmo/piclaw-addon-office-viewer
   // Do not freeze extension routes here: workspace/add-on extension factories
@@ -621,6 +627,13 @@ export async function startWebChannel(queue: AgentQueue, agentPool: AgentPool): 
   registerSessionControlHandler(agentPool, web);
 
   return web;
+  } catch (error) {
+    if (bind) {
+      try { await web.stop(); }
+      catch (cleanupError) { throw new RuntimeStartupCleanupError([error, cleanupError], "Web startup cleanup uncertain"); }
+    }
+    throw error;
+  }
 }
 
 /**

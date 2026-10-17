@@ -477,6 +477,7 @@ describe("runtime bootstrap", () => {
     expect(deps.triggerPattern).toBeInstanceOf(RegExp);
     expect(typeof deps.hydrateMcpCredentials).toBe("function");
     expect(typeof deps.clearMcpCredentials).toBe("function");
+    expect(deps.prepareApplicationBackend).toBeUndefined();
     expect(typeof deps.createAgentPool).toBe("function");
     expect(typeof deps.startRuntimeLoop).toBe("function");
   });
@@ -558,6 +559,57 @@ for (const failure of ["none", "scheduler", "producer", "queue"] as const) {
     }
   });
 }
+
+for (const uncertain of [false, true]) test(`backend startup cleanup retains owner only when uncertain=${uncertain}`, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "backend-startup-"));
+  const acquire = () => acquireRuntimeLock({ lockPath: join(dir, "owner"), strictOwnership: true, disabled: false });
+  const owner = acquire();
+  const events: string[] = [];
+  const sessionOptions = Object.freeze({ durableSessions: new Map() });
+  const bind = (options: any) => options;
+  try {
+    const deps = bootstrapDepsForFailure({
+      prepareApplicationBackend: async actual => {
+        expect(actual).toBe(owner); actual.assertCurrentOwner(); events.push("prepare");
+        return { sessionOptions, bind, stop: () => { events.push("stop"); }, close: async () => { events.push("close"); if (uncertain) throw Error("close uncertain"); } };
+      },
+      base: { queue: { shutdown: async () => { events.push("queue-close"); } } as RuntimeBootstrapQueue, state: {} as RuntimeBootstrapState },
+      createAgentPool: async options => {
+        expect(options).toBe(sessionOptions); events.push("pool");
+        return { shutdown: async () => { events.push("pool-close"); } } as RuntimeBootstrapAgentPool;
+      },
+      startWebChannel: async (_queue, _pool, actualBind) => {
+        expect(actualBind).toBe(bind); events.push("web"); throw Error("web failed");
+      },
+    });
+    await expect(main({ acquireLock: () => owner, createBootstrapDeps: () => deps })).rejects.toThrow(uncertain ? "cleanup uncertain" : "web failed");
+    expect(events).toEqual(["prepare", "pool", "web", "stop", "queue-close", "pool-close", "close"]);
+    if (uncertain) { owner.assertCurrentOwner(); expect(acquire).toThrow("refuses existing lock"); }
+    else acquire().release();
+  } finally { owner.release(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("backend preparation requires strict owner before callback", async () => {
+  let called = false;
+  await expect(bootstrapRuntime(bootstrapDepsForFailure({ prepareApplicationBackend: async () => {
+    called = true; throw Error("must not open");
+  } }))).rejects.toThrow("Strict runtime owner required");
+  expect(called).toBe(false);
+});
+
+test("selected backend preparation error never falls back to legacy construction", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "backend-no-fallback-"));
+  const owner = acquireRuntimeLock({ lockPath: join(dir, "owner"), strictOwnership: true, disabled: false });
+  const legacy = spyOn(SessionManager, "create").mockImplementation(() => { throw Error("legacy forbidden"); });
+  let pools = 0;
+  try {
+    await expect(bootstrapRuntime(bootstrapDepsForFailure({
+      prepareApplicationBackend: async () => { throw Error("selected backend failed"); },
+      createAgentPool: async () => { pools++; throw Error("legacy fallback forbidden"); },
+    }), owner)).rejects.toThrow("selected backend failed");
+    expect(pools).toBe(0); expect(legacy).not.toHaveBeenCalled(); owner.assertCurrentOwner();
+  } finally { legacy.mockRestore(); owner.release(); rmSync(dir, { recursive: true, force: true }); }
+});
 
 test("main preserves lock release on startup failure before producer stop", async () => {
   const dir = mkdtempSync(join(tmpdir(), "poller-startup-owner-"));

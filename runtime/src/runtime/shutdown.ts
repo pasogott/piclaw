@@ -9,6 +9,8 @@ import { SchedulerStoreReleaseError } from "../task-scheduler.js";
 
 const log = createLogger("runtime.shutdown");
 
+export { RuntimeStartupCleanupError } from "./startup-cleanup-error.js";
+
 /** Runtime resources required to perform graceful shutdown. */
 export type ShutdownDeps = {
   queue: { shutdown: (timeoutMs?: number) => Promise<unknown> };
@@ -19,6 +21,7 @@ export type ShutdownDeps = {
   stopMessageLoop?: () => void | Promise<void>;
   stopSchedulerLoop: () => void | Promise<void>;
   stopOptionalProviders: () => void;
+  closeApplicationBackend?: () => Promise<void>;
   /** Certify successful cleanup only; never called on failure or deadline exit. */
   onShutdownComplete?: () => void;
 };
@@ -97,6 +100,7 @@ export function createShutdownHandler(deps: ShutdownDeps): (signal: string) => P
       await cleanup(() => deps.web.stop(), 4000, "web stop");
       await cleanup(() => deps.pushover?.stop(), 4000, "pushover stop");
       if (errors.length) throw new AggregateError(errors, "Runtime shutdown cleanup failed");
+      await deps.closeApplicationBackend?.();
       deps.onShutdownComplete?.();
       process.exit(0);
     } finally {

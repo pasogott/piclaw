@@ -1446,3 +1446,25 @@ pass. The surviving root gate completed 7,275 tests (74 baseline skips), plus 25
 feature and 9 build tests with final build footer; the interrupted wrapper recorded
 no exit code. Earlier failures and the legacy-immediate regression remain recorded;
 no timeouts or assertions were weakened. Automatic/protected compaction remains open.
+
+### Consolidated runtime startup ownership
+
+Existing runtime bootstrap now owns one `RuntimeBackend` lifecycle: prepare before
+pool/channel construction, pass its session/bind outputs once, stop observations
+before queue join, and close after pool cleanup. The redundant prepared-backend
+alias/wrapper is removed. Uncertain startup cleanup propagates one dependency-free
+error class so main retains ownership; importing that type no longer loads bootstrap
+side effects through the engine. Failed selected-backend preparation never falls
+through to legacy session construction.
+
+Actual startup application cases run in fresh process fixtures, matching process-
+singleton runtime ownership rather than repeatedly bootstrapping one shared test DB.
+Final candidate verification passes 423 tests / 6,781 assertions; root fast CI,
+scoped types and bounded independent review pass. A first root attempt discovered
+ignored generated JS tests with missing siblings; disposable generated output was
+moved outside test discovery before the successful unchanged-source repeat.
+
+This consolidates source wiring, not completed production legacy replacement.
+Per user direction, further migration work is parked: next work replaces legacy
+runtime/session execution and deletes superseded internals before migration is
+finished. Production selector remains unchanged; no live activation occurs.
