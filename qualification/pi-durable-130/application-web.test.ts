@@ -338,9 +338,14 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
   try {
     const events: { type: string; data: any }[] = [];
     channel.broadcastEvent = (type, data) => { events.push({ type, data }); };
-    // Actual pool/channel composition must leave B on the ordinary legacy path,
-    // BEFORE any throwing legacy factory runs: no durable admission or claim.
-    expect(channel.getInputSourceAdmission?.(unbound)).toBeUndefined();
+    // The selected backend rejects chats outside its exact manifest before admission.
+    expect(() => channel.getInputSourceAdmission?.(unbound)).toThrow("Unbound application conversation");
+    await expect(pool.getSessionForIntrospection(unbound)).rejects.toThrow("Durable application does not construct legacy sessions");
+    const unboundResponse = await channel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(unbound)}`, {
+      method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: JSON.stringify({ content: "must not fall back" }),
+    }));
+    expect(unboundResponse.status).toBeGreaterThanOrEqual(400);
+    expect(db.query("SELECT count(*) AS n FROM messages WHERE chat_jid=?").get(unbound)).toEqual({ n: 0 });
     expect(bundle.sessionOptions.durableSessions.has(unbound)).toBe(false);
     expect(db.query("SELECT count(*) AS n FROM service_effect_s01_sources WHERE chat_jid=?").get(unbound)).toEqual({ n: 0 });
     expect(db.query("SELECT count(*) AS n FROM service_effect_s01_operations WHERE chat_jid=?").get(unbound)).toEqual({ n: 0 });

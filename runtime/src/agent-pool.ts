@@ -320,8 +320,6 @@ export class AgentPool {
   private modelRegistry: ModelRegistry;
   private settingsManager = SettingsManager.create(WORKSPACE_DIR, getPiclawAgentDir());
   private logsDir = join(WORKSPACE_DIR, "logs");
-  private createSession?: AgentPoolOptions["createSession"];
-  private createSideSession?: AgentPoolOptions["createSideSession"];
   private bashOperations = createTrackedBashOperations({
     shellPath: () => this.settingsManager.getShellPath(),
   });
@@ -336,15 +334,13 @@ export class AgentPool {
   private readonly config = getSessionPoolConfig();
 
   constructor(options: AgentPoolOptions) {
-    this.createSession = options.createSession;
-    this.createSideSession = options.createSideSession;
     if (!options.credentialStore || !options.modelRuntime) {
       throw new Error("AgentPool requires shared credentialStore and modelRuntime services");
     }
     this.credentialStore = options.credentialStore;
     this.modelRuntime = options.modelRuntime;
     this.modelRegistry = options.modelRegistry ?? new ModelRegistry(this.modelRuntime);
-    installLegacySessionAffinityCompatibility(this.modelRegistry, (message, details) => log.warn(message, details));
+    if (options.durableSessions === undefined) installLegacySessionAffinityCompatibility(this.modelRegistry, (message, details) => log.warn(message, details));
     this.applyRateLimitRetryDefaults();
     ({
       attachments: this.attachments,
@@ -367,8 +363,10 @@ export class AgentPool {
       mainSessionMaxSize: this.config.mainSessionPoolMaxSize,
       bashOperations: this.bashOperations,
       durableSessions: options.durableSessions,
-      createSession: this.createSession,
-      createSideSession: this.createSideSession,
+      ...(options.durableSessions === undefined ? {
+        createSession: options.createSession,
+        createSideSession: options.createSideSession,
+      } : {}),
       onInfo: (message, details) => log.info(message, details),
       onWarn: (message, details) => log.warn(message, details),
       onError: (message, details) => log.error(message, details),
@@ -412,7 +410,7 @@ export class AgentPool {
     runtimeInterop.removeLogSink = removeLogSink;
     runtimeInterop.getKeychainEntry = getKeychainEntry;
     try { migrateProxmoxPortainerToKv(); } catch (e) { void e; /* migration is best-effort */ }
-    mkdirSync(SESSIONS_DIR, { recursive: true });
+    if (options.durableSessions === undefined) mkdirSync(SESSIONS_DIR, { recursive: true });
     mkdirSync(this.logsDir, { recursive: true });
     const agentLogConfig = getAgentLogConfig();
     startAgentLogCleanup(this.logsDir, agentLogConfig.retentionMs, agentLogConfig.cleanupIntervalMs);

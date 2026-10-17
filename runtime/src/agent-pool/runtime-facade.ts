@@ -325,7 +325,7 @@ export class AgentRuntimeFacade {
         readPosition: port.readPosition.bind(port), readModel: port.readModel?.bind(port), setModel: port.setModel?.bind(port), compact: port.compact?.bind(port), readTree: port.readTree?.bind(port) })]));
     const legacy = options.getOrCreateRuntime;
     this.options = { ...options, getOrCreateRuntime: chat => {
-      if (this.durableSessions.has(chat)) return Promise.reject(new Error("Legacy session operation unavailable for durable conversation"));
+      if (options.durableSessions !== undefined) return Promise.reject(new Error("Durable application does not construct legacy sessions"));
       return legacy(chat);
     } };
   }
@@ -466,8 +466,10 @@ export class AgentRuntimeFacade {
   ): Promise<AvailableModelsResult> {
     // Passive UI refreshes should not hydrate a cold runtime just to render
     // model state for the picker.
-    const session = this.options.pool.get(chatJid)?.runtime.session ?? null;
-    const persistedState = session ? { current: null, thinkingLevel: null } : getPersistedSessionState(chatJid);
+    const session = this.options.durableSessions === undefined ? this.options.pool.get(chatJid)?.runtime.session ?? null : null;
+    const persistedState = this.options.durableSessions !== undefined
+      ? { current: await this.getCurrentModelLabel(chatJid), thinkingLevel: null }
+      : session ? { current: null, thinkingLevel: null } : getPersistedSessionState(chatJid);
     const registry = (session as (AgentSession & { modelRegistry?: ModelRegistry }) | null)?.modelRegistry ?? this.options.modelRegistry;
     const scopedModels = resolveModelScope(
       registry.getAvailable(),
@@ -591,6 +593,7 @@ export class AgentRuntimeFacade {
     percent: number | null;
     sessionGeneration?: string;
   } | null {
+    if (this.options.durableSessions !== undefined) return null;
     const entry = this.options.pool.get(chatJid);
     if (!entry) return null;
     const session = entry.runtime.session;
@@ -603,11 +606,14 @@ export class AgentRuntimeFacade {
   }
 
   getSessionGenerationForChat(chatJid: string): string | null {
-    const sessionId = this.durableSessions.get(chatJid)?.sessionId ?? this.options.pool.get(chatJid)?.runtime.session.sessionId;
+    const sessionId = this.options.durableSessions !== undefined
+      ? this.durableSessions.get(chatJid)?.sessionId
+      : this.options.pool.get(chatJid)?.runtime.session.sessionId;
     return typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : null;
   }
 
   getSessionTreeSummaryForChat(chatJid: string): { leafId: string | null; total: number } | null {
+    if (this.options.durableSessions !== undefined) return null;
     const entry = this.options.pool.get(chatJid);
     if (!entry) return null;
     const snapshot = buildSessionTreeSnapshot(entry.runtime.session.sessionManager);
@@ -631,7 +637,7 @@ export class AgentRuntimeFacade {
   }
 
   async restoreSessionPosition(chatJid: string, leafId: string | null): Promise<void> {
-    if (this.durableSessions.has(chatJid)) throw new Error("Durable history navigation unavailable");
+    if (this.options.durableSessions !== undefined) throw new Error("Durable history navigation unavailable");
     if (leafId === null) return;
     const session = (await this.options.getOrCreateRuntime(chatJid)).session;
     const currentLeaf = session.sessionManager.getLeafId();

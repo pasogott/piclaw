@@ -66,7 +66,7 @@ test("single physical database: accepted primary + attached intent, terminal ide
     expect(persistedModel).toBe("qualification/synthetic");
     const beforePosition = await app.saveSessionPosition(f.chatJid);
     await expect(app.restoreSessionPosition(f.chatJid, beforePosition)).rejects.toThrow("Durable history navigation unavailable");
-    await expect(app.applySlashCommand(f.chatJid, "/compact")).rejects.toThrow("Legacy session operation unavailable");
+    await expect(app.applySlashCommand(f.chatJid, "/compact")).rejects.toThrow("Durable application does not construct legacy sessions");
     const sid = await adapter.submitIntent(captured);
     expect(await adapter.submitIntent(captured)).toBe(sid);
     expect(await f.runtime!.submit(primary)).toBe(primaryId);

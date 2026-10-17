@@ -14,7 +14,6 @@ import { AgentSessionBinder } from "./session-binder.js";
 import { AgentSessionManager, type PoolEntry } from "./session-manager.js";
 import { AgentToolFactory } from "./tool-factory.js";
 import { AgentTurnCoordinator } from "./turn-coordinator.js";
-import { lightweightPrewarmSession } from "./session.js";
 import { installSessionUsageRecorder } from "./usage.js";
 import type { AgentPoolOptions } from "./contracts.js";
 import type { AgentBashOperations } from "./tool-factory.js";
@@ -79,7 +78,7 @@ async function resolveSessionExtensionFactories(chatJid: string): Promise<Extens
  * Keeps constructor wiring in one place so AgentPool itself remains a thin façade.
  */
 export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions): AgentPoolServices {
-  const durableSessions = new Map(options.durableSessions);
+  const durableSessions = options.durableSessions === undefined ? undefined : new Map(options.durableSessions);
   const attachments = getAttachmentRegistry();
   const sessionBinder = new AgentSessionBinder({
     pool: options.pool,
@@ -130,19 +129,16 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     onWarn: options.onWarn,
   });
   sessionManager = new AgentSessionManager({
-    assertLegacySession: chat => {
-      if (durableSessions.has(chat)) throw new Error("Legacy session operation unavailable for durable conversation");
-    },
+    durableSessions,
     pool: options.pool,
     sidePool: options.sidePool,
-    ...(options.createSession ? { createSession: options.createSession } : {}),
-    ...(options.createSideSession ? { createSideSession: options.createSideSession } : {}),
     modelRuntime: options.modelRuntime,
     settingsManager: options.settingsManager,
     mainSessionMaxSize: options.mainSessionMaxSize,
-    lightweightPrewarmSession: (chatJid) => lightweightPrewarmSession(chatJid, {
-      getSessionExtensionFactories: (targetChatJid) => resolveSessionExtensionFactories(targetChatJid),
-    }),
+    // Compatibility construction is absent from the selected durable backend.
+    ...(durableSessions === undefined ? {
+    createSession: options.createSession,
+    createSideSession: options.createSideSession,
     createDefaultTools: () => toolFactory.createDefaultTools(),
     createCustomToolOverrides: (chatJid) => toolFactory.createCustomToolOverrides(chatJid),
     getSessionExtensionFactories: (chatJid) => resolveSessionExtensionFactories(chatJid),
@@ -153,6 +149,7 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     ensureBranchRegistration: (chatJid, session) => {
       branchManager.ensureBranchRegistration(chatJid, session);
     },
+    } : {}),
     onInfo: options.onInfo,
     onWarn: options.onWarn,
     onError: options.onError,

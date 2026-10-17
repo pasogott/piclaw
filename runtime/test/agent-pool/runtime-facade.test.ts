@@ -71,7 +71,7 @@ function createFacade(overrides: Partial<ConstructorParameters<typeof AgentRunti
   return { facade, pool, warnings, errors, cleared };
 }
 
-test("current model uses captured durable port, fails closed when absent, preserves legacy", async () => {
+test("current model uses captured durable port and rejects unbound chats without legacy fallback", async () => {
   const port = { sessionId: "session", branchId: "main", readPosition: async () => null,
     readModel: async () => "persisted/model" };
   const fixture = createFacade({ durableSessions: new Map([["bound", port],
@@ -80,9 +80,12 @@ test("current model uses captured durable port, fails closed when absent, preser
   expect(await fixture.facade.getCurrentModelLabel("bound")).toBe("persisted/model");
   await expect(fixture.facade.getCurrentModelLabel("unsupported")).rejects.toThrow("Durable session model unavailable");
   fixture.pool.set("legacy", { runtime: createRuntime({ model: { provider: "legacy", id: "model" } }), lastUsed: 0 });
-  expect(await fixture.facade.getCurrentModelLabel("legacy")).toBe("legacy/model");
-  fixture.pool.set("empty", { runtime: createRuntime({}), lastUsed: 0 });
-  expect(await fixture.facade.getCurrentModelLabel("empty")).toBeNull();
+  await expect(fixture.facade.getCurrentModelLabel("legacy")).rejects.toThrow("Durable application does not construct legacy sessions");
+  await expect(fixture.facade.getSessionTreeForChat("unknown")).rejects.toThrow("Durable application does not construct legacy sessions");
+  await expect(fixture.facade.saveSessionPosition("unknown")).rejects.toThrow("Durable application does not construct legacy sessions");
+  const legacy = createFacade();
+  legacy.pool.set("legacy", { runtime: createRuntime({ model: { provider: "legacy", id: "model" } }), lastUsed: 0 });
+  expect(await legacy.facade.getCurrentModelLabel("legacy")).toBe("legacy/model");
 });
 
 test("AgentRuntimeFacade reports available models and context usage", async () => {

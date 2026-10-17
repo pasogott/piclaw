@@ -141,7 +141,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       runningCorrelation: id => ({ sessionId: r.sessionId, lane: r.lane, harnessOperationId: String(id), state: "running", watchGeneration: r.generation }),
       shutdown: shutdown.signal, waitForReconciliation: recovery.waitForReconciliation });
     const getInputSourceAdmission: NonNullable<WebChannelOpts["getInputSourceAdmission"]> = chat => {
-      assert(); if (!chats.has(chat)) return undefined;
+      assert(); if (!chats.has(chat)) throw Error("Unbound application conversation");
       return ({ message, rowId, database: connection }) => {
         assert(); if (connection !== root || !root.inTransaction) throw Error("Root admission transaction required");
         const input = { effect: { idempotencyKey: message.id, requestHash: "", operationId: null, sourceSeq: null,

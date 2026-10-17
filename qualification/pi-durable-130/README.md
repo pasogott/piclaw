@@ -1468,3 +1468,25 @@ This consolidates source wiring, not completed production legacy replacement.
 Per user direction, further migration work is parked: next work replaces legacy
 runtime/session execution and deletes superseded internals before migration is
 finished. Production selector remains unchanged; no live activation occurs.
+
+### Durable selection excludes legacy construction pool-wide
+
+Supplying durable session ports, including an empty map, now selects the whole pool
+backend—not a per-chat overlay. Unknown chats reject instead of constructing legacy
+sessions. Selected pools skip legacy factory getters, eager default setup, affinity
+installation and JSONL sessions-directory creation. Legacy-only constructors load
+dynamically on compatibility paths; DB readers/control operations retain captured
+ports and cannot fall back to file sessions. Unbound application admission rejects
+before message/source acceptance through the existing error surface.
+
+The real application and construction regressions forbid legacy factories and
+verify no session-file creation. Final candidate verification passes 423 tests /
+6,781 assertions, both private-package types and root fast CI pass, and independent
+bounded review is clear. The first run caught an old expected rejection string and
+a binding-test timeout; unchanged sequential repeat passes after correcting only
+the changed error expectation. Default/no-map startup remains legacy and is the
+next replacement target; this is not a fully legacy-free module graph.
+
+Migration work remains parked until mainstream runtime convergence and compatibility
+are finished, per user direction. No live activation, database mutation, installation
+or dependency-pin change is performed by this source-only replacement.
