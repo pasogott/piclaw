@@ -10,7 +10,9 @@ import { RuntimeStartupCleanupError } from "../../runtime/src/runtime/startup-cl
 import { main } from "../../runtime/src/runtime.js";
 import { createDefaultRuntimeBootstrapDeps } from "../../runtime/src/runtime/bootstrap.js";
 import { storeChatMetadata, storeMessage } from "../../runtime/src/db.js";
-import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, copyFileSync, symlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { extensionKvSet, extensionKvGet } from "../../runtime/src/db/extension-kv.js";
 import { join } from "node:path";
 import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
 import { acquireRuntimeLock } from "../../runtime/src/runtime/single-instance.js";
@@ -23,6 +25,8 @@ import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite
 import { BACKGROUND_CONTEXT as context } from "../../runtime/durable-engine/qualification/context.ts";
 import { createHostModels } from "../../runtime/durable-engine/src/host-models.js";
 import { createHostBuiltinTools } from "../../runtime/durable-engine/src/host-builtins.js";
+import { HostConversationRuntime } from "../../runtime/durable-engine/src/host-runtime.js";
+import { createPlanKvAuthority } from "../../runtime/durable-engine/src/host-plan-tool.js";
 
 function factoryTest(scenario: string, name: string, body: () => Promise<void>) {
   const selected = process.env.PICLAW_DEFAULT_FACTORY_CASE;
@@ -88,7 +92,7 @@ for (const uncertain of [false, true]) factoryTest(`cleanup-${uncertain}`, `actu
   }
 });
 
-for (const scenario of ["public-conversations", "custom-subset", "pending-host"] as const) factoryTest(scenario, scenario === "custom-subset"
+for (const scenario of ["public-conversations", "custom-subset", "pending-host", "native-plan"] as const) factoryTest(scenario, scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -101,13 +105,34 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host"]
   let calls = 0;
   const model = { provider: "synthetic", id: "approved", name: "Approved", api: "openai-completions", baseUrl: "https://invalid.invalid", input: ["text"], reasoning: false, contextWindow: 10000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   const requested: string[] = [];
+  const planRequests: string[] = [];
   let toolSequence: { name: string; arguments: Record<string, unknown> }[] | undefined;
+  if (scenario === "native-plan") {
+    const source = process.env.DURABLE_ADDONS_ROOT;
+    if (!source) throw Error("DURABLE_ADDONS_ROOT required");
+    const pkg = join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-plan-sidebar");
+    mkdirSync(join(pkg, "compat"), { recursive: true });
+    for (const [file, hash] of Object.entries({
+      "index.ts": "b923bff190da94777aaf849667f7a8833be0fae04b76dc3748337552ae642dc8",
+      "compat/chat-context.ts": "8cfa6c16f0a27308ecc665f80ba107064d4fa8ac34122676ff0d1cb46e719da5",
+      "compat/extension-kv.ts": "04240517e9e8664cae2d2badb99f382100a7af3e12679cfce97087870881551c",
+    })) {
+      const path = join(source, "addons/plan-sidebar", file);
+      expect(createHash("sha256").update(readFileSync(path)).digest("hex")).toBe(hash);
+      copyFileSync(path, join(pkg, file));
+    }
+    symlinkSync(join(import.meta.dir, "../../node_modules"), join(pkg, "node_modules"));
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.25", type: "module", pi: { extensions: ["./index.ts"] } }));
+    extensionKvSet("plan-sidebar", "plan", { chat_jid: "web:default", markdown: "- [ ] NATIVE_PLAN_OLD", updated_at: "2026-01-01" }, "chat", "web:default");
+    toolSequence = [{ name: "plan", arguments: { action: "update", plan: [{ step: "NATIVE_PLAN_NEW", status: "in_progress" }] } }];
+  }
   const modelB = { ...model, id: "approved-b" };
   const observedResults = new Map<string, { toolName: string; isError?: boolean; content: unknown }>();
   const stream = (physical: typeof model, input: { messages: { role: string; toolCallId?: string; toolName?: string; isError?: boolean; content: unknown }[] }) => {
     for (const result of input.messages) if (result.role === "toolResult" && result.toolCallId && result.toolName)
       observedResults.set(result.toolCallId, { toolName: result.toolName, isError: result.isError, content: result.content });
     requested.push(physical.id);
+    planRequests.push(JSON.stringify(input));
     calls++; const stream = createAssistantMessageEventStream();
     const step = toolSequence?.shift();
     const message = { role: "assistant" as const, api: "openai-completions" as const, provider: physical.provider, model: physical.id,
@@ -137,6 +162,39 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host"]
   expect(modelRegistry.getAvailable().map(m => [m.provider, m.id])).toEqual([[model.provider, model.id], [modelB.provider, modelB.id]]);
   expect(SettingsManager.create(workspace, getPiclawAgentDir()).getDefaultModel()).toBe(model.id);
   const sdkSpies = [spyOn(SessionManager, "create"), spyOn(SessionManager, "open"), spyOn(SessionManager, "inMemory")];
+  let realRunCaptures = 0, realToolCaptures = 0;
+  const captureSpies: { mockRestore(): void }[] = [];
+  if (scenario === "native-plan") {
+    const captureRun = HostConversationRuntime.prototype.captureRunSource;
+    captureSpies.push(spyOn(HostConversationRuntime.prototype, "captureRunSource").mockImplementation(async function (this: HostConversationRuntime, ...args) {
+      const captured = await captureRun.apply(this, args);
+      realRunCaptures++;
+      expect(captured.operation.chatJid).toBe("web:default");
+      const readonly = createPlanKvAuthority(root, captured, () => owner.assertCurrentOwner(), true);
+      readonly.assertCurrent();
+      expect(() => readonly.write(() => {})).toThrow("Read-only Plan authority");
+      await expect(captureRun.call(this, args[0], -1 as never)).rejects.toThrow("Exact host tool run required");
+      return captured;
+    }));
+    const captureTool = HostConversationRuntime.prototype.captureToolSource;
+    captureSpies.push(spyOn(HostConversationRuntime.prototype, "captureToolSource").mockImplementation(async function (this: HostConversationRuntime, ...args) {
+      const captured = await captureTool.apply(this, args);
+      realToolCaptures++;
+      expect(captured.inputs[0]?.sourceId).toBe("factory-input");
+      const authority = createPlanKvAuthority(root, captured, () => owner.assertCurrentOwner());
+      authority.assertCurrent();
+      const revoked = createPlanKvAuthority(root, captured, () => { throw Error("Owner lost"); });
+      expect(() => revoked.write(() => {})).toThrow("Owner lost");
+      const rollback = Error("rollback cancellation probe");
+      expect(() => root.transaction(() => {
+        root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
+        expect(() => authority.write(() => {})).toThrow("Stale Plan operation authority");
+        throw rollback;
+      })()).toThrow(rollback);
+      authority.assertCurrent();
+      return captured;
+    }));
+  }
   let backend = await createDefaultApplicationRuntime(owner, async () => services);
   expect(!!backend.sessionOptions.getDurableSession?.("web:default")).toBe(true);
   const first = backend.sessionOptions.getDurableSession?.("web:default");
@@ -154,7 +212,33 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host"]
     return rowId;
   })();
   const dispatch = bound.dispatchAcceptedInput!("web:default", message.id, rowId!);
-  expect(dispatch).toBeDefined(); expect(await dispatch!()).toBe("settled"); expect(calls).toBe(1);
+  expect(dispatch).toBeDefined(); expect(await dispatch!()).toBe("settled");
+  if (scenario === "native-plan") {
+    expect(calls).toBe(2);
+    expect(realRunCaptures).toBe(2); expect(realToolCaptures).toBe(1);
+    captureSpies.forEach(spy => spy.mockRestore());
+    expect(planRequests[0]).toContain("NATIVE_PLAN_OLD");
+    expect(planRequests[1]).toContain("NATIVE_PLAN_NEW");
+    for (const request of planRequests) {
+      expect(request.match(/Current Plan Sidebar checklist/g)).toHaveLength(1);
+      expect(request.match(/## Plan Sidebar/g)).toHaveLength(1);
+    }
+    expect(observedResults.get("factory-tool-1")).toMatchObject({ toolName: "plan", content: [{ type: "text", text: "Plan updated." }] });
+    expect(extensionKvGet("plan-sidebar", "plan", "chat", "web:default")).toMatchObject({ markdown: "- [-] NATIVE_PLAN_NEW" });
+    expect(root.query("SELECT scope_key FROM extension_kv WHERE extension_id='plan-sidebar'").all()).toEqual([{ scope_key: "web:default" }]);
+    expect(root.query("SELECT content FROM messages WHERE chat_jid='web:default' AND is_bot_message=1").all()).toEqual([{ content: "factory synthetic reply" }]);
+    expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id=?").get(message.id)).toEqual({ state: "consumed" });
+    expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
+    await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
+    closeDatabase(); initDatabase();
+    expect(extensionKvGet("plan-sidebar", "plan", "chat", "web:default")).toMatchObject({ markdown: "- [-] NATIVE_PLAN_NEW" });
+    backend = await createDefaultApplicationRuntime(owner, async () => services);
+    expect(backend.sessionOptions.getDurableSession!("web:default")).toBeDefined();
+    backend.stop(); await backend.close();
+    sdkSpies.forEach(spy => spy.mockRestore()); owner.release(); closeDatabase();
+    return;
+  }
+  expect(calls).toBe(1);
   // Tiny history is correctly below the public compaction policy's retained window.
   expect(await first!.compact!("Summarize")).toEqual({ compacted: false });
   expect(calls).toBe(1);

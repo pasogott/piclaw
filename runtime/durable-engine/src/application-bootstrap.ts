@@ -53,6 +53,8 @@ export interface ApplicationBootstrapOptions {
   /** Original host session identities, not a new bootstrap-generated identity. */
   sessions: ReadonlyMap<string, string>;
   offlineInitialize?: boolean;
+  /** Publish the existing runtime before recovery can schedule any provider. */
+  onRuntime?: (runtime: import("./host-runtime.js").HostConversationRuntime) => void;
   assertConversationAvailable?: () => void;
   createConversation?: (tx: import("@earendil-works/pi-durable").Tx, chatJid: string, branchId: string) => Promise<Manifest[number] & { sessionId: string }>;
   runtime: Pick<HostControllerOptions["runtime"], "incarnation" | "sessionId" | "lane" | "generation" | "harnessOptions" | "now">;
@@ -129,6 +131,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     }, context);
     const activeController = controller;
     const runtime = activeController.runtime;
+    config.onRuntime?.(runtime);
     const wait = wrapWait?.(runtime.wait.bind(runtime));
     const runtimePort = wait ? new Proxy(runtime, { get(target, key) {
       if (key === "wait") return wait;

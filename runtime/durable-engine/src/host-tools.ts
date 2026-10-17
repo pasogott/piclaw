@@ -1,7 +1,7 @@
 import type { ToolDefinition } from "../../../node_modules/@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "@earendil-works/pi-ai";
 import type { JsonValue } from "@earendil-works/chord";
-import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
+import { defineTool, type ToolRegistration, type ConversationId, type TaskId } from "@earendil-works/pi-durable";
 
 /** Host-owned, invocation-local port. No 1.2 session/context is stored by durable.
  * invoke MUST arrange assertAllowed immediately before each actual effect, after
@@ -17,6 +17,8 @@ export interface HostToolEffectPort<P extends TSchema, D extends JsonValue> {
   readonly effectFence: "host-effect-port";
   invoke(args: Static<P>, call: {
     readonly toolCallId: string;
+    readonly conversationId: ConversationId;
+    readonly taskId: TaskId;
     readonly execute: ToolDefinition<P, D>["execute"];
     readonly assertAllowed: () => void;
     readonly signal: AbortSignal | undefined;
@@ -72,7 +74,7 @@ export function createHostTool<P extends TSchema, D extends JsonValue>(
       try {
         assertAllowed();
         const result = await host.invoke(args, {
-          toolCallId: api.callId, execute,
+          toolCallId: api.callId, conversationId: api.conversationId, taskId: api.taskId, execute,
           assertAllowed, signal: context.abortSignal,
           onUpdate(update) {
             assertAllowed();

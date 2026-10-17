@@ -88,7 +88,7 @@ import {
   extensionKvClear,
   migrateProxmoxPortainerToKv,
 } from "./db.js";
-import { registerExtensionKvStore } from "./extension-kv-registry.js";
+import { registerRootExtensionKvStore } from "./db/register-extension-kv.js";
 import { setSshToolHandlers } from "./extensions/ssh.js";
 import { applyLiveSshConfig, clearLiveSshConfig, hasLiveChatSshConnection, hasLiveChatSshSession, resolveSshCoreConfigFromChatConfig } from "./extensions/ssh-core.js";
 import { getKeychainEntry } from "./secure/keychain.js";
@@ -376,14 +376,7 @@ export class AgentPool {
       set: (chatJid, config) => this.setSshConfig(chatJid, config),
       clear: (chatJid) => this.clearSshConfig(chatJid),
     });
-    registerExtensionKvStore({
-      get: extensionKvGet,
-      set: extensionKvSet,
-      delete: extensionKvDelete,
-      list: extensionKvList,
-      query: extensionKvQuery,
-      clear: extensionKvClear,
-    });
+    registerRootExtensionKvStore();
     const runtimeInterop = ((globalThis as { __piclawRuntimeInterop?: RuntimeInteropBridge }).__piclawRuntimeInterop ||= {});
     runtimeInterop.getChatJid = getChatJid;
     runtimeInterop.getChatChannel = getChatChannel;
@@ -397,13 +390,6 @@ export class AgentPool {
     };
     runtimeInterop.getSessionId = (chatJid) => getSessionEntry(chatJid)?.runtime.session.sessionId ?? null;
     runtimeInterop.getScopedModels = (chatJid) => getSessionEntry(chatJid)?.runtime.session.scopedModels ?? [];
-    runtimeInterop.getExtensionKvStore = () => ({
-      get: extensionKvGet,
-      set: extensionKvSet,
-      delete: extensionKvDelete,
-      list: extensionKvList,
-      clear: extensionKvClear,
-    });
     runtimeInterop.addLogSink = addLogSink;
     runtimeInterop.removeLogSink = removeLogSink;
     runtimeInterop.getKeychainEntry = getKeychainEntry;

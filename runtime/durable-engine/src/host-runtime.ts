@@ -463,6 +463,55 @@ export class HostConversationRuntime {
     this.active.add(attempt);
     return attempt;
   }
+  /** Qualify a MODEL tool against its public live slot and every accepted run
+   * input. Busy-chat lookup alone is never source authority. No new ledger. */
+  captureToolSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId, callId: string) {
+    return this.captureSource(conversationId, taskId, callId);
+  }
+  /** Read-only generation provenance, including the first request before host ACK. */
+  captureRunSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId) {
+    return this.captureSource(conversationId, taskId);
+  }
+  private captureSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId, callId?: string): Promise<{
+    inputs: readonly HostInputBinding[]; operation: OperationSnapshot;
+  }> {
+    return this.observe(async () => {
+      const o = this.options;
+      if (!o.existingConversationIds.includes(conversationId)) throw Error("Host binding conflict");
+      const live = await this.harness.snapshot(LiveDoc, conversationId, this.context); this.fence();
+      if (!live?.run || !(callId === undefined ? live.run.taskId === taskId : live.tools?.some(slot => slot.taskId === taskId && slot.callId === callId && slot.status === "running")) || !live.run.inputs.length)
+        throw Error("Exact host tool run required");
+      const inputs: HostInputBinding[] = [];
+      let operation: OperationSnapshot | undefined;
+      for (const submissionId of live.run.inputs) {
+        const submission = await this.harness.submission(submissionId, this.context); this.fence();
+        const record = await submission?.status(this.context); this.fence();
+        if (!record || record.type !== "input" || record.conversationId !== conversationId || record.entry === undefined)
+          throw Error("Exact host accepted input required");
+        const entry = await this.harness.commit(tx => tx.entry(record.entry!), this.context); this.fence();
+        const data = entry?.data as Record<string, unknown> | undefined;
+        if (entry?.kind !== "host.accepted" || !data || (data.role !== "primary" && data.role !== "intent"))
+          throw Error("Exact host accepted input required");
+        const input = inputSnapshot(data as unknown as AcceptedInput);
+        if (input.conversationId !== conversationId || input.requestId !== record.requestId || input.incarnation !== o.incarnation ||
+          o.conversationFor(input.chatJid, input.branchId) !== conversationId) throw Error("Host binding conflict");
+        const bound = await this.port(data.role === "intent").get(input); this.fence();
+        if (!bound || (bound.submissionId !== submissionId && !(callId === undefined && bound.submissionId === null && data.role === "primary"))) throw Error("Host binding conflict");
+        const current = value(await o.work.getOperation(input.operationId)); this.fence();
+        if (!current || current.chatJid !== input.chatJid || current.phase !== "executing" || current.cancellation ||
+          !current.claimedSourceSeqs.includes(input.sourceSeq) || (operation && (operation.operationId !== current.operationId || operation.version !== current.version)))
+          throw Error("Host operation authority unavailable");
+        if (current.harness ? current.harness.sessionId !== o.sessionId || current.harness.lane !== o.lane ||
+          current.harness.watchGeneration !== o.generation || current.harness.state !== "running" ||
+          !live.run.inputs.some(id => String(id) === current.harness!.harnessOperationId)
+          : callId !== undefined || data.role !== "primary" || current.primarySourceSeq !== input.sourceSeq)
+          throw Error("Exact host harness required");
+        operation = current; inputs.push(bound);
+      }
+      if (!operation || !inputs.some(input => input.sourceSeq === operation!.primarySourceSeq)) throw Error("Host primary input required");
+      return { inputs: Object.freeze(inputs), operation };
+    });
+  }
   private port(intent: boolean) {
     const port = intent ? this.options.bindings.intents : this.options.bindings;
     if (!port) throw new Error("Accepted intent bindings required");

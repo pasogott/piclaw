@@ -34,6 +34,7 @@
     "tools.test.ts",
     "bash-port.test.ts",
     "plan.test.ts",
+    "installed-tool-catalog.test.ts",
     "vertical.test.ts",
     "projection.test.ts",
     "addon-host-services.test.ts",

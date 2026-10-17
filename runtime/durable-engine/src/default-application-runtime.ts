@@ -18,7 +18,13 @@ import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { applicationOwnership, createApplicationBootstrapBundle } from "./application-bootstrap.js";
 import { createHostModels } from "./host-models.js";
 import { createHostBuiltinTools } from "./host-builtins.js";
+import { loadApplicationExtensionCatalog, qualifyInstalledPlan, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
+import { createHostPlanTool } from "./host-plan-tool.js";
+import { createHostPlanPrompt } from "./host-plan-prompt.js";
+import type { HostConversationRuntime } from "./host-runtime.js";
 import { readAccessConfig } from "../../src/core/config-access.js";
+import { registerRootExtensionKvStore } from "../../src/db/register-extension-kv.js";
+import { requireExtensionKvAuthority } from "../../src/extension-kv-registry.js";
 
 const ApplicationConversations = defineDoc({ kind: "app.application-conversations", version: 1,
   scope: "conversation", history: "latest", fork: "initial", initial: () => ({ version: 1, domain: "", bindings: [] as { chatJid: string; branchId: string; conversationId: number; sessionId: string }[] }) });
@@ -118,8 +124,19 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const assert = () => owner.assertCurrentOwner();
   const root = getDb();
   assertFreshApplicationHistory(root, SESSIONS_DIR); // BEFORE SDK/schema/model construction
-  const host = await getModels(); assert();
+  registerRootExtensionKvStore();
+  requireExtensionKvAuthority();
   const settings = SettingsManager.create(WORKSPACE_DIR, getPiclawAgentDir());
+  // Public registration happens before model construction, AgentPool, or SDK
+  // writes. Never silently start with seven tools when installed tools exist.
+  const catalog = await loadApplicationExtensionCatalog({ cwd: WORKSPACE_DIR, agentDir: getPiclawAgentDir(), settingsManager: settings });
+  const plan = await qualifyInstalledPlan(catalog, WORKSPACE_DIR);
+  try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan); }
+  finally { catalog.runtime.invalidate("Application extension preflight ended"); }
+  const applicationToolNames: readonly string[] = [...defaultToolNames, ...(plan ? ["plan"] : [])];
+  const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || (!!plan && Array.isArray(tools) &&
+    tools.length === defaultToolNames.length && defaultToolNames.every((name, index) => tools[index] === name));
+  const host = await getModels(); assert();
   const provider = settings.getDefaultProvider(), modelId = settings.getDefaultModel();
   // Only the host's authenticated/approved catalog grants admission, never getAll().
   const available = host.modelRegistry.getAvailable().filter(model => {
@@ -149,11 +166,11 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       if (stored.model && !available.some(model => model.provider === stored.model!.provider && model.id === stored.model!.modelId))
         throw Error("Persisted host model not approved");
       if (doc.scope_kind !== "conversation" || !active.has(doc.owner_id)) continue;
-      if (Array.isArray(stored.tools) && stored.tools.some(name => !defaultToolNames.includes(name)))
+      if (Array.isArray(stored.tools) && stored.tools.some(name => !applicationToolNames.includes(name)))
         throw Error("Persisted host tool not available");
       // Only the recognised previous factory default converges. Explicit custom
       // subsets/filters, modelTools, instructions and extensions remain intact.
-      if (isOldDefault(stored.tools)) toolUpgrades.push(doc.owner_id);
+      if (isFactoryDefault(stored.tools)) toolUpgrades.push(doc.owner_id);
     }
     if (toolUpgrades.length) { assert(); assertToolUpgradeIdle(root); }
   }
@@ -161,11 +178,22 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     async authorize(model, _kind, signal) { check(model, signal); }, assertCurrent(model, _kind, signal) { check(model, signal); } });
   const registry = createRegistry();
   // Existing host SDK definitions, never durable's independent coding tools.
+  let captureRuntime: HostConversationRuntime | undefined;
+  const runtime = () => {
+    assert(); lifetime.signal.throwIfAborted();
+    if (!captureRuntime) throw Error("Host capture runtime unavailable");
+    return captureRuntime;
+  };
   const tools = createHostBuiltinTools({ cwd: WORKSPACE_DIR, authority: { assertAllowed() {
     assert(); lifetime.signal.throwIfAborted();
     if (readAccessConfig().mode !== "single-user") throw Error("Host tool permission denied");
   } }, signal: lifetime.signal, shellPath: () => settings.getShellPath(), names: defaultToolNames });
+  if (plan) tools.push(createHostPlanTool(plan.definition as Parameters<typeof createHostPlanTool>[0], { root, assertOwner: () => {
+    assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent();
+  }, runtime }));
   registry.install(defineExtension({ name: "app.host-builtins", tools }));
+  if (plan) registry.install(createHostPlanPrompt(plan.addon, { root, runtime,
+    assertOwner() { assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent(); }, failClosed(error) { lifetime.abort(error); } }));
   const harnessOptions = { models, registry, settings: { retry: { enabled: false } } };
   const path = (root.query("PRAGMA database_list").all() as { name: string; file: string }[]).find(row => row.name === "main")?.file;
   if (!path) throw Error("Durable default requires a file-backed application database");
@@ -212,7 +240,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         assert(); assertToolUpgradeIdle(root);
         for (const id of toolUpgrades) {
           const agent = await tx.doc(AgentDoc, id as ConversationId);
-          if (!isOldDefault(agent.tools)) throw Error("Persisted host tool selection changed");
+          if (!isFactoryDefault(agent.tools)) throw Error("Persisted host tool selection changed");
         }
         assert(); assertToolUpgradeIdle(root);
         for (const id of toolUpgrades) await configure(tx, id as ConversationId, { tools });
@@ -245,6 +273,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     return { ref, bytes, byteLength: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), mediaType: "text/plain", redactionClass: "private" as const };
   } } };
   const bundle = await createApplicationBootstrapBundle({ root, path, ownership, offlineInitialize: true, answers,
+    onRuntime(value) { captureRuntime = value; },
     manifest: mapping.bindings.map(({ chatJid, branchId, conversationId }) => ({ chatJid, branchId, conversationId: conversationId as ConversationId })),
     sessions: new Map(mapping.bindings.map(binding => [binding.chatJid, binding.sessionId])),
     assertConversationAvailable() { check(ref, lifetime.signal); },

@@ -1644,3 +1644,31 @@ The first root run hit the existing image-processing five-second timeout; unchan
 repeat passes without changing limits. Grep tests are explicitly registered in both
 qualification test command and types. No SDK-private patch, parallel process manager,
 ongoing JSONL, migration, deployment or live-state operation is introduced.
+
+### Installed Plan adopts native durable execution and request hooks
+
+Default runtime now loads the actual installed extension registry, admits the approved
+canonical Plan implementation, and executes its registered tool through a verified
+public run/tool-slot → accepted-source/operation binding. Root KV reads/writes use
+invocation-local authority; writes recheck inside the existing database transaction.
+The native public `GenerationHooks.beforeRequest` uses the add-on's exported prompt
+builders with readonly authority. No legacy ExtensionContext/AgentSession is emulated;
+Plan's legacy before-agent-start callback is replaced on the durable path.
+
+Shared package discovery and root KV registration replace duplicated AgentPool/session
+registration code. Unsupported tools/lifecycles remain explicit startup blockers,
+not silently omitted or labeled fenced. Qualification binds approved version/content,
+canonical paths, exact loaded objects and pre/post-load snapshots. Changed/unsupported
+source poisons the path for the process, preventing restored files from blessing a
+stale SDK-cached factory; a restart is required. No private cache API is used.
+
+Actual default-provider tests exercise Plan update, persistent chat-scoped KV and
+one Plan section per provider request, with public source/operation ownership checks.
+Spoofed manifests, unsupported code/version, changed declarations, cross-chat writes,
+revocation and same-path cache substitution are denied. Final candidate verification
+passes 456 tests / 6,970 assertions across 37 files; root fast CI passes 7,287 tests
+(74 baseline skips), plus 25 feature and 9 build tests, EXIT_CODE=0. All three scoped
+types and bounded independent reviews pass. Earlier root failures were an oracle
+pointing at the removed duplicate discovery code; shared containment checks remain.
+This qualifies approved Plan only, not all installed add-ons. Migration stays last;
+no live package changes, activation, restart or additional database/queue is introduced.

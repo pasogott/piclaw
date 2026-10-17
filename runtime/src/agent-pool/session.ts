@@ -61,9 +61,7 @@ import type { CompactionStreamFn } from "../extensions/smart-compaction/stream-c
 import { normalizeLlmContext } from "./llm-context-normalizer.js";
 import { writeMergedSessionArchive } from "../session-archive.js";
 import {
-  listInstalledAddonPackageDirs,
-  readInstalledAddonPackage,
-  resolveAddonPackageEntries,
+  getInstalledAddonExtensionPaths as installedAddonExtensionPaths,
 } from "../addons/package-entries.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -210,14 +208,7 @@ function ensureWorkspaceExtensionNodeModulesLink(nodeModulesDir: string | null):
 }
 
 export function getInstalledAddonExtensionPaths(workspaceDir = getWorkspaceDir()): string[] {
-  const addonsNodeModulesDir = join(workspaceDir, ".pi", "extensions", "node_modules");
-  const extensionPaths: string[] = [];
-  for (const packageDir of listInstalledAddonPackageDirs(addonsNodeModulesDir)) {
-    const addonPackage = readInstalledAddonPackage(packageDir);
-    if (!addonPackage) continue;
-    extensionPaths.push(...resolveAddonPackageEntries(packageDir, addonPackage.manifest.pi?.extensions));
-  }
-  return extensionPaths;
+  return installedAddonExtensionPaths(workspaceDir);
 }
 
 function getBundledExtensionPaths(chatJid?: string): string[] {
