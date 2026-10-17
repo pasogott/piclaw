@@ -34,6 +34,19 @@ export class QueueShutdownTimeoutError extends QueueShutdownIncompleteError {
   }
 }
 
+/** New admission is forbidden permanently once migration starts. */
+export class MigrationAdmissionClosedError extends Error {
+  constructor() { super("Queue admission is permanently sealed for migration"); this.name = "MigrationAdmissionClosedError"; }
+}
+
+/** Queue-local capability only; does not certify persisted sources or global ownership. */
+export interface QueueMigrationDrain {
+  readonly joined: Promise<void>;
+  assertSealedAndDrained(): void;
+  /** Invalidates this capability; never reopens admission. */
+  release(): void;
+}
+
 /** Internal representation of a queued work item. */
 interface QueueItem {
   /** Optional deduplication key. */
@@ -73,6 +86,15 @@ export class AgentQueue {
   private retryTimers = new Map<ReturnType<typeof setTimeout>, QueueItem>();
   private shuttingDown = false;
   private shutdownPromise?: Promise<void>;
+  private migration?: {
+    capability: QueueMigrationDrain;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+    settled: boolean;
+    failed: boolean;
+    error?: unknown;
+    released: boolean;
+  };
   private metrics: QueueMetrics = {
     enqueued: 0,
     deduplicated: 0,
@@ -117,6 +139,7 @@ export class AgentQueue {
    * concurrently. Items with the same `id` are deduplicated globally.
    */
   enqueue(fn: () => Promise<void>, id?: string, laneKey?: string): void {
+    if (this.migration) throw new MigrationAdmissionClosedError();
     if (this.shuttingDown) return;
 
     if (id && this.hasQueuedId(id)) {
@@ -143,11 +166,67 @@ export class AgentQueue {
     return Boolean(lane?.running || lane?.pending.length);
   }
 
-  /** Actual queue state, including delayed retries and the next-tick start window. */
+  private isDrained(): boolean {
+    return !this.retryingIds.size && !this.retryTimers.size && ![...this.lanes.values()].some(lane =>
+      lane.running || lane.current || lane.runningPromise || lane.pending.length);
+  }
+
+  /** Actual inventory check; a trusted coordinator still owns the global fence. */
   assertLegacyCaptureDrained(): void {
-    if (this.retryingIds.size || this.retryTimers.size || [...this.lanes.values()].some(lane =>
-      lane.running || lane.current || lane.runningPromise || lane.pending.length))
-      throw new Error("Legacy queue has not drained");
+    if (this.migration) this.migration.capability.assertSealedAndDrained();
+    else if (!this.isDrained()) throw new Error("Legacy queue has not drained");
+  }
+
+  /**
+   * Synchronously and permanently seal NEW admission, then join all queue-owned
+   * startup/current/pending/backoff work without shutdown or pool disposal.
+   * Retries retain their actual QueueItem identity; callbacks cannot admit forks,
+   * even with an existing id or from an accepted task's async context.
+   * processChat/queueChat follow-ups with new ids are new admission: persisted
+   * source/root S01 drain must be certified separately by the coordinator.
+   * No local deadline: a coordinator may time out, but must not certify capture.
+   */
+  sealAndDrain(): QueueMigrationDrain {
+    if (this.migration) return this.migration.capability;
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    const joined = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+    // The caller still observes rejection; keep deferred failures handled even
+    // when a coordinator attaches its join handler later.
+    void joined.catch((error) => {
+      log.warn("Migration queue drain was not certified", { err: error });
+    });
+    const state: NonNullable<AgentQueue["migration"]> = {
+      capability: Object.freeze({
+        joined,
+        assertSealedAndDrained: () => this.assertMigrationDrained(state),
+        release: () => { state.released = true; },
+      }),
+      resolve, reject, settled: false, failed: this.shuttingDown,
+      error: this.shuttingDown ? new QueueShutdownIncompleteError("Queue shutdown already started") : undefined,
+      released: false,
+    };
+    this.migration = state;
+    if (this.shuttingDown) {
+      state.settled = true;
+      reject(state.error);
+    } else {
+      this.checkMigrationDrain();
+    }
+    return state.capability;
+  }
+
+  private assertMigrationDrained(state: NonNullable<AgentQueue["migration"]>): void {
+    if (this.migration !== state || state.released || !state.settled || state.failed || !this.isDrained())
+      throw new Error("Queue migration capability is not sealed and drained");
+  }
+
+  private checkMigrationDrain(): void {
+    const state = this.migration;
+    if (!state || state.settled || !this.isDrained()) return;
+    state.settled = true;
+    if (state.failed) state.reject(state.error);
+    else state.resolve();
   }
 
   /** Convenience wrapper that prefixes the id with "task:" for scheduled tasks. */
@@ -169,7 +248,10 @@ export class AgentQueue {
     // the next event-loop turn keeps enqueue() as a cheap scheduling operation.
     lane.runningPromise = new Promise<void>((resolve) => {
       setTimeout(() => {
-        void this.executeItem(lane, item).finally(resolve);
+        void this.executeItem(lane, item).finally(() => {
+          resolve();
+          this.checkMigrationDrain();
+        });
       }, 0);
     });
   }
@@ -181,6 +263,10 @@ export class AgentQueue {
       this.metrics.succeeded += 1;
     } catch (error) {
       this.metrics.failed += 1;
+      if (this.migration && !this.migration.failed) {
+        this.migration.failed = true;
+        this.migration.error = error;
+      }
       log.error("Queue item failed", {
         operation: "execute_item",
         laneKey: item.laneKey,
@@ -216,6 +302,8 @@ export class AgentQueue {
       itemId: item.id ?? null,
     });
     const timer = setTimeout(() => {
+      // Only a retained retry record can re-enter after the migration seal.
+      if (this.retryTimers.get(timer) !== item) return;
       this.retryTimers.delete(timer);
       if (item.id) this.retryingIds.delete(item.id);
       if (this.shuttingDown) return;
@@ -234,7 +322,8 @@ export class AgentQueue {
    * cancel active tasks, or turn a failed join into success on a later call.
    */
   shutdown(ms = 5000): Promise<void> {
-    return this.shutdownPromise ??= this.joinShutdown(ms);
+    // Once migration owns the queue, shutdown must not cancel its accepted work.
+    return this.shutdownPromise ??= this.migration?.capability.joined ?? this.joinShutdown(ms);
   }
 
   private async joinShutdown(ms: number): Promise<void> {

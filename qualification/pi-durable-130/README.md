@@ -1298,3 +1298,20 @@ an old delegation stub to provide the required guarded gateway method. Real reje
 and nested-drain tests remain enabled; production does not gain an unguarded fallback.
 Full producer/ingress inventory and non-destructive accepted-work drain still need
 runtime-owned coordinator composition before resident migration capture is safe.
+
+### Queue-local non-destructive migration drain
+
+`AgentQueue.sealAndDrain()` permanently seals new admission and joins already
+accepted startup/current/pending/retry work on the same queue. It neither clears
+work nor disposes resident sessions. Only retained timer/item identities can re-enter
+as retries; arbitrary external enqueue after sealing throws. The stable capability
+can be invalidated but cannot reopen or reacquire admission. Errors poison drain
+certification while retained work finishes, and shutdown races cannot turn cleared
+work into a successful proof.
+
+This is queue-local quiescence only: persisted-source/root drain and stopped producers
+must still be proved by the runtime coordinator. Focused queue/capture verification
+passes 82 cases, runtime types and bounded independent review pass, and full root
+fast CI passes with EXIT_CODE=0. The gate caught a silent rejection observer, replaced
+with diagnostic warning before the successful repeat. No new queue, ledger, JSONL
+persistence, application activation or live-state change is introduced.
