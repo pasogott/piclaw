@@ -1254,3 +1254,32 @@ bounded independent review pass. The surviving interrupted root fast gate comple
 7,203 tests (74 baseline skips), plus 25 feature and 9 build tests without failures
 and with the final build footer. Its interrupted wrapper recorded no exit code.
 No importer/journal writes, ongoing JSONL, activation or live-state changes occur.
+
+### Joined producers, web admission and ownership-safe shutdown
+
+Scheduler stop now revokes admission and joins its poll. The message poller has a
+stable abort/join handle, abortable sleep and partial-batch cursor preservation.
+Web shutdown seals ordinary HTTP/control admission, joins entered handlers and
+startup, then tears down transports; runtime drains web admission before queue/pool
+disposal. Startup/TLS/bind-retry races and combined cleanup failures are covered.
+Primary errors remain observable; independent cleanup is attempted without falsely
+certifying success.
+
+Producer completion no longer releases application ownership. Actual queue shutdown
+deadlines reject while preserving work; uncertain joins prevent pool disposal.
+Strict and legacy runtime locks survive uncertified deadline/process exits. Only
+successful full cleanup synchronously authorises exit-time release. Real queue and
+disposable child-process tests cover those paths.
+
+A separately reviewed small indexing optimisation skips staged DELETEs only for
+new paths, retaining atomic replacement cleanup and every existing access check.
+No timing budgets or assertions changed. Earlier full gates repeatedly hit elapsed
+limits; profiling and failed receipts remain recorded. Final root fast CI passes
+7,253 tests (74 baseline skips), plus 25 feature and 9 build tests, EXIT_CODE=0.
+Combined lifecycle regressions pass 99 cases; runtime types and bounded source
+reviews pass. The gate also caught a silent startup-error observer, replaced with
+diagnostic logging before the successful repeat.
+
+These are real lifecycle prerequisites, not a composed migration admission lease or
+complete ingress inventory. No production activation, service restart, live-state
+change, additional queue/database or ongoing JSONL persistence is introduced.

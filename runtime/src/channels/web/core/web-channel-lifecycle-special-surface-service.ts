@@ -14,7 +14,7 @@ import type { WebChannelLike } from "./web-channel-contracts.js";
 
 type WebChannelLifecycleSpecialSurfaceServerLifecycle = Pick<
   WebServerLifecycleGatewayService,
-  "server" | "start" | "stop"
+  "server" | "start" | "stop" | "sealAdmissions"
 >;
 
 export interface WebChannelLifecycleSpecialSurfaceChannel {
@@ -75,8 +75,12 @@ export class WebChannelLifecycleSpecialSurfaceService {
     await this.channel.serverLifecycleGateway.start();
   }
 
-  async stop(): Promise<void> {
-    await this.channel.serverLifecycleGateway.stop();
+  sealAdmissions(): Promise<void> {
+    return this.channel.serverLifecycleGateway.sealAdmissions();
+  }
+
+  stop(): Promise<void> {
+    return this.channel.serverLifecycleGateway.stop();
   }
 
   async handleAdaptiveCardAction(req: Request): Promise<Response> {

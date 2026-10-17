@@ -1,4 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { main } from "../../src/runtime.js";
+import { acquireRuntimeLock } from "../../src/runtime/single-instance.js";
+import { createShutdownHandler } from "../../src/runtime/shutdown.js";
 import {
   bootstrapRuntime,
   createDefaultRuntimeBootstrapDeps,
@@ -44,6 +50,58 @@ function bootstrapDepsForFailure(overrides: Partial<RuntimeBootstrapDeps> = {}):
 }
 
 describe("runtime bootstrap", () => {
+  test("stop joins only its own coordinator, is stable, and cannot stop a replacement", async () => {
+    const startInstance = async () => {
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let stop!: () => void | Promise<void>;
+      let signal!: AbortSignal;
+      let complete!: () => void;
+      const running = bootstrapRuntime(bootstrapDepsForFailure({
+        createShutdownHandler: (deps) => { stop = deps.stopMessageLoop!; complete = deps.onShutdownComplete!; return async () => {}; },
+        startRuntimeLoop: async (deps) => {
+          signal = deps.signal!;
+          entered.resolve();
+          await release.promise; // Includes any asynchronous poll/notification tail.
+        },
+      }));
+      await entered.promise;
+      return { stop, signal, running, release, complete };
+    };
+    const old = await startInstance();
+    let joined = false;
+    const stopping = old.stop() as Promise<void>;
+    void stopping.then(() => { joined = true; });
+    expect(old.stop()).toBe(stopping);
+    expect(old.signal.aborted).toBe(true);
+    await Promise.resolve();
+    expect(joined).toBe(false);
+    old.release.resolve();
+    await stopping;
+    old.complete();
+    await old.running;
+    const next = await startInstance();
+    expect(old.stop()).toBe(stopping);
+    expect(next.signal.aborted).toBe(false);
+    const nextStop = next.stop();
+    next.release.resolve();
+    await nextStop;
+    next.complete();
+    await next.running;
+  });
+
+  test("stop registered before workers prevents later loop admission", async () => {
+    let stop!: () => void | Promise<void>;
+    let started = false;
+    let complete!: () => void;
+    await bootstrapRuntime(bootstrapDepsForFailure({
+      createShutdownHandler: (deps) => { stop = deps.stopMessageLoop!; complete = deps.onShutdownComplete!; return async () => {}; },
+      startRuntimeWorkers: () => { void stop(); complete(); },
+      startRuntimeLoop: async () => { started = true; },
+    }));
+    expect(started).toBe(false);
+  });
+
   test("applies environment before AgentPool creation and starts refresh after channels", async () => {
     const events: string[] = [];
 
@@ -243,4 +301,92 @@ describe("runtime bootstrap", () => {
     expect(typeof deps.createAgentPool).toBe("function");
     expect(typeof deps.startRuntimeLoop).toBe("function");
   });
+});
+
+for (const failure of ["none", "scheduler", "producer", "queue"] as const) {
+  test(`main retains strict global owner through producer stop (${failure})`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "poller-owner-"));
+    const lockPath = join(dir, "runtime.lock");
+    const acquire = () => acquireRuntimeLock({ lockPath, strictOwnership: true, disabled: false });
+    const owner = acquire();
+    const entered = Promise.withResolvers<void>();
+    const scheduler = Promise.withResolvers<void>();
+    const queueEntered = Promise.withResolvers<void>(), queue = Promise.withResolvers<void>();
+    const poolEntered = Promise.withResolvers<void>(), pool = Promise.withResolvers<void>();
+    const webEntered = Promise.withResolvers<void>(), web = Promise.withResolvers<void>();
+    let shutdown!: (signal: string) => Promise<void>;
+    let settled = false;
+    const exit = spyOn(process, "exit").mockImplementation((() => {}) as any);
+    const deps = bootstrapDepsForFailure({
+      createShutdownHandler,
+      registerRuntimeShutdownSignals: (_registrar, handler) => { shutdown = handler; },
+      startRuntimeLoop: async ({ signal }) => {
+        entered.resolve();
+        await new Promise<void>((resolve) => signal!.addEventListener("abort", () => resolve(), { once: true }));
+        if (failure === "producer") throw new Error("uncertain producer join");
+      },
+      stopSchedulerLoop: () => scheduler.promise,
+      createAgentPool: async () => ({ shutdown: async () => { poolEntered.resolve(); await pool.promise; } }) as RuntimeBootstrapAgentPool,
+      startWebChannel: async () => ({ stop: async () => { webEntered.resolve(); await web.promise; } }) as RuntimeBootstrapWeb,
+    });
+    deps.base.queue = { shutdown: async () => {
+      queueEntered.resolve(); await queue.promise;
+      if (failure === "queue") throw new Error("queue cleanup failed");
+    } } as RuntimeBootstrapQueue;
+    const running = main({ acquireLock: () => owner, createBootstrapDeps: () => deps });
+    void running.then(() => { settled = true; }, () => { settled = true; });
+    const assertHeld = async () => {
+      await Bun.sleep(0);
+      expect(settled).toBe(false);
+      owner.assertCurrentOwner();
+      expect(acquire).toThrow("refuses existing lock");
+    };
+    try {
+      await entered.promise;
+      const stopping = shutdown("test");
+      // Observe rejection immediately, including a producer join failure.
+      const stopped = stopping.catch((error: unknown) => error);
+      await assertHeld(); // Producer has resolved, scheduler join is still held.
+      if (failure === "scheduler" || failure === "producer") {
+        if (failure === "scheduler") scheduler.reject(new Error("uncertain scheduler join"));
+        const error = await stopped;
+        expect(error).toBeInstanceOf(Error);
+        await assertHeld();
+        expect(exit).not.toHaveBeenCalled();
+      } else {
+        scheduler.resolve();
+        await queueEntered.promise; await assertHeld(); queue.resolve();
+        if (failure === "queue") {
+          expect(await stopped).toBeInstanceOf(Error);
+          await assertHeld();
+          expect(exit).not.toHaveBeenCalled();
+        } else {
+          await poolEntered.promise; await assertHeld(); pool.resolve();
+          await webEntered.promise; await assertHeld(); web.resolve();
+          await stopping;
+          await running;
+          expect(exit).toHaveBeenCalledWith(0);
+          const replacement = acquire();
+          replacement.assertCurrentOwner();
+          replacement.release();
+        }
+      }
+    } finally {
+      scheduler.resolve(); queue.resolve(); pool.resolve(); web.resolve();
+      owner.release(); // Offline fixture cleanup only, including fail-closed case.
+      exit.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("main preserves lock release on startup failure before producer stop", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "poller-startup-owner-"));
+  const acquire = () => acquireRuntimeLock({ lockPath: join(dir, "runtime.lock"), strictOwnership: true, disabled: false });
+  try {
+    await expect(main({ acquireLock: acquire, createBootstrapDeps: () => bootstrapDepsForFailure({
+      createAgentPool: async () => { throw new Error("startup failed"); },
+    }) })).rejects.toThrow("startup failed");
+    acquire().release();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

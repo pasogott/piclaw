@@ -39,6 +39,8 @@ export interface RuntimeLockHandle {
   readonly strictOwnership: boolean;
   /** Strict lock authority only, not DB binding. Validate immediately before opening storage. */
   assertCurrentOwner(): void;
+  /** Permit exit cleanup only after the application explicitly certifies disposal. */
+  markSafeReleaseOnExit(): void;
   release(): void;
 }
 
@@ -142,6 +144,7 @@ export function acquireRuntimeLock(options: AcquireRuntimeLockOptions = {}): Run
     return Object.freeze({
       path: lockPath, record, enabled: false, strictOwnership: false,
       assertCurrentOwner() { throw new Error('Runtime ownership is disabled'); },
+      markSafeReleaseOnExit() {},
       release() {},
     });
   }
@@ -149,6 +152,8 @@ export function acquireRuntimeLock(options: AcquireRuntimeLockOptions = {}): Run
   try {
     const identity = writeNewLockFile(lockPath, raw);
     let released = false;
+    let safeToReleaseOnExit = false;
+    const releaseOnExit = (): void => { if (safeToReleaseOnExit) release(); };
     const matches = (): boolean => {
       const fd = openSync(lockPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       try {
@@ -173,7 +178,7 @@ export function acquireRuntimeLock(options: AcquireRuntimeLockOptions = {}): Run
     const release = (): void => {
       if (released) return;
       released = true;
-      process.removeListener('exit', release);
+      process.removeListener('exit', releaseOnExit);
       try {
         // The lock directory is trusted; Node has no atomic unlink-if-inode API.
         // Operators must never replace locks concurrently with a running owner.
@@ -184,13 +189,16 @@ export function acquireRuntimeLock(options: AcquireRuntimeLockOptions = {}): Run
         closeSync(identity.fd);
       }
     };
-    process.once("exit", release);
-    return Object.freeze({ path: lockPath, record, enabled: true, strictOwnership, assertCurrentOwner, release });
+    // Normal exit and the shutdown backstop are not proof of quiescence.
+    // This applies to legacy handles too: production must remain portable.
+    process.once("exit", releaseOnExit);
+    const markSafeReleaseOnExit = (): void => { safeToReleaseOnExit = true; };
+    return Object.freeze({ path: lockPath, record, enabled: true, strictOwnership, assertCurrentOwner, markSafeReleaseOnExit, release });
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error;
     // O_EXCL publishes the path before its record is written. Never read or
     // remove an existing path, even if apparently stale: it may belong to a
     // publishing owner or have been replaced since any stale observation.
-    throw new Error(`Piclaw refuses existing lock ${lockPath}; another runtime may be already running. Offline operator cleanup required: stop all workspace runtimes and maintenance processes, verify no owner remains, then remove the lock manually.`);
+    throw new Error(`Piclaw refuses existing lock ${lockPath}; another runtime may be already running. Offline operator cleanup required: stop all workspace runtimes and maintenance processes, verify no owner remains, then remove the lock manually.`, { cause: error });
   }
 }

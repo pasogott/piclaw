@@ -12,6 +12,7 @@ describe("web channel lifecycle/special surface service", () => {
     const service = createWebChannelLifecycleSpecialSurfaceService(
       {
         serverLifecycleGateway: {
+          sealAdmissions: async () => {},
           server,
           start: async () => {
             calls.push("start");

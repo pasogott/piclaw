@@ -21,6 +21,19 @@ import { createLogger } from "./utils/logger.js";
 const log = createLogger("queue");
 const DEFAULT_LANE_KEY = "__default__";
 
+/** A sealed queue still owns accepted work and cannot certify quiescence. */
+export class QueueShutdownIncompleteError extends Error {
+  constructor(message = "Queue shutdown retains accepted work") { super(message); this.name = "QueueShutdownIncompleteError"; }
+}
+
+/** The active-task join exceeded its deadline; late completion is not certification. */
+export class QueueShutdownTimeoutError extends QueueShutdownIncompleteError {
+  constructor(readonly timeoutMs: number) {
+    super(`Queue shutdown timed out after ${timeoutMs}ms`);
+    this.name = "QueueShutdownTimeoutError";
+  }
+}
+
 /** Internal representation of a queued work item. */
 interface QueueItem {
   /** Optional deduplication key. */
@@ -57,8 +70,9 @@ export interface QueueMetrics {
 export class AgentQueue {
   private lanes = new Map<string, LaneState>();
   private retryingIds = new Set<string>();
-  private retryTimers = new Set<ReturnType<typeof setTimeout>>();
+  private retryTimers = new Map<ReturnType<typeof setTimeout>, QueueItem>();
   private shuttingDown = false;
+  private shutdownPromise?: Promise<void>;
   private metrics: QueueMetrics = {
     enqueued: 0,
     deduplicated: 0,
@@ -212,27 +226,38 @@ export class AgentQueue {
         this.runItem(lane, item);
       }
     }, delay);
-    this.retryTimers.add(timer);
+    this.retryTimers.set(timer, item);
   }
 
   /**
-   * Gracefully shut down the queue: clear pending items and wait up to `ms`
-   * milliseconds for currently running lane tasks to finish.
+   * Seal admission and join active tasks. Never discard accepted pending work,
+   * cancel active tasks, or turn a failed join into success on a later call.
    */
-  async shutdown(ms = 5000): Promise<void> {
+  shutdown(ms = 5000): Promise<void> {
+    return this.shutdownPromise ??= this.joinShutdown(ms);
+  }
+
+  private async joinShutdown(ms: number): Promise<void> {
     this.shuttingDown = true;
-    for (const timer of this.retryTimers) {
-      clearTimeout(timer);
-    }
-    this.retryTimers.clear();
-    this.retryingIds.clear();
-    const runningPromises: Promise<void>[] = [];
-    for (const lane of this.lanes.values()) {
-      lane.pending = [];
-      if (lane.runningPromise) runningPromises.push(lane.runningPromise);
-    }
-    if (runningPromises.length > 0) {
-      await Promise.race([Promise.allSettled(runningPromises), Bun.sleep(ms)]);
+    const retainedRetries = this.retryTimers.size > 0;
+    // Keep canceled retry records as ownership evidence, including anonymous work.
+    for (const timer of this.retryTimers.keys()) clearTimeout(timer);
+    const runningPromises = [...this.lanes.values()].flatMap(lane => lane.runningPromise ? [lane.runningPromise] : []);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      if (runningPromises.length) {
+        await Promise.race([
+          Promise.all(runningPromises),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new QueueShutdownTimeoutError(ms)), ms);
+          }),
+        ]);
+      }
+      if (retainedRetries || [...this.lanes.values()].some(lane => lane.pending.length)) {
+        throw new QueueShutdownIncompleteError();
+      }
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
   }
 

@@ -37,6 +37,7 @@ export interface WebChannelPrototypeMembers extends WebChannelLike {
   readonly server: Bun.Server<WebSocketSessionData> | null;
   start(): Promise<void>;
   stop(): Promise<void>;
+  sealAdmissions(): Promise<void>;
   handleFetch(req: Request, server?: Bun.Server<WebSocketSessionData>): Promise<Response | undefined>;
   handleRequest(req: Request): Promise<Response>;
   enqueueAgentMessage(request: RuntimeAgentMessageRequest): Promise<RuntimeAgentMessageResult>;
@@ -136,7 +137,12 @@ export function installWebChannelPrototype(
     stop: {
       configurable: true,
       writable: true,
-      value: withLifecycleSpecialSurface(defaults, async (service) => await service.stop()),
+      value: withLifecycleSpecialSurface(defaults, (service) => service.stop()),
+    },
+    sealAdmissions: {
+      configurable: true,
+      writable: true,
+      value: withLifecycleSpecialSurface(defaults, (service) => service.sealAdmissions()),
     },
     sendMessage: {
       configurable: true,

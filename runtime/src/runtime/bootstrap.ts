@@ -27,7 +27,7 @@ import { startRuntimeLoop, type StartRuntimeLoopDeps } from "./coordinator.js";
 import { ModelRefreshCoordinator, type ModelRefreshResult } from "./model-refresh.js";
 import { registerOptionalProviders, stopOptionalProviders } from "./provider-bootstrap.js";
 import { createShutdownHandler, type ShutdownDeps } from "./shutdown.js";
-import { registerShutdownHandler } from "./shutdown-registry.js";
+import { createShutdownCompletion, registerShutdownHandler } from "./shutdown-registry.js";
 import {
   initializeRuntimeEnvironment,
   queueStartupResumePendingIpc,
@@ -100,9 +100,11 @@ export interface RuntimeBootstrapDeps {
   queueStartupResumePendingIpc(): void;
   startRuntimeLoop(deps: StartRuntimeLoopDeps): Promise<void>;
   waitForFamilyShutdown?(): Promise<void>;
+  /** Synchronous certificate, before shutdown's process.exit can bypass main's finally. */
+  onShutdownComplete?(): void;
   log(message: string): void;
   stopIpcWatcher(): Promise<void>;
-  stopSchedulerLoop(): void;
+  stopSchedulerLoop(): void | Promise<void>;
   stopOptionalProviders(): void;
 }
 
@@ -175,6 +177,15 @@ export function createDefaultRuntimeBootstrapDeps(base: RuntimeBootstrapDefaultB
 /** Bootstrap and run all runtime subsystems in production order. */
 export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void> {
   const { queue, state } = deps.base;
+  // Owned by this bootstrap instance, not by the forever-awaited coordinator.
+  const shutdownCompletion = createShutdownCompletion();
+  const messageLoopController = new AbortController();
+  let messageLoop: Promise<void> | undefined;
+  let messageLoopStop: Promise<void> | undefined;
+  const stopMessageLoop = (): Promise<void> => {
+    messageLoopController.abort();
+    return messageLoopStop ??= messageLoop ?? Promise.resolve();
+  };
 
   const access = deps.initializeRuntimeEnvironment(state);
   const familyMode = access?.effectiveMode === "family-shared";
@@ -193,8 +204,13 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
       web,
       pushover,
       stopIpcWatcher: deps.stopIpcWatcher,
+      stopMessageLoop,
       stopSchedulerLoop: deps.stopSchedulerLoop,
       stopOptionalProviders: deps.stopOptionalProviders,
+      onShutdownComplete: () => {
+        deps.onShutdownComplete?.();
+        shutdownCompletion.complete();
+      },
     });
     const shutdown = async (signal: string): Promise<void> => {
       try {
@@ -208,21 +224,37 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps): Promise<void
 
     const senders = deps.createRuntimeSenders(web, pushover);
     if (familyMode) {
-      await (deps.waitForFamilyShutdown?.() ?? new Promise<void>(() => {}));
+      await Promise.race([
+        deps.waitForFamilyShutdown?.() ?? new Promise<void>(() => {}),
+        shutdownCompletion.promise,
+      ]);
+      if (messageLoopController.signal.aborted) await shutdownCompletion.promise;
       return;
     }
     deps.startRuntimeWorkers(queue, agentPool, web, senders);
 
-    await deps.startRuntimeLoop({
+    if (messageLoopController.signal.aborted) {
+      await shutdownCompletion.promise;
+      return;
+    }
+    messageLoop = deps.startRuntimeLoop({
       queue,
       state,
       agentPool,
       assistantName: deps.assistantName,
       triggerPattern: deps.triggerPattern,
       pollIntervalMs: deps.pollIntervalMs,
+      signal: messageLoopController.signal,
     });
+    await messageLoop;
+    // A joined producer is not a disposed application. In particular, an
+    // injected process.exit may return while shutdown is still unwinding.
+    if (messageLoopController.signal.aborted) await shutdownCompletion.promise;
   } catch (error) {
     deps.clearMcpCredentials(hydratedMcpCredentials);
+    // Rejection here would run main's finally and release the global owner.
+    // An uncertain shutdown must remain owned until certified safe cleanup.
+    if (messageLoopController.signal.aborted) await shutdownCompletion.promise;
     throw error;
   }
 }
