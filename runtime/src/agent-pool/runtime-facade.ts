@@ -615,11 +615,11 @@ export class AgentRuntimeFacade {
     return typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : null;
   }
 
-  getSessionTreeSummaryForChat(chatJid: string): { leafId: string | null; total: number } | null {
-    if (this.options.getDurableSession !== undefined) return null;
-    const entry = this.options.pool.get(chatJid);
-    if (!entry) return null;
-    const snapshot = buildSessionTreeSnapshot(entry.runtime.session.sessionManager);
+  /** Exact public head and visible node count, from the same tree reader as /tree. */
+  async getSessionTreeSummaryForChat(chatJid: string): Promise<{ leafId: string | null; total: number } | null> {
+    // Legacy introspection must not instantiate an idle/unknown session.
+    if (this.options.getDurableSession === undefined && !this.options.pool.has(chatJid)) return null;
+    const snapshot = await this.getSessionTreeForChat(chatJid);
     return { leafId: snapshot.leafId, total: snapshot.total };
   }
 

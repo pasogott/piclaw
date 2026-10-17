@@ -164,6 +164,9 @@ export function createWebChannelEndpointContexts(
               ? { tokens: null, contextWindow: null, percent: null, sessionGeneration: authoritativeGeneration }
               : null;
           },
+          getSessionTreeSummaryForChat: typeof channel.agentPool.getSessionTreeSummaryForChat === "function"
+            ? (chatJid) => channel.agentPool.getSessionTreeSummaryForChat(chatJid)
+            : undefined,
           getTokenUsageForChat,
           getAvailableModels: (chatJid, modelOptions) => channel.agentPool.getAvailableModels(chatJid, modelOptions),
           getProviderReadyCompletedForInstance: () => isProviderReadyOobeCompletedForInstance(),

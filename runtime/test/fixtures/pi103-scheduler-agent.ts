@@ -42,7 +42,7 @@ const start = performance.now(), cpu = process.cpuUsage();
 try {
   const baseline = await pool.runAgent('Synthetic baseline conversation', chat, { timeoutMs: 0 });
   assert.equal(baseline.status, 'success', JSON.stringify(baseline));
-  const before = pool.getSessionTreeSummaryForChat(chat); assert(before?.leafId);
+  const before = await pool.getSessionTreeSummaryForChat(chat); assert(before?.leafId);
   const due = new Date(Date.now() - 60000).toISOString();
   createTask({ id: 'real-agent-task', chat_jid: chat, prompt, schedule_type: 'interval', schedule_value: '3600000', next_run: due, status: 'active', notify_on_complete: false, created_at: due });
   resetSchedulerMetricsForTests();
@@ -53,7 +53,7 @@ try {
   assert.equal(queue.getMetrics().failed, 0); assert.equal(queue.getMetrics().succeeded, 1);
   const logs = getTaskRunLogs('real-agent-task'); assert.equal(logs.length, 1); assert.equal(logs[0].status, 'success', JSON.stringify(logs));
   assert.equal(providerCalls, 2); assert.equal(deliveries.length, 1); assert.equal(deliveries[0].jid, chat); assert(deliveries[0].text.includes('Synthetic scheduler response 2'));
-  const session = await pool.getSessionForIntrospection(chat), after = pool.getSessionTreeSummaryForChat(chat);
+  const session = await pool.getSessionForIntrospection(chat), after = await pool.getSessionTreeSummaryForChat(chat);
   assert.equal(after?.leafId, before.leafId); assert(after!.total > before.total);
   assert(JSON.stringify(session.sessionManager.getEntries()).includes(prompt)); assert(!JSON.stringify(session.sessionManager.getBranch()).includes(prompt));
   const persisted = SessionManager.open(session.sessionFile!);

@@ -336,6 +336,17 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
   expect(db.query("SELECT count(*) AS n FROM messages WHERE chat_jid=?").get(chat)).toEqual({ n: 0 });
   const queue = runtimeBase.queue;
   try {
+    const readSummary = async () => {
+      const response = await channel.handleRequest(new Request(`http://fixture/agent/context?chat_jid=${encodeURIComponent(chat)}`));
+      expect(response.status).toBe(200);
+      const payload = await response.json() as { sessionTree: { leafId: string | null; total: number }; sessionGeneration: string };
+      const tree = await pool.getSessionTreeForChat(chat);
+      expect(payload.sessionTree).toEqual({ leafId: tree.leafId, total: tree.total });
+      expect(payload.sessionTree.total).toBeGreaterThan(0);
+      expect(payload.sessionGeneration).toBe("preserved-session");
+      return payload.sessionTree;
+    };
+    const initialSummary = await readSummary();
     const events: { type: string; data: any }[] = [];
     channel.broadcastEvent = (type, data) => { events.push({ type, data }); };
     // The selected backend rejects chats outside its exact manifest before admission.
@@ -603,6 +614,7 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
       expect(db.query("SELECT * FROM piclaw_durable_bindings_v1 WHERE domain=? AND chat_jid=?").all(incarnation, sibling)).toHaveLength(1);
       for (const spy of spies) expect(spy).not.toHaveBeenCalled();
     }
+    expect((await readSummary()).total).toBeGreaterThan(initialSummary.total);
     const files = readdirSync(process.env.PICLAW_WORKSPACE!, { recursive: true }).map(String);
     expect(files.filter(p => /\.jsonl$/i.test(p))).toEqual([]);
     expect(files.filter(p => /\.(db|sqlite)$/i.test(p))).toEqual([".piclaw/store/messages.db"]);

@@ -89,6 +89,9 @@ test("one DB imported fork tree through actual facade, original provenance and n
     const importedNodes = tree.nodes.filter(n => n.type === "compaction" && n.id !== nativeCompactionId);
     expect(importedNodes).toHaveLength(1);
     expect(importedNodes[0]).toMatchObject({ id: importedId, type: "compaction", childCount: 2, timestamp: new Date(1500).toISOString() });
+    expect(await app.getSessionTreeSummaryForChat(branch.chatJid)).toEqual({ leafId: rawHeadId!, total: tree.nodes.length });
+    expect(tree.total).toBe(tree.nodes.length);
+    expect(tree.total).toBeLessThan(publicRows.length);
     expect(tree.leafId).toBe(rawHeadId!);
     expect(tree.visibleLeafId).toBe(nativeCompactionId!);
     expect(tree.nodes.filter(n => n.active).map(n => n.id)).toEqual([nativeCompactionId!]);
@@ -112,6 +115,7 @@ test("one DB imported fork tree through actual facade, original provenance and n
       const current = (await writer.conversation(conversation.id, context))!;
       await current.commit(async tx => { await tx.appendEntry(current.id, { kind: "app.unsupported-tree-kind", model: [] }); }, context);
     } finally { await writer.close(context); }
+    await expect(app.getSessionTreeSummaryForChat(branch.chatJid)).rejects.toThrow("Unsupported durable entry");
     await expect(app.getSessionTreeForChat(branch.chatJid)).rejects.toThrow("Unsupported durable entry");
     await expect(app.applyControlCommand(branch.chatJid, { type: "tree", raw: "/tree" })).rejects.toThrow("Unsupported durable entry");
     expect((await readdir(dirname(f.hostPath), { recursive: true })).filter(name => name.endsWith(".jsonl"))).toEqual([]);

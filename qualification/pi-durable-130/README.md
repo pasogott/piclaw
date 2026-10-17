@@ -1,3 +1,27 @@
+# Session-tree summary follow-up — 17 October 2026
+
+The application summary now awaits the existing public tree reader, preserves the
+exact raw head, and counts visible nodes. Startup/session-control callers await
+the result; GET `/agent/context` includes it without changing active turn status.
+The separate legacy summary calculation and durable null placeholder are removed.
+
+On the isolated summary source tree over `7315c221e`:
+
+- Candidate suite: 456 pass, 0 fail, 6,974 assertions, 37 files
+  (`tree-summary-isolated-candidate.log`).
+- Root gate: 7,289 pass, 74 baseline skips, 0 fail; 25 feature and 9 build tests
+  pass (`root-tree-summary-final.log`). Inner make completed normally; the
+  interrupted outer wrapper supplied no exit-code receipt.
+- Runtime, engine and qualification typechecks pass; bounded independent source
+  review found no P1/P2 issues. The actual application/DB tests cover the context
+  endpoint, hidden raw head, visible count and unsupported-entry refusal.
+
+Receipts are under `/workspace/reviews/durable-1650/`. Unfinished native Delegate
+and Code Review work is parked separately, excluded from this tree and these
+results. No live activation or migration occurred. The
+[45-requirement assessment](../../docs/design/earendil-agent-harness-integration-adr/evidence/pi-durable-130-acceptance-current-20261017.md)
+separates source qualification from fixture-only and unresolved acceptance work.
+
 # #1650: isolated Pi durable 1.3.0, first qualification slice
 
 **Candidate in-place prototype qualification, not production integration or completion of #1650.**

@@ -1,4 +1,6 @@
-# #1650 acceptance gaps at 87efd0342
+> Superseded on 17 October 2026 by [#1650 acceptance at 7315c221e](pi-durable-130-acceptance-current-20261017.md), which contains the single current 45-row assessment. The body below preserves the historical `87efd0342` assessment and subsequent dated follow-ups. Its missing-registration/default-selection/controller statements do not describe current source.
+
+# Historical #1650 acceptance gaps at 87efd0342
 
 Pi durable 1.3.0 has bounded candidate-fixture evidence; the 25 HC and 20 PC requirements are **not all accepted**. The published source head is `87efd03424a715ad2ce122f6242f22ec137ea3f7`. Production ownership, bootstrap/recovery, compatibility and in-place cutover remain incomplete. Existing chats must continue under their original host chat/branch identities; a new-chats-only rollout does not meet the requirement.
 

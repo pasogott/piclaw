@@ -88,6 +88,25 @@ test("current model uses captured durable port and rejects unbound chats without
   expect(await legacy.facade.getCurrentModelLabel("legacy")).toBe("legacy/model");
 });
 
+test("tree summaries await captured public readers, preserve raw head and reject missing durable bindings", async () => {
+  const snapshot = { version: 1 as const, leafId: "hidden-head", visibleLeafId: "visible", nodes: [], flat: true as const, total: 3 };
+  const port = { sessionId: "generation", branchId: "main", readPosition: async () => "hidden-head",
+    async readTree() { expect(this.sessionId).toBe("generation"); return snapshot; } };
+  const fixture = createFacade({ durableSessions: new Map([["bound", port], ["unsupported", { sessionId: "other", branchId: "main", readPosition: async () => null }]]) });
+  port.readTree = async () => { throw Error("mutated reader"); };
+  expect(await fixture.facade.getSessionTreeSummaryForChat("bound")).toEqual({ leafId: "hidden-head", total: 3 });
+  expect(fixture.facade.getSessionGenerationForChat("bound")).toBe("generation");
+  expect(fixture.facade.getSessionGenerationForChat("unknown")).toBeNull();
+  fixture.pool.set("unknown", { runtime: createRuntime({}), lastUsed: 0 });
+  await expect(fixture.facade.getSessionTreeSummaryForChat("unknown")).rejects.toThrow("Durable application does not construct legacy sessions");
+  await expect(fixture.facade.getSessionTreeSummaryForChat("unsupported")).rejects.toThrow("Durable session tree unavailable");
+  const legacy = createFacade({ getOrCreateRuntime: async () => { throw Error("must not instantiate"); } });
+  expect(await legacy.facade.getSessionTreeSummaryForChat("unknown")).toBeNull();
+  const normal = createFacade();
+  normal.pool.set("legacy", { runtime: createRuntime({ sessionManager: { getLeafId: () => "raw", getTree: () => [], getEntries: () => { throw Error("private entry count forbidden"); } } }), lastUsed: 0 });
+  expect(await normal.facade.getSessionTreeSummaryForChat("legacy")).toEqual({ leafId: "raw", total: 0 });
+});
+
 test("AgentRuntimeFacade reports available models and context usage", async () => {
   let refreshCalls = 0;
   const session = {

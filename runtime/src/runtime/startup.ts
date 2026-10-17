@@ -342,7 +342,7 @@ async function buildSessionControlSnapshot(agentPool: AgentPool, chatJid: string
   const models = await agentPool.getAvailableModels(chatJid).catch(() => null);
   const activity = getSessionActivitySnapshot(chatJid);
   const context = await agentPool.getContextUsageForChat(chatJid).catch(() => null);
-  const tree = agentPool.getSessionTreeSummaryForChat(chatJid);
+  const tree = await agentPool.getSessionTreeSummaryForChat(chatJid);
   return {
     chat_jid: chatJid,
     active: agentPool.isActive(chatJid),
