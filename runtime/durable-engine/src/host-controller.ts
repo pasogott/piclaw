@@ -47,11 +47,13 @@ export async function createHostController(config: HostControllerOptions, contex
     if (!released) { await lease!.release(); released = true; }
   }
   let recovered: Awaited<ReturnType<typeof reconstituteAcceptedWork>> = [];
+  let scanCurrent: (() => Promise<typeof recovered>) | undefined;
   const assert = () => { if (!lease) throw Error("Host owner unavailable"); lease.assertCurrentOwner(); };
   const deny = () => { throw Error("Unknown recovered candidate authority"); };
   async function authorizeRecoveredWork(inspection: HarnessInspection) {
     assert();
     if (!ready || !runtime || !storage) return deny();
+    if (scanCurrent) recovered = await scanCurrent();
     const known = new Set<number>();
     for (const entry of recovered) {
       // Unbound intents stay explicit retry work; do not manufacture a binding on bootstrap.
@@ -120,6 +122,7 @@ export async function createHostController(config: HostControllerOptions, contex
       assert();
       return Object.freeze(all);
     }
+    scanCurrent = scan;
     recovered = await scan();
     ready = true;
     // Public Harness inspection covers the entire store, including unknown conversations.

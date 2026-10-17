@@ -45,9 +45,9 @@ export interface ServiceWorkAdapterRuntime {
   recordTrace(input: NormalisedTraceInput): void;
 }
 
-/** Optional host writer fence for new source admissions only. Replays remain observational. */
+/** Optional host writer fence for all new mutations. Committed replays remain observational. */
 export interface ServiceWorkAcceptanceRuntime extends ServiceWorkAdapterRuntime {
-  /** Synchronous, fail-closed check inside the acceptance SQL transaction, before/after apply. */
+  /** Synchronous, fail-closed check inside each mutation SQL transaction, before/after apply. */
   validateAcceptance?: () => boolean;
 }
 
@@ -1022,13 +1022,13 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
     const effect = request.effect;
     const replay = this.readDecision<T>(method, effect.idempotencyKey, effect.requestHash);
     if (replay) return replay;
-    if (method === "acceptSource") this.validateAcceptance();
+    this.validateAcceptance();
     const value = apply(request);
     if (!value.ok) return value;
     const transactionFault = this.fault(method, "before_effect");
     if (!transactionFault.ok || transactionFault.injected) throw new RollbackFault();
     this.writeDecision(method, effect.idempotencyKey, effect.requestHash, value.value);
-    if (method === "acceptSource") this.validateAcceptance();
+    this.validateAcceptance();
     return value;
   }
 

@@ -1131,3 +1131,27 @@ review is clear. Earlier full failures were corrected CLI fixture policy assumpt
 and README translation link parity, not ignored. Runtime types pass; aggregate
 frontend-baseline typechecking remains separately red as recorded. Candidate runtime
 source did not change in this slice; its prior full receipt remains historical.
+
+### Explicit application bootstrap bundle
+
+`application-bootstrap.ts` now composes the existing controller, same-file owned
+SQLite bridge, real host effect stores, bindings/recovery, adapter/session readers,
+admission and existing queue dispatch into one unregistered bundle. It borrows strict
+runtime-lock authority; closing the bundle seals that scope but never releases the
+application's global lock or closes its root database. The application must stop
+its worker/queue before disposal. Payload materialisation remains an explicit host
+port. No selector, automatic import or production schema activation is installed.
+
+Manifest and session chat sets must match exactly before storage or ports are
+published. Admission uses the captured manifest; configuration mutation cannot widen
+it. Review found and closed the extra-chat orphaning case. The real AgentPool and
+WebChannel qualification now uses only bundle outputs, including the retained-lane
+lost-ACK case and unbound-chat rejection. All ordinary effect-store mutations use
+the supplied owner fence; invalid asynchronous guards roll back.
+
+Final candidate verification passes 386 tests / 6,695 assertions. Root fast CI and
+both private-package typechecks pass; the private config includes the existing
+web-push declaration rather than requiring external compiler arguments. Independent
+bounded review is clear. The first root run hit one image-processing timeout; an
+unchanged full repeat passed. This bundle remains default-off and is not automatic
+migration, complete compatibility or production activation qualification.

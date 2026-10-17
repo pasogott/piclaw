@@ -4,13 +4,13 @@ import { createCurrentPiclawServiceWorkStore, type FinishHarnessRequest } from "
 import { terminalOperation, TERMINAL_HARNESS } from "../../src/service-effects/testing/contract-suites/terminal-settlement-store-contract.js";
 import { openSqliteSubject } from "./terminal-settlement-test-support.js";
 
-function fixture() {
+function fixture(validateAcceptance?: () => boolean) {
   const subject = openSqliteSubject(":memory:", [], false);
   const db = subject.database;
   const harness = { ...TERMINAL_HARNESS, state: "running" as const };
   subject.seedOperation(terminalOperation({ phase: "executing", harness }));
   let lost = false, fault = false;
-  const made = createCurrentPiclawServiceWorkStore(db, { recordTrace() {}, hitFault(point, method) {
+  const made = createCurrentPiclawServiceWorkStore(db, { validateAcceptance, recordTrace() {}, hitFault(point, method) {
     if (method !== "finishHarness") return false;
     if (fault && point === "before_effect") return true;
     if (lost && point === "effect_then_lost_acknowledgement") { lost = false; return true; }
@@ -45,6 +45,31 @@ test("finish harness commits running -> finished/settling once, replays original
     expect(f.snapshot()).toEqual(committed);
   } finally { f.subject.dispose?.(); }
 });
+
+for (const check of [1, 2]) for (const denial of ["false", "reject", "thenable"] as const) {
+  test(`finish harness writer fence ${denial} at check ${check} rolls back and observes invalid async guard`, async () => {
+    let calls = 0;
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on("unhandledRejection", onUnhandled);
+    const f = fixture((() => {
+      if (++calls !== check) return true;
+      if (denial === "reject") return Promise.reject(Error("private writer failure"));
+      if (denial === "thenable") return { then() { throw Error("private writer failure"); } };
+      return false;
+    }) as () => boolean);
+    try {
+      const before = f.snapshot();
+      expect(await f.work.finishHarness(f.request)).toEqual({ ok: false,
+        error: { _tag: "owner_conflict", certainty: "not_applied", retryable: false } });
+      expect(calls).toBe(check);
+      expect(f.snapshot()).toEqual(before);
+      await Bun.sleep(0);
+      expect(unhandled).toEqual([]);
+      expect(f.snapshot()).toEqual(before);
+    } finally { process.off("unhandledRejection", onUnhandled); f.subject.dispose?.(); }
+  });
+}
 
 for (const patch of [{ sessionId: "foreign" }, { lane: "foreign" }, { harnessOperationId: "foreign" }, { watchGeneration: 999 }, { state: "finished" as const }]) {
   test(`finish rejects changed harness ${JSON.stringify(patch)} without mutation`, async () => {

@@ -13,9 +13,17 @@ export class BunSqliteDatabase implements SqliteDatabase {
 
   private idleGuard?: () => void;
   private readonly identity?: ReturnType<typeof statSync>;
-  constructor(private readonly path: string, private readonly guard?: { root: Database; assertOwner(): void }) {
-    this.db = new Database(path, { create: true, strict: true });
+  constructor(private readonly path: string, private readonly guard?: { root: Database; assertOwner(): void; fenceTransactions?: boolean }) {
+    guard?.assertOwner();
     this.identity = guard ? statSync(path) : undefined;
+    if (guard) {
+      const root = (guard.root.query("PRAGMA database_list").all() as { name: string; file: string }[]).find(r => r.name === "main");
+      const identity = root?.file ? statSync(root.file) : undefined;
+      if (!identity || identity.dev !== this.identity!.dev || identity.ino !== this.identity!.ino)
+        throw new Error("Shared database identity required");
+    }
+    this.db = new Database(path, { create: !guard, strict: true });
+    this.db.exec("PRAGMA foreign_keys=ON");
   }
 
   /** Scope the next public storage transactions; checks run inside the candidate write lock. */
@@ -50,6 +58,7 @@ export class BunSqliteDatabase implements SqliteDatabase {
     if (this.closing) return Promise.reject(new Error("SQLite database is closed"));
     const result = this.tail.then(() => {
       if (this.failure) throw this.failure;
+      if (this.guard?.fenceTransactions) this.guard.assertOwner();
       return operation();
     });
     this.tail = result.catch(() => {}); // A rejected operation must not strand later admissions.
@@ -70,10 +79,10 @@ export class BunSqliteDatabase implements SqliteDatabase {
   }
 
   exec(sql: string): Promise<void> {
-    return this.enqueue(() => this.executor(() => {}).exec(sql));
+    return this.guard ? this.transaction(tx => tx.exec(sql)) : this.enqueue(() => this.executor(() => {}).exec(sql));
   }
   run(sql: string, ...params: SqliteValue[]): Promise<void> {
-    return this.enqueue(() => this.executor(() => {}).run(sql, ...params));
+    return this.guard ? this.transaction(tx => tx.run(sql, ...params)) : this.enqueue(() => this.executor(() => {}).run(sql, ...params));
   }
   get<T extends object>(sql: string, ...params: SqliteValue[]): Promise<T | undefined> {
     return this.enqueue(() => this.executor(() => {}).get<T>(sql, ...params));
@@ -86,9 +95,10 @@ export class BunSqliteDatabase implements SqliteDatabase {
     const idle = this.idleGuard;
     return this.enqueue(async () => {
       this.db.exec(this.guard ? "BEGIN IMMEDIATE" : "BEGIN");
-      let active = true;
+      let active = true, committed = false;
       const tx = this.executor(() => {
         if (!active) throw new Error("SQLite transaction handle expired");
+        if (this.guard?.fenceTransactions) this.guard.assertOwner();
       });
       try {
         idle?.();
@@ -96,9 +106,13 @@ export class BunSqliteDatabase implements SqliteDatabase {
         try { value = await this.callback.run(true, () => callback(tx)); }
         finally { active = false; }
         idle?.();
+        if (this.guard?.fenceTransactions) this.guard.assertOwner();
         this.db.exec("COMMIT");
+        committed = true;
+        if (this.guard?.fenceTransactions) this.guard.assertOwner();
         return value;
       } catch (error) {
+        if (committed) throw error;
         // Explicit SQL, never Bun's synchronous transaction(callback) helper.
         try { this.db.exec("ROLLBACK"); }
         catch (rollbackError) {
