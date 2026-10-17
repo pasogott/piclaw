@@ -59,7 +59,6 @@ import { MemoryReclamationGate } from "./agent-pool/memory-reclamation.js";
 import { type AgentSessionManagerInstrumentationSnapshot, type PoolEntry } from "./agent-pool/session-manager.js";
 import { ownAccountModelDefaults } from './agent-pool/family-model-defaults.js';
 import type { PiclawCredentialStore } from "./agent-pool/credential-store.js";
-import { installLegacySessionAffinityCompatibility } from "./agent-pool/session-affinity-compat.js";
 import {
   type ChatBranchRecord,
   type MergeChatBranchIntoParentResult,
@@ -340,7 +339,6 @@ export class AgentPool {
     this.credentialStore = options.credentialStore;
     this.modelRuntime = options.modelRuntime;
     this.modelRegistry = options.modelRegistry ?? new ModelRegistry(this.modelRuntime);
-    if (options.durableSessions === undefined) installLegacySessionAffinityCompatibility(this.modelRegistry, (message, details) => log.warn(message, details));
     this.applyRateLimitRetryDefaults();
     ({
       attachments: this.attachments,

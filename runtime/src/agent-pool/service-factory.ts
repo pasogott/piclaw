@@ -130,6 +130,7 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
   });
   sessionManager = new AgentSessionManager({
     durableSessions,
+    modelRegistry: options.modelRegistry,
     pool: options.pool,
     sidePool: options.sidePool,
     modelRuntime: options.modelRuntime,

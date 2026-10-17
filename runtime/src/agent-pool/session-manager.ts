@@ -8,7 +8,7 @@ import { isOperationSession } from "./operation-session-profile.js";
  * existing map-based cache structure used by callers and tests.
  */
 
-import type { AgentSession, AgentSessionRuntime, ExtensionFactory, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, AgentSessionRuntime, ExtensionFactory, ModelRegistry, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { closeOpenAICodexWebSocketSessions } from "@earendil-works/pi-ai/api/openai-codex-responses";
 
 import {
@@ -53,6 +53,7 @@ export interface AgentSessionManagerOptions {
   createSideSession?: (chatJid: string, sessionDir: string) => Promise<AgentSessionRuntime>;
   disposePersistence?: (runtime: AgentSessionRuntime) => Promise<void> | void;
   modelRuntime: ModelRuntime;
+  modelRegistry?: ModelRegistry;
   settingsManager: SettingsManager;
   mainSessionMaxSize?: number | null;
   lightweightPrewarmSession?: (chatJid: string) => Promise<void>;
@@ -346,6 +347,10 @@ export class AgentSessionManager {
         chatJid,
       });
 
+      if (this.options.modelRegistry) {
+        const { installLegacySessionAffinityCompatibility } = await import("./session-affinity-compat.js");
+        installLegacySessionAffinityCompatibility(this.options.modelRegistry, (message, details) => this.options.onWarn?.(message, details));
+      }
       const { ensureSessionDir, createDefaultSession } = await import("./session.js");
       const chatSessionDir = ensureSessionDir(chatJid);
 
@@ -447,6 +452,10 @@ export class AgentSessionManager {
         operation: "get_or_create_side.create_session",
         chatJid,
       });
+      if (this.options.modelRegistry) {
+        const { installLegacySessionAffinityCompatibility } = await import("./session-affinity-compat.js");
+        installLegacySessionAffinityCompatibility(this.options.modelRegistry, (message, details) => this.options.onWarn?.(message, details));
+      }
       const { ensureNamedSessionDir, createSessionInDir } = await import("./session.js");
       const sideSessionDir = ensureNamedSessionDir(chatJid, "btw-side");
 

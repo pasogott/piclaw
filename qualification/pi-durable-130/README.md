@@ -1490,3 +1490,17 @@ next replacement target; this is not a fully legacy-free module graph.
 Migration work remains parked until mainstream runtime convergence and compatibility
 are finished, per user direction. No live activation, database mutation, installation
 or dependency-pin change is performed by this source-only replacement.
+
+Local startup/session construction imports are now lazy: filesystem identity helpers
+live separately from the legacy session module, and affinity installation occurs
+only on actual legacy construction. Fresh-process load fences prove durable pool
+construction does not evaluate Piclaw's local legacy session module; a real legacy
+construction hits the fence as a positive control. Public SDK root exports still
+load SDK session machinery; no SDK-wide exclusion claim is made.
+
+Focused checks pass 80 construction tests and 91 additional regressions. Final
+sequential candidate verification passes 423 tests / 6,781 assertions; the full root
+gate passes unchanged limits with EXIT_CODE=0. Prior concurrent attempts hit existing
+elapsed limits and remain recorded. Runtime types and bounded review pass.
+This is local import cleanup, not the default durable backend switch. Migration
+remains parked; direct default replacement and legacy deletion remain the priority.

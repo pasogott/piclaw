@@ -28,7 +28,7 @@ import { peekProviderUsage, peekProviderUsageForRuntime, warmProviderUsage, type
 import { resolveModelLabel } from "../utils/model-utils.js";
 import { resolveModelScope } from "../utils/scoped-models.js";
 import { withChatContext, getChatJid } from "../core/chat-context.js";
-import { sanitiseJid } from "./session.js";
+import { sanitiseJid } from "./session-paths.js";
 import type { PoolEntry } from "./session-manager.js";
 import { probeCompactionModel, type CompactionModelProbeResult } from "./compaction-model-probe.js";
 import { readAccessConfig } from "../core/config-access.js";
