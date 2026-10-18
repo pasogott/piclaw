@@ -944,138 +944,40 @@ test("agent pool rate-limits repeated recent-chat warmup for the same chat", asy
   await pool.shutdown();
 });
 
-test("agent pool can run a side prompt with the current model and thinking level", async () => {
-  const ws = getTestWorkspace();
+test("agent pool forwards native side options without hydrating legacy sessions", async () => {
+  const ws = createTempWorkspace("native-side-pool-");
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
-
   const { AgentPool } = await importFresh<typeof import("../src/agent-pool.js")>("../src/agent-pool.js");
-
-  const seen: Array<{ model: string; reasoning: unknown; prompt: string }> = [];
-  class StubSession {
-    model = {
-      provider: "openai",
-      id: "gpt-test",
-      api: "openai-responses",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 8192,
-    };
-    thinkingLevel = "high";
-    subscribe(_listener: (event: any) => void) {
-      return () => {};
-    }
-    async prompt(_prompt: string) {}
-    async abort() {}
-    dispose() {}
-  }
-
-  const pool = new AgentPool({
-    ...createAgentPoolModelOptions(),
-    createSession: async () => createRuntime(new StubSession()) as any,
-    modelRegistry: {
-      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
-      find: () => undefined,
-      getAll: () => [],
-      getAvailable: () => [],
-    } as any,
-    sideStreamSimple: (_model: any, context: any, options: any) => {
-      seen.push({
-        model: `${_model.provider}/${_model.id}`,
-        reasoning: options?.reasoning,
-        prompt: context.messages[0].content[0].text,
-      });
-      return (async function* () {
-        yield { type: "thinking_delta", delta: "plan" } as any;
-        yield { type: "text_delta", delta: "answer" } as any;
-        yield {
-          type: "done",
-          reason: "stop",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "answer" }],
-            api: "openai-responses",
-            provider: "openai",
-            model: "gpt-test",
-            usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-            stopReason: "stop",
-            timestamp: Date.now(),
-          },
-        } as any;
-      })() as any;
-    },
-  });
-
-  const result = await pool.runSidePrompt("web:default", "Side question");
-  expect(result.status).toBe("success");
-  expect(result.result).toBe("answer");
-  expect(result.thinking).toBe("plan");
-  expect(result.model).toBe("openai/gpt-test");
-  expect(seen).toEqual([{ model: "openai/gpt-test", reasoning: "high", prompt: "Side question" }]);
+  const cleanup = ws.cleanup;
+  try {
+    const result = { status: "success" as const, result: "answer", thinking: "plan", model: "openai/gpt-test" };
+    const options = { systemPrompt: "instructions", budgetWorkId: "retry", signal: new AbortController().signal };
+    let calls = 0;
+    const config = { ...createAgentPoolModelOptions(),
+      createSession: async () => { throw Error("Legacy hydration forbidden"); },
+      dispatchSidePrompt: async function(chat: string, prompt: string, received: unknown) {
+        expect(this).toBe(config); expect(chat).toBe("web:default"); expect(prompt).toBe("question"); expect(received).toBe(options);
+        calls++; return result;
+      } };
+    const pool = new AgentPool(config);
+    config.dispatchSidePrompt = async () => { throw Error("Replacement must not run"); };
+    expect(await pool.runSidePrompt("web:default", "question", options)).toBe(result);
+    expect(calls).toBe(1); await pool.shutdown();
+  } finally { cleanup(); }
 });
 
-test("agent pool leaves side-prompt auth assembly to the runtime stream boundary", async () => {
-  const ws = getTestWorkspace();
+test("agent pool sanitises native side dispatcher failures", async () => {
+  const ws = createTempWorkspace("native-side-error-");
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
-
   const { AgentPool } = await importFresh<typeof import("../src/agent-pool.js")>("../src/agent-pool.js");
-
-  const seen: Array<{ apiKey: unknown }> = [];
-  class StubSession {
-    model = {
-      provider: "openai",
-      id: "gpt-test",
-      api: "openai-responses",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 8192,
-    };
-    thinkingLevel = "high";
-    subscribe(_listener: (event: any) => void) {
-      return () => {};
-    }
-    async prompt(_prompt: string) {}
-    async abort() {}
-    dispose() {}
-  }
-
-  const pool = new AgentPool({
-    ...createAgentPoolModelOptions(),
-    createSession: async () => createRuntime(new StubSession()) as any,
-    modelRegistry: {
-      getApiKey: async () => "side-api-key",
-      find: () => undefined,
-      getAll: () => [],
-      getAvailable: () => [],
-    } as any,
-    sideStreamSimple: (_model: any, _context: any, options: any) => {
-      seen.push({ apiKey: options?.apiKey });
-      return (async function* () {
-        yield {
-          type: "done",
-          reason: "stop",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "key answer" }],
-            api: "openai-responses",
-            provider: "openai",
-            model: "gpt-test",
-            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-            stopReason: "stop",
-            timestamp: Date.now(),
-          },
-        } as any;
-      })() as any;
-    },
-  });
-
-  const result = await pool.runSidePrompt("web:default", "Side question");
-  expect(result.status).toBe("success");
-  expect(result.result).toBe("key answer");
-  expect(seen).toEqual([{ apiKey: undefined }]);
+  const cleanup = ws.cleanup;
+  try {
+    const pool = new AgentPool({ ...createAgentPoolModelOptions(),
+      createSession: async () => { throw Error("Legacy hydration forbidden"); },
+      dispatchSidePrompt: async () => { throw Error("private credential sentinel"); } });
+    expect(await pool.runSidePrompt("web:default", "question")).toEqual({ status: "error", result: null, thinking: null, model: null, error: "Native side prompt unavailable or failed" });
+    await pool.shutdown();
+  } finally { cleanup(); }
 });
 
 test("agent pool forks active chats from the previous stable turn boundary", async () => {
@@ -1252,142 +1154,16 @@ test("agent pool refuses to prune an active branch session", async () => {
   ws.cleanup();
 });
 
-test("agent pool reports side prompt errors when no model is active", async () => {
-  const ws = getTestWorkspace();
+test("agent pool missing native side dispatcher fails closed without legacy hydration", async () => {
+  const ws = createTempWorkspace("native-side-unavailable-");
   restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
-
   const { AgentPool } = await importFresh<typeof import("../src/agent-pool.js")>("../src/agent-pool.js");
-
-  class StubSession {
-    model = null;
-    subscribe(_listener: (event: any) => void) {
-      return () => {};
-    }
-    async prompt(_prompt: string) {}
-    async abort() {}
-    dispose() {}
-  }
-
-  const pool = new AgentPool({
-    ...createAgentPoolModelOptions(),
-    createSession: async () => createRuntime(new StubSession()) as any,
-  });
-
-  const result = await pool.runSidePrompt("web:default", "Side question");
-  expect(result.status).toBe("error");
-  expect(result.error).toContain("No active model selected");
-});
-
-test("agent pool can run a tool-capable side prompt through a separate side session", async () => {
-  const ws = getTestWorkspace();
-  restoreEnv = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
-
-  const { AgentPool } = await importFresh<typeof import("../src/agent-pool.js")>("../src/agent-pool.js");
-
-  const mainModel = {
-    provider: "openai",
-    id: "gpt-test",
-    api: "openai-responses",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128000,
-    maxTokens: 8192,
-  };
-
-  class MainSession {
-    model = mainModel;
-    thinkingLevel = "high";
-    sessionManager = {
-      buildSessionContext: () => ({
-        messages: [{ role: "user", content: [{ type: "text", text: "main context" }], timestamp: Date.now() }],
-        thinkingLevel: "high",
-        model: { provider: "openai", modelId: "gpt-test" },
-      }),
-    };
-    getActiveToolNames() { return ["read", "bash"]; }
-    subscribe(_listener: (event: any) => void) { return () => {}; }
-    async prompt(_prompt: string) {}
-    async abort() {}
-    dispose() {}
-  }
-
-  const seen: any = { model: null, thinking: null, persistedThinking: null, tools: null, prompt: null, seeded: false };
-  class SideSession {
-    model = undefined;
-    isStreaming = false;
-    isCompacting = false;
-    isRetrying = false;
-    isBashRunning = false;
-    listeners: Array<(event: any) => void> = [];
-    subscribe(listener: (event: any) => void) {
-      this.listeners.push(listener);
-      return () => {
-        this.listeners = this.listeners.filter((l) => l !== listener);
-      };
-    }
-    async newSession(options: any) {
-      seen.seeded = typeof options?.setup === "function";
-      if (typeof options?.setup === "function") {
-        await options.setup({
-          appendSessionInfo: () => {},
-          appendModelChange: () => {},
-          appendThinkingLevelChange: (level: string) => { seen.persistedThinking = level; },
-          appendCompaction: () => {},
-          appendCustomMessageEntry: () => {},
-          appendMessage: () => {},
-        });
-      }
-      return true;
-    }
-    async setModel(model: any) { this.model = model; seen.model = `${model.provider}/${model.id}`; }
-    setThinkingLevel(level: any) { seen.thinking = level; }
-    setActiveToolsByName(toolNames: string[]) { seen.tools = [...toolNames]; }
-    async prompt(prompt: string) {
-      seen.prompt = prompt;
-      for (const listener of this.listeners) {
-        listener({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "tool plan" } });
-        listener({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "tool answer" } });
-        listener({
-          type: "message_end",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "tool answer" }],
-            usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-            stopReason: "stop",
-            timestamp: Date.now(),
-          },
-        });
-      }
-    }
-    async abort() {}
-    getLastAssistantText() { return "tool answer"; }
-    dispose() {}
-  }
-
-  const pool = new AgentPool({
-    ...createAgentPoolModelOptions(),
-    createSession: async () => createRuntime(new MainSession()) as any,
-    createSideSession: async () => createRuntime(new SideSession()) as any,
-    modelRegistry: {
-      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
-      find: () => undefined,
-      getAll: () => [],
-      getAvailable: () => [],
-    } as any,
-  });
-
-  const result = await pool.runSidePrompt("web:default", "Inspect workspace", { systemPrompt: "Use tools if needed." });
-  expect(result.status).toBe("success");
-  expect(result.result).toBe("tool answer");
-  expect(result.thinking).toBe("tool plan");
-  expect(result.model).toBe("openai/gpt-test");
-  expect(seen).toEqual({
-    model: "openai/gpt-test",
-    thinking: "high",
-    persistedThinking: "high",
-    tools: ["read", "bash"],
-    prompt: "Use tools if needed.\n\nInspect workspace",
-    seeded: true,
-  });
+  const cleanup = ws.cleanup;
+  try {
+    let legacyCalls = 0;
+    const pool = new AgentPool({ ...createAgentPoolModelOptions(),
+      createSession: async () => { legacyCalls++; throw Error("Legacy hydration forbidden"); } });
+    expect(await pool.runSidePrompt("web:default", "question")).toEqual({ status: "error", result: null, thinking: null, model: null, error: "Durable side prompt dispatcher unavailable" });
+    expect(legacyCalls).toBe(0); await pool.shutdown();
+  } finally { cleanup(); }
 });
