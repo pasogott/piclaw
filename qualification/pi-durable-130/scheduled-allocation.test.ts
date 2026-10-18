@@ -224,7 +224,7 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
     expect(db.query("SELECT * FROM entries WHERE conversation_id=? ORDER BY id").all(parent)).toEqual(beforeRun);
     expect(db.query("SELECT message_row_id FROM service_effect_s02_commits WHERE operation_id=?").get(input.operationId)).toEqual({ message_row_id: null });
     const sourcesBefore = db.query("SELECT count(*) AS n FROM service_effect_s01_sources WHERE chat_jid=?").get(chat);
-    await expect(bundle.dispatchSidePrompt(chat, "unsupported observer", { signal: new AbortController().signal })).rejects.toThrow("Native side prompt options unavailable");
+    await expect(bundle.dispatchSidePrompt(chat, "unsupported observer", { systemPrompt: "unsupported" })).rejects.toThrow("Native side prompt options unavailable");
     expect(db.query("SELECT count(*) AS n FROM service_effect_s01_sources WHERE chat_jid=?").get(chat)).toEqual(sourcesBefore);
     const competing = await Promise.allSettled([bundle.dispatchSidePrompt(chat, "side A"), bundle.dispatchSidePrompt(chat, "side B")]);
     expect(competing.filter(result => result.status === "fulfilled")).toHaveLength(1);

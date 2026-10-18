@@ -364,7 +364,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       return Object.freeze({ ...base, conversationId });
     }
     const sideContinuations = new Map<string, { identity: string; promise: Promise<SidePromptResult> }>();
-    function continueSidePrompt(raw: AcceptedInput): Promise<SidePromptResult> {
+    function continueSidePrompt(raw: AcceptedInput, signal?: AbortSignal): Promise<SidePromptResult> {
       assertLive();
       const input = Object.freeze({ ...raw });
       const key = JSON.stringify([input.chatJid, input.sourceId]);
@@ -381,8 +381,26 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         if (operation && !operation.harness) value(await work.bindHarness(sealed({
           effect: effect(`side-bind:${allocated.requestId}`, allocated.operationId, allocated.sourceSeq), expectedVersion: operation.version,
           sessionId: r.sessionId, lane: r.lane, harnessOperationId: String(id), state: "running" as const, watchGeneration: r.generation })));
-        await runtime.wait(allocated, id, shutdown.signal);
+        let cancelling: Promise<void> | undefined;
+        const cancel = () => {
+          cancelling ??= runtime.abortSidePrompt(allocated);
+          void cancelling.catch(() => {}); // Joined below; never leave listener rejection unobserved.
+        };
+        signal?.addEventListener("abort", cancel, { once: true });
+        try {
+          if (signal?.aborted) cancel();
+          if (cancelling) await cancelling;
+          else await runtime.wait(allocated, id, shutdown.signal);
+          if (cancelling) await cancelling;
+        } finally {
+          signal?.removeEventListener("abort", cancel);
+          if (cancelling) await cancelling;
+        }
         const state = await runtime.reconcile(allocated);
+        if (state.operation.cancellation) {
+          if (!await runtime.settle(allocated)) throw Error("Side cancellation settlement pending");
+          return { status: "error" as const, result: null, thinking: null, model: null, error: "Side prompt cancelled" };
+        }
         if (!state.answer) throw Error("Side prompt answer unavailable");
         if (!await runtime.settle(allocated)) throw Error("Side prompt settlement pending");
         return { status: "success" as const, result: state.answer.text, thinking: state.answer.message.content
@@ -416,7 +434,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     }
     async function dispatchSidePrompt(chatJid: string, prompt: string, options: SidePromptOptions = {}): Promise<SidePromptResult> {
       assertLive();
-      if (options.signal || options.systemPrompt || options.budgetWorkId || options.budgetParentWorkId ||
+      options.signal?.throwIfAborted();
+      if (options.systemPrompt || options.budgetWorkId || options.budgetParentWorkId ||
         ((options.onEvent || options.onTextDelta || options.onThinkingDelta) && !config.observeSidePrompt))
         throw Error("Native side prompt options unavailable");
       if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 100_000) throw Error("Invalid side prompt");
@@ -426,7 +445,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       assertLive();
       const sourceId = `side-prompt:${crypto.randomUUID()}`;
       // Immutable payload may outlive denied admission; it never grants authority.
-      await config.answers.put(sourceId, prompt); assertLive();
+      await config.answers.put(sourceId, prompt); assertLive(); options.signal?.throwIfAborted();
       const claimed = root.transaction(() => {
         assertLive();
         if (root.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native side prompt budget admission unavailable");
@@ -441,7 +460,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       let observerFailed = false;
       const unobserve = config.observeSidePrompt?.(sourceId, event => {
         assertLive();
-        if (observerFailed) return;
+        if (observerFailed || options.signal?.aborted) return;
         try {
           const text = event.type === "text_delta" ? event.delta : undefined;
           const thinking = event.type === "thinking_delta" ? event.delta : undefined;
@@ -456,7 +475,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       try {
         return await continueSidePrompt({ incarnation: r.incarnation, conversationId: scope.conversationId as ConversationId,
           chatJid, branchId: scope.branchId, operationId: claimed.operation.operationId, sourceSeq: claimed.source.sourceSeq,
-          sourceId, payloadRef: sourceId, requestId: sourceId, requestHash: hashCanonicalRequest({ type: "input", requestId: sourceId, content: prompt }) });
+          sourceId, payloadRef: sourceId, requestId: sourceId, requestHash: hashCanonicalRequest({ type: "input", requestId: sourceId, content: prompt }) }, options.signal);
       } finally { unobserve?.(); }
     }
     async function dispatchScheduledAgent(lease: ScheduledRunLease): Promise<import("../../src/agent-pool.js").AgentOutput> {
