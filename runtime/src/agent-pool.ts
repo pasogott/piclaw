@@ -827,6 +827,7 @@ export class AgentPool {
     chatJid: string,
     options: { agentName?: string | null } = {},
   ): Promise<ChatBranchRecord> {
+    if (this.durableApplication) throw new Error("Durable branch restore unavailable");
     return this.branchManager.restoreChatBranch(chatJid, options);
   }
 
