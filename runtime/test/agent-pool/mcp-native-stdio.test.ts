@@ -29,3 +29,21 @@ test('closed server input rejects sends without an unhandled pipe error',async()
  try{await expect(transport.send({jsonrpc:'2.0',id:2,method:'tools/list',params:{padding:'x'.repeat(512*1024)}})).rejects.toBeDefined();await Bun.sleep(10);expect(errors.length).toBeGreaterThan(0);}
  finally{try{await transport.close();}catch(error){expect(error).toBeDefined();}}
 },10000);
+
+test('malformed frame seals buffered replies and further send admission', async () => {
+  const transport = createNativeStdio({ command: process.execPath, args: ['--no-env-file', '-e', `process.stdout.write('not-json\\n'+JSON.stringify({jsonrpc:'2.0',id:1,result:{forbidden:true}})+'\\n');setInterval(()=>{},1000);`] });
+  const received: unknown[] = [];
+  const errors: Error[] = [];
+  let closed!: () => void;
+  const ended = new Promise<void>(resolve => closed = resolve);
+  transport.onMessage(message => received.push(message));
+  transport.onError(error => errors.push(error));
+  transport.onClose(closed);
+  try {
+    await transport.start();
+    await ended;
+    expect(received).toEqual([]);
+    expect(errors.map(error => error.message)).toEqual(['Native MCP server returned malformed JSON.']);
+    await expect(transport.send({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).rejects.toThrow('Native stdio is closed.');
+  } finally { await transport.close(); }
+}, 10000);

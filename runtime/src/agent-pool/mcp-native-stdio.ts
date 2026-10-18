@@ -17,6 +17,7 @@ export function createNativeStdio(options: { command: string; args?: string[]; c
   let resolveEnded!: () => void;
   let closePromise: Promise<void> | undefined;
   let buffer = '';
+  let inputFailed = false;
   const pipeFailures: Error[] = [];
   const env: NodeJS.ProcessEnv = {};
   for (const name of ['PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL', 'TZ']) if (process.env[name] !== undefined) env[name] = process.env[name];
@@ -42,20 +43,21 @@ export function createNativeStdio(options: { command: string; args?: string[]; c
       child.stderr.on('data', () => {});
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', chunk => {
+        if (inputFailed) return;
         buffer += chunk;
-        if (Buffer.byteLength(buffer) > 1024 * 1024) { events.emitError(Error('Native MCP message exceeds 1 MiB.')); kill('SIGKILL'); return; }
+        if (Buffer.byteLength(buffer) > 1024 * 1024) { inputFailed = true; buffer = ''; events.emitError(Error('Native MCP message exceeds 1 MiB.')); kill('SIGKILL'); return; }
         let index: number;
         while ((index = buffer.indexOf('\n')) >= 0) {
           const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);
           if (!line.trim()) continue;
           try { events.emitMessage(JSON.parse(line) as JsonRpcMessage); }
-          catch { events.emitError(Error('Native MCP server returned malformed JSON.')); kill('SIGKILL'); }
+          catch { inputFailed = true; buffer = ''; events.emitError(Error('Native MCP server returned malformed JSON.')); kill('SIGKILL'); return; }
         }
       });
       await new Promise<void>((resolve, reject) => { child!.once('spawn', resolve); child!.once('error', reject); });
     },
     async send(message) {
-      if (!child || closePromise || child.exitCode !== null || child.signalCode !== null) throw Error('Native stdio is closed.');
+      if (!child || closePromise || inputFailed || child.exitCode !== null || child.signalCode !== null) throw Error('Native stdio is closed.');
       const data = JSON.stringify(message) + '\n';
       if (Buffer.byteLength(data) > 1024 * 1024) throw Error('Native MCP message exceeds 1 MiB.');
       await new Promise<void>((resolve, reject) => {
