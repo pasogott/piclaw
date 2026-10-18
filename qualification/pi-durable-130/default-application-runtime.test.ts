@@ -125,7 +125,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -138,6 +138,8 @@ for (const scenario of ["public-admission-row-mismatch", "public-admission-chat-
   let calls = 0;
   let onProviderResponse: (() => void) | undefined;
   let onCredentialResolve: (() => Promise<void>) | undefined;
+  const customSubset = scenario === "custom-subset" || scenario === "source-filter-subset";
+  const sourceFilter = scenario === "source-filter-subset";
   const reasoningThinking = scenario === "public-thinking-reasoning";
   const model = { provider: "synthetic", id: "approved", name: "Approved", api: "openai-completions", baseUrl: "https://invalid.invalid", input: ["text"], reasoning: reasoningThinking, contextWindow: 10000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   const requested: string[] = [];
@@ -1588,8 +1590,8 @@ for (const scenario of ["public-admission-row-mismatch", "public-admission-chat-
       return await app.commit(async tx => {
         const states = new Map<number, unknown>();
         for (const { id } of root.query("SELECT id FROM conversations ORDER BY id").all() as { id: number }[]) {
-          if (seed) await configure(tx, id as ConversationId, { tools: createHostBuiltinTools({ cwd: workspace, names: scenario === "custom-subset" ? ["read"] : ["bash"], authority: { assertAllowed() { owner.assertCurrentOwner(); } } }),
-            thinkingLevel: "low", instructions: "preserve these instructions", extensions: [defineExtension({ name: "app.host-builtins" })] });
+          if (seed) await configure(tx, id as ConversationId, { tools: createHostBuiltinTools({ cwd: workspace, names: customSubset ? ["read"] : ["bash"], authority: { assertAllowed() { owner.assertCurrentOwner(); } } }),
+            thinkingLevel: "low", instructions: "preserve these instructions", extensions: sourceFilter ? { add: [defineExtension({ name: "app.host-builtins" })], remove: [defineExtension({ name: "app.host-scheduled-source" })] } : [defineExtension({ name: "app.host-builtins" })] });
           states.set(id, JSON.parse(JSON.stringify(await tx.doc(AgentDoc, id as ConversationId))));
         }
         return states;
@@ -1597,7 +1599,7 @@ for (const scenario of ["public-admission-row-mismatch", "public-admission-chat-
     } finally { await harness.close(context); }
   };
   const seeded = await inspectStored(true);
-  for (const state of seeded.values()) expect(state).toMatchObject({ tools: [scenario === "custom-subset" ? "read" : "bash"], model: { provider: model.provider, modelId: model.id },
+  for (const state of seeded.values()) expect(state).toMatchObject({ tools: [customSubset ? "read" : "bash"], model: { provider: model.provider, modelId: model.id },
     thinkingLevel: "low", instructions: "preserve these instructions" });
   if (scenario === "pending-host") {
     // Preflight rejects BEFORE SDK open/configure: a complete SQL byte snapshot
@@ -1627,7 +1629,7 @@ for (const scenario of ["public-admission-row-mismatch", "public-admission-chat-
   expect(calls).toBe(callsBeforeUpgrade);
   expect(root.query("SELECT * FROM entries ORDER BY id").all()).toEqual(historyBeforeUpgrade);
   expect(root.query(`SELECT * FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE kind='"app.application-identity"') ORDER BY document_id, seq`).all()).toEqual(identitiesBeforeUpgrade);
-  if (scenario === "custom-subset") {
+  if (customSubset) {
     expect(await backend.sessionOptions.getDurableSession!("web:default")!.readThinkingLevel!()).toBe("low");
     const thinkingPool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
     expect((await thinkingPool.getAvailableModels("web:default", { includeProviderUsage: false, includeProviderDiagnostics: false })).thinking_level).toBe("low");
@@ -1637,7 +1639,7 @@ for (const scenario of ["public-admission-row-mismatch", "public-admission-chat-
     expect(backend.sessionOptions.getDurableSession!(newcomer)).toMatchObject({ sessionId: newPort.sessionId, branchId: newPort.branchId });
     backend.stop(); await backend.close();
     const preserved = await inspectStored(false);
-    for (const [id, state] of seeded) expect(preserved.get(id)).toEqual({ ...(state as object), extensions: ["app.host-builtins", "app.host-scheduled-source"] }); // Retain explicit selection plus required source policy.
+    for (const [id, state] of seeded) expect(preserved.get(id)).toEqual({ ...(state as object), extensions: sourceFilter ? { add: ["app.host-builtins", "app.host-scheduled-source"], remove: [] } : ["app.host-builtins", "app.host-scheduled-source"] }); // Retain explicit selection plus required source policy.
     expect(root.query("SELECT * FROM entries ORDER BY id").all()).toEqual(historyBeforeUpgrade);
     expect(root.query(`SELECT * FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE kind='"app.application-identity"') ORDER BY document_id, seq`).all()).toEqual(identitiesBeforeUpgrade);
     expect(calls).toBe(callsBeforeUpgrade);
