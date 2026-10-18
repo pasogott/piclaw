@@ -37,8 +37,9 @@ export async function reserveHostRequest(options: {
   let dispatchStarted = false;
   let settled = false;
   let settlementHash: string | undefined;
-  try { await accounting.reserve(binding, signal); }
-  catch (error) { setBudgetWorkStatus(workId, "stopped", { boundary: "reserve_denied" }, database); throw error; }
+  // A rejected reservation may have committed before an ACK/storage failure.
+  // Keep work active; never retire authority needed to reconcile that hold.
+  await accounting.reserve(binding, signal);
   return {
     async dispatch() {
       current();
@@ -53,13 +54,14 @@ export async function reserveHostRequest(options: {
       if (settled) { if (hash !== settlementHash) throw Error("Native request terminal changed"); return; }
       const row = await accounting.settle(binding, message);
       if (row.state !== "settled") throw Error("Native request settlement unresolved");
-      settled = true; settlementHash = hash;
       setBudgetWorkStatus(workId, "completed", { boundary: "request_settled" }, database);
+      settled = true; settlementHash = hash;
     },
     async abandon() {
       if (settled) return;
       const row = await accounting.abandon(binding);
       if (row?.state === "released") setBudgetWorkStatus(workId, "stopped", { boundary: "request_not_sent" }, database);
+      if (row?.state === "settled") setBudgetWorkStatus(workId, "completed", { boundary: "request_settled" }, database);
     },
   };
 }
