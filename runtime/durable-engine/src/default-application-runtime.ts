@@ -309,16 +309,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
   } }] }));
   const tools = createHostBuiltinTools({ cwd: WORKSPACE_DIR,
-    async captureSourceGuard(call) {
-      const captured = await runtime().captureToolSource(call.conversationId, call.taskId, call.toolCallId);
-      const authority = createHostOperationAuthority(root, captured, () => {
-        assert(); lifetime.signal.throwIfAborted(); runtime().assertCapturedSourceCurrent(captured.inputs);
-      }, true);
-      return () => {
-        authority.assertCurrent();
-        if (captured.delegateModel) assertDelegateModel(captured.delegateModel);
-      };
-    }, authority: { assertAllowed() {
+    captureSourceGuard: captureSource,
+    authority: { assertAllowed() {
     assert(); lifetime.signal.throwIfAborted();
     if (readAccessConfig().mode !== "single-user") throw Error("Host tool permission denied");
   } }, signal: lifetime.signal, shellPath: () => settings.getShellPath(), names: defaultToolNames });
