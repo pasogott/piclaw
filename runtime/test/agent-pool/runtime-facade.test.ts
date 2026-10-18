@@ -1317,3 +1317,17 @@ test('durable model picker reads persisted thinking level without legacy hydrati
   }]]), modelRegistry: { getAvailable: () => [{ provider: 'synthetic', id: 'reasoning', reasoning: true }] } as any });
   expect(await facade.getAvailableModels('web:thinking', { includeProviderUsage: false, includeProviderDiagnostics: false })).toMatchObject({ current: 'synthetic/reasoning', thinking_level: 'high' });
 });
+
+test('durable thinking query reads persisted level and rejects mutation before reading', async () => {
+  let reads = 0, protections = 0;
+  const { facade } = createFacade({ getDurableSession: () => ({ sessionId: 'thinking-query', branchId: 'main', readPosition: async () => null,
+    readModel: async () => 'synthetic/reasoning', async readThinkingLevel() { reads++; return 'high'; } }),
+    modelRegistry: { getAvailable: () => [{ provider: 'synthetic', id: 'reasoning', reasoning: true }] } as any,
+    acquireCommandProtection() { protections++; return () => {}; },
+  });
+  expect(await facade.applyControlCommand('web:thinking-query', { type: 'thinking', raw: '/thinking' })).toMatchObject({ status: 'success', thinking_level: 'high', thinking_level_label: 'high' });
+  expect(reads).toBe(1);
+  expect(protections).toBe(0);
+  await expect(facade.applyControlCommand('web:thinking-query', { type: 'thinking', level: 'low', raw: '/thinking low' })).rejects.toThrow('Durable thinking mutation unavailable');
+  expect(reads).toBe(1);
+});

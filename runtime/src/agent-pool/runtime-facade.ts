@@ -375,6 +375,23 @@ export class AgentRuntimeFacade {
           return { status: "success", message: `Model set to ${selected.provider}/${selected.id}.` };
         } finally { release?.(); }
       }
+      if (command.type === "thinking") {
+        requireSingleUserDirectExecution("Direct thinking commands");
+        if (command.level !== undefined) throw new Error("Durable thinking mutation unavailable");
+        if (!port.readModel || !port.readThinkingLevel) throw new Error("Durable thinking reader unavailable");
+        const current = await port.readModel();
+        if (!current) return { status: "error", message: "No model selected." };
+        const model = this.options.modelRegistry.getAvailable().find(model => `${model.provider}/${model.id}` === current);
+        if (!model) throw new Error("Durable thinking model unavailable");
+        const level = await port.readThinkingLevel();
+        const display = level ? formatThinkingLevelForDisplay(level, model) : null;
+        const levels = getAvailableThinkingLevelsForModel(model, ["off"]);
+        return { status: "success", message: [
+          `Model: ${current}`, `Thinking level: ${display ?? "unknown"}`,
+          `Available levels: ${levels.map(value => formatThinkingLevelForDisplay(value, model)).join(", ")}`,
+          ...(!model.reasoning ? ["This model does not support thinking."] : []),
+        ].join("\n"), thinking_level: level, thinking_level_label: display };
+      }
       if (command.type !== "tree" || command.targetId) throw new Error("Durable history mutation unavailable");
       if (!port.readTree) throw new Error("Durable session tree unavailable");
       const tree = await port.readTree();
