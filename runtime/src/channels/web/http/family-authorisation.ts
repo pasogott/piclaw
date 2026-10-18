@@ -177,7 +177,7 @@ export async function handleFamilyRequest(channel: WebChannelLike, req: Request,
     "/static/classic/dist/app.bundle.css",
     "/static/common/js/marked.min.js",
     "/static/common/js/vendor/katex.min.js",
-    "/static/common/js/vendor/beautiful-mermaid.js",
+    "/static/common/js/vendor/pele.js",
     "/static/common/js/vendor/adaptivecards.min.js",
   ].includes(path)) {
     const response = await handleShellRoutes(channel, req, path, flags, serveStaticAsset) ?? deny();
