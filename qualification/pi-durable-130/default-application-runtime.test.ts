@@ -1694,6 +1694,22 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       expect(root.query("SELECT SUM(t.api_equivalent_cost_microusd) AS amount FROM token_usage t JOIN budget_work w ON w.id=t.work_id WHERE w.execution_kind='side_prompt'").get()).toEqual({ amount: 30 });
       const afterCancel = await pool.runSidePrompt("web:default", "after cancellation");
       expect(afterCancel.status).toBe("success");
+      const toolRoot = (await first!.readPosition());
+      const callsBeforeTool = calls;
+      const toolHistory = root.query("SELECT * FROM entries ORDER BY id").all();
+      writeFileSync(join(workspace, "native-side-read.txt"), "NATIVE_SIDE_READ_PROVENANCE");
+      toolSequence = [{ name: "read", arguments: { path: "native-side-read.txt" } }];
+      const toolRequestId = `factory-tool-${calls + 1}`;
+      const toolSide = await pool.runSidePrompt("web:default", "read native-side-read.txt in isolated context");
+      expect(toolSide.status).toBe("success");
+      expect(calls).toBe(callsBeforeTool + 2);
+      expect(observedResults.get(toolRequestId)).toMatchObject({ toolName: "read", isError: false });
+      expect(JSON.stringify(observedResults.get(toolRequestId)?.content)).toContain("NATIVE_SIDE_READ_PROVENANCE");
+      expect(await first!.readPosition()).toBe(toolRoot);
+      expect(root.query("SELECT * FROM entries WHERE id <= ? ORDER BY id").all((toolHistory.at(-1) as { id: number }).id)).toEqual(toolHistory);
+      toolSequence = undefined;
+      expect(root.query("SELECT state FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id WHERE w.execution_kind='side_prompt' AND r.state='unresolved'").all()).toHaveLength(1);
+      expect(root.query("SELECT SUM(t.api_equivalent_cost_microusd) AS amount FROM token_usage t JOIN budget_work w ON w.id=t.work_id WHERE w.execution_kind='side_prompt'").get()).toEqual({ amount: 60 });
       const eventsBeforeHttp = sideEvents.length;
       const timelineBeforeHttp = root.query("SELECT * FROM messages WHERE chat_jid='web:default' ORDER BY rowid").all();
       const httpSide = await channel.handleRequest(new Request("http://fixture/agent/side-prompt/stream?chat_jid=web%3Adefault", {
@@ -1710,6 +1726,27 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       expect(sideEvents.length).toBe(eventsBeforeHttp);
       expect(root.query("SELECT * FROM messages WHERE chat_jid='web:default' ORDER BY rowid").all()).toEqual(timelineBeforeHttp);
       expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
+      const { getAgentRuntimeConfig } = await import("../../runtime/src/core/config.js");
+      const timeoutMs = getAgentRuntimeConfig().timeoutMs;
+      const nativeSetTimeout = globalThis.setTimeout;
+      let expireSide: (() => void) | undefined;
+      const timerSpy = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms?: number, ...args: unknown[]) => {
+        if (ms === timeoutMs) { expireSide = callback; return nativeSetTimeout(() => {}, timeoutMs); }
+        return nativeSetTimeout(callback, ms, ...args);
+      }) as typeof setTimeout);
+      try {
+        let timeoutEntered!: () => void;
+        const timeoutReady = new Promise<void>(resolve => { timeoutEntered = resolve; });
+        checkpointHold = { entered: timeoutEntered };
+        const timed = pool.runSidePrompt("web:default", "configured side timeout");
+        await timeoutReady;
+        expect(expireSide).toBeDefined();
+        const timeoutSignal = checkpointHold.signal;
+        expireSide!();
+        expect(await timed).toMatchObject({ status: "error", stopReason: "aborted" });
+        expect(timeoutSignal?.aborted).toBe(true);
+      } finally { timerSpy.mockRestore(); checkpointHold = undefined; }
+      expect(root.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid='web:default' AND state NOT IN ('consumed','disposed')").all()).toEqual([]);
       await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
       compactionPolicySpy?.mockRestore();
       for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();

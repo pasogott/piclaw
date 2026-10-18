@@ -1,5 +1,7 @@
 // Explicit application composition only. Not imported by the default runtime selector.
 import type { Database } from "bun:sqlite";
+import { getAgentRuntimeConfig } from "../../src/core/config.js";
+import { formatTimeoutDuration } from "../../src/agent-pool/prompt-utils.js";
 import { createHash } from "node:crypto";
 import type { Context } from "@earendil-works/chord/context";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
@@ -382,10 +384,13 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           effect: effect(`side-bind:${allocated.requestId}`, allocated.operationId, allocated.sourceSeq), expectedVersion: operation.version,
           sessionId: r.sessionId, lane: r.lane, harnessOperationId: String(id), state: "running" as const, watchGeneration: r.generation })));
         let cancelling: Promise<void> | undefined;
+        let timedOut = false;
+        const timeoutMs = getAgentRuntimeConfig().timeoutMs;
         const cancel = () => {
           cancelling ??= runtime.abortSidePrompt(allocated);
           void cancelling.catch(() => {}); // Joined below; never leave listener rejection unobserved.
         };
+        const timer = timeoutMs > 0 ? setTimeout(() => { timedOut = true; cancel(); }, timeoutMs) : undefined;
         signal?.addEventListener("abort", cancel, { once: true });
         let waitFailed = false, waitError: unknown;
         try {
@@ -397,6 +402,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           waitFailed = true; waitError = error;
         } finally {
           signal?.removeEventListener("abort", cancel);
+          if (timer !== undefined) clearTimeout(timer);
           if (cancelling) {
             try { await cancelling; }
             catch (error) {
@@ -409,7 +415,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         const state = await runtime.reconcile(allocated);
         if (state.operation.cancellation) {
           if (!await runtime.settle(allocated)) throw Error("Side cancellation settlement pending");
-          return { status: "error" as const, result: null, thinking: null, model: null, error: "Side prompt cancelled" };
+          return { status: "error" as const, result: null, thinking: null, model: null, error: timedOut ? `Timed out after ${formatTimeoutDuration(timeoutMs)}` : "Side prompt cancelled", stopReason: "aborted" };
         }
         if (!state.answer) throw Error("Side prompt answer unavailable");
         if (!await runtime.settle(allocated)) throw Error("Side prompt settlement pending");
