@@ -451,10 +451,14 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     async function dispatchSidePrompt(chatJid: string, prompt: string, options: SidePromptOptions = {}): Promise<SidePromptResult> {
       assertLive();
       options.signal?.throwIfAborted();
-      if (options.systemPrompt || options.budgetWorkId || options.budgetParentWorkId ||
+      if (options.budgetWorkId || options.budgetParentWorkId ||
         ((options.onEvent || options.onTextDelta || options.onThinkingDelta) && !config.observeSidePrompt))
         throw Error("Native side prompt options unavailable");
-      if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 100_000) throw Error("Invalid side prompt");
+      if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 100_000 ||
+        (options.systemPrompt !== undefined && typeof options.systemPrompt !== "string")) throw Error("Invalid side prompt");
+      // Match the existing side-session composition; do not mutate parent instructions.
+      prompt = options.systemPrompt ? `${options.systemPrompt}\n\n${prompt}` : prompt;
+      if (prompt.length > 100_000) throw Error("Invalid side prompt");
       const scope = routeIndex.get(chatJid);
       if (!scope) throw Error("Unbound side prompt chat");
       if (await runtime.readSessionPosition({ incarnation: r.incarnation, ...scope }) === null) throw Error("Side prompt history unavailable");

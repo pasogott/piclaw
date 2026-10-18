@@ -1641,13 +1641,14 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       const callsBefore = calls;
       const sideEvents: string[] = [], sideText: string[] = [];
       const result = await pool.runSidePrompt("web:default", "native isolated side prompt", {
-        onEvent(event) { sideEvents.push(event.type); }, onTextDelta(delta) { sideText.push(delta); },
+        systemPrompt: "SIDE_SYSTEM_PREFIX", onEvent(event) { sideEvents.push(event.type); }, onTextDelta(delta) { sideText.push(delta); },
       });
       expect(result).toMatchObject({ status: "success", result: "factory synthetic reply", model: "openai-codex/approved" });
       expect(calls).toBe(callsBefore + 1);
       expect(sideEvents).toContain("done");
       expect(sideEvents).toContain("text_delta");
       expect(sideText.join("")).toBe("factory synthetic reply");
+      expect(planRequests.at(-1)).toContain("SIDE_SYSTEM_PREFIX\\n\\nnative isolated side prompt");
       expect(first!.sessionId).toBe(identity);
       expect(await first!.readModel!()).toBe(beforeModel);
       const sideSource = root.query("SELECT source_id FROM service_effect_s01_sources WHERE kind='internal'").get() as { source_id: string };
