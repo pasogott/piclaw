@@ -622,3 +622,12 @@ MCP and parent evidence above extends the older assessment without promoting any
 of the 45 requirement statuses. Current branch before this change: b516de2a9;
 exact-head hosted run 39119067426 was in progress at inspection. Existing-chat
 migration, load/performance and fleet activation are incomplete.
+
+### MCP server errors
+
+The native adapter forwards the server's `isError` flag to the durable tool-result
+envelope as well as structured data. The codemode nested-call record now marks
+server errors as `error`; scripts can still read schema-backed error data and
+complete successfully. A negative control without the forwarded flag records `ok`
+and fails the new assertion. All six selected MCP factory scenarios and three
+typechecks passed. General MCP parity and accounting remain incomplete.

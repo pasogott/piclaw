@@ -94,7 +94,7 @@ export async function createHostMcp(options: {
               check();
               // Project only supported public content, never server diagnostics/private fields.
               if (result.content.some(block => block.type !== "text")) throw Error("Unsupported MCP result content");
-              return { output: result.content.map(block => ({ type: "text" as const, text: (block as { text: string }).text })), structuredOutput: { content: result.content.map(block => ({ type: "text", text: (block as { text: string }).text })), ...(result.isError ? { isError: true } : {}), ...(result.structuredContent ? { structuredContent: result.structuredContent as JsonValue } : {}) } };
+              return { isError: result.isError, output: result.content.map(block => ({ type: "text" as const, text: (block as { text: string }).text })), structuredOutput: { content: result.content.map(block => ({ type: "text", text: (block as { text: string }).text })), ...(result.isError ? { isError: true } : {}), ...(result.structuredContent ? { structuredContent: result.structuredContent as JsonValue } : {}) } };
             },
           }));
         }

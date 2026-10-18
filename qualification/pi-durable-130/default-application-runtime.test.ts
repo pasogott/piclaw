@@ -125,7 +125,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -143,6 +143,7 @@ for (const scenario of ["native-parent-budget-cap", "native-parent-budget-auth-c
   const planRequests: string[] = [];
   let toolSequence: { name: string; arguments: JsonObject | (() => JsonObject) }[] | undefined;
   const nativeMcp = scenario.startsWith("native-mcp-");
+  const mcpError = scenario === "native-mcp-error";
   const mcpCancelled = scenario === "native-mcp-codemode-cancel";
   const mcpConcurrent = scenario === "native-mcp-concurrent";
   const mcpConfigChanged = scenario === "native-mcp-config-change";
@@ -152,7 +153,9 @@ for (const scenario of ["native-parent-budget-cap", "native-parent-budget-auth-c
     writeFileSync(getConfigPath(), JSON.stringify({ domains: { mcp: { engine: "native", codemode: "on" } } }), { mode: 0o600 });
     writeFileSync(join(workspace, ".pi/mcp.json"), JSON.stringify({ mcpServers: { fixture: scenario === "native-mcp-http-deny" ? { url: "https://invalid.invalid/mcp" } : { command: process.execPath, args: [join(import.meta.dir, "mcp-stdio-fixture.ts"), mcpMarker, mcpPid] } } }));
     await hydrateMcpKeychainCredentials(workspace, async () => { throw Error("No keychain access allowed"); });
-    toolSequence = [{ name: "codemode", arguments: { code: mcpConcurrent
+    toolSequence = [{ name: "codemode", arguments: { code: mcpError
+      ? 'const result = await tools.mcp__fixture__echo({message:"MCP_ERROR_SENTINEL"}); if (result.isError !== true) throw Error("MCP error flag lost"); console.log(result);'
+      : mcpConcurrent
       ? 'const results = await Promise.all([tools.mcp__fixture__echo({message:"MCP_FIRST"}), tools.mcp__fixture__echo({message:"MCP_SECOND"})]); if (!JSON.stringify(results[0]).includes("MCP_FIRST") || !JSON.stringify(results[1]).includes("MCP_SECOND")) throw Error("MCP response correlation lost"); return results;'
       : mcpCancelled || mcpConfigChanged
       ? 'try { await tools.mcp__fixture__echo({message:"FORBIDDEN"}); } catch {} store("revoked-sentinel","MUST_NOT_PERSIST");'
@@ -1026,8 +1029,16 @@ for (const scenario of ["native-parent-budget-cap", "native-parent-budget-auth-c
     expect(dispatchOutcome).toBe("settled");
     expect(readFileSync(mcpMarker, "utf8")).toBe(mcpConcurrent ? "call\ncall\n" : "call\n");
     const results = JSON.stringify([...observedResults.values()]);
-    expect(results).toContain(mcpConcurrent ? "MCP_FIRST" : "OWNED_MCP_SENTINEL");
+    expect(results).toContain(mcpError ? "MCP_ERROR_SENTINEL" : mcpConcurrent ? "MCP_FIRST" : "OWNED_MCP_SENTINEL");
     if (mcpConcurrent) expect(results).toContain("MCP_SECOND");
+    if (mcpError) {
+      const records = root.query("SELECT record FROM entries").all().map(row => JSON.parse((row as { record: string }).record));
+      const codemodeResult = records.filter(record => record.kind === "pi.tool-result").flatMap(record => record.model ?? []).find(message => message.toolName === "codemode");
+      expect(codemodeResult).toBeDefined();
+      expect(codemodeResult.details.calls).toMatchObject([{ name: "mcp__fixture__echo", status: "error" }]);
+      // Schema-backed error data remains readable by scripts; the outer script succeeds.
+      expect(codemodeResult.isError).toBe(false);
+    }
     expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
     backend.stop(); await backend.close();
     const pid = Number(readFileSync(mcpPid, "utf8"));
