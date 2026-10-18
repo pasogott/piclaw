@@ -82,8 +82,16 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: rcarmo/piclaw-addons
-          ref: d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f
+          ref: de92bc95b5b3bb1505beec9617d3b8a5e4fa92d3
           path: .qualification-addons
+          persist-credentials: false
+
+      - name: Checkout native Code Review qualification source
+        uses: actions/checkout@v6
+        with:
+          repository: rcarmo/piclaw-addons
+          ref: d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f
+          path: .qualification-code-review
           persist-credentials: false
 
       - name: Install inactive application durable engine
@@ -99,7 +107,7 @@ jobs:
         working-directory: qualification/pi-durable-130
         env:
           DURABLE_ADDONS_ROOT: ${{ github.workspace }}/.qualification-addons
-          DURABLE_CODE_REVIEW_ROOT: ${{ github.workspace }}/.qualification-addons
+          DURABLE_CODE_REVIEW_ROOT: ${{ github.workspace }}/.qualification-code-review
         run: |
           bun install --frozen-lockfile --ignore-scripts
           bun run typecheck
