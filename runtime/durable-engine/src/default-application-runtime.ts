@@ -441,6 +441,31 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       await app.commit(async tx => { const doc = await tx.doc(ApplicationConversations, app.id); Object.assign(doc, mapping); }, context);
     }
     validateApplicationMapping(root, mapping);
+    // Repair a successful maintenance task whose post-commit budget-work close
+    // was interrupted. Public SDK reads prove the task and its committed write.
+    const maintenancePrefix = `durable-maintenance:${mapping.domain}:`;
+    const maintenanceWork = root.query("SELECT id FROM budget_work WHERE execution_kind='side_prompt' AND parent_work_id IS NULL AND status='active' AND substr(id,1,?)=?")
+      .all(maintenancePrefix.length, maintenancePrefix) as { id: string }[];
+    for (const work of maintenanceWork) {
+      const suffix = work.id.slice(maintenancePrefix.length);
+      if (!/^[1-9][0-9]*$/.test(suffix) || !Number.isSafeInteger(Number(suffix))) continue;
+      const task = await harness.getTask(Number(suffix) as import("@earendil-works/pi-durable").TaskId, context);
+      assert();
+      if (task?.kind !== "pi.compaction" || task.state.status !== "terminal" || task.state.outcome.status !== "completed") continue;
+      const result = task.state.outcome.result as { entryId?: number; submissionId?: number };
+      let entryId = result.entryId;
+      if (result.submissionId !== undefined) {
+        const submission = await harness.submission(result.submissionId as import("@earendil-works/pi-durable").SubmissionId, context);
+        const state = await submission?.status(context);
+        if (state?.type !== "write" || state.status !== "done" || state.conversationId !== task.conversationId) continue;
+        entryId = state.entry;
+      }
+      if (entryId === undefined) continue;
+      const entry = await harness.commit(tx => tx.entry(entryId as import("@earendil-works/pi-durable").EntryId), context);
+      assert();
+      if (entry?.kind === "pi.compaction" && entry.conversationId === task.conversationId)
+        completeMaintenanceBudgetWork(root, work.id);
+    }
     if (toolUpgrades.length) {
       // Same-file BEGIN IMMEDIATE fences host admissions for the whole public
       // commit. Repeat global SDK/host preflight under that lock before ANY
