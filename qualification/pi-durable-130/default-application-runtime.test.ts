@@ -405,6 +405,7 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
           stream.push({ type: "error", reason: "aborted", error: aborted }); stream.end(aborted); return;
         }
       }
+      if (scenario === "native-compaction-accounting-side-dispatch") stream.push({ type: "text_delta", contentIndex: 0, delta: "factory synthetic reply", partial: message });
       stream.push({ type: "done", reason: message.stopReason, message }); stream.end(message);
     })(); return stream;
   };
@@ -1638,9 +1639,15 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
     if (scenario === "native-compaction-accounting-side-dispatch") {
       const historyBefore = root.query("SELECT * FROM entries ORDER BY id").all();
       const callsBefore = calls;
-      const result = await pool.runSidePrompt("web:default", "native isolated side prompt");
+      const sideEvents: string[] = [], sideText: string[] = [];
+      const result = await pool.runSidePrompt("web:default", "native isolated side prompt", {
+        onEvent(event) { sideEvents.push(event.type); }, onTextDelta(delta) { sideText.push(delta); },
+      });
       expect(result).toMatchObject({ status: "success", result: "factory synthetic reply", model: "openai-codex/approved" });
       expect(calls).toBe(callsBefore + 1);
+      expect(sideEvents).toContain("done");
+      expect(sideEvents).toContain("text_delta");
+      expect(sideText.join("")).toBe("factory synthetic reply");
       expect(first!.sessionId).toBe(identity);
       expect(await first!.readModel!()).toBe(beforeModel);
       const sideSource = root.query("SELECT source_id FROM service_effect_s01_sources WHERE kind='internal'").get() as { source_id: string };

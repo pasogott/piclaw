@@ -298,6 +298,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     const candidate = { provider: model.provider, id: model.modelId, fullId: `${model.provider}/${model.modelId}` };
     if (!delegate.buildModelCandidates([candidate], config).some(entry => entry.id === candidate.fullId)) throw Error("Native Delegate model not approved");
   };
+  const sideObservers = new Map<string, NonNullable<import("../../src/agent-pool/contracts.js").SidePromptOptions["onEvent"]>>();
   const requestSources = new WeakMap<AbortSignal, Awaited<ReturnType<HostConversationRuntime["captureRunSource"]>>>();
   const models = createHostModels(host.modelRuntime, available.map(model => ({ provider: model.provider, id: model.id })), { signal: lifetime.signal,
     async captureSourceGuard(signal) {
@@ -315,6 +316,15 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       const check = () => runtime().assertMaintenanceRequest(scope);
       check();
       return check;
+    },
+    onEvent(event, signal) {
+      const captured = signal && requestSources.get(signal);
+      if (!captured || captured.delegateModel) return;
+      const source = captured.inputs.find(input => input.sourceSeq === captured.operation.primarySourceSeq);
+      const observer = source && sideObservers.get(source.sourceId);
+      if (!observer) return;
+      assert(); signal!.throwIfAborted(); runtime().assertCapturedSourceCurrent(captured.inputs);
+      observer(event as any);
     },
     async prepareRequest(model, options, signal) {
       const scope = taskModelRequestScope(options?.signal);
@@ -523,6 +533,12 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     onMaintenanceSettled(workId) { assert(); completeMaintenanceBudgetWork(root, workId); },
     onOperationSettled(operationId) { assert(); reconcileOperationBudgetWork(root, operationId); },
     onRuntime(value) { captureRuntime = value; },
+    observeSidePrompt(sourceId, observer) {
+      assert();
+      if (sideObservers.has(sourceId)) throw Error("Side prompt observer already registered");
+      sideObservers.set(sourceId, observer);
+      return () => { if (sideObservers.get(sourceId) === observer) sideObservers.delete(sourceId); };
+    },
     manifest: mapping.bindings.map(({ chatJid, branchId, conversationId }) => ({ chatJid, branchId, conversationId: conversationId as ConversationId })),
     sessions: new Map(mapping.bindings.map(binding => [binding.chatJid, binding.sessionId])),
     assertConversationAvailable() { check(ref, lifetime.signal); },

@@ -17,6 +17,7 @@ type DeferredOperation = "fetchDeferred" | "cancelDeferred";
 export interface HostModelPolicy {
   /** Invocation-local source fence retained through asynchronous credential resolution. */
   captureSourceGuard?(signal: AbortSignal | undefined): (() => void) | Promise<() => void>;
+  onEvent?(event: AssistantMessageEvent, requestSignal?: AbortSignal): void;
   prepareRequest?(model: Model<Api>, options: SimpleStreamOptions | undefined, signal: AbortSignal): Promise<{
     dispatch(): Promise<void>; settle(message: AssistantMessage): Promise<void>; abandon(): Promise<void>;
   } | undefined>;
@@ -276,6 +277,7 @@ export function createHostModels(
           : hostModelRuntime120.stream(physical, data(context), hostOptions);
         let terminal: AssistantMessageEvent | undefined;
         for await (const event of stream) {
+          policy.onEvent?.(event, options?.signal);
           if (event.type === "error" || event.type === "done") { terminal = event; continue; }
           output.push("partial" in event ? { ...data({ ...event, partial: undefined }), partial: projectMessage(event.partial, model) } : data(event));
         }

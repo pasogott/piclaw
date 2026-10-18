@@ -66,6 +66,7 @@ export interface ApplicationBootstrapOptions {
   assertConversationAvailable?: () => void;
   /** Host-owned physical catalog approval; no credentials or provider execution. */
   resolveScheduledModel?: (label: string) => { provider: string; modelId: string };
+  observeSidePrompt?: (sourceId: string, observer: NonNullable<SidePromptOptions["onEvent"]>) => () => void;
   createConversation?: (tx: import("@earendil-works/pi-durable").Tx, chatJid: string, branchId: string) => Promise<Manifest[number] & { sessionId: string }>;
   runtime: Pick<HostControllerOptions["runtime"], "incarnation" | "sessionId" | "lane" | "generation" | "harnessOptions" | "now" | "codemodeExecute">;
   /** Existing application payload store, with immutable answer references. */
@@ -402,7 +403,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     }
     async function dispatchSidePrompt(chatJid: string, prompt: string, options: SidePromptOptions = {}): Promise<SidePromptResult> {
       assertLive();
-      if (options.signal || options.onEvent || options.onTextDelta || options.onThinkingDelta || options.systemPrompt || options.budgetWorkId || options.budgetParentWorkId)
+      if (options.signal || options.systemPrompt || options.budgetWorkId || options.budgetParentWorkId ||
+        ((options.onEvent || options.onTextDelta || options.onThinkingDelta) && !config.observeSidePrompt))
         throw Error("Native side prompt options unavailable");
       if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 100_000) throw Error("Invalid side prompt");
       const scope = routeIndex.get(chatJid);
@@ -423,9 +425,17 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           acceptedAt: r.now(), createWakeIntent: false }), sealed({ effect: { ...effect(`claim:${sourceId}`), provenanceRef: "application:side-prompt" },
           chatJid, expectedFrontier: busy?.consumed_through_source_seq ?? 0, newOperationId: `operation:${sourceId}`, claimedAt: r.now() }), root);
       }).immediate();
-      return continueSidePrompt({ incarnation: r.incarnation, conversationId: scope.conversationId as ConversationId,
-        chatJid, branchId: scope.branchId, operationId: claimed.operation.operationId, sourceSeq: claimed.source.sourceSeq,
-        sourceId, payloadRef: sourceId, requestId: sourceId, requestHash: hashCanonicalRequest({ type: "input", requestId: sourceId, content: prompt }) });
+      const unobserve = config.observeSidePrompt?.(sourceId, event => {
+        assertLive();
+        options.onEvent?.(event);
+        if (event.type === "text_delta") options.onTextDelta?.(event.delta);
+        if (event.type === "thinking_delta") options.onThinkingDelta?.(event.delta);
+      });
+      try {
+        return await continueSidePrompt({ incarnation: r.incarnation, conversationId: scope.conversationId as ConversationId,
+          chatJid, branchId: scope.branchId, operationId: claimed.operation.operationId, sourceSeq: claimed.source.sourceSeq,
+          sourceId, payloadRef: sourceId, requestId: sourceId, requestHash: hashCanonicalRequest({ type: "input", requestId: sourceId, content: prompt }) });
+      } finally { unobserve?.(); }
     }
     async function dispatchScheduledAgent(lease: ScheduledRunLease): Promise<import("../../src/agent-pool.js").AgentOutput> {
       assertLive();
