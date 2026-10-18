@@ -310,10 +310,11 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       if (!scope || scope.taskKind !== "pi.generation") return undefined;
       const captured = requestSources.get(scope.signal);
       if (!captured) throw Error("Native request source capture unavailable");
-      if (root.query("SELECT 1 FROM service_effect_s07_occurrences WHERE operation_id=?").get(captured.operation.operationId)) return undefined;
+      const scheduled = root.query("SELECT task_id FROM service_effect_s07_occurrences WHERE operation_id=?").get(captured.operation.operationId) as { task_id: string } | null;
       return reserveHostRequest({ database: root, operationId: captured.operation.operationId,
         chatJid: captured.operation.chatJid, authPath: join(getPiclawAgentDir(), "auth.json"), model: model as any,
-        maxTokens: options?.maxTokens, executionKind: captured.delegateModel ? "delegate" : "interactive", signal,
+        maxTokens: options?.maxTokens, executionKind: captured.delegateModel ? "delegate" : scheduled ? "scheduled" : "interactive",
+        scheduledTaskId: scheduled?.task_id, signal,
         assertCurrent() { assert(); scope.signal.throwIfAborted(); runtime().assertCapturedSourceCurrent(captured.inputs); if (captured.delegateModel) assertDelegateModel(captured.delegateModel); } });
     },
     async authorize(model, _kind, signal) { check(model, signal); }, assertCurrent(model, _kind, signal) { check(model, signal); } });

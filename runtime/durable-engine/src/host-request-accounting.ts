@@ -29,7 +29,7 @@ export function reconcileOperationBudgetWork(database: Database, operationId?: s
  */
 export async function reserveHostRequest(options: {
   database: Database; operationId: string; chatJid: string; authPath: string;
-  model: Model<Api>; maxTokens?: number; executionKind?: "interactive" | "delegate"; signal: AbortSignal; assertCurrent(): void;
+  model: Model<Api>; maxTokens?: number; executionKind?: "interactive" | "delegate" | "scheduled"; scheduledTaskId?: string; signal: AbortSignal; assertCurrent(): void;
 }) {
   const { database, model, signal, assertCurrent } = options;
   assertCurrent(); signal.throwIfAborted();
@@ -40,7 +40,8 @@ export async function reserveHostRequest(options: {
   const operationWork = operationBudgetWorkId(options.operationId);
   const id = randomUUID();
   const workId = `durable-request:${id}`;
-  ensureBudgetWork({ id: operationWork, chatJid: options.chatJid, executionKind: "interactive" }, database);
+  ensureBudgetWork({ id: operationWork, chatJid: options.chatJid, executionKind: options.scheduledTaskId ? "scheduled" : "interactive",
+    scheduledTaskId: options.scheduledTaskId }, database);
   ensureBudgetWork({ id: workId, chatJid: options.chatJid, executionKind: options.executionKind ?? "interactive", parentWorkId: operationWork }, database);
   const current = () => {
     assertCurrent(); signal.throwIfAborted();
