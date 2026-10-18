@@ -50,6 +50,7 @@ export interface MaterializedAnswer {
 }
 export interface RuntimeOptions {
   readonly incarnation: string;
+  readonly onOperationSettled?: (operationId: string) => void;
   /** Required for model SET: shared-file SQL guard, checked inside each storage transaction. */
   readonly withIdleModelGuard?: <T>(body: () => Promise<T>) => Promise<T>;
   /** Caller already holds exclusive ownership of this entire store, not a per-chat lease.
@@ -151,6 +152,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
     operationConversationFor: o.operationConversationFor?.bind(o),
     authorizeScheduling: authorizeScheduling.bind(o), putAnswer: putAnswer.bind(o),
     materializeAnswer: materializeAnswer?.bind(o), now: now.bind(o),
+    onOperationSettled: o.onOperationSettled?.bind(o),
     owner: Object.freeze({ assert: owner.assert.bind(owner), release: owner.release.bind(owner) }),
     work: Object.freeze({ getOperation: work.getOperation.bind(work), acceptCancellation: work.acceptCancellation.bind(work), bindHarness: work.bindHarness.bind(work), finishHarness: work.finishHarness?.bind(work) }),
     terminal: Object.freeze({ getTerminal: terminal.getTerminal.bind(terminal), commitTerminal: terminal.commitTerminal.bind(terminal) }),
@@ -873,7 +875,7 @@ export class HostConversationRuntime {
   private async settleInput(input: AcceptedInput) {
     let state = await this.readState(input); const o = this.options;
     if (state.operation.terminal) {
-      const terminal = value(await o.terminal.getTerminal(input.operationId)); this.fence(); return terminal;
+      const terminal = value(await o.terminal.getTerminal(input.operationId)); this.fence(); o.onOperationSettled?.(input.operationId); return terminal;
     }
     const initialVersion = state.operation.version;
     const primarySubmissionId = state.submissionId;
@@ -947,7 +949,7 @@ export class HostConversationRuntime {
       disposition: cancelled ? "cancelled" as const : "completed" as const, errorCode: null, terminalAuthorityRef: null,
       timeline, sourceDispositions: operation.claimedSourceSeqs.map(sourceSeq => ({ sourceSeq, state: "consumed" as const, reason: "runtime committed answer" })),
       outboxIntents: [], committedAt: o.now() });
-    const terminal = value(await o.terminal.commitTerminal(request)); this.fence(); return terminal;
+    const terminal = value(await o.terminal.commitTerminal(request)); this.fence(); o.onOperationSettled?.(input.operationId); return terminal;
   }
   /** Rollback-only shutdown: seal before yielding, join host calls, then reject ANY live
    * public task/submission before Harness.close can cancel work. Failure stays sealed.

@@ -19,6 +19,8 @@ import { installTerminalSettlementCompositionSchema } from "../../src/service-ef
 import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { applicationOwnership, createApplicationBootstrapBundle } from "./application-bootstrap.js";
 import { createHostModels } from "./host-models.js";
+import { reserveHostRequest, operationBudgetWorkId } from "./host-request-accounting.js";
+import { getBudgetWork, setBudgetWorkStatus } from "../../src/db/budget-limits.js";
 import { createHostMcp } from "./host-mcp.js";
 import { createHostFetch } from "./host-fetch.js";
 import { taskModelRequestScope, withTaskModelRequestScope } from "./task-model-boundary-shim.js";
@@ -302,6 +304,15 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       check();
       return check;
     },
+    async prepareRequest(model, options, signal) {
+      const scope = taskModelRequestScope(options?.signal);
+      if (!scope || scope.taskKind !== "pi.generation") return undefined;
+      const captured = await runtime().captureRunSource(scope.conversationId, scope.taskId);
+      if (captured.delegateModel || root.query("SELECT 1 FROM service_effect_s07_occurrences WHERE operation_id=?").get(captured.operation.operationId)) return undefined;
+      return reserveHostRequest({ database: root, operationId: captured.operation.operationId,
+        chatJid: captured.operation.chatJid, authPath: join(getPiclawAgentDir(), "auth.json"), model: model as any,
+        maxTokens: options?.maxTokens, signal, assertCurrent() { assert(); scope.signal.throwIfAborted(); runtime().assertCapturedSourceCurrent(captured.inputs); } });
+    },
     async authorize(model, _kind, signal) { check(model, signal); }, assertCurrent(model, _kind, signal) { check(model, signal); } });
   const registry = createRegistry();
   // Preserve old persisted extension names without depending on their hook selection.
@@ -459,6 +470,12 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     return { ref, bytes, byteLength: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), mediaType: "text/plain", redactionClass: "private" as const };
   } } };
   const bundle = await createApplicationBootstrapBundle({ root, path, ownership, offlineInitialize: true, answers,
+    onOperationSettled(operationId) {
+      const id = operationBudgetWorkId(operationId);
+      if (getBudgetWork(id, root) && !root.query(`SELECT 1 FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id
+        WHERE w.parent_work_id=? AND r.state NOT IN ('settled','released') LIMIT 1`).get(id))
+        setBudgetWorkStatus(id, "completed", { boundary: "operation_settled" }, root);
+    },
     onRuntime(value) { captureRuntime = value; },
     manifest: mapping.bindings.map(({ chatJid, branchId, conversationId }) => ({ chatJid, branchId, conversationId: conversationId as ConversationId })),
     sessions: new Map(mapping.bindings.map(binding => [binding.chatJid, binding.sessionId])),

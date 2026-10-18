@@ -17,6 +17,9 @@ type DeferredOperation = "fetchDeferred" | "cancelDeferred";
 export interface HostModelPolicy {
   /** Invocation-local source fence retained through asynchronous credential resolution. */
   captureSourceGuard?(signal: AbortSignal | undefined): (() => void) | Promise<() => void>;
+  prepareRequest?(model: Model<Api>, options: SimpleStreamOptions | undefined, signal: AbortSignal): Promise<{
+    dispatch(): Promise<void>; settle(message: AssistantMessage): Promise<void>; abandon(): Promise<void>;
+  } | undefined>;
   /** Includes host model approval and budget admission; never auth/login approval. */
   authorize(ref: ModelRef, kind: Operation, signal: AbortSignal): Promise<void>;
   /** Synchronous approval/budget-generation check after host auth has resolved. */
@@ -205,6 +208,7 @@ export function createHostModels(
     options?: SimpleStreamOptions, deferred?: { handle: DeferredHandle; options?: DeferredFetchOptions }) => {
     const output = createAssistantMessageEventStream();
     let terminalUsage: Usage | undefined;
+    let request: Awaited<ReturnType<NonNullable<HostModelPolicy["prepareRequest"]>>>;
     const captureTerminalUsage = (message: AssistantMessage) => {
       if (message.provider !== model.provider || message.model !== model.id || message.api !== model.api) return;
       const responseModel = message.responseModel ?? message.model;
@@ -223,12 +227,13 @@ export function createHostModels(
           const admitted = await deferredAdmission(model, deferred.handle, deferred.options, "fetchDeferred");
           const stream = hostModelRuntime120.streamDeferred(admitted.physical, admitted.raw, admitted.options);
           for await (const event of stream) {
-            if (event.type === "error") { captureTerminalUsage(event.error); throw new Error("Host request failed"); }
-            output.push("message" in event ? { ...data({ ...event, message: undefined }), message: projectMessage(event.message, model) }
+            if (event.type === "error") { await request?.settle(event.error); captureTerminalUsage(event.error); throw new Error("Host request failed"); }
+            if (event.type === "done") await request?.settle(event.message);
+          output.push("message" in event ? { ...data({ ...event, message: undefined }), message: projectMessage(event.message, model) }
               : "partial" in event ? { ...data({ ...event, partial: undefined }), partial: projectMessage(event.partial, model) } : data(event));
           }
           const result = await stream.result();
-          if (result.stopReason === "error" || result.stopReason === "aborted") { captureTerminalUsage(result); throw new Error("Host request failed"); }
+          if (result.stopReason === "error" || result.stopReason === "aborted") { await request?.settle(result); captureTerminalUsage(result); throw new Error("Host request failed"); }
           output.end(projectMessage(result, model));
           return;
         }
@@ -244,6 +249,7 @@ export function createHostModels(
           ? AbortSignal.any([options.signal, policy.signal]) : policy.signal;
         const safeOptions = requestOptions(options, !!policy.deferred);
         signal.throwIfAborted();
+        request = await policy.prepareRequest?.(model, { ...safeOptions, signal: options?.signal }, signal);
         await policy.authorize(ref, "chat", signal);
         signal.throwIfAborted();
         assertSource();
@@ -257,23 +263,25 @@ export function createHostModels(
           return current;
         };
         const physical = assertPhysicalCompatible();
-        const hostOptions = { ...safeOptions, signal, transformHeaders: (headers: Record<string, string | null>) => {
+        const hostOptions = { ...safeOptions, signal, transformHeaders: async (headers: Record<string, string | null>) => {
           signal.throwIfAborted();
           assertSource();
           policy.assertCurrent(ref, "chat", signal);
           assertPhysicalCompatible();
+          await request?.dispatch();
           return headers; // Host-only closure: never sent to 1.3 or a caller callback.
         } };
         const stream = simple
           ? hostModelRuntime120.streamSimple(physical, data(context), hostOptions)
           : hostModelRuntime120.stream(physical, data(context), hostOptions);
         for await (const event of stream) {
-          if (event.type === "error") { captureTerminalUsage(event.error); throw new Error("Host request failed"); }
+          if (event.type === "error") { await request?.settle(event.error); captureTerminalUsage(event.error); throw new Error("Host request failed"); }
+          if (event.type === "done") await request?.settle(event.message);
           output.push("message" in event ? { ...data({ ...event, message: undefined }), message: projectMessage(event.message, model) }
             : "partial" in event ? { ...data({ ...event, partial: undefined }), partial: projectMessage(event.partial, model) } : data(event));
         }
         const result = await stream.result();
-        if (result.stopReason === "error" || result.stopReason === "aborted") { captureTerminalUsage(result); throw new Error("Host request failed"); }
+        if (result.stopReason === "error" || result.stopReason === "aborted") { await request?.settle(result); captureTerminalUsage(result); throw new Error("Host request failed"); }
         output.end(projectMessage(result, model));
       } catch {
         // Host errors can contain credentials/headers. Do not export them.
@@ -283,6 +291,9 @@ export function createHostModels(
           usage: terminalUsage ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
         output.push({ type: "error", reason: "error", error });
+        // Finish reconciliation before publishing the terminal failure. An
+        // uncertain accounting write leaves its durable hold intact.
+        try { await request?.abandon(); } catch { /* Preserve the sanitised failure and unresolved reservation. */ }
         output.end(error);
       }
     })();
