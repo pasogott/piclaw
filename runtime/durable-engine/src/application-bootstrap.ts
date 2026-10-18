@@ -6,6 +6,7 @@ import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import type { RuntimeLockHandle } from "../../src/runtime/single-instance.js";
 import type { RuntimeBackend } from "../../src/runtime/bootstrap.js";
 import { RuntimeStartupCleanupError } from "../../src/runtime/startup-cleanup-error.js";
+import type { SidePromptOptions, SidePromptResult } from "../../src/agent-pool/contracts.js";
 import type { WebChannelOpts } from "../../src/channels/web.js";
 import type { EffectPayloadResolver } from "../../src/service-effects/contracts/payload-resolver.js";
 import { createCurrentPiclawServiceWorkStore } from "../../src/service-effects/current-piclaw/service-work-store.js";
@@ -18,7 +19,7 @@ import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { createHostController, type HostControllerOptions } from "./host-controller.js";
 import { createHostDurableBindings, assertNativeScheduledBudgetAvailable } from "./host-bindings.js";
 import { assertHostSchema, initializeHostSchema } from "./host-schema.js";
-import { value } from "./host-effects.js";
+import { value, effect, sealed } from "./host-effects.js";
 import { hashScheduledLeaseToken } from "../../src/service-effects/current-piclaw/scheduled-run-values.js";
 import type { ScheduledRunLease } from "../../src/service-effects/contracts/scheduled-run-store.js";
 import type { AcceptedInput } from "./host-runtime.js";
@@ -344,6 +345,39 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       if (conversationId === undefined || !persisted) throw Error("Scheduled fork not published");
       return Object.freeze({ ...base, conversationId });
     }
+    async function dispatchSidePrompt(chatJid: string, prompt: string, options: SidePromptOptions = {}): Promise<SidePromptResult> {
+      assertLive();
+      if (options.signal || options.onEvent || options.onTextDelta || options.onThinkingDelta || options.systemPrompt || options.budgetWorkId || options.budgetParentWorkId)
+        throw Error("Native side prompt options unavailable");
+      if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 100_000) throw Error("Invalid side prompt");
+      const scope = routeIndex.get(chatJid);
+      if (!scope) throw Error("Unbound side prompt chat");
+      const sourceId = `side-prompt:${crypto.randomUUID()}`;
+      // Immutable payload may outlive denied admission; it never grants authority.
+      await config.answers.put(sourceId, prompt); assertLive();
+      const claimed = root.transaction(() => {
+        assertLive();
+        if (root.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native side prompt budget admission unavailable");
+        const busy = root.query(`SELECT consumed_through_source_seq,active_operation_id FROM service_effect_s01_chats WHERE chat_jid=?`).get(chatJid) as
+          { consumed_through_source_seq: number; active_operation_id: string | null } | null;
+        if (busy?.active_operation_id) throw Error("Side prompt chat is busy");
+        return work.acceptAndClaimSourceInTransaction(sealed({ effect: { ...effect(`accept:${sourceId}`), provenanceRef: "application:side-prompt" },
+          chatJid, sourceId, kind: "internal" as const, payloadRef: sourceId, targetOperationId: null, parentSourceSeq: null,
+          acceptedAt: r.now(), createWakeIntent: false }), sealed({ effect: { ...effect(`claim:${sourceId}`), provenanceRef: "application:side-prompt" },
+          chatJid, expectedFrontier: busy?.consumed_through_source_seq ?? 0, newOperationId: `operation:${sourceId}`, claimedAt: r.now() }), root);
+      }).immediate();
+      const input = await allocateSidePromptConversation({ incarnation: r.incarnation, conversationId: scope.conversationId as ConversationId,
+        chatJid, branchId: scope.branchId, operationId: claimed.operation.operationId, sourceSeq: claimed.source.sourceSeq,
+        sourceId, payloadRef: sourceId, requestId: sourceId, requestHash: hashCanonicalRequest({ type: "input", requestId: sourceId, content: prompt }) });
+      const id = await runtime.submit(input);
+      await runtime.wait(input, id, shutdown.signal);
+      const state = await runtime.reconcile(input);
+      if (!state.answer) throw Error("Side prompt answer unavailable");
+      if (!await runtime.settle(input)) throw Error("Side prompt settlement pending");
+      return { status: "success", result: state.answer.text, thinking: state.answer.message.content
+        .filter(block => block.type === "thinking").map(block => block.thinking).join(""),
+        model: `${state.answer.message.provider}/${state.answer.message.model}`, usage: state.answer.message.usage, stopReason: state.answer.message.stopReason };
+    }
     async function dispatchScheduledAgent(lease: ScheduledRunLease): Promise<import("../../src/agent-pool.js").AgentOutput> {
       assertLive();
       // The native SDK task does not yet carry the host's per-request budget
@@ -372,7 +406,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     return Object.freeze({
       /** Construct pool first from this snapshot, then bind its existing channel constructor. */
       sessionOptions: Object.freeze({ getDurableSession, dispatchScheduledAgent }),
-      allocateScheduledConversation, allocateSidePromptConversation,
+      allocateScheduledConversation, allocateSidePromptConversation, dispatchSidePrompt,
       bind(options: Pick<WebChannelOpts, "queue" | "agentPool">): Readonly<WebChannelOpts> {
         assert(); if (bound || closing) throw Error("Application bundle already bound or closing");
         bound = true;
@@ -392,6 +426,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     } satisfies RuntimeBackend & {
       allocateScheduledConversation(lease: ScheduledRunLease): Promise<AcceptedInput>;
       allocateSidePromptConversation(input: AcceptedInput): Promise<AcceptedInput>;
+      dispatchSidePrompt(chatJid: string, prompt: string, options?: SidePromptOptions): Promise<SidePromptResult>;
       reconcileMaintenance(chatJid: string): Promise<void>;
       retryRecoveredWork: typeof recovery.retryRecoveredWork;
       onPendingIntent: typeof recovery.onPendingIntent;

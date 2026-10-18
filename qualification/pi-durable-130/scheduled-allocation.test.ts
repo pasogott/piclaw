@@ -126,6 +126,7 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
   const chat = `web:side-allocation-${failBinding}`, manifest = [{ chatJid: chat, branchId: "main", conversationId: parent }];
   let activeRuntime!: import("../../runtime/durable-engine/src/host-runtime.js").HostConversationRuntime;
   const payloads = new Map<string, string>();
+  let acceptMainDuringPayload = false;
   const createBundle = () => createApplicationBootstrapBundle({ root: db, path, ownership: applicationOwnership(lock), manifest,
     sessions: new Map([[chat, "original"]]), offlineInitialize: true, onRuntime(runtime) { activeRuntime = runtime; },
     runtime: { incarnation: "side-allocation", sessionId: "side-allocation", lane: "main", generation: 1,
@@ -134,7 +135,15 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
       const text = payloads.get(ref); if (text === undefined) return null;
       const bytes = new TextEncoder().encode(text);
       return { ref, bytes, byteLength: bytes.byteLength, sha256: (new Bun.CryptoHasher("sha256")).update(bytes).digest("hex"), mediaType: "text/plain", redactionClass: "private" };
-    } }, put(ref, text) { payloads.set(ref, text); } } }, context);
+    } }, put(ref, text) {
+      payloads.set(ref, text);
+      if (acceptMainDuringPayload && ref.startsWith("side-prompt:")) {
+        acceptMainDuringPayload = false;
+        db.transaction(() => work.acceptSourceInTransaction(sealed({ effect: effect(`main:${ref}`), chatJid: chat, sourceId: "intervening-main",
+          kind: "message", payloadRef: "main-payload", targetOperationId: null, parentSourceSeq: null,
+          acceptedAt: new Date().toISOString(), createWakeIntent: false }), db)).immediate();
+      }
+    } } }, context);
   let bundle = await createBundle();
   const work = value(createCurrentPiclawServiceWorkStore(db, { hitFault: () => false, recordTrace() {} }));
   try {
@@ -179,6 +188,23 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
     expect(await activeRuntime.settle(allocated)).not.toBeNull();
     expect(db.query("SELECT * FROM entries WHERE conversation_id=? ORDER BY id").all(parent)).toEqual(beforeRun);
     expect(db.query("SELECT message_row_id FROM service_effect_s02_commits WHERE operation_id=?").get(input.operationId)).toEqual({ message_row_id: null });
+    const sourcesBefore = db.query("SELECT count(*) AS n FROM service_effect_s01_sources WHERE chat_jid=?").get(chat);
+    await expect(bundle.dispatchSidePrompt(chat, "unsupported observer", { signal: new AbortController().signal })).rejects.toThrow("Native side prompt options unavailable");
+    expect(db.query("SELECT count(*) AS n FROM service_effect_s01_sources WHERE chat_jid=?").get(chat)).toEqual(sourcesBefore);
+    const competing = await Promise.allSettled([bundle.dispatchSidePrompt(chat, "side A"), bundle.dispatchSidePrompt(chat, "side B")]);
+    expect(competing.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(competing.filter(result => result.status === "rejected")).toHaveLength(1);
+    const successful = competing.find(result => result.status === "fulfilled") as PromiseFulfilledResult<import("../../runtime/src/agent-pool/contracts.js").SidePromptResult>;
+    expect(successful.value).toMatchObject({ status: "success", result: "synthetic answer", model: "qualification/synthetic" });
+    expect(db.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid=? AND state NOT IN ('consumed','disposed')").all(chat)).toEqual([]);
+    expect(db.query("SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid=?").get(chat)).toEqual({ active_operation_id: null });
+    expect(db.query("SELECT * FROM entries WHERE conversation_id=? ORDER BY id").all(parent)).toEqual(beforeRun);
+    acceptMainDuringPayload = true;
+    const sourceCount = db.query("SELECT count(*) AS n FROM service_effect_s01_sources WHERE chat_jid=?").get(chat) as { n: number };
+    await expect(bundle.dispatchSidePrompt(chat, "races main input")).rejects.toThrow("owner_conflict");
+    expect(db.query("SELECT state FROM service_effect_s01_sources WHERE source_id='intervening-main'").get()).toEqual({ state: "pending" });
+    expect(db.query("SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid=?").get(chat)).toEqual({ active_operation_id: null });
+    expect(db.query("SELECT count(*) AS n FROM service_effect_s01_sources WHERE chat_jid=?").get(chat)).toEqual({ n: sourceCount.n + 1 });
   } finally {
     await bundle.close();
     // These allocation-only fixtures deliberately never execute/settle the
