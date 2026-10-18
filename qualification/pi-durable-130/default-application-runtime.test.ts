@@ -119,7 +119,7 @@ const explicitDelegateCases: Record<string, { id: string; model: unknown; denied
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
+for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -140,6 +140,13 @@ for (const scenario of ["native-codemode-cancel", "native-codemode-harness", "na
   if ((scenario === "native-codemode-cancel" || scenario === "native-codemode-harness")) toolSequence = [{ name: "codemode", arguments: {
     code: 'try { await tools.write({path:"codemode-forbidden.txt",content:"FORBIDDEN"}); } catch {} store("revoked-sentinel", {secret:"MUST_NOT_PERSIST"}); console.log("done");',
   } }];
+  const codemodeReadPath = join(workspace, "codemode-reopen-read.txt");
+  const codemodeMarker = join(workspace, "codemode-reopen-entered");
+  const codemodePid = join(workspace, "codemode-reopen-pid");
+  if (scenario === "native-codemode-reopen") {
+    writeFileSync(codemodeReadPath, "NATIVE_CODEMODE_FIRST_READ");
+    toolSequence = [{ name: "codemode", arguments: { code: `const first = await tools.read({path:${JSON.stringify(codemodeReadPath)}}); try { await tools.bash({command:${JSON.stringify(`printf x >> '${codemodeMarker}'; printf '%s' $$ > '${codemodePid}'; exec sleep 1000`)}}); } catch {} console.log(first);` } }];
+  }
   const nativeDrawio = scenario.startsWith("native-drawio");
   const drawioCancelled = scenario === "native-drawio-cancel";
   const drawioMissingOpener = scenario === "native-drawio-missing-opener";
@@ -342,6 +349,16 @@ for (const scenario of ["native-codemode-cancel", "native-codemode-harness", "na
       authority.assertCurrent();
       return captured;
     }));
+  }
+  let codemodeReads = 0;
+  if (scenario === "native-codemode-reopen") {
+    const actualRead = hostFs.readFileSync;
+    captureSpies.push(spyOn(hostFs, "readFileSync").mockImplementation(((path: unknown, ...args: unknown[]) => {
+      if (String(path) === codemodeReadPath) codemodeReads++;
+      return (actualRead as Function)(path, ...args);
+    }) as typeof hostFs.readFileSync));
+    expect(readFileSync(codemodeReadPath, "utf8")).toBe("NATIVE_CODEMODE_FIRST_READ");
+    expect(codemodeReads).toBe(1); codemodeReads = 0;
   }
   let codemodeNestedCaptures = 0;
   if ((scenario === "native-codemode-cancel" || scenario === "native-codemode-harness")) {
@@ -746,6 +763,60 @@ for (const scenario of ["native-codemode-cancel", "native-codemode-harness", "na
   const dispatch = bound.dispatchAcceptedInput!(message.chat_jid, message.id, rowId!);
   const tableCancelled = scenario === "native-editable-table-revoked" || scenario === "native-editable-table-closed-publisher" || scenario === "native-editable-table-archived" || scenario === "native-editable-table-harness-generation";
   expect(dispatch).toBeDefined();
+  if (scenario === "native-codemode-reopen") {
+    let pending: Promise<unknown> | undefined;
+    let childPid: number | undefined;
+    let reopenedBase: ReturnType<typeof createRuntimeBaseServices> | undefined;
+    let reopenedPool: AgentPool | undefined;
+    try {
+      pending = dispatch!();
+      const deadline = Date.now() + 2000;
+      while (!existsSync(codemodePid) && Date.now() < deadline) await Bun.sleep(5);
+      expect(existsSync(codemodePid)).toBe(true);
+      childPid = Number(readFileSync(codemodePid, "utf8"));
+      expect(childPid).toBeGreaterThan(0);
+      expect(codemodeReads).toBe(1);
+      expect(readFileSync(codemodeMarker, "utf8")).toBe("x");
+      const binding = root.query("SELECT * FROM piclaw_durable_bindings_v1").all();
+      expect(binding).toHaveLength(1);
+      expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
+      expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+      backend.stop(); await backend.close();
+      expect(await pending).toBe("pending");
+      expect(() => process.kill(childPid!, 0)).toThrow();
+      await channel.stop(); await base.queue.shutdown(); await pool.shutdown();
+      const oldRoot = root;
+      closeDatabase(); initDatabase(); root = getDb();
+      expect(root).not.toBe(oldRoot);
+      expect(() => oldRoot.query("SELECT 1").get()).toThrow();
+      owner.assertCurrentOwner();
+      backend = await createDefaultApplicationRuntime(owner, async () => services);
+      expect(backend.sessionOptions.getDurableSession!("web:default")?.sessionId).toBe(first!.sessionId);
+      reopenedBase = createRuntimeBaseServices({ dataDir: workspace });
+      reopenedPool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
+      const reopened = backend.bind({ queue: reopenedBase.queue, agentPool: reopenedPool });
+      // Recover the original accepted row/binding, never submit a fresh request.
+      expect(await reopened.dispatchAcceptedInput!(message.chat_jid, message.id, rowId!)!()).toBe("settled");
+      expect(root.query("SELECT * FROM piclaw_durable_bindings_v1").all()).toEqual(binding);
+      expect(codemodeReads).toBe(1);
+      expect(readFileSync(codemodeMarker, "utf8")).toBe("x");
+      const result = [...observedResults.values()].find(result => result.toolName === "codemode");
+      expect(result).toBeDefined(); expect(result!.isError).not.toBe(true);
+      expect(JSON.stringify(result!.content)).toContain("NATIVE_CODEMODE_FIRST_READ");
+      expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "consumed" });
+      expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(1);
+      expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(1);
+      expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
+    } finally {
+      backend.stop(); await backend.close(); await pending;
+      if (childPid) { try { process.kill(childPid, "SIGKILL"); } catch {} }
+      await channel.stop(); await base.queue.shutdown(); await pool.shutdown();
+      await reopenedBase?.queue.shutdown(); await reopenedPool?.shutdown();
+      for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+      closeDatabase(); owner.release();
+    }
+    return;
+  }
   const dispatchOutcome = await dispatch!();
   if ((scenario === "native-codemode-cancel" || scenario === "native-codemode-harness")) {
     expect(dispatchOutcome).toBe("pending");

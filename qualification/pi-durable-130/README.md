@@ -1,3 +1,22 @@
+# Native codemode default-backend reopen — targeted coverage
+
+The native-codemode-reopen scenario uses the actual default backend, guarded
+read/bash tools, strict root ownership and a single disk application database.
+It completes a read, holds an unsafe shell child, then stops/closes the runtime
+and physically reopens SQLite. The same accepted row/message and durable binding
+are resumed. The read and shell marker remain single effects; the original child
+is dead, source is consumed, and one public answer/terminal commit is recorded.
+
+Targeted receipt: 1 pass / 38 assertions (~1.99 s), no full suite. Bounded static
+review is READY. A direct affected-file typecheck retains 14 existing diagnostics
+with zero additions versus exact HEAD; this is not a clean typecheck.
+Checkpoint: /workspace/reviews/durable-1650/native-codemode-reopen-checkpoint.md.
+
+Scope is controlled close/reopen through the default backend dispatcher, not
+SIGKILL, power loss, provider-payment exactly-once, private SDK interruption
+classification or a separate HTTP/processChat recovery scenario. No production
+code, services, dependencies, activation or migration changed.
+
 # Native codemode enabled — targeted qualification
 
 Codemode is installed by default through the public durable createCodemodeTool
