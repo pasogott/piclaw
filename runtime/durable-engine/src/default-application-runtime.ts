@@ -18,13 +18,14 @@ import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { applicationOwnership, createApplicationBootstrapBundle } from "./application-bootstrap.js";
 import { createHostModels } from "./host-models.js";
 import { createHostBuiltinTools } from "./host-builtins.js";
-import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, qualifyInstalledEditableTable, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
+import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, qualifyInstalledEditableTable, qualifyInstalledOfficeViewer, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
 import { createHostDelegateTool } from "./host-delegate-tool.js";
 import { createHostDelegateFileReader } from "./host-delegate-files.js";
 import { extensionKvGet } from "../../src/db/extension-kv.js";
 import { createHostPlanTool } from "./host-plan-tool.js";
 import { createHostCodeReviewTool } from "./host-code-review-tool.js";
 import { createHostEditableTableTool, type WidgetPublisher } from "./host-editable-table-tool.js";
+import { createHostOfficeViewerTool } from "./host-office-viewer-tool.js";
 import { createHostPlanPrompt } from "./host-plan-prompt.js";
 import type { HostConversationRuntime } from "./host-runtime.js";
 import { readAccessConfig } from "../../src/core/config-access.js";
@@ -157,11 +158,12 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const delegate = await qualifyInstalledDelegate(catalog, WORKSPACE_DIR);
   const codeReview = await qualifyInstalledCodeReview(catalog, WORKSPACE_DIR);
   const editableTable = await qualifyInstalledEditableTable(catalog, WORKSPACE_DIR);
+  const officeViewer = qualifyInstalledOfficeViewer(catalog, WORKSPACE_DIR);
   let widgetPublisher: WidgetPublisher | undefined;
-  try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan, delegate, codeReview, editableTable); }
+  try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan, delegate, codeReview, editableTable, officeViewer); }
   finally { catalog.runtime.invalidate("Application extension preflight ended"); }
-  const applicationToolNames: readonly string[] = [...defaultToolNames, ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : [])];
-  const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || ((!!plan || !!delegate || !!codeReview || !!editableTable) && Array.isArray(tools) &&
+  const applicationToolNames: readonly string[] = [...defaultToolNames, ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : [])];
+  const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || ((!!plan || !!delegate || !!codeReview || !!editableTable || !!officeViewer) && Array.isArray(tools) &&
     tools.length === defaultToolNames.length && defaultToolNames.every((name, index) => tools[index] === name));
   const host = await getModels(); assert();
   const provider = settings.getDefaultProvider(), modelId = settings.getDefaultModel();
@@ -262,6 +264,10 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   }, runtime }));
   if (codeReview) tools.push(createHostCodeReviewTool(codeReview.addon, { root, cwd: WORKSPACE_DIR, runtime,
     assertOwner() { assert(); lifetime.signal.throwIfAborted(); codeReview.assertCurrent(); } }));
+  if (officeViewer) tools.push(createHostOfficeViewerTool(officeViewer.definition as Parameters<typeof createHostOfficeViewerTool>[0], { root, runtime, workspace: WORKSPACE_DIR,
+    assertOwner() { assert(); lifetime.signal.throwIfAborted(); officeViewer.assertCurrent();
+      if (readAccessConfig().mode !== "single-user") throw Error("Office viewer requires single-user mode");
+    } }));
   if (editableTable) tools.push(createHostEditableTableTool(editableTable.addon, { root, runtime, publisher: () => widgetPublisher,
     assertOwner() { assert(); lifetime.signal.throwIfAborted(); editableTable.assertCurrent();
       if (readAccessConfig().mode !== "single-user") throw Error("Editable table requires single-user mode");

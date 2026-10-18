@@ -46,7 +46,14 @@ const approvedEditableTableFiles = Object.freeze({
   "tool.ts": "1d6752181e680055236302c57e9a100aa78d2c6033074034be83f36551814ceb",
   "shared.ts": "ce18a28856afc7d554d015dfeaf6b04d2deb918762040d0ee9dd030a7909b9f4"
 });
+// Execution-only profile: index imports only node:fs/path. Static route/status
+// registration is approved; vendor browser assets are not an execution proof.
+const approvedOfficeViewerFiles = Object.freeze({
+  "package.json": "fe62110bc5f59674973065afee279f34f7e0ff1cfc078718f8fad14a5973b155",
+  "index.ts": "71ea2d50f2e2e77ca600dd18b530f680bb0efaf024572b0e2f8b75c9e41828b0",
+});
 const profiles = {
+  open_office_viewer: { name: "@rcarmo/piclaw-addon-office-viewer", version: "0.1.3", files: approvedOfficeViewerFiles, shadows: ["index.js"], events: [] as readonly string[] },
   editable_table: { name: "@rcarmo/piclaw-addon-editable-table", version: "0.1.4", files: approvedEditableTableFiles, shadows: ["index.js", "tool.js", "tool.json", "tool/index.js", "tool/package.json", "shared.js", "shared.json", "shared/index.js", "shared/package.json"], events: ["resources_discover"] },
   plan: { name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.25", files: approvedPlanFiles, shadows: ["compat/chat-context.js", "compat/extension-kv.js", "compat/package.json"], events: ["before_agent_start"] },
   code_review: { name: "@rcarmo/piclaw-addon-code-review", version: "0.1.8", files: approvedCodeReviewFiles,
@@ -124,7 +131,7 @@ function qualifyInstalled(catalog: LoadExtensionsResult, cwd: string, kind: Prof
     if (!catalog.extensions.includes(extension) || resolve(extension.resolvedPath) !== source.entry ||
       !sameSource(source, captureApprovedPlan(cwd, getInstalledAddonExtensionPaths(cwd), kind))) throw Error(`Installed ${kind === "plan" ? "Plan" : kind === "delegate" ? "Delegate" : "Code Review"} source changed`);
     if (!definition || definition.name !== kind || extension.tools.size !== 1 || extension.tools.get(kind)?.definition !== definition || definition.execute !== execute || JSON.stringify(definition) !== declaration || extension.handlers !== handlerMap ||
-      extension.handlers.size !== profile.events.length || profile.events.some(event => {
+      extension.handlers.size !== profile.events.length || (profile.events as readonly string[]).some(event => {
         const current = extension.handlers.get(event) ?? [], prior = handlers.get(event) ?? [];
         return !prior.length || current.length !== prior.length || current.some((handler, i) => handler !== prior[i]);
       }) || extension.commands.size || extension.shortcuts.size) throw Error(`Unqualified ${kind === "plan" ? "Plan" : kind === "delegate" ? "Delegate" : "Code Review"} capabilities`);
@@ -174,6 +181,10 @@ export async function qualifyInstalledCodeReview(catalog: LoadExtensionsResult, 
     if (names.some(name => exports[name] !== addon[name])) throw Error("Code Review public exports changed");
   };
   return Object.freeze({ ...qualified, assertCurrent, addon });
+}
+
+export function qualifyInstalledOfficeViewer(catalog: LoadExtensionsResult, cwd: string) {
+  return qualifyInstalled(catalog, cwd, "open_office_viewer");
 }
 
 export async function qualifyInstalledEditableTable(catalog: LoadExtensionsResult, cwd: string) {
@@ -239,8 +250,8 @@ export async function loadApplicationExtensionCatalog(options: {
  * hooks through a fabricated AgentSession context. Keep all diagnostics so a
  * successful startup can never silently mean missing installed capabilities.
  */
-export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensionsResult, plan?: Awaited<ReturnType<typeof qualifyInstalledPlan>>, delegate?: Awaited<ReturnType<typeof qualifyInstalledDelegate>>, codeReview?: Awaited<ReturnType<typeof qualifyInstalledCodeReview>>, editableTable?: Awaited<ReturnType<typeof qualifyInstalledEditableTable>>): void {
-  plan?.assertCurrent(); delegate?.assertCurrent(); codeReview?.assertCurrent(); editableTable?.assertCurrent();
+export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensionsResult, plan?: Awaited<ReturnType<typeof qualifyInstalledPlan>>, delegate?: Awaited<ReturnType<typeof qualifyInstalledDelegate>>, codeReview?: Awaited<ReturnType<typeof qualifyInstalledCodeReview>>, editableTable?: Awaited<ReturnType<typeof qualifyInstalledEditableTable>>, officeViewer?: ReturnType<typeof qualifyInstalledOfficeViewer>): void {
+  plan?.assertCurrent(); delegate?.assertCurrent(); codeReview?.assertCurrent(); editableTable?.assertCurrent(); officeViewer?.assertCurrent();
   const blocked: string[] = catalog.errors.map(error => `${error.path}: extension load failed`);
   for (const extension of catalog.extensions) {
     for (const { definition } of extension.tools.values()) {
@@ -248,6 +259,7 @@ export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensio
       if (extension === delegate?.extension && definition === delegate.definition) continue;
       if (extension === codeReview?.extension && definition === codeReview.definition) continue;
       if (extension === editableTable?.extension && definition === editableTable.definition) continue;
+      if (extension === officeViewer?.extension && definition === officeViewer.definition) continue;
       blocked.push(`${definition.name}: no operation-owned host effect port`);
     }
     for (const event of extension.handlers.keys()) {

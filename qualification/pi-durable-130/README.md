@@ -1,3 +1,25 @@
+# Native Office Viewer — targeted execution port
+
+The default application reuses the exact registered open_office_viewer execute
+from approved 0.1.3 source. No replacement factory, fabricated ExtensionContext,
+or process-wide cwd change is introduced. The operation-owned adapter accepts
+only canonical workspace-contained regular files from current foreground web
+message sources, passes an absolute path to the original synchronous tool, and
+rechecks source, branch, cancellation, lifetime and single-user authority.
+
+Targeted receipts in /workspace/reviews/durable-1650/:
+- Catalog: 5 pass / 15 assertions (approved/tamper/shadow/execute/schema).
+- Actual default-runtime happy case: 1 pass / 33 assertions, including viewer URL,
+  raw-file handler response, unchanged bytes and invalid/outside-workspace paths.
+- Post-capture cancellation: 1 pass / 20 assertions, no successful viewer result.
+- Three configured typechecks and diff checks pass. Bounded review is READY.
+
+Exact manifest/index source is qualified; vendor assets are trusted installation
+content, not integrity-qualified. Browser document decoding, vendor-asset responses
+and status-hint rendering were not tested. The existing vendor route lacks
+canonical symlink containment and needs separate hardening. No full candidate/root
+suite was run, per operator direction. No deployment, restart, merge or migration.
+
 # Native Delegate caller image attachments — targeted qualification
 
 The guarded reader accepts JPEG, PNG, GIF and WebP only for an exact approved

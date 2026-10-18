@@ -34,6 +34,7 @@ import { saveBudgetCap, setBudgetCapEnabled } from "../../runtime/src/db/budget-
 import { pollScheduledRunsOnce, stopSchedulerLoop } from "../../runtime/src/task-scheduler.js";
 import { createPlanKvAuthority } from "../../runtime/durable-engine/src/host-plan-tool.js";
 import { installCodeReviewFixture } from "./code-review-fixture.ts";
+import { installOfficeViewerFixture } from "./office-viewer-fixture.ts";
 import { installEditableTableFixture } from "./editable-table-fixture.ts";
 import { withAddonLocalDispatch, bindAddonLocalDispatchRequest, getAddonLocalDispatchBlock, verifyAddonLocalMessage } from "../../runtime/src/addons/local-dispatch.js";
 import { admitAddonLocalRequest, withAddonLocalRequest } from "../../runtime/src/addons/local-context.js";
@@ -117,7 +118,7 @@ const explicitDelegateCases: Record<string, { id: string; model: unknown; denied
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["public-conversations", "custom-subset", "pending-host", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
+for (const scenario of ["public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -135,6 +136,15 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   const planRequests: string[] = [];
   let toolSequence: { name: string; arguments: Record<string, unknown> | (() => Record<string, unknown>) }[] | undefined;
   const reviewPackage = scenario === "native-code-review" ? installCodeReviewFixture(workspace) : undefined;
+  const nativeOffice = scenario.startsWith("native-office-viewer");
+  const officeCancelled = scenario === "native-office-viewer-cancel";
+  if (nativeOffice) {
+    installOfficeViewerFixture(workspace);
+    writeFileSync(join(workspace, "office.csv"), "name,value\nfixture,1650\n");
+    writeFileSync(join(workspace, "office.txt"), "unsupported");
+    toolSequence = [{ name: "open_office_viewer", arguments: { path: "@office.csv" } },
+      ...["office.txt", "missing.docx", "/tmp/outside-office.csv"].map(path => ({ name: "open_office_viewer", arguments: { path } }))];
+  }
   const nativeTable = scenario.startsWith("native-editable-table");
   if (nativeTable) {
     installEditableTableFixture(workspace);
@@ -348,12 +358,13 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
       return captured;
     }));
   }
-  if (nativeTable) {
+  if (nativeTable || nativeOffice) {
     const captureTool = HostConversationRuntime.prototype.captureToolSource;
     captureSpies.push(spyOn(HostConversationRuntime.prototype, "captureToolSource").mockImplementation(async function (this: HostConversationRuntime, ...args) {
       const captured = await captureTool.apply(this, args);
       realToolCaptures++;
       expect(captured.inputs[0]?.sourceId).toBe("factory-input");
+      if (officeCancelled) root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
       if (scenario === "native-editable-table-closed-publisher") backend.stop();
       if (scenario === "native-editable-table-revoked") root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
       // Host-owned SQL changes the actual authority after capture, not a fake
@@ -672,7 +683,38 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   expect(dispatch).toBeDefined();
   const dispatchOutcome = await dispatch!();
   if (tableCancelled) expect(widgetEvents).toHaveLength(0);
-  expect(dispatchOutcome).toBe(tableCancelled ? "pending" : "settled");
+  expect(dispatchOutcome).toBe(tableCancelled || officeCancelled ? "pending" : "settled");
+  if (nativeOffice) {
+    expect(realToolCaptures).toBe(officeCancelled ? 1 : 4);
+    expect(readFileSync(join(workspace, "office.csv"), "utf8")).toBe("name,value\nfixture,1650\n");
+    const records = JSON.stringify(root.query("SELECT * FROM entries").all());
+    if (officeCancelled) {
+      expect(observedResults.size).toBe(0);
+      expect(records).not.toContain("Office viewer URL:");
+      expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+    } else {
+      const result = observedResults.get("factory-tool-1");
+      expect(result?.isError).not.toBe(true);
+      const text = (result!.content as { text: string }[])[0]!.text;
+      const viewer = new URL(text.split("\n")[0]!.replace("Office viewer URL: ", ""), "http://fixture");
+      expect(viewer.pathname).toBe("/office-viewer/");
+      const raw = new URL(viewer.searchParams.get("url")!, "http://fixture");
+      expect(raw.pathname).toBe("/workspace/raw");
+      expect(raw.searchParams.get("path")).toBe(join(workspace, "office.csv"));
+      const response = await channel.handleRequest(new Request(raw));
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("name,value\nfixture,1650\n");
+      expect(records).toContain("viewerUrl");
+      for (const id of [2, 3, 4]) {
+        expect(observedResults.get(`factory-tool-${id}`)?.isError).toBe(true);
+        expect(JSON.stringify(observedResults.get(`factory-tool-${id}`))).toContain("Host tool execution failed");
+      }
+    }
+    captureSpies.forEach(spy => spy.mockRestore());
+    await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close(); owner.release(); closeDatabase();
+    sdkSpies.forEach(spy => spy.mockRestore());
+    return;
+  }
   if (nativeDelegate) {
     if (writeDelegate) {
       for (const id of revokeDelegate ? ["A"] : ["A", "B"]) expect(readFileSync(childWritePath(id), "utf8")).toBe(standardDelegate && !revokeDelegate ? `WRITTEN_${id}` : "OLD");
