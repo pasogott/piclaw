@@ -659,3 +659,20 @@ The existing actual runtime/adapter/facade synthetic harness now has a bounded
 [measurement and limits](../../../evidence/pi-durable-130-tree-read-performance-10k-20261018.md).
 Default-factory, imported/forked/compacted, concurrent-load and production-history
 performance acceptance is still unverified. No requirement status changed.
+
+## Durable model and thinking queries — 18 October 2026
+
+The actual AgentPool command path supports read-only `/model` catalogue and
+`/thinking` status queries. The model picker reads persisted thinking level through
+a public AgentDoc reader instead of substituting null. Model changes reuse existing
+add-on revocation and command protection, released on success and failure. No
+legacy session is constructed; no global default or second settings store is added.
+
+The actual default-factory scenario passes 156 assertions, including both model
+switch directions and read-only queries. The complete facade test file passes
+47 tests / 286 assertions. Three scoped typechecks and bounded review passed.
+Thinking mutations still fail closed. Compatibility ports without the optional
+thinking reader report null; model and thinking reads are separate snapshots.
+Hosted run39123174225 passed all gates at prior f8809f4b0; these subsequent changes
+need their own exact-head run. Accounting, general compatibility/load and migration
+acceptance remain incomplete; all 45 requirement statuses are unchanged.
