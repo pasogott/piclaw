@@ -1,5 +1,5 @@
 import "./src/test-guard.js";
-import { expect, test } from "bun:test";
+import { expect, test, spyOn } from "bun:test";
 import { Type, createProvider, createAssistantMessageEventStream, type AssistantMessage, type TranscriptContext } from "../../runtime/durable-engine/qualification/ai.ts";
 import { Harness, defineExtension, defineTool, type GenerationHooks } from "../../runtime/durable-engine/qualification/durable.ts";
 import { createHostDelegateTool } from "../../runtime/durable-engine/src/host-delegate-tool.ts";
@@ -16,7 +16,7 @@ import { storeChatMetadata } from "../../runtime/src/db.ts";
 
 // Core consumer tests with explicitly synthetic authority/schema. These do NOT
 // qualify installed Delegate content, Settings, host source capture or budgets.
-for (const mode of ["parallel", "denied", "files", "timeout", "mutating-tools"] as const) {
+for (const mode of ["parallel", "denied", "files", "timeout", "timeout-fraction", "timeout-string", "timeout-large", "mutating-tools"] as const) {
   test(`host native Delegate factory: ${mode}`, async () => {
     const f = await openFixture({ acquired: true });
     const release = barrier(), entered = barrier();
@@ -26,7 +26,7 @@ for (const mode of ["parallel", "denied", "files", "timeout", "mutating-tools"] 
     const readerExtension = defineExtension({ name: "native-readers", tools: [read] });
     f.registry.install(readerExtension);
     const parameters = Type.Object({ prompt: Type.String(), model: Type.Optional(Type.String()),
-      files: Type.Optional(Type.Array(Type.String())), timeout_sec: Type.Optional(Type.Integer()), tools: Type.Optional(Type.String()) });
+      files: Type.Optional(Type.Array(Type.String())), timeout_sec: Type.Optional(Type.Any()), tools: Type.Optional(Type.String()) });
     const tool = createHostDelegateTool({ name: "delegate", description: "Synthetic registered declaration", parameters }, {
       assertCurrent() {},
       runtime: () => ({ async captureToolSource() { captures++; return { inputs: [], operation: {} } as never; }, assertCapturedSourceCurrent() {} }),
@@ -43,7 +43,7 @@ for (const mode of ["parallel", "denied", "files", "timeout", "mutating-tools"] 
       const calls = !child && !transcript.messages.some(message => message.role === "toolResult");
       const output = createAssistantMessageEventStream();
       const args = { prompt: "CHILD_TASK", tools: mode === "mutating-tools" ? "bash" : "read_only",
-        ...(mode === "files" ? { files: ["file.txt"] } : {}), ...(mode === "timeout" ? { timeout_sec: 20 } : {}) };
+        ...(mode === "files" ? { files: ["file.txt"] } : {}), ...(mode.startsWith("timeout") ? { timeout_sec: ({ timeout: -1, "timeout-fraction": 10.5, "timeout-string": "10", "timeout-large": 301 } as Record<string, string | number>)[mode] } : {}) };
       const message: AssistantMessage = { role: "assistant", api: model.api, provider: model.provider, model: model.id,
         timestamp: 1, stopReason: calls ? "toolUse" : "stop", content: calls
           ? ["A", "B"].map(id => ({ type: "toolCall" as const, id, name: "delegate", arguments: args }))
@@ -90,6 +90,143 @@ for (const mode of ["parallel", "denied", "files", "timeout", "mutating-tools"] 
       if (mode === "parallel") expect(JSON.stringify(results)).toContain("CHILD_RESULT");
       else expect(await f.root.commit(async tx => (await tx.scanConversations({}, 10)).items.length, context)).toBe(1);
     } finally { release.release(); await f.close(); }
+  }, 10_000);
+}
+
+// Public consumer deadline lifecycle with keyless providers and real SQLite
+// reopen. Timer interception only captures the valid 10-second deadline; SDK
+// scheduling and cancellation retain their real timers.
+for (const mode of ["success", "expiry", "reopen"] as const) {
+  test(`native Delegate deadline: ${mode}`, async () => {
+    const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "delegate-deadline-"));
+    const { BunSqliteDatabase } = await import("../../runtime/durable-engine/src/bun-sqlite.ts");
+    const { awaitWithContext, withAbortSignal } = await import("../../runtime/durable-engine/qualification/context.ts");
+    let f: Awaited<ReturnType<typeof openFixture>> | undefined;
+    const hold = barrier(), entered = barrier(), aborted = barrier(), timerReady = barrier();
+    let requests = 0, started = 0, cleared = 0;
+    let fire: (() => void) | undefined;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const realTimer = globalThis.setTimeout, realClear = globalThis.clearTimeout;
+    const timers = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms?: number, ...args: unknown[]) => {
+      if (ms !== undefined && ms <= 10000 && new Error().stack?.includes("host-delegate-tool.ts")) {
+        started++;
+        fire = callback;
+        deadlineTimer = realTimer(() => {}, 60_000);
+        timerReady.release();
+        return deadlineTimer;
+      }
+      return realTimer(callback, ms, ...args);
+    }) as typeof setTimeout);
+    const clears = spyOn(globalThis, "clearTimeout").mockImplementation(((timer: ReturnType<typeof setTimeout>) => {
+      if (timer !== undefined && timer === deadlineTimer) cleared++;
+      return realClear(timer);
+    }) as typeof clearTimeout);
+    let clock: ReturnType<typeof spyOn> | undefined;
+    const open = async () => {
+      const base = await openFixture({ acquired: true }, undefined,
+        () => SqliteStorage.open(new BunSqliteDatabase(join(dir, "session.sqlite")), { prefix: "pi_" }));
+      f = base;
+      const read = defineTool({ name: "read", description: "reader", parameters: Type.Object({}), execute: async () => ({ output: [] }) });
+      const readers = defineExtension({ name: "deadline-readers", tools: [read] }); base.registry.install(readers);
+      const tool = createHostDelegateTool({ name: "delegate", description: "deadline", parameters: Type.Object({ prompt: Type.String(), timeout_sec: Type.Optional(Type.Integer()) }) }, {
+        assertCurrent() {}, runtime: () => ({ async captureToolSource() { return { inputs: [] } as never; }, assertCapturedSourceCurrent() {} }),
+        async selectModel(_args, parent) { return parent!; }, assertModelCurrent() {}, readonlyTools: [read], readonlyExtensions: [readers],
+      });
+      const extension = defineExtension({ name: "deadline-consumer", tools: [tool] }); base.registry.install(extension);
+      await base.root.configure({ extensions: [extension], tools: [tool] }, context);
+      const model = base.models.getModel("qualification", "synthetic")!;
+      const stream = (_model: unknown, transcript: TranscriptContext, options?: { signal?: AbortSignal }) => {
+        const user = JSON.stringify(transcript.messages.findLast(m => m.role === "user")?.content);
+        const child = user.includes("CHILD_");
+        const a = user.includes("CHILD_A");
+        const calls = !child && !transcript.messages.some(m => m.role === "toolResult");
+        const output = createAssistantMessageEventStream();
+        let message: AssistantMessage = { role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp: 1,
+          stopReason: calls ? "toolUse" : "stop", content: calls ? ["A", "B"].map(id => ({ type: "toolCall" as const, id, name: "delegate", arguments: { prompt: `CHILD_${id}`, ...(id === "A" ? { timeout_sec: 10 } : {}) } })) : [{ type: "text", text: child ? "CHILD_ANSWER" : "PARENT_DONE" }],
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+        if (child) { requests++; if (requests === 2) entered.release(); }
+        void (async () => {
+          try {
+            if (child) await awaitWithContext(hold.promise, options?.signal ? withAbortSignal(options.signal, context) : context);
+            options?.signal?.throwIfAborted();
+            output.push({ type: "done", reason: calls ? "toolUse" : "stop", message });
+          } catch (error) {
+            if (a) aborted.release();
+            message = { ...message, content: [], stopReason: "aborted", errorMessage: String(error) };
+            output.push({ type: "error", reason: "aborted", error: message });
+          }
+          output.end(message);
+        })();
+        return output;
+      };
+      base.models.setProvider(createProvider({ id: model.provider, models: [model], auth: { apiKey: { name: "keyless", resolve: async () => ({ auth: {}, source: "fixture" }) } }, api: { stream, streamSimple: stream } }));
+      return base;
+    };
+    try {
+      let base = await open();
+      const submission = await base.root.submit({ type: "input", content: "ROOT", requestId: "deadline-root" }, context);
+      await entered.promise; await timerReady.promise;
+      const ids = (await base.root.commit(tx => tx.scanConversations({}, 10), context)).items.filter(c => c.owner).map(c => c.id);
+      expect(ids).toHaveLength(2); expect(started).toBe(1);
+      if (mode === "reopen") {
+        const deadlines = async () => base.root.commit(async tx => {
+          const children = (await tx.scanConversations({}, 10)).items.filter(child => child.owner);
+          return Promise.all(children.map(async child => {
+            const task = await tx.task(child.owner!.taskId);
+            return { taskId: task!.id, deadline: task!.memos?.deadline };
+          }));
+        }, context);
+        const originalDeadlines = await deadlines();
+        expect(originalDeadlines).toHaveLength(2);
+        for (const entry of originalDeadlines) expect(typeof entry.deadline).toBe("number");
+        await base.close();
+        expect(cleared).toBe(1);
+        const now = Date.now() + 11_000;
+        clock = spyOn(Date, "now").mockReturnValue(now);
+        base = await open();
+        expect(await deadlines()).toEqual(originalDeadlines);
+        base.harness.resume();
+        // Keep providers held until replay actually observes the persisted
+        // expiry. Releasing first would legitimately commit an answer before
+        // the replay's completed-submission check.
+        let replayed = false;
+        for (let attempt = 0; attempt < 1000; attempt++) {
+          const entries = (await base.root.entries({}, 100, undefined, context)).items;
+          if (entries.some(e => e.model?.some(m => m.role === "toolResult" && m.isError))) { replayed = true; break; }
+          await new Promise(resolve => realTimer(resolve, 1));
+        }
+        expect(replayed).toBe(true);
+      } else if (mode === "expiry") {
+        fire!(); await aborted.promise;
+        expect((await submission.status(context)).status).toBe("placed");
+        // The sibling remains held/live while the timed-out child joins.
+        expect((await base.harness.inspect(context)).tasks.some(t => ids.includes(t.record.conversationId))).toBe(true);
+      }
+      hold.release();
+      expect((await (await base.harness.submission(submission.id, context))!.wait(context)).status).toBe("done");
+      expect((await base.harness.inspect(context)).tasks).toHaveLength(0);
+      expect(started).toBe(1); expect(cleared).toBe(1);
+      const results = (await base.root.entries({}, 100, undefined, context)).items.flatMap(e => e.model ?? []).filter(m => m.role === "toolResult");
+      expect(results).toHaveLength(2);
+      expect(results.filter(r => r.isError)).toHaveLength(mode === "success" ? 0 : 1);
+      expect(JSON.stringify(results)).toContain("CHILD_ANSWER");
+      if (mode !== "success") expect(JSON.stringify(results)).toContain("timed out after 10s");
+      if (mode === "reopen") {
+        // SDK recovery may restart the already-owned provider before its parent
+        // replays. No new durable submission or input is admitted.
+        expect(requests).toBeGreaterThanOrEqual(3); expect(requests).toBeLessThanOrEqual(4);
+        for (const id of ids) {
+          const child = (await base.harness.conversation(id, context))!;
+          expect((await child.entries({}, 100, undefined, context)).items.filter(e => e.kind === "pi.user")).toHaveLength(1);
+        }
+      }
+      // No callback remains scheduled to abort later work.
+      expect((await base.root.commit(tx => tx.scanConversations({}, 10), context)).items.filter(c => c.owner).map(c => c.id)).toEqual(ids);
+    } finally {
+      hold.release(); await f?.close(); clock?.mockRestore(); timers.mockRestore(); clears.mockRestore();
+      if (deadlineTimer) realClear(deadlineTimer);
+      await rm(dir, { recursive: true, force: true });
+    }
   }, 10_000);
 }
 

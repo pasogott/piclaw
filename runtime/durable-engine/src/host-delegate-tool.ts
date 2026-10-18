@@ -37,14 +37,20 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
       const supported = ["prompt", "model", "tools", "task_category", "system_prompt", "files", "timeout_sec"];
       if (Object.keys(args).some(key => !supported.includes(key))) throw Error("Unsupported native Delegate option");
       if (typeof args.prompt !== "string" || !args.prompt.trim()) throw Error("Delegate prompt required");
-      // The first native profile has no attachment or deadline port yet. Explicit
-      // rejection is mandatory: never silently drop a legacy schema option.
+      // Keep the installed declaration's default and bounds even for synthetic
+      // schemas: reject invalid input before allocating any child.
       if (args.files !== undefined && (!Array.isArray(args.files) || args.files.length)) throw Error("Native Delegate attachments are not qualified");
-      if (args.timeout_sec !== undefined) throw Error("Native Delegate deadlines are not qualified");
+      const timeout = args.timeout_sec === undefined ? 120 : args.timeout_sec;
+      if (typeof timeout !== "number" || !Number.isInteger(timeout) || timeout < 10 || timeout > 300) throw Error("Delegate timeout_sec must be an integer from 10 to 300");
       const names = args.tools === undefined || args.tools === "read_only" ? readers.map(tool => tool.name)
         : typeof args.tools === "string" ? args.tools.split(",").map(name => name.trim()).filter(Boolean) : [];
       if (!names.length || names.some(name => !readers.some(tool => tool.name === name))) throw Error("Native Delegate supports read-only tools only");
       if (args.system_prompt !== undefined && typeof args.system_prompt !== "string") throw Error("Invalid Delegate system prompt");
+      // Operation-entry budget includes host source/model approval awaits. Task
+      // memo preserves absolute expiry across replay; approval cannot renew it.
+      const deadline = await api.memo("deadline", Date.now() + timeout * 1000, context);
+      const expired = () => Date.now() >= deadline;
+      const timeoutError = () => Error(`Delegate timed out after ${timeout}s`);
       const captured = await runtime().captureToolSource(api.conversationId, api.taskId, api.callId);
       const parent = await api.agent(context);
       const proposed = await selectModel(args, parent.model);
@@ -56,6 +62,7 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
         const prior = await tx.scanConversations({ ownerTaskId: api.taskId }, 2);
         if (prior.next || prior.items.length > 1) throw Error("Ambiguous Delegate child ownership");
         if (prior.items[0]) return prior.items[0].id;
+        if (expired()) throw timeoutError();
         const child = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
         const tools = readers.filter(tool => names.includes(tool.name));
         // No parent history, recursive delegation, Plan prompt or legacy hooks.
@@ -69,8 +76,31 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
       const child = await api.conversation(childId, context);
       if (!child) throw Error("Missing owned Delegate child");
       check();
-      const submission = await child.submit({ type: "input", requestId: `delegate:${api.taskId}`, content: args.prompt }, context);
-      const settled = await submission.wait(context);
+      const requestId = `delegate:${api.taskId}`;
+      // A committed answer survives a late replay. Otherwise an expired replay
+      // never submits new work, including the create-before-submit crash gap.
+      const prior = await api.commit(tx => tx.submissionByRequest(childId, requestId), context);
+      let settled;
+      if (prior?.status === "done") settled = prior;
+      else {
+        if (expired()) { await child.abort(context); throw timeoutError(); }
+        const submission = await child.submit({ type: "input", requestId, content: args.prompt }, context);
+        const waiting = submission.wait(context);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          settled = await Promise.race([waiting, new Promise<undefined>(resolve => {
+            timer = setTimeout(() => resolve(undefined), Math.max(0, deadline - Date.now()));
+          })]);
+          if (!settled) {
+            // wait() cancellation only detaches the waiter. Stop this exact
+            // dedicated ownership scope and join before the parent continues.
+            // Cooperative providers must honour abort; this is not a hard kill.
+            await child.abort(context);
+            await waiting;
+            throw timeoutError();
+          }
+        } finally { clearTimeout(timer); }
+      }
       check();
       if (settled.type !== "input" || settled.status !== "done") throw Error("Native Delegate child did not complete");
       const answer = await api.commit(tx => tx.entry(AssistantEntry, settled.answer), context);

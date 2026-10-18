@@ -1,10 +1,10 @@
-# #1650 acceptance: all nine Code Review actions over 1d6ad39de — 17 October 2026
+# #1650 acceptance: Delegate deadlines over published `4e1ffe2fe`
 
 The default application now selects the public durable engine in source; fleet/live acceptance and existing-chat migration are incomplete. The 45 requirements below retain their original IDs and titles. None is an unconditional fleet acceptance claim.
 
 ## Source and evidence boundary
 
-- Worktree: `/workspace/tmp/durable-1650`; HEAD `1d6ad39de` with four implementation/fixture WIP files plus CI. Add-on PR #208 source and qualification CI checkout select `d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f`. All nine model-tool actions are admitted. Full add-on qualification passes 206 tests with 3 skips; the current candidate passes 485 tests / 7,182 assertions and the root gate passes 7,294 tests plus 25 feature and 9 build tests, exit 0. Earlier 485-candidate / 7,312-root + 25 feature + 9 build passes belong to the older local-write source. Exact-head hosted qualification is separate. Published Delegate `ea2d1416e`, its documentation `7150dd6a2` and supplied green hosted run `39073316535` retain their earlier boundaries.
+- Worktree: `/workspace/tmp/durable-1650`; published HEAD `4e1ffe2fe`, with three dirty consumer/test files for native Delegate deadlines. Current focused deadline qualification is 17 pass / 202 assertions across two files (`deadline-memo-final.log`); the prior actual-default `native-delegate-timeout` receipt is 1 pass / 35 assertions (`native-delegate-deadline-checkpoint.md`). All three scoped types pass; final candidate492/7245 and root7312+25+9 pass with exit 0. Add-on PR #208 source and qualification CI checkout select `d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f`. All nine model-tool actions are admitted. The exact previous all-nine receipt records 206 add-on passes with 3 skips, 485 candidate passes / 7,182 assertions and 7,294 root passes plus 25 feature and 9 build passes, root exit 0. These are previous Code Review receipts, not completed deadline gates. Earlier 485-candidate / 7,312-root + 25 feature + 9 build passes belong to the older local-write source. Exact-head hosted qualification is separate. Published Delegate `ea2d1416e`, its documentation `7150dd6a2` and supplied green hosted run `39073316535` retain their earlier boundaries.
 - The old stashed Delegate/Code Review work and refusal checkpoints do not qualify this implementation. Older uncommitted Delegate WIP stays separate and unapproved. The actual default factory admits the bounded installed Delegate profile and native Code Review reads/local mutations below.
 - `runtime/src/runtime.ts` acquires strict ownership. `runtime/src/runtime/bootstrap.ts` supplies `prepareApplicationBackend` by default and loads the fixed `runtime/durable-engine/src/default-application-runtime.ts` entry before AgentPool/WebChannel. Missing candidate dependencies fail explicitly; there is no production legacy fallback. Statements that production registration or default selection are absent are obsolete.
 - The private engine still owns isolated Pi/Chord 1.3.0 pins and its lock. The root package still uses Pi 1.2.0 host definitions/model services. Source default adoption does not establish distributed-package installation or live activation. No fleet rollout, installed-package replacement, live provider acceptance or service restart is recorded here.
@@ -215,12 +215,41 @@ and through model post-auth `transformHeaders` and tool-effect guards.
 Only the exact parent model is inherited. Children have fresh self-contained
 history, parent thinking level and `read`/`grep`/`find`/`ls` or explicit subsets;
 no recursion or Plan prompt. Categories `quick`, `summarize`, `code`, `analyze`,
-`reason` are accepted without model reselection; `judge`, other models/options,
-nonempty files and explicit deadlines reject. Any enabled root budget cap denies
+`reason` are accepted without model reselection; `judge`, different-model selection,
+unsupported options, nonempty files and read/write or full tool profiles reject.
+`timeout_sec` accepts integer 10..300, default 120 seconds, validated before child
+allocation. Any enabled root budget cap denies
 before creation and at each source/model guard. This conservative profile also
 denies unrelated caps; per-request child accounting is unqualified. Parallel tool
 calls use independent owned children, with no numeric global concurrency setting
 or second queue.
+
+Public `api.memo("deadline", …)` stores absolute operation-entry expiry before
+source/model approval awaits; replay cannot renew it. Child wait races the remaining
+time. Cleanup clears its timer on success, error, cancellation and timeout. Expiry
+uses invocation-bound owned `child.abort` and joins that child's work, preserving
+parent and sibling scopes. Provider abort is cooperative; a non-cooperative
+provider can prevent completion. No force-kill guarantee is qualified.
+
+Expired replay creates no new child or input. An existing owned child is aborted
+and joined unless a committed `done` answer already exists; late replay reuses that
+answer and preserves its result. SDK recovery may restart an already-owned provider
+before parent replay; the expired parent then aborts that child. The reopen test
+permits 3..4 physical provider requests, with one durable input per child. It
+explicitly reads public `TaskRecord.memos.deadline` for both child owner tasks and
+compares them unchanged before and after physical database close/open. This does
+not establish exactly-once provider execution or billing.
+
+`deadline-memo-final.log` records 17 pass, 0 fail, 202 assertions across two files.
+The prior `native-delegate-deadline-checkpoint.md` records actual-default selector
+`native-delegate-timeout`, 1 pass / 35 assertions: valid explicit 10-second timeout,
+manually fired deadline, cooperative held-provider abort, successful sibling and
+completed parent. These scopes are separate. All three scoped types pass. Final candidate `deadline-quiet-candidate.log` passes
+492 tests / 7,245 assertions, exit 0; root `deadline-quiet-root.log` passes 7,312
+tests with 74 baseline skips, plus 25 feature and 9 build tests, exit 0. The
+timer-registration test race uses an explicit barrier; its actual-default rerun
+passes 34 assertions. Earlier timeout failures remain recorded without weaker limits. Older receipts
+rejecting explicit deadlines describe the prior profile.
 
 Catalogue approval checks canonical paths, content hashes, module resolution and
 registered definition/handler objects. Changed source rejects; process-local path
@@ -253,7 +282,8 @@ and 3 migration/perf-unverified. HC-002 already had bounded source qualification
 The public SDK exposes `abortTask` for a known task. It lacks an atomic condition
 against the exact current running task; read-then-abort cannot provide that
 condition. HC-009/PC-004/PC-015 retain their exact-running cancellation gap.
-Foreground child cancellation and host publication fencing do not fill it.
+Foreground child cancellation, child deadlines and host publication fencing do not
+fill it. The 45 statuses remain unchanged; no activation or migration ran.
 
 ## Bounded native scheduler consumer
 
@@ -349,7 +379,7 @@ Original public entry IDs, linear ancestry, parent/child counts, full snapshot e
 1. Close the exact-running-abort public API gap for HC-009/PC-004/PC-015 or obtain an explicit requirement decision. Host cancellation/publication fencing is already distinct; no unsafe substitute is proposed.
 2. Complete scheduler model overrides and native per-request budget attribution/reservation/accounting, exact cancellation, accepted-agent takeover and arbitrary-crash/stale-delivery qualification. The actual consumer and cap-denial checks above do not complete those requirements. Complete service/terminal-effect (STE) acceptance across general trusted internal and cross-session input, protected hand-offs, mobile cancellation and goal/checkpoint races. EF-S01/02/05/07/08 keep their acceptance, terminal, delivery, scheduler and projection authorities. Task outcomes/watches cannot replace terminal or delivery receipts.
 3. Qualify remaining semantic matrices: parallel ordering, safe replay, retry/budgets, corruption, deferred live-provider recovery, reload, usage accounting and automatic/background/overflow compaction. Existing bounded source/component results do not supply those matrices.
-4. Extend bounded native Delegate beyond the read-only same-parent-model profile: explicit model selection, deadlines, attachments and enabled budget caps currently reject. Qualify request accounting, wider tools and recovery. Obtain completed current Code Review candidate/root receipts and representative operator/browser dispatch queue/delivery acceptance through durable ingress. All nine model-tool actions are implemented; synchronous `work` needs no new worker/provider/job. Remote networking/auth, MCP/SSH effects and other add-on/event lifecycle/state compatibility need separate evidence.
+4. Extend bounded native Delegate beyond the read-only same-parent-model profile: different-model selection, attachments, read/write or full tools and any enabled budget cap still reject. Numeric global concurrency is not implemented. Qualify request accounting, wider tools and recovery; complete the running deadline candidate/root gates. Current Code Review is published at core `4e1ffe2fe` and add-on PR #208 `d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f`, with exact previous receipts above. Qualify representative operator/browser dispatch queue/delivery acceptance through durable ingress. All nine model-tool actions are implemented; synchronous `work` needs no new worker/provider/job. Remote networking/auth, MCP/SSH effects and other add-on/event lifecycle/state compatibility need separate evidence.
 5. Keep migration last. Preserve existing host chat/branch/session identities; qualify compatibility totality, guarded cutover and reverse conversion after new work. `E/host-controller.ts` deliberately rejects checkpoint/rollback proof without public storage identity and historical frontier; copied host-only rollback success does not remove this limitation.
 6. Extend the bounded read evidence to production-scale restore/tree reads, storage growth, latency, memory and ownership/resource behaviour; supply a portable harness before clone-only reproduction is possible. Package/install, canary, live providers, fleet activation and rollback execution require separate approval and evidence.
 

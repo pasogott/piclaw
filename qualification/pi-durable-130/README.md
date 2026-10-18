@@ -1,4 +1,53 @@
-# Current native Code Review: all nine model-tool actions — 17 October 2026
+# Native Delegate deadlines — source follow-up over `4e1ffe2fe`
+
+The current native Delegate accepts `timeout_sec`: default 120 seconds, integer
+10..300. Validation precedes child allocation. Public `api.memo("deadline", …)`
+persists an absolute operation-entry expiry before source capture or model approval
+awaits; replay cannot renew it. This source-only follow-up changes the consumer and
+two test files over published core `4e1ffe2fe`.
+
+The child wait races the remaining deadline. Cleanup clears the timer on success,
+error, cancellation and timeout. Timeout calls the invocation-bound owned
+`child.abort` and joins its work; the parent and siblings retain their own scopes.
+Provider abort is cooperative; a non-cooperative provider can prevent the join
+from completing. There is no force-kill guarantee.
+
+Expired replay creates no new child or input. It aborts and joins an existing
+owned child unless its submission already has a committed `done` answer; that
+answer is reused after expiry, preserving its result. SDK recovery can restart an
+already-owned provider before the parent replays, after which the expired parent
+aborts that child. The reopen test permits 3..4 physical provider requests and
+checks one durable input per child; it does not establish exactly-once execution
+or billing. It explicitly reads public `TaskRecord.memos.deadline` for both child
+owner tasks before and after physical database close/open and compares the values
+unchanged.
+
+Existing receipts under `/workspace/reviews/durable-1650/`:
+
+- `deadline-memo-final.log`: 17 pass, 0 fail, 202 assertions across two files.
+- `native-delegate-deadline-checkpoint.md`: actual-default
+  `native-delegate-timeout` scenario, 1 pass / 35 assertions, including an explicit
+  valid 10-second deadline, manually fired timer, cooperative provider abort,
+  successful sibling and completed parent. This is a prior receipt, separate
+  from the 17-test focused run.
+- All three scoped typechecks pass. Final `deadline-quiet-candidate.log`: 492 pass,
+  0 fail, 7,245 assertions, `EXIT_CODE=0`. `deadline-quiet-root.log`: 7,312 pass,
+  74 baseline skips, 0 fail, plus 25 feature and 9 build tests, `EXIT_CODE=0`.
+- The timer-registration race in the original test is fixed with a registration
+  barrier (`deadline-actual-synchronized.log`: 1 pass / 34 assertions). Earlier
+  disk/rollback and note-retrieval timeout failures remain in their logs; no
+  assertion, timeout or resource limit was weakened.
+
+Attachments, different-model selection and read/write or full Delegate tools
+still reject. Any enabled budget cap denies; native request accounting is
+unqualified. Numeric global concurrency is not implemented. All 45 statuses stay
+22 source-qualified / 17 fixture-only / 3 blocked-publicAPI /
+3 migration/perf-unverified. Child deadlines do not fix the atomic exact-running
+parent cancellation gap in HC-009/PC-004/PC-015. No activation or migration ran.
+This documentation refresh runs no tests, network requests or service operations
+and changes no code, tests, CI, source pins, commits or pushes.
+
+# Current native Code Review: all nine model-tool actions — published `4e1ffe2fe`
 
 The actual default factory admits all nine registered Code Review actions:
 `dispatches`, `dispatch`, `thread`, `threads`, `reply`, `edit`, `deleteMessage`,
@@ -14,13 +63,15 @@ authority before and after mutation. Assignment epoch, current dispatch, item an
 thread versions bound the state change. Idempotent receipts recheck authority;
 revocation before root commit rolls back the mutation and receipt.
 
-Core `/workspace/tmp/durable-1650` HEAD is `1d6ad39de` with four implementation/fixture
-WIP files plus CI. Add-on PR #208 and the core qualification CI checkout select
+Core `/workspace/tmp/durable-1650` HEAD is published `4e1ffe2fe`; its three dirty
+consumer/test files belong to the separate Delegate deadline follow-up above.
+Add-on PR #208 and the core qualification CI checkout select
 `d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f`. This qualifies source only; installed
 package pins and versions are unchanged. No live installation or hosted success
 is established by these receipts.
 
-Existing receipts under `/workspace/reviews/durable-1650/`:
+Exact previous Code Review receipts under `/workspace/reviews/durable-1650/`
+(separate from the running deadline gates):
 
 - `code-review-work-actual.log`: actual-default 1 pass / 59 assertions, including
   `work` → `in_progress`, stale-item and cross-chat denial, `completed` after the
@@ -42,9 +93,10 @@ does not qualify every PC row. Operator/browser dispatch queue and delivery thro
 durable ingress still need representative acceptance. Earlier root direct-API tests
 and the actual new shared read establish bounded core behaviour without a provider;
 they do not establish that ingress/delivery path. No missing `work` worker is required.
-Delegate explicit model selection, deadlines, attachments and enabled budget caps
-still reject; scheduler model overrides and caps, other add-ons/events, exact atomic
-current-task cancellation, the 17 fixture-only requirements and production performance
+Delegate different-model selection, attachments and enabled budget caps still
+reject; deadlines use the current bounded profile above. Scheduler model overrides
+and caps, other add-ons/events, exact atomic current-task cancellation, the 17
+fixture-only requirements and production performance
 still need acceptance. Migration stays last: preserve the old `reviews.db`; no copy
 or conversion ran. This refresh changes documentation only, with no code/test/network,
 CI/service/pin/version, commit or live-state changes and no test reruns.
@@ -102,9 +154,11 @@ Existing receipts under `/workspace/reviews/durable-1650/`:
 
 All 45 statuses stay 22 source-qualified, 17 fixture-only, 3 blocked-publicAPI and
 3 migration/perf-unverified. HC-002 expands its bounded source scope to local
-review mutations. Full Code Review work still needs the single `work` action's
-job state, native worker, delivery and meaningful request budgets. Scheduler model
-overrides/request caps and generic exact-running abort gaps also remain.
+review mutations. At this older profile `work` was refused. Published all-nine
+source above
+implements it as a synchronous assigned-item mutation, without a worker, provider
+request or job. Durable ingress/delivery acceptance and request budgets remain
+separate obligations. Scheduler model overrides/request caps and generic exact-running abort gaps also remain.
 Existing `reviews.db` migration stays last; the store is preserved. No tests,
 network, service operations, CI/pin edits, deployment, migration, commits or pushes
 ran for this documentation refresh.
@@ -219,7 +273,9 @@ capture carries the guard through model authorisation and post-credential
 - Readers: `read`, `grep`, `find`, `ls`, including explicit subsets. No recursive
   Delegate, parent history or Plan prompt enters the fresh self-contained child.
 - Omitted model or the exact parent provider/model is supported. Other models,
-  `standard`/`full` tools, nonempty `files` and every `timeout_sec` reject explicitly.
+  `standard`/`full` tools and nonempty `files` reject explicitly. Every `timeout_sec`
+  rejected in this prior profile; the current deadline follow-up above accepts
+  integer 10..300 with default 120.
 - Supported `task_category`: `quick`, `summarize`, `code`, `analyze`, `reason`.
   `judge` and unknown options reject. Categories do not select a different model.
 - Any enabled cap in the root `budget_caps` table denies before child creation
