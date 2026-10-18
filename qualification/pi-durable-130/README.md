@@ -1,3 +1,18 @@
+# Native codemode can open editable tables
+
+The qualified editable_table adapter now accepts nested-tool callers. Exact
+registered codemode ownership, foreground web source/operation/harness/branch
+checks and synchronous publication fences remain unchanged. No second widget
+implementation, new ingress or broader grant.
+
+Three selected actual-runtime cases pass: nested table49 assertions, post-capture
+cancellation38, existing direct table29 (116 total). Success verifies real
+in-process SSE delivery and edited Markdown admitted through the normal message
+endpoint. Cancellation leaves no widget, guest-store sentinel or acknowledgement.
+Three configured typechecks and bounded review pass. No full suites or browser
+editor interaction ran. Checkpoint:
+/workspace/reviews/durable-1650/codemode-editable-table-compatibility.md.
+
 # Native codemode can open qualified Office files
 
 The existing Office Viewer adapter now accepts nested-tool callers. Exact native

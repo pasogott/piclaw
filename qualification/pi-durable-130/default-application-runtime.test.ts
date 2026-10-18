@@ -123,7 +123,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
+for (const scenario of ["native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -177,10 +177,17 @@ for (const scenario of ["native-codemode-office-viewer", "native-codemode-office
       : [{ name: "open_office_viewer", arguments: { path: "@office.csv" } },
         ...["office.txt", "missing.docx", "/tmp/outside-office.csv"].map(path => ({ name: "open_office_viewer", arguments: { path } }))];
   }
-  const nativeTable = scenario.startsWith("native-editable-table");
+  const codemodeTable = scenario === "native-codemode-editable-table" || scenario === "native-codemode-editable-table-cancel";
+  const codemodeTableCancelled = scenario === "native-codemode-editable-table-cancel";
+  const nativeTable = scenario.startsWith("native-editable-table") || codemodeTable;
+  let tableNestedCaptures = 0;
   if (nativeTable) {
     installEditableTableFixture(workspace);
-    toolSequence = [{ name: "editable_table", arguments: { markdown: "Name | Role\n--- | ---\nRui | User", title: " People " } }];
+    const tableArgs: JsonObject = { markdown: "Name | Role\n--- | ---\nRui | User", title: codemodeTable ? " Nested table " : " People " };
+    toolSequence = codemodeTable ? [{ name: "codemode", arguments: { code: codemodeTableCancelled
+      ? `try { await tools.editable_table(${JSON.stringify(tableArgs)}); } catch {} store('revoked-table','MUST_NOT_PERSIST'); console.log('done');`
+      : `const output=await tools.editable_table(${JSON.stringify(tableArgs)});console.log(output);` } }]
+      : [{ name: "editable_table", arguments: tableArgs }];
   }
   const codemodePlan = scenario.startsWith("native-codemode-plan");
   const codemodePlanCancelled = scenario === "native-codemode-plan-cancel";
@@ -429,6 +436,13 @@ for (const scenario of ["native-codemode-office-viewer", "native-codemode-office
       const captured = await captureTool.apply(this, args);
       realToolCaptures++;
       expect(captured.inputs[0]?.sourceId).toBe("factory-input");
+      if (codemodeTable && args[2].includes("/")) {
+        tableNestedCaptures++;
+        expect(captured.operation.chatJid).toBe("web:default");
+        expect(captured.operation.harness).toBeDefined();
+        expect(captured.delegateModel).toBeUndefined();
+        if (codemodeTableCancelled) root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
+      }
       if (codemodeOffice) {
         expect(captured.operation.chatJid).toBe("web:default");
         expect(captured.operation.harness).toBeDefined();
@@ -855,7 +869,7 @@ for (const scenario of ["native-codemode-office-viewer", "native-codemode-office
     return rowId;
   })();
   const dispatch = bound.dispatchAcceptedInput!(message.chat_jid, message.id, rowId!);
-  const tableCancelled = scenario === "native-editable-table-revoked" || scenario === "native-editable-table-closed-publisher" || scenario === "native-editable-table-archived" || scenario === "native-editable-table-harness-generation";
+  const tableCancelled = codemodeTableCancelled || scenario === "native-editable-table-revoked" || scenario === "native-editable-table-closed-publisher" || scenario === "native-editable-table-archived" || scenario === "native-editable-table-harness-generation";
   expect(dispatch).toBeDefined();
   if (scenario === "native-codemode-reopen") {
     let pending: Promise<unknown> | undefined;
@@ -1096,16 +1110,39 @@ for (const scenario of ["native-codemode-office-viewer", "native-codemode-office
   }
   if (nativeTable) {
     expect(calls).toBe(tableCancelled ? 1 : 2);
-    const denied = !["native-editable-table", "native-editable-table-branch"].includes(scenario);
-    expect(realToolCaptures).toBe(1);
+    const denied = codemodeTable ? codemodeTableCancelled : !["native-editable-table", "native-editable-table-branch"].includes(scenario);
+    expect(realToolCaptures).toBe(codemodeTable ? 2 : 1);
+    if (codemodeTable) {
+      expect(tableNestedCaptures).toBe(1);
+      expect(toolSequence).toEqual([]);
+    }
     expect(widgetEvents).toHaveLength(denied ? 0 : 1);
-    if (!denied) expect(widgetEvents[0]).toMatchObject({ event: "extension_ui_widget", data: { chat_jid: tableChat, content: ["| Name | Role |\n| --- | --- |\n| Rui | User |"], options: { extension: "editable-table", surface: "floating-widget", title: "People", headers: ["Name", "Role"], rows: [["Rui", "User"]] } } });
+    if (!denied) expect(widgetEvents[0]).toMatchObject({ event: "extension_ui_widget", data: { chat_jid: tableChat, content: ["| Name | Role |\n| --- | --- |\n| Rui | User |"], options: { extension: "editable-table", surface: "floating-widget", title: codemodeTable ? "Nested table" : "People", headers: ["Name", "Role"], rows: [["Rui", "User"]] } } });
     if (tableCancelled) {
       expect(observedResults.size).toBe(0);
+      if (codemodeTableCancelled) {
+        expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
+        expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=(SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default')").get()).toEqual({ phase: "cancelling" });
+        expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+        const stores = JSON.stringify(root.query(`SELECT r.content FROM document_revisions r JOIN documents d ON d.id=r.document_id WHERE d.kind='"pi.codemode.store"'`).all());
+        expect(stores).not.toContain("revoked-table");
+        expect(stores).not.toContain("MUST_NOT_PERSIST");
+      }
       expect(root.query("SELECT operation_id FROM service_effect_s01_operations WHERE chat_jid=? AND terminal_disposition='completed'").all(tableChat)).toHaveLength(0);
       expect(root.query("SELECT id FROM messages WHERE chat_jid=? AND is_bot_message=1").all(tableChat)).toHaveLength(0);
     } else expect(!!observedResults.get("factory-tool-1")?.isError).toBe(denied);
     if (!denied) {
+      if (codemodeTable) {
+        expect(observedResults.size).toBe(1);
+        expect(observedResults.get("factory-tool-1")).toMatchObject({ toolName: "codemode" });
+        const result = JSON.stringify(observedResults.get("factory-tool-1")?.content);
+        expect(result.length).toBeLessThan(4096);
+        expect(result).toContain("Opened the editable table widget.");
+        expect(result).not.toContain("markdown_table");
+        expect(result).not.toContain("floating-widget");
+        expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(1);
+        expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "consumed" });
+      }
       const editedMarkdown = "| Name | Role |\n| --- | --- |\n| Rui | Editor |";
       const response = await channel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(tableChat)}`, {
         method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: JSON.stringify({ content: editedMarkdown }),
@@ -1117,10 +1154,23 @@ for (const scenario of ["native-codemode-office-viewer", "native-codemode-office
       const completed = () => (root.query("SELECT count(*) AS n FROM service_effect_s01_operations WHERE chat_jid=? AND phase='terminal' AND terminal_disposition='completed'").get(tableChat) as { n: number }).n;
       for (let n = 0; n < 200 && completed() !== 2; n++) await Bun.sleep(10);
       expect(completed()).toBe(2);
+      if (codemodeTable) {
+        expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(2);
+        expect(root.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid=? ORDER BY source_seq").all(tableChat)).toEqual([{ state: "consumed" }, { state: "consumed" }]);
+        expect(calls).toBe(3);
+      }
     }
     await sseReader!.cancel(); await sseDrain;
     expect(sseText.match(/event: extension_ui_widget\n/g) ?? []).toHaveLength(denied ? 0 : 1);
-    if (!denied) expect(sseText).toContain(`"chat_jid":"${tableChat}"`);
+    if (!denied) {
+      expect(sseText).toContain(`"chat_jid":"${tableChat}"`);
+      if (codemodeTable) {
+        const payloads = sseText.split("\n\n").filter(frame => frame.includes("event: extension_ui_widget\n")).map(frame => JSON.parse(frame.split("\n").find(line => line.startsWith("data: "))!.slice(6)));
+        expect(payloads).toHaveLength(1);
+        expect(payloads[0]).toMatchObject({ chat_jid: tableChat, options: { title: "Nested table", headers: ["Name", "Role"], rows: [["Rui", "User"]] } });
+      }
+    }
+    if (codemodeTable) expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
     captureSpies.forEach(spy => spy.mockRestore());
     await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close(); owner.release(); closeDatabase();
     sdkSpies.forEach(spy => spy.mockRestore());

@@ -52,5 +52,5 @@ export function createHostEditableTableTool(addon: EditableTableNativeExports, o
       check();
       return result;
     },
-  });
+  }, { callers: ["model", "tools"] });
 }
