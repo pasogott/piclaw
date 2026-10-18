@@ -61,7 +61,7 @@ import type { CompactionStreamFn } from "../extensions/smart-compaction/stream-c
 import { normalizeLlmContext } from "./llm-context-normalizer.js";
 import { writeMergedSessionArchive } from "../session-archive.js";
 import {
-  getInstalledAddonExtensionPaths as installedAddonExtensionPaths,
+  getInstalledAddonExtensionPaths,
 } from "../addons/package-entries.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -205,10 +205,6 @@ function ensureWorkspaceExtensionNodeModulesLink(nodeModulesDir: string | null):
 
   ensureExtensionNodeModulesLink(workspaceExtensionsDir, nodeModulesDir);
   ensuredWorkspaceExtensionLinkKey = ensureKey;
-}
-
-export function getInstalledAddonExtensionPaths(workspaceDir = getWorkspaceDir()): string[] {
-  return installedAddonExtensionPaths(workspaceDir);
 }
 
 function getBundledExtensionPaths(chatJid?: string): string[] {
