@@ -177,3 +177,17 @@ typechecks passed. Independent bounded review returned READY for this stdio slic
 No full suite or live MCP server was run. HTTP, authentication, resources, prompts,
 live configuration apply, general MCP parity, capped accounting and concurrency
 acceptance are incomplete. Migration and activation have not occurred.
+
+### MCP overlap and configuration drift
+
+Two codemode calls now have targeted shared-client evidence: the fixture withholds
+the first response until the second call arrives, then replies in reverse order.
+Both results retain their request identity. This covers one operation and one
+stdio server; multi-chat concurrency and general load acceptance are unqualified.
+
+Codemode commit guards now include the existing MCP configuration/source guard.
+Changing the config after nested source capture prevents the MCP send and guest
+store persistence, including when guest code catches the MCP error. The operation
+can settle with a tool failure; configuration drift does not cancel the operation.
+Five selected MCP factory cases passed; three typechecks and bounded review passed.
+No full suite, live server, activation or migration ran.

@@ -372,7 +372,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     const authority = createHostOperationAuthority(root, captured, () => {
       assert(); lifetime.signal.throwIfAborted(); runtime().assertCapturedSourceCurrent(captured.inputs);
     }, true);
-    const assertCurrent = authority.assertCurrent;
+    const assertCurrent = () => { authority.assertCurrent(); mcp!.assertCurrent(); };
     assertCurrent();
     const result = await codemode.execute(args, withGuardedCommit(api, assertCurrent), context);
     assertCurrent();

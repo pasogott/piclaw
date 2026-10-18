@@ -100,7 +100,7 @@ export async function createHostMcp(options: {
         }
       }
     }
-    return { tools, close };
+    return { tools, close, assertCurrent };
   } catch (error) {
     try { await close(); } catch (cleanup) { throw new RuntimeStartupCleanupError([error, cleanup], "Native MCP startup cleanup uncertain"); }
     throw error;
