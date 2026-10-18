@@ -1644,7 +1644,7 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       ensureBudgetWork({ id: "native-side-parent", chatJid: "web:default", executionKind: "interactive" }, root);
       const sideEvents: string[] = [], sideText: string[] = [];
       const result = await withBudgetWorkContext({ workId: "native-side-parent", chatJid: "web:default", kind: "interactive" }, () => pool.runSidePrompt("web:default", "native isolated side prompt", {
-        systemPrompt: "SIDE_SYSTEM_PREFIX", onEvent(event) { sideEvents.push(event.type); }, onTextDelta(delta) { sideText.push(delta); },
+        budgetWorkId: "stable-side-retry", systemPrompt: "SIDE_SYSTEM_PREFIX", onEvent(event) { sideEvents.push(event.type); }, onTextDelta(delta) { sideText.push(delta); },
       }));
       expect(result).toMatchObject({ status: "success", result: "factory synthetic reply", model: "openai-codex/approved" });
       expect(calls).toBe(callsBefore + 1);
@@ -1659,6 +1659,13 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       expect(root.query(`SELECT r.state,w.execution_kind FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id WHERE w.execution_kind='side_prompt'`).all()).toEqual([{ state: "settled", execution_kind: "side_prompt" }]);
       expect(root.query("SELECT status,parent_work_id FROM budget_work WHERE execution_kind='side_prompt' AND id LIKE 'durable-operation:%'").all()).toEqual([{ status: "completed", parent_work_id: "native-side-parent" }]);
       expect(root.query("SELECT status FROM budget_work WHERE id='native-side-parent'").get()).toEqual({ status: "active" });
+      const callsBeforeReplay = calls;
+      const replayed = await pool.runSidePrompt("web:default", "native isolated side prompt", { budgetWorkId: "stable-side-retry", budgetParentWorkId: "native-side-parent", systemPrompt: "SIDE_SYSTEM_PREFIX" });
+      expect(replayed).toEqual(result);
+      expect(calls).toBe(callsBeforeReplay);
+      expect((await pool.runSidePrompt("web:default", "changed input", { budgetWorkId: "stable-side-retry", budgetParentWorkId: "native-side-parent" })).status).toBe("error");
+      expect((await pool.runSidePrompt("web:default", "native isolated side prompt", { budgetWorkId: "stable-side-retry", systemPrompt: "SIDE_SYSTEM_PREFIX" })).status).toBe("error");
+      expect(calls).toBe(callsBeforeReplay);
       const sourceCountBeforeParentDenial = root.query("SELECT count(*) AS n FROM service_effect_s01_sources").get();
       expect((await pool.runSidePrompt("web:default", "unknown parent", { budgetParentWorkId: "missing-parent" })).status).toBe("error");
       expect(root.query("SELECT count(*) AS n FROM service_effect_s01_sources").get()).toEqual(sourceCountBeforeParentDenial);

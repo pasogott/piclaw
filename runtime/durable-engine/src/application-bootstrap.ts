@@ -421,10 +421,12 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           return { status: "error" as const, result: null, thinking: null, model: null, error: timedOut ? `Timed out after ${formatTimeoutDuration(timeoutMs)}` : "Side prompt cancelled", stopReason: "aborted" };
         }
         if (!state.answer) throw Error("Side prompt answer unavailable");
-        if (!await runtime.settle(allocated)) throw Error("Side prompt settlement pending");
-        return { status: "success" as const, result: state.answer.text, thinking: state.answer.message.content
+        const result = { status: "success" as const, result: state.answer.text, thinking: state.answer.message.content
           .filter(block => block.type === "thinking").map(block => block.thinking).join(""),
           model: `${state.answer.message.provider}/${state.answer.message.model}`, usage: state.answer.message.usage, stopReason: state.answer.message.stopReason };
+        await config.answers.put(`side-result:${allocated.sourceId}`, JSON.stringify(result)); assertLive();
+        if (!await runtime.settle(allocated)) throw Error("Side prompt settlement pending");
+        return result;
       })();
       const promise = continuing.then(result => {
         sideContinuations.delete(key);
@@ -454,8 +456,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     async function dispatchSidePrompt(chatJid: string, prompt: string, options: SidePromptOptions = {}): Promise<SidePromptResult> {
       assertLive();
       options.signal?.throwIfAborted();
-      if (options.budgetWorkId ||
-        ((options.onEvent || options.onTextDelta || options.onThinkingDelta) && !config.observeSidePrompt))
+      if (((options.onEvent || options.onTextDelta || options.onThinkingDelta) && !config.observeSidePrompt))
         throw Error("Native side prompt options unavailable");
       if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 100_000 ||
         (options.systemPrompt !== undefined && typeof options.systemPrompt !== "string")) throw Error("Invalid side prompt");
@@ -476,8 +477,30 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           if (!parent || parent.chat_jid !== chatJid || parent.status !== "active") throw Error("Side prompt budget parent unavailable");
         }
       };
+      if (options.budgetWorkId !== undefined && typeof options.budgetWorkId !== "string") throw Error("Invalid side prompt budget identity");
+      const retryId = options.budgetWorkId?.trim();
+      if (options.budgetWorkId !== undefined && (!retryId || retryId.length > 1024)) throw Error("Invalid side prompt budget identity");
+      const digest = retryId && createHash("sha256").update(JSON.stringify([chatJid, retryId])).digest("hex");
+      const sourceId = digest ? `side-prompt:${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}` : `side-prompt:${crypto.randomUUID()}`;
+      const prior = work.getAcceptedSource(chatJid, sourceId);
+      if (prior) {
+        const storedPrompt = await content(sourceId, prior); assertLive();
+        if (storedPrompt !== prompt || prior.kind !== "internal") throw Error("Side prompt retry identity conflict");
+        const row = root.query(`SELECT o.operation_id FROM service_effect_s01_operations o
+          JOIN service_effect_s01_operation_sources os ON os.operation_id=o.operation_id AND os.chat_jid=o.chat_jid AND os.source_seq=o.primary_source_seq
+          WHERE o.chat_jid=? AND o.primary_source_seq=?`).get(chatJid, prior.sourceSeq) as { operation_id: string } | null;
+        const budget = row && getBudgetWork(operationBudgetWorkId(row.operation_id), root);
+        if (!row || !budget || budget.parent_work_id !== parentWorkId) throw Error("Side prompt retry identity conflict");
+        const committed = value(await terminal.getTerminal(row.operation_id)); assertLive();
+        if (!committed) { assertParent(); return reconcileSidePrompt(chatJid, sourceId); }
+        if (committed.disposition !== "completed") return { status: "error", result: null, thinking: null, model: null, error: "Side prompt cancelled", stopReason: "aborted" };
+        const payload = await config.answers.resolver.resolve(`side-result:${sourceId}`); assertLive();
+        if (!payload || payload.ref !== `side-result:${sourceId}` || payload.mediaType !== "text/plain" || payload.redactionClass !== "private") throw Error("Side prompt result unavailable");
+        const bytes = Uint8Array.from(payload.bytes);
+        if (bytes.byteLength !== payload.byteLength || createHash("sha256").update(bytes).digest("hex") !== payload.sha256) throw Error("Side prompt result unavailable");
+        return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as SidePromptResult;
+      }
       assertParent();
-      const sourceId = `side-prompt:${crypto.randomUUID()}`;
       // Immutable payload may outlive denied admission; it never grants authority.
       await config.answers.put(sourceId, prompt); assertLive(); options.signal?.throwIfAborted();
       const claimed = root.transaction(() => {
