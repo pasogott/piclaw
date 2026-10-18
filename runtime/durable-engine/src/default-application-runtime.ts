@@ -19,8 +19,7 @@ import { installTerminalSettlementCompositionSchema } from "../../src/service-ef
 import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { applicationOwnership, createApplicationBootstrapBundle } from "./application-bootstrap.js";
 import { createHostModels } from "./host-models.js";
-import { reserveHostRequest, operationBudgetWorkId } from "./host-request-accounting.js";
-import { getBudgetWork, setBudgetWorkStatus } from "../../src/db/budget-limits.js";
+import { reserveHostRequest, reconcileOperationBudgetWork } from "./host-request-accounting.js";
 import { createHostMcp } from "./host-mcp.js";
 import { createHostFetch } from "./host-fetch.js";
 import { taskModelRequestScope, withTaskModelRequestScope } from "./task-model-boundary-shim.js";
@@ -457,6 +456,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   if (failed) throw primary;
   assert();
   installTerminalSettlementCompositionSchema(root);
+  assert(); reconcileOperationBudgetWork(root);
   const payloadDir = join(DATA_DIR, "durable-answers");
   const payloadPath = (ref: string) => join(payloadDir, createHash("sha256").update(ref).digest("hex"));
   const answers = { put(ref: string, text: string) {
@@ -470,12 +470,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     return { ref, bytes, byteLength: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), mediaType: "text/plain", redactionClass: "private" as const };
   } } };
   const bundle = await createApplicationBootstrapBundle({ root, path, ownership, offlineInitialize: true, answers,
-    onOperationSettled(operationId) {
-      const id = operationBudgetWorkId(operationId);
-      if (getBudgetWork(id, root) && !root.query(`SELECT 1 FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id
-        WHERE w.parent_work_id=? AND r.state NOT IN ('settled','released') LIMIT 1`).get(id))
-        setBudgetWorkStatus(id, "completed", { boundary: "operation_settled" }, root);
-    },
+    onOperationSettled(operationId) { assert(); reconcileOperationBudgetWork(root, operationId); },
     onRuntime(value) { captureRuntime = value; },
     manifest: mapping.bindings.map(({ chatJid, branchId, conversationId }) => ({ chatJid, branchId, conversationId: conversationId as ConversationId })),
     sessions: new Map(mapping.bindings.map(binding => [binding.chatJid, binding.sessionId])),

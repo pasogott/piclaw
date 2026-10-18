@@ -3,10 +3,24 @@ import type Database from "bun:sqlite";
 import type { AssistantMessage, Api, Model } from "../../../node_modules/@earendil-works/pi-ai";
 import { modelRequestAccounting } from "../../src/budget/model-request-accounting.js";
 import { boundHostRequestCost } from "../../src/budget/request-cost-bound.js";
-import { ensureBudgetWork, setBudgetWorkStatus } from "../../src/db/budget-limits.js";
+import { ensureBudgetWork, getBudgetWork, setBudgetWorkStatus } from "../../src/db/budget-limits.js";
 import { readStoredProviderUsageAccountRef } from "../../src/agent-pool/provider-usage.js";
 
 export const operationBudgetWorkId = (operationId: string) => `durable-operation:${operationId}`;
+
+/** Reconcile only already-committed host terminals. Never clear uncertain holds. */
+export function reconcileOperationBudgetWork(database: Database, operationId?: string): void {
+  const terminals = database.query("SELECT operation_id FROM service_effect_s02_commits WHERE (? IS NULL OR operation_id=?)").all(operationId ?? null, operationId ?? null) as { operation_id: string }[];
+  database.transaction(() => {
+    for (const terminal of terminals) {
+      const id = operationBudgetWorkId(terminal.operation_id);
+      if (getBudgetWork(id, database)?.status !== "active") continue;
+      if (!database.query(`SELECT 1 FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id
+        WHERE w.parent_work_id=? AND r.state NOT IN ('settled','released') LIMIT 1`).get(id))
+        setBudgetWorkStatus(id, "completed", { boundary: "operation_settled" }, database);
+    }
+  }).immediate();
+}
 
 /** First consumer: stored-identity, uncapped interactive parent requests only.
  * Unsupported requests remain on the existing uncapped path; caps still deny.
