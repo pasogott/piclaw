@@ -1694,6 +1694,22 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       expect(root.query("SELECT SUM(t.api_equivalent_cost_microusd) AS amount FROM token_usage t JOIN budget_work w ON w.id=t.work_id WHERE w.execution_kind='side_prompt'").get()).toEqual({ amount: 30 });
       const afterCancel = await pool.runSidePrompt("web:default", "after cancellation");
       expect(afterCancel.status).toBe("success");
+      const eventsBeforeHttp = sideEvents.length;
+      const timelineBeforeHttp = root.query("SELECT * FROM messages WHERE chat_jid='web:default' ORDER BY rowid").all();
+      const httpSide = await channel.handleRequest(new Request("http://fixture/agent/side-prompt/stream?chat_jid=web%3Adefault", {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" },
+        body: JSON.stringify({ prompt: "actual card stream consumer" }),
+      }));
+      expect(httpSide.status).toBe(200);
+      expect(httpSide.headers.get("content-type")).toContain("text/event-stream");
+      const sse = await httpSide.text();
+      expect(sse).toContain('event: side_prompt_start');
+      expect(sse).toContain('event: side_prompt_text_delta\ndata: {"delta":"factory synthetic reply"}');
+      expect(sse).toContain('event: side_prompt_done\ndata: {"status":"success","result":"factory synthetic reply"');
+      expect(sse).not.toContain('event: side_prompt_error');
+      expect(sideEvents.length).toBe(eventsBeforeHttp);
+      expect(root.query("SELECT * FROM messages WHERE chat_jid='web:default' ORDER BY rowid").all()).toEqual(timelineBeforeHttp);
+      expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
       await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
       compactionPolicySpy?.mockRestore();
       for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
