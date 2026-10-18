@@ -5,6 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { BunSqliteDatabase, HostConversationRuntime } from "../../runtime/durable-engine/src/index.js";
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
+import { withTaskModelRequestScope, taskModelRequestScope } from "../../runtime/durable-engine/src/task-model-boundary-shim.ts";
 import { Harness, InboxDoc } from "../../runtime/durable-engine/qualification/durable.ts";
 import { TestOwner } from "./src/ownership.js";
 import { openFixture, context, barrier } from "./src/fixture.js";
@@ -25,7 +26,7 @@ test("public manual compact: real model summary, idle admission, observer detach
   let runtime!: HostConversationRuntime, approvals = 0;
   const config = { incarnation: "compact", owner: { assert: () => owner.assert(), release() {} }, openStorage,
     withIdleModelGuard: <T>(body: () => Promise<T>) => { beforeGuard?.(); return sql.withIdleModelGuard(body); },
-    harnessOptions: { models: f.models, registry: f.registry, settings: { retry: { enabled: false }, compaction: { enabled: false, keepRecentTokens: 1 } } },
+    harnessOptions: { models: f.models, registry: withTaskModelRequestScope(f.registry), settings: { retry: { enabled: false }, compaction: { enabled: false, keepRecentTokens: 1 } } },
     work: { getOperation: unused, acceptCancellation: unused, bindHarness: unused } as any,
     terminal: { getTerminal: unused, commitTerminal: unused } as any,
     bindings: { get: unused, bind: unused, getOrBind: unused, recordSubmission: unused },
@@ -67,7 +68,7 @@ test("public manual compact: real model summary, idle admission, observer detach
     const before = await conversation.context(context);
     await harness.close(context);
     runtime = await HostConversationRuntime.open(config, context);
-    const entered = barrier(); f.host.modelHold = barrier(); f.host.onModelEnter = () => entered.release();
+    const entered = barrier(); f.host.modelHold = barrier(); f.host.onModelEnter = signal => { const scope = taskModelRequestScope(signal); expect(scope).toBeDefined(); runtime.assertMaintenanceRequest(scope!); entered.release(); };
     f.host.finalContent = [{ type: "text", text: "REAL MODEL CHECKPOINT: retain history and continue" }];
     const abort = new AbortController();
     const observer = runtime.compactSession(binding, "retain decisions", abort.signal);

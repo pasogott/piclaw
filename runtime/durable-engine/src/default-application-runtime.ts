@@ -20,6 +20,7 @@ import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { applicationOwnership, createApplicationBootstrapBundle } from "./application-bootstrap.js";
 import { createHostModels } from "./host-models.js";
 import { createHostMcp } from "./host-mcp.js";
+import { taskModelRequestScope, withTaskModelRequestScope } from "./task-model-boundary-shim.js";
 import { createHostBuiltinTools } from "./host-builtins.js";
 import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, qualifyInstalledEditableTable, qualifyInstalledOfficeViewer, qualifyInstalledDrawio, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
 import { createHostDelegateTool } from "./host-delegate-tool.js";
@@ -296,8 +297,12 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const models = createHostModels(host.modelRuntime, available.map(model => ({ provider: model.provider, id: model.id })), { signal: lifetime.signal,
     captureSourceGuard(signal) {
       const guard = signal && requestGuards.get(signal);
-      if (!guard) throw Error("Native model request source unavailable");
-      return guard;
+      if (guard) return guard;
+      const scope = taskModelRequestScope(signal);
+      if (!scope) throw Error("Native model request source unavailable");
+      const check = () => runtime().assertMaintenanceRequest(scope);
+      check();
+      return check;
     },
     async authorize(model, _kind, signal) { check(model, signal); }, assertCurrent(model, _kind, signal) { check(model, signal); } });
   const registry = createRegistry();
@@ -391,7 +396,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   registry.install(defineExtension({ name: "app.host-builtins", tools }));
   if (plan) registry.install(createHostPlanPrompt(plan.addon, { root, runtime,
     assertOwner() { assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent(); }, failClosed(error) { lifetime.abort(error); } }));
-  const harnessOptions = { models, registry, settings: { retry: { enabled: false } } };
+  const harnessOptions = { models, registry: withTaskModelRequestScope(registry), settings: { retry: { enabled: false } } };
   const path = (root.query("PRAGMA database_list").all() as { name: string; file: string }[]).find(row => row.name === "main")?.file;
   if (!path) throw Error("Durable default requires a file-backed application database");
   const storage = new BunSqliteDatabase(path, { root, assertOwner: assert, fenceTransactions: true });

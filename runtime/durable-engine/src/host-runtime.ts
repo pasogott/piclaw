@@ -541,6 +541,12 @@ export class HostConversationRuntime {
     this.active.add(attempt);
     return attempt;
   }
+  assertMaintenanceRequest(scope: { taskId: number; conversationId: number; taskKind: string; phase: string; signal: AbortSignal }): void {
+    this.fence(); scope.signal.throwIfAborted();
+    if (!this.changingModel || this.maintenanceTaskId !== scope.taskId || scope.taskKind !== "pi.compaction" || scope.phase !== "summarize"
+      || !this.options.existingConversationIds.some(id => id === scope.conversationId)) throw Error("Exact maintenance request required");
+  }
+
   /** Qualify a MODEL tool against its public live slot and every accepted run
    * input. Busy-chat lookup alone is never source authority. No new ledger. */
   captureToolSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId, callId: string) {
