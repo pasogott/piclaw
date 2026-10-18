@@ -373,7 +373,6 @@ export class AgentPool {
       getDurableSession: options.getDurableSession,
       ...(options.getDurableSession === undefined ? {
         createSession: options.createSession,
-        createSideSession: options.createSideSession,
       } : {}),
       onInfo: (message, details) => log.info(message, details),
       onWarn: (message, details) => log.warn(message, details),

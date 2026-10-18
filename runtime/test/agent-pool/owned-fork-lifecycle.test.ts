@@ -47,7 +47,7 @@ function sessionFixture(jid = "web:alice") {
 }
 function lifecycle(create: (jid: string) => Promise<any>) {
   const pool = new Map();
-  const manager = new AgentSessionManager({ pool, sidePool: new Map(), createSession: create, createSideSession: create,
+  const manager = new AgentSessionManager({ pool, sidePool: new Map(), createSession: create,
     modelRuntime: { getModel: () => undefined } as any, settingsManager: { getDefaultProvider: () => undefined, getDefaultModel: () => undefined } as any,
     createDefaultTools: () => [] as any, bindSession: async () => {}, ensureBranchRegistration: () => {},
   });
@@ -91,7 +91,6 @@ test("hydration rejects missing/foreign identity, revoked cookies and background
   const { manager } = lifecycle(async jid => { created++; return sessionFixture(jid).runtime; });
   await expect(manager.getOrCreate("web:alice")).rejects.toThrow("Session access denied");
   await expect(run("web:alice", () => manager.getOrCreate("web:bob"))).rejects.toThrow();
-  await expect(run("web:alice", () => manager.getOrCreateSide("web:bob"))).rejects.toThrow();
   expect(run("web:alice", () => manager.prewarm("web:alice"))).toBe(false);
   const stale = identity(); revokeUserWebSessions(alice);
   await expect(withExecutionIdentity(stale, () => manager.getOrCreate("web:alice"))).rejects.toThrow();

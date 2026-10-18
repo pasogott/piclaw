@@ -41,7 +41,6 @@ export interface AgentPoolServiceFactoryOptions extends AgentPoolLogHooks {
   bashOperations?: AgentBashOperations;
   getDurableSession?: AgentPoolOptions["getDurableSession"];
   createSession?: AgentPoolOptions["createSession"];
-  createSideSession?: AgentPoolOptions["createSideSession"];
 }
 
 /** Concrete helper instances composed into AgentPool. */
@@ -139,7 +138,6 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     // Compatibility construction is absent from the selected durable backend.
     ...(getDurableSession === undefined ? {
     createSession: options.createSession,
-    createSideSession: options.createSideSession,
     createDefaultTools: () => toolFactory.createDefaultTools(),
     createCustomToolOverrides: (chatJid) => toolFactory.createCustomToolOverrides(chatJid),
     getSessionExtensionFactories: (chatJid) => resolveSessionExtensionFactories(chatJid),

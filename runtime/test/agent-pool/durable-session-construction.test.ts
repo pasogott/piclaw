@@ -22,7 +22,6 @@ for (const empty of [false, true]) {
     let factoryReads = 0;
     const compatibility = {
       get createSession(): never { factoryReads++; throw Error("legacy main factory accessed"); },
-      get createSideSession(): never { factoryReads++; throw Error("legacy side factory accessed"); },
     };
     const snapshot = () => { try { return readdirSync(SESSIONS_DIR, { recursive: true }).sort(); } catch { return []; } };
     const before = snapshot();
@@ -53,7 +52,7 @@ for (const empty of [false, true]) {
       for (const chat of ["web:bound", "web:unknown"]) {
         await expect(pool.getSessionForIntrospection(chat)).rejects.toThrow("Durable application does not construct legacy sessions");
         await expect(services.sessionManager.getOrCreate(chat)).rejects.toThrow("Durable application does not construct legacy sessions");
-        await expect(services.sessionManager.getOrCreateSide(chat)).rejects.toThrow("Durable application does not construct legacy sessions");
+        expect("getOrCreateSide" in services.sessionManager).toBe(false);
         expect(services.sessionManager.prewarm(chat, { mode: "lightweight" })).toBe(false);
         expect(services.sessionManager.prewarm(chat, { mode: "full" })).toBe(false);
         await expect(pool.mergeChatBranchIntoParent(chat)).rejects.toThrow("Durable branch rollup unavailable");

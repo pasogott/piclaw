@@ -220,7 +220,6 @@ export interface AgentPoolOptions {
   dispatchSidePrompt?: (chatJid: string, prompt: string, options: SidePromptOptions) => Promise<SidePromptResult>;
   getDurableSession?: (chatJid: string) => import("./durable-runtime-adapter.js").DurableSessionPositionPort | undefined;
   createSession?: (chatJid: string, sessionDir: string) => Promise<AgentSessionRuntime>;
-  createSideSession?: (chatJid: string, sessionDir: string) => Promise<AgentSessionRuntime>;
   credentialStore?: PiclawCredentialStore;
   modelRuntime?: ModelRuntime;
   modelRegistry?: import("@earendil-works/pi-coding-agent").ModelRegistry;
