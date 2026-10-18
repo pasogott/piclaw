@@ -5,7 +5,7 @@ import { closeDatabase, getDb, initDatabase } from "../../src/db/connection.js";
 import { getWebPreviewMaxChars } from "../../src/db/web-content.js";
 import { admitWebUserMessage, type WebUserMessageStoreOptions } from "../../src/channels/web/messaging/message-store.js";
 import { hashCanonicalRequest, type CanonicalJsonValue } from "../../src/service-effects/contracts/common.js";
-import type { AcceptSourceRequest } from "../../src/service-effects/contracts/service-work-store.js";
+import type { AcceptSourceRequest, ClaimNextSourceRequest } from "../../src/service-effects/contracts/service-work-store.js";
 import { installServiceWorkSchema } from "../../src/service-effects/current-piclaw/service-work-schema.js";
 import { createCurrentPiclawServiceWorkStore, EffectAdmissionError, type ServiceWorkAcceptanceRuntime } from "../../src/service-effects/current-piclaw/service-work-store.js";
 
@@ -251,3 +251,40 @@ test("invalid parent after ensureChat cannot leave partial source writes when pr
   await expect(admit({ acceptSource: ({ database }) => { store.acceptSourceInTransaction(bad, database); } })).rejects.toThrow("not_found");
   expect(snapshot(db)).toEqual(before);
 });
+
+function exactClaim(id: string, expectedFrontier = 0): ClaimNextSourceRequest {
+  const input = { effect: { idempotencyKey: `claim:${id}`, requestHash: "", operationId: null, sourceSeq: null,
+    provenanceRef: "application:side-prompt", redactionClass: "private" as const }, chatJid: "web:atomic", expectedFrontier,
+    newOperationId: `operation:${id}`, claimedAt: "2026-08-13T07:00:00.000Z" };
+  return { ...input, effect: { ...input.effect, requestHash: hashCanonicalRequest(input as unknown as CanonicalJsonValue) } };
+}
+function exactSnapshot(db: Database) {
+  return [...snapshot(db), ...["service_effect_s01_operations", "service_effect_s01_operation_sources"].map(table => db.query(`SELECT * FROM ${table}`).all())];
+}
+test("atomic exact source admission claims only its own source and replays both receipts", () => {
+  const { db, store } = fixture();
+  const accept = request("exact"), claim = exactClaim("exact");
+  expect(() => store.acceptAndClaimSourceInTransaction(accept, claim, db)).toThrow("owner_conflict");
+  const run = db.transaction(() => store.acceptAndClaimSourceInTransaction(accept, claim, db));
+  const first = run.immediate();
+  expect(first.source.sourceId).toBe("exact");
+  expect(first.operation.primarySourceSeq).toBe(first.source.sourceSeq);
+  expect(first.operation.operationId).toBe("operation:exact");
+  const before = exactSnapshot(db);
+  expect(run.immediate()).toEqual(first);
+  expect(exactSnapshot(db)).toEqual(before);
+});
+for (const conflict of ["earlier-message", "active-operation", "wrong-frontier", "claim-write-failure"] as const) {
+  test(`atomic exact source conflict ${conflict} rolls back admission and leaves existing work intact`, async () => {
+    const { db, store } = fixture();
+    if (conflict === "earlier-message" || conflict === "active-operation") {
+      const accepted = await store.acceptSource(request("main-message")); expect(accepted.ok).toBe(true);
+      if (conflict === "active-operation") expect((await store.claimNext(exactClaim("main-message"))).ok).toBe(true);
+    }
+    if (conflict === "claim-write-failure") db.exec("CREATE TRIGGER reject_exact_operation BEFORE INSERT ON service_effect_s01_operations BEGIN SELECT RAISE(ABORT, 'claim failure'); END");
+    const before = exactSnapshot(db);
+    expect(() => db.transaction(() => store.acceptAndClaimSourceInTransaction(request("side"), exactClaim("side", conflict === "wrong-frontier" ? 9 : 0), db)).immediate()).toThrow();
+    expect(exactSnapshot(db)).toEqual(before);
+    expect(store.getAcceptedSource("web:atomic", "side")).toBeNull();
+  });
+}

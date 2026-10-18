@@ -209,6 +209,32 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
     }
   }
 
+  /** Host-only exact-source admission/claim in one caller-owned transaction.
+   * Receipt is precommit; failures MUST escape and roll back the outer transaction.
+   * Both ordinary decision receipts retain replay/source/operation identity.
+   */
+  acceptAndClaimSourceInTransaction(accept: AcceptSourceRequest, claim: ClaimNextSourceRequest, transactionDatabase: Database): ClaimedOperation {
+    if (transactionDatabase !== this.database || !this.database.inTransaction) throw new EffectAdmissionError("owner_conflict");
+    const prepared = this.prepareMutation("claimNext", claim) as ClaimNextSourceRequest | null;
+    if (!prepared || claim.chatJid !== accept.chatJid || accept.targetOperationId !== null || accept.parentSourceSeq !== null)
+      throw new EffectAdmissionError("invalid_transition");
+    const source = this.acceptSourceInTransaction(accept, transactionDatabase);
+    try {
+      const fault = this.fault("claimNext", "before_effect");
+      if (!fault.ok || fault.injected) throw new EffectAdmissionError("storage_unavailable");
+      const outcome = this.applyMutationWithinTransaction("claimNext", prepared, request => this.applyClaimNext(request as ClaimNextSourceRequest));
+      if (!outcome.ok) throw new EffectAdmissionError(outcome.error._tag);
+      const claimed = outcome.value as ClaimedOperation | null;
+      if (!claimed || claimed.source.chatJid !== source.chatJid || claimed.source.sourceSeq !== source.sourceSeq ||
+        claimed.source.sourceId !== source.sourceId || claimed.operation.primarySourceSeq !== source.sourceSeq)
+        throw new EffectAdmissionError("owner_conflict");
+      return claimed;
+    } catch (cause) {
+      if (cause instanceof EffectAdmissionError) throw cause;
+      throw new EffectAdmissionError(cause instanceof RollbackFault ? "storage_unavailable" : mutationError(cause)._tag);
+    }
+  }
+
   /** Host-only precommit receipt. The caller MUST roll back on any failure. */
   withdrawUnclaimedSourceInTransaction(input: WithdrawUnclaimedSourceRequest, transactionDatabase: Database): AcceptedSourceSnapshot {
     if (transactionDatabase !== this.database || !this.database.inTransaction) throw new EffectAdmissionError("owner_conflict");
