@@ -14,6 +14,9 @@ for await (const line of createInterface({ input: process.stdin })) {
     first = { id: message.id, result };
     continue; // Require the second call before completing either.
   }
+  if (message.method === "tools/call" && message.params.arguments.message === "MCP_CATALOG_CHANGED") {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/tools/list_changed" }) + "\n");
+  }
   process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }) + "\n");
   if (message.method === "tools/call" && message.params.arguments.message === "MCP_SECOND" && first) {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...first }) + "\n");

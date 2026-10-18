@@ -631,3 +631,14 @@ server errors as `error`; scripts can still read schema-backed error data and
 complete successfully. A negative control without the forwarded flag records `ok`
 and fails the new assertion. All six selected MCP factory scenarios and three
 typechecks passed. General MCP parity and accounting remain incomplete.
+
+### MCP declaration changes
+
+A server's `notifications/tools/list_changed` invalidates the startup-owned native
+catalogue until restart. The public notification listener is installed before
+connect; calls, result publication and codemode store commits use the existing
+freshness guard. No live refresh or legacy fallback is added. A real fixture sends
+the notification before its first result: the result is suppressed, a subsequent
+call never reaches stdin, and a caught failure cannot persist guest state. Seven
+selected MCP cases and three typechecks pass; final drift case adds an explicit
+result non-disclosure assertion (22 assertions).
