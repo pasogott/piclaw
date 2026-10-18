@@ -1665,6 +1665,12 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       const nativeDebug = await debugResponse.json() as { backend: string; tools: { name: string }[] };
       expect(nativeDebug.backend).toBe("durable");
       expect(nativeDebug.tools.map(tool => tool.name)).toContain("read");
+      const nativeCommandsResponse = await channel.handleRequest(new Request("http://fixture/agent/commands?chat_jid=web%3Adefault"));
+      expect(nativeCommandsResponse.status).toBe(200);
+      const nativeCommands = await nativeCommandsResponse.json() as { backend: string; commands: { name: string }[] };
+      expect(nativeCommands.backend).toBe("durable");
+      expect(nativeCommands.commands.map(command => command.name)).toContain("/model");
+      expect(nativeCommands.commands.map(command => command.name)).toContain("/passkeys");
       expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
       const callsBeforeReplay = calls;
       const replayed = await pool.runSidePrompt("web:default", "native isolated side prompt", { budgetWorkId: "stable-side-retry", budgetParentWorkId: "native-side-parent", systemPrompt: "SIDE_SYSTEM_PREFIX" });

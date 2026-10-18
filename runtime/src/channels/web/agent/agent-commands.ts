@@ -23,7 +23,7 @@ export interface CommandEntry {
 /**
  * Build the full command list from a session.
  */
-function buildCommandList(session: AgentSession): CommandEntry[] {
+function buildCommandList(session: AgentSession | null): CommandEntry[] {
   const entries: CommandEntry[] = [];
   const seen = new Set<string>();
 
@@ -43,7 +43,7 @@ function buildCommandList(session: AgentSession): CommandEntry[] {
   }
 
   // Extension commands
-  if (session.extensionRunner) {
+  if (session?.extensionRunner) {
     const isPiBuiltin = (path: string | undefined) =>
       !!path && path.includes("node_modules/@earendil-works/pi-");
     const extCommands = session.extensionRunner.getRegisteredCommands();
@@ -58,12 +58,12 @@ function buildCommandList(session: AgentSession): CommandEntry[] {
   }
 
   // Prompt templates
-  for (const template of session.promptTemplates ?? []) {
+  for (const template of session?.promptTemplates ?? []) {
     add(`/${template.name}`, template.description || "prompt template", "template");
   }
 
   // Skills
-  if (session.resourceLoader) {
+  if (session?.resourceLoader) {
     const skills = session.resourceLoader.getSkills().skills;
     for (const skill of skills) {
       add(`/skill:${skill.name}`, skill.description || "skill", "skill");
@@ -89,7 +89,13 @@ export async function handleAgentCommandsRequest(
 
   const { result, durationMs } = await measureAsync(async () => {
     try {
-      const session = await options.agentPool.getSessionForIntrospection(chatJid);
+      const native = await options.agentPool.getDurableSessionMetadata?.(chatJid);
+    if (native !== undefined) {
+      return native ? options.json({ commands: buildCommandList(null), backend: "durable",
+        unavailable: ["legacy-extension-commands", "prompt-templates", "skills"] })
+        : options.json({ error: "No active session for this chat" }, 404);
+    }
+    const session = await options.agentPool.getSessionForIntrospection(chatJid);
       const commands = buildCommandList(session);
       return options.json({ commands }, 200);
     } catch {
