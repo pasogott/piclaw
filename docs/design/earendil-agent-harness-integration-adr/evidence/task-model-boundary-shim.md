@@ -65,3 +65,21 @@ receipts qualify the temporary adapter's identity propagation and the manual
 factory happy path. They do not qualify factory adoption of pre-existing
 maintenance, automatic/overflow compaction, crash-exactly-once behaviour or native
 budget reservation/settlement. No new CI run or deployment is part of this receipt.
+
+## Source-admission consumer
+
+The default factory now captures generation authority at the model boundary using
+the shim's exact task/conversation/signal scope. It awaits public `captureRunSource`
+before auth, then rechecks the captured source, invocation cancellation and current
+Delegate policy after each admission await and in the host header callback.
+
+This replaces the extension-selected `beforeRequest` hook, its signal map and the
+startup code that appended a required source extension to stored selections.
+Explicit extension arrays and filters now remain unchanged. The old extension name
+is registered without hooks only so persisted selections still resolve.
+
+Actual-source bounded review accepted the new capture and relay paths. Four focused
+revocation/cancellation/stale-harness cases pass 124 assertions. Prior actual-factory
+cases pass 325 assertions and the model/scope files pass 102 tests / 2,494 assertions.
+These are source-identity checks; the SDK's awaited header-to-provider interval is
+unchanged and is not an atomic dispatch or accounting guarantee.

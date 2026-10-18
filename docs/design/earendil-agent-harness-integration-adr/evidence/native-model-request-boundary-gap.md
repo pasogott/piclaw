@@ -62,3 +62,17 @@ requests. A single nontrivial factory experiment timed out at its existing
 The actual factory generation/Delegate hook is implemented and bounded-qualified.
 Accounting and factory model-backed compaction recovery are incomplete. Budget
 caps remain denied; no live activation or migration has occurred.
+
+## Temporary adapter follow-up
+
+The user-authorised registry-reader shim now supplies the actual task invocation
+scope without changing installed SDK files. Generation source capture has moved
+to the model boundary and no longer depends on selected extension hooks or stored
+extension rewriting. Manual summary requests can use the exact admitted maintenance
+task. The earlier hook-only limitation above explains the original gap; it is not
+the current generation admission implementation.
+
+Upstream draft PR https://github.com/earendil-works/pi/pull/11104 proposes a supported
+`taskModels(scope, models)` API to remove this adapter. Neither the shim nor that
+identity-only proposal implements request reservation, atomic dispatch or settlement.
+Factory adoption of recovered maintenance and accounting remain unqualified.
