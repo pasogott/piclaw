@@ -175,6 +175,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       return ({ message, rowId, database: connection }) => {
         assert(); if (!current()) throw Error("Unbound application conversation");
         if (connection !== root || !root.inTransaction) throw Error("Root admission transaction required");
+        if (message.chat_jid !== chat) throw Error("Input admission chat mismatch");
         const input = { effect: { idempotencyKey: message.id, requestHash: "", operationId: null, sourceSeq: null,
           provenanceRef: "application:durable", redactionClass: "private" as const }, chatJid: chat, sourceId: message.id,
           kind: "message" as const, payloadRef: `message-row:${rowId}`, targetOperationId: null, parentSourceSeq: null,
