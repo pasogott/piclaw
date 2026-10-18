@@ -676,3 +676,20 @@ thinking reader report null; model and thinking reads are separate snapshots.
 Hosted run39123174225 passed all gates at prior f8809f4b0; these subsequent changes
 need their own exact-head run. Accounting, general compatibility/load and migration
 acceptance remain incomplete; all 45 requirement statuses are unchanged.
+
+## Failed usage and query scope — 18 October 2026
+
+Failed host chat requests retain reported terminal usage only when provider,
+requested model, API and response model match the approved request and all usage
+numbers are finite and nonnegative. Sanitised error content and diagnostics remain
+fixed/empty. Invalid or mismatched usage falls back to unknown zero telemetry;
+it is not evidence that a dispatched request was free. No request reservation,
+settlement or capped execution is enabled by this change.
+
+The model bridge test file passes98 tests/2464 assertions, including valid terminal
+error usage and negative-cost/provider/response-model denial. The facade file
+passes48 tests/287 assertions. Bare `/model` reuses the picker's model-scope helper;
+actual reopened custom-subset history preserves non-null thinking `low` through
+port, picker and command (95 assertions). Scoped typechecks and bounded review
+passed. Prior edb19a468 passed all hosted gates in run39124204913; the subsequent
+batch needs its own exact-head receipt. All45 requirement statuses are unchanged.
