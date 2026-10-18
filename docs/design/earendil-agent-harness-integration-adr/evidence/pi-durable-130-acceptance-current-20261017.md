@@ -832,3 +832,30 @@ No duplicate gate or manual hosted rerun was used.
 This qualifies the bounded uncapped foreground tracking described above. All enabled
 caps still deny outright; scheduled/compaction accounting, automatic recovery and
 broader acceptance remain incomplete. Migration is still last; nothing was deployed.
+
+## Uncapped scheduled request accounting — 18 October 2026
+
+Native scheduled model requests now reuse the existing request-accounting adapter.
+The validated operation links to its EF-S07 occurrence and scheduled task ID;
+operation work retains `scheduled` execution kind and task lineage, while each
+provider invocation gets its own child request work and reservation. Foreground
+Delegate requests retain their own execution-kind tag under that operation root.
+No new ledger or legacy scheduler execution is introduced.
+
+Three actual scheduler cases pass124 assertions: the existing model-denial/cap
+revocation matrix, three successfully accounted occurrences (30 microdollars), and
+unknown scheduled valuation. Unknown usage leaves an unresolved reservation and
+active task-linked work across database reopen, with no fabricated charge or model
+answer. Scoped typechecks and bounded source/logic review pass.
+
+Frozen head `d6ed3109a` passed native candidate623 tests /7,878 assertions, exit0.
+Its first root gate exited2 solely on an unchanged 5-second EF-S07 checkpoint test
+(5,316ms); that exact test passed once at the unchanged limit in2.10s. One final
+root attempt on identical code exited0:7,333 pass /74 baseline skips /0failures,
+plus25 feature and9 build tests. Both failure and success receipts are retained in
+`/workspace/reviews/durable-1650/scheduled-accounting-{candidate,root,root-final}.*`.
+No assertions or timeouts were weakened, and no automatic retry followed success.
+
+All enabled caps still deny outright. Compaction accounting, provider-unknown
+reconciliation, factory recovered-maintenance adoption and broader acceptance are
+incomplete. No deployment, restart or migration occurred; migration remains last.
