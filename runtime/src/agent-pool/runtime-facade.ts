@@ -357,6 +357,13 @@ export class AgentRuntimeFacade {
       }
       if (command.type === "model") {
         requireSingleUserDirectExecution("Direct model commands");
+        if (!command.modelId) {
+          if (command.provider) return { status: "error", message: "Invalid model format. Use /model <provider>/<modelId>." };
+          if (!port.readModel) throw new Error("Durable session model unavailable");
+          const current = await port.readModel();
+          const models = Array.from(new Set(this.options.modelRegistry.getAvailable().map(model => `${model.provider}/${model.id}`))).sort();
+          return { status: "success", message: `Available models:\n${models.map(model => `  ${model}${model === current ? " (current)" : ""}`).join("\n")}` };
+        }
         if (!port.setModel) throw new Error("Durable model mutation unavailable");
         if (command.compact) return { status: "error", message: "Durable model compaction unavailable" };
         const selected = resolveControlModelSelection(this.options.modelRegistry, command);

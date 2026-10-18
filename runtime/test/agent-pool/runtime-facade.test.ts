@@ -1295,3 +1295,17 @@ for (const fails of [false, true]) test(`durable model command protects its capt
   expect(events).toEqual(['protect', 'set', 'release']);
   expect(lookups).toBe(1);
 });
+
+test('durable model query lists unique available models with persisted selection and no mutation', async () => {
+  let lookups = 0, reads = 0, protection = 0;
+  const { facade } = createFacade({ getDurableSession() { lookups++; return { sessionId: 'query', branchId: 'main', readPosition: async () => null,
+    async readModel() { reads++; return 'z/current'; } }; },
+    modelRegistry: { getAvailable: () => [{ provider: 'z', id: 'current' }, { provider: 'a', id: 'other' }, { provider: 'z', id: 'current' }] } as any,
+    acquireCommandProtection() { protection++; return () => {}; },
+  });
+  expect(await facade.applyControlCommand('web:model-query', { type: 'model', raw: '/model' })).toEqual({ status: 'success', message: 'Available models:\n  a/other\n  z/current (current)' });
+  expect(lookups).toBe(1);
+  expect(reads).toBe(1);
+  expect(protection).toBe(0);
+  expect(await facade.applyControlCommand('web:model-query', { type: 'model', provider: 'z', raw: '/model z/' })).toMatchObject({ status: 'error', message: 'Invalid model format. Use /model <provider>/<modelId>.' });
+});
