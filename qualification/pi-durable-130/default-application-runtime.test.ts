@@ -1554,6 +1554,11 @@ for (const scenario of ["native-mcp-cleanup-fail", "native-mcp-disconnect", "nat
   expect(root.query("SELECT * FROM entries ORDER BY id").all()).toEqual(historyBeforeUpgrade);
   expect(root.query(`SELECT * FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE kind='"app.application-identity"') ORDER BY document_id, seq`).all()).toEqual(identitiesBeforeUpgrade);
   if (scenario === "custom-subset") {
+    expect(await backend.sessionOptions.getDurableSession!("web:default")!.readThinkingLevel!()).toBe("low");
+    const thinkingPool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
+    expect((await thinkingPool.getAvailableModels("web:default", { includeProviderUsage: false, includeProviderDiagnostics: false })).thinking_level).toBe("low");
+    expect(await thinkingPool.applyControlCommand("web:default", { type: "thinking", raw: "/thinking" })).toMatchObject({ status: "success", thinking_level: "low" });
+    await thinkingPool.shutdown();
     expect(backend.sessionOptions.getDurableSession!("web:default")?.sessionId).toBe(first?.sessionId);
     expect(backend.sessionOptions.getDurableSession!(newcomer)).toMatchObject({ sessionId: newPort.sessionId, branchId: newPort.branchId });
     backend.stop(); await backend.close();
