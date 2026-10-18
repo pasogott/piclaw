@@ -1331,3 +1331,18 @@ test('durable thinking query reads persisted level and rejects mutation before r
   await expect(facade.applyControlCommand('web:thinking-query', { type: 'thinking', level: 'low', raw: '/thinking low' })).rejects.toThrow('Durable thinking mutation unavailable');
   expect(reads).toBe(1);
 });
+
+test('durable model catalogue query reuses configured model scope', async () => {
+  const previous = process.env.PICLAW_SCOPED_MODELS_ONLY;
+  process.env.PICLAW_SCOPED_MODELS_ONLY = '1';
+  try {
+    const { facade } = createFacade({ durableSessions: new Map([['web:scoped-query', { sessionId: 'scope', branchId: 'main', readPosition: async () => null, readModel: async () => 'synthetic/allowed' }]]),
+      modelRegistry: { getAvailable: () => [{ provider: 'synthetic', id: 'allowed' }, { provider: 'synthetic', id: 'hidden' }] } as any,
+      settingsManager: { getEnabledModels: () => ['synthetic/allowed'] } as any,
+    });
+    expect(await facade.applyControlCommand('web:scoped-query', { type: 'model', raw: '/model' })).toEqual({ status: 'success', message: 'Available models:\n  synthetic/allowed (current)' });
+  } finally {
+    if (previous === undefined) delete process.env.PICLAW_SCOPED_MODELS_ONLY;
+    else process.env.PICLAW_SCOPED_MODELS_ONLY = previous;
+  }
+});

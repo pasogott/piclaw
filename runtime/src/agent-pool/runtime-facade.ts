@@ -361,7 +361,8 @@ export class AgentRuntimeFacade {
           if (command.provider) return { status: "error", message: "Invalid model format. Use /model <provider>/<modelId>." };
           if (!port.readModel) throw new Error("Durable session model unavailable");
           const current = await port.readModel();
-          const models = Array.from(new Set(this.options.modelRegistry.getAvailable().map(model => `${model.provider}/${model.id}`))).sort();
+          const available = resolveModelScope(this.options.modelRegistry.getAvailable(), this.options.settingsManager).models;
+          const models = Array.from(new Set(available.map(model => `${model.provider}/${model.id}`))).sort();
           return { status: "success", message: `Available models:\n${models.map(model => `  ${model}${model === current ? " (current)" : ""}`).join("\n")}` };
         }
         if (!port.setModel) throw new Error("Durable model mutation unavailable");
