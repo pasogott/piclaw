@@ -1,3 +1,18 @@
+# Native Delegate standard-tool recovery follow-up
+
+Two additional actual-factory tests hold the real unsafe host write before and
+after its filesystem effect. Cooperative close/reopen retains the same owned
+child and one accepted child input. The write syscall count stays zero or one;
+unsafe execution is not replayed and the tool reports an interrupted error.
+The host recovery gate first rejects the unknown pending child; the subsequent
+explicit public SDK recovery does not qualify automatic production recovery.
+These are separate candidate-file fixtures, not a one-root-DB or SIGKILL claim.
+
+The complete candidate suite passes 527 tests / 7,546 assertions, exit 0
+(`delegate-standard-recovery-candidate.log`). Focused factory tests pass 27 /
+321 assertions; qualification types and bounded independent review pass. No
+production source changes are part of this follow-up.
+
 # Native Delegate standard tools — source candidate over `1241cdde0`
 
 The actual default factory accepts explicit `tools: "standard"` with exactly seven

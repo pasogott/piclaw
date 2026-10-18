@@ -6,7 +6,11 @@ import { createHostDelegateTool } from "../../runtime/durable-engine/src/host-de
 import { barrier, context, openFixture } from "./src/fixture.ts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { writeFileSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync } from "node:fs";
+import * as fs from "node:fs";
+import { Database } from "bun:sqlite";
+import { createHostBuiltinTools } from "../../runtime/durable-engine/src/host-builtins.ts";
+import { awaitWithContext } from "../../runtime/durable-engine/qualification/context.ts";
 import { createHostDelegateFileReader } from "../../runtime/durable-engine/src/host-delegate-files.ts";
 import { acceptedSteerFixture } from "./src/accepted-steer-recovery-fixture.ts";
 import { OwnedSqlite } from "./src/ownership.ts";
@@ -335,5 +339,131 @@ for (const cancel of [false, true]) {
       release.release(); await waiting;
       expect((await f.runtime!.reconcile(input)).status?.status).toBe("done");
     } finally { release.release(); await waiting?.catch(() => {}); await f.close(); await rm(dir, { recursive: true, force: true }); }
+  }, 10_000);
+}
+
+// Bounded public-factory recovery, not production startup authorization: the
+// fixture's host gate must reject the pending owned child. Only an explicit
+// public SDK resume below qualifies safe parent / unsafe child replay.
+for (const boundary of ["before-effect", "after-effect"] as const) {
+  test(`native Delegate standard unsafe child recovery: ${boundary}`, async () => {
+    const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "delegate-standard-recovery-"));
+    const f = await acceptedSteerFixture(dir, "before-submit");
+    const hold = barrier(), entered = barrier();
+    const sentinel = join(dir, "sentinel.txt");
+    let executions = 0, writes = 0, captures = 0, modelCaptures = 0;
+    let recovery: Harness | undefined;
+    const realWriteFileSync = fs.writeFileSync;
+    const writeSpy = spyOn(fs, "writeFileSync").mockImplementation(((...args: Parameters<typeof writeFileSync>) => {
+      if (String(args[0]) === sentinel) writes++;
+      return realWriteFileSync(...args);
+    }) as typeof writeFileSync);
+    const builtins = createHostBuiltinTools({ cwd: dir, authority: { assertAllowed() { f.owner.assert(); } },
+      async captureSourceGuard(call) {
+        const proof = await f.runtime!.captureToolSource(call.conversationId, call.taskId, call.toolCallId);
+        captures++;
+        expect(proof.inputs[0]!.operationId).toBe(f.incarnation);
+        return () => f.runtime!.assertCapturedSourceCurrent(proof.inputs);
+      } });
+    const actualWrite = builtins.find(tool => tool.name === "write")!;
+    const write = defineTool({ ...actualWrite, async execute(args, api, ctx) {
+      executions++;
+      if (boundary === "before-effect") { entered.release(); await awaitWithContext(hold.promise, ctx); }
+      const result = await actualWrite.execute(args, api, ctx);
+      if (boundary === "after-effect") { entered.release(); await awaitWithContext(hold.promise, ctx); }
+      return result;
+    } });
+    const standard = builtins.map(tool => tool === actualWrite ? write : tool);
+    const standardExtension = defineExtension({ name: "standard-recovery-builtins", tools: standard });
+    f.base.registry.install(standardExtension);
+    const delegate = createHostDelegateTool({ name: "delegate", description: "Synthetic declaration; actual native consumer",
+      parameters: Type.Object({ prompt: Type.String(), tools: Type.String() }) }, {
+      assertCurrent() { f.owner.assert(); }, runtime: () => f.runtime!,
+      async selectModel(_args, parent) { return parent!; }, assertModelCurrent() {},
+      readonlyTools: [], readonlyExtensions: [], standardTools: standard, standardExtensions: [standardExtension],
+    });
+    const extension = defineExtension({ name: "standard-recovery-consumer", tools: [delegate], hooks: [{ task: "pi.generation", handlers: {
+      async beforeRequest(_request: Parameters<NonNullable<GenerationHooks["beforeRequest"]>>[0], api: Parameters<NonNullable<GenerationHooks["beforeRequest"]>>[1]) {
+        const proof = await f.runtime!.captureRunSource(api.conversationId, api.taskId);
+        expect(proof.inputs[0]!.operationId).toBe(f.incarnation);
+        modelCaptures++;
+      },
+    } }] });
+    f.base.registry.install(extension);
+    const model = f.base.models.getModel("qualification", "synthetic")!;
+    const stream = (_model: unknown, transcript: TranscriptContext) => {
+      const child = JSON.stringify(transcript.messages.findLast(m => m.role === "user")?.content).includes("CHILD_WRITE");
+      const calls = transcript.messages.findLast(m => m.role !== "system")?.role === "user";
+      const output = createAssistantMessageEventStream();
+      const message: AssistantMessage = { role: "assistant", api: model.api, provider: model.provider, model: model.id,
+        timestamp: 1, stopReason: calls ? "toolUse" : "stop", content: calls
+          ? [{ type: "toolCall", id: "standard-owned-call", name: child ? "write" : "delegate", arguments: child
+            ? { path: "sentinel.txt", content: "SENTINEL\n" } : { prompt: "CHILD_WRITE", tools: "standard" } }]
+          : [{ type: "text", text: child ? "CHILD_DONE" : "ROOT_DONE" }],
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+      output.push({ type: "done", reason: calls ? "toolUse" : "stop", message }); output.end(message); return output;
+    };
+    f.base.models.setProvider(createProvider({ id: model.provider, models: [model],
+      auth: { apiKey: { name: "keyless", resolve: async () => ({ auth: {}, source: "fixture" }) } }, api: { stream, streamSimple: stream } }));
+    let waiting: Promise<void> | undefined;
+    try {
+      // Separate candidate file, explicitly WAL/FULL. No one-root-DB claim.
+      const policy = new Database(f.path);
+      try { policy.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL"); } finally { policy.close(); }
+      const setup = await Harness.open(await SqliteStorage.open(new OwnedSqlite(f.owner)), { models: f.base.models, registry: f.base.registry }, context);
+      try { await setup.commit(tx => configure(tx, f.base.root.id, { tools: [delegate], extensions: [extension] }), context); }
+      finally { await setup.close(context); }
+      await f.open(); f.permit = true;
+      expect(await f.candidateDatabase.get("PRAGMA journal_mode")).toEqual({ journal_mode: "wal" });
+      expect(await f.candidateDatabase.get("PRAGMA synchronous")).toEqual({ synchronous: 2 });
+      storeChatMetadata(f.chatJid, at);
+      const source = value(await f.ports.work.acceptSource(sealed({ effect: effect(`${f.incarnation}:standard`), chatJid: f.chatJid,
+        sourceId: "standard", kind: "message" as const, payloadRef: "standard", targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
+      f.db.query("INSERT INTO messages(id,chat_jid,content,timestamp) VALUES (?,?,?,?)").run("standard", f.chatJid, "ROOT_STANDARD", at);
+      const claimed = value(await f.ports.work.claimNext(sealed({ effect: effect(`${f.incarnation}:claim-standard`), chatJid: f.chatJid,
+        expectedFrontier: 0, newOperationId: f.incarnation, claimedAt: at })))!;
+      const input = { incarnation: f.incarnation, conversationId: f.base.root.id, chatJid: f.chatJid, branchId: "main", operationId: f.incarnation,
+        sourceSeq: source.sourceSeq, sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: f.primaryRequestId,
+        requestHash: hashCanonicalRequest({ type: "input", requestId: f.primaryRequestId, content: "ROOT_STANDARD" }) };
+      const id = await f.runtime!.submit(input);
+      value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:standard-running`, f.incarnation, source.sourceSeq), expectedVersion: claimed.operation.version,
+        sessionId: f.incarnation, lane: "main", harnessOperationId: String(id), state: "running" as const, watchGeneration: f.generation })));
+      waiting = f.runtime!.wait(input, id); void waiting.catch(() => {});
+      await Promise.race([entered.promise, waiting.then(() => { throw Error("Parent settled before write boundary"); })]);
+      expect(delegate.replay).toBe("safe"); expect(write.replay).toBe("unsafe");
+      expect(executions).toBe(1); expect(writes).toBe(boundary === "after-effect" ? 1 : 0);
+      expect(existsSync(sentinel)).toBe(boundary === "after-effect");
+      const before = await f.candidateStorage.scanConversations({}, 10, undefined, context);
+      const owned = before.items.filter(c => c.owner);
+      expect(owned).toHaveLength(1);
+      await f.runtime!.close(); await waiting.catch(() => {}); waiting = undefined;
+      await f.open();
+      // The fixture controller cannot authorize pending child work. Do not
+      // weaken it to turn this bounded SDK qualification into startup approval.
+      await expect(f.runtime!.wait(input, id)).rejects.toThrow("Unknown recovered authority");
+      recovery = await Harness.open(await SqliteStorage.open(new OwnedSqlite(f.owner)), { models: f.base.models, registry: f.base.registry }, context);
+      recovery.resume();
+      const submission = (await recovery.submission(id, context))!;
+      expect((await submission.wait(context)).status).toBe("done");
+      const root = (await recovery.conversation(f.base.root.id, context))!;
+      const after = await root.commit(tx => tx.scanConversations({}, 10), context);
+      expect(after.items.filter(c => c.owner)).toEqual(owned);
+      const child = (await recovery.conversation(owned[0]!.id, context))!;
+      const entries = (await child.entries({}, 100, undefined, context)).items;
+      expect(entries.filter(e => e.kind === "pi.user")).toHaveLength(1);
+      const results = entries.flatMap(e => e.model ?? []).filter(m => m.role === "toolResult");
+      expect(results).toHaveLength(1);
+      expect(results[0]!.isError).toBe(true);
+      expect(JSON.stringify(results[0]!.content)).toContain("interrupted");
+      expect(executions).toBe(1); expect(writes).toBe(boundary === "after-effect" ? 1 : 0);
+      if (boundary === "after-effect") expect(readFileSync(sentinel, "utf8")).toBe("SENTINEL\n");
+      else expect(existsSync(sentinel)).toBe(false);
+      expect(captures).toBe(boundary === "after-effect" ? 1 : 0);
+      expect(modelCaptures).toBeGreaterThan(0);
+      expect((await recovery.inspect(context)).tasks).toHaveLength(0);
+    } finally {
+      hold.release(); await waiting?.catch(() => {}); await recovery?.close(context); await f.close(); writeSpy.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
   }, 10_000);
 }
