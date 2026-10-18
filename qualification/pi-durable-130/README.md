@@ -1,3 +1,20 @@
+# Default-runtime fixture included in strict types
+
+The main default-application-runtime.test.ts fixture is now explicitly included
+in the strict qualification TypeScript project. Fourteen existing diagnostics
+were fixed at the fixture source: JSON-compatible adversarial values, the real
+in-memory test credential store, asserted admission callbacks, and generic
+transaction spies. Existing runtime assertions and strictness are unchanged;
+no production file or source hash was changed.
+
+All three configured typechecks pass with zero diagnostics. Targeted runtime
+checks pass: codemode reopen 1/38 assertions; malformed explicit model 1/25.
+An initial malformed-model invocation used unpublished dirty add-on source and
+correctly failed its hash guard; the final run uses the exact historical source.
+Bounded review is READY. No full suites, retries of broad batches, live services,
+dependency changes or migration. Checkpoint:
+/workspace/reviews/durable-1650/default-fixture-type-cleanup.md.
+
 # Native codemode default-backend reopen — targeted coverage
 
 The native-codemode-reopen scenario uses the actual default backend, guarded

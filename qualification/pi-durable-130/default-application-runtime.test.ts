@@ -1,6 +1,10 @@
 import "./src/test-guard.js";
 import { delegateImages } from "./delegate-image-fixtures.ts";
 import { expect, test, spyOn } from "bun:test";
+import { strict as assert } from "node:assert";
+import { createTestCredentialStore } from "../../runtime/test/model-services-fixture.js";
+import type { JsonObject } from "../../node_modules/@earendil-works/pi-ai";
+import type { SqliteExecutor } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { SessionManager, SettingsManager, ModelRuntime, ModelRegistry } from "../../node_modules/@earendil-works/pi-coding-agent";
 import { getPiclawAgentDir } from "../../runtime/src/core/agent-dir.js";
 import { BunSqliteDatabase } from "../../runtime/durable-engine/src/bun-sqlite.js";
@@ -104,7 +108,7 @@ for (const uncertain of [false, true]) factoryTest(`cleanup-${uncertain}`, `actu
   }
 });
 
-const explicitDelegateCases: Record<string, { id: string; model: unknown; denied?: boolean; exclude?: "model" | "provider" }> = {
+const explicitDelegateCases: Record<string, { id: string; model: string | number; denied?: boolean; exclude?: "model" | "provider" }> = {
   "native-delegate-explicit": { id: "gpt-5-mini", model: "synthetic/gpt-5-mini" },
   "native-delegate-explicit-parent": { id: "gpt-5-mini", model: "synthetic/gpt-6.1-sol" },
   "native-delegate-explicit-slash": { id: "openai/gpt-6-astra", model: "synthetic/openai/gpt-6-astra" },
@@ -135,7 +139,7 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
   const model = { provider: "synthetic", id: "approved", name: "Approved", api: "openai-completions", baseUrl: "https://invalid.invalid", input: ["text"], reasoning: false, contextWindow: 10000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   const requested: string[] = [];
   const planRequests: string[] = [];
-  let toolSequence: { name: string; arguments: Record<string, unknown> | (() => Record<string, unknown>) }[] | undefined;
+  let toolSequence: { name: string; arguments: JsonObject | (() => JsonObject) }[] | undefined;
   const reviewPackage = scenario === "native-code-review" ? installCodeReviewFixture(workspace) : undefined;
   if ((scenario === "native-codemode-cancel" || scenario === "native-codemode-harness")) toolSequence = [{ name: "codemode", arguments: {
     code: 'try { await tools.write({path:"codemode-forbidden.txt",content:"FORBIDDEN"}); } catch {} store("revoked-sentinel", {secret:"MUST_NOT_PERSIST"}); console.log("done");',
@@ -296,8 +300,7 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
       stream.push({ type: "done", reason: message.stopReason, message }); stream.end(message);
     })(); return stream;
   };
-  const credentialStore: RuntimeModelServices["credentialStore"] = { read: async provider => provider === model.provider ? { type: "api_key", key: "synthetic-only" } : undefined,
-    list: async () => [{ providerId: model.provider, type: "api_key" }], modify: async () => undefined, delete: async () => {} };
+  const credentialStore = createTestCredentialStore({ [model.provider]: { type: "api_key", key: "synthetic-only" } });
   const runtime = await ModelRuntime.create({ modelsPath: null, modelsStore: { read: async () => undefined, write: async () => {}, delete: async () => {} },
     credentials: credentialStore,
     allowModelNetwork: false, refreshOnCreate: false });
@@ -495,7 +498,7 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
       for (const [index, chat] of ["web:default", "web:scheduled-dynamic", "web:default"].entries()) {
         if (index === 2) {
           const message = { id: "scheduler-main-seed", chat_jid: chat, sender: "user", sender_name: "User", content: "main history", timestamp: new Date().toISOString(), is_from_me: false, is_bot_message: false };
-          const row = root.transaction(() => { const id = storeMessage(message); bound.getInputSourceAdmission!(chat)({ message, rowId: id, database: root }); return id; })();
+          const row = root.transaction(() => { const id = storeMessage(message); const admit = bound.getInputSourceAdmission!(chat); assert(admit); admit({ message, rowId: id, database: root }); return id; })();
           expect(await bound.dispatchAcceptedInput!(chat, message.id, row!)!()).toBe("settled");
         }
         const port = backend.sessionOptions.getDurableSession!(chat)!;
@@ -594,7 +597,7 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
       const reopened = backend.bind({ queue: reopenedBase.queue, agentPool: reopenedPool });
       try {
         const message = { id: "scheduler-after-reopen", chat_jid: "web:default", sender: "user", sender_name: "User", content: "ordinary message after scheduled forks", timestamp: new Date().toISOString(), is_from_me: false, is_bot_message: false };
-        const row = root.transaction(() => { const id = storeMessage(message); reopened.getInputSourceAdmission!(message.chat_jid)({ message, rowId: id, database: root }); return id; })();
+        const row = root.transaction(() => { const id = storeMessage(message); const admit = reopened.getInputSourceAdmission!(message.chat_jid); assert(admit); admit({ message, rowId: id, database: root }); return id; })();
         expect(await reopened.dispatchAcceptedInput!(message.chat_jid, message.id, row!)!()).toBe("settled");
         expect(root.query("SELECT COUNT(*) AS n FROM messages WHERE is_bot_message=1").get()).toEqual({ n: 2 });
         expect(requested.at(-1)).toBe(model.id);
@@ -649,7 +652,7 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
         const req = new Request("http://fixture/internal"); bindAddonLocalDispatchRequest(req, target.chatId, input.content);
         const marked = { ...message, content_blocks: [getAddonLocalDispatchBlock(req, target.chatId, input.content)!] };
         expect(verifyAddonLocalMessage(target.chatId, marked)?.reference?.intentId).toBe(submitted.dispatchId);
-        row = root.transaction(() => { const id = storeMessage(marked); bound.getInputSourceAdmission!(target.chatId)({ message: marked, rowId: id, database: root }); return id; })()!;
+        row = root.transaction(() => { const id = storeMessage(marked); const admit = bound.getInputSourceAdmission!(target.chatId); assert(admit); admit({ message: marked, rowId: id, database: root }); return id; })()!;
       });
       return { status: "accepted", rowId: row };
     } });
@@ -733,7 +736,7 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
           const req = new Request("http://fixture/internal"); bindAddonLocalDispatchRequest(req, target.chatId, input.content);
           const marked = { ...freshMessage, content_blocks: [getAddonLocalDispatchBlock(req, target.chatId, input.content)!] };
           expect(verifyAddonLocalMessage(target.chatId, marked)?.reference?.intentId).toBe(freshDispatch.dispatchId);
-          freshRow = root.transaction(() => { const id = storeMessage(marked); reopened.getInputSourceAdmission!(target.chatId)({ message: marked, rowId: id, database: root }); return id; })()!;
+          freshRow = root.transaction(() => { const id = storeMessage(marked); const admit = reopened.getInputSourceAdmission!(target.chatId); assert(admit); admit({ message: marked, rowId: id, database: root }); return id; })()!;
         });
         return { status: "accepted", rowId: freshRow };
       } });
@@ -757,7 +760,8 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
   }
   const rowId = root.transaction(() => {
     const rowId = storeMessage(message);
-    bound.getInputSourceAdmission!(message.chat_jid)({ message, rowId, database: root });
+    const admit = bound.getInputSourceAdmission!(message.chat_jid); assert(admit);
+    admit({ message, rowId, database: root });
     return rowId;
   })();
   const dispatch = bound.dispatchAcceptedInput!(message.chat_jid, message.id, rowId!);
@@ -1094,7 +1098,7 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
   expect(newPort).toBeDefined();
   expect((root.query("SELECT count(*) AS n FROM conversations").get() as { n: number }).n).toBe(before + 1);
   const newMessage = { ...message, id: "newcomer-first", chat_jid: newcomer };
-  const newRow = root.transaction(() => { const rowId = storeMessage(newMessage); bound.getInputSourceAdmission!(newcomer)({ message: newMessage, rowId, database: root }); return rowId; })();
+  const newRow = root.transaction(() => { const rowId = storeMessage(newMessage); const admit = bound.getInputSourceAdmission!(newcomer); assert(admit); admit({ message: newMessage, rowId, database: root }); return rowId; })();
   expect(await bound.dispatchAcceptedInput!(newcomer, newMessage.id, newRow!)!()).toBe("settled");
   expect(await newPort.readPosition()).not.toBeNull();
   expect(root.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1").get(newcomer)).toEqual({ content: "factory synthetic reply" });
@@ -1105,7 +1109,8 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
     const pending = { ...message, id: "pending-tool-upgrade", content: "must remain pending" };
     root.transaction(() => {
       const rowId = storeMessage(pending);
-      bound.getInputSourceAdmission!(pending.chat_jid)({ message: pending, rowId, database: root });
+      const admit = bound.getInputSourceAdmission!(pending.chat_jid); assert(admit);
+      admit({ message: pending, rowId, database: root });
     })();
     expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id=?").get(pending.id)).toEqual({ state: "pending" });
   }
@@ -1211,7 +1216,8 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
   const next = { ...message, id: "factory-input-after-default-change", content: "continue A" };
   const nextRow = root.transaction(() => {
     const rowId = storeMessage(next);
-    rebound.getInputSourceAdmission!(next.chat_jid)({ message: next, rowId, database: root });
+    const admit = rebound.getInputSourceAdmission!(next.chat_jid); assert(admit);
+    admit({ message: next, rowId, database: root });
     return rowId;
   })();
   expect(await rebound.dispatchAcceptedInput!(next.chat_jid, next.id, nextRow!)!()).toBe("settled");
@@ -1232,7 +1238,8 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
   const toolInput = { ...message, id: "factory-tool-input", content: "Run the synthetic host tool sequence" };
   const toolRow = root.transaction(() => {
     const rowId = storeMessage(toolInput);
-    rebound.getInputSourceAdmission!(toolInput.chat_jid)({ message: toolInput, rowId, database: root });
+    const admit = rebound.getInputSourceAdmission!(toolInput.chat_jid); assert(admit);
+    admit({ message: toolInput, rowId, database: root });
     return rowId;
   })();
   expect(await rebound.dispatchAcceptedInput!(toolInput.chat_jid, toolInput.id, toolRow!)!()).toBe("settled");
@@ -1263,8 +1270,8 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
   const actualTransaction = BunSqliteDatabase.prototype.transaction;
   const lostAck = Error("lost create commit acknowledgement");
   let lostAcknowledgements = 0;
-  const fault = spyOn(BunSqliteDatabase.prototype, "transaction").mockImplementation(async function (this: BunSqliteDatabase, ...args) {
-    const result = await actualTransaction.apply(this, args);
+  const fault = spyOn(BunSqliteDatabase.prototype, "transaction").mockImplementation(async function <T>(this: BunSqliteDatabase, callback: (tx: SqliteExecutor) => Promise<T>): Promise<T> {
+    const result = await actualTransaction.call<BunSqliteDatabase, [(tx: SqliteExecutor) => Promise<T>], Promise<T>>(this, callback);
     if ((root.query("SELECT count(*) AS n FROM conversations").get() as { n: number }).n > beforeUncertain) {
       lostAcknowledgements++; throw lostAck;
     }
@@ -1302,8 +1309,8 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
     let entered!: () => void, release!: () => void;
     const inside = new Promise<void>(resolve => { entered = resolve; });
     const hold = new Promise<void>(resolve => { release = resolve; });
-    const gate = spyOn(BunSqliteDatabase.prototype, "transaction").mockImplementationOnce(function (this: BunSqliteDatabase, callback) {
-      return actualTransaction.call(this, async tx => { entered(); await hold; return callback(tx); });
+    const gate = spyOn(BunSqliteDatabase.prototype, "transaction").mockImplementationOnce(function <T>(this: BunSqliteDatabase, callback: (tx: SqliteExecutor) => Promise<T>): Promise<T> {
+      return actualTransaction.call<BunSqliteDatabase, [(tx: SqliteExecutor) => Promise<T>], Promise<T>>(this, async tx => { entered(); await hold; return callback(tx); });
     });
     const pending = raceBound.prepareInputSourceAdmission!(raceChat).then(() => null, error => error);
     await inside;

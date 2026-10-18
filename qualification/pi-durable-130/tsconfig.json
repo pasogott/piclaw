@@ -14,6 +14,7 @@
   "include": [
     "src/**/*.ts",
     "host-operation-authority.test.ts",
+    "default-application-runtime.test.ts",
     "../../runtime/src/types/gifenc.d.ts",
     "../../runtime/src/types/web-push.d.ts",
     "test.ts",
