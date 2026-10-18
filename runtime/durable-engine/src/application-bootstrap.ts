@@ -4,7 +4,7 @@ import { getAgentRuntimeConfig } from "../../src/core/config.js";
 import { formatTimeoutDuration } from "../../src/agent-pool/prompt-utils.js";
 import { getBudgetWorkContext } from "../../src/budget/context.js";
 import { ensureBudgetWork, getBudgetWork } from "../../src/db/budget-limits.js";
-import { operationBudgetWorkId } from "./host-request-accounting.js";
+import { operationBudgetWorkId, sidePromptSourceId } from "./host-request-accounting.js";
 import { createHash } from "node:crypto";
 import type { Context } from "@earendil-works/chord/context";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
@@ -481,8 +481,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       if (options.budgetWorkId !== undefined && typeof options.budgetWorkId !== "string") throw Error("Invalid side prompt budget identity");
       const retryId = options.budgetWorkId?.trim();
       if (options.budgetWorkId !== undefined && (!retryId || retryId.length > 1024)) throw Error("Invalid side prompt budget identity");
-      const digest = retryId && createHash("sha256").update(JSON.stringify([chatJid, retryId])).digest("hex");
-      const sourceId = digest ? `side-prompt:${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}` : `side-prompt:${crypto.randomUUID()}`;
+      const sourceId = retryId ? sidePromptSourceId(chatJid, retryId) : `side-prompt:${crypto.randomUUID()}`;
       const prior = work.getAcceptedSource(chatJid, sourceId);
       if (prior) {
         const storedPrompt = await content(sourceId, prior); assertLive();
@@ -491,7 +490,9 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           JOIN service_effect_s01_operation_sources os ON os.operation_id=o.operation_id AND os.chat_jid=o.chat_jid AND os.source_seq=o.primary_source_seq
           WHERE o.chat_jid=? AND o.primary_source_seq=?`).get(chatJid, prior.sourceSeq) as { operation_id: string } | null;
         const budget = row && getBudgetWork(operationBudgetWorkId(row.operation_id), root);
-        if (!row || !budget || budget.parent_work_id !== parentWorkId) throw Error("Side prompt retry identity conflict");
+        const retryWork = retryId ? getBudgetWork(retryId, root) : null;
+        if (!row || !budget || (retryId ? budget.parent_work_id !== retryId || !retryWork || retryWork.chat_jid !== chatJid ||
+          retryWork.execution_kind !== "side_prompt" || retryWork.parent_work_id !== parentWorkId : budget.parent_work_id !== parentWorkId)) throw Error("Side prompt retry identity conflict");
         const committed = value(await terminal.getTerminal(row.operation_id)); assertLive();
         if (!committed) { assertParent(); return reconcileSidePrompt(chatJid, sourceId); }
         if (committed.disposition !== "completed") return { status: "error", result: null, thinking: null, model: null, error: "Side prompt cancelled", stopReason: "aborted" };
@@ -521,7 +522,11 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           chatJid, sourceId, kind: "internal" as const, payloadRef: sourceId, targetOperationId: null, parentSourceSeq: null,
           acceptedAt: r.now(), createWakeIntent: false }), sealed({ effect: { ...effect(`claim:${sourceId}`), provenanceRef: "application:side-prompt" },
           chatJid, expectedFrontier: busy?.consumed_through_source_seq ?? 0, newOperationId: `operation:${sourceId}`, claimedAt: r.now() }), root);
-        ensureBudgetWork({ id: operationBudgetWorkId(accepted.operation.operationId), chatJid, executionKind: "side_prompt", parentWorkId }, root);
+        if (retryId) {
+          if (getBudgetWork(retryId, root)) throw Error("Side prompt budget identity already used");
+          ensureBudgetWork({ id: retryId, chatJid, executionKind: "side_prompt", parentWorkId }, root);
+        }
+        ensureBudgetWork({ id: operationBudgetWorkId(accepted.operation.operationId), chatJid, executionKind: "side_prompt", parentWorkId: retryId ?? parentWorkId }, root);
         return accepted;
       }).immediate();
       let observerFailed = false;

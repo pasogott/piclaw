@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type Database from "bun:sqlite";
 import type { AssistantMessage, Api, Model } from "../../../node_modules/@earendil-works/pi-ai";
 import { modelRequestAccounting } from "../../src/budget/model-request-accounting.js";
@@ -7,6 +7,10 @@ import { ensureBudgetWork, getBudgetWork, setBudgetWorkStatus } from "../../src/
 import { readStoredProviderUsageAccountRef } from "../../src/agent-pool/provider-usage.js";
 
 export const operationBudgetWorkId = (operationId: string) => `durable-operation:${operationId}`;
+export function sidePromptSourceId(chatJid: string, retryId: string): string {
+  const digest = createHash("sha256").update(JSON.stringify([chatJid, retryId])).digest("hex");
+  return `side-prompt:${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
+}
 
 /** Reconcile only already-committed host terminals. Never clear uncertain holds. */
 export function completeMaintenanceBudgetWork(database: Database, workId: string): void {
@@ -26,7 +30,18 @@ export function reconcileOperationBudgetWork(database: Database, operationId?: s
       if (getBudgetWork(id, database)?.status !== "active") continue;
       if (!database.query(`SELECT 1 FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id
         WHERE w.parent_work_id=? AND r.state NOT IN ('settled','released') LIMIT 1`).get(id))
+      {
         setBudgetWorkStatus(id, "completed", { boundary: "operation_settled" }, database);
+        const work = getBudgetWork(id, database);
+        const parent = work?.parent_work_id ? getBudgetWork(work.parent_work_id, database) : null;
+        const source = database.query(`SELECT s.source_id FROM service_effect_s01_operations o
+          JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq
+          WHERE o.operation_id=? AND s.kind='internal'`).get(terminal.operation_id) as { source_id: string } | null;
+        if (parent?.status === "active" && parent.execution_kind === "side_prompt" && parent.chat_jid === work?.chat_jid &&
+          source?.source_id === sidePromptSourceId(parent.chat_jid, parent.id) &&
+          !database.query("SELECT 1 FROM budget_work WHERE parent_work_id=? AND id<>? LIMIT 1").get(parent.id, id))
+          setBudgetWorkStatus(parent.id, "completed", { boundary: "side_prompt_settled" }, database);
+      }
     }
   }).immediate();
 }

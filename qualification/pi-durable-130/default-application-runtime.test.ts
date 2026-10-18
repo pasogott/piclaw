@@ -1657,7 +1657,8 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       const sideSource = root.query("SELECT source_id FROM service_effect_s01_sources WHERE kind='internal'").get() as { source_id: string };
       expect(sideSource.source_id).toMatch(/^side-prompt:/);
       expect(root.query(`SELECT r.state,w.execution_kind FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id WHERE w.execution_kind='side_prompt'`).all()).toEqual([{ state: "settled", execution_kind: "side_prompt" }]);
-      expect(root.query("SELECT status,parent_work_id FROM budget_work WHERE execution_kind='side_prompt' AND id LIKE 'durable-operation:%'").all()).toEqual([{ status: "completed", parent_work_id: "native-side-parent" }]);
+      expect(root.query("SELECT status,parent_work_id FROM budget_work WHERE execution_kind='side_prompt' AND id LIKE 'durable-operation:%'").all()).toEqual([{ status: "completed", parent_work_id: "stable-side-retry" }]);
+      expect(root.query("SELECT status,parent_work_id,execution_kind FROM budget_work WHERE id='stable-side-retry'").get()).toEqual({ status: "completed", parent_work_id: "native-side-parent", execution_kind: "side_prompt" });
       expect(root.query("SELECT status FROM budget_work WHERE id='native-side-parent'").get()).toEqual({ status: "active" });
       const callsBeforeReplay = calls;
       const replayed = await pool.runSidePrompt("web:default", "native isolated side prompt", { budgetWorkId: "stable-side-retry", budgetParentWorkId: "native-side-parent", systemPrompt: "SIDE_SYSTEM_PREFIX" });
@@ -1699,13 +1700,14 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       const ready = new Promise<void>(resolve => { entered = resolve; });
       checkpointHold = { entered };
       let cancelledEvents = 0;
-      const cancelled = pool.runSidePrompt("web:default", "cancel owned side", { signal: abortSide.signal, onEvent() { cancelledEvents++; } });
+      const cancelled = pool.runSidePrompt("web:default", "cancel owned side", { budgetWorkId: "stable-cancelled-side", signal: abortSide.signal, onEvent() { cancelledEvents++; } });
       await ready;
       const providerSignal = checkpointHold.signal;
       abortSide.abort();
       expect(await cancelled).toMatchObject({ status: "error", error: "Side prompt cancelled" });
       expect(providerSignal?.aborted).toBe(true);
       expect(cancelledEvents).toBe(0);
+      expect(root.query("SELECT status FROM budget_work WHERE id='stable-cancelled-side'").get()).toEqual({ status: "active" });
       checkpointHold = undefined;
       expect(root.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid='web:default' AND state NOT IN ('consumed','disposed')").all()).toEqual([]);
       expect(root.query("SELECT state FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id WHERE w.execution_kind='side_prompt' ORDER BY r.rowid").all()).toEqual([{ state: "settled" }, { state: "settled" }, { state: "settled" }, { state: "unresolved" }]);
