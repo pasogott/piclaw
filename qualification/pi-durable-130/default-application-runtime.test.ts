@@ -1669,10 +1669,16 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       expect(recovered.sessionId).toBe(identity);
       expect(await recovered.readModel!()).toBe(beforeModel);
       const callsBeforeStop = calls;
+      root.query("INSERT INTO service_effect_s01_chats(chat_jid,active_operation_id) VALUES ('web:pending-recovery',NULL)").run();
+      root.query("UPDATE service_effect_s01_chats SET next_source_seq=2 WHERE chat_jid='web:pending-recovery'").run();
+      root.query("INSERT INTO service_effect_s01_sources VALUES ('web:pending-recovery',1,'pending-recovery',?,'message','pending','payload',NULL,NULL,'now',NULL,'provenance',0)").run("a".repeat(64));
+      await expect(recovered.reconcileMaintenance!()).rejects.toThrow("Host work is not idle");
+      expect(calls).toBe(callsBeforeStop);
       backend.stop();
       expect(() => recovered.reconcileMaintenance!()).toThrow("Application closing");
       expect(calls).toBe(callsBeforeStop);
       await backend.close();
+      root.query("UPDATE service_effect_s01_sources SET state='disposed' WHERE source_id='pending-recovery'").run();
       backend = await createDefaultApplicationRuntime(owner, async () => services);
       recovered = backend.sessionOptions.getDurableSession!("web:default")!;
       const callsBeforeResume = calls;

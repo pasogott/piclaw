@@ -438,7 +438,14 @@ export class HostConversationRuntime {
   }
   /** Resume an explicitly proven paused manual task without admitting a replacement. */
   recoverMaintenance(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, taskId: TaskId<CompactionResult>): Promise<{ compacted: boolean }> {
-    return this.runMaintenance(binding, undefined, undefined, taskId);
+    this.fence();
+    const copy = Object.freeze({ ...binding });
+    if (copy.incarnation !== this.options.incarnation || this.options.conversationFor(copy.chatJid, copy.branchId) !== copy.conversationId ||
+      !this.options.existingConversationIds.some(id => id === copy.conversationId)) throw Error("Host binding conflict");
+    if (!this.options.withIdleModelGuard) throw Error("Idle model guard unavailable");
+    // Check pending host ingress before claiming maintenance. Release the SQL
+    // guard before scheduling or provider IO; failed preflight leaves no claim.
+    return this.options.withIdleModelGuard(async () => {}).then(() => this.runMaintenance(copy, undefined, undefined, taskId));
   }
   private runMaintenance(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, instructions?: string, signal?: AbortSignal, recoveredTaskId?: TaskId<CompactionResult>): Promise<{ compacted: boolean }> {
     this.fence();
