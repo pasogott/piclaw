@@ -120,6 +120,11 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
   const assert = () => lock.assertCurrentOwner();
   const fixture = await openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(new BunSqliteDatabase(path, { root: db, assertOwner: assert })));
   const parent = fixture.root.id;
+  const { AgentDoc } = await import("../../runtime/durable-engine/qualification/durable.ts");
+  await fixture.root.commit(async tx => {
+    const agent = await tx.doc(AgentDoc, parent);
+    agent.tools = ["host_effect"]; agent.modelTools = ["host_effect"]; agent.extensions = ["qualification"];
+  }, context);
   const empty = await fixture.harness.createConversation({ ownership: { kind: "ownerless" }, agent: { model: { provider: "qualification", modelId: "synthetic" } } }, context);
   await fixture.root.commit(tx => tx.appendEntry(parent, { kind: "pi.user", model: [{ role: "user", content: "main history", timestamp: 1 }] }), context);
   const history = db.query("SELECT * FROM entries ORDER BY id").all();
@@ -132,7 +137,8 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
   const createBundle = () => createApplicationBootstrapBundle({ root: db, path, ownership: applicationOwnership(lock), manifest,
     sessions: new Map([[chat, "original"], [emptyChat, "empty-original"]]), offlineInitialize: true, onRuntime(runtime) { activeRuntime = runtime; },
     runtime: { incarnation: "side-allocation", sessionId: "side-allocation", lane: "main", generation: 1,
-      now: () => new Date().toISOString(), harnessOptions: { models: fixture.models, registry: fixture.registry } },
+      now: () => new Date().toISOString(), harnessOptions: { models: fixture.models, registry: fixture.registry,
+        settings: { retry: { enabled: false }, compaction: { enabled: false } } } },
     answers: { resolver: { resolve(ref) {
       const text = payloads.get(ref); if (text === undefined) return null;
       const bytes = new TextEncoder().encode(text);
