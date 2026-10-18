@@ -712,3 +712,18 @@ tests/120 assertions pass; three scoped typechecks and bounded reviews pass.
 Reasoning-provider level matrices and wider policy/load acceptance are unqualified.
 Prior8d6d08dd6 hosted39125366210 passed all gates; subsequent batch needs exact-head
 CI. No deployment/migration and no change to45 requirement statuses.
+
+## Lifecycle admission fencing — 18 October 2026
+
+Durable input admission rechecks the existing live branch route both when handing
+out a callback and inside its root transaction. A callback captured before archive
+now rejects without persisting message/source changes. Synthetic `main` retains
+its explicit fixture contract. Durable restore and rollup reject before legacy
+branch-manager identity/database/session-artifact effects; native implementations
+of those operations are still unsupported.
+
+Targeted real-factory reasoning-high invariants166 assertions, archived admission19,
+and empty/exact durable construction62 pass (247 total). Three scoped typechecks
+and combined bounded review passed. Prior c58b66fc9 hosted39126969865 passed all
+gates; this subsequent batch needs its own exact-head run. No accounting/cap
+integration, live migration, deployment, or requirement-status promotion occurred.
