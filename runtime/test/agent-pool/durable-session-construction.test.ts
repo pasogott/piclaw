@@ -9,6 +9,8 @@ import { SESSIONS_DIR } from "../../src/core/config.js";
 import { initDatabase } from "../../src/db.js";
 import * as legacySession from "../../src/agent-pool/session.js";
 import { AgentToolFactory } from "../../src/agent-pool/tool-factory.js";
+import { AgentBranchManager } from "../../src/agent-pool/branch-manager.js";
+import { getDb } from "../../src/db/connection.js";
 
 for (const empty of [false, true]) {
   test(`durable backend ${empty ? "empty" : "exact"} scope never reads legacy factories or creates sessions`, async () => {
@@ -29,6 +31,8 @@ for (const empty of [false, true]) {
       ...(["ensureSessionDir", "ensureNamedSessionDir", "createDefaultSession", "createSessionInDir", "lightweightPrewarmSession"] as const)
         .map(name => spyOn(legacySession, name).mockImplementation(() => { throw Error("legacy session setup forbidden"); })),
       spyOn(AgentToolFactory.prototype, "createDefaultTools").mockImplementation(() => { throw Error("legacy tool setup forbidden"); }),
+      spyOn(AgentBranchManager.prototype, "mergeChatBranchIntoParent").mockImplementation(() => { throw Error("legacy merge entered"); }),
+      spyOn(AgentBranchManager.prototype, "restoreChatBranch").mockImplementation(() => { throw Error("legacy restore entered"); }),
     ];
     let pool: AgentPool | undefined;
     let services: ReturnType<typeof createAgentPoolServices> | undefined;
@@ -43,6 +47,7 @@ for (const empty of [false, true]) {
       });
       Object.defineProperties(serviceOptions, Object.getOwnPropertyDescriptors(compatibility));
       services = createAgentPoolServices(serviceOptions);
+      const databaseBefore = getDb().serialize();
       // Backend-owned lookup remains live for post-startup routes.
       for (const chat of ["web:bound", "web:unknown"]) {
         await expect(pool.getSessionForIntrospection(chat)).rejects.toThrow("Durable application does not construct legacy sessions");
@@ -54,6 +59,7 @@ for (const empty of [false, true]) {
         await expect(pool.restoreChatBranch(chat)).rejects.toThrow("Durable branch restore unavailable");
         expect(await pool.applyControlCommand(chat, { type: "rollup", raw: "/rollup" })).toMatchObject({ status: "error", message: "Durable branch rollup unavailable" });
       }
+      expect(getDb().serialize()).toEqual(databaseBefore);
       if (!empty) {
         expect(await pool.saveSessionPosition("web:bound")).toBe("leaf");
         expect(await pool.getCurrentModelLabel("web:bound")).toBe("provider/model");
