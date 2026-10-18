@@ -88,24 +88,19 @@ export async function handleAgentCommandsRequest(
   const chatJid = url.searchParams.get("chat_jid")?.trim() || options.defaultChatJid;
 
   const { result, durationMs } = await measureAsync(async () => {
-    try {
-      const native = await options.agentPool.getDurableSessionMetadata?.(chatJid);
+    let native;
+    try { native = await options.agentPool.getDurableSessionMetadata?.(chatJid); }
+    catch { return options.json({ error: "Native command metadata unavailable" }, 503); }
     if (native !== undefined) {
       return native ? options.json({ commands: buildCommandList(null), backend: "durable",
         unavailable: ["legacy-extension-commands", "prompt-templates", "skills"] })
         : options.json({ error: "No active session for this chat" }, 404);
     }
-    const session = await options.agentPool.getSessionForIntrospection(chatJid);
-      const commands = buildCommandList(session);
-      return options.json({ commands }, 200);
+    try {
+      const session = await options.agentPool.getSessionForIntrospection(chatJid);
+      return options.json({ commands: buildCommandList(session) }, 200);
     } catch {
-      // Fallback to core commands only if session is unavailable
-      const commands: CommandEntry[] = CONTROL_COMMAND_DEFINITIONS.map(cmd => ({
-        name: cmd.name,
-        description: cmd.description,
-        source: "core" as const,
-      }));
-      return options.json({ commands }, 200);
+      return options.json({ commands: buildCommandList(null) }, 200);
     }
   });
 

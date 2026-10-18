@@ -183,3 +183,13 @@ test("unbound durable debug returns404 without legacy fallback", async () => {
     json: (payload: unknown, status = 200) => Response.json(payload, { status }) };
   expect((await handleAgentDebugRequest(new Request("http://local/agent/debug"), ctx)).status).toBe(404);
 });
+
+test("native debug metadata failure returns a sanitised unavailable response", async () => {
+  const response = await handleAgentDebugRequest(new Request("http://fixture/agent/debug"), {
+    defaultChatJid: "web:default", json: (value: unknown, status = 200) => Response.json(value, { status }),
+    agentPool: { getDurableSessionMetadata: async () => { throw Error("private native storage detail"); },
+      getSessionForIntrospection: async () => { throw Error("Legacy fallback forbidden"); } },
+  } as any);
+  expect(response.status).toBe(503);
+  expect(await response.json()).toEqual({ error: "Native debug metadata unavailable" });
+});

@@ -18,3 +18,14 @@ for (const bound of [true, false]) test(`durable command discovery never hydrate
   }
   expect(response.headers.get("server-timing")).toContain("agent_commands");
 });
+
+test("native metadata failure is unavailable, never successful legacy fallback", async () => {
+  const response = await handleAgentCommandsRequest(new Request("http://fixture/agent/commands"), {
+    defaultChatJid: "web:default", json: (value: unknown, status = 200) => Response.json(value, { status }),
+    agentPool: { getDurableSessionMetadata: async () => { throw Error("private storage detail"); },
+      getSessionForIntrospection: async () => { throw Error("legacy fallback forbidden"); } },
+  } as any);
+  expect(response.status).toBe(503);
+  expect(await response.json()).toEqual({ error: "Native command metadata unavailable" });
+  expect(response.headers.get("server-timing")).toContain("agent_commands");
+});
