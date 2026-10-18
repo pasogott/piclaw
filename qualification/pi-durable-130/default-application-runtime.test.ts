@@ -33,6 +33,7 @@ import { saveBudgetCap, setBudgetCapEnabled } from "../../runtime/src/db/budget-
 import { pollScheduledRunsOnce, stopSchedulerLoop } from "../../runtime/src/task-scheduler.js";
 import { createPlanKvAuthority } from "../../runtime/durable-engine/src/host-plan-tool.js";
 import { installCodeReviewFixture } from "./code-review-fixture.ts";
+import { installEditableTableFixture } from "./editable-table-fixture.ts";
 import { withAddonLocalDispatch, bindAddonLocalDispatchRequest, getAddonLocalDispatchBlock, verifyAddonLocalMessage } from "../../runtime/src/addons/local-dispatch.js";
 import { admitAddonLocalRequest, withAddonLocalRequest } from "../../runtime/src/addons/local-context.js";
 
@@ -115,7 +116,7 @@ const explicitDelegateCases: Record<string, { id: string; model: unknown; denied
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["public-conversations", "custom-subset", "pending-host", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
+for (const scenario of ["public-conversations", "custom-subset", "pending-host", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -133,6 +134,11 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   const planRequests: string[] = [];
   let toolSequence: { name: string; arguments: Record<string, unknown> | (() => Record<string, unknown>) }[] | undefined;
   const reviewPackage = scenario === "native-code-review" ? installCodeReviewFixture(workspace) : undefined;
+  const nativeTable = scenario.startsWith("native-editable-table");
+  if (nativeTable) {
+    installEditableTableFixture(workspace);
+    toolSequence = [{ name: "editable_table", arguments: { markdown: "Name | Role\n--- | ---\nRui | User", title: " People " } }];
+  }
   if (scenario === "native-plan") {
     const source = process.env.DURABLE_ADDONS_ROOT;
     if (!source) throw Error("DURABLE_ADDONS_ROOT required");
@@ -335,6 +341,21 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
       return captured;
     }));
   }
+  if (nativeTable) {
+    const captureTool = HostConversationRuntime.prototype.captureToolSource;
+    captureSpies.push(spyOn(HostConversationRuntime.prototype, "captureToolSource").mockImplementation(async function (this: HostConversationRuntime, ...args) {
+      const captured = await captureTool.apply(this, args);
+      realToolCaptures++;
+      expect(captured.inputs[0]?.sourceId).toBe("factory-input");
+      if (scenario === "native-editable-table-closed-publisher") backend.stop();
+      if (scenario === "native-editable-table-revoked") root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
+      // Host-owned SQL changes the actual authority after capture, not a fake
+      // source object or tool result. Neither stale generation may publish.
+      if (scenario === "native-editable-table-archived") root.query("UPDATE chat_branches SET archived_at=? WHERE chat_jid=? AND branch_id=?").run(new Date().toISOString(), captured.inputs[0]!.chatJid, captured.inputs[0]!.branchId);
+      if (scenario === "native-editable-table-harness-generation") root.query("UPDATE service_effect_s01_operations SET harness_watch_generation=harness_watch_generation+1 WHERE operation_id=?").run(captured.operation.operationId);
+      return captured;
+    }));
+  }
   let backend = await createDefaultApplicationRuntime(owner, async () => services);
   expect(!!backend.sessionOptions.getDurableSession?.("web:default")).toBe(true);
   const first = backend.sessionOptions.getDurableSession?.("web:default");
@@ -343,7 +364,25 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   const pool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
   const bound = backend.bind({ queue: base.queue, agentPool: pool });
   const channel = new WebChannel(bound);
-  channel.broadcastEvent = () => {};
+  const widgetEvents: { event: string; data: unknown }[] = [];
+  const broadcast = channel.broadcastEvent.bind(channel);
+  channel.broadcastEvent = (event, data) => { if (event === "extension_ui_widget") widgetEvents.push({ event, data }); broadcast(event, data); };
+  const tableChat = scenario === "native-editable-table-nonweb" ? "whatsapp:fixture" : scenario === "native-editable-table-branch" ? "web:table-branch" : "web:default";
+  let sseText = "";
+  let sseReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let sseDrain: Promise<void> | undefined;
+  if (nativeTable) {
+    if (scenario !== "native-editable-table-missing-publisher") {
+      backend.attachChannel!(channel);
+      expect(() => backend.attachChannel!(channel)).toThrow("already attached");
+    }
+    const response = await channel.handleRequest(new Request(`http://fixture/sse/stream?chat_jid=${encodeURIComponent(tableChat)}`));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    sseReader = response.body!.getReader();
+    sseDrain = (async () => { for (;;) { const chunk = await sseReader!.read(); if (chunk.done) return; sseText += new TextDecoder().decode(chunk.value); } })();
+
+  }
   if (scenario === "native-scheduler") {
     const prohibited = [spyOn(pool, "runAgent"), spyOn(pool, "saveSessionPosition"), spyOn(pool, "restoreSessionPosition"), spyOn(pool, "getCurrentModelLabel")];
     prohibited.forEach(spy => spy.mockImplementation(() => { throw Error("legacy scheduler path"); }));
@@ -610,13 +649,23 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
     expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
     sdkSpies.forEach(spy => spy.mockRestore()); owner.release(); closeDatabase(); return;
   }
+  if (nativeTable && tableChat !== "web:default") {
+    storeChatMetadata(tableChat, new Date().toISOString());
+    await bound.prepareInputSourceAdmission!(tableChat);
+    if (scenario === "native-editable-table-branch") root.query("UPDATE chat_branches SET root_chat_jid='web:default', parent_branch_id=? WHERE chat_jid=?").run(first!.branchId, tableChat);
+    message.chat_jid = tableChat;
+  }
   const rowId = root.transaction(() => {
     const rowId = storeMessage(message);
-    bound.getInputSourceAdmission!("web:default")({ message, rowId, database: root });
+    bound.getInputSourceAdmission!(message.chat_jid)({ message, rowId, database: root });
     return rowId;
   })();
-  const dispatch = bound.dispatchAcceptedInput!("web:default", message.id, rowId!);
-  expect(dispatch).toBeDefined(); expect(await dispatch!()).toBe("settled");
+  const dispatch = bound.dispatchAcceptedInput!(message.chat_jid, message.id, rowId!);
+  const tableCancelled = scenario === "native-editable-table-revoked" || scenario === "native-editable-table-closed-publisher" || scenario === "native-editable-table-archived" || scenario === "native-editable-table-harness-generation";
+  expect(dispatch).toBeDefined();
+  const dispatchOutcome = await dispatch!();
+  if (tableCancelled) expect(widgetEvents).toHaveLength(0);
+  expect(dispatchOutcome).toBe(tableCancelled ? "pending" : "settled");
   if (nativeDelegate) {
     if (writeDelegate) {
       for (const id of revokeDelegate ? ["A"] : ["A", "B"]) expect(readFileSync(childWritePath(id), "utf8")).toBe(standardDelegate && !revokeDelegate ? `WRITTEN_${id}` : "OLD");
@@ -684,6 +733,38 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
       expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
       deadlineSpy!.mockRestore();
     } else for (const result of observedResults.values()) expect(!!result.isError).toBe(!delegateAllowed);
+    await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close(); owner.release(); closeDatabase();
+    sdkSpies.forEach(spy => spy.mockRestore());
+    return;
+  }
+  if (nativeTable) {
+    expect(calls).toBe(tableCancelled ? 1 : 2);
+    const denied = !["native-editable-table", "native-editable-table-branch"].includes(scenario);
+    expect(realToolCaptures).toBe(1);
+    expect(widgetEvents).toHaveLength(denied ? 0 : 1);
+    if (!denied) expect(widgetEvents[0]).toMatchObject({ event: "extension_ui_widget", data: { chat_jid: tableChat, content: ["| Name | Role |\n| --- | --- |\n| Rui | User |"], options: { extension: "editable-table", surface: "floating-widget", title: "People", headers: ["Name", "Role"], rows: [["Rui", "User"]] } } });
+    if (tableCancelled) {
+      expect(observedResults.size).toBe(0);
+      expect(root.query("SELECT operation_id FROM service_effect_s01_operations WHERE chat_jid=? AND terminal_disposition='completed'").all(tableChat)).toHaveLength(0);
+      expect(root.query("SELECT id FROM messages WHERE chat_jid=? AND is_bot_message=1").all(tableChat)).toHaveLength(0);
+    } else expect(!!observedResults.get("factory-tool-1")?.isError).toBe(denied);
+    if (!denied) {
+      const editedMarkdown = "| Name | Role |\n| --- | --- |\n| Rui | Editor |";
+      const response = await channel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(tableChat)}`, {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: JSON.stringify({ content: editedMarkdown }),
+      }));
+      expect(response.status).toBe(201);
+      for (let n = 0; n < 200 && !planRequests.at(-1)?.includes("Editor"); n++) await Bun.sleep(10);
+      expect(planRequests.at(-1)).toContain(editedMarkdown.replaceAll("\n", "\\n"));
+      expect(root.query("SELECT content FROM messages WHERE chat_jid=? AND content=? AND is_bot_message=0").get(tableChat, editedMarkdown)).toBeDefined();
+      const completed = () => (root.query("SELECT count(*) AS n FROM service_effect_s01_operations WHERE chat_jid=? AND phase='terminal' AND terminal_disposition='completed'").get(tableChat) as { n: number }).n;
+      for (let n = 0; n < 200 && completed() !== 2; n++) await Bun.sleep(10);
+      expect(completed()).toBe(2);
+    }
+    await sseReader!.cancel(); await sseDrain;
+    expect(sseText.match(/event: extension_ui_widget\n/g) ?? []).toHaveLength(denied ? 0 : 1);
+    if (!denied) expect(sseText).toContain(`"chat_jid":"${tableChat}"`);
+    captureSpies.forEach(spy => spy.mockRestore());
     await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close(); owner.release(); closeDatabase();
     sdkSpies.forEach(spy => spy.mockRestore());
     return;

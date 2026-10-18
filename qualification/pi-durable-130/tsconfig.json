@@ -17,6 +17,8 @@
     "../../runtime/src/types/web-push.d.ts",
     "test.ts",
     "code-review-fixture.ts",
+    "editable-table-fixture.ts",
+    "installed-editable-table-catalog.test.ts",
     "installed-code-review-catalog.test.ts",
     "db-tree.test.ts",
     "idle-model.test.ts",

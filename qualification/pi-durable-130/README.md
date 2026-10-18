@@ -1,3 +1,31 @@
+# Native editable-table port — targeted qualification
+
+The default application uses the installed editable-table public factory through
+an invocation-owned widget port. Legacy registration calls the same factory; its
+duplicate execute body is removed. Existing `extension_ui_widget` events and normal
+Markdown message submission are unchanged. No ExtensionContext is fabricated.
+
+Publication requires an exact foreground web source, current operation/harness,
+active branch and live attached channel. Root and branch request-handler SSE tests
+include an edited-Markdown roundtrip. Missing/closed channel, nonweb source,
+revocation, archival and stale harness generation emit no widget. Application
+routing now rechecks active real branch IDs, retaining the existing synthetic
+`main` fixture contract. Archived work cannot settle through a stale route.
+
+Reviewed add-on source: `554d61cf495b8aba317964b8ae400fb52b0f91e3`.
+Targeted final checks: root/branch 29 assertions each; archival/stale harness 26
+each; synthetic-main compaction compatibility 1 pass / 209 assertions. Existing
+catalog coverage has 13 source/metadata/cache cases. Add-on tests pass 9 / 20
+assertions. All three configured typechecks and the workflow contract check pass.
+Receipts are under `/workspace/reviews/durable-1650/` (`resume-native-editable-table*`,
+`editable-final-synthetic-main.log`, `editable-final-*-types.log`).
+
+No full candidate/root suite was rerun for this slice, per operator direction.
+Interrupted broad batches are not qualification receipts. These are in-process
+HTTP request-handler/SSE-stream tests, not listening-socket/browser acceptance,
+durable widget delivery, or exactly-once publication. No live installation,
+restart, merge or migration occurred. The 45-requirement acceptance gaps remain.
+
 # Native Delegate standard-tool recovery follow-up
 
 Two additional actual-factory tests hold the real unsafe host write before and

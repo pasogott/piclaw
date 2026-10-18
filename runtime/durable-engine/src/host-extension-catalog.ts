@@ -5,6 +5,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import type { CodeReviewNativeExports } from "./host-code-review-tool.js";
+import type { EditableTableNativeExports } from "./host-editable-table-tool.js";
 export interface PlanPromptExports {
   loadSessionPlan(chatJid: string): { chat_jid: string; markdown: string; updated_at: string | null };
   buildPlanSystemPrompt(plan: ReturnType<PlanPromptExports["loadSessionPlan"]>): string;
@@ -39,7 +40,14 @@ const approvedCodeReviewFiles = Object.freeze({
   "store.ts": "f8a2977d1376c43c3e576c8c471433c1c77083bc40ebd79a1f663162d4a2d5ff",
   "validation.ts": "6520c981ea388f70e0278cf73583e0c80871aa346b2abd50dab3003d90c9d1a8",
 });
+const approvedEditableTableFiles = Object.freeze({
+  "package.json": "4810df9f1d7d8f5f34cf21eaccb398c574f0b7e8b5f4ee5511a1e01a26eb9e4c",
+  "index.ts": "878b9886c824d3a451153975e6fb92f73903e628add2ad754ad5c9c633de5acb",
+  "tool.ts": "1d6752181e680055236302c57e9a100aa78d2c6033074034be83f36551814ceb",
+  "shared.ts": "ce18a28856afc7d554d015dfeaf6b04d2deb918762040d0ee9dd030a7909b9f4"
+});
 const profiles = {
+  editable_table: { name: "@rcarmo/piclaw-addon-editable-table", version: "0.1.4", files: approvedEditableTableFiles, shadows: ["index.js", "tool.js", "tool.json", "tool/index.js", "tool/package.json", "shared.js", "shared.json", "shared/index.js", "shared/package.json"], events: ["resources_discover"] },
   plan: { name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.25", files: approvedPlanFiles, shadows: ["compat/chat-context.js", "compat/extension-kv.js", "compat/package.json"], events: ["before_agent_start"] },
   code_review: { name: "@rcarmo/piclaw-addon-code-review", version: "0.1.8", files: approvedCodeReviewFiles,
     shadows: [...Object.keys(approvedCodeReviewFiles).flatMap(file => [file.replace(/\.ts$/, ".js"), file.replace(/\.ts$/, ".json"), file.replace(/\.ts$/, "/index.js"), file.replace(/\.ts$/, "/package.json")])], events: ["resources_discover"] },
@@ -168,6 +176,19 @@ export async function qualifyInstalledCodeReview(catalog: LoadExtensionsResult, 
   return Object.freeze({ ...qualified, assertCurrent, addon });
 }
 
+export async function qualifyInstalledEditableTable(catalog: LoadExtensionsResult, cwd: string) {
+  const qualified = qualifyInstalled(catalog, cwd, "editable_table");
+  if (!qualified) return undefined;
+  const exports = await import(pathToFileURL(qualified.source.entry).href) as Partial<EditableTableNativeExports>;
+  qualified.assertCurrent();
+  if (typeof exports.createEditableTableTool !== "function") throw Error("Editable table public factory required");
+  const factory = exports.createEditableTableTool;
+  const native = factory();
+  const declaration = (tool: typeof native) => JSON.stringify({ name: tool.name, label: tool.label, description: tool.description, parameters: tool.parameters });
+  if (declaration(native) !== declaration(qualified.definition as typeof native)) throw Error("Editable table native/legacy declarations differ");
+  return Object.freeze({ ...qualified, addon: Object.freeze({ createEditableTableTool: factory }), assertCurrent() { qualified.assertCurrent(); if (exports.createEditableTableTool !== factory) throw Error("Editable table factory changed"); } });
+}
+
 /** The public Pi registry, not a second registerTool implementation. Factories
  * run once at application startup, without AgentSession or SessionManager.
  * No action stubs are rebound and no native extension context is fabricated.
@@ -218,20 +239,22 @@ export async function loadApplicationExtensionCatalog(options: {
  * hooks through a fabricated AgentSession context. Keep all diagnostics so a
  * successful startup can never silently mean missing installed capabilities.
  */
-export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensionsResult, plan?: Awaited<ReturnType<typeof qualifyInstalledPlan>>, delegate?: Awaited<ReturnType<typeof qualifyInstalledDelegate>>, codeReview?: Awaited<ReturnType<typeof qualifyInstalledCodeReview>>): void {
-  plan?.assertCurrent(); delegate?.assertCurrent(); codeReview?.assertCurrent();
+export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensionsResult, plan?: Awaited<ReturnType<typeof qualifyInstalledPlan>>, delegate?: Awaited<ReturnType<typeof qualifyInstalledDelegate>>, codeReview?: Awaited<ReturnType<typeof qualifyInstalledCodeReview>>, editableTable?: Awaited<ReturnType<typeof qualifyInstalledEditableTable>>): void {
+  plan?.assertCurrent(); delegate?.assertCurrent(); codeReview?.assertCurrent(); editableTable?.assertCurrent();
   const blocked: string[] = catalog.errors.map(error => `${error.path}: extension load failed`);
   for (const extension of catalog.extensions) {
     for (const { definition } of extension.tools.values()) {
       if (extension === plan?.extension && definition === plan.definition) continue;
       if (extension === delegate?.extension && definition === delegate.definition) continue;
       if (extension === codeReview?.extension && definition === codeReview.definition) continue;
+      if (extension === editableTable?.extension && definition === editableTable.definition) continue;
       blocked.push(`${definition.name}: no operation-owned host effect port`);
     }
     for (const event of extension.handlers.keys()) {
       if (extension === plan?.extension && event === "before_agent_start") continue;
       // Static skill discovery only: no session lifecycle or fabricated context.
       if (extension === codeReview?.extension && event === "resources_discover") continue;
+      if (extension === editableTable?.extension && event === "resources_discover") continue;
       if (extension === delegate?.extension && delegate.nativeLifecycle.events.some(allowed => allowed === event)) continue;
       blocked.push(`${extension.path}: ${event} lifecycle not bound to durable host`);
     }

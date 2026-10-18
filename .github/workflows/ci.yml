@@ -94,6 +94,14 @@ jobs:
           path: .qualification-code-review
           persist-credentials: false
 
+      - name: Checkout native editable-table qualification source
+        uses: actions/checkout@v6
+        with:
+          repository: rcarmo/piclaw-addons
+          ref: 554d61cf495b8aba317964b8ae400fb52b0f91e3
+          path: .qualification-editable-table
+          persist-credentials: false
+
       - name: Install inactive application durable engine
         working-directory: runtime/durable-engine
         run: |
@@ -108,6 +116,7 @@ jobs:
         env:
           DURABLE_ADDONS_ROOT: ${{ github.workspace }}/.qualification-addons
           DURABLE_CODE_REVIEW_ROOT: ${{ github.workspace }}/.qualification-code-review
+          DURABLE_EDITABLE_TABLE_ROOT: ${{ github.workspace }}/.qualification-editable-table
         run: |
           bun install --frozen-lockfile --ignore-scripts
           bun run typecheck

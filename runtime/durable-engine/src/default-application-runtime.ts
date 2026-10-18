@@ -18,12 +18,13 @@ import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { applicationOwnership, createApplicationBootstrapBundle } from "./application-bootstrap.js";
 import { createHostModels } from "./host-models.js";
 import { createHostBuiltinTools } from "./host-builtins.js";
-import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
+import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, qualifyInstalledEditableTable, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
 import { createHostDelegateTool } from "./host-delegate-tool.js";
 import { createHostDelegateFileReader } from "./host-delegate-files.js";
 import { extensionKvGet } from "../../src/db/extension-kv.js";
 import { createHostPlanTool } from "./host-plan-tool.js";
 import { createHostCodeReviewTool } from "./host-code-review-tool.js";
+import { createHostEditableTableTool, type WidgetPublisher } from "./host-editable-table-tool.js";
 import { createHostPlanPrompt } from "./host-plan-prompt.js";
 import type { HostConversationRuntime } from "./host-runtime.js";
 import { readAccessConfig } from "../../src/core/config-access.js";
@@ -155,10 +156,12 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const plan = await qualifyInstalledPlan(catalog, WORKSPACE_DIR);
   const delegate = await qualifyInstalledDelegate(catalog, WORKSPACE_DIR);
   const codeReview = await qualifyInstalledCodeReview(catalog, WORKSPACE_DIR);
-  try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan, delegate, codeReview); }
+  const editableTable = await qualifyInstalledEditableTable(catalog, WORKSPACE_DIR);
+  let widgetPublisher: WidgetPublisher | undefined;
+  try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan, delegate, codeReview, editableTable); }
   finally { catalog.runtime.invalidate("Application extension preflight ended"); }
-  const applicationToolNames: readonly string[] = [...defaultToolNames, ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : [])];
-  const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || ((!!plan || !!delegate || !!codeReview) && Array.isArray(tools) &&
+  const applicationToolNames: readonly string[] = [...defaultToolNames, ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : [])];
+  const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || ((!!plan || !!delegate || !!codeReview || !!editableTable) && Array.isArray(tools) &&
     tools.length === defaultToolNames.length && defaultToolNames.every((name, index) => tools[index] === name));
   const host = await getModels(); assert();
   const provider = settings.getDefaultProvider(), modelId = settings.getDefaultModel();
@@ -259,6 +262,10 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   }, runtime }));
   if (codeReview) tools.push(createHostCodeReviewTool(codeReview.addon, { root, cwd: WORKSPACE_DIR, runtime,
     assertOwner() { assert(); lifetime.signal.throwIfAborted(); codeReview.assertCurrent(); } }));
+  if (editableTable) tools.push(createHostEditableTableTool(editableTable.addon, { root, runtime, publisher: () => widgetPublisher,
+    assertOwner() { assert(); lifetime.signal.throwIfAborted(); editableTable.assertCurrent();
+      if (readAccessConfig().mode !== "single-user") throw Error("Editable table requires single-user mode");
+    } }));
   if (delegate) {
     const readers = builtins.filter(tool => ["read", "grep", "find", "ls"].includes(tool.name));
     const readerExtension = defineExtension({ name: "app.host-delegate-readers", tools: readers });
@@ -395,7 +402,16 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
     runtime: { incarnation: mapping.domain, sessionId: mapping.domain, lane: "main", generation: 1, now: () => new Date().toISOString(), harnessOptions } }, context);
   return { sessionOptions: bundle.sessionOptions, bind: bundle.bind,
-    stop() { lifetime.abort(); bundle.stop(); }, async close() {
+    attachChannel(channel: { broadcastEvent(event: string, data: Record<string, unknown>): void }) {
+      assert(); lifetime.signal.throwIfAborted();
+      if (widgetPublisher) throw Error("Widget channel already attached");
+      const broadcast = channel.broadcastEvent.bind(channel);
+      widgetPublisher = (chatJid, key, content, options) => {
+        assert(); lifetime.signal.throwIfAborted();
+        broadcast("extension_ui_widget", { chat_jid: chatJid, key, content, options });
+      };
+    },
+    stop() { widgetPublisher = undefined; lifetime.abort(); bundle.stop(); }, async close() {
       lifetime.abort(); releaseReviewSource?.(); await bundle.close();
     } };
   } catch (error) { lifetime.abort(); releaseReviewSource?.(); throw error; }

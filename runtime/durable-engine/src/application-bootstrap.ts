@@ -94,7 +94,15 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
   // Never invent a branch or choose a first/default row for an existing chat.
   assertApplicationBranchRoutes(root, manifest);
   const routeIndex = new Map(manifest.map(b => [b.chatJid, Object.freeze({ ...b, sessionId: sessions.get(b.chatJid)! })]));
-  const lookup = (chat: string, branch: string) => { const b = routeIndex.get(chat); return b?.branchId === branch ? b : undefined; };
+  const lookup = (chat: string, branch: string) => {
+    const binding = routeIndex.get(chat);
+    if (binding?.branchId !== branch) return undefined;
+    // Match the explicit synthetic-main contract used by branch preflight.
+    if (branch !== "main" && !root.query(
+      "SELECT 1 FROM chat_branches WHERE chat_jid=? AND branch_id=? AND archived_at IS NULL",
+    ).get(chat, branch)) return undefined;
+    return binding;
+  };
   if (root.inTransaction || (root.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys !== 1)
     throw Error("Open idle FK-enabled root connection required");
   // Verify physical identity BEFORE any optional host schema mutation.
