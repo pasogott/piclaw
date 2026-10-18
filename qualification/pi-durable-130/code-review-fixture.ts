@@ -17,8 +17,8 @@ export const codeReviewPins = {
   "validation.ts": "6520c981ea388f70e0278cf73583e0c80871aa346b2abd50dab3003d90c9d1a8"
 };
 export function installCodeReviewFixture(workspace: string) {
-  const root = process.env.DURABLE_CODE_REVIEW_ROOT;
-  if (!root) throw Error("DURABLE_CODE_REVIEW_ROOT required: reviewed candidate worktree, never live packages");
+  const root = process.env.DURABLE_ADDONS_ROOT;
+  if (!root) throw Error("DURABLE_ADDONS_ROOT required: reviewed candidate worktree, never live packages");
   const pkg = join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-code-review");
   mkdirSync(pkg, { recursive: true });
   for (const [file, expected] of Object.entries(codeReviewPins)) {

@@ -8,8 +8,8 @@ export const editableTablePins = {
   "shared.ts": "ce18a28856afc7d554d015dfeaf6b04d2deb918762040d0ee9dd030a7909b9f4"
 };
 export function installEditableTableFixture(workspace: string) {
- const root = process.env.DURABLE_EDITABLE_TABLE_ROOT;
- if (!root) throw Error("DURABLE_EDITABLE_TABLE_ROOT required: candidate only");
+ const root = process.env.DURABLE_ADDONS_ROOT;
+ if (!root) throw Error("DURABLE_ADDONS_ROOT required: candidate only");
  const pkg = join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-editable-table");
  mkdirSync(pkg, { recursive: true });
  for (const [file, expected] of Object.entries(editableTablePins)) {

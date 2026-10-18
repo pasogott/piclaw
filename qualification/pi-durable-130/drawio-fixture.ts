@@ -2,8 +2,8 @@ import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 export async function installDrawioFixture(workspace: string) {
-  const root = process.env.DURABLE_DRAWIO_ROOT;
-  if (!root) throw Error("DURABLE_DRAWIO_ROOT required: candidate only");
+  const root = process.env.DURABLE_ADDONS_ROOT;
+  if (!root) throw Error("DURABLE_ADDONS_ROOT required: candidate only");
   const pkg = join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-drawio-editor");
   mkdirSync(pkg, { recursive: true });
   const pins = {

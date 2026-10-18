@@ -82,40 +82,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: rcarmo/piclaw-addons
-          ref: de92bc95b5b3bb1505beec9617d3b8a5e4fa92d3
+          ref: 08746aa3f114d49f954c1dff712d9f74acca460f
           path: .qualification-addons
-          persist-credentials: false
-
-      - name: Checkout native Code Review qualification source
-        uses: actions/checkout@v6
-        with:
-          repository: rcarmo/piclaw-addons
-          ref: d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f
-          path: .qualification-code-review
-          persist-credentials: false
-
-      - name: Checkout native editable-table qualification source
-        uses: actions/checkout@v6
-        with:
-          repository: rcarmo/piclaw-addons
-          ref: 554d61cf495b8aba317964b8ae400fb52b0f91e3
-          path: .qualification-editable-table
-          persist-credentials: false
-
-      - name: Checkout native Office viewer qualification source
-        uses: actions/checkout@v6
-        with:
-          repository: rcarmo/piclaw-addons
-          ref: 2f32f17ebc70ff1d0e2ad1892382813d29ccbd16
-          path: .qualification-office-viewer
-          persist-credentials: false
-
-      - name: Checkout native Draw.io qualification source
-        uses: actions/checkout@v6
-        with:
-          repository: rcarmo/piclaw-addons
-          ref: 8eb776fd9989addaa7d110c3d253c20f0cc22d58
-          path: .qualification-drawio
           persist-credentials: false
 
       - name: Install inactive application durable engine
@@ -131,10 +99,6 @@ jobs:
         working-directory: qualification/pi-durable-130
         env:
           DURABLE_ADDONS_ROOT: ${{ github.workspace }}/.qualification-addons
-          DURABLE_CODE_REVIEW_ROOT: ${{ github.workspace }}/.qualification-code-review
-          DURABLE_EDITABLE_TABLE_ROOT: ${{ github.workspace }}/.qualification-editable-table
-          DURABLE_OFFICE_VIEWER_ROOT: ${{ github.workspace }}/.qualification-office-viewer
-          DURABLE_DRAWIO_ROOT: ${{ github.workspace }}/.qualification-drawio
         run: |
           bun install --frozen-lockfile --ignore-scripts
           bun run typecheck

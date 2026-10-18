@@ -769,6 +769,13 @@ capture fix and missing-case coverage.
 
 ## Exact source and existing receipts
 
+CI now uses one merged add-ons snapshot, `08746aa3f114d49f954c1dff712d9f74acca460f`,
+through `DURABLE_ADDONS_ROOT` for every fixture. It replaces the five earlier
+checkout sources and per-feature root variables described in historical receipts
+below. Code Review, editable table, Office Viewer and Draw.io directories are
+byte-for-byte identical to their previously qualified feature commits; all source
+hash guards are unchanged. Plan and other add-ons use this same checkout.
+
 The catalogue checks 13 backend source files, canonical resolution, declaration
 and registered objects against public add-on source
 `a1a165c0ba9ea051584f828392c5061cda91dd2a`, branch
