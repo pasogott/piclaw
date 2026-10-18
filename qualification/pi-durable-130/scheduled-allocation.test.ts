@@ -220,6 +220,11 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
     expect(db.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid=? AND state NOT IN ('consumed','disposed')").all(chat)).toEqual([]);
     expect(db.query("SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid=?").get(chat)).toEqual({ active_operation_id: null });
     expect(db.query("SELECT * FROM entries WHERE conversation_id=? ORDER BY id").all(parent)).toEqual(beforeRun);
+    const effectsBeforeSide = fixture.host.effects;
+    const toolSide = await bundle.dispatchSidePrompt(chat, "use-tool for isolated side result");
+    expect(toolSide.status).toBe("success");
+    expect(fixture.host.effects).toBe(effectsBeforeSide + 1);
+    expect(db.query("SELECT * FROM entries WHERE conversation_id=? ORDER BY id").all(parent)).toEqual(beforeRun);
     const recoveringId = `side-prompt:${crypto.randomUUID()}`;
     payloads.set(recoveringId, "recover exact source");
     const frontier = value(await work.getChatFrontier(chat));
@@ -227,6 +232,18 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
       sourceId: recoveringId, kind: "internal", payloadRef: recoveringId, targetOperationId: null, parentSourceSeq: null,
       acceptedAt: new Date().toISOString(), createWakeIntent: false }), sealed({ effect: effect(`claim:${recoveringId}`), chatJid: chat,
       expectedFrontier: frontier.consumedThroughSourceSeq, newOperationId: `op:${recoveringId}`, claimedAt: new Date().toISOString() }), db)).immediate();
+    const { writeFileSync } = await import("node:fs");
+    const { reserveHostRequest } = await import("../../runtime/durable-engine/src/host-request-accounting.js");
+    const authPath = join(process.env.PICLAW_WORKSPACE!, "side-accounting-auth.json");
+    writeFileSync(authPath, JSON.stringify({ "openai-codex": { type: "oauth", access: "synthetic", refresh: "synthetic", accountId: "side-fixture", expires: Date.now() + 60000 } }), { mode: 0o600 });
+    const priced = { ...fixture.models.getModel("qualification", "synthetic"), provider: "openai-codex", contextWindow: 1000, maxTokens: 100,
+      cost: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 } };
+    const reservation = await reserveHostRequest({ database: db, operationId: recovering.operation.operationId, chatJid: chat, authPath,
+      model: priced as any, signal: new AbortController().signal, assertCurrent: assert });
+    expect(reservation).toBeDefined();
+    expect(db.query("SELECT execution_kind FROM budget_work WHERE id=?").get(`durable-operation:${recovering.operation.operationId}`)).toEqual({ execution_kind: "side_prompt" });
+    expect(db.query("SELECT execution_kind FROM budget_work WHERE parent_work_id=?").all(`durable-operation:${recovering.operation.operationId}`)).toEqual([{ execution_kind: "side_prompt" }]);
+    await reservation!.abandon();
     const callsBeforeRecovery = fixture.host.modelCalls;
     await bundle.close(); bundle = await createBundle();
     expect(fixture.host.modelCalls).toBe(callsBeforeRecovery);

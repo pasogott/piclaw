@@ -50,9 +50,12 @@ export async function reserveHostRequest(options: {
   const operationWork = options.maintenanceWorkId ?? operationBudgetWorkId(options.operationId);
   const id = randomUUID();
   const workId = `durable-request:${id}`;
-  ensureBudgetWork({ id: operationWork, chatJid: options.chatJid, executionKind: options.maintenanceWorkId ? "side_prompt" : options.scheduledTaskId ? "scheduled" : "interactive",
+  const sidePrompt = database.query(`SELECT 1 FROM service_effect_s01_operations o
+    JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq
+    WHERE o.operation_id=? AND o.chat_jid=? AND s.kind='internal' AND s.source_id LIKE 'side-prompt:%'`).get(options.operationId, options.chatJid);
+  ensureBudgetWork({ id: operationWork, chatJid: options.chatJid, executionKind: options.maintenanceWorkId || sidePrompt ? "side_prompt" : options.scheduledTaskId ? "scheduled" : "interactive",
     scheduledTaskId: options.scheduledTaskId }, database);
-  ensureBudgetWork({ id: workId, chatJid: options.chatJid, executionKind: options.executionKind ?? "interactive", parentWorkId: operationWork }, database);
+  ensureBudgetWork({ id: workId, chatJid: options.chatJid, executionKind: options.executionKind === "delegate" ? "delegate" : sidePrompt ? "side_prompt" : options.executionKind ?? "interactive", parentWorkId: operationWork }, database);
   const current = () => {
     assertCurrent(); signal.throwIfAborted();
     if (readStoredProviderUsageAccountRef(model.provider, options.authPath) !== accountRef) throw Error("Native request account changed");
