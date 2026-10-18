@@ -892,3 +892,21 @@ or root-gate receipt yet and have not been pushed. The reopen fixtures seed
 interrupted bookkeeping; actual process-crash recovery and resumed-maintenance
 adoption are unqualified. Caps still deny, and provider-unknown reconciliation is
 incomplete. No deployment, restart or migration occurred.
+
+### Integrated manual-accounting qualification
+
+Frozen source head `7a21b15eaaf25183633db1f918a824aff836cefa` passed the native
+candidate: 626 tests / 7,881 assertions / zero failures across 51 files. The shell
+wait expired while its original test child continued; the terminal test summary
+is retained, with no fabricated shell exit receipt. No second candidate ran.
+
+The single root gate on that unchanged head exited 0: 7,333 pass / 74 baseline
+skips / zero failures / 48,406 assertions, plus 25 feature and 9 build tests.
+Both bounded reviews returned READY: maintenance dispatch plumbing and startup
+bookkeeping repair. Evidence: `/workspace/reviews/durable-1650/manual-accounting-`
+`{candidate,root}.log`, `manual-accounting-root.{head,exit}` and the qualification
+checkpoint. No timeout, assertion or source changes occurred during qualification.
+
+The accounting batch is qualified for publication. Interrupted live-maintenance
+adoption, provider-unknown reconciliation, capped execution, remaining acceptance
+and migration are incomplete. No live activation or deployment occurred.
