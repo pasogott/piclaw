@@ -1,3 +1,4 @@
+import { getSupportedThinkingLevels, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 // INACTIVE application module. No bootstrap registration or production schema migration.
 import { configure, AgentDoc, AssistantEntry, InboxDoc, LiveDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -362,7 +363,7 @@ export class HostConversationRuntime {
   async readSessionThinkingLevel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<string | null> {
     return (await this.readSessionChoice(binding)).thinkingLevel;
   }
-  async setSessionModel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, model: { provider: string; modelId: string }): Promise<void> {
+  private async setSessionChoice(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, model: { provider: string; modelId: string }, thinkingLevel?: string): Promise<void> {
     this.fence();
     const o = this.options;
     const id = o.existingConversationIds.find(id => id === binding.conversationId);
@@ -373,6 +374,7 @@ export class HostConversationRuntime {
     const target = o.harnessOptions.models.getModel(choice.provider, choice.modelId);
     if (!target || !Number.isFinite(target.contextWindow) || target.contextWindow <= 0 ||
       !Number.isFinite(target.maxTokens) || target.maxTokens < 0) throw new Error("Model context unavailable");
+    if (thinkingLevel !== undefined && !getSupportedThinkingLevels(target).includes(thinkingLevel as ModelThinkingLevel)) throw new Error("Unsupported thinking level");
     this.changingModel = true;
     const operation = (async () => {
       const inspection = await this.harness.inspect(this.context); this.fence();
@@ -389,7 +391,10 @@ export class HostConversationRuntime {
         // Dynamic sections cannot be bounded here without executing host prompt callbacks.
         const agent = await tx.doc(AgentDoc, id);
         this.assertContextFitsModel(view.messages, agent, target);
-        await configure(tx, id, { model: choice });
+        if (thinkingLevel !== undefined) {
+          if (agent.model?.provider !== choice.provider || agent.model.modelId !== choice.modelId) throw new Error("Thinking model changed");
+          await configure(tx, id, { thinkingLevel: thinkingLevel as ModelThinkingLevel });
+        } else await configure(tx, id, { model: choice });
         this.fence();
       }, this.context));
     })();
@@ -411,6 +416,19 @@ export class HostConversationRuntime {
       throw Error("Candidate context bound exceeded; compact first");
   }
   /** Explicit idle-only maintenance. Observer cancellation never cancels or releases the owned task. */
+  async setSessionModel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, model: { provider: string; modelId: string }): Promise<void> {
+    await this.setSessionChoice(binding, model);
+  }
+  async setSessionThinkingLevel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, level: string): Promise<void> {
+    this.fence();
+    if (this.changingModel || this.active.size) throw new Error("Runtime is not idle");
+    const current = await this.readSessionModel(binding);
+    const slash = current?.indexOf("/") ?? -1;
+    if (!current || slash < 1) throw new Error("No model selected");
+    await this.setSessionChoice(binding, { provider: current.slice(0, slash), modelId: current.slice(slash + 1) }, level);
+  }
+
+
   compactSession(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, instructions?: string, signal?: AbortSignal): Promise<{ compacted: boolean }> {
     this.fence();
     const o = this.options;

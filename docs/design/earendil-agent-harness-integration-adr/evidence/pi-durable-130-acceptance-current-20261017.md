@@ -693,3 +693,22 @@ actual reopened custom-subset history preserves non-null thinking `low` through
 port, picker and command (95 assertions). Scoped typechecks and bounded review
 passed. Prior edb19a468 passed all hosted gates in run39124204913; the subsequent
 batch needs its own exact-head receipt. All45 requirement statuses are unchanged.
+
+## Stored identity and thinking mutation — 18 October 2026
+
+A synchronous stored-account fingerprint helper reuses existing Codex account-ID
+and Copilot credential digest rules without auth/network work. The async quota
+reader preserves empty-versus-absent fallback semantics. Provider-usage22 tests /
+129 assertions pass. Native request accounting still lacks reservation/dispatch/
+settlement integration and caps remain denied.
+
+Durable `/thinking <level>` now uses public configure under the existing idle
+model guard, validates model-supported levels and rechecks persisted model identity
+inside the transaction. Existing command protection/revocation wraps mutation;
+read-only compatibility ports still deny it. Shared model mutation code replaces
+duplicated admission logic. Actual factory159 assertions (nonreasoning high denied,
+off persisted, history unchanged), facade49 tests/291 assertions, and maintenance5
+tests/120 assertions pass; three scoped typechecks and bounded reviews pass.
+Reasoning-provider level matrices and wider policy/load acceptance are unqualified.
+Prior8d6d08dd6 hosted39125366210 passed all gates; subsequent batch needs exact-head
+CI. No deployment/migration and no change to45 requirement statuses.

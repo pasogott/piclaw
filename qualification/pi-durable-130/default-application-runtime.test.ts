@@ -1381,7 +1381,11 @@ for (const scenario of ["native-mcp-cleanup-fail", "native-mcp-disconnect", "nat
   const persistedModel = await first!.readModel!();
   expect((await pool.getAvailableModels("web:default", { includeProviderUsage: false, includeProviderDiagnostics: false })).thinking_level).toBe(await first!.readThinkingLevel!());
   expect(await pool.applyControlCommand("web:default", { type: "thinking", raw: "/thinking" })).toMatchObject({ status: "success", thinking_level: await first!.readThinkingLevel!() });
-  await expect(pool.applyControlCommand("web:default", { type: "thinking", level: "high", raw: "/thinking high" })).rejects.toThrow("Durable thinking mutation unavailable");
+  expect(await pool.applyControlCommand("web:default", { type: "thinking", level: "high", raw: "/thinking high" })).toMatchObject({ status: "error" });
+  const thinkingHistory = root.query("SELECT * FROM entries ORDER BY id").all();
+  expect(await pool.applyControlCommand("web:default", { type: "thinking", level: "off", raw: "/thinking off" })).toMatchObject({ status: "success", thinking_level: "off" });
+  expect(await first!.readThinkingLevel!()).toBe("off");
+  expect(root.query("SELECT * FROM entries ORDER BY id").all()).toEqual(thinkingHistory);
   const modelQuery = await pool.applyControlCommand("web:default", { type: "model", raw: "/model" });
   expect(modelQuery.status).toBe("success");
   expect(modelQuery.message).toContain(`${model.provider}/${model.id} (current)`);

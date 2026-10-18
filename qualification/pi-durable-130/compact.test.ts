@@ -75,6 +75,7 @@ test("public manual compact: real model summary, idle admission, observer detach
     abort.abort(); await expect(observer).rejects.toThrow();
     expect(() => runtime.compactSession(binding)).toThrow("not idle");
     await expect(runtime.setSessionModel(binding, { provider: "qualification", modelId: "synthetic" })).rejects.toThrow("not idle");
+    await expect(runtime.setSessionThinkingLevel(binding, "off")).rejects.toThrow("not idle");
     // Host acceptance remains writable after task admission. It must not poison SDK summary writes.
     root.query("UPDATE service_effect_s01_sources SET state='pending'").run();
     const accepted = { incarnation: "compact", conversationId: id, chatJid: binding.chatJid, branchId: "main",
@@ -189,6 +190,7 @@ for (const failure of ["wait", "summary", "close", "close-reconcile"] as const) 
     expect(protections).toBe(1); expect(completed).toBe(false);
     expect(() => runtime.compactSession(binding)).toThrow("not idle");
     await expect(runtime.setSessionModel(binding, { provider: "qualification", modelId: "synthetic" })).rejects.toThrow("not idle");
+    await expect(runtime.setSessionThinkingLevel(binding, "off")).rejects.toThrow("not idle");
     if (failure === "close" || failure === "close-reconcile") {
       await readFailed.promise;
       let repair: Promise<void> | undefined;

@@ -1346,3 +1346,17 @@ test('durable model catalogue query reuses configured model scope', async () => 
     else process.env.PICLAW_SCOPED_MODELS_ONLY = previous;
   }
 });
+
+test('durable thinking mutation uses existing protection and preserves provider selection', async () => {
+  const events: string[] = [];
+  const { facade } = createFacade({ durableSessions: new Map([['web:thinking-set', { sessionId: 'set', branchId: 'main', readPosition: async () => null,
+    readModel: async () => 'synthetic/reasoning', readThinkingLevel: async () => 'low',
+    async setThinkingLevel(level) { events.push(level); } }]]),
+    modelRegistry: { getAvailable: () => [{ provider: 'synthetic', id: 'reasoning', reasoning: true }] } as any,
+    acquireCommandProtection() { events.push('protect'); return () => { events.push('release'); }; },
+  });
+  expect(await facade.applyControlCommand('web:thinking-set', { type: 'thinking', level: 'high', raw: '/thinking high' })).toMatchObject({ status: 'success', thinking_level: 'high' });
+  expect(events).toEqual(['protect', 'high', 'release']);
+  expect(await facade.applyControlCommand('web:thinking-set', { type: 'thinking', level: 'invalid', raw: '/thinking invalid' })).toMatchObject({ status: 'error' });
+  expect(events).toEqual(['protect', 'high', 'release']);
+});

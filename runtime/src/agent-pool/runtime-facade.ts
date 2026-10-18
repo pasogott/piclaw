@@ -323,7 +323,7 @@ export class AgentRuntimeFacade {
     this.providerUsageRefreshListener = options.onProviderUsageRefresh;
     // Capture routing before any session factory is entered. Never fall back on port failure.
     const compatibility = options.durableSessions === undefined ? undefined : new Map([...options.durableSessions].map(([chat, port]) =>
-      [chat, Object.freeze({ ...port, readPosition: port.readPosition.bind(port), readModel: port.readModel?.bind(port), readThinkingLevel: port.readThinkingLevel?.bind(port), setModel: port.setModel?.bind(port), compact: port.compact?.bind(port), readTree: port.readTree?.bind(port) })]));
+      [chat, Object.freeze({ ...port, readPosition: port.readPosition.bind(port), readModel: port.readModel?.bind(port), readThinkingLevel: port.readThinkingLevel?.bind(port), setThinkingLevel: port.setThinkingLevel?.bind(port), setModel: port.setModel?.bind(port), compact: port.compact?.bind(port), readTree: port.readTree?.bind(port) })]));
     this.getDurableSession = options.getDurableSession?.bind(options) ?? (chat => compatibility?.get(chat));
     options = { ...options, getDurableSession: options.getDurableSession ?? (compatibility && this.getDurableSession) };
     const legacy = options.getOrCreateRuntime;
@@ -378,12 +378,24 @@ export class AgentRuntimeFacade {
       }
       if (command.type === "thinking") {
         requireSingleUserDirectExecution("Direct thinking commands");
-        if (command.level !== undefined) throw new Error("Durable thinking mutation unavailable");
+        if (command.level !== undefined && !port.setThinkingLevel) throw new Error("Durable thinking mutation unavailable");
         if (!port.readModel || !port.readThinkingLevel) throw new Error("Durable thinking reader unavailable");
         const current = await port.readModel();
         if (!current) return { status: "error", message: "No model selected." };
         const model = this.options.modelRegistry.getAvailable().find(model => `${model.provider}/${model.id}` === current);
         if (!model) throw new Error("Durable thinking model unavailable");
+        if (command.level !== undefined) {
+          const level = resolveThinkingAlias(command.level.trim().toLowerCase(), model);
+          if (!THINKING_LEVELS.includes(level as never) || !getAvailableThinkingLevelsForModel(model).includes(level))
+            return { status: "error", message: "Thinking level is not available for this model." };
+          revokeAddonLocalAgent(chatJid);
+          const release = this.options.acquireCommandProtection?.(chatJid);
+          try {
+            await port.setThinkingLevel!(level);
+            const display = formatThinkingLevelForDisplay(level, model);
+            return { status: "success", message: `Thinking level set to ${display}.`, thinking_level: level, thinking_level_label: display };
+          } finally { release?.(); }
+        }
         const level = await port.readThinkingLevel();
         const display = level ? formatThinkingLevelForDisplay(level, model) : null;
         const levels = getAvailableThinkingLevelsForModel(model, ["off"]);
