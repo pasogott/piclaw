@@ -1,3 +1,16 @@
+# Native codemode can call the qualified Plan tool
+
+The existing Plan adapter now accepts model and nested-tool callers. Nested
+execution still requires the exact registered native codemode executor and live
+SDK ownership chain. The same accepted-source/version/harness checks and chat KV
+IMMEDIATE transaction apply; no second Plan implementation or broader grant.
+
+Targeted actual-runtime checks pass: codemode→Plan 57 assertions, cancellation
+after nested capture 45, existing direct Plan 50 (3 tests / 152 assertions).
+Strict qualification, engine and runtime types pass. Bounded review is READY.
+No full suites or live changes ran. Checkpoint:
+/workspace/reviews/durable-1650/codemode-plan-compatibility.md.
+
 # Default-runtime fixture included in strict types
 
 The main default-application-runtime.test.ts fixture is now explicitly included

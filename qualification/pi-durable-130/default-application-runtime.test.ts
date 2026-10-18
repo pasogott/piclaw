@@ -123,7 +123,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
+for (const scenario of ["native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -173,7 +173,11 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
     installEditableTableFixture(workspace);
     toolSequence = [{ name: "editable_table", arguments: { markdown: "Name | Role\n--- | ---\nRui | User", title: " People " } }];
   }
-  if (scenario === "native-plan") {
+  const codemodePlan = scenario.startsWith("native-codemode-plan");
+  const codemodePlanCancelled = scenario === "native-codemode-plan-cancel";
+  const nativePlan = scenario === "native-plan" || codemodePlan;
+  const planStep = codemodePlan ? "CODEMODE_PLAN_OWNED" : "NATIVE_PLAN_NEW";
+  if (nativePlan) {
     const source = process.env.DURABLE_ADDONS_ROOT;
     if (!source) throw Error("DURABLE_ADDONS_ROOT required");
     const pkg = join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-plan-sidebar");
@@ -190,7 +194,10 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
     symlinkSync(join(import.meta.dir, "../../node_modules"), join(pkg, "node_modules"));
     writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.25", type: "module", pi: { extensions: ["./index.ts"] } }));
     extensionKvSet("plan-sidebar", "plan", { chat_jid: "web:default", markdown: "- [ ] NATIVE_PLAN_OLD", updated_at: "2026-01-01" }, "chat", "web:default");
-    toolSequence = [{ name: "plan", arguments: { action: "update", plan: [{ step: "NATIVE_PLAN_NEW", status: "in_progress" }] } }];
+    toolSequence = codemodePlan ? [{ name: "codemode", arguments: { code: codemodePlanCancelled
+      ? 'try { await tools.plan({action:"update",plan:[{step:"CODEMODE_PLAN_OWNED",status:"in_progress"}]}); } catch {} store("revoked-sentinel", {secret:"MUST_NOT_PERSIST"}); console.log("done");'
+      : 'const r=await tools.plan({action:"update",plan:[{step:"CODEMODE_PLAN_OWNED",status:"in_progress"}]});console.log(r)' } }]
+      : [{ name: "plan", arguments: { action: "update", plan: [{ step: planStep, status: "in_progress" }] } }];
   }
   const standardDelegate = scenario === "native-delegate-standard" || scenario === "native-delegate-standard-revoke";
   const readonlyDeny = scenario === "native-delegate-readonly-deny";
@@ -322,7 +329,7 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
   const sdkSpies = [spyOn(SessionManager, "create"), spyOn(SessionManager, "open"), spyOn(SessionManager, "inMemory")];
   let realRunCaptures = 0, realToolCaptures = 0;
   const captureSpies: { mockRestore(): void }[] = [];
-  if (scenario === "native-plan") {
+  if (nativePlan) {
     const captureRun = HostConversationRuntime.prototype.captureRunSource;
     captureSpies.push(spyOn(HostConversationRuntime.prototype, "captureRunSource").mockImplementation(async function (this: HostConversationRuntime, ...args) {
       const captured = await captureRun.apply(this, args);
@@ -350,6 +357,10 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
         throw rollback;
       })()).toThrow(rollback);
       authority.assertCurrent();
+      if (codemodePlan && args[2].includes("/")) {
+        codemodeNestedCaptures++;
+        if (codemodePlanCancelled) root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
+      }
       return captured;
     }));
   }
@@ -822,9 +833,17 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
     return;
   }
   const dispatchOutcome = await dispatch!();
-  if ((scenario === "native-codemode-cancel" || scenario === "native-codemode-harness")) {
+  if (codemodePlanCancelled || scenario === "native-codemode-cancel" || scenario === "native-codemode-harness") {
     expect(dispatchOutcome).toBe("pending");
     expect(codemodeNestedCaptures).toBe(1);
+    if (codemodePlanCancelled) {
+      expect(calls).toBe(1);
+      expect(realToolCaptures).toBe(2);
+      expect(extensionKvGet("plan-sidebar", "plan", "chat", "web:default")).toMatchObject({ markdown: "- [ ] NATIVE_PLAN_OLD" });
+      expect(root.query("SELECT scope_key FROM extension_kv WHERE extension_id='plan-sidebar'").all()).toEqual([{ scope_key: "web:default" }]);
+      expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+      expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
+    }
     expect(existsSync(join(workspace, "codemode-forbidden.txt"))).toBe(false);
     // Read-only SDK forensics: no base or delta may retain the revoked write.
     const storeRevisions = root.query(`SELECT r.content FROM document_revisions r JOIN documents d ON d.id=r.document_id WHERE d.kind='"pi.codemode.store"'`).all();
@@ -1004,25 +1023,30 @@ for (const scenario of ["native-codemode-reopen", "native-codemode-cancel", "nat
     sdkSpies.forEach(spy => spy.mockRestore());
     return;
   }
-  if (scenario === "native-plan") {
+  if (nativePlan) {
     expect(calls).toBe(2);
-    expect(realRunCaptures).toBe(4); expect(realToolCaptures).toBe(1);
+    expect(realRunCaptures).toBe(4); expect(realToolCaptures).toBe(codemodePlan ? 2 : 1);
+    if (codemodePlan) expect(codemodeNestedCaptures).toBe(1);
     captureSpies.forEach(spy => spy.mockRestore());
     expect(planRequests[0]).toContain("NATIVE_PLAN_OLD");
-    expect(planRequests[1]).toContain("NATIVE_PLAN_NEW");
+    expect(planRequests[1]).toContain(planStep);
     for (const request of planRequests) {
       expect(request.match(/Current Plan Sidebar checklist/g)).toHaveLength(1);
       expect(request.match(/## Plan Sidebar/g)).toHaveLength(1);
     }
-    expect(observedResults.get("factory-tool-1")).toMatchObject({ toolName: "plan", content: [{ type: "text", text: "Plan updated." }] });
-    expect(extensionKvGet("plan-sidebar", "plan", "chat", "web:default")).toMatchObject({ markdown: "- [-] NATIVE_PLAN_NEW" });
+    if (codemodePlan) {
+      expect(observedResults.get("factory-tool-1")?.toolName).toBe("codemode");
+      expect(observedResults.get("factory-tool-1")?.isError).not.toBe(true);
+      expect(JSON.stringify(observedResults.get("factory-tool-1")?.content)).toContain("Plan updated.");
+    } else expect(observedResults.get("factory-tool-1")).toMatchObject({ toolName: "plan", content: [{ type: "text", text: "Plan updated." }] });
+    expect(extensionKvGet("plan-sidebar", "plan", "chat", "web:default")).toMatchObject({ markdown: `- [-] ${planStep}` });
     expect(root.query("SELECT scope_key FROM extension_kv WHERE extension_id='plan-sidebar'").all()).toEqual([{ scope_key: "web:default" }]);
     expect(root.query("SELECT content FROM messages WHERE chat_jid='web:default' AND is_bot_message=1").all()).toEqual([{ content: "factory synthetic reply" }]);
     expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id=?").get(message.id)).toEqual({ state: "consumed" });
     expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
     await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
     closeDatabase(); initDatabase();
-    expect(extensionKvGet("plan-sidebar", "plan", "chat", "web:default")).toMatchObject({ markdown: "- [-] NATIVE_PLAN_NEW" });
+    expect(extensionKvGet("plan-sidebar", "plan", "chat", "web:default")).toMatchObject({ markdown: `- [-] ${planStep}` });
     backend = await createDefaultApplicationRuntime(owner, async () => services);
     expect(backend.sessionOptions.getDurableSession!("web:default")).toBeDefined();
     backend.stop(); await backend.close();

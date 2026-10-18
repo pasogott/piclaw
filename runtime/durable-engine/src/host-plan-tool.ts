@@ -46,5 +46,5 @@ export function createHostPlanTool(definition: ToolDefinition<TSchema, JsonValue
         return call.execute(call.toolCallId, { ...params, chat_jid: chatJid }, call.signal, call.onUpdate, undefined as never);
       });
     },
-  });
+  }, { callers: ["model", "tools"] });
 }
