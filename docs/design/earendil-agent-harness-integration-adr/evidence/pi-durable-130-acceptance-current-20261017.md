@@ -130,7 +130,7 @@ This is the single current HC/PC table. The [earlier acceptance report](pi-durab
 | HC-007 | Follow-up | source-qualified | `A/durable-queue-dispatch.ts`, `E/application-bootstrap.ts`; `RT/channels/web/runtime/queued-followup-lifecycle-service.test.ts`, `Q/application-web.test.ts` | Existing queue/UUID/FIFO/worker wiring is present; complete successor authorisation/FIFO across every route and restart is unqualified. |
 | HC-008 | Next run | source-qualified | `A/durable-queue-dispatch.ts`; `SE/service-work-store-contracts.test.ts`, `Q/worker-recovery.test.ts` | Host settlement/worker barrier replaces the absent public `nextRun`; all producer/restart barrier cases and full replacement-contract acceptance are unproved. |
 | HC-009 | Abort | blocked-publicAPI | `E/host-runtime.ts` `cancelInput`; `Q/runtime.test.ts` | No atomic public conditional exact running abort; placed input returns `already_placed`. Host cancellation fences publication but does not stop that task. |
-| HC-010 | Compaction | source-qualified | `E/host-runtime.ts` `compactSession`; `Q/compact.test.ts`, `Q/application-web.test.ts` | Idle-only manual maintenance owns/joins its actual task and waits accepted work; threshold/background/overflow/stale-summary/budget/cancellation matrix is incomplete. |
+| HC-010 | Compaction | source-qualified | `E/host-runtime.ts` `compactSession`; `Q/compact.test.ts`, `Q/application-web.test.ts` | Idle-only maintenance ownership/joining is source-qualified with a separately configured model port. After mandatory generation-source correlation, nontrivial model-backed compaction through the source-default factory is unqualified: summary requests bypass `beforeRequest`, and `beforeCompact` is skipped when resuming a summary checkpoint. Tiny-history factory no-op is insufficient. Threshold/background/overflow/stale-summary/budget/cancellation matrix is incomplete. |
 | HC-011 | Retry | fixture-only | `E/default-application-runtime.ts` disables retry; `Q/models.test.ts`, `Q/src/fixture.ts` | No full captured-options/live-policy/restart-deadline/budget matrix; historical captured retry-policy guarantee changed. |
 | HC-012 | Suspension | fixture-only | `E/host-runtime.ts` `wait`/`reconcile`; `Q/runtime.test.ts`, `Q/models.test.ts` | Detached observation and selected deferred cases do not qualify all missing definitions, task migrations or background scopes. |
 | HC-013 | Restore | migration/perf-unverified | `E/host-controller.ts`, `E/host-recovery.ts`; `Q/single-database.test.ts`, `Q/cross-store.test.ts`, `Q/accepted-steer-recovery.test.ts` | Selected disk/process recovery works; bounded 100/1,000/2,000-entry read measurements exist below. Production-history costs and arbitrary recovery graphs are unqualified. |
@@ -748,3 +748,20 @@ extension lists can omit the generation-source hook, while the factory currently
 uses a no-op fallback for unmatched request signals. Mandatory source/admission
 coverage must be qualified before reservations are enabled. No private SDK writes,
 new ledger, automatic migration or requirement-status promotion is authorised.
+
+## Compaction correlation limitation — 18 October 2026
+
+The public `CompactionTask` invokes `beforeCompact` only while selecting the range,
+then persists a `summarize` checkpoint. Resuming that checkpoint directly calls
+`runtime.models.completeSimple` without the generation `beforeRequest` hook.
+`createRegistry()` explicitly prohibits replacing its built-in tasks. An exported
+task definition alone therefore does not authorise a summary-phase replacement.
+
+Strict request-source correlation must cover this path before real source-default
+model-backed compaction can be accepted. Existing standalone maintenance tests use
+a separately configured model port; factory tiny-history `compacted:false` tests do
+not cover summary requests. A single real-factory experiment hit the unchanged
+30-second test timeout and was completely reverted; it establishes no causal or
+passing runtime proof. No retries, timeout increases or private registry mutation
+were used. This narrows HC-010's evidence scope without changing its status label;
+no new code, CI execution, deployment or migration accompanied this correction.
