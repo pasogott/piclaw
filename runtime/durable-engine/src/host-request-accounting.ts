@@ -22,14 +22,14 @@ export function reconcileOperationBudgetWork(database: Database, operationId?: s
   }).immediate();
 }
 
-/** First consumer: stored-identity, uncapped interactive parent requests only.
+/** Stored-identity, uncapped interactive parent and foreground Delegate requests.
  * Unsupported requests remain on the existing uncapped path; caps still deny.
  * One fresh request ID per actual invocation, including a recovery resend. A
  * dispatched unknown outcome retains its old hold; it is never called free.
  */
 export async function reserveHostRequest(options: {
   database: Database; operationId: string; chatJid: string; authPath: string;
-  model: Model<Api>; maxTokens?: number; signal: AbortSignal; assertCurrent(): void;
+  model: Model<Api>; maxTokens?: number; executionKind?: "interactive" | "delegate"; signal: AbortSignal; assertCurrent(): void;
 }) {
   const { database, model, signal, assertCurrent } = options;
   assertCurrent(); signal.throwIfAborted();
@@ -41,7 +41,7 @@ export async function reserveHostRequest(options: {
   const id = randomUUID();
   const workId = `durable-request:${id}`;
   ensureBudgetWork({ id: operationWork, chatJid: options.chatJid, executionKind: "interactive" }, database);
-  ensureBudgetWork({ id: workId, chatJid: options.chatJid, executionKind: "interactive", parentWorkId: operationWork }, database);
+  ensureBudgetWork({ id: workId, chatJid: options.chatJid, executionKind: options.executionKind ?? "interactive", parentWorkId: operationWork }, database);
   const current = () => {
     assertCurrent(); signal.throwIfAborted();
     if (readStoredProviderUsageAccountRef(model.provider, options.authPath) !== accountRef) throw Error("Native request account changed");

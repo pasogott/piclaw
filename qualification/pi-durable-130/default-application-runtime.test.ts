@@ -125,7 +125,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -141,7 +141,8 @@ for (const scenario of ["native-parent-accounting-two-turns", "native-parent-acc
   const customSubset = scenario === "custom-subset" || scenario === "source-filter-subset";
   const sourceFilter = scenario === "source-filter-subset";
   const reasoningThinking = scenario === "public-thinking-reasoning";
-  const parentAccounting = scenario.startsWith("native-parent-accounting");
+  const delegateAccounting = scenario === "native-delegate-accounting";
+  const parentAccounting = scenario.startsWith("native-parent-accounting") || delegateAccounting;
   const accountingTwoTurns = scenario === "native-parent-accounting-two-turns";
   const accountingAuthDenied = scenario === "native-parent-accounting-auth-deny";
   const accountingRotate = scenario === "native-parent-accounting-rotate";
@@ -153,7 +154,8 @@ for (const scenario of ["native-parent-accounting-two-turns", "native-parent-acc
     mkdirSync(getPiclawAgentDir(), { recursive: true });
     writeFileSync(join(getPiclawAgentDir(), "auth.json"), JSON.stringify({ "openai-codex": { type: "oauth", access: "synthetic-access", refresh: "synthetic-refresh", accountId: "synthetic-account", expires: Date.now() + 60000 } }), { mode: 0o600 });
     onCredentialResolve = async () => {
-      expect(root.query("SELECT state FROM budget_request_reservations ORDER BY rowid").all()).toEqual([...(accountingTwoTurns && calls > 0 ? [{ state: "settled" }] : []), { state: "reserved" }]);
+      if (delegateAccounting) expect((root.query("SELECT COUNT(*) AS n FROM budget_request_reservations WHERE state='reserved'").get() as { n: number }).n).toBeGreaterThan(0);
+      else expect(root.query("SELECT state FROM budget_request_reservations ORDER BY rowid").all()).toEqual([...(accountingTwoTurns && calls > 0 ? [{ state: "settled" }] : []), { state: "reserved" }]);
       if (accountingAuthDenied) throw Error("Synthetic auth denial");
       if (accountingCloseFailure) root.exec("CREATE TRIGGER accounting_work_close_fail BEFORE UPDATE ON budget_work WHEN OLD.parent_work_id IS NULL AND NEW.status='completed' BEGIN SELECT RAISE(ABORT, 'synthetic operation work close failure'); END");
       if (accountingStorageFailure) root.exec("CREATE TRIGGER accounting_usage_fail BEFORE INSERT ON token_usage BEGIN SELECT RAISE(ABORT, 'synthetic usage write failure'); END");
@@ -283,7 +285,7 @@ for (const scenario of ["native-parent-accounting-two-turns", "native-parent-acc
   const delegateImagesCase = scenario === "native-delegate-images";
   const delegateFiles = scenario === "native-delegate-files" || delegateImagesCase;
   if (delegateFiles) writeFileSync(join(workspace, "delegate-task"), delegateImagesCase ? Buffer.from(delegateImages.png, "base64") : "NATIVE_FILE_BYTES\r\n\t");
-  const nativeDelegate = writeDelegate || delegateFiles || scenario === "native-delegate" || scenario === "native-delegate-denied" || revokeDelegate || timeoutDelegate || !!explicitDelegate;
+  const nativeDelegate = delegateAccounting || writeDelegate || delegateFiles || scenario === "native-delegate" || scenario === "native-delegate-denied" || revokeDelegate || timeoutDelegate || !!explicitDelegate;
   const delegateAllowed = writeDelegate || delegateFiles || scenario === "native-delegate" || timeoutDelegate || (!!explicitDelegate && !explicitDelegate.denied);
   const realTimer = globalThis.setTimeout;
   let expireDelegate: (() => void) | undefined;
@@ -336,7 +338,7 @@ for (const scenario of ["native-parent-accounting-two-turns", "native-parent-acc
     requested.push(physical.id);
     planRequests.push(JSON.stringify(input));
     calls++; const stream = createAssistantMessageEventStream();
-    if (parentAccounting) expect(root.query("SELECT state FROM budget_request_reservations ORDER BY rowid").all()).toEqual([...(accountingTwoTurns && calls > 1 ? [{ state: "settled" }] : []), { state: "dispatched" }]);
+    if (parentAccounting && !delegateAccounting) expect(root.query("SELECT state FROM budget_request_reservations ORDER BY rowid").all()).toEqual([...(accountingTwoTurns && calls > 1 ? [{ state: "settled" }] : []), { state: "dispatched" }]);
     const child = nativeDelegate && JSON.stringify(input.messages.findLast(message => message.role === "user")?.content).includes("NATIVE_DELEGATE_CHILD");
     if (delegateImagesCase && !child) expect(JSON.stringify(input)).not.toContain('"type":"image"');
     const firstDelegate = nativeDelegate && !child && !input.messages.some(message => message.role === "toolResult");
@@ -1074,6 +1076,20 @@ for (const scenario of ["native-parent-accounting-two-turns", "native-parent-acc
   }
   if (scenario === "native-parent-budget-cap") saveBudgetCap({ scope: "instance_daily", metric: "api_usd_micros", amount: 0, timezone: "UTC" }, root);
   const dispatchOutcome = await dispatch!();
+  if (delegateAccounting) {
+    expect(dispatchOutcome).toBe("settled");
+    expect(calls).toBe(4);
+    expect(childRequests).toBe(2);
+    expect(root.query("SELECT COUNT(*) AS n FROM budget_request_reservations WHERE state='settled'").get()).toEqual({ n: 4 });
+    expect(root.query("SELECT execution_kind, COUNT(*) AS n FROM budget_work WHERE parent_work_id IS NOT NULL GROUP BY execution_kind ORDER BY execution_kind").all()).toEqual([{ execution_kind: "delegate", n: 2 }, { execution_kind: "interactive", n: 2 }]);
+    expect(root.query("SELECT COUNT(*) AS n FROM budget_work WHERE status='completed'").get()).toEqual({ n: 5 });
+    expect(root.query("SELECT SUM(api_equivalent_cost_microusd) AS amount FROM token_usage WHERE invocation_id IS NOT NULL").get()).toEqual({ amount: 40 });
+    expect(observedResults.size).toBe(2);
+    expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(1);
+    backend.stop(); await backend.close();
+    for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+    closeDatabase(); owner.release(); return;
+  }
   if (accountingCloseFailure) {
     expect(calls).toBe(1);
     expect(root.query("SELECT state FROM budget_request_reservations").all()).toEqual([{ state: "settled" }]);
