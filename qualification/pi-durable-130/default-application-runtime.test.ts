@@ -125,7 +125,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -138,7 +138,8 @@ for (const scenario of ["native-mcp-cleanup-fail", "native-mcp-disconnect", "nat
   let calls = 0;
   let onProviderResponse: (() => void) | undefined;
   let onCredentialResolve: (() => Promise<void>) | undefined;
-  const model = { provider: "synthetic", id: "approved", name: "Approved", api: "openai-completions", baseUrl: "https://invalid.invalid", input: ["text"], reasoning: false, contextWindow: 10000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  const reasoningThinking = scenario === "public-thinking-reasoning";
+  const model = { provider: "synthetic", id: "approved", name: "Approved", api: "openai-completions", baseUrl: "https://invalid.invalid", input: ["text"], reasoning: reasoningThinking, contextWindow: 10000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   const requested: string[] = [];
   const planRequests: string[] = [];
   let toolSequence: { name: string; arguments: JsonObject | (() => JsonObject) }[] | undefined;
@@ -1381,7 +1382,20 @@ for (const scenario of ["native-mcp-cleanup-fail", "native-mcp-disconnect", "nat
   const persistedModel = await first!.readModel!();
   expect((await pool.getAvailableModels("web:default", { includeProviderUsage: false, includeProviderDiagnostics: false })).thinking_level).toBe(await first!.readThinkingLevel!());
   expect(await pool.applyControlCommand("web:default", { type: "thinking", raw: "/thinking" })).toMatchObject({ status: "success", thinking_level: await first!.readThinkingLevel!() });
-  expect(await pool.applyControlCommand("web:default", { type: "thinking", level: "high", raw: "/thinking high" })).toMatchObject({ status: "error" });
+  const thinkingDefault = settings.getDefaultThinkingLevel();
+  const thinkingModel = await first!.readModel!();
+  const thinkingIdentity = first!.sessionId;
+  const reasoningHistory = root.query("SELECT * FROM entries ORDER BY id").all();
+  expect(await pool.applyControlCommand("web:default", { type: "thinking", level: "high", raw: "/thinking high" })).toMatchObject({ status: reasoningThinking ? "success" : "error" });
+  if (reasoningThinking) {
+    expect(await first!.readThinkingLevel!()).toBe("high");
+    expect((await pool.getAvailableModels("web:default", { includeProviderUsage: false, includeProviderDiagnostics: false })).thinking_level).toBe("high");
+    expect(await pool.applyControlCommand("web:default", { type: "thinking", raw: "/thinking" })).toMatchObject({ thinking_level: "high" });
+    expect(await first!.readModel!()).toBe(thinkingModel);
+    expect(first!.sessionId).toBe(thinkingIdentity);
+    expect(settings.getDefaultThinkingLevel()).toBe(thinkingDefault);
+    expect(root.query("SELECT * FROM entries ORDER BY id").all()).toEqual(reasoningHistory);
+  }
   const thinkingHistory = root.query("SELECT * FROM entries ORDER BY id").all();
   expect(await pool.applyControlCommand("web:default", { type: "thinking", level: "off", raw: "/thinking off" })).toMatchObject({ status: "success", thinking_level: "off" });
   expect(await first!.readThinkingLevel!()).toBe("off");
