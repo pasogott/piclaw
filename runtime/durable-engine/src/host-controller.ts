@@ -219,10 +219,12 @@ export async function createHostController(config: HostControllerOptions, contex
     let maintenanceAttempt: Promise<{ compacted: boolean }> | undefined;
     function resumeRecoveredMaintenance() {
       assert();
+      if (maintenanceAttempt) return maintenanceAttempt;
       if (!maintenance) return Promise.reject(Error("No recovered maintenance"));
-      return maintenanceAttempt ??= activeRuntime.recoverMaintenance({ ...maintenance.binding, incarnation }, maintenance.taskId);
+      return maintenanceAttempt = activeRuntime.recoverMaintenance({ ...maintenance.binding, incarnation }, maintenance.taskId)
+        .then(result => { maintenance = undefined; return result; });
     }
-    return Object.freeze({ runtime, recovered, reconcileRecovered, resumeRecoveredMaintenance, checkpointCutover, rollback,
+    return Object.freeze({ runtime, recovered, reconcileRecovered, get recoveredMaintenanceChat() { return maintenance?.binding.chatJid; }, resumeRecoveredMaintenance, checkpointCutover, rollback,
       async addConversation<T extends Recovery["binding"]>(create: Parameters<typeof activeRuntime.addConversation<T>>[0], beforeCommit?: () => void) {
         assert();
         const binding = await activeRuntime.addConversation(create, beforeCommit); assert();

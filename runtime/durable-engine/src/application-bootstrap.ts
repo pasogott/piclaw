@@ -323,7 +323,9 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       },
       /** Continue the existing command worker's same-task settlement; no queue replay. */
       reconcileMaintenance(chatJid: string): Promise<void> {
-        assert();
+        assertLive();
+        if (activeController.recoveredMaintenanceChat === chatJid)
+          return activeController.resumeRecoveredMaintenance().then(() => {});
         const position = getDurableSession(chatJid);
         if (!position?.reconcileMaintenance) throw Error("Unbound maintenance reconciliation");
         return position.reconcileMaintenance();

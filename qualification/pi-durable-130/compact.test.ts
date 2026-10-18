@@ -294,7 +294,12 @@ test("controller explicitly adopts one checkpointed manual compaction without re
   const taskId = await conversation.compact("Retain decisions", context);
   h.resume(); await entered.promise;
   await h.close(context);
-  f.host.modelHold = undefined;
+  const recoveredEntered = barrier(), recoveredHold = barrier();
+  f.host.modelHold = recoveredHold;
+  f.host.onModelEnter = signal => {
+    expect(taskModelRequestScope(signal)).toMatchObject({ taskId, conversationId: id, taskKind: "pi.compaction", phase: "summarize" });
+    recoveredEntered.release();
+  };
   f.host.finalContent = [{ type: "text", text: "Recovered manual summary" }];
   const forbidden = async () => { throw Error("No accepted operation expected"); };
   const work = { listOpenOperations: async () => ({ ok: true, value: [] }), getOperation: forbidden, getSourceBySeq: forbidden,
@@ -313,10 +318,19 @@ test("controller explicitly adopts one checkpointed manual compaction without re
       recovery: { manifest: [binding], work, bindings, readAcceptedInput: forbidden } }, context);
     expect((await controller.runtime.inspectAuthority()).inspection.scheduling).toBe("paused");
     expect(f.host.modelCalls).toBe(0);
+    expect(() => controller!.runtime.recoverMaintenance({ ...binding, incarnation: "wrong-domain" }, taskId)).toThrow("Host binding conflict");
+    expect(() => controller!.runtime.recoverMaintenance({ ...binding, incarnation: "recovered-manual", conversationId: id + 1 }, taskId)).toThrow("Host binding conflict");
+    await expect(controller.reconcileRecovered()).rejects.toThrow("Unknown recovered candidate authority");
     const resumed = controller.resumeRecoveredMaintenance();
     expect(controller.resumeRecoveredMaintenance()).toBe(resumed);
+    await recoveredEntered.promise;
+    expect(() => controller!.runtime.compactSession({ ...binding, incarnation: "recovered-manual" })).toThrow("Runtime is not idle");
+    recoveredHold.release();
     expect(await resumed).toEqual({ compacted: true });
+    expect(controller.recoveredMaintenanceChat).toBeUndefined();
+    expect(controller.resumeRecoveredMaintenance()).toBe(resumed);
     expect(f.host.modelCalls).toBe(1);
+    await controller.reconcileRecovered();
     const state = await controller.runtime.inspectAuthority();
     expect(state.inspection.tasks).toEqual([]);
     expect(state.inspection.submissions).toEqual([]);
