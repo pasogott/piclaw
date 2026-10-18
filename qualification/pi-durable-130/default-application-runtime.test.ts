@@ -1665,9 +1665,16 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       await h.close(context); await request!.abandon(); checkpointHold = undefined;
       expect(root.query("SELECT state FROM budget_request_reservations WHERE work_id LIKE 'durable-request:%' AND state='unresolved'").all()).toHaveLength(1);
       backend = await createDefaultApplicationRuntime(owner, async () => services);
-      const recovered = backend.sessionOptions.getDurableSession!("web:default")!;
+      let recovered = backend.sessionOptions.getDurableSession!("web:default")!;
       expect(recovered.sessionId).toBe(identity);
       expect(await recovered.readModel!()).toBe(beforeModel);
+      const callsBeforeStop = calls;
+      backend.stop();
+      expect(() => recovered.reconcileMaintenance!()).toThrow("Application closing");
+      expect(calls).toBe(callsBeforeStop);
+      await backend.close();
+      backend = await createDefaultApplicationRuntime(owner, async () => services);
+      recovered = backend.sessionOptions.getDurableSession!("web:default")!;
       const callsBeforeResume = calls;
       await recovered.reconcileMaintenance!();
       expect(calls).toBe(callsBeforeResume + 1);
