@@ -52,6 +52,7 @@ export interface RuntimeOptions {
   readonly incarnation: string;
   readonly onOperationSettled?: (operationId: string) => void;
   readonly onMaintenanceSettled?: (workId: string) => void;
+  readonly cancelSideSource?: (input: AcceptedInput) => void;
   /** Required for model SET: shared-file SQL guard, checked inside each storage transaction. */
   readonly withIdleModelGuard?: <T>(body: () => Promise<T>) => Promise<T>;
   /** Caller already holds exclusive ownership of this entire store, not a per-chat lease.
@@ -153,7 +154,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
     operationConversationFor: o.operationConversationFor?.bind(o),
     authorizeScheduling: authorizeScheduling.bind(o), putAnswer: putAnswer.bind(o),
     materializeAnswer: materializeAnswer?.bind(o), now: now.bind(o),
-    onOperationSettled: o.onOperationSettled?.bind(o), onMaintenanceSettled: o.onMaintenanceSettled?.bind(o),
+    onOperationSettled: o.onOperationSettled?.bind(o), onMaintenanceSettled: o.onMaintenanceSettled?.bind(o), cancelSideSource: o.cancelSideSource?.bind(o),
     owner: Object.freeze({ assert: owner.assert.bind(owner), release: owner.release.bind(owner) }),
     work: Object.freeze({ getOperation: work.getOperation.bind(work), acceptCancellation: work.acceptCancellation.bind(work), bindHarness: work.bindHarness.bind(work), finishHarness: work.finishHarness?.bind(work) }),
     terminal: Object.freeze({ getTerminal: terminal.getTerminal.bind(terminal), commitTerminal: terminal.commitTerminal.bind(terminal) }),
@@ -886,6 +887,26 @@ export class HostConversationRuntime {
     return result;
   }
   /** Explicit progress grant after caller has revalidated the entire ownership domain. */
+  /** Only the exact ownerless side fork may be aborted as a whole. */
+  abortSidePrompt(input: AcceptedInput): Promise<void> {
+    const copy = inputSnapshot(input);
+    return this.observe(async () => {
+      const o = this.options;
+      if (!/^side-prompt:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(copy.sourceId) ||
+        copy.requestId !== copy.sourceId || copy.payloadRef !== copy.sourceId ||
+        o.conversationFor(copy.chatJid, copy.branchId) === copy.conversationId ||
+        o.operationConversationFor?.(copy) !== copy.conversationId || !o.cancelSideSource) throw Error("Exact isolated side prompt required");
+      const state = await this.readState(copy); this.fence();
+      if (state.operation.terminal) return;
+      const record = await this.harness.commit(tx => tx.conversation(copy.conversationId), this.context); this.fence();
+      if (record?.parent?.conversationId !== o.conversationFor(copy.chatJid, copy.branchId) || record.owner) throw Error("Exact isolated side prompt required");
+      if (!state.operation.cancellation) o.cancelSideSource(copy);
+      this.fence();
+      const conversation = await this.harness.conversation(copy.conversationId, this.context); this.fence();
+      if (!conversation) throw Error("Missing side conversation");
+      await conversation.abort(this.context); this.fence();
+    });
+  }
   resume(input: AcceptedInput, submissionId: SubmissionId) {
     input = inputSnapshot(input);
     return this.observe(async () => {
@@ -927,7 +948,7 @@ export class HostConversationRuntime {
     }
     const initialVersion = state.operation.version;
     const primarySubmissionId = state.submissionId;
-    const claimed = state.operation.claimedSourceSeqs.filter(seq => seq !== state.operation.primarySourceSeq);
+    const claimed = state.operation.claimedSourceSeqs.filter(seq => seq !== state.operation.primarySourceSeq && seq !== state.operation.cancellation?.sourceSeq);
     if (claimed.length) {
       const port = o.bindings.intents;
       if (!port) throw new Error("Accepted intent bindings required");

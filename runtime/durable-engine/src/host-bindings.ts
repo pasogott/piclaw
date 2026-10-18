@@ -64,7 +64,7 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
       JOIN service_effect_s01_chats ch ON ch.chat_jid=s.chat_jid AND ch.active_operation_id=o.operation_id
       WHERE b.domain=? AND b.incarnation=? AND b.operation_id=? AND b.source_seq=?
         AND s.kind='internal' AND s.state='claimed' AND s.source_id=? AND s.payload_ref=?
-        AND o.phase IN ('claimed','executing','settling')`)
+        AND o.phase IN ('claimed','executing','cancelling','settling')`)
       .get(domain, incarnation, i.operationId, i.sourceSeq, i.sourceId, i.payloadRef) as Row | null;
     if (side && /^side-prompt:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(i.sourceId) &&
       i.requestId === i.sourceId && i.payloadRef === i.sourceId && side.conversation_id !== root &&

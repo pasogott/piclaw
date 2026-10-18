@@ -148,6 +148,19 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     controller = await createHostController({ acquireOwnership: async () => lease,
       createStorage: async () => SqliteStorage.open(candidateDatabase),
       runtime: { ...r, work, terminal, bindings, onOperationSettled: config.onOperationSettled, onMaintenanceSettled: config.onMaintenanceSettled, putAnswer: config.answers.put.bind(config.answers),
+        cancelSideSource(input) {
+          root.transaction(() => {
+            assert();
+            const operation = root.query("SELECT version,cancellation_source_seq FROM service_effect_s01_operations WHERE operation_id=?").get(input.operationId) as { version: number; cancellation_source_seq: number | null } | null;
+            if (!operation) throw Error("Missing side operation");
+            if (operation.cancellation_source_seq !== null) return;
+            const id = `side-cancel:${input.sourceId}`;
+            work.acceptAndCancelSourceInTransaction(sealed({ effect: effect(id), chatJid: input.chatJid, sourceId: id,
+              kind: "cancellation", payloadRef: id, targetOperationId: input.operationId, parentSourceSeq: input.sourceSeq,
+              acceptedAt: r.now(), createWakeIntent: false }), operation.version, "side_prompt_cancelled", root);
+            assert();
+          }).immediate();
+        },
         withIdleModelGuard: body => candidateDatabase.withIdleModelGuard(body),
         existingConversationIds: manifest.map(b => b.conversationId),
         operationConversationFor: input => bindings.resolveConversation(input),
