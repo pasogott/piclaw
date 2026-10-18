@@ -38,10 +38,10 @@ async function setup() {
     async resolveContent(ref) { resolves++; return payloads.get(ref)!; } };
   const bindings = createHostDurableBindings(db, options);
   let seq = 0;
-  async function accept(requestId = "arbitrary / request: α", content = "accepted user prompt", chatJid = "web:bindings"): Promise<AcceptedInput> {
-    const id = `source:${++seq}`;
+  async function accept(requestId = "arbitrary / request: α", content = "accepted user prompt", chatJid = "web:bindings", kind: "message" | "internal" = "message"): Promise<AcceptedInput> {
+    const id = kind === "internal" ? requestId : `source:${++seq}`;
     const source = value(await work.acceptSource(sealed({ effect: effect(`accept:${id}`), chatJid, sourceId: id,
-      kind: "message" as const, payloadRef: `payload:${id}`, targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
+      kind, payloadRef: kind === "internal" ? id : `payload:${id}`, targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
     const claim = value(await work.claimNext(sealed({ effect: effect(`claim:${id}`), chatJid: source.chatJid,
       expectedFrontier: source.sourceSeq - 1, newOperationId: `operation:${id}`, claimedAt: at })))!;
     payloads.set(source.payloadRef, content);
@@ -217,4 +217,19 @@ test("bindings: exact queued intent proof matches root; terminal committed repla
     reopenedDb.query("DELETE FROM piclaw_durable_intent_bindings_v1").run();
     await expect(reopened.intents!.bind(input)).rejects.toThrow("Unverified host source");
   } finally { reopenedDb.close(); }
+}));
+
+test("bindings: internal side prompt requires its exact accepted source namespace", () => fixture(async f => {
+  const id = `side-prompt:${crypto.randomUUID()}`;
+  const input = await f.accept(id, "isolated prompt", "web:bindings", "internal");
+  await f.bindings.bind(input);
+  expect((await f.bindings.get(input))?.operationId).toBe(input.operationId);
+  expect(f.count()).toBe(1);
+  const unrelated = await f.accept("internal:other", "unrelated work", "web:bindings-2", "internal");
+  await expect(f.bindings.bind(unrelated)).rejects.toThrow("Unverified host source");
+  const wrongRequest = { ...input, requestId: "different", requestHash: hashCanonicalRequest({ type: "input", requestId: "different", content: "isolated prompt" }) };
+  await expect(f.bindings.bind(wrongRequest)).rejects.toThrow("Unverified host source");
+  f.db.query("UPDATE service_effect_s01_sources SET state='pending' WHERE chat_jid=? AND source_seq=?").run(input.chatJid, input.sourceSeq);
+  await expect(f.bindings.bind(input)).rejects.toThrow("Unverified host source");
+  expect(f.count()).toBe(1);
 }));

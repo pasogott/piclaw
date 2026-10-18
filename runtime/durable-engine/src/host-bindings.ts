@@ -104,14 +104,18 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
       if (!proof || proof.intentId !== i.requestId) throw new Error("Unverified host source");
       return;
     }
-    const source = db.query(`SELECT s.kind FROM service_effect_s01_sources s
+    const source = db.query(`SELECT s.kind,s.source_id,s.payload_ref FROM service_effect_s01_sources s
       JOIN service_effect_s01_operation_sources c ON c.chat_jid=s.chat_jid AND c.source_seq=s.source_seq
       JOIN service_effect_s01_operations o ON o.operation_id=c.operation_id AND o.chat_jid=s.chat_jid
       WHERE s.chat_jid=? AND s.source_seq=? AND s.source_id=? AND s.payload_ref=?
         AND s.state IN ('claimed','consumed') AND o.operation_id=?
-        AND o.primary_source_seq=s.source_seq AND s.kind IN ('message','scheduled_agent')`)
-      .get(i.chatJid, i.sourceSeq, i.sourceId, i.payloadRef, i.operationId);
-    if (!source) throw new Error("Unverified host source");
+        AND o.primary_source_seq=s.source_seq AND s.kind IN ('message','scheduled_agent','internal')`)
+      .get(i.chatJid, i.sourceSeq, i.sourceId, i.payloadRef, i.operationId) as { kind: string; source_id: string; payload_ref: string } | null;
+    // Internal work is not blanket tool authority. Only the exact side-prompt
+    // namespace can bind here; execution/recovery still need their own routing.
+    if (!source || (source.kind === "internal" &&
+      (!/^side-prompt:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(source.source_id) ||
+        source.payload_ref !== source.source_id || i.requestId !== source.source_id))) throw new Error("Unverified host source");
   }
   async function bindContent(i: AcceptedInput) {
     assertOwner(); verifySource(i); read(i); assertOwner();
