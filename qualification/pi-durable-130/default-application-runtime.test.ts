@@ -1378,13 +1378,20 @@ for (const scenario of ["native-mcp-cleanup-fail", "native-mcp-disconnect", "nat
     return;
   }
   expect(calls).toBe(1);
+  const persistedModel = await first!.readModel!();
+  const modelQuery = await pool.applyControlCommand("web:default", { type: "model", raw: "/model" });
+  expect(modelQuery.status).toBe("success");
+  expect(modelQuery.message).toContain(`${model.provider}/${model.id} (current)`);
+  expect(modelQuery.message).toContain(`${modelB.provider}/${modelB.id}`);
+  expect(await first!.readModel!()).toBe(persistedModel);
+  expect(calls).toBe(1);
   // Tiny history is correctly below the public compaction policy's retained window.
   expect(await first!.compact!("Summarize")).toEqual({ compacted: false });
   expect(calls).toBe(1);
   await assertContext(100000);
-  await first!.setModel!({ provider: modelB.provider, modelId: modelB.id });
+  expect(await pool.applyControlCommand("web:default", { type: "model", provider: modelB.provider, modelId: modelB.id, raw: `/model ${modelB.provider}/${modelB.id}` })).toMatchObject({ status: "success" });
   await assertContext(200000);
-  await first!.setModel!({ provider: model.provider, modelId: model.id });
+  expect(await pool.applyControlCommand("web:default", { type: "model", provider: model.provider, modelId: model.id, raw: `/model ${model.provider}/${model.id}` })).toMatchObject({ status: "success" });
   await assertContext(100000);
   const newcomer = "web:newcomer";
   storeChatMetadata(newcomer, new Date().toISOString());
