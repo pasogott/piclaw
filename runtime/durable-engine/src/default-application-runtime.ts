@@ -287,12 +287,14 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     const candidate = { provider: model.provider, id: model.modelId, fullId: `${model.provider}/${model.modelId}` };
     if (!delegate.buildModelCandidates([candidate], config).some(entry => entry.id === candidate.fullId)) throw Error("Native Delegate model not approved");
   };
+  const requestSources = new WeakMap<AbortSignal, Awaited<ReturnType<HostConversationRuntime["captureRunSource"]>>>();
   const models = createHostModels(host.modelRuntime, available.map(model => ({ provider: model.provider, id: model.id })), { signal: lifetime.signal,
     async captureSourceGuard(signal) {
       const scope = taskModelRequestScope(signal);
       if (!scope) throw Error("Native model request source unavailable");
       if (scope.taskKind === "pi.generation") {
         const captured = await runtime().captureRunSource(scope.conversationId, scope.taskId);
+        requestSources.set(scope.signal, captured);
         return () => {
           signal!.throwIfAborted();
           runtime().assertCapturedSourceCurrent(captured.inputs);
@@ -306,7 +308,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     async prepareRequest(model, options, signal) {
       const scope = taskModelRequestScope(options?.signal);
       if (!scope || scope.taskKind !== "pi.generation") return undefined;
-      const captured = await runtime().captureRunSource(scope.conversationId, scope.taskId);
+      const captured = requestSources.get(scope.signal);
+      if (!captured) throw Error("Native request source capture unavailable");
       if (captured.delegateModel || root.query("SELECT 1 FROM service_effect_s07_occurrences WHERE operation_id=?").get(captured.operation.operationId)) return undefined;
       return reserveHostRequest({ database: root, operationId: captured.operation.operationId,
         chatJid: captured.operation.chatJid, authPath: join(getPiclawAgentDir(), "auth.json"), model: model as any,
