@@ -798,3 +798,24 @@ the existing uncapped path. Delegate, scheduled and compaction request accountin
 provider-unknown reconciliation and factory adoption of recovered maintenance are
 not qualified by this slice. Migration remains last; no deployment or live-state
 change occurred. This evidence does not make #1650 acceptance-complete.
+
+## Foreground Delegate request accounting — local qualification
+
+Foreground Delegate model requests reuse the parent request-accounting adapter.
+Their source snapshot already validates exact task ownership, the originating
+Delegate call, operation/harness identity and current model approval. Each actual
+child request gets a fresh reservation and request-work row marked `delegate`,
+under the same operation work used by parent requests. Scheduled operations remain
+excluded. No separate ledger or nested-budget implementation is introduced.
+
+Three actual-factory cases pass116 assertions: parent plus two children settle four
+requests for40 microdollars; unknown child valuation retains two unresolved holds
+and active operation work across database reopen while charging only20 microdollars
+for known parent usage; existing cap revocation still denies. Scoped typechecks and
+bounded logic review pass. Review was of the exact production diff supplied inline;
+earlier independent file-reading reviews timed out. No full gate for this subsequent
+batch is claimed.
+
+All enabled caps still deny outright. This is uncapped accounting, not parent-cap
+or nested-cap enforcement. Automatic recovery/resend reconciliation, scheduled and
+compaction accounting, recovered-maintenance adoption and migration are incomplete.
