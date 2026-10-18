@@ -102,6 +102,14 @@ jobs:
           path: .qualification-editable-table
           persist-credentials: false
 
+      - name: Checkout native Office viewer qualification source
+        uses: actions/checkout@v6
+        with:
+          repository: rcarmo/piclaw-addons
+          ref: 2f32f17ebc70ff1d0e2ad1892382813d29ccbd16
+          path: .qualification-office-viewer
+          persist-credentials: false
+
       - name: Install inactive application durable engine
         working-directory: runtime/durable-engine
         run: |
@@ -117,6 +125,7 @@ jobs:
           DURABLE_ADDONS_ROOT: ${{ github.workspace }}/.qualification-addons
           DURABLE_CODE_REVIEW_ROOT: ${{ github.workspace }}/.qualification-code-review
           DURABLE_EDITABLE_TABLE_ROOT: ${{ github.workspace }}/.qualification-editable-table
+          DURABLE_OFFICE_VIEWER_ROOT: ${{ github.workspace }}/.qualification-office-viewer
         run: |
           bun install --frozen-lockfile --ignore-scripts
           bun run typecheck

@@ -50,7 +50,7 @@ const approvedEditableTableFiles = Object.freeze({
 // registration is approved; vendor browser assets are not an execution proof.
 const approvedOfficeViewerFiles = Object.freeze({
   "package.json": "fe62110bc5f59674973065afee279f34f7e0ff1cfc078718f8fad14a5973b155",
-  "index.ts": "71ea2d50f2e2e77ca600dd18b530f680bb0efaf024572b0e2f8b75c9e41828b0",
+  "index.ts": "c6d302ab289c6ce97967da40d97aac14f70b04aeb6a8be77c63bcde7e7d97565",
 });
 const profiles = {
   open_office_viewer: { name: "@rcarmo/piclaw-addon-office-viewer", version: "0.1.3", files: approvedOfficeViewerFiles, shadows: ["index.js"], events: [] as readonly string[] },

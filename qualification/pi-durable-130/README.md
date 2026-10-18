@@ -1,3 +1,15 @@
+# Office viewer vendor containment — targeted hardening
+
+Native Office qualification now selects add-on source
+2f32f17ebc70ff1d0e2ad1892382813d29ccbd16 through DURABLE_OFFICE_VIEWER_ROOT,
+separate from historical fixture pins. The static route rejects escaping
+canonical vendor symlinks before serving; normal/contained GET and HEAD, headers,
+missing assets and traversal behavior are preserved. Two selected route tests
+pass 37 assertions, scoped types and source review pass. Updated core catalog
+5/15 and actual default-runtime viewer1/33 pass; workflow contract passes.
+No full suites were run. Browser decoding/vendor integrity beyond this path
+check and parent-directory replacement races are not qualified. No live changes.
+
 # Native Office Viewer — targeted execution port
 
 The default application reuses the exact registered open_office_viewer execute
@@ -16,8 +28,8 @@ Targeted receipts in /workspace/reviews/durable-1650/:
 
 Exact manifest/index source is qualified; vendor assets are trusted installation
 content, not integrity-qualified. Browser document decoding, vendor-asset responses
-and status-hint rendering were not tested. The existing vendor route lacks
-canonical symlink containment and needs separate hardening. No full candidate/root
+and status-hint rendering were not tested. The reviewed route hardening at add-on commit 2f32f17 rejects vendor symlinks
+whose canonical targets escape the vendor root before stat or Bun.file. No full candidate/root
 suite was run, per operator direction. No deployment, restart, merge or migration.
 
 # Native Delegate caller image attachments — targeted qualification

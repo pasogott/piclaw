@@ -3,12 +3,12 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 
 export function installOfficeViewerFixture(workspace: string) {
-  const source = process.env.DURABLE_ADDONS_ROOT;
-  if (!source) throw Error("DURABLE_ADDONS_ROOT required (unchanged installed office-viewer)");
+  const source = process.env.DURABLE_OFFICE_VIEWER_ROOT;
+  if (!source) throw Error("DURABLE_OFFICE_VIEWER_ROOT required (reviewed Office viewer source)");
   const pkg = join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-office-viewer");
   mkdirSync(pkg, { recursive: true });
   for (const [file, hash] of Object.entries({
-    "index.ts": "71ea2d50f2e2e77ca600dd18b530f680bb0efaf024572b0e2f8b75c9e41828b0",
+    "index.ts": "c6d302ab289c6ce97967da40d97aac14f70b04aeb6a8be77c63bcde7e7d97565",
     "package.json": "fe62110bc5f59674973065afee279f34f7e0ff1cfc078718f8fad14a5973b155",
   })) {
     const path = join(source, "addons/office-viewer", file);
