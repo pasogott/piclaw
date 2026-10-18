@@ -53,8 +53,9 @@ export async function reserveHostRequest(options: {
   const sidePrompt = database.query(`SELECT 1 FROM service_effect_s01_operations o
     JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq
     WHERE o.operation_id=? AND o.chat_jid=? AND s.kind='internal' AND s.source_id LIKE 'side-prompt:%'`).get(options.operationId, options.chatJid);
+  const existingSide = sidePrompt ? getBudgetWork(operationWork, database) : null;
   ensureBudgetWork({ id: operationWork, chatJid: options.chatJid, executionKind: options.maintenanceWorkId || sidePrompt ? "side_prompt" : options.scheduledTaskId ? "scheduled" : "interactive",
-    scheduledTaskId: options.scheduledTaskId }, database);
+    parentWorkId: existingSide?.parent_work_id, scheduledTaskId: options.scheduledTaskId }, database);
   ensureBudgetWork({ id: workId, chatJid: options.chatJid, executionKind: options.executionKind === "delegate" ? "delegate" : sidePrompt ? "side_prompt" : options.executionKind ?? "interactive", parentWorkId: operationWork }, database);
   const current = () => {
     assertCurrent(); signal.throwIfAborted();

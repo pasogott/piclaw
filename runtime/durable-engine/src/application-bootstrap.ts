@@ -2,6 +2,9 @@
 import type { Database } from "bun:sqlite";
 import { getAgentRuntimeConfig } from "../../src/core/config.js";
 import { formatTimeoutDuration } from "../../src/agent-pool/prompt-utils.js";
+import { getBudgetWorkContext } from "../../src/budget/context.js";
+import { ensureBudgetWork, getBudgetWork } from "../../src/db/budget-limits.js";
+import { operationBudgetWorkId } from "./host-request-accounting.js";
 import { createHash } from "node:crypto";
 import type { Context } from "@earendil-works/chord/context";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
@@ -451,7 +454,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     async function dispatchSidePrompt(chatJid: string, prompt: string, options: SidePromptOptions = {}): Promise<SidePromptResult> {
       assertLive();
       options.signal?.throwIfAborted();
-      if (options.budgetWorkId || options.budgetParentWorkId ||
+      if (options.budgetWorkId ||
         ((options.onEvent || options.onTextDelta || options.onThinkingDelta) && !config.observeSidePrompt))
         throw Error("Native side prompt options unavailable");
       if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 100_000 ||
@@ -463,19 +466,32 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       if (!scope) throw Error("Unbound side prompt chat");
       if (await runtime.readSessionPosition({ incarnation: r.incarnation, ...scope }) === null) throw Error("Side prompt history unavailable");
       assertLive();
+      const context = getBudgetWorkContext();
+      const parentWorkId = options.budgetParentWorkId ?? context?.workId ?? null;
+      if (parentWorkId !== null && (typeof parentWorkId !== "string" || !parentWorkId.trim() || parentWorkId.length > 1024)) throw Error("Invalid side prompt budget parent");
+      const assertParent = () => {
+        if (context && context.chatJid !== chatJid) throw Error("Side prompt budget context mismatch");
+        if (parentWorkId !== null) {
+          const parent = getBudgetWork(parentWorkId, root);
+          if (!parent || parent.chat_jid !== chatJid || parent.status !== "active") throw Error("Side prompt budget parent unavailable");
+        }
+      };
+      assertParent();
       const sourceId = `side-prompt:${crypto.randomUUID()}`;
       // Immutable payload may outlive denied admission; it never grants authority.
       await config.answers.put(sourceId, prompt); assertLive(); options.signal?.throwIfAborted();
       const claimed = root.transaction(() => {
-        assertLive();
+        assertLive(); assertParent();
         if (root.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native side prompt budget admission unavailable");
         const busy = root.query(`SELECT consumed_through_source_seq,active_operation_id FROM service_effect_s01_chats WHERE chat_jid=?`).get(chatJid) as
           { consumed_through_source_seq: number; active_operation_id: string | null } | null;
         if (busy?.active_operation_id) throw Error("Side prompt chat is busy");
-        return work.acceptAndClaimSourceInTransaction(sealed({ effect: { ...effect(`accept:${sourceId}`), provenanceRef: "application:side-prompt" },
+        const accepted = work.acceptAndClaimSourceInTransaction(sealed({ effect: { ...effect(`accept:${sourceId}`), provenanceRef: "application:side-prompt" },
           chatJid, sourceId, kind: "internal" as const, payloadRef: sourceId, targetOperationId: null, parentSourceSeq: null,
           acceptedAt: r.now(), createWakeIntent: false }), sealed({ effect: { ...effect(`claim:${sourceId}`), provenanceRef: "application:side-prompt" },
           chatJid, expectedFrontier: busy?.consumed_through_source_seq ?? 0, newOperationId: `operation:${sourceId}`, claimedAt: r.now() }), root);
+        ensureBudgetWork({ id: operationBudgetWorkId(accepted.operation.operationId), chatJid, executionKind: "side_prompt", parentWorkId }, root);
+        return accepted;
       }).immediate();
       let observerFailed = false;
       const unobserve = config.observeSidePrompt?.(sourceId, event => {

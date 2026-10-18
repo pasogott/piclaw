@@ -1639,10 +1639,13 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
     if (scenario === "native-compaction-accounting-side-dispatch") {
       const historyBefore = root.query("SELECT * FROM entries ORDER BY id").all();
       const callsBefore = calls;
+      const { ensureBudgetWork } = await import("../../runtime/src/db/budget-limits.js");
+      const { withBudgetWorkContext } = await import("../../runtime/src/budget/context.js");
+      ensureBudgetWork({ id: "native-side-parent", chatJid: "web:default", executionKind: "interactive" }, root);
       const sideEvents: string[] = [], sideText: string[] = [];
-      const result = await pool.runSidePrompt("web:default", "native isolated side prompt", {
+      const result = await withBudgetWorkContext({ workId: "native-side-parent", chatJid: "web:default", kind: "interactive" }, () => pool.runSidePrompt("web:default", "native isolated side prompt", {
         systemPrompt: "SIDE_SYSTEM_PREFIX", onEvent(event) { sideEvents.push(event.type); }, onTextDelta(delta) { sideText.push(delta); },
-      });
+      }));
       expect(result).toMatchObject({ status: "success", result: "factory synthetic reply", model: "openai-codex/approved" });
       expect(calls).toBe(callsBefore + 1);
       expect(sideEvents).toContain("done");
@@ -1654,7 +1657,11 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       const sideSource = root.query("SELECT source_id FROM service_effect_s01_sources WHERE kind='internal'").get() as { source_id: string };
       expect(sideSource.source_id).toMatch(/^side-prompt:/);
       expect(root.query(`SELECT r.state,w.execution_kind FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id WHERE w.execution_kind='side_prompt'`).all()).toEqual([{ state: "settled", execution_kind: "side_prompt" }]);
-      expect(root.query("SELECT status FROM budget_work WHERE parent_work_id IS NULL AND execution_kind='side_prompt'").all()).toEqual([{ status: "completed" }]);
+      expect(root.query("SELECT status,parent_work_id FROM budget_work WHERE execution_kind='side_prompt' AND id LIKE 'durable-operation:%'").all()).toEqual([{ status: "completed", parent_work_id: "native-side-parent" }]);
+      expect(root.query("SELECT status FROM budget_work WHERE id='native-side-parent'").get()).toEqual({ status: "active" });
+      const sourceCountBeforeParentDenial = root.query("SELECT count(*) AS n FROM service_effect_s01_sources").get();
+      expect((await pool.runSidePrompt("web:default", "unknown parent", { budgetParentWorkId: "missing-parent" })).status).toBe("error");
+      expect(root.query("SELECT count(*) AS n FROM service_effect_s01_sources").get()).toEqual(sourceCountBeforeParentDenial);
       expect(root.query("SELECT SUM(t.api_equivalent_cost_microusd) AS amount FROM token_usage t JOIN budget_work w ON w.id=t.work_id WHERE w.execution_kind='side_prompt'").get()).toEqual({ amount: 10 });
       expect(root.query("SELECT message_row_id FROM service_effect_s02_commits WHERE operation_id IN (SELECT operation_id FROM service_effect_s01_operations WHERE primary_source_seq=(SELECT source_seq FROM service_effect_s01_sources WHERE source_id=?))").get(sideSource.source_id)).toEqual({ message_row_id: null });
       expect(root.query("SELECT * FROM entries WHERE id <= ? ORDER BY id").all((historyBefore.at(-1) as { id: number }).id)).toEqual(historyBefore);
