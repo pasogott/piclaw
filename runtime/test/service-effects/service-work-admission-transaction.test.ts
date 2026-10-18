@@ -309,3 +309,21 @@ for (const fail of [false, true]) test(`atomic targeted cancellation attaches it
   expect(run.immediate()).toEqual(cancelled);
   expect(exactSnapshot(db)).toEqual(after);
 });
+
+for (const fault of ["owner-after-attach", "foreign-parent", "foreign-connection"] as const) {
+  test(`atomic cancellation ${fault} leaves source and operation unchanged`, () => {
+    let denyCancellation = false;
+    const { db, store } = fixture({ validateAcceptance: () => !denyCancellation || !db.query("SELECT 1 FROM service_effect_s01_sources WHERE source_id='fault-cancel' AND state='claimed'").get() });
+    const original = db.transaction(() => store.acceptAndClaimSourceInTransaction(request("fault-side"), exactClaim("fault-side"), db)).immediate();
+    const input = seal({ ...request("fault-cancel"), kind: "cancellation", targetOperationId: original.operation.operationId,
+      parentSourceSeq: fault === "foreign-parent" ? original.source.sourceSeq + 99 : original.source.sourceSeq });
+    const before = exactSnapshot(db);
+    denyCancellation = fault === "owner-after-attach";
+    const other = new Database(":memory:");
+    try {
+      expect(() => db.transaction(() => store.acceptAndCancelSourceInTransaction(input, original.operation.version,
+        "side_prompt_cancelled", fault === "foreign-connection" ? other : db)).immediate()).toThrow(fault === "foreign-parent" ? "not_found" : "owner_conflict");
+      expect(exactSnapshot(db)).toEqual(before);
+    } finally { other.close(); }
+  });
+}
