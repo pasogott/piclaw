@@ -109,7 +109,7 @@ for (const model of [undefined, "qualification/synthetic"]) test(`allocation-onl
   } finally { stopSchedulerLoop(); await queue.shutdown(); await bundle.close(); lock.release(); closeDatabase(); }
 });
 
-test("side prompt allocation binds an exact claimed internal source and leaves parent history unchanged", async () => {
+for (const failBinding of [false, true]) test(`side prompt allocation binds an exact claimed internal source and leaves parent history unchanged; rollback=${failBinding}`, async () => {
   const { createCurrentPiclawServiceWorkStore } = await import("../../runtime/src/service-effects/current-piclaw/service-work-store.js");
   const { effect, sealed } = await import("./src/host-handoff.js");
   const { hashCanonicalRequest } = await import("../../runtime/src/service-effects/contracts/common.js");
@@ -123,7 +123,7 @@ test("side prompt allocation binds an exact claimed internal source and leaves p
   await fixture.root.commit(tx => tx.appendEntry(parent, { kind: "pi.user", model: [{ role: "user", content: "main history", timestamp: 1 }] }), context);
   const history = db.query("SELECT * FROM entries ORDER BY id").all();
   await fixture.close();
-  const chat = "web:side-allocation", manifest = [{ chatJid: chat, branchId: "main", conversationId: parent }];
+  const chat = `web:side-allocation-${failBinding}`, manifest = [{ chatJid: chat, branchId: "main", conversationId: parent }];
   const bundle = await createApplicationBootstrapBundle({ root: db, path, ownership: applicationOwnership(lock), manifest,
     sessions: new Map([[chat, "original"]]), offlineInitialize: true,
     runtime: { incarnation: "side-allocation", sessionId: "side-allocation", lane: "main", generation: 1,
@@ -132,13 +132,22 @@ test("side prompt allocation binds an exact claimed internal source and leaves p
   const work = value(createCurrentPiclawServiceWorkStore(db, { hitFault: () => false, recordTrace() {} }));
   try {
     const id = `side-prompt:${crypto.randomUUID()}`, prompt = "isolated follow-up";
-    const source = value(await work.acceptSource(sealed({ effect: effect("side-accept"), chatJid: chat, sourceId: id, kind: "internal" as const,
+    const source = value(await work.acceptSource(sealed({ effect: effect(`side-accept:${id}`), chatJid: chat, sourceId: id, kind: "internal" as const,
       payloadRef: id, targetOperationId: null, parentSourceSeq: null, acceptedAt: new Date().toISOString(), createWakeIntent: false })));
-    const claim = value(await work.claimNext(sealed({ effect: effect("side-claim"), chatJid: chat,
+    const claim = value(await work.claimNext(sealed({ effect: effect(`side-claim:${id}`), chatJid: chat,
       expectedFrontier: source.sourceSeq - 1, newOperationId: crypto.randomUUID(), claimedAt: new Date().toISOString() })))!;
     const input = { incarnation: "side-allocation", conversationId: parent, chatJid: chat, branchId: "main", operationId: claim.operation.operationId,
       sourceSeq: source.sourceSeq, sourceId: id, payloadRef: id, requestId: id, requestHash: hashCanonicalRequest({ type: "input", requestId: id, content: prompt }) };
     await expect(bundle.allocateSidePromptConversation({ ...input, sourceId: "internal:other" })).rejects.toThrow("Side prompt source authority unavailable");
+    if (failBinding) {
+      const beforeFailure = db.query("SELECT * FROM conversations ORDER BY id").all();
+      db.exec("CREATE TRIGGER fail_side_binding BEFORE INSERT ON piclaw_durable_bindings_v1 BEGIN SELECT RAISE(ABORT, 'synthetic side binding failure'); END");
+      await expect(bundle.allocateSidePromptConversation(input)).rejects.toThrow("synthetic side binding failure");
+      expect(db.query("SELECT * FROM conversations ORDER BY id").all()).toEqual(beforeFailure);
+      expect(db.query("SELECT * FROM piclaw_durable_bindings_v1 WHERE chat_jid=?").all(chat)).toEqual([]);
+      db.exec("DROP TRIGGER fail_side_binding");
+      return;
+    }
     const allocated = await bundle.allocateSidePromptConversation(input);
     expect(allocated.conversationId).not.toBe(parent);
     expect((await bundle.allocateSidePromptConversation(input)).conversationId).toBe(allocated.conversationId);
@@ -151,5 +160,13 @@ test("side prompt allocation binds an exact claimed internal source and leaves p
     setBudgetCapEnabled(cap.id, false, db);
     db.query("UPDATE service_effect_s01_sources SET state='pending' WHERE source_id=?").run(id);
     expect(bindings.resolveConversation(allocated)).toBeUndefined();
-  } finally { await bundle.close(); lock.release(); closeDatabase(); }
+  } finally {
+    await bundle.close();
+    // These allocation-only fixtures deliberately never execute/settle the
+    // claimed source; retire their synthetic work before the next shared-DB case.
+    db.query("UPDATE service_effect_s01_sources SET state='disposed' WHERE chat_jid=?").run(chat);
+    db.query("UPDATE service_effect_s01_operations SET phase='terminal' WHERE chat_jid=?").run(chat);
+    db.query("UPDATE service_effect_s01_chats SET active_operation_id=NULL WHERE chat_jid=?").run(chat);
+    lock.release(); closeDatabase();
+  }
 });
