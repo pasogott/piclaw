@@ -820,6 +820,7 @@ export class AgentPool {
     oldJid: string,
     newJid: string,
   ): Promise<{ oldJid: string; newJid: string; branch: ChatBranchRecord }> {
+    if (this.durableApplication) throw new Error("Durable chat identity rename unavailable");
     return this.branchManager.renameChatJid(oldJid, newJid);
   }
 

@@ -33,6 +33,7 @@ for (const empty of [false, true]) {
       spyOn(AgentToolFactory.prototype, "createDefaultTools").mockImplementation(() => { throw Error("legacy tool setup forbidden"); }),
       spyOn(AgentBranchManager.prototype, "mergeChatBranchIntoParent").mockImplementation(() => { throw Error("legacy merge entered"); }),
       spyOn(AgentBranchManager.prototype, "restoreChatBranch").mockImplementation(() => { throw Error("legacy restore entered"); }),
+      spyOn(AgentBranchManager.prototype, "renameChatJid").mockImplementation(() => { throw Error("legacy identity rename entered"); }),
     ];
     let pool: AgentPool | undefined;
     let services: ReturnType<typeof createAgentPoolServices> | undefined;
@@ -57,6 +58,7 @@ for (const empty of [false, true]) {
         expect(services.sessionManager.prewarm(chat, { mode: "full" })).toBe(false);
         await expect(pool.mergeChatBranchIntoParent(chat)).rejects.toThrow("Durable branch rollup unavailable");
         await expect(pool.restoreChatBranch(chat)).rejects.toThrow("Durable branch restore unavailable");
+        await expect(pool.renameChatJid(chat, "web:renamed")).rejects.toThrow("Durable chat identity rename unavailable");
         expect(await pool.applyControlCommand(chat, { type: "rollup", raw: "/rollup" })).toMatchObject({ status: "error", message: "Durable branch rollup unavailable" });
       }
       expect(getDb().serialize()).toEqual(databaseBefore);
