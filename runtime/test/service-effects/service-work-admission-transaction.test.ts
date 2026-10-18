@@ -288,3 +288,24 @@ for (const conflict of ["earlier-message", "active-operation", "wrong-frontier",
     expect(store.getAcceptedSource("web:atomic", "side")).toBeNull();
   });
 }
+
+for (const fail of [false, true]) test(`atomic targeted cancellation attaches its source; rollback=${fail}`, () => {
+  const { db, store } = fixture();
+  const original = db.transaction(() => store.acceptAndClaimSourceInTransaction(request("side-original"), exactClaim("side-original"), db)).immediate();
+  const input = seal({ ...request("side-cancel"), kind: "cancellation", targetOperationId: original.operation.operationId,
+    parentSourceSeq: original.source.sourceSeq });
+  const before = exactSnapshot(db);
+  const run = db.transaction(() => store.acceptAndCancelSourceInTransaction(input, original.operation.version + (fail ? 1 : 0), "side_prompt_cancelled", db));
+  if (fail) {
+    expect(() => run.immediate()).toThrow("version_mismatch");
+    expect(exactSnapshot(db)).toEqual(before);
+    return;
+  }
+  const cancelled = run.immediate();
+  expect(cancelled.phase).toBe("cancelling");
+  expect(cancelled.claimedSourceSeqs).toEqual([original.source.sourceSeq, cancelled.cancellation!.sourceSeq]);
+  expect(store.getSourceBySeq("web:atomic", cancelled.cancellation!.sourceSeq)?.state).toBe("claimed");
+  const after = exactSnapshot(db);
+  expect(run.immediate()).toEqual(cancelled);
+  expect(exactSnapshot(db)).toEqual(after);
+});

@@ -8,7 +8,7 @@ import { computeClosedSourceFrontier } from "./source-frontier.js";
 import { normaliseWithdrawalRequest, normaliseQueuedSourceAttachment, type AttachQueuedSourceRequest, type WithdrawUnclaimedSourceRequest, type FinishHarnessRequest } from "./service-work-request-normalizer.js";
 export type { AttachQueuedSourceRequest, WithdrawUnclaimedSourceRequest, FinishHarnessRequest } from "./service-work-request-normalizer.js";
 
-import { hashCanonicalRequest, type NormalisedTraceInput } from "../contracts/common.js";
+import { hashCanonicalRequest, type CanonicalJsonValue, type NormalisedTraceInput } from "../contracts/common.js";
 import type {
   AcceptCancellationRequest,
   AcceptedSourceSnapshot,
@@ -232,6 +232,44 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
     } catch (cause) {
       if (cause instanceof EffectAdmissionError) throw cause;
       throw new EffectAdmissionError(cause instanceof RollbackFault ? "storage_unavailable" : mutationError(cause)._tag);
+    }
+  }
+
+  /** Accept and attach a targeted cancellation so normal terminal settlement
+   * retires it with the operation. Caller owns the transaction and rollback. */
+  acceptAndCancelSourceInTransaction(input: AcceptSourceRequest, expectedVersion: number, cause: string, transactionDatabase: Database): OperationSnapshot {
+    if (transactionDatabase !== this.database || !this.database.inTransaction) throw new EffectAdmissionError("owner_conflict");
+    if (input.kind !== "cancellation" || !input.targetOperationId || input.parentSourceSeq === null) throw new EffectAdmissionError("invalid_transition");
+    const source = this.acceptSourceInTransaction(input, transactionDatabase);
+    const operation = this.operationRow(input.targetOperationId);
+    if (!operation || source.targetOperationId !== operation.operation_id || operation.chat_jid !== source.chatJid ||
+      !this.database.query("SELECT 1 FROM service_effect_s01_operation_sources WHERE operation_id=? AND chat_jid=? AND source_seq=?")
+        .get(operation.operation_id, source.chatJid, input.parentSourceSeq)) throw new EffectAdmissionError("owner_conflict");
+    const request: AcceptCancellationRequest = { effect: { ...input.effect, idempotencyKey: `cancel:${input.effect.idempotencyKey}`,
+      requestHash: "", operationId: operation.operation_id, sourceSeq: source.sourceSeq },
+      expectedVersion, sourceId: source.sourceId, sourceSeq: source.sourceSeq, cause, requestedAt: input.acceptedAt };
+    const sealedRequest = { ...request, effect: { ...request.effect, requestHash: hashCanonicalRequest(request as unknown as CanonicalJsonValue) } };
+    const prepared = this.prepareMutation("acceptCancellation", sealedRequest);
+    if (!prepared) throw new EffectAdmissionError("invalid_transition");
+    try {
+      const fault = this.fault("acceptCancellation", "before_effect");
+      if (!fault.ok || fault.injected) throw new EffectAdmissionError("storage_unavailable");
+      this.validateAcceptance();
+      const currentSource = this.sourceRow(source.chatJid, source.sourceSeq);
+      if (currentSource?.state === "pending") {
+        this.database.query("UPDATE service_effect_s01_sources SET state='claimed' WHERE chat_jid=? AND source_seq=? AND state='pending'")
+          .run(source.chatJid, source.sourceSeq);
+        this.database.query("INSERT INTO service_effect_s01_operation_sources(operation_id,chat_jid,source_seq) VALUES (?,?,?)")
+          .run(operation.operation_id, source.chatJid, source.sourceSeq);
+      } else if (!this.database.query("SELECT 1 FROM service_effect_s01_operation_sources WHERE operation_id=? AND chat_jid=? AND source_seq=?")
+        .get(operation.operation_id, source.chatJid, source.sourceSeq)) throw new EffectAdmissionError("owner_conflict");
+      const outcome = this.applyMutationWithinTransaction("acceptCancellation", prepared, value => this.applyCancellation(value as AcceptCancellationRequest));
+      if (!outcome.ok) throw new EffectAdmissionError(outcome.error._tag);
+      this.validateAcceptance();
+      return outcome.value as OperationSnapshot;
+    } catch (error) {
+      if (error instanceof EffectAdmissionError) throw error;
+      throw new EffectAdmissionError(error instanceof RollbackFault ? "storage_unavailable" : mutationError(error)._tag);
     }
   }
 
