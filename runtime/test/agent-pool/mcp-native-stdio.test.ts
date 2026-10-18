@@ -47,3 +47,38 @@ test('malformed frame seals buffered replies and further send admission', async 
     await expect(transport.send({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).rejects.toThrow('Native stdio is closed.');
   } finally { await transport.close(); }
 }, 10000);
+
+test('Native stdio checks ownership before spawning', async () => {
+  const denied = Error('spawn authority revoked');
+  let checks = 0;
+  const transport = createNativeStdio({ command: '/definitely-not-an-executable', assertStart() { checks++; throw denied; } });
+  const errors: Error[] = [];
+  transport.onError(error => errors.push(error));
+  await expect(transport.start()).rejects.toBe(denied);
+  expect(checks).toBe(1);
+  expect(errors).toEqual([]); // No spawn error: the process was never attempted.
+  await transport.close();
+});
+
+test('Native stdio rechecks authority before writing without sending denied bytes', async () => {
+  let allowed = true;
+  const denied = Error('send authority revoked');
+  const checked: unknown[] = [];
+  const transport = createNativeStdio({ command: process.execPath, args: ['--no-env-file', '-e', `let data='';process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>{data+=chunk;let i;while((i=data.indexOf('\\n'))>=0){const m=JSON.parse(data.slice(0,i));data=data.slice(i+1);process.stdout.write(JSON.stringify(m)+'\\n');}});`], assertSend(message) { checked.push(message); if (!allowed) throw denied; } });
+  const received: unknown[] = [];
+  let acknowledge!: () => void;
+  const response = new Promise<void>(resolve => acknowledge = resolve);
+  transport.onMessage(message => { received.push(message); acknowledge(); });
+  try {
+    await transport.start();
+    allowed = false;
+    const forbidden = { jsonrpc: '2.0' as const, id: 1, method: 'forbidden' };
+    await expect(transport.send(forbidden)).rejects.toBe(denied);
+    allowed = true;
+    const admitted = { jsonrpc: '2.0' as const, id: 2, method: 'tools/list' };
+    await transport.send(admitted);
+    await response;
+    expect(received).toEqual([admitted]); // Pipe order proves denied bytes did not precede this frame.
+    expect(checked).toEqual([forbidden, admitted]);
+  } finally { await transport.close(); }
+}, 10000);
