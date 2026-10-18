@@ -324,7 +324,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       const observer = source && sideObservers.get(source.sourceId);
       if (!observer) return;
       assert(); signal!.throwIfAborted(); runtime().assertCapturedSourceCurrent(captured.inputs);
-      observer(event as any);
+      // Observers never receive the provider's mutable accounting evidence.
+      observer(structuredClone(event) as any);
     },
     async prepareRequest(model, options, signal) {
       const scope = taskModelRequestScope(options?.signal);

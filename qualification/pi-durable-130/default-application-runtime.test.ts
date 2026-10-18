@@ -1658,6 +1658,24 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       expect(root.query("SELECT message_row_id FROM service_effect_s02_commits WHERE operation_id IN (SELECT operation_id FROM service_effect_s01_operations WHERE primary_source_seq=(SELECT source_seq FROM service_effect_s01_sources WHERE source_id=?))").get(sideSource.source_id)).toEqual({ message_row_id: null });
       expect(root.query("SELECT * FROM entries WHERE id <= ? ORDER BY id").all((historyBefore.at(-1) as { id: number }).id)).toEqual(historyBefore);
       expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
+      let mutationEvents = 0;
+      const mutationText: string[] = [];
+      const mutation = await pool.runSidePrompt("web:default", "mutating observer", { onEvent(event) {
+        mutationEvents++;
+        if (event.type === "done") { event.message.content = []; event.message.usage.cost.total = 999; }
+        if (event.type === "text_delta") event.delta = "MUTATED";
+      }, onTextDelta(delta) { mutationText.push(delta); } });
+      expect(mutation.status).toBe("success");
+      expect(mutation.result).toBe("factory synthetic reply");
+      expect(mutationText.join("")).toBe("factory synthetic reply");
+      const eventsBeforeFailure = mutationEvents;
+      let throwingCalls = 0;
+      const throwing = await pool.runSidePrompt("web:default", "throwing observer", { onEvent() { throwingCalls++; throw Error("private callback failure"); } });
+      expect(throwing.status).toBe("success");
+      expect(throwingCalls).toBe(1);
+      expect(mutationEvents).toBe(eventsBeforeFailure);
+      expect(root.query("SELECT SUM(t.api_equivalent_cost_microusd) AS amount FROM token_usage t JOIN budget_work w ON w.id=t.work_id WHERE w.execution_kind='side_prompt'").get()).toEqual({ amount: 30 });
+      expect(root.query("SELECT state FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id WHERE w.execution_kind='side_prompt'").all()).toEqual([{ state: "settled" }, { state: "settled" }, { state: "settled" }]);
       await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
       compactionPolicySpy?.mockRestore();
       for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();

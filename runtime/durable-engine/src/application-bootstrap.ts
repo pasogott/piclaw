@@ -425,11 +425,20 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           acceptedAt: r.now(), createWakeIntent: false }), sealed({ effect: { ...effect(`claim:${sourceId}`), provenanceRef: "application:side-prompt" },
           chatJid, expectedFrontier: busy?.consumed_through_source_seq ?? 0, newOperationId: `operation:${sourceId}`, claimedAt: r.now() }), root);
       }).immediate();
+      let observerFailed = false;
       const unobserve = config.observeSidePrompt?.(sourceId, event => {
         assertLive();
-        options.onEvent?.(event);
-        if (event.type === "text_delta") options.onTextDelta?.(event.delta);
-        if (event.type === "thinking_delta") options.onThinkingDelta?.(event.delta);
+        if (observerFailed) return;
+        try {
+          const text = event.type === "text_delta" ? event.delta : undefined;
+          const thinking = event.type === "thinking_delta" ? event.delta : undefined;
+          options.onEvent?.(event);
+          if (text !== undefined) options.onTextDelta?.(text);
+          if (thinking !== undefined) options.onThinkingDelta?.(thinking);
+        } catch {
+          // Callback failures detach this observer, not provider accounting.
+          observerFailed = true;
+        }
       });
       try {
         return await continueSidePrompt({ incarnation: r.incarnation, conversationId: scope.conversationId as ConversationId,
