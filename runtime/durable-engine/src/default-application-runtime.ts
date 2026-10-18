@@ -20,6 +20,7 @@ import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { applicationOwnership, createApplicationBootstrapBundle } from "./application-bootstrap.js";
 import { createHostModels } from "./host-models.js";
 import { createHostMcp } from "./host-mcp.js";
+import { createHostFetch } from "./host-fetch.js";
 import { taskModelRequestScope, withTaskModelRequestScope } from "./task-model-boundary-shim.js";
 import { createHostBuiltinTools } from "./host-builtins.js";
 import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, qualifyInstalledEditableTable, qualifyInstalledOfficeViewer, qualifyInstalledDrawio, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
@@ -211,7 +212,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || (Array.isArray(tools) &&
     ((tools.length === defaultToolNames.length && defaultToolNames.every((name, index) => tools[index] === name)) ||
       (tools.length === previousDefault.length && previousDefault.every((name, index) => tools[index] === name)) ||
-      (!!mcp?.tools.length && tools.length === baseApplicationToolNames.length && baseApplicationToolNames.every((name, index) => tools[index] === name))));
+      (tools.length === baseApplicationToolNames.length && baseApplicationToolNames.every((name, index) => tools[index] === name))));
   let drawioHost: ReturnType<DrawioNativeExports["bindDrawioVendorHost"]> | undefined;
   let sandbox: CodemodeSandbox | undefined;
   let sandboxClose: Promise<void> | undefined;
@@ -220,7 +221,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   try {
   mcp = await createHostMcp({ assertCurrent() { assert(); lifetime.signal.throwIfAborted(); },
     captureSource: api => captureSource({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId }) });
-  const applicationToolNames = [...baseApplicationToolNames, ...mcp.tools.map(tool => tool.name)];
+  const applicationToolNames = [...baseApplicationToolNames, "fetch", ...mcp.tools.map(tool => tool.name)];
   if (drawio) {
     drawioHost = drawio.addon.bindDrawioVendorHost({
       assertCurrent() { assert(); lifetime.signal.throwIfAborted(); drawio.assertCurrent(); },
@@ -312,6 +313,10 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     if (readAccessConfig().mode !== "single-user") throw Error("Host tool permission denied");
   } }, signal: lifetime.signal, shellPath: () => settings.getShellPath(), names: defaultToolNames });
   const builtins = [...tools];
+  tools.push(createHostFetch({ async captureSource(api) {
+    const source = await captureSource({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId });
+    return () => { source(); if (readAccessConfig().mode !== "single-user") throw Error("Host fetch permission denied"); };
+  } }));
   tools.push(...mcp.tools);
   if (plan) tools.push(createHostPlanTool(plan.definition as Parameters<typeof createHostPlanTool>[0], { root, assertOwner: () => {
     assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent();

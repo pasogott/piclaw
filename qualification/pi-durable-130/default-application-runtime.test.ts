@@ -1685,6 +1685,10 @@ for (const scenario of ["public-shim-compaction", "source-filter-subset", "publi
   // Normal accepted input through the actual default factory, not a standalone
   // tool harness: the synthetic provider requests existing host builtin calls.
   writeFileSync(join(workspace, "factory-tool-input.txt"), "before");
+  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: RequestInfo | URL) => {
+    expect(String(input)).toBe("https://codemode-fetch.invalid/data");
+    return Response.json({ value: "FETCH_USEFUL_SENTINEL" });
+  }, { preconnect() {} }));
   toolSequence = [
     { name: "read", arguments: { path: "factory-tool-input.txt" } },
     { name: "edit", arguments: { path: "factory-tool-input.txt", edits: [{ oldText: "before", newText: "after" }] } },
@@ -1693,7 +1697,7 @@ for (const scenario of ["public-shim-compaction", "source-filter-subset", "publi
     { name: "ls", arguments: { path: "." } },
     { name: "grep", arguments: { pattern: "after", path: "factory-tool-input.txt" } },
     { name: "bash", arguments: { command: "printf factory-tool-bash" } },
-    { name: "codemode", arguments: { code: 'console.log(await tools.read({path:"factory-tool-input.txt"})); console.log("CAPABILITIES", typeof process, typeof fetch, typeof models);' } },
+    { name: "codemode", arguments: { code: `await tools.write({path:"codemode-useful.txt",content:"before"}); await tools.edit({path:"codemode-useful.txt",edits:[{oldText:"before",newText:"after"}]}); console.log(await tools.read({path:"codemode-useful.txt"})); console.log(await tools.find({pattern:"codemode-useful.txt"})); console.log(await tools.grep({pattern:"after",path:"codemode-useful.txt"})); const response = await tools.fetch({url:"https://codemode-fetch.invalid/data"}); console.log(JSON.parse(response.body).value); console.log("CAPABILITIES",typeof process,typeof fetch,typeof models);` } },
   ];
   const toolInput = { ...message, id: "factory-tool-input", content: "Run the synthetic host tool sequence" };
   const toolRow = root.transaction(() => {
@@ -1703,6 +1707,8 @@ for (const scenario of ["public-shim-compaction", "source-filter-subset", "publi
     return rowId;
   })();
   expect(await rebound.dispatchAcceptedInput!(toolInput.chat_jid, toolInput.id, toolRow!)!()).toBe("settled");
+  fetchSpy.mockRestore();
+  expect(readFileSync(join(workspace, "codemode-useful.txt"), "utf8")).toBe("after");
   expect(toolSequence).toEqual([]); toolSequence = undefined;
   expect(readFileSync(join(workspace, "factory-tool-input.txt"), "utf8")).toBe("after");
   expect(readFileSync(join(workspace, "factory-tool-output.txt"), "utf8")).toBe("written by host tool");
@@ -1718,6 +1724,7 @@ for (const scenario of ["public-shim-compaction", "source-filter-subset", "publi
     if (name === "codemode") {
       expect(JSON.stringify(result!.content)).toContain("after");
       expect(JSON.stringify(result!.content)).toContain("CAPABILITIES undefined undefined undefined");
+      expect(JSON.stringify(result!.content)).toContain("FETCH_USEFUL_SENTINEL");
     }
     if (name === "grep") expect(JSON.stringify(result!.content)).toContain("factory-tool-input.txt:1: after");
     if (name === "find" || name === "ls") expect(JSON.stringify(result!.content)).toContain("factory-tool-output.txt");
@@ -1746,7 +1753,7 @@ for (const scenario of ["public-shim-compaction", "source-filter-subset", "publi
   } finally { fault.mockRestore(); }
   backend.stop(); await backend.close();
   const upgraded = await inspectStored(false);
-  for (const [id, state] of seeded) expect(upgraded.get(id)).toEqual({ ...(state as object), tools: ["read", "bash", "edit", "write", "find", "ls", "grep", "codemode"] });
+  for (const [id, state] of seeded) expect(upgraded.get(id)).toEqual({ ...(state as object), tools: ["read", "bash", "edit", "write", "find", "ls", "grep", "fetch", "codemode"] });
   backend = await createDefaultApplicationRuntime(owner, async () => services);
   const recoveredCreate = backend.sessionOptions.getDurableSession!(uncertainChat)!;
   expect(recoveredCreate).toBeDefined();

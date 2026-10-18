@@ -59,6 +59,7 @@
     "cutover.test.ts",
     "cutover-runtime.test.ts",
     "host-grep.test.ts",
+    "host-fetch.test.ts",
     "task-model-boundary.test.ts",
     "task-model-compaction-recovery.test.ts"
   ]
