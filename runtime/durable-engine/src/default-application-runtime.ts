@@ -19,6 +19,7 @@ import { installTerminalSettlementCompositionSchema } from "../../src/service-ef
 import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { applicationOwnership, createApplicationBootstrapBundle } from "./application-bootstrap.js";
 import { createHostModels } from "./host-models.js";
+import { createHostMcp } from "./host-mcp.js";
 import { createHostBuiltinTools } from "./host-builtins.js";
 import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, qualifyInstalledEditableTable, qualifyInstalledOfficeViewer, qualifyInstalledDrawio, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
 import { createHostDelegateTool } from "./host-delegate-tool.js";
@@ -188,18 +189,37 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   let widgetPublisher: WidgetPublisher | undefined;
   try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan, delegate, codeReview, editableTable, officeViewer, drawio); }
   finally { catalog.runtime.invalidate("Application extension preflight ended"); }
-  const applicationToolNames: readonly string[] = [...defaultToolNames, "codemode", ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : []), ...(drawio ? ["open_drawio_editor"] : [])];
-  const previousDefault = applicationToolNames.filter(name => name !== "codemode");
+  let mcp: Awaited<ReturnType<typeof createHostMcp>> | undefined;
+  let captureRuntime: HostConversationRuntime | undefined;
+  const lifetime = new AbortController();
+  const runtime = () => {
+    assert(); lifetime.signal.throwIfAborted();
+    if (!captureRuntime) throw Error("Host capture runtime unavailable");
+    return captureRuntime;
+  };
+  const captureSource = async (call: { conversationId: ConversationId; taskId: import("@earendil-works/pi-durable").TaskId; toolCallId: string }) => {
+    const captured = await runtime().captureToolSource(call.conversationId, call.taskId, call.toolCallId);
+    const authority = createHostOperationAuthority(root, captured, () => {
+      assert(); lifetime.signal.throwIfAborted(); runtime().assertCapturedSourceCurrent(captured.inputs);
+    }, true);
+    return () => { authority.assertCurrent(); if (captured.delegateModel) assertDelegateModel(captured.delegateModel); };
+  };
+  let assertDelegateModel: (model: { provider: string; modelId: string }) => void = () => { throw Error("Delegate unavailable"); };
+  const baseApplicationToolNames: readonly string[] = [...defaultToolNames, "codemode", ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : []), ...(drawio ? ["open_drawio_editor"] : [])];
+  const previousDefault = baseApplicationToolNames.filter(name => name !== "codemode");
   const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || (Array.isArray(tools) &&
     ((tools.length === defaultToolNames.length && defaultToolNames.every((name, index) => tools[index] === name)) ||
-      (tools.length === previousDefault.length && previousDefault.every((name, index) => tools[index] === name))));
-  const lifetime = new AbortController();
+      (tools.length === previousDefault.length && previousDefault.every((name, index) => tools[index] === name)) ||
+      (!!mcp?.tools.length && tools.length === baseApplicationToolNames.length && baseApplicationToolNames.every((name, index) => tools[index] === name))));
   let drawioHost: ReturnType<DrawioNativeExports["bindDrawioVendorHost"]> | undefined;
   let sandbox: CodemodeSandbox | undefined;
   let sandboxClose: Promise<void> | undefined;
   const closeSandbox = () => sandboxClose ??= sandbox?.close() ?? Promise.resolve();
   const releaseReviewSource = codeReview?.addon.setReviewDatabaseSource({ database: root, assertOwner: assert });
   try {
+  mcp = await createHostMcp({ assertCurrent() { assert(); lifetime.signal.throwIfAborted(); },
+    captureSource: api => captureSource({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId }) });
+  const applicationToolNames = [...baseApplicationToolNames, ...mcp.tools.map(tool => tool.name)];
   if (drawio) {
     drawioHost = drawio.addon.bindDrawioVendorHost({
       assertCurrent() { assert(); lifetime.signal.throwIfAborted(); drawio.assertCurrent(); },
@@ -256,7 +276,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   }
   // Automatic selection inherits the parent; explicit exact models use the same
   // installed approval/classification/exclusion policy, without a parent-tier cap.
-  const assertDelegateModel = (model: { provider: string; modelId: string }) => {
+  assertDelegateModel = (model: { provider: string; modelId: string }) => {
     if (!delegate) throw Error("Native Delegate unavailable");
     delegate.assertCurrent(); check({ provider: model.provider, id: model.modelId }, lifetime.signal);
     if (root.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native Delegate budget admission unavailable");
@@ -270,12 +290,6 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     async authorize(model, _kind, signal) { check(model, signal); }, assertCurrent(model, _kind, signal) { check(model, signal); } });
   const registry = createRegistry();
   // Existing host SDK definitions, never durable's independent coding tools.
-  let captureRuntime: HostConversationRuntime | undefined;
-  const runtime = () => {
-    assert(); lifetime.signal.throwIfAborted();
-    if (!captureRuntime) throw Error("Host capture runtime unavailable");
-    return captureRuntime;
-  };
   registry.install(defineExtension({ name: "app.host-scheduled-source", hooks: [{ task: "pi.generation", handlers: {
     async beforeRequest(_request: Parameters<NonNullable<import("@earendil-works/pi-durable").GenerationHooks["beforeRequest"]>>[0], api: Parameters<NonNullable<import("@earendil-works/pi-durable").GenerationHooks["beforeRequest"]>>[1], hookContext: Parameters<NonNullable<import("@earendil-works/pi-durable").GenerationHooks["beforeRequest"]>>[2]) {
       let guard: () => void;
@@ -309,6 +323,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     if (readAccessConfig().mode !== "single-user") throw Error("Host tool permission denied");
   } }, signal: lifetime.signal, shellPath: () => settings.getShellPath(), names: defaultToolNames });
   const builtins = [...tools];
+  tools.push(...mcp.tools);
   if (plan) tools.push(createHostPlanTool(plan.definition as Parameters<typeof createHostPlanTool>[0], { root, assertOwner: () => {
     assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent();
   }, runtime }));
@@ -496,16 +511,18 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     stop() {
       widgetPublisher = undefined; workspaceFileOpener = undefined; lifetime.abort();
       // close seals routing synchronously; final close below joins owned cleanup.
+      void mcp?.close().catch(() => {});
       void drawioHost?.close().catch(() => {});
       void closeSandbox().catch(() => {});
       bundle.stop();
     }, async close() {
       widgetPublisher = undefined; workspaceFileOpener = undefined;
-      lifetime.abort(); releaseReviewSource?.(); await closeSandbox(); await drawioHost?.close(); await bundle.close();
+      lifetime.abort(); releaseReviewSource?.(); await mcp?.close(); await closeSandbox(); await drawioHost?.close(); await bundle.close();
     } };
   } catch (error) {
     lifetime.abort(); releaseReviewSource?.();
     const cleanupFailures: unknown[] = [];
+    try { await mcp?.close(); } catch (cleanup) { cleanupFailures.push(cleanup); }
     try { await closeSandbox(); } catch (cleanup) { cleanupFailures.push(cleanup); }
     try { await drawioHost?.close(); } catch (cleanup) { cleanupFailures.push(cleanup); }
     if (cleanupFailures.length) throw new RuntimeStartupCleanupError([error, ...cleanupFailures], "Native tool preparation cleanup uncertain");

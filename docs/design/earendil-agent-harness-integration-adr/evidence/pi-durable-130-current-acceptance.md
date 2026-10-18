@@ -156,3 +156,24 @@ Source/manifest byte handling, legacy 1.2 projection and importer writes are
 unchanged. No services, live state, network, pins, commit or push were touched;
 parent retains integration/commit ownership. HC-024 remains unqualified for
 production as stated above.
+
+## Native MCP stdio tools — 18 October 2026
+
+The source-default factory now discovers configured stdio MCP tools with the public
+`McpClient` and installs them for native codemode calls. It uses the existing bridge
+snapshot/lease and constrained transport; it never loads the legacy MCP session
+extension. Configuration must explicitly select Native, permit codemode, and use
+literal stdio fields. Unsupported configuration fails before process startup.
+Source ownership, configuration revision and cancellation are checked again at the
+actual stdin write. Closing joins client and process-group cleanup; uncertain
+cleanup retains the bridge lease.
+
+Targeted evidence: `default-application-runtime.test.ts` scenarios
+`native-mcp-codemode`, `native-mcp-codemode-cancel`, `native-mcp-http-deny` passed.
+These exercise a real fixture process, nested result delivery, cancelled call/store
+suppression, process exit, and HTTP rejection before model construction. Six native
+transport regression tests passed (39 assertions); engine, qualification and runtime
+typechecks passed. Independent bounded review returned READY for this stdio slice.
+No full suite or live MCP server was run. HTTP, authentication, resources, prompts,
+live configuration apply, general MCP parity, capped accounting and concurrency
+acceptance are incomplete. Migration and activation have not occurred.

@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { JsonRpcMessage, McpTransport } from '@earendil-works/pi-mcp';
 
 /** Host-owned stdio: no ambient credentials, and cleanup awaits pipes plus process-group exit. */
-export function createNativeStdio(options: { command: string; args?: string[]; cwd?: string; env?: Record<string, string> }): McpTransport {
+export function createNativeStdio(options: { command: string; args?: string[]; cwd?: string; env?: Record<string, string>; assertStart?: () => void; assertSend?: (message: JsonRpcMessage) => void }): McpTransport {
   if (process.platform === 'win32') throw Error('Experimental Native stdio requires POSIX process-group cleanup.');
   const messages = new Set<(message: JsonRpcMessage) => void>();
   const errors = new Set<(error: Error) => void>();
@@ -33,6 +33,7 @@ export function createNativeStdio(options: { command: string; args?: string[]; c
     async start() {
       if (child || closePromise) throw Error('Native stdio transport cannot restart.');
       ended = new Promise<void>(resolve => resolveEnded = resolve);
+      options.assertStart?.();
       child = spawn(options.command, options.args ?? [], { cwd: options.cwd, env, detached: true, stdio: 'pipe' });
       child.once('close', () => { resolveEnded(); events.emitClose(); });
       child.on('error', error => { pipeFailures.push(error); events.emitError(error); });
@@ -57,7 +58,10 @@ export function createNativeStdio(options: { command: string; args?: string[]; c
       if (!child || closePromise || child.exitCode !== null || child.signalCode !== null) throw Error('Native stdio is closed.');
       const data = JSON.stringify(message) + '\n';
       if (Buffer.byteLength(data) > 1024 * 1024) throw Error('Native MCP message exceeds 1 MiB.');
-      await new Promise<void>((resolve, reject) => child!.stdin.write(data, error => error ? reject(error) : resolve()));
+      await new Promise<void>((resolve, reject) => {
+        options.assertSend?.(message);
+        child!.stdin.write(data, error => error ? reject(error) : resolve());
+      });
     },
     close() {
       if (!closePromise) closePromise = (async () => {
