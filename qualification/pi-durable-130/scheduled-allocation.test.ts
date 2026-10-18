@@ -319,6 +319,24 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
     const interruptedBinding = await bindings.findSource(chat, work.getAcceptedSource(chat, interrupted.source_id)!.sourceSeq);
     expect(await activeRuntime.settle(interruptedBinding!)).not.toBeNull();
     }
+    const firstRetryCalls = fixture.host.modelCalls;
+    const firstRetries = await Promise.allSettled([
+      bundle.dispatchSidePrompt(chat, "same first retry", { budgetWorkId: "simultaneous-side-retry" }),
+      bundle.dispatchSidePrompt(chat, "same first retry", { budgetWorkId: "simultaneous-side-retry" }),
+    ]);
+    expect(firstRetries.every(result => result.status === "fulfilled")).toBe(true);
+    expect((firstRetries[0] as PromiseFulfilledResult<unknown>).value).toEqual((firstRetries[1] as PromiseFulfilledResult<unknown>).value);
+    expect(fixture.host.modelCalls).toBe(firstRetryCalls + 1);
+    const stableResult = await bundle.dispatchSidePrompt(chat, "same first retry", { budgetWorkId: "simultaneous-side-retry" });
+    expect(stableResult.status).toBe("success");
+    expect(fixture.host.modelCalls).toBe(firstRetryCalls + 1);
+    const { sidePromptSourceId } = await import("../../runtime/durable-engine/src/host-request-accounting.js");
+    const resultRef = `side-result:${sidePromptSourceId(chat, "simultaneous-side-retry")}`;
+    const savedResult = payloads.get(resultRef)!;
+    payloads.set(resultRef, JSON.stringify({ status: "success", result: 42 }));
+    await expect(bundle.dispatchSidePrompt(chat, "same first retry", { budgetWorkId: "simultaneous-side-retry" })).rejects.toThrow("Invalid side prompt stored result");
+    payloads.set(resultRef, savedResult);
+    expect(fixture.host.modelCalls).toBe(firstRetryCalls + 1);
     acceptMainDuringPayload = true;
     const sourceCount = db.query("SELECT count(*) AS n FROM service_effect_s01_sources WHERE chat_jid=?").get(chat) as { n: number };
     await expect(bundle.dispatchSidePrompt(chat, "races main input")).rejects.toThrow("owner_conflict");

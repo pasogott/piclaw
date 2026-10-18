@@ -224,5 +224,4 @@ export interface AgentPoolOptions {
   credentialStore?: PiclawCredentialStore;
   modelRuntime?: ModelRuntime;
   modelRegistry?: import("@earendil-works/pi-coding-agent").ModelRegistry;
-  sideStreamSimple?: ModelRuntime["streamSimple"];
 }

@@ -11,7 +11,7 @@ import {recordSessionEventUsage} from '../../src/agent-pool/usage.js';
 import {modelRequestAccounting} from '../../src/budget/model-request-accounting.js';
 import {getBudgetRequest} from '../../src/db/budget-request-reservations.js';
 import {installSharedRequestBoundary} from '../../src/budget/install-shared-request-boundary.js';
-import {runSidePrompt} from '../../src/agent-pool/side-prompt-runner.js';
+import {runSidePrompt} from '../helpers/legacy-side-prompt-runner.js';
 import type {ModelRuntime} from '@earendil-works/pi-coding-agent';
 isolateBudgetTestDatabase();
 const model={id:'fixture',provider:'fixture',api:'openai-completions' as const,name:'fixture',baseUrl:'https://synthetic.invalid',reasoning:false,input:['text' as const],contextWindow:10,maxTokens:1,cost:{input:1,output:0,cacheRead:2,cacheWrite:3}};

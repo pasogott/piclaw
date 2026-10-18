@@ -48,7 +48,6 @@ import {
   type SidePromptOptions,
   type SidePromptResult,
 } from "./agent-pool/contracts.js";
-import { runSidePrompt as runSidePromptInternal } from "./agent-pool/side-prompt-runner.js";
 import { runAgentPrompt } from "./agent-pool/run-agent-orchestrator.js";
 import { runWithProtectedRecoveryHandoff } from "./agent-pool/protected-recovery-handoff.js";
 import { clearCompactionFailureBackoff, resetCompactionSuccessCount } from "./agent-pool/compaction.js";
@@ -329,7 +328,6 @@ export class AgentPool {
   private sessionManager: AgentPoolServices["sessionManager"];
   private branchManager: AgentPoolServices["branchManager"];
   private runtimeFacade: AgentPoolServices["runtimeFacade"];
-  private sideStreamSimple?: NonNullable<AgentPoolOptions["sideStreamSimple"]>;
   private readonly sidePromptDispatch?: AgentPoolOptions["dispatchSidePrompt"];
   private readonly config = getSessionPoolConfig();
 
@@ -381,7 +379,6 @@ export class AgentPool {
       onWarn: (message, details) => log.warn(message, details),
       onError: (message, details) => log.error(message, details),
     }));
-    this.sideStreamSimple = options.sideStreamSimple;
     setSshToolHandlers({
       get: (chatJid) => this.getSshConfig(chatJid),
       isActive: (chatJid) => hasLiveChatSshConnection(chatJid),
@@ -584,36 +581,9 @@ export class AgentPool {
     if (readAccessConfig().mode !== "single-user") {
       return { status: "error", result: null, thinking: null, error: "Side prompts are unavailable in multi-user mode.", model: null };
     }
-    if (this.durableApplication) {
-      if (!this.sidePromptDispatch) return { status: "error", result: null, thinking: null, model: null, error: "Durable side prompt dispatcher unavailable" };
-      try { return await this.sidePromptDispatch(chatJid, prompt, options); }
-      catch { return { status: "error", result: null, thinking: null, model: null, error: "Native side prompt unavailable or failed" }; }
-    }
-    const parent = getBudgetWorkContext();
-    const budgetWorkId = options.budgetWorkId?.trim() || createUuid("side-prompt");
-    const parentWorkId = options.budgetParentWorkId ?? parent?.workId ?? null;
-    ensureBudgetWork({ id: budgetWorkId, chatJid, executionKind: "side_prompt", parentWorkId });
-    const mainSession = await this.getOrCreate(chatJid);
-    const admission = await admitBudgetBoundary({
-      workId: budgetWorkId,
-      boundary: "side_prompt",
-      prompt,
-      modelRuntime: this.modelRuntime,
-      providerId: mainSession.model?.provider,
-    });
-    if (admission.message) {
-      return { status: "error", result: null, thinking: null, error: admission.message, model: mainSession.model ? `${mainSession.model.provider}/${mainSession.model.id}` : null };
-    }
-    const result = await withBudgetWorkContext({ workId: budgetWorkId, chatJid, kind: "side_prompt", parentWorkId }, () => runSidePromptInternal(chatJid, prompt, options, {
-      getOrCreate: (nextChatJid) => this.getOrCreate(nextChatJid),
-      getOrCreateSideRuntime: (nextChatJid) => this.getOrCreateSideRuntime(nextChatJid),
-      syncSideSessionFromMain: (mainSession, sideRuntime) => this.syncSideSessionFromMain(mainSession, sideRuntime),
-      modelRuntime: this.modelRuntime,
-      sideStreamSimple: this.sideStreamSimple,
-      onWarn: (message, details) => log.warn(message, details),
-    }));
-    if (getBudgetWork(budgetWorkId)?.status === "active") setBudgetWorkStatus(budgetWorkId, "completed");
-    return result;
+    if (!this.sidePromptDispatch) return { status: "error", result: null, thinking: null, model: null, error: "Durable side prompt dispatcher unavailable" };
+    try { return await this.sidePromptDispatch(chatJid, prompt, options); }
+    catch { return { status: "error", result: null, thinking: null, model: null, error: "Native side prompt unavailable or failed" }; }
   }
 
   async probeCompactionModel(modelLabel: string) {
@@ -974,14 +944,6 @@ export class AgentPool {
 
   private async getOrCreate(chatJid: string): Promise<AgentSession> {
     return (await this.getOrCreateRuntime(chatJid)).session;
-  }
-
-  private async getOrCreateSideRuntime(chatJid: string): Promise<AgentSessionRuntime> {
-    return this.sessionManager.getOrCreateSide(chatJid);
-  }
-
-  private async syncSideSessionFromMain(mainSession: AgentSession, sideRuntime: AgentSessionRuntime): Promise<void> {
-    return this.sessionManager.syncSideSessionFromMain(mainSession, sideRuntime);
   }
 
   private getMemoryPressureMode(): { active: boolean; mainIdleTtlMs: number; mainSessionMaxSizeOverride: number | undefined } {
