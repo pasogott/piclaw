@@ -257,12 +257,6 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     if (physical?.provider !== model.provider || physical.id !== model.id) throw Error("Host model no longer available");
   };
   const toolUpgrades: number[] = [];
-  const sourceUpgrades: number[] = [];
-  const sourceExtensionName = "app.host-scheduled-source";
-  const needsSourceExtension = (extensions: unknown) => Array.isArray(extensions)
-    ? !extensions.includes(sourceExtensionName)
-    : !!extensions && typeof extensions === "object" && Array.isArray((extensions as { remove?: unknown }).remove)
-      && (extensions as { remove: unknown[] }).remove.includes(sourceExtensionName);
   // Validate stored choices without opening/writing SDK documents or bundle ports.
   if (root.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='documents'").get()) {
     const manifest = root.query(`SELECT id FROM documents WHERE kind='"app.application-conversations"' AND owner_id=1 AND retired_at IS NULL`).get() as { id: number };
@@ -277,12 +271,10 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       if (Array.isArray(stored.tools) && stored.tools.some(name => !applicationToolNames.includes(name)))
         throw Error("Persisted host tool not available");
       // Only the recognised previous factory default converges. Explicit custom
-      // subsets/filters, modelTools and instructions remain intact. Explicit
-      // extension selections retain their entries plus required source policy.
+      // subsets/filters, modelTools, instructions and extensions remain intact.
       if (isFactoryDefault(stored.tools)) toolUpgrades.push(doc.owner_id);
-      if (needsSourceExtension(stored.extensions)) sourceUpgrades.push(doc.owner_id);
     }
-    if (toolUpgrades.length || sourceUpgrades.length) { assert(); assertToolUpgradeIdle(root); }
+    if (toolUpgrades.length) { assert(); assertToolUpgradeIdle(root); }
   }
   // Automatic selection inherits the parent; explicit exact models use the same
   // installed approval/classification/exclusion policy, without a parent-tier cap.
@@ -293,39 +285,26 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     const candidate = { provider: model.provider, id: model.modelId, fullId: `${model.provider}/${model.modelId}` };
     if (!delegate.buildModelCandidates([candidate], config).some(entry => entry.id === candidate.fullId)) throw Error("Native Delegate model not approved");
   };
-  const requestGuards = new WeakMap<AbortSignal, () => void>();
   const models = createHostModels(host.modelRuntime, available.map(model => ({ provider: model.provider, id: model.id })), { signal: lifetime.signal,
-    captureSourceGuard(signal) {
-      const guard = signal && requestGuards.get(signal);
-      if (guard) return guard;
+    async captureSourceGuard(signal) {
       const scope = taskModelRequestScope(signal);
       if (!scope) throw Error("Native model request source unavailable");
+      if (scope.taskKind === "pi.generation") {
+        const captured = await runtime().captureRunSource(scope.conversationId, scope.taskId);
+        return () => {
+          signal!.throwIfAborted();
+          runtime().assertCapturedSourceCurrent(captured.inputs);
+          if (captured.delegateModel) assertDelegateModel(captured.delegateModel);
+        };
+      }
       const check = () => runtime().assertMaintenanceRequest(scope);
       check();
       return check;
     },
     async authorize(model, _kind, signal) { check(model, signal); }, assertCurrent(model, _kind, signal) { check(model, signal); } });
   const registry = createRegistry();
-  // Existing host SDK definitions, never durable's independent coding tools.
-  const sourceExtension = defineExtension({ name: sourceExtensionName, hooks: [{ task: "pi.generation", handlers: {
-    async beforeRequest(_request: Parameters<NonNullable<import("@earendil-works/pi-durable").GenerationHooks["beforeRequest"]>>[0], api: Parameters<NonNullable<import("@earendil-works/pi-durable").GenerationHooks["beforeRequest"]>>[1], hookContext: Parameters<NonNullable<import("@earendil-works/pi-durable").GenerationHooks["beforeRequest"]>>[2]) {
-      let guard: () => void;
-      try {
-        const captured = await runtime().captureRunSource(api.conversationId, api.taskId);
-        guard = () => {
-          runtime().assertCapturedSourceCurrent(captured.inputs);
-          if (captured.delegateModel) assertDelegateModel(captured.delegateModel);
-        };
-      } catch (error) {
-        // Deny this request through the model result, not an infrastructure hook fault
-        // or a permanent abort of the shared model lifetime.
-        guard = () => { throw error; };
-      }
-      if (!hookContext.abortSignal) throw Error("Scheduled request signal unavailable");
-      requestGuards.set(hookContext.abortSignal, guard);
-    },
-  } }] });
-  registry.install(sourceExtension);
+  // Preserve old persisted extension names without depending on their hook selection.
+  registry.install(defineExtension({ name: "app.host-scheduled-source" }));
   const tools = createHostBuiltinTools({ cwd: WORKSPACE_DIR,
     captureSourceGuard: captureSource,
     authority: { assertAllowed() {
@@ -378,7 +357,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         assertDelegateModel(model);
         const physical = host.modelRuntime.getPhysicalModel(model.provider, model.modelId);
         return physical?.provider === model.provider && physical.id === model.modelId && physical.input?.includes("image") === true;
-      }, readFiles: createHostDelegateFileReader(WORKSPACE_DIR), readonlyTools: readers, readonlyExtensions: [readerExtension], standardTools: builtins, standardExtensions: [standardExtension], sourceExtension,
+      }, readFiles: createHostDelegateFileReader(WORKSPACE_DIR), readonlyTools: readers, readonlyExtensions: [readerExtension], standardTools: builtins, standardExtensions: [standardExtension],
     }));
   }
   sandbox = new CodemodeSandbox({ memoryLimitBytes: 128 * 1024 * 1024 });
@@ -434,7 +413,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       await app.commit(async tx => { const doc = await tx.doc(ApplicationConversations, app.id); Object.assign(doc, mapping); }, context);
     }
     validateApplicationMapping(root, mapping);
-    if (toolUpgrades.length || sourceUpgrades.length) {
+    if (toolUpgrades.length) {
       // Same-file BEGIN IMMEDIATE fences host admissions for the whole public
       // commit. Repeat global SDK/host preflight under that lock before ANY
       // configuration, not one conversation at a time after partial writes.
@@ -446,26 +425,6 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         }
         assert(); assertToolUpgradeIdle(root);
         for (const id of toolUpgrades) await configure(tx, id as ConversationId, { tools });
-        for (const id of sourceUpgrades) {
-          const agent = await tx.doc(AgentDoc, id as ConversationId);
-          if (Array.isArray(agent.extensions)) {
-            const installed = registry.snapshot().installed();
-            const extensions = agent.extensions.map(name => {
-              const extension = installed.find(extension => extension.name === name);
-              if (!extension) throw Error("Persisted extension unavailable");
-              return extension;
-            });
-            if (!agent.extensions.includes(sourceExtensionName)) extensions.push(sourceExtension);
-            await configure(tx, id as ConversationId, { extensions });
-          } else if (agent.extensions && needsSourceExtension(agent.extensions)) {
-            const installed = registry.snapshot().installed();
-            const resolve = (name: string) => { const extension = installed.find(extension => extension.name === name); if (!extension) throw Error("Persisted extension unavailable"); return extension; };
-            await configure(tx, id as ConversationId, { extensions: {
-              add: [...new Set([...(agent.extensions.add ?? []), sourceExtensionName])].map(resolve),
-              remove: (agent.extensions.remove ?? []).filter(name => name !== sourceExtensionName).map(resolve),
-            } });
-          }
-        }
         assert(); assertToolUpgradeIdle(root);
       }, context));
     }

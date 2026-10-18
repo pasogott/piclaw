@@ -16,7 +16,7 @@ type HostPort = Pick<ModelRuntime, "getPhysicalModel" | "stream" | "streamSimple
 type DeferredOperation = "fetchDeferred" | "cancelDeferred";
 export interface HostModelPolicy {
   /** Invocation-local source fence retained through asynchronous credential resolution. */
-  captureSourceGuard?(signal: AbortSignal | undefined): () => void;
+  captureSourceGuard?(signal: AbortSignal | undefined): (() => void) | Promise<() => void>;
   /** Includes host model approval and budget admission; never auth/login approval. */
   authorize(ref: ModelRef, kind: Operation, signal: AbortSignal): Promise<void>;
   /** Synchronous approval/budget-generation check after host auth has resolved. */
@@ -234,7 +234,7 @@ export function createHostModels(
         }
         const hasImages = context.messages.some(message =>
           Array.isArray(message.content) && message.content.some(block => block.type === "image"));
-        const assertSource = policy.captureSourceGuard?.(options?.signal) ?? (() => {});
+        const assertSource = await policy.captureSourceGuard?.(options?.signal) ?? (() => {});
         assertSource();
         const ref = { provider: model.provider, id: model.id };
         const listed = catalog.find((m) => (m.type ?? "chat") === "chat" && m.provider === ref.provider && m.id === ref.id);

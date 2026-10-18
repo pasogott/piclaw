@@ -1659,7 +1659,7 @@ for (const scenario of ["public-shim-compaction", "source-filter-subset", "publi
     expect(backend.sessionOptions.getDurableSession!(newcomer)).toMatchObject({ sessionId: newPort.sessionId, branchId: newPort.branchId });
     backend.stop(); await backend.close();
     const preserved = await inspectStored(false);
-    for (const [id, state] of seeded) expect(preserved.get(id)).toEqual({ ...(state as object), extensions: sourceFilter ? { add: ["app.host-builtins", "app.host-scheduled-source"], remove: [] } : ["app.host-builtins", "app.host-scheduled-source"] }); // Retain explicit selection plus required source policy.
+    for (const [id, state] of seeded) expect(preserved.get(id)).toEqual(state); // Source authority no longer changes explicit extension selections.
     expect(root.query("SELECT * FROM entries ORDER BY id").all()).toEqual(historyBeforeUpgrade);
     expect(root.query(`SELECT * FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE kind='"app.application-identity"') ORDER BY document_id, seq`).all()).toEqual(identitiesBeforeUpgrade);
     expect(calls).toBe(callsBeforeUpgrade);
@@ -1746,7 +1746,7 @@ for (const scenario of ["public-shim-compaction", "source-filter-subset", "publi
   } finally { fault.mockRestore(); }
   backend.stop(); await backend.close();
   const upgraded = await inspectStored(false);
-  for (const [id, state] of seeded) expect(upgraded.get(id)).toEqual({ ...(state as object), tools: ["read", "bash", "edit", "write", "find", "ls", "grep", "codemode"], extensions: ["app.host-builtins", "app.host-scheduled-source"] });
+  for (const [id, state] of seeded) expect(upgraded.get(id)).toEqual({ ...(state as object), tools: ["read", "bash", "edit", "write", "find", "ls", "grep", "codemode"] });
   backend = await createDefaultApplicationRuntime(owner, async () => services);
   const recoveredCreate = backend.sessionOptions.getDurableSession!(uncertainChat)!;
   expect(recoveredCreate).toBeDefined();
