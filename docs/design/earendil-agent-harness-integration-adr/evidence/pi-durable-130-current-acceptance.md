@@ -156,38 +156,3 @@ Source/manifest byte handling, legacy 1.2 projection and importer writes are
 unchanged. No services, live state, network, pins, commit or push were touched;
 parent retains integration/commit ownership. HC-024 remains unqualified for
 production as stated above.
-
-## Native MCP stdio tools — 18 October 2026
-
-The source-default factory now discovers configured stdio MCP tools with the public
-`McpClient` and installs them for native codemode calls. It uses the existing bridge
-snapshot/lease and constrained transport; it never loads the legacy MCP session
-extension. Configuration must explicitly select Native, permit codemode, and use
-literal stdio fields. Unsupported configuration fails before process startup.
-Source ownership, configuration revision and cancellation are checked again at the
-actual stdin write. Closing joins client and process-group cleanup; uncertain
-cleanup retains the bridge lease.
-
-Targeted evidence: `default-application-runtime.test.ts` scenarios
-`native-mcp-codemode`, `native-mcp-codemode-cancel`, `native-mcp-http-deny` passed.
-These exercise a real fixture process, nested result delivery, cancelled call/store
-suppression, process exit, and HTTP rejection before model construction. Six native
-transport regression tests passed (39 assertions); engine, qualification and runtime
-typechecks passed. Independent bounded review returned READY for this stdio slice.
-No full suite or live MCP server was run. HTTP, authentication, resources, prompts,
-live configuration apply, general MCP parity, capped accounting and concurrency
-acceptance are incomplete. Migration and activation have not occurred.
-
-### MCP overlap and configuration drift
-
-Two codemode calls now have targeted shared-client evidence: the fixture withholds
-the first response until the second call arrives, then replies in reverse order.
-Both results retain their request identity. This covers one operation and one
-stdio server; multi-chat concurrency and general load acceptance are unqualified.
-
-Codemode commit guards now include the existing MCP configuration/source guard.
-Changing the config after nested source capture prevents the MCP send and guest
-store persistence, including when guest code catches the MCP error. The operation
-can settle with a tool failure; configuration drift does not cancel the operation.
-Five selected MCP factory cases passed; three typechecks and bounded review passed.
-No full suite, live server, activation or migration ran.

@@ -125,7 +125,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -370,6 +370,9 @@ for (const scenario of ["native-mcp-concurrent", "native-mcp-config-change", "na
   expect(modelRegistry.getAvailable().map(m => [m.provider, m.id])).toEqual([[model.provider, model.id], [modelB.provider, modelB.id]]);
   expect(SettingsManager.create(workspace, getPiclawAgentDir()).getDefaultModel()).toBe(model.id);
   const sdkSpies = [spyOn(SessionManager, "create"), spyOn(SessionManager, "open"), spyOn(SessionManager, "inMemory")];
+  if (scenario === "native-parent-budget-auth-cap") onCredentialResolve = async () => {
+    saveBudgetCap({ scope: "instance_daily", metric: "api_usd_micros", amount: 0, timezone: "UTC" }, root);
+  };
   let realRunCaptures = 0, realToolCaptures = 0;
   const captureSpies: { mockRestore(): void }[] = [];
   if (nativePlan) {
@@ -974,7 +977,20 @@ for (const scenario of ["native-mcp-concurrent", "native-mcp-config-change", "na
     }
     return;
   }
+  if (scenario === "native-parent-budget-cap") saveBudgetCap({ scope: "instance_daily", metric: "api_usd_micros", amount: 0, timezone: "UTC" }, root);
   const dispatchOutcome = await dispatch!();
+  if (scenario === "native-parent-budget-cap" || scenario === "native-parent-budget-auth-cap") {
+    expect(dispatchOutcome).toBe("pending");
+    expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
+    expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+    expect(calls).toBe(0);
+    expect(observedResults.size).toBe(0);
+    expect(root.query("SELECT 1 FROM budget_caps WHERE enabled=1").get()).not.toBeNull();
+    expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
+    backend.stop(); await backend.close();
+    for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+    closeDatabase(); owner.release(); return;
+  }
   if (codemodePlanCancelled || mcpCancelled || mcpConfigChanged || scenario === "native-codemode-cancel" || scenario === "native-codemode-harness") {
     if (mcpCancelled || mcpConfigChanged) expect(existsSync(mcpMarker)).toBe(false);
     expect(dispatchOutcome).toBe(mcpConfigChanged ? "settled" : "pending");
@@ -1020,7 +1036,7 @@ for (const scenario of ["native-mcp-concurrent", "native-mcp-config-change", "na
     closeDatabase(); owner.release(); return;
   }
   if (tableCancelled) expect(widgetEvents).toHaveLength(0);
-  expect(dispatchOutcome).toBe(tableCancelled || officeCancelled || drawioCancelled ? "pending" : "settled");
+  expect(dispatchOutcome).toBe(tableCancelled || officeCancelled || drawioCancelled || scenario === "native-delegate-revoke-cap" || scenario === "native-delegate-standard-revoke" ? "pending" : "settled");
   if (nativeDrawio) {
     expect(realToolCaptures).toBe(codemodeDrawio ? drawioCancelled ? 2 : 3 : drawioCancelled ? 1 : 2);
     if (codemodeDrawio) {
@@ -1141,9 +1157,14 @@ for (const scenario of ["native-mcp-concurrent", "native-mcp-config-change", "na
   if (nativeDelegate) {
     if (writeDelegate) {
       for (const id of revokeDelegate ? ["A"] : ["A", "B"]) expect(readFileSync(childWritePath(id), "utf8")).toBe(standardDelegate && !revokeDelegate ? `WRITTEN_${id}` : "OLD");
-      expect(childRequests).toBe(revokeDelegate ? 2 : 4);
+      expect(childRequests).toBe(revokeDelegate ? 1 : 4);
+      if (revokeDelegate) {
+        expect(calls).toBe(2);
+        expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+        expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
+      }
       const writes = [...observedResults.values()].filter(result => result.toolName === "write");
-      expect(writes).toHaveLength(revokeDelegate ? 1 : 2);
+      expect(writes).toHaveLength(revokeDelegate ? 0 : 2);
       expect(writes.every(result => !!result.isError === (readonlyDeny || revokeDelegate))).toBe(true);
       const childIds = root.query("SELECT id FROM conversations WHERE owner_task_id IS NOT NULL").all() as { id: number }[];
       expect(childIds).toHaveLength(revokeDelegate ? 1 : 2);
@@ -1159,14 +1180,23 @@ for (const scenario of ["native-mcp-concurrent", "native-mcp-config-change", "na
     }
     if (revokeDelegate) {
       expect(childSourceCaptures).toBe(1);
-      expect(childRequests).toBe(2);
-      expect(calls).toBe(4);
+      const capped = scenario === "native-delegate-revoke-cap";
+      expect(childRequests).toBe(capped ? 1 : 2);
+      expect(calls).toBe(capped ? 2 : 4);
       expect(sentinelReads).toBe(0);
-      expect(requested).toEqual([model.id, modelB.id, modelB.id, model.id]);
+      expect(requested).toEqual(capped ? [model.id, modelB.id] : [model.id, modelB.id, modelB.id, model.id]);
       expect(root.query("SELECT id FROM conversations WHERE owner_task_id IS NOT NULL").all()).toHaveLength(1);
       const entries = JSON.stringify(root.query("SELECT * FROM entries").all());
       expect(entries).not.toContain(sentinel);
       expect(planRequests.join("\n")).not.toContain(sentinel);
+      if (capped) {
+        expect(observedResults.size).toBe(0);
+        expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+        expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
+        captureSpies.forEach(spy => spy.mockRestore());
+        await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close(); owner.release(); closeDatabase();
+        sdkSpies.forEach(spy => spy.mockRestore()); return;
+      }
       expect(observedResults.size).toBe(2);
       expect(observedResults.get("child-private-read")).toMatchObject({ toolName: "read", isError: true });
       expect(JSON.stringify(observedResults.get("child-private-read"))).toContain("Host tool execution failed");

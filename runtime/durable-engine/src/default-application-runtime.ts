@@ -249,6 +249,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   codeReview?.addon.reviewService();
   const check = (model: { provider: string; id: string }, signal: AbortSignal) => {
     assert(); signal.throwIfAborted();
+    if (root.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native model budget admission unavailable");
     if (!available.some(entry => entry.provider === model.provider && entry.id === model.id)) throw Error("Host model not approved");
     if (!host.modelRegistry.getAvailable().some(entry => entry.provider === model.provider && entry.id === model.id)) throw Error("Host model no longer available");
     const physical = host.modelRuntime.getPhysicalModel(model.provider, model.id);
@@ -279,7 +280,6 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   assertDelegateModel = (model: { provider: string; modelId: string }) => {
     if (!delegate) throw Error("Native Delegate unavailable");
     delegate.assertCurrent(); check({ provider: model.provider, id: model.modelId }, lifetime.signal);
-    if (root.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native Delegate budget admission unavailable");
     const config = extensionKvGet("delegate", "config", "global");
     const candidate = { provider: model.provider, id: model.modelId, fullId: `${model.provider}/${model.modelId}` };
     if (!delegate.buildModelCandidates([candidate], config).some(entry => entry.id === candidate.fullId)) throw Error("Native Delegate model not approved");

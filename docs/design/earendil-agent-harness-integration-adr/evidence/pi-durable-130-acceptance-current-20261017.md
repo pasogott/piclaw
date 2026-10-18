@@ -570,3 +570,55 @@ Original public entry IDs, linear ancestry, parent/child counts, full snapshot e
 - [Qualification README](../../../../qualification/pi-durable-130/README.md): incremental receipts; read final registered-suite results with their source scope.
 - [Historical acceptance report](pi-durable-130-current-acceptance.md): earlier `87efd0342` assessment and controller/copied-upgrade follow-ups, preserved unchanged below its supersession notice.
 - Local reviews: `default-backend-factory-checkpoint.md`, `native-plan-adoption-checkpoint.md`, `db-tree-summary-replacement-checkpoint.md`, `db-session-tree-checkpoint.md`, `web-admission-drain-checkpoint.md`, `queue-backstop-ownership-checkpoint.md`. Their old “next steps” and WIP states are dated evidence, not current missing-source declarations.
+
+## Native MCP stdio tools — 18 October 2026
+
+The source-default factory now discovers configured stdio MCP tools with the public
+`McpClient` and installs them for native codemode calls. It uses the existing bridge
+snapshot/lease and constrained transport; it never loads the legacy MCP session
+extension. Configuration must explicitly select Native, permit codemode, and use
+literal stdio fields. Unsupported configuration fails before process startup.
+Source ownership, configuration revision and cancellation are checked again at the
+actual stdin write. Closing joins client and process-group cleanup; uncertain
+cleanup retains the bridge lease.
+
+Targeted evidence: `default-application-runtime.test.ts` scenarios
+`native-mcp-codemode`, `native-mcp-codemode-cancel`, `native-mcp-http-deny` passed.
+These exercise a real fixture process, nested result delivery, cancelled call/store
+suppression, process exit, and HTTP rejection before model construction. Six native
+transport regression tests passed (39 assertions); engine, qualification and runtime
+typechecks passed. Independent bounded review returned READY for this stdio slice.
+No full suite or live MCP server was run. HTTP, authentication, resources, prompts,
+live configuration apply, general MCP parity, capped accounting and concurrency
+acceptance are incomplete. Migration and activation have not occurred.
+
+### MCP overlap and configuration drift
+
+Two codemode calls now have targeted shared-client evidence: the fixture withholds
+the first response until the second call arrives, then replies in reverse order.
+Both results retain their request identity. This covers one operation and one
+stdio server; multi-chat concurrency and general load acceptance are unqualified.
+
+Codemode commit guards now include the existing MCP configuration/source guard.
+Changing the config after nested source capture prevents the MCP send and guest
+store persistence, including when guest code catches the MCP error. The operation
+can settle with a tool failure; configuration drift does not cancel the operation.
+Five selected MCP factory cases passed; three typechecks and bounded review passed.
+No full suite, live server, activation or migration ran.
+
+## Parent budget admission — 18 October 2026
+
+The parent model path rejects every enabled budget cap until native per-request
+accounting is implemented. The same common model check now covers Delegate, so its
+duplicate cap query was removed. Denial after credential resolution uses the
+existing host model policy checks. This intentionally rejects unrelated cap scopes
+as well; scoped capped execution is unsupported.
+
+Two real default-factory scenarios insert a zero instance cap either before dispatch
+or during credential resolution. Both keep input claimed/pending, deliver no bot
+message and invoke the synthetic provider zero times. These tests do not close the
+public SDK await-to-provider race or qualify request reservation/settlement.
+MCP and parent evidence above extends the older assessment without promoting any
+of the 45 requirement statuses. Current branch before this change: b516de2a9;
+exact-head hosted run 39119067426 was in progress at inspection. Existing-chat
+migration, load/performance and fleet activation are incomplete.
