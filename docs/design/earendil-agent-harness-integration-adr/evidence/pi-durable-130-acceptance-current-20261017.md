@@ -1,6 +1,19 @@
 # #1650 acceptance: standard-tools candidate over `1241cdde0`
 
-The default application now selects the public durable engine in source; fleet/live acceptance and existing-chat migration are incomplete. The 45 requirements below retain their original IDs and titles. None is an unconditional fleet acceptance claim.
+The published source at `bda68d523` selects the public durable engine and includes
+native card side prompts. Existing-chat migration, live-provider/fleet acceptance,
+capped execution and production-scale resource qualification are incomplete.
+
+The current integrated receipts are 633 native tests / 7,983 assertions (exit 0)
+and 7,342 root tests / 74 baseline skips, plus 25 feature and 9 build tests (exit 0).
+The production legacy side-prompt runner is retired; its compatibility implementation
+lives only in test helpers. The native side consumer preserves isolated tools,
+streaming, cancellation, timeout, accounting, parent/work identity and completed
+retry lookup. Empty-history requests and enabled caps fail closed.
+
+The 45-row assessment below retains conservative qualification levels. Recent
+source-backed proofs update the affected rows; synthetic tests do not establish
+fleet acceptance. Historical receipts and implementation detail follow the matrix.
 
 ## Native Delegate standard-tools candidate
 
@@ -130,16 +143,16 @@ This is the single current HC/PC table. The [earlier acceptance report](pi-durab
 | HC-007 | Follow-up | source-qualified | `A/durable-queue-dispatch.ts`, `E/application-bootstrap.ts`; `RT/channels/web/runtime/queued-followup-lifecycle-service.test.ts`, `Q/application-web.test.ts` | Existing queue/UUID/FIFO/worker wiring is present; complete successor authorisation/FIFO across every route and restart is unqualified. |
 | HC-008 | Next run | source-qualified | `A/durable-queue-dispatch.ts`; `SE/service-work-store-contracts.test.ts`, `Q/worker-recovery.test.ts` | Host settlement/worker barrier replaces the absent public `nextRun`; all producer/restart barrier cases and full replacement-contract acceptance are unproved. |
 | HC-009 | Abort | blocked-publicAPI | `E/host-runtime.ts` `cancelInput`; `Q/runtime.test.ts` | No atomic public conditional exact running abort; placed input returns `already_placed`. Host cancellation fences publication but does not stop that task. |
-| HC-010 | Compaction | source-qualified | `E/host-runtime.ts` `compactSession`; `Q/compact.test.ts`, `Q/application-web.test.ts` | Idle-only maintenance ownership/joining is source-qualified with a separately configured model port. After mandatory generation-source correlation, nontrivial model-backed compaction through the source-default factory is unqualified: summary requests bypass `beforeRequest`, and `beforeCompact` is skipped when resuming a summary checkpoint. Tiny-history factory no-op is insufficient. Threshold/background/overflow/stale-summary/budget/cancellation matrix is incomplete. |
+| HC-010 | Compaction | source-qualified | Default-factory manual summaries use exact maintenance-task scope and the existing request ledger. Known usage settles; unknown usage retains its hold. Public completed-task evidence repairs interrupted bookkeeping; one paused manual task can be explicitly adopted. Actual factory/reopen and candidate633/root7342 evidence qualify these bounded paths. Multiple maintenance candidates, terminal tasks with pending writes and arbitrary process-crash adoption remain unqualified; see the 2026-10-18 maintenance appendices. |
 | HC-011 | Retry | fixture-only | `E/default-application-runtime.ts` disables retry; `Q/models.test.ts`, `Q/src/fixture.ts` | No full captured-options/live-policy/restart-deadline/budget matrix; historical captured retry-policy guarantee changed. |
 | HC-012 | Suspension | fixture-only | `E/host-runtime.ts` `wait`/`reconcile`; `Q/runtime.test.ts`, `Q/models.test.ts` | Detached observation and selected deferred cases do not qualify all missing definitions, task migrations or background scopes. |
 | HC-013 | Restore | migration/perf-unverified | `E/host-controller.ts`, `E/host-recovery.ts`; `Q/single-database.test.ts`, `Q/cross-store.test.ts`, `Q/accepted-steer-recovery.test.ts` | Selected disk/process recovery works; bounded 100/1,000/2,000-entry read measurements exist below. Production-history costs and arbitrary recovery graphs are unqualified. |
 | HC-014 | Corruption | fixture-only | `Q/migration.test.ts`, `Q/copied-upgrade.test.ts`, `Q/sqlite.test.ts` | Import/public-document/facade rejection tests do not cover the full durable reference/version/torn-tail/corruption matrix. |
 | HC-015 | Session/Branch/lane isolation | source-qualified | `E/default-application-runtime.ts`, `E/session-tree.ts`; `Q/db-tree.test.ts`, `Q/default-application-runtime.test.ts` | Canonical public routing/identity and copied forks are bounded; full installed multi-chat authority-domain/branch mutation parity is unqualified. Root ID 1 is store-local. |
 | HC-016 | Close | source-qualified | `E/application-bootstrap.ts`, `runtime/src/runtime/shutdown.ts`; `Q/host-controller.test.ts`, `RT/runtime/queue-backstop-ownership.test.ts` | Stop/join/close and uncertain-cleanup ownership are wired; non-cooperative callbacks can prevent completion indefinitely. Process death is separate from power loss. |
-| HC-017 | Deterministic drive | fixture-only | `Q/src/fixture.ts`, `Q/accepted-steer-recovery.test.ts` | Controlled barriers qualify fixed schedules only; no public manual Drive, exhaustive scheduler or arbitrary crash oracle. |
+| HC-017 | Registry/effect ports | source-qualified | Default source uses seven guarded Linux built-ins, native Plan, parallel Delegate, shared-database Code Review, editable tables, Office Viewer, Draw.io and MCP/codemode adapters. The card HTTP side-prompt consumer runs isolated native tools under its own accepted-source authority; production legacy side runner removed. Catalogue/provenance guards and unsupported-tool denials remain. Full installed fleet/add-on compatibility is not established by these bounded source consumers. |
 | HC-018 | Hooks/events | source-qualified | `E/host-plan-prompt.ts`, `E/host-projection.ts`; `Q/default-application-runtime.test.ts`, `Q/projection.test.ts` | Native Plan request hook and bounded watches work; general extension reload/hooks and browser delivery acknowledgement are unqualified. |
-| HC-019 | Usage | fixture-only | `Q/models.test.ts`, `Q/src/fixture.ts` | Synthetic usage/model projection does not qualify aggregate retry/error/abort/compaction accounting or full budget reconciliation. |
+| HC-019 | Usage/quota/backoff | fixture-only | Uncapped foreground, Delegate, scheduled, maintenance and card side requests use existing per-request accounting and retain unknown holds. Side retries preserve literal work IDs/parent lineage and completed results without redispatch. Enabled caps still deny execution; provider-unknown reconciliation and live quota/backoff behaviour remain incomplete. |
 | HC-020 | Deferred provider | fixture-only | `E/host-models.ts`; `Q/models.test.ts` | Selected synthetic handle/fetch/cancel/recreated-bridge cases do not prove persistent live-provider handle authority, polling/deadlines/lineage. One poll per resume is no public guarantee. |
 | HC-021 | Effect admission | source-qualified | `E/host-builtins.ts`, `A/host-grep.ts`, `A/host-tool-process.ts`; `Q/host-builtins.test.ts`, `Q/host-grep.test.ts`, `Q/bash-port.test.ts`, `Q/models.test.ts` | Actual filesystem/spawn boundaries are guarded for selected ports. No general Gate/zero-effect guarantee; accepted provider microtask race is separate from exact-abort API gap. |
 | HC-022 | Effect-start crash | fixture-only | `Q/cross-store.test.ts`, `Q/accepted-steer-recovery.test.ts`, `Q/bash-port.test.ts` | Fixed post-boundary SIGKILL/unsafe reopen evidence does not resolve arbitrary surviving children or external unknown outcomes. |
@@ -149,20 +162,20 @@ This is the single current HC/PC table. The [earlier acceptance report](pi-durab
 | PC-001 | Ordinary accepted message | source-qualified | `E/application-bootstrap.ts`, `A/durable-queue-dispatch.ts`; `Q/default-application-runtime.test.ts`, `Q/application-web.test.ts` | Default SQL admission/worker dispatch/settlement and fresh chat creation are present; every non-web ingress and live deployment need qualification. |
 | PC-002 | Exact steer | source-qualified | `A/durable-queued-steering.ts`; `SE/service-work-queued-steer.test.ts`, `Q/accepted-steer-recovery.test.ts` | Exact host target/source/version attach/materialise/consume works; no exact physical-generation or arbitrary cross-session guarantee. |
 | PC-003 | Stale steer | source-qualified | `A/durable-queued-steering.ts`; `RT/channels/web/input-source-admission.test.ts`, `SE/service-work-queued-steer.test.ts` | Selected finished/version/harness mismatch and rollback cases reject; general producer/successor race coverage is incomplete. |
-| PC-004 | Exact cancellation | blocked-publicAPI | `E/host-runtime.ts` `cancelInput`; `Q/runtime.test.ts` | Missing atomic conditional running abort; no read-then-abort, raw task mutation or conversation-wide substitute is admitted. |
-| PC-005 | Stale cancellation | fixture-only | `Q/runtime.test.ts` | Wrong submission/repeated cancellation leave selected successor intact; full running cancellation depends on PC-004. |
+| PC-004 | Exact cancel | blocked-publicAPI | Main accepted-input cancellation still lacks atomic public conditional running-task abort. Native side prompts may abort only their verified ownerless isolated fork after durable cancellation-source attachment; this does not authorise a main-conversation abort. |
+| PC-005 | Stale cancel after completion | fixture-only | Main stale/queued withdrawal checks and held side-fork signal/disconnect/timeout cases have source-backed tests. Side cancellation joins the isolated task and retires its cancellation source; unknown usage stays held. General main running cancellation still depends on PC-004. |
 | PC-006 | Late completion after cancellation | source-qualified | `E/host-runtime.ts`; `Q/host-handoff.test.ts`, `Q/cutover-runtime.test.ts`, `Q/runtime.test.ts` | Host cancellation suppresses late success/settlement publication in selected races; no provider/task interruption claim. |
 | PC-007 | Terminal commit fault matrix | source-qualified | `E/application-bootstrap.ts`; `SE/terminal-settlement-atomicity-races.test.ts`, `SE/terminal-settlement-payload-redaction.test.ts`, `Q/host-handoff.test.ts` | Actual EF-S02 owner/atomic settlement is composed; arbitrary cross-file fault placement and live delivery matrix are unqualified. |
 | PC-008 | Restart with open run | source-qualified | `E/host-controller.ts`, `E/host-recovery.ts`, `A/durable-recovery-dispatch.ts`; `Q/host-controller.test.ts`, `Q/worker-recovery.test.ts`, `Q/single-database.test.ts`, native scheduler scenario in `Q/default-application-runtime.test.ts` | Bounded identity discovery, paused authorisation and completed-schedule reopen work. Unknown/background work fails closed; automatic accepted-agent takeover, arbitrary scheduled crash recovery and external exactly-once acceptance are unqualified. |
 | PC-009 | Pending steer restart | source-qualified | `E/host-recovery.ts`, `E/application-bootstrap.ts`; `Q/accepted-steer-recovery.test.ts`, `Q/host-recovery.test.ts`, `Q/worker-recovery.test.ts` | Clean reopen and both SIGKILL windows are existing evidence; application recovery reads real host records. Arbitrary windows/all-ingress FIFO are unqualified; fixture-only identity table is no longer the sole source implementation. |
-| PC-010 | Protected hand-off | fixture-only | `SE/service-work-store-contracts.test.ts`, `RT/channels/web/messaging/starting-turn-steering.test.ts`, `Q/plan.test.ts` | Host/selected Plan lifecycle evidence does not qualify candidate reset/protected hand-off→exactly one successor end to end. |
+| PC-010 | Native/official tools | fixture-only | Seven default Linux tools and bounded Plan/Delegate/Code Review/editable-table/Office/Draw.io/MCP/codemode consumers are integrated and source-qualified within their documented scopes. Actual card side HTTP execution uses production read/source/accounting guards without SDK session hydration. Remaining installed tool/extension consumers and fleet parity still need an exhaustive audit. |
 | PC-011 | Mutation containment | fixture-only | `E/host-tools.ts`, `E/host-builtins.ts`; `Q/tools.test.ts`, `Q/bash-port.test.ts`, `Q/host-builtins.test.ts` | Selected effect fencing works; unsafe interrupted effects, all installed ports and reload containment/reconciliation remain incomplete. |
 | PC-012 | Scheduler agent task | source-qualified | `runtime/src/task-scheduler.ts` `executeScheduledTask`, `runtime/src/agent-pool.ts` `dispatchScheduledAgent`, `E/application-bootstrap.ts`, `E/host-bindings.ts`; `Q/default-application-runtime.test.ts` selector `native-scheduler`, `Q/scheduled.test.ts` | Actual default native consumer uses public forks, preserves empty/dynamic/nonempty main history, reopens and accepts subsequent ordinary input; EF-S07 alone logs/delivers scheduled results. Captured canonical task-revision labels now resolve approved available physical models into atomically configured forks; actual A100k→B200k coverage includes a slash-bearing model ID and unchanged main A after reopen. Invalid/unavailable labels create no fork/provider request. Enabled caps deny allocation, with bounded mid-run/post-auth rechecks but no request budget accounting. Direct approval revocation during await is untested. Cancellation, automatic accepted-agent takeover, arbitrary crash and complete stale-delivery parity are unqualified. Allocation-only fake `runAgent` tests are not actual consumer proof. |
 | PC-013 | Scheduler shell task | fixture-only | `Q/scheduled.test.ts`, `runtime/src/task-scheduler.ts` | Candidate agent dispatch rejects shell; retained shell regression path does not establish candidate-mode Pushover/delivery equivalence. |
-| PC-014 | Stale SSE generation | source-qualified | `E/host-projection.ts`; `Q/projection.test.ts` | Actual EF-S08 owner/generation/receipt filtering drops stale observations; full browser SSE/reconnect remains unqualified. |
+| PC-014 | Stale watch delivery | source-qualified | EF-S08 filters stale incarnation/session/operation/generation observations. Card side HTTP SSE forwards only exact captured source events; mutation/throwing observers cannot change provider accounting, and aborted request observers stop. Actual HTTP success/disconnect is tested; full browser reconnect/skin coverage remains unqualified. |
 | PC-015 | Mobile Abort | blocked-publicAPI | `E/host-runtime.ts`; `Q/runtime.test.ts` | No candidate mobile→exact running-task abort proof; same API gap as PC-004. Legacy mobile tests cannot fill it. |
 | PC-016 | Protected evidence | source-qualified | `E/host-projection.ts`, `E/host-tools.ts`; `Q/projection.test.ts`, `Q/tools.test.ts`, `Q/models.test.ts`, `Q/application-web.test.ts` | Selected sanitised DTOs/results/private reasoning/materialisation work; persisted logs/exports/telemetry need a complete secret audit. |
-| PC-017 | Maintenance failure | source-qualified | `E/host-runtime.ts` `compactSession`/`reconcileMaintenance`; `Q/compact.test.ts`, `Q/application-web.test.ts`, `SE/terminal-settlement-atomicity-races.test.ts` | Same-task uncertain maintenance retains command/owner and accepted work; full compaction/watch/cleanup-after-terminal/no-redelivery matrix is incomplete. |
+| PC-017 | Legacy rollout | fixture-only | Published source defaults to the durable factory, with no production JSONL fallback; the production side-prompt runner is now test-only. Shared-DB/new-chat/guarded-consumer tests and copied upgrade fixtures pass, but existing production chat history still requires migration. No live fleet cutover or general legacy-session retirement is qualified. |
 | PC-018 | Trusted internal input | fixture-only | `A/durable-runtime-adapter.ts`; `Q/scheduled.test.ts`, `Q/runtime.test.ts`, `RT/channels/web/alternate-ingress-guards.test.ts` | Selected claimed/scheduler ports and admission seals exist; every internal ingress still needs acceptance/budget/owner proof. |
 | PC-019 | Cross-session steer | fixture-only | `A/durable-queued-steering.ts`; `SE/service-work-queued-steer.test.ts` | Local accepted steer is chat-bound; no complete cross-session acknowledgement/retry/dedup/offline acceptance proof. |
 | PC-020 | Goal/checkpoint race | fixture-only | `Q/runtime.test.ts`, `Q/accepted-steer-recovery.test.ts` | Selected all-input settlement/checkpoint races pass; general goal/cross-session producer and carry/disposal races are unqualified. |
@@ -999,3 +1012,29 @@ deny execution; uncertain storage failures retain ownership and require reopen.
 General acceptance, live-provider/fleet and production-scale performance evidence,
 historical rollback proof and identity-preserving migration are incomplete.
 Migration stays last. No live activation, deployment, restart or migration occurred.
+
+## Remaining acceptance work after native side prompts — 2026-10-18
+
+All 45 requirements remain represented: 22 source-qualified, 17 fixture-only,
+3 blocked-publicAPI and 3 migration/perf-unverified. The recent native consumer
+work changes evidence and scope descriptions, not these conservative levels.
+
+Before migration:
+
+1. Audit remaining production consumers of legacy session construction, extension
+   lifecycle and introspection; remove superseded implementations when their real
+   consumers have native replacements. Test-only compatibility code is separate.
+2. Resolve or explicitly reject capped execution requirements. Current source
+   denies enabled caps; known accounting and retained unknown holds are qualified,
+   capped execution and provider-unknown reconciliation are not.
+3. Resolve public-API blockers for general exact running cancellation and durable
+   historical storage/rollback proof. Dedicated side-fork abort is insufficient.
+4. Qualify production-history recovery costs and resource limits; synthetic
+   100/1,000/2,000-entry measurements do not establish fleet performance.
+5. Refresh copied-state upgrade acceptance, preserving chat/session/branch/model
+   identity and existing context, then implement identity-preserving migration last.
+   Live activation still requires explicit approval.
+
+The evidence ledger contains historical receipts below older baselines; those
+sections do not override this dated assessment. Current published implementation
+head is `bda68d523`; no merge, deployment, restart or migration has occurred.
