@@ -910,3 +910,36 @@ checkpoint. No timeout, assertion or source changes occurred during qualificatio
 The accounting batch is qualified for publication. Interrupted live-maintenance
 adoption, provider-unknown reconciliation, capped execution, remaining acceptance
 and migration are incomplete. No live activation or deployment occurred.
+
+## Explicit interrupted manual maintenance recovery — 2026-10-18
+
+Source head `715ece0f6f05ee04d380daa5ff1bffaaf13789df` adopts exactly one paused,
+conversation-owned, non-background manual compaction in a mapped chat. Multiple
+candidates, unknown tasks and queued submissions fail closed. Reopening does not
+start scheduling. The existing session adapter's maintenance reconciliation entry
+explicitly resumes the same task and reuses maintenance exclusion and settlement.
+Successful settlement retires recovery authority so later work is not restricted
+to the recovered task. Pending host input denies recovery at admission preflight;
+the existing idle guard is released before scheduling or provider IO.
+
+The actual-factory fixture passes 42 assertions: a genuine SDK summary checkpoint
+and an explicitly seeded lost-usage reservation survive reopen; model/session
+identity stays unchanged, one recovered request settles for 10 microdollars and
+one compaction entry appears. The original unresolved reservation and active root
+budget work remain. Pending input and stopped-backend reconciliation deny without
+provider calls. This fixture does not simulate a process crash or prove interrupted
+first-attempt accounting through the default factory.
+
+Bounded controller, adapter and preflight reviews returned READY. Engine and
+qualification typechecks pass. Single integrated candidate: exit 0, 628 tests /
+7,898 assertions across 51 files. Single root gate on the same frozen head:
+exit 0, 7,333 pass / 74 baseline skips / zero failures, plus 25 feature and 9 build
+tests. No retries, assertion changes or timeout changes. Receipts:
+`/workspace/reviews/durable-1650/recovered-maintenance-{candidate,root}.{log,head,exit}`.
+
+Terminal tasks with pending summary writes and multiple maintenance candidates
+remain unsupported. Enabled caps deny execution; unknown-cost reconciliation,
+remaining compatibility and identity-preserving migration are incomplete. Adaptive
+Card side prompts still depend on legacy session construction and need a native
+consumer replacement before that runner can be removed. No live activation,
+deployment, restart or migration occurred.
