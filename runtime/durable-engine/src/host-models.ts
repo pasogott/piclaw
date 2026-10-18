@@ -207,6 +207,8 @@ export function createHostModels(
     let terminalUsage: Usage | undefined;
     const captureTerminalUsage = (message: AssistantMessage) => {
       if (message.provider !== model.provider || message.model !== model.id || message.api !== model.api) return;
+      const responseModel = message.responseModel ?? message.model;
+      if (responseModel !== model.id && responseModel !== `${model.provider}/${model.id}`) return;
       const projected = usage(message.usage);
       if (!projected || ![projected.input, projected.output, projected.cacheRead, projected.cacheWrite, projected.totalTokens,
         ...Object.values(projected.cost)].every(value => typeof value === "number" && Number.isFinite(value) && value >= 0)) return;

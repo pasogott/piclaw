@@ -37,7 +37,7 @@ async function bounded(promise: Promise<void>) {
     })]);
   } finally { clearTimeout(timer); }
 }
-async function fixture(multimodal = false, keyless = false, deferred = false, imageInput = false, terminalError: boolean | "invalid-usage" | "wrong-owner" = false) {
+async function fixture(multimodal = false, keyless = false, deferred = false, imageInput = false, terminalError: boolean | "invalid-usage" | "wrong-owner" | "wrong-response" = false) {
   const physical = { ...model, input: imageInput ? ["text", "image"] as Model<Api>["input"] : ["text"] as Model<Api>["input"] };
   let stored: Credential | undefined = { type: "api_key", key: token };
   const requested: string[] = [];
@@ -98,10 +98,11 @@ async function fixture(multimodal = false, keyless = false, deferred = false, im
     const stream = createAssistantMessageEventStream();
     const result = deferred ? { ...message, stopReason: "deferred" as const, deferred: privateHandle } : structuredClone(message);
     if (terminalError) {
-      const error = { ...message, content: [], stopReason: "error" as const, errorMessage: token,
+      const error: AssistantMessage = { ...message, content: [], stopReason: "error" as const, errorMessage: token,
         usage: { ...message.usage, cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 } } };
       if (terminalError === "invalid-usage") error.usage.cost.total = -1;
       if (terminalError === "wrong-owner") error.provider = "different-provider";
+      if (terminalError === "wrong-response") error.responseModel = "different-model";
       stream.push({ type: "error", reason: "error", error }); stream.end(error); return stream;
     }
     if (deferred) stream.push({ type: "start", partial: result });
@@ -699,7 +700,7 @@ test('failed host request preserves validated reported usage without private dia
   expect(f.calls()).toBe(1);
 });
 
-for (const invalid of ['invalid-usage', 'wrong-owner'] as const) test(`failed host usage rejects ${invalid} without disclosing diagnostics`, async () => {
+for (const invalid of ['invalid-usage', 'wrong-owner', 'wrong-response'] as const) test(`failed host usage rejects ${invalid} without disclosing diagnostics`, async () => {
   const f = await fixture(false, false, false, false, invalid);
   const result = await f.models.complete(f.model, context);
   expect(result.stopReason).toBe('error');
