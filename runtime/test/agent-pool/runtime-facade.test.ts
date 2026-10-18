@@ -1275,3 +1275,23 @@ test("durable tree command uses its captured port without resolving another gene
   expect(reads).toBe(1);
   expect(legacyCalls).toBe(0);
 });
+
+for (const fails of [false, true]) test(`durable model command protects its captured port and releases on ${fails ? 'failure' : 'success'}`, async () => {
+  const events: string[] = [];
+  const fault = Error('model switch denied');
+  const port = { sessionId: 'model-generation', branchId: 'main', readPosition: async () => null,
+    async setModel(model: { provider: string; modelId: string }) {
+      events.push('set'); expect(model).toEqual({ provider: 'synthetic', modelId: 'approved' });
+      if (fails) throw fault;
+    } };
+  let lookups = 0;
+  const { facade } = createFacade({ getDurableSession() { lookups++; return port; },
+    modelRegistry: { getAll: () => [{ provider: 'synthetic', id: 'approved' }] } as any,
+    acquireCommandProtection(chat) { expect(chat).toBe('web:model-protected'); events.push('protect'); return () => { events.push('release'); }; },
+  });
+  const result = facade.applyControlCommand('web:model-protected', { type: 'model', provider: 'synthetic', modelId: 'approved' });
+  if (fails) await expect(result).rejects.toBe(fault);
+  else expect(await result).toMatchObject({ status: 'success', message: 'Model set to synthetic/approved.' });
+  expect(events).toEqual(['protect', 'set', 'release']);
+  expect(lookups).toBe(1);
+});

@@ -361,8 +361,12 @@ export class AgentRuntimeFacade {
         if (command.compact) return { status: "error", message: "Durable model compaction unavailable" };
         const selected = resolveControlModelSelection(this.options.modelRegistry, command);
         if ("status" in selected) return selected;
-        await port.setModel({ provider: selected.provider, modelId: selected.id });
-        return { status: "success", message: `Model set to ${selected.provider}/${selected.id}.` };
+        revokeAddonLocalAgent(chatJid);
+        const release = this.options.acquireCommandProtection?.(chatJid);
+        try {
+          await port.setModel({ provider: selected.provider, modelId: selected.id });
+          return { status: "success", message: `Model set to ${selected.provider}/${selected.id}.` };
+        } finally { release?.(); }
       }
       if (command.type !== "tree" || command.targetId) throw new Error("Durable history mutation unavailable");
       if (!port.readTree) throw new Error("Durable session tree unavailable");
