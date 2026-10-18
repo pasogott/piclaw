@@ -24,3 +24,43 @@ test("fetch denies revoked sources, credential URLs and oversized bodies", async
   expect(calls).toBe(0);
   await expect(tool.execute({ url: "https://example.com", max_bytes: 2 }, {} as any, context)).rejects.toThrow("max_bytes");
 });
+
+test("fetch revocation during body reading cancels the stream and returns no body", async () => {
+  let allowed = true, cancelled = false;
+  const tool = createHostFetch({ async captureSource() { return () => { if (!allowed) throw Error("revoked"); }; },
+    fetch: async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { allowed = false; controller.enqueue(new TextEncoder().encode("MUST_NOT_RETURN")); },
+      cancel() { cancelled = true; },
+    })),
+  });
+  await expect(tool.execute({ url: "https://fixture.invalid" }, {} as any, context)).rejects.toThrow("revoked");
+  expect(cancelled).toBe(true);
+});
+
+test("fetch propagates cancellation to an outstanding body read", async () => {
+  const { withAbortSignal } = await import("../../runtime/durable-engine/qualification/context.ts");
+  const abort = new AbortController();
+  let entered!: () => void;
+  const reading = new Promise<void>(resolve => entered = resolve);
+  const tool = createHostFetch({ async captureSource() { return () => {}; }, fetch: async (_url, options) => {
+    return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+      options.signal!.addEventListener("abort", () => controller.error(options.signal!.reason), { once: true });
+      entered();
+    } }));
+  } });
+  const result = tool.execute({ url: "https://fixture.invalid" }, {} as any, withAbortSignal(abort.signal, context));
+  await reading;
+  abort.abort(Error("caller cancelled"));
+  await expect(result).rejects.toThrow("caller cancelled");
+});
+
+test("fetch redirect refusal does not issue a second request", async () => {
+  let calls = 0;
+  const tool = createHostFetch({ async captureSource() { return () => {}; }, fetch: async (_url, options) => {
+    calls++;
+    expect(options.redirect).toBe("error");
+    throw TypeError("redirect refused"); // Match native fetch's redirect:error rejection.
+  } });
+  await expect(tool.execute({ url: "https://fixture.invalid/redirect" }, {} as any, context)).rejects.toThrow("redirect refused");
+  expect(calls).toBe(1);
+});
