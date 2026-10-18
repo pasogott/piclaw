@@ -1,3 +1,18 @@
+# Native codemode can call assigned Code Review
+
+The existing Code Review adapter now accepts nested-tool callers alongside model
+callers. The caller flag grants no review scope: capture still requires the exact
+registered native codemode executor and live MODEL parent. The accepted local
+dispatch proof, current branch/workspace/assignment checks and operation-owned
+IMMEDIATE transaction remain unchanged. No second review implementation or store.
+
+Three targeted actual-runtime checks pass: codemode read/reply plus other-chat
+denial54 assertions; post-capture cancellation47; existing direct review59.
+Total3tests/160assertions. Cancellation leaves no reply, guest-store sentinel or
+delivered acknowledgement. All three configured typechecks and bounded review
+pass. No full suites, live services, dependency changes or migration.
+Checkpoint: /workspace/reviews/durable-1650/codemode-code-review-compatibility.md.
+
 # Native codemode can call the qualified Plan tool
 
 The existing Plan adapter now accepts model and nested-tool callers. Nested

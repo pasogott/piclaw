@@ -123,7 +123,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
+for (const scenario of ["native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -140,7 +140,10 @@ for (const scenario of ["native-codemode-plan", "native-codemode-plan-cancel", "
   const requested: string[] = [];
   const planRequests: string[] = [];
   let toolSequence: { name: string; arguments: JsonObject | (() => JsonObject) }[] | undefined;
-  const reviewPackage = scenario === "native-code-review" ? installCodeReviewFixture(workspace) : undefined;
+  const codemodeReview = scenario === "native-codemode-code-review" || scenario === "native-codemode-code-review-cancel";
+  const codemodeReviewCancelled = scenario === "native-codemode-code-review-cancel";
+  const nativeReview = scenario === "native-code-review" || codemodeReview;
+  const reviewPackage = nativeReview ? installCodeReviewFixture(workspace) : undefined;
   if ((scenario === "native-codemode-cancel" || scenario === "native-codemode-harness")) toolSequence = [{ name: "codemode", arguments: {
     code: 'try { await tools.write({path:"codemode-forbidden.txt",content:"FORBIDDEN"}); } catch {} store("revoked-sentinel", {secret:"MUST_NOT_PERSIST"}); console.log("done");',
   } }];
@@ -678,6 +681,71 @@ for (const scenario of ["native-codemode-plan", "native-codemode-plan-cancel", "
     const otherThread = service.createThread(who, otherReview.reviewId, { fileId: otherReview.files[0], side: "source", body: secret }, { requestId: "other-comment" });
     const otherDispatch = service.submit(who, otherReview.reviewId, { target: otherTarget, items: [{ threadId: otherThread.threadId, version: 1 }] }, { requestId: "other-send" });
     expect(service.inspectDispatch(who, otherDispatch.dispatchId)).toBeDefined();
+    if (codemodeReview) {
+      const beforeThread = service.getThread(who, thread.threadId);
+      const beforeOther = service.getThread(who, otherThread.threadId);
+      const beforeDispatch = service.inspectDispatch(who, submitted.dispatchId);
+      const beforeKv = root.query("SELECT * FROM extension_kv").all();
+      const captureTool = HostConversationRuntime.prototype.captureToolSource;
+      captureSpies.push(spyOn(HostConversationRuntime.prototype, "captureToolSource").mockImplementation(async function (this: HostConversationRuntime, ...args) {
+        const captured = await captureTool.apply(this, args);
+        expect(captured.inputs[0]?.sourceId).toBe(message.id);
+        expect(captured.operation.chatJid).toBe(target.chatId);
+        expect(captured.operation.harness).toBeDefined();
+        if (args[2].includes("/")) {
+          codemodeNestedCaptures++;
+          if (codemodeReviewCancelled) root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
+        }
+        return captured;
+      }));
+      const reply: JsonObject = { action: "reply", threadId: thread.threadId, body: "NATIVE_CODEMODE_REPLY", requestId: "native-codemode-reply", expectedVersion: beforeThread.version, assignmentEpoch: beforeThread.assignment_epoch };
+      const ownRead = JSON.stringify({ action: "thread", threadId: thread.threadId });
+      const otherRead = JSON.stringify({ action: "thread", threadId: otherThread.threadId });
+      toolSequence = [{ name: "codemode", arguments: { code: codemodeReviewCancelled
+        ? `try { await tools.code_review(${JSON.stringify(reply)}); } catch {} store("revoked-review", {secret:"MUST_NOT_PERSIST"}); console.log("done");`
+        : `const thread = await tools.code_review(${ownRead}); const reply = await tools.code_review(${JSON.stringify(reply)}); let denied = false; try { await tools.code_review(${otherRead}); } catch { denied = true; } console.log({thread:JSON.parse(thread).messages.map(m=>m.body),reply:JSON.parse(reply),denied});` } }];
+      try {
+        expect(await bound.dispatchAcceptedInput!(message.chat_jid, message.id, row)!()).toBe(codemodeReviewCancelled ? "pending" : "settled");
+        expect(calls).toBe(codemodeReviewCancelled ? 1 : 2);
+        expect(toolSequence).toEqual([]);
+        expect(codemodeNestedCaptures).toBe(codemodeReviewCancelled ? 1 : 3);
+        expect(service.getThread(who, otherThread.threadId)).toEqual(beforeOther);
+        expect(root.query("SELECT * FROM extension_kv").all()).toEqual(beforeKv);
+        expect(readFileSync(join(workspace, "review-source.ts"), "utf8")).toBe("const saved = true;\n");
+        expect(existsSync(join(workspace, "codemode-forbidden.txt"))).toBe(false);
+        if (codemodeReviewCancelled) {
+          expect(service.getThread(who, thread.threadId)).toEqual(beforeThread);
+          expect(service.getThread(who, thread.threadId).messages).toHaveLength(1);
+          expect(service.inspectDispatch(who, submitted.dispatchId)).toEqual(beforeDispatch);
+          expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+          expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
+          expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=(SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default')").get()).toEqual({ phase: "cancelling" });
+          expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+          expect(observedResults.size).toBe(0);
+        } else {
+          const result = observedResults.get("factory-tool-1");
+          expect(result).toMatchObject({ toolName: "codemode" });
+          expect(result?.isError, JSON.stringify(result)).not.toBe(true);
+          expect(JSON.stringify(result)).toContain("NATIVE_SAVED_REVIEW_THREAD");
+          expect(JSON.stringify(result)).toContain('\\"version\\":2');
+          expect(JSON.stringify(result)).toContain('\\"denied\\":true');
+          expect(service.getThread(who, thread.threadId).messages).toHaveLength(2);
+          expect(JSON.stringify(service.getThread(who, thread.threadId).messages)).toContain("NATIVE_CODEMODE_REPLY");
+          expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "consumed" });
+          expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(1);
+        }
+        const storeRevisions = root.query(`SELECT r.content FROM document_revisions r JOIN documents d ON d.id=r.document_id WHERE d.kind='"pi.codemode.store"'`).all();
+        expect(JSON.stringify(storeRevisions)).not.toContain("revoked-review");
+        expect(JSON.stringify(storeRevisions)).not.toContain("MUST_NOT_PERSIST");
+        for (const text of [JSON.stringify([...observedResults.values()]), JSON.stringify(root.query("SELECT * FROM entries").all()), planRequests.join("\n"), JSON.stringify(root.query("SELECT content FROM messages WHERE is_bot_message=1").all())]) expect(text).not.toContain(secret);
+        expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
+      } finally {
+        await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
+        for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+        owner.release(); closeDatabase();
+      }
+      return;
+    }
     const workBody = () => ({ action: "work", dispatchId: submitted.dispatchId, threadId: thread.threadId, state: "in_progress", itemVersion: service.inspectDispatch(who, submitted.dispatchId).items[0].version, threadVersion: service.getThread(who, thread.threadId).version, assignmentEpoch: service.getThread(who, thread.threadId).assignment_epoch });
     toolSequence = [
       { name: "code_review", arguments: { action: "thread", threadId: thread.threadId } },

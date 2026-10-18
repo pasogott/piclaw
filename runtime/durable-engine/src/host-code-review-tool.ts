@@ -97,5 +97,5 @@ export function createHostCodeReviewTool(addon: CodeReviewNativeExports, options
       check();
       return result;
     },
-  });
+  }, { callers: ["model", "tools"] });
 }
