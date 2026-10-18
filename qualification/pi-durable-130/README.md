@@ -1,3 +1,19 @@
+# Shared host-operation authority — targeted refactor
+
+Plan, Code Review, editable tables and Office Viewer now use one operation
+authority implementation. Plan alone adds its chat-scoped extension-KV metadata.
+The other adapters no longer depend on a Plan KV capability for unrelated work.
+The four SQL queries and current version/source/harness predicates are unchanged;
+readonly writes still reject before callbacks, and writes retain IMMEDIATE
+transactions with pre/post checks and rollback. No new grants or registry.
+
+Targeted receipts: 8 passing tests / 286 assertions across direct authority tests,
+four actual tool paths and installed Plan KV. Runtime, engine and qualification
+types pass; the new direct test is explicitly included in qualification types.
+Independent bounded review is READY. Only Plan-specific diagnostic text became
+generic. No full suites, dependency changes, services, migration or activation.
+Details: /workspace/reviews/durable-1650/host-operation-authority-refactor.md.
+
 # Office viewer vendor containment — targeted hardening
 
 Native Office qualification now selects add-on source

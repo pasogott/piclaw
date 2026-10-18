@@ -308,7 +308,7 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
       expect(captured.operation.chatJid).toBe("web:default");
       const readonly = createPlanKvAuthority(root, captured, () => owner.assertCurrentOwner(), true);
       readonly.assertCurrent();
-      expect(() => readonly.write(() => {})).toThrow("Read-only Plan authority");
+      expect(() => readonly.write(() => {})).toThrow("Read-only host operation authority");
       await expect(captureRun.call(this, args[0], -1 as never)).rejects.toThrow("Exact host tool run required");
       return captured;
     }));
@@ -324,7 +324,7 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
       const rollback = Error("rollback cancellation probe");
       expect(() => root.transaction(() => {
         root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
-        expect(() => authority.write(() => {})).toThrow("Stale Plan operation authority");
+        expect(() => authority.write(() => {})).toThrow("Stale host operation authority");
         throw rollback;
       })()).toThrow(rollback);
       authority.assertCurrent();

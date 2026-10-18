@@ -3,7 +3,7 @@ import type { ToolDefinition } from "../../../node_modules/@earendil-works/pi-co
 import type { TSchema } from "@earendil-works/pi-ai";
 import type { JsonValue } from "@earendil-works/chord";
 import type { HostConversationRuntime } from "./host-runtime.js";
-import { createPlanKvAuthority } from "./host-plan-tool.js";
+import { createHostOperationAuthority } from "./host-operation-authority.js";
 import { createHostTool } from "./host-tools.js";
 
 export interface EditableTableWidgetPort {
@@ -30,7 +30,7 @@ export function createHostEditableTableTool(addon: EditableTableNativeExports, o
       const params = structuredClone(args);
       const captured = await options.runtime().captureToolSource(call.conversationId, call.taskId, call.toolCallId);
       const publisher = options.publisher();
-      const authority = createPlanKvAuthority(options.root, captured, () => { call.assertAllowed(); options.assertOwner(); }, true);
+      const authority = createHostOperationAuthority(options.root, captured, () => { call.assertAllowed(); options.assertOwner(); }, true);
       const primary = captured.inputs.find(input => input.sourceSeq === captured.operation.primarySourceSeq);
       const check = () => {
         authority.assertCurrent();

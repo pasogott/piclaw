@@ -5,7 +5,7 @@ import type { JsonValue } from "@earendil-works/chord";
 import { realpathSync, statSync } from "node:fs";
 import { resolve, relative, isAbsolute } from "node:path";
 import type { HostConversationRuntime } from "./host-runtime.js";
-import { createPlanKvAuthority } from "./host-plan-tool.js";
+import { createHostOperationAuthority } from "./host-operation-authority.js";
 import { createHostTool } from "./host-tools.js";
 
 /** Pinned registered execute has plain arguments, no context and no internal
@@ -25,7 +25,7 @@ export function createHostOfficeViewerTool(definition: ToolDefinition<TSchema, J
       call.assertAllowed();
       const params = structuredClone(args) as { path: string };
       const captured = await options.runtime().captureToolSource(call.conversationId, call.taskId, call.toolCallId);
-      const authority = createPlanKvAuthority(options.root, captured, () => { call.assertAllowed(); options.assertOwner(); }, true);
+      const authority = createHostOperationAuthority(options.root, captured, () => { call.assertAllowed(); options.assertOwner(); }, true);
       const primary = captured.inputs.find(input => input.sourceSeq === captured.operation.primarySourceSeq);
       const check = () => {
         authority.assertCurrent();

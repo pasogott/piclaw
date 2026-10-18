@@ -161,10 +161,10 @@ test("installed pinned Plan executes the public registry definition against root
     active = true;
     await Promise.resolve();
     db.query("UPDATE service_effect_s01_operations SET version=version+1 WHERE operation_id=?").run(operation.operationId);
-    await expect(execute({ action: "write", chat_jid: chatJid, markdown: "STALE_VERSION" })).rejects.toThrow("Stale Plan operation authority");
+    await expect(execute({ action: "write", chat_jid: chatJid, markdown: "STALE_VERSION" })).rejects.toThrow("Stale host operation authority");
     db.query("UPDATE service_effect_s01_operations SET version=? WHERE operation_id=?").run(operation.version, operation.operationId);
     db.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(operation.operationId);
-    await expect(execute({ action: "write", chat_jid: chatJid, markdown: "CANCELLED" })).rejects.toThrow("Stale Plan operation authority");
+    await expect(execute({ action: "write", chat_jid: chatJid, markdown: "CANCELLED" })).rejects.toThrow("Stale host operation authority");
     db.query("UPDATE service_effect_s01_operations SET phase='executing' WHERE operation_id=?").run(operation.operationId);
     await expect(withExtensionKvAuthority(authority, async () => cached.set("plan-sidebar", "rollback", {
       toJSON() { active = false; return "FORBIDDEN"; },
