@@ -765,3 +765,36 @@ not cover summary requests. A single real-factory experiment hit the unchanged
 passing runtime proof. No retries, timeout increases or private registry mutation
 were used. This narrows HC-010's evidence scope without changing its status label;
 no new code, CI execution, deployment or migration accompanied this correction.
+
+## Native parent request accounting — 18 October 2026
+
+The source-default model consumer now uses the existing host request accounting
+service for uncapped interactive parent requests with supported stored account
+identity and a known price bound. It reserves before asynchronous auth, rechecks
+account/source/model authority at the post-auth header boundary, and settles the
+original terminal usage before publishing the terminal model result. Each actual
+provider invocation gets a fresh request/work ID under its persisted operation's
+work. The invocation signal is source authority, not a billing request ID.
+
+Auth denial or account rotation releases an undispatched reservation. Unknown
+valuation and settlement-storage failures retain unresolved holds and withhold the
+answer. Existing terminal receipts reconcile interrupted operation-work completion
+at startup without clearing outstanding holds. No new ledger or SDK-private write
+is introduced. The known awaited-header-to-provider interval is unchanged; this is
+not an atomic send or provider-exactly-once guarantee.
+
+Actual factory cases cover success, auth denial, unknown valuation, account
+rotation, settlement-write failure with database reopen, terminal-work closure
+failure with factory reopen, and independent accounting of two tool-turn requests.
+Source reviews and scoped typechecks pass. At frozen code head `29c29b5ea`, the
+native candidate passed 619 tests / 7,874 assertions / 0 failures; the single root
+`ci-fast` run exited 0 with 7,333 pass / 74 baseline skips / 0 fail, plus 25 feature
+and 9 build tests. Logs are under `/workspace/reviews/durable-1650/`:
+`accounting-final-candidate.log`, `accounting-root-fast.log`, and
+`accounting-root-fast.exit`.
+
+All enabled budget caps still deny. Unsupported account identities/pricing retain
+the existing uncapped path. Delegate, scheduled and compaction request accounting,
+provider-unknown reconciliation and factory adoption of recovered maintenance are
+not qualified by this slice. Migration remains last; no deployment or live-state
+change occurred. This evidence does not make #1650 acceptance-complete.
