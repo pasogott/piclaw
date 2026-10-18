@@ -157,11 +157,20 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     const runtime = activeController.runtime;
     config.onRuntime?.(runtime);
     const wait = wrapWait?.(runtime.wait.bind(runtime));
-    const runtimePort = wait ? new Proxy(runtime, { get(target, key) {
-      if (key === "wait") return wait;
+    const runtimePort = new Proxy(runtime, { get(target, key) {
+      if (key === "wait" && wait) return wait;
+      if (key === "reconcileMaintenance") return (binding: Parameters<typeof runtime.reconcileMaintenance>[0]) => {
+        assertLive();
+        if (activeController.recoveredMaintenanceChat === binding.chatJid) {
+          const current = lookup(binding.chatJid, binding.branchId);
+          if (binding.incarnation !== r.incarnation || current?.conversationId !== binding.conversationId) throw Error("Host binding conflict");
+          return activeController.resumeRecoveredMaintenance().then(() => {});
+        }
+        return runtime.reconcileMaintenance(binding);
+      };
       const member = Reflect.get(target, key, target);
       return typeof member === "function" ? member.bind(target) : member;
-    } }) : runtime;
+    } });
     const adapter = createDurableConversationAdapter({ incarnation: r.incarnation, manifest, getConversationBinding: lookup, runtime: runtimePort });
     const shutdown = new AbortController();
     const recovery = createDurableRecoveryDispatch({ assertCurrentWriter: assert, submitIntent: input => adapter.submitIntent(input),
@@ -324,8 +333,6 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       /** Continue the existing command worker's same-task settlement; no queue replay. */
       reconcileMaintenance(chatJid: string): Promise<void> {
         assertLive();
-        if (activeController.recoveredMaintenanceChat === chatJid)
-          return activeController.resumeRecoveredMaintenance().then(() => {});
         const position = getDurableSession(chatJid);
         if (!position?.reconcileMaintenance) throw Error("Unbound maintenance reconciliation");
         return position.reconcileMaintenance();

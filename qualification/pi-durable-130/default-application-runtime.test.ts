@@ -5,7 +5,7 @@ import { delegateImages } from "./delegate-image-fixtures.ts";
 import { expect, test, spyOn } from "bun:test";
 import { strict as assert } from "node:assert";
 import { createTestCredentialStore } from "../../runtime/test/model-services-fixture.js";
-import type { JsonObject } from "../../node_modules/@earendil-works/pi-ai";
+import type { Api, Model, JsonObject } from "../../node_modules/@earendil-works/pi-ai";
 import type { SqliteExecutor } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { SessionManager, SettingsManager, ModelRuntime, ModelRegistry } from "../../node_modules/@earendil-works/pi-coding-agent";
 import { getPiclawAgentDir } from "../../runtime/src/core/agent-dir.js";
@@ -31,6 +31,8 @@ import { ensureTestFilesystemIsolation } from "../../runtime/scripts/test-filesy
 import { Harness, AgentDoc, InboxDoc, configure, createRegistry, defineTask, defineExtension, type ConversationId } from "../../runtime/durable-engine/qualification/durable.ts";
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { awaitWithContext, withAbortSignal, BACKGROUND_CONTEXT as context } from "../../runtime/durable-engine/qualification/context.ts";
+import { reserveHostRequest } from "../../runtime/durable-engine/src/host-request-accounting.ts";
+import { withTaskModelRequestScope } from "../../runtime/durable-engine/src/task-model-boundary-shim.ts";
 import { createHostModels } from "../../runtime/durable-engine/src/host-models.js";
 import { createHostBuiltinTools } from "../../runtime/durable-engine/src/host-builtins.js";
 import { HostConversationRuntime } from "../../runtime/durable-engine/src/host-runtime.js";
@@ -125,7 +127,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-compaction-accounting-close-fail", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -150,6 +152,7 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
   const compactionAccountingUnknown = scenario === "native-compaction-accounting-unknown";
   const compactionCloseFailure = scenario === "native-compaction-accounting-close-fail";
   let inManualSummary = false;
+  let checkpointHold: { entered(): void; signal?: AbortSignal } | undefined;
   const parentAccounting = scenario.startsWith("native-parent-accounting") || delegateAccounting || scheduledAccounting || compactionAccounting;
   const accountingTwoTurns = scenario === "native-parent-accounting-two-turns";
   const accountingAuthDenied = scenario === "native-parent-accounting-auth-deny";
@@ -346,6 +349,16 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
     requested.push(physical.id);
     planRequests.push(JSON.stringify(input));
     calls++; const stream = createAssistantMessageEventStream();
+    if (checkpointHold) {
+      checkpointHold.signal = options?.signal;
+      checkpointHold.entered();
+      void awaitWithContext(new Promise<void>(() => {}), withAbortSignal(options!.signal!, context)).catch(() => {
+        const error = { role: "assistant" as const, content: [], api: physical.api, provider: physical.provider, model: physical.id,
+          timestamp: 1, stopReason: "aborted" as const, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+        stream.push({ type: "error", reason: "aborted", error }); stream.end(error);
+      });
+      return stream;
+    }
     if (parentAccounting && !delegateAccounting && !scheduledAccounting && !compactionAccounting) expect(root.query("SELECT state FROM budget_request_reservations ORDER BY rowid").all()).toEqual([...(accountingTwoTurns && calls > 1 ? [{ state: "settled" }] : []), { state: "dispatched" }]);
     const child = nativeDelegate && JSON.stringify(input.messages.findLast(message => message.role === "user")?.content).includes("NATIVE_DELEGATE_CHILD");
     if (delegateImagesCase && !child) expect(JSON.stringify(input)).not.toContain('"type":"image"');
@@ -1622,6 +1635,50 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
     const beforeModel = await first!.readModel!();
     const identity = first!.sessionId;
     inManualSummary = true;
+    if (scenario === "native-compaction-accounting-recover") {
+      // Seed a genuine paused SDK checkpoint, then reopen the actual application.
+      // Host close joins maintenance, so this is not a host process-crash fixture.
+      backend.stop(); await backend.close();
+      const path = (root.query("PRAGMA database_list").all() as { name: string; file: string }[]).find(row => row.name === "main")!.file;
+      const modelPort = createHostModels(runtime, [model, modelB].map(({ provider, id }) => ({ provider, id })), {
+        signal: new AbortController().signal, async authorize() { owner.assertCurrentOwner(); }, assertCurrent() { owner.assertCurrentOwner(); },
+      });
+      const h = await Harness.open(await SqliteStorage.open(new BunSqliteDatabase(path, { root, assertOwner: () => owner.assertCurrentOwner(), fenceTransactions: true })),
+        { models: modelPort, registry: withTaskModelRequestScope(createRegistry()) }, context);
+      const row = root.query("SELECT incarnation,conversation_id FROM piclaw_durable_bindings_v1 WHERE chat_jid='web:default' LIMIT 1").get() as { incarnation: string; conversation_id: number };
+      const conversation = (await h.conversation(row.conversation_id as ConversationId, context))!;
+      await conversation.commit(async tx => {
+        for (let i = 0; i < 4; i++) await tx.appendEntry(conversation.id, { kind: "pi.user", model: [{ role: "user", content: `checkpoint history ${i}`, timestamp: i }] });
+      }, context);
+      let entered!: () => void;
+      const ready = new Promise<void>(resolve => { entered = resolve; });
+      checkpointHold = { entered };
+      const taskId = await conversation.compact("Retain the accepted decision", context);
+      // Existing host ledger represents a dispatched attempt whose result was lost.
+      const request = await reserveHostRequest({ database: root, operationId: "", chatJid: "web:default", authPath: join(getPiclawAgentDir(), "auth.json"), model: model as Model<Api>,
+        executionKind: "side_prompt", maintenanceWorkId: `durable-maintenance:${row.incarnation}:${taskId}`,
+        signal: new AbortController().signal, assertCurrent: () => owner.assertCurrentOwner() });
+      expect(request).toBeDefined();
+      h.resume();
+      await Promise.race([ready, h.waitForTask(taskId, context).then(task => { throw Error(`Checkpoint did not request summary: ${JSON.stringify(task.state.outcome)}`); })]);
+      await request!.dispatch();
+      await h.close(context); await request!.abandon(); checkpointHold = undefined;
+      expect(root.query("SELECT state FROM budget_request_reservations WHERE work_id LIKE 'durable-request:%' AND state='unresolved'").all()).toHaveLength(1);
+      backend = await createDefaultApplicationRuntime(owner, async () => services);
+      const recovered = backend.sessionOptions.getDurableSession!("web:default")!;
+      expect(recovered.sessionId).toBe(identity);
+      expect(await recovered.readModel!()).toBe(beforeModel);
+      const callsBeforeResume = calls;
+      await recovered.reconcileMaintenance!();
+      expect(calls).toBe(callsBeforeResume + 1);
+      expect(root.query("SELECT state FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id WHERE w.execution_kind='side_prompt' ORDER BY r.rowid").all()).toEqual([{ state: "unresolved" }, { state: "settled" }]);
+      expect(root.query("SELECT status FROM budget_work WHERE parent_work_id IS NULL AND execution_kind='side_prompt'").all()).toEqual([{ status: "active" }]);
+      expect(root.query("SELECT id FROM entries WHERE json_extract(record, '$.kind')='pi.compaction'").all()).toHaveLength(1);
+      expect(root.query("SELECT SUM(t.api_equivalent_cost_microusd) AS amount FROM token_usage t JOIN budget_work w ON w.id=t.work_id WHERE w.execution_kind='side_prompt'").get()).toEqual({ amount: 10 });
+      backend.stop(); await backend.close(); compactionPolicySpy?.mockRestore();
+      for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+      closeDatabase(); owner.release(); return;
+    }
     if (compactionAccountingUnknown) {
       await expect(first!.compact!("Retain the accepted decision")).rejects.toThrow("did not complete");
       expect(calls).toBe(beforeCalls + 1);
