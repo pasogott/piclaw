@@ -671,3 +671,20 @@ test('stored fingerprint denies unsupported or absent identity without auth fall
   expect(readStoredProviderUsageAccountRef('github-copilot', storage.authPath)).toBeNull();
   expect(readStoredProviderUsageAccountRef('openai-codex', join(storage.authPath, 'absent'))).toBeNull();
 });
+
+for (const provider of ['openai-codex', 'github-copilot'] as const) test(`empty stored ${provider} identity cannot fall back to asynchronous auth`, async () => {
+  const storage = createAuthStorage({ [provider]: { type: 'oauth', access: 'synthetic-access', refresh: '', accountId: '', expires: Date.now() + 60000 } });
+  let calls = 0;
+  const runtime = { async getAuth() { calls++; return { auth: { apiKey: 'synthetic-fallback' } }; } };
+  expect(readStoredProviderUsageAccountRef(provider, storage.authPath)).toBeNull();
+  expect(await resolveProviderUsageAccountRef(runtime, provider, storage.authPath)).toBeNull();
+  expect(calls).toBe(0);
+});
+
+test('absent stored identity retains existing asynchronous auth fallback', async () => {
+  const storage = createAuthStorage({});
+  let calls = 0;
+  const runtime = { async getAuth() { calls++; return { auth: { apiKey: 'synthetic-fallback' } }; } };
+  expect(await resolveProviderUsageAccountRef(runtime, 'openai-codex', storage.authPath + '/not-a-file')).toMatch(/^openai-codex:sha256:/);
+  expect(calls).toBe(1);
+});

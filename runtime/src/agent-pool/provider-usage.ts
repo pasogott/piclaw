@@ -416,14 +416,18 @@ function resolveUsageAuthPath(modelRuntime: UsageModelRuntime, authPath?: string
   return authPath ?? (modelRuntime as UsageModelRuntime & { authPath?: string }).authPath ?? join(getPiclawAgentDir(), "auth.json");
 }
 
+function storedProviderIdentity(providerId: string, authPath: string): string | undefined {
+  const stored = readStoredCredential(providerId, authPath) as Record<string, unknown> | undefined;
+  const identity = providerId === "openai-codex" ? stored?.accountId : providerId === "github-copilot" ? stored?.refresh : undefined;
+  return typeof identity === "string" ? identity : undefined;
+}
+
 /** Read only stored identity; never resolves credentials or performs auth/network work. */
 export function readStoredProviderUsageAccountRef(providerId: string, authPath: string): string | null {
   if (providerId !== "openai-codex" && providerId !== "github-copilot") return null;
   try {
-    const stored = readStoredCredential(providerId, authPath) as Record<string, unknown> | undefined;
-    const identity = providerId === "openai-codex" ? stored?.accountId : stored?.refresh;
-    return typeof identity === "string" && identity
-      ? `${providerId}:sha256:${createHash("sha256").update(identity).digest("hex")}` : null;
+    const identity = storedProviderIdentity(providerId, authPath);
+    return identity ? `${providerId}:sha256:${createHash("sha256").update(identity).digest("hex")}` : null;
   } catch { return null; }
 }
 
@@ -436,9 +440,8 @@ export async function resolveProviderUsageAccountRef(
   if (!isSupportedProviderId(providerId)) return null;
   try {
     const path = resolveUsageAuthPath(modelRuntime, authPath);
-    const storedRef = readStoredProviderUsageAccountRef(providerId, path);
-    if (storedRef) return storedRef;
-    const identity = (await modelRuntime.getAuth(providerId))?.auth.apiKey ?? null;
+    const stored = storedProviderIdentity(providerId, path);
+    const identity = stored !== undefined ? stored : (await modelRuntime.getAuth(providerId))?.auth.apiKey ?? null;
     return identity ? `${providerId}:sha256:${createHash("sha256").update(identity).digest("hex")}` : null;
   } catch {
     return null;
