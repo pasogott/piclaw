@@ -270,3 +270,63 @@ for (const failure of ["wait", "summary", "close", "close-reconcile"] as const) 
     root.close(); owner.releaseAfterClose(); owner.closeConnection(); await rm(dir, { recursive: true, force: true });
   }
 }, 20000);
+
+test("controller explicitly adopts one checkpointed manual compaction without replacing its task", async () => {
+  const { createHostController } = await import("../../runtime/durable-engine/src/host-controller.js");
+  const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "recovered-manual-"));
+  const path = join(dir, "shared.db"), owner = TestOwner.acquire(path), root = new Database(path);
+  installServiceWorkSchema(root);
+  let sql!: BunSqliteDatabase;
+  const openStorage = () => { sql = new BunSqliteDatabase(path, { root, assertOwner: () => owner.assert() }); return SqliteStorage.open(sql); };
+  const f = await openFixture(owner, () => {}, openStorage);
+  const id = f.root.id;
+  await f.close();
+  const entered = barrier();
+  f.host.modelHold = barrier();
+  f.host.onModelEnter = () => entered.release();
+  const harnessOptions = { models: f.models, registry: withTaskModelRequestScope(f.registry),
+    settings: { retry: { enabled: false }, compaction: { enabled: false, keepRecentTokens: 1 } } };
+  let h = await Harness.open(await openStorage(), harnessOptions, context);
+  const conversation = (await h.conversation(id, context))!;
+  await conversation.commit(async tx => {
+    for (let i = 0; i < 4; i++) await tx.appendEntry(id, { kind: "pi.user", model: [{ role: "user", content: `history ${i}`, timestamp: i }] });
+  }, context);
+  const taskId = await conversation.compact("Retain decisions", context);
+  h.resume(); await entered.promise;
+  await h.close(context);
+  f.host.modelHold = undefined;
+  f.host.finalContent = [{ type: "text", text: "Recovered manual summary" }];
+  const forbidden = async () => { throw Error("No accepted operation expected"); };
+  const work = { listOpenOperations: async () => ({ ok: true, value: [] }), getOperation: forbidden, getSourceBySeq: forbidden,
+    getQueuedInputIntent: forbidden, acceptCancellation: forbidden, bindHarness: forbidden } as any;
+  const bindings = { findSource: forbidden, get: forbidden, bind: forbidden, getOrBind: forbidden, recordSubmission: forbidden, intents: { get: forbidden, bind: forbidden, getOrBind: forbidden, recordSubmission: forbidden, list: forbidden } };
+  const binding = { chatJid: "web:recovered", branchId: "main", conversationId: id };
+  let controller: Awaited<ReturnType<typeof createHostController>> | undefined;
+  try {
+    controller = await createHostController({ acquireOwnership: async () => ({ assertCurrentOwner: () => owner.assert(), release() {} }),
+      createStorage: async () => openStorage(),
+      runtime: { incarnation: "recovered-manual", sessionId: "original", lane: "maintenance", generation: 1,
+        now: () => new Date(0).toISOString(), harnessOptions, work, bindings,
+        terminal: { getTerminal: forbidden, commitTerminal: forbidden } as any,
+        existingConversationIds: [id], conversationFor: () => id, putAnswer: forbidden,
+        withIdleModelGuard: body => sql.withIdleModelGuard(body) },
+      recovery: { manifest: [binding], work, bindings, readAcceptedInput: forbidden } }, context);
+    expect((await controller.runtime.inspectAuthority()).inspection.scheduling).toBe("paused");
+    expect(f.host.modelCalls).toBe(0);
+    const resumed = controller.resumeRecoveredMaintenance();
+    expect(controller.resumeRecoveredMaintenance()).toBe(resumed);
+    expect(await resumed).toEqual({ compacted: true });
+    expect(f.host.modelCalls).toBe(1);
+    const state = await controller.runtime.inspectAuthority();
+    expect(state.inspection.tasks).toEqual([]);
+    expect(state.inspection.submissions).toEqual([]);
+    await controller.close();
+    h = await Harness.open(await openStorage(), harnessOptions, context);
+    expect((await h.getTask(taskId, context))?.state.status).toBe("terminal");
+    expect((await h.conversation(id, context))?.id).toBe(id);
+    await h.close(context);
+  } finally {
+    await controller?.close(); root.close(); owner.releaseAfterClose(); owner.closeConnection();
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 10000);

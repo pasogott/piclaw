@@ -46,6 +46,8 @@ export async function createHostController(config: HostControllerOptions, contex
     assert();
     if (!released) { await lease!.release(); released = true; }
   }
+  let bootstrapApproval = true;
+  let maintenance: { taskId: import("@earendil-works/pi-durable").TaskId<import("@earendil-works/pi-durable").CompactionResult>; binding: Recovery["binding"] } | undefined;
   let recovered: Awaited<ReturnType<typeof reconstituteAcceptedWork>> = [];
   let scanCurrent: (() => Promise<typeof recovered>) | undefined;
   const assert = () => { if (!lease) throw Error("Host owner unavailable"); lease.assertCurrentOwner(); };
@@ -71,6 +73,13 @@ export async function createHostController(config: HostControllerOptions, contex
     // with no corresponding host operation. A caller-supplied approval cannot bypass this.
     if (inspection.submissions.some(s => !known.has(s.id))) return deny();
     const roots = new Set<number>();
+    if (maintenance) {
+      if (!bootstrapApproval && inspection.tasks.some(t => t.record.id === maintenance!.taskId) && !runtime.ownsMaintenance(maintenance.taskId)) return deny();
+      const task = inspection.tasks.find(t => t.record.id === maintenance!.taskId)?.record;
+      if (task && (task.kind !== "pi.compaction" || task.conversationId !== maintenance.binding.conversationId || task.owner !== undefined || task.background ||
+        (task.input as { reason?: string }).reason !== "manual")) return deny();
+      if (task) roots.add(task.id);
+    }
     const { runs } = await runtime.inspectAuthority(recovered.map(entry => entry.input)); assert();
     for (const run of runs) {
       if (!run.inputs.length || run.inputs.some(id => !known.has(id))) return deny();
@@ -84,6 +93,7 @@ export async function createHostController(config: HostControllerOptions, contex
       // Only a persisted terminal receipt removes it from the live authority domain.
       if (await runtime.isTaskTerminal(record.id)) { assert(); continue; }
       assert();
+      if (maintenance && record.id !== maintenance.taskId) return deny();
       let current = record;
       const seen = new Set<number>();
       while (!roots.has(current.id)) {
@@ -132,7 +142,16 @@ export async function createHostController(config: HostControllerOptions, contex
     // Public Harness inspection covers the entire store, including unknown conversations.
     const { inspection } = await runtime.inspectAuthority();
     if (inspection.scheduling !== "paused") throw Error("Expected paused bootstrap");
+    // Independent maintenance has no accepted-input operation. Admit only one
+    // paused manual task with an exact manifest conversation and no other work.
+    if (!recovered.length && !inspection.submissions.length && inspection.tasks.length === 1) {
+      const task = inspection.tasks[0]!.record;
+      const binding = manifest.find(b => b.conversationId === task.conversationId);
+      if (binding && task.kind === "pi.compaction" && task.owner === undefined && !task.background &&
+        (task.input as { reason?: string }).reason === "manual") maintenance = { taskId: task.id as import("@earendil-works/pi-durable").TaskId<import("@earendil-works/pi-durable").CompactionResult>, binding };
+    }
     await authorizeRecoveredWork(inspection);
+    bootstrapApproval = false;
     let retry: Promise<void> | undefined;
     const activeRuntime = runtime;
     // Explicit same-ID intent repair only. Never resume/wait or replay a primary model turn.
@@ -197,7 +216,13 @@ export async function createHostController(config: HostControllerOptions, contex
         if (retainOwner && !released && closedStorage) await releaseOwner();
       })();
     }
-    return Object.freeze({ runtime, recovered, reconcileRecovered, checkpointCutover, rollback,
+    let maintenanceAttempt: Promise<{ compacted: boolean }> | undefined;
+    function resumeRecoveredMaintenance() {
+      assert();
+      if (!maintenance) return Promise.reject(Error("No recovered maintenance"));
+      return maintenanceAttempt ??= activeRuntime.recoverMaintenance({ ...maintenance.binding, incarnation }, maintenance.taskId);
+    }
+    return Object.freeze({ runtime, recovered, reconcileRecovered, resumeRecoveredMaintenance, checkpointCutover, rollback,
       async addConversation<T extends Recovery["binding"]>(create: Parameters<typeof activeRuntime.addConversation<T>>[0], beforeCommit?: () => void) {
         assert();
         const binding = await activeRuntime.addConversation(create, beforeCommit); assert();

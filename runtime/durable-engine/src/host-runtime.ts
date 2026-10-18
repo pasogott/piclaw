@@ -1,6 +1,6 @@
 import { getSupportedThinkingLevels, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 // INACTIVE application module. No bootstrap registration or production schema migration.
-import { configure, AgentDoc, AssistantEntry, InboxDoc, LiveDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
+import { configure, AgentDoc, AssistantEntry, InboxDoc, LiveDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId, type TaskId, type CompactionResult } from "@earendil-works/pi-durable";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { awaitWithContext, withAbortSignal, withoutAbortSignal, type Context } from "@earendil-works/chord/context";
 import type { CurrentPiclawServiceWorkStore, FinishHarnessRequest } from "../../../runtime/src/service-effects/current-piclaw/service-work-store.js";
@@ -434,6 +434,13 @@ export class HostConversationRuntime {
 
 
   compactSession(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, instructions?: string, signal?: AbortSignal): Promise<{ compacted: boolean }> {
+    return this.runMaintenance(binding, instructions, signal);
+  }
+  /** Resume an explicitly proven paused manual task without admitting a replacement. */
+  recoverMaintenance(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, taskId: TaskId<CompactionResult>): Promise<{ compacted: boolean }> {
+    return this.runMaintenance(binding, undefined, undefined, taskId);
+  }
+  private runMaintenance(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, instructions?: string, signal?: AbortSignal, recoveredTaskId?: TaskId<CompactionResult>): Promise<{ compacted: boolean }> {
     this.fence();
     const o = this.options;
     const copy = Object.freeze({ incarnation: binding.incarnation, chatJid: binding.chatJid, branchId: binding.branchId, conversationId: binding.conversationId });
@@ -444,6 +451,7 @@ export class HostConversationRuntime {
     if (this.changingModel || this.active.size) throw new Error("Runtime is not idle");
     signal?.throwIfAborted();
     this.maintenanceBinding = Object.freeze({ chatJid: binding.chatJid, conversationId: binding.conversationId });
+    if (recoveredTaskId !== undefined) this.maintenanceTaskId = recoveredTaskId;
     this.changingModel = true; // Claim before the first await, across the entire authority domain.
     const context = withoutAbortSignal(this.context);
     const assertOwner = () => o.owner.assert(); // Close seals callers but joins this maintenance.
@@ -451,13 +459,13 @@ export class HostConversationRuntime {
     let settleTask: (() => Promise<{ compacted: boolean }>) | undefined;
     const operation = (async () => {
       const inspection = await this.harness.inspect(context); assertOwner();
-      if (inspection.tasks.length || inspection.submissions.length) throw new Error("Runtime is not idle");
+      if (recoveredTaskId === undefined && (inspection.tasks.length || inspection.submissions.length)) throw new Error("Runtime is not idle");
       this.authorizingMaintenance = true;
       try { await o.authorizeScheduling(inspection); } finally { this.authorizingMaintenance = false; }
       assertOwner();
       const conversation = await this.harness.conversation(id, context); assertOwner();
       if (!conversation) throw new Error("Missing existing conversation");
-      const taskId = await o.withIdleModelGuard!(async () => {
+      const taskId = recoveredTaskId ?? await o.withIdleModelGuard!(async () => {
         // Same Session line and same-file BEGIN IMMEDIATE checks before task admission.
         await conversation.commit(async tx => {
           assertOwner();
@@ -472,6 +480,18 @@ export class HostConversationRuntime {
       }); // Release SQL guard at admission, never across provider execution or summary writes.
       this.maintenanceTaskId = taskId;
       assertOwner();
+      if (recoveredTaskId !== undefined) {
+        const inspection = await this.harness.inspect(context); assertOwner();
+        const task = await this.harness.getTask(taskId, context); assertOwner();
+        if (inspection.scheduling !== "paused" || inspection.tasks.length !== 1 || inspection.tasks[0]?.record.id !== taskId || inspection.submissions.length ||
+          task?.kind !== "pi.compaction" || task.conversationId !== id || task.owner !== undefined || task.background ||
+          (task.input as { reason?: string }).reason !== "manual" || task.state.status === "terminal") throw Error("Unknown recovered maintenance authority");
+        this.authorizingMaintenance = true;
+        try { await this.progress(); } finally { this.authorizingMaintenance = false; }
+        assertOwner();
+        admitted = true;
+        this.harness.resume();
+      }
       settleTask = async () => {
         const task = await this.harness.waitForTask(taskId, context); assertOwner();
         if (task.state.outcome.status !== "completed") {
@@ -529,6 +549,10 @@ export class HostConversationRuntime {
       } catch { this.changingModel = true; } // An unreadable domain retains exclusion and ownership.
     });
     return awaitWithContext(settlement, withAbortSignal(signal ?? new AbortController().signal, context));
+  }
+  ownsMaintenance(taskId: number): boolean {
+    this.fence();
+    return this.changingModel && this.maintenanceTaskId === taskId && this.maintenanceBinding !== undefined;
   }
   /** Explicit observation repair only: no task submission, provider retry or new queue. */
   reconcileMaintenance(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<void> {
