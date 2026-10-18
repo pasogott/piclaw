@@ -1666,6 +1666,9 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       expect((await pool.runSidePrompt("web:default", "changed input", { budgetWorkId: "stable-side-retry", budgetParentWorkId: "native-side-parent" })).status).toBe("error");
       expect((await pool.runSidePrompt("web:default", "native isolated side prompt", { budgetWorkId: "stable-side-retry", systemPrompt: "SIDE_SYSTEM_PREFIX" })).status).toBe("error");
       expect(calls).toBe(callsBeforeReplay);
+      const foreignContext = await withBudgetWorkContext({ workId: "foreign", chatJid: "web:foreign", kind: "interactive" }, () => pool.runSidePrompt("web:default", "native isolated side prompt", { budgetWorkId: "stable-side-retry", budgetParentWorkId: "native-side-parent", systemPrompt: "SIDE_SYSTEM_PREFIX" }));
+      expect(foreignContext.status).toBe("error");
+      expect(calls).toBe(callsBeforeReplay);
       const sourceCountBeforeParentDenial = root.query("SELECT count(*) AS n FROM service_effect_s01_sources").get();
       expect((await pool.runSidePrompt("web:default", "unknown parent", { budgetParentWorkId: "missing-parent" })).status).toBe("error");
       expect(root.query("SELECT count(*) AS n FROM service_effect_s01_sources").get()).toEqual(sourceCountBeforeParentDenial);
@@ -1782,6 +1785,17 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       expect(root.query("SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default'").get()).toEqual({ active_operation_id: null });
       checkpointHold = undefined;
       await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
+      const callsBeforeRestartReplay = calls;
+      backend = await createDefaultApplicationRuntime(owner, async () => services);
+      expect(await backend.sessionOptions.dispatchSidePrompt!("web:default", "native isolated side prompt", {
+        budgetWorkId: "stable-side-retry", budgetParentWorkId: "native-side-parent", systemPrompt: "SIDE_SYSTEM_PREFIX",
+      })).toEqual(result);
+      expect(calls).toBe(callsBeforeRestartReplay);
+      expect(root.query("SELECT status FROM budget_work WHERE id='native-side-parent'").get()).toEqual({ status: "active" });
+      root.query("UPDATE budget_work SET status='completed' WHERE id='native-side-parent'").run();
+      expect(await backend.sessionOptions.dispatchSidePrompt!("web:default", "native isolated side prompt", { budgetWorkId: "stable-side-retry", budgetParentWorkId: "native-side-parent", systemPrompt: "SIDE_SYSTEM_PREFIX" })).toEqual(result);
+      expect(calls).toBe(callsBeforeRestartReplay);
+      backend.stop(); await backend.close();
       compactionPolicySpy?.mockRestore();
       for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
       closeDatabase(); owner.release(); return;

@@ -468,6 +468,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       if (await runtime.readSessionPosition({ incarnation: r.incarnation, ...scope }) === null) throw Error("Side prompt history unavailable");
       assertLive();
       const context = getBudgetWorkContext();
+      if (context && context.chatJid !== chatJid) throw Error("Side prompt budget context mismatch");
       const parentWorkId = options.budgetParentWorkId ?? context?.workId ?? null;
       if (parentWorkId !== null && (typeof parentWorkId !== "string" || !parentWorkId.trim() || parentWorkId.length > 1024)) throw Error("Invalid side prompt budget parent");
       const assertParent = () => {
@@ -498,7 +499,14 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         if (!payload || payload.ref !== `side-result:${sourceId}` || payload.mediaType !== "text/plain" || payload.redactionClass !== "private") throw Error("Side prompt result unavailable");
         const bytes = Uint8Array.from(payload.bytes);
         if (bytes.byteLength !== payload.byteLength || createHash("sha256").update(bytes).digest("hex") !== payload.sha256) throw Error("Side prompt result unavailable");
-        return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as SidePromptResult;
+        const result = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as SidePromptResult;
+        if (!result || result.status !== "success" || typeof result.result !== "string" ||
+          (result.thinking !== null && typeof result.thinking !== "string") || typeof result.model !== "string" ||
+          (result.stopReason !== "stop" && result.stopReason !== "length") ||
+          !result.usage || [result.usage.input, result.usage.output, result.usage.cacheRead, result.usage.cacheWrite, result.usage.totalTokens,
+            result.usage.cost?.input, result.usage.cost?.output, result.usage.cost?.cacheRead, result.usage.cost?.cacheWrite, result.usage.cost?.total]
+            .some(value => typeof value !== "number" || !Number.isFinite(value) || value < 0)) throw Error("Invalid side prompt stored result");
+        return result;
       }
       assertParent();
       // Immutable payload may outlive denied admission; it never grants authority.
