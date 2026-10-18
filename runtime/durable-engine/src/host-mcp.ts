@@ -21,12 +21,12 @@ export async function createHostMcp(options: {
   const tools: ReturnType<typeof defineTool>[] = [];
   const closes: (() => Promise<void>)[] = [];
   let sealed = false;
-  let catalogChanged = false;
+  let invalidated = false;
   let closing: Promise<void> | undefined;
   const scope = new AsyncLocalStorage<{ name: string; assertCurrent(): void; signal?: AbortSignal }>();
   const assertCurrent = () => {
     options.assertCurrent();
-    if (sealed || catalogChanged || getMcpBridgeReadSnapshot().revision !== snapshot.revision || readMcpInstancePolicy().revision !== policy.revision) throw Error("Native MCP owner is no longer current");
+    if (sealed || invalidated || getMcpBridgeReadSnapshot().revision !== snapshot.revision || readMcpInstancePolicy().revision !== policy.revision) throw Error("Native MCP owner is no longer current");
     assertMcpBridgeSourcesCurrent();
   };
   const lease = acquireMcpSessionBridge();
@@ -71,7 +71,8 @@ export async function createHostMcp(options: {
         });
         const constrained = constrainNativeTransport(raw);
         const client = new McpClient({ name: "piclaw-durable", version: "1", requestTimeoutMs: 10000 });
-        client.onNotification("notifications/tools/list_changed", () => { catalogChanged = true; });
+        client.onNotification("notifications/tools/list_changed", () => { invalidated = true; });
+        client.onClose(() => { invalidated = true; });
         closes.push(async () => {
           const results = await Promise.allSettled([client.close(), constrained.close()]);
           const failure = results.find((r): r is PromiseRejectedResult => r.status === "rejected");

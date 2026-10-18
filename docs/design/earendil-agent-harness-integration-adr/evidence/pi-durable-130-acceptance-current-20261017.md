@@ -642,3 +642,11 @@ the notification before its first result: the result is suppressed, a subsequent
 call never reaches stdin, and a caught failure cannot persist guest state. Seven
 selected MCP cases and three typechecks pass; final drift case adds an explicit
 result non-disclosure assertion (22 assertions).
+
+### MCP transport loss
+
+Unexpected client close invalidates the startup catalogue through the same guard
+as declaration changes. A fixture exits during a tool call without replying;
+catching that failure cannot persist guest state. Eight selected MCP factory cases
+and three typechecks pass; bounded review accepted public onClose registration and
+cleanup semantics. No reconnect, fallback, full-suite or live-server test added.
