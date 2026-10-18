@@ -1,7 +1,7 @@
 import {
   createModels, createProvider, createAssistantMessageEventStream, normalizeContext,
   type Api, type Model, type Models, type SimpleStreamOptions,
-  type TranscriptContext, type AssistantMessage, type AnyModel, type ModelType,
+  type TranscriptContext, type AssistantMessage, type AssistantMessageEvent, type AnyModel, type ModelType,
   type ImageModel, type ImageApi, type ClassifierModel, type ClassifierApi,
   type ImagesContext, type ImagesOptions, type AssistantImages,
   type ClassifierContext, type ClassifierOptions, type ClassifierResult, type Usage,
@@ -249,7 +249,7 @@ export function createHostModels(
           ? AbortSignal.any([options.signal, policy.signal]) : policy.signal;
         const safeOptions = requestOptions(options, !!policy.deferred);
         signal.throwIfAborted();
-        request = await policy.prepareRequest?.(model, { ...safeOptions, signal: options?.signal }, signal);
+        if (policy.prepareRequest) request = await policy.prepareRequest(model, { ...safeOptions, signal: options?.signal }, signal);
         await policy.authorize(ref, "chat", signal);
         signal.throwIfAborted();
         assertSource();
@@ -274,14 +274,15 @@ export function createHostModels(
         const stream = simple
           ? hostModelRuntime120.streamSimple(physical, data(context), hostOptions)
           : hostModelRuntime120.stream(physical, data(context), hostOptions);
+        let terminal: AssistantMessageEvent | undefined;
         for await (const event of stream) {
-          if (event.type === "error") { await request?.settle(event.error); captureTerminalUsage(event.error); throw new Error("Host request failed"); }
-          if (event.type === "done") await request?.settle(event.message);
-          output.push("message" in event ? { ...data({ ...event, message: undefined }), message: projectMessage(event.message, model) }
-            : "partial" in event ? { ...data({ ...event, partial: undefined }), partial: projectMessage(event.partial, model) } : data(event));
+          if (event.type === "error" || event.type === "done") { terminal = event; continue; }
+          output.push("partial" in event ? { ...data({ ...event, partial: undefined }), partial: projectMessage(event.partial, model) } : data(event));
         }
         const result = await stream.result();
         if (result.stopReason === "error" || result.stopReason === "aborted") { await request?.settle(result); captureTerminalUsage(result); throw new Error("Host request failed"); }
+        await request?.settle(result);
+        if (terminal?.type === "done") output.push({ ...data({ ...terminal, message: undefined }), message: projectMessage(result, model) });
         output.end(projectMessage(result, model));
       } catch {
         // Host errors can contain credentials/headers. Do not export them.
