@@ -16,9 +16,9 @@ import { createHostTool } from "../../runtime/durable-engine/src/index.js";
 
 // Deliberately mandatory companion source, never silently skip or use live add-ons.
 const root = process.env.DURABLE_ADDONS_ROOT;
-if (!root) throw Error("Requires DURABLE_ADDONS_ROOT at de92bc95b5b3bb1505beec9617d3b8a5e4fa92d3");
+if (!root) throw Error("Requires DURABLE_ADDONS_ROOT at 08746aa3f114d49f954c1dff712d9f74acca460f");
 const sources = {
-  "code-review": { version: "0.1.8", hash: "889769f64cd52c6271aae7bca72467e83c531a82389dc31f787ec40f39055e21", files: ["index", "host", "runtime", "dispatch", "store", "database", "anchors", "contracts", "validation", "source", "render-source", "markdown"] },
+  "code-review": { version: "0.1.8", hash: "26a2744e0db6785c5b2ffc2ba08dd2604eb070ccd5cd0aeacdcb88034d28abfc", files: ["index", "host", "runtime", "dispatch", "store", "database", "anchors", "contracts", "validation", "source", "render-source", "markdown", "tool"] },
   "remote-peer": { version: "0.3.6", hash: "10cfb60a9a5524f877d0a76353b18417dcfd486c0b62ee2a1d0d14a35d13e117", files: ["index", "runtime-service", "compat/runtime", "service", "state", "transport", "discovery", "config", "client-id"] },
 };
 for (const [addon, pin] of Object.entries(sources)) {

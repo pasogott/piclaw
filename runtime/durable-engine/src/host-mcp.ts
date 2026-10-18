@@ -29,14 +29,15 @@ export async function createHostMcp(options: {
     if (sealed || invalidated || getMcpBridgeReadSnapshot().revision !== snapshot.revision || readMcpInstancePolicy().revision !== policy.revision) throw Error("Native MCP owner is no longer current");
     assertMcpBridgeSourcesCurrent();
   };
-  const lease = acquireMcpSessionBridge();
+  // An empty catalogue owns no credential-bearing transport or generation.
+  const lease = enabled.length ? acquireMcpSessionBridge() : undefined;
   const close = () => {
     sealed = true;
     return closing ??= (async () => {
       const results = await Promise.allSettled(closes.map(close => close()));
       const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
       if (failures.length) throw new AggregateError(failures.map(r => r.reason), "Native MCP cleanup uncertain");
-      lease.release();
+      lease?.release();
     })();
   };
   try {
