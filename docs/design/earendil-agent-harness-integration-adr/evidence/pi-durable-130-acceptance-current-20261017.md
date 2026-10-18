@@ -859,3 +859,36 @@ No assertions or timeouts were weakened, and no automatic retry followed success
 All enabled caps still deny outright. Compaction accounting, provider-unknown
 reconciliation, factory recovered-maintenance adoption and broader acceptance are
 incomplete. No deployment, restart or migration occurred; migration remains last.
+
+## Manual compaction accounting and bookkeeping repair — 2026-10-18
+
+Local commits `dd91145e1` through `5da88f1fe` account uncapped manual summary
+requests under their exact maintenance task identity. The existing request ledger
+records side-prompt work and summary usage; the successful path preserves the
+conversation's model and session identity. Unknown usage retains an unresolved
+reservation and active maintenance work without publishing a compaction entry or
+fabricating a charge.
+
+Startup closes interrupted bookkeeping only after public SDK reads establish a
+completed compaction task and its committed compaction entry in the work's bound
+chat conversation. Completion requires active root side-prompt work and refuses
+unresolved child reservations inside the same transaction. No provider request or
+SDK task is replayed or mutated by this repair.
+
+Focused evidence:
+
+- Successful manual summary: 36 assertions.
+- Unknown summary: 37 assertions, including actual factory reopen after database
+  reopen; the reservation and work stay unresolved/active with no provider resend.
+- Callback failure and seeded interrupted bookkeeping: 36 assertions, including
+  refusal under an unrelated chat and repair after restoring the original binding,
+  without another provider call or charge.
+- Engine and qualification typechecks pass. Independent bounded review returned
+  READY for startup identity, committed-entry proof and unresolved-hold retention.
+
+Logs and review checkpoint: `/workspace/reviews/durable-1650/maintenance-*` and
+`manual-accounting-final-targeted.log`. These local changes have no full candidate
+or root-gate receipt yet and have not been pushed. The reopen fixtures seed
+interrupted bookkeeping; actual process-crash recovery and resumed-maintenance
+adoption are unqualified. Caps still deny, and provider-unknown reconciliation is
+incomplete. No deployment, restart or migration occurred.

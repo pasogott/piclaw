@@ -1631,8 +1631,11 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       expect(root.query("SELECT t.invocation_id FROM token_usage t JOIN budget_work w ON w.id=t.work_id WHERE w.execution_kind='side_prompt'").all()).toHaveLength(0);
       backend.stop(); await backend.close(); compactionPolicySpy?.mockRestore();
       closeDatabase(); initDatabase(); root = getDb();
+      backend = await createDefaultApplicationRuntime(owner, async () => services);
       expect(root.query("SELECT r.state FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id WHERE w.execution_kind='side_prompt'").all()).toEqual([{ state: "unresolved" }]);
       expect(root.query("SELECT status FROM budget_work WHERE parent_work_id IS NULL AND execution_kind='side_prompt'").all()).toEqual([{ status: "active" }]);
+      expect(calls).toBe(beforeCalls + 1);
+      backend.stop(); await backend.close();
       for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
       closeDatabase(); owner.release(); return;
     }
