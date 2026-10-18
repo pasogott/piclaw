@@ -24,12 +24,10 @@ import { readAccessConfig } from "../core/config-access.js";
 import { ChatAccessDenied } from "../db/session-ownership.js";
 import { readOwnedForkSeed, finishOwnedForkSeed } from "../db/owned-forks.js";
 import { requireOwnedSessionExecution } from "./owned-session-access.js";
+import { restoreSessionThinkingPolicy } from "./thinking-policy.js";
 import { importAdoptedSession } from './adopted-session-import.js';
 import type { createDefaultSession } from "./session.js";
-import { forcePersistSessionFile, seedRotatedSession } from "../session-rotation.js";
-import { getSessionPersistencePort } from "./session-persistence.js";
-import { getSessionThinkingPolicy, restoreSessionThinkingPolicy } from './thinking-policy.js';
-import { getDefaultActiveToolNames } from "../extensions/tool-activation.js";
+import { forcePersistSessionFile } from "../session-rotation.js";
 
 /** Cached session entry stored for each chat JID. */
 export interface PoolEntry {
@@ -494,85 +492,6 @@ export class AgentSessionManager {
 
     this.createSideInFlight.set(chatJid, task);
     return await task;
-  }
-
-  async syncSideSessionFromMain(mainSession: AgentSession, sideRuntime: AgentSessionRuntime): Promise<void> {
-    this.assertNonReentrantLifecycleTransition();
-    this.assertMcpAdmission();
-    const epoch = this.mcpAdmissionEpoch;
-    return this.trackMcpLifecycle(async () => {
-      this.assertMcpAdmission(epoch);
-      await this.syncSideSessionFromMainAdmitted(mainSession, sideRuntime, epoch);
-    });
-  }
-
-  private async syncSideSessionFromMainAdmitted(mainSession: AgentSession, sideRuntime: AgentSessionRuntime, epoch: number): Promise<void> {
-    try {
-      const mainContext = await getSessionPersistencePort(mainSession).buildContext();
-      this.assertMcpAdmission(epoch);
-      const result = await sideRuntime.newSession({
-        setup: async (sessionManager) => {
-          this.assertMcpAdmission(epoch);
-          await seedRotatedSession(sessionManager, mainContext, {
-            sessionName: "BTW",
-            model: mainContext.model,
-            thinkingLevel: mainSession.thinkingLevel,
-            preferredThinkingLevel: getSessionThinkingPolicy(mainSession)?.preferred_level,
-          });
-        },
-      });
-      this.assertMcpAdmission(epoch);
-      if (result.cancelled) {
-        throw new Error("Side-session reseed was cancelled.");
-      }
-    } catch (err) {
-      this.options.onWarn?.("Failed to reseed side session from main context", {
-        operation: "sync_side_session_from_main.reseed",
-        err,
-      });
-      await this.disposeSideRuntimeAfterError(sideRuntime, "sync_side_session_from_main.dispose_after_reseed_failure");
-      throw err;
-    }
-
-    this.assertMcpAdmission(epoch);
-    const sideSession = sideRuntime.session;
-    const mainModel = mainSession.model;
-    const sideModel = sideSession.model;
-    if (mainModel && (!sideModel || sideModel.provider !== mainModel.provider || sideModel.id !== mainModel.id)) {
-      try {
-        await sideSession.setModel(mainModel);
-      } catch (err) {
-        this.options.onWarn?.("Failed to sync side-session model", {
-          operation: "sync_side_session_from_main.model",
-          model: `${mainModel.provider}/${mainModel.id}`,
-          err,
-        });
-      }
-    }
-
-    this.assertMcpAdmission(epoch);
-    try {
-      restoreSessionThinkingPolicy(sideSession, mainSession.thinkingLevel, getSessionThinkingPolicy(mainSession)?.preferred_level);
-    } catch (err) {
-      this.options.onWarn?.("Failed to sync side-session thinking level", {
-        operation: "sync_side_session_from_main.thinking_level",
-        err,
-      });
-    }
-
-    this.assertMcpAdmission(epoch);
-    try {
-      const mainToolNames = mainSession.getActiveToolNames();
-      // Empty is a transient protected-recovery/finalisation state, not a
-      // durable user selection. Never copy that suppression into a side
-      // session where it can outlive the owning turn.
-      sideSession.setActiveToolsByName(mainToolNames.length > 0 ? mainToolNames : getDefaultActiveToolNames());
-    } catch (err) {
-      this.options.onWarn?.("Failed to sync side-session tool selection", {
-        operation: "sync_side_session_from_main.tools",
-        err,
-      });
-    }
   }
 
   async recreate(chatJid: string): Promise<void> {

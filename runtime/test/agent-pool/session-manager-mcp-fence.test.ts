@@ -120,14 +120,11 @@ test("quarantine removes only captured runtime generation and deduplicates concu
   } finally { f.cleanup(); }
 });
 
-test("fenced manager rejects side reseeding and runtime recreation before lifecycle work", async () => {
-  const f = fixture(); let replaced = false;
-  const side = { ...runtime("side"), newSession: async () => { replaced = true; return { cancelled: false }; } } as AgentSessionRuntime;
+test("fenced manager rejects runtime recreation before lifecycle work", async () => {
+  const f = fixture();
   try {
     f.manager.blockMcpAdmissions();
-    await expect(f.manager.syncSideSessionFromMain({} as AgentSession, side)).rejects.toThrow("blocked");
     await expect(f.manager.recreate("web:any")).rejects.toThrow("blocked");
-    expect(replaced).toBe(false);
   } finally { f.cleanup(); }
 });
 
