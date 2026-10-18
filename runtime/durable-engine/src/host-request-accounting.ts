@@ -9,6 +9,14 @@ import { readStoredProviderUsageAccountRef } from "../../src/agent-pool/provider
 export const operationBudgetWorkId = (operationId: string) => `durable-operation:${operationId}`;
 
 /** Reconcile only already-committed host terminals. Never clear uncertain holds. */
+export function completeMaintenanceBudgetWork(database: Database, workId: string): void {
+  database.transaction(() => {
+    if (!getBudgetWork(workId, database) || database.query(`SELECT 1 FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id
+      WHERE w.parent_work_id=? AND r.state NOT IN ('settled','released') LIMIT 1`).get(workId)) return;
+    setBudgetWorkStatus(workId, "completed", { boundary: "maintenance_settled" }, database);
+  }).immediate();
+}
+
 export function reconcileOperationBudgetWork(database: Database, operationId?: string): void {
   const terminals = database.query("SELECT operation_id FROM service_effect_s02_commits WHERE (? IS NULL OR operation_id=?)").all(operationId ?? null, operationId ?? null) as { operation_id: string }[];
   database.transaction(() => {
@@ -22,14 +30,15 @@ export function reconcileOperationBudgetWork(database: Database, operationId?: s
   }).immediate();
 }
 
-/** Stored-identity, uncapped interactive parent and foreground Delegate requests.
+/** Stored-identity, uncapped host model requests.
  * Unsupported requests remain on the existing uncapped path; caps still deny.
  * One fresh request ID per actual invocation, including a recovery resend. A
  * dispatched unknown outcome retains its old hold; it is never called free.
  */
 export async function reserveHostRequest(options: {
   database: Database; operationId: string; chatJid: string; authPath: string;
-  model: Model<Api>; maxTokens?: number; executionKind?: "interactive" | "delegate" | "scheduled"; scheduledTaskId?: string; signal: AbortSignal; assertCurrent(): void;
+  model: Model<Api>; maxTokens?: number; executionKind?: "interactive" | "delegate" | "scheduled" | "side_prompt"; scheduledTaskId?: string;
+  maintenanceWorkId?: string; signal: AbortSignal; assertCurrent(): void;
 }) {
   const { database, model, signal, assertCurrent } = options;
   assertCurrent(); signal.throwIfAborted();
@@ -37,10 +46,10 @@ export async function reserveHostRequest(options: {
   if (!accountRef) return undefined;
   const amount = boundHostRequestCost(model, options.maxTokens ?? model.maxTokens);
   if (amount.amountMicros === null) return undefined;
-  const operationWork = operationBudgetWorkId(options.operationId);
+  const operationWork = options.maintenanceWorkId ?? operationBudgetWorkId(options.operationId);
   const id = randomUUID();
   const workId = `durable-request:${id}`;
-  ensureBudgetWork({ id: operationWork, chatJid: options.chatJid, executionKind: options.scheduledTaskId ? "scheduled" : "interactive",
+  ensureBudgetWork({ id: operationWork, chatJid: options.chatJid, executionKind: options.maintenanceWorkId ? "side_prompt" : options.scheduledTaskId ? "scheduled" : "interactive",
     scheduledTaskId: options.scheduledTaskId }, database);
   ensureBudgetWork({ id: workId, chatJid: options.chatJid, executionKind: options.executionKind ?? "interactive", parentWorkId: operationWork }, database);
   const current = () => {

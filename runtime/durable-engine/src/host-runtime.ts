@@ -51,6 +51,7 @@ export interface MaterializedAnswer {
 export interface RuntimeOptions {
   readonly incarnation: string;
   readonly onOperationSettled?: (operationId: string) => void;
+  readonly onMaintenanceSettled?: (workId: string) => void;
   /** Required for model SET: shared-file SQL guard, checked inside each storage transaction. */
   readonly withIdleModelGuard?: <T>(body: () => Promise<T>) => Promise<T>;
   /** Caller already holds exclusive ownership of this entire store, not a per-chat lease.
@@ -152,7 +153,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
     operationConversationFor: o.operationConversationFor?.bind(o),
     authorizeScheduling: authorizeScheduling.bind(o), putAnswer: putAnswer.bind(o),
     materializeAnswer: materializeAnswer?.bind(o), now: now.bind(o),
-    onOperationSettled: o.onOperationSettled?.bind(o),
+    onOperationSettled: o.onOperationSettled?.bind(o), onMaintenanceSettled: o.onMaintenanceSettled?.bind(o),
     owner: Object.freeze({ assert: owner.assert.bind(owner), release: owner.release.bind(owner) }),
     work: Object.freeze({ getOperation: work.getOperation.bind(work), acceptCancellation: work.acceptCancellation.bind(work), bindHarness: work.bindHarness.bind(work), finishHarness: work.finishHarness?.bind(work) }),
     terminal: Object.freeze({ getTerminal: terminal.getTerminal.bind(terminal), commitTerminal: terminal.commitTerminal.bind(terminal) }),
@@ -176,6 +177,7 @@ export class HostConversationRuntime {
   private authorizingMaintenance = false;
   private maintenance?: Promise<unknown>;
   private maintenanceTaskId?: number;
+  private maintenanceBinding?: { chatJid: string; conversationId: number };
   private pendingMaintenance?: {
     binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number };
     reconcile: () => Promise<void>;
@@ -441,6 +443,7 @@ export class HostConversationRuntime {
     if (!o.withIdleModelGuard) throw new Error("Idle model guard unavailable");
     if (this.changingModel || this.active.size) throw new Error("Runtime is not idle");
     signal?.throwIfAborted();
+    this.maintenanceBinding = Object.freeze({ chatJid: binding.chatJid, conversationId: binding.conversationId });
     this.changingModel = true; // Claim before the first await, across the entire authority domain.
     const context = withoutAbortSignal(this.context);
     const assertOwner = () => o.owner.assert(); // Close seals callers but joins this maintenance.
@@ -493,6 +496,7 @@ export class HostConversationRuntime {
           const view = await conversation.context(context); assertOwner();
           if (!entry || entry.conversationId !== id || entry.kind !== "pi.compaction" || view.head?.id !== entryId) throw new Error("Compaction context not committed");
         }
+        o.onMaintenanceSettled?.(`durable-maintenance:${o.incarnation}:${taskId}`);
         return { compacted: entryId !== undefined };
       };
       return settleTask();
@@ -547,6 +551,12 @@ export class HostConversationRuntime {
     this.fence(); scope.signal.throwIfAborted();
     if (!this.changingModel || this.maintenanceTaskId !== scope.taskId || scope.taskKind !== "pi.compaction" || scope.phase !== "summarize"
       || !this.options.existingConversationIds.some(id => id === scope.conversationId)) throw Error("Exact maintenance request required");
+  }
+
+  maintenanceRequestIdentity(scope: { taskId: number; conversationId: number; taskKind: string; phase: string; signal: AbortSignal }) {
+    this.assertMaintenanceRequest(scope);
+    if (this.maintenanceBinding?.conversationId !== scope.conversationId) throw Error("Maintenance binding unavailable");
+    return { chatJid: this.maintenanceBinding.chatJid, workId: `durable-maintenance:${this.options.incarnation}:${scope.taskId}` };
   }
 
   /** Qualify a MODEL tool against its public live slot and every accepted run

@@ -19,7 +19,7 @@ import { installTerminalSettlementCompositionSchema } from "../../src/service-ef
 import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { applicationOwnership, createApplicationBootstrapBundle } from "./application-bootstrap.js";
 import { createHostModels } from "./host-models.js";
-import { reserveHostRequest, reconcileOperationBudgetWork } from "./host-request-accounting.js";
+import { reserveHostRequest, reconcileOperationBudgetWork, completeMaintenanceBudgetWork } from "./host-request-accounting.js";
 import { createHostMcp } from "./host-mcp.js";
 import { createHostFetch } from "./host-fetch.js";
 import { taskModelRequestScope, withTaskModelRequestScope } from "./task-model-boundary-shim.js";
@@ -307,7 +307,15 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
     async prepareRequest(model, options, signal) {
       const scope = taskModelRequestScope(options?.signal);
-      if (!scope || scope.taskKind !== "pi.generation") return undefined;
+      if (!scope) throw Error("Native request task scope unavailable");
+      if (scope.taskKind === "pi.compaction") {
+        const identity = runtime().maintenanceRequestIdentity(scope);
+        return reserveHostRequest({ database: root, operationId: identity.workId, maintenanceWorkId: identity.workId,
+          chatJid: identity.chatJid, authPath: join(getPiclawAgentDir(), "auth.json"), model: model as any,
+          maxTokens: options?.maxTokens, executionKind: "side_prompt", signal,
+          assertCurrent() { assert(); runtime().assertMaintenanceRequest(scope); } });
+      }
+      if (scope.taskKind !== "pi.generation") throw Error("Native request kind unavailable");
       const captured = requestSources.get(scope.signal);
       if (!captured) throw Error("Native request source capture unavailable");
       const scheduled = root.query("SELECT task_id FROM service_effect_s07_occurrences WHERE operation_id=?").get(captured.operation.operationId) as { task_id: string } | null;
@@ -475,6 +483,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     return { ref, bytes, byteLength: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), mediaType: "text/plain", redactionClass: "private" as const };
   } } };
   const bundle = await createApplicationBootstrapBundle({ root, path, ownership, offlineInitialize: true, answers,
+    onMaintenanceSettled(workId) { assert(); completeMaintenanceBudgetWork(root, workId); },
     onOperationSettled(operationId) { assert(); reconcileOperationBudgetWork(root, operationId); },
     onRuntime(value) { captureRuntime = value; },
     manifest: mapping.bindings.map(({ chatJid, branchId, conversationId }) => ({ chatJid, branchId, conversationId: conversationId as ConversationId })),

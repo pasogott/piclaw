@@ -125,7 +125,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -146,7 +146,8 @@ for (const scenario of ["native-scheduler-accounting-unknown", "native-scheduler
   const scheduledAccounting = scenario.startsWith("native-scheduler-accounting");
   const scheduledAccountingUnknown = scenario === "native-scheduler-accounting-unknown";
   const nativeScheduler = scenario === "native-scheduler" || scheduledAccounting;
-  const parentAccounting = scenario.startsWith("native-parent-accounting") || delegateAccounting || scheduledAccounting;
+  const compactionAccounting = scenario === "native-compaction-accounting";
+  const parentAccounting = scenario.startsWith("native-parent-accounting") || delegateAccounting || scheduledAccounting || compactionAccounting;
   const accountingTwoTurns = scenario === "native-parent-accounting-two-turns";
   const accountingAuthDenied = scenario === "native-parent-accounting-auth-deny";
   const accountingRotate = scenario === "native-parent-accounting-rotate";
@@ -158,7 +159,7 @@ for (const scenario of ["native-scheduler-accounting-unknown", "native-scheduler
     mkdirSync(getPiclawAgentDir(), { recursive: true });
     writeFileSync(join(getPiclawAgentDir(), "auth.json"), JSON.stringify({ "openai-codex": { type: "oauth", access: "synthetic-access", refresh: "synthetic-refresh", accountId: "synthetic-account", expires: Date.now() + 60000 } }), { mode: 0o600 });
     onCredentialResolve = async () => {
-      if (delegateAccounting || scheduledAccounting) expect((root.query("SELECT COUNT(*) AS n FROM budget_request_reservations WHERE state='reserved'").get() as { n: number }).n).toBeGreaterThan(0);
+      if (delegateAccounting || scheduledAccounting || compactionAccounting) expect((root.query("SELECT COUNT(*) AS n FROM budget_request_reservations WHERE state='reserved'").get() as { n: number }).n).toBeGreaterThan(0);
       else expect(root.query("SELECT state FROM budget_request_reservations ORDER BY rowid").all()).toEqual([...(accountingTwoTurns && calls > 0 ? [{ state: "settled" }] : []), { state: "reserved" }]);
       if (accountingAuthDenied) throw Error("Synthetic auth denial");
       if (accountingCloseFailure) root.exec("CREATE TRIGGER accounting_work_close_fail BEFORE UPDATE ON budget_work WHEN OLD.parent_work_id IS NULL AND NEW.status='completed' BEGIN SELECT RAISE(ABORT, 'synthetic operation work close failure'); END");
@@ -342,7 +343,7 @@ for (const scenario of ["native-scheduler-accounting-unknown", "native-scheduler
     requested.push(physical.id);
     planRequests.push(JSON.stringify(input));
     calls++; const stream = createAssistantMessageEventStream();
-    if (parentAccounting && !delegateAccounting && !scheduledAccounting) expect(root.query("SELECT state FROM budget_request_reservations ORDER BY rowid").all()).toEqual([...(accountingTwoTurns && calls > 1 ? [{ state: "settled" }] : []), { state: "dispatched" }]);
+    if (parentAccounting && !delegateAccounting && !scheduledAccounting && !compactionAccounting) expect(root.query("SELECT state FROM budget_request_reservations ORDER BY rowid").all()).toEqual([...(accountingTwoTurns && calls > 1 ? [{ state: "settled" }] : []), { state: "dispatched" }]);
     const child = nativeDelegate && JSON.stringify(input.messages.findLast(message => message.role === "user")?.content).includes("NATIVE_DELEGATE_CHILD");
     if (delegateImagesCase && !child) expect(JSON.stringify(input)).not.toContain('"type":"image"');
     const firstDelegate = nativeDelegate && !child && !input.messages.some(message => message.role === "toolResult");
@@ -415,7 +416,7 @@ for (const scenario of ["native-scheduler-accounting-unknown", "native-scheduler
     saveBudgetCap({ scope: "instance_daily", metric: "api_usd_micros", amount: 0, timezone: "UTC" }, root);
   };
   let compactionPolicySpy: { mockRestore(): void } | undefined;
-  if (scenario === "public-shim-compaction") {
+  if (scenario === "public-shim-compaction" || compactionAccounting) {
     const open = Harness.open;
     compactionPolicySpy = spyOn(Harness, "open").mockImplementation((storage, options, ctx) => open.call(Harness, storage, { ...options,
       settings: { ...options.settings, compaction: { enabled: false, keepRecentTokens: 1 } } }, ctx));
@@ -1184,7 +1185,7 @@ for (const scenario of ["native-scheduler-accounting-unknown", "native-scheduler
     for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
     closeDatabase(); owner.release(); return;
   }
-  if (parentAccounting) {
+  if (parentAccounting && !compactionAccounting) {
     expect(dispatchOutcome).toBe("settled");
     expect(calls).toBe(1);
     expect(root.query("SELECT state FROM budget_request_reservations").all()).toEqual([{ state: "settled" }]);
@@ -1613,7 +1614,7 @@ for (const scenario of ["native-scheduler-accounting-unknown", "native-scheduler
   expect(modelQuery.message).toContain(`${modelB.provider}/${modelB.id}`);
   expect(await first!.readModel!()).toBe(persistedModel);
   expect(calls).toBe(1);
-  if (scenario === "public-shim-compaction") {
+  if (scenario === "public-shim-compaction" || compactionAccounting) {
     const beforeCalls = calls;
     const beforeModel = await first!.readModel!();
     const identity = first!.sessionId;
@@ -1623,6 +1624,11 @@ for (const scenario of ["native-scheduler-accounting-unknown", "native-scheduler
     expect(root.query("SELECT id FROM entries WHERE json_extract(record, '$.kind')='pi.compaction'").all()).toHaveLength(1);
     expect(await first!.readModel!()).toBe(beforeModel);
     expect(first!.sessionId).toBe(identity);
+    if (compactionAccounting) {
+      expect(root.query("SELECT r.state FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id WHERE w.execution_kind='side_prompt'").all()).toEqual([{ state: "settled" }]);
+      expect(root.query("SELECT status,last_boundary FROM budget_work WHERE parent_work_id IS NULL AND execution_kind='side_prompt'").all()).toEqual([{ status: "completed", last_boundary: "maintenance_settled" }]);
+      expect(root.query("SELECT SUM(t.api_equivalent_cost_microusd) AS amount FROM token_usage t JOIN budget_work w ON w.id=t.work_id WHERE w.execution_kind='side_prompt'").get()).toEqual({ amount: 10 });
+    }
     backend.stop(); await backend.close(); compactionPolicySpy?.mockRestore();
     for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
     closeDatabase(); owner.release(); return;

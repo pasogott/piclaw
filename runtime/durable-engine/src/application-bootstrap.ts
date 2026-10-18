@@ -57,6 +57,7 @@ export interface ApplicationBootstrapOptions {
   sessions: ReadonlyMap<string, string>;
   offlineInitialize?: boolean;
   /** Publish the existing runtime before recovery can schedule any provider. */
+  onMaintenanceSettled?: (workId: string) => void;
   onOperationSettled?: (operationId: string) => void;
   onRuntime?: (runtime: import("./host-runtime.js").HostConversationRuntime) => void;
   assertConversationAvailable?: () => void;
@@ -134,7 +135,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     const bindings = createHostDurableBindings(root, { domain: r.incarnation, incarnation: r.incarnation, manifest, getConversationBinding: lookup, assertOwner: assert, resolveContent: content });
     controller = await createHostController({ acquireOwnership: async () => lease,
       createStorage: async () => SqliteStorage.open(candidateDatabase),
-      runtime: { ...r, work, terminal, bindings, onOperationSettled: config.onOperationSettled, putAnswer: config.answers.put.bind(config.answers),
+      runtime: { ...r, work, terminal, bindings, onOperationSettled: config.onOperationSettled, onMaintenanceSettled: config.onMaintenanceSettled, putAnswer: config.answers.put.bind(config.answers),
         withIdleModelGuard: body => candidateDatabase.withIdleModelGuard(body),
         existingConversationIds: manifest.map(b => b.conversationId),
         operationConversationFor: input => bindings.resolveConversation(input),
