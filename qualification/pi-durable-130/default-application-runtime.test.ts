@@ -36,6 +36,7 @@ import { createPlanKvAuthority } from "../../runtime/durable-engine/src/host-pla
 import { installCodeReviewFixture } from "./code-review-fixture.ts";
 import { installOfficeViewerFixture } from "./office-viewer-fixture.ts";
 import { installEditableTableFixture } from "./editable-table-fixture.ts";
+import { installDrawioFixture } from "./drawio-fixture.ts";
 import { withAddonLocalDispatch, bindAddonLocalDispatchRequest, getAddonLocalDispatchBlock, verifyAddonLocalMessage } from "../../runtime/src/addons/local-dispatch.js";
 import { admitAddonLocalRequest, withAddonLocalRequest } from "../../runtime/src/addons/local-context.js";
 
@@ -118,7 +119,7 @@ const explicitDelegateCases: Record<string, { id: string; model: unknown; denied
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
+for (const scenario of ["native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -136,6 +137,14 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   const planRequests: string[] = [];
   let toolSequence: { name: string; arguments: Record<string, unknown> | (() => Record<string, unknown>) }[] | undefined;
   const reviewPackage = scenario === "native-code-review" ? installCodeReviewFixture(workspace) : undefined;
+  const nativeDrawio = scenario.startsWith("native-drawio");
+  const drawioCancelled = scenario === "native-drawio-cancel";
+  const drawioMissingOpener = scenario === "native-drawio-missing-opener";
+  if (nativeDrawio) {
+    await installDrawioFixture(workspace);
+    writeFileSync(join(workspace, "existing.drawio"), "PRESERVED_DRAWIO");
+    toolSequence = [{ name: "open_drawio_editor", arguments: { path: "nested/new.drawio" } }, { name: "open_drawio_editor", arguments: { path: "existing.drawio" } }];
+  }
   const nativeOffice = scenario.startsWith("native-office-viewer");
   const officeCancelled = scenario === "native-office-viewer-cancel";
   if (nativeOffice) {
@@ -358,13 +367,13 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
       return captured;
     }));
   }
-  if (nativeTable || nativeOffice) {
+  if (nativeTable || nativeOffice || nativeDrawio) {
     const captureTool = HostConversationRuntime.prototype.captureToolSource;
     captureSpies.push(spyOn(HostConversationRuntime.prototype, "captureToolSource").mockImplementation(async function (this: HostConversationRuntime, ...args) {
       const captured = await captureTool.apply(this, args);
       realToolCaptures++;
       expect(captured.inputs[0]?.sourceId).toBe("factory-input");
-      if (officeCancelled) root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
+      if (officeCancelled || drawioCancelled) root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
       if (scenario === "native-editable-table-closed-publisher") backend.stop();
       if (scenario === "native-editable-table-revoked") root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
       // Host-owned SQL changes the actual authority after capture, not a fake
@@ -374,7 +383,31 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
       return captured;
     }));
   }
-  let backend = await createDefaultApplicationRuntime(owner, async () => services);
+  let backend: Awaited<ReturnType<typeof createDefaultApplicationRuntime>>;
+  if (scenario === "native-drawio-prepare-held") {
+    let entered!: () => void, release!: () => void;
+    const inside = new Promise<void>(resolve => { entered = resolve; });
+    const hold = new Promise<void>(resolve => { release = resolve; });
+    const extract = Bun.Archive.prototype.extract;
+    const gate = spyOn(Bun.Archive.prototype, "extract").mockImplementation(async function (this: Bun.Archive, ...args) {
+      entered(); await hold; return extract.apply(this, args);
+    });
+    let modelCalls = 0, finished = false;
+    const primary = Error("model construction failed after vendor preparation");
+    const pending = createDefaultApplicationRuntime(owner, async () => { modelCalls++; throw primary; })
+      .then(() => { finished = true; return undefined; }, error => { finished = true; return error; });
+    try {
+      await inside;
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(finished).toBe(false); expect(modelCalls).toBe(0); expect(calls).toBe(0);
+      release(); expect(await pending).toBe(primary); expect(modelCalls).toBe(1);
+      const pkg = join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-drawio-editor/index.ts");
+      const addon = await import(pkg);
+      expect((await addon.handleRoute(new Request("http://fixture/drawio/index.html"), "/drawio/index.html")).status).toBe(503);
+    } finally { release(); await pending; gate.mockRestore(); }
+    backend = await createDefaultApplicationRuntime(owner, async () => { modelCalls++; return services; });
+    expect(modelCalls).toBe(2);
+  } else backend = await createDefaultApplicationRuntime(owner, async () => services);
   expect(!!backend.sessionOptions.getDurableSession?.("web:default")).toBe(true);
   const first = backend.sessionOptions.getDurableSession?.("web:default");
   expect(first).toBeDefined(); expect(calls).toBe(0);
@@ -389,16 +422,32 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   let sseText = "";
   let sseReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let sseDrain: Promise<void> | undefined;
-  if (nativeTable) {
+  if (nativeTable || nativeDrawio) {
     if (scenario !== "native-editable-table-missing-publisher") {
-      backend.attachChannel!(channel);
-      expect(() => backend.attachChannel!(channel)).toThrow("already attached");
+      const attached = drawioMissingOpener ? { broadcastEvent: channel.broadcastEvent.bind(channel) } : channel;
+      backend.attachChannel!(attached);
+      expect(() => backend.attachChannel!(attached)).toThrow("already attached");
     }
     const response = await channel.handleRequest(new Request(`http://fixture/sse/stream?chat_jid=${encodeURIComponent(tableChat)}`));
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     sseReader = response.body!.getReader();
-    sseDrain = (async () => { for (;;) { const chunk = await sseReader!.read(); if (chunk.done) return; sseText += new TextDecoder().decode(chunk.value); } })();
+    sseDrain = (async () => {
+      const replied = new Set<string>();
+      for (;;) {
+        const chunk = await sseReader!.read(); if (chunk.done) return;
+        sseText += new TextDecoder().decode(chunk.value);
+        if (nativeDrawio) for (const line of sseText.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          let payload: any; try { payload = JSON.parse(line.slice(6)); } catch { continue; }
+          if (payload.kind !== "custom" || !payload.request_id || replied.has(payload.request_id)) continue;
+          replied.add(payload.request_id);
+          expect(payload).toMatchObject({ chat_jid: "web:default", options: { action: "open_workspace_file", target: "tab" } });
+          const reply = await channel.handleRequest(new Request("http://fixture/agent/respond", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ request_id: payload.request_id, chat_jid: payload.chat_jid, outcome: { ok: true, opened: true, target: "tab" } }) }));
+          expect(await reply.json()).toMatchObject({ status: "ok" });
+        }
+      }
+    })();
 
   }
   if (scenario === "native-scheduler") {
@@ -683,7 +732,37 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   expect(dispatch).toBeDefined();
   const dispatchOutcome = await dispatch!();
   if (tableCancelled) expect(widgetEvents).toHaveLength(0);
-  expect(dispatchOutcome).toBe(tableCancelled || officeCancelled ? "pending" : "settled");
+  expect(dispatchOutcome).toBe(tableCancelled || officeCancelled || drawioCancelled ? "pending" : "settled");
+  if (nativeDrawio) {
+    expect(realToolCaptures).toBe(drawioCancelled ? 1 : 2);
+    expect(readFileSync(join(workspace, "existing.drawio"), "utf8")).toBe("PRESERVED_DRAWIO");
+    if (drawioCancelled) {
+      expect(existsSync(join(workspace, "nested/new.drawio"))).toBe(false);
+      expect(observedResults.size).toBe(0);
+      expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
+      expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+    } else {
+      expect(readFileSync(join(workspace, "nested/new.drawio"), "utf8")).toContain("<mxfile");
+      expect(observedResults.get("factory-tool-1")?.isError).not.toBe(true);
+    }
+    if (drawioCancelled || drawioMissingOpener) expect(sseText).not.toContain("extension_ui_request");
+    else expect(sseText).toContain("extension_ui_request");
+    if (drawioMissingOpener) {
+      const result = JSON.stringify(observedResults.get("factory-tool-1")?.content);
+      expect(result).toContain("Fallback URL: /drawio/edit?path=nested%2Fnew.drawio");
+      expect(result).toContain("Draw.io channel opener unavailable");
+      expect(result).not.toContain("Opened nested/new.drawio");
+    }
+    const route = await channel.handleRequest(new Request("http://fixture/drawio/index.html"));
+    expect(route.status).toBe(200); expect(await route.text()).toBe("DRAWIO_NATIVE_FIXTURE");
+    await sseReader!.cancel(); await sseDrain;
+    captureSpies.forEach(spy => spy.mockRestore());
+    backend.stop();
+    const sealed = await channel.handleRequest(new Request("http://fixture/drawio/index.html"));
+    expect(sealed.status).toBe(503);
+    await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); await backend.close();
+    sdkSpies.forEach(spy => spy.mockRestore()); owner.release(); closeDatabase(); return;
+  }
   if (nativeOffice) {
     expect(realToolCaptures).toBe(officeCancelled ? 1 : 4);
     expect(readFileSync(join(workspace, "office.csv"), "utf8")).toBe("name,value\nfixture,1650\n");

@@ -5,7 +5,7 @@
  * cancellation, and session binding correctly.
  */
 
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, spyOn } from "bun:test";
 import "../../helpers.js";
 import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 import { UiBridge } from "../../../src/channels/web/theming/ui-bridge.js";
@@ -40,6 +40,34 @@ function createRuntime(session: any): AgentSessionRuntime {
 }
 
 describe("ui-context", () => {
+  test("openWorkspaceFile requires acknowledgement and reports UI timeout", async () => {
+    const { events, uiBridge } = makeChannel();
+    let expire!: () => void;
+    const originalSetTimeout = globalThis.setTimeout;
+    const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
+      expect(ms).toBe(15000);
+      expire = callback;
+      return originalSetTimeout(() => {}, 60000);
+    }) as typeof setTimeout);
+    try {
+      const result = uiBridge.openWorkspaceFile("web:default", "diagram.drawio", "Diagram");
+      const pending = [...uiBridge.pendingUiRequests.values()][0]!;
+      clearTimeout(pending.timeoutId);
+      expect(events[0]?.payload.options).toEqual({ timeout: 15000, action: "open_workspace_file", path: "diagram.drawio", label: "Diagram", target: "tab" });
+      expire();
+      expect(await result).toEqual({ ok: false, opened: false, reason: "ui_timeout", detail: "The browser did not confirm opening the workspace file." });
+      expect(uiBridge.pendingUiRequests.size).toBe(0);
+      expect(events.at(-1)?.type).toBe("extension_ui_timeout");
+      for (const value of [null, false, {}, { ok: true, opened: true, target: "tab" }, { ok: false, opened: false, reason: "blocked" }]) {
+        const opened = uiBridge.openWorkspaceFile("web:default", "diagram.drawio", "Diagram");
+        const [id, request] = [...uiBridge.pendingUiRequests.entries()][0]!;
+        clearTimeout(request.timeoutId);
+        uiBridge.pendingUiRequests.delete(id);
+        request.resolve(value);
+        expect(await opened).toEqual(value && typeof value === "object" && ("ok" in value) ? value : { ok: false, opened: false, reason: "ui_not_opened", detail: "The browser did not confirm opening the workspace file." });
+      }
+    } finally { timer.mockRestore(); }
+  });
   test("createUiContext handles confirm/input/editor and editor updates", async () => {
     const { channel, events, uiBridge } = makeChannel();
     const ui = createUiContext(channel as any, "web:default");

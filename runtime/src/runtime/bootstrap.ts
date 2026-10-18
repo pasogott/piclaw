@@ -11,7 +11,7 @@ export interface RuntimeBackend {
   readonly sessionOptions: Readonly<Pick<AgentPoolOptions, "getDurableSession" | "dispatchScheduledAgent">>;
   readonly bind: (options: Pick<WebChannelOpts, "queue" | "agentPool">) => Readonly<WebChannelOpts>;
   /** Attach the actual constructed channel, never a global channel lookup. */
-  attachChannel?(channel: { broadcastEvent(event: string, data: Record<string, unknown>): void }): void;
+  attachChannel?(channel: { broadcastEvent(event: string, data: Record<string, unknown>): void; requestWorkspaceFileOpen?(chatJid: string, path: string, label: string): Promise<unknown> }): void;
   /** Wake queue-owned observers before queue join; do not dispose storage yet. */
   stop(): void;
   /** Close the borrowed scope after queue join, never the application's global owner. */
@@ -274,7 +274,7 @@ export async function bootstrapRuntime(deps: RuntimeBootstrapDeps, runtimeOwner?
     const web = partialWeb = await deps.startWebChannel(queue, agentPool, backend?.bind);
     if (backend?.attachChannel) {
       if (!("broadcastEvent" in web) || typeof web.broadcastEvent !== "function") throw Error("Backend requires channel publisher");
-      backend.attachChannel(web as unknown as { broadcastEvent(event: string, data: Record<string, unknown>): void });
+      backend.attachChannel(web as unknown as Parameters<NonNullable<RuntimeBackend["attachChannel"]>>[0]);
     }
     const pushover = familyMode ? null : await deps.startOptionalPushoverChannel();
     if (!familyMode) deps.startBackgroundModelRefresh(agentPool);

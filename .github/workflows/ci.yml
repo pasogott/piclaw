@@ -110,6 +110,14 @@ jobs:
           path: .qualification-office-viewer
           persist-credentials: false
 
+      - name: Checkout native Draw.io qualification source
+        uses: actions/checkout@v6
+        with:
+          repository: rcarmo/piclaw-addons
+          ref: 8eb776fd9989addaa7d110c3d253c20f0cc22d58
+          path: .qualification-drawio
+          persist-credentials: false
+
       - name: Install inactive application durable engine
         working-directory: runtime/durable-engine
         run: |
@@ -126,6 +134,7 @@ jobs:
           DURABLE_CODE_REVIEW_ROOT: ${{ github.workspace }}/.qualification-code-review
           DURABLE_EDITABLE_TABLE_ROOT: ${{ github.workspace }}/.qualification-editable-table
           DURABLE_OFFICE_VIEWER_ROOT: ${{ github.workspace }}/.qualification-office-viewer
+          DURABLE_DRAWIO_ROOT: ${{ github.workspace }}/.qualification-drawio
         run: |
           bun install --frozen-lockfile --ignore-scripts
           bun run typecheck

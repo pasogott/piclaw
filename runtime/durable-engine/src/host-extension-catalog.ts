@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import type { CodeReviewNativeExports } from "./host-code-review-tool.js";
 import type { EditableTableNativeExports } from "./host-editable-table-tool.js";
+import type { DrawioNativeExports } from "./host-drawio-tool.js";
 export interface PlanPromptExports {
   loadSessionPlan(chatJid: string): { chat_jid: string; markdown: string; updated_at: string | null };
   buildPlanSystemPrompt(plan: ReturnType<PlanPromptExports["loadSessionPlan"]>): string;
@@ -52,7 +53,15 @@ const approvedOfficeViewerFiles = Object.freeze({
   "package.json": "fe62110bc5f59674973065afee279f34f7e0ff1cfc078718f8fad14a5973b155",
   "index.ts": "c6d302ab289c6ce97967da40d97aac14f70b04aeb6a8be77c63bcde7e7d97565",
 });
+// Execution source only. Installed vendor assets remain trusted installation
+// content, not integrity-qualified source or a filesystem sandbox.
+const approvedDrawioFiles = Object.freeze({
+  "package.json": "2942b1e169541326fd83c9bec29f3365c2f1efabfd13511667da503e7cde67d8",
+  "index.ts": "ab1ffba287828ed37db87288c7f1feb47a12efb2c66aa983941643575bdf2790",
+  "tool.ts": "7a47e648d93d396c5b959795056885353f34fa04322390e35b0e989d95e81a8b",
+});
 const profiles = {
+  open_drawio_editor: { name: "@rcarmo/piclaw-addon-drawio-editor", version: "31.4.4", files: approvedDrawioFiles, shadows: ["index.js", "tool.js", "tool.json", "tool/index.js", "tool/package.json"], events: [] as readonly string[] },
   open_office_viewer: { name: "@rcarmo/piclaw-addon-office-viewer", version: "0.1.3", files: approvedOfficeViewerFiles, shadows: ["index.js"], events: [] as readonly string[] },
   editable_table: { name: "@rcarmo/piclaw-addon-editable-table", version: "0.1.4", files: approvedEditableTableFiles, shadows: ["index.js", "tool.js", "tool.json", "tool/index.js", "tool/package.json", "shared.js", "shared.json", "shared/index.js", "shared/package.json"], events: ["resources_discover"] },
   plan: { name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.25", files: approvedPlanFiles, shadows: ["compat/chat-context.js", "compat/extension-kv.js", "compat/package.json"], events: ["before_agent_start"] },
@@ -183,6 +192,22 @@ export async function qualifyInstalledCodeReview(catalog: LoadExtensionsResult, 
   return Object.freeze({ ...qualified, assertCurrent, addon });
 }
 
+export async function qualifyInstalledDrawio(catalog: LoadExtensionsResult, cwd: string) {
+  const qualified = qualifyInstalled(catalog, cwd, "open_drawio_editor");
+  if (!qualified) return undefined;
+  const exports = await import(pathToFileURL(qualified.source.entry).href) as Partial<DrawioNativeExports>;
+  qualified.assertCurrent();
+  const names = ["createDrawioEditorTool", "bindDrawioVendorHost", "getDrawioVendorCacheDir", "handleRoute"] as const;
+  if (names.some(name => typeof exports[name] !== "function")) throw Error("Draw.io public native exports required");
+  const addon = Object.freeze(Object.fromEntries(names.map(name => [name, exports[name]]))) as unknown as DrawioNativeExports;
+  const declaration = (tool: Pick<ReturnType<DrawioNativeExports["createDrawioEditorTool"]>, "name" | "label" | "description" | "parameters">) => JSON.stringify({ name: tool.name, label: tool.label, description: tool.description, parameters: tool.parameters });
+  if (declaration(addon.createDrawioEditorTool()) !== declaration(qualified.definition)) throw Error("Draw.io native/legacy declarations differ");
+  return Object.freeze({ ...qualified, addon, assertCurrent() {
+    qualified.assertCurrent();
+    if (names.some(name => exports[name] !== addon[name])) throw Error("Draw.io public exports changed");
+  } });
+}
+
 export function qualifyInstalledOfficeViewer(catalog: LoadExtensionsResult, cwd: string) {
   return qualifyInstalled(catalog, cwd, "open_office_viewer");
 }
@@ -250,8 +275,8 @@ export async function loadApplicationExtensionCatalog(options: {
  * hooks through a fabricated AgentSession context. Keep all diagnostics so a
  * successful startup can never silently mean missing installed capabilities.
  */
-export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensionsResult, plan?: Awaited<ReturnType<typeof qualifyInstalledPlan>>, delegate?: Awaited<ReturnType<typeof qualifyInstalledDelegate>>, codeReview?: Awaited<ReturnType<typeof qualifyInstalledCodeReview>>, editableTable?: Awaited<ReturnType<typeof qualifyInstalledEditableTable>>, officeViewer?: ReturnType<typeof qualifyInstalledOfficeViewer>): void {
-  plan?.assertCurrent(); delegate?.assertCurrent(); codeReview?.assertCurrent(); editableTable?.assertCurrent(); officeViewer?.assertCurrent();
+export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensionsResult, plan?: Awaited<ReturnType<typeof qualifyInstalledPlan>>, delegate?: Awaited<ReturnType<typeof qualifyInstalledDelegate>>, codeReview?: Awaited<ReturnType<typeof qualifyInstalledCodeReview>>, editableTable?: Awaited<ReturnType<typeof qualifyInstalledEditableTable>>, officeViewer?: ReturnType<typeof qualifyInstalledOfficeViewer>, drawio?: Awaited<ReturnType<typeof qualifyInstalledDrawio>>): void {
+  plan?.assertCurrent(); delegate?.assertCurrent(); codeReview?.assertCurrent(); editableTable?.assertCurrent(); officeViewer?.assertCurrent(); drawio?.assertCurrent();
   const blocked: string[] = catalog.errors.map(error => `${error.path}: extension load failed`);
   for (const extension of catalog.extensions) {
     for (const { definition } of extension.tools.values()) {
@@ -260,6 +285,7 @@ export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensio
       if (extension === codeReview?.extension && definition === codeReview.definition) continue;
       if (extension === editableTable?.extension && definition === editableTable.definition) continue;
       if (extension === officeViewer?.extension && definition === officeViewer.definition) continue;
+      if (extension === drawio?.extension && definition === drawio.definition) continue;
       blocked.push(`${definition.name}: no operation-owned host effect port`);
     }
     for (const event of extension.handlers.keys()) {

@@ -1,3 +1,33 @@
+# Native Draw.io — targeted application port
+
+The default runtime uses the shared Draw.io factory with explicit workspace and
+operation-owned file/UI ports. Missing diagrams use guarded exclusive creation;
+existing documents are preserved. The narrow workspace opener reuses the actual
+UiBridge request/response registry, tab target and 15-second acknowledgement wait.
+No ExtensionContext is fabricated and no duplicate tool body is introduced.
+An unanswered request is an explicit failure, never a successful Opened result.
+
+Startup binds and prepares vendor assets before model construction. Native asset
+fetches are read-only and fail closed while unprepared, revoked or stopped. Stop
+seals the binding; close joins preparation/cleanup. Uncertain staging cleanup
+retains ownership and propagates RuntimeStartupCleanupError rather than releasing
+a replacement grant. Exact reviewed add-on source:
+8eb776fd9989addaa7d110c3d253c20f0cc22d58 (PR #211).
+
+Targeted receipts under /workspace/reviews/durable-1650/:
+- Actual default SSE/request/respond roundtrip: 1 pass / 31 assertions.
+- Cancellation: 1 / 28; missing opener fallback: 1 / 30; held preparation,
+  model-startup failure and successful replacement: 1 / 38.
+- Staging cleanup fault: 1 / 11; narrow UI timeout acknowledgement: 1 / 15.
+- Final source catalog: 2 / 10; three configured typechecks and workflow check pass.
+- Bounded source reviews cleared both cleanup and false-open P2 findings.
+
+No full suites were run. Browser/vendor assets and archive bytes remain trusted
+installation content, not integrity-qualified. Staging writes may finish after
+revocation but cannot publish; close joins cleanup. These tests establish neither
+power-loss resilience, a general filesystem sandbox nor exactly-once file/UI
+effects. No deployment, restart, merge or migration occurred.
+
 # Shared host-operation authority — targeted refactor
 
 Plan, Code Review, editable tables and Office Viewer now use one operation

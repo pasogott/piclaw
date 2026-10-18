@@ -18,7 +18,7 @@ import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { applicationOwnership, createApplicationBootstrapBundle } from "./application-bootstrap.js";
 import { createHostModels } from "./host-models.js";
 import { createHostBuiltinTools } from "./host-builtins.js";
-import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, qualifyInstalledEditableTable, qualifyInstalledOfficeViewer, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
+import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, qualifyInstalledEditableTable, qualifyInstalledOfficeViewer, qualifyInstalledDrawio, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
 import { createHostDelegateTool } from "./host-delegate-tool.js";
 import { createHostDelegateFileReader } from "./host-delegate-files.js";
 import { extensionKvGet } from "../../src/db/extension-kv.js";
@@ -26,11 +26,13 @@ import { createHostPlanTool } from "./host-plan-tool.js";
 import { createHostCodeReviewTool } from "./host-code-review-tool.js";
 import { createHostEditableTableTool, type WidgetPublisher } from "./host-editable-table-tool.js";
 import { createHostOfficeViewerTool } from "./host-office-viewer-tool.js";
+import { createHostDrawioTool, type WorkspaceFileOpener, type DrawioNativeExports } from "./host-drawio-tool.js";
 import { createHostPlanPrompt } from "./host-plan-prompt.js";
 import type { HostConversationRuntime } from "./host-runtime.js";
 import { readAccessConfig } from "../../src/core/config-access.js";
 import { registerRootExtensionKvStore } from "../../src/db/register-extension-kv.js";
 import { requireExtensionKvAuthority } from "../../src/extension-kv-registry.js";
+import { registerExtensionRoute } from "../../src/channels/web/http/extension-routes.js";
 
 const ApplicationConversations = defineDoc({ kind: "app.application-conversations", version: 1,
   scope: "conversation", history: "latest", fork: "initial", initial: () => ({ version: 1, domain: "", bindings: [] as { chatJid: string; branchId: string; conversationId: number; sessionId: string }[] }) });
@@ -159,12 +161,33 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const codeReview = await qualifyInstalledCodeReview(catalog, WORKSPACE_DIR);
   const editableTable = await qualifyInstalledEditableTable(catalog, WORKSPACE_DIR);
   const officeViewer = qualifyInstalledOfficeViewer(catalog, WORKSPACE_DIR);
+  const drawio = await qualifyInstalledDrawio(catalog, WORKSPACE_DIR);
+  let workspaceFileOpener: WorkspaceFileOpener | undefined;
   let widgetPublisher: WidgetPublisher | undefined;
-  try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan, delegate, codeReview, editableTable, officeViewer); }
+  try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan, delegate, codeReview, editableTable, officeViewer, drawio); }
   finally { catalog.runtime.invalidate("Application extension preflight ended"); }
-  const applicationToolNames: readonly string[] = [...defaultToolNames, ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : [])];
-  const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || ((!!plan || !!delegate || !!codeReview || !!editableTable || !!officeViewer) && Array.isArray(tools) &&
+  const applicationToolNames: readonly string[] = [...defaultToolNames, ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : []), ...(drawio ? ["open_drawio_editor"] : [])];
+  const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || ((!!plan || !!delegate || !!codeReview || !!editableTable || !!officeViewer || !!drawio) && Array.isArray(tools) &&
     tools.length === defaultToolNames.length && defaultToolNames.every((name, index) => tools[index] === name));
+  const lifetime = new AbortController();
+  let drawioHost: ReturnType<DrawioNativeExports["bindDrawioVendorHost"]> | undefined;
+  const releaseReviewSource = codeReview?.addon.setReviewDatabaseSource({ database: root, assertOwner: assert });
+  try {
+  if (drawio) {
+    drawioHost = drawio.addon.bindDrawioVendorHost({
+      assertCurrent() { assert(); lifetime.signal.throwIfAborted(); drawio.assertCurrent(); },
+      baseDir: drawio.source.packageDir, cwd: WORKSPACE_DIR,
+      cacheDir: drawio.addon.getDrawioVendorCacheDir(DATA_DIR),
+    });
+    // SDK evaluation and native imports can have distinct module state. Route
+    // the existing owner/prefix to the same native module that owns preparation.
+    if (registerExtensionRoute("/drawio", (request, pathname) => {
+      try { assert(); lifetime.signal.throwIfAborted(); drawio.assertCurrent(); }
+      catch { return new Response("Draw.io vendor unavailable", { status: 503 }); }
+      return drawio.addon.handleRoute(request, pathname);
+    }, drawio.source.packageDir) === "rejected") throw Error("Draw.io native route unavailable");
+    await drawioHost.prepare();
+  }
   const host = await getModels(); assert();
   const provider = settings.getDefaultProvider(), modelId = settings.getDefaultModel();
   // Only the host's authenticated/approved catalog grants admission, never getAll().
@@ -175,9 +198,6 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const selected = provider && modelId ? available.find(model => model.provider === provider && model.id === modelId) : available[0];
   if (!selected) throw Error("Durable startup requires an available host default model");
   const ref = { provider: selected.provider, id: selected.id };
-  const lifetime = new AbortController();
-  const releaseReviewSource = codeReview?.addon.setReviewDatabaseSource({ database: root, assertOwner: assert });
-  try {
   // Allocate/recover the shared namespace before any accepted task or API read.
   codeReview?.addon.reviewService();
   const check = (model: { provider: string; id: string }, signal: AbortSignal) => {
@@ -271,6 +291,10 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   if (editableTable) tools.push(createHostEditableTableTool(editableTable.addon, { root, runtime, publisher: () => widgetPublisher,
     assertOwner() { assert(); lifetime.signal.throwIfAborted(); editableTable.assertCurrent();
       if (readAccessConfig().mode !== "single-user") throw Error("Editable table requires single-user mode");
+    } }));
+  if (drawio) tools.push(createHostDrawioTool(drawio.addon, { root, cwd: WORKSPACE_DIR, runtime, opener: () => workspaceFileOpener,
+    assertOwner() { assert(); lifetime.signal.throwIfAborted(); drawio.assertCurrent();
+      if (readAccessConfig().mode !== "single-user") throw Error("Draw.io requires single-user mode");
     } }));
   if (delegate) {
     const readers = builtins.filter(tool => ["read", "grep", "find", "ls"].includes(tool.name));
@@ -413,17 +437,29 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
     runtime: { incarnation: mapping.domain, sessionId: mapping.domain, lane: "main", generation: 1, now: () => new Date().toISOString(), harnessOptions } }, context);
   return { sessionOptions: bundle.sessionOptions, bind: bundle.bind,
-    attachChannel(channel: { broadcastEvent(event: string, data: Record<string, unknown>): void }) {
+    attachChannel(channel) {
       assert(); lifetime.signal.throwIfAborted();
       if (widgetPublisher) throw Error("Widget channel already attached");
       const broadcast = channel.broadcastEvent.bind(channel);
+      workspaceFileOpener = channel.requestWorkspaceFileOpen?.bind(channel);
       widgetPublisher = (chatJid, key, content, options) => {
         assert(); lifetime.signal.throwIfAborted();
         broadcast("extension_ui_widget", { chat_jid: chatJid, key, content, options });
       };
     },
-    stop() { widgetPublisher = undefined; lifetime.abort(); bundle.stop(); }, async close() {
-      lifetime.abort(); releaseReviewSource?.(); await bundle.close();
+    stop() {
+      widgetPublisher = undefined; workspaceFileOpener = undefined; lifetime.abort();
+      // close seals routing synchronously; final close below joins owned cleanup.
+      void drawioHost?.close().catch(() => {});
+      bundle.stop();
+    }, async close() {
+      widgetPublisher = undefined; workspaceFileOpener = undefined;
+      lifetime.abort(); releaseReviewSource?.(); await drawioHost?.close(); await bundle.close();
     } };
-  } catch (error) { lifetime.abort(); releaseReviewSource?.(); throw error; }
+  } catch (error) {
+    lifetime.abort(); releaseReviewSource?.();
+    try { await drawioHost?.close(); }
+    catch (cleanup) { throw new RuntimeStartupCleanupError([error, cleanup], "Draw.io preparation cleanup uncertain"); }
+    throw error;
+  }
 }

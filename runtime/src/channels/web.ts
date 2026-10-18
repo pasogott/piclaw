@@ -80,6 +80,10 @@ export interface WebChannelOpts {
 /** Web channel: HTTP/SSE server, API endpoints, and agent event bridge. */
 // eslint-disable-next-line typescript/no-unsafe-declaration-merging, no-redeclare
 export class WebChannel implements WebChannelLike {
+  requestWorkspaceFileOpen(chatJid: string, path: string, label: string): Promise<unknown> {
+    return this.uiBridge.openWorkspaceFile(chatJid, path, label);
+  }
+
   private _terminalService: TerminalSessionService | null = null;
   private _vncService: VncSessionService | null = null;
 
