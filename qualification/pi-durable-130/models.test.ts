@@ -37,7 +37,7 @@ async function bounded(promise: Promise<void>) {
     })]);
   } finally { clearTimeout(timer); }
 }
-async function fixture(multimodal = false, keyless = false, deferred = false, imageInput = false) {
+async function fixture(multimodal = false, keyless = false, deferred = false, imageInput = false, terminalError = false) {
   const physical = { ...model, input: imageInput ? ["text", "image"] as Model<Api>["input"] : ["text"] as Model<Api>["input"] };
   let stored: Credential | undefined = { type: "api_key", key: token };
   const requested: string[] = [];
@@ -97,6 +97,11 @@ async function fixture(multimodal = false, keyless = false, deferred = false, im
     calls++; captured = { owner, context, options };
     const stream = createAssistantMessageEventStream();
     const result = deferred ? { ...message, stopReason: "deferred" as const, deferred: privateHandle } : structuredClone(message);
+    if (terminalError) {
+      const error = { ...message, content: [], stopReason: "error" as const, errorMessage: token,
+        usage: { ...message.usage, cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 } } };
+      stream.push({ type: "error", reason: "error", error }); stream.end(error); return stream;
+    }
     if (deferred) stream.push({ type: "start", partial: result });
     stream.push({ type: "done", reason: result.stopReason as "toolUse" | "deferred", message: result });
     stream.end(result);
@@ -680,4 +685,14 @@ test("accepted limitation: public transformHeaders is awaited, not an atomic dis
   // requires a public synchronous guard at provider invocation in host 1.2.
   expect(f.calls()).toBe(1);
   expect(f.captured().options.signal.aborted).toBe(true);
+});
+
+test('failed host request preserves validated reported usage without private diagnostics', async () => {
+  const f = await fixture(false, false, false, false, true);
+  const result = await f.models.complete(f.model, context);
+  expect(result.stopReason).toBe('error');
+  expect(result.usage).toMatchObject({ input: 2, output: 3, totalTokens: 5, cost: { input: 0.1, output: 0.2, total: 0.3 } });
+  expect(JSON.stringify(result)).not.toContain(token);
+  expect(result.content).toEqual([]);
+  expect(f.calls()).toBe(1);
 });

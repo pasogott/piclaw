@@ -204,6 +204,14 @@ export function createHostModels(
   const relay = (simple: boolean, model: Model<Api>, context: TranscriptContext,
     options?: SimpleStreamOptions, deferred?: { handle: DeferredHandle; options?: DeferredFetchOptions }) => {
     const output = createAssistantMessageEventStream();
+    let terminalUsage: Usage | undefined;
+    const captureTerminalUsage = (message: AssistantMessage) => {
+      if (message.provider !== model.provider || message.model !== model.id || message.api !== model.api) return;
+      const projected = usage(message.usage);
+      if (!projected || ![projected.input, projected.output, projected.cacheRead, projected.cacheWrite, projected.totalTokens,
+        ...Object.values(projected.cost)].every(value => typeof value === "number" && Number.isFinite(value) && value >= 0)) return;
+      terminalUsage = projected;
+    };
     void (async () => {
       try {
         model = validatedChatModel(model);
@@ -213,12 +221,12 @@ export function createHostModels(
           const admitted = await deferredAdmission(model, deferred.handle, deferred.options, "fetchDeferred");
           const stream = hostModelRuntime120.streamDeferred(admitted.physical, admitted.raw, admitted.options);
           for await (const event of stream) {
-            if (event.type === "error") throw new Error("Host request failed");
+            if (event.type === "error") { captureTerminalUsage(event.error); throw new Error("Host request failed"); }
             output.push("message" in event ? { ...data({ ...event, message: undefined }), message: projectMessage(event.message, model) }
               : "partial" in event ? { ...data({ ...event, partial: undefined }), partial: projectMessage(event.partial, model) } : data(event));
           }
           const result = await stream.result();
-          if (result.stopReason === "error" || result.stopReason === "aborted") throw new Error("Host request failed");
+          if (result.stopReason === "error" || result.stopReason === "aborted") { captureTerminalUsage(result); throw new Error("Host request failed"); }
           output.end(projectMessage(result, model));
           return;
         }
@@ -258,19 +266,19 @@ export function createHostModels(
           ? hostModelRuntime120.streamSimple(physical, data(context), hostOptions)
           : hostModelRuntime120.stream(physical, data(context), hostOptions);
         for await (const event of stream) {
-          if (event.type === "error") throw new Error("Host request failed");
+          if (event.type === "error") { captureTerminalUsage(event.error); throw new Error("Host request failed"); }
           output.push("message" in event ? { ...data({ ...event, message: undefined }), message: projectMessage(event.message, model) }
             : "partial" in event ? { ...data({ ...event, partial: undefined }), partial: projectMessage(event.partial, model) } : data(event));
         }
         const result = await stream.result();
-        if (result.stopReason === "error" || result.stopReason === "aborted") throw new Error("Host request failed");
+        if (result.stopReason === "error" || result.stopReason === "aborted") { captureTerminalUsage(result); throw new Error("Host request failed"); }
         output.end(projectMessage(result, model));
       } catch {
         // Host errors can contain credentials/headers. Do not export them.
         const error: AssistantMessage = { role: "assistant", content: [], api: model.api,
           provider: model.provider, model: model.id, timestamp: Date.now(),
           stopReason: "error", errorMessage: "Host model request denied or failed",
-          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+          usage: terminalUsage ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
         output.push({ type: "error", reason: "error", error });
         output.end(error);
