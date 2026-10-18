@@ -339,7 +339,7 @@ export class HostConversationRuntime {
     });
   }
   /** Read only the public persisted agent choice, not resolved host defaults or response metadata. */
-  readSessionModel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<string | null> {
+  private readSessionChoice(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<{ model: string | null; thinkingLevel: string | null }> {
     const copy = Object.freeze({ incarnation: binding.incarnation, chatJid: binding.chatJid,
       branchId: binding.branchId, conversationId: binding.conversationId });
     return this.observe(async () => {
@@ -351,10 +351,16 @@ export class HostConversationRuntime {
       if (!conversation) throw new Error("Missing existing conversation");
       const label = await conversation.commit(async tx => {
         const state = await tx.doc(AgentDoc, id);
-        return state.model ? `${state.model.provider}/${state.model.modelId}` : null;
+        return { model: state.model ? `${state.model.provider}/${state.model.modelId}` : null, thinkingLevel: state.thinkingLevel ?? null };
       }, this.context); this.fence();
       return label;
     });
+  }
+  async readSessionModel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<string | null> {
+    return (await this.readSessionChoice(binding)).model;
+  }
+  async readSessionThinkingLevel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<string | null> {
+    return (await this.readSessionChoice(binding)).thinkingLevel;
   }
   async setSessionModel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, model: { provider: string; modelId: string }): Promise<void> {
     this.fence();

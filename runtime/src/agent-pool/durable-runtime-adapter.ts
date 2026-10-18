@@ -24,6 +24,7 @@ export interface DurableSessionPositionPort {
   readonly readPosition: () => Promise<string | null>;
   /** Persisted conversation choice only; never infer a model from provider responses. */
   readonly readModel?: () => Promise<string | null>;
+  readonly readThinkingLevel?: () => Promise<string | null>;
   readonly setModel?: (model: { provider: string; modelId: string }) => Promise<void>;
   readonly compact?: (instructions?: string) => Promise<{ compacted: boolean }>;
   /** Observe the same owned maintenance; never admit a new compaction. */
@@ -62,6 +63,7 @@ export interface DurableConversationRuntimePort {
   readSessionTree?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<import("../agent-control/session-tree-snapshot.js").SessionTreeSnapshot>;
   readSessionPosition?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<string | null>;
   setSessionModel?(binding: DurableConversationBinding & { readonly incarnation: string }, model: { provider: string; modelId: string }): Promise<void>;
+  readSessionThinkingLevel?(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<string | null>;
   readSessionModel?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<string | null>;
   submit(input: DurableAcceptedInput): Promise<number>;
   submitIntent?(input: DurableAcceptedInput): Promise<number>;
@@ -103,6 +105,7 @@ export function createDurableConversationAdapter(options: {
   const wait = runtime.wait?.bind(runtime), submitIntent = runtime.submitIntent?.bind(runtime);
   const readPosition = runtime.readSessionPosition?.bind(runtime);
   const readModel = runtime.readSessionModel?.bind(runtime);
+  const readThinkingLevel = runtime.readSessionThinkingLevel?.bind(runtime);
   const setModel = runtime.setSessionModel?.bind(runtime);
   const compact = runtime.compactSession?.bind(runtime);
   const reconcileMaintenance = runtime.reconcileMaintenance?.bind(runtime);
@@ -130,6 +133,7 @@ export function createDurableConversationAdapter(options: {
       return Object.freeze({ sessionId, branchId,
         readPosition: () => readPosition({ ...binding, incarnation }),
         readModel: readModel ? () => readModel({ ...binding, incarnation }) : undefined,
+        readThinkingLevel: readThinkingLevel ? () => readThinkingLevel({ ...binding, incarnation }) : undefined,
         setModel: setModel ? (model: { provider: string; modelId: string }) => setModel({ ...binding, incarnation }, { provider: model.provider, modelId: model.modelId }) : undefined,
         compact: compact ? (instructions?: string) => compact({ ...binding, incarnation }, instructions) : undefined,
         reconcileMaintenance: reconcileMaintenance ? () => reconcileMaintenance({ ...binding, incarnation }) : undefined,

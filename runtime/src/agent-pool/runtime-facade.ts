@@ -323,7 +323,7 @@ export class AgentRuntimeFacade {
     this.providerUsageRefreshListener = options.onProviderUsageRefresh;
     // Capture routing before any session factory is entered. Never fall back on port failure.
     const compatibility = options.durableSessions === undefined ? undefined : new Map([...options.durableSessions].map(([chat, port]) =>
-      [chat, Object.freeze({ ...port, readPosition: port.readPosition.bind(port), readModel: port.readModel?.bind(port), setModel: port.setModel?.bind(port), compact: port.compact?.bind(port), readTree: port.readTree?.bind(port) })]));
+      [chat, Object.freeze({ ...port, readPosition: port.readPosition.bind(port), readModel: port.readModel?.bind(port), readThinkingLevel: port.readThinkingLevel?.bind(port), setModel: port.setModel?.bind(port), compact: port.compact?.bind(port), readTree: port.readTree?.bind(port) })]));
     this.getDurableSession = options.getDurableSession?.bind(options) ?? (chat => compatibility?.get(chat));
     options = { ...options, getDurableSession: options.getDurableSession ?? (compatibility && this.getDurableSession) };
     const legacy = options.getOrCreateRuntime;
@@ -481,8 +481,10 @@ export class AgentRuntimeFacade {
     // Passive UI refreshes should not hydrate a cold runtime just to render
     // model state for the picker.
     const session = this.options.getDurableSession === undefined ? this.options.pool.get(chatJid)?.runtime.session ?? null : null;
+    const durable = this.getDurableSession(chatJid);
+    if (this.options.getDurableSession !== undefined && !durable?.readModel) throw new Error("Durable session model unavailable");
     const persistedState = this.options.getDurableSession !== undefined
-      ? { current: await this.getCurrentModelLabel(chatJid), thinkingLevel: null }
+      ? { current: await durable!.readModel!(), thinkingLevel: await durable!.readThinkingLevel?.() ?? null }
       : session ? { current: null, thinkingLevel: null } : getPersistedSessionState(chatJid);
     const registry = (session as (AgentSession & { modelRegistry?: ModelRegistry }) | null)?.modelRegistry ?? this.options.modelRegistry;
     const scopedModels = resolveModelScope(

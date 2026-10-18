@@ -1309,3 +1309,11 @@ test('durable model query lists unique available models with persisted selection
   expect(protection).toBe(0);
   expect(await facade.applyControlCommand('web:model-query', { type: 'model', provider: 'z', raw: '/model z/' })).toMatchObject({ status: 'error', message: 'Invalid model format. Use /model <provider>/<modelId>.' });
 });
+
+test('durable model picker reads persisted thinking level without legacy hydration', async () => {
+  const { facade } = createFacade({ durableSessions: new Map([['web:thinking', {
+    sessionId: 'thinking', branchId: 'main', readPosition: async () => null,
+    readModel: async () => 'synthetic/reasoning', readThinkingLevel: async () => 'high',
+  }]]), modelRegistry: { getAvailable: () => [{ provider: 'synthetic', id: 'reasoning', reasoning: true }] } as any });
+  expect(await facade.getAvailableModels('web:thinking', { includeProviderUsage: false, includeProviderDiagnostics: false })).toMatchObject({ current: 'synthetic/reasoning', thinking_level: 'high' });
+});
