@@ -220,6 +220,24 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
     expect(db.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid=? AND state NOT IN ('consumed','disposed')").all(chat)).toEqual([]);
     expect(db.query("SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid=?").get(chat)).toEqual({ active_operation_id: null });
     expect(db.query("SELECT * FROM entries WHERE conversation_id=? ORDER BY id").all(parent)).toEqual(beforeRun);
+    const recoveringId = `side-prompt:${crypto.randomUUID()}`;
+    payloads.set(recoveringId, "recover exact source");
+    const frontier = value(await work.getChatFrontier(chat));
+    const recovering = db.transaction(() => work.acceptAndClaimSourceInTransaction(sealed({ effect: effect(`accept:${recoveringId}`), chatJid: chat,
+      sourceId: recoveringId, kind: "internal", payloadRef: recoveringId, targetOperationId: null, parentSourceSeq: null,
+      acceptedAt: new Date().toISOString(), createWakeIntent: false }), sealed({ effect: effect(`claim:${recoveringId}`), chatJid: chat,
+      expectedFrontier: frontier.consumedThroughSourceSeq, newOperationId: `op:${recoveringId}`, claimedAt: new Date().toISOString() }), db)).immediate();
+    const callsBeforeRecovery = fixture.host.modelCalls;
+    await bundle.close(); bundle = await createBundle();
+    expect(fixture.host.modelCalls).toBe(callsBeforeRecovery);
+    await expect(bundle.reconcileSidePrompt(chat, "side-prompt:not-a-uuid")).rejects.toThrow("Unverified side prompt recovery");
+    const recovered = await Promise.all([bundle.reconcileSidePrompt(chat, recoveringId), bundle.reconcileSidePrompt(chat, recoveringId)]);
+    expect(recovered[0]).toEqual(recovered[1]);
+    expect(recovered[0].result).toBe("synthetic answer");
+    expect(fixture.host.modelCalls).toBe(callsBeforeRecovery + 1);
+    expect(db.query("SELECT count(*) AS n FROM service_effect_s01_sources WHERE source_id=?").get(recoveringId)).toEqual({ n: 1 });
+    expect(db.query("SELECT message_row_id FROM service_effect_s02_commits WHERE operation_id=?").get(recovering.operation.operationId)).toEqual({ message_row_id: null });
+    expect(db.query("SELECT * FROM entries WHERE conversation_id=? ORDER BY id").all(parent)).toEqual(beforeRun);
     acceptMainDuringPayload = true;
     const sourceCount = db.query("SELECT count(*) AS n FROM service_effect_s01_sources WHERE chat_jid=?").get(chat) as { n: number };
     await expect(bundle.dispatchSidePrompt(chat, "races main input")).rejects.toThrow("owner_conflict");

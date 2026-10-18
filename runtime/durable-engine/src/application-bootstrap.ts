@@ -349,6 +349,44 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       if (conversationId === undefined || !persisted) throw Error("Scheduled fork not published");
       return Object.freeze({ ...base, conversationId });
     }
+    const sideContinuations = new Map<string, Promise<SidePromptResult>>();
+    function continueSidePrompt(input: AcceptedInput): Promise<SidePromptResult> {
+      assertLive();
+      const key = JSON.stringify([input.chatJid, input.sourceId]);
+      const pending = sideContinuations.get(key);
+      if (pending) return pending;
+      const continuing = (async () => {
+        const allocated = await allocateSidePromptConversation(input);
+        const id = await runtime.submit(allocated);
+        await runtime.wait(allocated, id, shutdown.signal);
+        const state = await runtime.reconcile(allocated);
+        if (!state.answer) throw Error("Side prompt answer unavailable");
+        if (!await runtime.settle(allocated)) throw Error("Side prompt settlement pending");
+        return { status: "success" as const, result: state.answer.text, thinking: state.answer.message.content
+          .filter(block => block.type === "thinking").map(block => block.thinking).join(""),
+          model: `${state.answer.message.provider}/${state.answer.message.model}`, usage: state.answer.message.usage, stopReason: state.answer.message.stopReason };
+      })();
+      sideContinuations.set(key, continuing);
+      // Keep unknown failures owned until reopen; do not replay a failed storage
+      // admission in a possibly sealed SDK instance. No second request identity.
+      return continuing;
+    }
+    async function reconcileSidePrompt(chatJid: string, sourceId: string): Promise<SidePromptResult> {
+      assertLive();
+      const scope = routeIndex.get(chatJid);
+      const source = work.getAcceptedSource(chatJid, sourceId);
+      if (!scope || !source || source.kind !== "internal" || source.state !== "claimed" || source.payloadRef !== sourceId ||
+        !/^side-prompt:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(sourceId)) throw Error("Unverified side prompt recovery");
+      const row = root.query(`SELECT o.operation_id FROM service_effect_s01_operations o
+        JOIN service_effect_s01_operation_sources os ON os.operation_id=o.operation_id AND os.chat_jid=o.chat_jid AND os.source_seq=o.primary_source_seq
+        JOIN service_effect_s01_chats c ON c.chat_jid=o.chat_jid AND c.active_operation_id=o.operation_id
+        WHERE o.chat_jid=? AND o.primary_source_seq=? AND o.phase IN ('claimed','executing')`).get(chatJid, source.sourceSeq) as { operation_id: string } | null;
+      if (!row) throw Error("Unverified side prompt recovery");
+      const prompt = await content(source.payloadRef, source); assertLive();
+      return continueSidePrompt({ incarnation: r.incarnation, conversationId: scope.conversationId as ConversationId,
+        chatJid, branchId: scope.branchId, operationId: row.operation_id, sourceSeq: source.sourceSeq, sourceId, payloadRef: sourceId,
+        requestId: sourceId, requestHash: hashCanonicalRequest({ type: "input", requestId: sourceId, content: prompt }) });
+    }
     async function dispatchSidePrompt(chatJid: string, prompt: string, options: SidePromptOptions = {}): Promise<SidePromptResult> {
       assertLive();
       if (options.signal || options.onEvent || options.onTextDelta || options.onThinkingDelta || options.systemPrompt || options.budgetWorkId || options.budgetParentWorkId)
@@ -372,17 +410,9 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           acceptedAt: r.now(), createWakeIntent: false }), sealed({ effect: { ...effect(`claim:${sourceId}`), provenanceRef: "application:side-prompt" },
           chatJid, expectedFrontier: busy?.consumed_through_source_seq ?? 0, newOperationId: `operation:${sourceId}`, claimedAt: r.now() }), root);
       }).immediate();
-      const input = await allocateSidePromptConversation({ incarnation: r.incarnation, conversationId: scope.conversationId as ConversationId,
+      return continueSidePrompt({ incarnation: r.incarnation, conversationId: scope.conversationId as ConversationId,
         chatJid, branchId: scope.branchId, operationId: claimed.operation.operationId, sourceSeq: claimed.source.sourceSeq,
         sourceId, payloadRef: sourceId, requestId: sourceId, requestHash: hashCanonicalRequest({ type: "input", requestId: sourceId, content: prompt }) });
-      const id = await runtime.submit(input);
-      await runtime.wait(input, id, shutdown.signal);
-      const state = await runtime.reconcile(input);
-      if (!state.answer) throw Error("Side prompt answer unavailable");
-      if (!await runtime.settle(input)) throw Error("Side prompt settlement pending");
-      return { status: "success", result: state.answer.text, thinking: state.answer.message.content
-        .filter(block => block.type === "thinking").map(block => block.thinking).join(""),
-        model: `${state.answer.message.provider}/${state.answer.message.model}`, usage: state.answer.message.usage, stopReason: state.answer.message.stopReason };
     }
     async function dispatchScheduledAgent(lease: ScheduledRunLease): Promise<import("../../src/agent-pool.js").AgentOutput> {
       assertLive();
@@ -412,7 +442,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     return Object.freeze({
       /** Construct pool first from this snapshot, then bind its existing channel constructor. */
       sessionOptions: Object.freeze({ getDurableSession, dispatchScheduledAgent }),
-      allocateScheduledConversation, allocateSidePromptConversation, dispatchSidePrompt,
+      allocateScheduledConversation, allocateSidePromptConversation, dispatchSidePrompt, reconcileSidePrompt,
       bind(options: Pick<WebChannelOpts, "queue" | "agentPool">): Readonly<WebChannelOpts> {
         assert(); if (bound || closing) throw Error("Application bundle already bound or closing");
         bound = true;
@@ -433,6 +463,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       allocateScheduledConversation(lease: ScheduledRunLease): Promise<AcceptedInput>;
       allocateSidePromptConversation(input: AcceptedInput): Promise<AcceptedInput>;
       dispatchSidePrompt(chatJid: string, prompt: string, options?: SidePromptOptions): Promise<SidePromptResult>;
+      reconcileSidePrompt(chatJid: string, sourceId: string): Promise<SidePromptResult>;
       reconcileMaintenance(chatJid: string): Promise<void>;
       retryRecoveredWork: typeof recovery.retryRecoveredWork;
       onPendingIntent: typeof recovery.onPendingIntent;
