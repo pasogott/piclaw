@@ -1,9 +1,51 @@
-# Native Delegate text attachments and fixture WAL policy — qualified source over `b258ff3a2`
+# Native Delegate standard tools — source candidate over `1241cdde0`
 
-Local source qualification is complete; the attachment/WAL slice is uncommitted
-and awaits commit and exact-source hosted evidence. Native Delegate accepts 0..10
-explicit workspace text files, including empty `files: []` without attachment IO,
-under approved read-only policy. Images and wider file/tool permissions remain
+The actual default factory accepts explicit `tools: "standard"` with exactly seven
+existing guarded Linux host tools: `read`, `bash`, `edit`, `write`, `find`, `ls`,
+`grep`. It snapshots their registrations before appending add-ons. Omitted tools
+and `read_only` keep exactly four readers: `read`, `grep`, `find`, `ls`. Explicit
+comma-separated exact names select subsets of the seven. `full`, unknown names,
+recursive Delegate, Plan, Code Review and MCP/add-on tools are not qualified and
+reject; children receive none of those registrations.
+
+Child extensions have no hooks or sections and contain only approved tool objects
+by membership check. The public child `AgentDoc` configures `tools`, `modelTools`
+and the selected extensions atomically. Existing owner, source, selected-model,
+availability and cap checks apply per request and at effects. This reuses the
+parent's single-user host policy, including approved absolute filesystem paths;
+it adds no sandbox, permission framework or root ToolContext emulator.
+Cancellation cannot undo already-admitted writes. Child tools retain unsafe replay
+handling in the SDK; exactly-once writes and standard-specific crash/reopen are
+unqualified. Existing native/deadline recovery tests retain their narrower scopes.
+
+Existing evidence in `/workspace/reviews/durable-1650/delegate-standard-tools-checkpoint.md`:
+
+- Actual factory: `native-delegate-standard`, 43 assertions with writes/readback;
+  `native-delegate-readonly-deny`, 43 with unchanged bytes after attempted writes;
+  `native-delegate-standard-revoke`, 38 with no filesystem write after cap
+  revocation following child source capture.
+- Retained `native-delegate`: 33 assertions; reader cap/provider revocation:
+  48 each. Focused tests: 25 pass / 276 assertions; three scoped typechecks pass.
+- `delegate-standard-full-candidate.log`: 525 pass / 7,501 assertions, exit 0.
+  `delegate-standard-full-root.log`: 7,312 pass, 74 baseline skips, 0 fail;
+  25 feature + 9 build tests pass, `EXIT_CODE=0`.
+
+All 45 statuses stay 22 source-qualified / 17 fixture-only / 3 blocked-publicAPI /
+3 migration/perf-unverified. Images/renderable binary attachments, full MCP/add-on
+profiles, numeric global parallelism and native capped accounting are unqualified;
+enabled caps still deny. Selected-auth/live-provider and public root SDK limits
+retain their existing boundaries, including exact-running abort gaps. All-nine
+Code Review stays core `4e1ffe2fe` / add-on `d1ce8c6f` (PR #208), without a new
+worker. Migration stays last; no live activation or version/pin change. This
+refresh changes documentation only; no code, test, CI, network, service or commit
+operation ran.
+
+## Published text attachments and fixture WAL policy — `1241cdde0`
+
+The preceding attachment/WAL slice is published at `1241cdde0`; its local receipts
+below predate the standard-tools candidate. Native Delegate accepts 0..10 explicit
+workspace text files, including empty `files: []` without attachment IO, under the
+approved attachment reader policy. Images/renderable binary attachments remain
 unsupported. No future source hash is assigned.
 
 ## Measured fixture-policy repair
@@ -93,8 +135,8 @@ Existing receipts under `/workspace/reviews/durable-1650/`:
   was fully reverted. HISTORICAL hold: `/workspace/reviews/durable-1650/delegate-text-qualification-hold.md`;
   final qualification above supersedes it.
 
-Images, wider tool permissions, native capped accounting and numeric global
-concurrency are unqualified. All 45 statuses stay 22 source-qualified / 17
+Images, tools beyond the bounded standard profile, native capped accounting and
+numeric global concurrency are unqualified. All 45 statuses stay 22 source-qualified / 17
 fixture-only / 3 blocked-publicAPI / 3 migration/perf-unverified. The 17 fixture-only
 requirements need acceptance; production performance is unverified and migration
 stays last. All-nine Code Review scope stays core `4e1ffe2fe` / add-on `d1ce8c6f`
@@ -173,8 +215,8 @@ task revision to an approved, currently available physical model through the roo
 ModelRuntime. Resolution performs no LLM request or credential lookup. The source
 guard rechecks source and model approval before the public fork commit. The
 scheduler change is published at `e3d248a01`; its completed full-gate receipts are
-below. The current uncommitted follow-up adds Delegate text attachments and
-qualification-only WAL fixture policy above.
+below. The later published attachment/WAL slice and current standard-tools candidate
+have separate evidence above.
 
 The allocator captures an immutable choice, checks the inherited context, copies
 the parent's `AgentDoc` and configures the fork model in the same public SDK commit
@@ -283,8 +325,8 @@ thread versions bound the state change. Idempotent receipts recheck authority;
 revocation before root commit rolls back the mutation and receipt.
 
 All-nine Code Review source was published at core `4e1ffe2fe`. Current worktree
-HEAD is `b258ff3a2`; its uncommitted source/test/tooling changes belong to the
-separate Delegate text-attachment and qualification-only WAL fixture follow-up above. Scheduler overrides are published at
+HEAD is `1241cdde0`; its uncommitted source/test changes belong to the separate
+Delegate standard-tools candidate above. Scheduler overrides are published at
 `e3d248a01`.
 Add-on PR #208 and the core qualification CI checkout select
 `d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f`. This qualifies source only; installed

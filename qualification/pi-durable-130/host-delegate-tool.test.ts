@@ -18,13 +18,17 @@ import { storeChatMetadata } from "../../runtime/src/db.ts";
 
 // Core consumer tests with explicitly synthetic authority/schema. These do NOT
 // qualify installed Delegate content, Settings, host source capture or budgets.
-for (const mode of ["parallel", "files-empty", "denied", "files", "files-unavailable", "files-revoked", "timeout", "timeout-fraction", "timeout-string", "timeout-large", "mutating-tools", "model-type", "model-short", "model-empty-provider", "model-empty-id"] as const) {
+for (const mode of ["parallel", "standard", "subset", "omitted", "full", "unknown-tool", "files-empty", "denied", "files", "files-unavailable", "files-revoked", "timeout", "timeout-fraction", "timeout-string", "timeout-large", "mutating-tools", "model-type", "model-short", "model-empty-provider", "model-empty-id"] as const) {
   test(`host native Delegate factory: ${mode}`, async () => {
     const f = await openFixture({ acquired: true });
     const release = barrier(), entered = barrier();
     let childRequests = 0, captures = 0, revoked = false;
     const read = defineTool({ name: "read", description: "Synthetic reader", parameters: Type.Object({}),
       execute: async () => ({ output: [{ type: "text", text: "reader" }] }) });
+    const standard = [read, ...["bash", "edit", "write", "find", "ls", "grep"].map(name => defineTool({ name, description: "Synthetic builtin", parameters: Type.Object({}), execute: async () => ({ output: [] }) }))];
+    const standardExtension = defineExtension({ name: "native-standard", tools: standard });
+    f.registry.install(standardExtension);
+    const allowed = ["parallel", "standard", "subset", "omitted", "files-empty"].includes(mode);
     const readerExtension = defineExtension({ name: "native-readers", tools: [read] });
     f.registry.install(readerExtension);
     const parameters = Type.Object({ prompt: Type.String(), model: Type.Optional(Type.Any()),
@@ -39,6 +43,7 @@ for (const mode of ["parallel", "files-empty", "denied", "files", "files-unavail
       } } : {}),
       async selectModel(_args, parent) { if (mode === "denied") throw Error("Model denied"); return parent!; },
       assertModelCurrent() {}, readonlyTools: [read], readonlyExtensions: [readerExtension],
+      ...(["standard", "subset", "full", "unknown-tool"].includes(mode) ? { standardTools: standard, standardExtensions: [standardExtension] } : {}),
     });
     const extension = defineExtension({ name: "native-consumer-test", tools: [tool, read] });
     f.registry.install(extension);
@@ -49,7 +54,7 @@ for (const mode of ["parallel", "files-empty", "denied", "files", "files-unavail
       const child = JSON.stringify(user?.content).includes("CHILD_TASK");
       const calls = !child && !transcript.messages.some(message => message.role === "toolResult");
       const output = createAssistantMessageEventStream();
-      const args = { prompt: "CHILD_TASK", tools: mode === "mutating-tools" ? "bash" : "read_only",
+      const args = { prompt: "CHILD_TASK", ...(mode === "omitted" ? {} : { tools: mode === "mutating-tools" ? "bash" : mode === "standard" ? "standard" : mode === "subset" ? "read,write" : mode === "full" ? "full" : mode === "unknown-tool" ? "read,delegate" : "read_only" }),
         ...(mode.startsWith("model-") ? { model: ({ "model-type": 42, "model-short": "synthetic", "model-empty-provider": "/synthetic", "model-empty-id": "qualification/" } as Record<string, string | number>)[mode] } : {}),
         ...(mode.startsWith("files") ? { files: mode === "files-empty" ? [] : ["file.txt"] } : {}), ...(mode.startsWith("timeout") ? { timeout_sec: ({ timeout: -1, "timeout-fraction": 10.5, "timeout-string": "10", "timeout-large": 301 } as Record<string, string | number>)[mode] } : {}) };
       const message: AssistantMessage = { role: "assistant", api: model.api, provider: model.provider, model: model.id,
@@ -72,7 +77,7 @@ for (const mode of ["parallel", "files-empty", "denied", "files", "files-unavail
       auth: { apiKey: { name: "Synthetic", resolve: async () => ({ auth: {}, source: "fixture" }) } }, api: { stream, streamSimple: stream } }));
     try {
       const submission = await f.root.submit({ type: "input", content: "PARENT_SECRET", requestId: "parent" }, context);
-      if (mode === "parallel" || mode === "files-empty") {
+      if (allowed) {
         await Promise.race([entered.promise, submission.wait(context).then(async () => {
           throw Error("Parent settled before both native children entered");
         })]); // Independent MODEL calls: both providers before release.
@@ -83,20 +88,20 @@ for (const mode of ["parallel", "files-empty", "denied", "files", "files-unavail
         expect(new Set(children.items.flatMap(record => record.owner ? [record.owner.taskId] : [])).size).toBe(2);
         for (const record of children.items.filter(record => record.owner)) {
           const child = (await f.harness.conversation(record.id, context))!;
-          expect((await child.agent(context)).tools.map(tool => tool.name)).toEqual(["read"]);
+          expect((await child.agent(context)).tools.map(tool => tool.name)).toEqual(mode === "standard" ? standard.map(tool => tool.name) : mode === "subset" ? ["read", "write"] : ["read"]);
           expect((await child.agent(context)).thinkingLevel).toBe("medium");
         }
         release.release();
       }
       expect((await submission.wait(context)).status).toBe("done");
-      expect(childRequests).toBe(mode === "parallel" || mode === "files-empty" ? 2 : 0);
-      expect(captures).toBe(mode === "parallel" || mode === "files-empty" || mode === "denied" || mode === "files-unavailable" || mode === "files-revoked" ? 2 : 0);
+      expect(childRequests).toBe(allowed ? 2 : 0);
+      expect(captures).toBe(allowed || mode === "denied" || mode === "files-unavailable" || mode === "files-revoked" ? 2 : 0);
       const entries = (await f.root.entries({}, 100, undefined, context)).items;
       const results = entries.flatMap(entry => entry.model ?? []).filter(message => message.role === "toolResult");
       expect(results).toHaveLength(2);
       expect(JSON.stringify(results)).not.toContain("PRIVATE_CHILD_THINKING");
       expect(JSON.stringify(results)).not.toContain("PRIVATE_HOST_PATH");
-      if (mode === "parallel" || mode === "files-empty") expect(JSON.stringify(results)).toContain("CHILD_RESULT");
+      if (allowed) expect(JSON.stringify(results)).toContain("CHILD_RESULT");
       else expect(await f.root.commit(async tx => (await tx.scanConversations({}, 10)).items.length, context)).toBe(1);
     } finally { release.release(); await f.close(); }
   }, 10_000);

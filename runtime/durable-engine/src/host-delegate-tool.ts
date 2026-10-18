@@ -22,6 +22,9 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
   readonlyTools: readonly ToolRegistration[];
   /** Installed, hook-free read-only capability extensions only. */
   readonlyExtensions: readonly Extension[];
+  /** Same guarded host registrations; never add-on/MCP or recursive tools. */
+  standardTools?: readonly ToolRegistration[];
+  standardExtensions?: readonly Extension[];
 }) {
   if (definition.name !== "delegate") throw Error("Expected registered Delegate tool");
   const { assertCurrent, runtime, selectModel, assertModelCurrent, readFiles } = options;
@@ -31,6 +34,12 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
     throw Error("Native Delegate child extensions must contain only approved readers");
   if (readers.some(tool => !["read", "grep", "find", "ls"].includes(tool.name)) || new Set(readers.map(tool => tool.name)).size !== readers.length)
     throw Error("Native Delegate requires read-only host builtins");
+  const standard = [...(options.standardTools ?? [])];
+  const standardExtensions = [...(options.standardExtensions ?? [])];
+  if (standard.some(tool => !["read", "bash", "edit", "write", "find", "ls", "grep"].includes(tool.name)) || new Set(standard.map(tool => tool.name)).size !== standard.length)
+    throw Error("Native Delegate requires standard host builtins only");
+  if (standardExtensions.some(extension => extension.hooks?.length || extension.sections?.length || extension.tools?.some(tool => !standard.includes(tool))))
+    throw Error("Native Delegate child extensions must contain only approved standard tools");
   return defineTool({ name: definition.name, description: definition.description, parameters: definition.parameters,
     callers: ["model"], replay: "safe", executionMode: "parallel",
     async execute(input, api, context) {
@@ -52,9 +61,12 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
       }
       const timeout = args.timeout_sec === undefined ? 120 : args.timeout_sec;
       if (typeof timeout !== "number" || !Number.isInteger(timeout) || timeout < 10 || timeout > 300) throw Error("Delegate timeout_sec must be an integer from 10 to 300");
-      const names = args.tools === undefined || args.tools === "read_only" ? readers.map(tool => tool.name)
+      const readOnly = args.tools === undefined || args.tools === "read_only";
+      const approved = readOnly ? readers : standard.length ? standard : readers;
+      const names = readOnly ? readers.map(tool => tool.name) : args.tools === "standard" ? standard.map(tool => tool.name)
         : typeof args.tools === "string" ? args.tools.split(",").map(name => name.trim()).filter(Boolean) : [];
-      if (!names.length || names.some(name => !readers.some(tool => tool.name === name))) throw Error("Native Delegate supports read-only tools only");
+      if (args.tools === "full" || !names.length || names.some(name => !approved.some(tool => tool.name === name))) throw Error("Native Delegate supports approved host builtins only; full is not qualified");
+      const childExtensions = readOnly || !standard.length ? extensions : standardExtensions;
       if (args.system_prompt !== undefined && typeof args.system_prompt !== "string") throw Error("Invalid Delegate system prompt");
       // Operation-entry budget includes host source/model approval awaits. Task
       // memo preserves absolute expiry across replay; approval cannot renew it.
@@ -94,11 +106,11 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
         if (prior.items[0]) return prior.items[0].id;
         if (expired()) throw timeoutError();
         const child = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
-        const tools = readers.filter(tool => names.includes(tool.name));
+        const tools = approved.filter(tool => names.includes(tool.name));
         // No parent history, recursive delegation, Plan prompt or legacy hooks.
         // Registry-wide host source hooks remain active independently.
-        await configure(tx, child.id, { model, tools, modelTools: tools, extensions,
-          thinkingLevel: parent.thinkingLevel, instructions: typeof args.system_prompt === "string" ? args.system_prompt : "Complete the self-contained task using read-only tools." });
+        await configure(tx, child.id, { model, tools, modelTools: tools, extensions: childExtensions,
+          thinkingLevel: parent.thinkingLevel, instructions: typeof args.system_prompt === "string" ? args.system_prompt : "Complete the self-contained task using the selected tools." });
         check();
         return child.id;
       }, context);

@@ -253,15 +253,18 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     assert(); lifetime.signal.throwIfAborted();
     if (readAccessConfig().mode !== "single-user") throw Error("Host tool permission denied");
   } }, signal: lifetime.signal, shellPath: () => settings.getShellPath(), names: defaultToolNames });
+  const builtins = [...tools];
   if (plan) tools.push(createHostPlanTool(plan.definition as Parameters<typeof createHostPlanTool>[0], { root, assertOwner: () => {
     assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent();
   }, runtime }));
   if (codeReview) tools.push(createHostCodeReviewTool(codeReview.addon, { root, cwd: WORKSPACE_DIR, runtime,
     assertOwner() { assert(); lifetime.signal.throwIfAborted(); codeReview.assertCurrent(); } }));
   if (delegate) {
-    const readers = tools.filter(tool => ["read", "grep", "find", "ls"].includes(tool.name));
+    const readers = builtins.filter(tool => ["read", "grep", "find", "ls"].includes(tool.name));
     const readerExtension = defineExtension({ name: "app.host-delegate-readers", tools: readers });
+    const standardExtension = defineExtension({ name: "app.host-delegate-standard", tools: builtins });
     registry.install(readerExtension);
+    registry.install(standardExtension);
     tools.push(createHostDelegateTool(delegate.definition as Parameters<typeof createHostDelegateTool>[0], {
       assertCurrent() { assert(); lifetime.signal.throwIfAborted(); delegate.assertCurrent(); }, runtime,
       async selectModel(args, parent) {
@@ -278,7 +281,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         }
         if (!model) throw Error("Delegate parent model required");
         assertDelegateModel(model); return model;
-      }, assertModelCurrent: assertDelegateModel, readFiles: createHostDelegateFileReader(WORKSPACE_DIR), readonlyTools: readers, readonlyExtensions: [readerExtension],
+      }, assertModelCurrent: assertDelegateModel, readFiles: createHostDelegateFileReader(WORKSPACE_DIR), readonlyTools: readers, readonlyExtensions: [readerExtension], standardTools: builtins, standardExtensions: [standardExtension],
     }));
   }
   registry.install(defineExtension({ name: "app.host-builtins", tools }));

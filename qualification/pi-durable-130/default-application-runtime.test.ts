@@ -115,7 +115,7 @@ const explicitDelegateCases: Record<string, { id: string; model: unknown; denied
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["public-conversations", "custom-subset", "pending-host", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-files", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
+for (const scenario of ["public-conversations", "custom-subset", "pending-host", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -152,13 +152,16 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
     extensionKvSet("plan-sidebar", "plan", { chat_jid: "web:default", markdown: "- [ ] NATIVE_PLAN_OLD", updated_at: "2026-01-01" }, "chat", "web:default");
     toolSequence = [{ name: "plan", arguments: { action: "update", plan: [{ step: "NATIVE_PLAN_NEW", status: "in_progress" }] } }];
   }
-  const revokeDelegate = scenario === "native-delegate-revoke-cap" || scenario === "native-delegate-revoke-provider";
+  const standardDelegate = scenario === "native-delegate-standard" || scenario === "native-delegate-standard-revoke";
+  const readonlyDeny = scenario === "native-delegate-readonly-deny";
+  const writeDelegate = standardDelegate || readonlyDeny;
+  const revokeDelegate = scenario === "native-delegate-revoke-cap" || scenario === "native-delegate-revoke-provider" || scenario === "native-delegate-standard-revoke";
   const timeoutDelegate = scenario === "native-delegate-timeout";
   const explicitDelegate = explicitDelegateCases[scenario];
   const delegateFiles = scenario === "native-delegate-files";
   if (delegateFiles) writeFileSync(join(workspace, "delegate-task"), "NATIVE_FILE_BYTES\r\n\t");
-  const nativeDelegate = delegateFiles || scenario === "native-delegate" || scenario === "native-delegate-denied" || revokeDelegate || timeoutDelegate || !!explicitDelegate;
-  const delegateAllowed = delegateFiles || scenario === "native-delegate" || timeoutDelegate || (!!explicitDelegate && !explicitDelegate.denied);
+  const nativeDelegate = writeDelegate || delegateFiles || scenario === "native-delegate" || scenario === "native-delegate-denied" || revokeDelegate || timeoutDelegate || !!explicitDelegate;
+  const delegateAllowed = writeDelegate || delegateFiles || scenario === "native-delegate" || timeoutDelegate || (!!explicitDelegate && !explicitDelegate.denied);
   const realTimer = globalThis.setTimeout;
   let expireDelegate: (() => void) | undefined;
   let deadlineRegistered!: () => void;
@@ -171,6 +174,8 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   const sentinel = "PRIVATE_NATIVE_DELEGATE_READ_SENTINEL";
   const childReadPath = join(workspace, "delegate-private-read.txt");
   if (revokeDelegate) writeFileSync(childReadPath, sentinel);
+  const childWritePath = (id: string) => join(workspace, `delegate-write-${id}.txt`);
+  if (writeDelegate) for (const id of ["A", "B"]) writeFileSync(childWritePath(id), "OLD");
   if (nativeDelegate) {
     const source = process.env.DURABLE_ADDONS_ROOT;
     if (!source) throw Error("DURABLE_ADDONS_ROOT required");
@@ -221,14 +226,17 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
       expect(JSON.stringify(input)).not.toContain("hello factory");
       expect(JSON.stringify(input)).not.toContain('"name":"delegate"');
       expect(JSON.stringify(input)).not.toContain('"name":"plan"');
+      expect(JSON.stringify(input)).not.toContain('"name":"code_review"');
       if (childRequests === (revokeDelegate ? 1 : 2)) {
         releaseChildren();
         if (timeoutDelegate) void deadlineRegistration.then(() => { expireDelegate!(); });
       }
     }
-    const step = toolSequence?.shift();
+    const childId = JSON.stringify(input.messages.findLast(message => message.role === "user")?.content).includes("CHILD_B") ? "B" : "A";
+    const childWrite = child && writeDelegate && !input.messages.some(message => message.role === "toolResult");
+    const step = childWrite ? { name: "write", arguments: { path: childWritePath(childId), content: `WRITTEN_${childId}` } } : toolSequence?.shift();
     const message = { role: "assistant" as const, api: "openai-completions" as const, provider: physical.provider, model: physical.id,
-      content: firstDelegate ? (revokeDelegate ? ["A"] : ["A", "B"]).map(id => ({ type: "toolCall" as const, id, name: "delegate", arguments: { prompt: `NATIVE_DELEGATE_CHILD_${id}`, tools: "read_only", task_category: "reason", ...(explicitDelegate && (explicitDelegate.denied || id === "B") ? { model: explicitDelegate.model } : revokeDelegate ? { model: `${modelB.provider}/${modelB.id}` } : {}), ...(timeoutDelegate && id === "A" ? { timeout_sec: 10 } : {}), ...(delegateFiles && id === "B" ? { files: ["delegate-task"] } : {}) } })) : child && revokeDelegate && !input.messages.some(message => message.role === "toolResult") ? [{ type: "toolCall" as const, id: "child-private-read", name: "read", arguments: { path: childReadPath } }] : step ? [{ type: "toolCall" as const, id: `factory-tool-${calls}`, name: step.name, arguments: typeof step.arguments === "function" ? step.arguments() : step.arguments }]
+      content: firstDelegate ? (revokeDelegate ? ["A"] : ["A", "B"]).map(id => ({ type: "toolCall" as const, id, name: "delegate", arguments: { prompt: `NATIVE_DELEGATE_CHILD_${id}`, tools: standardDelegate ? "standard" : "read_only", task_category: "reason", ...(explicitDelegate && (explicitDelegate.denied || id === "B") ? { model: explicitDelegate.model } : revokeDelegate ? { model: `${modelB.provider}/${modelB.id}` } : {}), ...(timeoutDelegate && id === "A" ? { timeout_sec: 10 } : {}), ...(delegateFiles && id === "B" ? { files: ["delegate-task"] } : {}) } })) : child && revokeDelegate && !writeDelegate && !input.messages.some(message => message.role === "toolResult") ? [{ type: "toolCall" as const, id: "child-private-read", name: "read", arguments: { path: childReadPath } }] : step ? [{ type: "toolCall" as const, id: `factory-tool-${calls}`, name: step.name, arguments: typeof step.arguments === "function" ? step.arguments() : step.arguments }]
         : [{ type: "text" as const, text: "factory synthetic reply" }], stopReason: step || firstDelegate || (child && revokeDelegate && !input.messages.some(message => message.role === "toolResult")) ? "toolUse" as const : "stop" as const, timestamp: Date.now(),
       usage: { input: 5, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 10, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
     onProviderResponse?.();
@@ -316,12 +324,12 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
     captureSpies.push(spyOn(HostConversationRuntime.prototype, "captureToolSource").mockImplementation(async function (this: HostConversationRuntime, ...args) {
       const captured = await captureTool.apply(this, args);
       if (captured.delegateModel) {
-        expect(args[2]).toBe("child-private-read");
+        expect(args[2]).toBe(standardDelegate ? `factory-tool-${calls}` : "child-private-read");
         expect(captured.delegateModel).toMatchObject({ provider: modelB.provider, modelId: modelB.id });
         childSourceCaptures++;
         // The real capture has already admitted this model. Revoke across its
         // await boundary, before the default factory returns its effect guard.
-        if (scenario === "native-delegate-revoke-cap") saveBudgetCap({ scope: "instance_daily", metric: "api_usd_micros", amount: 0, timezone: "UTC" }, root);
+        if (scenario === "native-delegate-revoke-cap" || standardDelegate) saveBudgetCap({ scope: "instance_daily", metric: "api_usd_micros", amount: 0, timezone: "UTC" }, root);
         else extensionKvSet("delegate", "config", { searchable_providers: [], excluded_providers: [], excluded_models: [] }, "global");
       }
       return captured;
@@ -610,6 +618,24 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   const dispatch = bound.dispatchAcceptedInput!("web:default", message.id, rowId!);
   expect(dispatch).toBeDefined(); expect(await dispatch!()).toBe("settled");
   if (nativeDelegate) {
+    if (writeDelegate) {
+      for (const id of revokeDelegate ? ["A"] : ["A", "B"]) expect(readFileSync(childWritePath(id), "utf8")).toBe(standardDelegate && !revokeDelegate ? `WRITTEN_${id}` : "OLD");
+      expect(childRequests).toBe(revokeDelegate ? 2 : 4);
+      const writes = [...observedResults.values()].filter(result => result.toolName === "write");
+      expect(writes).toHaveLength(revokeDelegate ? 1 : 2);
+      expect(writes.every(result => !!result.isError === (readonlyDeny || revokeDelegate))).toBe(true);
+      const childIds = root.query("SELECT id FROM conversations WHERE owner_task_id IS NOT NULL").all() as { id: number }[];
+      expect(childIds).toHaveLength(revokeDelegate ? 1 : 2);
+      for (const child of childIds) {
+        const records = root.query("SELECT record FROM entries WHERE conversation_id=?").all(child.id) as { record: string }[];
+        const exposed = records.flatMap(row => JSON.parse(row.record).model ?? []).flatMap((message: { toolsAdded?: { name: string }[] }) => message.toolsAdded ?? []).map((tool: { name: string }) => tool.name).sort();
+        expect(exposed).toEqual((standardDelegate ? ["read", "bash", "edit", "write", "find", "ls", "grep"] : ["read", "grep", "find", "ls"]).sort());
+      }
+      if (revokeDelegate) expect(childSourceCaptures).toBe(1);
+      captureSpies.forEach(spy => spy.mockRestore());
+      await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close(); owner.release(); closeDatabase();
+      sdkSpies.forEach(spy => spy.mockRestore()); return;
+    }
     if (revokeDelegate) {
       expect(childSourceCaptures).toBe(1);
       expect(childRequests).toBe(2);
