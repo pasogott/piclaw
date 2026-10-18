@@ -650,3 +650,12 @@ as declaration changes. A fixture exits during a tool call without replying;
 catching that failure cannot persist guest state. Eight selected MCP factory cases
 and three typechecks pass; bounded review accepted public onClose registration and
 cleanup semantics. No reconnect, fallback, full-suite or live-server test added.
+
+## 10,000-entry reader measurement — 18 October 2026
+
+The existing actual runtime/adapter/facade synthetic harness now has a bounded
+10,000-entry receipt: 60,042 assertions, warm median26.223ms, slowest of five
+32.417ms, first read after reopen26.105ms. See
+[measurement and limits](../../../evidence/pi-durable-130-tree-read-performance-10k-20261018.md).
+Default-factory, imported/forked/compacted, concurrent-load and production-history
+performance acceptance is still unverified. No requirement status changed.
