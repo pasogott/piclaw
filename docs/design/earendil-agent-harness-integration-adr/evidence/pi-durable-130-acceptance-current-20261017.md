@@ -1038,3 +1038,26 @@ Before migration:
 The evidence ledger contains historical receipts below older baselines; those
 sections do not override this dated assessment. Current published implementation
 head is `bda68d523`; no merge, deployment, restart or migration has occurred.
+
+## Unused legacy side-session cleanup — 2026-10-18
+
+Source `a5cc945c00b9dd6c72d22fee65136e648a2d2c97` removes the uncalled legacy
+side-session reseeding and construction methods, factory options and creation
+singleflight state. The native card consumer uses public durable forks. Shared
+side-pool disposal, snapshot and MCP failure guards remain; main-session thinking
+restoration is unchanged. Method-only tests were removed with their implementations.
+
+Combined independent deletion review returned READY. One native candidate exited
+0: 633 tests / 7,983 assertions across 51 files. One root gate on the same frozen
+head exited 0: 7,334 pass / 74 baseline skips / zero failures, plus 25 feature and
+9 build tests. Scoped typechecks and targeted lifecycle/ownership tests pass.
+Receipts: `/workspace/reviews/durable-1650/legacy-side-cleanup-{candidate,root}.*`.
+No repeated gates or timeout changes were needed.
+
+The production-consumer audit identified web debug and command discovery still
+calling legacy session introspection. Debug requires a native metadata path;
+command discovery currently falls back to core commands after the legacy guard
+rejects. These consumers are not qualified as replaced. Preprompt-compaction
+introspection needs ingress-route analysis before its compatibility path is removed.
+Capped execution, public-API blockers, production-scale evidence and migration-last
+remain incomplete. No merge, deployment, restart or migration occurred.
