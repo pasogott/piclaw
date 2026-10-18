@@ -363,6 +363,10 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       const continuing = (async () => {
         const allocated = await allocateSidePromptConversation(input);
         const id = await runtime.submit(allocated);
+        const operation = value(await work.getOperation(allocated.operationId)); assertLive();
+        if (operation && !operation.harness) value(await work.bindHarness(sealed({
+          effect: effect(`side-bind:${allocated.requestId}`, allocated.operationId, allocated.sourceSeq), expectedVersion: operation.version,
+          sessionId: r.sessionId, lane: r.lane, harnessOperationId: String(id), state: "running" as const, watchGeneration: r.generation })));
         await runtime.wait(allocated, id, shutdown.signal);
         const state = await runtime.reconcile(allocated);
         if (!state.answer) throw Error("Side prompt answer unavailable");
@@ -450,7 +454,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     }
     return Object.freeze({
       /** Construct pool first from this snapshot, then bind its existing channel constructor. */
-      sessionOptions: Object.freeze({ getDurableSession, dispatchScheduledAgent }),
+      sessionOptions: Object.freeze({ getDurableSession, dispatchScheduledAgent, dispatchSidePrompt }),
       allocateScheduledConversation, allocateSidePromptConversation, dispatchSidePrompt, reconcileSidePrompt,
       bind(options: Pick<WebChannelOpts, "queue" | "agentPool">): Readonly<WebChannelOpts> {
         assert(); if (bound || closing) throw Error("Application bundle already bound or closing");

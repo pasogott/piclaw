@@ -330,6 +330,7 @@ export class AgentPool {
   private branchManager: AgentPoolServices["branchManager"];
   private runtimeFacade: AgentPoolServices["runtimeFacade"];
   private sideStreamSimple?: NonNullable<AgentPoolOptions["sideStreamSimple"]>;
+  private readonly sidePromptDispatch?: AgentPoolOptions["dispatchSidePrompt"];
   private readonly config = getSessionPoolConfig();
 
   private readonly scheduledDispatch: AgentPoolOptions["dispatchScheduledAgent"];
@@ -342,6 +343,7 @@ export class AgentPool {
 
   constructor(options: AgentPoolOptions) {
     this.scheduledDispatch = options.dispatchScheduledAgent?.bind(options);
+    this.sidePromptDispatch = options.dispatchSidePrompt?.bind(options);
     this.durableApplication = options.getDurableSession !== undefined;
     if (!options.credentialStore || !options.modelRuntime) {
       throw new Error("AgentPool requires shared credentialStore and modelRuntime services");
@@ -581,6 +583,11 @@ export class AgentPool {
     // admission controls are installed around them.
     if (readAccessConfig().mode !== "single-user") {
       return { status: "error", result: null, thinking: null, error: "Side prompts are unavailable in multi-user mode.", model: null };
+    }
+    if (this.durableApplication) {
+      if (!this.sidePromptDispatch) return { status: "error", result: null, thinking: null, model: null, error: "Durable side prompt dispatcher unavailable" };
+      try { return await this.sidePromptDispatch(chatJid, prompt, options); }
+      catch { return { status: "error", result: null, thinking: null, model: null, error: "Native side prompt unavailable or failed" }; }
     }
     const parent = getBudgetWorkContext();
     const budgetWorkId = options.budgetWorkId?.trim() || createUuid("side-prompt");
