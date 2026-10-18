@@ -123,7 +123,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
+for (const scenario of ["native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -162,14 +162,20 @@ for (const scenario of ["native-codemode-plan", "native-codemode-plan-cancel", "
     writeFileSync(join(workspace, "existing.drawio"), "PRESERVED_DRAWIO");
     toolSequence = [{ name: "open_drawio_editor", arguments: { path: "nested/new.drawio" } }, { name: "open_drawio_editor", arguments: { path: "existing.drawio" } }];
   }
-  const nativeOffice = scenario.startsWith("native-office-viewer");
-  const officeCancelled = scenario === "native-office-viewer-cancel";
+  const codemodeOffice = scenario === "native-codemode-office-viewer" || scenario === "native-codemode-office-viewer-cancel";
+  const nativeOffice = scenario.startsWith("native-office-viewer") || codemodeOffice;
+  const officeCancelled = scenario === "native-office-viewer-cancel" || scenario === "native-codemode-office-viewer-cancel";
+  const officePath = codemodeOffice ? "office-fixture.csv" : "office.csv";
+  let officeNestedCaptures = 0;
   if (nativeOffice) {
     installOfficeViewerFixture(workspace);
-    writeFileSync(join(workspace, "office.csv"), "name,value\nfixture,1650\n");
+    writeFileSync(join(workspace, officePath), "name,value\nfixture,1650\n");
     writeFileSync(join(workspace, "office.txt"), "unsupported");
-    toolSequence = [{ name: "open_office_viewer", arguments: { path: "@office.csv" } },
-      ...["office.txt", "missing.docx", "/tmp/outside-office.csv"].map(path => ({ name: "open_office_viewer", arguments: { path } }))];
+    toolSequence = codemodeOffice ? [{ name: "codemode", arguments: () => ({ code: officeCancelled
+      ? `try { await tools.open_office_viewer(${JSON.stringify({ path: officePath })}); } catch {} store("revoked-office", "MUST_NOT_PERSIST"); console.log("done");`
+      : `const result = await tools.open_office_viewer(${JSON.stringify({ path: officePath })}); if (typeof result !== "string") throw Error("Expected native tool output string"); console.log(result);` }) }]
+      : [{ name: "open_office_viewer", arguments: { path: "@office.csv" } },
+        ...["office.txt", "missing.docx", "/tmp/outside-office.csv"].map(path => ({ name: "open_office_viewer", arguments: { path } }))];
   }
   const nativeTable = scenario.startsWith("native-editable-table");
   if (nativeTable) {
@@ -423,7 +429,12 @@ for (const scenario of ["native-codemode-plan", "native-codemode-plan-cancel", "
       const captured = await captureTool.apply(this, args);
       realToolCaptures++;
       expect(captured.inputs[0]?.sourceId).toBe("factory-input");
-      if (officeCancelled || drawioCancelled) root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
+      if (codemodeOffice) {
+        expect(captured.operation.chatJid).toBe("web:default");
+        expect(captured.operation.harness).toBeDefined();
+        if (args[2].includes("/")) officeNestedCaptures++;
+      }
+      if ((officeCancelled && (!codemodeOffice || args[2].includes("/"))) || drawioCancelled) root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
       if (scenario === "native-editable-table-closed-publisher") backend.stop();
       if (scenario === "native-editable-table-revoked") root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
       // Host-owned SQL changes the actual authority after capture, not a fake
@@ -958,27 +969,51 @@ for (const scenario of ["native-codemode-plan", "native-codemode-plan-cancel", "
     sdkSpies.forEach(spy => spy.mockRestore()); owner.release(); closeDatabase(); return;
   }
   if (nativeOffice) {
-    expect(realToolCaptures).toBe(officeCancelled ? 1 : 4);
-    expect(readFileSync(join(workspace, "office.csv"), "utf8")).toBe("name,value\nfixture,1650\n");
+    expect(realToolCaptures).toBe(codemodeOffice ? 2 : officeCancelled ? 1 : 4);
+    expect(readFileSync(join(workspace, officePath), "utf8")).toBe("name,value\nfixture,1650\n");
+    if (codemodeOffice) {
+      expect(officeNestedCaptures).toBe(1);
+      expect(calls).toBe(officeCancelled ? 1 : 2);
+      expect(toolSequence).toEqual([]);
+      expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
+    }
     const records = JSON.stringify(root.query("SELECT * FROM entries").all());
     if (officeCancelled) {
       expect(observedResults.size).toBe(0);
       expect(records).not.toContain("Office viewer URL:");
       expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+      if (codemodeOffice) {
+        expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
+        expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=(SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default')").get()).toEqual({ phase: "cancelling" });
+        expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+        const stores = root.query(`SELECT r.content FROM document_revisions r JOIN documents d ON d.id=r.document_id WHERE d.kind='"pi.codemode.store"'`).all();
+        expect(JSON.stringify(stores)).not.toContain("revoked-office");
+        expect(JSON.stringify(stores)).not.toContain("MUST_NOT_PERSIST");
+      }
     } else {
       const result = observedResults.get("factory-tool-1");
       expect(result?.isError).not.toBe(true);
-      const text = (result!.content as { text: string }[])[0]!.text;
-      const viewer = new URL(text.split("\n")[0]!.replace("Office viewer URL: ", ""), "http://fixture");
+      const text = (result!.content as { text: string }[]).map(block => block.text).join("\n");
+      assert(text.includes("Office viewer URL: "), text);
+      const viewer = new URL(codemodeOffice ? text.match(/Office viewer URL: (\S+)/)![1]! : text.split("\n")[0]!.replace("Office viewer URL: ", ""), "http://fixture");
       expect(viewer.pathname).toBe("/office-viewer/");
       const raw = new URL(viewer.searchParams.get("url")!, "http://fixture");
       expect(raw.pathname).toBe("/workspace/raw");
-      expect(raw.searchParams.get("path")).toBe(join(workspace, "office.csv"));
+      expect(raw.searchParams.get("path")).toBe(join(workspace, officePath));
       const response = await channel.handleRequest(new Request(raw));
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("name,value\nfixture,1650\n");
-      expect(records).toContain("viewerUrl");
-      for (const id of [2, 3, 4]) {
+      if (!codemodeOffice) expect(records).toContain("viewerUrl");
+      if (codemodeOffice) {
+        expect(observedResults.size).toBe(1);
+        expect(result?.toolName).toBe("codemode");
+        expect(text.length).toBeLessThan(4096);
+        for (const hidden of ["viewerUrl", "fileName", "fileType", "name,value", "fixture,1650"]) {
+          expect(text).not.toContain(hidden);
+          expect(planRequests[1]).not.toContain(hidden);
+        }
+        expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(1);
+      } else for (const id of [2, 3, 4]) {
         expect(observedResults.get(`factory-tool-${id}`)?.isError).toBe(true);
         expect(JSON.stringify(observedResults.get(`factory-tool-${id}`))).toContain("Host tool execution failed");
       }

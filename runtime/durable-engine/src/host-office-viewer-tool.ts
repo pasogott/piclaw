@@ -54,5 +54,5 @@ export function createHostOfficeViewerTool(definition: ToolDefinition<TSchema, J
       check();
       return result;
     },
-  });
+  }, { callers: ["model", "tools"] });
 }

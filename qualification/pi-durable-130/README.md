@@ -1,3 +1,17 @@
+# Native codemode can open qualified Office files
+
+The existing Office Viewer adapter now accepts nested-tool callers. Exact native
+codemode ownership, foreground accepted-source/harness checks and workspace file
+validation remain unchanged. No second viewer implementation or UI context.
+
+Three selected actual-runtime cases pass: nested viewer46 assertions, cancellation
+after nested capture34, existing direct viewer33 (113 total). The returned viewer
+URL resolves through the real raw-file handler; CSV bytes remain unchanged and
+are not inserted into model output. Cancellation denies the URL/result and guest
+store commit, preserving pending source ownership. Three configured typechecks
+and bounded review pass. No full suites or browser-decoding qualification ran.
+Checkpoint: /workspace/reviews/durable-1650/codemode-office-viewer-compatibility.md.
+
 # Native codemode can call assigned Code Review
 
 The existing Code Review adapter now accepts nested-tool callers alongside model
