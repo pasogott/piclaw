@@ -11,7 +11,8 @@ export const operationBudgetWorkId = (operationId: string) => `durable-operation
 /** Reconcile only already-committed host terminals. Never clear uncertain holds. */
 export function completeMaintenanceBudgetWork(database: Database, workId: string): void {
   database.transaction(() => {
-    if (!getBudgetWork(workId, database) || database.query(`SELECT 1 FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id
+    const work = getBudgetWork(workId, database);
+    if (work?.status !== "active" || work.execution_kind !== "side_prompt" || work.parent_work_id !== null || database.query(`SELECT 1 FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id
       WHERE w.parent_work_id=? AND r.state NOT IN ('settled','released') LIMIT 1`).get(workId)) return;
     setBudgetWorkStatus(workId, "completed", { boundary: "maintenance_settled" }, database);
   }).immediate();

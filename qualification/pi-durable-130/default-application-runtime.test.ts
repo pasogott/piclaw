@@ -1649,8 +1649,12 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       expect(await compacting).toEqual({ compacted: true });
       // Simulate a process stopping after the SDK commit but before its work
       // closure acknowledgement. Startup must repair from the existing task.
-      root.query("UPDATE budget_work SET status='active',closed_at=NULL WHERE parent_work_id IS NULL AND execution_kind='side_prompt'").run();
+      root.query("UPDATE budget_work SET status='active',closed_at=NULL,chat_jid='web:unrelated' WHERE parent_work_id IS NULL AND execution_kind='side_prompt'").run();
       backend.stop(); await backend.close();
+      backend = await createDefaultApplicationRuntime(owner, async () => services);
+      expect(root.query("SELECT status FROM budget_work WHERE parent_work_id IS NULL AND execution_kind='side_prompt'").all()).toEqual([{ status: "active" }]);
+      backend.stop(); await backend.close();
+      root.query("UPDATE budget_work SET chat_jid='web:default' WHERE parent_work_id IS NULL AND execution_kind='side_prompt'").run();
       backend = await createDefaultApplicationRuntime(owner, async () => services);
       expect(root.query("SELECT status FROM budget_work WHERE parent_work_id IS NULL AND execution_kind='side_prompt'").all()).toEqual([{ status: "completed" }]);
       expect(calls).toBe(beforeCalls + 1);

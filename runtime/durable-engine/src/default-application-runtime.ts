@@ -444,14 +444,15 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     // Repair a successful maintenance task whose post-commit budget-work close
     // was interrupted. Public SDK reads prove the task and its committed write.
     const maintenancePrefix = `durable-maintenance:${mapping.domain}:`;
-    const maintenanceWork = root.query("SELECT id FROM budget_work WHERE execution_kind='side_prompt' AND parent_work_id IS NULL AND status='active' AND substr(id,1,?)=?")
-      .all(maintenancePrefix.length, maintenancePrefix) as { id: string }[];
+    const maintenanceWork = root.query("SELECT id,chat_jid FROM budget_work WHERE execution_kind='side_prompt' AND parent_work_id IS NULL AND status='active' AND substr(id,1,?)=?")
+      .all(maintenancePrefix.length, maintenancePrefix) as { id: string; chat_jid: string }[];
     for (const work of maintenanceWork) {
       const suffix = work.id.slice(maintenancePrefix.length);
       if (!/^[1-9][0-9]*$/.test(suffix) || !Number.isSafeInteger(Number(suffix))) continue;
       const task = await harness.getTask(Number(suffix) as import("@earendil-works/pi-durable").TaskId, context);
       assert();
       if (task?.kind !== "pi.compaction" || task.state.status !== "terminal" || task.state.outcome.status !== "completed") continue;
+      if (!mapping.bindings.some(binding => binding.chatJid === work.chat_jid && binding.conversationId === task.conversationId)) continue;
       const result = task.state.outcome.result as { entryId?: number; submissionId?: number };
       let entryId = result.entryId;
       if (result.submissionId !== undefined) {
