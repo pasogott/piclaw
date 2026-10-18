@@ -61,35 +61,35 @@ const approvedDrawioFiles = Object.freeze({
   "tool.ts": "7a47e648d93d396c5b959795056885353f34fa04322390e35b0e989d95e81a8b",
 });
 const profiles = {
-  open_drawio_editor: { name: "@rcarmo/piclaw-addon-drawio-editor", version: "31.4.4", files: approvedDrawioFiles, shadows: ["index.js", "tool.js", "tool.json", "tool/index.js", "tool/package.json"], events: [] as readonly string[] },
-  open_office_viewer: { name: "@rcarmo/piclaw-addon-office-viewer", version: "0.1.3", files: approvedOfficeViewerFiles, shadows: ["index.js"], events: [] as readonly string[] },
-  editable_table: { name: "@rcarmo/piclaw-addon-editable-table", version: "0.1.4", files: approvedEditableTableFiles, shadows: ["index.js", "tool.js", "tool.json", "tool/index.js", "tool/package.json", "shared.js", "shared.json", "shared/index.js", "shared/package.json"], events: ["resources_discover"] },
-  plan: { name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.25", files: approvedPlanFiles, shadows: ["compat/chat-context.js", "compat/extension-kv.js", "compat/package.json"], events: ["before_agent_start"] },
-  code_review: { name: "@rcarmo/piclaw-addon-code-review", version: "0.1.8", files: approvedCodeReviewFiles,
+  open_drawio_editor: { label: "Draw.io", name: "@rcarmo/piclaw-addon-drawio-editor", version: "31.4.4", files: approvedDrawioFiles, shadows: ["index.js", "tool.js", "tool.json", "tool/index.js", "tool/package.json"], events: [] as readonly string[] },
+  open_office_viewer: { label: "Office Viewer", name: "@rcarmo/piclaw-addon-office-viewer", version: "0.1.3", files: approvedOfficeViewerFiles, shadows: ["index.js"], events: [] as readonly string[] },
+  editable_table: { label: "Editable Table", name: "@rcarmo/piclaw-addon-editable-table", version: "0.1.4", files: approvedEditableTableFiles, shadows: ["index.js", "tool.js", "tool.json", "tool/index.js", "tool/package.json", "shared.js", "shared.json", "shared/index.js", "shared/package.json"], events: ["resources_discover"] },
+  plan: { label: "Plan", name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.25", files: approvedPlanFiles, shadows: ["compat/chat-context.js", "compat/extension-kv.js", "compat/package.json"], events: ["before_agent_start"] },
+  code_review: { label: "Code Review", name: "@rcarmo/piclaw-addon-code-review", version: "0.1.8", files: approvedCodeReviewFiles,
     shadows: [...Object.keys(approvedCodeReviewFiles).flatMap(file => [file.replace(/\.ts$/, ".js"), file.replace(/\.ts$/, ".json"), file.replace(/\.ts$/, "/index.js"), file.replace(/\.ts$/, "/package.json")])], events: ["resources_discover"] },
-  delegate: { name: "@rcarmo/piclaw-addon-delegate", version: "0.2.20", files: approvedDelegateFiles, shadows: ["delegate.js", "delegate.json", "delegate/index.js", "delegate/package.json", "compat/extension-kv.js", "compat/package.json"], events: ["session_start", "model_select", "before_agent_start"] },
+  delegate: { label: "Delegate", name: "@rcarmo/piclaw-addon-delegate", version: "0.2.20", files: approvedDelegateFiles, shadows: ["delegate.js", "delegate.json", "delegate/index.js", "delegate/package.json", "compat/extension-kv.js", "compat/package.json"], events: ["session_start", "model_select", "before_agent_start"] },
 } as const;
 type Profile = keyof typeof profiles;
 type Extension = LoadExtensionsResult["extensions"][number];
-type PlanSource = Readonly<{ cwd: string; packageDir: string; entry: string; manifest: string; files: string }>;
-type PlanRegistration = Readonly<{
-  source: PlanSource;
+type InstalledSource = Readonly<{ cwd: string; packageDir: string; entry: string; manifest: string; files: string }>;
+type InstalledRegistration = Readonly<{
+  source: InstalledSource;
   definition: NonNullable<ReturnType<Extension["tools"]["get"]>>["definition"];
   execute: NonNullable<ReturnType<Extension["tools"]["get"]>>["definition"]["execute"];
   declaration: string;
   handlerMap: Extension["handlers"];
   handlers: ReadonlyMap<string, readonly unknown[]>;
 }>;
-const loadedPlanSources = new WeakMap<LoadExtensionsResult, ReadonlyMap<Extension, PlanRegistration>>();
+const loadedInstalledSources = new WeakMap<LoadExtensionsResult, ReadonlyMap<Extension, InstalledRegistration>>();
 // DefaultResourceLoader's first reload may reuse a process-wide factory cache.
 // The SDK root does not export its cache clear API. Remember the source BEFORE
 // every application load (including rejected/failed loads), never just successful
 // qualification. An unsupported first attempt permanently poisons this path for
 // this process; restored bytes cannot prove which cached factory would run.
 // This is cache provenance metadata, not durable ownership/adoption authority.
-const attemptedPlanSources = new Map<string, PlanSource | undefined>();
+const attemptedInstalledSources = new Map<string, InstalledSource | undefined>();
 
-function captureApprovedPlan(cwd: string, installedEntries: readonly string[], kind: Profile = "plan"): PlanSource | undefined {
+function captureApprovedSource(cwd: string, installedEntries: readonly string[], kind: Profile): InstalledSource | undefined {
   try {
     const profile = profiles[kind];
     const workspace = realpathSync(cwd);
@@ -113,37 +113,37 @@ function captureApprovedPlan(cwd: string, installedEntries: readonly string[], k
     if (profile.shadows.some(file => existsSync(join(packageDir, file)))) return undefined;
     const files = Object.entries(profile.files).map(([file, expected]) => {
       const path = join(packageDir, file);
-      if (!inside(path)) throw Error("Plan source escape");
+      if (!inside(path)) throw Error(`${profile.label} source escape`);
       const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
-      if (digest !== expected) throw Error("Unsupported Plan source");
+      if (digest !== expected) throw Error(`Unsupported ${profile.label} source`);
       return `${file}:${realpathSync(path)}:${digest}`;
     }).join("\n");
     return Object.freeze({ cwd: workspace, packageDir, entry, manifest, files });
   } catch { return undefined; }
 }
-function sameSource(a: PlanSource | undefined, b: PlanSource | undefined): boolean {
+function sameSource(a: InstalledSource | undefined, b: InstalledSource | undefined): boolean {
   return !!a && !!b && a.cwd === b.cwd && a.packageDir === b.packageDir && a.entry === b.entry && a.manifest === b.manifest && a.files === b.files;
 }
 
 /** Only a pre-evaluation snapshot bound to this exact loaded registration can
  * qualify. Never infer what ran from a subsequently edited manifest. */
 function qualifyInstalled(catalog: LoadExtensionsResult, cwd: string, kind: Profile) {
-  const sources = loadedPlanSources.get(catalog);
+  const sources = loadedInstalledSources.get(catalog);
   if (!sources?.size) return undefined;
   const profile = profiles[kind];
   const candidates = [...sources].filter(([extension, { source }]) => catalog.extensions.includes(extension) && source.cwd === realpathSync(cwd) &&
-    sameSource(source, captureApprovedPlan(cwd, getInstalledAddonExtensionPaths(cwd), kind)));
+    sameSource(source, captureApprovedSource(cwd, getInstalledAddonExtensionPaths(cwd), kind)));
   if (!candidates.length) return undefined;
-  if (candidates.length !== 1) throw Error("Ambiguous installed Plan package");
+  if (candidates.length !== 1) throw Error(`Ambiguous installed ${profile.label} package`);
   const [extension, { source, definition, execute, declaration, handlerMap, handlers }] = candidates[0]!;
   const assertCurrent = () => {
     if (!catalog.extensions.includes(extension) || resolve(extension.resolvedPath) !== source.entry ||
-      !sameSource(source, captureApprovedPlan(cwd, getInstalledAddonExtensionPaths(cwd), kind))) throw Error(`Installed ${kind === "plan" ? "Plan" : kind === "delegate" ? "Delegate" : "Code Review"} source changed`);
+      !sameSource(source, captureApprovedSource(cwd, getInstalledAddonExtensionPaths(cwd), kind))) throw Error(`Installed ${profile.label} source changed`);
     if (!definition || definition.name !== kind || extension.tools.size !== 1 || extension.tools.get(kind)?.definition !== definition || definition.execute !== execute || JSON.stringify(definition) !== declaration || extension.handlers !== handlerMap ||
       extension.handlers.size !== profile.events.length || (profile.events as readonly string[]).some(event => {
         const current = extension.handlers.get(event) ?? [], prior = handlers.get(event) ?? [];
         return !prior.length || current.length !== prior.length || current.some((handler, i) => handler !== prior[i]);
-      }) || extension.commands.size || extension.shortcuts.size) throw Error(`Unqualified ${kind === "plan" ? "Plan" : kind === "delegate" ? "Delegate" : "Code Review"} capabilities`);
+      }) || extension.commands.size || extension.shortcuts.size) throw Error(`Unqualified ${profile.label} capabilities`);
   };
   assertCurrent();
   return Object.freeze({ extension, source, definition: definition!, assertCurrent });
@@ -236,11 +236,11 @@ export async function loadApplicationExtensionCatalog(options: {
 }): Promise<LoadExtensionsResult> {
   const installedEntries = getInstalledAddonExtensionPaths(options.cwd);
   const snapshots = (Object.keys(profiles) as Profile[]).map(kind => {
-    const before = captureApprovedPlan(options.cwd, installedEntries, kind);
+    const before = captureApprovedSource(options.cwd, installedEntries, kind);
     const entry = join(realpathSync(options.cwd), ".pi/extensions/node_modules", profiles[kind].name, "index.ts");
-    if (attemptedPlanSources.has(entry) && !sameSource(attemptedPlanSources.get(entry), before))
-      throw Error(`Installed ${kind === "plan" ? "Plan" : "Delegate"} loader cache provenance changed; process restart required`);
-    if (existsSync(entry)) attemptedPlanSources.set(entry, before);
+    if (attemptedInstalledSources.has(entry) && !sameSource(attemptedInstalledSources.get(entry), before))
+      throw Error(`Installed ${profiles[kind].label} loader cache provenance changed; process restart required`);
+    if (existsSync(entry)) attemptedInstalledSources.set(entry, before);
     return { kind, before, entry };
   });
   const loader = new DefaultResourceLoader({ ...options,
@@ -250,13 +250,13 @@ export async function loadApplicationExtensionCatalog(options: {
   try {
     await loader.reload();
   } finally {
-    for (const { kind, before, entry } of snapshots) if (existsSync(entry) || attemptedPlanSources.has(entry)) {
-      if (!sameSource(before, captureApprovedPlan(options.cwd, getInstalledAddonExtensionPaths(options.cwd), kind))) attemptedPlanSources.set(entry, undefined);
+    for (const { kind, before, entry } of snapshots) if (existsSync(entry) || attemptedInstalledSources.has(entry)) {
+      if (!sameSource(before, captureApprovedSource(options.cwd, getInstalledAddonExtensionPaths(options.cwd), kind))) attemptedInstalledSources.set(entry, undefined);
     }
   }
   const catalog = loader.getExtensions();
-  const sources = new Map<Extension, PlanRegistration>();
-  for (const { kind, before } of snapshots) if (before && sameSource(before, captureApprovedPlan(options.cwd, getInstalledAddonExtensionPaths(options.cwd), kind))) {
+  const sources = new Map<Extension, InstalledRegistration>();
+  for (const { kind, before } of snapshots) if (before && sameSource(before, captureApprovedSource(options.cwd, getInstalledAddonExtensionPaths(options.cwd), kind))) {
     for (const extension of catalog.extensions) {
       const definition = extension.tools.get(kind)?.definition;
       if (resolve(extension.resolvedPath) === before.entry && definition) sources.set(extension, Object.freeze({
@@ -265,7 +265,7 @@ export async function loadApplicationExtensionCatalog(options: {
       }));
     }
   }
-  loadedPlanSources.set(catalog, sources);
+  loadedInstalledSources.set(catalog, sources);
   return catalog;
 }
 

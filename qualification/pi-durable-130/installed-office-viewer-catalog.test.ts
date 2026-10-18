@@ -28,6 +28,10 @@ for (const mode of ["approved", "tamper", "shadow", "execute", "schema"] as cons
     if (mode === "execute") qualified!.definition.execute = async () => { throw Error("substituted"); };
     if (mode === "schema") qualified!.definition.parameters = { ...qualified!.definition.parameters, description: "changed" };
     if (mode !== "approved") expect(() => qualified!.assertCurrent()).toThrow("capabilities");
-    else qualified!.assertCurrent();
+    else {
+      qualified!.assertCurrent();
+      writeFileSync(join(pkg, "index.ts"), readFileSync(join(pkg, "index.ts"), "utf8") + "\n// changed after capture\n");
+      expect(() => qualified!.assertCurrent()).toThrow("Installed Office Viewer source changed");
+    }
   } finally { catalog?.runtime.invalidate("fixture ended"); rmSync(dir, { recursive: true, force: true }); }
 });
