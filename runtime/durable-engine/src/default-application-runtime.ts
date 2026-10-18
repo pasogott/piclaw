@@ -358,6 +358,15 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     manifest: mapping.bindings.map(({ chatJid, branchId, conversationId }) => ({ chatJid, branchId, conversationId: conversationId as ConversationId })),
     sessions: new Map(mapping.bindings.map(binding => [binding.chatJid, binding.sessionId])),
     assertConversationAvailable() { check(ref, lifetime.signal); },
+    resolveScheduledModel(label) {
+      const slash = label.indexOf("/");
+      const choice = { provider: label.slice(0, slash), id: label.slice(slash + 1) };
+      check(choice, lifetime.signal);
+      const physical = host.modelRuntime.getPhysicalModel(choice.provider, choice.id)!;
+      if (!Number.isFinite(physical.contextWindow) || physical.contextWindow <= 0 ||
+        !Number.isFinite(physical.maxTokens) || physical.maxTokens < 0) throw Error("Model context unavailable");
+      return { provider: choice.provider, modelId: choice.id };
+    },
     async createConversation(tx, chatJid, branchId) {
       assert(); check(ref, lifetime.signal);
       const doc = await tx.doc(ApplicationConversations, 1 as ConversationId);

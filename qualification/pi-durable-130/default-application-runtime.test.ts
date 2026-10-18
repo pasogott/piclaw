@@ -178,7 +178,7 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   const bothChildren = new Promise<void>(resolve => { releaseChildren = resolve; });
   // Leave room for the real built-in schemas and idle-model framing reserve.
   model.contextWindow = 100000;
-  const modelB = { ...model, id: "approved-b", contextWindow: 200000 };
+  const modelB = { ...model, id: scenario === "native-scheduler" ? "approved/b" : "approved-b", contextWindow: 200000 };
   const observedResults = new Map<string, { toolName: string; isError?: boolean; content: unknown }>();
   const stream = (physical: typeof model, input: { messages: { role: string; toolCallId?: string; toolName?: string; isError?: boolean; content: unknown }[] }, options?: { signal?: AbortSignal }) => {
     for (const result of input.messages) if (result.role === "toolResult" && result.toolCallId && result.toolName)
@@ -325,20 +325,34 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
         }
         const port = backend.sessionOptions.getDurableSession!(chat)!;
         const position = await port.readPosition();
+        expect(await port.readModel!()).toBe(`${model.provider}/${model.id}`);
         const before = JSON.stringify(root.query("SELECT * FROM entries WHERE conversation_id=(SELECT conversation_id FROM piclaw_durable_bindings_v1 WHERE source_id='scheduler-main-seed') ORDER BY id").all());
         const due = new Date(Date.now() - 1000).toISOString(), id = `native-schedule-${index}`;
-        createTask({ id, chat_jid: chat, prompt: "scheduled real consumer", schedule_type: "once", schedule_value: due, next_run: due, status: "active", notify_on_complete: false, created_at: due });
+        createTask({ id, chat_jid: chat, model: `${modelB.provider}/${modelB.id}`, prompt: "scheduled real consumer", schedule_type: "once", schedule_value: due, next_run: due, status: "active", notify_on_complete: false, created_at: due });
         await pollScheduledRunsOnce({ queue: base.queue, agentPool: pool, sendMessage: async (_chat, text) => { delivered.push(text); } }, scheduledStore.value);
         const deadline = Date.now() + 5000;
         while (!root.query("SELECT 1 FROM service_effect_s07_occurrences WHERE task_id=? AND state='completed'").get(id) && Date.now() < deadline) await Bun.sleep(10);
         expect(root.query("SELECT state FROM service_effect_s07_occurrences WHERE task_id=?").get(id)).toEqual({ state: "completed" });
         expect(await port.readPosition()).toBe(position);
+        expect(await port.readModel!()).toBe(`${model.provider}/${model.id}`);
+        expect(requested.at(-1)).toBe(modelB.id);
         expect(JSON.stringify(root.query("SELECT * FROM entries WHERE conversation_id=(SELECT conversation_id FROM piclaw_durable_bindings_v1 WHERE source_id='scheduler-main-seed') ORDER BY id").all())).toBe(before);
         if (!delivered.at(-1)) throw Error(JSON.stringify(root.query("SELECT * FROM task_run_logs WHERE task_id=?").all(id)));
         expect(delivered.at(-1)).toBe("factory synthetic reply");
       }
       expect(delivered).toHaveLength(3);
       expect(root.query("SELECT COUNT(*) AS n FROM task_run_logs WHERE task_id LIKE 'native-schedule-%' AND status='success'").get()).toEqual({ n: 3 });
+      for (const [index, label] of ["unknown/model", "synthetic/", "synthetic", "/approved", "synthetic/virtual"].entries()) {
+        const due = new Date(Date.now() - 1000).toISOString(), id = `native-model-denied-${index}`;
+        const beforeCalls = calls, beforeForks = root.query("SELECT COUNT(*) AS n FROM conversations").get();
+        createTask({ id, chat_jid: "web:default", model: label, prompt: "must not dispatch", schedule_type: "once", schedule_value: due, next_run: due, status: "active", notify_on_complete: false, created_at: due });
+        await pollScheduledRunsOnce({ queue: base.queue, agentPool: pool, sendMessage: async () => {} }, scheduledStore.value);
+        const deadline = Date.now() + 5000;
+        while (!root.query("SELECT 1 FROM task_run_logs WHERE task_id=?").get(id) && Date.now() < deadline) await Bun.sleep(10);
+        expect(root.query("SELECT status FROM task_run_logs WHERE task_id=?").get(id)).toEqual({ status: "error" });
+        expect(calls).toBe(beforeCalls);
+        expect(root.query("SELECT COUNT(*) AS n FROM conversations").get()).toEqual(beforeForks);
+      }
       // Exercise the actual scheduler/AgentPool consumer, not a budget stub.
       // Even a positive allowance is unqualified without per-request binding.
       for (const [index, amount] of [0, 1_000_000].entries()) {
@@ -408,6 +422,8 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
         const row = root.transaction(() => { const id = storeMessage(message); reopened.getInputSourceAdmission!(message.chat_jid)({ message, rowId: id, database: root }); return id; })();
         expect(await reopened.dispatchAcceptedInput!(message.chat_jid, message.id, row!)!()).toBe("settled");
         expect(root.query("SELECT COUNT(*) AS n FROM messages WHERE is_bot_message=1").get()).toEqual({ n: 2 });
+        expect(requested.at(-1)).toBe(model.id);
+        expect(await backend.sessionOptions.getDurableSession!("web:default")!.readModel!()).toBe(`${model.provider}/${model.id}`);
       } finally { await reopenedBase.queue.shutdown(); await reopenedPool.shutdown(); }
       prohibited.forEach(spy => expect(spy).not.toHaveBeenCalled());
       sdkSpies.forEach(spy => expect(spy).not.toHaveBeenCalled());

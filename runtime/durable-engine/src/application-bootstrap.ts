@@ -59,6 +59,8 @@ export interface ApplicationBootstrapOptions {
   /** Publish the existing runtime before recovery can schedule any provider. */
   onRuntime?: (runtime: import("./host-runtime.js").HostConversationRuntime) => void;
   assertConversationAvailable?: () => void;
+  /** Host-owned physical catalog approval; no credentials or provider execution. */
+  resolveScheduledModel?: (label: string) => { provider: string; modelId: string };
   createConversation?: (tx: import("@earendil-works/pi-durable").Tx, chatJid: string, branchId: string) => Promise<Manifest[number] & { sessionId: string }>;
   runtime: Pick<HostControllerOptions["runtime"], "incarnation" | "sessionId" | "lane" | "generation" | "harnessOptions" | "now">;
   /** Existing application payload store, with immutable answer references. */
@@ -73,6 +75,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
   const root = config.root, path = config.path, r = { ...config.runtime };
   const wrapWait = config.wrapWait;
   const createConversation = config.createConversation?.bind(config);
+  const resolveScheduledModel = config.resolveScheduledModel?.bind(config);
   let database: BunSqliteDatabase | undefined;
   let controller: Awaited<ReturnType<typeof createHostController>> | undefined;
   try {
@@ -233,6 +236,19 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         return row;
       };
       const source = read(), requestId = `scheduled:${record.runId}`;
+      const label = lease.task.modelLabel;
+      let model: Readonly<{ provider: string; modelId: string }> | undefined;
+      const checkModel = () => {
+        if (label === null) return;
+        const slash = label.indexOf("/");
+        if (slash <= 0 || slash === label.length - 1 || /\s/.test(label)) throw Error("Malformed scheduled model");
+        if (!resolveScheduledModel) throw Error("Scheduled model override unavailable");
+        const resolved = resolveScheduledModel(label);
+        if (resolved.provider !== label.slice(0, slash) || resolved.modelId !== label.slice(slash + 1)) throw Error("Scheduled model resolution conflict");
+        if (model && (model.provider !== resolved.provider || model.modelId !== resolved.modelId)) throw Error("Scheduled model changed");
+        model ??= Object.freeze({ provider: resolved.provider, modelId: resolved.modelId });
+      };
+      checkModel();
       const base = { incarnation: r.incarnation, chatJid: scope.chatJid, branchId: scope.branchId,
         operationId: source.operation_id, sourceSeq: source.source_seq, sourceId: source.source_id,
         payloadRef: source.payload_ref, requestId,
@@ -244,21 +260,19 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         return prior;
       }
       let conversationId: import("@earendil-works/pi-durable").ConversationId | undefined, persisted = false;
-      await candidateDatabase.withHostSourceGuard(() => { read(); }, async tx => {
+      await candidateDatabase.withHostSourceGuard(() => { read(); checkModel(); }, async tx => {
         if (conversationId === undefined || persisted) return;
         await tx.run(`INSERT INTO piclaw_durable_bindings_v1
           (domain,incarnation,conversation_id,chat_jid,branch_id,operation_id,source_seq,source_id,payload_ref,request_id,request_hash)
           VALUES (?,?,?,?,?,?,?,?,?,?,?)`, r.incarnation, r.incarnation, conversationId, base.chatJid, base.branchId,
           base.operationId, base.sourceSeq, base.sourceId, base.payloadRef, base.requestId, base.requestHash);
         persisted = true;
-      }, () => runtime.allocateScheduledFork(scope.conversationId, id => { conversationId = id; }));
+      }, () => runtime.allocateScheduledFork(scope.conversationId, id => { conversationId = id; }, model));
       if (conversationId === undefined || !persisted) throw Error("Scheduled fork not published");
       return Object.freeze({ ...base, conversationId });
     }
     async function dispatchScheduledAgent(lease: ScheduledRunLease): Promise<import("../../src/agent-pool.js").AgentOutput> {
       assertLive();
-      // Model overrides require separate fork-local host validation; never mutate the root.
-      if (lease.task.modelLabel) throw Error("Scheduled model override unavailable");
       // The native SDK task does not yet carry the host's per-request budget
       // reservation authority. Never treat ALS or an interactive root work ID
       // as proof of scheduled admission. Until that binding is qualified, only

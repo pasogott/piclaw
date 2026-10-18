@@ -228,21 +228,33 @@ export class HostConversationRuntime {
     });
   }
   /** Allocation only; EF-S07 continues to own execution, result and recurrence. */
-  allocateScheduledFork(parentId: ConversationId, allocated: (id: ConversationId) => void): Promise<ConversationId> {
-    return this.observe(() => this.harness.commit(async tx => {
+  allocateScheduledFork(parentId: ConversationId, allocated: (id: ConversationId) => void, model?: { provider: string; modelId: string }): Promise<ConversationId> {
+    const choice = model && Object.freeze({ provider: model.provider, modelId: model.modelId });
+    return this.observe(async () => {
+      const target = choice && this.options.harnessOptions.models.getModel(choice.provider, choice.modelId);
+      if (choice && !target) throw Error("Model context unavailable");
+      const parent = await this.harness.conversation(parentId, this.context); this.fence();
+      if (!parent) throw Error("Unknown scheduled root");
+      const position = choice && (await parent.entries({ order: "descending" }, 1, undefined, this.context)).items[0]?.id;
+      const view = choice && await parent.context(this.context); this.fence();
+      return this.harness.commit(async tx => {
       this.fence();
       if (!this.options.existingConversationIds.includes(parentId)) throw Error("Unknown scheduled root");
       const page = await tx.scanEntries({ conversationId: parentId, order: "descending" }, 1);
       const head = page.items[0];
+      if (choice && head?.id !== position) throw Error("Scheduled parent changed");
+      const agent = await tx.doc(AgentDoc, parentId);
+      if (target && view) this.assertContextFitsModel(view.messages, agent, target);
       const fork = head ? await tx.forkConversation(parentId, head.id, { ownership: { kind: "ownerless" } })
         : await tx.createConversation({ ownership: { kind: "ownerless" } });
       // Empty roots have no public fork point. Copy only configuration, never fabricate an entry.
-      const agent = await tx.doc(AgentDoc, parentId);
       const isolated = await tx.doc(AgentDoc, fork.id);
       Object.assign(isolated, JSON.parse(JSON.stringify(agent)));
+      if (choice) await configure(tx, fork.id, { model: choice });
       this.fence(); allocated(fork.id);
       return fork.id;
-    }, this.context));
+      }, this.context);
+    });
   }
   private routed(input: AcceptedInput): boolean {
     const o = this.options;
@@ -366,25 +378,28 @@ export class HostConversationRuntime {
         }
         // Candidate-only admission bound, NOT proof that the host's next full prompt fits.
         // Dynamic sections cannot be bounded here without executing host prompt callbacks.
-        const registry = o.harnessOptions.registry.snapshot();
-        if (registry.sections().length) throw new Error("Dynamic prompt overhead unavailable");
         const agent = await tx.doc(AgentDoc, id);
-        const tools = registry.tools().map(({ tool }) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
-        const bytes = new TextEncoder().encode(JSON.stringify([view.messages, agent, tools])).length;
-        const usage = view.messages.reduce((max, message) => message.role === "assistant"
-          ? Math.max(max, message.usage.input + message.usage.output + message.usage.cacheRead + message.usage.cacheWrite) : max, 0);
-        // One token per serialized UTF-8 byte plus framing and full output reserve is
-        // deliberately pessimistic for text; non-text/provider-specific overhead is unknown.
-        if (view.messages.some(message => typeof message.content !== "string" && message.content.some(block => block.type === "image")))
-          throw new Error("Non-text context overhead unavailable");
-        if (!Number.isFinite(usage) || Math.max(bytes, usage) + 8192 + target.maxTokens > target.contextWindow)
-          throw new Error("Candidate context bound exceeded; compact first");
+        this.assertContextFitsModel(view.messages, agent, target);
         await configure(tx, id, { model: choice });
         this.fence();
       }, this.context));
     })();
     this.active.add(operation);
     try { await operation; } finally { this.active.delete(operation); this.changingModel = false; }
+  }
+  private assertContextFitsModel(messages: readonly import("@earendil-works/pi-ai").Message[], agent: unknown, target: { contextWindow: number; maxTokens: number }): void {
+    if (!Number.isFinite(target.contextWindow) || target.contextWindow <= 0 ||
+      !Number.isFinite(target.maxTokens) || target.maxTokens < 0) throw Error("Model context unavailable");
+    const registry = this.options.harnessOptions.registry.snapshot();
+    if (registry.sections().length) throw Error("Dynamic prompt overhead unavailable");
+    const tools = registry.tools().map(({ tool }) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
+    const bytes = new TextEncoder().encode(JSON.stringify([messages, agent, tools])).length;
+    const usage = messages.reduce((max, message) => message.role === "assistant"
+      ? Math.max(max, message.usage.input + message.usage.output + message.usage.cacheRead + message.usage.cacheWrite) : max, 0);
+    if (messages.some(message => typeof message.content !== "string" && message.content.some(block => block.type === "image")))
+      throw Error("Non-text context overhead unavailable");
+    if (!Number.isFinite(usage) || Math.max(bytes, usage) + 8192 + target.maxTokens > target.contextWindow)
+      throw Error("Candidate context bound exceeded; compact first");
   }
   /** Explicit idle-only maintenance. Observer cancellation never cancels or releases the owned task. */
   compactSession(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, instructions?: string, signal?: AbortSignal): Promise<{ compacted: boolean }> {

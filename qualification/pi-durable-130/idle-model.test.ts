@@ -48,6 +48,18 @@ test("shared DB actual facade resolves, persists/reopens and fails closed for pe
   };
   try {
     let app = appFor();
+    const beforeForks = root.query("SELECT COUNT(*) AS n FROM conversations").get();
+    for (const modelId of ["tiny", "missing"]) {
+      await expect(runtime.allocateScheduledFork(id, () => { throw Error("must not allocate"); }, { provider: "alternate", modelId })).rejects.toThrow();
+      expect(root.query("SELECT COUNT(*) AS n FROM conversations").get()).toEqual(beforeForks);
+    }
+    const choice = { provider: "alternate", modelId: "other" };
+    let childId: number | undefined;
+    const allocation = runtime.allocateScheduledFork(id, child => { childId = child; }, choice);
+    choice.modelId = "tiny";
+    await allocation;
+    expect(childId).toBeDefined();
+    expect(await app.getCurrentModelLabel("web:idle")).toBe("qualification/synthetic");
     const command = { type: "model" as const, modelId: "SYNTHETIC", raw: "/model SYNTHETIC" };
     const other = { ...command, provider: "alternate", modelId: "other" };
     expect((await app.applyControlCommand("web:idle", other)).status).toBe("success");

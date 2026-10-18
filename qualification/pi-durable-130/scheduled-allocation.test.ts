@@ -18,7 +18,7 @@ import type { ScheduledRunLease, ScheduledRunStore } from "../../runtime/src/ser
 import { context, openFixture, barrier } from "./src/fixture.js";
 import { value } from "./src/host-handoff.js";
 
-test("allocation-only helper (fake runAgent): source-bound lease, rollback, public fork, forged route denied", async () => {
+for (const model of [undefined, "qualification/synthetic"]) test(`allocation-only helper (fake runAgent): source-bound lease, rollback, public fork, forged route denied; model=${model}`, async () => {
   process.env.PICLAW_DB_IN_MEMORY = "0";
   mkdirSync(join(process.env.PICLAW_WORKSPACE!, ".piclaw"), { recursive: true });
   initDatabase();
@@ -44,7 +44,7 @@ test("allocation-only helper (fake runAgent): source-bound lease, rollback, publ
     }, context))).rejects.toThrow("allocation rollback");
   expect(db.query("SELECT count(*) AS n FROM conversations").get()).toEqual(count);
   await rollbackFixture.close(); // Public SDK correctly requires reopen after storage failure.
-  const chat = "web:allocation", manifest = [{ chatJid: chat, branchId: "main", conversationId: main.id }];
+  const chat = model ? "web:allocation-override" : "web:allocation", manifest = [{ chatJid: chat, branchId: "main", conversationId: main.id }];
   const bundle = await createApplicationBootstrapBundle({ root: db, path, ownership: applicationOwnership(lock), manifest,
     sessions: new Map([[chat, "session"]]), offlineInitialize: true,
     runtime: { incarnation: "allocation", sessionId: "allocation", lane: "main", generation: 1, now: () => new Date().toISOString(),
@@ -91,9 +91,18 @@ test("allocation-only helper (fake runAgent): source-bound lease, rollback, publ
       return { status: "success", result: "allocation only" };
     },
   } as unknown as SchedulerDeps["agentPool"] };
+  if (model) deps.agentPool.dispatchScheduledAgent = async current => {
+    try {
+      const count = db.query("SELECT count(*) AS n FROM conversations").get();
+      await expect(bundle.allocateScheduledConversation(current)).rejects.toThrow("Scheduled model override unavailable");
+      expect(db.query("SELECT count(*) AS n FROM conversations").get()).toEqual(count);
+      return { status: "success", result: "fail closed" };
+    } catch (error) { failure = error; throw error; }
+    finally { finished.release(); }
+  };
   try {
     const due = new Date(Date.now() - 1000).toISOString();
-    createTask({ id: "allocation-task", chat_jid: chat, prompt: "scheduled", schedule_type: "once", schedule_value: due, next_run: due, status: "active", notify_on_complete: false, created_at: due });
+    createTask({ id: model ? "allocation-override-task" : "allocation-task", chat_jid: chat, model, prompt: "scheduled", schedule_type: "once", schedule_value: due, next_run: due, status: "active", notify_on_complete: false, created_at: due });
     await pollScheduledRunsOnce(deps, store);
     await Promise.race([finished.promise, Bun.sleep(5000).then(() => { throw Error("allocation timeout"); })]);
     if (failure) throw failure;

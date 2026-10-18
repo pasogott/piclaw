@@ -1,10 +1,55 @@
-# Native Delegate deadlines — source follow-up over `4e1ffe2fe`
+# Scheduled model overrides — source follow-up over `e5ca1b67d`
+
+Native EF-S07 schedules now resolve captured `model_label` values from the canonical
+task revision to an approved, currently available physical model through the root
+ModelRuntime. Resolution performs no LLM request or credential lookup. The source
+guard rechecks source and model approval before the public fork commit. The six
+modified core source/test files are frozen while full gates run; no future commit
+hash is assigned.
+
+The allocator captures an immutable choice, checks the inherited context, copies
+the parent's `AgentDoc` and configures the fork model in the same public SDK commit
+as the host binding. The main conversation is never temporarily mutated. Only the
+separate legacy path uses switch/restore. A shared conservative context-fit helper
+replaces duplicated logic in the existing idle model SET path. Missing metadata,
+images and dynamic prompt sections fail closed; they are not supported context-fit
+cases. This bound does not establish that every future host prompt fits.
+
+Existing receipts under `/workspace/reviews/durable-1650/`:
+
+- `scheduler-model-actual.log`: actual native-scheduler consumer, 1 pass / 73
+  assertions. Empty, dynamically added and nonempty main roots retain their
+  history/model; the nonempty A100k main uses a B200k fork whose model ID contains
+  a slash. Invalid/unavailable labels allocate no fork, invoke no provider and
+  produce error receipts. Ordinary main A still works after physical reopen.
+  Existing cap-revocation guards are retained.
+- `scheduler-model-focused-final.log`: 96 pass, 0 fail, 2,477 assertions across
+  three files. Missing resolver, tiny/unavailable models and immutable choice
+  capture are covered alongside the existing idle-model and public model bridges.
+  This mixed total is separate from the actual-native scenario above.
+- `scheduler-model-{root,engine,qualification}-types.log`: all three scoped types
+  pass. Bounded source review is READY. No direct approval-revocation-during-await
+  test was supplied; a complete revocation matrix is unqualified.
+- `scheduler-override-full-candidate.log`: 493 pass / 7,255 assertions, exit 0.
+  `scheduler-override-full-root.log`: 7,312 pass, 74 baseline skips, 0 fail;
+  25 feature + 9 build tests pass, exit 0.
+
+PC-012 gains bounded model-override coverage. All 45 statuses stay 22
+source-qualified / 17 fixture-only / 3 blocked-publicAPI /
+3 migration/perf-unverified. Enabled applicable scheduler caps and all enabled
+Delegate caps still deny; native capped request accounting is unqualified.
+Delegate explicit different-model selection and attachments still reject. Other
+add-ons, the 17 fixture-only requirements and production performance need
+acceptance. Migration stays last. No code, test, CI, pin, network, service,
+migration, commit or push operation ran for this documentation refresh.
+
+# Native Delegate deadlines — published `e5ca1b67d`
 
 The current native Delegate accepts `timeout_sec`: default 120 seconds, integer
 10..300. Validation precedes child allocation. Public `api.memo("deadline", …)`
 persists an absolute operation-entry expiry before source capture or model approval
-awaits; replay cannot renew it. This source-only follow-up changes the consumer and
-two test files over published core `4e1ffe2fe`.
+awaits; replay cannot renew it. The deadline change over core `4e1ffe2fe` is
+published in `e5ca1b67d`; it is separate from the scheduler source follow-up above.
 
 The child wait races the remaining deadline. Cleanup clears the timer on success,
 error, cancellation and timeout. Timeout calls the invocation-bound owned
@@ -37,6 +82,8 @@ Existing receipts under `/workspace/reviews/durable-1650/`:
   barrier (`deadline-actual-synchronized.log`: 1 pass / 34 assertions). Earlier
   disk/rollback and note-retrieval timeout failures remain in their logs; no
   assertion, timeout or resource limit was weakened.
+- Exact-head hosted qualification for published `e5ca1b67d` is pending/unknown;
+  no hosted query ran for this refresh.
 
 Attachments, different-model selection and read/write or full Delegate tools
 still reject. Any enabled budget cap denies; native request accounting is
@@ -63,15 +110,16 @@ authority before and after mutation. Assignment epoch, current dispatch, item an
 thread versions bound the state change. Idempotent receipts recheck authority;
 revocation before root commit rolls back the mutation and receipt.
 
-Core `/workspace/tmp/durable-1650` HEAD is published `4e1ffe2fe`; its three dirty
-consumer/test files belong to the separate Delegate deadline follow-up above.
+All-nine Code Review source was published at core `4e1ffe2fe`. Current worktree
+HEAD is `e5ca1b67d`; its six dirty core source/test files belong to the separate
+scheduler model-override follow-up above.
 Add-on PR #208 and the core qualification CI checkout select
 `d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f`. This qualifies source only; installed
 package pins and versions are unchanged. No live installation or hosted success
 is established by these receipts.
 
 Exact previous Code Review receipts under `/workspace/reviews/durable-1650/`
-(separate from the running deadline gates):
+(separate from published deadline results and the running scheduler gates):
 
 - `code-review-work-actual.log`: actual-default 1 pass / 59 assertions, including
   `work` → `in_progress`, stale-item and cross-chat denial, `completed` after the
@@ -94,8 +142,8 @@ durable ingress still need representative acceptance. Earlier root direct-API te
 and the actual new shared read establish bounded core behaviour without a provider;
 they do not establish that ingress/delivery path. No missing `work` worker is required.
 Delegate different-model selection, attachments and enabled budget caps still
-reject; deadlines use the current bounded profile above. Scheduler model overrides
-and caps, other add-ons/events, exact atomic current-task cancellation, the 17
+reject; deadlines use the current bounded profile above. Scheduler model overrides have the bounded source coverage above; native capped
+accounting, other add-ons/events, exact atomic current-task cancellation, the 17
 fixture-only requirements and production performance
 still need acceptance. Migration stays last: preserve the old `reviews.db`; no copy
 or conversion ran. This refresh changes documentation only, with no code/test/network,
@@ -375,8 +423,9 @@ consumer proof.
 
 ## Admission and side-effect limits
 
-- Scheduled model overrides explicitly reject with `Scheduled model override
-  unavailable`; fork-local override validation is incomplete.
+- This historical scheduler profile rejected model overrides with `Scheduled model
+  override unavailable`. The current source follow-up above adds bounded fork-local
+  resolution and validation.
 - Applicable enabled instance/provider or matching scheduled-task caps, including
   zero and positive amounts, reject before fork allocation with `Native scheduled
   budget admission unavailable`. Task-work caps do not authorise a new occurrence;
@@ -431,7 +480,8 @@ were made for this documentation refresh.
 
 PC-012 is now bounded source-qualified: the production consumer exists and the
 actual native scenario exercises it. Full scheduler parity/acceptance still needs
-model overrides, native request budgets, cancellation and recovery qualification.
+wider model-override acceptance, native request budgets, cancellation and recovery
+qualification; the current bounded override receipts are recorded at the top.
 The [45-requirement assessment](../../docs/design/earendil-agent-harness-integration-adr/evidence/pi-durable-130-acceptance-current-20261017.md)
 now counts 22 source-qualified, 17 fixture-only, 3 blocked-publicAPI and
 3 migration/perf-unverified rows. HC-019 usage and PC-018 general internal ingress
