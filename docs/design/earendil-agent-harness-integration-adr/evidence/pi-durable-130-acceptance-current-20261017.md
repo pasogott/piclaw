@@ -943,3 +943,59 @@ remaining compatibility and identity-preserving migration are incomplete. Adapti
 Card side prompts still depend on legacy session construction and need a native
 consumer replacement before that runner can be removed. No live activation,
 deployment, restart or migration occurred.
+
+## Native card side prompts and legacy runner retirement — 2026-10-18
+
+The card side-prompt HTTP routes now use native durable execution through
+`AgentPool.runSidePrompt`. Production no longer hydrates legacy SDK sessions for
+side prompts. The old runner is a test-only compatibility fixture; unrelated
+legacy session infrastructure has not been removed wholesale.
+
+Each request atomically accepts and claims its own internal source, allocates an
+ownerless fork of the mapped conversation and preserves its model, thinking and
+tool configuration. Existing host source guards authorise model and tool effects.
+Side results settle without a main-timeline message or parent-history changes.
+The existing payload store holds immutable inputs and completed retry results;
+there is no new ledger or persistent queue.
+
+Focused actual-factory evidence covers native `read`, source-scoped SSE deltas,
+observer mutation/failure isolation, caller and HTTP request cancellation,
+configured timeout, system-prompt prefix, request accounting, explicit/inherited
+budget parents, literal budget work IDs and completed replay after backend reopen.
+Unknown cancelled usage retains its reservation and active budget authority;
+completion never fabricates a zero charge. Cancellation records and retires its
+source with the operation, aborts only the verified isolated fork and joins it.
+Main-conversation running cancellation has not gained a broader abort capability.
+
+Completed retry reads validate prompt/parent identity, terminal receipt, payload
+integrity and result shape. They can read an existing result after the outer parent
+finishes without invoking a provider. Passive recovery before fork allocation
+retains exact claimed authority and stays paused until explicit continuation.
+Focused tests also cover concurrent retries, intervening main input, transactional
+fork/binding rollback, ownership loss and combined wait/abort failures.
+
+Qualification:
+
+- Candidate source `d92a208b2eb30b28d2fddf9739c2e76cd602dcd7`: exit 0,
+  633 tests / 7,983 assertions across 51 files.
+- Root head `592db8f234f2f8eb6892e1a91af6e738228bf7e2`: exit 0,
+  7,342 pass / 74 baseline skips / zero failures, plus 25 feature and 9 build tests.
+  The only change after the candidate was a core test-contract migration;
+  production and native qualification source stayed unchanged.
+- Bounded implementation, lifecycle, accounting, replay and retirement reviews
+  returned READY; scoped typechecks pass.
+
+The first candidate failed one fixture tool-selection test. Explicit public
+`AgentDoc` fixture configuration corrected inherited test state without changing
+the effect assertion. The first root failed four obsolete pool tests expecting
+the retired legacy runner; native dispatcher contract tests replaced them while
+legacy behaviour tests stayed in the test helper suite. Both failed receipts and
+corrected terminal receipts are retained under
+`/workspace/reviews/durable-1650/native-side-prompts-*`. No timeouts or production
+assertions were weakened; no successful gate was repeated.
+
+Boundaries: empty-history side requests fail before admission; enabled caps still
+deny execution; uncertain storage failures retain ownership and require reopen.
+General acceptance, live-provider/fleet and production-scale performance evidence,
+historical rollback proof and identity-preserving migration are incomplete.
+Migration stays last. No live activation, deployment, restart or migration occurred.
