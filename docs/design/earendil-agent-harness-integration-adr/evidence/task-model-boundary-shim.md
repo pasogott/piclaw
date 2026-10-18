@@ -52,3 +52,16 @@ same task/conversation, a fresh invocation signal and summary-phase correlation
 recovered attempt completes a model call. This is clean-close recovery, not a
 SIGKILL or provider exactly-once test. Default-factory adoption of previously
 admitted maintenance remains separate and unqualified.
+
+Final bounded local run: the shim, actual SDK compaction checkpoint-reopen and
+manual maintenance files pass 9 tests / 151 assertions. The actual factory's
+model-backed manual compaction passes 31 assertions. Three scoped typechecks pass.
+Automatic compaction is disabled only in the fixture; the SDK manual compaction
+path still selects and summarises its range. The test requires both an additional
+provider call and a persisted compaction entry, so a no-op cannot satisfy it.
+
+The recovery test was independently reviewed for its clean-reopen claim. These
+receipts qualify the temporary adapter's identity propagation and the manual
+factory happy path. They do not qualify factory adoption of pre-existing
+maintenance, automatic/overflow compaction, crash-exactly-once behaviour or native
+budget reservation/settlement. No new CI run or deployment is part of this receipt.
