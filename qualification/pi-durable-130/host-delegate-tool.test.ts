@@ -6,6 +6,8 @@ import { createHostDelegateTool } from "../../runtime/durable-engine/src/host-de
 import { barrier, context, openFixture } from "./src/fixture.ts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { writeFileSync } from "node:fs";
+import { createHostDelegateFileReader } from "../../runtime/durable-engine/src/host-delegate-files.ts";
 import { acceptedSteerFixture } from "./src/accepted-steer-recovery-fixture.ts";
 import { OwnedSqlite } from "./src/ownership.ts";
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
@@ -16,11 +18,11 @@ import { storeChatMetadata } from "../../runtime/src/db.ts";
 
 // Core consumer tests with explicitly synthetic authority/schema. These do NOT
 // qualify installed Delegate content, Settings, host source capture or budgets.
-for (const mode of ["parallel", "denied", "files", "timeout", "timeout-fraction", "timeout-string", "timeout-large", "mutating-tools", "model-type", "model-short", "model-empty-provider", "model-empty-id"] as const) {
+for (const mode of ["parallel", "files-empty", "denied", "files", "files-unavailable", "files-revoked", "timeout", "timeout-fraction", "timeout-string", "timeout-large", "mutating-tools", "model-type", "model-short", "model-empty-provider", "model-empty-id"] as const) {
   test(`host native Delegate factory: ${mode}`, async () => {
     const f = await openFixture({ acquired: true });
     const release = barrier(), entered = barrier();
-    let childRequests = 0, captures = 0;
+    let childRequests = 0, captures = 0, revoked = false;
     const read = defineTool({ name: "read", description: "Synthetic reader", parameters: Type.Object({}),
       execute: async () => ({ output: [{ type: "text", text: "reader" }] }) });
     const readerExtension = defineExtension({ name: "native-readers", tools: [read] });
@@ -29,7 +31,12 @@ for (const mode of ["parallel", "denied", "files", "timeout", "timeout-fraction"
       files: Type.Optional(Type.Array(Type.String())), timeout_sec: Type.Optional(Type.Any()), tools: Type.Optional(Type.String()) });
     const tool = createHostDelegateTool({ name: "delegate", description: "Synthetic registered declaration", parameters }, {
       assertCurrent() {},
-      runtime: () => ({ async captureToolSource() { captures++; return { inputs: [], operation: {} } as never; }, assertCapturedSourceCurrent() {} }),
+      runtime: () => ({ async captureToolSource() { captures++; return { inputs: [], operation: {} } as never; }, assertCapturedSourceCurrent() { if (revoked) throw Error("source revoked"); } }),
+      ...(mode === "files-unavailable" || mode === "files-revoked" || mode === "files-empty" ? { async readFiles(_files: readonly string[], guard: () => void) {
+        if (mode === "files-empty") throw Error("Empty file list must not perform attachment IO");
+        if (mode === "files-unavailable") throw Error("PRIVATE_HOST_PATH");
+        revoked = true; guard(); return [];
+      } } : {}),
       async selectModel(_args, parent) { if (mode === "denied") throw Error("Model denied"); return parent!; },
       assertModelCurrent() {}, readonlyTools: [read], readonlyExtensions: [readerExtension],
     });
@@ -44,7 +51,7 @@ for (const mode of ["parallel", "denied", "files", "timeout", "timeout-fraction"
       const output = createAssistantMessageEventStream();
       const args = { prompt: "CHILD_TASK", tools: mode === "mutating-tools" ? "bash" : "read_only",
         ...(mode.startsWith("model-") ? { model: ({ "model-type": 42, "model-short": "synthetic", "model-empty-provider": "/synthetic", "model-empty-id": "qualification/" } as Record<string, string | number>)[mode] } : {}),
-        ...(mode === "files" ? { files: ["file.txt"] } : {}), ...(mode.startsWith("timeout") ? { timeout_sec: ({ timeout: -1, "timeout-fraction": 10.5, "timeout-string": "10", "timeout-large": 301 } as Record<string, string | number>)[mode] } : {}) };
+        ...(mode.startsWith("files") ? { files: mode === "files-empty" ? [] : ["file.txt"] } : {}), ...(mode.startsWith("timeout") ? { timeout_sec: ({ timeout: -1, "timeout-fraction": 10.5, "timeout-string": "10", "timeout-large": 301 } as Record<string, string | number>)[mode] } : {}) };
       const message: AssistantMessage = { role: "assistant", api: model.api, provider: model.provider, model: model.id,
         timestamp: 1, stopReason: calls ? "toolUse" : "stop", content: calls
           ? ["A", "B"].map(id => ({ type: "toolCall" as const, id, name: "delegate", arguments: args }))
@@ -65,7 +72,7 @@ for (const mode of ["parallel", "denied", "files", "timeout", "timeout-fraction"
       auth: { apiKey: { name: "Synthetic", resolve: async () => ({ auth: {}, source: "fixture" }) } }, api: { stream, streamSimple: stream } }));
     try {
       const submission = await f.root.submit({ type: "input", content: "PARENT_SECRET", requestId: "parent" }, context);
-      if (mode === "parallel") {
+      if (mode === "parallel" || mode === "files-empty") {
         await Promise.race([entered.promise, submission.wait(context).then(async () => {
           throw Error("Parent settled before both native children entered");
         })]); // Independent MODEL calls: both providers before release.
@@ -82,13 +89,14 @@ for (const mode of ["parallel", "denied", "files", "timeout", "timeout-fraction"
         release.release();
       }
       expect((await submission.wait(context)).status).toBe("done");
-      expect(childRequests).toBe(mode === "parallel" ? 2 : 0);
-      expect(captures).toBe(mode === "parallel" || mode === "denied" ? 2 : 0);
+      expect(childRequests).toBe(mode === "parallel" || mode === "files-empty" ? 2 : 0);
+      expect(captures).toBe(mode === "parallel" || mode === "files-empty" || mode === "denied" || mode === "files-unavailable" || mode === "files-revoked" ? 2 : 0);
       const entries = (await f.root.entries({}, 100, undefined, context)).items;
       const results = entries.flatMap(entry => entry.model ?? []).filter(message => message.role === "toolResult");
       expect(results).toHaveLength(2);
       expect(JSON.stringify(results)).not.toContain("PRIVATE_CHILD_THINKING");
-      if (mode === "parallel") expect(JSON.stringify(results)).toContain("CHILD_RESULT");
+      expect(JSON.stringify(results)).not.toContain("PRIVATE_HOST_PATH");
+      if (mode === "parallel" || mode === "files-empty") expect(JSON.stringify(results)).toContain("CHILD_RESULT");
       else expect(await f.root.commit(async tx => (await tx.scanConversations({}, 10)).items.length, context)).toBe(1);
     } finally { release.release(); await f.close(); }
   }, 10_000);
@@ -104,7 +112,9 @@ for (const mode of ["success", "expiry", "reopen"] as const) {
     const { awaitWithContext, withAbortSignal } = await import("../../runtime/durable-engine/qualification/context.ts");
     let f: Awaited<ReturnType<typeof openFixture>> | undefined;
     const hold = barrier(), entered = barrier(), aborted = barrier(), timerReady = barrier();
-    let requests = 0, started = 0, cleared = 0;
+    let requests = 0, started = 0, cleared = 0, attachmentReads = 0;
+    writeFileSync(join(dir, "task.txt"), "ORIGINAL_FILE_CONTENT\r\n\t");
+    const readFiles = createHostDelegateFileReader(dir);
     let fire: (() => void) | undefined;
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     const realTimer = globalThis.setTimeout, realClear = globalThis.clearTimeout;
@@ -129,9 +139,10 @@ for (const mode of ["success", "expiry", "reopen"] as const) {
       f = base;
       const read = defineTool({ name: "read", description: "reader", parameters: Type.Object({}), execute: async () => ({ output: [] }) });
       const readers = defineExtension({ name: "deadline-readers", tools: [read] }); base.registry.install(readers);
-      const tool = createHostDelegateTool({ name: "delegate", description: "deadline", parameters: Type.Object({ prompt: Type.String(), timeout_sec: Type.Optional(Type.Integer()) }) }, {
+      const tool = createHostDelegateTool({ name: "delegate", description: "deadline", parameters: Type.Object({ prompt: Type.String(), timeout_sec: Type.Optional(Type.Integer()), files: Type.Optional(Type.Array(Type.String())) }) }, {
         assertCurrent() {}, runtime: () => ({ async captureToolSource() { return { inputs: [] } as never; }, assertCapturedSourceCurrent() {} }),
-        async selectModel(_args, parent) { return parent!; }, assertModelCurrent() {}, readonlyTools: [read], readonlyExtensions: [readers],
+        async selectModel(_args, parent) { return parent!; }, assertModelCurrent() {},
+        async readFiles(files, guard) { attachmentReads++; return readFiles(files, guard); }, readonlyTools: [read], readonlyExtensions: [readers],
       });
       const extension = defineExtension({ name: "deadline-consumer", tools: [tool] }); base.registry.install(extension);
       await base.root.configure({ extensions: [extension], tools: [tool] }, context);
@@ -143,9 +154,13 @@ for (const mode of ["success", "expiry", "reopen"] as const) {
         const calls = !child && !transcript.messages.some(m => m.role === "toolResult");
         const output = createAssistantMessageEventStream();
         let message: AssistantMessage = { role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp: 1,
-          stopReason: calls ? "toolUse" : "stop", content: calls ? ["A", "B"].map(id => ({ type: "toolCall" as const, id, name: "delegate", arguments: { prompt: `CHILD_${id}`, ...(id === "A" ? { timeout_sec: 10 } : {}) } })) : [{ type: "text", text: child ? "CHILD_ANSWER" : "PARENT_DONE" }],
+          stopReason: calls ? "toolUse" : "stop", content: calls ? ["A", "B"].map(id => ({ type: "toolCall" as const, id, name: "delegate", arguments: { prompt: `CHILD_${id}`, ...(id === "A" ? { timeout_sec: 10 } : { files: ["task.txt"] }) } })) : [{ type: "text", text: child ? "CHILD_ANSWER" : "PARENT_DONE" }],
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
-        if (child) { requests++; if (requests === 2) entered.release(); }
+        if (child) {
+          expect(user.includes("ORIGINAL_FILE_CONTENT")).toBe(!a);
+          expect(user).not.toContain("MUTATED_FILE_CONTENT");
+          requests++; if (requests === 2) entered.release();
+        }
         void (async () => {
           try {
             if (child) await awaitWithContext(hold.promise, options?.signal ? withAbortSignal(options.signal, context) : context);
@@ -181,6 +196,7 @@ for (const mode of ["success", "expiry", "reopen"] as const) {
         expect(originalDeadlines).toHaveLength(2);
         for (const entry of originalDeadlines) expect(typeof entry.deadline).toBe("number");
         await base.close();
+        writeFileSync(join(dir, "task.txt"), "MUTATED_FILE_CONTENT");
         expect(cleared).toBe(1);
         const now = Date.now() + 11_000;
         clock = spyOn(Date, "now").mockReturnValue(now);
@@ -207,6 +223,7 @@ for (const mode of ["success", "expiry", "reopen"] as const) {
       expect((await (await base.harness.submission(submission.id, context))!.wait(context)).status).toBe("done");
       expect((await base.harness.inspect(context)).tasks).toHaveLength(0);
       expect(started).toBe(1); expect(cleared).toBe(1);
+      expect(attachmentReads).toBe(1);
       const results = (await base.root.entries({}, 100, undefined, context)).items.flatMap(e => e.model ?? []).filter(m => m.role === "toolResult");
       expect(results).toHaveLength(2);
       expect(results.filter(r => r.isError)).toHaveLength(mode === "success" ? 0 : 1);

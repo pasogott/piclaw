@@ -6,7 +6,7 @@ import { AssistantEntry, Harness, createRegistry, defineExtension, type ToolRegi
 import { SqliteStorage } from "../../../runtime/durable-engine/qualification/sqlite.ts";
 import type { JsonValue } from "../../../runtime/durable-engine/qualification/chord.ts";
 import { BACKGROUND_CONTEXT as context } from "../../../runtime/durable-engine/qualification/context.ts";
-import { BunSqliteDatabase } from "../../../runtime/durable-engine/src/index.js";
+import { openWalFixtureDatabase } from "./sqlite-fixture-policy.js";
 
 /** Qualification-only keyless provider; actual registered host tools, public graph. */
 export async function actualAddonGraph(dir: string, tools: ToolRegistration<TSchema, JsonValue>[], invocations: () => number, revoke: () => void, serviceData: () => unknown, delegate = false) {
@@ -35,7 +35,7 @@ export async function actualAddonGraph(dir: string, tools: ToolRegistration<TSch
   const models = createModels({ authContext: { env: noCredentials, fileExists: noCredentials } });
   models.setProvider(createProvider({ id: model.provider, models: [model],
     auth: { apiKey: { name: "Keyless synthetic", resolve: async () => ({ auth: {}, source: "synthetic" }) } }, api: { stream, streamSimple: stream } }));
-  const open = async () => Harness.open(await SqliteStorage.open(new BunSqliteDatabase(join(dir, "graph.sqlite"))),
+  const open = async () => Harness.open(await SqliteStorage.open(await openWalFixtureDatabase(join(dir, "graph.sqlite"))),
     { models, registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } }, context);
   let harness = await open();
   try {

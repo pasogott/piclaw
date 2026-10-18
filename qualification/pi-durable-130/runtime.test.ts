@@ -7,7 +7,7 @@ import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite
 import { Harness, LiveDoc, AssistantEntry, type Tx } from "../../runtime/durable-engine/qualification/durable.ts";
 import type { AssistantMessage } from "../../runtime/durable-engine/qualification/ai.ts";
 import { HostConversationRuntime, type AcceptedInput, type RuntimeOptions, type SettledAnswer } from "../../runtime/durable-engine/src/index.js";
-import { BunSqliteDatabase } from "../../runtime/durable-engine/src/index.js";
+import { configureHostWalFixtureDatabase, openWalFixtureDatabase } from "./src/sqlite-fixture-policy.js";
 import { barrier, context, openFixture } from "./src/fixture.js";
 import { at, effect, sealed, value } from "./src/host-handoff.js";
 import { hashCanonicalRequest, type CanonicalJsonValue } from "../../runtime/src/service-effects/contracts/common.js";
@@ -48,11 +48,12 @@ async function setup(busy = false) {
   process.env.PICLAW_DB_IN_MEMORY = "1";
   initDatabase(); getDb().query("VACUUM INTO ?").run(join(dir, "host.sqlite")); closeDatabase();
   const db = new Database(join(dir, "host.sqlite"), { strict: true });
+  configureHostWalFixtureDatabase(db);
   db.exec("PRAGMA foreign_keys=ON"); installTerminalSettlementCompositionSchema(db);
   // Explicit qualification-only host correlation schema. Never installed by runtime.open().
   db.exec(`CREATE TABLE runtime_payloads (ref TEXT PRIMARY KEY, content TEXT NOT NULL)`);
   const path = join(dir, "candidate.sqlite");
-  const base = await openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(new BunSqliteDatabase(path)));
+  const base = await openFixture({ acquired: true }, () => {}, async () => SqliteStorage.open(await openWalFixtureDatabase(path)));
   const id = base.root.id;
   if (busy) {
     base.host.modelHold = barrier();
@@ -79,7 +80,7 @@ async function setup(busy = false) {
   }));
   const options: RuntimeOptions = {
     incarnation: "copy-A", owner: { assert, release() { releases++; acquired = false; } },
-    openStorage: () => { assert(); opens++; return SqliteStorage.open(new BunSqliteDatabase(path)); },
+    openStorage: async () => { assert(); opens++; return SqliteStorage.open(await openWalFixtureDatabase(path)); },
     harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
     work: { acceptSource: work.acceptSource.bind(work), claimNext: work.claimNext.bind(work), appendIntent: work.appendIntent.bind(work),
       finishHarness: work.finishHarness.bind(work), bindHarness: work.bindHarness.bind(work), recordQueuedInput: work.recordQueuedInput.bind(work), getOperation: work.getOperation.bind(work),

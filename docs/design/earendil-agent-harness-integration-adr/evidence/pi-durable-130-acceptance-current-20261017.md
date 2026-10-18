@@ -1,14 +1,69 @@
-# #1650 acceptance: Delegate explicit models over published `98e0676af`
+# #1650 acceptance: attachment/WAL source qualified over `b258ff3a2`
 
 The default application now selects the public durable engine in source; fleet/live acceptance and existing-chat migration are incomplete. The 45 requirements below retain their original IDs and titles. None is an unconditional fleet acceptance claim.
 
+## Attachment/WAL final local qualification
+
+Local source qualification is complete; the attachment/WAL slice over `b258ff3a2`
+is uncommitted and awaits commit and exact-source hosted evidence. The actual
+helper and default factory admit 0..10 explicit workspace text files under approved
+read-only policy, with a 100,000-byte aggregate limit measured from actual reads.
+Empty `files: []` performs no attachment IO. Images and wider file/tool permissions
+remain unsupported. Attachment and empty-list source reviews are READY. No future
+source hash is assigned.
+
+Two external instrumented runs measured 20 body COMMIT calls at 1.959 / 2.442
+seconds, 99.4% / 99.5% of public adapter transaction time, not total test time.
+Both failed the unchanged 5,000 ms limit. There is no syscall trace or fsync proof.
+The fresh separate candidate used default DELETE by source/default inference;
+PRAGMAs were not measured by that observer. Production initialises its shared
+root with WAL. `baseline-sqlite-timing.md` records the measurements and limits.
+
+`Q/src/sqlite-fixture-policy.ts` now aligns only these component fixtures to WAL.
+The copied host uses existing `enableSqliteWal`, preserving its busy timeout;
+the candidate uses public adapter SQL. Both require `synchronous=FULL` (2) before
+setup, explicitly set FULL and verify 2 afterwards on every open/reopen.
+Production constructors and journal helpers are unchanged. No NORMAL/OFF policy,
+tmpfs, reduced assertion or increased timeout was used. The historical two-file
+fixtures remain separate; actual one-database application qualification has
+separate existing tests. This repair adds no shared-schema atomicity claim.
+
+- New policy tests: 2 pass / 18 assertions (`wal-policy-test.log`), covering WAL
+  sidecars, FULL, busy timeout, transaction rollback and physical reopen.
+- Runtime: 54 pass / 477 assertions, maximum case 2.89 seconds
+  (`wal-runtime-test.log`); sequential bindings: 9 pass / 74 assertions
+  (`wal-bindings-test.log`).
+- Unchanged rollback-journal `sqlite.test.ts` plus new policy tests: 35 pass /
+  273 assertions (`wal-sqlite-conformance.log`). All three scoped typechecks pass
+  (`wal-types-*.log`); FULL fixture-policy source review is READY.
+- Actual add-on graph also uses `openWalFixtureDatabase`;
+  `wal-addon-graph-focused.log`: 4 pass / 150 assertions across 3 files.
+- `attachments-final-candidate.log`: 517 pass, 0 fail, 7,427 assertions across
+  44 files, 266.49 seconds, `EXIT_CODE=0`.
+- `attachments-final-root.log`: 7,312 pass / 74 skip / 0 fail, plus 25 feature
+  and 9 build tests; normal `make` completion. The outer wrapper was interrupted;
+  no exit-code receipt exists, so root `EXIT_CODE=0` is not established.
+- `attachments-final-{engine,qualification,root}-types.log`: all three pass.
+- These receipts establish no power-loss guarantee, additional SIGKILL coverage
+  or production performance acceptance. The failed pristine-host-image
+  optimisation was reverted; its old checkpoint describes abandoned code.
+  No additional optimisation setup is retained.
+
+All 45 statuses stay 22 source-qualified / 17 fixture-only / 3 blocked-publicAPI /
+3 migration/perf-unverified. Images, wider child tools, native capped accounting,
+numeric global concurrency and production performance are unqualified. Migration
+stays last. Local receipts are under `/workspace/reviews/durable-1650/`; see
+`wal-fixture-policy-checkpoint.md` and `attachments-publication-doc-checkpoint.md`.
+The old hold in `attachment-wal-doc-checkpoint.md` is HISTORICAL and superseded.
+
 ## Source and evidence boundary
 
-- Worktree: `/workspace/tmp/durable-1650`; published HEAD `98e0676af`, with four dirty core source/test files for native Delegate explicit models. `delegate-explicit-current-tests.log` records 43 pass, 0 fail, 167 assertions across two files, including 13 actual-default explicit cases and different-model child B revocation checks. All three `delegate-explicit-{root,engine,qualification}-types.log` checks pass after the fixture's `unknown` JSON type was corrected. The initial test failure used a wrong `DURABLE_CODE_REVIEW_ROOT` source hash; no assertions or policy were weakened. Full candidate510/7292 and simplified root7312+25+9 complete normally; outer exit receipts were interrupted. Earlier timeout failures remain recorded.
+- Worktree: `/workspace/tmp/durable-1650`; published HEAD `b258ff3a2`. `delegate-files-final-focused.log` records 21 pass, 0 fail, 257 assertions after the empty-list no-IO fix; the prior 20 / 238 receipt predates it. Actual-default `native-delegate-files` passes 1 / 38 assertions: one of two children receives text, the other does not, and the parent model is unchanged. All three scoped typechecks pass; bounded source and empty-list reviews are READY. Historical pre-policy failures remain: initial candidate512/3timeouts (515 cases), later candidate510/5timeouts (515 cases), root7311/1note-indexing failure (74 skips). An unchanged b258 baseline reproduces one held-intent timeout; this does not qualify attachments. These failures are historical; final attachment/WAL qualification above supersedes their hold. Historical receipts: `/workspace/reviews/durable-1650/delegate-text-qualification-hold.md`.
+- Explicit models are published at `b258ff3a2`. `delegate-explicit-current-tests.log` records 43 pass, 0 fail, 167 assertions across two files, including 13 actual-default explicit cases and different-model child B revocation checks. All three `delegate-explicit-{root,engine,qualification}-types.log` checks pass after the fixture's `unknown` JSON type was corrected. The initial test failure used a wrong `DURABLE_CODE_REVIEW_ROOT` source hash; no assertions or policy were weakened. Full candidate510/7292 and simplified root7312+25+9 complete normally; outer exit receipts were interrupted. Earlier timeout failures remain recorded.
 - Scheduler overrides are published at `e3d248a01`, with candidate 493 / 7,255 and root 7,312 + 25 + 9 passing, exit 0. Current actual native-scheduler receipt is 1 pass / 73 assertions; mixed focused qualification is 96 pass / 2,477 assertions and all three scoped types pass. Bounded source review is READY, without a direct approval-revocation-during-await test or complete revocation matrix. No future source hash is assigned.
 - Published deadline qualification is 17 pass / 202 assertions across two files (`deadline-memo-final.log`); its prior actual-default `native-delegate-timeout` receipt is 1 pass / 35 assertions (`native-delegate-deadline-checkpoint.md`). Deadline final candidate 492 / 7,245 and root 7,312 + 25 + 9 pass with exit 0.
-- CI fix `98e0676af` separates historical fixtures at `de92bc95b5b3bb1505beec9617d3b8a5e4fa92d3` (`DURABLE_ADDONS_ROOT`) from native Code Review at `d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f` (`DURABLE_CODE_REVIEW_ROOT`) in separate checkouts. Previous hosted core failures came from source-hash mismatch; exact-head `98e0676af` hosted status is awaited and was not queried.
-- Add-on PR #208 source and qualification CI checkout select `d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f`. All nine model-tool actions are admitted. The exact previous all-nine receipt records 206 add-on passes with 3 skips, 485 candidate passes / 7,182 assertions and 7,294 root passes plus 25 feature and 9 build passes, root exit 0. These are previous Code Review receipts, separate from published deadline/scheduler results and running Delegate gates. Earlier 485-candidate / 7,312-root + 25 feature + 9 build passes belong to the older local-write source. Exact-head hosted qualification is separate. Published Delegate `ea2d1416e`, its documentation `7150dd6a2` and supplied green hosted run `39073316535` retain their earlier boundaries.
+- CI fix `98e0676af` separates historical fixtures at `de92bc95b5b3bb1505beec9617d3b8a5e4fa92d3` (`DURABLE_ADDONS_ROOT`) from native Code Review at `d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f` (`DURABLE_CODE_REVIEW_ROOT`) in separate checkouts. Previous hosted core failures came from source-hash mismatch; exact-head `98e0676af` hosted status is green (run `39086238913`). The supplied exact-head `b258ff3a2` PR check returned `statusCheckRollup: []`; no hosted run is established for that head. The older green run supplies no later-head CI evidence. No query ran during this documentation refresh.
+- Add-on PR #208 source and qualification CI checkout select `d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f`. All nine model-tool actions are admitted. The exact previous all-nine receipt records 206 add-on passes with 3 skips, 485 candidate passes / 7,182 assertions and 7,294 root passes plus 25 feature and 9 build passes, root exit 0. These are historical Code Review receipts, separate from published deadline/scheduler results and final attachment/WAL qualification. Earlier 485-candidate / 7,312-root + 25 feature + 9 build passes belong to the older local-write source. Exact-head hosted qualification is separate. Published Delegate `ea2d1416e`, its documentation `7150dd6a2` and supplied green hosted run `39073316535` retain their earlier boundaries.
 - The old stashed Delegate/Code Review work and refusal checkpoints do not qualify this implementation. Older uncommitted Delegate WIP stays separate and unapproved. The actual default factory admits the bounded installed Delegate profile and native Code Review reads/local mutations below.
 - `runtime/src/runtime.ts` acquires strict ownership. `runtime/src/runtime/bootstrap.ts` supplies `prepareApplicationBackend` by default and loads the fixed `runtime/durable-engine/src/default-application-runtime.ts` entry before AgentPool/WebChannel. Missing candidate dependencies fail explicitly; there is no production legacy fallback. Statements that production registration or default selection are absent are obsolete.
 - The private engine still owns isolated Pi/Chord 1.3.0 pins and its lock. The root package still uses Pi 1.2.0 host definitions/model services. Source default adoption does not establish distributed-package installation or live activation. No fleet rollout, installed-package replacement, live provider acceptance or service restart is recorded here.
@@ -31,7 +86,7 @@ This is the single current HC/PC table. The [earlier acceptance report](pi-durab
 | ID | Original requirement | Status | Exact source / existing test evidence | What remains |
 | --- | --- | --- | --- | --- |
 | HC-001 | Simple prompt | source-qualified | `E/default-application-runtime.ts`, `E/application-bootstrap.ts`; `Q/default-application-runtime.test.ts`, `Q/application-web.test.ts` | Actual default synthetic HTTP acceptance→answer→EF-S02/reopen works; live authenticated providers and rollout are unverified. |
-| HC-002 | Tool prompt | source-qualified | `E/host-builtins.ts`, `E/host-plan-tool.ts`, `E/host-delegate-tool.ts`, `E/host-code-review-tool.ts`; `Q/host-builtins.test.ts`, `Q/host-grep.test.ts`, `Q/host-delegate-tool.test.ts`, `Q/default-application-runtime.test.ts` | Seven Linux host builtins, approved Plan, bounded native Delegate with inherited or explicit exact approved models and all nine source-bound Code Review actions, including synchronous assigned-item `work`, are admitted. Operator/browser dispatch queue/delivery through durable ingress, general SSH/MCP/add-on tools, family policy and full installed parity are unqualified. |
+| HC-002 | Tool prompt | source-qualified | `E/host-builtins.ts`, `E/host-plan-tool.ts`, `E/host-delegate-tool.ts`, `E/host-delegate-files.ts`, `E/host-code-review-tool.ts`; `Q/host-builtins.test.ts`, `Q/host-grep.test.ts`, `Q/host-delegate-tool.test.ts`, `Q/host-delegate-files.test.ts`, `Q/default-application-runtime.test.ts` | Seven Linux host builtins, approved Plan, bounded native Delegate with inherited or explicit exact approved models and workspace text attachments, and all nine source-bound Code Review actions, including synchronous assigned-item `work`, are admitted. Operator/browser dispatch queue/delivery through durable ingress, general SSH/MCP/add-on tools, family policy and full installed parity are unqualified. |
 | HC-003 | Parallel tools | fixture-only | `Q/tools.test.ts`; ordering obligation in `earendil-100-durable-crosswalk.md` | Preparation/results do not prove completion-order raw commits versus call-order context/projection. No dedicated candidate ordering oracle. |
 | HC-004 | Safe replay | fixture-only | `E/host-tools.ts`; `Q/tools.test.ts` | Explicit safe-policy tests do not supply crash/redeclaration/idempotency/replay-authorisation matrix. Default host builtins remain unsafe. |
 | HC-005 | Never replay | fixture-only | `Q/sqlite.test.ts`, `Q/bash-port.test.ts` | Selected executing unsafe calls do not rerun on reopen; arbitrary external mutation/unknown-outcome reconciliation needs per-effect policy. |
@@ -232,8 +287,8 @@ on its root model.
 Children have fresh self-contained history, parent thinking level and
 `read`/`grep`/`find`/`ls` or explicit subsets; no recursion or Plan prompt.
 Categories `quick`, `summarize`, `code`, `analyze`, `reason` are accepted without
-automatic model reselection. `judge`, unsupported options, nonempty files and
-read/write or full tool profiles reject. Unavailable, unclassified, excluded
+automatic model reselection. `judge`, unsupported options and read/write or full
+tool profiles reject. Unavailable, unclassified, excluded
 provider/model, non-string, empty, short, fuzzy and virtual model choices reject
 without a fallback child.
 `timeout_sec` accepts integer 10..300, default 120 seconds, validated before child
@@ -242,6 +297,33 @@ before creation and at each source/model guard. This conservative profile also
 denies unrelated caps; per-request child accounting is unqualified. Parallel tool
 calls use independent owned children, with no numeric global concurrency setting
 or second queue.
+
+Text attachments accept 0..10 explicit paths; empty `files: []` performs no
+attachment IO. `E/host-delegate-files.ts` uses the captured host reader callback
+and workspace root, lexical/canonical containment, nonblocking final-component
+`O_NOFOLLOW` opens and regular-file descriptor checks. Actual aggregate reads are
+bounded at 100,000 bytes with an overflow probe; overflow rejects without truncation.
+Invalid UTF-8, NUL, disallowed controls and recognised binary/image signatures
+reject. UTF-8 SVG is text only, without image rendering. The legacy workspace
+policy supplies no general filesystem sandbox; canonical parent-directory
+replacement races are not prevented by `O_NOFOLLOW`.
+
+Source, owner, lifetime, cap, selected-model and deadline guards run at actual
+open/read boundaries and after reading. Validation and materialisation precede
+the first new child creation. Logical path labels mark file contents as untrusted
+data. Fixed attachment errors omit raw filesystem errors; no new contents logging
+is added. No CLI `execute` or fabricated ToolContext runs.
+
+Replay reconciles public task-owned child/request state before IO and reuses
+accepted input without rereading mutated source files. Public SDK request-ID
+deduplication checks submission type, not content equality; accepted input stays
+authoritative, including queued input. Normal SDK child input holds that snapshot;
+no 100 KB memo, new ledger or parallel queue is added. The latest focused receipt
+passes 21 tests / 257 assertions, including empty-list coverage; prior actual-native
+coverage passes 1 / 38. Final candidate/root and all three scoped type receipts
+are recorded above; attachment and empty-list reviews are READY. The root outer
+wrapper has no exit-code receipt. Images, wider tool permissions, capped request
+accounting and numeric global concurrency are unqualified.
 
 Public `api.memo("deadline", …)` stores absolute operation-entry expiry before
 source/model approval awaits; replay cannot renew it. Child wait races the remaining
@@ -269,9 +351,8 @@ from a wrong native Code Review source hash, without weaker assertions or policy
 `delegate-explicit-full-candidate.log` passes 510 tests / 7,292 assertions.
 `delegate-explicit-simplified-root.log` passes 7,312 tests, 74 baseline skips,
 plus 25 feature and 9 build tests. Both inner runs complete normally; interrupted
-outer wrappers supplied no exit-code receipts. Earlier timeout attempts remain recorded. These receipts qualify the
-four dirty source/test files over `98e0676af`, separately from earlier deadline
-and Delegate publication receipts.
+outer wrappers supplied no exit-code receipts. Earlier timeout attempts remain recorded. These receipts qualify explicit-model source published at `b258ff3a2`, separately
+from the current uncommitted attachment source and earlier deadline/Delegate receipts.
 
 `deadline-memo-final.log` records 17 pass, 0 fail, 202 assertions across two files.
 The prior `native-delegate-deadline-checkpoint.md` records actual-default selector
@@ -441,7 +522,7 @@ Original public entry IDs, linear ancestry, parent/child counts, full snapshot e
 1. Close the exact-running-abort public API gap for HC-009/PC-004/PC-015 or obtain an explicit requirement decision. Host cancellation/publication fencing is already distinct; no unsafe substitute is proposed.
 2. Extend bounded scheduler model-override acceptance, including direct approval revocation during await; complete native per-request budget attribution/reservation/accounting, exact cancellation, accepted-agent takeover and arbitrary-crash/stale-delivery qualification. Applicable enabled scheduler caps deny; native capped accounting is unqualified. The actual consumer and cap-denial checks above do not complete those requirements. Complete service/terminal-effect (STE) acceptance across general trusted internal and cross-session input, protected hand-offs, mobile cancellation and goal/checkpoint races. EF-S01/02/05/07/08 keep their acceptance, terminal, delivery, scheduler and projection authorities. Task outcomes/watches cannot replace terminal or delivery receipts.
 3. Qualify remaining semantic matrices: parallel ordering, safe replay, retry/budgets, corruption, deferred live-provider recovery, reload, usage accounting and automatic/background/overflow compaction. Existing bounded source/component results do not supply those matrices.
-4. Extend bounded native Delegate beyond its read-only inherited-or-explicit-model profile: attachments, read/write or full tools and any enabled budget cap still reject. Explicit exact approved physical models now have the bounded source coverage above; their full qualification has completed. Numeric global concurrency is not implemented. Qualify native capped request accounting, wider tools and recovery; all enabled Delegate caps still deny. Deadline candidate/root gates passed for published `e5ca1b67d`; current scheduler candidate493 and root7312+25+9 gates pass with exit 0. Current Code Review is published at core `4e1ffe2fe` and add-on PR #208 `d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f`, with exact previous receipts above. Qualify representative operator/browser dispatch queue/delivery acceptance through durable ingress. All nine model-tool actions are implemented; synchronous `work` needs no new worker/provider/job. Remote networking/auth, MCP/SSH effects and other add-on/event lifecycle/state compatibility need separate evidence.
+4. Extend bounded native Delegate beyond its read-only inherited-or-explicit-model profile with workspace text attachments. Images, read/write or full tools and any enabled budget cap still reject. Explicit exact approved physical models and bounded text attachments have completed local source qualification above; the attachment/WAL slice awaits commit and exact-source hosted evidence. Numeric global concurrency is not implemented. Qualify native capped request accounting, wider tools and recovery; all enabled Delegate caps still deny. Deadline candidate/root gates passed for published `e5ca1b67d`; current scheduler candidate493 and root7312+25+9 gates pass with exit 0. Current Code Review is published at core `4e1ffe2fe` and add-on PR #208 `d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f`, with exact previous receipts above. Qualify representative operator/browser dispatch queue/delivery acceptance through durable ingress. All nine model-tool actions are implemented; synchronous `work` needs no new worker/provider/job. Remote networking/auth, MCP/SSH effects and other add-on/event lifecycle/state compatibility need separate evidence.
 5. Keep migration last. Preserve existing host chat/branch/session identities; qualify compatibility totality, guarded cutover and reverse conversion after new work. `E/host-controller.ts` deliberately rejects checkpoint/rollback proof without public storage identity and historical frontier; copied host-only rollback success does not remove this limitation.
 6. Extend the bounded read evidence to production-scale restore/tree reads, storage growth, latency, memory and ownership/resource behaviour; supply a portable harness before clone-only reproduction is possible. Package/install, canary, live providers, fleet activation and rollback execution require separate approval and evidence.
 

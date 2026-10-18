@@ -1,8 +1,111 @@
-# Native Delegate explicit models — source follow-up over `98e0676af`
+# Native Delegate text attachments and fixture WAL policy — qualified source over `b258ff3a2`
 
-The native Delegate now accepts an explicit exact approved `provider/model` choice.
-Four dirty core source/test files contain this follow-up over published HEAD
-`98e0676af`; full qualification has completed. No future commit hash is assigned.
+Local source qualification is complete; the attachment/WAL slice is uncommitted
+and awaits commit and exact-source hosted evidence. Native Delegate accepts 0..10
+explicit workspace text files, including empty `files: []` without attachment IO,
+under approved read-only policy. Images and wider file/tool permissions remain
+unsupported. No future source hash is assigned.
+
+## Measured fixture-policy repair
+
+Two external instrumented runs measured 20 body COMMIT calls at 1.959 / 2.442
+seconds: 99.4% / 99.5% of the corresponding public adapter transaction time,
+not total test time. Both timed out at the unchanged 5,000 ms limit. No syscall
+trace or fsync attribution exists. The fresh separate candidate used the default
+DELETE journal policy by source/default inference; the observer did not measure
+PRAGMAs. Production initialises its shared file root with WAL. Measurements and
+instrumentation limits: `/workspace/reviews/durable-1650/baseline-sqlite-timing.md`.
+
+Qualification-only `src/sqlite-fixture-policy.ts` aligns the historical fixture
+files to WAL. The copied native host uses existing `enableSqliteWal`, retaining
+its busy timeout. The standalone candidate uses public adapter SQL. Both require
+`synchronous=FULL` (2) before setup, explicitly set FULL and verify 2 afterwards,
+including every reopen. Production constructors and journal helpers are unchanged.
+No NORMAL/OFF setting, tmpfs substitution, timeout increase or assertion reduction
+was used. These legacy two-database component fixtures remain separate; they do
+not qualify shared-schema atomicity. Actual one-database application behaviour
+has separate existing tests.
+
+Receipts under `/workspace/reviews/durable-1650/`:
+
+- `wal-policy-test.log`: 2 pass / 18 assertions, covering WAL sidecars, FULL,
+  busy-timeout preservation, rollback and physical reopen.
+- `wal-runtime-test.log`: 54 pass / 477 assertions; largest case 2.89 seconds.
+  `wal-bindings-test.log`: 9 pass / 74 assertions, run sequentially afterwards.
+- `wal-sqlite-conformance.log`: unchanged rollback-journal `sqlite.test.ts` plus
+  the new policy tests, 35 pass / 273 assertions. No conformance test changed.
+- `wal-addon-graph-focused.log`: 4 pass / 150 assertions across 3 files. The
+  actual add-on graph now uses `openWalFixtureDatabase` too.
+- FULL fixture-policy source review is READY. These results establish neither
+  power-loss durability nor additional SIGKILL coverage or production performance.
+- `attachments-final-candidate.log`: 517 pass, 0 fail, 7,427 assertions across
+  44 files, 266.49 seconds, `EXIT_CODE=0`.
+- `attachments-final-root.log`: 7,312 pass / 74 skip / 0 fail, plus 25 feature
+  and 9 build tests; normal `make` completion. The outer wrapper was interrupted;
+  no exit-code receipt exists, so root `EXIT_CODE=0` is not established.
+- `attachments-final-{engine,qualification,root}-types.log`: all three pass.
+
+The failed pristine-host-image optimisation was reverted. Its old checkpoint
+records an abandoned experiment, not additional unpublished setup code. Full
+policy details: `/workspace/reviews/durable-1650/wal-fixture-policy-checkpoint.md`.
+
+## Bounded text attachment source
+
+`host-delegate-files.ts` reads canonical regular files within the captured workspace
+root. Lexical and canonical containment checks preserve the legacy workspace
+policy. Nonblocking descriptor opens use `O_NOFOLLOW` on the final component.
+Canonical parent-directory replacement races are not prevented; this reader is
+not a general filesystem sandbox. Bounded descriptor reads count actual aggregate
+bytes, up to 100,000 across all files, with an overflow probe. Overflow rejects
+without truncation. Invalid UTF-8, NUL, disallowed controls and recognised
+binary/image signatures reject. UTF-8 SVG enters as text, without image rendering.
+
+The default factory captures the host-owned reader callback and workspace root.
+Source, owner, lifetime, cap, selected-model and deadline guards run at actual
+open/read boundaries and after reading. Validation and materialisation precede
+the first new child creation. No legacy CLI `execute` or fabricated ToolContext
+runs. Logical path labels mark contents as untrusted data. Failures return
+`Delegate attachment unavailable` without raw filesystem errors. Normal SDK child
+input persists contents; no new content logging is added.
+
+Replay reconciles public owned child/request state before attachment IO. Accepted
+input stays authoritative after source-file mutation and is reused without rereading.
+Public SDK request-ID deduplication checks submission type, not content equality,
+including queued input. No 100 KB memo, new ledger or parallel queue is introduced.
+
+Existing receipts under `/workspace/reviews/durable-1650/`:
+
+- `delegate-files-final-focused.log`: 21 pass, 0 fail, 257 assertions across helper
+  and consumer/deadline/source tests, including the empty-list regression. The
+  previous 20 / 238 receipt predates that regression.
+- `delegate-text-attachments-checkpoint.md`: actual-default `native-delegate-files`,
+  1 pass / 38 assertions. One of two isolated children receives the attachment;
+  the other does not, and the parent model is unchanged.
+- All three scoped types pass (`delegate-files-{engine,qualification,root}-types.log`).
+  Source review and the empty-list follow-up are READY within their stated scope.
+- Historical pre-policy full candidate: 512 pass / 3 timeouts. Later pre-policy candidate
+  `delegate-files-quiet-candidate.log`: 510 pass / 5 timeouts, exit 1. Historical root
+  `delegate-files-serial-root.log`: 7,311 pass / 74 skip / 1 note-indexing failure,
+  exit 2; that note workflow passes its focused rerun. These failed attempts are
+  historical; final qualification receipts above supersede their publication hold.
+- Baseline comparison: `delegate-files-baseline-intents.log` reproduces a timeout
+  on unchanged published source. The unsuccessful host-fixture-copy experiment
+  was fully reverted. HISTORICAL hold: `/workspace/reviews/durable-1650/delegate-text-qualification-hold.md`;
+  final qualification above supersedes it.
+
+Images, wider tool permissions, native capped accounting and numeric global
+concurrency are unqualified. All 45 statuses stay 22 source-qualified / 17
+fixture-only / 3 blocked-publicAPI / 3 migration/perf-unverified. The 17 fixture-only
+requirements need acceptance; production performance is unverified and migration
+stays last. All-nine Code Review scope stays core `4e1ffe2fe` / add-on `d1ce8c6f`
+(PR #208), with one application database and no JSONL. Documentation-only refresh:
+no code, tests, CI, network, services, pins, migration, commit or push operations.
+
+# Historical native Delegate explicit-model checkpoint — published `b258ff3a2`
+
+Native Delegate accepts an explicit exact approved `provider/model` choice.
+This follow-up over `98e0676af` is published at `b258ff3a2`. Its completed
+qualification receipts predate the text-attachment source above.
 
 Explicit selection matches the captured approved available physical catalogue and
 rechecks current host policy. The installed actual `buildModelCandidates` supplies
@@ -47,11 +150,14 @@ Published CI fix `98e0676af` separates historical add-on fixtures
 Code Review source (`DURABLE_CODE_REVIEW_ROOT`,
 `d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f`) in separate checkouts. Previous hosted
 core failures came from the source-hash mismatch. Exact-head hosted status is
-green for `98e0676af` (run `39086238913`); the new exact-head run is separate.
+green for `98e0676af` (run `39086238913`). The supplied exact-head check for
+`b258ff3a2` returned PR `statusCheckRollup: []`; no hosted run is established for
+that head. The older green run cannot qualify a later head. No hosted query ran
+for this documentation refresh.
 
 All 45 statuses stay 22 source-qualified / 17 fixture-only / 3 blocked-publicAPI /
-3 migration/perf-unverified. Attachments, wider-than-read-only tools and any enabled
-Delegate cap still deny; numeric global concurrency and native capped request
+3 migration/perf-unverified. At this historical checkpoint, attachments,
+wider-than-read-only tools and any enabled Delegate cap still deny; numeric global concurrency and native capped request
 accounting are unqualified. Scheduler model overrides are implemented at
 `e3d248a01`, with candidate 493 / 7,255 and root 7,312 + 25 + 9 passing, exit 0.
 Deadlines are published at `e5ca1b67d`; all-nine Code Review source stays core
@@ -60,15 +166,15 @@ atomic running-abort gaps and production performance still need acceptance.
 Migration stays last. This refresh changes documentation only: no code, test, CI,
 pin, network, service, live-state, migration, commit or push operation ran.
 
-# Scheduled model overrides — published `e3d248a01`
+# Historical scheduled model-override checkpoint — published `e3d248a01`
 
 Native EF-S07 schedules now resolve captured `model_label` values from the canonical
 task revision to an approved, currently available physical model through the root
 ModelRuntime. Resolution performs no LLM request or credential lookup. The source
 guard rechecks source and model approval before the public fork commit. The
 scheduler change is published at `e3d248a01`; its completed full-gate receipts are
-below. The four dirty source/test files now belong to the separate Delegate
-explicit-model follow-up above.
+below. The current uncommitted follow-up adds Delegate text attachments and
+qualification-only WAL fixture policy above.
 
 The allocator captures an immutable choice, checks the inherited context, copies
 the parent's `AgentDoc` and configures the fork model in the same public SDK commit
@@ -102,12 +208,12 @@ source-qualified / 17 fixture-only / 3 blocked-publicAPI /
 3 migration/perf-unverified. Enabled applicable scheduler caps and all enabled
 Delegate caps still deny; native capped request accounting is unqualified.
 Delegate explicit different-model selection now has the bounded source coverage
-above; attachments still reject. Other add-ons, the 17 fixture-only requirements
+above; attachments rejected at this historical checkpoint. Other add-ons, the 17 fixture-only requirements
 and production performance need
 acceptance. Migration stays last. No code, test, CI, pin, network, service,
 migration, commit or push operation ran for this documentation refresh.
 
-# Native Delegate deadlines — published `e5ca1b67d`
+# Historical native Delegate deadline checkpoint — published `e5ca1b67d`
 
 The current native Delegate accepts `timeout_sec`: default 120 seconds, integer
 10..300. Validation precedes child allocation. Public `api.memo("deadline", …)`
@@ -151,7 +257,7 @@ Existing receipts under `/workspace/reviews/durable-1650/`:
   published `98e0676af` separates those checkouts. Its exact-head hosted status
   is awaited; no hosted query ran for this refresh.
 
-Attachments and read/write or full Delegate tools still reject. Explicit exact
+At this historical checkpoint, attachments and read/write or full Delegate tools reject. Explicit exact
 model selection has the bounded source coverage above. Any enabled budget cap
 denies; native request accounting is unqualified. Numeric global concurrency is not implemented. All 45 statuses stay
 22 source-qualified / 17 fixture-only / 3 blocked-publicAPI /
@@ -177,8 +283,8 @@ thread versions bound the state change. Idempotent receipts recheck authority;
 revocation before root commit rolls back the mutation and receipt.
 
 All-nine Code Review source was published at core `4e1ffe2fe`. Current worktree
-HEAD is `98e0676af`; its four dirty core source/test files belong to the separate
-Delegate explicit-model follow-up above. Scheduler overrides are published at
+HEAD is `b258ff3a2`; its uncommitted source/test/tooling changes belong to the
+separate Delegate text-attachment and qualification-only WAL fixture follow-up above. Scheduler overrides are published at
 `e3d248a01`.
 Add-on PR #208 and the core qualification CI checkout select
 `d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f`. This qualifies source only; installed
@@ -186,7 +292,7 @@ package pins and versions are unchanged. No live installation or hosted success
 is established by these receipts.
 
 Exact previous Code Review receipts under `/workspace/reviews/durable-1650/`
-(separate from published deadline/scheduler results and running Delegate gates):
+(historical receipts, separate from the final attachment/WAL qualification above):
 
 - `code-review-work-actual.log`: actual-default 1 pass / 59 assertions, including
   `work` → `in_progress`, stale-item and cross-chat denial, `completed` after the
@@ -209,7 +315,7 @@ durable ingress still need representative acceptance. Earlier root direct-API te
 and the actual new shared read establish bounded core behaviour without a provider;
 they do not establish that ingress/delivery path. No missing `work` worker is required.
 Delegate explicit different-model selection and deadlines use the bounded profiles
-above; attachments and enabled budget caps still reject. Scheduler model overrides
+above; attachments rejected at this historical checkpoint; enabled budget caps still reject. Scheduler model overrides
 have the bounded source coverage above; native capped accounting, other add-ons/events, exact atomic current-task cancellation, the 17
 fixture-only requirements and production performance
 still need acceptance. Migration stays last: preserve the old `reviews.db`; no copy

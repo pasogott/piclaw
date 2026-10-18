@@ -20,6 +20,7 @@ import { createHostModels } from "./host-models.js";
 import { createHostBuiltinTools } from "./host-builtins.js";
 import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
 import { createHostDelegateTool } from "./host-delegate-tool.js";
+import { createHostDelegateFileReader } from "./host-delegate-files.js";
 import { extensionKvGet } from "../../src/db/extension-kv.js";
 import { createHostPlanTool } from "./host-plan-tool.js";
 import { createHostCodeReviewTool } from "./host-code-review-tool.js";
@@ -277,7 +278,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         }
         if (!model) throw Error("Delegate parent model required");
         assertDelegateModel(model); return model;
-      }, assertModelCurrent: assertDelegateModel, readonlyTools: readers, readonlyExtensions: [readerExtension],
+      }, assertModelCurrent: assertDelegateModel, readFiles: createHostDelegateFileReader(WORKSPACE_DIR), readonlyTools: readers, readonlyExtensions: [readerExtension],
     }));
   }
   registry.install(defineExtension({ name: "app.host-builtins", tools }));

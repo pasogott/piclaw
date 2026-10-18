@@ -1,5 +1,6 @@
 import { AssistantEntry, configure, defineTool, type ModelRef, type ToolRegistration, type Extension } from "@earendil-works/pi-durable";
-import type { TSchema } from "@earendil-works/pi-ai";
+import { validateDelegateFiles } from "./host-delegate-files.js";
+import type { TextContent, TSchema } from "@earendil-works/pi-ai";
 import type { ToolDefinition } from "../../../node_modules/@earendil-works/pi-coding-agent";
 import type { HostConversationRuntime } from "./host-runtime.js";
 
@@ -17,12 +18,13 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
   /** Rechecked before creation and after settlement. Enabled budget caps must
    * deny until operation-owned child request accounting has been qualified. */
   assertModelCurrent(model: ModelRef): void;
+  readFiles?(files: readonly string[], assertAllowed: () => void): Promise<readonly TextContent[]>;
   readonlyTools: readonly ToolRegistration[];
   /** Installed, hook-free read-only capability extensions only. */
   readonlyExtensions: readonly Extension[];
 }) {
   if (definition.name !== "delegate") throw Error("Expected registered Delegate tool");
-  const { assertCurrent, runtime, selectModel, assertModelCurrent } = options;
+  const { assertCurrent, runtime, selectModel, assertModelCurrent, readFiles } = options;
   const readers = [...options.readonlyTools];
   const extensions = [...options.readonlyExtensions];
   if (extensions.some(extension => extension.hooks?.length || extension.sections?.length || extension.tools?.some(tool => !readers.includes(tool))))
@@ -44,7 +46,10 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
       }
       // Keep the installed declaration's default and bounds even for synthetic
       // schemas: reject invalid input before allocating any child.
-      if (args.files !== undefined && (!Array.isArray(args.files) || args.files.length)) throw Error("Native Delegate attachments are not qualified");
+      if (args.files !== undefined) {
+        validateDelegateFiles(args.files);
+        if (args.files.length && !readFiles) throw Error("Delegate attachment unavailable");
+      }
       const timeout = args.timeout_sec === undefined ? 120 : args.timeout_sec;
       if (typeof timeout !== "number" || !Number.isInteger(timeout) || timeout < 10 || timeout > 300) throw Error("Delegate timeout_sec must be an integer from 10 to 300");
       const names = args.tools === undefined || args.tools === "read_only" ? readers.map(tool => tool.name)
@@ -62,7 +67,27 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
       const model = await api.memo("model", proposed, context);
       const check = () => { assertCurrent(); runtime().assertCapturedSourceCurrent(captured.inputs); assertModelCurrent(model); };
       check();
-      const childId = await api.commit(async tx => {
+      const requestId = `delegate:${api.taskId}`;
+      // Reconcile accepted work before touching files. Public SDK request-ID
+      // deduplication retains accepted content (including queued input).
+      const owned = await api.commit(async tx => {
+        check();
+        const prior = await tx.scanConversations({ ownerTaskId: api.taskId }, 2);
+        if (prior.next || prior.items.length > 1) throw Error("Ambiguous Delegate child ownership");
+        const child = prior.items[0];
+        return child ? { id: child.id, submission: await tx.submissionByRequest(child.id, requestId) } : undefined;
+      }, context);
+      const assertReadAllowed = () => { check(); if (expired()) throw timeoutError(); };
+      let content: string | TextContent[] = args.prompt;
+      if (!owned?.submission && Array.isArray(args.files) && args.files.length) {
+        assertReadAllowed();
+        let attachments: readonly TextContent[];
+        try { attachments = await readFiles!(args.files as string[], assertReadAllowed); }
+        catch { assertReadAllowed(); throw Error("Delegate attachment unavailable"); }
+        assertReadAllowed();
+        content = [{ type: "text", text: args.prompt }, ...attachments];
+      }
+      const childId = owned?.id ?? await api.commit(async tx => {
         check();
         const prior = await tx.scanConversations({ ownerTaskId: api.taskId }, 2);
         if (prior.next || prior.items.length > 1) throw Error("Ambiguous Delegate child ownership");
@@ -81,15 +106,14 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
       const child = await api.conversation(childId, context);
       if (!child) throw Error("Missing owned Delegate child");
       check();
-      const requestId = `delegate:${api.taskId}`;
       // A committed answer survives a late replay. Otherwise an expired replay
       // never submits new work, including the create-before-submit crash gap.
-      const prior = await api.commit(tx => tx.submissionByRequest(childId, requestId), context);
+      const prior = owned?.submission ?? await api.commit(tx => tx.submissionByRequest(childId, requestId), context);
       let settled;
       if (prior?.status === "done") settled = prior;
       else {
         if (expired()) { await child.abort(context); throw timeoutError(); }
-        const submission = await child.submit({ type: "input", requestId, content: args.prompt }, context);
+        const submission = await child.submit({ type: "input", requestId, content }, context);
         const waiting = submission.wait(context);
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {

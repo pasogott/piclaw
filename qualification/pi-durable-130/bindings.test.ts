@@ -10,6 +10,7 @@ import { createCurrentPiclawServiceWorkStore } from "../../runtime/src/service-e
 import { hashCanonicalRequest } from "../../runtime/src/service-effects/contracts/common.js";
 import { at, effect, sealed, value } from "./src/host-handoff.js";
 import { barrier } from "./src/fixture.js";
+import { configureHostWalFixtureDatabase } from "./src/sqlite-fixture-policy.js";
 
 async function fixture(run: (f: Awaited<ReturnType<typeof setup>>) => Promise<void>) {
   const f = await setup();
@@ -20,6 +21,7 @@ async function setup() {
   process.env.PICLAW_DB_IN_MEMORY = "1";
   initDatabase(); getDb().query("VACUUM INTO ?").run(join(dir, "host.sqlite")); closeDatabase();
   const db = new Database(join(dir, "host.sqlite"), { strict: true });
+  configureHostWalFixtureDatabase(db);
   db.exec("PRAGMA foreign_keys=ON"); installTerminalSettlementCompositionSchema(db);
   let owned = true, failAfterWrite = false, resolves = 0;
   const assertOwner = () => {
@@ -209,6 +211,7 @@ test("bindings: exact queued intent proof matches root; terminal committed repla
   expect(f.work.getQueuedInputIntent(primary.operationId, source)).toBeNull();
   const reopenedDb = new Database(join(f.dir, "host.sqlite"), { strict: true });
   try {
+    configureHostWalFixtureDatabase(reopenedDb);
     const reopened = createHostDurableBindings(reopenedDb, f.options);
     expect((await reopened.intents!.bind(input)).submissionId).toBe(77);
     reopenedDb.query("DELETE FROM piclaw_durable_intent_bindings_v1").run();
