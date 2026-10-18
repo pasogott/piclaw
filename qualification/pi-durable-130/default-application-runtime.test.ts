@@ -1280,10 +1280,10 @@ for (const scenario of ["source-filter-subset", "public-admission-row-mismatch",
     if (revokeDelegate) {
       expect(childSourceCaptures).toBe(1);
       const capped = scenario === "native-delegate-revoke-cap";
-      expect(childRequests).toBe(capped ? 1 : 2);
-      expect(calls).toBe(capped ? 2 : 4);
+      expect(childRequests).toBe(1);
+      expect(calls).toBe(capped ? 2 : 3);
       expect(sentinelReads).toBe(0);
-      expect(requested).toEqual(capped ? [model.id, modelB.id] : [model.id, modelB.id, modelB.id, model.id]);
+      expect(requested).toEqual(capped ? [model.id, modelB.id] : [model.id, modelB.id, model.id]);
       expect(root.query("SELECT id FROM conversations WHERE owner_task_id IS NOT NULL").all()).toHaveLength(1);
       const entries = JSON.stringify(root.query("SELECT * FROM entries").all());
       expect(entries).not.toContain(sentinel);
@@ -1296,13 +1296,13 @@ for (const scenario of ["source-filter-subset", "public-admission-row-mismatch",
         await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close(); owner.release(); closeDatabase();
         sdkSpies.forEach(spy => spy.mockRestore()); return;
       }
-      expect(observedResults.size).toBe(2);
-      expect(observedResults.get("child-private-read")).toMatchObject({ toolName: "read", isError: true });
-      expect(JSON.stringify(observedResults.get("child-private-read"))).toContain("Host tool execution failed");
-      expect(JSON.stringify(observedResults.get("child-private-read"))).not.toContain(sentinel);
+      // The revoked child cannot make a follow-up model request to observe its
+      // tool result. Only the parent's Delegate policy failure is delivered.
+      expect(observedResults.size).toBe(1);
+      expect(observedResults.has("child-private-read")).toBe(false);
       expect(observedResults.get("A")).toMatchObject({ toolName: "delegate", isError: true });
-      expect(JSON.stringify(observedResults.get("child-private-read"))).not.toContain("Native Delegate model not approved");
-      expect(JSON.stringify(observedResults.get("child-private-read"))).not.toContain("Native Delegate budget admission unavailable");
+      expect(JSON.stringify(observedResults.get("A"))).not.toContain(sentinel);
+      expect(JSON.stringify(observedResults.get("A"))).toContain("Native Delegate model not approved");
       expect(JSON.stringify(root.query("SELECT content FROM messages WHERE is_bot_message=1").all())).not.toContain(sentinel);
       expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
       captureSpies.forEach(spy => spy.mockRestore());
