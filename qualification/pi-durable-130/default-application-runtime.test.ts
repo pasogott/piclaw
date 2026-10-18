@@ -119,7 +119,7 @@ const explicitDelegateCases: Record<string, { id: string; model: unknown; denied
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
+for (const scenario of ["native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -137,6 +137,9 @@ for (const scenario of ["native-drawio", "native-drawio-cancel", "native-drawio-
   const planRequests: string[] = [];
   let toolSequence: { name: string; arguments: Record<string, unknown> | (() => Record<string, unknown>) }[] | undefined;
   const reviewPackage = scenario === "native-code-review" ? installCodeReviewFixture(workspace) : undefined;
+  if ((scenario === "native-codemode-cancel" || scenario === "native-codemode-harness")) toolSequence = [{ name: "codemode", arguments: {
+    code: 'try { await tools.write({path:"codemode-forbidden.txt",content:"FORBIDDEN"}); } catch {} store("revoked-sentinel", {secret:"MUST_NOT_PERSIST"}); console.log("done");',
+  } }];
   const nativeDrawio = scenario.startsWith("native-drawio");
   const drawioCancelled = scenario === "native-drawio-cancel";
   const drawioMissingOpener = scenario === "native-drawio-missing-opener";
@@ -337,6 +340,19 @@ for (const scenario of ["native-drawio", "native-drawio-cancel", "native-drawio-
         throw rollback;
       })()).toThrow(rollback);
       authority.assertCurrent();
+      return captured;
+    }));
+  }
+  let codemodeNestedCaptures = 0;
+  if ((scenario === "native-codemode-cancel" || scenario === "native-codemode-harness")) {
+    const captureTool = HostConversationRuntime.prototype.captureToolSource;
+    captureSpies.push(spyOn(HostConversationRuntime.prototype, "captureToolSource").mockImplementation(async function (this: HostConversationRuntime, ...args) {
+      const captured = await captureTool.apply(this, args);
+      if (args[2].includes("/")) {
+        codemodeNestedCaptures++;
+        if (scenario === "native-codemode-harness") root.query("UPDATE service_effect_s01_operations SET harness_watch_generation=harness_watch_generation+1 WHERE operation_id=?").run(captured.operation.operationId);
+        else root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
+      }
       return captured;
     }));
   }
@@ -731,6 +747,22 @@ for (const scenario of ["native-drawio", "native-drawio-cancel", "native-drawio-
   const tableCancelled = scenario === "native-editable-table-revoked" || scenario === "native-editable-table-closed-publisher" || scenario === "native-editable-table-archived" || scenario === "native-editable-table-harness-generation";
   expect(dispatch).toBeDefined();
   const dispatchOutcome = await dispatch!();
+  if ((scenario === "native-codemode-cancel" || scenario === "native-codemode-harness")) {
+    expect(dispatchOutcome).toBe("pending");
+    expect(codemodeNestedCaptures).toBe(1);
+    expect(existsSync(join(workspace, "codemode-forbidden.txt"))).toBe(false);
+    // Read-only SDK forensics: no base or delta may retain the revoked write.
+    const storeRevisions = root.query(`SELECT r.content FROM document_revisions r JOIN documents d ON d.id=r.document_id WHERE d.kind='"pi.codemode.store"'`).all();
+    expect(JSON.stringify(storeRevisions)).not.toContain("revoked-sentinel");
+    expect(JSON.stringify(storeRevisions)).not.toContain("MUST_NOT_PERSIST");
+    expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
+    expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=(SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default')").get()).toEqual({ phase: scenario === "native-codemode-harness" ? "executing" : "cancelling" });
+    expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+    expect(observedResults.size).toBe(0);
+    backend.stop(); await backend.close();
+    for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+    closeDatabase(); owner.release(); return;
+  }
   if (tableCancelled) expect(widgetEvents).toHaveLength(0);
   expect(dispatchOutcome).toBe(tableCancelled || officeCancelled || drawioCancelled ? "pending" : "settled");
   if (nativeDrawio) {
@@ -1124,6 +1156,7 @@ for (const scenario of ["native-drawio", "native-drawio-cancel", "native-drawio-
     { name: "ls", arguments: { path: "." } },
     { name: "grep", arguments: { pattern: "after", path: "factory-tool-input.txt" } },
     { name: "bash", arguments: { command: "printf factory-tool-bash" } },
+    { name: "codemode", arguments: { code: 'console.log(await tools.read({path:"factory-tool-input.txt"})); console.log("CAPABILITIES", typeof process, typeof fetch, typeof models);' } },
   ];
   const toolInput = { ...message, id: "factory-tool-input", content: "Run the synthetic host tool sequence" };
   const toolRow = root.transaction(() => {
@@ -1141,9 +1174,13 @@ for (const scenario of ["native-drawio", "native-drawio-cancel", "native-drawio-
   expect(toolEntries).toContain("factory-tool-output.txt");
   // Inspect results delivered back to the actual public model adapter: merely
   // draining the call queue would also succeed when a requested tool is absent.
-  for (const name of ["read", "edit", "write", "find", "ls", "bash", "grep"]) {
+  for (const name of ["read", "edit", "write", "find", "ls", "bash", "grep", "codemode"]) {
     const result = [...observedResults.values()].find(result => result.toolName === name);
     expect(result).toBeDefined(); expect(result!.isError).not.toBe(true);
+    if (name === "codemode") {
+      expect(JSON.stringify(result!.content)).toContain("after");
+      expect(JSON.stringify(result!.content)).toContain("CAPABILITIES undefined undefined undefined");
+    }
     if (name === "grep") expect(JSON.stringify(result!.content)).toContain("factory-tool-input.txt:1: after");
     if (name === "find" || name === "ls") expect(JSON.stringify(result!.content)).toContain("factory-tool-output.txt");
   }
@@ -1171,7 +1208,7 @@ for (const scenario of ["native-drawio", "native-drawio-cancel", "native-drawio-
   } finally { fault.mockRestore(); }
   backend.stop(); await backend.close();
   const upgraded = await inspectStored(false);
-  for (const [id, state] of seeded) expect(upgraded.get(id)).toEqual({ ...(state as object), tools: ["read", "bash", "edit", "write", "find", "ls", "grep"] });
+  for (const [id, state] of seeded) expect(upgraded.get(id)).toEqual({ ...(state as object), tools: ["read", "bash", "edit", "write", "find", "ls", "grep", "codemode"] });
   backend = await createDefaultApplicationRuntime(owner, async () => services);
   const recoveredCreate = backend.sessionOptions.getDurableSession!(uncertainChat)!;
   expect(recoveredCreate).toBeDefined();

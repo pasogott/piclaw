@@ -1,3 +1,32 @@
+# Native codemode enabled — targeted qualification
+
+Codemode is installed by default through the public durable createCodemodeTool
+API and a 128 MiB QuickJS sandbox. It is offered alongside host builtins, with
+search/description support from the native tool. Internal model APIs are disabled
+(models:false). No legacy AgentSession or dynamic prompt-section adapter is used.
+New chats and idle recognized previous defaults gain codemode; explicit custom
+subsets remain unchanged. MCP/provider registrations still require separate ports.
+
+Nested builtin calls must belong to the exact registered native codemode executor
+and its current live MODEL parent slot. Captured operation/source/harness checks
+run at filesystem effects. Native public api.commit callbacks are decorated with
+those checks before/after the callback inside the SDK SQL transaction; unrelated
+parent finalization is not globally blocked. Revoked guest store writes roll back.
+The sandbox closes before bundle ownership can be released.
+
+Final targeted actual-runtime receipts: public-conversations1/146 assertions;
+native-codemode-cancel1/22; native-codemode-harness1/22. The latter two require
+pending work, no file, no sentinel store revision and no delivered result after
+revocation. Earlier cancellation fence was red/green verified. Host builtin/tool
+checks pass28/157; three configured typechecks and bounded review pass.
+Receipts: /workspace/reviews/durable-1650/codemode-final-*.log and
+codemode-publish-*-types.log. No full suites or live configuration changes ran.
+
+Restart during scripts, private memo bookkeeping, store fork semantics and full
+MCP codemode are not newly qualified. Existing exact-running cancellation and
+selected-auth budget gaps remain. This source enables codemode, without asserting
+full acceptance, deployment, restart, migration or merged changes.
+
 # Native Draw.io — targeted application port
 
 The default runtime uses the shared Draw.io factory with explicit workspace and

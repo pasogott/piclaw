@@ -18,7 +18,7 @@ export function createHostBashTool(options: {
   return defineTool({
     name: schema.name, description: schema.description, parameters: schema.parameters,
     structuredOutputSchema: schema.outputSchema,
-    callers: ["model"], replay: "unsafe",
+    callers: options.captureSourceGuard ? ["model", "tools"] : ["model"], replay: "unsafe",
     async execute(args, api, context) {
       const sourceGuard = options.captureSourceGuard
         ? await options.captureSourceGuard({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId })

@@ -63,6 +63,8 @@ export interface RuntimeOptions {
    * Production implementation/migration is NOT activated by this module. */
   readonly bindings: HostDurableBindings;
   readonly conversationFor: (chatJid: string, branchId: string) => ConversationId;
+  /** Exact native codemode executor installed by the owning application only. */
+  readonly codemodeExecute?: import("@earendil-works/pi-durable").ToolRegistration["execute"];
   /** Trusted persisted scheduled-source route, never a caller-selected conversation. */
   readonly operationConversationFor?: (input: AcceptedInput) => ConversationId | undefined;
   /** All IDs must come from a caller-validated, quiescent import manifest. Never creates root. */
@@ -142,6 +144,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
   const { owner, work, terminal, bindings, harnessOptions: h, existingConversationIds,
     openStorage, conversationFor, authorizeScheduling, putAnswer, materializeAnswer, now, incarnation, sessionId, lane, generation } = o;
   return Object.freeze({ incarnation, sessionId, lane, generation, captured: true as const,
+    codemodeExecute: o.codemodeExecute,
     withIdleModelGuard: o.withIdleModelGuard?.bind(o),
     openStorage: openStorage.bind(o), conversationFor: conversationFor.bind(o),
     operationConversationFor: o.operationConversationFor?.bind(o),
@@ -538,6 +541,28 @@ export class HostConversationRuntime {
     return this.observe(async () => {
       const o = this.options;
       const live = await this.harness.snapshot(LiveDoc, conversationId, this.context); this.fence();
+      if (callId !== undefined && live?.nestedTools?.some(slot => slot.taskId === taskId && slot.callId === callId && slot.status === "running")) {
+        // Exactly one SDK-owned nested hop from a live MODEL codemode call.
+        // Neither slot presentation nor a caller-supplied parent ID grants authority.
+        const registered = o.harnessOptions.registry.snapshot().tools().find(({ tool }) => tool.name === "codemode")?.tool;
+        if (!o.codemodeExecute || registered?.execute !== o.codemodeExecute) throw Error("Native codemode registration required");
+        const parent = await this.harness.commit(async tx => {
+          const child = await tx.task(taskId);
+          if (!child || child.kind !== "pi.tool" || child.conversationId !== conversationId || child.abortRequested || child.state.status === "terminal") throw Error("Live nested tool required");
+          const input = child.input as import("@earendil-works/pi-durable").ToolTaskInput;
+          if (input.kind !== "nested" || input.call.id !== callId) throw Error("Exact nested tool required");
+          const owner = await tx.task(input.parent);
+          if (!owner || owner.kind !== "pi.tool" || owner.conversationId !== conversationId || owner.abortRequested || owner.state.status === "terminal") throw Error("Live codemode owner required");
+          const model = owner.input as import("@earendil-works/pi-durable").ToolTaskInput;
+          if (model.kind !== "model" || model.callId !== input.parentCallId) throw Error("Model codemode owner required");
+          const assistant = await tx.entry(model.assistant);
+          const calls = assistant?.model?.flatMap(message => message.role === "assistant" ? message.content.filter(part => part.type === "toolCall") : []) ?? [];
+          if (assistant?.conversationId !== conversationId || !calls.some(call => call.id === model.callId && call.name === "codemode") ||
+            !live.tools?.some(slot => slot.taskId === owner.id && slot.callId === model.callId && slot.name === "codemode" && slot.status === "running")) throw Error("Exact codemode owner required");
+          return { taskId: input.parent, callId: model.callId };
+        }, this.context); this.fence();
+        return this.captureSource(conversationId, parent.taskId, parent.callId);
+      }
       if (!live?.run || !(callId === undefined ? live.run.taskId === taskId : live.tools?.some(slot => slot.taskId === taskId && slot.callId === callId && slot.status === "running")) || !live.run.inputs.length)
         throw Error("Exact host tool run required");
       // A native foreground child has its own pi.user input, not a new host

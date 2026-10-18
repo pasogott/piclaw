@@ -3,8 +3,10 @@ import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { apply } from "@earendil-works/chord/delta";
-import { Harness, AgentDoc, configure, createRegistry, defineDoc, defineExtension, type ConversationId } from "@earendil-works/pi-durable";
+import { Harness, AgentDoc, configure, createRegistry, defineDoc, defineExtension, defineTool, type ToolExecutionApi, type ConversationId } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+import { createCodemodeTool } from "@earendil-works/pi-durable/codemode";
+import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 import { SettingsManager } from "../../../node_modules/@earendil-works/pi-coding-agent";
 import type { RuntimeModelServices } from "../../src/agent-pool/model-services.js";
 import type { RuntimeLockHandle } from "../../src/runtime/single-instance.js";
@@ -23,6 +25,7 @@ import { createHostDelegateTool } from "./host-delegate-tool.js";
 import { createHostDelegateFileReader } from "./host-delegate-files.js";
 import { extensionKvGet } from "../../src/db/extension-kv.js";
 import { createHostPlanTool } from "./host-plan-tool.js";
+import { createHostOperationAuthority } from "./host-operation-authority.js";
 import { createHostCodeReviewTool } from "./host-code-review-tool.js";
 import { createHostEditableTableTool, type WidgetPublisher } from "./host-editable-table-tool.js";
 import { createHostOfficeViewerTool } from "./host-office-viewer-tool.js";
@@ -39,6 +42,25 @@ const ApplicationConversations = defineDoc({ kind: "app.application-conversation
 
 type ApplicationMapping = { version: number; domain: string; bindings: { chatJid: string; branchId: string; conversationId: number; sessionId: string }[] };
 const defaultToolNames = ["read", "bash", "edit", "write", "find", "ls", "grep"] as const;
+
+/** Decorate only this executor's public commit port. The SDK owns the SQL
+ * transaction; both checks run under its write lock, including store/result and
+ * run-journal commits. Private memo/task bookkeeping and parent settlement keep
+ * their original API and lifecycle; this is not a global storage policy. */
+function withGuardedCommit(api: ToolExecutionApi, assertCurrent: () => void): ToolExecutionApi {
+  const originalCommit = api.commit.bind(api);
+  const commit: ToolExecutionApi["commit"] = (body, context) => originalCommit(async tx => {
+    assertCurrent();
+    const value = await body(tx);
+    assertCurrent();
+    return value;
+  }, context);
+  return new Proxy(api, { get(target, key) {
+    if (key === "commit") return commit;
+    const value = Reflect.get(target, key, target);
+    return typeof value === "function" ? value.bind(target) : value;
+  } });
+}
 const isOldDefault = (tools: unknown) => Array.isArray(tools) &&
   ((tools.length === 1 && tools[0] === "bash") ||
     (tools.length === 6 && defaultToolNames.slice(0, 6).every((name, i) => tools[i] === name)));
@@ -166,11 +188,16 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   let widgetPublisher: WidgetPublisher | undefined;
   try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan, delegate, codeReview, editableTable, officeViewer, drawio); }
   finally { catalog.runtime.invalidate("Application extension preflight ended"); }
-  const applicationToolNames: readonly string[] = [...defaultToolNames, ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : []), ...(drawio ? ["open_drawio_editor"] : [])];
-  const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || ((!!plan || !!delegate || !!codeReview || !!editableTable || !!officeViewer || !!drawio) && Array.isArray(tools) &&
-    tools.length === defaultToolNames.length && defaultToolNames.every((name, index) => tools[index] === name));
+  const applicationToolNames: readonly string[] = [...defaultToolNames, "codemode", ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : []), ...(drawio ? ["open_drawio_editor"] : [])];
+  const previousDefault = applicationToolNames.filter(name => name !== "codemode");
+  const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || (Array.isArray(tools) &&
+    ((tools.length === defaultToolNames.length && defaultToolNames.every((name, index) => tools[index] === name)) ||
+      (tools.length === previousDefault.length && previousDefault.every((name, index) => tools[index] === name))));
   const lifetime = new AbortController();
   let drawioHost: ReturnType<DrawioNativeExports["bindDrawioVendorHost"]> | undefined;
+  let sandbox: CodemodeSandbox | undefined;
+  let sandboxClose: Promise<void> | undefined;
+  const closeSandbox = () => sandboxClose ??= sandbox?.close() ?? Promise.resolve();
   const releaseReviewSource = codeReview?.addon.setReviewDatabaseSource({ database: root, assertOwner: assert });
   try {
   if (drawio) {
@@ -270,8 +297,11 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const tools = createHostBuiltinTools({ cwd: WORKSPACE_DIR,
     async captureSourceGuard(call) {
       const captured = await runtime().captureToolSource(call.conversationId, call.taskId, call.toolCallId);
+      const authority = createHostOperationAuthority(root, captured, () => {
+        assert(); lifetime.signal.throwIfAborted(); runtime().assertCapturedSourceCurrent(captured.inputs);
+      }, true);
       return () => {
-        runtime().assertCapturedSourceCurrent(captured.inputs);
+        authority.assertCurrent();
         if (captured.delegateModel) assertDelegateModel(captured.delegateModel);
       };
     }, authority: { assertAllowed() {
@@ -326,6 +356,21 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       }, readFiles: createHostDelegateFileReader(WORKSPACE_DIR), readonlyTools: readers, readonlyExtensions: [readerExtension], standardTools: builtins, standardExtensions: [standardExtension],
     }));
   }
+  sandbox = new CodemodeSandbox({ memoryLimitBytes: 128 * 1024 * 1024 });
+  // Native tool description includes discovery instructions. Deliberately no dynamic
+  // declaration section: scheduled model overrides retain their fail-closed budget.
+  const codemode = createCodemodeTool({ sandbox, models: false });
+  tools.push(defineTool<typeof codemode.parameters>({ ...codemode, async execute(args, api, context) {
+    const captured = await runtime().captureToolSource(api.conversationId, api.taskId, api.callId);
+    const authority = createHostOperationAuthority(root, captured, () => {
+      assert(); lifetime.signal.throwIfAborted(); runtime().assertCapturedSourceCurrent(captured.inputs);
+    }, true);
+    const assertCurrent = authority.assertCurrent;
+    assertCurrent();
+    const result = await codemode.execute(args, withGuardedCommit(api, assertCurrent), context);
+    assertCurrent();
+    return result;
+  } }));
   registry.install(defineExtension({ name: "app.host-builtins", tools }));
   if (plan) registry.install(createHostPlanPrompt(plan.addon, { root, runtime,
     assertOwner() { assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent(); }, failClosed(error) { lifetime.abort(error); } }));
@@ -435,7 +480,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       assert(); check(ref, lifetime.signal);
       return Object.freeze(binding);
     },
-    runtime: { incarnation: mapping.domain, sessionId: mapping.domain, lane: "main", generation: 1, now: () => new Date().toISOString(), harnessOptions } }, context);
+    runtime: { incarnation: mapping.domain, sessionId: mapping.domain, lane: "main", generation: 1, now: () => new Date().toISOString(), harnessOptions,
+      codemodeExecute: tools.find(tool => tool.name === "codemode")!.execute } }, context);
   return { sessionOptions: bundle.sessionOptions, bind: bundle.bind,
     attachChannel(channel) {
       assert(); lifetime.signal.throwIfAborted();
@@ -451,15 +497,18 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       widgetPublisher = undefined; workspaceFileOpener = undefined; lifetime.abort();
       // close seals routing synchronously; final close below joins owned cleanup.
       void drawioHost?.close().catch(() => {});
+      void closeSandbox().catch(() => {});
       bundle.stop();
     }, async close() {
       widgetPublisher = undefined; workspaceFileOpener = undefined;
-      lifetime.abort(); releaseReviewSource?.(); await drawioHost?.close(); await bundle.close();
+      lifetime.abort(); releaseReviewSource?.(); await closeSandbox(); await drawioHost?.close(); await bundle.close();
     } };
   } catch (error) {
     lifetime.abort(); releaseReviewSource?.();
-    try { await drawioHost?.close(); }
-    catch (cleanup) { throw new RuntimeStartupCleanupError([error, cleanup], "Draw.io preparation cleanup uncertain"); }
+    const cleanupFailures: unknown[] = [];
+    try { await closeSandbox(); } catch (cleanup) { cleanupFailures.push(cleanup); }
+    try { await drawioHost?.close(); } catch (cleanup) { cleanupFailures.push(cleanup); }
+    if (cleanupFailures.length) throw new RuntimeStartupCleanupError([error, ...cleanupFailures], "Native tool preparation cleanup uncertain");
     throw error;
   }
 }

@@ -106,6 +106,6 @@ export function createHostBuiltinTools(options: {
           await pending?.catch(() => {});
         }
       },
-    });
+    }, { callers: options.captureSourceGuard ? ["model", "tools"] : ["model"] });
   });
 }

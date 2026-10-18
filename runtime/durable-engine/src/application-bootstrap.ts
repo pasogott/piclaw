@@ -62,7 +62,7 @@ export interface ApplicationBootstrapOptions {
   /** Host-owned physical catalog approval; no credentials or provider execution. */
   resolveScheduledModel?: (label: string) => { provider: string; modelId: string };
   createConversation?: (tx: import("@earendil-works/pi-durable").Tx, chatJid: string, branchId: string) => Promise<Manifest[number] & { sessionId: string }>;
-  runtime: Pick<HostControllerOptions["runtime"], "incarnation" | "sessionId" | "lane" | "generation" | "harnessOptions" | "now">;
+  runtime: Pick<HostControllerOptions["runtime"], "incarnation" | "sessionId" | "lane" | "generation" | "harnessOptions" | "now" | "codemodeExecute">;
   /** Existing application payload store, with immutable answer references. */
   answers: { resolver: EffectPayloadResolver; put(ref: string, text: string): void | Promise<void> };
   /** Optional acknowledgement boundary; the supplied operation still performs the real wait. */

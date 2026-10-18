@@ -34,6 +34,7 @@ export interface HostToolEffectPort<P extends TSchema, D extends JsonValue> {
  */
 export function createHostTool<P extends TSchema, D extends JsonValue>(
   tool: ToolDefinition<P, D>, host: HostToolEffectPort<P, D>,
+  options: { callers?: readonly ("model" | "tools")[] } = {},
 ): ToolRegistration<P, D> {
   if (tool.outputSchema || tool.reachesTools) throw new Error("Host bridge does not support structured or nested tools");
   if (host.effectFence !== "host-effect-port") throw new Error("Host effect port required");
@@ -60,7 +61,7 @@ export function createHostTool<P extends TSchema, D extends JsonValue>(
       }
     } : undefined,
     executionMode: tool.executionMode,
-    callers: ["model"], replay: host.replay ?? "unsafe",
+    callers: options.callers ?? ["model"], replay: host.replay ?? "unsafe",
     async execute(args, api, context) {
       let active = true;
       const assertAllowed = () => {
