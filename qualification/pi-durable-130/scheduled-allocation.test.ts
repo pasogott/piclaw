@@ -120,15 +120,17 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
   const assert = () => lock.assertCurrentOwner();
   const fixture = await openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(new BunSqliteDatabase(path, { root: db, assertOwner: assert })));
   const parent = fixture.root.id;
+  const empty = await fixture.harness.createConversation({ ownership: { kind: "ownerless" }, agent: { model: { provider: "qualification", modelId: "synthetic" } } }, context);
   await fixture.root.commit(tx => tx.appendEntry(parent, { kind: "pi.user", model: [{ role: "user", content: "main history", timestamp: 1 }] }), context);
   const history = db.query("SELECT * FROM entries ORDER BY id").all();
   await fixture.close();
-  const chat = `web:side-allocation-${failBinding}`, manifest = [{ chatJid: chat, branchId: "main", conversationId: parent }];
+  const chat = `web:side-allocation-${failBinding}`, emptyChat = `${chat}-empty`, manifest = [
+    { chatJid: chat, branchId: "main", conversationId: parent }, { chatJid: emptyChat, branchId: "main", conversationId: empty.id }];
   let activeRuntime!: import("../../runtime/durable-engine/src/host-runtime.js").HostConversationRuntime;
   const payloads = new Map<string, string>();
   let acceptMainDuringPayload = false;
   const createBundle = () => createApplicationBootstrapBundle({ root: db, path, ownership: applicationOwnership(lock), manifest,
-    sessions: new Map([[chat, "original"]]), offlineInitialize: true, onRuntime(runtime) { activeRuntime = runtime; },
+    sessions: new Map([[chat, "original"], [emptyChat, "empty-original"]]), offlineInitialize: true, onRuntime(runtime) { activeRuntime = runtime; },
     runtime: { incarnation: "side-allocation", sessionId: "side-allocation", lane: "main", generation: 1,
       now: () => new Date().toISOString(), harnessOptions: { models: fixture.models, registry: fixture.registry } },
     answers: { resolver: { resolve(ref) {
@@ -147,6 +149,13 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
   let bundle = await createBundle();
   const work = value(createCurrentPiclawServiceWorkStore(db, { hitFault: () => false, recordTrace() {} }));
   try {
+    const emptySnapshot = ["service_effect_s01_sources", "service_effect_s01_operations", "service_effect_s01_decisions", "conversations"]
+      .map(table => db.query(`SELECT * FROM ${table}`).all());
+    const payloadCount = payloads.size;
+    await expect(bundle.dispatchSidePrompt(emptyChat, "must not claim")).rejects.toThrow("Side prompt history unavailable");
+    expect(["service_effect_s01_sources", "service_effect_s01_operations", "service_effect_s01_decisions", "conversations"]
+      .map(table => db.query(`SELECT * FROM ${table}`).all())).toEqual(emptySnapshot);
+    expect(payloads.size).toBe(payloadCount);
     const id = `side-prompt:${crypto.randomUUID()}`, prompt = "isolated follow-up";
     payloads.set(id, prompt);
     const source = value(await work.acceptSource(sealed({ effect: effect(`side-accept:${id}`), chatJid: chat, sourceId: id, kind: "internal" as const,

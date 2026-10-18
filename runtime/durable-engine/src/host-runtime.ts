@@ -240,9 +240,9 @@ export class HostConversationRuntime {
     return this.allocateIsolatedFork(parentId, allocated, model);
   }
   allocateSidePromptFork(parentId: ConversationId, allocated: (id: ConversationId) => void): Promise<ConversationId> {
-    return this.allocateIsolatedFork(parentId, allocated);
+    return this.allocateIsolatedFork(parentId, allocated, undefined, true);
   }
-  private allocateIsolatedFork(parentId: ConversationId, allocated: (id: ConversationId) => void, model?: { provider: string; modelId: string }): Promise<ConversationId> {
+  private allocateIsolatedFork(parentId: ConversationId, allocated: (id: ConversationId) => void, model?: { provider: string; modelId: string }, requireHistory = false): Promise<ConversationId> {
     const choice = model && Object.freeze({ provider: model.provider, modelId: model.modelId });
     return this.observe(async () => {
       const target = choice && this.options.harnessOptions.models.getModel(choice.provider, choice.modelId);
@@ -256,6 +256,7 @@ export class HostConversationRuntime {
       if (!this.options.existingConversationIds.includes(parentId)) throw Error("Unknown scheduled root");
       const page = await tx.scanEntries({ conversationId: parentId, order: "descending" }, 1);
       const head = page.items[0];
+      if (requireHistory && !head) throw Error("Side prompt history unavailable");
       if (choice && head?.id !== position) throw Error("Scheduled parent changed");
       const agent = await tx.doc(AgentDoc, parentId);
       if (target && view) this.assertContextFitsModel(view.messages, agent, target);

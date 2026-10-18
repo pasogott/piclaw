@@ -352,6 +352,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 100_000) throw Error("Invalid side prompt");
       const scope = routeIndex.get(chatJid);
       if (!scope) throw Error("Unbound side prompt chat");
+      if (await runtime.readSessionPosition({ incarnation: r.incarnation, ...scope }) === null) throw Error("Side prompt history unavailable");
+      assertLive();
       const sourceId = `side-prompt:${crypto.randomUUID()}`;
       // Immutable payload may outlive denied admission; it never grants authority.
       await config.answers.put(sourceId, prompt); assertLive();
