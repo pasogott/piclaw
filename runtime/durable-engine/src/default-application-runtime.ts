@@ -201,8 +201,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     }
     if (toolUpgrades.length) { assert(); assertToolUpgradeIdle(root); }
   }
-  // Restricted native profile: inherit only the approved parent model. The
-  // installed add-on's own classification/exclusion policy remains authoritative.
+  // Automatic selection inherits the parent; explicit exact models use the same
+  // installed approval/classification/exclusion policy, without a parent-tier cap.
   const assertDelegateModel = (model: { provider: string; modelId: string }) => {
     if (!delegate) throw Error("Native Delegate unavailable");
     delegate.assertCurrent(); check({ provider: model.provider, id: model.modelId }, lifetime.signal);
@@ -264,11 +264,19 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     tools.push(createHostDelegateTool(delegate.definition as Parameters<typeof createHostDelegateTool>[0], {
       assertCurrent() { assert(); lifetime.signal.throwIfAborted(); delegate.assertCurrent(); }, runtime,
       async selectModel(args, parent) {
-        if (!parent) throw Error("Delegate parent model required");
-        const fullId = `${parent.provider}/${parent.modelId}`;
-        if (args.model !== undefined && args.model !== fullId) throw Error("Native Delegate supports parent model inheritance only");
         if (args.task_category !== undefined && !["quick", "summarize", "code", "analyze", "reason"].includes(String(args.task_category))) throw Error("Native Delegate task category not qualified");
-        assertDelegateModel(parent); return parent;
+        let model = parent;
+        if (args.model !== undefined) {
+          if (typeof args.model !== "string") throw Error("Delegate model must be an exact provider/model ID");
+          const slash = args.model.indexOf("/");
+          if (slash <= 0 || slash === args.model.length - 1) throw Error("Delegate model must be an exact provider/model ID");
+          const provider = args.model.slice(0, slash), modelId = args.model.slice(slash + 1);
+          const exact = available.find(entry => entry.provider === provider && entry.id === modelId);
+          if (!exact) throw Error("Native Delegate model unavailable");
+          model = { provider: exact.provider, modelId: exact.id };
+        }
+        if (!model) throw Error("Delegate parent model required");
+        assertDelegateModel(model); return model;
       }, assertModelCurrent: assertDelegateModel, readonlyTools: readers, readonlyExtensions: [readerExtension],
     }));
   }

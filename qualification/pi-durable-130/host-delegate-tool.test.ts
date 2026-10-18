@@ -16,7 +16,7 @@ import { storeChatMetadata } from "../../runtime/src/db.ts";
 
 // Core consumer tests with explicitly synthetic authority/schema. These do NOT
 // qualify installed Delegate content, Settings, host source capture or budgets.
-for (const mode of ["parallel", "denied", "files", "timeout", "timeout-fraction", "timeout-string", "timeout-large", "mutating-tools"] as const) {
+for (const mode of ["parallel", "denied", "files", "timeout", "timeout-fraction", "timeout-string", "timeout-large", "mutating-tools", "model-type", "model-short", "model-empty-provider", "model-empty-id"] as const) {
   test(`host native Delegate factory: ${mode}`, async () => {
     const f = await openFixture({ acquired: true });
     const release = barrier(), entered = barrier();
@@ -25,7 +25,7 @@ for (const mode of ["parallel", "denied", "files", "timeout", "timeout-fraction"
       execute: async () => ({ output: [{ type: "text", text: "reader" }] }) });
     const readerExtension = defineExtension({ name: "native-readers", tools: [read] });
     f.registry.install(readerExtension);
-    const parameters = Type.Object({ prompt: Type.String(), model: Type.Optional(Type.String()),
+    const parameters = Type.Object({ prompt: Type.String(), model: Type.Optional(Type.Any()),
       files: Type.Optional(Type.Array(Type.String())), timeout_sec: Type.Optional(Type.Any()), tools: Type.Optional(Type.String()) });
     const tool = createHostDelegateTool({ name: "delegate", description: "Synthetic registered declaration", parameters }, {
       assertCurrent() {},
@@ -43,6 +43,7 @@ for (const mode of ["parallel", "denied", "files", "timeout", "timeout-fraction"
       const calls = !child && !transcript.messages.some(message => message.role === "toolResult");
       const output = createAssistantMessageEventStream();
       const args = { prompt: "CHILD_TASK", tools: mode === "mutating-tools" ? "bash" : "read_only",
+        ...(mode.startsWith("model-") ? { model: ({ "model-type": 42, "model-short": "synthetic", "model-empty-provider": "/synthetic", "model-empty-id": "qualification/" } as Record<string, string | number>)[mode] } : {}),
         ...(mode === "files" ? { files: ["file.txt"] } : {}), ...(mode.startsWith("timeout") ? { timeout_sec: ({ timeout: -1, "timeout-fraction": 10.5, "timeout-string": "10", "timeout-large": 301 } as Record<string, string | number>)[mode] } : {}) };
       const message: AssistantMessage = { role: "assistant", api: model.api, provider: model.provider, model: model.id,
         timestamp: 1, stopReason: calls ? "toolUse" : "stop", content: calls

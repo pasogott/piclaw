@@ -1,11 +1,74 @@
-# Scheduled model overrides — source follow-up over `e5ca1b67d`
+# Native Delegate explicit models — source follow-up over `98e0676af`
+
+The native Delegate now accepts an explicit exact approved `provider/model` choice.
+Four dirty core source/test files contain this follow-up over published HEAD
+`98e0676af`; full qualification has completed. No future commit hash is assigned.
+
+Explicit selection matches the captured approved available physical catalogue and
+rechecks current host policy. The installed actual `buildModelCandidates` supplies
+approved-provider, ordered classification and exclusion checks; no new policy map
+was added. Automatic selection still inherits the parent. Explicit selection uses
+the existing CLI `validateExplicit` semantics: it can override the automatic
+parent-tier restriction, including a higher-tier model, but grants no additional
+approval. IDs split at the first slash, preserving slashes within model IDs.
+Short, fuzzy, virtual, empty, non-string, unavailable, unclassified and excluded
+provider/model choices fail without a fallback child.
+
+Public `api.memo("model", …)` pins the choice on replay. Current source/model
+assertions run before creation and after settlement. Child generation,
+post-authentication `transformHeaders` and filesystem-effect guards check the
+actual selected child model. A different physical child model leaves the parent
+on its root model. Existing absolute persisted deadlines and ownership scopes
+are unchanged.
+
+Existing receipts under `/workspace/reviews/durable-1650/`:
+
+- `delegate-explicit-current-tests.log`: 43 pass, 0 fail, 167 assertions across
+  two files. Thirteen actual-default explicit cases cover parent, smaller,
+  higher-tier and slash-bearing IDs, plus unavailable, unclassified, excluded
+  provider/model, non-string, empty, short, fuzzy and virtual rejection. Invalid
+  cases create no child and do not fall back. Cap/provider revocation scenarios
+  now use explicit different-model child B and check policy against B.
+- `delegate-explicit-{root,engine,qualification}-types.log`: all three scoped
+  typechecks pass after correcting the fixture's `unknown` JSON type. Earlier
+  initial test failure used the wrong `DURABLE_CODE_REVIEW_ROOT` source hash;
+  no assertion or policy was weakened.
+- `delegate-explicit-full-candidate.log`: 510 pass / 7,292 assertions, 42 files.
+  `delegate-explicit-simplified-root.log`: 7,312 pass, 74 baseline skips,
+  0 fail, plus 25 feature and 9 build tests. Both inner runs completed normally;
+  interrupted outer wrappers supplied no exit-code receipts.
+- Two earlier full-root attempts timed out in scheduled-store/retention tests.
+  Their focused rerun passed 38 tests. The ordering-only retention fixture now
+  derives 100 valid receipt pairs from one real failed run, preserving parser,
+  assertions and 15-second budget; no production durability setting changed.
+
+Published CI fix `98e0676af` separates historical add-on fixtures
+(`DURABLE_ADDONS_ROOT`, `de92bc95b5b3bb1505beec9617d3b8a5e4fa92d3`) from native
+Code Review source (`DURABLE_CODE_REVIEW_ROOT`,
+`d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f`) in separate checkouts. Previous hosted
+core failures came from the source-hash mismatch. Exact-head hosted status is
+green for `98e0676af` (run `39086238913`); the new exact-head run is separate.
+
+All 45 statuses stay 22 source-qualified / 17 fixture-only / 3 blocked-publicAPI /
+3 migration/perf-unverified. Attachments, wider-than-read-only tools and any enabled
+Delegate cap still deny; numeric global concurrency and native capped request
+accounting are unqualified. Scheduler model overrides are implemented at
+`e3d248a01`, with candidate 493 / 7,255 and root 7,312 + 25 + 9 passing, exit 0.
+Deadlines are published at `e5ca1b67d`; all-nine Code Review source stays core
+`4e1ffe2fe` / add-on `d1ce8c6f`. The 17 fixture-only requirements, three exact
+atomic running-abort gaps and production performance still need acceptance.
+Migration stays last. This refresh changes documentation only: no code, test, CI,
+pin, network, service, live-state, migration, commit or push operation ran.
+
+# Scheduled model overrides — published `e3d248a01`
 
 Native EF-S07 schedules now resolve captured `model_label` values from the canonical
 task revision to an approved, currently available physical model through the root
 ModelRuntime. Resolution performs no LLM request or credential lookup. The source
-guard rechecks source and model approval before the public fork commit. The six
-modified core source/test files are frozen while full gates run; no future commit
-hash is assigned.
+guard rechecks source and model approval before the public fork commit. The
+scheduler change is published at `e3d248a01`; its completed full-gate receipts are
+below. The four dirty source/test files now belong to the separate Delegate
+explicit-model follow-up above.
 
 The allocator captures an immutable choice, checks the inherited context, copies
 the parent's `AgentDoc` and configures the fork model in the same public SDK commit
@@ -38,8 +101,9 @@ PC-012 gains bounded model-override coverage. All 45 statuses stay 22
 source-qualified / 17 fixture-only / 3 blocked-publicAPI /
 3 migration/perf-unverified. Enabled applicable scheduler caps and all enabled
 Delegate caps still deny; native capped request accounting is unqualified.
-Delegate explicit different-model selection and attachments still reject. Other
-add-ons, the 17 fixture-only requirements and production performance need
+Delegate explicit different-model selection now has the bounded source coverage
+above; attachments still reject. Other add-ons, the 17 fixture-only requirements
+and production performance need
 acceptance. Migration stays last. No code, test, CI, pin, network, service,
 migration, commit or push operation ran for this documentation refresh.
 
@@ -49,7 +113,8 @@ The current native Delegate accepts `timeout_sec`: default 120 seconds, integer
 10..300. Validation precedes child allocation. Public `api.memo("deadline", …)`
 persists an absolute operation-entry expiry before source capture or model approval
 awaits; replay cannot renew it. The deadline change over core `4e1ffe2fe` is
-published in `e5ca1b67d`; it is separate from the scheduler source follow-up above.
+published in `e5ca1b67d`; it precedes the published scheduler model overrides and
+current Delegate explicit-model follow-up above.
 
 The child wait races the remaining deadline. Cleanup clears the timer on success,
 error, cancellation and timeout. Timeout calls the invocation-bound owned
@@ -82,12 +147,13 @@ Existing receipts under `/workspace/reviews/durable-1650/`:
   barrier (`deadline-actual-synchronized.log`: 1 pass / 34 assertions). Earlier
   disk/rollback and note-retrieval timeout failures remain in their logs; no
   assertion, timeout or resource limit was weakened.
-- Exact-head hosted qualification for published `e5ca1b67d` is pending/unknown;
-  no hosted query ran for this refresh.
+- Historical hosted core failures were traced to add-on source-hash mismatch;
+  published `98e0676af` separates those checkouts. Its exact-head hosted status
+  is awaited; no hosted query ran for this refresh.
 
-Attachments, different-model selection and read/write or full Delegate tools
-still reject. Any enabled budget cap denies; native request accounting is
-unqualified. Numeric global concurrency is not implemented. All 45 statuses stay
+Attachments and read/write or full Delegate tools still reject. Explicit exact
+model selection has the bounded source coverage above. Any enabled budget cap
+denies; native request accounting is unqualified. Numeric global concurrency is not implemented. All 45 statuses stay
 22 source-qualified / 17 fixture-only / 3 blocked-publicAPI /
 3 migration/perf-unverified. Child deadlines do not fix the atomic exact-running
 parent cancellation gap in HC-009/PC-004/PC-015. No activation or migration ran.
@@ -111,15 +177,16 @@ thread versions bound the state change. Idempotent receipts recheck authority;
 revocation before root commit rolls back the mutation and receipt.
 
 All-nine Code Review source was published at core `4e1ffe2fe`. Current worktree
-HEAD is `e5ca1b67d`; its six dirty core source/test files belong to the separate
-scheduler model-override follow-up above.
+HEAD is `98e0676af`; its four dirty core source/test files belong to the separate
+Delegate explicit-model follow-up above. Scheduler overrides are published at
+`e3d248a01`.
 Add-on PR #208 and the core qualification CI checkout select
 `d1ce8c6f2e5ea6d5330728aa8a6a3684bf5c3d4f`. This qualifies source only; installed
 package pins and versions are unchanged. No live installation or hosted success
 is established by these receipts.
 
 Exact previous Code Review receipts under `/workspace/reviews/durable-1650/`
-(separate from published deadline results and the running scheduler gates):
+(separate from published deadline/scheduler results and running Delegate gates):
 
 - `code-review-work-actual.log`: actual-default 1 pass / 59 assertions, including
   `work` → `in_progress`, stale-item and cross-chat denial, `completed` after the
@@ -141,9 +208,9 @@ does not qualify every PC row. Operator/browser dispatch queue and delivery thro
 durable ingress still need representative acceptance. Earlier root direct-API tests
 and the actual new shared read establish bounded core behaviour without a provider;
 they do not establish that ingress/delivery path. No missing `work` worker is required.
-Delegate different-model selection, attachments and enabled budget caps still
-reject; deadlines use the current bounded profile above. Scheduler model overrides have the bounded source coverage above; native capped
-accounting, other add-ons/events, exact atomic current-task cancellation, the 17
+Delegate explicit different-model selection and deadlines use the bounded profiles
+above; attachments and enabled budget caps still reject. Scheduler model overrides
+have the bounded source coverage above; native capped accounting, other add-ons/events, exact atomic current-task cancellation, the 17
 fixture-only requirements and production performance
 still need acceptance. Migration stays last: preserve the old `reviews.db`; no copy
 or conversion ran. This refresh changes documentation only, with no code/test/network,

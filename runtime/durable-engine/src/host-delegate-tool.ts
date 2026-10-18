@@ -37,6 +37,11 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
       const supported = ["prompt", "model", "tools", "task_category", "system_prompt", "files", "timeout_sec"];
       if (Object.keys(args).some(key => !supported.includes(key))) throw Error("Unsupported native Delegate option");
       if (typeof args.prompt !== "string" || !args.prompt.trim()) throw Error("Delegate prompt required");
+      if (args.model !== undefined) {
+        if (typeof args.model !== "string") throw Error("Delegate model must be an exact provider/model ID");
+        const slash = args.model.indexOf("/");
+        if (slash <= 0 || slash === args.model.length - 1) throw Error("Delegate model must be an exact provider/model ID");
+      }
       // Keep the installed declaration's default and bounds even for synthetic
       // schemas: reject invalid input before allocating any child.
       if (args.files !== undefined && (!Array.isArray(args.files) || args.files.length)) throw Error("Native Delegate attachments are not qualified");
