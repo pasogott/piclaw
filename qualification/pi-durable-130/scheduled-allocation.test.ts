@@ -279,6 +279,46 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
     expect(db.query("SELECT count(*) AS n FROM service_effect_s01_sources WHERE source_id=?").get(recoveringId)).toEqual({ n: 1 });
     expect(db.query("SELECT message_row_id FROM service_effect_s02_commits WHERE operation_id=?").get(recovering.operation.operationId)).toEqual({ message_row_id: null });
     expect(db.query("SELECT * FROM entries WHERE conversation_id=? ORDER BY id").all(parent)).toEqual(beforeRun);
+    for (const abortFails of [false, true]) {
+    const abortJoined = barrier(), releaseAbort = barrier();
+    const realAbort = activeRuntime.abortSidePrompt.bind(activeRuntime), realWait = activeRuntime.wait.bind(activeRuntime);
+    const failingSignal = new AbortController();
+    const waitFailure = Error("synthetic side wait observation failure");
+    const abortFailure = Error("synthetic abort observation failure");
+    let abortFinished = false, dispatchFinished = false;
+    activeRuntime.abortSidePrompt = async input => {
+      abortJoined.release();
+      await releaseAbort.promise;
+      await realAbort(input);
+      abortFinished = true;
+      if (abortFails) throw abortFailure;
+    };
+    activeRuntime.wait = async () => { failingSignal.abort(); throw waitFailure; };
+    try {
+      const failed = bundle.dispatchSidePrompt(chat, "join abort despite wait failure", { signal: failingSignal.signal });
+      const observed = failed.then(() => { dispatchFinished = true; return null; }, error => { dispatchFinished = true; return error; });
+      await abortJoined.promise;
+      await Bun.sleep(0);
+      expect(dispatchFinished).toBe(false);
+      expect(abortFinished).toBe(false);
+      releaseAbort.release();
+      const failure = await observed;
+      if (abortFails) {
+        expect(failure).toBeInstanceOf(AggregateError);
+        expect((failure as AggregateError).errors).toEqual([waitFailure, abortFailure]);
+      } else expect(failure).toBe(waitFailure);
+      expect(abortFinished).toBe(true);
+    } finally {
+      releaseAbort.release();
+      activeRuntime.abortSidePrompt = realAbort;
+      activeRuntime.wait = realWait;
+    }
+    // Observation failure deliberately leaves the cancelled operation owned.
+    // Its sources are retired only by explicit same-operation settlement.
+    const interrupted = db.query("SELECT s.source_id FROM service_effect_s01_sources s JOIN service_effect_s01_chats c ON c.chat_jid=s.chat_jid JOIN service_effect_s01_operations o ON o.operation_id=c.active_operation_id AND o.primary_source_seq=s.source_seq WHERE s.chat_jid=?").get(chat) as { source_id: string };
+    const interruptedBinding = await bindings.findSource(chat, work.getAcceptedSource(chat, interrupted.source_id)!.sourceSeq);
+    expect(await activeRuntime.settle(interruptedBinding!)).not.toBeNull();
+    }
     acceptMainDuringPayload = true;
     const sourceCount = db.query("SELECT count(*) AS n FROM service_effect_s01_sources WHERE chat_jid=?").get(chat) as { n: number };
     await expect(bundle.dispatchSidePrompt(chat, "races main input")).rejects.toThrow("owner_conflict");

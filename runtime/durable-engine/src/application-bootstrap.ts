@@ -387,15 +387,25 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           void cancelling.catch(() => {}); // Joined below; never leave listener rejection unobserved.
         };
         signal?.addEventListener("abort", cancel, { once: true });
+        let waitFailed = false, waitError: unknown;
         try {
           if (signal?.aborted) cancel();
           if (cancelling) await cancelling;
           else await runtime.wait(allocated, id, shutdown.signal);
           if (cancelling) await cancelling;
+        } catch (error) {
+          waitFailed = true; waitError = error;
         } finally {
           signal?.removeEventListener("abort", cancel);
-          if (cancelling) await cancelling;
+          if (cancelling) {
+            try { await cancelling; }
+            catch (error) {
+              if (waitFailed && error !== waitError) throw new AggregateError([waitError, error], "Side wait and cancellation failed");
+              throw error;
+            }
+          }
         }
+        if (waitFailed) throw waitError;
         const state = await runtime.reconcile(allocated);
         if (state.operation.cancellation) {
           if (!await runtime.settle(allocated)) throw Error("Side cancellation settlement pending");
