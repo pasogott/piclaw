@@ -343,6 +343,24 @@ export class HostConversationRuntime {
       return buildSessionTreeSnapshot({ getLeafId: () => leafId, getTree: () => roots }, { visibleLeafId });
     });
   }
+  /** Detached provider-ready transcript for an isolated side prompt; no session hydration or writes. */
+  readSidePromptContext(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<{ model: string; thinkingLevel: string; messages: unknown[] }> {
+    const copy = Object.freeze({ incarnation: binding.incarnation, chatJid: binding.chatJid, branchId: binding.branchId, conversationId: binding.conversationId });
+    return this.observe(async () => {
+      const o = this.options;
+      if (copy.incarnation !== o.incarnation || !o.existingConversationIds.some(id => id === copy.conversationId) ||
+        o.conversationFor(copy.chatJid, copy.branchId) !== copy.conversationId) throw Error("Host binding conflict");
+      const conversation = await this.harness.conversation(copy.conversationId as ConversationId, this.context); this.fence();
+      if (!conversation) throw Error("Missing existing conversation");
+      const agent = await conversation.agent(this.context); this.fence();
+      const view = await conversation.context(this.context); this.fence();
+      const current = await conversation.agent(this.context); this.fence();
+      if (JSON.stringify(current) !== JSON.stringify(agent)) throw Error("Side prompt agent changed");
+      if (!agent.model) throw Error("No model configured");
+      return { model: `${agent.model.provider}/${agent.model.modelId}`, thinkingLevel: agent.thinkingLevel ?? "off",
+        messages: JSON.parse(JSON.stringify(view.messages)) as unknown[] };
+    });
+  }
   /** Read only the public persisted agent choice, not resolved host defaults or response metadata. */
   private readSessionChoice(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<{ model: string | null; thinkingLevel: string | null }> {
     const copy = Object.freeze({ incarnation: binding.incarnation, chatJid: binding.chatJid,
