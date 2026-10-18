@@ -1,4 +1,5 @@
 import "./src/test-guard.js";
+import { delegateImages } from "./delegate-image-fixtures.ts";
 import { expect, test, spyOn } from "bun:test";
 import { SessionManager, SettingsManager, ModelRuntime, ModelRegistry } from "../../node_modules/@earendil-works/pi-coding-agent";
 import { getPiclawAgentDir } from "../../runtime/src/core/agent-dir.js";
@@ -116,7 +117,7 @@ const explicitDelegateCases: Record<string, { id: string; model: unknown; denied
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["public-conversations", "custom-subset", "pending-host", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
+for (const scenario of ["public-conversations", "custom-subset", "pending-host", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -164,8 +165,9 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   const revokeDelegate = scenario === "native-delegate-revoke-cap" || scenario === "native-delegate-revoke-provider" || scenario === "native-delegate-standard-revoke";
   const timeoutDelegate = scenario === "native-delegate-timeout";
   const explicitDelegate = explicitDelegateCases[scenario];
-  const delegateFiles = scenario === "native-delegate-files";
-  if (delegateFiles) writeFileSync(join(workspace, "delegate-task"), "NATIVE_FILE_BYTES\r\n\t");
+  const delegateImagesCase = scenario === "native-delegate-images";
+  const delegateFiles = scenario === "native-delegate-files" || delegateImagesCase;
+  if (delegateFiles) writeFileSync(join(workspace, "delegate-task"), delegateImagesCase ? Buffer.from(delegateImages.png, "base64") : "NATIVE_FILE_BYTES\r\n\t");
   const nativeDelegate = writeDelegate || delegateFiles || scenario === "native-delegate" || scenario === "native-delegate-denied" || revokeDelegate || timeoutDelegate || !!explicitDelegate;
   const delegateAllowed = writeDelegate || delegateFiles || scenario === "native-delegate" || timeoutDelegate || (!!explicitDelegate && !explicitDelegate.denied);
   const realTimer = globalThis.setTimeout;
@@ -210,7 +212,7 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
   const bothChildren = new Promise<void>(resolve => { releaseChildren = resolve; });
   // Leave room for the real built-in schemas and idle-model framing reserve.
   model.contextWindow = 100000;
-  const modelB = { ...model, id: explicitDelegate?.id ?? (revokeDelegate ? "gpt-5-mini" : scenario === "native-scheduler" ? "approved/b" : "approved-b"), contextWindow: 200000 };
+  const modelB = { ...model, input: delegateImagesCase ? ["text", "image"] : model.input, id: delegateImagesCase ? "gpt-5-mini" : explicitDelegate?.id ?? (revokeDelegate ? "gpt-5-mini" : scenario === "native-scheduler" ? "approved/b" : "approved-b"), contextWindow: 200000 };
   const childModels: string[] = [];
   const observedResults = new Map<string, { toolName: string; isError?: boolean; content: unknown }>();
   const stream = (physical: typeof model, input: { messages: { role: string; toolCallId?: string; toolName?: string; isError?: boolean; content: unknown }[] }, options?: { signal?: AbortSignal }) => {
@@ -220,13 +222,18 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
     planRequests.push(JSON.stringify(input));
     calls++; const stream = createAssistantMessageEventStream();
     const child = nativeDelegate && JSON.stringify(input.messages.findLast(message => message.role === "user")?.content).includes("NATIVE_DELEGATE_CHILD");
+    if (delegateImagesCase && !child) expect(JSON.stringify(input)).not.toContain('"type":"image"');
     const firstDelegate = nativeDelegate && !child && !input.messages.some(message => message.role === "toolResult");
     if (child) {
       childRequests++;
       childModels.push(physical.id);
       if (delegateFiles) {
         const user = JSON.stringify(input.messages.findLast(message => message.role === "user")?.content);
-        expect(user.includes("NATIVE_FILE_BYTES")).toBe(user.includes("CHILD_B"));
+        if (delegateImagesCase) {
+          expect(user.includes('"type":"image"')).toBe(user.includes("CHILD_B"));
+          expect(physical.id).toBe(user.includes("CHILD_B") ? modelB.id : model.id);
+          if (user.includes("CHILD_B")) expect(user).toContain(delegateImages.png);
+        } else expect(user.includes("NATIVE_FILE_BYTES")).toBe(user.includes("CHILD_B"));
         expect(user).not.toContain(join(workspace, "delegate-task"));
       }
       expect(JSON.stringify(input)).not.toContain("hello factory");
@@ -242,7 +249,7 @@ for (const scenario of ["public-conversations", "custom-subset", "pending-host",
     const childWrite = child && writeDelegate && !input.messages.some(message => message.role === "toolResult");
     const step = childWrite ? { name: "write", arguments: { path: childWritePath(childId), content: `WRITTEN_${childId}` } } : toolSequence?.shift();
     const message = { role: "assistant" as const, api: "openai-completions" as const, provider: physical.provider, model: physical.id,
-      content: firstDelegate ? (revokeDelegate ? ["A"] : ["A", "B"]).map(id => ({ type: "toolCall" as const, id, name: "delegate", arguments: { prompt: `NATIVE_DELEGATE_CHILD_${id}`, tools: standardDelegate ? "standard" : "read_only", task_category: "reason", ...(explicitDelegate && (explicitDelegate.denied || id === "B") ? { model: explicitDelegate.model } : revokeDelegate ? { model: `${modelB.provider}/${modelB.id}` } : {}), ...(timeoutDelegate && id === "A" ? { timeout_sec: 10 } : {}), ...(delegateFiles && id === "B" ? { files: ["delegate-task"] } : {}) } })) : child && revokeDelegate && !writeDelegate && !input.messages.some(message => message.role === "toolResult") ? [{ type: "toolCall" as const, id: "child-private-read", name: "read", arguments: { path: childReadPath } }] : step ? [{ type: "toolCall" as const, id: `factory-tool-${calls}`, name: step.name, arguments: typeof step.arguments === "function" ? step.arguments() : step.arguments }]
+      content: firstDelegate ? (revokeDelegate ? ["A"] : ["A", "B"]).map(id => ({ type: "toolCall" as const, id, name: "delegate", arguments: { prompt: `NATIVE_DELEGATE_CHILD_${id}`, tools: standardDelegate ? "standard" : "read_only", task_category: "reason", ...(delegateImagesCase && id === "B" ? { model: `${modelB.provider}/${modelB.id}` } : {}), ...(explicitDelegate && (explicitDelegate.denied || id === "B") ? { model: explicitDelegate.model } : revokeDelegate ? { model: `${modelB.provider}/${modelB.id}` } : {}), ...(timeoutDelegate && id === "A" ? { timeout_sec: 10 } : {}), ...(delegateFiles && id === "B" ? { files: ["delegate-task"] } : {}) } })) : child && revokeDelegate && !writeDelegate && !input.messages.some(message => message.role === "toolResult") ? [{ type: "toolCall" as const, id: "child-private-read", name: "read", arguments: { path: childReadPath } }] : step ? [{ type: "toolCall" as const, id: `factory-tool-${calls}`, name: step.name, arguments: typeof step.arguments === "function" ? step.arguments() : step.arguments }]
         : [{ type: "text" as const, text: "factory synthetic reply" }], stopReason: step || firstDelegate || (child && revokeDelegate && !input.messages.some(message => message.role === "toolResult")) ? "toolUse" as const : "stop" as const, timestamp: Date.now(),
       usage: { input: 5, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 10, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
     onProviderResponse?.();

@@ -288,7 +288,12 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         }
         if (!model) throw Error("Delegate parent model required");
         assertDelegateModel(model); return model;
-      }, assertModelCurrent: assertDelegateModel, readFiles: createHostDelegateFileReader(WORKSPACE_DIR), readonlyTools: readers, readonlyExtensions: [readerExtension], standardTools: builtins, standardExtensions: [standardExtension],
+      }, assertModelCurrent: assertDelegateModel,
+      modelSupportsImages(model) {
+        assertDelegateModel(model);
+        const physical = host.modelRuntime.getPhysicalModel(model.provider, model.modelId);
+        return physical?.provider === model.provider && physical.id === model.modelId && physical.input?.includes("image") === true;
+      }, readFiles: createHostDelegateFileReader(WORKSPACE_DIR), readonlyTools: readers, readonlyExtensions: [readerExtension], standardTools: builtins, standardExtensions: [standardExtension],
     }));
   }
   registry.install(defineExtension({ name: "app.host-builtins", tools }));

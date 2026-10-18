@@ -22,7 +22,7 @@ import { storeChatMetadata } from "../../runtime/src/db.ts";
 
 // Core consumer tests with explicitly synthetic authority/schema. These do NOT
 // qualify installed Delegate content, Settings, host source capture or budgets.
-for (const mode of ["parallel", "standard", "subset", "omitted", "full", "unknown-tool", "files-empty", "denied", "files", "files-unavailable", "files-revoked", "timeout", "timeout-fraction", "timeout-string", "timeout-large", "mutating-tools", "model-type", "model-short", "model-empty-provider", "model-empty-id"] as const) {
+for (const mode of ["parallel", "standard", "subset", "omitted", "full", "unknown-tool", "files-empty", "files-image-invalid", "files-image-disabled", "denied", "files", "files-unavailable", "files-revoked", "timeout", "timeout-fraction", "timeout-string", "timeout-large", "mutating-tools", "model-type", "model-short", "model-empty-provider", "model-empty-id"] as const) {
   test(`host native Delegate factory: ${mode}`, async () => {
     const f = await openFixture({ acquired: true });
     const release = barrier(), entered = barrier();
@@ -32,6 +32,7 @@ for (const mode of ["parallel", "standard", "subset", "omitted", "full", "unknow
     const standard = [read, ...["bash", "edit", "write", "find", "ls", "grep"].map(name => defineTool({ name, description: "Synthetic builtin", parameters: Type.Object({}), execute: async () => ({ output: [] }) }))];
     const standardExtension = defineExtension({ name: "native-standard", tools: standard });
     f.registry.install(standardExtension);
+    if (mode === "files-image-invalid" || mode === "files-image-disabled") writeFileSync(join(process.env.PICLAW_WORKSPACE!, "file.txt"), Buffer.from([0xff, 0xd8, 0xff]));
     const allowed = ["parallel", "standard", "subset", "omitted", "files-empty"].includes(mode);
     const readerExtension = defineExtension({ name: "native-readers", tools: [read] });
     f.registry.install(readerExtension);
@@ -45,6 +46,10 @@ for (const mode of ["parallel", "standard", "subset", "omitted", "full", "unknow
         if (mode === "files-unavailable") throw Error("PRIVATE_HOST_PATH");
         revoked = true; guard(); return [];
       } } : {}),
+      ...(mode === "files-image-invalid" || mode === "files-image-disabled" ? {
+        readFiles: createHostDelegateFileReader(process.env.PICLAW_WORKSPACE!),
+        modelSupportsImages: () => mode === "files-image-invalid",
+      } : {}),
       async selectModel(_args, parent) { if (mode === "denied") throw Error("Model denied"); return parent!; },
       assertModelCurrent() {}, readonlyTools: [read], readonlyExtensions: [readerExtension],
       ...(["standard", "subset", "full", "unknown-tool"].includes(mode) ? { standardTools: standard, standardExtensions: [standardExtension] } : {}),
@@ -99,7 +104,7 @@ for (const mode of ["parallel", "standard", "subset", "omitted", "full", "unknow
       }
       expect((await submission.wait(context)).status).toBe("done");
       expect(childRequests).toBe(allowed ? 2 : 0);
-      expect(captures).toBe(allowed || mode === "denied" || mode === "files-unavailable" || mode === "files-revoked" ? 2 : 0);
+      expect(captures).toBe(allowed || mode === "denied" || mode === "files-unavailable" || mode === "files-revoked" || mode === "files-image-invalid" || mode === "files-image-disabled" ? 2 : 0);
       const entries = (await f.root.entries({}, 100, undefined, context)).items;
       const results = entries.flatMap(entry => entry.model ?? []).filter(message => message.role === "toolResult");
       expect(results).toHaveLength(2);

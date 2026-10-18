@@ -1,3 +1,32 @@
+# Native Delegate caller image attachments — targeted qualification
+
+The guarded reader accepts JPEG, PNG, GIF and WebP only for an exact approved
+physical model with explicit image input support. Text remains supported. The
+existing 0–10 path and 100,000 aggregate actual-byte limits are unchanged. Sharp
+validates all frames with a 4MP input limit and five-second processing timeout;
+no dependency was added. Public SDK image blocks retain the original bytes.
+
+Current physical model identity/API and image capability are rechecked after
+authorization and after real credential resolution, before dispatch. A reopened
+conversation retaining committed image history cannot continue through a now
+text-only physical model. Accepted attachment replay still avoids file rereads.
+This is caller input, not generated-media authority or exactly-once billing.
+
+Targeted receipts under /workspace/reviews/durable-1650/:
+- image-final-default-scenario.log: 1 pass / 45 assertions; image goes only to
+  the selected capable child, not its text-only peer or parent.
+- image-capability-final-focused.log: 1 pass / 32 assertions; user/tool-result
+  revocation during authorization/post-auth, text compatibility and persisted
+  image-history reopen/continuation denial.
+- images-reader-final-targeted.log: existing text reader passes 1 / 53 assertions.
+- image-final-{engine,qualification,root}-types.log: configured types pass.
+
+Bounded source review cleared the dispatch-capability P2 after its fix. Earlier
+held-admission test deadlock was replaced with committed-history recovery; no
+queued-unsent recovery claim. No full candidate/root suite was run. Standard
+tool permissions, capped accounting refusal and the accepted post-transform
+microtask gap remain unchanged. No activation, restart, merge or migration.
+
 # Native editable-table port — targeted qualification
 
 The default application uses the installed editable-table public factory through

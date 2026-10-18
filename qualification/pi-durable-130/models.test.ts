@@ -1,4 +1,11 @@
+import "./src/test-guard.js";
 import { expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { Harness, createRegistry } from "../../runtime/durable-engine/qualification/durable.ts";
+import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
+import { BunSqliteDatabase } from "../../runtime/durable-engine/src/index.js";
+import { context as durableContext } from "./src/fixture.js";
 import { createHash } from "node:crypto";
 import type { ModelRuntime as HostRuntime } from "../../node_modules/@earendil-works/pi-coding-agent";
 import type { Credential, CredentialStore, Model, TranscriptContext as HostTranscript, AssistantMessage } from "../../node_modules/@earendil-works/pi-ai";
@@ -30,7 +37,8 @@ async function bounded(promise: Promise<void>) {
     })]);
   } finally { clearTimeout(timer); }
 }
-async function fixture(multimodal = false, keyless = false, deferred = false) {
+async function fixture(multimodal = false, keyless = false, deferred = false, imageInput = false) {
+  const physical = { ...model, input: imageInput ? ["text", "image"] as Model<Api>["input"] : ["text"] as Model<Api>["input"] };
   let stored: Credential | undefined = { type: "api_key", key: token };
   const requested: string[] = [];
   const credentials: CredentialStore = {
@@ -101,8 +109,8 @@ async function fixture(multimodal = false, keyless = false, deferred = false) {
   const classifier: ClassifierModel<ClassifierApi> = { ...image, type: "classifier", api: "synthetic-classifier", contextWindow: 2048 };
   const oneShot = (owner: unknown, ctx: unknown, options: unknown) => { calls++; captured = { owner, context: ctx, options }; };
   const unapproved = { ...model, id: "unapproved-model" };
-  runtime.registerNativeProvider({ id: ref.provider, name: "Synthetic", getModels: () => [model, unapproved],
-    getAllModels: () => multimodal ? [model, unapproved, image, classifier] : [model, unapproved],
+  runtime.registerNativeProvider({ id: ref.provider, name: "Synthetic", getModels: () => [physical, unapproved],
+    getAllModels: () => multimodal ? [physical, unapproved, image, classifier] : [physical, unapproved],
     generateImages: async (owner, ctx, options) => {
       oneShot(owner, ctx, options);
       if (fail) throw new Error(token);
@@ -602,6 +610,66 @@ for (const method of ["stream", "streamSimple", "complete", "completeSimple"] as
     expect(f.admissions).toEqual([`${ref.provider}/${ref.id}/chat`]);
   });
 }
+
+test("image capability: authorization, real post-auth fence, and accepted SQLite recovery", async () => {
+  const image = { type: "image" as const, data: "c3ludGhldGlj", mimeType: "image/png" };
+  for (const role of ["user", "toolResult"] as const) {
+    const ctx = { messages: [role === "user"
+      ? { role, content: [image], timestamp: 1 }
+      : { role, content: [image], toolCallId: "call-1", toolName: "fixture_tool", isError: false, timestamp: 1 }] };
+    for (const phase of ["authorize", "post-auth"] as const) {
+      const f = await fixture(false, true, false, true);
+      const physical = f.runtime.getPhysicalModel(ref.provider, ref.id)!;
+      const revoke = () => { physical.input.splice(0, physical.input.length, "text"); };
+      if (phase === "authorize") f.policy.authorize = async () => { await Promise.resolve(); revoke(); };
+      else f.hold();
+      const pending = f.models.completeSimple(f.model, ctx);
+      if (phase === "post-auth") {
+        try { await bounded(f.entered.promise); revoke(); } finally { f.held.release(); }
+      }
+      const result = await pending;
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toBe("Host model request denied or failed");
+      expect(f.calls()).toBe(0);
+      expect(JSON.stringify(result)).not.toContain(token);
+      if (phase === "authorize") expect(f.requested).toEqual([]);
+      // Text-only requests remain legal on the same downgraded physical owner.
+      f.policy.authorize = async () => {};
+      expect((await f.models.completeSimple(f.model, context)).stopReason).toBe("toolUse");
+      expect(f.calls()).toBe(1);
+    }
+  }
+  const f = await fixture(false, true, false, true);
+  const directory = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "image-recovery-"));
+  const path = join(directory, "candidate.sqlite");
+  const registry = createRegistry();
+  const open = async () => Harness.open(await SqliteStorage.open(new BunSqliteDatabase(path)), {
+    models: f.models, registry, settings: { retry: { enabled: false }, compaction: { enabled: false } },
+  }, durableContext);
+  let harness = await open();
+  try {
+    const root = await harness.root(durableContext, { agent: { model: { provider: ref.provider, modelId: ref.id } } });
+    f.message.content = [{ type: "text", text: "Image accepted" }];
+    f.message.stopReason = "stop";
+    const accepted = await root.submit({ type: "input", requestId: "accepted-image", content: [image] }, durableContext);
+    expect((await accepted.wait(durableContext)).status).toBe("done");
+    const before = await accepted.status(durableContext);
+    const callsBeforeReopen = f.calls();
+    await harness.close(durableContext);
+    f.runtime.getPhysicalModel(ref.provider, ref.id)!.input.splice(0, 2, "text");
+    f.policy.authorize = async () => {};
+    harness = await open();
+    const recovered = (await harness.submission(accepted.id, durableContext))!;
+    expect(await recovered.status(durableContext)).toEqual(before);
+    expect(f.calls()).toBe(callsBeforeReopen);
+    const reopenedRoot = await harness.root(durableContext);
+    expect(JSON.stringify((await reopenedRoot.context(durableContext)).messages)).toContain(image.data);
+    const continuation = await reopenedRoot.submit({ type: "input", requestId: "after-capability-change", content: "Continue" }, durableContext);
+    await continuation.wait(durableContext);
+    expect((await continuation.status(durableContext)).status).toBe("unanswered");
+    expect(f.calls()).toBe(callsBeforeReopen);
+  } finally { await harness.close(durableContext); await rm(directory, { recursive: true, force: true }); }
+});
 
 test("accepted limitation: public transformHeaders is awaited, not an atomic dispatch fence", async () => {
   const f = await fixture();

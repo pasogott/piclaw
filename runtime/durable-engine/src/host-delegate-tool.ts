@@ -1,6 +1,6 @@
 import { AssistantEntry, configure, defineTool, type ModelRef, type ToolRegistration, type Extension } from "@earendil-works/pi-durable";
 import { validateDelegateFiles } from "./host-delegate-files.js";
-import type { TextContent, TSchema } from "@earendil-works/pi-ai";
+import type { ImageContent, TextContent, TSchema } from "@earendil-works/pi-ai";
 import type { ToolDefinition } from "../../../node_modules/@earendil-works/pi-coding-agent";
 import type { HostConversationRuntime } from "./host-runtime.js";
 
@@ -18,7 +18,8 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
   /** Rechecked before creation and after settlement. Enabled budget caps must
    * deny until operation-owned child request accounting has been qualified. */
   assertModelCurrent(model: ModelRef): void;
-  readFiles?(files: readonly string[], assertAllowed: () => void): Promise<readonly TextContent[]>;
+  modelSupportsImages?(model: ModelRef): boolean;
+  readFiles?(files: readonly string[], assertAllowed: () => void, options?: { modelSupportsImages: boolean }): Promise<readonly (TextContent | ImageContent)[]>;
   readonlyTools: readonly ToolRegistration[];
   /** Installed, hook-free read-only capability extensions only. */
   readonlyExtensions: readonly Extension[];
@@ -90,11 +91,16 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
         return child ? { id: child.id, submission: await tx.submissionByRequest(child.id, requestId) } : undefined;
       }, context);
       const assertReadAllowed = () => { check(); if (expired()) throw timeoutError(); };
-      let content: string | TextContent[] = args.prompt;
+      let content: string | (TextContent | ImageContent)[] = args.prompt;
       if (!owned?.submission && Array.isArray(args.files) && args.files.length) {
         assertReadAllowed();
-        let attachments: readonly TextContent[];
-        try { attachments = await readFiles!(args.files as string[], assertReadAllowed); }
+        const modelSupportsImages = options.modelSupportsImages?.(model) === true;
+        const guard = () => {
+          assertReadAllowed();
+          if (modelSupportsImages && options.modelSupportsImages?.(model) !== true) throw Error("Delegate attachment unavailable");
+        };
+        let attachments: readonly (TextContent | ImageContent)[];
+        try { attachments = await readFiles!(args.files as string[], guard, { modelSupportsImages }); }
         catch { assertReadAllowed(); throw Error("Delegate attachment unavailable"); }
         assertReadAllowed();
         content = [{ type: "text", text: args.prompt }, ...attachments];

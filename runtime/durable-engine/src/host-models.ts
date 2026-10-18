@@ -222,6 +222,8 @@ export function createHostModels(
           output.end(projectMessage(result, model));
           return;
         }
+        const hasImages = context.messages.some(message =>
+          Array.isArray(message.content) && message.content.some(block => block.type === "image"));
         const assertSource = policy.captureSourceGuard?.(options?.signal) ?? (() => {});
         assertSource();
         const ref = { provider: model.provider, id: model.id };
@@ -237,12 +239,19 @@ export function createHostModels(
         assertSource();
         policy.assertCurrent(ref, "chat", signal);
         // Resolve the physical owner again, never accept caller model overrides/routing.
-        const physical = hostModelRuntime120.getPhysicalModel(ref.provider, ref.id);
-        if (!physical || physical.api !== listed.api) throw new Error("Model owner changed");
+        const assertPhysicalCompatible = () => {
+          const current = hostModelRuntime120.getPhysicalModel(ref.provider, ref.id);
+          if (!current || (current.type ?? "chat") !== "chat" || current.provider !== ref.provider ||
+            current.id !== ref.id || current.api !== listed.api ||
+            (hasImages && !current.input.includes("image"))) throw new Error("Model owner changed");
+          return current;
+        };
+        const physical = assertPhysicalCompatible();
         const hostOptions = { ...safeOptions, signal, transformHeaders: (headers: Record<string, string | null>) => {
           signal.throwIfAborted();
           assertSource();
           policy.assertCurrent(ref, "chat", signal);
+          assertPhysicalCompatible();
           return headers; // Host-only closure: never sent to 1.3 or a caller callback.
         } };
         const stream = simple
