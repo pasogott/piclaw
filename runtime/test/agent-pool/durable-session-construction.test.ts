@@ -50,6 +50,8 @@ for (const empty of [false, true]) {
         await expect(services.sessionManager.getOrCreateSide(chat)).rejects.toThrow("Durable application does not construct legacy sessions");
         expect(services.sessionManager.prewarm(chat, { mode: "lightweight" })).toBe(false);
         expect(services.sessionManager.prewarm(chat, { mode: "full" })).toBe(false);
+        await expect(pool.mergeChatBranchIntoParent(chat)).rejects.toThrow("Durable branch rollup unavailable");
+        expect(await pool.applyControlCommand(chat, { type: "rollup", raw: "/rollup" })).toMatchObject({ status: "error", message: "Durable branch rollup unavailable" });
       }
       if (!empty) {
         expect(await pool.saveSessionPosition("web:bound")).toBe("leaf");

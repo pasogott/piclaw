@@ -812,6 +812,7 @@ export class AgentPool {
   }
 
   async mergeChatBranchIntoParent(chatJid: string): Promise<MergeChatBranchIntoParentResult> {
+    if (this.durableApplication) throw new Error("Durable branch rollup unavailable");
     return this.branchManager.mergeChatBranchIntoParent(chatJid);
   }
 
