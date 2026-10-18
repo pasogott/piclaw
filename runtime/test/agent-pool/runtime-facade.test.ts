@@ -1263,3 +1263,15 @@ test("durable compact captures one port for the whole command without legacy fal
   expect(legacyCalls).toBe(0);
   expect(releases).toBe(1);
 });
+
+test("durable tree command uses its captured port without resolving another generation", async () => {
+  let lookups = 0, reads = 0, legacyCalls = 0;
+  const port = { sessionId: "tree-generation", branchId: "main", readPosition: async () => null,
+    async readTree() { reads++; expect(this.sessionId).toBe("tree-generation"); return { version: 1 as const, leafId: null, nodes: [], flat: true as const, total: 0 }; } };
+  const { facade } = createFacade({ getDurableSession() { return ++lookups === 1 ? port : undefined; },
+    async getOrCreateRuntime() { legacyCalls++; throw Error("Legacy forbidden"); } });
+  expect(await facade.applyControlCommand("web:tree-captured", { type: "tree" })).toMatchObject({ status: "success" });
+  expect(lookups).toBe(1);
+  expect(reads).toBe(1);
+  expect(legacyCalls).toBe(0);
+});

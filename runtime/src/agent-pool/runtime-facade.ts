@@ -365,7 +365,8 @@ export class AgentRuntimeFacade {
         return { status: "success", message: `Model set to ${selected.provider}/${selected.id}.` };
       }
       if (command.type !== "tree" || command.targetId) throw new Error("Durable history mutation unavailable");
-      const tree = await this.getSessionTreeForChat(chatJid);
+      if (!port.readTree) throw new Error("Durable session tree unavailable");
+      const tree = await port.readTree();
       return renderSessionTreeWidget(tree, chatJid) ?? { status: "success", message: tree.nodes.length
         ? ["Session tree:", ...tree.nodes.slice(command.mode === "head" ? command.offset ?? 0 : -(command.limit ?? 10), command.mode === "head" ? (command.offset ?? 0) + (command.limit ?? 10) : undefined).map(node => `${node.active ? "→ " : ""}${node.id} ${node.preview}`)].join("\n")
         : "Tree is empty." };
