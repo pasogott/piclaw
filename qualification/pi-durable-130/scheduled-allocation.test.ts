@@ -124,14 +124,22 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
   const history = db.query("SELECT * FROM entries ORDER BY id").all();
   await fixture.close();
   const chat = `web:side-allocation-${failBinding}`, manifest = [{ chatJid: chat, branchId: "main", conversationId: parent }];
-  const bundle = await createApplicationBootstrapBundle({ root: db, path, ownership: applicationOwnership(lock), manifest,
-    sessions: new Map([[chat, "original"]]), offlineInitialize: true,
+  let activeRuntime!: import("../../runtime/durable-engine/src/host-runtime.js").HostConversationRuntime;
+  const payloads = new Map<string, string>();
+  const createBundle = () => createApplicationBootstrapBundle({ root: db, path, ownership: applicationOwnership(lock), manifest,
+    sessions: new Map([[chat, "original"]]), offlineInitialize: true, onRuntime(runtime) { activeRuntime = runtime; },
     runtime: { incarnation: "side-allocation", sessionId: "side-allocation", lane: "main", generation: 1,
       now: () => new Date().toISOString(), harnessOptions: { models: fixture.models, registry: fixture.registry } },
-    answers: { resolver: { resolve: () => null }, put() {} } }, context);
+    answers: { resolver: { resolve(ref) {
+      const text = payloads.get(ref); if (text === undefined) return null;
+      const bytes = new TextEncoder().encode(text);
+      return { ref, bytes, byteLength: bytes.byteLength, sha256: (new Bun.CryptoHasher("sha256")).update(bytes).digest("hex"), mediaType: "text/plain", redactionClass: "private" };
+    } }, put(ref, text) { payloads.set(ref, text); } } }, context);
+  let bundle = await createBundle();
   const work = value(createCurrentPiclawServiceWorkStore(db, { hitFault: () => false, recordTrace() {} }));
   try {
     const id = `side-prompt:${crypto.randomUUID()}`, prompt = "isolated follow-up";
+    payloads.set(id, prompt);
     const source = value(await work.acceptSource(sealed({ effect: effect(`side-accept:${id}`), chatJid: chat, sourceId: id, kind: "internal" as const,
       payloadRef: id, targetOperationId: null, parentSourceSeq: null, acceptedAt: new Date().toISOString(), createWakeIntent: false })));
     const claim = value(await work.claimNext(sealed({ effect: effect(`side-claim:${id}`), chatJid: chat,
@@ -160,6 +168,17 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
     setBudgetCapEnabled(cap.id, false, db);
     db.query("UPDATE service_effect_s01_sources SET state='pending' WHERE source_id=?").run(id);
     expect(bindings.resolveConversation(allocated)).toBeUndefined();
+    db.query("UPDATE service_effect_s01_sources SET state='claimed' WHERE source_id=?").run(id);
+    await bundle.close();
+    bundle = await createBundle();
+    const beforeRun = db.query("SELECT * FROM entries WHERE conversation_id=? ORDER BY id").all(parent);
+    const submission = await activeRuntime.submit(allocated);
+    await activeRuntime.wait(allocated, submission);
+    const state = await activeRuntime.reconcile(allocated);
+    expect(state.answer?.text).toBe("synthetic answer");
+    expect(await activeRuntime.settle(allocated)).not.toBeNull();
+    expect(db.query("SELECT * FROM entries WHERE conversation_id=? ORDER BY id").all(parent)).toEqual(beforeRun);
+    expect(db.query("SELECT message_row_id FROM service_effect_s02_commits WHERE operation_id=?").get(input.operationId)).toEqual({ message_row_id: null });
   } finally {
     await bundle.close();
     // These allocation-only fixtures deliberately never execute/settle the

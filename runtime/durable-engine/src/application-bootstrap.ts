@@ -1,5 +1,6 @@
 // Explicit application composition only. Not imported by the default runtime selector.
 import type { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import type { Context } from "@earendil-works/chord/context";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import type { RuntimeLockHandle } from "../../src/runtime/single-instance.js";
@@ -119,6 +120,14 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     // Resolve only actual root messages and verify both accepted reference and source identity.
     async function content(ref: string, input: AcceptedInput | { chatJid: string; sourceId: string }) {
       assert();
+      if ("conversationId" in input && input.sourceId.startsWith("side-prompt:") &&
+        ref === input.sourceId && bindings.resolveConversation(input) === input.conversationId) {
+        const payload = await config.answers.resolver.resolve(ref); assert();
+        if (!payload || payload.ref !== ref || payload.mediaType !== "text/plain" || payload.redactionClass !== "private") throw Error("Unverified side prompt payload");
+        const bytes = Uint8Array.from(payload.bytes);
+        if (bytes.byteLength !== payload.byteLength || createHash("sha256").update(bytes).digest("hex") !== payload.sha256) throw Error("Unverified side prompt payload");
+        return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      }
       if ("conversationId" in input && bindings.resolveConversation(input) === input.conversationId) {
         const row = root.query(`SELECT t.prompt FROM scheduled_tasks t
           JOIN service_effect_s07_occurrences r ON r.task_id=t.id AND r.task_revision=t.revision AND r.scheduled_for=t.next_run
@@ -143,7 +152,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         conversationFor(chat, branch) { const b = lookup(chat, branch); if (!b) throw Error("Unbound conversation"); return b.conversationId; } },
       recovery: { manifest, work, bindings, async readAcceptedInput(source) {
         assert();
-        if (source.kind !== "message" && source.kind !== "scheduled_agent") throw Error("Unsupported recovered source");
+        if (source.kind !== "message" && source.kind !== "scheduled_agent" && source.kind !== "internal") throw Error("Unsupported recovered source");
         const binding = await bindings.findSource(source.chatJid, source.sourceSeq);
         const operationId = binding?.operationId ?? source.targetOperationId;
         if (!operationId) throw Error("Missing recovered operation identity");
@@ -151,7 +160,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         const scope = routeIndex.get(source.chatJid);
         if (!operation || !scope) throw Error("Missing recovered operation");
         return { claimed: { source, operation }, branchId: scope.branchId,
-          requestId: binding?.requestId ?? `queued-steer:${source.sourceId}`, content: await content(source.payloadRef, source.kind === "scheduled_agent" && binding ? binding : source) };
+          requestId: binding?.requestId ?? `queued-steer:${source.sourceId}`, content: await content(source.payloadRef, (source.kind === "scheduled_agent" || source.kind === "internal") && binding ? binding : source) };
       } },
     }, context);
     const activeController = controller;
