@@ -150,8 +150,19 @@ export function assertFreshApplicationHistory(root: ReturnType<typeof getDb>, se
       const scope = mapping.bindings.find(b => b.chatJid === row.chat_jid && b.branchId === row.branch_id);
       if (row.domain !== mapping.domain || row.incarnation !== mapping.domain || !scope) throw Error("Invalid durable application routing provenance");
       if (scope.conversationId === row.conversation_id) continue;
-      // Scheduled forks are not main conversation routes. Validate their persisted
-      // EF-S07/EF-S01 allocation provenance, including already completed occurrences.
+      // Side forks retain exact source/operation and parent provenance after settlement.
+      const side = table === "piclaw_durable_bindings_v1" && root.query(`SELECT b.source_id,b.payload_ref,b.request_id FROM piclaw_durable_bindings_v1 b
+        JOIN service_effect_s01_sources s ON s.chat_jid=b.chat_jid AND s.source_seq=b.source_seq AND s.source_id=b.source_id AND s.payload_ref=b.payload_ref
+        JOIN service_effect_s01_operations o ON o.operation_id=b.operation_id AND o.chat_jid=b.chat_jid AND o.primary_source_seq=b.source_seq
+        JOIN service_effect_s01_operation_sources os ON os.operation_id=o.operation_id AND os.chat_jid=s.chat_jid AND os.source_seq=s.source_seq
+        JOIN conversations c ON c.id=b.conversation_id
+        WHERE b.domain=? AND b.incarnation=? AND b.operation_id=? AND b.source_seq=? AND b.conversation_id=?
+          AND s.kind='internal' AND s.state IN ('claimed','consumed','disposed') AND json_extract(c.record,'$.parent.conversationId')=?
+          AND json_extract(c.record,'$.owner.taskId') IS NULL AND json_extract(c.record,'$.owner.conversationId') IS NULL`)
+        .get(row.domain, row.incarnation, row.operation_id, row.source_seq, row.conversation_id, scope.conversationId) as { source_id: string; payload_ref: string; request_id: string } | null | false;
+      if (side && /^side-prompt:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(side.source_id) &&
+        side.payload_ref === side.source_id && side.request_id === side.source_id) continue;
+      // Scheduled forks use persisted EF-S07/EF-S01 provenance, including completed occurrences.
       const scheduled = table === "piclaw_durable_bindings_v1" && exists("service_effect_s07_occurrences") && root.query(`SELECT 1 FROM piclaw_durable_bindings_v1 b
         JOIN service_effect_s01_sources s ON s.chat_jid=b.chat_jid AND s.source_seq=b.source_seq AND s.source_id=b.source_id AND s.payload_ref=b.payload_ref
         JOIN service_effect_s07_occurrences r ON r.run_id=s.source_id AND r.operation_id=b.operation_id AND r.accepted_source_seq=s.source_seq
