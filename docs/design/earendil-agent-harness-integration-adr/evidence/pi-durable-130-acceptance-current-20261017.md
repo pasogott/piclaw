@@ -727,3 +727,24 @@ and empty/exact durable construction62 pass (247 total). Three scoped typechecks
 and combined bounded review passed. Prior c58b66fc9 hosted39126969865 passed all
 gates; this subsequent batch needs its own exact-head run. No accounting/cap
 integration, live migration, deployment, or requirement-status promotion occurred.
+
+## Admission identity and legacy rename fencing — 18 October 2026
+
+Captured input admission verifies message chat identity and the persisted message
+row's ID/chat/non-bot status before source acceptance. Wrong-chat, wrong-ID, bot
+and absent-row transactions roll back without source/provider effects. This is
+row identity validation, not content immutability or general ingress acceptance.
+Durable chat-JID rename rejects before legacy database/session-path mutation;
+metadata-only display rename and root creation are unchanged.
+
+Targeted mismatch16 + row20 + normal-factory159 assertions pass, along with all7
+application-web scenarios (copied forks, deferred outcomes and lost wait ACK).
+Construction tests pass68 assertions with legacy-entry spies, database-byte and
+session-directory invariance. Scoped typechecks and bounded reviews pass.
+Prior8967ba288 hosted39128212420 passed all gates; this batch needs its own head CI.
+
+Accounting remains unimplemented. Source tracing found that exact persisted
+extension lists can omit the generation-source hook, while the factory currently
+uses a no-op fallback for unmatched request signals. Mandatory source/admission
+coverage must be qualified before reservations are enabled. No private SDK writes,
+new ledger, automatic migration or requirement-status promotion is authorised.
