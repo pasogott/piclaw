@@ -1748,6 +1748,25 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
         expect(timeoutSignal?.aborted).toBe(true);
       } finally { timerSpy.mockRestore(); checkpointHold = undefined; }
       expect(root.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid='web:default' AND state NOT IN ('consumed','disposed')").all()).toEqual([]);
+      let disconnectEntered!: () => void;
+      const disconnectReady = new Promise<void>(resolve => { disconnectEntered = resolve; });
+      checkpointHold = { entered: disconnectEntered };
+      const disconnect = new AbortController();
+      const httpDisconnect = await channel.handleRequest(new Request("http://fixture/agent/side-prompt/stream?chat_jid=web%3Adefault", {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, signal: disconnect.signal,
+        body: JSON.stringify({ prompt: "disconnect card stream" }),
+      }));
+      const disconnectedBody = httpDisconnect.text();
+      await disconnectReady;
+      const disconnectedProvider = checkpointHold.signal;
+      disconnect.abort();
+      expect(await disconnectedBody).toContain("event: side_prompt_start");
+      const disconnectDeadline = Date.now() + 2000;
+      while (root.query("SELECT 1 FROM service_effect_s01_chats WHERE chat_jid='web:default' AND active_operation_id IS NOT NULL").get() && Date.now() < disconnectDeadline) await Bun.sleep(10);
+      expect(disconnectedProvider?.aborted).toBe(true);
+      expect(root.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid='web:default' AND state NOT IN ('consumed','disposed')").all()).toEqual([]);
+      expect(root.query("SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default'").get()).toEqual({ active_operation_id: null });
+      checkpointHold = undefined;
       await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
       compactionPolicySpy?.mockRestore();
       for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
