@@ -176,6 +176,9 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         assert(); if (!current()) throw Error("Unbound application conversation");
         if (connection !== root || !root.inTransaction) throw Error("Root admission transaction required");
         if (message.chat_jid !== chat) throw Error("Input admission chat mismatch");
+        const stored = root.query("SELECT id, chat_jid, is_bot_message FROM messages WHERE rowid=?").get(rowId) as { id: string; chat_jid: string; is_bot_message: number } | null;
+        if (!Number.isSafeInteger(rowId) || rowId <= 0 || stored?.id !== message.id || stored.chat_jid !== chat || stored.is_bot_message !== 0)
+          throw Error("Input admission message row mismatch");
         const input = { effect: { idempotencyKey: message.id, requestHash: "", operationId: null, sourceSeq: null,
           provenanceRef: "application:durable", redactionClass: "private" as const }, chatJid: chat, sourceId: message.id,
           kind: "message" as const, payloadRef: `message-row:${rowId}`, targetOperationId: null, parentSourceSeq: null,
