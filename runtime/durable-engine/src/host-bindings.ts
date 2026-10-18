@@ -57,6 +57,22 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
     assertOwner();
     const i = inputSnapshot(input), root = lookup(i.chatJid, i.branchId)?.conversationId;
     if (i.incarnation !== incarnation || !root || i.conversationId === root) return undefined;
+    const side = db.query(`SELECT b.* FROM piclaw_durable_bindings_v1 b
+      JOIN service_effect_s01_sources s ON s.chat_jid=b.chat_jid AND s.source_seq=b.source_seq
+      JOIN service_effect_s01_operations o ON o.operation_id=b.operation_id AND o.chat_jid=b.chat_jid AND o.primary_source_seq=b.source_seq
+      JOIN service_effect_s01_operation_sources os ON os.operation_id=o.operation_id AND os.chat_jid=s.chat_jid AND os.source_seq=s.source_seq
+      JOIN service_effect_s01_chats ch ON ch.chat_jid=s.chat_jid AND ch.active_operation_id=o.operation_id
+      WHERE b.domain=? AND b.incarnation=? AND b.operation_id=? AND b.source_seq=?
+        AND s.kind='internal' AND s.state='claimed' AND s.source_id=? AND s.payload_ref=?
+        AND o.phase IN ('claimed','executing','settling')`)
+      .get(domain, incarnation, i.operationId, i.sourceSeq, i.sourceId, i.payloadRef) as Row | null;
+    if (side && /^side-prompt:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(i.sourceId) &&
+      i.requestId === i.sourceId && i.payloadRef === i.sourceId && side.conversation_id !== root &&
+      side.chat_jid === i.chatJid && side.branch_id === i.branchId && side.conversation_id === i.conversationId &&
+      side.request_id === i.requestId && side.request_hash === i.requestHash) {
+      if (db.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native side prompt budget admission unavailable");
+      return side.conversation_id;
+    }
     if (!db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='service_effect_s07_occurrences'").get()) return undefined;
     const row = db.query(`SELECT b.*, r.task_id FROM piclaw_durable_bindings_v1 b
       JOIN service_effect_s01_sources s ON s.chat_jid=b.chat_jid AND s.source_seq=b.source_seq

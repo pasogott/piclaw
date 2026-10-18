@@ -237,6 +237,12 @@ export class HostConversationRuntime {
   }
   /** Allocation only; EF-S07 continues to own execution, result and recurrence. */
   allocateScheduledFork(parentId: ConversationId, allocated: (id: ConversationId) => void, model?: { provider: string; modelId: string }): Promise<ConversationId> {
+    return this.allocateIsolatedFork(parentId, allocated, model);
+  }
+  allocateSidePromptFork(parentId: ConversationId, allocated: (id: ConversationId) => void): Promise<ConversationId> {
+    return this.allocateIsolatedFork(parentId, allocated);
+  }
+  private allocateIsolatedFork(parentId: ConversationId, allocated: (id: ConversationId) => void, model?: { provider: string; modelId: string }): Promise<ConversationId> {
     const choice = model && Object.freeze({ provider: model.provider, modelId: model.modelId });
     return this.observe(async () => {
       const target = choice && this.options.harnessOptions.models.getModel(choice.provider, choice.modelId);

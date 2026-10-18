@@ -21,6 +21,7 @@ import { value } from "./host-effects.js";
 import { hashScheduledLeaseToken } from "../../src/service-effects/current-piclaw/scheduled-run-values.js";
 import type { ScheduledRunLease } from "../../src/service-effects/contracts/scheduled-run-store.js";
 import type { AcceptedInput } from "./host-runtime.js";
+import type { ConversationId } from "@earendil-works/pi-durable";
 
 type Manifest = HostControllerOptions["recovery"]["manifest"];
 /** Validate existing host routing before any import/journal/schema write. */
@@ -236,6 +237,44 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       preparing.set(chat, promise); return promise;
     }
     let bound = false, closing: Promise<void> | undefined;
+    async function allocateSidePromptConversation(raw: AcceptedInput): Promise<AcceptedInput> {
+      const input = Object.freeze({ ...raw });
+      const scope = routeIndex.get(input.chatJid);
+      const check = () => {
+        assertLive();
+        if (!scope || input.incarnation !== r.incarnation || input.branchId !== scope.branchId ||
+          !/^side-prompt:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(input.sourceId) ||
+          input.requestId !== input.sourceId || input.payloadRef !== input.sourceId) throw Error("Side prompt source authority unavailable");
+        if (root.query("SELECT 1 FROM budget_caps WHERE enabled=1 LIMIT 1").get()) throw Error("Native side prompt budget admission unavailable");
+        const source = root.query(`SELECT 1 FROM service_effect_s01_sources s
+          JOIN service_effect_s01_operations o ON o.operation_id=? AND o.chat_jid=s.chat_jid AND o.primary_source_seq=s.source_seq
+          JOIN service_effect_s01_operation_sources os ON os.operation_id=o.operation_id AND os.chat_jid=s.chat_jid AND os.source_seq=s.source_seq
+          JOIN service_effect_s01_chats c ON c.chat_jid=s.chat_jid AND c.active_operation_id=o.operation_id
+          WHERE s.chat_jid=? AND s.source_seq=? AND s.source_id=? AND s.payload_ref=? AND s.kind='internal' AND s.state='claimed'
+            AND o.phase IN ('claimed','executing')`).get(input.operationId, input.chatJid, input.sourceSeq, input.sourceId, input.payloadRef);
+        if (!source) throw Error("Side prompt source authority unavailable");
+      };
+      check();
+      const prior = await bindings.findSource(input.chatJid, input.sourceSeq); check();
+      if (prior) {
+        if (Object.entries(input).some(([key, value]) => key !== "conversationId" && prior[key as keyof typeof prior] !== value) ||
+          bindings.resolveConversation({ ...input, conversationId: prior.conversationId }) !== prior.conversationId) throw Error("Side prompt binding conflict");
+        return Object.freeze({ ...input, conversationId: prior.conversationId });
+      }
+      if (input.conversationId !== scope!.conversationId) throw Error("Side prompt parent mismatch");
+      let allocated: AcceptedInput | undefined;
+      await candidateDatabase.withHostSourceGuard(check, async tx => {
+        if (!allocated) return;
+        const b = allocated;
+        await tx.run(`INSERT INTO piclaw_durable_bindings_v1
+          (domain,incarnation,conversation_id,chat_jid,branch_id,operation_id,source_seq,source_id,payload_ref,request_id,request_hash)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?)`, r.incarnation, r.incarnation, b.conversationId, b.chatJid, b.branchId,
+          b.operationId, b.sourceSeq, b.sourceId, b.payloadRef, b.requestId, b.requestHash);
+      }, () => runtime.allocateSidePromptFork(scope!.conversationId as ConversationId, id => { allocated = Object.freeze({ ...input, conversationId: id }); }));
+      check();
+      if (!allocated) throw Error("Side prompt fork not published");
+      return allocated;
+    }
     async function allocateScheduledConversation(raw: ScheduledRunLease): Promise<AcceptedInput> {
       const lease = structuredClone(raw), record = lease.record;
       const scope = routeIndex.get(lease.task.chatJid);
@@ -324,7 +363,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     return Object.freeze({
       /** Construct pool first from this snapshot, then bind its existing channel constructor. */
       sessionOptions: Object.freeze({ getDurableSession, dispatchScheduledAgent }),
-      allocateScheduledConversation,
+      allocateScheduledConversation, allocateSidePromptConversation,
       bind(options: Pick<WebChannelOpts, "queue" | "agentPool">): Readonly<WebChannelOpts> {
         assert(); if (bound || closing) throw Error("Application bundle already bound or closing");
         bound = true;
@@ -343,6 +382,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       close() { return closing ??= (async () => { shutdown.abort(); await activeController.close(); })(); },
     } satisfies RuntimeBackend & {
       allocateScheduledConversation(lease: ScheduledRunLease): Promise<AcceptedInput>;
+      allocateSidePromptConversation(input: AcceptedInput): Promise<AcceptedInput>;
       reconcileMaintenance(chatJid: string): Promise<void>;
       retryRecoveredWork: typeof recovery.retryRecoveredWork;
       onPendingIntent: typeof recovery.onPendingIntent;

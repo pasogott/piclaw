@@ -108,3 +108,48 @@ for (const model of [undefined, "qualification/synthetic"]) test(`allocation-onl
     if (failure) throw failure;
   } finally { stopSchedulerLoop(); await queue.shutdown(); await bundle.close(); lock.release(); closeDatabase(); }
 });
+
+test("side prompt allocation binds an exact claimed internal source and leaves parent history unchanged", async () => {
+  const { createCurrentPiclawServiceWorkStore } = await import("../../runtime/src/service-effects/current-piclaw/service-work-store.js");
+  const { effect, sealed } = await import("./src/host-handoff.js");
+  const { hashCanonicalRequest } = await import("../../runtime/src/service-effects/contracts/common.js");
+  process.env.PICLAW_DB_IN_MEMORY = "0"; initDatabase();
+  const db = getDb(); db.exec("PRAGMA foreign_keys=ON"); installTerminalSettlementCompositionSchema(db);
+  const path = (db.query("PRAGMA database_list").all() as { name: string; file: string }[]).find(row => row.name === "main")!.file;
+  const lock = acquireRuntimeLock({ lockPath: join(process.env.PICLAW_WORKSPACE!, "side-allocation.lock"), strictOwnership: true, disabled: false });
+  const assert = () => lock.assertCurrentOwner();
+  const fixture = await openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(new BunSqliteDatabase(path, { root: db, assertOwner: assert })));
+  const parent = fixture.root.id;
+  await fixture.root.commit(tx => tx.appendEntry(parent, { kind: "pi.user", model: [{ role: "user", content: "main history", timestamp: 1 }] }), context);
+  const history = db.query("SELECT * FROM entries ORDER BY id").all();
+  await fixture.close();
+  const chat = "web:side-allocation", manifest = [{ chatJid: chat, branchId: "main", conversationId: parent }];
+  const bundle = await createApplicationBootstrapBundle({ root: db, path, ownership: applicationOwnership(lock), manifest,
+    sessions: new Map([[chat, "original"]]), offlineInitialize: true,
+    runtime: { incarnation: "side-allocation", sessionId: "side-allocation", lane: "main", generation: 1,
+      now: () => new Date().toISOString(), harnessOptions: { models: fixture.models, registry: fixture.registry } },
+    answers: { resolver: { resolve: () => null }, put() {} } }, context);
+  const work = value(createCurrentPiclawServiceWorkStore(db, { hitFault: () => false, recordTrace() {} }));
+  try {
+    const id = `side-prompt:${crypto.randomUUID()}`, prompt = "isolated follow-up";
+    const source = value(await work.acceptSource(sealed({ effect: effect("side-accept"), chatJid: chat, sourceId: id, kind: "internal" as const,
+      payloadRef: id, targetOperationId: null, parentSourceSeq: null, acceptedAt: new Date().toISOString(), createWakeIntent: false })));
+    const claim = value(await work.claimNext(sealed({ effect: effect("side-claim"), chatJid: chat,
+      expectedFrontier: source.sourceSeq - 1, newOperationId: crypto.randomUUID(), claimedAt: new Date().toISOString() })))!;
+    const input = { incarnation: "side-allocation", conversationId: parent, chatJid: chat, branchId: "main", operationId: claim.operation.operationId,
+      sourceSeq: source.sourceSeq, sourceId: id, payloadRef: id, requestId: id, requestHash: hashCanonicalRequest({ type: "input", requestId: id, content: prompt }) };
+    await expect(bundle.allocateSidePromptConversation({ ...input, sourceId: "internal:other" })).rejects.toThrow("Side prompt source authority unavailable");
+    const allocated = await bundle.allocateSidePromptConversation(input);
+    expect(allocated.conversationId).not.toBe(parent);
+    expect((await bundle.allocateSidePromptConversation(input)).conversationId).toBe(allocated.conversationId);
+    expect(db.query("SELECT * FROM entries ORDER BY id").all()).toEqual(history);
+    const bindings = createHostDurableBindings(db, { domain: "side-allocation", incarnation: "side-allocation", manifest, assertOwner: assert, resolveContent: async () => prompt });
+    expect(bindings.resolveConversation(allocated)).toBe(allocated.conversationId);
+    expect(bindings.resolveConversation({ ...allocated, requestHash: "0".repeat(64) })).toBeUndefined();
+    const cap = saveBudgetCap({ scope: "instance_daily", metric: "api_usd_micros", amount: 1, timezone: "UTC" }, db);
+    expect(() => bindings.resolveConversation(allocated)).toThrow("Native side prompt budget admission unavailable");
+    setBudgetCapEnabled(cap.id, false, db);
+    db.query("UPDATE service_effect_s01_sources SET state='pending' WHERE source_id=?").run(id);
+    expect(bindings.resolveConversation(allocated)).toBeUndefined();
+  } finally { await bundle.close(); lock.release(); closeDatabase(); }
+});
