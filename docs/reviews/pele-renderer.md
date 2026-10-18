@@ -21,4 +21,8 @@ The timeline uses Pele 1.6.0 through one lazy local asset and one shared Classic
 - Bounded independent source judge found one P2: quoted relative CSS image-set resource URLs. Fixed standard/prefixed forms and added no-request browser regression; follow-up returned READY with no remaining P1/P2 in the reviewed renderer/security files.
 - Light/dark old/new screenshots inspected. Single-run Chromium render+sanitize observations for 10/100/300 edges: about 5/16/40 ms; no performance SLA inferred.
 
-Full `make ci-fast` qualification is required on the frozen candidate before publication. No merge, deployment, installation into the running runtime or restart is authorised by this work.
+## Frozen full gate
+
+`make ci-fast` passed at `3a28393a2779e810b8941a9e61955bed0651b7c2`, tree `5fa230589b230b5f276650519f23aefd72d92ae7`: 7,327 passed / 84 skipped / 0 failed / 48,225 assertions across 1,009 files; feature stage 25 passed / 253 assertions; build stage nine passed / 26 assertions. Head/tree were identical before and after. The only untracked output was the retained browser screenshots. Frozen browser matrices passed 29 tests / 651 assertions per engine. The qualification receipt is `/workspace/exports/pele-renderer-qualification.json`.
+
+The publication update changes documentation only; runtime/generated-assets parity with that frozen commit is verified separately. Aggregate typecheck and wider Family-suite baseline failures above remain disclosed. No merge, deployment, installation into the running runtime or restart is authorised by this work.

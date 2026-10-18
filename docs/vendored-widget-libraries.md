@@ -194,7 +194,9 @@ fixed. Pele zoom controls, resize-driven relayout and error overlays are not
 used; the existing inline loading and error surfaces remain.
 
 `bun run build:vendor:pele` regenerates the bundle, metadata and complete
-MIT/embedded ISC notice at `/static/common/js/vendor/pele.LICENSE.txt`, plus\nthe bundled DOMPurify Apache-2.0 notice at\n`/static/common/js/vendor/diagram-sanitizer.LICENSE.txt`.
+MIT/embedded ISC notice at `/static/common/js/vendor/pele.LICENSE.txt`, plus
+the bundled DOMPurify Apache-2.0 notice at
+`/static/common/js/vendor/diagram-sanitizer.LICENSE.txt`.
 `bun run update:vendor:pele -- --version <exact-version>` updates the pinned
 package through the existing manifest workflow.
 
