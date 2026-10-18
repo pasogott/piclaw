@@ -349,12 +349,17 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       if (conversationId === undefined || !persisted) throw Error("Scheduled fork not published");
       return Object.freeze({ ...base, conversationId });
     }
-    const sideContinuations = new Map<string, Promise<SidePromptResult>>();
-    function continueSidePrompt(input: AcceptedInput): Promise<SidePromptResult> {
+    const sideContinuations = new Map<string, { identity: string; promise: Promise<SidePromptResult> }>();
+    function continueSidePrompt(raw: AcceptedInput): Promise<SidePromptResult> {
       assertLive();
+      const input = Object.freeze({ ...raw });
       const key = JSON.stringify([input.chatJid, input.sourceId]);
+      const identity = hashCanonicalRequest(input as unknown as CanonicalJsonValue);
       const pending = sideContinuations.get(key);
-      if (pending) return pending;
+      if (pending) {
+        if (pending.identity !== identity) throw Error("Side prompt continuation conflict");
+        return pending.promise;
+      }
       const continuing = (async () => {
         const allocated = await allocateSidePromptConversation(input);
         const id = await runtime.submit(allocated);
@@ -366,10 +371,14 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           .filter(block => block.type === "thinking").map(block => block.thinking).join(""),
           model: `${state.answer.message.provider}/${state.answer.message.model}`, usage: state.answer.message.usage, stopReason: state.answer.message.stopReason };
       })();
-      sideContinuations.set(key, continuing);
+      const promise = continuing.then(result => {
+        sideContinuations.delete(key);
+        return result;
+      });
+      sideContinuations.set(key, { identity, promise });
       // Keep unknown failures owned until reopen; do not replay a failed storage
       // admission in a possibly sealed SDK instance. No second request identity.
-      return continuing;
+      return promise;
     }
     async function reconcileSidePrompt(chatJid: string, sourceId: string): Promise<SidePromptResult> {
       assertLive();
