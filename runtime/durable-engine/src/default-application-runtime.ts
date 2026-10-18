@@ -368,11 +368,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   // declaration section: scheduled model overrides retain their fail-closed budget.
   const codemode = createCodemodeTool({ sandbox, models: false });
   tools.push(defineTool<typeof codemode.parameters>({ ...codemode, async execute(args, api, context) {
-    const captured = await runtime().captureToolSource(api.conversationId, api.taskId, api.callId);
-    const authority = createHostOperationAuthority(root, captured, () => {
-      assert(); lifetime.signal.throwIfAborted(); runtime().assertCapturedSourceCurrent(captured.inputs);
-    }, true);
-    const assertCurrent = () => { authority.assertCurrent(); mcp!.assertCurrent(); };
+    const sourceCurrent = await captureSource({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId });
+    const assertCurrent = () => { sourceCurrent(); mcp!.assertCurrent(); };
     assertCurrent();
     const result = await codemode.execute(args, withGuardedCommit(api, assertCurrent), context);
     assertCurrent();
