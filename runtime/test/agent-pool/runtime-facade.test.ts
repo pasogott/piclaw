@@ -1247,3 +1247,19 @@ test('lifetime-bound streaming input refuses unfenced SDK injection', async () =
   expect(prompts).toBe(0);
   expect(validations).toBe(2);
 });
+
+test("durable compact captures one port for the whole command without legacy fallback", async () => {
+  let lookups = 0, compactions = 0, legacyCalls = 0, releases = 0;
+  const port = { sessionId: "captured-generation", branchId: "main", readPosition: async () => null,
+    async compact(instructions?: string) { compactions++; expect(instructions).toBe("keep decisions"); return { compacted: true }; } };
+  const { facade } = createFacade({
+    getDurableSession() { return ++lookups === 1 ? port : undefined; },
+    async getOrCreateRuntime() { legacyCalls++; throw Error("Legacy forbidden"); },
+    acquireCommandProtection() { return () => { releases++; }; },
+  });
+  expect(await facade.applyControlCommand("web:captured", { type: "compact", instructions: " keep decisions " })).toMatchObject({ status: "success", sessionGeneration: "captured-generation" });
+  expect(lookups).toBe(1);
+  expect(compactions).toBe(1);
+  expect(legacyCalls).toBe(0);
+  expect(releases).toBe(1);
+});

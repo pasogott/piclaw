@@ -338,10 +338,10 @@ export class AgentRuntimeFacade {
   }
 
   async applyControlCommand(chatJid: string, command: AgentControlCommand): Promise<AgentControlResult> {
-    if (this.getDurableSession(chatJid)) {
+    const port = this.getDurableSession(chatJid);
+    if (port) {
       if (command.type === "compact") {
         requireSingleUserDirectExecution("Direct control commands");
-        const port = this.getDurableSession(chatJid)!;
         if (!port.compact) throw new Error("Durable compaction unavailable");
         revokeAddonLocalAgent(chatJid);
         const release = this.options.acquireCommandProtection?.(chatJid);
@@ -357,7 +357,6 @@ export class AgentRuntimeFacade {
       }
       if (command.type === "model") {
         requireSingleUserDirectExecution("Direct model commands");
-        const port = this.getDurableSession(chatJid)!;
         if (!port.setModel) throw new Error("Durable model mutation unavailable");
         if (command.compact) return { status: "error", message: "Durable model compaction unavailable" };
         const selected = resolveControlModelSelection(this.options.modelRegistry, command);
