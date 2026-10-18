@@ -38,6 +38,16 @@ export async function handleAgentDebugRequest(req: Request, ctx: AgentDebugConte
   const url = new URL(req.url);
   const chatJid = (url.searchParams.get("chat_jid") || ctx.defaultChatJid).trim() || ctx.defaultChatJid;
 
+  const native = await ctx.agentPool.getDurableSessionMetadata?.(chatJid);
+  if (native !== undefined) {
+    if (!native) return ctx.json({ error: "No active session for this chat" }, 404);
+    return ctx.json({ chatJid, backend: native.backend, conversationId: native.conversationId,
+      extensions: native.extensions.map((name: string) => ({ name, sourceInfo: null })),
+      tools: native.tools.map((tool: { name: string; description: string }) => ({ ...tool, sourceInfo: null })),
+      commands: [], promptTemplates: [], skills: [],
+      unavailable: ["legacy-extension-provenance", "legacy-extension-commands", "prompt-templates", "skills"],
+    }, 200);
+  }
   const session = await ctx.agentPool.getSessionForIntrospection(chatJid);
   if (!session) {
     return ctx.json({ error: "No active session for this chat" }, 404);

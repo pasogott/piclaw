@@ -18,7 +18,15 @@ export interface DurableAcceptedInput {
 }
 
 /** Explicit internal binding for the existing application session-position reader. */
+export interface DurableSessionMetadata {
+  backend: "durable";
+  conversationId: number;
+  extensions: string[];
+  tools: { name: string; description: string }[];
+}
+
 export interface DurableSessionPositionPort {
+  readonly readMetadata?: () => Promise<DurableSessionMetadata>;
   readonly sessionId: string;
   readonly branchId: string;
   readonly readPosition: () => Promise<string | null>;
@@ -61,6 +69,7 @@ export interface DurableConversationState {
 export interface DurableConversationRuntimePort {
   compactSession?(binding: DurableConversationBinding & { readonly incarnation: string }, instructions?: string): Promise<{ compacted: boolean }>;
   reconcileMaintenance?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<void>;
+  readSessionMetadata?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<DurableSessionMetadata>;
   readSessionTree?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<import("../agent-control/session-tree-snapshot.js").SessionTreeSnapshot>;
   readSessionPosition?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<string | null>;
   setSessionThinkingLevel?(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, level: string): Promise<void>;
@@ -113,6 +122,7 @@ export function createDurableConversationAdapter(options: {
   const compact = runtime.compactSession?.bind(runtime);
   const reconcileMaintenance = runtime.reconcileMaintenance?.bind(runtime);
   const readTree = runtime.readSessionTree?.bind(runtime);
+  const readMetadata = runtime.readSessionMetadata?.bind(runtime);
   function input(work: DurableConversationOperation, intent = false): DurableAcceptedInput {
     const { source, operation } = work.claimed;
     const binding = lookup(source.chatJid, work.branchId);
@@ -141,7 +151,8 @@ export function createDurableConversationAdapter(options: {
         setModel: setModel ? (model: { provider: string; modelId: string }) => setModel({ ...binding, incarnation }, { provider: model.provider, modelId: model.modelId }) : undefined,
         compact: compact ? (instructions?: string) => compact({ ...binding, incarnation }, instructions) : undefined,
         reconcileMaintenance: reconcileMaintenance ? () => reconcileMaintenance({ ...binding, incarnation }) : undefined,
-        readTree: readTree ? () => readTree({ ...binding, incarnation }) : undefined });
+        readTree: readTree ? () => readTree({ ...binding, incarnation }) : undefined,
+        readMetadata: readMetadata ? () => readMetadata({ ...binding, incarnation }) : undefined });
     },
     supportsIntent: !!submitIntent,
     validateIntent(work: DurableConversationOperation) { input(work, true); },

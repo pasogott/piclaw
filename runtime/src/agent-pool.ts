@@ -333,6 +333,7 @@ export class AgentPool {
 
   private readonly scheduledDispatch: AgentPoolOptions["dispatchScheduledAgent"];
   private readonly durableApplication: boolean;
+  private readonly durableSessionLookup?: AgentPoolOptions["getDurableSession"];
   dispatchScheduledAgent(lease: import("./service-effects/contracts/scheduled-run-store.js").ScheduledRunLease): Promise<AgentOutput> | undefined {
     if (this.scheduledDispatch) return this.scheduledDispatch(lease);
     if (this.durableApplication) throw new Error("Durable scheduled dispatcher unavailable");
@@ -343,6 +344,7 @@ export class AgentPool {
     this.scheduledDispatch = options.dispatchScheduledAgent?.bind(options);
     this.sidePromptDispatch = options.dispatchSidePrompt?.bind(options);
     this.durableApplication = options.getDurableSession !== undefined;
+    this.durableSessionLookup = options.getDurableSession?.bind(options);
     if (!options.credentialStore || !options.modelRuntime) {
       throw new Error("AgentPool requires shared credentialStore and modelRuntime services");
     }
@@ -919,6 +921,13 @@ export class AgentPool {
   }
 
   /** Return an existing session for read-only introspection, or create one if needed. */
+  async getDurableSessionMetadata(chatJid: string) {
+    if (!this.durableApplication) return undefined;
+    const position = this.durableSessionLookup?.(chatJid);
+    if (!position?.readMetadata) return null;
+    return position.readMetadata();
+  }
+
   async getSessionForIntrospection(chatJid: string): Promise<AgentSession> {
     return this.getOrCreate(chatJid);
   }

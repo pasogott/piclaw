@@ -302,6 +302,20 @@ export class HostConversationRuntime {
       return page.items[0] ? String(page.items[0].id) : null;
     });
   }
+  readSessionMetadata(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<import("../../src/agent-pool/durable-runtime-adapter.js").DurableSessionMetadata> {
+    const copy = Object.freeze({ ...binding });
+    return this.observe(async () => {
+      const o = this.options;
+      if (copy.incarnation !== o.incarnation || !o.existingConversationIds.some(id => id === copy.conversationId) ||
+        o.conversationFor(copy.chatJid, copy.branchId) !== copy.conversationId) throw Error("Host binding conflict");
+      const conversation = await this.harness.conversation(copy.conversationId as ConversationId, this.context); this.fence();
+      if (!conversation) throw Error("Missing existing conversation");
+      const agent = await conversation.agent(this.context); this.fence();
+      const tools = [...new Map([...agent.tools, ...agent.callable, ...agent.deferred].map(tool => [tool.name,
+        { name: tool.name, description: tool.description }])).values()];
+      return { backend: "durable", conversationId: copy.conversationId, extensions: agent.extensions.map(extension => extension.name), tools };
+    });
+  }
   /** Fork-aware public history across the explicit imported host-session bindings only. */
   readSessionTree(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<SessionTreeSnapshot> {
     const copy = Object.freeze({ incarnation: binding.incarnation, chatJid: binding.chatJid,

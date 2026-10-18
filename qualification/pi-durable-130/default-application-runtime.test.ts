@@ -1660,6 +1660,12 @@ for (const scenario of ["native-compaction-accounting-close-fail", "native-compa
       expect(root.query("SELECT status,parent_work_id FROM budget_work WHERE execution_kind='side_prompt' AND id LIKE 'durable-operation:%'").all()).toEqual([{ status: "completed", parent_work_id: "stable-side-retry" }]);
       expect(root.query("SELECT status,parent_work_id,execution_kind FROM budget_work WHERE id='stable-side-retry'").get()).toEqual({ status: "completed", parent_work_id: "native-side-parent", execution_kind: "side_prompt" });
       expect(root.query("SELECT status FROM budget_work WHERE id='native-side-parent'").get()).toEqual({ status: "active" });
+      const debugResponse = await channel.handleRequest(new Request("http://fixture/agent/debug?chat_jid=web%3Adefault"));
+      expect(debugResponse.status).toBe(200);
+      const nativeDebug = await debugResponse.json() as { backend: string; tools: { name: string }[] };
+      expect(nativeDebug.backend).toBe("durable");
+      expect(nativeDebug.tools.map(tool => tool.name)).toContain("read");
+      expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
       const callsBeforeReplay = calls;
       const replayed = await pool.runSidePrompt("web:default", "native isolated side prompt", { budgetWorkId: "stable-side-retry", budgetParentWorkId: "native-side-parent", systemPrompt: "SIDE_SYSTEM_PREFIX" });
       expect(replayed).toEqual(result);

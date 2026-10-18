@@ -331,6 +331,14 @@ test("controller explicitly adopts one checkpointed manual compaction without re
     expect(controller.resumeRecoveredMaintenance()).toBe(resumed);
     expect(f.host.modelCalls).toBe(1);
     await controller.reconcileRecovered();
+    const historyBeforeMetadata = root.query("SELECT * FROM entries ORDER BY id").all();
+    const metadata = await controller.runtime.readSessionMetadata({ ...binding, incarnation: "recovered-manual" });
+    expect(metadata).toMatchObject({ backend: "durable", conversationId: id, extensions: ["qualification"] });
+    expect(metadata.tools.map(tool => tool.name)).toContain("host_effect");
+    metadata.tools.length = 0;
+    expect((await controller.runtime.readSessionMetadata({ ...binding, incarnation: "recovered-manual" })).tools.length).toBeGreaterThan(0);
+    await expect(controller.runtime.readSessionMetadata({ ...binding, incarnation: "wrong" })).rejects.toThrow("Host binding conflict");
+    expect(root.query("SELECT * FROM entries ORDER BY id").all()).toEqual(historyBeforeMetadata);
     const state = await controller.runtime.inspectAuthority();
     expect(state.inspection.tasks).toEqual([]);
     expect(state.inspection.submissions).toEqual([]);
