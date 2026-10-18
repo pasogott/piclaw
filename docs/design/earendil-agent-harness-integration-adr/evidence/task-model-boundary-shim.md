@@ -44,3 +44,11 @@ synthetic task's persisted summary phase (3 tests / 17 assertions). This proves 
 decorator follows recovered phase execution; it is not real compaction checkpoint
 recovery evidence. A bounded shim-only review found no scope/cache/receiver blocker.
 Upstream draft API proposal: https://github.com/earendil-works/pi/pull/11104.
+
+A separate disk-backed test now runs the SDK's actual `pi.compaction` task, stops
+with its summary checkpoint persisted, and reopens the same file. It verifies the
+same task/conversation, a fresh invocation signal and summary-phase correlation
+(13 assertions). The synthetic provider is held before its effect gate; only the
+recovered attempt completes a model call. This is clean-close recovery, not a
+SIGKILL or provider exactly-once test. Default-factory adoption of previously
+admitted maintenance remains separate and unqualified.
