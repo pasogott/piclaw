@@ -1636,7 +1636,8 @@ for (const scenario of ["public-admission-row-mismatch", "public-admission-chat-
     expect(backend.sessionOptions.getDurableSession!("web:default")?.sessionId).toBe(first?.sessionId);
     expect(backend.sessionOptions.getDurableSession!(newcomer)).toMatchObject({ sessionId: newPort.sessionId, branchId: newPort.branchId });
     backend.stop(); await backend.close();
-    expect(await inspectStored(false)).toEqual(seeded); // Includes tools/model/thinking/instructions/extensions, not just tool count.
+    const preserved = await inspectStored(false);
+    for (const [id, state] of seeded) expect(preserved.get(id)).toEqual({ ...(state as object), extensions: ["app.host-builtins", "app.host-scheduled-source"] }); // Retain explicit selection plus required source policy.
     expect(root.query("SELECT * FROM entries ORDER BY id").all()).toEqual(historyBeforeUpgrade);
     expect(root.query(`SELECT * FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE kind='"app.application-identity"') ORDER BY document_id, seq`).all()).toEqual(identitiesBeforeUpgrade);
     expect(calls).toBe(callsBeforeUpgrade);
@@ -1723,7 +1724,7 @@ for (const scenario of ["public-admission-row-mismatch", "public-admission-chat-
   } finally { fault.mockRestore(); }
   backend.stop(); await backend.close();
   const upgraded = await inspectStored(false);
-  for (const [id, state] of seeded) expect(upgraded.get(id)).toEqual({ ...(state as object), tools: ["read", "bash", "edit", "write", "find", "ls", "grep", "codemode"] });
+  for (const [id, state] of seeded) expect(upgraded.get(id)).toEqual({ ...(state as object), tools: ["read", "bash", "edit", "write", "find", "ls", "grep", "codemode"], extensions: ["app.host-builtins", "app.host-scheduled-source"] });
   backend = await createDefaultApplicationRuntime(owner, async () => services);
   const recoveredCreate = backend.sessionOptions.getDurableSession!(uncertainChat)!;
   expect(recoveredCreate).toBeDefined();

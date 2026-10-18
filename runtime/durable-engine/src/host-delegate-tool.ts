@@ -26,6 +26,8 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
   /** Same guarded host registrations; never add-on/MCP or recursive tools. */
   standardTools?: readonly ToolRegistration[];
   standardExtensions?: readonly Extension[];
+  /** Exact application-owned source-policy extension, separate from child capabilities. */
+  sourceExtension?: Extension;
 }) {
   if (definition.name !== "delegate") throw Error("Expected registered Delegate tool");
   const { assertCurrent, runtime, selectModel, assertModelCurrent, readFiles } = options;
@@ -41,6 +43,9 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
     throw Error("Native Delegate requires standard host builtins only");
   if (standardExtensions.some(extension => extension.hooks?.length || extension.sections?.length || extension.tools?.some(tool => !standard.includes(tool))))
     throw Error("Native Delegate child extensions must contain only approved standard tools");
+  const source = options.sourceExtension;
+  if (source && (source.name !== "app.host-scheduled-source" || source.tools?.length || source.sections?.length))
+    throw Error("Invalid Delegate source-policy extension");
   return defineTool({ name: definition.name, description: definition.description, parameters: definition.parameters,
     callers: ["model"], replay: "safe", executionMode: "parallel",
     async execute(input, api, context) {
@@ -67,7 +72,7 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
       const names = readOnly ? readers.map(tool => tool.name) : args.tools === "standard" ? standard.map(tool => tool.name)
         : typeof args.tools === "string" ? args.tools.split(",").map(name => name.trim()).filter(Boolean) : [];
       if (args.tools === "full" || !names.length || names.some(name => !approved.some(tool => tool.name === name))) throw Error("Native Delegate supports approved host builtins only; full is not qualified");
-      const childExtensions = readOnly || !standard.length ? extensions : standardExtensions;
+      const childExtensions = [...(source ? [source] : []), ...(readOnly || !standard.length ? extensions : standardExtensions)];
       if (args.system_prompt !== undefined && typeof args.system_prompt !== "string") throw Error("Invalid Delegate system prompt");
       // Operation-entry budget includes host source/model approval awaits. Task
       // memo preserves absolute expiry across replay; approval cannot renew it.
