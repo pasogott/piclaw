@@ -121,8 +121,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     // Resolve only actual root messages and verify both accepted reference and source identity.
     async function content(ref: string, input: AcceptedInput | { chatJid: string; sourceId: string }) {
       assert();
-      if ("conversationId" in input && input.sourceId.startsWith("side-prompt:") &&
-        ref === input.sourceId && bindings.resolveConversation(input) === input.conversationId) {
+      if (input.sourceId.startsWith("side-prompt:") && ref === input.sourceId &&
+        (!("conversationId" in input) || bindings.resolveConversation(input) === input.conversationId)) {
         const payload = await config.answers.resolver.resolve(ref); assert();
         if (!payload || payload.ref !== ref || payload.mediaType !== "text/plain" || payload.redactionClass !== "private") throw Error("Unverified side prompt payload");
         const bytes = Uint8Array.from(payload.bytes);
@@ -155,13 +155,17 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         assert();
         if (source.kind !== "message" && source.kind !== "scheduled_agent" && source.kind !== "internal") throw Error("Unsupported recovered source");
         const binding = await bindings.findSource(source.chatJid, source.sourceSeq);
-        const operationId = binding?.operationId ?? source.targetOperationId;
+        const pendingSideOperation = !binding && source.kind === "internal" ? root.query(`SELECT o.operation_id FROM service_effect_s01_operations o
+          JOIN service_effect_s01_operation_sources os ON os.operation_id=o.operation_id AND os.chat_jid=o.chat_jid AND os.source_seq=o.primary_source_seq
+          JOIN service_effect_s01_chats c ON c.chat_jid=o.chat_jid AND c.active_operation_id=o.operation_id
+          WHERE o.chat_jid=? AND o.primary_source_seq=? AND o.phase='claimed' AND o.harness_session_id IS NULL`).get(source.chatJid, source.sourceSeq) as { operation_id: string } | null : null;
+        const operationId = binding?.operationId ?? pendingSideOperation?.operation_id ?? source.targetOperationId;
         if (!operationId) throw Error("Missing recovered operation identity");
         const operation = value(await work.getOperation(operationId));
         const scope = routeIndex.get(source.chatJid);
         if (!operation || !scope) throw Error("Missing recovered operation");
         return { claimed: { source, operation }, branchId: scope.branchId,
-          requestId: binding?.requestId ?? `queued-steer:${source.sourceId}`, content: await content(source.payloadRef, (source.kind === "scheduled_agent" || source.kind === "internal") && binding ? binding : source) };
+          requestId: binding?.requestId ?? (pendingSideOperation ? source.sourceId : `queued-steer:${source.sourceId}`), content: await content(source.payloadRef, (source.kind === "scheduled_agent" || source.kind === "internal") && binding ? binding : source) };
       } },
     }, context);
     const activeController = controller;

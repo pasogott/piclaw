@@ -62,15 +62,18 @@ export async function reconstituteAcceptedWork(options: {
         if (proof) proofs.set(proof.intentId, proof);
         const sourceCopy = Object.freeze(structuredClone(source));
         const stored = await find(scope.chatJid, seq); assert();
-        if (role === "primary" && !stored) return deny();
+        const pendingSide = role === "primary" && !stored && source.kind === "internal" && source.state === "claimed" &&
+          /^side-prompt:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(source.sourceId) &&
+          source.payloadRef === source.sourceId && operation.phase === "claimed" && !h && operation.claimedSourceSeqs.length === 1;
+        if (role === "primary" && !stored && !pendingSide) return deny();
         const loaded = structuredClone(await read(sourceCopy)); assert();
         if (digest(loaded.claimed.source) !== digest(sourceCopy) || digest(loaded.claimed.operation) !== digest(operation) ||
           loaded.branchId !== scope.branchId || typeof loaded.content !== "string") return deny();
-        const requestId = stored?.requestId ?? proof!.intentId;
+        const requestId = stored?.requestId ?? (pendingSide ? source.sourceId : proof!.intentId);
         if (loaded.requestId !== requestId || (role === "intent" && requestId !== proof!.intentId)) return deny();
         const isolated = source.kind === "scheduled_agent" || source.kind === "internal";
         const scheduledId = isolated && stored && options.bindings.resolveConversation?.(stored);
-        if (isolated && !scheduledId) return deny();
+        if (isolated && !scheduledId && !pendingSide) return deny();
         const input = inputSnapshot({ incarnation, ...scope, ...(scheduledId ? { conversationId: scheduledId } : {}), operationId: operation.operationId,
           sourceSeq: seq, sourceId: source.sourceId, payloadRef: source.payloadRef, requestId,
           requestHash: hashCanonicalRequest({ type: "input", requestId, content: loaded.content }) });

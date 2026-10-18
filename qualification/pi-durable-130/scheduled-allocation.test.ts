@@ -164,6 +164,18 @@ for (const failBinding of [false, true]) test(`side prompt allocation binds an e
       expectedFrontier: source.sourceSeq - 1, newOperationId: crypto.randomUUID(), claimedAt: new Date().toISOString() })))!;
     const input = { incarnation: "side-allocation", conversationId: parent, chatJid: chat, branchId: "main", operationId: claim.operation.operationId,
       sourceSeq: source.sourceSeq, sourceId: id, payloadRef: id, requestId: id, requestHash: hashCanonicalRequest({ type: "input", requestId: id, content: prompt }) };
+    if (!failBinding) {
+      const callsBeforeReopen = fixture.host.modelCalls;
+      await bundle.close();
+      db.query("UPDATE service_effect_s01_operations SET phase='executing' WHERE operation_id=?").run(input.operationId);
+      await expect(createBundle()).rejects.toThrow("Unverified recovered authority");
+      db.query("UPDATE service_effect_s01_operations SET phase='claimed' WHERE operation_id=?").run(input.operationId);
+      bundle = await createBundle();
+      expect((await activeRuntime.inspectAuthority()).inspection.scheduling).toBe("paused");
+      expect(fixture.host.modelCalls).toBe(callsBeforeReopen);
+      expect(db.query("SELECT * FROM piclaw_durable_bindings_v1 WHERE chat_jid=?").all(chat)).toEqual([]);
+      expect(db.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=?").get(input.operationId)).toEqual({ phase: "claimed" });
+    }
     await expect(bundle.allocateSidePromptConversation({ ...input, sourceId: "internal:other" })).rejects.toThrow("Side prompt source authority unavailable");
     if (failBinding) {
       const beforeFailure = db.query("SELECT * FROM conversations ORDER BY id").all();
