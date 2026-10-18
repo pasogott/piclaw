@@ -506,7 +506,11 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       bundle.stop();
     }, async close() {
       widgetPublisher = undefined; workspaceFileOpener = undefined;
-      lifetime.abort(); releaseReviewSource?.(); await mcp?.close(); await closeSandbox(); await drawioHost?.close(); await bundle.close();
+      lifetime.abort(); releaseReviewSource?.();
+      const results = await Promise.allSettled([mcp?.close(), closeSandbox(), drawioHost?.close()]);
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (failures.length) throw new AggregateError(failures.map(result => result.reason), "Native tool cleanup uncertain");
+      await bundle.close();
     } };
   } catch (error) {
     lifetime.abort(); releaseReviewSource?.();

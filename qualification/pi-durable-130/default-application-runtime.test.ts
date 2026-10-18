@@ -125,7 +125,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -1048,6 +1048,27 @@ for (const scenario of ["native-mcp-disconnect", "native-mcp-catalog-change", "n
       expect(codemodeResult.isError).toBe(false);
     }
     expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
+    if (scenario === "native-mcp-cleanup-fail") {
+      const { McpClient } = await import("../../node_modules/@earendil-works/pi-mcp");
+      const { CodemodeSandbox } = await import("../../runtime/durable-engine/node_modules/@earendil-works/pi-codemode");
+      const mcpFault = Error("MCP_CLOSE_FAULT"), sandboxFault = Error("SANDBOX_CLOSE_FAULT");
+      const clientClose = spyOn(McpClient.prototype, "close").mockRejectedValue(mcpFault);
+      const sandboxClose = spyOn(CodemodeSandbox.prototype, "close").mockRejectedValue(sandboxFault);
+      const runtimeClose = spyOn(HostConversationRuntime.prototype, "close");
+      let failure: unknown;
+      try { await backend.close(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toContain(sandboxFault);
+      expect(((failure as AggregateError).errors[0] as AggregateError).errors).toContain(mcpFault);
+      expect(clientClose).toHaveBeenCalledTimes(1);
+      expect(sandboxClose).toHaveBeenCalledTimes(1);
+      expect(runtimeClose).not.toHaveBeenCalled();
+      expect(() => owner.assertCurrentOwner()).not.toThrow();
+      clientClose.mockRestore(); sandboxClose.mockRestore(); runtimeClose.mockRestore();
+      expect(() => process.kill(Number(readFileSync(mcpPid, "utf8")), 0)).toThrow();
+      for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+      closeDatabase(); owner.release(); return;
+    }
     backend.stop(); await backend.close();
     const pid = Number(readFileSync(mcpPid, "utf8"));
     expect(() => process.kill(pid, 0)).toThrow();
