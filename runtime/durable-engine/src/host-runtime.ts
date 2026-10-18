@@ -344,7 +344,7 @@ export class HostConversationRuntime {
     });
   }
   /** Detached provider-ready transcript for an isolated side prompt; no session hydration or writes. */
-  readSidePromptContext(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<{ model: string; thinkingLevel: string; messages: unknown[] }> {
+  readSidePromptContext(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<import("../../src/agent-pool/durable-runtime-adapter.js").DurableSidePromptContext> {
     const copy = Object.freeze({ incarnation: binding.incarnation, chatJid: binding.chatJid, branchId: binding.branchId, conversationId: binding.conversationId });
     return this.observe(async () => {
       const o = this.options;
@@ -355,10 +355,14 @@ export class HostConversationRuntime {
       const agent = await conversation.agent(this.context); this.fence();
       const view = await conversation.context(this.context); this.fence();
       const current = await conversation.agent(this.context); this.fence();
-      if (JSON.stringify(current) !== JSON.stringify(agent)) throw Error("Side prompt agent changed");
+      const configuration = (value: typeof agent) => ({ model: value.model, thinkingLevel: value.thinkingLevel,
+        tools: [...new Set([...value.tools, ...value.callable, ...value.deferred].map(tool => tool.name))], modelTools: value.tools.map(tool => tool.name), extensions: value.extensions.map(extension => extension.name),
+        instructions: value.instructions, cwd: value.cwd });
+      if (JSON.stringify(configuration(current)) !== JSON.stringify(configuration(agent))) throw Error("Side prompt agent changed");
       if (!agent.model) throw Error("No model configured");
-      return { model: `${agent.model.provider}/${agent.model.modelId}`, thinkingLevel: agent.thinkingLevel ?? "off",
-        messages: JSON.parse(JSON.stringify(view.messages)) as unknown[] };
+      return JSON.parse(JSON.stringify({ model: `${agent.model.provider}/${agent.model.modelId}`, thinkingLevel: agent.thinkingLevel ?? "off",
+        messages: view.messages, tools: [...new Set([...agent.tools, ...agent.callable, ...agent.deferred].map(tool => tool.name))], modelTools: agent.tools.map(tool => tool.name),
+        extensions: agent.extensions.map(extension => extension.name), instructions: agent.instructions, cwd: agent.cwd }));
     });
   }
   /** Read only the public persisted agent choice, not resolved host defaults or response metadata. */

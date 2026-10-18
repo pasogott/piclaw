@@ -18,6 +18,17 @@ export interface DurableAcceptedInput {
 }
 
 /** Explicit internal binding for the existing application session-position reader. */
+export interface DurableSidePromptContext {
+  model: string;
+  thinkingLevel: string;
+  messages: unknown[];
+  tools: string[];
+  modelTools: string[];
+  extensions: string[];
+  instructions?: string;
+  cwd?: string;
+}
+
 export interface DurableSessionPositionPort {
   readonly sessionId: string;
   readonly branchId: string;
@@ -31,7 +42,7 @@ export interface DurableSessionPositionPort {
   /** Observe the same owned maintenance; never admit a new compaction. */
   readonly reconcileMaintenance?: () => Promise<void>;
   readonly readTree?: () => Promise<import("../agent-control/session-tree-snapshot.js").SessionTreeSnapshot>;
-  readonly readSidePromptContext?: () => Promise<{ model: string; thinkingLevel: string; messages: unknown[] }>;
+  readonly readSidePromptContext?: () => Promise<DurableSidePromptContext>;
 }
 
 export interface DurableConversationBinding {
@@ -63,7 +74,7 @@ export interface DurableConversationRuntimePort {
   compactSession?(binding: DurableConversationBinding & { readonly incarnation: string }, instructions?: string): Promise<{ compacted: boolean }>;
   reconcileMaintenance?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<void>;
   readSessionTree?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<import("../agent-control/session-tree-snapshot.js").SessionTreeSnapshot>;
-  readSidePromptContext?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<{ model: string; thinkingLevel: string; messages: unknown[] }>;
+  readSidePromptContext?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<DurableSidePromptContext>;
   readSessionPosition?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<string | null>;
   setSessionThinkingLevel?(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, level: string): Promise<void>;
   setSessionModel?(binding: DurableConversationBinding & { readonly incarnation: string }, model: { provider: string; modelId: string }): Promise<void>;

@@ -332,6 +332,12 @@ test("controller explicitly adopts one checkpointed manual compaction without re
     const sideContext = await controller.runtime.readSidePromptContext({ ...binding, incarnation: "recovered-manual" });
     expect(sideContext.model).toBe("qualification/synthetic");
     expect(sideContext.messages.length).toBeGreaterThan(0);
+    expect(sideContext.tools).toContain("host_effect");
+    expect(sideContext.modelTools).toContain("host_effect");
+    expect(sideContext.extensions.every(name => typeof name === "string")).toBe(true);
+    const originalTools = [...sideContext.tools];
+    sideContext.tools.length = 0;
+    expect((await controller.runtime.readSidePromptContext({ ...binding, incarnation: "recovered-manual" })).tools).toEqual(originalTools);
     const originalMessages = JSON.stringify(sideContext.messages);
     sideContext.messages.length = 0;
     expect(JSON.stringify((await controller.runtime.readSidePromptContext({ ...binding, incarnation: "recovered-manual" })).messages)).toBe(originalMessages);
