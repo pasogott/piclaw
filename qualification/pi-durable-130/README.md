@@ -1,3 +1,17 @@
+# Native MCP transport close admission — targeted hardening
+
+The existing constrained Native MCP transport now rejects start/send admission
+as soon as close begins, before calling the raw transport. Closure stays sealed
+after completion or failure. Raw policy-denial cleanup replies, pending-tail joins
+and cached close failures retain their existing path. Already-admitted work is
+not undone; no atomic network-cancellation claim is added.
+
+Selected close/shutdown tests pass4/28 assertions; runtime types and bounded
+review pass. No full suites or live MCP requests ran. This hardens the existing
+Native transport only: durable default MCP admission remains unqualified and
+blocked. Checkpoint:
+/workspace/reviews/durable-1650/mcp-transport-close-admission.md.
+
 # Native codemode can create/open Draw.io diagrams
 
 The existing Draw.io adapter now permits nested-tool callers. Exact native
