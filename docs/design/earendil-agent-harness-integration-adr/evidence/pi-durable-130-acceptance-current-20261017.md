@@ -819,3 +819,16 @@ batch is claimed.
 All enabled caps still deny outright. This is uncapped accounting, not parent-cap
 or nested-cap enforcement. Automatic recovery/resend reconciliation, scheduled and
 compaction accounting, recovered-maintenance adoption and migration are incomplete.
+
+### Foreground Delegate accounting publication gates
+
+Frozen code/evidence head `1e4484322` passed one native-candidate run with exit0:
+621 tests / 7,876 assertions / 0 failures across51 files. Its single root `ci-fast`
+run also exited0: 7,333 pass /74 baseline skips /0 failures, plus25 feature and9 build
+tests. Logs and numeric exit receipts are
+`/workspace/reviews/durable-1650/delegate-accounting-{candidate,root}.{log,exit}`.
+No duplicate gate or manual hosted rerun was used.
+
+This qualifies the bounded uncapped foreground tracking described above. All enabled
+caps still deny outright; scheduled/compaction accounting, automatic recovery and
+broader acceptance remain incomplete. Migration is still last; nothing was deployed.
