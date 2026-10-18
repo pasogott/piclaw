@@ -123,7 +123,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
+for (const scenario of ["native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -154,13 +154,22 @@ for (const scenario of ["native-codemode-editable-table", "native-codemode-edita
     writeFileSync(codemodeReadPath, "NATIVE_CODEMODE_FIRST_READ");
     toolSequence = [{ name: "codemode", arguments: { code: `const first = await tools.read({path:${JSON.stringify(codemodeReadPath)}}); try { await tools.bash({command:${JSON.stringify(`printf x >> '${codemodeMarker}'; printf '%s' $$ > '${codemodePid}'; exec sleep 1000`)}}); } catch {} console.log(first);` } }];
   }
-  const nativeDrawio = scenario.startsWith("native-drawio");
-  const drawioCancelled = scenario === "native-drawio-cancel";
+  const codemodeDrawio = scenario === "native-codemode-drawio" || scenario === "native-codemode-drawio-cancel";
+  const nativeDrawio = scenario.startsWith("native-drawio") || codemodeDrawio;
+  const drawioCancelled = scenario === "native-drawio-cancel" || scenario === "native-codemode-drawio-cancel";
+  const drawioPath = codemodeDrawio ? "codemode-diagrams/new.drawio" : "nested/new.drawio";
+  let drawioNestedCaptures = 0, drawioCreates = 0;
+  let drawioDefaultXml: string | undefined;
+  const drawioRequests: string[] = [];
   const drawioMissingOpener = scenario === "native-drawio-missing-opener";
   if (nativeDrawio) {
-    await installDrawioFixture(workspace);
+    const drawioPackage = await installDrawioFixture(workspace);
+    if (codemodeDrawio) drawioDefaultXml = (await import(join(drawioPackage, "tool.ts"))).DEFAULT_DRAWIO_XML;
     writeFileSync(join(workspace, "existing.drawio"), "PRESERVED_DRAWIO");
-    toolSequence = [{ name: "open_drawio_editor", arguments: { path: "nested/new.drawio" } }, { name: "open_drawio_editor", arguments: { path: "existing.drawio" } }];
+    toolSequence = codemodeDrawio ? [{ name: "codemode", arguments: { code: drawioCancelled
+      ? `try { await tools.open_drawio_editor({path:'codemode-diagrams/new.drawio'}); } catch {} store('revoked-drawio','MUST_NOT_PERSIST'); console.log('done');`
+      : `const result=await tools.open_drawio_editor({path:'codemode-diagrams/new.drawio'}); if(typeof result!=="string") throw Error("Expected native tool output string"); console.log(result); const existing=await tools.open_drawio_editor({path:'existing.drawio'}); if(typeof existing!=="string") throw Error("Expected native tool output string"); console.log(existing);` } }]
+      : [{ name: "open_drawio_editor", arguments: { path: "nested/new.drawio" } }, { name: "open_drawio_editor", arguments: { path: "existing.drawio" } }];
   }
   const codemodeOffice = scenario === "native-codemode-office-viewer" || scenario === "native-codemode-office-viewer-cancel";
   const nativeOffice = scenario.startsWith("native-office-viewer") || codemodeOffice;
@@ -380,6 +389,13 @@ for (const scenario of ["native-codemode-editable-table", "native-codemode-edita
       return captured;
     }));
   }
+  if (codemodeDrawio) {
+    const actualOpen = hostFs.openSync;
+    captureSpies.push(spyOn(hostFs, "openSync").mockImplementation(((path: unknown, ...args: unknown[]) => {
+      if (String(path) === join(workspace, drawioPath)) drawioCreates++;
+      return (actualOpen as Function)(path, ...args);
+    }) as typeof hostFs.openSync));
+  }
   let codemodeReads = 0;
   if (scenario === "native-codemode-reopen") {
     const actualRead = hostFs.readFileSync;
@@ -448,7 +464,13 @@ for (const scenario of ["native-codemode-editable-table", "native-codemode-edita
         expect(captured.operation.harness).toBeDefined();
         if (args[2].includes("/")) officeNestedCaptures++;
       }
-      if ((officeCancelled && (!codemodeOffice || args[2].includes("/"))) || drawioCancelled) root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
+      if (codemodeDrawio && args[2].includes("/")) {
+        drawioNestedCaptures++;
+        expect(captured.operation.chatJid).toBe("web:default");
+        expect(captured.operation.harness).toBeDefined();
+        expect(captured.delegateModel).toBeUndefined();
+      }
+      if ((officeCancelled && (!codemodeOffice || args[2].includes("/"))) || (drawioCancelled && (!codemodeDrawio || args[2].includes("/")))) root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
       if (scenario === "native-editable-table-closed-publisher") backend.stop();
       if (scenario === "native-editable-table-revoked") root.query("UPDATE service_effect_s01_operations SET phase='cancelling' WHERE operation_id=?").run(captured.operation.operationId);
       // Host-owned SQL changes the actual authority after capture, not a fake
@@ -517,6 +539,7 @@ for (const scenario of ["native-codemode-editable-table", "native-codemode-edita
           let payload: any; try { payload = JSON.parse(line.slice(6)); } catch { continue; }
           if (payload.kind !== "custom" || !payload.request_id || replied.has(payload.request_id)) continue;
           replied.add(payload.request_id);
+          drawioRequests.push(payload.request_id);
           expect(payload).toMatchObject({ chat_jid: "web:default", options: { action: "open_workspace_file", target: "tab" } });
           const reply = await channel.handleRequest(new Request("http://fixture/agent/respond", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ request_id: payload.request_id, chat_jid: payload.chat_jid, outcome: { ok: true, opened: true, target: "tab" } }) }));
           expect(await reply.json()).toMatchObject({ status: "ok" });
@@ -953,16 +976,48 @@ for (const scenario of ["native-codemode-editable-table", "native-codemode-edita
   if (tableCancelled) expect(widgetEvents).toHaveLength(0);
   expect(dispatchOutcome).toBe(tableCancelled || officeCancelled || drawioCancelled ? "pending" : "settled");
   if (nativeDrawio) {
-    expect(realToolCaptures).toBe(drawioCancelled ? 1 : 2);
+    expect(realToolCaptures).toBe(codemodeDrawio ? drawioCancelled ? 2 : 3 : drawioCancelled ? 1 : 2);
+    if (codemodeDrawio) {
+      expect(drawioNestedCaptures).toBe(drawioCancelled ? 1 : 2);
+      expect(drawioCreates).toBe(drawioCancelled ? 0 : 1);
+      expect(drawioRequests).toHaveLength(drawioCancelled ? 0 : 2);
+      expect(calls).toBe(drawioCancelled ? 1 : 2);
+      expect(toolSequence).toEqual([]);
+      expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
+    }
     expect(readFileSync(join(workspace, "existing.drawio"), "utf8")).toBe("PRESERVED_DRAWIO");
     if (drawioCancelled) {
-      expect(existsSync(join(workspace, "nested/new.drawio"))).toBe(false);
+      expect(existsSync(join(workspace, drawioPath))).toBe(false);
+      if (codemodeDrawio) {
+        expect(root.query("SELECT phase FROM service_effect_s01_operations WHERE operation_id=(SELECT active_operation_id FROM service_effect_s01_chats WHERE chat_jid='web:default')").get()).toEqual({ phase: "cancelling" });
+        expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+        const stores = root.query(`SELECT r.content FROM document_revisions r JOIN documents d ON d.id=r.document_id WHERE d.kind='"pi.codemode.store"'`).all();
+        expect(JSON.stringify(stores)).not.toContain("revoked-drawio");
+        expect(JSON.stringify(stores)).not.toContain("MUST_NOT_PERSIST");
+      }
       expect(observedResults.size).toBe(0);
       expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "claimed" });
       expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
     } else {
-      expect(readFileSync(join(workspace, "nested/new.drawio"), "utf8")).toContain("<mxfile");
+      expect(readFileSync(join(workspace, drawioPath), "utf8")).toContain("<mxfile");
       expect(observedResults.get("factory-tool-1")?.isError).not.toBe(true);
+      if (codemodeDrawio) {
+        expect(readFileSync(join(workspace, drawioPath), "utf8")).toBe(drawioDefaultXml!);
+        expect(observedResults.size).toBe(1);
+        const result = observedResults.get("factory-tool-1")!;
+        expect(result.toolName).toBe("codemode");
+        const text = (result.content as { text: string }[]).map(block => block.text).join("\n");
+        expect(text).toContain("Opened codemode-diagrams/new.drawio in the Draw.io editor pane.");
+        expect(text).toContain("Opened existing.drawio in the Draw.io editor pane.");
+        expect(text.length).toBeLessThan(4096);
+        for (const hidden of ["editorUrl", "/drawio/edit", "<mxfile", "request_id", "open_workspace_file", ...drawioRequests]) {
+          expect(text).not.toContain(hidden);
+          expect(planRequests[1]).not.toContain(hidden);
+        }
+        expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='factory-input'").get()).toEqual({ state: "consumed" });
+        expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(1);
+        expect(root.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(1);
+      }
     }
     if (drawioCancelled || drawioMissingOpener) expect(sseText).not.toContain("extension_ui_request");
     else expect(sseText).toContain("extension_ui_request");

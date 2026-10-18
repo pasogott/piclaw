@@ -1,3 +1,19 @@
+# Native codemode can create/open Draw.io diagrams
+
+The existing Draw.io adapter now permits nested-tool callers. Exact native
+codemode ownership and all operation/source/harness/branch checks remain.
+The same guarded exclusive creation, original shared factory and acknowledged
+workspace UI opener run; no replacement implementation or wider grant.
+
+Three selected actual-runtime scenarios pass (140 assertions): nested creation
+and existing-file open, cancellation, and the unchanged direct tool. New XML
+matches the default, existing bytes stay unchanged, and two real UI responses
+acknowledge opens. Cancellation blocks file/UI/store/delivery effects. Current
+asset handler serves prepared fixtures then returns503 after stop. Three strict
+typechecks and bounded review pass. No full suites, browser-asset qualification
+or exactly-once filesystem claim.
+Checkpoint: /workspace/reviews/durable-1650/codemode-drawio-compatibility.md.
+
 # Native codemode can open editable tables
 
 The qualified editable_table adapter now accepts nested-tool callers. Exact

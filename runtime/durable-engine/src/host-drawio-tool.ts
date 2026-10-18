@@ -56,5 +56,5 @@ export function createHostDrawioTool(addon: DrawioNativeExports, options: {
       check();
       return result;
     },
-  });
+  }, { callers: ["model", "tools"] });
 }
