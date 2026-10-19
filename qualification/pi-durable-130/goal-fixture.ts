@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, symlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 const pins = {
-  "index.ts": "a4a6f8b08ddb085076a82a4852d3c1f99bc91c435d9e9383a7671ac1c5566884",
+  "index.ts": "b216723fec751a8edc547699eaba9a66dbb2176d9c089dffa75bbe6d36bd91fb",
   "deadline-checkpoint.ts": "e94f7cb065f321b06de33bfd7963011f03714c73437eedab634bce69f199c1db",
   "compat/chat-context.ts": "90e20fa38d72915a7cbf4eea4e4134788271e6eb52dfbcb813df05b6d60c3c44",
   "compat/extension-kv.ts": "04240517e9e8664cae2d2badb99f382100a7af3e12679cfce97087870881551c",

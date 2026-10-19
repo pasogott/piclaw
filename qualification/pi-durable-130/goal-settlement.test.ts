@@ -13,6 +13,8 @@ import { InMemoryEffectPayloadResolver } from "../../runtime/src/service-effects
 import { createHostGoalSettlement, withGoalSettlementAuthority } from "../../runtime/durable-engine/src/host-goal-settlement.js";
 import { QueuedFollowupLifecycleService } from "../../runtime/src/channels/web/runtime/queued-followup-lifecycle-service.js";
 import { getDeferredQueuedFollowups } from "../../runtime/src/db.js";
+import { createHostGoalPlanReader } from "../../runtime/durable-engine/src/host-goal-plan.js";
+import { getExtensionKvStore } from "../../runtime/src/extension-kv-registry.js";
 import { accountCommittedGoalBatch } from "../../runtime/durable-engine/src/host-goal-usage.js";
 import { hashCanonicalRequest } from "../../runtime/src/service-effects/contracts/common.js";
 import { value, effect, sealed, at } from "./src/host-handoff.js";
@@ -41,7 +43,18 @@ for (const mode of ["continue", "pending", "error", "stalled", "finalize"] as co
   const queue = new QueuedFollowupLifecycleService();
   if (mode === "pending") value(await work.acceptSource(sealed({ effect: effect("pending-user"), chatJid, sourceId: "pending-user", kind: "message", payloadRef: "pending-user", targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
   const continuationId = "goal-continuation:op";
-  let planFingerprint = "stale-preparation-plan", planReads = 0;
+  const planRoot = process.env.DURABLE_ADDONS_ROOT;
+  if (!planRoot) throw Error("DURABLE_ADDONS_ROOT required for actual Plan qualification");
+  const planAddon = await import(pathToFileURL(join(planRoot, "addons/plan-sidebar/index.ts")).href);
+  const readPlan = createHostGoalPlanReader(db, planAddon, addon);
+  const planMarkdown = mode === "finalize" ? "- [x] Continue work" : "- [ ] Continue work";
+  const fingerprint = addon.summarizeGoalPlan(planAddon.parsePlanMarkdown(planMarkdown).plan).fingerprint;
+  // Stalled setup used synthetic fingerprint above; replace with actual Plan fingerprint.
+  if (mode === "stalled") withExtensionKvAuthority(setup, () => {
+    const stored = addon.loadThreadGoal(chatJid);
+    getExtensionKvStore().set("goal", "thread-goal", { ...stored, last_auto_continue_fingerprint: fingerprint }, "chat", chatJid);
+  });
+  let planReads = 0;
   const prepare = createHostGoalSettlement(addon, { root: db, assertOwner() {}, runtime: () => ({
     async readAcceptedInputText() { return text; },
     async readSettledUsage() { return [{ conversationId: 1, entryId: 5, tokens: 7 }]; },
@@ -51,8 +64,7 @@ for (const mode of ["continue", "pending", "error", "stalled", "finalize"] as co
     async prepare() { return { message: { role: "assistant", stopReason: mode === "error" ? "error" : "stop" }, hadToolActivity: false }; },
     readPlan(chat, assertCurrent) {
       assertCurrent(); expect(db.inTransaction).toBe(true); expect(chat).toBe(chatJid); planReads++;
-      return { available: true, total: 1, allCompleted: mode === "finalize", fingerprint: planFingerprint,
-        plan: [{ step: "Continue work", status: mode === "finalize" ? "completed" : "pending" }] };
+      return readPlan(chat, assertCurrent);
     },
     admit(next) { return queue.enqueueAcceptedFollowupOnce(next.sourceId, next.chatJid, next.text, next.queuedAt,
       { source: "goal.continuation" }, ({ chatJid, item, database }) => {
@@ -62,7 +74,9 @@ for (const mode of ["continue", "pending", "error", "stalled", "finalize"] as co
   } });
   const apply = await prepare({ incarnation: "fixture", conversationId: 1, chatJid, branchId: "main", operationId: "op", sourceSeq: source.sourceSeq,
     sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: "request", requestHash: "a".repeat(64) });
-  planFingerprint = "native-plan"; // Change AFTER evidence preparation, BEFORE terminal transaction.
+  withExtensionKvAuthority({ ...setup, extensionId: "plan-sidebar" }, () => {
+    getExtensionKvStore().set("plan-sidebar", "plan", { markdown: planMarkdown, updated_at: at }, "chat", chatJid);
+  }); // Change persisted Plan AFTER preparation, BEFORE transaction.
   expect(planReads).toBe(0);
   let fail = true, calls = 0, retained: (() => void) | undefined;
   const terminal = value(createCurrentPiclawTerminalSettlementStore(db, new InMemoryEffectPayloadResolver(), {
@@ -102,8 +116,8 @@ for (const mode of ["continue", "pending", "error", "stalled", "finalize"] as co
     expect(queued[0]!.queuedContent).toContain("Terminal usage");
     expect(queued[0]!.queuedContent).toContain("<piclaw_goal_input>");
     expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject(mode === "finalize"
-      ? { status: "active", completion_probe_count: 1, completion_plan_fingerprint: "native-plan" }
-      : { no_progress_turns: 1, last_auto_continue_fingerprint: "native-plan" });
+      ? { status: "active", completion_probe_count: 1, completion_plan_fingerprint: fingerprint }
+      : { no_progress_turns: 1, last_auto_continue_fingerprint: fingerprint });
     expect(db.query("SELECT source_id,state FROM service_effect_s01_sources WHERE source_id=?").all(continuationId)).toEqual([{ source_id: continuationId, state: "pending" }]);
     } else {
       expect(db.query("SELECT * FROM service_effect_s01_sources WHERE source_id=?").all(continuationId)).toHaveLength(0);
