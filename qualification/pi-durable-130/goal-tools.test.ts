@@ -106,6 +106,9 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
     expect(proof.operation.chatJid).toBe(f.chatJid); captures++; return proof;
   } }) });
   const extension = defineExtension({ name: "native-goal-fixture", tools }); f.base.registry.install(extension);
+  const { createHostGoalTerminalFence } = await import("../../runtime/durable-engine/src/host-goal-terminal.js");
+  const terminalFence = createHostGoalTerminalFence(addon, { root: f.db, assertOwner: () => f.owner.assert(), runtime: () => f.runtime! });
+  f.base.registry.install(terminalFence);
   const { createHostGoalPrompt } = await import("../../runtime/durable-engine/src/host-goal-prompt.js");
   let requestFenced = false, modelEntries = 0;
   const terminalProofs: boolean[] = [];
@@ -125,16 +128,18 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
   f.base.registry.install(promptExtension);
   const prompts: string[] = [];
   const model = f.base.models.getModel("qualification", "synthetic")!;
+  let laterModelEntries = 0;
   const stream = (_model: unknown, transcript: { messages: { role: string }[] }) => {
     modelEntries++;
     prompts.push(JSON.stringify(transcript.messages));
     const toolTurns = transcript.messages.filter(message => message.role === "toolResult").length;
-    const calling = toolTurns < 2 && !JSON.stringify(transcript.messages).includes("LATER_GOAL_OPERATION");
+    const later = JSON.stringify(transcript.messages).includes("LATER_GOAL_OPERATION");
+    const calling = later ? laterModelEntries++ === 0 : toolTurns < 3;
     const output = createAssistantMessageEventStream();
     const message = { role: "assistant" as const, api: model.api, provider: model.provider, model: model.id, timestamp: 1,
       stopReason: calling ? "toolUse" as const : "stop" as const, content: calling
-        ? [{ type: "toolCall" as const, id: `native-goal-call-${toolTurns}`, name: toolTurns === 0 ? "create_goal" : "goal_complete",
-          arguments: (toolTurns === 0 ? { objective: "Live Goal source capture" } : { summary: "Verified live transition", evidence: ["native accepted operation tool task"] }) as Record<string, string | string[]> }]
+        ? [{ type: "toolCall" as const, id: `native-goal-call-${toolTurns}`, name: later || toolTurns === 2 ? "get_goal" : toolTurns === 0 ? "create_goal" : "goal_complete",
+          arguments: (later || toolTurns === 2 ? {} : toolTurns === 0 ? { objective: "Live Goal source capture" } : { summary: "Verified live transition", evidence: ["native accepted operation tool task"] }) as Record<string, string | string[]> }]
         : [{ type: "text" as const, text: "Goal stored" }],
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
     output.push({ type: "done", reason: message.stopReason, message }); output.end(message); return output;
@@ -142,7 +147,7 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
   f.base.models.setProvider(createProvider({ id: model.provider, models: [model], auth: { apiKey: { name: "Synthetic", resolve: async () => { if (requestFenced) throw Error("Goal request lifetime fenced"); return { auth: {}, source: "fixture" }; } } }, api: { stream, streamSimple: stream } }));
   try {
     const harness = await Harness.open(await SqliteStorage.open(new OwnedSqlite(f.owner)), { models: f.base.models, registry: f.base.registry }, context);
-    try { await harness.commit(tx => configure(tx, f.base.root.id, { tools, extensions: [extension, promptExtension] }), context); } finally { await harness.close(context); }
+    try { await harness.commit(tx => configure(tx, f.base.root.id, { tools, extensions: [extension, promptExtension, terminalFence] }), context); } finally { await harness.close(context); }
     await f.open(); f.permit = true;
     storeChatMetadata(f.chatJid, at);
     const source = value(await f.ports.work.acceptSource(sealed({ effect: effect(`${f.incarnation}:goal-source`), chatJid: f.chatJid, sourceId: "goal-native", kind: "message", payloadRef: "goal-native", targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
@@ -164,8 +169,9 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
       return;
     }
     expect(captures).toBe(2);
-    expect(terminalProofs).toEqual([true, false, false]);
-    expect(prompts).toHaveLength(3);
+    expect(terminalProofs).toEqual([true, false, false, true, false, false]);
+    expect(prompts).toHaveLength(4);
+    expect(prompts[3]).toContain("Goal terminal state recorded");
     expect(prompts[0]).not.toContain("<objective>");
     expect(prompts[1]).toContain("Live Goal source capture");
     expect(prompts[1]).toContain("Active Goal");
@@ -187,8 +193,9 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
     value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:later-running`, laterInput.operationId, laterSource.sourceSeq), expectedVersion: laterClaim.operation.version,
       sessionId: f.incarnation, lane: "main", harnessOperationId: String(laterId), state: "running", watchGeneration: f.generation })));
     await f.runtime!.wait(laterInput, laterId);
-    expect(terminalProofs).toEqual([true, false, false, false, false, false]);
-    expect(captures).toBe(2);
+    expect(terminalProofs).toEqual([true, false, false, true, false, false, false, false, false, false, false, false]);
+    expect(captures).toBe(3);
+    expect(laterModelEntries).toBe(2);
     await f.runtime!.close(); f.runtime = undefined;
     const reader = await Harness.open(await SqliteStorage.open(new OwnedSqlite(f.owner)), { models: f.base.models, registry: f.base.registry }, context);
     try {
@@ -196,8 +203,10 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
       const entries = await conversation.entries({ order: "ascending" }, 100, undefined, context);
       expect(JSON.stringify(entries.items)).not.toContain("Active Goal");
       const results = entries.items.filter(entry => entry.kind === "pi.tool-result");
-      expect(results).toHaveLength(2);
-      const committed = results.at(-1)!.model as unknown as readonly { toolCallId: string; toolName: string; isError: boolean; details: { goal: unknown } }[];
+      expect(results).toHaveLength(4);
+      expect(results[2]!.model?.[0]).toMatchObject({ toolName: "get_goal", isError: true });
+      expect(results[3]!.model?.[0]).toMatchObject({ toolName: "get_goal", isError: false });
+      const committed = results[1]!.model as unknown as readonly { toolCallId: string; toolName: string; isError: boolean; details: { goal: unknown } }[];
       expect(committed).toHaveLength(1);
       expect(committed[0]).toMatchObject({ toolCallId: "native-goal-call-1", toolName: "goal_complete", isError: false,
         details: { goal: { goalId: completedGoal.goal_id, lifecycleGeneration: completedGoal.lifecycle_generation, status: "complete", completionSummary: "Verified live transition" } } });

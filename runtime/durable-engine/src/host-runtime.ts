@@ -617,7 +617,19 @@ export class HostConversationRuntime {
   captureToolSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId, callId: string) {
     return this.captureSource(conversationId, taskId, callId);
   }
-  /** Recheck captured source routing synchronously at a host effect boundary. */
+  /** Read-only beforeTool provenance: the SDK has not recorded execution intent yet. */
+  async capturePendingToolSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId, callId: string) {
+    this.fence();
+    const live = await this.harness.snapshot(LiveDoc, conversationId, this.context); this.fence();
+    if (!live?.run || !live.tools?.some(slot => slot.taskId === taskId && slot.callId === callId && slot.status === "pending"))
+      throw Error("Exact pending model tool required");
+    const task = await this.harness.commit(tx => tx.task(taskId), this.context); this.fence();
+    const input = task?.input as Partial<import("@earendil-works/pi-durable").ToolTaskInput> | undefined;
+    if (task?.kind !== "pi.tool" || task.conversationId !== conversationId || task.abortRequested || task.state.status === "terminal" ||
+      input?.kind !== "model" || input.callId !== callId) throw Error("Exact pending model tool required");
+    const captured = await this.captureRunSource(conversationId, live.run.taskId);
+    return { ...captured, runTaskId: live.run.taskId };
+  }
   /** Committed terminal tool evidence after this run's accepted input boundary.
    * Generation handovers retain input submissions, not generation task IDs. */
   async hasGoalTerminalResult(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId,
