@@ -62,7 +62,7 @@ const approvedDrawioFiles = Object.freeze({
   "tool.ts": "7a47e648d93d396c5b959795056885353f34fa04322390e35b0e989d95e81a8b",
 });
 const approvedGoalFiles = Object.freeze({
-  "index.ts": "5b4c73f2cf2655a85cf0a2811d3211b160f230a953ba0924fd94a670183eec5a",
+  "index.ts": "83330e4a62b98b245689e21056ce8168b50dafdb82f165df8d236d52563ad339",
   "deadline-checkpoint.ts": "e94f7cb065f321b06de33bfd7963011f03714c73437eedab634bce69f199c1db",
   "compat/chat-context.ts": "90e20fa38d72915a7cbf4eea4e4134788271e6eb52dfbcb813df05b6d60c3c44",
   "compat/extension-kv.ts": "04240517e9e8664cae2d2badb99f382100a7af3e12679cfce97087870881551c",
@@ -163,7 +163,8 @@ function qualifyInstalled(catalog: LoadExtensionsResult, cwd: string, kind: Prof
   assertCurrent();
   return Object.freeze({ extension, source, definition: definition!, assertCurrent });
 }
-export type GoalNativeExports = Parameters<typeof import("./host-goal-input.js").createHostGoalInput>[0]
+export type GoalNativeExports = Parameters<typeof import("./host-goal-config.js").createHostGoalConfig>[0]
+  & Parameters<typeof import("./host-goal-input.js").createHostGoalInput>[0]
   & Parameters<typeof import("./host-goal-prompt.js").createHostGoalPrompt>[0]
   & Parameters<typeof import("./host-goal-settlement.js").createHostGoalSettlement>[0]
   & Parameters<typeof import("./host-goal-plan.js").createHostGoalPlanReader>[2]
@@ -176,7 +177,7 @@ export async function qualifyInstalledGoal(catalog: LoadExtensionsResult, cwd: s
   const qualified = qualifyInstalled(catalog, cwd, "goal");
   if (!qualified) return undefined;
   const exports = await import(pathToFileURL(qualified.source.entry).href);
-  const names = ["createGoalTools", "loadThreadGoal", "buildGoalSystemPrompt", "prepareGoalInput", "goalInputIdentity", "resolveGoalInput", "accountGoalProgress", "accountTerminalGoalProgress", "shouldContinueGoalAfterMessage", "decideGoalPlanProgress", "applyGoalPlanProgress", "summarizeGoalPlan", "isGoalProgressTool", "applyGoalCommand"] as const;
+  const names = ["createGoalTools", "loadThreadGoal", "buildGoalSystemPrompt", "prepareGoalInput", "goalInputIdentity", "resolveGoalInput", "accountGoalProgress", "accountTerminalGoalProgress", "shouldContinueGoalAfterMessage", "decideGoalPlanProgress", "applyGoalPlanProgress", "summarizeGoalPlan", "isGoalProgressTool", "applyGoalCommand", "applyGoalConfig", "goalResponse"] as const;
   qualified.assertCurrent();
   if (names.some(name => typeof exports[name] !== "function")) throw Error("Goal public native exports required");
   const addon = Object.freeze(Object.fromEntries(names.map(name => [name, exports[name]]))) as unknown as GoalNativeExports;

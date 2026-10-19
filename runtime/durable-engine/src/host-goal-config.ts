@@ -1,0 +1,40 @@
+import type Database from "bun:sqlite";
+import { withExtensionKvAuthority } from "../../src/extension-kv-registry.js";
+
+/** Settings uses the same transaction/source admission as native commands,
+ * without invoking the add-on's legacy HTTP enqueue implementation. */
+export function createHostGoalConfig(addon: {
+  loadThreadGoal(chat: string): unknown;
+  goalResponse(goal: any): unknown;
+  applyGoalConfig(chat: string, body: Record<string, unknown>): {
+    goal: { goal_id: string; lifecycle_generation: number; updated_at: string } | null;
+    continuation?: string; reason: string | null; response: Record<string, unknown>;
+  };
+  prepareGoalInput(text: string, chat: string): { decision: { action: string; text?: string } };
+}, options: {
+  root: Database; assertAdmission(chat: string): void;
+  admit(input: { sourceId: string; chatJid: string; text: string; queuedAt: string }): number | null;
+}) {
+  const scoped = <T>(chatJid: string, body: () => T): T => {
+    options.assertAdmission(chatJid);
+    const authority = { extensionId: "goal", chatJid, assertCurrent() { options.assertAdmission(chatJid); },
+      write<T>(run: () => T): T { return options.root.transaction(() => { this.assertCurrent(); const result = run(); this.assertCurrent(); return result; }).immediate(); } };
+    return authority.write(() => withExtensionKvAuthority(authority, body));
+  };
+  return {
+    get(chatJid: string) { return scoped(chatJid, () => addon.goalResponse(addon.loadThreadGoal(chatJid))); },
+    set(chatJid: string, body: Record<string, unknown>) {
+      return scoped(chatJid, () => {
+        const result = addon.applyGoalConfig(chatJid, body);
+        if (result.continuation) {
+          const goal = result.goal;
+          const prepared = addon.prepareGoalInput(result.continuation, chatJid).decision;
+          if (!goal || prepared.action !== "transform" || !prepared.text) throw Error("Goal Settings input no longer executable");
+          if (options.admit({ sourceId: `goal-settings:${goal.goal_id}:${goal.lifecycle_generation}`, chatJid,
+            text: prepared.text, queuedAt: goal.updated_at }) === null) throw Error("Goal Settings continuation admission unavailable");
+        }
+        return { ...result.response, continuationQueued: Boolean(result.continuation), continuationReason: result.reason };
+      });
+    },
+  };
+}

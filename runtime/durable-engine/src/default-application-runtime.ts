@@ -42,6 +42,8 @@ import { createHostGoalInput } from "./host-goal-input.js";
 import { createHostGoalSettlement } from "./host-goal-settlement.js";
 import { createHostGoalProgressReader } from "./host-goal-progress.js";
 import { createHostGoalPlanReader } from "./host-goal-plan.js";
+import { registerAddonConfigApi } from "../../src/channels/web/handlers/addon-config-api.js";
+import { createHostGoalConfig } from "./host-goal-config.js";
 import { createHostGoalCommand } from "./host-goal-command.js";
 import type { HostConversationRuntime } from "./host-runtime.js";
 import { readAccessConfig } from "../../src/core/config-access.js";
@@ -606,6 +608,23 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
     runtime: { incarnation: mapping.domain, sessionId: mapping.domain, lane: "main", generation: 1, now: () => new Date().toISOString(), harnessOptions,
       codemodeExecute: tools.find(tool => tool.name === "codemode")!.execute } }, context);
+  if (goal) {
+    const config = createHostGoalConfig(goal.addon, { root, assertAdmission: goalAdmission, admit: input => bundle.admitHostFollowup(input) });
+    const chatFrom = (payload: unknown, request: Request) => {
+      const body = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+      const chat = new URL(request.url).searchParams.get("chat_jid") || body.chat_jid;
+      if (typeof chat !== "string" || !chat.trim()) throw Error("Explicit Goal Settings chat required");
+      return chat.trim();
+    };
+    registerAddonConfigApi("goal", "goal", {
+      get(payload, request) { return config.get(chatFrom(payload, request)); },
+      set(payload, request) {
+        const chat = chatFrom(payload, request);
+        const result = config.set(chat, payload && typeof payload === "object" ? payload as Record<string, unknown> : {});
+        wakeGoalFollowups(chat); return result;
+      },
+    }, goal.source.packageDir);
+  }
   return { sessionOptions: bundle.sessionOptions, bind: bundle.bind,
     attachChannel(channel) {
       assert(); lifetime.signal.throwIfAborted();

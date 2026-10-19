@@ -631,6 +631,14 @@ for (const scenario of ["native-goal", "native-compaction-accounting-close-fail"
     expect(calls).toBeGreaterThan(0);
     expect(getDeferredQueuedFollowups("web:default")).toHaveLength(1);
     expect(extensionKvGet("goal", "thread-goal", "chat", "web:default")).toMatchObject({ status: "active", no_progress_turns: 1 });
+    const { handleRegisteredAddonConfigApiRequest } = await import("../../runtime/src/channels/web/handlers/addon-config-api.js");
+    const settings = await handleRegisteredAddonConfigApiRequest(new Request("http://fixture/agent/addons/api/goal/goal?chat_jid=web:default", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ objective: "Updated through native Settings" }),
+    }), "goal", "goal", (body, status = 200) => Response.json(body, { status }));
+    expect(settings!.status).toBe(200);
+    expect(await settings!.json()).toMatchObject({ continuationQueued: true, continuationReason: "objective_updated" });
+    expect(extensionKvGet("goal", "thread-goal", "chat", "web:default")).toMatchObject({ objective: "Updated through native Settings" });
+    expect(getDeferredQueuedFollowups("web:default")).toHaveLength(2);
     failWake = true; // Optional wake failure cannot reject an already committed command.
     expect(await pool.applySlashCommand("web:default", "/goal pause")).toMatchObject({ status: "success", message: "Goal paused" });
     await pool.shutdown(); backend.stop(); await backend.close(); closeDatabase(); owner.release();
