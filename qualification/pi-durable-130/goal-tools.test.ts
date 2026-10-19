@@ -83,7 +83,8 @@ test("Goal host adapter fences mutations to committed operation authority", asyn
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
 
-for (const mode of [false, true, "external", "stop", "external-terminal", "stop-accounting", "complete-accounting", "budget-accounting"] as const) test(`actual Goal tool task captures its live accepted operation; rejected=${mode}`, async () => {
+for (const mode of [false, true, "external", "stop", "external-terminal", "stop-accounting", "complete-accounting", "budget-accounting", "continuation"] as const) test(`actual Goal tool task captures its live accepted operation; rejected=${mode}`, async () => {
+  const continuation = mode === "continuation";
   const rejectRequestAuthority = mode === true;
   const externalLifecycle = mode === "external";
   const externalTerminal = mode === "external-terminal";
@@ -106,6 +107,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "goal-live-source-"));
   let prepareSettlement: import("../../runtime/durable-engine/src/host-runtime.js").RuntimeOptions["prepareTerminalEffect"];
   const f = await acceptedSteerFixture(dir, "before-submit", undefined, true, {
+    sharedDatabase: continuation,
     prepareTerminalEffect: input => prepareSettlement?.(input) ?? Promise.resolve(undefined),
   });
   const addon = await import(pathToFileURL(join(sourceRoot, "addons/goal/index.ts")).href);
@@ -126,6 +128,28 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
   const checkedTerminalBoundaries = new Set<string>();
   const { createHostGoalSettlement } = await import("../../runtime/durable-engine/src/host-goal-settlement.js");
   prepareSettlement = createHostGoalSettlement(addon, { root: f.db, runtime: () => f.runtime!, assertOwner: () => f.owner.assert() });
+  if (continuation) {
+    const planRoot = process.env.DURABLE_ADDONS_ROOT;
+    if (!planRoot) throw Error("DURABLE_ADDONS_ROOT required");
+    const plan = await import(pathToFileURL(join(planRoot, "addons/plan-sidebar/index.ts")).href);
+    const { createHostGoalPlanReader } = await import("../../runtime/durable-engine/src/host-goal-plan.js");
+    const { createHostGoalProgressReader } = await import("../../runtime/durable-engine/src/host-goal-progress.js");
+    const { QueuedFollowupLifecycleService } = await import("../../runtime/src/channels/web/runtime/queued-followup-lifecycle-service.js");
+    const { getExtensionKvStore } = await import("../../runtime/src/extension-kv-registry.js");
+    withExtensionKvAuthority({ extensionId: "plan-sidebar", chatJid: f.chatJid, assertCurrent: () => f.owner.assert(),
+      write<T>(run: () => T) { return f.db.transaction(run).immediate(); } }, () => {
+      getExtensionKvStore().set("plan-sidebar", "plan", { markdown: "- [ ] Continue implementation", updated_at: at }, "chat", f.chatJid);
+    });
+    const queue = new QueuedFollowupLifecycleService();
+    prepareSettlement = createHostGoalSettlement(addon, { root: f.db, runtime: () => f.runtime!, assertOwner: () => f.owner.assert(), continuation: {
+      addon, prepare: createHostGoalProgressReader(addon, { runtime: () => f.runtime!, assertOwner: () => f.owner.assert() }),
+      readPlan: createHostGoalPlanReader(f.db, plan, addon),
+      admit(next) { return queue.enqueueAcceptedFollowupOnce(next.sourceId, next.chatJid, next.text, next.queuedAt, { source: "goal.continuation" }, ({ chatJid, item, database }) => {
+        f.ports.work.acceptSourceInTransaction(sealed({ effect: effect(`accept:${item.source_id}`), chatJid, sourceId: item.source_id,
+          kind: "message", payloadRef: `queued-source:${item.source_id}`, targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false }), database);
+      }, true); },
+    } });
+  }
   const promptExtension = createHostGoalPrompt(addon, { root: f.db, assertOwner: () => f.owner.assert(), runtime: () => ({
     async captureRunSource(conversation, task) {
       if (rejectRequestAuthority) throw Error("synthetic Goal request authority revoked");
@@ -168,7 +192,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
     prompts.push(JSON.stringify(transcript.messages));
     const toolTurns = transcript.messages.filter(message => message.role === "toolResult").length;
     const later = JSON.stringify(transcript.messages).includes("LATER_GOAL_OPERATION");
-    const calling = later ? laterModelEntries++ === 0 : toolTurns < 3;
+    const calling = continuation ? toolTurns < 1 : later ? laterModelEntries++ === 0 : toolTurns < 3;
     const output = createAssistantMessageEventStream();
     const message = { role: "assistant" as const, api: model.api, provider: model.provider, model: model.id, timestamp: 1,
       stopReason: calling ? "toolUse" as const : "stop" as const, content: calling
@@ -201,6 +225,18 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
     value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:goal-running`, f.incarnation, source.sourceSeq), expectedVersion: claimed.operation.version,
       sessionId: f.incarnation, lane: "main", harnessOperationId: String(id), state: "running", watchGeneration: f.generation })));
     await f.runtime!.wait(input, id);
+    if (continuation) {
+      expect((await f.runtime!.reconcile(input)).answer?.text).toBe("Goal stored");
+      expect(await f.runtime!.settle(input)).not.toBeNull();
+      expect(await f.runtime!.settle(input)).not.toBeNull();
+      const { getDeferredQueuedFollowups } = await import("../../runtime/src/db.js");
+      const queued = getDeferredQueuedFollowups(f.chatJid);
+      expect(queued).toHaveLength(1);
+      expect(queued[0]).toMatchObject({ source_id: `goal-continuation:${input.operationId}`, source_accepted: true });
+      expect(queued[0]!.queuedContent).toContain("<piclaw_goal_input>");
+      expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 6, status: "active", no_progress_turns: 1 });
+      return;
+    }
     if (mode === "budget-accounting") {
       expect(requestFenced).toBe(true);
       expect(modelEntries).toBe(1);
