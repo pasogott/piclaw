@@ -146,6 +146,27 @@ async function setup(busy = false) {
   return { dir, db, base, options, runtime, accept, attach, drain, work, terminal, payloads, path, hooks, stats: () => ({ opens, releases, authorizations }), setOwner: (v: boolean) => { acquired = v; }, grantKnown: () => { allowKnown = true; }, loseCancellationAck: () => { loseCancellationAck = true; } };
 }
 
+test("runtime: final usage receipt survives settlement and remains bound to original submission", () => fixture(async f => {
+    const input = await f.accept();
+    expect(await f.runtime.readFinalUsage(input)).toBeNull();
+    await f.runtime.submit(input); const reopened = await f.drain();
+    try {
+    const before = await f.work.getOperation(input.operationId);
+    const receipt = await reopened.readFinalUsage(input);
+    expect(receipt).toMatchObject({ conversationId: input.conversationId });
+    expect(receipt!.entryId).toBeGreaterThan(0);
+    expect(Number.isSafeInteger(receipt!.tokens)).toBe(true);
+    await expect(reopened.readFinalUsage({ ...input, requestHash: "f".repeat(64) })).rejects.toThrow("Host binding conflict");
+    expect(await f.work.getOperation(input.operationId)).toEqual(before);
+    expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+    expect(await reopened.settle(input)).not.toBeNull();
+    expect(await reopened.readFinalUsage(input)).toEqual(receipt);
+    const later = await f.accept("later-final-usage", "new plain answer");
+    expect(await reopened.readFinalUsage(input)).toEqual(receipt);
+    expect(await reopened.readFinalUsage(later)).toBeNull();
+    } finally { await reopened.close(); }
+}));
+
 test("runtime: close aborts unresolved observation before cooperative model cleanup and releases owner", () => fixture(async f => {
   const input = await f.accept();
   f.base.host.modelHold = barrier();

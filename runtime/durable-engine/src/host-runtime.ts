@@ -979,6 +979,36 @@ export class HostConversationRuntime {
     }, true);
   }
   reconcileIntent(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.readState(copy, true), true); }
+  /** Read-only final receipt bound to the original public input submission.
+   * Does not require a live run or grant post-settlement mutation authority. */
+  readFinalUsage(input: AcceptedInput) {
+    const copy = inputSnapshot(input);
+    return this.observe(async () => {
+      const state = await this.readState(copy);
+      if (!state.answer || state.status?.type !== "input" || state.status.status !== "done") return null;
+      const answerId = state.status.answer;
+      const message = state.answer.message;
+      const receipt = await this.harness.commit(async tx => {
+        const entry = await tx.entry(answerId);
+        if (!entry || entry.kind !== "pi.assistant" || entry.conversationId !== copy.conversationId || entry.byTaskId === undefined)
+          throw Error("Invalid final usage entry");
+        const task = await tx.task(entry.byTaskId);
+        const outcome = task?.state.status === "terminal" && task.state.outcome.status === "completed" ? task.state.outcome.result as { entryId?: number } : undefined;
+        if (task?.kind !== "pi.generation" || task.conversationId !== copy.conversationId || outcome?.entryId !== entry.id)
+          throw Error("Invalid final usage task");
+        const usage = message.usage;
+        const parts = [usage.input, usage.output, usage.cacheRead, usage.cacheWrite];
+        if (!parts.every(value => Number.isSafeInteger(value) && value >= 0) || !Number.isSafeInteger(usage.totalTokens) || usage.totalTokens < 0)
+          throw Error("Invalid final usage tokens");
+        const tokens = usage.totalTokens > 0 ? usage.totalTokens : parts.reduce((sum, value) => sum + value, 0);
+        if (!Number.isSafeInteger(tokens)) throw Error("Invalid final usage total");
+        return { conversationId: copy.conversationId as number, entryId: entry.id as number, tokens };
+      }, this.context);
+      this.fence();
+      await this.checked(copy);
+      return receipt;
+    });
+  }
   private async readState(input: AcceptedInput, intent = false) {
     const { operation, conversation } = await this.checked(input, intent);
     const record = await this.record(input, intent);
