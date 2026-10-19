@@ -22,6 +22,7 @@ import { value, effect, sealed, at } from "./src/host-handoff.js";
 for (const mode of ["continue", "pending", "error", "stalled", "finalize"] as const) test(`actual Goal terminal continuation is atomic and policy scoped: ${mode}`, async () => {
   const sourceRoot = process.env.DURABLE_GOAL_ADDON_ROOT;
   if (!sourceRoot) throw Error("DURABLE_GOAL_ADDON_ROOT required");
+  process.env.PICLAW_DB_IN_MEMORY = "1";
   initDatabase(); const db = getDb(); installTerminalSettlementCompositionSchema(db);
   registerRootExtensionKvStore(); requireExtensionKvAuthority();
   const addon = await import(pathToFileURL(join(sourceRoot, "addons/goal/index.ts")).href); addon.resetGoalAddonForTests();

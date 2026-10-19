@@ -237,7 +237,12 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
       expect(queued[0]).toMatchObject({ source_id: `goal-continuation:${input.operationId}`, source_accepted: true });
       expect(queued[0]!.queuedContent).toContain("<piclaw_goal_input>");
       expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 6, status: "active", no_progress_turns: 1 });
-      const item = queued[0]!;
+      // Restart the durable runtime before consuming the admitted continuation.
+      // Neither the accepted source nor its queue identity may be recreated.
+      await f.runtime!.close(); f.runtime = undefined;
+      await f.open();
+      expect(getDeferredQueuedFollowups(f.chatJid)).toEqual(queued);
+      const item = getDeferredQueuedFollowups(f.chatJid)[0]!;
       const { storeWebMessage } = await import("../../runtime/src/channels/web/messaging/message-store.js");
       const stored = storeWebMessage({} as any, { chatJid: f.chatJid, content: item.queuedContent, isBot: false, mediaIds: [], agentId: "default", agentName: "Fixture" }, {
         consumeDeferredFollowupRowId: item.rowId,
