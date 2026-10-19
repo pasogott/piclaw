@@ -37,7 +37,7 @@ export function readFamilyWorkspacePolicy(database: Database, actor: Authenticat
         { name: 'Shell and file mutation', state: 'denied', detail: 'Shell, exec, scripts, write and edit tools are outside the admitted web-turn ceiling. This is not a sandbox against an OS-level process or installed extension.' },
         { name: 'Keychain, SQL and environment editing', state: 'denied', detail: 'No generic keychain, raw SQL or environment tools in admitted web turns; raw SQL also denies at its multi-user tool boundary.' },
         { name: 'Add-on management and external automation', state: 'denied', detail: 'Family browser add-on APIs and installed panes are disabled; unknown tools are outside the fixed ceiling.' },
-        { name: 'Scheduling and Dream', state: 'denied', detail: 'Automatic family scheduling and Dream remain disabled. Explicit task preparation/run controls and internal owner Dream admission have separate gates.' },
+        { name: 'Scheduling and Dream', state: 'denied', detail: 'Automatic family scheduling and Dream remain disabled. Explicit task preparation/revocation and internal owner Dream admission have separate gates; manual task execution is unavailable.' },
         { name: 'Browser notifications', state: 'owner-scoped', detail: 'Web Push subscriptions bind the immutable account and current login. Reply delivery resolves the conversation owner and rechecks the recipient before sending.' },
       ],
       settings: [

@@ -7,8 +7,8 @@ const required:Record<string,string[]>={
   'channels/web/family-authorisation.test.ts':['SSE receives only approved own-chat events','foreign, unknown, blank, duplicate and unowned targets all deny'],
   'channels/web/family-message-provenance.test.ts':['admission atomically persists owner/login authority','queued processChat recovers persisted identity'],
   'agent-pool/owned-fork-lifecycle.test.ts':['family HTTP fork/rename/picker use cookie owner','runtime handle lookup and active/known lists'],
-  'web/family.playwright.optional.test.ts':['switch account is distinct','owned session Settings creates, renames','account profile and device controls','memory publication previews exact source','due task run requires separate confirmation'],
-  'agent-pool/scheduled-dispatch.test.ts':['two concurrent owners retain separate identities'],
+  'web/family.playwright.optional.test.ts':['switch account is distinct','owned session Settings creates, renames','account profile and device controls','memory publication previews exact source','prepared tasks retain inspection but expose no manual execution controls or requests'],
+  'db/family-task-admission.test.ts':['retired manual run denies without admission, queue or model work','HTTP pinned preparation/list/detail/revoke leaves tasks paused without queue or model work'],
   'agent-memory/family-dream-admission.test.ts':['provider capacity allows one per owner and two globally'],
   'db/family-workspace-policy.test.ts':['workspace policy distinguishes routing/config/activation and shared filesystem from private conversation scope'],
 };
