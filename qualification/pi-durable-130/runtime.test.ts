@@ -5,6 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { Harness, LiveDoc, AssistantEntry, type Tx } from "../../runtime/durable-engine/qualification/durable.ts";
+import type { TerminalCommit } from "../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
 import type { AssistantMessage } from "../../runtime/durable-engine/qualification/ai.ts";
 import { HostConversationRuntime, type AcceptedInput, type RuntimeOptions, type SettledAnswer } from "../../runtime/durable-engine/src/index.js";
 import { configureHostWalFixtureDatabase, openWalFixtureDatabase } from "./src/sqlite-fixture-policy.js";
@@ -66,7 +67,7 @@ async function setup(busy = false) {
   let loseCancellationAck = false;
   const hooks = { authorize: undefined as (() => void | Promise<void>) | undefined,
     cancellation: undefined as (() => void | Promise<void>) | undefined,
-    terminalEffects: undefined as (() => undefined) | undefined };
+    terminalEffects: undefined as ((commit: Readonly<TerminalCommit>, assertCurrent: () => void) => undefined) | undefined };
   const work = value(createCurrentPiclawServiceWorkStore(db, {
     hitFault(point, method) {
       if (loseCancellationAck && method === "acceptCancellation" && point === "effect_then_lost_acknowledgement") {
@@ -78,7 +79,7 @@ async function setup(busy = false) {
   const payloads = new InMemoryEffectPayloadResolver();
   const terminal = value(createCurrentPiclawTerminalSettlementStore(db, payloads, {
     hitFault: () => false, recordTrace() {}, validateOwnership: () => { assert(); expect(db.inTransaction).toBe(true); return true; },
-    applyTerminalEffects() { return hooks.terminalEffects?.(); },
+    applyTerminalEffects(commit, scope) { return hooks.terminalEffects?.(commit, scope); },
   }));
   const options: RuntimeOptions = {
     incarnation: "copy-A", owner: { assert, release() { releases++; acquired = false; } },
@@ -185,6 +186,61 @@ test("runtime: final usage receipt survives settlement and remains bound to orig
     expect(await reopened.readFinalUsage(input)).toEqual(receipt);
     expect(await reopened.readFinalUsage(later)).toBeNull();
     } finally { await reopened.close(); }
+}));
+
+test.skipIf(!process.env.DURABLE_GOAL_ADDON_ROOT)("runtime: actual Goal accounts public SDK final receipt atomically with terminal", () => fixture(async f => {
+  const { pathToFileURL } = await import("node:url");
+  const { withExtensionKvAuthority, registerExtensionKvStore, getExtensionKvStore, requireExtensionKvAuthority, resetExtensionKvStoreForTests } = await import("../../runtime/src/extension-kv-registry.js");
+  const { withGoalSettlementAuthority } = await import("../../runtime/durable-engine/src/host-goal-settlement.js");
+  const { accountCommittedGoalBatch } = await import("../../runtime/durable-engine/src/host-goal-usage.js");
+  const addon = await import(pathToFileURL(join(process.env.DURABLE_GOAL_ADDON_ROOT!, "addons/goal/index.ts")).href);
+  // This fixture owns a copied host DB, not the global runtime connection.
+  const extensionKvGet = <T = unknown>(extensionId: string, key: string, scope = "chat", scopeKey = ""): T | null => {
+    const row = f.db.query("SELECT value FROM extension_kv WHERE extension_id=? AND key=? AND scope=? AND scope_key=?").get(extensionId, key, scope, scopeKey) as { value: string } | null;
+    return row ? JSON.parse(row.value) : null;
+  };
+  registerExtensionKvStore({ get: extensionKvGet,
+    set(extension, key, value, scope = "chat", chat = "") { f.db.query("INSERT INTO extension_kv(extension_id,key,scope,scope_key,value,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(extension_id,scope,scope_key,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").run(extension, key, scope, chat, JSON.stringify(value), at); },
+    delete(extension, key, scope = "chat", chat = "") { return f.db.query("DELETE FROM extension_kv WHERE extension_id=? AND key=? AND scope=? AND scope_key=?").run(extension, key, scope, chat).changes > 0; },
+    clear(extension) { return f.db.query("DELETE FROM extension_kv WHERE extension_id=?").run(extension).changes; },
+    list() { throw Error("Unexpected fixture list"); }, query() { throw Error("Unexpected fixture query"); },
+  });
+  const interop = (globalThis as any).__piclawRuntimeInterop;
+  (globalThis as any).__piclawRuntimeInterop = { ...interop, getExtensionKvStore };
+  requireExtensionKvAuthority(); addon.resetGoalAddonForTests();
+  let reopened: HostConversationRuntime | undefined;
+  try {
+    const chatJid = "web:runtime";
+    const text = withExtensionKvAuthority({ extensionId: "goal", chatJid, assertCurrent() {}, write<T>(run: () => T) { return f.db.transaction(run).immediate(); } }, () => {
+      addon.createThreadGoal(chatJid, "Account final SDK receipt");
+      return addon.prepareGoalInput("🎯 Continue goal: Account final SDK receipt", chatJid).decision.text;
+    });
+    f.base.host.tokens = 7;
+    const input = await f.accept("request-1", text);
+    await f.runtime.submit(input); reopened = await f.drain();
+    const receipt = await reopened.readFinalUsage(input);
+    expect(receipt).toMatchObject({ tokens: 7 });
+    const payload = f.db.query("SELECT content FROM runtime_payloads WHERE ref=?").get(input.payloadRef) as { content: string };
+    expect(hashCanonicalRequest({ type: "input", requestId: input.requestId, content: payload.content })).toBe(input.requestHash);
+    let fail = true, calls = 0;
+    f.hooks.terminalEffects = (commit, scope) => {
+      expect(commit.operationId).toBe(input.operationId); calls++;
+      withGoalSettlementAuthority(f.db, commit, scope, authority => {
+        expect(accountCommittedGoalBatch(addon, authority, [payload.content], [receipt!])).toBe(1);
+      });
+      if (fail) throw Error("rollback actual SDK receipt");
+      return undefined;
+    };
+    await expect(reopened.settle(input)).rejects.toThrow();
+    expect(extensionKvGet("goal", "committed-usage:" + receipt!.conversationId, "chat", chatJid)).toBeNull();
+    expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ tokens_used: 0 });
+    fail = false;
+    expect(await reopened.settle(input)).not.toBeNull();
+    expect(extensionKvGet("goal", "committed-usage:" + receipt!.conversationId, "chat", chatJid)).toMatchObject({ entryId: receipt!.entryId, tokens: 7 });
+    expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ tokens_used: 7 });
+    expect(await reopened.settle(input)).not.toBeNull();
+    expect(calls).toBe(2);
+  } finally { await reopened?.close(); addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); (globalThis as any).__piclawRuntimeInterop = interop; }
 }));
 
 test("runtime: close aborts unresolved observation before cooperative model cleanup and releases owner", () => fixture(async f => {

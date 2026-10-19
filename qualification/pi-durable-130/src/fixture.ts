@@ -22,7 +22,7 @@ export async function openFixture(owner: { acquired: boolean }, allocated = () =
     transcripts: [] as string[],
     modelHold: undefined as ReturnType<typeof barrier> | undefined,
     onModelEnter: undefined as ((signal?: AbortSignal) => void) | undefined,
-    finalContent: undefined as AssistantMessage["content"] | undefined,
+    finalContent: undefined as AssistantMessage["content"] | undefined, tokens: 0,
     toolHold: undefined as ReturnType<typeof barrier> | undefined,
     toolEntered: barrier(),
   };
@@ -62,7 +62,7 @@ export async function openFixture(owner: { acquired: boolean }, allocated = () =
     void (async () => {
       let message: AssistantMessage = {
         role: "assistant", api: model.api, provider: model.provider, model: model.id, content: [], stopReason: "stop", timestamp: Date.now(),
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        usage: { input: host.tokens, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: host.tokens, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
       };
       try {
         const requestContext = options?.signal ? withAbortSignal(options.signal, context) : context;
