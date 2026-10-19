@@ -45,11 +45,12 @@ test("actual Goal usage commits with terminal, rolls back and cannot reuse expir
         retained = authority.assertCurrent;
         accountCommittedGoalBatch(addon, authority, [text], [{ conversationId: 1, entryId: 5, tokens: 7 }]);
       });
-      queue.enqueueAcceptedFollowupOnce(continuationId, chatJid, text, at, { source: "goal.continuation" }, ({ chatJid, item, database }) => {
+      const admitted = queue.enqueueAcceptedFollowupOnce(continuationId, chatJid, text, at, { source: "goal.continuation" }, ({ chatJid, item, database }) => {
         scope(commit);
         work.acceptSourceInTransaction(sealed({ effect: effect(`accept:${item.source_id}`), chatJid, sourceId: item.source_id,
           kind: "message", payloadRef: `queued-source:${item.source_id}`, targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false }), database);
-      });
+      }, true);
+      expect(admitted).not.toBeNull();
       if (fail) throw Error("rollback after Goal mutation");
       return undefined;
     },

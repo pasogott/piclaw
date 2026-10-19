@@ -112,6 +112,23 @@ test("host follow-up identity replay reuses accepted queue row and denies change
   expect(getDeferredQueuedFollowups(chat)).toHaveLength(0);
 });
 
+test("autonomous stable follow-up yields to pending sources and legacy queue items", () => {
+  const f = fixture(undefined, () => true);
+  const service = new QueuedFollowupLifecycleService(), chat = 'web:continuation-priority';
+  const admit = (id: string) => f.db.transaction(() => service.enqueueAcceptedFollowupOnce(id, chat, 'Continue Goal',
+    '2026-10-19T00:00:00.000Z', { source: 'goal.continuation' }, f.acceptQueued, true)).immediate();
+  f.db.transaction(() => service.enqueueQueuedFollowupItem(chat, 0, 'User input', undefined, '2026-10-19T00:00:00.000Z')).immediate();
+  expect(admit('goal:first')).toBeNull();
+  expect(f.db.query('SELECT * FROM service_effect_s01_sources').all()).toHaveLength(0);
+  setDeferredQueuedFollowups(chat, []);
+  const first = admit('goal:first');
+  expect(first).not.toBeNull();
+  expect(admit('goal:first')).toBe(first); // Reconciliation wins over the idle guard.
+  setDeferredQueuedFollowups(chat, []); // Accepted pending source remains durable.
+  expect(admit('goal:second')).toBeNull();
+  expect(f.db.query('SELECT source_id FROM service_effect_s01_sources').all()).toEqual([{ source_id: 'goal:first' }]);
+});
+
 function withdrawalFixture() {
   const f = fixture(undefined, () => true);
   f.channel.getQueuedInputSourceAdmission = () => f.acceptQueued;

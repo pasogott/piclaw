@@ -146,7 +146,8 @@ export class QueuedFollowupLifecycleService {
   enqueueAcceptedFollowupOnce(
     sourceId: string, chatJid: string, content: string, queuedAt: string,
     extras: Pick<QueuedFollowupItem, 'source' | 'queuedBy'>, acceptSource: QueuedInputSourceAdmission,
-  ): number {
+    onlyIfIdle = false,
+  ): number | null {
     const db = getDb();
     if (!db.inTransaction) throw new Error('Follow-up admission transaction required');
     if (!sourceId || sourceId.trim() !== sourceId || sourceId.length > 512) throw new Error('Invalid follow-up source identity');
@@ -165,6 +166,11 @@ export class QueuedFollowupLifecycleService {
     }
     if (db.query('SELECT 1 FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?').get(chatJid, sourceId))
       throw new Error('Follow-up source already materialized; reconcile existing source');
+    // Autonomous continuation yields to every outstanding input. Check after
+    // identity reconciliation so a lost ACK can still recover its original row.
+    if (onlyIfIdle && (getDeferredQueuedFollowups(chatJid).length || db.query(
+      "SELECT 1 FROM service_effect_s01_sources WHERE chat_jid=? AND state IN ('pending','claimed') LIMIT 1",
+    ).get(chatJid))) return null;
     const rowId = this.enqueueQueuedFollowupItem(chatJid, 0, candidate.queuedContent, undefined, candidate.queuedAt,
       { source: candidate.source, queuedBy: candidate.queuedBy });
     const items = getDeferredQueuedFollowups(chatJid);
