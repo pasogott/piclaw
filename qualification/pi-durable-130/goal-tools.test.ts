@@ -118,10 +118,12 @@ for (const mode of [false, true, "external", "stop", "external-terminal"] as con
   const { createHostGoalPrompt } = await import("../../runtime/durable-engine/src/host-goal-prompt.js");
   let requestFenced = false, modelEntries = 0;
   const terminalProofs: boolean[] = [];
+  const usageReads: { conversationId: number; entryId: number; tokens: number }[][] = [];
   const promptExtension = createHostGoalPrompt(addon, { root: f.db, assertOwner: () => f.owner.assert(), runtime: () => ({
     async captureRunSource(conversation, task) {
       if (rejectRequestAuthority) throw Error("synthetic Goal request authority revoked");
       const captured = await f.runtime!.captureRunSource(conversation, task);
+      usageReads.push(await f.runtime!.readCommittedRunUsage(conversation, task));
       if (externalLifecycle) withExtensionKvAuthority({ extensionId: "goal", chatJid: f.chatJid, assertCurrent() {},
         write<T>(body: () => T) { return f.db.transaction(body).immediate(); } }, () => {
         addon.clearThreadGoal(f.chatJid); addon.createThreadGoal(f.chatJid, "Externally replaced Goal");
@@ -158,7 +160,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal"] as con
         ? [{ type: "toolCall" as const, id: `native-goal-call-${toolTurns}`, name: later || toolTurns === 2 || toolTurns === 0 ? "get_goal" : terminalTool,
           arguments: (later || toolTurns === 2 || toolTurns === 0 ? {} : { ...(stopped ? { reason: "other" } : {}), summary: "Verified live transition", evidence: ["native accepted operation tool task"] }) as Record<string, string | string[]> }]
         : [{ type: "text" as const, text: "Goal stored" }],
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+      usage: { input: 2, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
     output.push({ type: "done", reason: message.stopReason, message }); output.end(message); return output;
   };
   f.base.models.setProvider(createProvider({ id: model.provider, models: [model], auth: { apiKey: { name: "Synthetic", resolve: async () => { if (requestFenced) throw Error("Goal request lifetime fenced"); return { auth: {}, source: "fixture" }; } } }, api: { stream, streamSimple: stream } }));
@@ -234,6 +236,12 @@ for (const mode of [false, true, "external", "stop", "external-terminal"] as con
     expect(terminalProofs).toEqual([true, false, false, true, false, false, false, false, false, false, false, false]);
     expect(captures).toBe(3);
     expect(laterModelEntries).toBe(2);
+    expect(usageReads.map(entries => entries.length)).toEqual([0, 1, 2, 3, 0, 1]);
+    expect(usageReads.flat().every(entry => entry.conversationId === f.base.root.id && entry.tokens === 3)).toBe(true);
+    const originalIds = usageReads[3]!.map(entry => entry.entryId);
+    expect(originalIds).toEqual([...originalIds].sort((a, b) => a - b));
+    expect(new Set(originalIds).size).toBe(3);
+    expect(originalIds).not.toContain(usageReads[5]![0]!.entryId);
     await f.runtime!.close(); f.runtime = undefined;
     const reader = await Harness.open(await SqliteStorage.open(new OwnedSqlite(f.owner)), { models: f.base.models, registry: f.base.registry }, context);
     try {
