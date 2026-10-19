@@ -74,7 +74,7 @@ export async function rehearse(args: string[]) {
     check(Buffer.from(manifestBytes.toString("utf8"), "utf8").equals(manifestBytes));
     const manifest = parseJSON(manifestBytes); object(manifest);
     fields(manifest, ["version", "sourceCopied", "expectedSourceSHA256", "pending", "inflight", "hostBranchBindings"]);
-    check(manifest.version === 1 && manifest.sourceCopied === true && manifest.pending === 0 && manifest.inflight === 0);
+    check(manifest.version === 2 && manifest.sourceCopied === true && manifest.pending === 0 && manifest.inflight === 0);
     check(typeof manifest.expectedSourceSHA256 === "string" && /^[a-f0-9]{64}$/.test(manifest.expectedSourceSHA256));
     check(sourceSHA256 === manifest.expectedSourceSHA256, "source_digest");
     object(manifest.hostBranchBindings);
@@ -101,8 +101,7 @@ export async function rehearse(args: string[]) {
     };
     const plan = prepareLegacyTreeImport(input, bridge); // Validates EVERY leaf and pending tool call.
     for (const branch of plan.prepared) {
-      const systems = branch.projection.messages.filter(message => message.role === "system");
-      check(systems.length === 1 && systems[0]!.content === branch.identity.hostBaseline, "import_unsupported");
+      check(JSON.stringify(branch.projection.messages[0]) === JSON.stringify(branch.continuation), "import_unsupported");
     }
     stage = "storage_failure";
     try { mkdirSync(destination, { mode: 0o700 }); }

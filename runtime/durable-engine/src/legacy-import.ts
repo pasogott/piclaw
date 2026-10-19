@@ -50,10 +50,11 @@ function message(value: unknown): asserts value is Message {
 }
 
 
-export const IMPORTER_VERSION = 1;
+export const IMPORTER_VERSION = 2;
 export const DEFAULT_IMPORT_LIMITS = { maxEntries: 1000, maxBytes: 8 * 1024 * 1024 } as const;
 export type CopiedLegacyInput = Readonly<{
   sourceJSONL: string; chatJid: string; chatIncarnation: string; branchId: string;
+  /** Genuinely captured current host instructions for continuation, not historical proof. */
   hostBaseline: string;
   maxEntries?: number; maxBytes?: number;
 }>;
@@ -165,16 +166,17 @@ function prepareCopiedLegacy(input: CopiedLegacyInput, getLegacyContext: GetLega
   assert(pending.length === 0, "inflight tools");
   // Cast only after the narrow data validator above; never executes source content.
   const entries = raw as SessionEntry[];
-  const first = entries[0];
-  assert(first?.type === "message" && first.message.role === "system" && first.message.content === hostBaseline,
-    "missing/mismatched persisted host baseline (external-only baseline unsupported)");
-  const projection = clone(getLegacyContext(clone(entries), parent!));
+  const history = clone(getLegacyContext(clone(entries), parent!));
+  // New host instructions are explicit continuation context. Timestamp0 denotes
+  // injected instructions, never an invented historical source event.
+  const continuation: Message = { role: "system", content: hostBaseline, timestamp: 0 };
+  const projection = { ...history, messages: [continuation, ...history.messages] };
   assert(projection.projected.length === entries.length && projection.projected.every((p, i) => p.sourceEntryId === entries[i]!.id),
     "incomplete host projection");
   const sourceHash = createHash("sha256").update(JSON.stringify({
     importerVersion: IMPORTER_VERSION, chatJid, chatIncarnation, branchId, hostBaseline, sourceJSONL,
   })).digest("hex");
-  return { identity, entries, projection, sourceHash, sourceSessionId: header.id as string, sourceLeafId: parent! };
+  return { identity, entries, projection, continuation, sourceHash, sourceSessionId: header.id as string, sourceLeafId: parent! };
 }
 
 /** Caller MUST hold exclusive host ownership, drain admission/work, and use owned/fenced
@@ -197,6 +199,7 @@ export async function importCopiedLegacy(conversation: Conversation, input: Copi
     }
     assert((await tx.scanEntries({ conversationId: conversation.id }, 1)).items.length === 0, "target must be empty");
     const mapping = new Map<string, EntryId>();
+    await tx.appendEntry(SystemEntry, conversation.id, { model: [prepared.continuation] });
     await appendPrepared(tx, conversation.id, prepared, 0, mapping, assertOwnership);
     const binding: LegacyImportBinding = {
       schemaVersion: 3, importerVersion: IMPORTER_VERSION, sourceHash: prepared.sourceHash,
@@ -221,20 +224,13 @@ async function appendPrepared(tx: Tx, conversationId: ConversationId,
       const model = [...prepared.projection.projected[index]!.messages];
       if (entry.type === "message") {
         assertOwnership();
-        at = entry.message.role === "system"
-          ? (await tx.appendEntry(SystemEntry, conversationId, { model })).id
-          : (await tx.appendEntry(conversationId, { kind: "app.legacy-message", model })).id;
+        at = (await tx.appendEntry(conversationId, { kind: "app.legacy-message", model })).id;
       } else if (entry.type === "compaction") {
         const head = mapping.get(entry.firstKeptEntryId); assert(head, "unmapped compaction head");
         assertOwnership();
         at = (await tx.appendEntry(CompactionEntry, conversationId, {
-          head, data: { reason: "manual" }, model: model.filter(m => m.role !== "system"),
+          head, data: { reason: "manual" }, model: [prepared.continuation, ...model],
         })).id;
-        const baseline = model.filter(m => m.role === "system");
-        if (baseline.length) {
-          assertOwnership();
-          at = (await tx.appendEntry(SystemEntry, conversationId, { model: baseline })).id;
-        }
       }
       mapping.set(entry.id, at);
     }
@@ -329,6 +325,8 @@ export function prepareLegacyTreeImport(input: CopiedLegacyTreeInput, bridge: Ge
     sourceJSONL: [header, ...path].map(record => JSON.stringify(record)).join("\n"),
     maxEntries, maxBytes,
   }, bridge));
+  assert(prepared.every(branch => branch.identity.hostBaseline === prepared[0]!.identity.hostBaseline),
+    "Conflicting captured continuation instructions for shared source");
   const sourceHash = createHash("sha256").update(hashedInput).digest("hex");
   return { prepared, sourceHash, raw, plannedBranches };
 }
@@ -371,6 +369,9 @@ export async function importCopiedLegacyTree(conversation: Conversation, input: 
         assertOwnership();
         conversationId = (await tx.forkConversation(parent.conversationId, parent.at,
           { ownership: { kind: "ownerless" } })).id;
+      } else if (branches.length === 0) {
+        assertOwnership();
+        await tx.appendEntry(SystemEntry, conversationId, { model: [prepared.continuation] });
       }
       await appendPrepared(tx, conversationId, prepared, start, mapping, assertOwnership);
       for (const entry of prepared.entries.slice(start))

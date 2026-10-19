@@ -15,7 +15,7 @@ import { captureResidentLegacyUpgradeBindings } from "../../src/agent-pool/legac
 
 const cleanup: (() => void)[] = [];
 afterEach(() => { for (const fn of cleanup.splice(0).reverse()) fn(); });
-function fixture(externalAlias = false, persistedBaseline = false) {
+function fixture(externalAlias = false, persistedBaseline = false, quiescent = false) {
   initDatabase();
   const dir = mkdtempSync(join(tmpdir(), "resident-capture-"));
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
@@ -33,7 +33,10 @@ function fixture(externalAlias = false, persistedBaseline = false) {
   const records = [{ type: "session", version: 3, id: "original", timestamp: time, cwd: dir },
     { type: "message", id: "base", parentId: null, timestamp: time, message: { role: "user", content: "base", timestamp: 1 } },
     ...["left", "right"].map(id => ({ type: "message", id, parentId: "base", timestamp: time,
-      message: { role: "user", content: id, timestamp: 2 } }))];
+      message: quiescent ? { role: "assistant", api: "openai-completions", provider: "never", model: "never",
+        content: [{ type: "text", text: id }], stopReason: "stop", timestamp: 2,
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } : { role: "user", content: id, timestamp: 2 } }))];
   let leaves = ["left", "right"];
   if (persistedBaseline) {
     // Fixture creation ONLY. Capture must never invent or persist this baseline.
@@ -87,6 +90,7 @@ test("existing pool captures exact resident selection, baseline and new migratio
   expect(capture.unselectedSourcePaths).toHaveLength(1);
   expect(capture.inputs[0]!.sourceJSONL).toBe(bytes.toString());
   const manifest = JSON.parse(capture.inputs[0]!.manifestJSON);
+  expect(manifest.version).toBe(2);
   expect(manifest.hostBranchBindings.left.hostBaseline).toBe("exact resident dynamic tools baseline");
   expect(manifest.hostBranchBindings.left.chatIncarnation).toBe("trusted-cutover-scope");
   expect(capture.legacyIncarnation).toBeNull();
@@ -150,21 +154,38 @@ if (process.env.PICLAW_REQUIRE_DURABLE_ENGINE === "1") {
   test("resident capture requires the installed application durable engine", () => expect(hasDurableEngine).toBe(true));
 }
 for (const persisted of [false, true]) {
-  test.skipIf(!hasDurableEngine)(`capture feeds actual copied application preparation: ${persisted ? "persisted original baseline prepares" : "current-only baseline is rejected"}`, async () => {
-    const f = fixture(false, persisted), bytes = readFileSync(f.file), before = f.root.serialize();
+  test.skipIf(!hasDurableEngine)(`capture feeds actual copied application preparation: ${persisted ? "current instructions differ from historical system" : "current instructions without historical system"}`, async () => {
+    const f = fixture(false, persisted, true), bytes = readFileSync(f.file), before = f.root.serialize();
+    if (persisted) f.changeBaseline(); // Real resident prompt capture, not edited source history.
     const captured = await f.capture(), input = captured.inputs[0]!;
+    const manifest = JSON.parse(input.manifestJSON);
+    expect(manifest.version).toBe(2);
+    const baseline = manifest.hostBranchBindings[f.managers[0]!.getLeafId()!].hostBaseline;
+    expect(baseline).toBe("exact resident dynamic tools baseline" + (persisted ? " changed" : ""));
     const { prepareCopiedApplicationUpgrade } = await import("../../durable-engine/src/copied-upgrade.js");
     const prepare = () => prepareCopiedApplicationUpgrade(Buffer.from(input.sourceJSONL), Buffer.from(input.manifestJSON), input.expected,
       (entries, leaf) => JSON.parse(JSON.stringify({
         messages: convertToLlm(buildSessionContext([...entries], leaf).messages),
         projected: entries.map(entry => ({ sourceEntryId: entry.id, messages: convertToLlm(sessionEntryToContextMessages(entry)) })),
       })));
-    if (persisted) {
-      const plan = prepare();
-      plan.assertApplicationBranches(f.root);
-      plan.assertApplicationScope(captured.migrationIncarnation, "original");
-      expect(plan.sourceSHA256).toBe(input.expected.sourceSHA256);
-    } else expect(prepare).toThrow("missing/mismatched persisted host baseline");
+    const plan = prepare();
+    plan.assertApplicationBranches(f.root);
+    plan.assertApplicationScope(captured.migrationIncarnation, "original");
+    expect(plan.sourceSHA256).toBe(input.expected.sourceSHA256);
+    const { prepareLegacyTreeImport } = await import("../../durable-engine/src/legacy-import.js");
+    const tree = prepareLegacyTreeImport({ sourceJSONL: input.sourceJSONL, hostBranchBindings: manifest.hostBranchBindings },
+      (entries, leaf) => JSON.parse(JSON.stringify({
+        messages: convertToLlm(buildSessionContext([...entries], leaf).messages),
+        projected: entries.map(entry => ({ sourceEntryId: entry.id, messages: convertToLlm(sessionEntryToContextMessages(entry)) })),
+      })));
+    expect(tree.raw).toEqual(bytes.toString().trim().split("\n").slice(1).map(line => JSON.parse(line)));
+    for (const branch of tree.prepared) {
+      const original = JSON.parse(JSON.stringify(convertToLlm(buildSessionContext(branch.entries, branch.sourceLeafId).messages)));
+      expect(branch.continuation).toEqual({ role: "system", content: baseline, timestamp: 0 });
+      expect(branch.projection.messages).toEqual([branch.continuation, ...original]);
+      expect(branch.projection.messages.slice(1)).toEqual(original);
+      expect(branch.entries.some(e => e.type === "message" && e.message.role === "system")).toBe(persisted);
+    }
     captured.revalidate();
     expect(readFileSync(f.file)).toEqual(bytes);
     expect(f.root.serialize()).toEqual(before);

@@ -49,7 +49,7 @@ async function setup() {
   const leaf = manager.getLeafId()!, bindings = { [leaf]: { chatJid: "web:cutover", chatIncarnation: "chat-A", branchId: "main", hostBaseline: "baseline" } };
   const sourceJSONL = [manager.getHeader(), ...manager.getEntries()].map(x => JSON.stringify(x)).join("\n") + "\n";
   const original = join(dir, "original.jsonl"), copied = join(dir, "copied.jsonl"); await writeFile(original, sourceJSONL);
-  const sourceDigest = sha(sourceJSONL), importHash = sha(JSON.stringify({ importerVersion: 1, sourceJSONL,
+  const sourceDigest = sha(sourceJSONL), importHash = sha(JSON.stringify({ importerVersion: 2, sourceJSONL,
     plannedBranches: [{ sourceLeafId: leaf, ...bindings[leaf] }], ...DEFAULT_TREE_IMPORT_LIMITS }));
   const identity = { domain: "runtime-domain", incarnation: "host-A", ownerGeneration: owner.token.generation, sourceEngineId: "legacy", candidateStoreRef: "candidate:one" };
   function currentWriter() {
@@ -87,7 +87,7 @@ async function setup() {
   };
   async function verify() {
     const conversation = (await base.harness.conversation(conversationId, context))!;
-    expect((await conversation.context(context)).messages).toEqual(json(convertToLlm(buildSessionContext(manager.getEntries(), leaf).messages)));
+    expect((await conversation.context(context)).messages).toEqual([{ role: "system", content: bindings[leaf].hostBaseline, timestamp: 0 }, ...json(convertToLlm(buildSessionContext(manager.getEntries(), leaf).messages))]);
     expect(base.host.modelCalls + base.host.effects + base.host.credentialLookups).toBe(0); return receipt;
   }
   async function ready() { const m = controller.preflight(request); const copied = await controller.begin(m.revision, preparation); return controller.verify(copied.revision, verify); }

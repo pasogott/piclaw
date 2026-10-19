@@ -14,18 +14,19 @@ import { HostCutoverController, initializeCutoverManifest, LegacyTreeImportManif
 import { TestOwner, OwnedSqlite } from "./src/ownership.ts";
 import { context, openFixture } from "./src/fixture.ts";
 const sha = (v: Uint8Array) => createHash("sha256").update(v).digest("hex");
+const capturedBaseline = "Captured current upgrade host instructions for future continuation";
 const json = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const bridge: GetLegacyContext = (entries, leaf) => ({ messages: json(convertToLlm(buildSessionContext([...entries], leaf).messages)),
   projected: entries.map(entry => ({ sourceEntryId: entry.id, messages: json(convertToLlm(sessionEntryToContextMessages(entry))) })) });
-async function using(run: (f: Awaited<ReturnType<typeof setup>>) => Promise<void>, mainOnly = false) {
-  const f = await setup(false, mainOnly);
+async function using(run: (f: Awaited<ReturnType<typeof setup>>) => Promise<void>, mainOnly = false, historicalBaseline = true) {
+  const f = await setup(false, mainOnly, historicalBaseline);
   try { await run(f); } finally { await f.base.close(); f.owner.releaseAfterClose(); f.db.close(); f.owner.closeConnection(); await rm(f.dir, { recursive: true, force: true }); }
 }
-async function setup(sharedDatabase = false, mainOnly = false) {
+async function setup(sharedDatabase = false, mainOnly = false, historicalBaseline = true) {
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "upgrade-"));
   const path = sharedDatabase ? join(STORE_DIR, "messages.db") : join(dir, "owned.sqlite");
   const manager = SessionManager.inMemory(dir, { id: "existing-session" });
-  manager.appendMessage({ role: "system", content: "persisted baseline", timestamp: 1 });
+  if (historicalBaseline) manager.appendMessage({ role: "system", content: "persisted baseline", timestamp: 1 });
   const user = manager.appendMessage({ role: "user", content: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }], timestamp: 2 });
   manager.appendCustomEntry("qualification.display", { note: "copied metadata, not a model message" });
   const shared = manager.appendCompaction("Copied summary, never regenerated", user, 100, { copied: true }, true);
@@ -36,8 +37,8 @@ async function setup(sharedDatabase = false, mainOnly = false) {
   const leaves = mainOnly ? [left] : [left, answer()];
   const source = Buffer.from([manager.getHeader(), ...manager.getEntries()].map(v => JSON.stringify(v)).join("\n") + "\n");
   const chatJid = sharedDatabase ? `web:existing-${crypto.randomUUID()}` : "web:existing";
-  const host = { version: 1, sourceCopied: true, expectedSourceSHA256: sha(source), pending: 0, inflight: 0,
-    hostBranchBindings: Object.fromEntries(leaves.map((leaf, i) => [leaf, { chatJid: sharedDatabase && i === 1 ? `${chatJid}-right` : chatJid, chatIncarnation: "existing-incarnation", branchId: mainOnly ? "main" : `${chatJid}-${i}`, hostBaseline: "persisted baseline" }])) };
+  const host = { version: 2, sourceCopied: true, expectedSourceSHA256: sha(source), pending: 0, inflight: 0,
+    hostBranchBindings: Object.fromEntries(leaves.map((leaf, i) => [leaf, { chatJid: sharedDatabase && i === 1 ? `${chatJid}-right` : chatJid, chatIncarnation: "existing-incarnation", branchId: mainOnly ? "main" : `${chatJid}-${i}`, hostBaseline: capturedBaseline }])) };
   if (!sharedDatabase) {
     await writeFile(join(dir, "copy.jsonl"), source); await writeFile(join(dir, "host.json"), JSON.stringify(host));
   }
@@ -88,6 +89,53 @@ async function setup(sharedDatabase = false, mainOnly = false) {
     checkDrained() { return { sourceDigest: expected.sourceSHA256, pending: 0, inflight: 0 }; } };
   const controller = new HostCutoverController(db, identity, ports);
   return { dir, path, owner, db, base, bytes, manifest, expected, controller, identity, ports, host, candidateDatabase, hostSnapshot, originalHost };
+}
+for (const historical of [false, true]) {
+  test(`copied v2 continuation accepts ${historical ? "different historical system/checkpoint" : "no historical system"} without changing source audit`, () => using(async f => {
+    const source = Buffer.from(f.bytes), records = source.toString().trim().split("\n").map(line => JSON.parse(line));
+    const original = records.slice(1);
+    expect(original.some(entry => entry.message?.role === "system")).toBe(historical);
+    const plan = prepareCopiedUpgrade(f.bytes, f.manifest, f.expected, bridge);
+    await plan.importCopied(f.base.root, () => f.owner.assert(), context);
+    const receipt = (await f.base.harness.snapshot(LegacyTreeImportManifest, f.base.root.id, context))!.binding!;
+    expect(receipt.importerVersion).toBe(2);
+    expect(receipt.originalEntries).toEqual(original);
+    const seedIds = new Set<number>();
+    for (const branch of receipt.branches) {
+      const conversation = (await f.base.harness.conversation(branch.engineConversationId as typeof f.base.root.id, context))!;
+      const current = { role: "system", content: capturedBaseline, timestamp: 0 };
+      const view = await conversation.context(context);
+      const legacy = bridge(branch.originalEntries as unknown as Parameters<GetLegacyContext>[0], branch.sourceLeafId);
+      expect(view.messages).toEqual([current, ...legacy.messages]);
+      expect(view.messages.slice(1)).toEqual(legacy.messages);
+      const history = (await conversation.commit(tx => tx.scanEntries({ conversationId: conversation.id, order: "ascending" }, original.length * 3 + 1), context)).items;
+      const { id, conversationId: owner, ...seed } = history[0]!;
+      seedIds.add(id); expect(owner).toBe(f.base.root.id);
+      expect(seed).toEqual({ kind: "pi.system", model: [current] });
+      expect(history.filter(entry => entry.kind === "pi.system")).toHaveLength(1);
+      expect(history.filter(e => e.kind === "app.legacy-source").map(e => e.data)).toEqual(branch.originalEntries);
+      for (const [index, row] of history.entries()) {
+        if (row.kind !== "app.legacy-source") continue;
+        const raw = row.data as { type: string; id: string };
+        if (raw.type === "message") {
+          expect(history[index + 1]).toMatchObject({ kind: "app.legacy-message", model: legacy.projected.find(p => p.sourceEntryId === raw.id)!.messages });
+        }
+        if (raw.type === "compaction") {
+          expect(history[index + 1]).toMatchObject({ kind: "pi.compaction", model: [current, ...legacy.projected.find(p => p.sourceEntryId === raw.id)!.messages] });
+          expect(branch.entries.find(e => e.sourceEntryId === raw.id)!.durableEntryId).toBe(history[index + 1]!.id);
+        }
+      }
+    }
+    expect(seedIds.size).toBe(1); // Forks inherit the original seed, never reseed.
+    await plan.verify(f.base.harness, f.base.root.id, context);
+    const before = await f.base.harness.snapshot(LegacyTreeImportManifest, f.base.root.id, context);
+    await plan.importCopied(f.base.root, () => f.owner.assert(), context);
+    expect(await f.base.harness.snapshot(LegacyTreeImportManifest, f.base.root.id, context)).toEqual(before);
+    expect(f.bytes).toEqual(source);
+    expect(await readFile(join(f.dir, "copy.jsonl"))).toEqual(source);
+    expect(f.base.host.modelCalls + f.base.host.effects + f.base.host.credentialLookups).toBe(0);
+    expect(f.controller.inspect()).toBeNull();
+  }, false, historical));
 }
 test("installation: every source validated before writes; deterministic identity pins roots and rejects duplicates", () => using(async f => {
   const secondSource = Buffer.from(f.bytes.toString().replace('"id":"existing-session"', '"id":"second-session"'));
@@ -314,8 +362,11 @@ for (const fault of ["missing tree mapping", "missing branch mapping", "aliased 
 }
 test("copied upgrade: digest/provenance/context failures precede every journal/import write", () => using(async f => {
   const before = await f.base.harness.snapshot(LegacyTreeImportManifest, f.base.root.id, context);
-  for (const patch of [{ expectedSourceSHA256: "0".repeat(64) }, { pending: 1 }, { sourceCopied: false },
-    { hostBranchBindings: {} }, { hostBranchBindings: Object.fromEntries(Object.entries(f.host.hostBranchBindings).map(([k, v]) => [k, { ...v, hostBaseline: "invented" }])) }]) {
+  for (const patch of [{ expectedSourceSHA256: "0".repeat(64) }, { pending: 1 }, { sourceCopied: false }, { version: 1 }, { version: 3 },
+    { hostBranchBindings: {} },
+    { hostBranchBindings: Object.fromEntries(Object.entries(f.host.hostBranchBindings).map(([k, v]) => [k, { ...v, hostBaseline: "" }])) },
+    { hostBranchBindings: Object.fromEntries(Object.entries(f.host.hostBranchBindings).map(([k, { hostBaseline: _hostBaseline, ...v }]) => [k, v])) },
+    { hostBranchBindings: Object.fromEntries(Object.entries(f.host.hostBranchBindings).map(([k, v], index) => [k, { ...v, hostBaseline: index ? capturedBaseline + " conflicting" : capturedBaseline }])) }]) {
     const manifest = Buffer.from(JSON.stringify({ ...f.host, ...patch }));
     expect(() => prepareCopiedUpgrade(f.bytes, manifest, { ...f.expected, manifestSHA256: sha(manifest) }, bridge)).toThrow();
     expect(f.controller.inspect()).toBeNull();

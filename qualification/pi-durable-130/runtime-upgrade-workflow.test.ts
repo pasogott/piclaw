@@ -4,7 +4,7 @@ import { Database } from "bun:sqlite";
 import { snapshotLegacyHostFrontier } from "../../runtime/src/agent-pool/legacy-host-frontier.js";
 import { mkdirSync, writeFileSync, readFileSync, rmSync, mkdtempSync, readdirSync, symlinkSync, watch } from "node:fs";
 import { join } from "node:path";
-import { SessionManager, createAgentSession, createAgentSessionRuntime, DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { buildSessionContext, convertToLlm, sessionEntryToContextMessages, SessionManager, createAgentSession, createAgentSessionRuntime, DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { bootstrapRuntime, type RuntimeBootstrapContext, type RuntimeBootstrapDeps } from "../../runtime/src/runtime/bootstrap.js";
 import * as shutdownRegistry from "../../runtime/src/runtime/shutdown-registry.js";
 import { AgentPool } from "../../runtime/src/agent-pool.js";
@@ -20,7 +20,7 @@ import { BunSqliteDatabase } from "../../runtime/durable-engine/src/bun-sqlite.j
 import { applicationOwnership } from "../../runtime/durable-engine/src/application-bootstrap.js";
 import { HostCutoverController, initializeCutoverManifest } from "../../runtime/durable-engine/src/host-cutover.js";
 import { copiedInstallationSourceDigest } from "../../runtime/durable-engine/src/copied-installation.js";
-import { LegacyTreeImportManifest } from "../../runtime/durable-engine/src/legacy-import.js";
+import { LegacyTreeImportManifest, prepareLegacyTreeImport } from "../../runtime/durable-engine/src/legacy-import.js";
 import { upgradeCapturedRuntime } from "../../runtime/durable-engine/src/runtime-upgrade-workflow.js";
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { openFixture, context } from "./src/fixture.js";
@@ -33,7 +33,7 @@ const mutations = {
   security: "INSERT INTO web_sessions(token,user_id,created_at,expires_at) VALUES ('frontier-probe','default','now','later')",
   terminal: "INSERT INTO service_effect_s01_chats(chat_jid) VALUES ('frontier-probe')",
 };
-const scenarios = ["happy", "happy-forks", "happy-multiple", "happy-multiple-retry", "zero", "unselected", "multiple", "released", "changed-after-open", "released-after-open",
+const scenarios = ["happy", "happy-no-system", "happy-different-current", "happy-forks", "happy-multiple", "happy-multiple-retry", "zero", "unselected", "multiple", "released", "changed-after-open", "released-after-open",
   ...Object.keys(mutations).flatMap(name => [`host-${name}-open`, `host-${name}-close`])];
 for (const scenario of scenarios.filter(name => !process.env.PICLAW_WORKFLOW_CASE || name === process.env.PICLAW_WORKFLOW_CASE))
   test(`actual runtime capture → owned upgrade: ${scenario}`, async () => {
@@ -63,7 +63,7 @@ for (const scenario of scenarios.filter(name => !process.env.PICLAW_WORKFLOW_CAS
     const queue = new AgentQueue(), pool = new AgentPool({ ...modelOptions, createSession: async (chat, sessionDir) => {
       const loader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
         appendSystemPromptOverride: () => [], agentsFilesOverride: () => ({ agentsFiles: [] }),
-        disabledBuiltinExtensions: ["codemode", "tool-search", "mcp"], systemPromptOverride: () => "original baseline" });
+        disabledBuiltinExtensions: ["codemode", "tool-search", "mcp"], systemPromptOverride: () => scenario === "happy-different-current" ? "Captured current continuation policy" : "original baseline" });
       await loader.reload();
       const settingsManager = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: false } });
       const manager = SessionManager.open(join(sessionDir, "resident.jsonl"));
@@ -98,7 +98,7 @@ for (const scenario of scenarios.filter(name => !process.env.PICLAW_WORKFLOW_CAS
       for (let index = 0; index < (scenario === "zero" ? 0 : scenario.includes("multiple") ? 2 : 1); index++) {
         const chat = `web:workflow:${index}`; storeChatMetadata(chat, new Date().toISOString());
         const manager = SessionManager.inMemory(dir, { id: `original-${index}` });
-        manager.appendMessage({ role: "system", content: `original baseline\n\n<cwd>\n${dir}\n</cwd>`, timestamp: 1 });
+        if (scenario !== "happy-no-system") manager.appendMessage({ role: "system", content: `original baseline\n\n<cwd>\n${dir}\n</cwd>`, timestamp: 1 });
         manager.appendThinkingLevelChange("off");
         const shared = manager.getLeafId()!;
         const answer = () => manager.appendMessage({ role: "assistant", api: "openai-completions", provider: "qualification", model: "synthetic", content: [{ type: "text", text: "original answer" }], stopReason: "stop", timestamp: 2,
@@ -124,6 +124,27 @@ for (const scenario of scenarios.filter(name => !process.env.PICLAW_WORKFLOW_CAS
       jsonl = (["create", "open", "continueRecent"] as const).map(name => spyOn(SessionManager, name).mockImplementation(() => { throw Error("JSONL factories forbidden after preparation"); }));
       const preparation = await runtime.prepareLegacyMigration("workflow-next");
       const captured = await preparation.capture();
+      for (const input of captured.inputs) {
+        const manifest = JSON.parse(input.manifestJSON);
+        expect(manifest.version).toBe(2);
+        const bridge: import("../../runtime/durable-engine/src/legacy-import.js").GetLegacyContext = (entries, leaf) => JSON.parse(JSON.stringify({
+          messages: convertToLlm(buildSessionContext([...entries], leaf).messages),
+          projected: entries.map(entry => ({ sourceEntryId: entry.id, messages: convertToLlm(sessionEntryToContextMessages(entry)) })),
+        }));
+        const plan = prepareLegacyTreeImport({ sourceJSONL: input.sourceJSONL, hostBranchBindings: manifest.hostBranchBindings }, bridge);
+        expect(plan.raw).toEqual(input.sourceJSONL.trim().split("\n").slice(1).map(line => JSON.parse(line)));
+        for (const branch of plan.prepared) {
+          const historical = bridge(branch.entries, branch.sourceLeafId);
+          expect(branch.projection.messages).toEqual([branch.continuation, ...historical.messages]);
+          expect(branch.projection.projected).toEqual(historical.projected);
+          expect(branch.continuation).toEqual({ role: "system", content: branch.identity.hostBaseline, timestamp: 0 });
+          if (scenario === "happy-no-system") expect(historical.messages.some(message => message.role === "system")).toBe(false);
+          if (scenario === "happy-different-current") {
+            expect(branch.identity.hostBaseline).toContain("Captured current continuation policy");
+            expect(historical.messages.some(message => message.role === "system" && message.content === branch.identity.hostBaseline)).toBe(false);
+          }
+        }
+      }
       if (scenario.startsWith("happy-multiple")) {
         expect(captured.inputs).toHaveLength(2); expect(captured.unselectedSourcePaths).toEqual([]);
         expect([...new Set(captured.identities.map(i => i.originalSessionId))].sort()).toEqual(["original-0", "original-1"]);

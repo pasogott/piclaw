@@ -37,7 +37,7 @@ function fixture() {
   const earlyLeaf = manager.appendMessage(assistant());
   const leaves = [main, siblingLeaf, grandchild, earlyLeaf];
   const source = [manager.getHeader(), ...manager.getEntries()].map(record => JSON.stringify(record)).join("\n") + "\n";
-  return { manager, source, manifest: { version: 1, sourceCopied: true, expectedSourceSHA256: sha(source), pending: 0, inflight: 0,
+  return { manager, source, manifest: { version: 2, sourceCopied: true, expectedSourceSHA256: sha(source), pending: 0, inflight: 0,
     hostBranchBindings: Object.fromEntries(leaves.map((leaf, index) => [leaf, { chatJid: `web:original-${index}`,
       chatIncarnation: `original-incarnation-${index}`, branchId: `original-branch-${index}`, hostBaseline: baseline }])) } };
 }
@@ -92,7 +92,7 @@ test("CLI imports all four leaves with original identities, tools/images/compact
   for (const branch of receipt.branches) {
     const binding = f.manifest.hostBranchBindings[branch.sourceLeafId]!;
     expect([branch.chatJid, branch.chatIncarnation, branch.branchId]).toEqual([binding.chatJid, binding.chatIncarnation, binding.branchId]);
-    expect(branch.contextSHA256).toBe(sha(JSON.stringify(convertToLlm(buildSessionContext(f.manager.getEntries(), branch.sourceLeafId).messages))));
+    expect(branch.contextSHA256).toBe(sha(JSON.stringify([{ role: "system", content: binding.hostBaseline, timestamp: 0 }, ...convertToLlm(buildSessionContext(f.manager.getEntries(), branch.sourceLeafId).messages)])));
   }
   expect(await readFile(join(dir, "copied.jsonl"))).toEqual(before);
   expect((await stat(first)).mode & 0o777).toBe(0o700);
@@ -110,7 +110,7 @@ test("CLI imports all four leaves with original identities, tools/images/compact
 
 test("CLI rejects digest, manifest, flags and active-profile paths before ANY destination creation", () => using(async (dir, f) => {
   const destination = join(dir, "never-created");
-  for (const patch of [{ expectedSourceSHA256: "0".repeat(64) }, { sourceCopied: false }, { version: 2 }, { pending: 1 }, { unexpected: true }]) {
+  for (const patch of [{ expectedSourceSHA256: "0".repeat(64) }, { sourceCopied: false }, { version: 1 }, { version: 3 }, { pending: 1 }, { unexpected: true }]) {
     await writeFile(join(dir, "manifest.json"), JSON.stringify({ ...f.manifest, ...patch }));
     const result = await invoke(dir, destination);
     expect(result.exit).toBe(1); expect(result.stderr).toMatch(/"code":"(?:invalid_input|source_digest)"/);
@@ -130,13 +130,15 @@ test("CLI rejects digest, manifest, flags and active-profile paths before ANY de
   expect(existsSync(destination)).toBe(false);
 }));
 
-test("CLI rejects unsupported or non-quiescent leaves, incomplete/duplicate bindings and invented baseline before storage", () => using(async (dir, f) => {
+test("CLI rejects unsupported or non-quiescent leaves, incomplete/duplicate bindings and conflicting/missing continuation instructions before storage", () => using(async (dir, f) => {
   const destination = join(dir, "never-created");
   const leaves = Object.keys(f.manifest.hostBranchBindings);
-  const variants = [structuredClone(f.manifest), structuredClone(f.manifest), structuredClone(f.manifest)];
+  const variants = Array.from({ length: 5 }, () => structuredClone(f.manifest));
   delete variants[0]!.hostBranchBindings[leaves[0]!];
   variants[1]!.hostBranchBindings[leaves[1]!] = { ...variants[1]!.hostBranchBindings[leaves[0]!]! };
-  variants[2]!.hostBranchBindings[leaves[0]!]!.hostBaseline = "Invented baseline";
+  variants[2]!.hostBranchBindings[leaves[0]!]!.hostBaseline = "Different captured current instructions";
+  variants[3]!.hostBranchBindings[leaves[0]!]!.hostBaseline = "";
+  delete (variants[4]!.hostBranchBindings[leaves[0]!] as Partial<{ hostBaseline: string }>).hostBaseline;
   for (const manifest of variants) {
     await writeFile(join(dir, "manifest.json"), JSON.stringify(manifest));
     expect((await invoke(dir, destination)).stderr).toContain('"code":"import_unsupported"');

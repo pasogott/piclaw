@@ -41,7 +41,7 @@ async function setup() {
   // Importer requires a nonempty caller-validated baseline.
   for (const binding of Object.values(bindings)) binding.hostBaseline = "baseline";
   const plannedBranches = [left, right].sort().map(sourceLeafId => ({ sourceLeafId, ...bindings[sourceLeafId]! }));
-  const sourceDigest = sha(sourceJSONL), importHash = sha(JSON.stringify({ importerVersion: 1, sourceJSONL, plannedBranches, ...DEFAULT_TREE_IMPORT_LIMITS }));
+  const sourceDigest = sha(sourceJSONL), importHash = sha(JSON.stringify({ importerVersion: 2, sourceJSONL, plannedBranches, ...DEFAULT_TREE_IMPORT_LIMITS }));
   const request = { requestKey: "cutover:one", sourceDigest, importHash };
   const identity = { domain: "fixture-domain", incarnation: "host-A", ownerGeneration: owner.token.generation, sourceEngineId: "legacy", candidateStoreRef: "candidate:one" };
   let currentDigest = sourceDigest;
@@ -74,7 +74,7 @@ async function setup() {
     for (const branch of binding.branches) {
       expect(branch.chatJid).toBe("web:existing"); expect(branch.chatIncarnation).toBe("chat-A");
       const conversation = (await base.harness.conversation(branch.engineConversationId as ConversationId, context))!;
-      expect((await conversation.context(context)).messages).toEqual(json(convertToLlm(buildSessionContext(manager.getEntries(), branch.sourceLeafId).messages)));
+      expect((await conversation.context(context)).messages).toEqual([{ role: "system", content: bindings[branch.sourceLeafId]!.hostBaseline, timestamp: 0 }, ...json(convertToLlm(buildSessionContext(manager.getEntries(), branch.sourceLeafId).messages))]);
       expect(branch.entries.map(e => e.sourceEntryId)).toEqual(manager.getBranch(branch.sourceLeafId).map(e => e.id));
     }
     expect(await base.harness.inspect(context)).toEqual({ scheduling: "paused", tasks: [], submissions: [] });

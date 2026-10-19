@@ -4,7 +4,8 @@ The implementation is incomplete. Native Goal and soft token-budget wrap-up are
 adopted in source. Legacy deadline checkpoints, general exact running cancellation,
 historical rollback proof and whole-history migration still prevent acceptance.
 Full-gate source: core `08991f990`; the ordinary-steer successor below has separate
-focused qualification. Goal add-on `92de0be`. Nothing was installed,
+focused qualification. The captured-current continuation contract below has a
+separate focused gate. Goal add-on `92de0be`. No running service was installed,
 activated, migrated or deployed.
 
 ## Design goal
@@ -129,7 +130,8 @@ Prefixes: `E/` = `runtime/durable-engine/src/`; `A/` =
    and quiescence requirements. Unsupported real history must reject intact;
    no sanitising, dropped entries, invented baseline or live cutover is permitted.
 4. Source-head tests, independent review, publication and exact-head hosted CI
-   are separate gates. No merge, install, restart or live migration is authorised.
+   are separate gates. Source push/merge is authorised. Running-service install,
+   restart and live migration require separate approval.
 
 ## Native token-budget wrap-up — source `76e5f81ec` / add-on `92de0be`
 
@@ -215,6 +217,32 @@ receipts remain ordinary. Goal inputs after an ordinary tail reject.
   after an already exhausted live Goal budget, external lifecycle replacement,
   and arbitrary alternating Goal/ordinary runs retain their fail-closed limits.
   No runner, scheduler, ledger or legacy compatibility shim was added.
+
+## Captured current instructions for continuation — importer v2
+
+Importer v2 prefixes genuinely captured current host instructions to future
+continuation context. Historical records and their original system messages stay
+unchanged. The injected system message uses timestamp0 and carries no historical
+instruction-time assertion. Version1 copied manifests reject.
+
+- Native root receives one continuation seed. An imported compaction prefixes
+  those instructions to its public model messages, preserving the legacy context
+  order across the new head. Forks inherit the root seed; shared-source current
+  prompts must agree. Source audit records, identities and complete mappings stay
+  intact through rollback, retry, fork and SQLite reopen.
+- Historical system messages use `app.legacy-message`. UI projection keeps them
+  private only after an exact immutable-provenance match. Native instructions
+  never become an additional visible conversation acknowledgement.
+- Final copied/import/workflow/application gates: **119 pass / 2,405 assertions /
+  8 files**, exit0. Resident capture: **14 pass / 65 assertions**, exit0.
+  Engine and candidate types pass. Bounded static production review: READY;
+  SHA256 `e41983d941f39872777cd538ceda8828ab71c0616b9159e7d0843a178a70bc78`.
+  Receipts: `reviews/durable-1650/current-instructions-final-*`,
+  `current-instructions-capture.*` and `current-instructions-projection-fixed.*`.
+- These are focused gates. Whole real-history bounds, thinking/custom/context-edit
+  coverage and pending authority still need qualification. All45 requirement
+  classifications stay22 source-qualified/17 fixture-only/3 blocked-publicAPI/
+  3 migration-perf-unverified. No live capture, drain or cutover occurred.
 
 ## Whole real-history preflight (earlier source `3cbc12b6e`)
 

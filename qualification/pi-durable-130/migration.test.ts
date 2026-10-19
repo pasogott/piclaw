@@ -268,11 +268,35 @@ const publicContextBridge: GetLegacyContext = (entries, leafId) => ({
   projected: entries.map(entry => ({ sourceEntryId: entry.id,
     messages: entry.type === "custom" ? [] : json(convertToLlm(sessionEntryToContextMessages(entry))) })),
 });
+const capturedBaseline = "Captured current synthetic host instructions for future continuation";
+const continuation = (content = capturedBaseline): Message => ({ role: "system", content, timestamp: 0 });
 function moduleInput(manager: LegacyManager): CopiedLegacyInput {
   return { sourceJSONL: copied(manager).jsonl, chatJid: "web:module-chat", chatIncarnation: "stable-original-uuid",
-    branchId: "original-main", hostBaseline: "Known original synthetic baseline" };
+    branchId: "original-main", hostBaseline: capturedBaseline };
 }
 describe("reusable copied-history module (not live migration wiring)", () => {
+  for (const historical of [false, true]) {
+    test(`captured current continuation with ${historical ? "different historical system/checkpoint" : "no historical system"} preserves source and public context`, () => using(async f => {
+      const manager = historical ? advancedFixture(true) : representative();
+      const input = moduleInput(manager), source = input.sourceJSONL;
+      const original = json(manager.getEntries()), legacyContext = publicContextBridge(original, manager.getLeafId()!);
+      expect(original.some(entry => entry.type === "message" && entry.message.role === "system")).toBe(historical);
+      const prepared = prepareLegacyImport(input, publicContextBridge);
+      expect(continuation()).toEqual(prepared.continuation);
+      expect(prepared.projection.messages).toEqual([continuation(), ...legacyContext.messages]);
+      expect(prepared.projection.projected).toEqual(legacyContext.projected);
+      expect(prepared.entries).toEqual(original);
+      const receipt = await importCopiedLegacy(f.root, input, publicContextBridge, () => {}, context);
+      expect(receipt.importerVersion).toBe(2);
+      expect(receipt.originalEntries).toEqual(JSON.parse(JSON.stringify(original)));
+      await equivalentImported(f, manager);
+      expect(input.sourceJSONL).toBe(source);
+      expect(manager.getEntries()).toEqual(original);
+      expect(await importCopiedLegacy(f.root, input, publicContextBridge, () => {}, context)).toEqual(receipt);
+      await expect(importCopiedLegacy(f.root, { ...input, hostBaseline: capturedBaseline + " changed" }, publicContextBridge, () => {}, context)).rejects.toThrow("content conflict");
+    }));
+  }
+
   for (const location of ["tool arguments", "tool details", "custom metadata", "compaction details"] as const) {
     test(`literal 1e400 in ${location} rejects before bridge or any writes`, () => using(async f => {
       const manager = advancedFixture(true);
@@ -363,7 +387,7 @@ describe("reusable copied-history module (not live migration wiring)", () => {
     while (manager.getEntries().length < 100) manager.appendMessage({ role: "user", content: `history-${manager.getEntries().length}`, timestamp: 3000 });
     const input = moduleInput(manager);
     const receipt = await importCopiedLegacy(f.root, input, publicContextBridge, () => {}, context);
-    await equivalent(f, manager);
+    await equivalentImported(f, manager);
     expect(receipt.entries).toHaveLength(100);
     expect(receipt.originalEntries).toEqual(JSON.parse(JSON.stringify(manager.getEntries())));
     expect(receipt.chatIncarnation).toBe("stable-original-uuid");
@@ -371,17 +395,17 @@ describe("reusable copied-history module (not live migration wiring)", () => {
     expect(receipt.entries.map(e => e.sourceEntryId)).toEqual(manager.getEntries().map(e => e.id));
     expect(await importCopiedLegacy(f.root, input, publicContextBridge, () => {}, context)).toEqual(receipt);
     await expect(importCopiedLegacy(f.root, { ...input, sourceJSONL: input.sourceJSONL + "\n" }, publicContextBridge, () => {}, context)).rejects.toThrow("content conflict");
-    expect((await f.root.context(context)).entries).toHaveLength(200);
+    expect((await f.root.context(context)).entries).toHaveLength(201);
   }));
   test("compaction checkpoint, audit data and original fork points survive extraction", () => using(async f => {
     const manager = advancedFixture(true);
     const receipt = await importCopiedLegacy(f.root, moduleInput(manager), publicContextBridge, () => {}, context);
-    await equivalent(f, manager);
+    await equivalentImported(f, manager);
     for (const index of [1, 3]) {
       const entry = manager.getEntries()[index]!;
       const at = receipt.entries.find(e => e.sourceEntryId === entry.id)!.durableEntryId;
       const fork = await f.root.fork(at as EntryId, { ownership: { kind: "ownerless" } }, context);
-      expect((await fork.context(context)).messages).toEqual(json(convertToLlm(buildSessionContext(manager.getEntries(), entry.id).messages)));
+      expect((await fork.context(context)).messages).toEqual([continuation(), ...json(convertToLlm(buildSessionContext(manager.getEntries(), entry.id).messages))]);
     }
     expect((await f.harness.snapshot(LegacyImportManifest, f.root.id, context))!.binding).toEqual(receipt);
   }));
@@ -405,7 +429,7 @@ describe("reusable copied-history module (not live migration wiring)", () => {
       else if (entry.type === "custom") manager.appendCustomEntry(entry.customType, entry.data);
     }
     const receipt = await importCopiedLegacy(f.root, moduleInput(manager), publicContextBridge, () => {}, context);
-    await equivalent(f, manager);
+    await equivalentImported(f, manager);
     expect(receipt.originalEntries).toEqual(JSON.parse(JSON.stringify(manager.getEntries())));
     expect(JSON.stringify((await f.root.context(context)).messages)).toContain("historically completed");
   }));
@@ -424,7 +448,7 @@ describe("reusable copied-history module (not live migration wiring)", () => {
       const receipt = await importCopiedLegacy(f.root, input, publicContextBridge, () => {}, context);
       await f.close(); f = await open();
       expect(await importCopiedLegacy(f.root, input, publicContextBridge, () => {}, context)).toEqual(receipt);
-      await equivalent(f, manager);
+      await equivalentImported(f, manager);
     } finally { await f.close(); await rm(dir, { recursive: true, force: true }); }
   });
   test("explicit bounds, absent baseline, nonlinear tree, unsupported records fail before writing", () => using(async f => {
@@ -612,6 +636,54 @@ describe("H5 advanced actual public context qualification, independent of reject
   }));
 });
 
+// Production importer v2 oracle; independent inline qualification importers above
+// intentionally retain their own historical-only context contract.
+async function equivalentImported(f: Fixture, manager: LegacyManager, conversation: Conversation = f.root,
+  hostBaseline = capturedBaseline, leafId = manager.getLeafId()!) {
+  const source = manager.getBranch(leafId), expectedContinuation = continuation(hostBaseline);
+  const legacyContext = publicContextBridge(source, leafId);
+  const view = await conversation.context(context);
+  expect(view.messages).toEqual([expectedContinuation, ...legacyContext.messages]);
+  expect(view.messages[0]).toEqual(expectedContinuation);
+  expect(view.messages.slice(1)).toEqual([...legacyContext.messages]);
+  const binding = (await f.harness.snapshot(LegacyImportManifest, conversation.id, context))!.binding!;
+  expect(binding.importerVersion).toBe(2);
+  expect(binding.originalEntries).toEqual(JSON.parse(JSON.stringify(source)));
+  const history = (await conversation.commit(tx => tx.scanEntries({ conversationId: conversation.id, order: "ascending" }, source.length * 3 + 1), context)).items;
+  const { id: seedId, conversationId: seedOwner, ...seed } = history[0]!;
+  expect(seed).toEqual({ kind: SystemEntry.kind, model: [expectedContinuation] });
+  let cursor = 1;
+  const mapping: Mapping[] = [];
+  for (const [index, entry] of source.entries()) {
+    const audit = history[cursor++]!;
+    const { id: auditId, conversationId: auditOwner, ...auditContent } = audit;
+    expect(auditContent).toEqual({ kind: "app.legacy-source", data: JSON.parse(JSON.stringify(entry)) });
+    expect(seedId).toBeLessThan(auditId);
+    let at = auditId;
+    const model = legacyContext.projected[index]!.messages;
+    if (entry.type === "message" || entry.type === "compaction") {
+      const record = history[cursor++]!;
+      const { id, conversationId: owner, ...content } = record;
+      expect(owner).toBe(auditOwner);
+      if (entry.type === "message") {
+        // Historical systems are ordinary legacy messages, never native baseline seeds.
+        expect(content).toEqual({ kind: "app.legacy-message", model });
+      } else {
+        expect(content).toEqual({ kind: CompactionEntry.kind, head: mapping.find(m => m.sourceEntryId === entry.firstKeptEntryId)!.durableEntryId as typeof record.head,
+          data: { reason: "manual" }, model: [expectedContinuation, ...model] });
+      }
+      at = id;
+    }
+    mapping.push({ sourceEntryId: entry.id, durableEntryId: at });
+  }
+  expect(cursor).toBe(history.length);
+  expect(binding.entries).toEqual(mapping);
+  expect(history.filter(e => e.kind === SystemEntry.kind)).toHaveLength(1);
+  expect(f.host.effects + f.host.modelCalls + f.host.credentialLookups).toBe(0);
+  expect(await f.harness.inspect(context)).toEqual({ scheduling: "paused", tasks: [], submissions: [] });
+  return { seedId, seedOwner };
+}
+
 function treeFixture() {
   const manager = advancedFixture(true);
   const checkpoint = manager.getEntries().find(e => e.type === "compaction")!.id;
@@ -634,27 +706,33 @@ function treeFixture() {
     sourceJSONL: copied(manager).jsonl,
     hostBranchBindings: Object.fromEntries(leaves.map((leaf, index) => [leaf, {
       chatJid: `web:original-tree-${index}`, chatIncarnation: `original-incarnation-${index}`,
-      branchId: `original-host-branch-${index}`, hostBaseline: "Known original synthetic baseline",
+      branchId: `original-host-branch-${index}`, hostBaseline: capturedBaseline,
     }])),
   };
   return { manager, input, leaves };
 }
 async function checkTree(f: Fixture, fixture: ReturnType<typeof treeFixture>, receipt: Awaited<ReturnType<typeof importCopiedLegacyTree>>) {
   expect(receipt.branches).toHaveLength(4);
+  expect(receipt.importerVersion).toBe(2);
+  const seedIds = new Set<number>();
   expect(receipt.entries).toHaveLength(fixture.manager.getEntries().length);
   expect(new Set(receipt.entries.map(e => e.durableEntryId)).size).toBe(receipt.entries.length);
   expect(receipt.originalEntries).toEqual(JSON.parse(JSON.stringify(fixture.manager.getEntries())));
   for (const branch of receipt.branches) {
     const conversation = (await f.harness.conversation(branch.engineConversationId as ConversationId, context))!;
     const expected = json(convertToLlm(buildSessionContext(fixture.manager.getEntries(), branch.sourceLeafId).messages));
-    expect((await conversation.context(context)).messages).toEqual(expected);
     const host = fixture.input.hostBranchBindings[branch.sourceLeafId]!;
+    expect((await conversation.context(context)).messages).toEqual([continuation(host.hostBaseline), ...expected]);
+    const seed = await equivalentImported(f, fixture.manager, conversation, host.hostBaseline, branch.sourceLeafId);
+    expect(seed.seedOwner).toBe(f.root.id);
+    seedIds.add(seed.seedId);
     expect([branch.chatJid, branch.chatIncarnation, branch.branchId]).toEqual([host.chatJid, host.chatIncarnation, host.branchId]);
     expect(branch.entries.map(e => e.sourceEntryId)).toEqual(fixture.manager.getBranch(branch.sourceLeafId).map(e => e.id));
     for (const entry of branch.entries)
       expect(entry.durableEntryId).toBe(receipt.entries.find(e => e.sourceEntryId === entry.sourceEntryId)!.durableEntryId);
     expect((await f.harness.snapshot(LegacyImportManifest, conversation.id, context))!.binding).toEqual(branch);
   }
+  expect(seedIds.size).toBe(1);
   const conversations = await f.root.commit(tx => tx.scanConversations({}, 100), context);
   expect(conversations.items).toHaveLength(4);
   let audits = 0;
@@ -751,11 +829,11 @@ describe("restartable public full copied branch-tree importer", () => {
     const second = await importCopiedLegacyTree(other, reordered, publicContextBridge, () => {}, context);
     for (const branch of second.branches) {
       const c = (await f.harness.conversation(branch.engineConversationId as ConversationId, context))!;
-      expect((await c.context(context)).messages).toEqual(json(convertToLlm(buildSessionContext(fixture.manager.getEntries(), branch.sourceLeafId).messages)));
+      expect((await c.context(context)).messages).toEqual([continuation(), ...json(convertToLlm(buildSessionContext(fixture.manager.getEntries(), branch.sourceLeafId).messages))]);
     }
   }));
   for (const invalid of ["missing-binding", "extra-binding", "duplicate-host", "duplicate-ID", "missing-parent", "cycle",
-    "two-roots", "unknown-record", "overflow", "entries-bound", "bytes-bound", "branches-bound", "bad-baseline"] as const) {
+    "two-roots", "unknown-record", "overflow", "entries-bound", "bytes-bound", "branches-bound", "conflicting-baselines", "empty-baseline", "missing-baseline"] as const) {
     test(`whole-tree preflight rejects ${invalid} without any writes`, () => using(async f => {
       const fixture = treeFixture(), input = json(fixture.input);
       const bindings = input.hostBranchBindings as Record<string, { chatJid: string; chatIncarnation: string; branchId: string; hostBaseline: string }>;
@@ -770,7 +848,9 @@ describe("restartable public full copied branch-tree importer", () => {
       if (invalid === "two-roots") records[2].parentId = null;
       if (invalid === "unknown-record") records.at(-1).type = "future-record";
       if (invalid === "overflow") records.at(-1).message.content = "OVERFLOW";
-      if (invalid === "bad-baseline") bindings[leaf]!.hostBaseline = "unsupported baseline";
+      if (invalid === "conflicting-baselines") bindings[leaf]!.hostBaseline = "Different captured current instructions";
+      if (invalid === "empty-baseline") bindings[leaf]!.hostBaseline = "";
+      if (invalid === "missing-baseline") delete (bindings[leaf] as Partial<{ hostBaseline: string }>).hostBaseline;
       const candidate = { ...input, sourceJSONL: records.map(r => JSON.stringify(r)).join("\n").replace('"OVERFLOW"', "1e400"),
         ...(invalid === "entries-bound" ? { maxEntries: 2 } : {}),
         ...(invalid === "bytes-bound" ? { maxBytes: 2 } : {}),

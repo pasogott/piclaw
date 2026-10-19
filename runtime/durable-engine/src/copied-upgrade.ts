@@ -11,7 +11,7 @@ const sha = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).d
 
 /** Caller supplies actual owned copied bytes and independently pinned digests. The host
  * manifest remains trusted provenance, NOT evidence of a live host drain or ownership.
- * Its format is the existing rehearsal v1 format; no invented migration/chat IDs.
+ * Version2 binds current captured continuation instructions; no invented migration/chat IDs.
  * All decoding, provenance and every-leaf context validation precedes any journal write.
  * Bridge must be the trusted public legacy projection; no caller-prepared plan is accepted. */
 export function prepareCopiedUpgrade(sourceBytes: Uint8Array, manifestBytes: Uint8Array,
@@ -53,13 +53,12 @@ function prepareUpgrade(sourceBytes: Uint8Array, manifestBytes: Uint8Array,
   assert(host && typeof host === "object" && !Array.isArray(host));
   const fields = ["version", "sourceCopied", "expectedSourceSHA256", "pending", "inflight", "hostBranchBindings"];
   assert(Object.keys(host).length === fields.length && fields.every(key => Object.hasOwn(host, key)), "invalid copied manifest");
-  assert(host.version === 1 && host.sourceCopied === true && host.pending === 0 && host.inflight === 0, "copied source not quiescent");
+  assert(host.version === 2 && host.sourceCopied === true && host.pending === 0 && host.inflight === 0, "copied source not quiescent");
   assert(host.expectedSourceSHA256 === sourceSHA256, "copied source provenance conflict");
   const input: CopiedLegacyTreeInput = { sourceJSONL, hostBranchBindings: host.hostBranchBindings };
   const plan = prepareLegacyTreeImport(input, bridge);
   for (const branch of plan.prepared) {
-    const systems = branch.projection.messages.filter(message => message.role === "system");
-    assert(systems.length === 1 && systems[0]!.content === branch.identity.hostBaseline, "baseline context conflict");
+    assert.deepEqual(branch.projection.messages[0], branch.continuation, "continuation context conflict");
     const last = branch.projection.messages.at(-1);
     assert(last?.role === "assistant" && last.stopReason === "stop", "copied leaf not quiescent");
   }
@@ -121,10 +120,16 @@ function prepareUpgrade(sourceBytes: Uint8Array, manifestBytes: Uint8Array,
         assert.deepEqual((await harness.snapshot(LegacyImportManifest, conversationId, context))?.binding, branch,
           "copied branch receipt conflict");
         // Public visible history includes fork ancestors; context alone loses audit/metadata
-        // and cannot distinguish identical leaf messages. At most three records per source.
+        // and cannot distinguish identical leaf messages. At most three records per
+        // source, plus the explicitly captured current continuation instructions.
         const history = await conversation.commit(tx => tx.scanEntries({ conversationId, order: "ascending" },
           expectedBranch.entries.length * 3 + 1), context);
-        let cursor = 0;
+        const initial = history.items[0];
+        assert(initial, "missing current continuation instructions");
+        const { id: _initialId, conversationId: initialOwner, ...initialContent } = initial;
+        assert.equal(initialOwner, rootId, "continuation conversation conflict");
+        assert.deepEqual(initialContent, { kind: SystemEntry.kind, model: [expectedBranch.continuation] });
+        let cursor = 1;
         const mapping: { sourceEntryId: string; durableEntryId: number }[] = [];
         for (const [sourceIndex, source] of expectedBranch.entries.entries()) {
           const owner = locations.get(source.id)?.conversationId ?? conversationId;
@@ -139,13 +144,11 @@ function prepareUpgrade(sourceBytes: Uint8Array, manifestBytes: Uint8Array,
           let at = take({ kind: "app.legacy-source", data: JSON.parse(JSON.stringify(source)) });
           const model = [...expectedBranch.projection.projected[sourceIndex]!.messages];
           if (source.type === "message") {
-            at = take({ kind: source.message.role === "system" ? SystemEntry.kind : "app.legacy-message", model });
+            at = take({ kind: "app.legacy-message", model });
           } else if (source.type === "compaction") {
             const head = mapping.find(entry => entry.sourceEntryId === source.firstKeptEntryId)!.durableEntryId;
             at = take({ kind: CompactionEntry.kind, head: head as EntryRecord["head"],
-              data: { reason: "manual" }, model: model.filter(message => message.role !== "system") });
-            const baseline = model.filter(message => message.role === "system");
-            if (baseline.length) at = take({ kind: SystemEntry.kind, model: baseline });
+              data: { reason: "manual" }, model: [expectedBranch.continuation, ...model] });
           }
           const previous = locations.get(source.id);
           if (previous) assert.equal(at, previous.id, "copied ancestor mapping conflict");

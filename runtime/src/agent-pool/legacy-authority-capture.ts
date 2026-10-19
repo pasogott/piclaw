@@ -105,12 +105,12 @@ export async function captureResidentLegacyUpgradeBindings(options: LegacyCaptur
     const bytes = await readFile(source.canonicalPath);
     revalidate();
     assert(sha(bytes) === source.sourceSHA256, "Exact legacy source bytes changed");
-    // Current resident prompt is not proof of the original persisted baseline.
-    // Existing copied-upgrade preparation must still validate it against source.
+    // Current resident instructions define future continuation, never historical
+    // proof. Original source records and their public context remain unchanged.
     const hostBranchBindings = Object.fromEntries(bindings.map(({ reference, captured }) => [captured.leaf!, {
       chatJid: reference.chatJid, branchId: reference.branchId!, chatIncarnation: migrationIncarnation, hostBaseline: captured.baseline,
     }]));
-    const manifestJSON = json({ version: 1, sourceCopied: true, expectedSourceSHA256: source.sourceSHA256,
+    const manifestJSON = json({ version: 2, sourceCopied: true, expectedSourceSHA256: source.sourceSHA256,
       pending: 0, inflight: 0, hostBranchBindings });
     inputs.push(Object.freeze({ sourceJSONL: bytes.toString("utf8"), manifestJSON,
       expected: Object.freeze({ sourceSHA256: source.sourceSHA256, manifestSHA256: sha(manifestJSON) }) }));

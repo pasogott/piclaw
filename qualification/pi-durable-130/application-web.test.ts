@@ -95,7 +95,7 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
   }
   const source = Buffer.from([manager.getHeader(), ...manager.getEntries()].map(v => JSON.stringify(v)).join("\n") + "\n");
   const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
-  const manifest = Buffer.from(JSON.stringify({ version: 1, sourceCopied: true, expectedSourceSHA256: sha(source), pending: 0, inflight: 0,
+  const manifest = Buffer.from(JSON.stringify({ version: 2, sourceCopied: true, expectedSourceSHA256: sha(source), pending: 0, inflight: 0,
     hostBranchBindings: { [leaf]: { chatJid: chat, chatIncarnation: incarnation, branchId, hostBaseline: "original baseline" },
       ...(siblingLeaf ? { [siblingLeaf]: { chatJid: sibling, chatIncarnation: incarnation, branchId: siblingBranchId, hostBaseline: "original baseline" } } : {}) } }));
   const json = <T>(v: T): T => JSON.parse(JSON.stringify(v));

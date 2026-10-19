@@ -16,13 +16,15 @@ import { projectPublicHistory } from "../../runtime/durable-engine/src/session-t
 
 test("only the adjacent audited imported compaction/baseline pair is deduplicated", () => {
   const source = { type: "compaction", id: "source", parentId: null, summary: "source summary", tokensBefore: 12 };
-  const binding = { schemaVersion: 3, importerVersion: 1, sourceHash: "fixture", chatJid: "web:fixture", chatIncarnation: "fixture", branchId: "fixture", sourceSessionId: "fixture", sourceLeafId: "source", engineConversationId: 1, originalEntries: [source], entries: [{ sourceEntryId: "source", durableEntryId: 3 }] };
+  const binding = { schemaVersion: 3, importerVersion: 2, sourceHash: "fixture", chatJid: "web:fixture", chatIncarnation: "fixture", branchId: "fixture", sourceSessionId: "fixture", sourceLeafId: "source", engineConversationId: 1, originalEntries: [source], entries: [{ sourceEntryId: "source", durableEntryId: 3 }] };
   const rows = [
     { id: 1, conversationId: 1, kind: "app.legacy-source", data: source },
     { id: 2, conversationId: 1, kind: "pi.compaction" },
     { id: 3, conversationId: 1, kind: "pi.system" },
   ] as unknown as Parameters<typeof projectPublicHistory>[0];
   expect(projectPublicHistory(rows, binding).map(n => n.entry)).toEqual([{ ...source, id: "3", parentId: null }]);
+  const seed = { id: 0, conversationId: 1, kind: "pi.system", model: [{ role: "system", content: "Captured current continuation policy", timestamp: 0 }] } as unknown as typeof rows[number];
+  expect(projectPublicHistory([seed, ...rows], binding).map(n => n.entry)).toEqual([{ ...source, id: "3", parentId: null }]);
   // Unmapped native compaction + arbitrary system must not erase the compaction.
   expect(projectPublicHistory(rows.slice(1), null).map(n => n.entry.id)).toEqual(["2"]);
   // Even a mapped baseline cannot prove the pair without the matching source audit.
@@ -30,6 +32,19 @@ test("only the adjacent audited imported compaction/baseline pair is deduplicate
   expect(projectPublicHistory([{ ...rows[0]!, data: { ...source, summary: "different source" } }, ...rows.slice(1)], binding).map(n => n.entry.id)).toEqual(["2", "3"]);
   const customBinding = { ...binding!, originalEntries: [{ ...source, type: "custom" }] } as Parameters<typeof projectPublicHistory>[1];
   expect(projectPublicHistory(rows, customBinding).map(n => n.entry.type)).toEqual(["compaction", "custom"]);
+});
+
+test("historical system instructions stay private and must match immutable import provenance", () => {
+  const source = { type: "message", id: "historical-system", parentId: null,
+    message: { role: "system", content: "Private historical instructions", timestamp: 1 } };
+  const binding = { schemaVersion: 3, importerVersion: 2, sourceHash: "fixture", chatJid: "web:fixture", chatIncarnation: "fixture",
+    branchId: "fixture", sourceSessionId: "fixture", sourceLeafId: source.id, engineConversationId: 1,
+    originalEntries: [source], entries: [{ sourceEntryId: source.id, durableEntryId: 2 }] } as Parameters<typeof projectPublicHistory>[1];
+  const rows = [{ id: 2, conversationId: 1, kind: "app.legacy-message", model: [source.message] }] as unknown as Parameters<typeof projectPublicHistory>[0];
+  expect(projectPublicHistory(rows, binding)).toEqual([]);
+  expect(() => projectPublicHistory([{ ...rows[0]!, model: [{ role: "system", content: "Changed instructions", timestamp: 1 }] }], binding))
+    .toThrow("Imported system projection conflict");
+  expect(() => projectPublicHistory(rows, null)).toThrow("Unsupported durable message role");
 });
 
 test("one DB imported fork tree through actual facade, original provenance and native public suffix", async () => {
@@ -67,6 +82,12 @@ test("one DB imported fork tree through actual facade, original provenance and n
     }, context);
     const provenance = await harness.snapshot(LegacyImportManifest, conversation.id, context);
     const publicRows = (await conversation.entries({ order: "ascending" }, 100, undefined, context)).items;
+    expect(provenance!.binding!.importerVersion).toBe(2);
+    expect(provenance!.binding!.originalEntries).toEqual(JSON.parse(JSON.stringify(raw.filter(entry => entry.id !== "original-a"))));
+    expect(publicRows[0]).toMatchObject({ kind: "pi.system", model: [{ role: "system", content: "baseline", timestamp: 0 }] });
+    expect(publicRows.filter(row => row.kind === "app.legacy-source").map(row => row.data)).toEqual(provenance!.binding!.originalEntries);
+    const historicalSystem = publicRows.findIndex(row => row.kind === "app.legacy-source" && (row.data as { id?: string }).id === "baseline");
+    expect(publicRows[historicalSystem + 1]).toMatchObject({ kind: "app.legacy-message", model: [raw[0]!.message] });
     const projectedCompactions = projectPublicHistory(publicRows, provenance!.binding).filter(n => n.entry.type === "compaction");
     expect(projectedCompactions).toHaveLength(2); // one imported source plus the independent native compaction
     expect(projectedCompactions[0]!.entry).toEqual({ ...raw[2], id: String(provenance!.binding!.entries.find(e => e.sourceEntryId === "original-compaction")!.durableEntryId), parentId: String(provenance!.binding!.entries.find(e => e.sourceEntryId === "original-root")!.durableEntryId) });

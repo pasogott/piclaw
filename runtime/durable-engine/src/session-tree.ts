@@ -24,6 +24,12 @@ export function projectPublicHistory(rows: readonly EntryRecord[], binding: Lega
     // Raw import audit is provenance only, except a mapped metadata-only entry.
     if (row.kind === "app.legacy-source" && !original) continue;
     if (row.kind === "pi.system" && !original) continue; // private baseline, never a UI message
+    if (original?.type === "message" && (original.message as { role?: unknown } | undefined)?.role === "system" &&
+      ["pi.system", "app.legacy-message"].includes(row.kind)) {
+      if (row.model?.length !== 1 || !isDeepStrictEqual(row.model[0], original.message))
+        throw new Error("Imported system projection conflict");
+      continue; // preserved historical instructions are still private
+    }
     let entry: RootSessionTreeNode["entry"];
     const base = { id: String(row.id), parentId };
     if (original && original.type !== "message") {
@@ -44,8 +50,6 @@ export function projectPublicHistory(rows: readonly EntryRecord[], binding: Lega
         message: { role: message.role, content, ...(message.role === "toolResult" ? { toolName: message.toolName } : {}) } };
     } else if (row.kind === "pi.compaction") {
       entry = { ...base, type: "compaction" }; // no invented token count/timestamp
-    } else if (row.kind === "pi.system" && original?.type === "message") {
-      continue; // imported system baseline
     } else throw new Error(`Unsupported durable entry: ${row.kind}`);
     nodes.push({ entry, children: [] }); parentId = entry.id;
   }
