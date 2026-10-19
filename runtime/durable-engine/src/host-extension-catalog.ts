@@ -1,4 +1,4 @@
-import { DefaultResourceLoader, type LoadExtensionsResult, type SettingsManager } from "../../../node_modules/@earendil-works/pi-coding-agent";
+import { DefaultResourceLoader, type LoadExtensionsResult, type SettingsManager, type ToolDefinition, type RegisteredCommand } from "../../../node_modules/@earendil-works/pi-coding-agent";
 import { getInstalledAddonExtensionPaths, resolveAddonPackageEntries } from "../../src/addons/package-entries.js";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -60,7 +60,16 @@ const approvedDrawioFiles = Object.freeze({
   "index.ts": "ab1ffba287828ed37db87288c7f1feb47a12efb2c66aa983941643575bdf2790",
   "tool.ts": "7a47e648d93d396c5b959795056885353f34fa04322390e35b0e989d95e81a8b",
 });
+const approvedGoalFiles = Object.freeze({
+  "index.ts": "283264c62f06cc74984d9ebbf5680873c1a3f6c4330acfe2b4dec29c736e73ec",
+  "deadline-checkpoint.ts": "e94f7cb065f321b06de33bfd7963011f03714c73437eedab634bce69f199c1db",
+  "compat/chat-context.ts": "90e20fa38d72915a7cbf4eea4e4134788271e6eb52dfbcb813df05b6d60c3c44",
+  "compat/extension-kv.ts": "04240517e9e8664cae2d2badb99f382100a7af3e12679cfce97087870881551c",
+});
 const profiles = {
+  goal: { label: "Goal", name: "@rcarmo/piclaw-addon-goal", version: "0.1.49", files: approvedGoalFiles,
+    shadows: [...Object.keys(approvedGoalFiles).flatMap(file => [file.replace(/\.ts$/, ".js"), file.replace(/\.ts$/, ".json"), file.replace(/\.ts$/, "/index.js"), file.replace(/\.ts$/, "/package.json")]), "compat/package.json"],
+    events: ["before_agent_start", "tool_execution_end", "session_compact", "input", "message_end", "agent_end"] },
   open_drawio_editor: { label: "Draw.io", name: "@rcarmo/piclaw-addon-drawio-editor", version: "31.4.4", files: approvedDrawioFiles, shadows: ["index.js", "tool.js", "tool.json", "tool/index.js", "tool/package.json"], events: [] as readonly string[] },
   open_office_viewer: { label: "Office Viewer", name: "@rcarmo/piclaw-addon-office-viewer", version: "0.1.3", files: approvedOfficeViewerFiles, shadows: ["index.js"], events: [] as readonly string[] },
   editable_table: { label: "Editable Table", name: "@rcarmo/piclaw-addon-editable-table", version: "0.1.4", files: approvedEditableTableFiles, shadows: ["index.js", "tool.js", "tool.json", "tool/index.js", "tool/package.json", "shared.js", "shared.json", "shared/index.js", "shared/package.json"], events: ["resources_discover"] },
@@ -79,6 +88,8 @@ type InstalledRegistration = Readonly<{
   declaration: string;
   handlerMap: Extension["handlers"];
   handlers: ReadonlyMap<string, readonly unknown[]>;
+  tools: readonly { name: string; definition: ToolDefinition; execute: unknown; declaration: string }[];
+  commands: readonly { name: string; command: RegisteredCommand; handler: RegisteredCommand["handler"]; completions: RegisteredCommand["getArgumentCompletions"]; declaration: string }[];
 }>;
 const loadedInstalledSources = new WeakMap<LoadExtensionsResult, ReadonlyMap<Extension, InstalledRegistration>>();
 // DefaultResourceLoader's first reload may reuse a process-wide factory cache.
@@ -135,18 +146,35 @@ function qualifyInstalled(catalog: LoadExtensionsResult, cwd: string, kind: Prof
     sameSource(source, captureApprovedSource(cwd, getInstalledAddonExtensionPaths(cwd), kind)));
   if (!candidates.length) return undefined;
   if (candidates.length !== 1) throw Error(`Ambiguous installed ${profile.label} package`);
-  const [extension, { source, definition, execute, declaration, handlerMap, handlers }] = candidates[0]!;
+  const [extension, { source, definition, execute, declaration, handlerMap, handlers, tools, commands }] = candidates[0]!;
   const assertCurrent = () => {
     if (!catalog.extensions.includes(extension) || resolve(extension.resolvedPath) !== source.entry ||
       !sameSource(source, captureApprovedSource(cwd, getInstalledAddonExtensionPaths(cwd), kind))) throw Error(`Installed ${profile.label} source changed`);
-    if (!definition || definition.name !== kind || extension.tools.size !== 1 || extension.tools.get(kind)?.definition !== definition || definition.execute !== execute || JSON.stringify(definition) !== declaration || extension.handlers !== handlerMap ||
+    const names = kind === "goal" ? ["get_goal", "create_goal", "goal_complete", "goal_stop", "update_goal"] : [kind];
+    if (!definition || definition.name !== names[0] || extension.tools.size !== names.length || tools.length !== names.length ||
+      names.some(name => !tools.some(prior => prior.name === name && extension.tools.get(name)?.definition === prior.definition && prior.definition.execute === prior.execute && JSON.stringify(prior.definition) === prior.declaration)) ||
+      definition.execute !== execute || JSON.stringify(definition) !== declaration || extension.handlers !== handlerMap ||
       extension.handlers.size !== profile.events.length || (profile.events as readonly string[]).some(event => {
         const current = extension.handlers.get(event) ?? [], prior = handlers.get(event) ?? [];
         return !prior.length || current.length !== prior.length || current.some((handler, i) => handler !== prior[i]);
-      }) || extension.commands.size || extension.shortcuts.size) throw Error(`Unqualified ${profile.label} capabilities`);
+      }) || (kind === "goal" ? commands.length !== 1 || commands[0]?.name !== "goal" || extension.commands.size !== 1 || extension.commands.get("goal") !== commands[0].command || commands[0].command.handler !== commands[0].handler || commands[0].command.getArgumentCompletions !== commands[0].completions || JSON.stringify(commands[0].command) !== commands[0].declaration : extension.commands.size !== 0) || extension.shortcuts.size) throw Error(`Unqualified ${profile.label} capabilities`);
   };
   assertCurrent();
   return Object.freeze({ extension, source, definition: definition!, assertCurrent });
+}
+/** Source qualification only: Goal lifecycle/commands remain denied by application admission. */
+export async function qualifyInstalledGoal(catalog: LoadExtensionsResult, cwd: string) {
+  const qualified = qualifyInstalled(catalog, cwd, "goal");
+  if (!qualified) return undefined;
+  const exports = await import(pathToFileURL(qualified.source.entry).href);
+  const names = ["createGoalTools", "loadThreadGoal", "buildGoalSystemPrompt", "prepareGoalInput", "goalInputIdentity", "resolveGoalInput"] as const;
+  qualified.assertCurrent();
+  if (names.some(name => typeof exports[name] !== "function")) throw Error("Goal public native exports required");
+  const addon = Object.freeze(Object.fromEntries(names.map(name => [name, exports[name]])));
+  return Object.freeze({ ...qualified, addon, assertCurrent() {
+    qualified.assertCurrent();
+    if (names.some(name => exports[name] !== addon[name])) throw Error("Goal public exports changed");
+  } });
 }
 export async function qualifyInstalledPlan(catalog: LoadExtensionsResult, cwd: string) {
   const qualified = qualifyInstalled(catalog, cwd, "plan");
@@ -258,9 +286,11 @@ export async function loadApplicationExtensionCatalog(options: {
   const sources = new Map<Extension, InstalledRegistration>();
   for (const { kind, before } of snapshots) if (before && sameSource(before, captureApprovedSource(options.cwd, getInstalledAddonExtensionPaths(options.cwd), kind))) {
     for (const extension of catalog.extensions) {
-      const definition = extension.tools.get(kind)?.definition;
+      const definition = extension.tools.get(kind === "goal" ? "get_goal" : kind)?.definition;
       if (resolve(extension.resolvedPath) === before.entry && definition) sources.set(extension, Object.freeze({
         source: before, definition, execute: definition.execute, declaration: JSON.stringify(definition), handlerMap: extension.handlers,
+        tools: [...extension.tools].map(([name, { definition }]) => Object.freeze({ name, definition, execute: definition.execute, declaration: JSON.stringify(definition) })),
+        commands: [...extension.commands].map(([name, command]) => Object.freeze({ name, command, handler: command.handler, completions: command.getArgumentCompletions, declaration: JSON.stringify(command) })),
         handlers: new Map([...extension.handlers].map(([event, handlers]) => [event, Object.freeze([...handlers])])),
       }));
     }
