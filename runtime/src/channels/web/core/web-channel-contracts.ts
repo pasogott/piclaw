@@ -44,6 +44,11 @@ interface TaskQueueLike {
   enqueue(task: () => unknown, key: string, laneKey?: string): unknown;
 }
 
+export interface PreparedInputText {
+  readonly text: string;
+  assertCurrent(): void;
+}
+
 export interface WebChannelLike
   extends RequestGuardsChannel,
     WorkspaceDispatchChannel,
@@ -61,6 +66,7 @@ export interface WebChannelLike
   queue: TaskQueueLike;
   /** Trusted host-only selection, captured before reading HTTP input; absent by default. */
   prepareInputSourceAdmission?(chatJid: string): Promise<void>;
+  prepareInputText?(chatJid: string, text: string): PreparedInputText;
   getInputSourceAdmission?(chatJid: string): WebUserMessageStoreOptions["acceptSource"];
   /** Default-off trusted SQL materialization binding; not an HTTP selection. */
   getAcceptedQueuedSteering?(chatJid: string): import('../../../agent-pool/durable-queued-steering.js').AcceptedQueuedSteering | undefined;

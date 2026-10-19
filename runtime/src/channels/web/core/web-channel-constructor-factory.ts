@@ -116,6 +116,7 @@ export interface WebChannelConstructorFactoryRuntimeOpts {
   queue: AgentQueue;
   agentPool: AgentPool;
   prepareInputSourceAdmission?: WebChannelLike["prepareInputSourceAdmission"];
+  prepareInputText?: WebChannelLike["prepareInputText"];
   getInputSourceAdmission?: WebChannelLike["getInputSourceAdmission"];
   getQueuedInputSourceAdmission?: WebChannelLike["getQueuedInputSourceAdmission"];
   getQueuedInputSourceWithdrawal?: WebChannelLike["getQueuedInputSourceWithdrawal"];

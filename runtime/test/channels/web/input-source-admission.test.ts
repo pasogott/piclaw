@@ -895,3 +895,24 @@ for (const [queuedInput, pending, steering] of [[false,false,false], [false,true
     owner = true;
   } finally { owner = true; shutdown.abort(); await adapter.close(); }
 }, 15000);
+
+test("prepared input text reaches direct and queued admissions with the same synchronous authority", async () => {
+  const f = fixture(undefined, () => true);
+  let checks = 0;
+  f.channel.prepareInputText = (_chat, text) => ({ text: `prepared:${text}`, assertCurrent() { checks++; } });
+  const response = await f.route({ content: "direct text", mode: "queue" });
+  expect(response.status).toBe(201);
+  expect((getDb().query("SELECT content FROM messages ORDER BY rowid DESC LIMIT 1").get() as { content: string }).content).toBe("prepared:direct text");
+  expect(checks).toBeGreaterThan(1);
+  f.busy(true); f.expectSources(1);
+  f.channel.getQueuedInputSourceAdmission = () => f.acceptQueued;
+  const queued = await f.route({ content: "queued text", mode: "queue" });
+  expect(queued.status).toBe(201);
+  expect(f.channel.getQueuedFollowupItems("web:default").at(-1)?.queuedContent).toBe("prepared:queued text");
+  const before = f.snapshot();
+  const queueBefore = f.channel.getQueuedFollowupItems("web:default");
+  f.channel.prepareInputText = () => ({ text: "must not be accepted", assertCurrent() { throw Error("Goal lifecycle revoked"); } });
+  expect((await f.route({ content: "stale continuation", mode: "queue" })).status).toBe(503);
+  expect(f.snapshot()).toEqual(before);
+  expect(f.channel.getQueuedFollowupItems("web:default")).toEqual(queueBefore);
+});

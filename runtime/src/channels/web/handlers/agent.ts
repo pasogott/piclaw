@@ -681,6 +681,7 @@ export async function handleAgentMessage(
   // Pin the trusted host selection to this route before any body read/await.
   // Request contents cannot select an engine or replace this SQL-only callback.
   const prepareAdmission = channel.prepareInputSourceAdmission?.bind(channel);
+  const prepareInputText = channel.prepareInputText?.bind(channel);
   const lookupAdmission = channel.getInputSourceAdmission?.bind(channel);
   const lookupQueuedAdmission = channel.getQueuedInputSourceAdmission?.bind(channel);
   let acceptSource: ReturnType<NonNullable<WebChannelLike["getInputSourceAdmission"]>>;
@@ -762,6 +763,17 @@ export async function handleAgentMessage(
       acceptSource = lookupAdmission?.(chatJid);
       acceptQueuedSource = lookupQueuedAdmission?.(chatJid);
     } catch { return channel.json({ error: 'Input admission could not be confirmed.' }, 503); }
+  }
+  if (prepareInputText && !command && !themeCommand && !metersCommand && !isSettingsCommand && !isSlashCommandInvocation(content)) {
+    try {
+      const prepared = prepareInputText(chatJid, content);
+      if (!prepared || typeof prepared.text !== "string" || typeof prepared.assertCurrent !== "function") throw Error("Invalid prepared input");
+      const requestAuthority = revalidateInputAuthority;
+      const assertCurrent = prepared.assertCurrent.bind(prepared);
+      revalidateInputAuthority = () => { requestAuthority(); assertCurrent(); };
+      content = prepared.text;
+      revalidateInputAuthority();
+    } catch { return channel.json({ error: "Input preparation could not be confirmed." }, 503); }
   }
   const isStreaming = typeof channel.agentPool.isStreaming === "function"
     ? channel.agentPool.isStreaming(chatJid)
