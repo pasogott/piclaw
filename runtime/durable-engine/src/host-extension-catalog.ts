@@ -171,6 +171,13 @@ export async function qualifyInstalledGoal(catalog: LoadExtensionsResult, cwd: s
   qualified.assertCurrent();
   if (names.some(name => typeof exports[name] !== "function")) throw Error("Goal public native exports required");
   const addon = Object.freeze(Object.fromEntries(names.map(name => [name, exports[name]])));
+  // The native collector must expose the same declarations as this exact loaded
+  // registration. Collecting tools does not execute them or run legacy hooks.
+  const native = addon.createGoalTools(() => { throw Error("Invocation-local Goal scope required"); }) as ToolDefinition[];
+  if (native.length !== qualified.extension.tools.size || new Set(native.map(tool => tool.name)).size !== native.length || native.some(tool => {
+    const loaded = qualified.extension.tools.get(tool.name)?.definition;
+    return !loaded || typeof tool.execute !== "function" || JSON.stringify(tool) !== JSON.stringify(loaded);
+  })) throw Error("Goal native/legacy declarations differ");
   return Object.freeze({ ...qualified, addon, assertCurrent() {
     qualified.assertCurrent();
     if (names.some(name => exports[name] !== addon[name])) throw Error("Goal public exports changed");

@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { SettingsManager } from "../../node_modules/@earendil-works/pi-coding-agent";
 import { loadApplicationExtensionCatalog, qualifyInstalledGoal, assertApplicationExtensionCatalogSupported } from "../../runtime/durable-engine/src/host-extension-catalog.ts";
 import { installGoalFixture } from "./goal-fixture.ts";
+import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
+import { registerRootExtensionKvStore } from "../../runtime/src/db/register-extension-kv.js";
+import { extensionKvGet } from "../../runtime/src/db/extension-kv.js";
+import { withExtensionKvAuthority, requireExtensionKvAuthority, resetExtensionKvStoreForTests } from "../../runtime/src/extension-kv-registry.js";
 
 for (const mode of ["approved", "tamper", "shadow", "execute", "command", "command-handler", "event", "extra-tool"] as const) test(`actual installed Goal source qualification remains startup denied: ${mode}`, async () => {
   const dir = mkdtempSync(join(import.meta.dir, ".qualification-goal-"));
@@ -36,6 +40,19 @@ for (const mode of ["approved", "tamper", "shadow", "execute", "command", "comma
     if (mode !== "approved") expect(() => qualified!.assertCurrent()).toThrow("capabilities");
     else {
       qualified!.assertCurrent();
+      initDatabase(); registerRootExtensionKvStore(); requireExtensionKvAuthority();
+      try {
+        const db = getDb(), chatJid = "web:installed-goal-factory";
+        const tools = qualified!.addon.createGoalTools(() => chatJid) as { name: string; execute(...args: unknown[]): Promise<unknown> }[];
+        const scoped = <T>(body: () => T) => withExtensionKvAuthority({ extensionId: "goal", chatJid, assertCurrent() { qualified!.assertCurrent(); },
+          write<T>(body: () => T) { return db.transaction(body).immediate(); } }, body);
+        const invoke = (name: string, args: unknown) => scoped(() => tools.find(tool => tool.name === name)!.execute("installed-factory", args, undefined, undefined, {}));
+        await invoke("create_goal", { objective: "Exact installed native factory" });
+        expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ objective: "Exact installed native factory", status: "active" });
+        await invoke("goal_stop", { reason: "other", summary: "Factory qualified" });
+        expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ status: "stopped", stop_summary: "Factory qualified" });
+        expect(() => assertApplicationExtensionCatalogSupported(catalog!)).toThrow("no operation-owned host effect port");
+      } finally { resetExtensionKvStoreForTests(); closeDatabase(); }
       writeFileSync(join(pkg, "compat/chat-context.ts"), "// replaced\n");
       expect(() => qualified!.assertCurrent()).toThrow("Installed Goal source changed");
     }
