@@ -249,7 +249,7 @@ test("actual web message admission runs Goal lifecycle guard inside its owned tr
   const scoped = <T>(body: () => T) => withExtensionKvAuthority(authority, body);
   scoped(() => addon.createThreadGoal(chat, "Actual web source fence"));
   const prepared = scoped(() => addon.prepareGoalInput("🎯 Continue goal: Actual web source fence", chat));
-  let guardCalls = 0, failAfterSource = false;
+  let guardCalls = 0, failAfterSource = false, asyncGuard = false;
   const bundle = await createApplicationBootstrapBundle({ root, path, ownership: applicationOwnership(lock), offlineInitialize: true,
     manifest: [{ chatJid: chat, branchId: "main", conversationId: conversation }], sessions: new Map([[chat, "original"]]),
     runtime: { incarnation: "goal-admission", sessionId: "goal-admission", lane: "main", generation: 1, now: () => new Date().toISOString(),
@@ -257,6 +257,7 @@ test("actual web message admission runs Goal lifecycle guard inside its owned tr
     answers: { resolver: { resolve: () => null }, put() {} },
     assertInputAdmission(chatJid, content) {
       expect(root.inTransaction).toBe(true); expect(chatJid).toBe(chat); expect(content).toBe(prepared.decision.text);
+      if (asyncGuard) return Promise.reject(Error("private asynchronous guard failure")) as never;
       guardCalls++;
       scoped(() => {
         if (failAfterSource && guardCalls % 2 === 0) { addon.clearThreadGoal(chat); addon.createThreadGoal(chat, "Changed after source write"); }
@@ -276,5 +277,15 @@ test("actual web message admission runs Goal lifecycle guard inside its owned tr
     await expect(admitWebUserMessage(channel, input, { acceptSource }, () => {}, new AbortController().signal)).rejects.toThrow("Goal input lifecycle changed");
     expect(guardCalls).toBe(4);
     expect(["messages", "service_effect_s01_sources", "service_effect_s01_decisions", "extension_kv"].map(table => root.query(`SELECT * FROM ${table}`).all())).toEqual(before);
+    failAfterSource = false; asyncGuard = true;
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => { unhandled.push(error); };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await expect(admitWebUserMessage(channel, input, { acceptSource }, () => {}, new AbortController().signal)).rejects.toThrow("Input admission guard must be synchronous");
+      await Bun.sleep(0);
+      expect(unhandled).toEqual([]);
+      expect(["messages", "service_effect_s01_sources", "service_effect_s01_decisions", "extension_kv"].map(table => root.query(`SELECT * FROM ${table}`).all())).toEqual(before);
+    } finally { process.off("unhandledRejection", onUnhandled); }
   } finally { await bundle.close(); lock.release(); addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
