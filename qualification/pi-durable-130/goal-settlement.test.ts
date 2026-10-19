@@ -58,7 +58,8 @@ test("native Goal commands commit state and accepted continuation atomically", a
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
 
-for (const mode of ["continue", "pending", "error", "stalled", "finalize"] as const) test(`actual Goal terminal continuation is atomic and policy scoped: ${mode}`, async () => {
+for (const mode of ["continue", "pending", "error", "stalled", "finalize", "budget", "budget-pending"] as const) test(`actual Goal terminal continuation is atomic and policy scoped: ${mode}`, async () => {
+  const budget = mode === "budget" || mode === "budget-pending";
   const sourceRoot = process.env.DURABLE_GOAL_ADDON_ROOT;
   if (!sourceRoot) throw Error("DURABLE_GOAL_ADDON_ROOT required");
   process.env.PICLAW_DB_IN_MEMORY = "1";
@@ -67,7 +68,7 @@ for (const mode of ["continue", "pending", "error", "stalled", "finalize"] as co
   const addon = await import(pathToFileURL(join(sourceRoot, "addons/goal/index.ts")).href); addon.resetGoalAddonForTests();
   const chatJid = "web:goal-settlement";
   const setup = { extensionId: "goal", chatJid, assertCurrent() {}, write<T>(run: () => T) { return db.transaction(run).immediate(); } };
-  const text = withExtensionKvAuthority(setup, () => { addon.createThreadGoal(chatJid, "Terminal usage");
+  const text = withExtensionKvAuthority(setup, () => { addon.createThreadGoal(chatJid, "Terminal usage", budget ? 5 : undefined);
     if (mode === "stalled") {
       const plan = { available: true, total: 1, allCompleted: false, fingerprint: "native-plan", plan: [{ step: "Continue work", status: "pending" }] };
       addon.applyGoalPlanProgress(addon.loadThreadGoal(chatJid), plan, false);
@@ -81,8 +82,9 @@ for (const mode of ["continue", "pending", "error", "stalled", "finalize"] as co
   const finish = sealed({ effect: effect("finish", "op", source.sourceSeq), expectedVersion: bound.version, expectedHarness: bound.harness! });
   const finished = value(await work.finishHarness({ ...finish, effect: { ...finish.effect, requestHash: hashCanonicalRequest({ method: "finishHarness.v1", ...finish }) } }));
   const queue = new QueuedFollowupLifecycleService();
-  if (mode === "pending") value(await work.acceptSource(sealed({ effect: effect("pending-user"), chatJid, sourceId: "pending-user", kind: "message", payloadRef: "pending-user", targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
-  const continuationId = "goal-continuation:op";
+  if (mode === "pending" || mode === "budget-pending") value(await work.acceptSource(sealed({ effect: effect("pending-user"), chatJid, sourceId: "pending-user", kind: "message", payloadRef: "pending-user", targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
+  const initial = extensionKvGet("goal", "thread-goal", "chat", chatJid) as { goal_id: string };
+  const continuationId = budget ? `goal-budget:${initial.goal_id}:2` : "goal-continuation:op";
   const planRoot = process.env.DURABLE_ADDONS_ROOT;
   if (!planRoot) throw Error("DURABLE_ADDONS_ROOT required for actual Plan qualification");
   const planAddon = await import(pathToFileURL(join(planRoot, "addons/plan-sidebar/index.ts")).href);
@@ -106,11 +108,11 @@ for (const mode of ["continue", "pending", "error", "stalled", "finalize"] as co
       assertCurrent(); expect(db.inTransaction).toBe(true); expect(chat).toBe(chatJid); planReads++;
       return readPlan(chat, assertCurrent);
     },
-    admit(next) { return queue.enqueueAcceptedFollowupOnce(next.sourceId, next.chatJid, next.text, next.queuedAt,
+    admit(next, onlyIfIdle = true) { return queue.enqueueAcceptedFollowupOnce(next.sourceId, next.chatJid, next.text, next.queuedAt,
       { source: "goal.continuation" }, ({ chatJid, item, database }) => {
         work.acceptSourceInTransaction(sealed({ effect: effect(`accept:${item.source_id}`), chatJid, sourceId: item.source_id,
           kind: "message", payloadRef: `queued-source:${item.source_id}`, targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false }), database);
-      }, true); },
+      }, onlyIfIdle); },
   } });
   const apply = await prepare({ incarnation: "fixture", conversationId: 1, chatJid, branchId: "main", operationId: "op", sourceSeq: source.sourceSeq,
     sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: "request", requestHash: "a".repeat(64) });
@@ -147,8 +149,20 @@ for (const mode of ["continue", "pending", "error", "stalled", "finalize"] as co
     expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ tokens_used: 7 });
     value(await terminal.commitTerminal(request));
     expect(calls).toBe(2);
-    expect(planReads).toBe(mode === "pending" || mode === "error" ? 0 : 2); // Replay never re-reads.
+    expect(planReads).toBe(budget || mode === "pending" || mode === "error" ? 0 : 2); // Replay never re-reads.
     const queued = getDeferredQueuedFollowups(chatJid);
+    if (budget) {
+      expect(queued).toHaveLength(1);
+      expect(queued[0]).toMatchObject({ source_id: continuationId, source_accepted: true });
+      expect(addon.isGoalBudgetInput(queued[0]!.queuedContent)).toBe(true);
+      expect(addon.goalInputIdentity(queued[0]!.queuedContent)).toMatchObject({ generation: 2 });
+      expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ status: "budget_limited", budget_limit_reported: true, tokens_used: 7, lifecycle_generation: 2 });
+      if (mode === "budget-pending") expect(value(await work.getChatFrontier(chatJid)).nextPendingSourceSeq)
+        .toBe(work.getAcceptedSource(chatJid, "pending-user")!.sourceSeq);
+      expect(() => retained!()).toThrow("scope ended");
+      expect(() => db.transaction(() => retained!()).immediate()).toThrow("scope ended");
+      return;
+    }
     const continues = mode === "continue" || mode === "finalize";
     expect(queued).toHaveLength(continues ? 1 : 0);
     if (continues) {

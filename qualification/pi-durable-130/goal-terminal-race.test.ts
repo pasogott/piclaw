@@ -7,7 +7,7 @@ import { createHostGoalTerminalFence } from "../../runtime/durable-engine/src/ho
 import { value, effect, sealed, at } from "./src/host-handoff.js";
 import { context } from "./src/fixture.js";
 
-for (const change of ["none", "replace", "generation", "status", "delete"] as const) test(`Goal terminal tool fence rechecks lifecycle after proof: ${change}`, async () => {
+for (const status of ["complete", "budget_limited"] as const) for (const change of ["none", "replace", "generation", "status", "delete"] as const) test(`Goal terminal tool fence rechecks lifecycle after proof: ${status}:${change}`, async () => {
   initDatabase(); const db = getDb(); installTerminalSettlementCompositionSchema(db);
   const work = value(createCurrentPiclawServiceWorkStore(db, { hitFault: () => false, recordTrace() {} }));
   const chatJid = `web:goal-race-${change}`;
@@ -17,22 +17,29 @@ for (const change of ["none", "replace", "generation", "status", "delete"] as co
     sessionId: "race-session", lane: "main", harnessOperationId: "42", state: "running", watchGeneration: 1 })));
   const captured = { operation, inputs: [{ incarnation: "race-copy", conversationId: 2 as never, chatJid, branchId: "main", operationId: operation.operationId,
     sourceSeq: source.sourceSeq, sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: "race", requestHash: "a".repeat(64), submissionId: 42 as never }], runTaskId: 9 as never };
-  let goal: { goal_id: string; lifecycle_generation: number; status: string } | null = { goal_id: "original", lifecycle_generation: 2, status: "complete" };
-  const extension = createHostGoalTerminalFence({ loadThreadGoal() { return goal && { ...goal }; } }, { root: db, assertOwner() {}, runtime: () => ({
+  let goal: { goal_id: string; lifecycle_generation: number; status: string } | null = { goal_id: "original", lifecycle_generation: 2, status };
+  const afterRead = async () => {
+    await Promise.resolve();
+    if (change === "replace") goal!.goal_id = "replacement";
+    if (change === "generation") goal!.lifecycle_generation++;
+    if (change === "status") goal!.status = "active";
+    if (change === "delete") goal = null;
+  };
+  const extension = createHostGoalTerminalFence({ loadThreadGoal() { return goal && { ...goal }; }, goalInputIdentity() { return {}; } }, { root: db, assertOwner() {}, runtime: () => ({
     async capturePendingToolSource() { return captured; },
+    async readCapturedInputText() { await afterRead(); return ["Goal input"]; },
     async hasGoalTerminalResult() {
-      await Promise.resolve();
-      if (change === "replace") goal!.goal_id = "replacement";
-      if (change === "generation") goal!.lifecycle_generation++;
-      if (change === "status") goal!.status = "active";
-      if (change === "delete") goal = null;
+      await afterRead();
       return false; // Old operation may not block a later turn, unless lifecycle changed during proof.
     },
   }) });
   try {
     const hook = extension.hooks![0]!.handlers.beforeTool!;
     const invoke = () => hook({ id: "pending", name: "get_goal", arguments: {} }, { conversationId: 2, taskId: 10 } as never, context);
-    if (change === "none") expect(await invoke()).toBeUndefined();
+    if (change === "none") {
+      if (status === "budget_limited") expect(await invoke()).toMatchObject({ block: "Goal token budget reached; provide the final wrap-up without further tools." });
+      else expect(await invoke()).toBeUndefined();
+    }
     else await expect(invoke()).rejects.toThrow("Goal tool lifecycle changed");
   } finally { closeDatabase(); }
 });

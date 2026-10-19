@@ -6,7 +6,7 @@ import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connect
 import { registerRootExtensionKvStore } from "../../runtime/src/db/register-extension-kv.js";
 import { extensionKvGet } from "../../runtime/src/db/extension-kv.js";
 import { withExtensionKvAuthority, requireExtensionKvAuthority, resetExtensionKvStoreForTests } from "../../runtime/src/extension-kv-registry.js";
-import { accountCommittedGoalEntry, accountCommittedGoalBatch } from "../../runtime/durable-engine/src/host-goal-usage.js";
+import { accountCommittedGoalEntry, accountCommittedGoalBatch, isGoalBudgetWrapup } from "../../runtime/durable-engine/src/host-goal-usage.js";
 
 test("committed Goal usage and cursor are atomic, replay safe and lifecycle scoped", async () => {
   const source = process.env.DURABLE_GOAL_ADDON_ROOT;
@@ -73,6 +73,36 @@ test("committed Goal usage and cursor are atomic, replay safe and lifecycle scop
     const { getExtensionKvStore } = await import("../../runtime/src/extension-kv-registry.js");
     scoped(() => getExtensionKvStore().set("goal", "committed-usage:1", { goalId: load().goal_id, entryId: 31, tokens: 4 }, "chat", authority.chatJid));
     expect(() => accountCommittedGoalBatch(addon, authority, [cappedText], capped)).toThrow("lifecycle changed");
+    const ownedBudgetText = scoped(() => {
+      addon.clearThreadGoal(authority.chatJid); addon.createThreadGoal(authority.chatJid, "Owned budget wrap-up", 5);
+      return addon.prepareGoalInput(addon.buildVisibleGoalPrompt(load(), "continuation"), authority.chatJid).decision.text;
+    });
+    const budgetSource = { conversationId: 8, operationId: "budget-owner" };
+    const budgetReceipts = [{ conversationId: 8, entryId: 30, tokens: 5 }];
+    failAfterWrite = true;
+    expect(() => accountCommittedGoalBatch(addon, authority, [ownedBudgetText], budgetReceipts, undefined, budgetSource)).toThrow("lost before commit");
+    expect(load()).toMatchObject({ status: "active", tokens_used: 0, lifecycle_generation: 1 });
+    expect(extensionKvGet("goal", "committed-usage:8", "chat", authority.chatJid)).toBeNull();
+    failAfterWrite = false;
+    expect(accountCommittedGoalBatch(addon, authority, [ownedBudgetText], budgetReceipts, undefined, budgetSource)).toBe(1);
+    expect(scoped(() => isGoalBudgetWrapup(addon, authority.chatJid, [ownedBudgetText], budgetSource))).toBe(true);
+    const foreignBudgetSource = { ...budgetSource, operationId: "foreign-operation" };
+    expect(scoped(() => isGoalBudgetWrapup(addon, authority.chatJid, [ownedBudgetText], foreignBudgetSource))).toBe(false);
+    const wrappedReceipts = [...budgetReceipts, { conversationId: 8, entryId: 31, tokens: 2 }];
+    expect(() => accountCommittedGoalBatch(addon, authority, [ownedBudgetText], wrappedReceipts, undefined, foreignBudgetSource)).toThrow("lifecycle changed");
+    expect(load().tokens_used).toBe(5);
+    expect(accountCommittedGoalBatch(addon, authority, [ownedBudgetText], wrappedReceipts, undefined, budgetSource)).toBe(1);
+    expect(accountCommittedGoalBatch(addon, authority, [ownedBudgetText], wrappedReceipts, undefined, budgetSource)).toBe(0);
+    expect(load()).toMatchObject({ status: "budget_limited", tokens_used: 7, lifecycle_generation: 2 });
+    const explicitBudgetText = scoped(() => addon.prepareGoalInput(addon.buildVisibleGoalPrompt(load(), "budget_limited"), authority.chatJid)).decision.text;
+    expect(scoped(() => isGoalBudgetWrapup(addon, authority.chatJid, [explicitBudgetText], foreignBudgetSource))).toBe(true);
+    expect(scoped(() => isGoalBudgetWrapup(addon, authority.chatJid, [explicitBudgetText.replaceAll("Owned budget wrap-up", "Wrong objective")], foreignBudgetSource))).toBe(false);
+    expect(scoped(() => isGoalBudgetWrapup(addon, authority.chatJid, [explicitBudgetText, "ordinary input"], foreignBudgetSource))).toBe(false);
+    expect(() => accountCommittedGoalBatch(addon, authority, [explicitBudgetText], [{ conversationId: 8, entryId: 32, tokens: 1 }],
+      undefined, { ...foreignBudgetSource, conversationId: 9 })).toThrow("source conversation changed");
+    expect(load().tokens_used).toBe(7);
+    expect(accountCommittedGoalBatch(addon, authority, [explicitBudgetText], [{ conversationId: 8, entryId: 32, tokens: 1 }], undefined, foreignBudgetSource)).toBe(1);
+    expect(load()).toMatchObject({ status: "budget_limited", tokens_used: 8, lifecycle_generation: 2 });
     scoped(() => { addon.clearThreadGoal(authority.chatJid); addon.createThreadGoal(authority.chatJid, "Overflow boundary"); });
     const overflowGoal = load();
     expect(accountCommittedGoalEntry(addon, authority, { ...entry, goalId: overflowGoal.goal_id, conversationId: 3, entryId: 40, tokens: Number.MAX_SAFE_INTEGER })).toBe(true);

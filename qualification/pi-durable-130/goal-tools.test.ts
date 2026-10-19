@@ -252,7 +252,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
       stopReason: calling ? "toolUse" as const : "stop" as const, content: calling
         ? [{ type: "toolCall" as const, id: `native-goal-call-${toolTurns}`, name: later || toolTurns === 2 || toolTurns === 0 ? "get_goal" : terminalTool,
           arguments: (later || toolTurns === 2 || toolTurns === 0 ? {} : { ...(stopped ? { reason: "other" } : terminalTool === "update_goal" ? { status: "complete" } : {}), summary: "Verified live transition", evidence: ["native accepted operation tool task"] }) as Record<string, string | string[]> }]
-        : [{ type: "text" as const, text: "Goal stored" }],
+        : [{ type: "text" as const, text: mode === "budget-accounting" ? "Budget wrap-up" : "Goal stored" }],
       usage: { input: 2, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
     output.push({ type: "done", reason: message.stopReason, message }); output.end(message); return output;
   };
@@ -343,10 +343,15 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
       return;
     }
     if (mode === "budget-accounting") {
-      expect(requestFenced).toBe(true);
-      expect(modelEntries).toBe(1);
+      expect(requestFenced).toBe(false);
+      expect(modelEntries).toBe(4);
       expect(captures).toBe(1);
-      expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 3, status: "budget_limited", lifecycle_generation: 2 });
+      expect(prompts[1]).toContain("has reached its token budget");
+      expect(prompts[2]).toContain("Goal token budget reached");
+      expect((await f.runtime!.reconcile(input)).answer?.text).toBe("Budget wrap-up");
+      expect(await f.runtime!.settle(input)).not.toBeNull();
+      expect(await f.runtime!.settle(input)).not.toBeNull();
+      expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 12, status: "budget_limited", lifecycle_generation: 2, budget_limit_reported: true });
       return;
     }
     if (externalTerminal) {

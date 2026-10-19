@@ -2,13 +2,16 @@ import type Database from "bun:sqlite";
 import { defineExtension, type GenerationHooks } from "@earendil-works/pi-durable";
 import { createHostOperationAuthority } from "./host-operation-authority.js";
 import type { HostConversationRuntime } from "./host-runtime.js";
-import { accountCommittedGoalBatch } from "./host-goal-usage.js";
+import { accountCommittedGoalBatch, isGoalBudgetWrapup } from "./host-goal-usage.js";
 import { withExtensionKvAuthority } from "../../src/extension-kv-registry.js";
 
-type GoalState = { status: string; goal_id: string; lifecycle_generation: number; deadline_checkpoint?: unknown };
+type GoalState = { status: string; goal_id: string; lifecycle_generation: number; deadline_checkpoint?: unknown; budget_limit_reported: boolean };
 export function createHostGoalPrompt(addon: {
   loadThreadGoal(chat: string): GoalState | null;
   buildGoalSystemPrompt(goal: any): string;
+  buildGoalBudgetLimitPrompt(goal: any): string;
+  claimGoalBudgetWrapup(chat: string, expected: { goalId: string; generation: number }): unknown;
+  isGoalBudgetInput(text: string): boolean;
   goalInputIdentity(text: string): { goalId: string; generation: number } | false | null;
   resolveGoalInput(text: string, chat: string): { action: string };
   accountGoalProgress(chat: string, tokens: number): unknown;
@@ -25,21 +28,26 @@ export function createHostGoalPrompt(addon: {
     options.assertOwner();
     const runtime = options.runtime();
     const captured = await runtime.captureRunSource(api.conversationId, api.taskId);
+    const source = { operationId: captured.operation.operationId, conversationId: api.conversationId as number };
     const authority = createHostOperationAuthority(options.root, captured, options.assertOwner, true);
     const scope = <T>(body: () => T) => withExtensionKvAuthority({ extensionId: "goal", chatJid: captured.operation.chatJid,
       assertCurrent: authority.assertCurrent, write: authority.write }, () => { authority.assertCurrent(); return body(); });
+    const texts = await runtime.readCapturedInputText(captured.inputs);
+    authority.assertCurrent();
+    const autonomous = texts.some(text => addon.goalInputIdentity(text) !== null);
+    const budgetWrapup = () => scope(() => isGoalBudgetWrapup(addon, captured.operation.chatJid, texts, source));
     const executable = () => scope(() => {
       const goal = load(captured.operation.chatJid);
       if (goal?.deadline_checkpoint) throw Error("Native Goal deadline checkpoint recovery unavailable");
-      if (goal?.status === "budget_limited" || goal?.status === "usage_limited") throw Error("Native Goal budget finalization unavailable");
+      if (goal?.status === "usage_limited") throw Error("Native Goal usage-limit recovery unavailable");
+      if (goal?.status === "budget_limited" && autonomous && !budgetWrapup()) throw Error("Goal budget input authority unavailable");
     });
     executable();
-    const texts = await runtime.readCapturedInputText(captured.inputs);
-    authority.assertCurrent();
     let terminalProof: { goalId: string; generation: number; status: "complete" | "stopped" } | undefined;
     for (const text of texts) {
       const denied = scope(() => addon.resolveGoalInput(text, captured.operation.chatJid).action === "handled");
       if (!denied) continue;
+      if (budgetWrapup()) continue;
       const identity = addon.goalInputIdentity(text);
       const goal = scope(() => load(captured.operation.chatJid));
       if (!identity || !goal || identity.goalId !== goal.goal_id || identity.generation + 1 !== goal.lifecycle_generation ||
@@ -59,16 +67,26 @@ export function createHostGoalPrompt(addon: {
       authority.assertCurrent();
       if (receipts.length) {
         const writer = createHostOperationAuthority(options.root, captured, options.assertOwner);
-        accountCommittedGoalBatch(addon, { extensionId: "goal", chatJid: captured.operation.chatJid, ...writer }, texts, receipts, terminalProof);
-        // Accounting may itself exhaust the budget and advance the lifecycle.
-        // Do not dispatch this stale continuation as a finalization request.
-        if (!terminalProof && texts.some(text => scope(() => addon.resolveGoalInput(text, captured.operation.chatJid).action === "handled")))
+        accountCommittedGoalBatch(addon, { extensionId: "goal", chatJid: captured.operation.chatJid, ...writer }, texts, receipts, terminalProof, source);
+        if (!terminalProof && !budgetWrapup() && texts.some(text => scope(() => addon.resolveGoalInput(text, captured.operation.chatJid).action === "handled")))
           throw Error("Goal usage changed input lifecycle");
       }
     }
     executable();
+    if (budgetWrapup()) {
+      const goal = scope(() => load(captured.operation.chatJid))!;
+      if (!goal.budget_limit_reported) {
+        const writer = createHostOperationAuthority(options.root, captured, options.assertOwner);
+        writer.write(() => withExtensionKvAuthority({ extensionId: "goal", chatJid: captured.operation.chatJid, ...writer }, () =>
+          addon.claimGoalBudgetWrapup(captured.operation.chatJid, { goalId: goal.goal_id, generation: goal.lifecycle_generation })));
+      }
+    }
     return scope(() => {
       const goal = load(captured.operation.chatJid);
+      if (goal?.status === "budget_limited" && budgetWrapup()) {
+        const prompt = addon.buildGoalBudgetLimitPrompt(goal) + "\nThe goal is already budget_limited. Give the final wrap-up without calling further tools.";
+        return { messages: [...request.messages, { role: "user" as const, content: prompt, timestamp: 0 }] };
+      }
       if (!goal || (goal.status !== "active")) return request;
       const prompt = build(goal);
       authority.assertCurrent();

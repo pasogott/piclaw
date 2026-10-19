@@ -30,6 +30,7 @@ import { createHostDelegateFileReader } from "./host-delegate-files.js";
 import { extensionKvGet } from "../../src/db/extension-kv.js";
 import { createHostPlanTool } from "./host-plan-tool.js";
 import { createHostOperationAuthority } from "./host-operation-authority.js";
+import { hashCanonicalRequest } from "../../src/service-effects/contracts/common.js";
 import { createHostCodeReviewTool } from "./host-code-review-tool.js";
 import { createHostEditableTableTool, type WidgetPublisher } from "./host-editable-table-tool.js";
 import { createHostOfficeViewerTool } from "./host-office-viewer-tool.js";
@@ -119,7 +120,7 @@ function validateApplicationMapping(root: ReturnType<typeof getDb>, value: unkno
       !root.query("SELECT 1 FROM chat_branches WHERE chat_jid=? AND branch_id=? AND archived_at IS NULL").get(b.chatJid, b.branchId))) throw Error("Invalid durable application conversation manifest");
 }
 
-/** Presence detection only: migration remains a separate, unimplemented operation. */
+/** Validate native source provenance. Legacy import is explicit, never inferred. */
 export function assertFreshApplicationHistory(root: ReturnType<typeof getDb>, sessionsDir: string): void {
   const files = existsSync(sessionsDir) ? readdirSync(sessionsDir, { recursive: true, withFileTypes: true }) : [];
   if (files.some(file => file.isFile())) throw Error("Durable startup requires migration: legacy session files exist; no files were imported or reset");
@@ -145,13 +146,26 @@ export function assertFreshApplicationHistory(root: ReturnType<typeof getDb>, se
       if (!row || row.content !== JSON.stringify({ domain: mapping.domain, chatJid: b.chatJid, branchId: b.branchId, sessionId: b.sessionId })) throw Error("Invalid durable application identity");
     }
   }
-  const messages = root.query("SELECT rowid, id, chat_jid, is_bot_message FROM messages").all() as { rowid: number; id: string; chat_jid: string; is_bot_message: number }[];
+  type Source = { source_id: string; kind: string; payload_ref: string; provenance_ref: string; input_content?: string };
+  const queuedContent = (source: Source, content: unknown) => typeof content === "string" && source.kind === "message" &&
+    source.payload_ref === `queued-source:${source.source_id}` && /^application:queued:[0-9a-f]{64}:[0-9a-f]{64}$/.test(source.provenance_ref) &&
+    source.provenance_ref.endsWith(`:${hashCanonicalRequest({ content })}`);
+  const messages = root.query("SELECT rowid, id, chat_jid, content, is_bot_message FROM messages").all() as { rowid: number; id: string; chat_jid: string; content: string; is_bot_message: number }[];
   for (const message of messages) {
     if (!mapping || !exists("service_effect_s01_sources")) throw Error("Durable startup requires migration: legacy message history exists");
     const binding = mapping.bindings.find(b => b.chatJid === message.chat_jid);
-    const source = root.query("SELECT 1 FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=? AND kind='message' AND payload_ref=? AND provenance_ref='application:durable'").get(message.chat_jid, message.id, `message-row:${message.rowid}`);
-    const terminal = message.is_bot_message && exists("service_effect_s01_operations") && exists("piclaw_durable_bindings_v1") && root.query(`SELECT 1 FROM service_effect_s01_operations o JOIN piclaw_durable_bindings_v1 b ON b.operation_id=o.operation_id JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq WHERE o.chat_jid=? AND o.terminal_message_row_id=? AND o.phase='terminal' AND b.domain=? AND b.incarnation=? AND b.conversation_id=? AND s.provenance_ref='application:durable'`).get(message.chat_jid, message.rowid, mapping.domain, mapping.domain, binding?.conversationId ?? -1);
-    if (!binding || !(message.is_bot_message ? terminal : source)) throw Error("Durable startup requires migration: unverified message provenance");
+    const source = root.query("SELECT source_id,kind,payload_ref,provenance_ref FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=? AND kind='message'")
+      .get(message.chat_jid, message.id) as Source | null;
+    const terminal = message.is_bot_message && exists("service_effect_s01_operations") && exists("piclaw_durable_bindings_v1") && root.query(`SELECT s.source_id,s.kind,s.payload_ref,s.provenance_ref,m.content AS input_content
+      FROM service_effect_s01_operations o JOIN piclaw_durable_bindings_v1 b ON b.operation_id=o.operation_id
+      JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq
+      LEFT JOIN messages m ON m.chat_jid=s.chat_jid AND m.id=s.source_id AND m.is_bot_message=0
+      WHERE o.chat_jid=? AND o.terminal_message_row_id=? AND o.phase='terminal' AND b.domain=? AND b.incarnation=? AND b.conversation_id=?`)
+      .get(message.chat_jid, message.rowid, mapping.domain, mapping.domain, binding?.conversationId ?? -1) as Source | null | false;
+    const verified = message.is_bot_message
+      ? terminal && (terminal.provenance_ref === "application:durable" || queuedContent(terminal, terminal.input_content))
+      : source && ((source.payload_ref === `message-row:${message.rowid}` && source.provenance_ref === "application:durable") || queuedContent(source, message.content));
+    if (!binding || !verified) throw Error("Durable startup requires migration: unverified message provenance");
   }
   if (mapping) for (const table of ["piclaw_durable_bindings_v1", "piclaw_durable_intent_bindings_v1"]) {
     if (!exists(table)) continue;
@@ -560,7 +574,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       const goalCommand = goal ? createHostGoalCommand(goal.addon, { root, assertAdmission: goalAdmission, admit: input => bundle.admitHostFollowup(input) }) : undefined;
       const goalSettlement = goal ? createHostGoalSettlement(goal.addon, { root, runtime, assertOwner: assertGoal, continuation: {
         addon: goal.addon, prepare: createHostGoalProgressReader(goal.addon, { runtime, assertOwner: assertGoal }),
-        readPlan: createHostGoalPlanReader(root, plan!.addon, goal.addon), admit: input => bundle.admitHostFollowup(input, true),
+        readPlan: createHostGoalPlanReader(root, plan!.addon, goal.addon), admit: (input, onlyIfIdle = true) => bundle.admitHostFollowup(input, onlyIfIdle),
       } }) : undefined;
       bundle = await createApplicationBootstrapBundle({ root, path, ownership, offlineInitialize: true, answers,
     onMaintenanceSettled(workId) { assert(); completeMaintenanceBudgetWork(root, workId); },

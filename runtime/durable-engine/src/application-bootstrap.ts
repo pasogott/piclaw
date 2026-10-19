@@ -1,4 +1,4 @@
-// Explicit application composition only. Not imported by the default runtime selector.
+// Single-root application composition; execution and recovery remain SDK-owned.
 import type { Database } from "bun:sqlite";
 import { getAgentRuntimeConfig } from "../../src/core/config.js";
 import { formatTimeoutDuration } from "../../src/agent-pool/prompt-utils.js";
@@ -28,10 +28,17 @@ import { value, effect, sealed } from "./host-effects.js";
 import { hashScheduledLeaseToken } from "../../src/service-effects/current-piclaw/scheduled-run-values.js";
 import type { ScheduledRunLease } from "../../src/service-effects/contracts/scheduled-run-store.js";
 import { QueuedFollowupLifecycleService } from "../../src/channels/web/runtime/queued-followup-lifecycle-service.js";
+import type { QueuedFollowupItem } from "../../src/queued-followups.js";
 import type { AcceptedInput, RuntimeOptions } from "./host-runtime.js";
 import type { ConversationId } from "@earendil-works/pi-durable";
 
 type Manifest = HostControllerOptions["recovery"]["manifest"];
+/** Keep the full queue intent proof, plus a payload digest that remains verifiable
+ * after normal materialisation removes the UI queue row. No second payload store. */
+function queuedInputProvenance(item: QueuedFollowupItem): string {
+  const { source_accepted, materializeRetries, ...immutable } = item;
+  return `application:queued:${hashCanonicalRequest(JSON.parse(JSON.stringify(immutable)))}:${hashCanonicalRequest({ content: item.queuedContent })}`;
+}
 /** Validate existing host routing before any import/journal/schema write. */
 export function assertApplicationBranchRoutes(root: Database, manifest: readonly { chatJid: string; branchId: string }[]) {
   for (const binding of manifest) {
@@ -256,10 +263,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       return ({ chatJid, item, database: connection }) => {
         assert();
         if (connection !== root || !root.inTransaction || chatJid !== chat || !item.source_id) throw Error("Root queued admission required");
-        const { source_accepted, materializeRetries, ...immutable } = item;
-        const digest = hashCanonicalRequest(JSON.parse(JSON.stringify(immutable)));
         work.acceptSourceInTransaction(sealed({ effect: { ...effect(`queue:${item.source_id}`),
-          provenanceRef: `application:queued:${digest}` }, chatJid: chat, sourceId: item.source_id, kind: "message",
+          provenanceRef: queuedInputProvenance(item) }, chatJid: chat, sourceId: item.source_id, kind: "message",
           payloadRef: `queued-source:${item.source_id}`, targetOperationId: null, parentSourceSeq: null, acceptedAt: item.queuedAt, createWakeIntent: false }), root);
         assert();
       };
@@ -270,9 +275,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         assert();
         if (connection !== root || !root.inTransaction || chatJid !== chat || item.source_id !== message.id) throw Error("Root queued materialization required");
         const source = work.getAcceptedSource(chat, message.id);
-        const { source_accepted, materializeRetries, ...immutable } = item;
-        const digest = hashCanonicalRequest(JSON.parse(JSON.stringify(immutable)));
-        if (!source || source.kind !== "message" || source.payloadRef !== `queued-source:${message.id}` || source.provenanceRef !== `application:queued:${digest}` || source.state !== "pending")
+        if (!source || source.kind !== "message" || source.payloadRef !== `queued-source:${message.id}` || source.provenanceRef !== queuedInputProvenance(item) || source.state !== "pending")
           throw Error("Queued source payload conflict");
         assert();
       };
@@ -283,10 +286,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         assert();
         if (connection !== root || !root.inTransaction || chatJid !== chat || !item.source_id) throw Error("Root queued withdrawal required");
         const source = work.getAcceptedSource(chat, item.source_id);
-        const { source_accepted, materializeRetries, ...immutable } = item;
-        const digest = hashCanonicalRequest(JSON.parse(JSON.stringify(immutable)));
         const stored = root.query("SELECT source_hash FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?").get(chat, item.source_id) as { source_hash: string } | null;
-        if (!source || !stored || source.payloadRef !== `queued-source:${item.source_id}` || source.provenanceRef !== `application:queued:${digest}`)
+        if (!source || !stored || source.payloadRef !== `queued-source:${item.source_id}` || source.provenanceRef !== queuedInputProvenance(item))
           throw Error("Queued withdrawal payload conflict");
         const request = { effect: { ...effect(`withdraw:${item.source_id}`), provenanceRef: "application:queue-remove" },
           chatJid: chat, sourceId: item.source_id, sourceHash: stored.source_hash, payloadRef: source.payloadRef, actor: "application:queue-remove" };

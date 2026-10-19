@@ -25,7 +25,7 @@ import { extensionKvSet, extensionKvGet } from "../../runtime/src/db/extension-k
 import { join } from "node:path";
 import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
 import { acquireRuntimeLock } from "../../runtime/src/runtime/single-instance.js";
-import { createDefaultApplicationRuntime } from "../../runtime/durable-engine/src/default-application-runtime.js";
+import { createDefaultApplicationRuntime, assertFreshApplicationHistory } from "../../runtime/durable-engine/src/default-application-runtime.js";
 import { createAssistantMessageEventStream } from "../../node_modules/@earendil-works/pi-ai";
 import type { RuntimeModelServices } from "../../runtime/src/agent-pool/model-services.js";
 import { ensureTestFilesystemIsolation } from "../../runtime/scripts/test-filesystem-isolation.js";
@@ -128,7 +128,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["native-goal", "native-goal-budget", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -264,8 +264,9 @@ for (const scenario of ["native-goal", "native-compaction-accounting-close-fail"
   }
   const codemodePlan = scenario.startsWith("native-codemode-plan");
   const codemodePlanCancelled = scenario === "native-codemode-plan-cancel";
-  const nativePlan = scenario === "native-plan" || scenario === "native-goal" || codemodePlan;
-  if (scenario === "native-goal") installGoalFixture(workspace);
+  const nativeGoal = scenario === "native-goal" || scenario === "native-goal-budget";
+  const nativePlan = scenario === "native-plan" || nativeGoal || codemodePlan;
+  if (nativeGoal) installGoalFixture(workspace);
   const planStep = codemodePlan ? "CODEMODE_PLAN_OWNED" : "NATIVE_PLAN_NEW";
   if (nativePlan) {
     const source = process.env.DURABLE_ADDONS_ROOT;
@@ -289,6 +290,7 @@ for (const scenario of ["native-goal", "native-compaction-accounting-close-fail"
       : 'const r=await tools.plan({action:"update",plan:[{step:"CODEMODE_PLAN_OWNED",status:"in_progress"}]});console.log(r)' } }]
       : [{ name: "plan", arguments: { action: "update", plan: [{ step: planStep, status: "in_progress" }] } }];
   }
+  if (scenario === "native-goal-budget") toolSequence = undefined; // Budget reached by the final answer, not a tool round.
   const standardDelegate = scenario === "native-delegate-standard" || scenario === "native-delegate-standard-revoke";
   const readonlyDeny = scenario === "native-delegate-readonly-deny";
   const writeDelegate = standardDelegate || readonlyDeny;
@@ -441,6 +443,7 @@ for (const scenario of ["native-goal", "native-compaction-accounting-close-fail"
       settings: { ...options.settings, compaction: { enabled: false, keepRecentTokens: 1 } } }, ctx));
   }
   let realRunCaptures = 0, realToolCaptures = 0;
+  let expectedToolSource = "factory-input";
   const captureSpies: { mockRestore(): void }[] = [];
   if (nativePlan) {
     const captureRun = HostConversationRuntime.prototype.captureRunSource;
@@ -458,7 +461,7 @@ for (const scenario of ["native-goal", "native-compaction-accounting-close-fail"
     captureSpies.push(spyOn(HostConversationRuntime.prototype, "captureToolSource").mockImplementation(async function (this: HostConversationRuntime, ...args) {
       const captured = await captureTool.apply(this, args);
       realToolCaptures++;
-      expect(captured.inputs[0]?.sourceId).toBe("factory-input");
+      expect(captured.inputs[0]?.sourceId).toBe(expectedToolSource);
       const authority = createPlanKvAuthority(root, captured, () => owner.assertCurrentOwner());
       authority.assertCurrent();
       const revoked = createPlanKvAuthority(root, captured, () => { throw Error("Owner lost"); });
@@ -608,6 +611,80 @@ for (const scenario of ["native-goal", "native-compaction-accounting-close-fail"
   const pool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
   const bound = backend.bind({ queue: base.queue, agentPool: pool });
   const channel = new WebChannel(bound);
+  if (scenario === "native-goal-budget") {
+    const { getDeferredQueuedFollowups } = await import("../../runtime/src/db.js");
+    const { storeWebMessage, admitWebUserMessage } = await import("../../runtime/src/channels/web/messaging/message-store.js");
+    const { handleRegisteredAddonConfigApiRequest } = await import("../../runtime/src/channels/web/handlers/addon-config-api.js");
+    backend.attachChannel!({ broadcastEvent() {}, resumePendingChats() { expect(getDb().inTransaction).toBe(false); } });
+    expect(await pool.applySlashCommand("web:default", "/goal Budget wrap-up")).toMatchObject({ status: "success" });
+    const settings = await handleRegisteredAddonConfigApiRequest(new Request("http://fixture/agent/addons/api/goal/goal?chat_jid=web:default", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token_budget: 5 }),
+    }), "goal", "goal", (body, status = 200) => Response.json(body, { status }));
+    expect(settings!.status).toBe(200);
+    expect(await settings!.json()).toMatchObject({ continuationQueued: false });
+    const initial = getDeferredQueuedFollowups("web:default")[0]!;
+    const firstMessage = storeWebMessage(channel, { chatJid: "web:default", content: initial.queuedContent,
+      mediaIds: [], isBot: false, agentId: "default", agentName: "Fixture" }, {
+      consumeDeferredFollowupRowId: initial.rowId, materializeQueuedSource: bound.getQueuedInputMaterialization!("web:default"),
+    })!;
+    const human = await admitWebUserMessage(channel, { chatJid: "web:default", content: "Ordinary human input before budget wrap-up",
+      mediaIds: [], isBot: false, agentId: "default", agentName: "Fixture" },
+      { acceptSource: bound.getInputSourceAdmission!("web:default") }, () => owner.assertCurrentOwner(), new AbortController().signal);
+    expect(human).not.toBeNull();
+    const humanId = (root.query("SELECT id FROM messages WHERE rowid=?").get(human!.id) as { id: string }).id;
+    expect(await bound.dispatchAcceptedInput!("web:default", initial.source_id!, firstMessage.id)!()).toBe("settled");
+    expect(calls).toBe(1);
+    expect(extensionKvGet("goal", "thread-goal", "chat", "web:default")).toMatchObject({ status: "budget_limited", tokens_used: 10,
+      lifecycle_generation: 2, budget_limit_reported: true, no_progress_turns: 0 });
+    const queued = getDeferredQueuedFollowups("web:default");
+    expect(queued).toHaveLength(1);
+    expect(queued[0]!.queuedContent).toContain("has reached its token budget");
+    expect(queued[0]!.source_id).toStartWith("goal-budget:");
+    const sourceText = (root.query("SELECT content FROM messages WHERE rowid=?").get(firstMessage.id) as { content: string }).content;
+    root.query("UPDATE messages SET content=? WHERE rowid=?").run(sourceText + "tampered", firstMessage.id);
+    expect(() => assertFreshApplicationHistory(root, join(workspace, "absent-legacy-sessions"))).toThrow("unverified message provenance");
+    root.query("UPDATE messages SET content=? WHERE rowid=?").run(sourceText, firstMessage.id);
+    expect(() => assertFreshApplicationHistory(root, join(workspace, "absent-legacy-sessions"))).not.toThrow();
+    // Reopen the actual default application with the human input and exactly one
+    // admitted budget wrap-up still pending. No provider is replayed at startup.
+    await pool.shutdown(); backend.stop(); await backend.close(); closeDatabase();
+    initDatabase(); root = getDb();
+    backend = await createDefaultApplicationRuntime(owner, async () => services);
+    const reopenedPool = new AgentPool({ credentialStore, modelRuntime: runtime, modelRegistry, ...backend.sessionOptions });
+    const reopened = backend.bind({ queue: base.queue, agentPool: reopenedPool });
+    const reopenedChannel = new WebChannel(reopened);
+    backend.attachChannel!({ broadcastEvent() {}, resumePendingChats() { expect(getDb().inTransaction).toBe(false); } });
+    expect(calls).toBe(1);
+    expect(getDeferredQueuedFollowups("web:default")).toEqual(queued);
+    const wrap = queued[0]!;
+    const wrapMessage = storeWebMessage(reopenedChannel, { chatJid: "web:default", content: wrap.queuedContent,
+      mediaIds: [], isBot: false, agentId: "default", agentName: "Fixture" }, {
+      consumeDeferredFollowupRowId: wrap.rowId, materializeQueuedSource: reopened.getQueuedInputMaterialization!("web:default"),
+    })!;
+    const dispatchWrap = reopened.dispatchAcceptedInput!("web:default", wrap.source_id!, wrapMessage.id)!;
+    expect(await dispatchWrap()).toBe("pending"); // The older human source owns the next frontier.
+    expect(calls).toBe(1);
+    toolSequence = [{ name: "plan", arguments: { action: "read" } }];
+    expectedToolSource = humanId;
+    expect(await reopened.dispatchAcceptedInput!("web:default", humanId, human!.id)!()).toBe("settled");
+    expect(calls).toBe(3);
+    expect(observedResults.get("factory-tool-2")?.toolName).toBe("plan");
+    expect(observedResults.get("factory-tool-2")?.isError).not.toBe(true);
+    expect(JSON.stringify(observedResults.get("factory-tool-2")?.content)).toContain("NATIVE_PLAN_OLD");
+    expect(planRequests[1]).not.toContain("has reached its token budget");
+    expect(extensionKvGet("goal", "thread-goal", "chat", "web:default")).toMatchObject({ tokens_used: 10 });
+    expect(await dispatchWrap()).toBe("settled");
+    expect(calls).toBe(4);
+    expect(planRequests[3]).toContain("has reached its token budget");
+    expect(await dispatchWrap()).toBe("settled");
+    expect(calls).toBe(4);
+    expect(extensionKvGet("goal", "thread-goal", "chat", "web:default")).toMatchObject({ status: "budget_limited", tokens_used: 20,
+      lifecycle_generation: 2, budget_limit_reported: true });
+    expect(getDeferredQueuedFollowups("web:default")).toHaveLength(0);
+    for (const spy of sdkSpies) expect(spy).not.toHaveBeenCalled();
+    await reopenedPool.shutdown(); backend.stop(); await backend.close(); closeDatabase(); owner.release();
+    return;
+  }
   if (scenario === "native-goal") {
     const wakes: string[] = [];
     let failWake = false;
@@ -625,6 +702,7 @@ for (const scenario of ["native-goal", "native-compaction-accounting-close-fail"
       consumeDeferredFollowupRowId: item.rowId, materializeQueuedSource: bound.getQueuedInputMaterialization!("web:default"),
     });
     expect(stored).not.toBeNull();
+    expectedToolSource = item.source_id!;
     const dispatchResult = await bound.dispatchAcceptedInput!("web:default", item.source_id!, stored!.id)!();
     expect(dispatchResult).toBe("settled");
     expect(wakes).toEqual(["web:default", "web:default"]);
