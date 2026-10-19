@@ -1785,6 +1785,7 @@
           "helperReaders": 0,
           "semanticReaders": 0,
           "files": [
+            ".github/workflows/ci.yml",
             ".github/workflows/e2e.yml",
             "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-auth-recording-boundaries.md",
             "docs/design/earendil-agent-harness-integration-adr/evidence/earendil-0991-packaged-cli-auth.md",
