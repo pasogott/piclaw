@@ -90,6 +90,13 @@ test("committed Goal usage and cursor are atomic, replay safe and lifecycle scop
     expect(progress().decision).toEqual({ action: "stop", reason: "no_progress" });
     expect(load()).toMatchObject({ status: "stopped", stop_reason: "no_progress", lifecycle_generation: 2 });
     expect(() => scoped(() => authority.write(() => addon.applyGoalPlanProgress(beforeStop, planState, false)))).toThrow("lifecycle changed");
+    scoped(() => addon.clearThreadGoal(authority.chatJid));
+    expect(scoped(() => addon.applyGoalCommand(authority.chatJid, "help"))).toMatchObject({ help: true, goal: null });
+    expect(scoped(() => addon.applyGoalCommand(authority.chatJid, "Explicit command objective"))).toMatchObject({ action: "create", continuation: "🎯 Continue goal: Explicit command objective" });
+    expect(scoped(() => addon.applyGoalCommand(authority.chatJid, "pause"))).toMatchObject({ action: "pause", goal: { status: "paused" } });
+    expect(scoped(() => addon.applyGoalCommand(authority.chatJid, "resume"))).toMatchObject({ action: "resume", goal: { status: "active" } });
+    expect(() => scoped(() => authority.write(() => { addon.applyGoalCommand(authority.chatJid, "clear"); throw Error("command rollback"); }))).toThrow("command rollback");
+    expect(load()).toMatchObject({ objective: "Explicit command objective", status: "active" });
     for (const toolName of ["goal_complete", "goal_stop"]) {
       scoped(() => { addon.clearThreadGoal(authority.chatJid); addon.createThreadGoal(authority.chatJid, "Terminal usage policy", 1); });
       const tool = addon.createGoalTools(() => authority.chatJid).find((tool: { name: string }) => tool.name === toolName)!;
