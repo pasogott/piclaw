@@ -29,7 +29,7 @@ export async function sdkRecoverySnapshot(database: OwnedSqlite) {
 }
 
 export type RecoveryCheckpoint = { sdkSnapshot?: Awaited<ReturnType<typeof sdkRecoverySnapshot>>; generation: number; intentSourceId: string; primary: AcceptedInput; primaryId: number; b: { sourceId: string; sourceSeq: number }; committedIntentId?: number; intent: DurableConversationOperation; candidate?: { id: number; requestId?: string }; modelCalls: number; effects: number; };
-export async function acceptedSteerFixture(dir: string, boundary: "before-submit" | "committed-ack-lost", recovered?: RecoveryCheckpoint, queuePrimary = false, testConfig: { loseIntentBindingAck?: boolean; sharedDatabase?: boolean; httpPrimary?: boolean; prepareTerminalEffect?: import("../../../runtime/durable-engine/src/host-runtime.js").RuntimeOptions["prepareTerminalEffect"] } = {}) {
+export async function acceptedSteerFixture(dir: string, boundary: "before-submit" | "committed-ack-lost", recovered?: RecoveryCheckpoint, queuePrimary = false, testConfig: { loseIntentBindingAck?: boolean; sharedDatabase?: boolean; httpPrimary?: boolean; allowRequest?: (requestId: string) => boolean; prepareTerminalEffect?: import("../../../runtime/durable-engine/src/host-runtime.js").RuntimeOptions["prepareTerminalEffect"] } = {}) {
     process.env.PICLAW_DB_IN_MEMORY = "0";
     const chatJid = `web:recovery:${basename(dir)}:${boundary}`;
     const hostPath = join(STORE_DIR, "messages.db");
@@ -124,7 +124,7 @@ export async function acceptedSteerFixture(dir: string, boundary: "before-submit
           if (!permit) throw Error("Host scheduling gate closed");
           const httpRow = testConfig.httpPrimary ? db.query('SELECT rowid, id FROM messages WHERE chat_jid=? AND is_bot_message=0 ORDER BY rowid LIMIT 1').get(chatJid) as { rowid: number; id: string } | null : null;
           const allowedPrimary = httpRow ? `message:${httpRow.rowid}:${httpRow.id}` : primaryRequestId;
-          if (inspection.submissions.some(s => s.conversationId !== base.root.id || ![allowedPrimary, `queued-steer:${intentSourceId}`].includes(s.requestId!))) throw Error("Unknown recovered authority");
+          if (inspection.submissions.some(s => s.conversationId !== base.root.id || (![allowedPrimary, `queued-steer:${intentSourceId}`].includes(s.requestId!) && !testConfig.allowRequest?.(s.requestId!)))) throw Error("Unknown recovered authority");
         }, putAnswer(ref, text) { payloads.putText(ref, text); }, sessionId: incarnation, lane: "main", generation, now: () => testConfig.httpPrimary ? new Date().toISOString() : at }, context);
       return createDurableConversationAdapter({ incarnation, manifest, runtime });
     }

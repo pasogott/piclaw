@@ -105,9 +105,11 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
   const { storeChatMetadata } = await import("../../runtime/src/db.js");
   const { createHostGoalTools } = await import("../../runtime/durable-engine/src/host-goal-tools.js");
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "goal-live-source-"));
+  const allowedContinuationRequests = new Set<string>();
   let prepareSettlement: import("../../runtime/durable-engine/src/host-runtime.js").RuntimeOptions["prepareTerminalEffect"];
   const f = await acceptedSteerFixture(dir, "before-submit", undefined, true, {
     sharedDatabase: continuation,
+    allowRequest: request => allowedContinuationRequests.has(request),
     prepareTerminalEffect: input => prepareSettlement?.(input) ?? Promise.resolve(undefined),
   });
   const addon = await import(pathToFileURL(join(sourceRoot, "addons/goal/index.ts")).href);
@@ -192,7 +194,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
     prompts.push(JSON.stringify(transcript.messages));
     const toolTurns = transcript.messages.filter(message => message.role === "toolResult").length;
     const later = JSON.stringify(transcript.messages).includes("LATER_GOAL_OPERATION");
-    const calling = continuation ? toolTurns < 1 : later ? laterModelEntries++ === 0 : toolTurns < 3;
+    const calling = continuation ? modelEntries === 1 : later ? laterModelEntries++ === 0 : toolTurns < 3;
     const output = createAssistantMessageEventStream();
     const message = { role: "assistant" as const, api: model.api, provider: model.provider, model: model.id, timestamp: 1,
       stopReason: calling ? "toolUse" as const : "stop" as const, content: calling
@@ -235,6 +237,27 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
       expect(queued[0]).toMatchObject({ source_id: `goal-continuation:${input.operationId}`, source_accepted: true });
       expect(queued[0]!.queuedContent).toContain("<piclaw_goal_input>");
       expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 6, status: "active", no_progress_turns: 1 });
+      const item = queued[0]!;
+      const { storeWebMessage } = await import("../../runtime/src/channels/web/messaging/message-store.js");
+      const stored = storeWebMessage({} as any, { chatJid: f.chatJid, content: item.queuedContent, isBot: false, mediaIds: [], agentId: "default", agentName: "Fixture" }, {
+        consumeDeferredFollowupRowId: item.rowId,
+        materializeQueuedSource({ database, message }) {
+          const source = f.ports.work.getAcceptedSource(f.chatJid, message.id);
+          if (database !== f.db || !database.inTransaction || source?.payloadRef !== `queued-source:${message.id}`) throw Error("Exact continuation source required");
+        },
+      });
+      if (!stored) throw Error("Continuation materialization failed");
+      const { createDurableQueueDispatch } = await import("../../runtime/src/agent-pool/durable-queue-dispatch.js");
+      const { createDurableConversationAdapter } = await import("../../runtime/src/agent-pool/durable-runtime-adapter.js");
+      const adapter = createDurableConversationAdapter({ incarnation: f.incarnation, manifest: [{ chatJid: f.chatJid, branchId: "main", conversationId: f.base.root.id }], runtime: f.runtime! });
+      allowedContinuationRequests.add(`message:${stored.id}:${item.source_id}`);
+      const dispatch = createDurableQueueDispatch({ work: f.ports.work, adapter, branchId: "main", assertCurrentWriter: () => f.owner.assert(),
+        runningCorrelation(id) { return { sessionId: f.incarnation, lane: "main", harnessOperationId: String(id), state: "running", watchGeneration: f.generation }; },
+        async waitForReconciliation() {}, shutdown: new AbortController().signal });
+      expect(await dispatch(f.chatJid, item.source_id!, stored.id)!()).toBe("settled");
+      expect(modelEntries).toBe(3);
+      expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 9, no_progress_turns: 2 });
+      expect(getDeferredQueuedFollowups(f.chatJid)).toHaveLength(1); // Exactly the next turn's continuation, not a replay duplicate.
       return;
     }
     if (mode === "budget-accounting") {

@@ -136,7 +136,7 @@ function writePreparedWebMessage(prepared: PreparedWebMessage): CommittedWebMess
   if (queued && !queuedItem) throw Error('Deferred follow-up intent disappeared before materialization');
   let messageId = prepared.messageId;
   if (queuedItem?.source_accepted) {
-    if (!queuedItem.source_id || !/^source-[0-9a-f-]{36}$/i.test(queuedItem.source_id) || !options.materializeQueuedSource)
+    if (!queuedItem.source_id || queuedItem.source_id.trim() !== queuedItem.source_id || queuedItem.source_id.length > 512 || !options.materializeQueuedSource)
       throw Error('Accepted queued input requires its host materialization binding');
     if (params.content !== queuedItem.queuedContent || JSON.stringify(params.mediaIds) !== JSON.stringify(queuedItem.mediaIds ?? []) ||
       JSON.stringify(options.contentBlocks ?? []) !== JSON.stringify(queuedItem.contentBlocks ?? []) ||
