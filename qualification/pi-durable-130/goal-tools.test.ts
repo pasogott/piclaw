@@ -97,7 +97,7 @@ test("actual Goal tool task captures its live accepted operation before shared K
   const { storeChatMetadata } = await import("../../runtime/src/db.js");
   const { createHostGoalTools } = await import("../../runtime/durable-engine/src/host-goal-tools.js");
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "goal-live-source-"));
-  const f = await acceptedSteerFixture(dir, "before-submit");
+  const f = await acceptedSteerFixture(dir, "before-submit", undefined, true);
   const addon = await import(pathToFileURL(join(sourceRoot, "addons/goal/index.ts")).href);
   registerRootExtensionKvStore(); requireExtensionKvAuthority(); addon.resetGoalAddonForTests();
   let captures = 0;
@@ -106,9 +106,14 @@ test("actual Goal tool task captures its live accepted operation before shared K
     expect(proof.operation.chatJid).toBe(f.chatJid); captures++; return proof;
   } }) });
   const extension = defineExtension({ name: "native-goal-fixture", tools }); f.base.registry.install(extension);
+  const { createHostGoalPrompt } = await import("../../runtime/durable-engine/src/host-goal-prompt.js");
+  const promptExtension = createHostGoalPrompt(addon, { root: f.db, assertOwner: () => f.owner.assert(), runtime: () => f.runtime!, failClosed() { f.permit = false; } });
+  f.base.registry.install(promptExtension);
+  const prompts: string[] = [];
   const model = f.base.models.getModel("qualification", "synthetic")!;
   const stream = (_model: unknown, transcript: { messages: { role: string }[] }) => {
-    const calling = transcript.messages.findLast(message => message.role !== "system")?.role === "user";
+    prompts.push(JSON.stringify(transcript.messages));
+    const calling = !transcript.messages.some(message => message.role === "toolResult");
     const output = createAssistantMessageEventStream();
     const message = { role: "assistant" as const, api: model.api, provider: model.provider, model: model.id, timestamp: 1,
       stopReason: calling ? "toolUse" as const : "stop" as const, content: calling
@@ -120,7 +125,7 @@ test("actual Goal tool task captures its live accepted operation before shared K
   f.base.models.setProvider(createProvider({ id: model.provider, models: [model], auth: { apiKey: { name: "Synthetic", resolve: async () => ({ auth: {}, source: "fixture" }) } }, api: { stream, streamSimple: stream } }));
   try {
     const harness = await Harness.open(await SqliteStorage.open(new OwnedSqlite(f.owner)), { models: f.base.models, registry: f.base.registry }, context);
-    try { await harness.commit(tx => configure(tx, f.base.root.id, { tools, extensions: [extension] }), context); } finally { await harness.close(context); }
+    try { await harness.commit(tx => configure(tx, f.base.root.id, { tools, extensions: [extension, promptExtension] }), context); } finally { await harness.close(context); }
     await f.open(); f.permit = true;
     storeChatMetadata(f.chatJid, at);
     const source = value(await f.ports.work.acceptSource(sealed({ effect: effect(`${f.incarnation}:goal-source`), chatJid: f.chatJid, sourceId: "goal-native", kind: "message", payloadRef: "goal-native", targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
@@ -135,7 +140,18 @@ test("actual Goal tool task captures its live accepted operation before shared K
       sessionId: f.incarnation, lane: "main", harnessOperationId: String(id), state: "running", watchGeneration: f.generation })));
     await f.runtime!.wait(input, id);
     expect(captures).toBe(1);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).not.toContain("<objective>");
+    expect(prompts[1]).toContain("Live Goal source capture");
+    expect(prompts[1]).toContain("Active Goal");
     expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ objective: "Live Goal source capture", status: "active" });
     expect((await f.runtime!.reconcile(input)).answer?.text).toBe("Goal stored");
+    await f.runtime!.close(); f.runtime = undefined;
+    const reader = await Harness.open(await SqliteStorage.open(new OwnedSqlite(f.owner)), { models: f.base.models, registry: f.base.registry }, context);
+    try {
+      const conversation = (await reader.conversation(f.base.root.id, context))!;
+      const entries = await conversation.entries({ order: "ascending" }, 100, undefined, context);
+      expect(JSON.stringify(entries.items)).not.toContain("Active Goal");
+    } finally { await reader.close(context); }
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); await f.close(); await rm(dir, { recursive: true, force: true }); }
 });
