@@ -19,6 +19,7 @@ import type {
 import type {
   CommitTerminalRequest,
   TerminalCommit,
+  TerminalDatabaseEffect,
   TerminalSettlementError,
   TerminalSettlementErrorTag,
   TerminalSettlementStore,
@@ -292,6 +293,7 @@ class CurrentPiclawTerminalSettlementStore
 
   async commitTerminal(
     input: CommitTerminalRequest,
+    applyEffect?: TerminalDatabaseEffect,
   ): Promise<ResultValue<TerminalCommit, TerminalSettlementError>> {
     const request = normaliseCommitTerminalRequest(input);
     const effectId = request?.effect.idempotencyKey ?? "invalid";
@@ -353,7 +355,7 @@ class CurrentPiclawTerminalSettlementStore
           }
           this.validateOwnership();
           const commit = this.apply(request, resolved.value);
-          if (this.runtime.applyTerminalEffects) {
+          if (this.runtime.applyTerminalEffects || applyEffect) {
             let active = true;
             const assertCurrent = (expected: Readonly<TerminalCommit>) => {
               if (!active || !this.database.inTransaction) throw new Error("Terminal effect scope ended");
@@ -361,7 +363,7 @@ class CurrentPiclawTerminalSettlementStore
               this.validateOwnership();
             };
             try {
-              if (this.runtime.applyTerminalEffects(commit, assertCurrent) !== undefined)
+              if (this.runtime.applyTerminalEffects?.(commit, assertCurrent) !== undefined || applyEffect?.(commit, assertCurrent) !== undefined)
                 throw new SettlementAbort(settlementError("invalid_request", "not_applied", false));
             } finally { active = false; }
           }

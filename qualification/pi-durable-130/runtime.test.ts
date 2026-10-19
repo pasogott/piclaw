@@ -5,7 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { Harness, LiveDoc, AssistantEntry, type Tx } from "../../runtime/durable-engine/qualification/durable.ts";
-import type { TerminalCommit } from "../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
+import type { TerminalCommit, TerminalDatabaseEffect } from "../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
 import type { AssistantMessage } from "../../runtime/durable-engine/qualification/ai.ts";
 import { HostConversationRuntime, type AcceptedInput, type RuntimeOptions, type SettledAnswer } from "../../runtime/durable-engine/src/index.js";
 import { configureHostWalFixtureDatabase, openWalFixtureDatabase } from "./src/sqlite-fixture-policy.js";
@@ -67,6 +67,7 @@ async function setup(busy = false) {
   let loseCancellationAck = false;
   const hooks = { authorize: undefined as (() => void | Promise<void>) | undefined,
     cancellation: undefined as (() => void | Promise<void>) | undefined,
+    prepareTerminal: undefined as ((input: AcceptedInput) => Promise<TerminalDatabaseEffect | undefined>) | undefined,
     terminalEffects: undefined as ((commit: Readonly<TerminalCommit>, assertCurrent: (expected: Readonly<TerminalCommit>) => void) => undefined) | undefined };
   const work = value(createCurrentPiclawServiceWorkStore(db, {
     hitFault(point, method) {
@@ -82,6 +83,7 @@ async function setup(busy = false) {
     applyTerminalEffects(commit, scope) { return hooks.terminalEffects?.(commit, scope); },
   }));
   const options: RuntimeOptions = {
+    prepareTerminalEffect: input => hooks.prepareTerminal?.(input) ?? Promise.resolve(undefined),
     incarnation: "copy-A", owner: { assert, release() { releases++; acquired = false; } },
     openStorage: async () => { assert(); opens++; return SqliteStorage.open(await openWalFixtureDatabase(path)); },
     harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
@@ -239,13 +241,18 @@ test.skipIf(!process.env.DURABLE_GOAL_ADDON_ROOT)("runtime: actual Goal accounts
     const payload = f.db.query("SELECT content FROM runtime_payloads WHERE ref=?").get(input.payloadRef) as { content: string };
     expect(hashCanonicalRequest({ type: "input", requestId: input.requestId, content: payload.content })).toBe(input.requestHash);
     let fail = true, calls = 0;
-    f.hooks.terminalEffects = (commit, scope) => {
-      expect(commit.operationId).toBe(input.operationId); calls++;
+    f.hooks.prepareTerminal = async captured => {
+      expect(captured).toEqual(input);
+      const verified = await reopened!.readSettledUsage(captured);
+      expect(verified).toEqual(receipts!);
+      return (commit, scope) => {
+      expect(commit.operationId).toBe(captured.operationId); calls++;
       withGoalSettlementAuthority(f.db, commit, scope, authority => {
-        expect(accountCommittedGoalBatch(addon, authority, [payload.content], receipts!)).toBe(1);
+        expect(accountCommittedGoalBatch(addon, authority, [payload.content], verified!)).toBe(1);
       });
       if (fail) throw Error("rollback actual SDK receipt");
       return undefined;
+      };
     };
     await expect(reopened.settle(input)).rejects.toThrow();
     expect(extensionKvGet("goal", "committed-usage:" + receipt!.conversationId, "chat", chatJid)).toBeNull();

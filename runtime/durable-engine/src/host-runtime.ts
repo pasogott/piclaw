@@ -6,7 +6,7 @@ import { awaitWithContext, withAbortSignal, withoutAbortSignal, type Context } f
 import type { CurrentPiclawServiceWorkStore, FinishHarnessRequest } from "../../../runtime/src/service-effects/current-piclaw/service-work-store.js";
 import { hashCanonicalRequest, type CanonicalJsonValue } from "../../../runtime/src/service-effects/contracts/common.js";
 import type { ServiceWorkStore, AcceptCancellationRequest, OperationSnapshot } from "../../../runtime/src/service-effects/contracts/service-work-store.js";
-import type { TerminalSettlementStore, CommitTerminalRequest } from "../../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
+import type { TerminalSettlementStore, CommitTerminalRequest, TerminalDatabaseEffect } from "../../../runtime/src/service-effects/contracts/terminal-settlement-store.js";
 import { value, sealed, effect } from "./host-effects.js";
 import { LegacyImportManifest } from "./legacy-import.js";
 import { projectPublicHistory } from "./session-tree.js";
@@ -51,6 +51,8 @@ export interface MaterializedAnswer {
 export interface RuntimeOptions {
   readonly incarnation: string;
   readonly onOperationSettled?: (operationId: string) => void;
+  /** Public evidence preparation outside SQLite; effect is invocation-local. */
+  readonly prepareTerminalEffect?: (input: AcceptedInput) => Promise<TerminalDatabaseEffect | undefined>;
   readonly onMaintenanceSettled?: (workId: string) => void;
   readonly cancelSideSource?: (input: AcceptedInput) => void;
   /** Required for model SET: shared-file SQL guard, checked inside each storage transaction. */
@@ -154,6 +156,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
     operationConversationFor: o.operationConversationFor?.bind(o),
     authorizeScheduling: authorizeScheduling.bind(o), putAnswer: putAnswer.bind(o),
     materializeAnswer: materializeAnswer?.bind(o), now: now.bind(o),
+    prepareTerminalEffect: o.prepareTerminalEffect?.bind(o),
     onOperationSettled: o.onOperationSettled?.bind(o), onMaintenanceSettled: o.onMaintenanceSettled?.bind(o), cancelSideSource: o.cancelSideSource?.bind(o),
     owner: Object.freeze({ assert: owner.assert.bind(owner), release: owner.release.bind(owner) }),
     work: Object.freeze({ getOperation: work.getOperation.bind(work), acceptCancellation: work.acceptCancellation.bind(work), bindHarness: work.bindHarness.bind(work), finishHarness: work.finishHarness?.bind(work) }),
@@ -1200,7 +1203,9 @@ export class HostConversationRuntime {
       disposition: cancelled ? "cancelled" as const : "completed" as const, errorCode: null, terminalAuthorityRef: null,
       timeline, sourceDispositions: operation.claimedSourceSeqs.map(sourceSeq => ({ sourceSeq, state: "consumed" as const, reason: "runtime committed answer" })),
       outboxIntents: [], committedAt: o.now() });
-    const terminal = value(await o.terminal.commitTerminal(request)); this.fence(); o.onOperationSettled?.(input.operationId); return terminal;
+    const terminalEffect = cancelled ? undefined : await o.prepareTerminalEffect?.(input);
+    this.fence();
+    const terminal = value(await o.terminal.commitTerminal(request, terminalEffect)); this.fence(); o.onOperationSettled?.(input.operationId); return terminal;
   }
   /** Rollback-only shutdown: seal before yielding, join host calls, then reject ANY live
    * public task/submission before Harness.close can cancel work. Failure stays sealed.
