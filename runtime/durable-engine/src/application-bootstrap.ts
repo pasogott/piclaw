@@ -248,6 +248,32 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         assert();
       };
     };
+    const getQueuedInputSourceAdmission: NonNullable<WebChannelOpts["getQueuedInputSourceAdmission"]> = chat => {
+      assert(); if (!routeIndex.get(chat) || !lookup(chat, routeIndex.get(chat)!.branchId)) throw Error("Unbound queued input chat");
+      return ({ chatJid, item, database: connection }) => {
+        assert();
+        if (connection !== root || !root.inTransaction || chatJid !== chat || !item.source_id) throw Error("Root queued admission required");
+        const { source_accepted, materializeRetries, ...immutable } = item;
+        const digest = hashCanonicalRequest(JSON.parse(JSON.stringify(immutable)));
+        work.acceptSourceInTransaction(sealed({ effect: { ...effect(`queue:${item.source_id}`),
+          provenanceRef: `application:queued:${digest}` }, chatJid: chat, sourceId: item.source_id, kind: "message",
+          payloadRef: `queued-source:${item.source_id}`, targetOperationId: null, parentSourceSeq: null, acceptedAt: item.queuedAt, createWakeIntent: false }), root);
+        assert();
+      };
+    };
+    const getQueuedInputMaterialization: NonNullable<WebChannelOpts["getQueuedInputMaterialization"]> = chat => {
+      assert(); if (!routeIndex.get(chat) || !lookup(chat, routeIndex.get(chat)!.branchId)) throw Error("Unbound queued input chat");
+      return ({ chatJid, item, message, database: connection }) => {
+        assert();
+        if (connection !== root || !root.inTransaction || chatJid !== chat || item.source_id !== message.id) throw Error("Root queued materialization required");
+        const source = work.getAcceptedSource(chat, message.id);
+        const { source_accepted, materializeRetries, ...immutable } = item;
+        const digest = hashCanonicalRequest(JSON.parse(JSON.stringify(immutable)));
+        if (!source || source.kind !== "message" || source.payloadRef !== `queued-source:${message.id}` || source.provenanceRef !== `application:queued:${digest}` || source.state !== "pending")
+          throw Error("Queued source payload conflict");
+        assert();
+      };
+    };
     const getDurableSession = (chat: string) => {
       const binding = routeIndex.get(chat);
       return binding && adapter.sessionPosition(chat, binding.branchId, binding.sessionId);
@@ -598,7 +624,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       bind(options: Pick<WebChannelOpts, "queue" | "agentPool">): Readonly<WebChannelOpts> {
         assert(); if (bound || closing) throw Error("Application bundle already bound or closing");
         bound = true;
-        return Object.freeze({ ...options, prepareInputSourceAdmission, getInputSourceAdmission,
+        return Object.freeze({ ...options, prepareInputSourceAdmission, getInputSourceAdmission, getQueuedInputSourceAdmission, getQueuedInputMaterialization,
           prepareInputText: prepareInputText ? (chat: string, text: string) => { assertLive(); if (!routeIndex.has(chat)) throw Error("Unbound input preparation"); return prepareInputText(chat, text); } : undefined,
           dispatchAcceptedInput: dispatch });
       },

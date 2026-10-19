@@ -376,6 +376,23 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
     expect(db.query("SELECT count(*) AS n FROM service_effect_s01_sources WHERE chat_jid=?").get(unbound)).toEqual({ n: 0 });
     expect(db.query("SELECT count(*) AS n FROM service_effect_s01_operations WHERE chat_jid=?").get(unbound)).toEqual({ n: 0 });
     expect(() => bundle.bind({ queue, agentPool: pool })).toThrow("already bound");
+    if (!failWait && !forks && !deferred) {
+      const { QueuedFollowupLifecycleService } = await import("../../runtime/src/channels/web/runtime/queued-followup-lifecycle-service.js");
+      const { storeWebMessage } = await import("../../runtime/src/channels/web/messaging/message-store.js");
+      const service = new QueuedFollowupLifecycleService();
+      const admission = channel.getQueuedInputSourceAdmission!(chat)!;
+      const materialize = channel.getQueuedInputMaterialization!(chat)!;
+      expect(() => db.transaction(() => {
+        const queuedAt = new Date().toISOString(), sourceId = "goal-continuation:application-test";
+        const queuedRow = service.enqueueAcceptedFollowupOnce(sourceId, chat, "Queued application input", queuedAt, { source: "goal.continuation" }, admission)!;
+        const stored = storeWebMessage(channel, { chatJid: chat, content: "Queued application input", mediaIds: [], isBot: false, agentId: "default", agentName: "Fixture" },
+          { consumeDeferredFollowupRowId: queuedRow, materializeQueuedSource: materialize });
+        expect(stored).not.toBeNull();
+        expect(db.query("SELECT id FROM messages WHERE id=?").get(sourceId)).toMatchObject({ id: sourceId });
+        throw Error("rollback queued application probe");
+      }).immediate()).toThrow("rollback queued application probe");
+      expect(db.query("SELECT * FROM service_effect_s01_sources WHERE source_id=?").all("goal-continuation:application-test")).toHaveLength(0);
+    }
     const hold = barrier(); base.host.modelHold = hold;
     const entered = barrier(); base.host.onModelEnter = () => entered.release();
     const response = await channel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(chat)}`, {
