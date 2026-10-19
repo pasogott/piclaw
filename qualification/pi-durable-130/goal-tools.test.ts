@@ -220,3 +220,61 @@ test("prepared Goal text and accepted source commit together; stale lifecycle ro
     expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ objective: "Accepted current Goal" });
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
+
+test("actual web message admission runs Goal lifecycle guard inside its owned transaction", async () => {
+  const sourceRoot = process.env.DURABLE_GOAL_ADDON_ROOT;
+  if (!sourceRoot) throw Error("DURABLE_GOAL_ADDON_ROOT required");
+  const { mkdirSync } = await import("node:fs");
+  const { createApplicationBootstrapBundle, applicationOwnership } = await import("../../runtime/durable-engine/src/application-bootstrap.js");
+  const { acquireRuntimeLock } = await import("../../runtime/src/runtime/single-instance.js");
+  const { BunSqliteDatabase } = await import("../../runtime/durable-engine/src/bun-sqlite.js");
+  const { SqliteStorage } = await import("../../runtime/durable-engine/qualification/sqlite.ts");
+  const { openFixture, context } = await import("./src/fixture.js");
+  const { admitWebUserMessage } = await import("../../runtime/src/channels/web/messaging/message-store.js");
+  const { storeChatMetadata } = await import("../../runtime/src/db.js");
+  process.env.PICLAW_DB_IN_MEMORY = "0";
+  mkdirSync(join(process.env.PICLAW_WORKSPACE!, ".piclaw"), { recursive: true });
+  initDatabase(); const root = getDb(); root.exec("PRAGMA foreign_keys=ON");
+  const { installTerminalSettlementCompositionSchema } = await import("../../runtime/src/service-effects/current-piclaw/terminal-settlement-schema.js");
+  installTerminalSettlementCompositionSchema(root);
+  const path = (root.query("PRAGMA database_list").all() as { name: string; file: string }[]).find(row => row.name === "main")!.file;
+  const lock = acquireRuntimeLock({ lockPath: join(process.env.PICLAW_WORKSPACE!, "goal-admission.lock"), strictOwnership: true, disabled: false });
+  const fixture = await openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(new BunSqliteDatabase(path, { root, assertOwner: () => lock.assertCurrentOwner() })));
+  const conversation = fixture.root.id; await fixture.close();
+  registerRootExtensionKvStore(); requireExtensionKvAuthority();
+  const addon = await import(pathToFileURL(join(sourceRoot, "addons/goal/index.ts")).href); addon.resetGoalAddonForTests();
+  const chat = "web:goal-real-web";
+  storeChatMetadata(chat, new Date().toISOString());
+  const authority = { extensionId: "goal", chatJid: chat, assertCurrent() { lock.assertCurrentOwner(); }, write<T>(body: () => T) { return root.transaction(body).immediate(); } };
+  const scoped = <T>(body: () => T) => withExtensionKvAuthority(authority, body);
+  scoped(() => addon.createThreadGoal(chat, "Actual web source fence"));
+  const prepared = scoped(() => addon.prepareGoalInput("🎯 Continue goal: Actual web source fence", chat));
+  let guardCalls = 0, failAfterSource = false;
+  const bundle = await createApplicationBootstrapBundle({ root, path, ownership: applicationOwnership(lock), offlineInitialize: true,
+    manifest: [{ chatJid: chat, branchId: "main", conversationId: conversation }], sessions: new Map([[chat, "original"]]),
+    runtime: { incarnation: "goal-admission", sessionId: "goal-admission", lane: "main", generation: 1, now: () => new Date().toISOString(),
+      harnessOptions: { models: fixture.models, registry: fixture.registry } },
+    answers: { resolver: { resolve: () => null }, put() {} },
+    assertInputAdmission(chatJid, content) {
+      expect(root.inTransaction).toBe(true); expect(chatJid).toBe(chat); expect(content).toBe(prepared.decision.text);
+      guardCalls++;
+      scoped(() => {
+        if (failAfterSource && guardCalls % 2 === 0) { addon.clearThreadGoal(chat); addon.createThreadGoal(chat, "Changed after source write"); }
+        prepared.assertCurrent();
+      });
+    },
+  }, context);
+  try {
+    const bound = bundle.bind({ queue: {}, agentPool: {} } as any);
+    const acceptSource = bound.getInputSourceAdmission!(chat)!;
+    const input = { chatJid: chat, content: prepared.decision.text, isBot: false, mediaIds: [], agentId: "default", agentName: "Fixture" };
+    const channel = { broadcastEvent() {}, pendingLinkPreviews: new Set<number>() };
+    await admitWebUserMessage(channel, input, { acceptSource }, () => {}, new AbortController().signal);
+    expect(guardCalls).toBe(2);
+    const before = ["messages", "service_effect_s01_sources", "service_effect_s01_decisions", "extension_kv"].map(table => root.query(`SELECT * FROM ${table}`).all());
+    failAfterSource = true;
+    await expect(admitWebUserMessage(channel, input, { acceptSource }, () => {}, new AbortController().signal)).rejects.toThrow("Goal input lifecycle changed");
+    expect(guardCalls).toBe(4);
+    expect(["messages", "service_effect_s01_sources", "service_effect_s01_decisions", "extension_kv"].map(table => root.query(`SELECT * FROM ${table}`).all())).toEqual(before);
+  } finally { await bundle.close(); lock.release(); addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
+});

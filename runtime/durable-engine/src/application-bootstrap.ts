@@ -72,6 +72,8 @@ export interface ApplicationBootstrapOptions {
   /** Host-owned physical catalog approval; no credentials or provider execution. */
   resolveScheduledModel?: (label: string) => { provider: string; modelId: string };
   observeSidePrompt?: (sourceId: string, observer: NonNullable<SidePromptOptions["onEvent"]>) => () => void;
+  /** Synchronous final admission check on already materialised immutable input. */
+  assertInputAdmission?: (chatJid: string, content: string) => void;
   createConversation?: (tx: import("@earendil-works/pi-durable").Tx, chatJid: string, branchId: string) => Promise<Manifest[number] & { sessionId: string }>;
   runtime: Pick<HostControllerOptions["runtime"], "incarnation" | "sessionId" | "lane" | "generation" | "harnessOptions" | "now" | "codemodeExecute">;
   /** Existing application payload store, with immutable answer references. */
@@ -87,6 +89,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
   const wrapWait = config.wrapWait;
   const createConversation = config.createConversation?.bind(config);
   const resolveScheduledModel = config.resolveScheduledModel?.bind(config);
+  const assertInputAdmission = config.assertInputAdmission?.bind(config);
   let database: BunSqliteDatabase | undefined;
   let controller: Awaited<ReturnType<typeof createHostController>> | undefined;
   try {
@@ -229,7 +232,17 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
           kind: "message" as const, payloadRef: `message-row:${rowId}`, targetOperationId: null, parentSourceSeq: null,
           acceptedAt: message.timestamp, createWakeIntent: false };
         input.effect.requestHash = hashCanonicalRequest(input as unknown as CanonicalJsonValue);
-        work.acceptSourceInTransaction(input, connection); assert();
+        const checkInput = () => {
+          const result = assertInputAdmission?.(chat, message.content);
+          if (result !== undefined) {
+            void Promise.resolve(result).catch(() => {});
+            throw Error("Input admission guard must be synchronous");
+          }
+        };
+        checkInput();
+        work.acceptSourceInTransaction(input, connection);
+        checkInput();
+        assert();
       };
     };
     const getDurableSession = (chat: string) => {
