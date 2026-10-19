@@ -297,57 +297,51 @@ describe("EF-S07 SQLite hardening", () => {
     }
   });
 
-  test("every completion statement checkpoint rolls back and a clean retry commits once", async () => {
-    const checkpoints: ScheduledRunStatement[] = ["next_decision_insert", "run_log_insert", "outbox_insert", "outbox_decision_insert", "outbox_link_insert", "task_head_update", "occurrence_terminal_update", "decision_insert"];
-    for (const [index, checkpoint] of checkpoints.entries()) {
-      const subject = isolated();
-      try {
-        const id = `rollback-${index}`;
-        subject.authority.create(authorityTask(`task:${id}`));
-        const claimed = await subject.store.claimDue(dueClaim(id)); expect(claimed.ok).toBe(true); if (!claimed.ok) continue;
-        const request = completion(claimed.value[0], `complete:${id}`, "2026-08-16T01:00:10.000Z", [deliveryIntent(id)]);
-        subject.runtime.failAfterStatement(checkpoint);
-        const failed = await subject.store.complete(request);
-        expect(!failed.ok && failed.error._tag).toBe("storage_unavailable");
-        const restored = await sqliteFactory.crashAndRestore!(subject, context());
-        expect(restored.subject.inspect()).toMatchObject({ runLogs: 0, nextDecisions: 0, outboxRows: 0 });
-        const retry = await restored.subject.store.complete(request);
-        expect(retry.ok).toBe(true);
-        expect(restored.subject.inspect()).toMatchObject({ runLogs: 1, nextDecisions: 1, outboxRows: 1 });
-        restored.subject.dispose?.();
-      } finally { subject.dispose?.(); }
-    }
+  for (const [index, checkpoint] of (["next_decision_insert", "run_log_insert", "outbox_insert", "outbox_decision_insert", "outbox_link_insert", "task_head_update", "occurrence_terminal_update", "decision_insert"] as ScheduledRunStatement[]).entries()) test(`every completion statement checkpoint rolls back and a clean retry commits once: ${checkpoint}`, async () => {
+    const subject = isolated();
+    try {
+      const id = `rollback-${index}`;
+      subject.authority.create(authorityTask(`task:${id}`));
+      const claimed = await subject.store.claimDue(dueClaim(id)); expect(claimed.ok).toBe(true); if (!claimed.ok) return;
+      const request = completion(claimed.value[0], `complete:${id}`, "2026-08-16T01:00:10.000Z", [deliveryIntent(id)]);
+      subject.runtime.failAfterStatement(checkpoint);
+      const failed = await subject.store.complete(request);
+      expect(!failed.ok && failed.error._tag).toBe("storage_unavailable");
+      const restored = await sqliteFactory.crashAndRestore!(subject, context());
+      expect(restored.subject.inspect()).toMatchObject({ runLogs: 0, nextDecisions: 0, outboxRows: 0 });
+      const retry = await restored.subject.store.complete(request);
+      expect(retry.ok).toBe(true);
+      expect(restored.subject.inspect()).toMatchObject({ runLogs: 1, nextDecisions: 1, outboxRows: 1 });
+      restored.subject.dispose?.();
+    } finally { subject.dispose?.(); }
   });
 
-  test("agent-bound completion checkpoints restore binding without terminal or outbox partials", async () => {
-    const checkpoints: ScheduledRunStatement[] = ["next_decision_insert", "run_log_insert", "outbox_insert", "outbox_decision_insert", "outbox_link_insert", "task_head_update", "occurrence_terminal_update", "decision_insert"];
-    for (const [index, checkpoint] of checkpoints.entries()) {
-      const subject = isolated();
-      try {
-        const id = `agent-rollback-${index}`;
-        subject.authority.create(authorityTask(`task:${id}`, { chatJid: `chat:${id}`, kind: "agent", executionRepeatability: "agent_source" }));
-        const claimed = await subject.store.claimDue(dueClaim(id)); expect(claimed.ok).toBe(true); if (!claimed.ok) continue;
-        const lease = claimed.value[0], operationId = `operation:${id}`, sourceSeq = 1;
-        acceptSqliteSource(subject.database, { runId: lease.record.runId, chatJid: lease.task.chatJid, sourceSeq, operationId });
-        const binding = { effect: { idempotencyKey: `bind:${id}`, requestHash: "", operationId, sourceSeq, provenanceRef: `provenance:${id}`, redactionClass: "private" as const }, runId: lease.record.runId, workerId: lease.record.workerId, expectedAttempt: 1, expectedTaskRevision: 1, leaseToken: lease.leaseToken, now: "2026-08-16T01:00:05.000Z", sourceSeq, operationId, boundAt: "2026-08-16T01:00:05.000Z" };
-        binding.effect.requestHash = hashCanonicalRequest(binding as unknown as CanonicalJsonValue);
-        const bound = await subject.store.bindAcceptedSource(binding); expect(bound.ok).toBe(true); if (!bound.ok) continue;
-        const boundLease = { ...lease, record: bound.value as ScheduledRunLease["record"] };
-        const request = completion(boundLease, `complete:${id}`, "2026-08-16T01:00:10.000Z", [agentDeliveryIntent(id, operationId, sourceSeq)]);
-        subject.runtime.failAfterStatement(checkpoint);
-        const failed = await subject.store.complete(request);
-        expect(!failed.ok && failed.error._tag).toBe("storage_unavailable");
-        const restored = await sqliteFactory.crashAndRestore!(subject, context());
-        const current = await restored.subject.store.get(lease.record.runId);
-        expect(current.ok && current.value?.state).toBe("source_bound");
-        expect(restored.subject.inspect()).toMatchObject({ runLogs: 0, nextDecisions: 0, outboxRows: 0 });
-        expect((restored.subject.database.query("SELECT COUNT(*) AS count FROM service_effect_s07_source_bindings WHERE run_id=?").get(lease.record.runId) as { count: number }).count).toBe(1);
-        const retry = await restored.subject.store.complete(request);
-        expect(retry.ok).toBe(true);
-        expect(restored.subject.inspect()).toMatchObject({ runLogs: 1, nextDecisions: 1, outboxRows: 1 });
-        restored.subject.dispose?.();
-      } finally { subject.dispose?.(); }
-    }
+  for (const [index, checkpoint] of (["next_decision_insert", "run_log_insert", "outbox_insert", "outbox_decision_insert", "outbox_link_insert", "task_head_update", "occurrence_terminal_update", "decision_insert"] as ScheduledRunStatement[]).entries()) test(`agent-bound completion checkpoints restore binding without terminal or outbox partials: ${checkpoint}`, async () => {
+    const subject = isolated();
+    try {
+      const id = `agent-rollback-${index}`;
+      subject.authority.create(authorityTask(`task:${id}`, { chatJid: `chat:${id}`, kind: "agent", executionRepeatability: "agent_source" }));
+      const claimed = await subject.store.claimDue(dueClaim(id)); expect(claimed.ok).toBe(true); if (!claimed.ok) return;
+      const lease = claimed.value[0], operationId = `operation:${id}`, sourceSeq = 1;
+      acceptSqliteSource(subject.database, { runId: lease.record.runId, chatJid: lease.task.chatJid, sourceSeq, operationId });
+      const binding = { effect: { idempotencyKey: `bind:${id}`, requestHash: "", operationId, sourceSeq, provenanceRef: `provenance:${id}`, redactionClass: "private" as const }, runId: lease.record.runId, workerId: lease.record.workerId, expectedAttempt: 1, expectedTaskRevision: 1, leaseToken: lease.leaseToken, now: "2026-08-16T01:00:05.000Z", sourceSeq, operationId, boundAt: "2026-08-16T01:00:05.000Z" };
+      binding.effect.requestHash = hashCanonicalRequest(binding as unknown as CanonicalJsonValue);
+      const bound = await subject.store.bindAcceptedSource(binding); expect(bound.ok).toBe(true); if (!bound.ok) return;
+      const boundLease = { ...lease, record: bound.value as ScheduledRunLease["record"] };
+      const request = completion(boundLease, `complete:${id}`, "2026-08-16T01:00:10.000Z", [agentDeliveryIntent(id, operationId, sourceSeq)]);
+      subject.runtime.failAfterStatement(checkpoint);
+      const failed = await subject.store.complete(request);
+      expect(!failed.ok && failed.error._tag).toBe("storage_unavailable");
+      const restored = await sqliteFactory.crashAndRestore!(subject, context());
+      const current = await restored.subject.store.get(lease.record.runId);
+      expect(current.ok && current.value?.state).toBe("source_bound");
+      expect(restored.subject.inspect()).toMatchObject({ runLogs: 0, nextDecisions: 0, outboxRows: 0 });
+      expect((restored.subject.database.query("SELECT COUNT(*) AS count FROM service_effect_s07_source_bindings WHERE run_id=?").get(lease.record.runId) as { count: number }).count).toBe(1);
+      const retry = await restored.subject.store.complete(request);
+      expect(retry.ok).toBe(true);
+      expect(restored.subject.inspect()).toMatchObject({ runLogs: 1, nextDecisions: 1, outboxRows: 1 });
+      restored.subject.dispose?.();
+    } finally { subject.dispose?.(); }
   });
 
   test("claim checkpoints are atomic", async () => {

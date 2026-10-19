@@ -20,6 +20,7 @@ import type { TotpAuthContext } from "../auth/totp-auth.js";
 import type { WebauthnAuthContext } from "../auth/webauthn-auth.js";
 import type { WebauthnEnrolPageContext } from "../auth/webauthn-enrol-page.js";
 import type { AgentStatusContext } from "../agent/agent-status.js";
+import type { WebUserMessageStoreOptions } from "../messaging/message-store.js";
 
 interface AuthGatewayLike {
   isAuthEnabled(): boolean;
@@ -43,6 +44,11 @@ interface TaskQueueLike {
   enqueue(task: () => unknown, key: string, laneKey?: string): unknown;
 }
 
+export interface PreparedInputText {
+  readonly text: string;
+  assertCurrent(): void;
+}
+
 export interface WebChannelLike
   extends RequestGuardsChannel,
     WorkspaceDispatchChannel,
@@ -58,9 +64,18 @@ export interface WebChannelLike
 
   /** Runtime dependencies and state services used across web layers. */
   queue: TaskQueueLike;
-  admitUserMessage?(chatJid: string, content: string, mediaIds: number[], options: {
-    contentBlocks?: unknown[]; linkPreviews?: unknown[]; threadId?: number | null; screenHint?: string | null;
-  }, authorise: () => void, signal: AbortSignal, deferBeforeInsert?: () => boolean): Promise<InteractionRow | null>;
+  /** Trusted host-only selection, captured before reading HTTP input; absent by default. */
+  prepareInputSourceAdmission?(chatJid: string): Promise<void>;
+  prepareInputText?(chatJid: string, text: string): PreparedInputText;
+  getInputSourceAdmission?(chatJid: string): WebUserMessageStoreOptions["acceptSource"];
+  /** Default-off trusted SQL materialization binding; not an HTTP selection. */
+  getAcceptedQueuedSteering?(chatJid: string): import('../../../agent-pool/durable-queued-steering.js').AcceptedQueuedSteering | undefined;
+  getQueuedInputMaterialization?(chatJid: string): import('../messaging/message-store.js').QueuedInputMaterialization | undefined;
+  getQueuedInputSourceWithdrawal?(chatJid: string): import("../runtime/queued-followup-lifecycle-service.js").QueuedInputSourceAdmission | undefined;
+  getQueuedInputSourceAdmission?(chatJid: string): import("../runtime/queued-followup-lifecycle-service.js").QueuedInputSourceAdmission | undefined;
+  dispatchAcceptedInput?: import("../../../agent-pool/durable-queue-dispatch.js").AcceptedQueueDispatch;
+  admitUserMessage?(chatJid: string, content: string, mediaIds: number[], options: WebUserMessageStoreOptions,
+    authorise: () => void, signal: AbortSignal, deferBeforeInsert?: () => boolean): Promise<InteractionRow | null>;
   agentPool: AgentPool & {
     queueOwnedStreamingMessage?(chatJid: string, text: string, behavior: "steer"): Promise<{ queued: boolean; error?: string }>;
     abortOwnedRun?(chatJid: string): Promise<unknown>;
@@ -116,7 +131,7 @@ export interface WebChannelLike
     extras?: { mediaIds?: number[]; contentBlocks?: unknown[]; linkPreviews?: unknown[]; screenHint?: string; source?: string; queuedBy?: QueuedFollowupItem["queuedBy"] }
   ): number;
   getQueuedFollowupCount(chatJid: string): number;
-  admitQueuedFollowupItem?(args: Parameters<WebChannelLike['enqueueQueuedFollowupItem']>, authorise: () => void, signal: AbortSignal): Promise<number>;
+  admitQueuedFollowupItem?(args: Parameters<WebChannelLike['enqueueQueuedFollowupItem']>, authorise: () => void, signal: AbortSignal, acceptSource?: import("../runtime/queued-followup-lifecycle-service.js").QueuedInputSourceAdmission): Promise<number>;
   getQueuedFollowupItems(chatJid: string): QueuedFollowupItem[];
   removeQueuedFollowupItem(chatJid: string, rowId: number): QueuedFollowupItem | null;
   peekQueuedFollowupItem(chatJid: string): QueuedFollowupItem | null;

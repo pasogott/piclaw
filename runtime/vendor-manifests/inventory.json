@@ -375,6 +375,20 @@
       "provenance": "unrecorded"
     },
     {
+      "path": "runtime/web/static/common/js/vendor/diagram-sanitizer-license.meta.json",
+      "bytes": 1145,
+      "sha256": "8c8d88e08d119ea06deb50c4cb4545970b452aba7fe79a86080cb1800c3a5b4d",
+      "manifests": [],
+      "provenance": "unrecorded"
+    },
+    {
+      "path": "runtime/web/static/common/js/vendor/diagram-sanitizer.LICENSE.txt",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "manifests": [],
+      "provenance": "unrecorded"
+    },
+    {
       "path": "runtime/web/static/common/js/vendor/echarts/echarts.meta.json",
       "bytes": 324,
       "sha256": "52741864bc54638068f560256d6caa48cad2ed0756a46503d1f7cd27f820a80f",
@@ -410,6 +424,36 @@
         "runtime/vendor-manifests/katex-global.json"
       ],
       "provenance": "manifest-linked"
+    },
+    {
+      "path": "runtime/web/static/common/js/vendor/pele-license.meta.json",
+      "bytes": 1026,
+      "sha256": "cb885e15badb0a40af3947151b0a370e159ba100c3a48dff575f6e8a81d76c0c",
+      "manifests": [],
+      "provenance": "unrecorded"
+    },
+    {
+      "path": "runtime/web/static/common/js/vendor/pele.LICENSE.txt",
+      "bytes": 1934,
+      "sha256": "311bccc30de6f7b9cbfb64232bb0c911ccb2191abe316550813ae25b2c7925b9",
+      "manifests": [],
+      "provenance": "unrecorded"
+    },
+    {
+      "path": "runtime/web/static/common/js/vendor/pele.js",
+      "bytes": 701894,
+      "sha256": "7a33e3d9f6d005863c437b61bb25e2ff489393e3f3b3a0d0b6ca71a6d23cb3b9",
+      "manifests": [
+        "runtime/vendor-manifests/pele.json"
+      ],
+      "provenance": "manifest-linked"
+    },
+    {
+      "path": "runtime/web/static/common/js/vendor/pele.meta.json",
+      "bytes": 1214,
+      "sha256": "28f252549440003c09a71713fa7eb4f8dd568f20142dba2db0befba9be0810a2",
+      "manifests": [],
+      "provenance": "unrecorded"
     },
     {
       "path": "runtime/web/static/common/js/vendor/preact-htm.js",
@@ -949,10 +993,15 @@
     "runtime/web/static/common/js/vendor/codemirror.js",
     "runtime/web/static/common/js/vendor/d3/d3.meta.json",
     "runtime/web/static/common/js/vendor/d3/d3.min.js",
+    "runtime/web/static/common/js/vendor/diagram-sanitizer-license.meta.json",
+    "runtime/web/static/common/js/vendor/diagram-sanitizer.LICENSE.txt",
     "runtime/web/static/common/js/vendor/echarts/echarts.meta.json",
     "runtime/web/static/common/js/vendor/echarts/echarts.min.js",
     "runtime/web/static/common/js/vendor/editor-profiler.js",
     "runtime/web/static/common/js/vendor/katex.meta.json",
+    "runtime/web/static/common/js/vendor/pele-license.meta.json",
+    "runtime/web/static/common/js/vendor/pele.LICENSE.txt",
+    "runtime/web/static/common/js/vendor/pele.meta.json",
     "runtime/web/static/common/js/vendor/preact-htm.meta.json",
     "runtime/web/static/common/js/vendor/remote-display-decoder.meta.json",
     "runtime/web/static/common/js/vendor/remote-display-decoder.wasm",

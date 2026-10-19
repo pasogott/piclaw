@@ -187,13 +187,28 @@ export class UiBridge {
     });
   }
 
-  createUiContext(chatJid: string): ExtensionUIContext {
-    this.touchChat(chatJid);
-    const requestUiResponse = async (
+  async openWorkspaceFile(chatJid: string, path: string, label: string): Promise<unknown> {
+    const result = await this.requestUiResponse(chatJid, "custom", { title: "Custom UI", options: {
+      timeout: 15000, action: "open_workspace_file", path, label, target: "tab",
+    } }, 15000);
+    if (result && typeof result === "object") {
+      const outcome = result as { ok?: unknown; opened?: unknown };
+      if ((outcome.ok === true || outcome.opened === true) && outcome.ok !== false && outcome.opened !== false) return result;
+      if (outcome.ok === false || outcome.opened === false) return result;
+    }
+    return {
+      ok: false, opened: false,
+      reason: result === undefined ? "ui_timeout" : "ui_not_opened",
+      detail: "The browser did not confirm opening the workspace file.",
+    };
+  }
+
+  private async requestUiResponse(
+      chatJid: string,
       kind: string,
       payload: Record<string, unknown>,
       timeoutMs = 120000
-    ): Promise<unknown> => {
+    ): Promise<unknown> {
       this.touchChat(chatJid);
       const requestId = `ui-${Date.now()}-${++this.uiRequestCounter}`;
       return new Promise((resolve, reject) => {
@@ -211,8 +226,12 @@ export class UiBridge {
           ...payload,
         });
       });
-    };
+  }
 
+  createUiContext(chatJid: string): ExtensionUIContext {
+    this.touchChat(chatJid);
+    const requestUiResponse = (kind: string, payload: Record<string, unknown>, timeoutMs = 120000) =>
+      this.requestUiResponse(chatJid, kind, payload, timeoutMs);
     const fallbackTheme = this.fallbackTheme;
 
     return {

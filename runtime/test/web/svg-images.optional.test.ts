@@ -338,7 +338,7 @@ for (const skin of ['classic','visual']) browserTest(`${skin}: SVG defaults, exp
 
 for(const skin of ['classic','visual']) browserTest(`${skin}: actual Mermaid SVG follows selected palette, not OS, without rerender`,async()=>{
   await fixture(async(page)=>{
-    await page.addScriptTag({content:readFileSync(resolve(repo,'runtime/web/static/common/js/vendor/beautiful-mermaid.js'),'utf8')});
+    await page.addScriptTag({content:readFileSync(resolve(repo,'runtime/web/static/common/js/vendor/pele.js'),'utf8')});
     await page.emulateMedia({colorScheme:'dark'});
     const result=await page.evaluate(async(skin)=>{
       const api=(window as any).svgTest,post=document.getElementById('post')!;

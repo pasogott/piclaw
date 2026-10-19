@@ -36,7 +36,8 @@ const { toolActivation } = await import('../src/extensions/tool-activation.js');
 const { currentContextTools, providerTranscriptContext } = await import('../src/extensions/transcript-context-compat.js');
 const { createRunToolCeilingController } = await import('../src/agent-pool/run-tool-ceiling.js');
 const { AgentSessionManager } = await import('../src/agent-pool/session-manager.js');
-const { getInstalledAddonExtensionPaths, createSessionInDir } = await import('../src/agent-pool/session.js');
+const { createSessionInDir } = await import('../src/agent-pool/session.js');
+const { getInstalledAddonExtensionPaths } = await import('../src/addons/package-entries.js');
 const { initDatabase, closeDatabase } = await import('../src/db/connection.js');
 const { AddonOperationService } = await import('../src/addons/operation-service.js');
 const ambient = new AsyncLocalStorage<string>();
@@ -201,8 +202,8 @@ try {
     cases++;
   }
   // Exercise actual core cache manager, injecting only the offline SDK runtime factory (not production MCP/built-ins).
-  const pool = new Map(), sidePool = new Map();
-  const manager = new AgentSessionManager({ pool, sidePool, modelRuntime, settingsManager: settings, createDefaultTools: () => [],
+  const pool = new Map();
+  const manager = new AgentSessionManager({ pool, modelRuntime, settingsManager: settings, createDefaultTools: () => [],
     bindSession: async (runtime: any) => runtime.session.bindExtensions({ uiContext: {} as any, commandContextActions: {} as any }),
     ensureBranchRegistration: () => {}, createSession: async (_jid: string) => {
       const runtime = await createAgentSessionRuntime(async ({ sessionManager, sessionStartEvent }: any) => {

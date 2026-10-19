@@ -1,3 +1,4 @@
+// Legacy compatibility fixture only; production side prompts use the durable dispatcher.
 /**
  * agent-pool/side-prompt-runner.ts – runSidePrompt orchestration helpers.
  */
@@ -5,14 +6,14 @@
 import type { AgentSession, AgentSessionEvent, AgentSessionRuntime, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { type AssistantMessageEvent, type Usage } from "@earendil-works/pi-ai";
 
-import { getAgentRuntimeConfig } from "../core/config.js";
-import { readAccessConfig } from "../core/config-access.js";
-import { detectChannel } from "../router.js";
-import { withChatContext } from "../core/chat-context.js";
-import { installSessionUsageRecorder, recordMessageUsage } from "./usage.js";
-import { createLogger, debugSuppressedError } from "../utils/logger.js";
-import { withoutAddonLocalContext } from '../addons/local-context.js';
-import { normalizeLlmContext } from "./llm-context-normalizer.js";
+import { getAgentRuntimeConfig } from "../../src/core/config.js";
+import { readAccessConfig } from "../../src/core/config-access.js";
+import { detectChannel } from "../../src/router.js";
+import { withChatContext } from "../../src/core/chat-context.js";
+import { installSessionUsageRecorder, recordMessageUsage } from "../../src/agent-pool/usage.js";
+import { createLogger, debugSuppressedError } from "../../src/utils/logger.js";
+import { withoutAddonLocalContext } from '../../src/addons/local-context.js';
+import { normalizeLlmContext } from "../../src/agent-pool/llm-context-normalizer.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
@@ -20,8 +21,8 @@ import {
   SideAssistantMessage,
   toSideReasoning,
   waitForSessionIdle,
-} from "./prompt-utils.js";
-import type { SidePromptOptions, SidePromptResult } from "./contracts.js";
+} from "../../src/agent-pool/prompt-utils.js";
+import type { SidePromptOptions, SidePromptResult } from "../../src/agent-pool/contracts.js";
 
 const log = createLogger("agent-pool.side-prompt-runner");
 

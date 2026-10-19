@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createTempWorkspace, setEnv } from '../helpers.js';
-import { runSidePrompt, type SidePromptRunnerOptions } from '../../src/agent-pool/side-prompt-runner.js';
+import { runSidePrompt, type SidePromptRunnerOptions } from '../helpers/legacy-side-prompt-runner.js';
 import { AgentPool } from '../../src/agent-pool.js';
 import { withExecutionIdentity, type ExecutionIdentity } from '../../src/core/execution-context.js';
 

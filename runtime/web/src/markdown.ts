@@ -1,5 +1,6 @@
 import { highlightCodeToHtml } from './utils/code-highlighting.js';
-import { MERMAID_THEME_COLORS, stripMermaidFontImports } from './ui/svg-theme.js';
+import { renderMermaidDiagrams as renderDiagrams } from './ui/mermaid-render.js';
+export { isMermaidSourceAllowedForScopedRendering } from './ui/mermaid-render.js';
 import { renderSvgFences, escapeSvgSource, encodeSvgSource } from './utils/svg-images.js';
 import { linkifyChatReferences } from './ui/chat-reference-links.js';
 
@@ -422,15 +423,6 @@ function toBase64(value) {
     return btoa(binary);
 }
 
-function fromBase64(value) {
-    const binary = atob(String(value || ''));
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) {
-        bytes[i] = binary.charCodeAt(i);
-    }
-    return new TextDecoder().decode(bytes);
-}
-
 function injectMermaidBlocks(html, blocks) {
     if (!html || !blocks || blocks.length === 0) return html;
     return html.replace(/@@MERMAID_BLOCK_(\d+)@@/g, (match, idxStr) => {
@@ -739,101 +731,10 @@ export function renderThinkingMarkdown(text) {
     return html_content;
 }
 
-// Render pending mermaid diagrams in the DOM
-/**
- * Post-process Mermaid SVG: replace sharp orthogonal polyline corners with
- * smooth arc-cornered paths.  Radius is clamped so short segments stay valid.
- */
-function roundPolylineCorners(svgString, radius = 6) {
-    return svgString.replace(
-        /<polyline\b([^>]*)\bpoints="([^"]+)"([^>]*)\/?\s*>/g,
-        (_match, before, pointsStr, after) => {
-            const pts = pointsStr.trim().split(/\s+/).map(p => {
-                const [x, y] = p.split(',').map(Number);
-                return { x, y };
-            });
-            if (pts.length < 3) {
-                return `<polyline${before}points="${pointsStr}"${after}/>`;
-            }
-
-            const parts = [`M ${pts[0].x},${pts[0].y}`];
-            for (let i = 1; i < pts.length - 1; i++) {
-                const prev = pts[i - 1];
-                const curr = pts[i];
-                const next = pts[i + 1];
-
-                const dxIn  = curr.x - prev.x;
-                const dyIn  = curr.y - prev.y;
-                const dxOut = next.x - curr.x;
-                const dyOut = next.y - curr.y;
-
-                const lenIn  = Math.sqrt(dxIn * dxIn + dyIn * dyIn);
-                const lenOut = Math.sqrt(dxOut * dxOut + dyOut * dyOut);
-
-                // Clamp radius to half the shortest adjacent segment
-                const r = Math.min(radius, lenIn / 2, lenOut / 2);
-                if (r < 0.5) {
-                    parts.push(`L ${curr.x},${curr.y}`);
-                    continue;
-                }
-
-                // Points where the arc begins and ends
-                const ax = curr.x - (dxIn / lenIn) * r;
-                const ay = curr.y - (dyIn / lenIn) * r;
-                const bx = curr.x + (dxOut / lenOut) * r;
-                const by = curr.y + (dyOut / lenOut) * r;
-
-                // Determine sweep direction via cross product
-                const cross = dxIn * dyOut - dyIn * dxOut;
-                const sweep = cross > 0 ? 1 : 0;
-
-                parts.push(`L ${ax},${ay}`);
-                parts.push(`A ${r},${r} 0 0 ${sweep} ${bx},${by}`);
-            }
-            parts.push(`L ${pts[pts.length - 1].x},${pts[pts.length - 1].y}`);
-
-            return `<path${before}d="${parts.join(' ')}"${after}/>`;
-        },
-    );
-}
-
-export function isMermaidSourceAllowedForScopedRendering(source: string): boolean {
-    const value = typeof source === 'string' ? source : '';
-    if (/(?:https?:\/\/|data:|blob:|\/\/)/i.test(value)) return false;
-    const references = Array.from(value.matchAll(/url\(\s*(['"]?)(.*?)\1\s*\)/gi), (match) => match[2]?.trim() || '');
-    return references.every((reference) => /^#[A-Za-z_][A-Za-z0-9_.:-]*$/.test(reference));
-}
-
-/** Find mermaid code blocks in a container and render them as SVG diagrams. */
-export async function renderMermaidDiagrams(container, options: MarkdownOptions = {}) {
-    if (!window.beautifulMermaid) return;
-
-    const { renderMermaid } = window.beautifulMermaid;
-    const theme = MERMAID_THEME_COLORS;
-
-    const pending = container.querySelectorAll('.mermaid-container[data-mermaid]');
-    for (const el of pending) {
-        try {
-            const encoded = el.dataset.mermaid;
-            const raw = fromBase64(encoded || '');
-            const code = decodeEntitiesDeep(raw, 2);
-            if (typeof options.rewriteImageSrc === 'function' && !isMermaidSourceAllowedForScopedRendering(code)) {
-                throw new Error('External Mermaid resources are unavailable in this view.');
-            }
-            let svg = await renderMermaid(code, { ...theme, font: 'system-ui', transparent: true });
-            svg = stripMermaidFontImports(roundPolylineCorners(svg));
-            el.innerHTML = typeof options.rewriteImageSrc === 'function'
-                ? sanitizeHtml(svg, options)
-                : svg;
-            el.removeAttribute('data-mermaid');
-        } catch (e) {
-            console.error('Mermaid render error:', e);
-            const pre = document.createElement('pre');
-            pre.className = 'mermaid-error';
-            pre.textContent = `Diagram error: ${e.message}`;
-            el.innerHTML = '';
-            el.appendChild(pre);
-            el.removeAttribute('data-mermaid');
-        }
-    }
+/** Render through the shared, sanitized timeline renderer. */
+export async function renderMermaidDiagrams(container: HTMLElement, options: MarkdownOptions = {}) {
+    await renderDiagrams(container, {
+        scoped: typeof options.rewriteImageSrc === 'function',
+        reportError: (error) => console.error('Mermaid render error:', error),
+    });
 }

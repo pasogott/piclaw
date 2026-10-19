@@ -461,11 +461,10 @@ describe("WP-3C hermetic add-on package-tree oracle", () => {
   test("pins the shared package-entry containment policy adopted by installed add-on consumers", () => {
     const sessionSource = readFileSync(new URL("../../src/agent-pool/session.ts", import.meta.url), "utf8");
     const resolverSource = readFileSync(new URL("../../src/addons/package-entries.ts", import.meta.url), "utf8");
-    const discoveryBody = sessionSource.slice(
-      sessionSource.indexOf("export function getInstalledAddonExtensionPaths"),
-      sessionSource.indexOf("function getBundledExtensionPaths"),
-    );
-    expect(discoveryBody).toContain("resolveAddonPackageEntries(packageDir, addonPackage.manifest.pi?.extensions)");
+    expect(sessionSource).not.toContain("export function getInstalledAddonExtensionPaths");
+    expect(sessionSource).toMatch(/import\s*\{\s*getInstalledAddonExtensionPaths,?\s*\}\s*from\s*["']\.\.\/addons\/package-entries\.js["']/);
+    expect(sessionSource).toContain("getInstalledAddonExtensionPaths(getWorkspaceDir())");
+    expect(resolverSource).toMatch(/resolveAddonPackageEntries\(packageDir,\s*\w+\.manifest\.pi\?\.extensions\)/);
     expect(resolverSource).toContain("statSync(fullPath).isFile()");
     expect(resolverSource).toContain("realpathSync(fullPath)");
     expect(resolverSource).toContain("isInside(realPackageDir, realEntryPath)");

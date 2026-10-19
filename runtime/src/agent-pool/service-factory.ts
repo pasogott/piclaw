@@ -14,7 +14,6 @@ import { AgentSessionBinder } from "./session-binder.js";
 import { AgentSessionManager, type PoolEntry } from "./session-manager.js";
 import { AgentToolFactory } from "./tool-factory.js";
 import { AgentTurnCoordinator } from "./turn-coordinator.js";
-import { lightweightPrewarmSession } from "./session.js";
 import { installSessionUsageRecorder } from "./usage.js";
 import type { AgentPoolOptions } from "./contracts.js";
 import type { AgentBashOperations } from "./tool-factory.js";
@@ -31,7 +30,6 @@ export interface AgentPoolLogHooks {
 /** Inputs required to assemble the extracted AgentPool helper services. */
 export interface AgentPoolServiceFactoryOptions extends AgentPoolLogHooks {
   pool: Map<string, PoolEntry>;
-  sidePool: Map<string, PoolEntry>;
   activeForkBaseLeafByChat: Map<string, string | null>;
   authStorage: PiclawCredentialStore;
   modelRuntime: ModelRuntime;
@@ -40,8 +38,8 @@ export interface AgentPoolServiceFactoryOptions extends AgentPoolLogHooks {
   workspaceDir: string;
   mainSessionMaxSize?: number | null;
   bashOperations?: AgentBashOperations;
+  getDurableSession?: AgentPoolOptions["getDurableSession"];
   createSession?: AgentPoolOptions["createSession"];
-  createSideSession?: AgentPoolOptions["createSideSession"];
 }
 
 /** Concrete helper instances composed into AgentPool. */
@@ -78,6 +76,7 @@ async function resolveSessionExtensionFactories(chatJid: string): Promise<Extens
  * Keeps constructor wiring in one place so AgentPool itself remains a thin façade.
  */
 export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions): AgentPoolServices {
+  const getDurableSession = options.getDurableSession?.bind(options);
   const attachments = getAttachmentRegistry();
   const sessionBinder = new AgentSessionBinder({
     pool: options.pool,
@@ -102,6 +101,7 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
   let branchManager: AgentBranchManager;
   const runtimeFacade = new AgentRuntimeFacade({
     pool: options.pool,
+    getDurableSession,
     acquireCommandProtection: chatJid => sessionManager.acquireEvictionProtection(chatJid),
     getOrCreateRuntime: (chatJid) => sessionManager.getOrCreate(chatJid),
     modelRegistry: options.modelRegistry,
@@ -116,7 +116,6 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
   });
   branchManager = new AgentBranchManager({
     pool: options.pool,
-    sidePool: options.sidePool,
     activeForkBaseLeafByChat: options.activeForkBaseLeafByChat,
     getOrCreateRuntime: (chatJid) => sessionManager.getOrCreate(chatJid),
     refreshRuntime: (chatJid, runtime) => sessionManager.refreshRuntime(chatJid, runtime),
@@ -127,16 +126,15 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     onWarn: options.onWarn,
   });
   sessionManager = new AgentSessionManager({
+    getDurableSession,
+    modelRegistry: options.modelRegistry,
     pool: options.pool,
-    sidePool: options.sidePool,
-    ...(options.createSession ? { createSession: options.createSession } : {}),
-    ...(options.createSideSession ? { createSideSession: options.createSideSession } : {}),
     modelRuntime: options.modelRuntime,
     settingsManager: options.settingsManager,
     mainSessionMaxSize: options.mainSessionMaxSize,
-    lightweightPrewarmSession: (chatJid) => lightweightPrewarmSession(chatJid, {
-      getSessionExtensionFactories: (targetChatJid) => resolveSessionExtensionFactories(targetChatJid),
-    }),
+    // Compatibility construction is absent from the selected durable backend.
+    ...(getDurableSession === undefined ? {
+    createSession: options.createSession,
     createDefaultTools: () => toolFactory.createDefaultTools(),
     createCustomToolOverrides: (chatJid) => toolFactory.createCustomToolOverrides(chatJid),
     getSessionExtensionFactories: (chatJid) => resolveSessionExtensionFactories(chatJid),
@@ -147,6 +145,7 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     ensureBranchRegistration: (chatJid, session) => {
       branchManager.ensureBranchRegistration(chatJid, session);
     },
+    } : {}),
     onInfo: options.onInfo,
     onWarn: options.onWarn,
     onError: options.onError,

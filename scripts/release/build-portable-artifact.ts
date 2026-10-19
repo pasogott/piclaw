@@ -500,17 +500,19 @@ async function buildPortableArtifact(options: Options): Promise<void> {
     mkdirSync(installCacheDir, { recursive: true });
     mkdirSync(installTmpDir, { recursive: true });
     mkdirSync(bunTmpDir, { recursive: true });
-    run("bun", ["install", "--production", "--frozen-lockfile"], {
+    const installEnv = {
+      ...process.env,
+      BUN_INSTALL_CACHE_DIR: installCacheDir,
+      BUN_TMPDIR: bunTmpDir,
+      TMPDIR: installTmpDir,
+      TMP: installTmpDir,
+      TEMP: installTmpDir,
+    };
+    run("bun", ["install", "--production", "--frozen-lockfile", "--ignore-scripts"], {
       cwd: appDir,
-      env: {
-        ...process.env,
-        BUN_INSTALL_CACHE_DIR: installCacheDir,
-        BUN_TMPDIR: bunTmpDir,
-        TMPDIR: installTmpDir,
-        TMP: installTmpDir,
-        TEMP: installTmpDir,
-      },
+      env: installEnv,
     });
+    run("bun", ["run", "scripts/postinstall.ts"], { cwd: appDir, env: installEnv });
 
     assertBundledPiCli(appDir);
     rewriteBundledPiCliShebang(appDir);

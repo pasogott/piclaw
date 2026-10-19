@@ -1,5 +1,6 @@
 import { Result, type Result as ResultValue } from "../contracts/result.js";
 import type Database from "bun:sqlite";
+import { computeClosedSourceFrontier } from "./source-frontier.js";
 
 import { validateServiceEffectContentBlocks } from "../../channels/web/messaging/content-block-safety.js";
 import type { NormalisedTraceInput } from "../contracts/common.js";
@@ -18,6 +19,7 @@ import type {
 import type {
   CommitTerminalRequest,
   TerminalCommit,
+  TerminalDatabaseEffect,
   TerminalSettlementError,
   TerminalSettlementErrorTag,
   TerminalSettlementStore,
@@ -64,7 +66,6 @@ const DISPOSITIONS = new Set<PiclawDisposition>([
   "skipped",
   "superseded",
 ]);
-const CLOSED_SOURCE_STATES = new Set(["consumed", "disposed"]);
 const REQUIRED_SCHEMA = Object.freeze([
   "chats",
   "media",
@@ -152,6 +153,19 @@ export type TerminalSettlementStatement =
   | "link_commit_outbox";
 
 export interface TerminalSettlementAdapterRuntime {
+  /**
+   * Optional host ownership check. Must be synchronous and must not await:
+   * read the host's durable owner/incarnation binding on this same database
+   * connection, not a cached entry check. Called inside BEGIN IMMEDIATE before
+   * and after apply; only exact true permits commit. False, nonboolean results
+   * and throws abort with owner_conflict and roll back all settlement effects.
+   * Existing committed replay is observational and does not call this hook.
+   */
+  validateOwnership?: () => boolean;
+  /** Synchronous shared-database terminal effects. Runs once inside the terminal
+   * transaction, after apply and before the final owner check; replay skips it.
+   * Throwing rolls back ALL writes. No async work or external effects permitted. */
+  applyTerminalEffects?: (commit: Readonly<TerminalCommit>, assertCurrent: (expected: Readonly<TerminalCommit>) => void) => undefined;
   hitFault(
     point: "before_effect" | "effect_then_lost_acknowledgement",
   ): unknown;
@@ -279,6 +293,7 @@ class CurrentPiclawTerminalSettlementStore
 
   async commitTerminal(
     input: CommitTerminalRequest,
+    applyEffect?: TerminalDatabaseEffect,
   ): Promise<ResultValue<TerminalCommit, TerminalSettlementError>> {
     const request = normaliseCommitTerminalRequest(input);
     const effectId = request?.effect.idempotencyKey ?? "invalid";
@@ -338,7 +353,22 @@ class CurrentPiclawTerminalSettlementStore
             if (reconciled.kind === "replay") return reconciled.commit;
             throw new SettlementAbort(reconciled.error);
           }
-          return this.apply(request, resolved.value);
+          this.validateOwnership();
+          const commit = this.apply(request, resolved.value);
+          if (this.runtime.applyTerminalEffects || applyEffect) {
+            let active = true;
+            const assertCurrent = (expected: Readonly<TerminalCommit>) => {
+              if (!active || !this.database.inTransaction) throw new Error("Terminal effect scope ended");
+              if (expected !== commit) throw new Error("Exact terminal effect commit required");
+              this.validateOwnership();
+            };
+            try {
+              if (this.runtime.applyTerminalEffects?.(commit, assertCurrent) !== undefined || applyEffect?.(commit, assertCurrent) !== undefined)
+                throw new SettlementAbort(settlementError("invalid_request", "not_applied", false));
+            } finally { active = false; }
+          }
+          this.validateOwnership();
+          return commit;
         })
         .immediate();
 
@@ -725,20 +755,9 @@ class CurrentPiclawTerminalSettlementStore
   }
 
   private computeFrontier(operation: ClosedOperation): number {
-    let frontier = operation.consumedThroughSourceSeq;
-    while (frontier + 1 < operation.nextSourceSeq) {
-      const row = this.database
-        .query(
-          "SELECT state FROM service_effect_s01_sources WHERE chat_jid=? AND source_seq=?",
-        )
-        .get(operation.chatJid, frontier + 1) as { state?: unknown } | undefined;
-      if (!row || typeof row.state !== "string") {
-        throw new CorruptSettlementState();
-      }
-      if (!CLOSED_SOURCE_STATES.has(row.state)) break;
-      frontier += 1;
-    }
-    return frontier;
+    try {
+      return computeClosedSourceFrontier(this.database, operation.chatJid, operation.consumedThroughSourceSeq, operation.nextSourceSeq);
+    } catch { throw new CorruptSettlementState(); }
   }
 
   private validateOutboxAuthority(
@@ -1251,6 +1270,20 @@ class CurrentPiclawTerminalSettlementStore
       outboxIds,
       committedAt,
     });
+  }
+
+  private validateOwnership(): void {
+    try {
+      if (!this.runtime.validateOwnership) return;
+      const observed: unknown = this.runtime.validateOwnership();
+      if (observed === true) return;
+      // Invalid asynchronous guards must be denied, but their rejections still need an observer.
+      if ((typeof observed === "object" && observed !== null) || typeof observed === "function")
+        void Promise.resolve(observed).then(() => undefined, () => undefined);
+    } catch (error) {
+      void error;
+    }
+    throw new SettlementAbort(settlementError("owner_conflict"));
   }
 
   private afterStatement(statement: TerminalSettlementStatement): void {

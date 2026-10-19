@@ -214,10 +214,15 @@ export interface RetrySettingsProvider {
 
 /** Construction options for creating an AgentPool. */
 export interface AgentPoolOptions {
+  /** Application-owned native slash commands; never constructs a legacy session. */
+  dispatchHostCommand?: (chatJid: string, rawText: string) => Promise<import("../agent-control/agent-control-types.js").AgentControlResult>;
+  /** Select the durable backend for the entire pool. Captured bindings are exhaustive;
+   * even an empty map disables all legacy session construction. No HTTP selection. */
+  dispatchScheduledAgent?: (lease: import("../service-effects/contracts/scheduled-run-store.js").ScheduledRunLease) => Promise<AgentOutput>;
+  dispatchSidePrompt?: (chatJid: string, prompt: string, options: SidePromptOptions) => Promise<SidePromptResult>;
+  getDurableSession?: (chatJid: string) => import("./durable-runtime-adapter.js").DurableSessionPositionPort | undefined;
   createSession?: (chatJid: string, sessionDir: string) => Promise<AgentSessionRuntime>;
-  createSideSession?: (chatJid: string, sessionDir: string) => Promise<AgentSessionRuntime>;
   credentialStore?: PiclawCredentialStore;
   modelRuntime?: ModelRuntime;
   modelRegistry?: import("@earendil-works/pi-coding-agent").ModelRegistry;
-  sideStreamSimple?: ModelRuntime["streamSimple"];
 }

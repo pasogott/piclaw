@@ -71,6 +71,75 @@ function createFacade(overrides: Partial<ConstructorParameters<typeof AgentRunti
   return { facade, pool, warnings, errors, cleared };
 }
 
+test("current model uses captured durable port and rejects unbound chats without legacy fallback", async () => {
+  const port = { sessionId: "session", branchId: "main", readPosition: async () => null,
+    readModel: async () => "persisted/model" };
+  const ports = new Map([["bound", Object.freeze(port)],
+    ["unsupported", Object.freeze({ sessionId: "other", branchId: "main", readPosition: async () => null })]]);
+  const fixture = createFacade({ getDurableSession: chat => ports.get(chat) });
+  expect(await fixture.facade.getCurrentModelLabel("bound")).toBe("persisted/model");
+  await expect(fixture.facade.getCurrentModelLabel("unsupported")).rejects.toThrow("Durable session model unavailable");
+  fixture.pool.set("legacy", { runtime: createRuntime({ model: { provider: "legacy", id: "model" } }), lastUsed: 0 });
+  await expect(fixture.facade.getCurrentModelLabel("legacy")).rejects.toThrow("Durable application does not construct legacy sessions");
+  await expect(fixture.facade.getSessionTreeForChat("unknown")).rejects.toThrow("Durable application does not construct legacy sessions");
+  await expect(fixture.facade.saveSessionPosition("unknown")).rejects.toThrow("Durable application does not construct legacy sessions");
+  const legacy = createFacade();
+  legacy.pool.set("legacy", { runtime: createRuntime({ model: { provider: "legacy", id: "model" } }), lastUsed: 0 });
+  expect(await legacy.facade.getCurrentModelLabel("legacy")).toBe("legacy/model");
+});
+
+test("tree summaries await captured public readers, preserve raw head and reject missing durable bindings", async () => {
+  const snapshot = { version: 1 as const, leafId: "hidden-head", visibleLeafId: "visible", nodes: [], flat: true as const, total: 3 };
+  const port = { sessionId: "generation", branchId: "main", readPosition: async () => "hidden-head",
+    async readTree() { expect(this.sessionId).toBe("generation"); return snapshot; } };
+  const fixture = createFacade({ durableSessions: new Map([["bound", port], ["unsupported", { sessionId: "other", branchId: "main", readPosition: async () => null }]]) });
+  port.readTree = async () => { throw Error("mutated reader"); };
+  expect(await fixture.facade.getSessionTreeSummaryForChat("bound")).toEqual({ leafId: "hidden-head", total: 3 });
+  expect(fixture.facade.getSessionGenerationForChat("bound")).toBe("generation");
+  expect(fixture.facade.getSessionGenerationForChat("unknown")).toBeNull();
+  fixture.pool.set("unknown", { runtime: createRuntime({}), lastUsed: 0 });
+  await expect(fixture.facade.getSessionTreeSummaryForChat("unknown")).rejects.toThrow("Durable application does not construct legacy sessions");
+  await expect(fixture.facade.getSessionTreeSummaryForChat("unsupported")).rejects.toThrow("Durable session tree unavailable");
+  const legacy = createFacade({ getOrCreateRuntime: async () => { throw Error("must not instantiate"); } });
+  expect(await legacy.facade.getSessionTreeSummaryForChat("unknown")).toBeNull();
+  const normal = createFacade();
+  normal.pool.set("legacy", { runtime: createRuntime({ sessionManager: { getLeafId: () => "raw", getTree: () => [], getEntries: () => { throw Error("private entry count forbidden"); } } }), lastUsed: 0 });
+  expect(await normal.facade.getSessionTreeSummaryForChat("legacy")).toEqual({ leafId: "raw", total: 0 });
+});
+
+test("durable context uses the captured persisted model and synchronous physical metadata only", async () => {
+  let label: string | null = "provider/model/with/slash";
+  let window: number | undefined = 12345;
+  let release!: () => void;
+  let hold: Promise<void> = Promise.resolve();
+  const port = { sessionId: "generation", branchId: "main", readPosition: async () => null,
+    readModel: async () => { await hold; return label; } };
+  const ports = new Map([["bound", port], ["missing", { sessionId: "missing", branchId: "main", readPosition: async () => null }]]);
+  const fixture = createFacade({ getDurableSession: chat => ports.get(chat),
+    getOrCreateRuntime: async () => { throw Error("legacy forbidden"); },
+    modelRuntime: { getPhysicalModel: (provider: string, id: string) => {
+      expect(provider).toBe("provider"); expect(id).toBe("model/with/slash");
+      return window === undefined ? undefined : { contextWindow: window };
+    } } as any });
+  const expected = { tokens: null, contextWindow: 12345, percent: null, sessionGeneration: "generation", tokensAreAuthoritative: true };
+  expect(await fixture.facade.getContextUsageForChat("bound")).toEqual(expected);
+  for (window of [0, -1, NaN, Infinity, undefined]) {
+    expect(await fixture.facade.getContextUsageForChat("bound")).toEqual({ ...expected, contextWindow: null });
+  }
+  label = null;
+  expect(await fixture.facade.getContextUsageForChat("bound")).toEqual({ ...expected, contextWindow: null });
+  await expect(fixture.facade.getContextUsageForChat("missing")).rejects.toThrow("Durable model reader unavailable");
+  await expect(fixture.facade.getContextUsageForChat("unknown")).rejects.toThrow("Durable application does not construct legacy sessions");
+  label = "provider/model/with/slash"; window = 54321;
+  hold = new Promise<void>(resolve => { release = resolve; });
+  const pending = fixture.facade.getContextUsageForChat("bound");
+  ports.set("bound", { ...port, sessionId: "replacement" });
+  release();
+  expect(await pending).toEqual({ ...expected, contextWindow: 54321 });
+  ports.set("bound", { ...port, readModel: async () => { throw Error("Stale owner"); } });
+  await expect(fixture.facade.getContextUsageForChat("bound")).rejects.toThrow("Stale owner");
+});
+
 test("AgentRuntimeFacade reports available models and context usage", async () => {
   let refreshCalls = 0;
   const session = {
@@ -132,7 +201,7 @@ test("AgentRuntimeFacade reports available models and context usage", async () =
   ]);
   expect(available.thinking_level).toBe("high");
   expect(available.supports_thinking).toBe(true);
-  expect(fixture.facade.getContextUsageForChat("web:default")).toEqual({
+  expect(await fixture.facade.getContextUsageForChat("web:default")).toEqual({
     tokens: 10,
     contextWindow: 100,
     percent: 10,
@@ -995,7 +1064,6 @@ function createManagedFacade(bindSession: () => Promise<void> = async () => {}) 
   const pool = new Map<string, { runtime: AgentSessionRuntime; lastUsed: number }>();
   const manager = new AgentSessionManager({
     pool,
-    sidePool: new Map(),
     mainSessionMaxSize: 1,
     modelRuntime: {} as any,
     settingsManager: { getDefaultProvider: () => null, getDefaultModel: () => null } as any,
@@ -1070,7 +1138,7 @@ for (const kind of ["extension", "control"] as const) {
           // Do not let getOrCreate's touch or the recent-use grace mask eviction.
           fixture.pool.get("web:held")!.lastUsed = Date.now() - 20_000;
           fixture.pool.set("web:other", { runtime: other, lastUsed: Date.now() - 10_000 });
-          const eviction = { mainIdleTtlMs: policy === "ttl" ? 1 : 60_000, sideIdleTtlMs: 60_000, mainSessionMaxSizeOverride: 1 };
+          const eviction = { mainIdleTtlMs: policy === "ttl" ? 1 : 60_000, mainSessionMaxSizeOverride: 1 };
           fixture.manager.evictIdle(eviction);
           expect(fixture.pool.get("web:held")?.runtime).toBe(runtime);
           expect(fixture.pool.has("web:other")).toBe(false);
@@ -1134,7 +1202,7 @@ for (const kind of ["slash", "control"] as const) {
         await gate.started;
         expect(fixture.manager.hasProtectedRun("web:refresh")).toBe(true);
         fixture.pool.get("web:refresh")!.lastUsed = Date.now() - 10_000;
-        fixture.manager.evictIdle({ mainIdleTtlMs: 1, sideIdleTtlMs: 1, mainSessionMaxSizeOverride: 1 });
+        fixture.manager.evictIdle({ mainIdleTtlMs: 1, mainSessionMaxSizeOverride: 1 });
         expect(fixture.pool.get("web:refresh")?.runtime).toBe(runtime);
         expect(disposed).toBe(0);
         gate.release();
@@ -1142,7 +1210,7 @@ for (const kind of ["slash", "control"] as const) {
         if (fails) expect(outcome.error?.message).toBe("refresh failed");
         else expect(outcome.result?.status).toBe("success");
         expect(fixture.manager.hasProtectedRun("web:refresh")).toBe(false);
-        fixture.manager.evictIdle({ mainIdleTtlMs: 1, sideIdleTtlMs: 1 });
+        fixture.manager.evictIdle({ mainIdleTtlMs: 1 });
         expect(fixture.pool.has("web:refresh")).toBe(false);
         await waitFor(() => disposed === 1);
       } finally {
@@ -1177,4 +1245,117 @@ test('lifetime-bound streaming input refuses unfenced SDK injection', async () =
   expect(await fixture.facade.queueStreamingMessage('web:default', 'peer input', 'steer', { validate: () => { validations++; } })).toEqual({ queued: false });
   expect(prompts).toBe(0);
   expect(validations).toBe(2);
+});
+
+test("durable compact captures one port for the whole command without legacy fallback", async () => {
+  let lookups = 0, compactions = 0, legacyCalls = 0, releases = 0;
+  const port = { sessionId: "captured-generation", branchId: "main", readPosition: async () => null,
+    async compact(instructions?: string) { compactions++; expect(instructions).toBe("keep decisions"); return { compacted: true }; } };
+  const { facade } = createFacade({
+    getDurableSession() { return ++lookups === 1 ? port : undefined; },
+    async getOrCreateRuntime() { legacyCalls++; throw Error("Legacy forbidden"); },
+    acquireCommandProtection() { return () => { releases++; }; },
+  });
+  expect(await facade.applyControlCommand("web:captured", { type: "compact", instructions: " keep decisions " })).toMatchObject({ status: "success", sessionGeneration: "captured-generation" });
+  expect(lookups).toBe(1);
+  expect(compactions).toBe(1);
+  expect(legacyCalls).toBe(0);
+  expect(releases).toBe(1);
+});
+
+test("durable tree command uses its captured port without resolving another generation", async () => {
+  let lookups = 0, reads = 0, legacyCalls = 0;
+  const port = { sessionId: "tree-generation", branchId: "main", readPosition: async () => null,
+    async readTree() { reads++; expect(this.sessionId).toBe("tree-generation"); return { version: 1 as const, leafId: null, nodes: [], flat: true as const, total: 0 }; } };
+  const { facade } = createFacade({ getDurableSession() { return ++lookups === 1 ? port : undefined; },
+    async getOrCreateRuntime() { legacyCalls++; throw Error("Legacy forbidden"); } });
+  expect(await facade.applyControlCommand("web:tree-captured", { type: "tree" })).toMatchObject({ status: "success" });
+  expect(lookups).toBe(1);
+  expect(reads).toBe(1);
+  expect(legacyCalls).toBe(0);
+});
+
+for (const fails of [false, true]) test(`durable model command protects its captured port and releases on ${fails ? 'failure' : 'success'}`, async () => {
+  const events: string[] = [];
+  const fault = Error('model switch denied');
+  const port = { sessionId: 'model-generation', branchId: 'main', readPosition: async () => null,
+    async setModel(model: { provider: string; modelId: string }) {
+      events.push('set'); expect(model).toEqual({ provider: 'synthetic', modelId: 'approved' });
+      if (fails) throw fault;
+    } };
+  let lookups = 0;
+  const { facade } = createFacade({ getDurableSession() { lookups++; return port; },
+    modelRegistry: { getAll: () => [{ provider: 'synthetic', id: 'approved' }] } as any,
+    acquireCommandProtection(chat) { expect(chat).toBe('web:model-protected'); events.push('protect'); return () => { events.push('release'); }; },
+  });
+  const result = facade.applyControlCommand('web:model-protected', { type: 'model', provider: 'synthetic', modelId: 'approved' });
+  if (fails) await expect(result).rejects.toBe(fault);
+  else expect(await result).toMatchObject({ status: 'success', message: 'Model set to synthetic/approved.' });
+  expect(events).toEqual(['protect', 'set', 'release']);
+  expect(lookups).toBe(1);
+});
+
+test('durable model query lists unique available models with persisted selection and no mutation', async () => {
+  let lookups = 0, reads = 0, protection = 0;
+  const { facade } = createFacade({ getDurableSession() { lookups++; return { sessionId: 'query', branchId: 'main', readPosition: async () => null,
+    async readModel() { reads++; return 'z/current'; } }; },
+    modelRegistry: { getAvailable: () => [{ provider: 'z', id: 'current' }, { provider: 'a', id: 'other' }, { provider: 'z', id: 'current' }] } as any,
+    acquireCommandProtection() { protection++; return () => {}; },
+  });
+  expect(await facade.applyControlCommand('web:model-query', { type: 'model', raw: '/model' })).toEqual({ status: 'success', message: 'Available models:\n  a/other\n  z/current (current)' });
+  expect(lookups).toBe(1);
+  expect(reads).toBe(1);
+  expect(protection).toBe(0);
+  expect(await facade.applyControlCommand('web:model-query', { type: 'model', provider: 'z', raw: '/model z/' })).toMatchObject({ status: 'error', message: 'Invalid model format. Use /model <provider>/<modelId>.' });
+});
+
+test('durable model picker reads persisted thinking level without legacy hydration', async () => {
+  const { facade } = createFacade({ durableSessions: new Map([['web:thinking', {
+    sessionId: 'thinking', branchId: 'main', readPosition: async () => null,
+    readModel: async () => 'synthetic/reasoning', readThinkingLevel: async () => 'high',
+  }]]), modelRegistry: { getAvailable: () => [{ provider: 'synthetic', id: 'reasoning', reasoning: true }] } as any });
+  expect(await facade.getAvailableModels('web:thinking', { includeProviderUsage: false, includeProviderDiagnostics: false })).toMatchObject({ current: 'synthetic/reasoning', thinking_level: 'high' });
+});
+
+test('durable thinking query reads persisted level and rejects mutation before reading', async () => {
+  let reads = 0, protections = 0;
+  const { facade } = createFacade({ getDurableSession: () => ({ sessionId: 'thinking-query', branchId: 'main', readPosition: async () => null,
+    readModel: async () => 'synthetic/reasoning', async readThinkingLevel() { reads++; return 'high'; } }),
+    modelRegistry: { getAvailable: () => [{ provider: 'synthetic', id: 'reasoning', reasoning: true }] } as any,
+    acquireCommandProtection() { protections++; return () => {}; },
+  });
+  expect(await facade.applyControlCommand('web:thinking-query', { type: 'thinking', raw: '/thinking' })).toMatchObject({ status: 'success', thinking_level: 'high', thinking_level_label: 'high' });
+  expect(reads).toBe(1);
+  expect(protections).toBe(0);
+  await expect(facade.applyControlCommand('web:thinking-query', { type: 'thinking', level: 'low', raw: '/thinking low' })).rejects.toThrow('Durable thinking mutation unavailable');
+  expect(reads).toBe(1);
+});
+
+test('durable model catalogue query reuses configured model scope', async () => {
+  const previous = process.env.PICLAW_SCOPED_MODELS_ONLY;
+  process.env.PICLAW_SCOPED_MODELS_ONLY = '1';
+  try {
+    const { facade } = createFacade({ durableSessions: new Map([['web:scoped-query', { sessionId: 'scope', branchId: 'main', readPosition: async () => null, readModel: async () => 'synthetic/allowed' }]]),
+      modelRegistry: { getAvailable: () => [{ provider: 'synthetic', id: 'allowed' }, { provider: 'synthetic', id: 'hidden' }] } as any,
+      settingsManager: { getEnabledModels: () => ['synthetic/allowed'] } as any,
+    });
+    expect(await facade.applyControlCommand('web:scoped-query', { type: 'model', raw: '/model' })).toEqual({ status: 'success', message: 'Available models:\n  synthetic/allowed (current)' });
+  } finally {
+    if (previous === undefined) delete process.env.PICLAW_SCOPED_MODELS_ONLY;
+    else process.env.PICLAW_SCOPED_MODELS_ONLY = previous;
+  }
+});
+
+test('durable thinking mutation uses existing protection and preserves provider selection', async () => {
+  const events: string[] = [];
+  const { facade } = createFacade({ durableSessions: new Map([['web:thinking-set', { sessionId: 'set', branchId: 'main', readPosition: async () => null,
+    readModel: async () => 'synthetic/reasoning', readThinkingLevel: async () => 'low',
+    async setThinkingLevel(level) { events.push(level); } }]]),
+    modelRegistry: { getAvailable: () => [{ provider: 'synthetic', id: 'reasoning', reasoning: true }] } as any,
+    acquireCommandProtection() { events.push('protect'); return () => { events.push('release'); }; },
+  });
+  expect(await facade.applyControlCommand('web:thinking-set', { type: 'thinking', level: 'high', raw: '/thinking high' })).toMatchObject({ status: 'success', thinking_level: 'high' });
+  expect(events).toEqual(['protect', 'high', 'release']);
+  expect(await facade.applyControlCommand('web:thinking-set', { type: 'thinking', level: 'invalid', raw: '/thinking invalid' })).toMatchObject({ status: 'error' });
+  expect(events).toEqual(['protect', 'high', 'release']);
 });

@@ -271,31 +271,6 @@ test('native max and restricted target capabilities clamp without erasing prefer
 });
 
 
-test('side-session synchronization retains target effective override separately from session intent', async () => {
-  const { AgentSessionManager } = await import('../../src/agent-pool/session-manager.js');
-  const settings = SettingsManager.inMemory({ defaultThinkingLevel: 'low', modelThinkingLevels: { 'fixture-openai/b': 'medium' } });
-  const main = await fixture({ settings });
-  await main.session.setModel(models[1]);
-  expect(main.session.thinkingLevel).toBe('medium');
-  expect(getSessionThinkingPolicy(main.session)?.preferred_level).toBe('high');
-  let side = (await fixture({ settings })).session;
-  const sideRuntime = { get session() { return side; }, newSession: async ({ setup }: any) => {
-    const sm = SessionManager.inMemory(ws.workspace); await setup(sm);
-    side = (await fixture({ settings, manager: sm })).session;
-    return { cancelled: false };
-  } };
-  const manager = new AgentSessionManager({
-    pool: new Map(), sidePool: new Map(), modelRuntime: main.runtime, settingsManager: settings,
-    createDefaultTools: () => [], bindSession: async () => {}, ensureBranchRegistration: () => {},
-  });
-  await manager.syncSideSessionFromMain(main.session, sideRuntime as any);
-  expect(side.thinkingLevel).toBe('medium');
-  expect(getSessionThinkingPolicy(side)?.preferred_level).toBe('high');
-  await side.setModel(models[2]); expect(side.thinkingLevel).toBe('high');
-  expect(settings.getDefaultThinkingLevel()).toBe('low');
-});
-
-
 test('deferred restore keeps carried effective choice and resumes session preference on next model', async () => {
   const { restoreSessionThinkingPolicy } = await import('../../src/agent-pool/thinking-policy.js');
   const { seedSessionManagerFromDeferredBranchSeed } = await import('../../src/agent-pool/branch-seeding.js');

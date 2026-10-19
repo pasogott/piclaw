@@ -30,7 +30,6 @@ test("createAgentPoolServices wires the extracted helper services together", asy
     const modelServices = await createFactoryModelServices(workspace.base);
     const services = createAgentPoolServices({
       pool: new Map(),
-      sidePool: new Map(),
       activeForkBaseLeafByChat: new Map(),
       ...createServicesOptions(modelServices, workspace.workspace),
     });
@@ -54,10 +53,10 @@ test("createAgentPoolServices scopes attachment registries per pool", async () =
     const modelServices = await createFactoryModelServices(workspace.base);
     const options = createServicesOptions(modelServices, workspace.workspace);
     const first = createAgentPoolServices({
-      pool: new Map(), sidePool: new Map(), activeForkBaseLeafByChat: new Map(), ...options,
+      pool: new Map(), activeForkBaseLeafByChat: new Map(), ...options,
     });
     const second = createAgentPoolServices({
-      pool: new Map(), sidePool: new Map(), activeForkBaseLeafByChat: new Map(), ...options,
+      pool: new Map(), activeForkBaseLeafByChat: new Map(), ...options,
     });
 
     first.attachments.register("web:default", {
@@ -82,7 +81,7 @@ for (const fails of [false, true]) {
     const modelServices = await createFactoryModelServices(workspace.base);
     const pool = new Map<string, { runtime: AgentSessionRuntime; lastUsed: number }>();
     const services = createAgentPoolServices({
-      pool, sidePool: new Map(), activeForkBaseLeafByChat: new Map(),
+      pool, activeForkBaseLeafByChat: new Map(),
       mainSessionMaxSize: 1,
       ...createServicesOptions(modelServices, workspace.workspace),
     });
@@ -113,10 +112,10 @@ for (const fails of [false, true]) {
         runtime: { session: { isStreaming: false }, dispose: async () => {} } as unknown as AgentSessionRuntime,
         lastUsed: Date.now() - 10_000,
       });
-      services.sessionManager.evictIdle({ mainIdleTtlMs: 60_000, sideIdleTtlMs: 60_000 });
+      services.sessionManager.evictIdle({ mainIdleTtlMs: 60_000 });
       expect(pool.get("web:factory-held")?.runtime).toBe(runtime);
       expect(pool.has("web:factory-other")).toBe(false);
-      services.sessionManager.evictIdle({ mainIdleTtlMs: 1, sideIdleTtlMs: 1 });
+      services.sessionManager.evictIdle({ mainIdleTtlMs: 1 });
       expect(pool.get("web:factory-held")?.runtime).toBe(runtime);
       expect(disposed).toBe(0);
       release();
@@ -124,7 +123,7 @@ for (const fails of [false, true]) {
       if (fails) expect(outcome.error?.message).toBe("factory command failed");
       else expect(outcome.result?.status).toBe("success");
       expect(services.sessionManager.hasProtectedRun("web:factory-held")).toBe(false);
-      services.sessionManager.evictIdle({ mainIdleTtlMs: 1, sideIdleTtlMs: 1 });
+      services.sessionManager.evictIdle({ mainIdleTtlMs: 1 });
       expect(pool.has("web:factory-held")).toBe(false);
       await waitFor(() => disposed === 1);
     } finally {

@@ -23,6 +23,7 @@
 
 import { existsSync, mkdirSync, readFileSync, statSync } from "fs";
 import { join } from "path";
+import { captureResidentLegacyUpgradeBindings } from "./agent-pool/legacy-authority-capture.js";
 import {
   type AgentSession,
   type AgentSessionRuntime,
@@ -47,7 +48,6 @@ import {
   type SidePromptOptions,
   type SidePromptResult,
 } from "./agent-pool/contracts.js";
-import { runSidePrompt as runSidePromptInternal } from "./agent-pool/side-prompt-runner.js";
 import { runAgentPrompt } from "./agent-pool/run-agent-orchestrator.js";
 import { runWithProtectedRecoveryHandoff } from "./agent-pool/protected-recovery-handoff.js";
 import { clearCompactionFailureBackoff, resetCompactionSuccessCount } from "./agent-pool/compaction.js";
@@ -58,7 +58,6 @@ import { MemoryReclamationGate } from "./agent-pool/memory-reclamation.js";
 import { type AgentSessionManagerInstrumentationSnapshot, type PoolEntry } from "./agent-pool/session-manager.js";
 import { ownAccountModelDefaults } from './agent-pool/family-model-defaults.js';
 import type { PiclawCredentialStore } from "./agent-pool/credential-store.js";
-import { installLegacySessionAffinityCompatibility } from "./agent-pool/session-affinity-compat.js";
 import {
   type ChatBranchRecord,
   type MergeChatBranchIntoParentResult,
@@ -88,7 +87,7 @@ import {
   extensionKvClear,
   migrateProxmoxPortainerToKv,
 } from "./db.js";
-import { registerExtensionKvStore } from "./extension-kv-registry.js";
+import { registerRootExtensionKvStore } from "./db/register-extension-kv.js";
 import { setSshToolHandlers } from "./extensions/ssh.js";
 import { applyLiveSshConfig, clearLiveSshConfig, hasLiveChatSshConnection, hasLiveChatSshSession, resolveSshCoreConfigFromChatConfig } from "./extensions/ssh-core.js";
 import { getKeychainEntry } from "./secure/keychain.js";
@@ -286,6 +285,11 @@ export function createKnownModelCostResolver(agentDir: string): (provider: strin
  * process-spawn overhead, conversation context already loaded.
  */
 export class AgentPool {
+  assertLegacyCaptureIdle(): void { this.sessionManager.assertLegacyCaptureIdle(); }
+  /** Explicit read-only resident capture; never selects or constructs a session. */
+  captureLegacyUpgradeBindings(options: import("./agent-pool/legacy-authority-capture.js").LegacyCaptureOptions) {
+    return captureResidentLegacyUpgradeBindings(options, this.pool, () => this.sessionManager.assertLegacyCaptureIdle());
+  }
   inspectMcpSettings(policy?: unknown) { return this.mcpSettings.inspect(policy); }
   inspectMcpServers(edit?: unknown) { return this.mcpSettings.inspectServers(edit); }
   applyMcpServers(input: { revision: string; acknowledgeInterruptions: boolean }, authorise: () => void, signal: AbortSignal) {
@@ -296,7 +300,6 @@ export class AgentPool {
   }
   private mcpSettings: AgentPoolServices["mcpSettings"];
   private pool = new Map<string, PoolEntry>();
-  private sidePool = new Map<string, PoolEntry>();
   private activeForkBaseLeafByChat = new Map<string, string | null>();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private shuttingDown = false;
@@ -314,8 +317,6 @@ export class AgentPool {
   private modelRegistry: ModelRegistry;
   private settingsManager = SettingsManager.create(WORKSPACE_DIR, getPiclawAgentDir());
   private logsDir = join(WORKSPACE_DIR, "logs");
-  private createSession?: AgentPoolOptions["createSession"];
-  private createSideSession?: AgentPoolOptions["createSideSession"];
   private bashOperations = createTrackedBashOperations({
     shellPath: () => this.settingsManager.getShellPath(),
   });
@@ -326,19 +327,31 @@ export class AgentPool {
   private sessionManager: AgentPoolServices["sessionManager"];
   private branchManager: AgentPoolServices["branchManager"];
   private runtimeFacade: AgentPoolServices["runtimeFacade"];
-  private sideStreamSimple?: NonNullable<AgentPoolOptions["sideStreamSimple"]>;
+  private readonly sidePromptDispatch?: AgentPoolOptions["dispatchSidePrompt"];
   private readonly config = getSessionPoolConfig();
 
+  private readonly scheduledDispatch: AgentPoolOptions["dispatchScheduledAgent"];
+  private readonly durableApplication: boolean;
+  private readonly durableSessionLookup?: AgentPoolOptions["getDurableSession"];
+  private readonly hostCommandDispatch?: AgentPoolOptions["dispatchHostCommand"];
+  dispatchScheduledAgent(lease: import("./service-effects/contracts/scheduled-run-store.js").ScheduledRunLease): Promise<AgentOutput> | undefined {
+    if (this.scheduledDispatch) return this.scheduledDispatch(lease);
+    if (this.durableApplication) throw new Error("Durable scheduled dispatcher unavailable");
+    return undefined;
+  }
+
   constructor(options: AgentPoolOptions) {
-    this.createSession = options.createSession;
-    this.createSideSession = options.createSideSession;
+    this.hostCommandDispatch = options.dispatchHostCommand?.bind(options);
+    this.scheduledDispatch = options.dispatchScheduledAgent?.bind(options);
+    this.sidePromptDispatch = options.dispatchSidePrompt?.bind(options);
+    this.durableApplication = options.getDurableSession !== undefined;
+    this.durableSessionLookup = options.getDurableSession?.bind(options);
     if (!options.credentialStore || !options.modelRuntime) {
       throw new Error("AgentPool requires shared credentialStore and modelRuntime services");
     }
     this.credentialStore = options.credentialStore;
     this.modelRuntime = options.modelRuntime;
     this.modelRegistry = options.modelRegistry ?? new ModelRegistry(this.modelRuntime);
-    installLegacySessionAffinityCompatibility(this.modelRegistry, (message, details) => log.warn(message, details));
     this.applyRateLimitRetryDefaults();
     ({
       attachments: this.attachments,
@@ -351,7 +364,6 @@ export class AgentPool {
       branchManager: this.branchManager,
     } = createAgentPoolServices({
       pool: this.pool,
-      sidePool: this.sidePool,
       activeForkBaseLeafByChat: this.activeForkBaseLeafByChat,
       authStorage: this.credentialStore,
       modelRuntime: this.modelRuntime,
@@ -360,27 +372,21 @@ export class AgentPool {
       workspaceDir: WORKSPACE_DIR,
       mainSessionMaxSize: this.config.mainSessionPoolMaxSize,
       bashOperations: this.bashOperations,
-      createSession: this.createSession,
-      createSideSession: this.createSideSession,
+      getDurableSession: options.getDurableSession,
+      ...(options.getDurableSession === undefined ? {
+        createSession: options.createSession,
+      } : {}),
       onInfo: (message, details) => log.info(message, details),
       onWarn: (message, details) => log.warn(message, details),
       onError: (message, details) => log.error(message, details),
     }));
-    this.sideStreamSimple = options.sideStreamSimple;
     setSshToolHandlers({
       get: (chatJid) => this.getSshConfig(chatJid),
       isActive: (chatJid) => hasLiveChatSshConnection(chatJid),
       set: (chatJid, config) => this.setSshConfig(chatJid, config),
       clear: (chatJid) => this.clearSshConfig(chatJid),
     });
-    registerExtensionKvStore({
-      get: extensionKvGet,
-      set: extensionKvSet,
-      delete: extensionKvDelete,
-      list: extensionKvList,
-      query: extensionKvQuery,
-      clear: extensionKvClear,
-    });
+    registerRootExtensionKvStore();
     const runtimeInterop = ((globalThis as { __piclawRuntimeInterop?: RuntimeInteropBridge }).__piclawRuntimeInterop ||= {});
     runtimeInterop.getChatJid = getChatJid;
     runtimeInterop.getChatChannel = getChatChannel;
@@ -390,22 +396,15 @@ export class AgentPool {
     runtimeInterop.streamSimple = (model, context, options) => this.modelRuntime.streamSimple(model, context, options);
     const getSessionEntry = (chatJid = getChatJid("")): PoolEntry | undefined => {
       const normalizedChatJid = String(chatJid || "").trim();
-      return normalizedChatJid ? this.pool.get(normalizedChatJid) ?? this.sidePool.get(normalizedChatJid) : undefined;
+      return normalizedChatJid ? this.pool.get(normalizedChatJid) : undefined;
     };
     runtimeInterop.getSessionId = (chatJid) => getSessionEntry(chatJid)?.runtime.session.sessionId ?? null;
     runtimeInterop.getScopedModels = (chatJid) => getSessionEntry(chatJid)?.runtime.session.scopedModels ?? [];
-    runtimeInterop.getExtensionKvStore = () => ({
-      get: extensionKvGet,
-      set: extensionKvSet,
-      delete: extensionKvDelete,
-      list: extensionKvList,
-      clear: extensionKvClear,
-    });
     runtimeInterop.addLogSink = addLogSink;
     runtimeInterop.removeLogSink = removeLogSink;
     runtimeInterop.getKeychainEntry = getKeychainEntry;
     try { migrateProxmoxPortainerToKv(); } catch (e) { void e; /* migration is best-effort */ }
-    mkdirSync(SESSIONS_DIR, { recursive: true });
+    if (options.getDurableSession === undefined) mkdirSync(SESSIONS_DIR, { recursive: true });
     mkdirSync(this.logsDir, { recursive: true });
     const agentLogConfig = getAgentLogConfig();
     startAgentLogCleanup(this.logsDir, agentLogConfig.retentionMs, agentLogConfig.cleanupIntervalMs);
@@ -583,31 +582,9 @@ export class AgentPool {
     if (readAccessConfig().mode !== "single-user") {
       return { status: "error", result: null, thinking: null, error: "Side prompts are unavailable in multi-user mode.", model: null };
     }
-    const parent = getBudgetWorkContext();
-    const budgetWorkId = options.budgetWorkId?.trim() || createUuid("side-prompt");
-    const parentWorkId = options.budgetParentWorkId ?? parent?.workId ?? null;
-    ensureBudgetWork({ id: budgetWorkId, chatJid, executionKind: "side_prompt", parentWorkId });
-    const mainSession = await this.getOrCreate(chatJid);
-    const admission = await admitBudgetBoundary({
-      workId: budgetWorkId,
-      boundary: "side_prompt",
-      prompt,
-      modelRuntime: this.modelRuntime,
-      providerId: mainSession.model?.provider,
-    });
-    if (admission.message) {
-      return { status: "error", result: null, thinking: null, error: admission.message, model: mainSession.model ? `${mainSession.model.provider}/${mainSession.model.id}` : null };
-    }
-    const result = await withBudgetWorkContext({ workId: budgetWorkId, chatJid, kind: "side_prompt", parentWorkId }, () => runSidePromptInternal(chatJid, prompt, options, {
-      getOrCreate: (nextChatJid) => this.getOrCreate(nextChatJid),
-      getOrCreateSideRuntime: (nextChatJid) => this.getOrCreateSideRuntime(nextChatJid),
-      syncSideSessionFromMain: (mainSession, sideRuntime) => this.syncSideSessionFromMain(mainSession, sideRuntime),
-      modelRuntime: this.modelRuntime,
-      sideStreamSimple: this.sideStreamSimple,
-      onWarn: (message, details) => log.warn(message, details),
-    }));
-    if (getBudgetWork(budgetWorkId)?.status === "active") setBudgetWorkStatus(budgetWorkId, "completed");
-    return result;
+    if (!this.sidePromptDispatch) return { status: "error", result: null, thinking: null, model: null, error: "Durable side prompt dispatcher unavailable" };
+    try { return await this.sidePromptDispatch(chatJid, prompt, options); }
+    catch { return { status: "error", result: null, thinking: null, model: null, error: "Native side prompt unavailable or failed" }; }
   }
 
   async probeCompactionModel(modelLabel: string) {
@@ -636,9 +613,10 @@ export class AgentPool {
   /** Return the current context token usage for a chat session, or null if unknown. */
   async getContextUsageForChat(chatJid: string): Promise<{
     tokens: number | null;
-    contextWindow: number;
+    contextWindow: number | null;
     percent: number | null;
     sessionGeneration?: string;
+    tokensAreAuthoritative?: true;
   } | null> {
     return this.runtimeFacade.getContextUsageForChat(chatJid);
   }
@@ -717,7 +695,11 @@ export class AgentPool {
     return this.sessionManager.prewarm(chatJid, options);
   }
 
-  getSessionTreeSummaryForChat(chatJid: string): { leafId: string | null; total: number } | null {
+  getSessionTreeForChat(chatJid: string) {
+    return this.runtimeFacade.getSessionTreeForChat(chatJid);
+  }
+
+  getSessionTreeSummaryForChat(chatJid: string): Promise<{ leafId: string | null; total: number } | null> {
     return this.runtimeFacade.getSessionTreeSummaryForChat(chatJid);
   }
 
@@ -808,6 +790,7 @@ export class AgentPool {
   }
 
   async mergeChatBranchIntoParent(chatJid: string): Promise<MergeChatBranchIntoParentResult> {
+    if (this.durableApplication) throw new Error("Durable branch rollup unavailable");
     return this.branchManager.mergeChatBranchIntoParent(chatJid);
   }
 
@@ -815,6 +798,7 @@ export class AgentPool {
     oldJid: string,
     newJid: string,
   ): Promise<{ oldJid: string; newJid: string; branch: ChatBranchRecord }> {
+    if (this.durableApplication) throw new Error("Durable chat identity rename unavailable");
     return this.branchManager.renameChatJid(oldJid, newJid);
   }
 
@@ -822,6 +806,7 @@ export class AgentPool {
     chatJid: string,
     options: { agentName?: string | null } = {},
   ): Promise<ChatBranchRecord> {
+    if (this.durableApplication) throw new Error("Durable branch restore unavailable");
     return this.branchManager.restoreChatBranch(chatJid, options);
   }
 
@@ -856,11 +841,10 @@ export class AgentPool {
   getMemoryInstrumentationSnapshot(): AgentPoolMemoryInstrumentationSnapshot {
     const sessionResources = collectSessionResourceInstrumentation([
       ...this.pool.values(),
-      ...this.sidePool.values(),
     ]);
     return {
       cachedMainSessions: this.pool.size,
-      cachedSideSessions: this.sidePool.size,
+      cachedSideSessions: 0,
       activeForkBaseLeaves: this.activeForkBaseLeafByChat.size,
       activeChats: this.branchManager.listActiveChats().length,
       sessionResources,
@@ -897,6 +881,11 @@ export class AgentPool {
 
   /** Execute a raw slash command in the AgentSession (extension commands). */
   async applySlashCommand(chatJid: string, rawText: string): Promise<AgentControlResult> {
+    if (this.hostCommandDispatch) {
+      if (readAccessConfig().mode !== "single-user") throw Error("Native slash commands require owned family execution");
+      return this.hostCommandDispatch(chatJid, rawText);
+    }
+    if (this.durableApplication) throw Error("Native slash command unavailable");
     return this.runtimeFacade.applySlashCommand(chatJid, rawText);
   }
 
@@ -936,6 +925,13 @@ export class AgentPool {
   }
 
   /** Return an existing session for read-only introspection, or create one if needed. */
+  async getDurableSessionMetadata(chatJid: string) {
+    if (!this.durableApplication) return undefined;
+    const position = this.durableSessionLookup?.(chatJid);
+    if (!position?.readMetadata) return null;
+    return position.readMetadata();
+  }
+
   async getSessionForIntrospection(chatJid: string): Promise<AgentSession> {
     return this.getOrCreate(chatJid);
   }
@@ -946,28 +942,19 @@ export class AgentPool {
     const runtime = await this.sessionManager.getOrCreate(chatJid);
     const pressure = this.getMemoryPressureMode();
     if (pressure.active && !this.shuttingDown) {
-      const poolSizeBefore = this.pool.size + this.sidePool.size;
+      const poolSizeBefore = this.pool.size;
       this.sessionManager.evictIdle({
         mainIdleTtlMs: pressure.mainIdleTtlMs,
-        sideIdleTtlMs: this.config.sideIdleTtlMs,
         mainSessionMaxSizeOverride: pressure.mainSessionMaxSizeOverride,
         protectedChatJids: [chatJid],
       });
-      if (this.pool.size + this.sidePool.size < poolSizeBefore) this.memoryReclamation.request();
+      if (this.pool.size < poolSizeBefore) this.memoryReclamation.request();
     }
     return runtime;
   }
 
   private async getOrCreate(chatJid: string): Promise<AgentSession> {
     return (await this.getOrCreateRuntime(chatJid)).session;
-  }
-
-  private async getOrCreateSideRuntime(chatJid: string): Promise<AgentSessionRuntime> {
-    return this.sessionManager.getOrCreateSide(chatJid);
-  }
-
-  private async syncSideSessionFromMain(mainSession: AgentSession, sideRuntime: AgentSessionRuntime): Promise<void> {
-    return this.sessionManager.syncSideSessionFromMain(mainSession, sideRuntime);
   }
 
   private getMemoryPressureMode(): { active: boolean; mainIdleTtlMs: number; mainSessionMaxSizeOverride: number | undefined } {
@@ -993,13 +980,12 @@ export class AgentPool {
 
   private evictIdle(): void {
     const pressure = this.getMemoryPressureMode();
-    const poolSizeBefore = this.pool.size + this.sidePool.size;
+    const poolSizeBefore = this.pool.size;
     this.sessionManager.evictIdle({
       mainIdleTtlMs: pressure.mainIdleTtlMs,
-      sideIdleTtlMs: this.config.sideIdleTtlMs,
       mainSessionMaxSizeOverride: pressure.mainSessionMaxSizeOverride,
     });
-    const poolSizeAfter = this.pool.size + this.sidePool.size;
+    const poolSizeAfter = this.pool.size;
     // Coalesce pressure/eviction requests and reclaim only after active runs
     // and asynchronous disposal drain; do not interrupt another chat's work.
     if (this.memoryReclamation.shouldReclaim({
