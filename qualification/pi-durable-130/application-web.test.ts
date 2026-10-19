@@ -122,7 +122,20 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
       return { ref, bytes, byteLength: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), mediaType: "text/plain", redactionClass: "private" as const };
     } } };
   const failed = barrier();
+  const terminalEffects: string[] = [];
+  let settlementRuntime: import("../../runtime/durable-engine/src/host-runtime.js").HostConversationRuntime | undefined;
   const options = { root: db, path, ownership,
+    onRuntime(runtime) { settlementRuntime = runtime; },
+    async prepareTerminalEffect(input) {
+      const receipts = await settlementRuntime!.readSettledUsage(input);
+      expect(receipts!.length).toBeGreaterThan(0);
+      return (commit, scope) => {
+        scope(commit); expect(db.inTransaction).toBe(true);
+        expect(commit.operationId).toBe(input.operationId);
+        terminalEffects.push(commit.operationId);
+        return undefined;
+      };
+    },
     wrapWait: failWait ? wait => async (...args) => { await wait(...args); failed.release(); throw Error("lost wait ACK"); } : undefined,
     ...importedBindings, sessions: new Map(importedBindings.sessions),
     offlineInitialize: true, answers,
@@ -445,6 +458,7 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
       expect(answers).toHaveLength(deferred ? 2 : 1);
       if (deferred) expect(answers[1].content).toContain(compactSucceeds ? "Context compacted" : "did not complete");
       expect(db.query("SELECT operation_id FROM service_effect_s02_commits WHERE chat_jid=?").all(chat)).toEqual([{ operation_id: `message:${row.rowid}:1` }]);
+      expect(terminalEffects.filter(operation => operation === `message:${row.rowid}:1`)).toHaveLength(1);
     }
     expect(await pool.getCurrentModelLabel(chat)).toBe("qualification/synthetic");
     expect(pool.getSessionGenerationForChat(chat)).toBe("preserved-session");

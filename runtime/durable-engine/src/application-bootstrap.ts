@@ -27,7 +27,7 @@ import { assertHostSchema, initializeHostSchema } from "./host-schema.js";
 import { value, effect, sealed } from "./host-effects.js";
 import { hashScheduledLeaseToken } from "../../src/service-effects/current-piclaw/scheduled-run-values.js";
 import type { ScheduledRunLease } from "../../src/service-effects/contracts/scheduled-run-store.js";
-import type { AcceptedInput } from "./host-runtime.js";
+import type { AcceptedInput, RuntimeOptions } from "./host-runtime.js";
 import type { ConversationId } from "@earendil-works/pi-durable";
 
 type Manifest = HostControllerOptions["recovery"]["manifest"];
@@ -67,6 +67,7 @@ export interface ApplicationBootstrapOptions {
   /** Publish the existing runtime before recovery can schedule any provider. */
   onMaintenanceSettled?: (workId: string) => void;
   onOperationSettled?: (operationId: string) => void;
+  prepareTerminalEffect?: RuntimeOptions["prepareTerminalEffect"];
   onRuntime?: (runtime: import("./host-runtime.js").HostConversationRuntime) => void;
   assertConversationAvailable?: () => void;
   /** Host-owned physical catalog approval; no credentials or provider execution. */
@@ -157,7 +158,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     const bindings = createHostDurableBindings(root, { domain: r.incarnation, incarnation: r.incarnation, manifest, getConversationBinding: lookup, assertOwner: assert, resolveContent: content });
     controller = await createHostController({ acquireOwnership: async () => lease,
       createStorage: async () => SqliteStorage.open(candidateDatabase),
-      runtime: { ...r, work, terminal, bindings, onOperationSettled: config.onOperationSettled, onMaintenanceSettled: config.onMaintenanceSettled, putAnswer: config.answers.put.bind(config.answers),
+      runtime: { ...r, work, terminal, bindings, prepareTerminalEffect: config.prepareTerminalEffect, onOperationSettled: config.onOperationSettled, onMaintenanceSettled: config.onMaintenanceSettled, putAnswer: config.answers.put.bind(config.answers),
         cancelSideSource(input) {
           root.transaction(() => {
             assert();
