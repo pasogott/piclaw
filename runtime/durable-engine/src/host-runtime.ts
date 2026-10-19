@@ -657,6 +657,38 @@ export class HostConversationRuntime {
       boundary = index;
     }
     if (boundary < 0) return false;
+    const found = await this.goalTerminalResultInEntries(conversationId, entries, boundary, target);
+    this.fence(); this.assertCapturedSourceCurrent(captured.inputs);
+    return found;
+  }
+  /** Original-submission terminal proof after live generation ownership ends.
+   * Strictly bounded to that input and its exact committed final answer. */
+  hasSettledGoalTerminalResult(input: AcceptedInput,
+    expected: { goalId: string; generation: number; status: "complete" | "stopped" }) {
+    const copy = inputSnapshot(input), target = Object.freeze({ ...expected });
+    return this.observe(async () => {
+      const state = await this.readState(copy);
+      if (!state.answer || state.status?.type !== "input" || state.status.status !== "done") return false;
+      const record = await this.record(copy); this.fence();
+      if (record?.entry === undefined) throw Error("Missing Goal input entry");
+      const conversation = await this.harness.conversation(copy.conversationId, this.context); this.fence();
+      if (!conversation) throw Error("Missing Goal conversation");
+      const entries: import("@earendil-works/pi-durable").EntryRecord[] = [];
+      let cursor: import("@earendil-works/pi-durable").Cursor | undefined;
+      do {
+        const page = await conversation.entries({ order: "ascending", minEntryId: record.entry, maxEntryId: state.status.answer }, 100, cursor, this.context); this.fence();
+        entries.push(...page.items); cursor = page.next;
+      } while (cursor !== undefined);
+      if (entries[0]?.id !== record.entry || entries.at(-1)?.id !== state.status.answer) throw Error("Missing Goal receipt window");
+      if (entries.slice(1).some(entry => entry.kind === "host.accepted")) return false;
+      const found = await this.goalTerminalResultInEntries(copy.conversationId, entries, 0, target);
+      await this.checked(copy); this.fence();
+      return found;
+    });
+  }
+  private async goalTerminalResultInEntries(conversationId: ConversationId,
+    entries: readonly import("@earendil-works/pi-durable").EntryRecord[], boundary: number,
+    target: { goalId: string; generation: number; status: "complete" | "stopped" }) {
     const found = await this.harness.commit(async tx => {
       for (let index = entries.length - 1; index > boundary; index--) {
         const entry = entries[index]!;
@@ -682,7 +714,7 @@ export class HostConversationRuntime {
       }
       return false;
     }, this.context);
-    this.fence(); this.assertCapturedSourceCurrent(captured.inputs);
+    this.fence();
     return found;
   }
   /** Completed generation receipts after this operation's accepted input. This

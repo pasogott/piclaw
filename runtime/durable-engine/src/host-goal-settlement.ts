@@ -28,11 +28,11 @@ export function withGoalSettlementAuthority<T>(root: Database, commit: Readonly<
   return result;
 }
 
-/** Active Goal recovery accounting. Terminal Goal/budget finalization must be
- * separately proven; do not infer permission from current Goal status alone. */
+/** Recovery accounting bound to the original input and committed tool evidence.
+ * Never infer terminal permission from current Goal status alone. */
 export function createHostGoalSettlement(addon: Parameters<typeof accountCommittedGoalBatch>[0], options: {
   root: Database;
-  runtime(): Pick<HostConversationRuntime, "readAcceptedInputText" | "readSettledUsage">;
+  runtime(): Pick<HostConversationRuntime, "readAcceptedInputText" | "readSettledUsage" | "hasSettledGoalTerminalResult">;
   assertOwner(): void;
 }): (input: AcceptedInput) => Promise<TerminalDatabaseEffect | undefined> {
   return async input => {
@@ -44,6 +44,14 @@ export function createHostGoalSettlement(addon: Parameters<typeof accountCommitt
     const identity = addon.goalInputIdentity(text);
     if (identity === null) return undefined;
     if (!identity) throw Error("Invalid accepted Goal identity");
+    const goal = withExtensionKvAuthority({ extensionId: "goal", chatJid: captured.chatJid,
+      assertCurrent: options.assertOwner, write() { throw Error("Goal preparation is read-only"); } }, () => addon.loadThreadGoal(captured.chatJid));
+    let proof: { goalId: string; generation: number; status: "complete" | "stopped" } | undefined;
+    if (goal && (goal.status === "complete" || goal.status === "stopped")) {
+      proof = { goalId: goal.goal_id, generation: goal.lifecycle_generation, status: goal.status };
+      if (identity.goalId !== goal.goal_id || identity.generation + 1 !== goal.lifecycle_generation ||
+        !await runtime.hasSettledGoalTerminalResult(captured, proof)) throw Error("Goal terminal operation proof required");
+    }
     const receipts = await runtime.readSettledUsage(captured);
     options.assertOwner();
     if (!receipts?.length) throw Error("Missing committed Goal usage");
@@ -55,7 +63,7 @@ export function createHostGoalSettlement(addon: Parameters<typeof accountCommitt
       if (commit.operationId !== captured.operationId || commit.disposition !== "completed") throw Error("Exact Goal operation completion required");
       withGoalSettlementAuthority(options.root, commit, scope, authority => {
         if (authority.chatJid !== captured.chatJid) throw Error("Goal settlement chat conflict");
-        accountCommittedGoalBatch(addon, authority, [text], usage);
+        accountCommittedGoalBatch(addon, authority, [text], usage, proof);
       });
       return undefined;
     };
