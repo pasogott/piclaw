@@ -30,6 +30,24 @@ async function createServiceFixture(fileBacked = false) {
 }
 
 describe("queued follow-up lifecycle service", () => {
+  test('input behind deferred control stays queued until normal materialisation', async () => {
+    const { service } = await createServiceFixture();
+    const signal = new AbortController().signal;
+    let admissions = 0;
+    const accept = () => { admissions++; };
+    await service.admitQueuedFollowupItem(['web:default', 0, 'before compact'], () => {}, signal, accept);
+    const compact = service.enqueueQueuedFollowupItem('web:default', 0, '/compact');
+    await service.admitQueuedFollowupItem(['web:default', 0, 'after compact'], () => {}, signal, accept);
+    expect(admissions).toBe(1);
+    const items = service.getQueuedFollowupItems('web:default');
+    expect(items.map(item => item.queuedContent)).toEqual(['before compact', '/compact', 'after compact']);
+    expect(items[0]!.source_accepted).toBe(true);
+    expect(items[2]!.source_accepted).toBeUndefined();
+    service.consumeQueuedFollowupItem('web:default');
+    expect(service.consumeQueuedFollowupItem('web:default')!.rowId).toBe(compact);
+    await service.admitQueuedFollowupItem(['web:default', 0, 'new input'], () => {}, signal, accept);
+    expect(admissions).toBe(2);
+  });
   test("host identity survives file database reopen and queue edits without changing public actions", async () => {
     const { service, db } = await createServiceFixture(true);
     const { QueuedFollowupLifecycleService } = await import("../../../../src/channels/web/runtime/queued-followup-lifecycle-service.js");

@@ -23,7 +23,9 @@ import {
 import { FollowupPlaceholderStore } from "./followup-placeholders.js";
 import { getDb, getDatabaseBinding } from '../../../db/connection.js';
 import { admitSqliteWrite } from '../../../db/sqlite-async-admission.js';
-import { getWorkspaceDir, getStoreDir, getConfigPath } from '../../../core/config.js';
+import { getWorkspaceDir, getStoreDir, getConfigPath, getRoutingConfig } from '../../../core/config.js';
+import { parseControlCommand } from '../../../agent-control/agent-control-parser.js';
+import { DEFERRED_CONTROL_COMMAND_TYPES } from '../../../agent-control/agent-control-types.js';
 import { statSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { createUuid } from '../../../utils/ids.js';
@@ -201,7 +203,16 @@ export class QueuedFollowupLifecycleService {
       previousSeed = this.nextDeferredRowIdByChat.get(args[0]);
       attempted = true;
       const rowId = this.enqueueQueuedFollowupItem(...args);
-      acceptQueuedInputSource(args[0], rowId, database, acceptSource);
+      // A control command ahead of this input must acquire its idle guard first.
+      // Keep later input in the persisted queue; its normal materialisation
+      // atomically admits the source after the control command has settled.
+      const queued = getDeferredQueuedFollowups(args[0]);
+      const index = queued.findIndex(item => item.rowId === rowId);
+      const controlAhead = queued.slice(0, index).some(item => {
+        const command = parseControlCommand(item.queuedContent, getRoutingConfig().triggerPattern);
+        return command && DEFERRED_CONTROL_COMMAND_TYPES.has(command.type);
+      });
+      if (!controlAhead) acceptQueuedInputSource(args[0], rowId, database, acceptSource);
       return rowId;
     }, check, signal, 5000, assertBinding, () => {
       // Queue contents are SQL-backed; only the allocation seed lives in memory.

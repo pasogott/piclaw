@@ -11,6 +11,10 @@
  *   - agent-pool.ts, runtime/message-loop.ts, channels/web.ts use both types.
  */
 
+/** Commands which require idle execution after the preceding turn. */
+export const MODEL_COMMAND_TYPES = new Set(["model", "thinking", "cycle_model", "cycle_thinking"]);
+export const DEFERRED_CONTROL_COMMAND_TYPES = new Set(["compact", ...MODEL_COMMAND_TYPES]);
+
 /** Parsed control command variants accepted by the agent-control subsystem. */
 export type AgentControlCommand =
   | {

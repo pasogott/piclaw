@@ -28,8 +28,8 @@ import type { NewMessage } from "../../../types.js";
 
 const log = createLogger("web.runtime.process-chat-control-runtime");
 
-export const MODEL_COMMAND_TYPES = new Set(["model", "thinking", "cycle_model", "cycle_thinking"]);
-export const DEFERRED_CONTROL_COMMAND_TYPES = new Set(["compact", ...MODEL_COMMAND_TYPES]);
+import { MODEL_COMMAND_TYPES, DEFERRED_CONTROL_COMMAND_TYPES } from "../../../agent-control/agent-control-types.js";
+export { MODEL_COMMAND_TYPES, DEFERRED_CONTROL_COMMAND_TYPES };
 
 export type ModelControlCommand = Extract<AgentControlCommand, { type: "model" | "thinking" | "cycle_model" | "cycle_thinking" }>;
 export type DeferredControlCommand = Extract<AgentControlCommand, { type: "compact" | "model" | "thinking" | "cycle_model" | "cycle_thinking" }>;
