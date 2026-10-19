@@ -83,11 +83,12 @@ test("Goal host adapter fences mutations to committed operation authority", asyn
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
 
-for (const mode of [false, true, "external", "stop", "external-terminal"] as const) test(`actual Goal tool task captures its live accepted operation; rejected=${mode}`, async () => {
+for (const mode of [false, true, "external", "stop", "external-terminal", "stop-accounting", "complete-accounting"] as const) test(`actual Goal tool task captures its live accepted operation; rejected=${mode}`, async () => {
   const rejectRequestAuthority = mode === true;
   const externalLifecycle = mode === "external";
   const externalTerminal = mode === "external-terminal";
-  const stopped = mode === "stop";
+  const stopped = mode === "stop" || mode === "stop-accounting";
+  const accountingOnly = mode === "stop-accounting" || mode === "complete-accounting";
   const terminalStatus = stopped ? "stopped" : "complete";
   const terminalTool = stopped ? "goal_stop" : "goal_complete";
   const sourceRoot = process.env.DURABLE_GOAL_ADDON_ROOT;
@@ -120,6 +121,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal"] as con
   const terminalProofs: boolean[] = [];
   const usageReads: { conversationId: number; entryId: number; tokens: number }[][] = [];
   const usageApplied: number[] = [];
+  let accountFinal: ((receipt: { conversationId: number; entryId: number; tokens: number }) => number) | undefined;
   const { accountCommittedGoalBatch } = await import("../../runtime/durable-engine/src/host-goal-usage.js");
   const { createHostOperationAuthority } = await import("../../runtime/durable-engine/src/host-operation-authority.js");
   const promptExtension = createHostGoalPrompt(addon, { root: f.db, assertOwner: () => f.owner.assert(), runtime: () => ({
@@ -145,7 +147,16 @@ for (const mode of [false, true, "external", "stop", "external-terminal"] as con
       });
       const goal = extensionKvGet("goal", "thread-goal", "chat", f.chatJid) as { goal_id: string; lifecycle_generation: number; status: string } | null;
       if (goal?.status === terminalStatus) {
-        terminalProofs.push(await f.runtime!.hasGoalTerminalResult(conversation, task, { goalId: goal.goal_id, generation: goal.lifecycle_generation, status: terminalStatus }));
+        const proof = { goalId: goal.goal_id, generation: goal.lifecycle_generation, status: terminalStatus } as const;
+        const verified = await f.runtime!.hasGoalTerminalResult(conversation, task, proof);
+        terminalProofs.push(verified);
+        if (verified && (mode === false || accountingOnly)) {
+          const owned = createHostOperationAuthority(f.db, captured, () => f.owner.assert());
+          const authority = { extensionId: "goal", chatJid: f.chatJid, ...owned };
+          const texts = await f.runtime!.readCapturedInputText(captured.inputs);
+          accountCommittedGoalBatch(addon, authority, texts, usageReads.at(-1)!, proof);
+          accountFinal = receipt => accountCommittedGoalBatch(addon, authority, texts, [receipt], proof);
+        }
         terminalProofs.push(await f.runtime!.hasGoalTerminalResult(conversation, task, { goalId: "wrong-goal", generation: goal.lifecycle_generation, status: terminalStatus }));
         terminalProofs.push(await f.runtime!.hasGoalTerminalResult(conversation, task, { goalId: goal.goal_id, generation: goal.lifecycle_generation + 1, status: terminalStatus }));
       }
@@ -220,7 +231,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal"] as con
     }
     if (mode === false) {
       expect(usageApplied).toEqual([1, 0]);
-      expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 3 });
+      expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 9 });
     }
     expect(captures).toBe(2);
     expect(terminalProofs).toEqual([true, false, false, true, false, false]);
@@ -233,6 +244,14 @@ for (const mode of [false, true, "external", "stop", "external-terminal"] as con
     const completedGoal = extensionKvGet("goal", "thread-goal", "chat", f.chatJid) as { goal_id: string; lifecycle_generation: number };
     expect(completedGoal).toMatchObject({ objective: "Live Goal source capture", status: terminalStatus, lifecycle_generation: 2 });
     expect((await f.runtime!.reconcile(input)).answer?.text).toBe("Goal stored");
+    if (accountingOnly) {
+      const final = await f.runtime!.readFinalUsage(input);
+      expect(final).toMatchObject({ tokens: 3 });
+      expect(accountFinal!(final!)).toBe(1);
+      expect(accountFinal!(final!)).toBe(0);
+      expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 12, status: terminalStatus, lifecycle_generation: 2 });
+      return;
+    }
     expect(await f.runtime!.settle(input)).not.toBeNull();
     const laterSource = value(await f.ports.work.acceptSource(sealed({ effect: effect(`${f.incarnation}:later-source`), chatJid: f.chatJid,
       sourceId: "later-goal-input", kind: "message", payloadRef: "later-goal-input", targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));

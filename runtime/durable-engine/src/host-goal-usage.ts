@@ -2,23 +2,29 @@ import { getExtensionKvStore, withExtensionKvAuthority, type ExtensionKvAuthorit
 
 type Goal = { goal_id: string; lifecycle_generation: number; status: string };
 type Cursor = { entryId: number; tokens: number };
+/** Trusted host evidence from hasGoalTerminalResult for this captured operation. */
+type TerminalProof = { goalId: string; generation: number; status: "complete" | "stopped" };
 /** Apply an already-verified committed assistant entry. The SDK reader must feed
  * entries in ascending order after the Goal's start boundary. Not provider events.
  * Cursor and Goal mutation share the caller's operation-owned SQLite transaction. */
 export function accountCommittedGoalEntry(addon: {
   loadThreadGoal(chat: string): Goal | null;
   accountGoalProgress(chat: string, tokens: number): unknown;
+  accountTerminalGoalProgress?(chat: string, expected: { goalId: string; generation: number }, tokens: number): unknown;
 }, authority: ExtensionKvAuthority, entry: {
   goalId: string; generation: number; conversationId: number; entryId: number; tokens: number;
-}): boolean {
+}, terminalProof?: TerminalProof): boolean {
   if (authority.extensionId !== "goal" || !entry.goalId ||
     ![entry.generation, entry.conversationId, entry.entryId].every(value => Number.isSafeInteger(value) && value > 0) ||
     !Number.isSafeInteger(entry.tokens) || entry.tokens < 0) throw Error("Invalid committed Goal usage");
   return authority.write(() => withExtensionKvAuthority(authority, () => {
     authority.assertCurrent();
     const goal = addon.loadThreadGoal(authority.chatJid);
+    const terminal = terminalProof && goal && goal.goal_id === terminalProof.goalId &&
+      goal.lifecycle_generation === terminalProof.generation && goal.status === terminalProof.status &&
+      (terminalProof.status === "complete" || terminalProof.status === "stopped");
     if (!goal || goal.goal_id !== entry.goalId || goal.lifecycle_generation !== entry.generation ||
-      (goal.status !== "active" && goal.status !== "budget_limited")) throw Error("Goal usage lifecycle changed");
+      (terminalProof ? !terminal : goal.status !== "active" && goal.status !== "budget_limited")) throw Error("Goal usage lifecycle changed");
     const store = getExtensionKvStore();
     const key = `committed-usage:${entry.conversationId}`;
     const saved = store.get<Cursor & { goalId: string }>("goal", key, "chat", authority.chatJid);
@@ -30,7 +36,10 @@ export function accountCommittedGoalEntry(addon: {
         return false;
       }
     }
-    addon.accountGoalProgress(authority.chatJid, entry.tokens);
+    if (terminalProof) {
+      if (!addon.accountTerminalGoalProgress) throw Error("Terminal Goal accounting export required");
+      addon.accountTerminalGoalProgress(authority.chatJid, terminalProof, entry.tokens);
+    } else addon.accountGoalProgress(authority.chatJid, entry.tokens);
     store.set("goal", key, { goalId: entry.goalId, entryId: entry.entryId, tokens: entry.tokens }, "chat", authority.chatJid);
     authority.assertCurrent();
     return true;
@@ -43,10 +52,11 @@ export function accountCommittedGoalEntry(addon: {
 export function accountCommittedGoalBatch(addon: {
   loadThreadGoal(chat: string): Goal | null;
   accountGoalProgress(chat: string, tokens: number): unknown;
+  accountTerminalGoalProgress?(chat: string, expected: { goalId: string; generation: number }, tokens: number): unknown;
   goalInputIdentity(text: string): { goalId: string; generation: number } | false | null;
 }, authority: ExtensionKvAuthority, texts: readonly string[], receipts: readonly {
   conversationId: number; entryId: number; tokens: number;
-}[]): number {
+}[], terminalProof?: TerminalProof): number {
   return authority.write(() => withExtensionKvAuthority(authority, () => {
     authority.assertCurrent();
     const identities = texts.map(text => addon.goalInputIdentity(text));
@@ -56,8 +66,12 @@ export function accountCommittedGoalBatch(addon: {
       throw Error("Conflicting accepted Goal identities");
     const goal = addon.loadThreadGoal(authority.chatJid);
     if (!goal || goal.goal_id !== identity.goalId) throw Error("Goal usage lifecycle changed");
+    const terminal = terminalProof && terminalProof.goalId === identity.goalId && terminalProof.generation === identity.generation + 1 &&
+      goal.lifecycle_generation === terminalProof.generation && goal.status === terminalProof.status &&
+      (terminalProof.status === "complete" || terminalProof.status === "stopped");
+    if (terminalProof && !terminal) throw Error("Goal usage lifecycle changed");
     const replayOnly = goal.status === "budget_limited" && goal.lifecycle_generation === identity.generation + 1;
-    if (!replayOnly && (goal.lifecycle_generation !== identity.generation || goal.status !== "active"))
+    if (!terminal && !replayOnly && (goal.lifecycle_generation !== identity.generation || goal.status !== "active"))
       throw Error("Goal usage lifecycle changed");
     let previous = 0, conversation: number | undefined, applied = 0;
     for (const receipt of receipts) {
@@ -74,7 +88,7 @@ export function accountCommittedGoalBatch(addon: {
       }
       if (cursor?.goalId === goal.goal_id && receipt.entryId < cursor.entryId) continue;
       const current = addon.loadThreadGoal(authority.chatJid)!;
-      if (accountCommittedGoalEntry(addon, authority, { ...receipt, goalId: goal.goal_id, generation: current.lifecycle_generation })) {
+      if (accountCommittedGoalEntry(addon, authority, { ...receipt, goalId: goal.goal_id, generation: current.lifecycle_generation }, terminalProof)) {
         applied++;
         getExtensionKvStore().set("goal", `committed-usage:${receipt.conversationId}`,
           { goalId: goal.goal_id, entryId: receipt.entryId, tokens: receipt.tokens, acceptedGeneration: identity.generation }, "chat", authority.chatJid);

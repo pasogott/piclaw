@@ -78,16 +78,24 @@ test("committed Goal usage and cursor are atomic, replay safe and lifecycle scop
       const tool = addon.createGoalTools(() => authority.chatJid).find((tool: { name: string }) => tool.name === toolName)!;
       await scoped(() => tool.execute("terminal-policy", { reason: "other", summary: "Verified terminal policy", evidence: ["fixture"] }, undefined, undefined, {}));
       const terminal = load();
+      const terminalText = `<piclaw_goal_input>${JSON.stringify({ goalId: terminal.goal_id, generation: terminal.lifecycle_generation - 1 })}</piclaw_goal_input>`;
+      const proof = { goalId: terminal.goal_id, generation: terminal.lifecycle_generation, status: terminal.status };
+      const terminalReceipt = [{ conversationId: 2, entryId: 50, tokens: 2 }];
+      expect(() => accountCommittedGoalBatch(addon, authority, [terminalText], terminalReceipt)).toThrow("lifecycle changed");
+      expect(() => accountCommittedGoalBatch(addon, authority, [terminalText], terminalReceipt, { ...proof, goalId: "foreign" })).toThrow("lifecycle changed");
+      expect(accountCommittedGoalBatch(addon, authority, [terminalText], terminalReceipt, proof)).toBe(1);
+      expect(accountCommittedGoalBatch(addon, authority, [terminalText], terminalReceipt, proof)).toBe(0);
+      expect(load()).toMatchObject({ tokens_used: 2, status: terminal.status, lifecycle_generation: terminal.lifecycle_generation });
       const expected = { goalId: terminal.goal_id, generation: terminal.lifecycle_generation };
       scoped(() => addon.accountTerminalGoalProgress(authority.chatJid, expected, 7));
-      expect(load()).toMatchObject({ status: terminal.status, lifecycle_generation: terminal.lifecycle_generation, tokens_used: 7,
+      expect(load()).toMatchObject({ status: terminal.status, lifecycle_generation: terminal.lifecycle_generation, tokens_used: 9,
         completion_summary: terminal.completion_summary, stop_summary: terminal.stop_summary });
       expect(() => scoped(() => addon.accountTerminalGoalProgress(authority.chatJid, { ...expected, generation: expected.generation + 1 }, 2))).toThrow("lifecycle changed");
       expect(() => scoped(() => addon.accountTerminalGoalProgress(authority.chatJid, expected, -1))).toThrow("Invalid terminal");
       expect(() => scoped(() => authority.write(() => { addon.accountTerminalGoalProgress(authority.chatJid, expected, 2); throw Error("terminal rollback"); }))).toThrow("terminal rollback");
-      expect(load().tokens_used).toBe(7);
+      expect(load().tokens_used).toBe(9);
       scoped(() => addon.accountGoalProgress(authority.chatJid, 3));
-      expect(load().tokens_used).toBe(7); // Legacy callers still ignore terminal Goals.
+      expect(load().tokens_used).toBe(9); // Legacy callers still ignore terminal Goals.
     }
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
