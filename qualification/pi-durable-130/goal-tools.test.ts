@@ -120,11 +120,13 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
   const stream = (_model: unknown, transcript: { messages: { role: string }[] }) => {
     modelEntries++;
     prompts.push(JSON.stringify(transcript.messages));
-    const calling = !transcript.messages.some(message => message.role === "toolResult");
+    const toolTurns = transcript.messages.filter(message => message.role === "toolResult").length;
+    const calling = toolTurns < 2;
     const output = createAssistantMessageEventStream();
     const message = { role: "assistant" as const, api: model.api, provider: model.provider, model: model.id, timestamp: 1,
       stopReason: calling ? "toolUse" as const : "stop" as const, content: calling
-        ? [{ type: "toolCall" as const, id: "native-goal-call", name: "create_goal", arguments: { objective: "Live Goal source capture" } }]
+        ? [{ type: "toolCall" as const, id: `native-goal-call-${toolTurns}`, name: toolTurns === 0 ? "create_goal" : "goal_complete",
+          arguments: (toolTurns === 0 ? { objective: "Live Goal source capture" } : { summary: "Verified live transition", evidence: ["native accepted operation tool task"] }) as Record<string, string | string[]> }]
         : [{ type: "text" as const, text: "Goal stored" }],
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
     output.push({ type: "done", reason: message.stopReason, message }); output.end(message); return output;
@@ -153,12 +155,14 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
       expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toBeNull();
       return;
     }
-    expect(captures).toBe(1);
-    expect(prompts).toHaveLength(2);
+    expect(captures).toBe(2);
+    expect(prompts).toHaveLength(3);
     expect(prompts[0]).not.toContain("<objective>");
     expect(prompts[1]).toContain("Live Goal source capture");
     expect(prompts[1]).toContain("Active Goal");
-    expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ objective: "Live Goal source capture", status: "active" });
+    expect(prompts[2]).not.toContain("<objective>");
+    const completedGoal = extensionKvGet("goal", "thread-goal", "chat", f.chatJid) as { goal_id: string; lifecycle_generation: number };
+    expect(completedGoal).toMatchObject({ objective: "Live Goal source capture", status: "complete", lifecycle_generation: 2 });
     expect((await f.runtime!.reconcile(input)).answer?.text).toBe("Goal stored");
     await f.runtime!.close(); f.runtime = undefined;
     const reader = await Harness.open(await SqliteStorage.open(new OwnedSqlite(f.owner)), { models: f.base.models, registry: f.base.registry }, context);
@@ -166,6 +170,12 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
       const conversation = (await reader.conversation(f.base.root.id, context))!;
       const entries = await conversation.entries({ order: "ascending" }, 100, undefined, context);
       expect(JSON.stringify(entries.items)).not.toContain("Active Goal");
+      const results = entries.items.filter(entry => entry.kind === "pi.tool-result");
+      expect(results).toHaveLength(2);
+      const committed = results.at(-1)!.model as unknown as readonly { toolCallId: string; toolName: string; isError: boolean; details: { goal: unknown } }[];
+      expect(committed).toHaveLength(1);
+      expect(committed[0]).toMatchObject({ toolCallId: "native-goal-call-1", toolName: "goal_complete", isError: false,
+        details: { goal: { goalId: completedGoal.goal_id, lifecycleGeneration: completedGoal.lifecycle_generation, status: "complete", completionSummary: "Verified live transition" } } });
     } finally { await reader.close(context); }
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); await f.close(); await rm(dir, { recursive: true, force: true }); }
 });
