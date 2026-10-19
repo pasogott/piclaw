@@ -36,3 +36,40 @@ export function accountCommittedGoalEntry(addon: {
     return true;
   }));
 }
+
+/** Bind a read-only SDK receipt batch to a validated accepted Goal input. The
+ * caller obtains both texts and receipts from the same captured host operation.
+ * No awaits between lifecycle validation, cursor reads and atomic application. */
+export function accountCommittedGoalBatch(addon: {
+  loadThreadGoal(chat: string): Goal | null;
+  accountGoalProgress(chat: string, tokens: number): unknown;
+  goalInputIdentity(text: string): { goalId: string; generation: number } | false | null;
+}, authority: ExtensionKvAuthority, texts: readonly string[], receipts: readonly {
+  conversationId: number; entryId: number; tokens: number;
+}[]): number {
+  return authority.write(() => withExtensionKvAuthority(authority, () => {
+    authority.assertCurrent();
+    const identities = texts.map(text => addon.goalInputIdentity(text));
+    if (!identities.length || identities.some(identity => !identity)) throw Error("Explicit accepted Goal identity required");
+    const identity = identities[0]!;
+    if (!identity || identities.some(other => !other || other.goalId !== identity.goalId || other.generation !== identity.generation))
+      throw Error("Conflicting accepted Goal identities");
+    const goal = addon.loadThreadGoal(authority.chatJid);
+    if (!goal || goal.goal_id !== identity.goalId || goal.lifecycle_generation !== identity.generation || goal.status !== "active")
+      throw Error("Goal usage lifecycle changed");
+    let previous = 0, conversation: number | undefined, applied = 0;
+    for (const receipt of receipts) {
+      if (![receipt.entryId, receipt.conversationId].every(value => Number.isSafeInteger(value) && value > 0) ||
+        !Number.isSafeInteger(receipt.tokens) || receipt.tokens < 0) throw Error("Invalid committed Goal usage");
+      if (receipt.entryId <= previous || (conversation !== undefined && receipt.conversationId !== conversation))
+        throw Error("Goal usage batch out of order");
+      previous = receipt.entryId; conversation = receipt.conversationId;
+      const cursor = getExtensionKvStore().get<Cursor & { goalId: string }>("goal", `committed-usage:${receipt.conversationId}`, "chat", authority.chatJid);
+      if (cursor?.goalId === goal.goal_id && receipt.entryId < cursor.entryId) continue;
+      const current = addon.loadThreadGoal(authority.chatJid)!;
+      if (accountCommittedGoalEntry(addon, authority, { ...receipt, goalId: goal.goal_id, generation: current.lifecycle_generation })) applied++;
+    }
+    authority.assertCurrent();
+    return applied;
+  }));
+}

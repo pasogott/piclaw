@@ -119,11 +119,21 @@ for (const mode of [false, true, "external", "stop", "external-terminal"] as con
   let requestFenced = false, modelEntries = 0;
   const terminalProofs: boolean[] = [];
   const usageReads: { conversationId: number; entryId: number; tokens: number }[][] = [];
+  const usageApplied: number[] = [];
+  const { accountCommittedGoalBatch } = await import("../../runtime/durable-engine/src/host-goal-usage.js");
+  const { createHostOperationAuthority } = await import("../../runtime/durable-engine/src/host-operation-authority.js");
   const promptExtension = createHostGoalPrompt(addon, { root: f.db, assertOwner: () => f.owner.assert(), runtime: () => ({
     async captureRunSource(conversation, task) {
       if (rejectRequestAuthority) throw Error("synthetic Goal request authority revoked");
       const captured = await f.runtime!.captureRunSource(conversation, task);
       usageReads.push(await f.runtime!.readCommittedRunUsage(conversation, task));
+      if (mode === false && usageReads.length === 2) {
+        const owned = createHostOperationAuthority(f.db, captured, () => f.owner.assert());
+        const authority = { extensionId: "goal", chatJid: f.chatJid, ...owned };
+        const texts = await f.runtime!.readCapturedInputText(captured.inputs);
+        usageApplied.push(accountCommittedGoalBatch(addon, authority, texts, usageReads.at(-1)!));
+        usageApplied.push(accountCommittedGoalBatch(addon, authority, texts, usageReads.at(-1)!));
+      }
       if (externalLifecycle) withExtensionKvAuthority({ extensionId: "goal", chatJid: f.chatJid, assertCurrent() {},
         write<T>(body: () => T) { return f.db.transaction(body).immediate(); } }, () => {
         addon.clearThreadGoal(f.chatJid); addon.createThreadGoal(f.chatJid, "Externally replaced Goal");
@@ -207,6 +217,10 @@ for (const mode of [false, true, "external", "stop", "external-terminal"] as con
       expect(captures).toBe(0);
       expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toBeNull();
       return;
+    }
+    if (mode === false) {
+      expect(usageApplied).toEqual([1, 0]);
+      expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 3 });
     }
     expect(captures).toBe(2);
     expect(terminalProofs).toEqual([true, false, false, true, false, false]);

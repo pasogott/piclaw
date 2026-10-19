@@ -6,7 +6,7 @@ import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connect
 import { registerRootExtensionKvStore } from "../../runtime/src/db/register-extension-kv.js";
 import { extensionKvGet } from "../../runtime/src/db/extension-kv.js";
 import { withExtensionKvAuthority, requireExtensionKvAuthority, resetExtensionKvStoreForTests } from "../../runtime/src/extension-kv-registry.js";
-import { accountCommittedGoalEntry } from "../../runtime/durable-engine/src/host-goal-usage.js";
+import { accountCommittedGoalEntry, accountCommittedGoalBatch } from "../../runtime/durable-engine/src/host-goal-usage.js";
 
 test("committed Goal usage and cursor are atomic, replay safe and lifecycle scoped", async () => {
   const source = process.env.DURABLE_GOAL_ADDON_ROOT;
@@ -45,5 +45,16 @@ test("committed Goal usage and cursor are atomic, replay safe and lifecycle scop
     expect(() => accountCommittedGoalEntry(addon, authority, { ...entry, generation: 2, entryId: 14 })).toThrow("lifecycle changed");
     expect(accountCommittedGoalEntry(addon, authority, { ...entry, goalId: load().goal_id, entryId: 20, tokens: 1 })).toBe(true);
     expect(load().tokens_used).toBe(1);
+    const text = scoped(() => addon.prepareGoalInput("🎯 Continue goal: Replacement", authority.chatJid)).decision.text;
+    const receipts = [{ conversationId: 1, entryId: 20, tokens: 1 }, { conversationId: 1, entryId: 21, tokens: 2 }];
+    expect(accountCommittedGoalBatch(addon, authority, [text], receipts)).toBe(1);
+    expect(load().tokens_used).toBe(3);
+    expect(accountCommittedGoalBatch(addon, authority, [text], receipts)).toBe(0);
+    expect(load().tokens_used).toBe(3);
+    expect(() => accountCommittedGoalBatch(addon, authority, ["ordinary input"], receipts)).toThrow("Explicit accepted");
+    expect(() => accountCommittedGoalBatch(addon, authority, [text], [...receipts, { conversationId: 1, entryId: 22, tokens: 2 }, { conversationId: 1, entryId: 23, tokens: -1 }])).toThrow("Invalid committed");
+    expect(load().tokens_used).toBe(3);
+    expect(extensionKvGet("goal", "committed-usage:1", "chat", authority.chatJid)).toMatchObject({ entryId: 21 });
+    expect(() => accountCommittedGoalBatch(addon, authority, [text], [...receipts].reverse())).toThrow("out of order");
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
