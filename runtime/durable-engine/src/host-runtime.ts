@@ -1086,7 +1086,7 @@ export class HostConversationRuntime {
           if (entry.byTaskId === undefined || entry.model?.length !== 1 || entry.model[0]?.role !== "toolResult") throw Error("Invalid committed tool result");
           const message = entry.model[0];
           const tool = await tx.task(entry.byTaskId);
-          if (tool?.kind !== "pi.tool" || tool.conversationId !== copy.conversationId || tool.owner === undefined || tool.state.status !== "terminal" || tool.state.outcome.status !== "completed") throw Error("Invalid committed tool task");
+          if (tool?.kind !== "pi.tool" || tool.conversationId !== copy.conversationId || tool.owner === undefined || tool.state.status !== "terminal" || !["completed", "failed"].includes(tool.state.outcome.status)) throw Error("Invalid committed tool task");
           const input = tool.input as { kind?: string; assistant?: number; callId?: string };
           const outcome = tool.state.outcome.result as { kind?: string; entryId?: number };
           if (input.kind !== "model" || input.callId !== message.toolCallId || outcome.kind !== "model" || outcome.entryId !== entry.id) throw Error("Invalid committed tool receipt");

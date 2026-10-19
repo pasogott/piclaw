@@ -33,6 +33,7 @@ for (const mode of ["approved", "tamper", "shadow", "execute", "command", "comma
     expect(typeof qualified!.addon.accountGoalProgress).toBe("function");
     expect(typeof qualified!.addon.accountTerminalGoalProgress).toBe("function");
     expect(() => assertApplicationExtensionCatalogSupported(catalog!)).toThrow("no operation-owned host effect port");
+    assertApplicationExtensionCatalogSupported(catalog!, undefined, undefined, undefined, undefined, undefined, undefined, qualified);
     const extension = qualified!.extension;
     if (mode === "execute") extension.tools.get("goal_stop")!.definition.execute = async () => { throw Error("substituted"); };
     if (mode === "command") extension.commands.delete("goal");

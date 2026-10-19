@@ -24,7 +24,7 @@ import { createHostMcp } from "./host-mcp.js";
 import { createHostFetch } from "./host-fetch.js";
 import { taskModelRequestScope, withTaskModelRequestScope } from "./task-model-boundary-shim.js";
 import { createHostBuiltinTools } from "./host-builtins.js";
-import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, qualifyInstalledEditableTable, qualifyInstalledOfficeViewer, qualifyInstalledDrawio, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
+import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, qualifyInstalledEditableTable, qualifyInstalledOfficeViewer, qualifyInstalledDrawio, qualifyInstalledGoal, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
 import { createHostDelegateTool } from "./host-delegate-tool.js";
 import { createHostDelegateFileReader } from "./host-delegate-files.js";
 import { extensionKvGet } from "../../src/db/extension-kv.js";
@@ -35,6 +35,14 @@ import { createHostEditableTableTool, type WidgetPublisher } from "./host-editab
 import { createHostOfficeViewerTool } from "./host-office-viewer-tool.js";
 import { createHostDrawioTool, type WorkspaceFileOpener, type DrawioNativeExports } from "./host-drawio-tool.js";
 import { createHostPlanPrompt } from "./host-plan-prompt.js";
+import { createHostGoalTools } from "./host-goal-tools.js";
+import { createHostGoalPrompt } from "./host-goal-prompt.js";
+import { createHostGoalTerminalFence } from "./host-goal-terminal.js";
+import { createHostGoalInput } from "./host-goal-input.js";
+import { createHostGoalSettlement } from "./host-goal-settlement.js";
+import { createHostGoalProgressReader } from "./host-goal-progress.js";
+import { createHostGoalPlanReader } from "./host-goal-plan.js";
+import { createHostGoalCommand } from "./host-goal-command.js";
 import type { HostConversationRuntime } from "./host-runtime.js";
 import { readAccessConfig } from "../../src/core/config-access.js";
 import { registerRootExtensionKvStore } from "../../src/db/register-extension-kv.js";
@@ -198,10 +206,11 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const codeReview = await qualifyInstalledCodeReview(catalog, WORKSPACE_DIR);
   const editableTable = await qualifyInstalledEditableTable(catalog, WORKSPACE_DIR);
   const officeViewer = qualifyInstalledOfficeViewer(catalog, WORKSPACE_DIR);
-  const drawio = await qualifyInstalledDrawio(catalog, WORKSPACE_DIR);
+  const drawio = await qualifyInstalledDrawio(catalog, WORKSPACE_DIR), goal = await qualifyInstalledGoal(catalog, WORKSPACE_DIR);
   let workspaceFileOpener: WorkspaceFileOpener | undefined;
   let widgetPublisher: WidgetPublisher | undefined;
-  try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan, delegate, codeReview, editableTable, officeViewer, drawio); }
+  try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan, delegate, codeReview, editableTable, officeViewer, drawio, goal);
+    if (goal && !plan) throw Error("Native Goal requires qualified Plan"); }
   finally { catalog.runtime.invalidate("Application extension preflight ended"); }
   let mcp: Awaited<ReturnType<typeof createHostMcp>> | undefined;
   let captureRuntime: HostConversationRuntime | undefined;
@@ -219,7 +228,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     return () => { authority.assertCurrent(); if (captured.delegateModel) assertDelegateModel(captured.delegateModel); };
   };
   let assertDelegateModel: (model: { provider: string; modelId: string }) => void = () => { throw Error("Delegate unavailable"); };
-  const baseApplicationToolNames: readonly string[] = [...defaultToolNames, "codemode", ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : []), ...(drawio ? ["open_drawio_editor"] : [])];
+  const baseApplicationToolNames: readonly string[] = [...defaultToolNames, "codemode", ...(goal ? ["get_goal", "create_goal", "goal_complete", "goal_stop", "update_goal"] : []), ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : []), ...(drawio ? ["open_drawio_editor"] : [])];
   const previousDefault = baseApplicationToolNames.filter(name => name !== "codemode");
   const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || (Array.isArray(tools) &&
     ((tools.length === defaultToolNames.length && defaultToolNames.every((name, index) => tools[index] === name)) ||
@@ -351,6 +360,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const registry = createRegistry();
   // Preserve old persisted extension names without depending on their hook selection.
   registry.install(defineExtension({ name: "app.host-scheduled-source" }));
+  const assertGoal = () => { assert(); lifetime.signal.throwIfAborted(); goal?.assertCurrent(); };
   const tools = createHostBuiltinTools({ cwd: WORKSPACE_DIR,
     captureSourceGuard: captureSource,
     authority: { assertAllowed() {
@@ -363,6 +373,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     return () => { source(); if (readAccessConfig().mode !== "single-user") throw Error("Host fetch permission denied"); };
   } }));
   tools.push(...mcp.tools);
+  if (goal) tools.push(...createHostGoalTools(goal.addon.createGoalTools, { root, runtime, assertOwner: assertGoal }));
   if (plan) tools.push(createHostPlanTool(plan.definition as Parameters<typeof createHostPlanTool>[0], { root, assertOwner: () => {
     assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent();
   }, runtime }));
@@ -425,6 +436,10 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   registry.install(defineExtension({ name: "app.host-builtins", tools }));
   if (plan) registry.install(createHostPlanPrompt(plan.addon, { root, runtime,
     assertOwner() { assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent(); }, failClosed(error) { lifetime.abort(error); } }));
+  if (goal) {
+    registry.install(createHostGoalPrompt(goal.addon, { root, runtime, assertOwner: assertGoal, failClosed(error) { lifetime.abort(error); } }));
+    registry.install(createHostGoalTerminalFence(goal.addon, { root, runtime, assertOwner: assertGoal }));
+  }
   const harnessOptions = { models, registry: withTaskModelRequestScope(registry), settings: { retry: { enabled: false } } };
   const path = (root.query("PRAGMA database_list").all() as { name: string; file: string }[]).find(row => row.name === "main")?.file;
   if (!path) throw Error("Durable default requires a file-backed application database");
@@ -530,10 +545,19 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     const bytes = new Uint8Array(readFileSync(file));
     return { ref, bytes, byteLength: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), mediaType: "text/plain", redactionClass: "private" as const };
   } } };
-  const bundle = await createApplicationBootstrapBundle({ root, path, ownership, offlineInitialize: true, answers,
+      let bundle: Awaited<ReturnType<typeof createApplicationBootstrapBundle>>;
+      const goalAdmission = (chat: string) => { assertGoal(); if (!mapping.bindings.some(binding => binding.chatJid === chat)) throw Error("Unbound Goal chat"); };
+      const goalInput = goal ? createHostGoalInput(goal.addon, goalAdmission) : undefined;
+      const goalCommand = goal ? createHostGoalCommand(goal.addon, { root, assertAdmission: goalAdmission, admit: input => bundle.admitHostFollowup(input) }) : undefined;
+      const goalSettlement = goal ? createHostGoalSettlement(goal.addon, { root, runtime, assertOwner: assertGoal, continuation: {
+        addon: goal.addon, prepare: createHostGoalProgressReader(goal.addon, { runtime, assertOwner: assertGoal }),
+        readPlan: createHostGoalPlanReader(root, plan!.addon, goal.addon), admit: input => bundle.admitHostFollowup(input, true),
+      } }) : undefined;
+      bundle = await createApplicationBootstrapBundle({ root, path, ownership, offlineInitialize: true, answers,
     onMaintenanceSettled(workId) { assert(); completeMaintenanceBudgetWork(root, workId); },
     onOperationSettled(operationId) { assert(); reconcileOperationBudgetWork(root, operationId); },
     onRuntime(value) { captureRuntime = value; },
+        prepareInputText: goalInput, prepareTerminalEffect: goalSettlement, dispatchHostCommand: goalCommand,
     observeSidePrompt(sourceId, observer) {
       assert();
       if (sideObservers.has(sourceId)) throw Error("Side prompt observer already registered");

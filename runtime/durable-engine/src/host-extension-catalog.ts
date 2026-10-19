@@ -163,7 +163,15 @@ function qualifyInstalled(catalog: LoadExtensionsResult, cwd: string, kind: Prof
   assertCurrent();
   return Object.freeze({ extension, source, definition: definition!, assertCurrent });
 }
-/** Source qualification only: Goal lifecycle/commands remain denied by application admission. */
+export type GoalNativeExports = Parameters<typeof import("./host-goal-input.js").createHostGoalInput>[0]
+  & Parameters<typeof import("./host-goal-prompt.js").createHostGoalPrompt>[0]
+  & Parameters<typeof import("./host-goal-settlement.js").createHostGoalSettlement>[0]
+  & Parameters<typeof import("./host-goal-plan.js").createHostGoalPlanReader>[2]
+  & Parameters<typeof import("./host-goal-command.js").createHostGoalCommand>[0]
+  & Parameters<typeof import("./host-goal-progress.js").createHostGoalProgressReader>[0]
+  & NonNullable<Parameters<typeof import("./host-goal-settlement.js").createHostGoalSettlement>[1]["continuation"]>["addon"]
+  & { createGoalTools: Parameters<typeof import("./host-goal-tools.js").createHostGoalTools>[0]; decideGoalPlanProgress: (...args: any[]) => unknown };
+/** Exact source and declaration qualification; application installs native lifecycle. */
 export async function qualifyInstalledGoal(catalog: LoadExtensionsResult, cwd: string) {
   const qualified = qualifyInstalled(catalog, cwd, "goal");
   if (!qualified) return undefined;
@@ -171,7 +179,7 @@ export async function qualifyInstalledGoal(catalog: LoadExtensionsResult, cwd: s
   const names = ["createGoalTools", "loadThreadGoal", "buildGoalSystemPrompt", "prepareGoalInput", "goalInputIdentity", "resolveGoalInput", "accountGoalProgress", "accountTerminalGoalProgress", "shouldContinueGoalAfterMessage", "decideGoalPlanProgress", "applyGoalPlanProgress", "summarizeGoalPlan", "isGoalProgressTool", "applyGoalCommand"] as const;
   qualified.assertCurrent();
   if (names.some(name => typeof exports[name] !== "function")) throw Error("Goal public native exports required");
-  const addon = Object.freeze(Object.fromEntries(names.map(name => [name, exports[name]])));
+  const addon = Object.freeze(Object.fromEntries(names.map(name => [name, exports[name]]))) as unknown as GoalNativeExports;
   // The native collector must expose the same declarations as this exact loaded
   // registration. Collecting tools does not execute them or run legacy hooks.
   const native = addon.createGoalTools(() => { throw Error("Invocation-local Goal scope required"); }) as ToolDefinition[];
@@ -313,11 +321,12 @@ export async function loadApplicationExtensionCatalog(options: {
  * hooks through a fabricated AgentSession context. Keep all diagnostics so a
  * successful startup can never silently mean missing installed capabilities.
  */
-export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensionsResult, plan?: Awaited<ReturnType<typeof qualifyInstalledPlan>>, delegate?: Awaited<ReturnType<typeof qualifyInstalledDelegate>>, codeReview?: Awaited<ReturnType<typeof qualifyInstalledCodeReview>>, editableTable?: Awaited<ReturnType<typeof qualifyInstalledEditableTable>>, officeViewer?: ReturnType<typeof qualifyInstalledOfficeViewer>, drawio?: Awaited<ReturnType<typeof qualifyInstalledDrawio>>): void {
-  plan?.assertCurrent(); delegate?.assertCurrent(); codeReview?.assertCurrent(); editableTable?.assertCurrent(); officeViewer?.assertCurrent(); drawio?.assertCurrent();
+export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensionsResult, plan?: Awaited<ReturnType<typeof qualifyInstalledPlan>>, delegate?: Awaited<ReturnType<typeof qualifyInstalledDelegate>>, codeReview?: Awaited<ReturnType<typeof qualifyInstalledCodeReview>>, editableTable?: Awaited<ReturnType<typeof qualifyInstalledEditableTable>>, officeViewer?: ReturnType<typeof qualifyInstalledOfficeViewer>, drawio?: Awaited<ReturnType<typeof qualifyInstalledDrawio>>, goal?: Awaited<ReturnType<typeof qualifyInstalledGoal>>): void {
+  goal?.assertCurrent(); plan?.assertCurrent(); delegate?.assertCurrent(); codeReview?.assertCurrent(); editableTable?.assertCurrent(); officeViewer?.assertCurrent(); drawio?.assertCurrent();
   const blocked: string[] = catalog.errors.map(error => `${error.path}: extension load failed`);
   for (const extension of catalog.extensions) {
     for (const { definition } of extension.tools.values()) {
+      if (extension === goal?.extension && extension.tools.get(definition.name)?.definition === definition) continue;
       if (extension === plan?.extension && definition === plan.definition) continue;
       if (extension === delegate?.extension && definition === delegate.definition) continue;
       if (extension === codeReview?.extension && definition === codeReview.definition) continue;
@@ -327,6 +336,7 @@ export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensio
       blocked.push(`${definition.name}: no operation-owned host effect port`);
     }
     for (const event of extension.handlers.keys()) {
+      if (extension === goal?.extension) continue; // Replaced by native request/terminal hooks, not invoked.
       if (extension === plan?.extension && event === "before_agent_start") continue;
       // Static skill discovery only: no session lifecycle or fabricated context.
       if (extension === codeReview?.extension && event === "resources_discover") continue;
@@ -334,7 +344,7 @@ export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensio
       if (extension === delegate?.extension && delegate.nativeLifecycle.events.some(allowed => allowed === event)) continue;
       blocked.push(`${extension.path}: ${event} lifecycle not bound to durable host`);
     }
-    if (extension.commands.size || extension.shortcuts.size) {
+    if ((extension.commands.size || extension.shortcuts.size) && extension !== goal?.extension) {
       blocked.push(`${extension.path}: session commands/shortcuts not bound to durable host`);
     }
   }

@@ -27,6 +27,7 @@ import { assertHostSchema, initializeHostSchema } from "./host-schema.js";
 import { value, effect, sealed } from "./host-effects.js";
 import { hashScheduledLeaseToken } from "../../src/service-effects/current-piclaw/scheduled-run-values.js";
 import type { ScheduledRunLease } from "../../src/service-effects/contracts/scheduled-run-store.js";
+import { QueuedFollowupLifecycleService } from "../../src/channels/web/runtime/queued-followup-lifecycle-service.js";
 import type { AcceptedInput, RuntimeOptions } from "./host-runtime.js";
 import type { ConversationId } from "@earendil-works/pi-durable";
 
@@ -249,6 +250,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         assert();
       };
     };
+    const hostFollowups = new QueuedFollowupLifecycleService();
     const getQueuedInputSourceAdmission: NonNullable<WebChannelOpts["getQueuedInputSourceAdmission"]> = chat => {
       assert(); if (!routeIndex.get(chat) || !lookup(chat, routeIndex.get(chat)!.branchId)) throw Error("Unbound queued input chat");
       return ({ chatJid, item, database: connection }) => {
@@ -638,6 +640,13 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     }
     return Object.freeze({
       /** Construct pool first from this snapshot, then bind its existing channel constructor. */
+      admitHostFollowup(input: { sourceId: string; chatJid: string; text: string; queuedAt: string }, onlyIfIdle = false) {
+        assertLive();
+        const admission = getQueuedInputSourceAdmission(input.chatJid);
+        if (!admission) throw Error("Queued admission unavailable");
+        return hostFollowups.enqueueAcceptedFollowupOnce(input.sourceId, input.chatJid, input.text, input.queuedAt,
+          { source: "goal.continuation" }, admission, onlyIfIdle);
+      },
       sessionOptions: Object.freeze({ getDurableSession, dispatchScheduledAgent, dispatchSidePrompt,
         dispatchHostCommand: config.dispatchHostCommand ? (chat: string, text: string) => { assertLive(); if (!routeIndex.has(chat)) throw Error("Unbound command chat"); return config.dispatchHostCommand!(chat, text); } : undefined }),
       allocateScheduledConversation, allocateSidePromptConversation, dispatchSidePrompt, reconcileSidePrompt,
@@ -660,6 +669,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       stop() { shutdown.abort(); },
       close() { return closing ??= (async () => { shutdown.abort(); await activeController.close(); })(); },
     } satisfies RuntimeBackend & {
+      admitHostFollowup(input: { sourceId: string; chatJid: string; text: string; queuedAt: string }, onlyIfIdle?: boolean): number | null;
       allocateScheduledConversation(lease: ScheduledRunLease): Promise<AcceptedInput>;
       allocateSidePromptConversation(input: AcceptedInput): Promise<AcceptedInput>;
       dispatchSidePrompt(chatJid: string, prompt: string, options?: SidePromptOptions): Promise<SidePromptResult>;
