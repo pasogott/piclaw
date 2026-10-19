@@ -305,6 +305,11 @@ test("actual web message admission runs Goal lifecycle guard inside its owned tr
     const routed = root.query("SELECT content FROM messages WHERE chat_jid=? ORDER BY rowid DESC LIMIT 1").get(chat) as { content: string };
     expect(routed.content).toContain("Continue working toward the active thread goal");
     expect(routed.content).toContain("Actual web source fence");
+    expect(routed.content).toContain("<piclaw_goal_input>");
+    const reconstructed = createHostGoalInput(addon, () => lock.assertCurrentOwner());
+    expect(reconstructed(chat, routed.content).text).toBe(routed.content);
+    scoped(() => { addon.clearThreadGoal(chat); addon.createThreadGoal(chat, "Actual web source fence"); });
+    expect(() => reconstructed(chat, routed.content)).toThrow("Goal input is no longer executable");
     scoped(() => addon.clearThreadGoal(chat));
     const beforeRejected = root.query("SELECT id FROM messages WHERE chat_jid=?").all(chat);
     const denied = await web.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(chat)}`, {
