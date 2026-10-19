@@ -17,7 +17,7 @@ import { accountCommittedGoalBatch } from "../../runtime/durable-engine/src/host
 import { hashCanonicalRequest } from "../../runtime/src/service-effects/contracts/common.js";
 import { value, effect, sealed, at } from "./src/host-handoff.js";
 
-test("actual Goal usage commits with terminal, rolls back and cannot reuse expired settlement scope", async () => {
+for (const mode of ["continue", "pending", "error", "stalled", "finalize"] as const) test(`actual Goal terminal continuation is atomic and policy scoped: ${mode}`, async () => {
   const sourceRoot = process.env.DURABLE_GOAL_ADDON_ROOT;
   if (!sourceRoot) throw Error("DURABLE_GOAL_ADDON_ROOT required");
   initDatabase(); const db = getDb(); installTerminalSettlementCompositionSchema(db);
@@ -25,7 +25,13 @@ test("actual Goal usage commits with terminal, rolls back and cannot reuse expir
   const addon = await import(pathToFileURL(join(sourceRoot, "addons/goal/index.ts")).href); addon.resetGoalAddonForTests();
   const chatJid = "web:goal-settlement";
   const setup = { extensionId: "goal", chatJid, assertCurrent() {}, write<T>(run: () => T) { return db.transaction(run).immediate(); } };
-  const text = withExtensionKvAuthority(setup, () => { addon.createThreadGoal(chatJid, "Terminal usage"); return addon.prepareGoalInput("🎯 Continue goal: Terminal usage", chatJid).decision.text; });
+  const text = withExtensionKvAuthority(setup, () => { addon.createThreadGoal(chatJid, "Terminal usage");
+    if (mode === "stalled") {
+      const plan = { available: true, total: 1, allCompleted: false, fingerprint: "native-plan", plan: [{ step: "Continue work", status: "pending" }] };
+      addon.applyGoalPlanProgress(addon.loadThreadGoal(chatJid), plan, false);
+      addon.applyGoalPlanProgress(addon.loadThreadGoal(chatJid), plan, false);
+    }
+    return addon.prepareGoalInput("🎯 Continue goal: Terminal usage", chatJid).decision.text; });
   const work = value(createCurrentPiclawServiceWorkStore(db, { hitFault: () => false, recordTrace() {} }));
   const source = value(await work.acceptSource(sealed({ effect: effect("accept"), chatJid, sourceId: "input", kind: "message", payloadRef: "input", targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
   const claimed = value(await work.claimNext(sealed({ effect: effect("claim"), chatJid, expectedFrontier: 0, newOperationId: "op", claimedAt: at })))!;
@@ -33,6 +39,7 @@ test("actual Goal usage commits with terminal, rolls back and cannot reuse expir
   const finish = sealed({ effect: effect("finish", "op", source.sourceSeq), expectedVersion: bound.version, expectedHarness: bound.harness! });
   const finished = value(await work.finishHarness({ ...finish, effect: { ...finish.effect, requestHash: hashCanonicalRequest({ method: "finishHarness.v1", ...finish }) } }));
   const queue = new QueuedFollowupLifecycleService();
+  if (mode === "pending") value(await work.acceptSource(sealed({ effect: effect("pending-user"), chatJid, sourceId: "pending-user", kind: "message", payloadRef: "pending-user", targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
   const continuationId = "goal-continuation:op";
   let planFingerprint = "stale-preparation-plan", planReads = 0;
   const prepare = createHostGoalSettlement(addon, { root: db, assertOwner() {}, runtime: () => ({
@@ -41,10 +48,11 @@ test("actual Goal usage commits with terminal, rolls back and cannot reuse expir
     async hasSettledGoalTerminalResult() { return false; },
   }), continuation: {
     addon,
-    async prepare() { return { message: { role: "assistant", stopReason: "stop" }, hadToolActivity: false }; },
+    async prepare() { return { message: { role: "assistant", stopReason: mode === "error" ? "error" : "stop" }, hadToolActivity: false }; },
     readPlan(chat, assertCurrent) {
       assertCurrent(); expect(db.inTransaction).toBe(true); expect(chat).toBe(chatJid); planReads++;
-      return { available: true, total: 1, allCompleted: false, fingerprint: planFingerprint, plan: [{ step: "Continue work", status: "pending" }] };
+      return { available: true, total: 1, allCompleted: mode === "finalize", fingerprint: planFingerprint,
+        plan: [{ step: "Continue work", status: mode === "finalize" ? "completed" : "pending" }] };
     },
     admit(next) { return queue.enqueueAcceptedFollowupOnce(next.sourceId, next.chatJid, next.text, next.queuedAt,
       { source: "goal.continuation" }, ({ chatJid, item, database }) => {
@@ -85,14 +93,24 @@ test("actual Goal usage commits with terminal, rolls back and cannot reuse expir
     expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ tokens_used: 7 });
     value(await terminal.commitTerminal(request));
     expect(calls).toBe(2);
-    expect(planReads).toBe(2); // Rollback retry re-reads; committed replay does not.
+    expect(planReads).toBe(mode === "pending" || mode === "error" ? 0 : 2); // Replay never re-reads.
     const queued = getDeferredQueuedFollowups(chatJid);
-    expect(queued).toHaveLength(1);
+    const continues = mode === "continue" || mode === "finalize";
+    expect(queued).toHaveLength(continues ? 1 : 0);
+    if (continues) {
     expect(queued[0]).toMatchObject({ source_id: continuationId, source_accepted: true });
     expect(queued[0]!.queuedContent).toContain("Terminal usage");
     expect(queued[0]!.queuedContent).toContain("<piclaw_goal_input>");
-    expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ no_progress_turns: 1, last_auto_continue_fingerprint: "native-plan" });
+    expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject(mode === "finalize"
+      ? { status: "active", completion_probe_count: 1, completion_plan_fingerprint: "native-plan" }
+      : { no_progress_turns: 1, last_auto_continue_fingerprint: "native-plan" });
     expect(db.query("SELECT source_id,state FROM service_effect_s01_sources WHERE source_id=?").all(continuationId)).toEqual([{ source_id: continuationId, state: "pending" }]);
+    } else {
+      expect(db.query("SELECT * FROM service_effect_s01_sources WHERE source_id=?").all(continuationId)).toHaveLength(0);
+      expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject(mode === "stalled"
+        ? { status: "stopped", stop_reason: "no_progress", lifecycle_generation: 2 }
+        : { status: "active", no_progress_turns: 0 });
+    }
     expect(() => retained!()).toThrow("scope ended");
     expect(() => db.transaction(() => retained!()).immediate()).toThrow("scope ended");
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
