@@ -56,5 +56,22 @@ test("committed Goal usage and cursor are atomic, replay safe and lifecycle scop
     expect(load().tokens_used).toBe(3);
     expect(extensionKvGet("goal", "committed-usage:1", "chat", authority.chatJid)).toMatchObject({ entryId: 21 });
     expect(() => accountCommittedGoalBatch(addon, authority, [text], [...receipts].reverse())).toThrow("out of order");
+    const cappedText = scoped(() => {
+      addon.clearThreadGoal(authority.chatJid); addon.createThreadGoal(authority.chatJid, "Capped batch", 5);
+      return addon.prepareGoalInput("🎯 Continue goal: Capped batch", authority.chatJid).decision.text;
+    });
+    const capped = [{ conversationId: 1, entryId: 30, tokens: 3 }, { conversationId: 1, entryId: 31, tokens: 4 }];
+    expect(accountCommittedGoalBatch(addon, authority, [cappedText], capped)).toBe(2);
+    expect(load()).toMatchObject({ tokens_used: 7, status: "budget_limited", lifecycle_generation: 2 });
+    expect(accountCommittedGoalBatch(addon, authority, [cappedText], capped)).toBe(0);
+    expect(load().tokens_used).toBe(7);
+    expect(() => accountCommittedGoalBatch(addon, authority, [cappedText], [...capped, { conversationId: 1, entryId: 32, tokens: 1 }])).toThrow("lifecycle changed");
+    expect(() => accountCommittedGoalBatch(addon, authority, [cappedText], [{ ...capped[1]!, tokens: 5 }])).toThrow("lifecycle changed");
+    expect(load().tokens_used).toBe(7);
+    // Terminal state alone is insufficient: an older/direct cursor has no proof
+    // that this accepted batch caused the budget lifecycle transition.
+    const { getExtensionKvStore } = await import("../../runtime/src/extension-kv-registry.js");
+    scoped(() => getExtensionKvStore().set("goal", "committed-usage:1", { goalId: load().goal_id, entryId: 31, tokens: 4 }, "chat", authority.chatJid));
+    expect(() => accountCommittedGoalBatch(addon, authority, [cappedText], capped)).toThrow("lifecycle changed");
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
