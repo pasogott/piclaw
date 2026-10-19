@@ -1,4 +1,5 @@
-import { AddonLocalContextError, withAddonLocalRequest, type AddonLocalContext } from "../../../addons/local-context.js";
+import { withExtensionKvAuthority, type ExtensionKvAuthority } from "../../../extension-kv-registry.js";
+import { AddonLocalContextError, addonLocalContextApi, withAddonLocalRequest, type AddonLocalContext } from "../../../addons/local-context.js";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -35,6 +36,25 @@ type RuntimeGlobal = typeof globalThis & {
     extensionPath?: string,
   ) => "created" | "updated";
 };
+
+type AdminGrantFactory = (addonId: string, chatJid: string) => ExtensionKvAuthority;
+let adminGrantFactory: AdminGrantFactory | undefined;
+/** Application-owner registration; disposer cannot revoke a newer owner. */
+export function registerAddonConfigKvAuthority(factory: AdminGrantFactory): () => void {
+  if (adminGrantFactory) throw Error("Addon configuration owner already registered");
+  adminGrantFactory = factory;
+  return () => { if (adminGrantFactory === factory) adminGrantFactory = undefined; };
+}
+async function invokeConfig(handler: AddonConfigApiHandler, payload: unknown, req: Request, context: AddonLocalContext | null, addonId: string) {
+  if (!adminGrantFactory) return handler(payload, req, context);
+  if (!context || context.kind !== "operator" || context.accessMode !== "single-user") throw Error("Authenticated configuration owner required");
+  await context.listTargets();
+  const grant = adminGrantFactory(addonId, context.chatJid ?? "");
+  let active = true;
+  const assertCurrent = () => { if (!active || !addonLocalContextApi.getRequestContext(req)) throw Error("Configuration request expired"); grant.assertCurrent(); };
+  try { return await withExtensionKvAuthority({ ...grant, globalWrite: req.method === "POST" && grant.globalWrite === true, assertCurrent, write: body => grant.write(() => { assertCurrent(); const result = body(); assertCurrent(); return result; }) }, () => handler(payload, req, context)); }
+  finally { active = false; }
+}
 
 const registrations = new Map<string, RegisteredAddonConfigApi>();
 let registryInstalled = false;
@@ -151,14 +171,14 @@ export async function handleRegisteredAddonConfigApiRequest(
     if (req.method === "GET") {
       if (typeof entry.handlers.get !== "function") return json({ error: "Method not allowed" }, 405);
       const handler = entry.handlers.get;
-      return await withAddonLocalRequest(req, async (context) => json(await handler(undefined, req, context)));
+      return await withAddonLocalRequest(req, async (context) => json(await invokeConfig(handler, undefined, req, context, entry!.addonId)));
     }
 
     if (req.method === "POST") {
       if (typeof entry.handlers.set !== "function") return json({ error: "Method not allowed" }, 405);
       const body = await req.json().catch(() => ({}));
       const handler = entry.handlers.set;
-      return await withAddonLocalRequest(req, async (context) => json(await handler(body, req, context)));
+      return await withAddonLocalRequest(req, async (context) => json(await invokeConfig(handler, body, req, context, entry!.addonId)));
     }
 
     return json({ error: "Method not allowed" }, 405);

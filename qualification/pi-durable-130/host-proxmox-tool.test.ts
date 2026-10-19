@@ -1,3 +1,4 @@
+import { getExtensionKvStore } from "../../runtime/src/extension-kv-registry.ts";
 import { test, expect } from "bun:test";
 import { createHostProxmoxTool } from "../../runtime/durable-engine/src/host-proxmox-tool.ts";
 test("Proxmox schema discovery grants no invocation authority", () => {
@@ -48,6 +49,11 @@ for (const mode of ["valid", "foreign", "owner", "version", "source", "watch", "
           if (mode === "version") root.exec("UPDATE service_effect_s01_operations SET version=version+1");
           if (mode === "source") root.exec("UPDATE service_effect_s01_sources SET payload_ref='other'");
           if (mode === "watch") root.exec("UPDATE service_effect_s01_operations SET harness_watch_generation=2");
+          const kv = getExtensionKvStore();
+          kv.get("proxmox", "settings", "global");
+          expect(() => kv.get("foreign", "settings", "global")).toThrow();
+          expect(() => kv.get("proxmox", "profile", "chat", "web:foreign")).toThrow();
+          expect(() => kv.set("proxmox", "settings", {}, "global")).toThrow();
           options.assertCurrent(); effects++;
           expect(options.chatJid).toBe(captured.operation.chatJid);
           return { content: [{ type: "text" as const, text: "synthetic" }], details: {} };

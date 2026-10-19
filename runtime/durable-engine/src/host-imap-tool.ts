@@ -1,3 +1,4 @@
+import { withExtensionKvAuthority } from "../../src/extension-kv-registry.js";
 import type { Database } from "bun:sqlite";
 import type { ToolDefinition } from "../../src/durable-legacy-sdk.js";
 import type { JsonValue } from "@earendil-works/chord";
@@ -27,7 +28,7 @@ export function createHostImapTool(addon: ImapNativeExports, options: {
       authority.assertCurrent();
       if (params.chat_jid && params.chat_jid !== captured.operation.chatJid) throw Error("Foreign chat profile denied");
       const native = addon.createImapTool({ assertCurrent: authority.assertCurrent, chatJid: captured.operation.chatJid, signal: call.signal });
-      const result = await native.execute(call.toolCallId, params, call.signal, undefined, undefined as never);
+      const result = await withExtensionKvAuthority({ ...authority, extensionId: "imap", chatJid: captured.operation.chatJid, globalRead: true, globalWrite: true }, () => native.execute(call.toolCallId, params, call.signal, undefined, undefined as never));
       authority.assertCurrent();
       return result;
     },

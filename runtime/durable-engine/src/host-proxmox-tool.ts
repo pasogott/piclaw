@@ -1,3 +1,4 @@
+import { withExtensionKvAuthority } from "../../src/extension-kv-registry.js";
 import type { Database } from "bun:sqlite";
 import type { ToolDefinition } from "../../src/durable-legacy-sdk.js";
 import type { JsonValue } from "@earendil-works/chord";
@@ -27,7 +28,7 @@ export function createHostProxmoxTool(addon: ProxmoxNativeExports, options: {
       const chatJid = captured.operation.chatJid;
       if (params.chat_jid && params.chat_jid !== chatJid) throw Error("Foreign chat profile denied");
       const native = addon.createProxmoxTool({ chatJid, assertCurrent: authority.assertCurrent });
-      const result = await native.execute(call.toolCallId, params, call.signal, undefined, undefined as never);
+      const result = await withExtensionKvAuthority({ ...authority, extensionId: "proxmox", chatJid: captured.operation.chatJid, globalRead: true, globalWrite: false }, () => native.execute(call.toolCallId, params, call.signal, undefined, undefined as never));
       authority.assertCurrent();
       return result;
     },
