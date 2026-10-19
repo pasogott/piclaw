@@ -34,6 +34,11 @@ describe("check-unused-exports", () => {
     expect(findUnexpectedUnusedExports(entries)).toEqual(["src/something.ts:1 - badExport"]);
   });
 
+  test("host SDK exports retain a closed cross-project boundary, not an entire-file exemption", () => {
+    expect(getAllowedUnusedExportReason("src/durable-legacy-sdk.ts:5 - DefaultResourceLoader")).toContain("native engine");
+    expect(findUnexpectedUnusedExports(["src/durable-legacy-sdk.ts:99 - unusedFutureExport"])).toEqual(["src/durable-legacy-sdk.ts:99 - unusedFutureExport"]);
+  });
+
   test("allowlist is line-number independent and records a reason", () => {
     expect(getAllowedUnusedExportReason("src/runtime/progress-watchdog.ts:126 - setProgressWatchdogTimeoutForTests")).toContain("test");
     expect(getAllowedUnusedExportReason("src/runtime/progress-watchdog.ts:999 - setProgressWatchdogTimeoutForTests")).toContain("test");

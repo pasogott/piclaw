@@ -1,4 +1,4 @@
-import { DefaultResourceLoader, type LoadExtensionsResult, type SettingsManager, type ToolDefinition, type RegisteredCommand } from "../../../node_modules/@earendil-works/pi-coding-agent";
+import { DefaultResourceLoader, type LoadExtensionsResult, type SettingsManager, type ToolDefinition, type RegisteredCommand } from "../../src/durable-legacy-sdk.js";
 import { getInstalledAddonExtensionPaths, resolveAddonPackageEntries } from "../../src/addons/package-entries.js";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import { existsSync, readFileSync, realpathSync } from "node:fs";

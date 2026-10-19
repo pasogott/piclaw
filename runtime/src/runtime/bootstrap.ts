@@ -3,6 +3,7 @@
  */
 
 import { AgentPool } from "../agent-pool.js";
+import { assertDurableEngineDependencies } from "./durable-engine-dependencies.js";
 import type { AgentPoolOptions } from "../agent-pool.js";
 import type { WebChannelOpts } from "../channels/web.js";
 
@@ -164,6 +165,7 @@ function logBackgroundRefreshResult(result: ModelRefreshResult): void {
 // Trusted package boundary: never a user-configurable plugin or source selector.
 const MODULE_PATH = new URL("../../durable-engine/src/default-application-runtime.ts", import.meta.url).href;
 async function prepareDefaultApplicationBackend(owner: RuntimeLockHandle, models: () => ReturnType<typeof createRuntimeModelServices>): Promise<RuntimeBackend> {
+  assertDurableEngineDependencies();
   let engine: { createDefaultApplicationRuntime?: unknown };
   try { engine = await import(MODULE_PATH); }
   catch (cause) {

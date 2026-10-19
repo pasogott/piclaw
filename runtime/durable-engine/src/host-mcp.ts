@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { Type } from "@earendil-works/pi-ai";
 import type { JsonValue } from "@earendil-works/chord";
 import { defineTool, type ToolExecutionApi } from "@earendil-works/pi-durable";
-import { McpClient } from "@earendil-works/pi-mcp";
+import { McpClient } from "../../src/durable-legacy-sdk.js";
 import { getMcpBridgeReadSnapshot, acquireMcpSessionBridge, assertMcpBridgeSourcesCurrent } from "../../src/secure/mcp-keychain.js";
 import { readMcpInstancePolicy } from "../../src/core/config-mcp.js";
 import { planMcpEnginePolicy } from "../../src/agent-pool/mcp-engine-plan.js";

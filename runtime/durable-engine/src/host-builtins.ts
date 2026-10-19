@@ -3,7 +3,7 @@ import { delimiter, extname, join } from "node:path";
 import {
   createReadToolDefinition, createWriteToolDefinition, createEditToolDefinition,
   createLsToolDefinition, createFindToolDefinition, type ToolDefinition,
-} from "../../../node_modules/@earendil-works/pi-coding-agent";
+} from "../../src/durable-legacy-sdk.js";
 import type { JsonValue } from "@earendil-works/chord";
 import type { TSchema } from "@earendil-works/pi-ai";
 import { createHostTool } from "./host-tools.js";

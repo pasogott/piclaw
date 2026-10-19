@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "../../../node_modules/@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "../../src/durable-legacy-sdk.js";
 import type { Static, TSchema } from "@earendil-works/pi-ai";
 import type { JsonValue } from "@earendil-works/chord";
 import { defineTool, type ToolRegistration, type ConversationId, type TaskId } from "@earendil-works/pi-durable";

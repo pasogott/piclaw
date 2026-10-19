@@ -5,7 +5,6 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
 import { Harness, createRegistry, type ConversationId } from "@earendil-works/pi-durable";
@@ -88,8 +87,7 @@ export async function rehearse(args: string[]) {
     const packagePath = rootRequire.resolve("@earendil-works/pi-coding-agent/package.json");
     const pkg = JSON.parse(readFileSync(packagePath, "utf8"));
     check(pkg.version === "1.2.0", "import_unsupported");
-    const legacy: typeof import("../../../node_modules/@earendil-works/pi-coding-agent") =
-      await import(pathToFileURL(resolve(dirname(packagePath), pkg.exports["."].import)).href);
+    const legacy = await import("../../src/durable-legacy-sdk.js");
     const bridge: GetLegacyContext = (entries, leaf) => {
       const detached = json([...entries]);
       const messages = json(legacy.convertToLlm(legacy.buildSessionContext(detached, leaf).messages));

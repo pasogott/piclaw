@@ -34,6 +34,10 @@ const ALLOWED_UNUSED_EXPORTS = new Map<string, string>([
   ["src/channels/web/http/extension-routes.ts - isExtensionRouteRegistryFrozen", "extension route registry test/debug API retained for web extension route tests"],
   ["src/channels/web/http/rate-limit.ts - resetRateLimiterStateForTests", "test-only API for focused channels/web/http/rate-limit.ts regression harnesses"],
   ["src/channels/web/ui-context.ts - bindSessionUiContext", "web UI context binder retained for web channel UI wiring compatibility"],
+  // The private engine is a separate TypeScript project; ts-prune cannot see its imports.
+  ...["DefaultResourceLoader", "SettingsManager", "createBashTool", "createReadToolDefinition", "createWriteToolDefinition", "createEditToolDefinition", "createLsToolDefinition", "createFindToolDefinition", "buildSessionContext", "convertToLlm", "sessionEntryToContextMessages", "BashToolOptions", "ExtensionContext", "LoadExtensionsResult", "ModelRuntime", "RegisteredCommand", "SessionEntry", "ToolDefinition", "AssistantMessage", "Api", "Model", "McpClient"].map(name => [
+    `src/durable-legacy-sdk.ts - ${name}`, "actual host SDK binding consumed by the separately typechecked native engine",
+  ] as [string, string]),
   ["src/db.ts - KvEntry", "public database barrel contract retained for runtime modules, add-ons, and tests importing ./db.js"],
   ["src/dream.ts - DREAM_TASK_CRON", "Dream scheduler compatibility export retained for fresh-process configuration tests"],
   ["src/db.ts - KvQueryOptions", "public database barrel contract retained for runtime modules, add-ons, and tests importing ./db.js"],

@@ -1,6 +1,6 @@
 // Explicit, bounded application-owned workflow. No production selector or activation.
 import type { Context } from "@earendil-works/chord/context";
-import { buildSessionContext, convertToLlm, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
+import { buildSessionContext, convertToLlm, sessionEntryToContextMessages } from "../../src/durable-legacy-sdk.js";
 import type { RuntimeMigrationPreparation } from "../../src/runtime/bootstrap.js";
 import { prepareCopiedApplicationUpgrade } from "./copied-upgrade.js";
 import { prepareCopiedInstallation } from "./copied-installation.js";

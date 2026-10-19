@@ -7,7 +7,7 @@ import {
   type ClassifierContext, type ClassifierOptions, type ClassifierResult, type Usage,
   type DeferredHandle, type DeferredFetchOptions, type DeferredCancelOptions,
 } from "@earendil-works/pi-ai";
-import type { ModelRuntime } from "../../../node_modules/@earendil-works/pi-coding-agent";
+import type { ModelRuntime } from "../../src/durable-legacy-sdk.js";
 
 export interface ModelRef { provider: string; id: string; type?: ModelType }
 type Operation = "chat" | "generateImages" | "classify";

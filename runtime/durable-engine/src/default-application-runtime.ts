@@ -7,7 +7,7 @@ import { Harness, AgentDoc, configure, createRegistry, defineDoc, defineExtensio
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { createCodemodeTool } from "@earendil-works/pi-durable/codemode";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
-import { SettingsManager } from "../../../node_modules/@earendil-works/pi-coding-agent";
+import { SettingsManager } from "../../src/durable-legacy-sdk.js";
 import type { RuntimeModelServices } from "../../src/agent-pool/model-services.js";
 import type { RuntimeLockHandle } from "../../src/runtime/single-instance.js";
 import type { RuntimeBackend } from "../../src/runtime/bootstrap.js";

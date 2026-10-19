@@ -1,7 +1,7 @@
 import { AssistantEntry, configure, defineTool, type ModelRef, type ToolRegistration, type Extension } from "@earendil-works/pi-durable";
 import { validateDelegateFiles } from "./host-delegate-files.js";
 import type { ImageContent, TextContent, TSchema } from "@earendil-works/pi-ai";
-import type { ToolDefinition } from "../../../node_modules/@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "../../src/durable-legacy-sdk.js";
 import type { HostConversationRuntime } from "./host-runtime.js";
 
 /** Native foreground consumer of the actual registered Delegate declaration.

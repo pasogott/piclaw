@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "bun:sqlite";
-import type { AssistantMessage, Api, Model } from "../../../node_modules/@earendil-works/pi-ai";
+import type { AssistantMessage, Api, Model } from "../../src/durable-legacy-sdk.js";
 import { modelRequestAccounting } from "../../src/budget/model-request-accounting.js";
 import { boundHostRequestCost } from "../../src/budget/request-cost-bound.js";
 import { ensureBudgetWork, getBudgetWork, setBudgetWorkStatus } from "../../src/db/budget-limits.js";

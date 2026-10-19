@@ -202,8 +202,8 @@ try {
     cases++;
   }
   // Exercise actual core cache manager, injecting only the offline SDK runtime factory (not production MCP/built-ins).
-  const pool = new Map(), sidePool = new Map();
-  const manager = new AgentSessionManager({ pool, sidePool, modelRuntime, settingsManager: settings, createDefaultTools: () => [],
+  const pool = new Map();
+  const manager = new AgentSessionManager({ pool, modelRuntime, settingsManager: settings, createDefaultTools: () => [],
     bindSession: async (runtime: any) => runtime.session.bindExtensions({ uiContext: {} as any, commandContextActions: {} as any }),
     ensureBranchRegistration: () => {}, createSession: async (_jid: string) => {
       const runtime = await createAgentSessionRuntime(async ({ sessionManager, sessionStartEvent }: any) => {

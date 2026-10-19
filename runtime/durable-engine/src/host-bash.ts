@@ -1,4 +1,4 @@
-import { createBashTool, type BashToolOptions } from "../../../node_modules/@earendil-works/pi-coding-agent";
+import { createBashTool, type BashToolOptions } from "../../src/durable-legacy-sdk.js";
 import { defineTool } from "@earendil-works/pi-durable";
 import type { JsonValue } from "@earendil-works/chord";
 import { createTrackedBashOperations, type TrackedBashOperationsOptions } from "../../../runtime/src/tools/tracked-bash.ts";
