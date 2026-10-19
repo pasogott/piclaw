@@ -1,0 +1,49 @@
+import "./src/test-guard.js";
+import { expect, test } from "bun:test";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
+import { registerRootExtensionKvStore } from "../../runtime/src/db/register-extension-kv.js";
+import { extensionKvGet } from "../../runtime/src/db/extension-kv.js";
+import { withExtensionKvAuthority, requireExtensionKvAuthority, resetExtensionKvStoreForTests } from "../../runtime/src/extension-kv-registry.js";
+import { accountCommittedGoalEntry } from "../../runtime/durable-engine/src/host-goal-usage.js";
+
+test("committed Goal usage and cursor are atomic, replay safe and lifecycle scoped", async () => {
+  const source = process.env.DURABLE_GOAL_ADDON_ROOT;
+  if (!source) throw Error("DURABLE_GOAL_ADDON_ROOT required");
+  initDatabase(); const db = getDb(); registerRootExtensionKvStore(); requireExtensionKvAuthority();
+  const addon = await import(pathToFileURL(join(source, "addons/goal/index.ts")).href);
+  addon.resetGoalAddonForTests();
+  let allowed = true, failAfterWrite = false;
+  const authority = { extensionId: "goal", chatJid: "web:committed-goal-usage", assertCurrent() { if (!allowed) throw Error("revoked"); },
+    write<T>(body: () => T): T { return db.transaction(() => { this.assertCurrent(); const result = body(); if (failAfterWrite) throw Error("lost before commit"); this.assertCurrent(); return result; }).immediate(); } };
+  const scoped = <T>(body: () => T) => withExtensionKvAuthority(authority, body);
+  const load = () => scoped(() => addon.loadThreadGoal(authority.chatJid));
+  try {
+    scoped(() => addon.createThreadGoal(authority.chatJid, "Account committed usage", 10));
+    const goal = load();
+    const entry = { goalId: goal.goal_id, generation: goal.lifecycle_generation, conversationId: 1, entryId: 12, tokens: 4 };
+    expect(accountCommittedGoalEntry(addon, authority, entry)).toBe(true);
+    expect(load().tokens_used).toBe(4);
+    expect(accountCommittedGoalEntry(addon, authority, entry)).toBe(false);
+    expect(load().tokens_used).toBe(4);
+    expect(() => accountCommittedGoalEntry(addon, authority, { ...entry, tokens: 5 })).toThrow("changed");
+    expect(() => accountCommittedGoalEntry(addon, authority, { ...entry, entryId: 11 })).toThrow("out of order");
+    failAfterWrite = true;
+    expect(() => accountCommittedGoalEntry(addon, authority, { ...entry, entryId: 13, tokens: 6 })).toThrow("lost before commit");
+    expect(load()).toMatchObject({ tokens_used: 4, status: "active", lifecycle_generation: 1 });
+    expect(extensionKvGet("goal", "committed-usage:1", "chat", authority.chatJid)).toMatchObject({ entryId: 12 });
+    failAfterWrite = false;
+    expect(accountCommittedGoalEntry(addon, authority, { ...entry, entryId: 13, tokens: 6 })).toBe(true);
+    expect(load()).toMatchObject({ tokens_used: 10, status: "budget_limited", lifecycle_generation: 2 });
+    expect(() => accountCommittedGoalEntry(addon, authority, { ...entry, entryId: 14 })).toThrow("lifecycle changed");
+    expect(accountCommittedGoalEntry(addon, authority, { ...entry, generation: 2, entryId: 13, tokens: 6 })).toBe(false);
+    allowed = false;
+    expect(() => accountCommittedGoalEntry(addon, authority, { ...entry, generation: 2, entryId: 14 })).toThrow("revoked");
+    allowed = true;
+    scoped(() => { addon.clearThreadGoal(authority.chatJid); addon.createThreadGoal(authority.chatJid, "Replacement"); });
+    expect(() => accountCommittedGoalEntry(addon, authority, { ...entry, generation: 2, entryId: 14 })).toThrow("lifecycle changed");
+    expect(accountCommittedGoalEntry(addon, authority, { ...entry, goalId: load().goal_id, entryId: 20, tokens: 1 })).toBe(true);
+    expect(load().tokens_used).toBe(1);
+  } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
+});
