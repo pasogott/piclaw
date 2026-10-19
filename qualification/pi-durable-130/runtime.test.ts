@@ -150,9 +150,19 @@ async function setup(busy = false) {
 }
 
 test("runtime: final usage receipt survives settlement and remains bound to original submission", () => fixture(async f => {
+    // Public historical entries exceed a page; none belongs to the new accepted window.
+    await f.runtime.close(); f.setOwner(true);
+    const history = await Harness.open(await SqliteStorage.open(await openWalFixtureDatabase(f.path)), f.options.harnessOptions, context);
+    try {
+      await history.commit(async tx => {
+        for (let index = 0; index < 105; index++) await tx.appendEntry(f.options.existingConversationIds[0]!, { kind: "qualification.history", data: { index } });
+      }, context);
+    } finally { await history.close(context); }
+    const seeded = await HostConversationRuntime.open(f.options, context);
+    f.runtime = seeded;
     const input = await f.accept("request-1", "use-tool");
     expect(await f.runtime.readSettledUsage(input)).toBeNull();
-    await f.runtime.submit(input); const reopened = await f.drain();
+    await f.runtime.submit(input); await seeded.close(); const reopened = await f.drain();
     try {
     const before = await f.work.getOperation(input.operationId);
     const settledReceipts = await reopened.readSettledUsage(input);

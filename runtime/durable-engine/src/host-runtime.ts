@@ -995,7 +995,7 @@ export class HostConversationRuntime {
       const entries: import("@earendil-works/pi-durable").EntryRecord[] = [];
       let cursor: import("@earendil-works/pi-durable").Cursor | undefined;
       do {
-        const page = await conversation.entries({ order: "ascending" }, 100, cursor, this.context); this.fence();
+        const page = await conversation.entries({ order: "ascending", minEntryId: record.entry, maxEntryId: finalId }, 100, cursor, this.context); this.fence();
         entries.push(...page.items); cursor = page.next;
         if (page.items.some(entry => entry.id === finalId)) break;
       } while (cursor !== undefined);
