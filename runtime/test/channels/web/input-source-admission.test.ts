@@ -91,11 +91,17 @@ test("host follow-up identity replay reuses accepted queue row and denies change
   const service = new QueuedFollowupLifecycleService();
   const chat = 'web:durable-admission';
   const admit = (content = 'Continue verified Goal') => f.db.transaction(() => service.enqueueAcceptedFollowupOnce(
-    'goal-continuation:operation-1', chat, content, '2026-10-19T00:00:00.000Z', { source: 'goal.continuation' }, f.acceptQueued,
+    'goal-continuation:operation-1', chat, content, '2026-10-19T00:00:00.000Z', { source: ' goal.continuation ', queuedBy: { source: ' goal ', sourceMessageId: ' operation-1 ' },
+      mediaIds: [999], source_id: 'forged' } as any, f.acceptQueued,
   )).immediate();
   const row = admit();
   expect(admit()).toBe(row);
-  expect(getDeferredQueuedFollowups(chat)).toHaveLength(1);
+  expect(f.db.transaction(() => service.enqueueAcceptedFollowupOnce('goal-continuation:operation-1', chat,
+    'Continue verified Goal', '2026-10-19T00:00:00.000Z', { source: 'goal.continuation', queuedBy: { source: 'goal', sourceMessageId: 'operation-1' } }, f.acceptQueued)).immediate()).toBe(row);
+  const queued = getDeferredQueuedFollowups(chat);
+  expect(queued).toHaveLength(1);
+  expect(queued[0]).toMatchObject({ source_id: 'goal-continuation:operation-1', source: 'goal.continuation', queuedBy: { source: 'goal', sourceMessageId: 'operation-1' } });
+  expect(queued[0]!.mediaIds ?? []).toHaveLength(0);
   expect(f.db.query('SELECT * FROM service_effect_s01_sources').all()).toHaveLength(1);
   expect(() => admit('Changed objective')).toThrow('identity conflict');
   const before = f.snapshot();

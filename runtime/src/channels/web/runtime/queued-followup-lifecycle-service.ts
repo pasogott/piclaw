@@ -150,18 +150,23 @@ export class QueuedFollowupLifecycleService {
     const db = getDb();
     if (!db.inTransaction) throw new Error('Follow-up admission transaction required');
     if (!sourceId || sourceId.trim() !== sourceId || sourceId.length > 512) throw new Error('Invalid follow-up source identity');
+    // Project exactly the supported payload fields before both persistence and
+    // comparison; untyped extras must not smuggle media or another source ID.
+    const candidate = projectQueuedFollowupItem({ rowId: 0, queuedContent: content, threadId: null, queuedAt,
+      source: extras.source, queuedBy: extras.queuedBy });
     const prior = getDeferredQueuedFollowups(chatJid).find(item => item.source_id === sourceId);
     const identity = (item: Pick<QueuedFollowupItem, 'queuedContent' | 'queuedAt' | 'source' | 'queuedBy'>) => hashCanonicalRequest(JSON.parse(JSON.stringify({
       content: item.queuedContent, queuedAt: item.queuedAt, source: item.source ?? null, queuedBy: item.queuedBy ?? null,
     })));
     if (prior) {
-      if (!prior.source_accepted || identity(prior) !== identity({ queuedContent: content, queuedAt, ...extras }))
+      if (!prior.source_accepted || identity(prior) !== identity(candidate))
         throw new Error('Follow-up source identity conflict');
       return prior.rowId;
     }
     if (db.query('SELECT 1 FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?').get(chatJid, sourceId))
       throw new Error('Follow-up source already materialized; reconcile existing source');
-    const rowId = this.enqueueQueuedFollowupItem(chatJid, 0, content, undefined, queuedAt, extras);
+    const rowId = this.enqueueQueuedFollowupItem(chatJid, 0, candidate.queuedContent, undefined, candidate.queuedAt,
+      { source: candidate.source, queuedBy: candidate.queuedBy });
     const items = getDeferredQueuedFollowups(chatJid);
     setDeferredQueuedFollowups(chatJid, items.map(item => item.rowId === rowId ? { ...item, source_id: sourceId } : item));
     acceptQueuedInputSource(chatJid, rowId, db, acceptSource);
