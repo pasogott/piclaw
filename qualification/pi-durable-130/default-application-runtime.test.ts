@@ -609,10 +609,14 @@ for (const scenario of ["native-goal", "native-compaction-accounting-close-fail"
   const bound = backend.bind({ queue: base.queue, agentPool: pool });
   const channel = new WebChannel(bound);
   if (scenario === "native-goal") {
+    const wakes: string[] = [];
+    let failWake = false;
+    backend.attachChannel!({ broadcastEvent() {}, resumePendingChats(chat) { expect(getDb().inTransaction).toBe(false); if (failWake) throw Error("wake unavailable"); wakes.push(chat!); } });
     expect(await pool.applySlashCommand("web:default", "/goal Implement native Goal")).toMatchObject({ status: "success", message: "Goal active — continuation queued" });
     const { getDeferredQueuedFollowups } = await import("../../runtime/src/db.js");
     const queued = getDeferredQueuedFollowups("web:default");
     expect(queued).toHaveLength(1);
+    expect(wakes).toEqual(["web:default"]);
     expect(queued[0]!.source_accepted).toBe(true);
     expect(queued[0]!.queuedContent).toContain("<piclaw_goal_input>");
     const { storeWebMessage } = await import("../../runtime/src/channels/web/messaging/message-store.js");
@@ -623,9 +627,11 @@ for (const scenario of ["native-goal", "native-compaction-accounting-close-fail"
     expect(stored).not.toBeNull();
     const dispatchResult = await bound.dispatchAcceptedInput!("web:default", item.source_id!, stored!.id)!();
     expect(dispatchResult).toBe("settled");
+    expect(wakes).toEqual(["web:default", "web:default"]);
     expect(calls).toBeGreaterThan(0);
     expect(getDeferredQueuedFollowups("web:default")).toHaveLength(1);
     expect(extensionKvGet("goal", "thread-goal", "chat", "web:default")).toMatchObject({ status: "active", no_progress_turns: 1 });
+    failWake = true; // Optional wake failure cannot reject an already committed command.
     expect(await pool.applySlashCommand("web:default", "/goal pause")).toMatchObject({ status: "success", message: "Goal paused" });
     await pool.shutdown(); backend.stop(); await backend.close(); closeDatabase(); owner.release();
     return;

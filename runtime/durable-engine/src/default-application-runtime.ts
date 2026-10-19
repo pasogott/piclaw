@@ -215,6 +215,13 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   let mcp: Awaited<ReturnType<typeof createHostMcp>> | undefined;
   let captureRuntime: HostConversationRuntime | undefined;
   const lifetime = new AbortController();
+  let resumePending: ((chatJid?: string) => void) | undefined;
+  const wakeGoalFollowups = (chat: string) => {
+    assert();
+    if (!lifetime.signal.aborted) {
+      try { resumePending?.(chat); } catch { /* Persisted admission survives; startup uses the same recovery drain. */ }
+    }
+  };
   const runtime = () => {
     assert(); lifetime.signal.throwIfAborted();
     if (!captureRuntime) throw Error("Host capture runtime unavailable");
@@ -555,9 +562,16 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       } }) : undefined;
       bundle = await createApplicationBootstrapBundle({ root, path, ownership, offlineInitialize: true, answers,
     onMaintenanceSettled(workId) { assert(); completeMaintenanceBudgetWork(root, workId); },
-    onOperationSettled(operationId) { assert(); reconcileOperationBudgetWork(root, operationId); },
+    onOperationSettled(operationId) {
+      assert(); reconcileOperationBudgetWork(root, operationId);
+      if (goal) {
+        const row = root.query("SELECT chat_jid FROM service_effect_s01_operations WHERE operation_id=?").get(operationId) as { chat_jid: string } | null;
+        if (row) wakeGoalFollowups(row.chat_jid);
+      }
+    },
     onRuntime(value) { captureRuntime = value; },
-        prepareInputText: goalInput, prepareTerminalEffect: goalSettlement, dispatchHostCommand: goalCommand,
+        prepareInputText: goalInput, prepareTerminalEffect: goalSettlement,
+        dispatchHostCommand: goalCommand ? async (chat, text) => { const result = await goalCommand(chat, text); wakeGoalFollowups(chat); return result; } : undefined,
     observeSidePrompt(sourceId, observer) {
       assert();
       if (sideObservers.has(sourceId)) throw Error("Side prompt observer already registered");
@@ -597,6 +611,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       assert(); lifetime.signal.throwIfAborted();
       if (widgetPublisher) throw Error("Widget channel already attached");
       const broadcast = channel.broadcastEvent.bind(channel);
+      resumePending = channel.resumePendingChats?.bind(channel);
       workspaceFileOpener = channel.requestWorkspaceFileOpen?.bind(channel);
       widgetPublisher = (chatJid, key, content, options) => {
         assert(); lifetime.signal.throwIfAborted();
@@ -604,6 +619,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       };
     },
     stop() {
+      resumePending = undefined;
       widgetPublisher = undefined; workspaceFileOpener = undefined; lifetime.abort();
       // close seals routing synchronously; final close below joins owned cleanup.
       void mcp?.close().catch(() => {});

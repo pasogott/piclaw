@@ -11,7 +11,7 @@ export interface RuntimeBackend {
   readonly sessionOptions: Readonly<Pick<AgentPoolOptions, "getDurableSession" | "dispatchScheduledAgent" | "dispatchSidePrompt" | "dispatchHostCommand">>;
   readonly bind: (options: Pick<WebChannelOpts, "queue" | "agentPool">) => Readonly<WebChannelOpts>;
   /** Attach the actual constructed channel, never a global channel lookup. */
-  attachChannel?(channel: { broadcastEvent(event: string, data: Record<string, unknown>): void; requestWorkspaceFileOpen?(chatJid: string, path: string, label: string): Promise<unknown> }): void;
+  attachChannel?(channel: { broadcastEvent(event: string, data: Record<string, unknown>): void; resumePendingChats?(chatJid?: string): void; requestWorkspaceFileOpen?(chatJid: string, path: string, label: string): Promise<unknown> }): void;
   /** Wake queue-owned observers before queue join; do not dispose storage yet. */
   stop(): void;
   /** Close the borrowed scope after queue join, never the application's global owner. */
