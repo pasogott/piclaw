@@ -42,11 +42,12 @@ export function createHostGoalSettlement(addon: Parameters<typeof accountCommitt
   root: Database;
   runtime(): Pick<HostConversationRuntime, "readAcceptedInputText" | "readSettledUsage" | "hasSettledGoalTerminalResult">;
   assertOwner(): void;
-  /** Trusted host reads existing persisted Plan and verified committed activity.
-   * Queue admission must be synchronous, SQL-only and use the existing source port. */
+  /** Committed activity is prepared outside SQLite; current Plan is read inside
+   * the terminal transaction. Admission is synchronous and uses the source port. */
   continuation?: {
     addon: GoalContinuationAddon;
-    prepare(input: AcceptedInput): Promise<{ message: unknown; plan: GoalPlanState; hadToolActivity: boolean }>;
+    prepare(input: AcceptedInput): Promise<{ message: unknown; hadToolActivity: boolean }>;
+    readPlan(chatJid: string, assertCurrent: () => void): GoalPlanState;
     admit(input: { sourceId: string; chatJid: string; text: string; queuedAt: string }): number | null;
   };
 }): (input: AcceptedInput) => Promise<TerminalDatabaseEffect | undefined> {
@@ -88,7 +89,9 @@ export function createHostGoalSettlement(addon: Parameters<typeof accountCommitt
         if (getDeferredQueuedFollowups(captured.chatJid).length || options.root.query(
           "SELECT 1 FROM service_effect_s01_sources WHERE chat_jid=? AND state IN ('pending','claimed') LIMIT 1",
         ).get(captured.chatJid)) return;
-        const next = options.continuation.addon.applyGoalPlanProgress(current, progress.plan, progress.hadToolActivity);
+        const plan = options.continuation.readPlan(captured.chatJid, authority.assertCurrent);
+        authority.assertCurrent();
+        const next = options.continuation.addon.applyGoalPlanProgress(current, plan, progress.hadToolActivity);
         if (next.decision.action === "stop") return;
         const prompt = `${next.decision.action === "finalize" ? "🎯 Finalize goal:" : "🎯 Continue goal:"} ${next.goal.objective}`;
         const prepared = options.continuation.addon.prepareGoalInput(prompt, captured.chatJid).decision;

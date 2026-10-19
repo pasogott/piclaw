@@ -34,14 +34,18 @@ test("actual Goal usage commits with terminal, rolls back and cannot reuse expir
   const finished = value(await work.finishHarness({ ...finish, effect: { ...finish.effect, requestHash: hashCanonicalRequest({ method: "finishHarness.v1", ...finish }) } }));
   const queue = new QueuedFollowupLifecycleService();
   const continuationId = "goal-continuation:op";
+  let planFingerprint = "stale-preparation-plan", planReads = 0;
   const prepare = createHostGoalSettlement(addon, { root: db, assertOwner() {}, runtime: () => ({
     async readAcceptedInputText() { return text; },
     async readSettledUsage() { return [{ conversationId: 1, entryId: 5, tokens: 7 }]; },
     async hasSettledGoalTerminalResult() { return false; },
   }), continuation: {
     addon,
-    async prepare() { return { message: { role: "assistant", stopReason: "stop" },
-      plan: { available: true, total: 1, allCompleted: false, fingerprint: "native-plan", plan: [{ step: "Continue work", status: "pending" }] }, hadToolActivity: false }; },
+    async prepare() { return { message: { role: "assistant", stopReason: "stop" }, hadToolActivity: false }; },
+    readPlan(chat, assertCurrent) {
+      assertCurrent(); expect(db.inTransaction).toBe(true); expect(chat).toBe(chatJid); planReads++;
+      return { available: true, total: 1, allCompleted: false, fingerprint: planFingerprint, plan: [{ step: "Continue work", status: "pending" }] };
+    },
     admit(next) { return queue.enqueueAcceptedFollowupOnce(next.sourceId, next.chatJid, next.text, next.queuedAt,
       { source: "goal.continuation" }, ({ chatJid, item, database }) => {
         work.acceptSourceInTransaction(sealed({ effect: effect(`accept:${item.source_id}`), chatJid, sourceId: item.source_id,
@@ -50,6 +54,8 @@ test("actual Goal usage commits with terminal, rolls back and cannot reuse expir
   } });
   const apply = await prepare({ incarnation: "fixture", conversationId: 1, chatJid, branchId: "main", operationId: "op", sourceSeq: source.sourceSeq,
     sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: "request", requestHash: "a".repeat(64) });
+  planFingerprint = "native-plan"; // Change AFTER evidence preparation, BEFORE terminal transaction.
+  expect(planReads).toBe(0);
   let fail = true, calls = 0, retained: (() => void) | undefined;
   const terminal = value(createCurrentPiclawTerminalSettlementStore(db, new InMemoryEffectPayloadResolver(), {
     hitFault: () => false, recordTrace() {}, validateOwnership: () => true,
@@ -79,6 +85,7 @@ test("actual Goal usage commits with terminal, rolls back and cannot reuse expir
     expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ tokens_used: 7 });
     value(await terminal.commitTerminal(request));
     expect(calls).toBe(2);
+    expect(planReads).toBe(2); // Rollback retry re-reads; committed replay does not.
     const queued = getDeferredQueuedFollowups(chatJid);
     expect(queued).toHaveLength(1);
     expect(queued[0]).toMatchObject({ source_id: continuationId, source_accepted: true });
