@@ -167,7 +167,7 @@ export async function qualifyInstalledGoal(catalog: LoadExtensionsResult, cwd: s
   const qualified = qualifyInstalled(catalog, cwd, "goal");
   if (!qualified) return undefined;
   const exports = await import(pathToFileURL(qualified.source.entry).href);
-  const names = ["createGoalTools", "loadThreadGoal", "buildGoalSystemPrompt", "prepareGoalInput", "goalInputIdentity", "resolveGoalInput"] as const;
+  const names = ["createGoalTools", "loadThreadGoal", "buildGoalSystemPrompt", "prepareGoalInput", "goalInputIdentity", "resolveGoalInput", "accountGoalProgress", "accountTerminalGoalProgress"] as const;
   qualified.assertCurrent();
   if (names.some(name => typeof exports[name] !== "function")) throw Error("Goal public native exports required");
   const addon = Object.freeze(Object.fromEntries(names.map(name => [name, exports[name]])));
