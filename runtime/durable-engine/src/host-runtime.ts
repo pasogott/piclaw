@@ -618,6 +618,58 @@ export class HostConversationRuntime {
     return this.captureSource(conversationId, taskId, callId);
   }
   /** Recheck captured source routing synchronously at a host effect boundary. */
+  /** Committed terminal tool evidence after this run's accepted input boundary.
+   * Generation handovers retain input submissions, not generation task IDs. */
+  async hasGoalTerminalResult(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId,
+    expected: { goalId: string; generation: number; status: "complete" | "stopped" }): Promise<boolean> {
+    const target = Object.freeze({ ...expected });
+    const captured = await this.captureRunSource(conversationId, taskId); this.fence();
+    const conversation = await this.harness.conversation(conversationId, this.context); this.fence();
+    if (!conversation) throw Error("Missing Goal conversation");
+    const view = await conversation.context(this.context); this.fence();
+    const entries = view.entries;
+    const accepted = new Set(captured.inputs.map(input => JSON.stringify([input.operationId, input.sourceSeq, input.requestId])));
+    let boundary = -1;
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index]!;
+      if (entry.kind !== "host.accepted") continue;
+      const data = entry.data as { operationId?: string; sourceSeq?: number; requestId?: string } | undefined;
+      if (!data || !accepted.has(JSON.stringify([data.operationId, data.sourceSeq, data.requestId]))) {
+        // Do not use a receipt before a later operation/input boundary.
+        if (boundary >= 0) return false;
+        continue;
+      }
+      boundary = index;
+    }
+    if (boundary < 0) return false;
+    const found = await this.harness.commit(async tx => {
+      for (let index = entries.length - 1; index > boundary; index--) {
+        const entry = entries[index]!;
+        if (entry.kind !== "pi.tool-result" || entry.byTaskId === undefined || entry.model?.length !== 1 || entry.model[0].role !== "toolResult") continue;
+        const message = entry.model[0];
+        const goal = (message.details as { goal?: { goalId?: string; lifecycleGeneration?: number; status?: string } } | undefined)?.goal;
+        if (message.isError || !goal || goal.goalId !== target.goalId || goal.lifecycleGeneration !== target.generation || goal.status !== target.status) continue;
+        const tool = await tx.task(entry.byTaskId);
+        if (tool?.kind !== "pi.tool" || tool.conversationId !== conversationId || tool.owner === undefined || tool.state.status !== "terminal" || tool.state.outcome.status !== "completed") continue;
+        const input = tool.input as { kind?: string; assistant?: number; callId?: string };
+        const result = tool.state.outcome.result as { kind?: string; entryId?: number };
+        if (input.kind !== "model" || input.callId !== message.toolCallId || result.kind !== "model" || result.entryId !== entry.id) continue;
+        const assistantIndex = entries.findIndex(candidate => candidate.id === input.assistant);
+        const assistant = entries[assistantIndex];
+        if (assistantIndex <= boundary || assistantIndex >= index || assistant?.kind !== "pi.assistant" || assistant.byTaskId !== tool.owner) continue;
+        const owner = await tx.task(tool.owner);
+        if (owner?.kind !== "pi.generation" || owner.conversationId !== conversationId || owner.state.status !== "terminal" || owner.state.outcome.status !== "completed") continue;
+        const ownerResult = owner.state.outcome.result as { entryId?: number };
+        if (ownerResult.entryId !== assistant.id) continue;
+        const call = assistant.model?.flatMap(part => part.role === "assistant" ? part.content.filter(block => block.type === "toolCall") : [])
+          .find(call => call.id === message.toolCallId);
+        if (call?.name === message.toolName && ["goal_complete", "goal_stop", "update_goal"].includes(call.name)) return true;
+      }
+      return false;
+    }, this.context);
+    this.fence(); this.assertCapturedSourceCurrent(captured.inputs);
+    return found;
+  }
   assertCapturedSourceCurrent(inputs: readonly HostInputBinding[]): void {
     this.fence();
     for (const input of inputs) {

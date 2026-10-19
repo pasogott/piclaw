@@ -108,10 +108,18 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
   const extension = defineExtension({ name: "native-goal-fixture", tools }); f.base.registry.install(extension);
   const { createHostGoalPrompt } = await import("../../runtime/durable-engine/src/host-goal-prompt.js");
   let requestFenced = false, modelEntries = 0;
+  const terminalProofs: boolean[] = [];
   const promptExtension = createHostGoalPrompt(addon, { root: f.db, assertOwner: () => f.owner.assert(), runtime: () => ({
     async captureRunSource(conversation, task) {
       if (rejectRequestAuthority) throw Error("synthetic Goal request authority revoked");
-      return f.runtime!.captureRunSource(conversation, task);
+      const captured = await f.runtime!.captureRunSource(conversation, task);
+      const goal = extensionKvGet("goal", "thread-goal", "chat", f.chatJid) as { goal_id: string; lifecycle_generation: number; status: string } | null;
+      if (goal?.status === "complete") {
+        terminalProofs.push(await f.runtime!.hasGoalTerminalResult(conversation, task, { goalId: goal.goal_id, generation: goal.lifecycle_generation, status: "complete" }));
+        terminalProofs.push(await f.runtime!.hasGoalTerminalResult(conversation, task, { goalId: "wrong-goal", generation: goal.lifecycle_generation, status: "complete" }));
+        terminalProofs.push(await f.runtime!.hasGoalTerminalResult(conversation, task, { goalId: goal.goal_id, generation: goal.lifecycle_generation + 1, status: "complete" }));
+      }
+      return captured;
     },
   }), failClosed() { requestFenced = true; } });
   f.base.registry.install(promptExtension);
@@ -156,6 +164,7 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
       return;
     }
     expect(captures).toBe(2);
+    expect(terminalProofs).toEqual([true, false, false]);
     expect(prompts).toHaveLength(3);
     expect(prompts[0]).not.toContain("<objective>");
     expect(prompts[1]).toContain("Live Goal source capture");
