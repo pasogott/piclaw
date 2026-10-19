@@ -207,8 +207,7 @@ test("runtime: final usage receipt survives settlement and remains bound to orig
 test.skipIf(!process.env.DURABLE_GOAL_ADDON_ROOT)("runtime: actual Goal accounts public SDK final receipt atomically with terminal", () => fixture(async f => {
   const { pathToFileURL } = await import("node:url");
   const { withExtensionKvAuthority, registerExtensionKvStore, getExtensionKvStore, requireExtensionKvAuthority, resetExtensionKvStoreForTests } = await import("../../runtime/src/extension-kv-registry.js");
-  const { withGoalSettlementAuthority } = await import("../../runtime/durable-engine/src/host-goal-settlement.js");
-  const { accountCommittedGoalBatch } = await import("../../runtime/durable-engine/src/host-goal-usage.js");
+  const { createHostGoalSettlement } = await import("../../runtime/durable-engine/src/host-goal-settlement.js");
   const addon = await import(pathToFileURL(join(process.env.DURABLE_GOAL_ADDON_ROOT!, "addons/goal/index.ts")).href);
   // This fixture owns a copied host DB, not the global runtime connection.
   const extensionKvGet = <T = unknown>(extensionId: string, key: string, scope = "chat", scopeKey = ""): T | null => {
@@ -241,17 +240,15 @@ test.skipIf(!process.env.DURABLE_GOAL_ADDON_ROOT)("runtime: actual Goal accounts
     const payload = f.db.query("SELECT content FROM runtime_payloads WHERE ref=?").get(input.payloadRef) as { content: string };
     expect(hashCanonicalRequest({ type: "input", requestId: input.requestId, content: payload.content })).toBe(input.requestHash);
     let fail = true, calls = 0;
+    const prepare = createHostGoalSettlement(addon, { root: f.db, runtime: () => reopened!, assertOwner() {} });
     f.hooks.prepareTerminal = async captured => {
       expect(captured).toEqual(input);
-      const verified = await reopened!.readSettledUsage(captured);
-      expect(verified).toEqual(receipts!);
+      const apply = await prepare(captured);
+      expect(apply).toBeDefined();
       return (commit, scope) => {
-      expect(commit.operationId).toBe(captured.operationId); calls++;
-      withGoalSettlementAuthority(f.db, commit, scope, authority => {
-        expect(accountCommittedGoalBatch(addon, authority, [payload.content], verified!)).toBe(1);
-      });
-      if (fail) throw Error("rollback actual SDK receipt");
-      return undefined;
+        calls++; apply!(commit, scope);
+        if (fail) throw Error("rollback actual SDK receipt");
+        return undefined;
       };
     };
     await expect(reopened.settle(input)).rejects.toThrow();

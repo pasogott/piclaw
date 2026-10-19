@@ -1,5 +1,7 @@
 import type Database from "bun:sqlite";
-import type { TerminalCommit } from "../../src/service-effects/contracts/terminal-settlement-store.js";
+import { accountCommittedGoalBatch } from "./host-goal-usage.js";
+import type { AcceptedInput, HostConversationRuntime } from "./host-runtime.js";
+import type { TerminalDatabaseEffect, TerminalCommit } from "../../src/service-effects/contracts/terminal-settlement-store.js";
 import { withExtensionKvAuthority, type ExtensionKvAuthority } from "../../src/extension-kv-registry.js";
 
 /** Only usable inside applyTerminalEffects, after the exact terminal record was
@@ -24,4 +26,38 @@ export function withGoalSettlementAuthority<T>(root: Database, commit: Readonly<
   const result = withExtensionKvAuthority(authority, () => body(authority));
   assertCurrent();
   return result;
+}
+
+/** Active Goal recovery accounting. Terminal Goal/budget finalization must be
+ * separately proven; do not infer permission from current Goal status alone. */
+export function createHostGoalSettlement(addon: Parameters<typeof accountCommittedGoalBatch>[0], options: {
+  root: Database;
+  runtime(): Pick<HostConversationRuntime, "readAcceptedInputText" | "readSettledUsage">;
+  assertOwner(): void;
+}): (input: AcceptedInput) => Promise<TerminalDatabaseEffect | undefined> {
+  return async input => {
+    const captured = Object.freeze({ ...input });
+    options.assertOwner();
+    const runtime = options.runtime();
+    const text = await runtime.readAcceptedInputText(captured);
+    options.assertOwner();
+    const identity = addon.goalInputIdentity(text);
+    if (identity === null) return undefined;
+    if (!identity) throw Error("Invalid accepted Goal identity");
+    const receipts = await runtime.readSettledUsage(captured);
+    options.assertOwner();
+    if (!receipts?.length) throw Error("Missing committed Goal usage");
+    // Detach public evidence before crossing the asynchronous payload boundary
+    // in commitTerminal; the transaction still rechecks lifecycle and ownership.
+    const usage = Object.freeze(receipts.map(receipt => Object.freeze({ ...receipt })));
+    return (commit, scope) => {
+      options.assertOwner();
+      if (commit.operationId !== captured.operationId || commit.disposition !== "completed") throw Error("Exact Goal operation completion required");
+      withGoalSettlementAuthority(options.root, commit, scope, authority => {
+        if (authority.chatJid !== captured.chatJid) throw Error("Goal settlement chat conflict");
+        accountCommittedGoalBatch(addon, authority, [text], usage);
+      });
+      return undefined;
+    };
+  };
 }

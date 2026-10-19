@@ -982,6 +982,11 @@ export class HostConversationRuntime {
     }, true);
   }
   reconcileIntent(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.readState(copy, true), true); }
+  /** Original hash-checked host payload, including after the SDK run ends. */
+  readAcceptedInputText(input: AcceptedInput): Promise<string> {
+    const copy = inputSnapshot(input);
+    return this.observe(async () => (await this.checked(copy)).content);
+  }
   /** Recovery accounting window: original accepted entry through its exact final
    * answer, even after later turns exist. No current-live-run dependency. */
   readSettledUsage(input: AcceptedInput) {
