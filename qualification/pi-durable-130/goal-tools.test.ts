@@ -169,3 +169,54 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
     } finally { await reader.close(context); }
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); await f.close(); await rm(dir, { recursive: true, force: true }); }
 });
+
+test("prepared Goal text and accepted source commit together; stale lifecycle rolls admission back", async () => {
+  const sourceRoot = process.env.DURABLE_GOAL_ADDON_ROOT;
+  if (!sourceRoot) throw Error("DURABLE_GOAL_ADDON_ROOT required");
+  const { createCurrentPiclawServiceWorkStore } = await import("../../runtime/src/service-effects/current-piclaw/service-work-store.js");
+  const { installServiceWorkSchema } = await import("../../runtime/src/service-effects/current-piclaw/service-work-schema.js");
+  const { value, sealed, effect, at } = await import("./src/host-handoff.js");
+  const { hashCanonicalRequest } = await import("../../runtime/src/service-effects/contracts/common.js");
+  initDatabase(); const db = getDb(); installServiceWorkSchema(db);
+  registerRootExtensionKvStore(); requireExtensionKvAuthority();
+  const addon = await import(pathToFileURL(join(sourceRoot, "addons/goal/index.ts")).href); addon.resetGoalAddonForTests();
+  const chatJid = "web:goal-admission";
+  const work = value(createCurrentPiclawServiceWorkStore(db, { hitFault: () => false, recordTrace() {}, validateAcceptance: () => true }));
+  const authority = { extensionId: "goal", chatJid, assertCurrent() {}, write<T>(body: () => T) { return db.transaction(body).immediate(); } };
+  const scoped = <T>(body: () => T) => withExtensionKvAuthority(authority, body);
+  try {
+    scoped(() => addon.createThreadGoal(chatJid, "Accepted current Goal"));
+    const prepared = scoped(() => addon.prepareGoalInput("🎯 Continue goal: Accepted current Goal", chatJid));
+    expect(prepared.decision.action).toBe("transform");
+    const text = prepared.decision.text as string;
+    db.query("INSERT OR IGNORE INTO chats(jid,name,last_message_time) VALUES (?,?,?)").run(chatJid, "Goal admission", at);
+    const admit = (id: string, preparation: typeof prepared, afterAccept?: () => void) => db.transaction(() => scoped(() => {
+      preparation.assertCurrent();
+      db.query("INSERT INTO messages(id,chat_jid,content,timestamp,is_from_me) VALUES (?,?,?,?,0)").run(id, chatJid, text, at);
+      const message = db.query("SELECT rowid FROM messages WHERE id=? AND chat_jid=?").get(id, chatJid) as { rowid: number };
+      const accepted = work.acceptSourceInTransaction(sealed({ effect: effect(id), chatJid, sourceId: id, kind: "message", payloadRef: `message-row:${message.rowid}`,
+        targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false }), db);
+      afterAccept?.();
+      preparation.assertCurrent();
+      return accepted;
+    })).immediate();
+    const source = admit("goal-admitted", prepared);
+    const row = db.query("SELECT content FROM messages WHERE id='goal-admitted'").get() as { content: string };
+    expect(row.content).toBe(text);
+    expect(row.content).toContain("Accepted current Goal");
+    expect(source.payloadRef).toMatch(/^message-row:/);
+    expect(hashCanonicalRequest({ type: "input", requestId: "goal-admitted", content: row.content }))
+      .toBe(hashCanonicalRequest({ type: "input", requestId: "goal-admitted", content: text }));
+    const stale = scoped(() => addon.prepareGoalInput("🎯 Continue goal: Accepted current Goal", chatJid));
+    scoped(() => { addon.clearThreadGoal(chatJid); addon.createThreadGoal(chatJid, "Accepted current Goal"); });
+    const before = ["messages", "service_effect_s01_sources", "service_effect_s01_decisions"].map(table => db.query(`SELECT * FROM ${table}`).all());
+    expect(() => admit("goal-stale", stale)).toThrow("Goal input lifecycle changed");
+    expect(["messages", "service_effect_s01_sources", "service_effect_s01_decisions"].map(table => db.query(`SELECT * FROM ${table}`).all())).toEqual(before);
+    const changedAfterWrite = scoped(() => addon.prepareGoalInput("🎯 Continue goal: Accepted current Goal", chatJid));
+    expect(() => admit("goal-mid-write", changedAfterWrite, () => {
+      addon.clearThreadGoal(chatJid); addon.createThreadGoal(chatJid, "Different lifecycle");
+    })).toThrow("Goal input lifecycle changed");
+    expect(["messages", "service_effect_s01_sources", "service_effect_s01_decisions"].map(table => db.query(`SELECT * FROM ${table}`).all())).toEqual(before);
+    expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ objective: "Accepted current Goal" });
+  } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
+});
