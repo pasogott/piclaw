@@ -17,6 +17,6 @@ export function installGoalFixture(dir: string): string {
     if (createHash("sha256").update(bytes).digest("hex") !== expected) throw Error("Goal fixture source changed");
     const target = join(pkg, file); mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, bytes);
   }
-  symlinkSync(join(source, "node_modules"), join(pkg, "node_modules"), "dir");
+  symlinkSync(join(import.meta.dir, "../../node_modules"), join(pkg, "node_modules"), "dir");
   return pkg;
 }

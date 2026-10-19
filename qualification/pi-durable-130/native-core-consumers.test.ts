@@ -1,6 +1,6 @@
 import "./src/test-guard.js";
 import { test, expect, spyOn } from "bun:test";
-import { cpSync, existsSync, symlinkSync } from "node:fs";
+import { cpSync, symlinkSync } from "node:fs";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ensureTestFilesystemIsolation } from "../../runtime/scripts/test-filesystem-isolation.js";
@@ -36,8 +36,7 @@ test("all seven shipped consumers admit actual native startup and Restic effects
   for (const slug of slugs) {
     const from = join(source, "addons", slug), to = join(workspace, ".pi/extensions/node_modules/@rcarmo", `piclaw-addon-${slug}`);
     cpSync(from, to, { recursive: true, filter: path => basename(path) !== "node_modules" });
-    const deps = join(from, "node_modules");
-    symlinkSync(slug === "observability" && existsSync(deps) ? deps : join(import.meta.dir, "../../node_modules"), join(to, "node_modules"));
+    symlinkSync(join(import.meta.dir, slug === "observability" ? "node_modules" : "../../node_modules"), join(to, "node_modules"));
   }
   const loadAddon = (slug: string, file: string) => import(pathToFileURL(join(workspace, ".pi/extensions/node_modules/@rcarmo", `piclaw-addon-${slug}`, file)).href);
   const { ResticService } = await loadAddon("restic", "service.ts");

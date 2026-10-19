@@ -8,7 +8,10 @@
     "test:goal-tools": "bun ../../runtime/scripts/local-test-priority.ts --cwd . -- bun test ./goal-tools.test.ts ./goal-usage.test.ts ./goal-settlement.test.ts ./goal-terminal-race.test.ts ./installed-goal-catalog.test.ts"
   },
   "devDependencies": {
+    "@azure/monitor-opentelemetry": "1.19.0",
     "@number0/iroh": "1.1.0",
+    "@opentelemetry/api": "1.9.0",
+    "@opentelemetry/resources": "2.10.0",
     "@types/bun": "1.3.14",
     "typescript": "7.0.2"
   },
