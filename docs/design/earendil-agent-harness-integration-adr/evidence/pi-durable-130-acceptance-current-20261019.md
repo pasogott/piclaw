@@ -3,7 +3,8 @@
 The implementation is incomplete. Native Goal and soft token-budget wrap-up are
 adopted in source. Legacy deadline checkpoints, general exact running cancellation,
 historical rollback proof and whole-history migration still prevent acceptance.
-Source reviewed: core `76e5f81ec`, Goal add-on `92de0be`. Nothing was installed,
+Source: core based on `804283a2d`, with the verified Goal steer change below;
+Goal add-on `92de0be`. Nothing was installed,
 activated, migrated or deployed.
 
 ## Design goal
@@ -144,6 +145,35 @@ Prefixes: `E/` = `runtime/durable-engine/src/`; `A/` =
   SHA-256 `a86e270d606ab404095a4ba2e6ffa3466b5d1a0d074da77003217039cee7eba1`.
   Final production diff is byte-identical to that reviewed diff. Local receipts:
   `reviews/durable-1650/native-budget-*` and `native-budget-final-*`.
+
+## Native same-Goal steer settlement
+
+The settled readers reuse publication's existing verified source/binding/SDK-state
+collection. They account from primary acceptance through the operation's final
+answer, permit only its verified accepted boundaries, and validate each intent's
+physical payload hash. Terminal Goal proof starts after the last owned acceptance.
+Settlement validates every input's Goal identity before updating the usage cursor.
+No execution, scheduling or recovery mechanism was added.
+
+- Real SDK/shared-database A→accepted B→settlement, pre-settlement reopen,
+  post-settlement replay/reopen and terminal completion pass. Both sources are
+  consumed once; accounting stays at 6 or 12 tokens without extra model calls.
+- Intent payload tampering rejects. Ordinary B cannot inherit A's Goal authority:
+  settlement rejects, leaves both sources unconsumed and charges zero Goal tokens.
+  Mixed-input continuation remains unsupported.
+- Five-file Goal gate: **46 pass / 680 assertions**. Exact-path runtime/recovery:
+  **62 pass / 937 assertions**. Actual-default Goal and budget: **1/60** and
+  **1/97**. Public conversations and thinking: **1/162** and **1/169**.
+  Engine/candidate types, circular/silent-swallow and whitespace checks pass.
+- Initial Goal failures were shared-fixture idempotency/program state and stale
+  exact call IDs. An accidental four-file selection returned 158 pass/2 fail;
+  both failures were `find` without `fd` on the test shell PATH. Corrected runs
+  use the existing `/home/agent/.pi/agent/bin/fd` 10.3.0, without installation or
+  service changes. Assertions, history and timeouts remain intact.
+- Bounded production-diff review: READY; SHA-256
+  `d2a44ade9461b36f155440ba55b1d7c23bd2559931d4b51cd408c8b78cb12183`.
+  Receipts: `reviews/durable-1650/native-goal-steer-final-*`. Broader root/candidate
+  acceptance and all 45 row statuses remain unchanged pending corrected-head gates.
 
 ## Whole real-history preflight (earlier source `3cbc12b6e`)
 

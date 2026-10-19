@@ -96,9 +96,10 @@ test("Goal host adapter fences mutations to committed operation authority", asyn
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
 
-for (const mode of [false, true, "external", "stop", "external-terminal", "stop-accounting", "complete-accounting", "update-accounting", "budget-accounting", "persisted-budget", "deadline-checkpoint", "continuation", "steer-accounting"] as const) test(`actual Goal tool task captures its live accepted operation; rejected=${mode}`, async () => {
+for (const mode of [false, true, "external", "stop", "external-terminal", "stop-accounting", "complete-accounting", "update-accounting", "budget-accounting", "persisted-budget", "deadline-checkpoint", "continuation", "steer-accounting", "steer-complete", "steer-ordinary"] as const) test(`actual Goal tool task captures its live accepted operation; rejected=${mode}`, async () => {
   const continuation = mode === "continuation";
-  const steer = mode === "steer-accounting";
+  const steer = mode === "steer-accounting" || mode === "steer-complete" || mode === "steer-ordinary";
+  const terminalSteer = mode === "steer-complete", ordinarySteer = mode === "steer-ordinary";
   const rejectRequestAuthority = mode === true;
   const externalLifecycle = mode === "external";
   const externalTerminal = mode === "external-terminal";
@@ -122,7 +123,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
   const allowedContinuationRequests = new Set<string>();
   let prepareSettlement: import("../../runtime/durable-engine/src/host-runtime.js").RuntimeOptions["prepareTerminalEffect"];
   const f = await acceptedSteerFixture(dir, "before-submit", undefined, true, {
-    sharedDatabase: continuation,
+    sharedDatabase: continuation || steer,
     allowRequest: request => allowedContinuationRequests.has(request),
     prepareTerminalEffect: input => prepareSettlement?.(input) ?? Promise.resolve(undefined),
   });
@@ -143,7 +144,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
       const { createDurableQueuedSteering } = await import("../../runtime/src/agent-pool/durable-queued-steering.js");
       const { setDeferredQueuedFollowups, getDeferredQueuedFollowups } = await import("../../runtime/src/db.js");
       const { storeWebMessage } = await import("../../runtime/src/channels/web/messaging/message-store.js");
-      const source = value(await f.ports.work.acceptSource(sealed({ effect: effect("goal-steer-usage"), chatJid: f.chatJid,
+      const source = value(await f.ports.work.acceptSource(sealed({ effect: effect(`${f.incarnation}:goal-steer-usage`), chatJid: f.chatJid,
         sourceId: f.intentSourceId, kind: "message", payloadRef: `queued-source:${f.intentSourceId}`,
         targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
       setDeferredQueuedFollowups(f.chatJid, [{ rowId: 1650, threadId: null, source_id: source.sourceId,
@@ -244,13 +245,15 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
   const stream = (_model: unknown, transcript: { messages: { role: string }[] }) => {
     modelEntries++;
     prompts.push(JSON.stringify(transcript.messages));
-    const toolTurns = transcript.messages.filter(message => message.role === "toolResult").length;
+    // Shared-file cases retain earlier conversation history. This provider's
+    // current program must not count another fixture's committed tool results.
+    const toolTurns = modelEntries - 1;
     const later = JSON.stringify(transcript.messages).includes("LATER_GOAL_OPERATION");
-    const calling = continuation || steer ? modelEntries === 1 : later ? laterModelEntries++ === 0 : toolTurns < 3;
+    const calling = continuation || (steer && !terminalSteer) ? modelEntries === 1 : later ? laterModelEntries++ === 0 : modelEntries <= 3;
     const output = createAssistantMessageEventStream();
     const message = { role: "assistant" as const, api: model.api, provider: model.provider, model: model.id, timestamp: 1,
       stopReason: calling ? "toolUse" as const : "stop" as const, content: calling
-        ? [{ type: "toolCall" as const, id: `native-goal-call-${toolTurns}`, name: later || toolTurns === 2 || toolTurns === 0 ? "get_goal" : terminalTool,
+        ? [{ type: "toolCall" as const, id: `${f.incarnation}:native-goal-call-${modelEntries}`, name: later || toolTurns === 2 || toolTurns === 0 ? "get_goal" : terminalTool,
           arguments: (later || toolTurns === 2 || toolTurns === 0 ? {} : { ...(stopped ? { reason: "other" } : terminalTool === "update_goal" ? { status: "complete" } : {}), summary: "Verified live transition", evidence: ["native accepted operation tool task"] }) as Record<string, string | string[]> }]
         : [{ type: "text" as const, text: mode === "budget-accounting" ? "Budget wrap-up" : "Goal stored" }],
       usage: { input: 2, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
@@ -277,7 +280,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
           continuation_generation: 1, status: "scheduled" } };
       f.db.query("UPDATE extension_kv SET value=? WHERE extension_id='goal' AND scope_key=? AND key='thread-goal'").run(JSON.stringify(updated), f.chatJid);
     }
-    steerText = acceptedText;
+    steerText = ordinarySteer ? "Explicit ordinary human steer" : acceptedText;
     f.db.query("INSERT INTO messages(id,chat_jid,content,timestamp) VALUES (?,?,?,?)").run("goal-native", f.chatJid, acceptedText, at);
     const claimed = value(await f.ports.work.claimNext(sealed({ effect: effect(`${f.incarnation}:goal-claim`), chatJid: f.chatJid, expectedFrontier: 0, newOperationId: f.incarnation, claimedAt: at })))!;
     const { hashCanonicalRequest } = await import("../../runtime/src/service-effects/contracts/common.js");
@@ -290,12 +293,45 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
     await f.runtime!.wait(input, id);
     if (steer) {
       expect(steered).toBe(true);
-      expect(capturedCounts).toEqual([1, 2]);
-      expect(usageReads.map(receipts => receipts.length)).toEqual([0, 1]);
-      expect(usageReads[1]![0]!.tokens).toBe(3); // Before the later accepted B boundary.
-      expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 3, status: "active" });
-      expect(modelEntries).toBe(2);
+      expect(capturedCounts).toEqual(terminalSteer ? [1, 2, 2, 2] : [1, 2]);
+      expect(usageReads.map(receipts => receipts.length)).toEqual(ordinarySteer ? [0] : terminalSteer ? [0, 1, 2, 3] : [0, 1]);
+      if (!ordinarySteer) expect(usageReads[1]![0]!.tokens).toBe(3); // Before the later accepted B boundary.
+      expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: ordinarySteer ? 0 : terminalSteer ? 9 : 3, status: terminalSteer ? "complete" : "active" });
+      expect(modelEntries).toBe(terminalSteer ? 4 : 2);
       expect(requestFenced).toBe(false);
+      await f.runtime!.close(); f.runtime = undefined;
+      await f.open();
+      // Every intent's physical payload still has to match its committed SDK
+      // submission; a matching primary input never blesses a modified B.
+      f.db.query("UPDATE messages SET content=? WHERE id=?").run(steerText + " tampered", f.intentSourceId);
+      await expect(f.runtime!.readSettledUsage(input)).rejects.toThrow("Host payload hash conflict");
+      f.db.query("UPDATE messages SET content=? WHERE id=?").run(steerText, f.intentSourceId);
+      const receipts = await f.runtime!.readSettledUsage(input);
+      expect(receipts?.map(receipt => receipt.tokens)).toEqual(terminalSteer ? [3, 3, 3, 3] : [3, 3]);
+      expect(await f.runtime!.readSettledToolNames(input)).toEqual(terminalSteer ? ["get_goal", "goal_complete", "get_goal"] : ["get_goal"]);
+      expect((await f.runtime!.readSettledInputUsage(input))?.texts).toEqual([acceptedText, steerText]);
+      if (ordinarySteer) {
+        // Mixed-source attribution is not silently promoted to Goal authority.
+        await expect(f.runtime!.settle(input)).rejects.toThrow();
+        expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 0, status: "active" });
+        expect(value(await f.ports.work.getOperation(input.operationId))?.terminal).toBeNull();
+        expect(f.ports.work.getAcceptedSource(f.chatJid, f.intentSourceId)?.state).toBe("claimed");
+        return;
+      }
+      const tokens = terminalSteer ? 12 : 6;
+      const commit = await f.runtime!.settle(input);
+      expect(commit).not.toBeNull();
+      expect(await f.runtime!.settle(input)).toEqual(commit);
+      expect(f.ports.work.getAcceptedSource(f.chatJid, source.sourceId)?.state).toBe("consumed");
+      expect(f.ports.work.getAcceptedSource(f.chatJid, f.intentSourceId)?.state).toBe("consumed");
+      expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: tokens, status: terminalSteer ? "complete" : "active" });
+      expect(await f.runtime!.readSettledUsage(input)).toEqual(receipts);
+      await f.runtime!.close(); f.runtime = undefined;
+      await f.open();
+      expect(await f.runtime!.settle(input)).toEqual(commit);
+      expect(await f.runtime!.readSettledUsage(input)).toEqual(receipts);
+      expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: tokens });
+      expect(modelEntries).toBe(terminalSteer ? 4 : 2);
       return;
     }
     if (mode === "persisted-budget" || mode === "deadline-checkpoint") {
@@ -442,7 +478,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
       expect(results[3]!.model?.[0]).toMatchObject({ toolName: "get_goal", isError: false });
       const committed = results[1]!.model as unknown as readonly { toolCallId: string; toolName: string; isError: boolean; details: { goal: unknown } }[];
       expect(committed).toHaveLength(1);
-      expect(committed[0]).toMatchObject({ toolCallId: "native-goal-call-1", toolName: terminalTool, isError: false,
+      expect(committed[0]).toMatchObject({ toolCallId: `${f.incarnation}:native-goal-call-2`, toolName: terminalTool, isError: false,
         details: { goal: { goalId: completedGoal.goal_id, lifecycleGeneration: completedGoal.lifecycle_generation, status: terminalStatus,
           ...(stopped ? { stopSummary: "Verified live transition" } : { completionSummary: "Verified live transition" }) } } });
     } finally { await reader.close(context); }

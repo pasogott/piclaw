@@ -42,7 +42,7 @@ interface GoalContinuationAddon {
 }
 export function createHostGoalSettlement(addon: Parameters<typeof accountCommittedGoalBatch>[0], options: {
   root: Database;
-  runtime(): Pick<HostConversationRuntime, "readAcceptedInputText" | "readSettledUsage" | "hasSettledGoalTerminalResult">;
+  runtime(): Pick<HostConversationRuntime, "readAcceptedInputText" | "readSettledInputUsage" | "hasSettledGoalTerminalResult">;
   assertOwner(): void;
   /** Committed activity is prepared outside SQLite; current Plan is read inside
    * the terminal transaction. Admission is synchronous and uses the source port. */
@@ -70,12 +70,13 @@ export function createHostGoalSettlement(addon: Parameters<typeof accountCommitt
       if (identity.goalId !== goal.goal_id || identity.generation + 1 !== goal.lifecycle_generation ||
         !await runtime.hasSettledGoalTerminalResult(captured, proof)) throw Error("Goal terminal operation proof required");
     }
-    const receipts = await runtime.readSettledUsage(captured);
+    const batch = await runtime.readSettledInputUsage(captured);
     options.assertOwner();
-    if (!receipts?.length) throw Error("Missing committed Goal usage");
+    if (!batch?.receipts.length) throw Error("Missing committed Goal usage");
     // Detach public evidence before crossing the asynchronous payload boundary
     // in commitTerminal; the transaction still rechecks lifecycle and ownership.
-    const usage = Object.freeze(receipts.map(receipt => Object.freeze({ ...receipt })));
+    const texts = Object.freeze([...batch.texts]);
+    const usage = Object.freeze(batch.receipts.map(receipt => Object.freeze({ ...receipt })));
     const progress = options.continuation ? structuredClone(await options.continuation.prepare(captured)) : undefined;
     options.assertOwner();
     return (commit, scope) => {
@@ -83,7 +84,7 @@ export function createHostGoalSettlement(addon: Parameters<typeof accountCommitt
       if (commit.operationId !== captured.operationId || commit.disposition !== "completed") throw Error("Exact Goal operation completion required");
       withGoalSettlementAuthority(options.root, commit, scope, authority => {
         if (authority.chatJid !== captured.chatJid) throw Error("Goal settlement chat conflict");
-        accountCommittedGoalBatch(addon, authority, [text], usage, proof, { operationId: captured.operationId, conversationId: captured.conversationId });
+        accountCommittedGoalBatch(addon, authority, texts, usage, proof, { operationId: captured.operationId, conversationId: captured.conversationId });
         if (!options.continuation || !progress || !options.continuation.addon.shouldContinueGoalAfterMessage(progress.message)) return;
         const current = addon.loadThreadGoal(captured.chatJid) as GoalContinuationState | null;
         if (current?.status === "budget_limited") {

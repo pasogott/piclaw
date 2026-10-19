@@ -670,9 +670,9 @@ export class HostConversationRuntime {
       const window = await this.settledUsageEntries(copy);
       if (!window) return false;
       const { entries } = window;
-      if (entries.slice(1).some(entry => entry.kind === "host.accepted")) return false;
-      const found = await this.goalTerminalResultInEntries(copy.conversationId, entries, 0, target);
-      await this.checked(copy); this.fence();
+      const found = await this.goalTerminalResultInEntries(copy.conversationId, entries, window.boundary, target);
+      if ((await this.checked(copy)).operation.version !== window.version) throw Error("Settled usage operation changed");
+      this.fence();
       return found;
     });
   }
@@ -1019,37 +1019,64 @@ export class HostConversationRuntime {
   /** Recovery accounting window: original accepted entry through its exact final
    * answer, even after later turns exist. No current-live-run dependency. */
   readSettledUsage(input: AcceptedInput) {
+    return this.readSettledInputUsage(input).then(batch => batch?.receipts ?? null);
+  }
+  /** One verified operation window for both attribution and committed usage.
+   * Accepted intent texts must not disappear behind the primary input's identity. */
+  readSettledInputUsage(input: AcceptedInput) {
     const copy = inputSnapshot(input);
     return this.observe(async () => {
       const window = await this.settledUsageEntries(copy);
       if (!window) return null;
       const entries = window.entries.slice(window.start + 1, window.end + 1);
-      if (entries.some(entry => entry.kind === "host.accepted")) throw Error("Intervening settled usage input");
+      const texts: string[] = [];
+      for (const source of window.inputs) {
+        const checked = await this.checked(source, source.sourceSeq !== copy.sourceSeq);
+        if (checked.operation.version !== window.version) throw Error("Settled usage operation changed");
+        texts.push(checked.content);
+      }
       const receipts = await this.readUsageEntries(copy.conversationId, entries);
-      this.fence(); await this.checked(copy);
-      return receipts;
+      this.fence();
+      if ((await this.checked(copy)).operation.version !== window.version) throw Error("Settled usage operation changed");
+      return { texts, receipts };
     });
   }
   private async settledUsageEntries(copy: AcceptedInput) {
-      const state = await this.readState(copy);
+      const primary = await this.readState(copy);
+      const selected = await this.readOperationInputs(copy, primary);
+      if (!selected) return null;
+      const { state, sources } = selected;
       if (!state.answer || state.status?.type !== "input" || state.status.status !== "done") return null;
       const finalId = state.status.answer;
-      const record = await this.record(copy); this.fence();
-      if (record?.entry === undefined) throw Error("Missing usage input entry");
+      const firstId = primary.status?.entry;
+      if (firstId === undefined) throw Error("Missing usage input entry");
       const conversation = await this.harness.conversation(copy.conversationId, this.context); this.fence();
       if (!conversation) throw Error("Missing usage conversation");
       // Entries, rather than model context: compaction must not hide committed usage.
       const entries: import("@earendil-works/pi-durable").EntryRecord[] = [];
       let cursor: import("@earendil-works/pi-durable").Cursor | undefined;
       do {
-        const page = await conversation.entries({ order: "ascending", minEntryId: record.entry, maxEntryId: finalId }, 100, cursor, this.context); this.fence();
+        const page = await conversation.entries({ order: "ascending", minEntryId: firstId, maxEntryId: finalId }, 100, cursor, this.context); this.fence();
         entries.push(...page.items); cursor = page.next;
         if (page.items.some(entry => entry.id === finalId)) break;
       } while (cursor !== undefined);
-      const start = entries.findIndex(entry => entry.id === record.entry);
+      const start = entries.findIndex(entry => entry.id === firstId);
       const end = entries.findIndex(entry => entry.id === finalId);
       if (start < 0 || end <= start) throw Error("Missing settled usage window");
-      return { entries, start, end };
+      // readState already verified each SDK entry against its immutable host
+      // binding and payload hash. Allow exactly those entries, never any other
+      // accepted input merely because it falls inside the answer's range.
+      const owned = new Set(sources.map(source => source.state.status?.entry));
+      let boundary = start, count = 0;
+      for (let index = start; index <= end; index++) {
+        const entry = entries[index]!;
+        if (entry.kind !== "host.accepted") continue;
+        if (!owned.has(entry.id)) throw Error("Intervening settled operation input");
+        boundary = index; count++;
+      }
+      if (count !== sources.length) throw Error("Missing settled operation input");
+      if ((await this.checked(copy)).operation.version !== primary.operation.version) throw Error("Settled usage operation changed");
+      return { entries, start, end, boundary, inputs: sources.map(source => source.input), version: primary.operation.version };
   }
   /** Actual model-issued tool receipts in the settled input's own window.
    * Goal policy decides which names count as substantive; no event-local flags. */
@@ -1059,7 +1086,6 @@ export class HostConversationRuntime {
       const window = await this.settledUsageEntries(copy);
       if (!window) return null;
       const entries = window.entries.slice(window.start + 1, window.end + 1);
-      if (entries.some(entry => entry.kind === "host.accepted")) throw Error("Intervening settled tool input");
       const names = await this.harness.commit(async tx => {
         const result: string[] = [];
         for (const entry of entries) {
@@ -1082,7 +1108,8 @@ export class HostConversationRuntime {
         }
         return result;
       }, this.context);
-      this.fence(); await this.checked(copy);
+      this.fence();
+      if ((await this.checked(copy)).operation.version !== window.version) throw Error("Settled usage operation changed");
       return names;
     });
   }
@@ -1185,27 +1212,26 @@ export class HostConversationRuntime {
     });
   }
   settle(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.settleInput(copy)); }
-  private async settleInput(input: AcceptedInput) {
-    let state = await this.readState(input); const o = this.options;
-    if (state.operation.terminal) {
-      const terminal = value(await o.terminal.getTerminal(input.operationId)); this.fence(); o.onOperationSettled?.(input.operationId); return terminal;
-    }
+  /** Existing EF-owned input collection shared by publication and read-only
+   * recovery. The SDK owns submission placement, completion and final answers. */
+  private async readOperationInputs(input: AcceptedInput, state: Awaited<ReturnType<HostConversationRuntime["readState"]>>) {
     const initialVersion = state.operation.version;
-    const primarySubmissionId = state.submissionId;
+    const sources = [{ input, state }];
     const claimed = state.operation.claimedSourceSeqs.filter(seq => seq !== state.operation.primarySourceSeq && seq !== state.operation.cancellation?.sourceSeq);
     if (claimed.length) {
-      const port = o.bindings.intents;
+      const port = this.options.bindings.intents;
       if (!port) throw new Error("Accepted intent bindings required");
       const bindings = await port.list(input); this.fence();
       if (bindings.some(b => !claimed.includes(b.sourceSeq))) return null;
-      const states = [state];
       for (const seq of claimed) {
         const matches = bindings.filter(b => b.sourceSeq === seq);
         if (matches.length !== 1 || matches[0]!.submissionId === null) return null;
-        const next = await this.readState(inputSnapshot(matches[0]!), true);
+        const accepted = inputSnapshot(matches[0]!);
+        const next = await this.readState(accepted, true);
         if (next.operation.version !== initialVersion || next.status?.status !== "done" || !next.answer) return null;
-        states.push(next);
+        sources.push({ input: accepted, state: next });
       }
+      const states = sources.map(source => source.state);
       if (states.some(s => s.status?.status !== "done" || !s.answer)) return null;
       // Public entry IDs are transcript positions (EntryQuery's documented ID ordering).
       const positions = states.map(s => s.status!.entry!);
@@ -1213,6 +1239,18 @@ export class HostConversationRuntime {
         throw new Error("Ambiguous accepted input placement");
       state = states.reduce((latest, s) => s.status!.entry! > latest.status!.entry! ? s : latest);
     }
+    return { state, sources };
+  }
+  private async settleInput(input: AcceptedInput) {
+    const primary = await this.readState(input); const o = this.options;
+    if (primary.operation.terminal) {
+      const terminal = value(await o.terminal.getTerminal(input.operationId)); this.fence(); o.onOperationSettled?.(input.operationId); return terminal;
+    }
+    const initialVersion = primary.operation.version;
+    const primarySubmissionId = primary.submissionId;
+    const selected = await this.readOperationInputs(input, primary);
+    if (!selected) return null;
+    const { state } = selected;
     const aborted = state.operation.cancellation !== null && state.status?.status === "unanswered";
     if ((!aborted && state.answer === null) || !state.submissionId) return null;
     let operation = value(await o.work.getOperation(input.operationId)); this.fence();

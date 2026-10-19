@@ -99,7 +99,7 @@ for (const mode of ["continue", "pending", "error", "stalled", "finalize", "budg
   let planReads = 0;
   const prepare = createHostGoalSettlement(addon, { root: db, assertOwner() {}, runtime: () => ({
     async readAcceptedInputText() { return text; },
-    async readSettledUsage() { return [{ conversationId: 1, entryId: 5, tokens: 7 }]; },
+    async readSettledInputUsage() { return { texts: [text], receipts: [{ conversationId: 1, entryId: 5, tokens: 7 }] }; },
     async hasSettledGoalTerminalResult() { return false; },
   }), continuation: {
     addon,
