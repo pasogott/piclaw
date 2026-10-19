@@ -251,6 +251,9 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
       const toolNames = await f.runtime!.readSettledToolNames(input);
       expect(toolNames).toEqual(["get_goal", terminalTool, "get_goal"]);
       expect(toolNames!.some(addon.isGoalProgressTool)).toBe(false);
+      const { createHostGoalProgressReader } = await import("../../runtime/durable-engine/src/host-goal-progress.js");
+      const progress = createHostGoalProgressReader(addon, { runtime: () => f.runtime!, assertOwner: () => f.owner.assert() });
+      expect(await progress(input)).toMatchObject({ hadToolActivity: false, message: { role: "assistant", stopReason: "stop" } });
       const final = (await f.runtime!.readSettledUsage(input))!.at(-1)!;
       expect(final).toMatchObject({ tokens: 3 });
       expect(await f.runtime!.settle(input)).not.toBeNull();

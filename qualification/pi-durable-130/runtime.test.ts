@@ -167,6 +167,9 @@ test("runtime: final usage receipt survives settlement and remains bound to orig
     await f.runtime.submit(input); await seeded.close(); const reopened = await f.drain();
     try {
     const before = await f.work.getOperation(input.operationId);
+    const { createHostGoalProgressReader } = await import("../../runtime/durable-engine/src/host-goal-progress.js");
+    const progressReader = createHostGoalProgressReader({ isGoalProgressTool: name => name === "host_effect" }, { runtime: () => reopened, assertOwner() {} });
+    expect(await progressReader(input)).toMatchObject({ hadToolActivity: true, message: { role: "assistant", stopReason: "stop" } });
     const settledReceipts = await reopened.readSettledUsage(input);
     const receipt = settledReceipts!.at(-1)!;
     expect(settledReceipts).toHaveLength(2);
@@ -243,6 +246,9 @@ test.skipIf(!process.env.DURABLE_GOAL_ADDON_ROOT)("runtime: actual Goal accounts
     const payload = f.db.query("SELECT content FROM runtime_payloads WHERE ref=?").get(input.payloadRef) as { content: string };
     expect(hashCanonicalRequest({ type: "input", requestId: input.requestId, content: payload.content })).toBe(input.requestHash);
     let fail = true, calls = 0;
+    const { createHostGoalProgressReader } = await import("../../runtime/durable-engine/src/host-goal-progress.js");
+    const progress = createHostGoalProgressReader(addon, { runtime: () => reopened!, assertOwner() {} });
+    expect(await progress(input)).toMatchObject({ hadToolActivity: false, message: { role: "assistant", stopReason: "stop" } });
     const prepare = createHostGoalSettlement(addon, { root: f.db, runtime: () => reopened!, assertOwner() {} });
     f.hooks.prepareTerminal = async captured => {
       expect(captured).toEqual(input);
