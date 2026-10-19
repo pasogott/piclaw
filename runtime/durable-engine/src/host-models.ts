@@ -1,3 +1,4 @@
+import type { HostCodexModelServices } from "./host-codex-model-services.js";
 import {
   createModels, createProvider, createAssistantMessageEventStream, normalizeContext,
   type Api, type Model, type Models, type SimpleStreamOptions,
@@ -32,6 +33,7 @@ export interface HostModelPolicy {
    * account scope, including after reopen. No bridge-local registry is authority.
    * Cancel grants are explicit owner-cleanup grants, independent of spend approval.
    */
+  codex?: HostCodexModelServices;
   deferred?: {
     project(handle: DeferredHandle, model: ModelRef): DeferredHandle;
     resolve(handle: DeferredHandle, model: ModelRef): DeferredHandle;
@@ -209,6 +211,8 @@ export function createHostModels(
     options?: SimpleStreamOptions, deferred?: { handle: DeferredHandle; options?: DeferredFetchOptions }) => {
     const output = createAssistantMessageEventStream();
     let terminalUsage: Usage | undefined;
+    let providerTerminal = false;
+    let codex: Awaited<ReturnType<HostCodexModelServices["bind"]>>;
     let request: Awaited<ReturnType<NonNullable<HostModelPolicy["prepareRequest"]>>>;
     const captureTerminalUsage = (message: AssistantMessage) => {
       if (message.provider !== model.provider || message.model !== model.id || message.api !== model.api) return;
@@ -264,17 +268,18 @@ export function createHostModels(
           return current;
         };
         const physical = assertPhysicalCompatible();
-        const hostOptions = { ...safeOptions, signal, transformHeaders: async (headers: Record<string, string | null>) => {
+        codex = await policy.codex?.bind(physical, signal);
+        const hostOptions = { ...safeOptions, ...codex?.options, signal, transformHeaders: async (headers: Record<string, string | null>) => {
           signal.throwIfAborted();
           assertSource();
           policy.assertCurrent(ref, "chat", signal);
           assertPhysicalCompatible();
           await request?.dispatch();
-          return headers; // Host-only closure: never sent to 1.3 or a caller callback.
+          return codex ? codex.headers(headers) : headers; // Host-only closure: never sent to 1.3 or a caller callback.
         } };
         const stream = simple
-          ? hostModelRuntime120.streamSimple(physical, data(context), hostOptions)
-          : hostModelRuntime120.stream(physical, data(context), hostOptions);
+          ? hostModelRuntime120.streamSimple(physical, codex ? codex.context(data(context)) : data(context), hostOptions)
+          : hostModelRuntime120.stream(physical, codex ? codex.context(data(context)) : data(context), hostOptions);
         let terminal: AssistantMessageEvent | undefined;
         for await (const event of stream) {
           policy.onEvent?.(event, options?.signal);
@@ -282,11 +287,15 @@ export function createHostModels(
           output.push("partial" in event ? { ...data({ ...event, partial: undefined }), partial: projectMessage(event.partial, model) } : data(event));
         }
         const result = await stream.result();
-        if (result.stopReason === "error" || result.stopReason === "aborted") { await request?.settle(result); captureTerminalUsage(result); throw new Error("Host request failed"); }
+        providerTerminal = true;
+        captureTerminalUsage(result);
         await request?.settle(result);
+        await codex?.finish();
+        if (result.stopReason === "error" || result.stopReason === "aborted") throw new Error("Host request failed");
         if (terminal?.type === "done") output.push({ ...data({ ...terminal, message: undefined }), message: projectMessage(result, model) });
         output.end(projectMessage(result, model));
       } catch {
+        try { await codex?.finish(); } catch { /* Keep unresolved output private. */ }
         // Host errors can contain credentials/headers. Do not export them.
         const error: AssistantMessage = { role: "assistant", content: [], api: model.api,
           provider: model.provider, model: model.id, timestamp: Date.now(),
@@ -296,7 +305,7 @@ export function createHostModels(
         output.push({ type: "error", reason: "error", error });
         // Finish reconciliation before publishing the terminal failure. An
         // uncertain accounting write leaves its durable hold intact.
-        try { await request?.abandon(); } catch { /* Preserve the sanitised failure and unresolved reservation. */ }
+        try { if (!providerTerminal) await request?.abandon(); } catch { /* Preserve the sanitised failure and unresolved reservation. */ }
         output.end(error);
       }
     })();
