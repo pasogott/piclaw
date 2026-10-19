@@ -249,7 +249,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
     expect(completedGoal).toMatchObject({ objective: "Live Goal source capture", status: terminalStatus, lifecycle_generation: 2 });
     expect((await f.runtime!.reconcile(input)).answer?.text).toBe("Goal stored");
     if (accountingOnly) {
-      const final = await f.runtime!.readFinalUsage(input);
+      const final = (await f.runtime!.readSettledUsage(input))!.at(-1)!;
       expect(final).toMatchObject({ tokens: 3 });
       expect(accountFinal!(final!)).toBe(1);
       expect(accountFinal!(final!)).toBe(0);

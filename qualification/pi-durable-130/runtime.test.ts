@@ -151,18 +151,18 @@ async function setup(busy = false) {
 
 test("runtime: final usage receipt survives settlement and remains bound to original submission", () => fixture(async f => {
     const input = await f.accept("request-1", "use-tool");
-    expect(await f.runtime.readFinalUsage(input)).toBeNull();
+    expect(await f.runtime.readSettledUsage(input)).toBeNull();
     await f.runtime.submit(input); const reopened = await f.drain();
     try {
     const before = await f.work.getOperation(input.operationId);
-    const receipt = await reopened.readFinalUsage(input);
     const settledReceipts = await reopened.readSettledUsage(input);
+    const receipt = settledReceipts!.at(-1)!;
     expect(settledReceipts).toHaveLength(2);
     expect(settledReceipts!.at(-1)).toEqual(receipt!);
     expect(receipt).toMatchObject({ conversationId: input.conversationId });
     expect(receipt!.entryId).toBeGreaterThan(0);
     expect(Number.isSafeInteger(receipt!.tokens)).toBe(true);
-    await expect(reopened.readFinalUsage({ ...input, requestHash: "f".repeat(64) })).rejects.toThrow("Host binding conflict");
+    await expect(reopened.readSettledUsage({ ...input, requestHash: "f".repeat(64) })).rejects.toThrow("Host binding conflict");
     expect(await f.work.getOperation(input.operationId)).toEqual(before);
     expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
     f.db.exec("CREATE TABLE terminal_usage_fixture(entry_id INTEGER PRIMARY KEY, tokens INTEGER NOT NULL)");
@@ -184,10 +184,10 @@ test("runtime: final usage receipt survives settlement and remains bound to orig
     expect(await reopened.settle(input)).not.toBeNull();
     expect(effects).toBe(2);
     expect(f.db.query("SELECT * FROM terminal_usage_fixture").all()).toHaveLength(1);
-    expect(await reopened.readFinalUsage(input)).toEqual(receipt);
+    expect(await reopened.readSettledUsage(input)).toEqual(settledReceipts);
     const later = await f.accept("later-final-usage", "new plain answer");
-    expect(await reopened.readFinalUsage(input)).toEqual(receipt);
-    expect(await reopened.readFinalUsage(later)).toBeNull();
+    expect(await reopened.readSettledUsage(input)).toEqual(settledReceipts);
+    expect(await reopened.readSettledUsage(later)).toBeNull();
     expect(await reopened.readSettledUsage(input)).toEqual(settledReceipts);
     } finally { await reopened.close(); }
 }));
@@ -222,10 +222,10 @@ test.skipIf(!process.env.DURABLE_GOAL_ADDON_ROOT)("runtime: actual Goal accounts
     f.base.host.tokens = 7;
     const input = await f.accept("request-1", text);
     await f.runtime.submit(input); reopened = await f.drain();
-    const receipt = await reopened.readFinalUsage(input);
-    expect(receipt).toMatchObject({ tokens: 7 });
     const receipts = await reopened.readSettledUsage(input);
-    expect(receipts).toEqual([receipt!]);
+    expect(receipts).toHaveLength(1);
+    const receipt = receipts![0]!;
+    expect(receipt).toMatchObject({ tokens: 7 });
     const payload = f.db.query("SELECT content FROM runtime_payloads WHERE ref=?").get(input.payloadRef) as { content: string };
     expect(hashCanonicalRequest({ type: "input", requestId: input.requestId, content: payload.content })).toBe(input.requestHash);
     let fail = true, calls = 0;
