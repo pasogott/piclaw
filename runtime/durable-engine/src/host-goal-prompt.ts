@@ -5,7 +5,7 @@ import type { HostConversationRuntime } from "./host-runtime.js";
 import { accountCommittedGoalBatch } from "./host-goal-usage.js";
 import { withExtensionKvAuthority } from "../../src/extension-kv-registry.js";
 
-type GoalState = { status: string; goal_id: string; lifecycle_generation: number };
+type GoalState = { status: string; goal_id: string; lifecycle_generation: number; deadline_checkpoint?: unknown };
 export function createHostGoalPrompt(addon: {
   loadThreadGoal(chat: string): GoalState | null;
   buildGoalSystemPrompt(goal: any): string;
@@ -28,6 +28,12 @@ export function createHostGoalPrompt(addon: {
     const authority = createHostOperationAuthority(options.root, captured, options.assertOwner, true);
     const scope = <T>(body: () => T) => withExtensionKvAuthority({ extensionId: "goal", chatJid: captured.operation.chatJid,
       assertCurrent: authority.assertCurrent, write: authority.write }, () => { authority.assertCurrent(); return body(); });
+    const executable = () => scope(() => {
+      const goal = load(captured.operation.chatJid);
+      if (goal?.deadline_checkpoint) throw Error("Native Goal deadline checkpoint recovery unavailable");
+      if (goal?.status === "budget_limited" || goal?.status === "usage_limited") throw Error("Native Goal budget finalization unavailable");
+    });
+    executable();
     const texts = await runtime.readCapturedInputText(captured.inputs);
     authority.assertCurrent();
     let terminalProof: { goalId: string; generation: number; status: "complete" | "stopped" } | undefined;
@@ -60,9 +66,10 @@ export function createHostGoalPrompt(addon: {
           throw Error("Goal usage changed input lifecycle");
       }
     }
+    executable();
     return scope(() => {
       const goal = load(captured.operation.chatJid);
-      if (!goal || (goal.status !== "active" && goal.status !== "budget_limited")) return request;
+      if (!goal || (goal.status !== "active")) return request;
       const prompt = build(goal);
       authority.assertCurrent();
       return { messages: [...request.messages, { role: "user" as const, content: prompt, timestamp: 0 }] };

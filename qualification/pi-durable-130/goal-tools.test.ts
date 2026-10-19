@@ -83,7 +83,7 @@ test("Goal host adapter fences mutations to committed operation authority", asyn
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
 
-for (const mode of [false, true, "external", "stop", "external-terminal", "stop-accounting", "complete-accounting", "budget-accounting", "continuation"] as const) test(`actual Goal tool task captures its live accepted operation; rejected=${mode}`, async () => {
+for (const mode of [false, true, "external", "stop", "external-terminal", "stop-accounting", "complete-accounting", "budget-accounting", "persisted-budget", "deadline-checkpoint", "continuation"] as const) test(`actual Goal tool task captures its live accepted operation; rejected=${mode}`, async () => {
   const continuation = mode === "continuation";
   const rejectRequestAuthority = mode === true;
   const externalLifecycle = mode === "external";
@@ -217,6 +217,14 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
       addon.createThreadGoal(f.chatJid, "Live Goal source capture", mode === "budget-accounting" ? 3 : undefined);
       acceptedText = addon.prepareGoalInput("🎯 Continue goal: Live Goal source capture", f.chatJid).decision.text;
     });
+    if (mode === "persisted-budget" || mode === "deadline-checkpoint") {
+      const current = extensionKvGet("goal", "thread-goal", "chat", f.chatJid) as Record<string, unknown>;
+      const updated = mode === "persisted-budget" ? { ...current, status: "budget_limited" } : { ...current,
+        deadline_checkpoint: { checkpoint_id: "checkpoint", operation_id: "operation", continuation_id: "continuation", source_seq: 1,
+          operation_generation: 1, old_turn_id: "old-turn", expires_at: new Date(Date.now() + 120000).toISOString(), lifecycle_generation: current.lifecycle_generation,
+          continuation_generation: 1, status: "scheduled" } };
+      f.db.query("UPDATE extension_kv SET value=? WHERE extension_id='goal' AND scope_key=? AND key='thread-goal'").run(JSON.stringify(updated), f.chatJid);
+    }
     f.db.query("INSERT INTO messages(id,chat_jid,content,timestamp) VALUES (?,?,?,?)").run("goal-native", f.chatJid, acceptedText, at);
     const claimed = value(await f.ports.work.claimNext(sealed({ effect: effect(`${f.incarnation}:goal-claim`), chatJid: f.chatJid, expectedFrontier: 0, newOperationId: f.incarnation, claimedAt: at })))!;
     const { hashCanonicalRequest } = await import("../../runtime/src/service-effects/contracts/common.js");
@@ -227,6 +235,12 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
     value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:goal-running`, f.incarnation, source.sourceSeq), expectedVersion: claimed.operation.version,
       sessionId: f.incarnation, lane: "main", harnessOperationId: String(id), state: "running", watchGeneration: f.generation })));
     await f.runtime!.wait(input, id);
+    if (mode === "persisted-budget" || mode === "deadline-checkpoint") {
+      expect(requestFenced).toBe(true);
+      expect(modelEntries).toBe(0);
+      expect(captures).toBe(0);
+      return;
+    }
     if (continuation) {
       expect((await f.runtime!.reconcile(input)).answer?.text).toBe("Goal stored");
       expect(await f.runtime!.settle(input)).not.toBeNull();
