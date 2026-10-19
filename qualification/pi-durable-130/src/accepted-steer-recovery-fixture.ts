@@ -29,7 +29,7 @@ export async function sdkRecoverySnapshot(database: OwnedSqlite) {
 }
 
 export type RecoveryCheckpoint = { sdkSnapshot?: Awaited<ReturnType<typeof sdkRecoverySnapshot>>; generation: number; intentSourceId: string; primary: AcceptedInput; primaryId: number; b: { sourceId: string; sourceSeq: number }; committedIntentId?: number; intent: DurableConversationOperation; candidate?: { id: number; requestId?: string }; modelCalls: number; effects: number; };
-export async function acceptedSteerFixture(dir: string, boundary: "before-submit" | "committed-ack-lost", recovered?: RecoveryCheckpoint, queuePrimary = false, testConfig: { loseIntentBindingAck?: boolean; sharedDatabase?: boolean; httpPrimary?: boolean } = {}) {
+export async function acceptedSteerFixture(dir: string, boundary: "before-submit" | "committed-ack-lost", recovered?: RecoveryCheckpoint, queuePrimary = false, testConfig: { loseIntentBindingAck?: boolean; sharedDatabase?: boolean; httpPrimary?: boolean; prepareTerminalEffect?: import("../../../runtime/durable-engine/src/host-runtime.js").RuntimeOptions["prepareTerminalEffect"] } = {}) {
     process.env.PICLAW_DB_IN_MEMORY = "0";
     const chatJid = `web:recovery:${basename(dir)}:${boundary}`;
     const hostPath = join(STORE_DIR, "messages.db");
@@ -116,6 +116,7 @@ export async function acceptedSteerFixture(dir: string, boundary: "before-submit
       runtime = await HostConversationRuntime.open({ incarnation, owner: { assert, release() {} },
         openStorage: async () => { assert(); candidateStorage = await openStorage(); return candidateStorage; },
         harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
+        prepareTerminalEffect: testConfig.prepareTerminalEffect,
         ...ports, existingConversationIds: [base.root.id], conversationFor(chat, branch) {
           if (chat !== chatJid || branch !== "main") throw Error("Manifest conflict"); return base.root.id;
         }, authorizeScheduling(inspection) {

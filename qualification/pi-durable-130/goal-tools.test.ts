@@ -104,7 +104,10 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
   const { storeChatMetadata } = await import("../../runtime/src/db.js");
   const { createHostGoalTools } = await import("../../runtime/durable-engine/src/host-goal-tools.js");
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "goal-live-source-"));
-  const f = await acceptedSteerFixture(dir, "before-submit", undefined, true);
+  let prepareSettlement: import("../../runtime/durable-engine/src/host-runtime.js").RuntimeOptions["prepareTerminalEffect"];
+  const f = await acceptedSteerFixture(dir, "before-submit", undefined, true, {
+    prepareTerminalEffect: input => prepareSettlement?.(input) ?? Promise.resolve(undefined),
+  });
   const addon = await import(pathToFileURL(join(sourceRoot, "addons/goal/index.ts")).href);
   registerRootExtensionKvStore(); requireExtensionKvAuthority(); addon.resetGoalAddonForTests();
   let captures = 0;
@@ -121,9 +124,8 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
   const terminalProofs: boolean[] = [];
   const usageReads: { conversationId: number; entryId: number; tokens: number }[][] = [];
   const checkedTerminalBoundaries = new Set<string>();
-  let accountFinal: ((receipt: { conversationId: number; entryId: number; tokens: number }) => number) | undefined;
-  const { accountCommittedGoalBatch } = await import("../../runtime/durable-engine/src/host-goal-usage.js");
-  const { createHostOperationAuthority } = await import("../../runtime/durable-engine/src/host-operation-authority.js");
+  const { createHostGoalSettlement } = await import("../../runtime/durable-engine/src/host-goal-settlement.js");
+  prepareSettlement = createHostGoalSettlement(addon, { root: f.db, runtime: () => f.runtime!, assertOwner: () => f.owner.assert() });
   const promptExtension = createHostGoalPrompt(addon, { root: f.db, assertOwner: () => f.owner.assert(), runtime: () => ({
     async captureRunSource(conversation, task) {
       if (rejectRequestAuthority) throw Error("synthetic Goal request authority revoked");
@@ -143,12 +145,6 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
         const proof = { goalId: goal.goal_id, generation: goal.lifecycle_generation, status: terminalStatus } as const;
         const verified = await f.runtime!.hasGoalTerminalResult(conversation, task, proof);
         terminalProofs.push(verified);
-        if (verified && (mode === false || accountingOnly)) {
-          const owned = createHostOperationAuthority(f.db, captured, () => f.owner.assert());
-          const authority = { extensionId: "goal", chatJid: f.chatJid, ...owned };
-          const texts = await f.runtime!.readCapturedInputText(captured.inputs);
-          accountFinal = receipt => accountCommittedGoalBatch(addon, authority, texts, [receipt], proof);
-        }
         // Wrong-ID/generation checks once per accepted operation, not on every
         // generation handover. Keep the real positive proof on every request.
         if (!checkedTerminalBoundaries.has(captured.operation.operationId)) {
@@ -254,8 +250,8 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
       expect(await f.runtime!.hasSettledGoalTerminalResult(input, { ...proof, goalId: "wrong" })).toBe(false);
       const final = (await f.runtime!.readSettledUsage(input))!.at(-1)!;
       expect(final).toMatchObject({ tokens: 3 });
-      expect(accountFinal!(final!)).toBe(1);
-      expect(accountFinal!(final!)).toBe(0);
+      expect(await f.runtime!.settle(input)).not.toBeNull();
+      expect(await f.runtime!.settle(input)).not.toBeNull();
       expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 12, status: terminalStatus, lifecycle_generation: 2 });
       return;
     }
