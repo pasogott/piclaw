@@ -68,6 +68,7 @@ export interface ApplicationBootstrapOptions {
   onMaintenanceSettled?: (workId: string) => void;
   onOperationSettled?: (operationId: string) => void;
   prepareTerminalEffect?: RuntimeOptions["prepareTerminalEffect"];
+  dispatchHostCommand?: import("../../src/agent-pool/contracts.js").AgentPoolOptions["dispatchHostCommand"];
   onRuntime?: (runtime: import("./host-runtime.js").HostConversationRuntime) => void;
   assertConversationAvailable?: () => void;
   /** Host-owned physical catalog approval; no credentials or provider execution. */
@@ -637,7 +638,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     }
     return Object.freeze({
       /** Construct pool first from this snapshot, then bind its existing channel constructor. */
-      sessionOptions: Object.freeze({ getDurableSession, dispatchScheduledAgent, dispatchSidePrompt }),
+      sessionOptions: Object.freeze({ getDurableSession, dispatchScheduledAgent, dispatchSidePrompt,
+        dispatchHostCommand: config.dispatchHostCommand ? (chat: string, text: string) => { assertLive(); if (!routeIndex.has(chat)) throw Error("Unbound command chat"); return config.dispatchHostCommand!(chat, text); } : undefined }),
       allocateScheduledConversation, allocateSidePromptConversation, dispatchSidePrompt, reconcileSidePrompt,
       bind(options: Pick<WebChannelOpts, "queue" | "agentPool">): Readonly<WebChannelOpts> {
         assert(); if (bound || closing) throw Error("Application bundle already bound or closing");

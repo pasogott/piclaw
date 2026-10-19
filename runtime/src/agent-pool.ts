@@ -334,6 +334,7 @@ export class AgentPool {
   private readonly scheduledDispatch: AgentPoolOptions["dispatchScheduledAgent"];
   private readonly durableApplication: boolean;
   private readonly durableSessionLookup?: AgentPoolOptions["getDurableSession"];
+  private readonly hostCommandDispatch?: AgentPoolOptions["dispatchHostCommand"];
   dispatchScheduledAgent(lease: import("./service-effects/contracts/scheduled-run-store.js").ScheduledRunLease): Promise<AgentOutput> | undefined {
     if (this.scheduledDispatch) return this.scheduledDispatch(lease);
     if (this.durableApplication) throw new Error("Durable scheduled dispatcher unavailable");
@@ -341,6 +342,7 @@ export class AgentPool {
   }
 
   constructor(options: AgentPoolOptions) {
+    this.hostCommandDispatch = options.dispatchHostCommand?.bind(options);
     this.scheduledDispatch = options.dispatchScheduledAgent?.bind(options);
     this.sidePromptDispatch = options.dispatchSidePrompt?.bind(options);
     this.durableApplication = options.getDurableSession !== undefined;
@@ -882,6 +884,11 @@ export class AgentPool {
 
   /** Execute a raw slash command in the AgentSession (extension commands). */
   async applySlashCommand(chatJid: string, rawText: string): Promise<AgentControlResult> {
+    if (this.hostCommandDispatch) {
+      if (readAccessConfig().mode !== "single-user") throw Error("Native slash commands require owned family execution");
+      return this.hostCommandDispatch(chatJid, rawText);
+    }
+    if (this.durableApplication) throw Error("Native slash command unavailable");
     return this.runtimeFacade.applySlashCommand(chatJid, rawText);
   }
 

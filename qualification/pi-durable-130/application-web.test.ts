@@ -126,6 +126,11 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
   let settlementRuntime: import("../../runtime/durable-engine/src/host-runtime.js").HostConversationRuntime | undefined;
   const options = { root: db, path, ownership,
     onRuntime(runtime) { settlementRuntime = runtime; },
+    async dispatchHostCommand(chat, text) {
+      expect(chat).toBe(importedBindings.manifest[0]!.chatJid);
+      expect(text).toBe("/native-probe");
+      return { status: "success", message: "Native command without legacy session" };
+    },
     async prepareTerminalEffect(input) {
       const receipts = await settlementRuntime!.readSettledUsage(input);
       expect(receipts!.length).toBeGreaterThan(0);
@@ -376,6 +381,7 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
     expect(db.query("SELECT count(*) AS n FROM service_effect_s01_sources WHERE chat_jid=?").get(unbound)).toEqual({ n: 0 });
     expect(db.query("SELECT count(*) AS n FROM service_effect_s01_operations WHERE chat_jid=?").get(unbound)).toEqual({ n: 0 });
     expect(() => bundle.bind({ queue, agentPool: pool })).toThrow("already bound");
+    if (!failWait && !forks && !deferred) expect(await pool.applySlashCommand(chat, "/native-probe")).toMatchObject({ status: "success", message: "Native command without legacy session" });
     if (!failWait && !forks && !deferred) {
       const { QueuedFollowupLifecycleService } = await import("../../runtime/src/channels/web/runtime/queued-followup-lifecycle-service.js");
       const { storeWebMessage } = await import("../../runtime/src/channels/web/messaging/message-store.js");

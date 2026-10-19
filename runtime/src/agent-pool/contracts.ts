@@ -214,6 +214,8 @@ export interface RetrySettingsProvider {
 
 /** Construction options for creating an AgentPool. */
 export interface AgentPoolOptions {
+  /** Application-owned native slash commands; never constructs a legacy session. */
+  dispatchHostCommand?: (chatJid: string, rawText: string) => Promise<import("../agent-control/index.js").AgentControlResult>;
   /** Select the durable backend for the entire pool. Captured bindings are exhaustive;
    * even an empty map disables all legacy session construction. No HTTP selection. */
   dispatchScheduledAgent?: (lease: import("../service-effects/contracts/scheduled-run-store.js").ScheduledRunLease) => Promise<AgentOutput>;
