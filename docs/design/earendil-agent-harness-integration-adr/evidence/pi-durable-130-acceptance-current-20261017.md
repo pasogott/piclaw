@@ -1,4 +1,8 @@
-# #1650 acceptance: standard-tools candidate over `1241cdde0`
+# Historical #1650 incremental acceptance evidence
+
+The [19 October 45-row assessment](pi-durable-130-acceptance-current-20261019.md)
+supersedes this page's current-state claims and older CI totals. The dated
+implementation, failure and publication receipts below remain historical evidence.
 
 The published source at `bda68d523` selects the public durable engine and includes
 native card side prompts. Existing-chat migration, live-provider/fleet acceptance,
