@@ -61,7 +61,7 @@ const approvedDrawioFiles = Object.freeze({
   "tool.ts": "7a47e648d93d396c5b959795056885353f34fa04322390e35b0e989d95e81a8b",
 });
 const approvedGoalFiles = Object.freeze({
-  "index.ts": "b643ea6d57d74a1ff976532fbdf659d056df4d6f7b0acfe0c42f5d713b8ca30d",
+  "index.ts": "bfbabd84268d2639ad9513a57308191f5b1fe2cfae2ed8658e78cb8470c6a5f3",
   "deadline-checkpoint.ts": "e94f7cb065f321b06de33bfd7963011f03714c73437eedab634bce69f199c1db",
   "compat/chat-context.ts": "90e20fa38d72915a7cbf4eea4e4134788271e6eb52dfbcb813df05b6d60c3c44",
   "compat/extension-kv.ts": "04240517e9e8664cae2d2badb99f382100a7af3e12679cfce97087870881551c",

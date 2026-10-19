@@ -73,6 +73,12 @@ test("committed Goal usage and cursor are atomic, replay safe and lifecycle scop
     const { getExtensionKvStore } = await import("../../runtime/src/extension-kv-registry.js");
     scoped(() => getExtensionKvStore().set("goal", "committed-usage:1", { goalId: load().goal_id, entryId: 31, tokens: 4 }, "chat", authority.chatJid));
     expect(() => accountCommittedGoalBatch(addon, authority, [cappedText], capped)).toThrow("lifecycle changed");
+    scoped(() => { addon.clearThreadGoal(authority.chatJid); addon.createThreadGoal(authority.chatJid, "Overflow boundary"); });
+    const overflowGoal = load();
+    expect(accountCommittedGoalEntry(addon, authority, { ...entry, goalId: overflowGoal.goal_id, conversationId: 3, entryId: 40, tokens: Number.MAX_SAFE_INTEGER })).toBe(true);
+    expect(() => accountCommittedGoalEntry(addon, authority, { ...entry, goalId: overflowGoal.goal_id, conversationId: 3, entryId: 41, tokens: 1 })).toThrow("Goal usage overflow");
+    expect(load().tokens_used).toBe(Number.MAX_SAFE_INTEGER);
+    expect(extensionKvGet("goal", "committed-usage:3", "chat", authority.chatJid)).toMatchObject({ entryId: 40 });
     for (const toolName of ["goal_complete", "goal_stop"]) {
       scoped(() => { addon.clearThreadGoal(authority.chatJid); addon.createThreadGoal(authority.chatJid, "Terminal usage policy", 1); });
       const tool = addon.createGoalTools(() => authority.chatJid).find((tool: { name: string }) => tool.name === toolName)!;
