@@ -65,7 +65,8 @@ test("Goal host adapter fences mutations to committed operation authority", asyn
   const captured = { operation, inputs: [{ incarnation: "goal-copy", conversationId: 2 as never, chatJid: chat, branchId: "main", operationId: operation.operationId,
     sourceSeq: source.sourceSeq, sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: "goal-request", requestHash: "a".repeat(64), submissionId: 42 as never }] };
   let revokeDuringCapture = false;
-  const tools = createHostGoalTools(addon.createGoalTools, { root: db, assertOwner() {}, runtime: () => ({ async captureToolSource() {
+  let factoryCalls = 0;
+  const tools = createHostGoalTools((resolveChat) => { factoryCalls++; return addon.createGoalTools(resolveChat); }, { root: db, assertOwner() {}, runtime: () => ({ async captureToolSource() {
     await Promise.resolve();
     if (revokeDuringCapture) db.query("UPDATE service_effect_s01_chats SET active_operation_id=NULL WHERE chat_jid=?").run(chat);
     return captured;
@@ -78,5 +79,63 @@ test("Goal host adapter fences mutations to committed operation authority", asyn
     revokeDuringCapture = true;
     await expect(invoke("goal_complete", { summary: "Denied", evidence: ["revoked operation"] })).rejects.toThrow();
     expect(extensionKvGet("goal", "thread-goal", "chat", chat)).toMatchObject({ status: "active" });
+    expect(factoryCalls).toBe(1);
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
+});
+
+test("actual Goal tool task captures its live accepted operation before shared KV mutation", async () => {
+  const sourceRoot = process.env.DURABLE_GOAL_ADDON_ROOT;
+  if (!sourceRoot) throw Error("DURABLE_GOAL_ADDON_ROOT required");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { acceptedSteerFixture } = await import("./src/accepted-steer-recovery-fixture.js");
+  const { context } = await import("./src/fixture.js");
+  const { value, effect, sealed, at } = await import("./src/host-handoff.js");
+  const { Harness, configure, defineExtension } = await import("../../runtime/durable-engine/qualification/durable.ts");
+  const { SqliteStorage } = await import("../../runtime/durable-engine/qualification/sqlite.ts");
+  const { OwnedSqlite } = await import("./src/ownership.js");
+  const { createProvider, createAssistantMessageEventStream } = await import("../../runtime/durable-engine/node_modules/@earendil-works/pi-ai");
+  const { storeChatMetadata } = await import("../../runtime/src/db.js");
+  const { createHostGoalTools } = await import("../../runtime/durable-engine/src/host-goal-tools.js");
+  const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "goal-live-source-"));
+  const f = await acceptedSteerFixture(dir, "before-submit");
+  const addon = await import(pathToFileURL(join(sourceRoot, "addons/goal/index.ts")).href);
+  registerRootExtensionKvStore(); requireExtensionKvAuthority(); addon.resetGoalAddonForTests();
+  let captures = 0;
+  const tools = createHostGoalTools(addon.createGoalTools, { root: f.db, assertOwner: () => f.owner.assert(), runtime: () => ({ async captureToolSource(conversation, task, call) {
+    const proof = await f.runtime!.captureToolSource(conversation, task, call);
+    expect(proof.operation.chatJid).toBe(f.chatJid); captures++; return proof;
+  } }) });
+  const extension = defineExtension({ name: "native-goal-fixture", tools }); f.base.registry.install(extension);
+  const model = f.base.models.getModel("qualification", "synthetic")!;
+  const stream = (_model: unknown, transcript: { messages: { role: string }[] }) => {
+    const calling = transcript.messages.findLast(message => message.role !== "system")?.role === "user";
+    const output = createAssistantMessageEventStream();
+    const message = { role: "assistant" as const, api: model.api, provider: model.provider, model: model.id, timestamp: 1,
+      stopReason: calling ? "toolUse" as const : "stop" as const, content: calling
+        ? [{ type: "toolCall" as const, id: "native-goal-call", name: "create_goal", arguments: { objective: "Live Goal source capture" } }]
+        : [{ type: "text" as const, text: "Goal stored" }],
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+    output.push({ type: "done", reason: message.stopReason, message }); output.end(message); return output;
+  };
+  f.base.models.setProvider(createProvider({ id: model.provider, models: [model], auth: { apiKey: { name: "Synthetic", resolve: async () => ({ auth: {}, source: "fixture" }) } }, api: { stream, streamSimple: stream } }));
+  try {
+    const harness = await Harness.open(await SqliteStorage.open(new OwnedSqlite(f.owner)), { models: f.base.models, registry: f.base.registry }, context);
+    try { await harness.commit(tx => configure(tx, f.base.root.id, { tools, extensions: [extension] }), context); } finally { await harness.close(context); }
+    await f.open(); f.permit = true;
+    storeChatMetadata(f.chatJid, at);
+    const source = value(await f.ports.work.acceptSource(sealed({ effect: effect(`${f.incarnation}:goal-source`), chatJid: f.chatJid, sourceId: "goal-native", kind: "message", payloadRef: "goal-native", targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
+    f.db.query("INSERT INTO messages(id,chat_jid,content,timestamp) VALUES (?,?,?,?)").run("goal-native", f.chatJid, "Create the explicit goal", at);
+    const claimed = value(await f.ports.work.claimNext(sealed({ effect: effect(`${f.incarnation}:goal-claim`), chatJid: f.chatJid, expectedFrontier: 0, newOperationId: f.incarnation, claimedAt: at })))!;
+    const { hashCanonicalRequest } = await import("../../runtime/src/service-effects/contracts/common.js");
+    const input = { incarnation: f.incarnation, conversationId: f.base.root.id, chatJid: f.chatJid, branchId: "main", operationId: f.incarnation,
+      sourceSeq: source.sourceSeq, sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: f.primaryRequestId,
+      requestHash: hashCanonicalRequest({ type: "input", requestId: f.primaryRequestId, content: "Create the explicit goal" }) };
+    const id = await f.runtime!.submit(input);
+    value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:goal-running`, f.incarnation, source.sourceSeq), expectedVersion: claimed.operation.version,
+      sessionId: f.incarnation, lane: "main", harnessOperationId: String(id), state: "running", watchGeneration: f.generation })));
+    await f.runtime!.wait(input, id);
+    expect(captures).toBe(1);
+    expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ objective: "Live Goal source capture", status: "active" });
+    expect((await f.runtime!.reconcile(input)).answer?.text).toBe("Goal stored");
+  } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); await f.close(); await rm(dir, { recursive: true, force: true }); }
 });

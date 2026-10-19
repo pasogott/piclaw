@@ -1,4 +1,5 @@
 import type Database from "bun:sqlite";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { JsonValue } from "@earendil-works/chord";
 import type { ExtensionContext, ToolDefinition } from "../../../node_modules/@earendil-works/pi-coding-agent";
 import { createHostTool } from "./host-tools.js";
@@ -15,7 +16,12 @@ export function createHostGoalTools(factory: GoalFactory, options: {
   runtime(): Pick<HostConversationRuntime, "captureToolSource">;
   assertOwner(): void;
 }) {
-  const declarations = factory(() => { throw Error("Goal chat authority unavailable"); });
+  const chatScope = new AsyncLocalStorage<string>();
+  const declarations = factory(() => {
+    const chat = chatScope.getStore();
+    if (!chat) throw Error("Goal chat authority unavailable");
+    return chat;
+  });
   if (declarations.length !== names.length || new Set(declarations.map(tool => tool.name)).size !== names.length ||
     names.some(name => !declarations.some(tool => tool.name === name))) throw Error("Unqualified Goal tool set");
   return declarations.map(declaration => createHostTool(declaration, {
@@ -26,14 +32,12 @@ export function createHostGoalTools(factory: GoalFactory, options: {
       const captured = await options.runtime().captureToolSource(invocation.conversationId, invocation.taskId, invocation.toolCallId);
       const chatJid = captured.operation.chatJid;
       const authority = createHostOperationAuthority(options.root, captured, options.assertOwner, declaration.name === "get_goal");
-      const tool = factory(() => chatJid).find(tool => tool.name === declaration.name);
-      if (!tool) throw Error("Goal tool changed");
-      return withExtensionKvAuthority({ extensionId: "goal", chatJid, assertCurrent: authority.assertCurrent, write: authority.write }, async () => {
+      return chatScope.run(chatJid, () => withExtensionKvAuthority({ extensionId: "goal", chatJid, assertCurrent: authority.assertCurrent, write: authority.write }, async () => {
         authority.assertCurrent();
-        const result = await tool.execute(invocation.toolCallId, cloned as never, invocation.signal, undefined, undefined as never);
+        const result = await invocation.execute(invocation.toolCallId, cloned as never, invocation.signal, undefined, undefined as never);
         authority.assertCurrent();
         return result as unknown as { content: never; details: JsonValue };
-      });
+      }));
     },
   }, { callers: ["model"] }));
 }
