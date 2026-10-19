@@ -129,6 +129,26 @@ test("autonomous stable follow-up yields to pending sources and legacy queue ite
   expect(f.db.query('SELECT source_id FROM service_effect_s01_sources').all()).toEqual([{ source_id: 'goal:first' }]);
 });
 
+test("accepted stable follow-up dispatch uses exact source and materialized message, not UUID shape", async () => {
+  const f = fixture(undefined, () => true), chatJid = 'web:stable-dispatch';
+  const service = new QueuedFollowupLifecycleService(), messageId = 'goal-continuation:operation-1';
+  f.db.transaction(() => service.enqueueAcceptedFollowupOnce(messageId, chatJid, 'Continue Goal', '2026-10-19T00:00:00.000Z',
+    { source: 'goal.continuation' }, f.acceptQueued)).immediate();
+  f.db.query('INSERT OR IGNORE INTO chats(jid,name,last_message_time) VALUES (?,?,?)').run(chatJid, 'Stable dispatch', '2026-10-19T00:00:00.000Z');
+  const rowId = Number(f.db.query("INSERT INTO messages(id,chat_jid,content,timestamp,is_from_me) VALUES (?,?,?,?,0)").run(messageId, chatJid, 'Continue Goal', '2026-10-19T00:00:00.000Z').lastInsertRowid);
+  let submissions = 0;
+  const dispatch = createDurableQueueDispatch({ work: f.work, branchId: 'main', assertCurrentWriter() {}, shutdown: new AbortController().signal,
+    async waitForReconciliation() {}, adapter: {
+      async submit(accepted: any) { expect(accepted.claimed.source.sourceId).toBe(messageId); expect(accepted.content).toBe('Continue Goal'); submissions++; return 1; },
+      async wait() {}, async settle() { return {}; },
+    } as any });
+  expect(await dispatch(chatJid, messageId, rowId)!()).toBe('settled');
+  expect(submissions).toBe(1);
+  expect(dispatch(chatJid, 'goal-continuation:foreign', rowId)).toBeUndefined();
+  f.db.query('UPDATE service_effect_s01_sources SET payload_ref=? WHERE chat_jid=? AND source_id=?').run('queued-source:foreign', chatJid, messageId);
+  expect(() => dispatch(chatJid, messageId, rowId)).toThrow('identity conflict');
+});
+
 function withdrawalFixture() {
   const f = fixture(undefined, () => true);
   f.channel.getQueuedInputSourceAdmission = () => f.acceptQueued;

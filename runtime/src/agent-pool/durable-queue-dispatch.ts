@@ -4,7 +4,7 @@ import { createLogger } from "../utils/logger.js";
 
 const log = createLogger("durable.queue-dispatch");
 function matchesPayloadRef(ref: string, messageId: string, rowId: number): boolean {
-  return ref === `message-row:${rowId}` || (/^source-[0-9a-f-]{36}$/i.test(messageId) && ref === `queued-source:${messageId}`);
+  return ref === `message-row:${rowId}` || ref === `queued-source:${messageId}`;
 }
 import type { CurrentPiclawServiceWorkStore } from "../service-effects/current-piclaw/service-work-store.js";
 import type { createDurableConversationAdapter } from "./durable-runtime-adapter.js";
