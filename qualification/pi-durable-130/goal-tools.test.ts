@@ -83,7 +83,7 @@ test("Goal host adapter fences mutations to committed operation authority", asyn
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
 
-for (const mode of [false, true, "external", "stop", "external-terminal", "stop-accounting", "complete-accounting"] as const) test(`actual Goal tool task captures its live accepted operation; rejected=${mode}`, async () => {
+for (const mode of [false, true, "external", "stop", "external-terminal", "stop-accounting", "complete-accounting", "budget-accounting"] as const) test(`actual Goal tool task captures its live accepted operation; rejected=${mode}`, async () => {
   const rejectRequestAuthority = mode === true;
   const externalLifecycle = mode === "external";
   const externalTerminal = mode === "external-terminal";
@@ -120,7 +120,6 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
   let requestFenced = false, modelEntries = 0;
   const terminalProofs: boolean[] = [];
   const usageReads: { conversationId: number; entryId: number; tokens: number }[][] = [];
-  const usageApplied: number[] = [];
   const checkedTerminalBoundaries = new Set<string>();
   let accountFinal: ((receipt: { conversationId: number; entryId: number; tokens: number }) => number) | undefined;
   const { accountCommittedGoalBatch } = await import("../../runtime/durable-engine/src/host-goal-usage.js");
@@ -130,13 +129,6 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
       if (rejectRequestAuthority) throw Error("synthetic Goal request authority revoked");
       const captured = await f.runtime!.captureRunSource(conversation, task);
       usageReads.push(await f.runtime!.readCommittedRunUsage(conversation, task));
-      if (mode === false && usageReads.length === 2) {
-        const owned = createHostOperationAuthority(f.db, captured, () => f.owner.assert());
-        const authority = { extensionId: "goal", chatJid: f.chatJid, ...owned };
-        const texts = await f.runtime!.readCapturedInputText(captured.inputs);
-        usageApplied.push(accountCommittedGoalBatch(addon, authority, texts, usageReads.at(-1)!));
-        usageApplied.push(accountCommittedGoalBatch(addon, authority, texts, usageReads.at(-1)!));
-      }
       if (externalLifecycle) withExtensionKvAuthority({ extensionId: "goal", chatJid: f.chatJid, assertCurrent() {},
         write<T>(body: () => T) { return f.db.transaction(body).immediate(); } }, () => {
         addon.clearThreadGoal(f.chatJid); addon.createThreadGoal(f.chatJid, "Externally replaced Goal");
@@ -155,7 +147,6 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
           const owned = createHostOperationAuthority(f.db, captured, () => f.owner.assert());
           const authority = { extensionId: "goal", chatJid: f.chatJid, ...owned };
           const texts = await f.runtime!.readCapturedInputText(captured.inputs);
-          accountCommittedGoalBatch(addon, authority, texts, usageReads.at(-1)!, proof);
           accountFinal = receipt => accountCommittedGoalBatch(addon, authority, texts, [receipt], proof);
         }
         // Wrong-ID/generation checks once per accepted operation, not on every
@@ -168,6 +159,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
       }
       return captured;
     },
+    readCommittedRunUsage: (conversation, task) => f.runtime!.readCommittedRunUsage(conversation, task),
     readCapturedInputText: inputs => f.runtime!.readCapturedInputText(inputs),
     hasGoalTerminalResult: (conversation, task, expected) => f.runtime!.hasGoalTerminalResult(conversation, task, expected),
   }), failClosed() { requestFenced = true; } });
@@ -200,7 +192,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
     let acceptedText = "Create the explicit goal";
     if (!rejectRequestAuthority) withExtensionKvAuthority({ extensionId: "goal", chatJid: f.chatJid, assertCurrent() {},
       write<T>(body: () => T) { return f.db.transaction(body).immediate(); } }, () => {
-      addon.createThreadGoal(f.chatJid, "Live Goal source capture");
+      addon.createThreadGoal(f.chatJid, "Live Goal source capture", mode === "budget-accounting" ? 3 : undefined);
       acceptedText = addon.prepareGoalInput("🎯 Continue goal: Live Goal source capture", f.chatJid).decision.text;
     });
     f.db.query("INSERT INTO messages(id,chat_jid,content,timestamp) VALUES (?,?,?,?)").run("goal-native", f.chatJid, acceptedText, at);
@@ -213,6 +205,13 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
     value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:goal-running`, f.incarnation, source.sourceSeq), expectedVersion: claimed.operation.version,
       sessionId: f.incarnation, lane: "main", harnessOperationId: String(id), state: "running", watchGeneration: f.generation })));
     await f.runtime!.wait(input, id);
+    if (mode === "budget-accounting") {
+      expect(requestFenced).toBe(true);
+      expect(modelEntries).toBe(1);
+      expect(captures).toBe(1);
+      expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 3, status: "budget_limited", lifecycle_generation: 2 });
+      return;
+    }
     if (externalTerminal) {
       expect(requestFenced).toBe(true);
       expect(modelEntries).toBe(0);
@@ -236,7 +235,6 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
       return;
     }
     if (mode === false) {
-      expect(usageApplied).toEqual([1, 0]);
       expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 9 });
     }
     expect(captures).toBe(2);

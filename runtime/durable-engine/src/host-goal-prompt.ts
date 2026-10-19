@@ -2,6 +2,7 @@ import type Database from "bun:sqlite";
 import { defineExtension, type GenerationHooks } from "@earendil-works/pi-durable";
 import { createHostOperationAuthority } from "./host-operation-authority.js";
 import type { HostConversationRuntime } from "./host-runtime.js";
+import { accountCommittedGoalBatch } from "./host-goal-usage.js";
 import { withExtensionKvAuthority } from "../../src/extension-kv-registry.js";
 
 type GoalState = { status: string; goal_id: string; lifecycle_generation: number };
@@ -10,9 +11,11 @@ export function createHostGoalPrompt(addon: {
   buildGoalSystemPrompt(goal: any): string;
   goalInputIdentity(text: string): { goalId: string; generation: number } | false | null;
   resolveGoalInput(text: string, chat: string): { action: string };
+  accountGoalProgress(chat: string, tokens: number): unknown;
+  accountTerminalGoalProgress(chat: string, expected: { goalId: string; generation: number }, tokens: number): unknown;
 }, options: {
   root: Database;
-  runtime(): Pick<HostConversationRuntime, "captureRunSource" | "readCapturedInputText" | "hasGoalTerminalResult">;
+  runtime(): Pick<HostConversationRuntime, "captureRunSource" | "readCapturedInputText" | "hasGoalTerminalResult" | "readCommittedRunUsage">;
   assertOwner(): void;
   failClosed(error: unknown): void;
 }) {
@@ -27,6 +30,7 @@ export function createHostGoalPrompt(addon: {
       assertCurrent: authority.assertCurrent, write: authority.write }, () => { authority.assertCurrent(); return body(); });
     const texts = await runtime.readCapturedInputText(captured.inputs);
     authority.assertCurrent();
+    let terminalProof: { goalId: string; generation: number; status: "complete" | "stopped" } | undefined;
     for (const text of texts) {
       const denied = scope(() => addon.resolveGoalInput(text, captured.operation.chatJid).action === "handled");
       if (!denied) continue;
@@ -38,9 +42,23 @@ export function createHostGoalPrompt(addon: {
           goalId: goal.goal_id, generation: goal.lifecycle_generation, status: goal.status,
         })) throw Error("Goal input lifecycle changed");
       authority.assertCurrent();
+      terminalProof = { goalId: goal.goal_id, generation: goal.lifecycle_generation, status: goal.status };
       const current = scope(() => load(captured.operation.chatJid));
       if (!current || current.goal_id !== goal.goal_id || current.lifecycle_generation !== goal.lifecycle_generation || current.status !== goal.status)
         throw Error("Goal input lifecycle changed");
+    }
+    // Ordinary input does not acquire autonomous Goal accounting authority.
+    if (texts.length && texts.every(text => addon.goalInputIdentity(text))) {
+      const receipts = await runtime.readCommittedRunUsage(api.conversationId, api.taskId);
+      authority.assertCurrent();
+      if (receipts.length) {
+        const writer = createHostOperationAuthority(options.root, captured, options.assertOwner);
+        accountCommittedGoalBatch(addon, { extensionId: "goal", chatJid: captured.operation.chatJid, ...writer }, texts, receipts, terminalProof);
+        // Accounting may itself exhaust the budget and advance the lifecycle.
+        // Do not dispatch this stale continuation as a finalization request.
+        if (!terminalProof && texts.some(text => scope(() => addon.resolveGoalInput(text, captured.operation.chatJid).action === "handled")))
+          throw Error("Goal usage changed input lifecycle");
+      }
     }
     return scope(() => {
       const goal = load(captured.operation.chatJid);
