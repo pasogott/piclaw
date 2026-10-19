@@ -73,5 +73,21 @@ test("committed Goal usage and cursor are atomic, replay safe and lifecycle scop
     const { getExtensionKvStore } = await import("../../runtime/src/extension-kv-registry.js");
     scoped(() => getExtensionKvStore().set("goal", "committed-usage:1", { goalId: load().goal_id, entryId: 31, tokens: 4 }, "chat", authority.chatJid));
     expect(() => accountCommittedGoalBatch(addon, authority, [cappedText], capped)).toThrow("lifecycle changed");
+    for (const toolName of ["goal_complete", "goal_stop"]) {
+      scoped(() => { addon.clearThreadGoal(authority.chatJid); addon.createThreadGoal(authority.chatJid, "Terminal usage policy", 1); });
+      const tool = addon.createGoalTools(() => authority.chatJid).find((tool: { name: string }) => tool.name === toolName)!;
+      await scoped(() => tool.execute("terminal-policy", { reason: "other", summary: "Verified terminal policy", evidence: ["fixture"] }, undefined, undefined, {}));
+      const terminal = load();
+      const expected = { goalId: terminal.goal_id, generation: terminal.lifecycle_generation };
+      scoped(() => addon.accountTerminalGoalProgress(authority.chatJid, expected, 7));
+      expect(load()).toMatchObject({ status: terminal.status, lifecycle_generation: terminal.lifecycle_generation, tokens_used: 7,
+        completion_summary: terminal.completion_summary, stop_summary: terminal.stop_summary });
+      expect(() => scoped(() => addon.accountTerminalGoalProgress(authority.chatJid, { ...expected, generation: expected.generation + 1 }, 2))).toThrow("lifecycle changed");
+      expect(() => scoped(() => addon.accountTerminalGoalProgress(authority.chatJid, expected, -1))).toThrow("Invalid terminal");
+      expect(() => scoped(() => authority.write(() => { addon.accountTerminalGoalProgress(authority.chatJid, expected, 2); throw Error("terminal rollback"); }))).toThrow("terminal rollback");
+      expect(load().tokens_used).toBe(7);
+      scoped(() => addon.accountGoalProgress(authority.chatJid, 3));
+      expect(load().tokens_used).toBe(7); // Legacy callers still ignore terminal Goals.
+    }
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
