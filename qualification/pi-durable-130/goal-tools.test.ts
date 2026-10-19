@@ -44,3 +44,39 @@ test("actual Goal factory uses scoped shared database KV and denies revoked muta
     expect(() => withExtensionKvAuthority({ ...authority, chatJid: "web:foreign" }, () => addon.loadThreadGoal(authority.chatJid))).toThrow("Extension KV scope denied");
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
+
+test("Goal host adapter fences mutations to committed operation authority", async () => {
+  const sourceRoot = process.env.DURABLE_GOAL_ADDON_ROOT;
+  if (!sourceRoot) throw Error("DURABLE_GOAL_ADDON_ROOT required");
+  const { createHostGoalTools } = await import("../../runtime/durable-engine/src/host-goal-tools.js");
+  const { installTerminalSettlementCompositionSchema } = await import("../../runtime/src/service-effects/current-piclaw/terminal-settlement-schema.js");
+  const { createCurrentPiclawServiceWorkStore } = await import("../../runtime/src/service-effects/current-piclaw/service-work-store.js");
+  const { value, effect, sealed, at } = await import("./src/host-handoff.js");
+  const { context } = await import("./src/fixture.js");
+  initDatabase(); const db = getDb(); installTerminalSettlementCompositionSchema(db);
+  registerRootExtensionKvStore(); requireExtensionKvAuthority();
+  const addon = await import(pathToFileURL(join(sourceRoot, "addons/goal/index.ts")).href); addon.resetGoalAddonForTests();
+  const work = value(createCurrentPiclawServiceWorkStore(db, { hitFault: () => false, recordTrace() {} }));
+  const chat = "web:goal-operation";
+  const source = value(await work.acceptSource(sealed({ effect: effect("goal-accept"), chatJid: chat, sourceId: "goal-source", kind: "message", payloadRef: "goal-payload", targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
+  const claimed = value(await work.claimNext(sealed({ effect: effect("goal-claim"), chatJid: chat, expectedFrontier: 0, newOperationId: "goal-operation", claimedAt: at })))!;
+  const operation = value(await work.bindHarness(sealed({ effect: effect("goal-bind", claimed.operation.operationId, source.sourceSeq), expectedVersion: claimed.operation.version,
+    sessionId: "goal-session", lane: "main", harnessOperationId: "42", state: "running", watchGeneration: 1 })));
+  const captured = { operation, inputs: [{ incarnation: "goal-copy", conversationId: 2 as never, chatJid: chat, branchId: "main", operationId: operation.operationId,
+    sourceSeq: source.sourceSeq, sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: "goal-request", requestHash: "a".repeat(64), submissionId: 42 as never }] };
+  let revokeDuringCapture = false;
+  const tools = createHostGoalTools(addon.createGoalTools, { root: db, assertOwner() {}, runtime: () => ({ async captureToolSource() {
+    await Promise.resolve();
+    if (revokeDuringCapture) db.query("UPDATE service_effect_s01_chats SET active_operation_id=NULL WHERE chat_jid=?").run(chat);
+    return captured;
+  } }) });
+  const api = { conversationId: 2, taskId: 99, callId: "goal-call", output() {}, async details() {} } as any;
+  const invoke = (name: string, args: unknown) => tools.find(tool => tool.name === name)!.execute(args, api, context);
+  try {
+    await invoke("create_goal", { objective: "Operation-owned Goal" });
+    expect(extensionKvGet("goal", "thread-goal", "chat", chat)).toMatchObject({ status: "active", objective: "Operation-owned Goal" });
+    revokeDuringCapture = true;
+    await expect(invoke("goal_complete", { summary: "Denied", evidence: ["revoked operation"] })).rejects.toThrow();
+    expect(extensionKvGet("goal", "thread-goal", "chat", chat)).toMatchObject({ status: "active" });
+  } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
+});
