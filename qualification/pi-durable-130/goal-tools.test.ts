@@ -83,7 +83,7 @@ test("Goal host adapter fences mutations to committed operation authority", asyn
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
 
-test("actual Goal tool task captures its live accepted operation before shared KV mutation", async () => {
+for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task captures its live accepted operation; rejected=${rejectRequestAuthority}`, async () => {
   const sourceRoot = process.env.DURABLE_GOAL_ADDON_ROOT;
   if (!sourceRoot) throw Error("DURABLE_GOAL_ADDON_ROOT required");
   const { mkdtemp, rm } = await import("node:fs/promises");
@@ -107,11 +107,18 @@ test("actual Goal tool task captures its live accepted operation before shared K
   } }) });
   const extension = defineExtension({ name: "native-goal-fixture", tools }); f.base.registry.install(extension);
   const { createHostGoalPrompt } = await import("../../runtime/durable-engine/src/host-goal-prompt.js");
-  const promptExtension = createHostGoalPrompt(addon, { root: f.db, assertOwner: () => f.owner.assert(), runtime: () => f.runtime!, failClosed() { f.permit = false; } });
+  let requestFenced = false, modelEntries = 0;
+  const promptExtension = createHostGoalPrompt(addon, { root: f.db, assertOwner: () => f.owner.assert(), runtime: () => ({
+    async captureRunSource(conversation, task) {
+      if (rejectRequestAuthority) throw Error("synthetic Goal request authority revoked");
+      return f.runtime!.captureRunSource(conversation, task);
+    },
+  }), failClosed() { requestFenced = true; } });
   f.base.registry.install(promptExtension);
   const prompts: string[] = [];
   const model = f.base.models.getModel("qualification", "synthetic")!;
   const stream = (_model: unknown, transcript: { messages: { role: string }[] }) => {
+    modelEntries++;
     prompts.push(JSON.stringify(transcript.messages));
     const calling = !transcript.messages.some(message => message.role === "toolResult");
     const output = createAssistantMessageEventStream();
@@ -122,7 +129,7 @@ test("actual Goal tool task captures its live accepted operation before shared K
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
     output.push({ type: "done", reason: message.stopReason, message }); output.end(message); return output;
   };
-  f.base.models.setProvider(createProvider({ id: model.provider, models: [model], auth: { apiKey: { name: "Synthetic", resolve: async () => ({ auth: {}, source: "fixture" }) } }, api: { stream, streamSimple: stream } }));
+  f.base.models.setProvider(createProvider({ id: model.provider, models: [model], auth: { apiKey: { name: "Synthetic", resolve: async () => { if (requestFenced) throw Error("Goal request lifetime fenced"); return { auth: {}, source: "fixture" }; } } }, api: { stream, streamSimple: stream } }));
   try {
     const harness = await Harness.open(await SqliteStorage.open(new OwnedSqlite(f.owner)), { models: f.base.models, registry: f.base.registry }, context);
     try { await harness.commit(tx => configure(tx, f.base.root.id, { tools, extensions: [extension, promptExtension] }), context); } finally { await harness.close(context); }
@@ -139,6 +146,13 @@ test("actual Goal tool task captures its live accepted operation before shared K
     value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:goal-running`, f.incarnation, source.sourceSeq), expectedVersion: claimed.operation.version,
       sessionId: f.incarnation, lane: "main", harnessOperationId: String(id), state: "running", watchGeneration: f.generation })));
     await f.runtime!.wait(input, id);
+    if (rejectRequestAuthority) {
+      expect(requestFenced).toBe(true);
+      expect(modelEntries).toBe(0);
+      expect(captures).toBe(0);
+      expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toBeNull();
+      return;
+    }
     expect(captures).toBe(1);
     expect(prompts).toHaveLength(2);
     expect(prompts[0]).not.toContain("<objective>");
