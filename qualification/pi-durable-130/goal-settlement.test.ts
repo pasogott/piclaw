@@ -58,8 +58,10 @@ test("native Goal commands commit state and accepted continuation atomically", a
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
 
-for (const mode of ["continue", "pending", "error", "stalled", "finalize", "budget", "budget-pending"] as const) test(`actual Goal terminal continuation is atomic and policy scoped: ${mode}`, async () => {
-  const budget = mode === "budget" || mode === "budget-pending";
+for (const mode of ["continue", "ordinary", "ordinary-empty", "ordinary-budget", "pending", "error", "stalled", "finalize", "budget", "budget-pending"] as const) test(`actual Goal terminal continuation is atomic and policy scoped: ${mode}`, async () => {
+  const ordinary = mode === "ordinary" || mode === "ordinary-empty" || mode === "ordinary-budget";
+  const budget = mode === "budget" || mode === "budget-pending" || mode === "ordinary-budget";
+  const tokens = mode === "ordinary-empty" ? 0 : 7;
   const sourceRoot = process.env.DURABLE_GOAL_ADDON_ROOT;
   if (!sourceRoot) throw Error("DURABLE_GOAL_ADDON_ROOT required");
   process.env.PICLAW_DB_IN_MEMORY = "1";
@@ -96,10 +98,14 @@ for (const mode of ["continue", "pending", "error", "stalled", "finalize", "budg
     const stored = addon.loadThreadGoal(chatJid);
     getExtensionKvStore().set("goal", "thread-goal", { ...stored, last_auto_continue_fingerprint: fingerprint }, "chat", chatJid);
   });
-  let planReads = 0;
+  let planReads = 0, goalAfterOrdinary = false;
   const prepare = createHostGoalSettlement(addon, { root: db, assertOwner() {}, runtime: () => ({
     async readAcceptedInputText() { return text; },
-    async readSettledInputUsage() { return { texts: [text], receipts: [{ conversationId: 1, entryId: 5, tokens: 7 }] }; },
+    async readSettledInputUsage() { return {
+      inputs: [{ entryId: 1, text }, ...(ordinary ? [{ entryId: mode === "ordinary-empty" ? 4 : 10, text: "Ordinary human work" }] : []),
+        ...(goalAfterOrdinary ? [{ entryId: 20, text }] : [])],
+      receipts: [{ conversationId: 1, entryId: 5, tokens: 7 }, ...(ordinary ? [{ conversationId: 1, entryId: 11, tokens: 11 }] : [])],
+    }; },
     async hasSettledGoalTerminalResult() { return false; },
   }), continuation: {
     addon,
@@ -114,13 +120,20 @@ for (const mode of ["continue", "pending", "error", "stalled", "finalize", "budg
           kind: "message", payloadRef: `queued-source:${item.source_id}`, targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false }), database);
       }, onlyIfIdle); },
   } });
-  const apply = await prepare({ incarnation: "fixture", conversationId: 1, chatJid, branchId: "main", operationId: "op", sourceSeq: source.sourceSeq,
-    sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: "request", requestHash: "a".repeat(64) });
+  const input = { incarnation: "fixture", conversationId: 1, chatJid, branchId: "main", operationId: "op", sourceSeq: source.sourceSeq,
+    sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: "request", requestHash: "a".repeat(64) };
+  if (mode === "ordinary") {
+    goalAfterOrdinary = true;
+    await expect(prepare(input)).rejects.toThrow("Goal input after ordinary steer");
+    expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ tokens_used: 0 });
+    goalAfterOrdinary = false;
+  }
+  const apply = await prepare(input);
   withExtensionKvAuthority({ ...setup, extensionId: "plan-sidebar" }, () => {
     getExtensionKvStore().set("plan-sidebar", "plan", { markdown: planMarkdown, updated_at: at }, "chat", chatJid);
   }); // Change persisted Plan AFTER preparation, BEFORE transaction.
   expect(planReads).toBe(0);
-  let fail = true, calls = 0, retained: (() => void) | undefined;
+  let fail = true, calls = 0, deniedExternalBudget = 0, retained: (() => void) | undefined;
   const terminal = value(createCurrentPiclawTerminalSettlementStore(db, new InMemoryEffectPayloadResolver(), {
     hitFault: () => false, recordTrace() {}, validateOwnership: () => true,
     applyTerminalEffects(commit, scope) {
@@ -139,6 +152,19 @@ for (const mode of ["continue", "pending", "error", "stalled", "finalize", "budg
     const request = sealed({ effect: effect("terminal", "op", source.sourceSeq), expectedChatJid: chatJid, expectedVersion: finished.version, expectedHarness: finished.harness!, disposition: "completed" as const,
       errorCode: null, terminalAuthorityRef: null,
       timeline: { mode: "none" as const, chatJid, placeholderRowId: null, contentRef: null, threadId: null, mediaIds: [], contentBlocksRef: null }, sourceDispositions: [{ sourceSeq: source.sourceSeq, state: "consumed" as const, reason: "completed" }], outboxIntents: [], committedAt: at });
+    if (mode === "ordinary-empty") {
+      const before = extensionKvGet("goal", "thread-goal", "chat", chatJid) as Record<string, unknown>;
+      withExtensionKvAuthority(setup, () => getExtensionKvStore().set("goal", "thread-goal",
+        { ...before, status: "budget_limited", lifecycle_generation: 2, budget_limit_reported: false }, "chat", chatJid));
+      fail = false;
+      expect((await terminal.commitTerminal(request)).ok).toBe(false);
+      expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ tokens_used: 0, status: "budget_limited", budget_limit_reported: false });
+      expect(extensionKvGet("goal", "committed-usage:1", "chat", chatJid)).toBeNull();
+      expect(getDeferredQueuedFollowups(chatJid)).toHaveLength(0);
+      withExtensionKvAuthority(setup, () => getExtensionKvStore().set("goal", "thread-goal", before, "chat", chatJid));
+      deniedExternalBudget = 1;
+      fail = true;
+    }
     expect((await terminal.commitTerminal(request)).ok).toBe(false);
     expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ tokens_used: 0 });
     expect(extensionKvGet("goal", "committed-usage:1", "chat", chatJid)).toBeNull();
@@ -146,9 +172,10 @@ for (const mode of ["continue", "pending", "error", "stalled", "finalize", "budg
     expect(db.query("SELECT * FROM service_effect_s01_sources WHERE source_id=?").all(continuationId)).toHaveLength(0);
     fail = false;
     value(await terminal.commitTerminal(request));
-    expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ tokens_used: 7 });
+    expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ tokens_used: tokens });
+    if (!tokens) expect(extensionKvGet("goal", "committed-usage:1", "chat", chatJid)).toBeNull();
     value(await terminal.commitTerminal(request));
-    expect(calls).toBe(2);
+    expect(calls).toBe(2 + deniedExternalBudget);
     expect(planReads).toBe(budget || mode === "pending" || mode === "error" ? 0 : 2); // Replay never re-reads.
     const queued = getDeferredQueuedFollowups(chatJid);
     if (budget) {
@@ -163,7 +190,7 @@ for (const mode of ["continue", "pending", "error", "stalled", "finalize", "budg
       expect(() => db.transaction(() => retained!()).immediate()).toThrow("scope ended");
       return;
     }
-    const continues = mode === "continue" || mode === "finalize";
+    const continues = mode === "continue" || ordinary || mode === "finalize";
     expect(queued).toHaveLength(continues ? 1 : 0);
     if (continues) {
     expect(queued[0]).toMatchObject({ source_id: continuationId, source_accepted: true });

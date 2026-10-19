@@ -3,8 +3,8 @@
 The implementation is incomplete. Native Goal and soft token-budget wrap-up are
 adopted in source. Legacy deadline checkpoints, general exact running cancellation,
 historical rollback proof and whole-history migration still prevent acceptance.
-Source verified: core `08991f990`, including the Goal steer change below;
-Goal add-on `92de0be`. Nothing was installed,
+Full-gate source: core `08991f990`; the ordinary-steer successor below has separate
+focused qualification. Goal add-on `92de0be`. Nothing was installed,
 activated, migrated or deployed.
 
 ## Design goal
@@ -113,7 +113,7 @@ Prefixes: `E/` = `runtime/durable-engine/src/`; `A/` =
 | PC-017 | Legacy rollout | fixture-only | Published source defaults to the durable factory, with no production JSONL fallback; the production side-prompt runner is now test-only. Shared-DB/new-chat/guarded-consumer tests and copied upgrade fixtures pass, but existing production chat history still requires migration. No live fleet cutover or general legacy-session retirement is qualified. | Wider acceptance remains unqualified as described in the evidence column. |
 | PC-018 | Trusted internal input | fixture-only | `A/durable-runtime-adapter.ts`; `Q/scheduled.test.ts`, `Q/runtime.test.ts`, `RT/channels/web/alternate-ingress-guards.test.ts` | Selected claimed/scheduler ports and admission seals exist; every internal ingress still needs acceptance/budget/owner proof. |
 | PC-019 | Cross-session steer | fixture-only | `A/durable-queued-steering.ts`; `SE/service-work-queued-steer.test.ts` | Local accepted steer is chat-bound; no complete cross-session acknowledgement/retry/dedup/offline acceptance proof. |
-| PC-020 | Goal/checkpoint race | fixture-only | `E/host-goal-{input,prompt,usage,settlement,terminal}.ts`; `Q/{goal-tools,goal-usage,goal-settlement,goal-terminal-race}.test.ts` and actual-default Goal/budget. | Bounded lifecycle, completion/stop/update, committed usage, terminal rollback/replay, Plan/progress, continuation close/reopen, accepted-steer accounting and soft token-budget wrap-up are integrated. Current budget/provenance diff review is READY. Legacy deadline checkpoints, mixed Goal/ordinary settlement and general cross-session/carry/disposal races remain unqualified. |
+| PC-020 | Goal/checkpoint race | fixture-only | `E/host-goal-{input,prompt,usage,settlement,terminal}.ts`; `Q/{goal-tools,goal-usage,goal-settlement,goal-terminal-race}.test.ts` and actual-default Goal/budget. | Bounded lifecycle, completion/stop/update, committed usage, terminal rollback/replay, Plan/progress, continuation close/reopen, accepted-steer accounting, Goal-prefix/ordinary-tail settlement and soft token-budget wrap-up are integrated. Bounded production reviews are READY. Legacy deadline checkpoints, arbitrary mixed-input lifecycle/budget transitions and general cross-session/carry/disposal races remain unqualified. |
 
 ## Hard boundaries
 
@@ -167,9 +167,9 @@ No execution, scheduling or recovery mechanism was added.
 - Real SDK/shared-database A→accepted B→settlement, pre-settlement reopen,
   post-settlement replay/reopen and terminal completion pass. Both sources are
   consumed once; accounting stays at 6 or 12 tokens without extra model calls.
-- Intent payload tampering rejects. Ordinary B cannot inherit A's Goal authority:
+- At `08991f990`, intent payload tampering rejects and ordinary B cannot inherit A's Goal authority:
   settlement rejects, leaves both sources unconsumed and charges zero Goal tokens.
-  Mixed-input continuation remains unsupported.
+  That source did not support mixed-input continuation.
 - Five-file Goal gate: **46 pass / 680 assertions**. Exact-path runtime/recovery:
   **62 pass / 937 assertions**. Actual-default Goal and budget: **1/60** and
   **1/97**. Public conversations and thinking: **1/162** and **1/169**.
@@ -185,6 +185,36 @@ No execution, scheduling or recovery mechanism was added.
   pass as recorded above. All 45 requirement statuses remain conservative and
   unchanged: 22 source-qualified, 17 fixture-only, 3 blocked-publicAPI and 3
   migration/performance-unverified.
+
+## Goal prefix followed by ordinary steering
+
+The successor to `2084044eb` permits an ordinary tail to settle the whole owned
+operation. The existing verified input/usage batch now retains each accepted
+text's SDK entry position. SDK custom inputs queue outside the transcript and
+steers are placed after the current tool round (candidate README410–441).
+Only receipts before the first ordinary placement enter the Goal cursor; later
+receipts remain ordinary. Goal inputs after an ordinary tail reject.
+
+- Actual shared-file SDK A→ordinary B settles and consumes both sources. All6
+  tokens remain in the raw receipt window; only A's3 tokens count toward Goal.
+  Payload tampering rejects, and repeated settlement/reopen does not add usage
+  or model calls. Existing same-Goal6-token and terminal12-token cases still pass.
+- Atomic continuation tests cover rollback/retry, zero paid prefix without a
+  cursor, and a budgeted prefix. An empty prefix cannot turn an external limited
+  snapshot into wrap-up authority: the existing own-operation budget proof is
+  rechecked before claim/admission. The ordinary11-token receipt is excluded from
+  the7-token prefix; budget wrap-up uses existing claim/FIFO admission.
+- Goal **49/771**, runtime/recovery **62/937**, actual default Goal **1/60** and
+  budget **1/97** pass. Engine/candidate types, circular/silent-swallow checks
+  and whitespace checks pass. No full root/candidate rerun for this successor;
+  the `08991f990` broad receipts remain specific to that source.
+- Bounded static production review READY; final diff SHA-256
+  `cdf2a1d9f20d9b16d6d7ce0e09f467551c69383d0c321ea65327238f7c0c5467`.
+  Receipts: `reviews/durable-1650/native-ordinary-steer-*`.
+- Live mixed accounting still waits until settlement. An ordinary input arriving
+  after an already exhausted live Goal budget, external lifecycle replacement,
+  and arbitrary alternating Goal/ordinary runs retain their fail-closed limits.
+  No runner, scheduler, ledger or legacy compatibility shim was added.
 
 ## Whole real-history preflight (earlier source `3cbc12b6e`)
 

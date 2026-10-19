@@ -1,6 +1,6 @@
 import type Database from "bun:sqlite";
 import { getDeferredQueuedFollowups } from "../../src/db.js";
-import { accountCommittedGoalBatch } from "./host-goal-usage.js";
+import { accountCommittedGoalBatch, isGoalBudgetWrapup } from "./host-goal-usage.js";
 import type { AcceptedInput, HostConversationRuntime } from "./host-runtime.js";
 import type { TerminalDatabaseEffect, TerminalCommit } from "../../src/service-effects/contracts/terminal-settlement-store.js";
 import { withExtensionKvAuthority, type ExtensionKvAuthority } from "../../src/extension-kv-registry.js";
@@ -73,10 +73,17 @@ export function createHostGoalSettlement(addon: Parameters<typeof accountCommitt
     const batch = await runtime.readSettledInputUsage(captured);
     options.assertOwner();
     if (!batch?.receipts.length) throw Error("Missing committed Goal usage");
+    const ordinary = batch.inputs.findIndex(input => addon.goalInputIdentity(input.text) === null);
+    if (ordinary >= 0 && batch.inputs.slice(ordinary).some(input => addon.goalInputIdentity(input.text) !== null))
+      throw Error("Goal input after ordinary steer");
+    const prefix = ordinary < 0 ? batch.inputs : batch.inputs.slice(0, ordinary);
+    // SDK custom inputs are placed after the current tool round. Receipts before
+    // the first ordinary placement belong to the Goal prefix; later work does not.
+    const receipts = ordinary < 0 ? batch.receipts : batch.receipts.filter(receipt => receipt.entryId < batch.inputs[ordinary]!.entryId);
     // Detach public evidence before crossing the asynchronous payload boundary
     // in commitTerminal; the transaction still rechecks lifecycle and ownership.
-    const texts = Object.freeze([...batch.texts]);
-    const usage = Object.freeze(batch.receipts.map(receipt => Object.freeze({ ...receipt })));
+    const texts = Object.freeze(prefix.map(input => input.text));
+    const usage = Object.freeze(receipts.map(receipt => Object.freeze({ ...receipt })));
     const progress = options.continuation ? structuredClone(await options.continuation.prepare(captured)) : undefined;
     options.assertOwner();
     return (commit, scope) => {
@@ -84,10 +91,12 @@ export function createHostGoalSettlement(addon: Parameters<typeof accountCommitt
       if (commit.operationId !== captured.operationId || commit.disposition !== "completed") throw Error("Exact Goal operation completion required");
       withGoalSettlementAuthority(options.root, commit, scope, authority => {
         if (authority.chatJid !== captured.chatJid) throw Error("Goal settlement chat conflict");
-        accountCommittedGoalBatch(addon, authority, texts, usage, proof, { operationId: captured.operationId, conversationId: captured.conversationId });
+        const source = { operationId: captured.operationId, conversationId: captured.conversationId };
+        accountCommittedGoalBatch(addon, authority, texts, usage, proof, source);
         if (!options.continuation || !progress || !options.continuation.addon.shouldContinueGoalAfterMessage(progress.message)) return;
         const current = addon.loadThreadGoal(captured.chatJid) as GoalContinuationState | null;
         if (current?.status === "budget_limited") {
+          if (!isGoalBudgetWrapup(addon, captured.chatJid, texts, source)) throw Error("Goal budget input authority unavailable");
           const claimed = options.continuation.addon.claimGoalBudgetWrapup(captured.chatJid,
             { goalId: current.goal_id, generation: current.lifecycle_generation });
           if (!claimed) return;

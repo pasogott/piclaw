@@ -309,16 +309,15 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
       const receipts = await f.runtime!.readSettledUsage(input);
       expect(receipts?.map(receipt => receipt.tokens)).toEqual(terminalSteer ? [3, 3, 3, 3] : [3, 3]);
       expect(await f.runtime!.readSettledToolNames(input)).toEqual(terminalSteer ? ["get_goal", "goal_complete", "get_goal"] : ["get_goal"]);
-      expect((await f.runtime!.readSettledInputUsage(input))?.texts).toEqual([acceptedText, steerText]);
+      const batch = await f.runtime!.readSettledInputUsage(input);
+      expect(batch?.inputs.map(input => input.text)).toEqual([acceptedText, steerText]);
+      expect(batch!.inputs[0]!.entryId).toBeLessThan(batch!.inputs[1]!.entryId);
       if (ordinarySteer) {
-        // Mixed-source attribution is not silently promoted to Goal authority.
-        await expect(f.runtime!.settle(input)).rejects.toThrow();
-        expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 0, status: "active" });
-        expect(value(await f.ports.work.getOperation(input.operationId))?.terminal).toBeNull();
-        expect(f.ports.work.getAcceptedSource(f.chatJid, f.intentSourceId)?.state).toBe("claimed");
-        return;
+        expect(prompts[1]).toContain("Explicit ordinary human steer");
+        expect(receipts![0]!.entryId).toBeLessThan(batch!.inputs[1]!.entryId);
+        expect(receipts![1]!.entryId).toBeGreaterThan(batch!.inputs[1]!.entryId);
       }
-      const tokens = terminalSteer ? 12 : 6;
+      const tokens = ordinarySteer ? 3 : terminalSteer ? 12 : 6;
       const commit = await f.runtime!.settle(input);
       expect(commit).not.toBeNull();
       expect(await f.runtime!.settle(input)).toEqual(commit);

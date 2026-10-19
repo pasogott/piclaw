@@ -1021,24 +1021,24 @@ export class HostConversationRuntime {
   readSettledUsage(input: AcceptedInput) {
     return this.readSettledInputUsage(input).then(batch => batch?.receipts ?? null);
   }
-  /** One verified operation window for both attribution and committed usage.
-   * Accepted intent texts must not disappear behind the primary input's identity. */
+  /** One verified operation window for attribution and usage, retaining each
+   * accepted text's SDK placement instead of only the primary input's identity. */
   readSettledInputUsage(input: AcceptedInput) {
     const copy = inputSnapshot(input);
     return this.observe(async () => {
       const window = await this.settledUsageEntries(copy);
       if (!window) return null;
       const entries = window.entries.slice(window.start + 1, window.end + 1);
-      const texts: string[] = [];
+      const inputs: { entryId: number; text: string }[] = [];
       for (const source of window.inputs) {
-        const checked = await this.checked(source, source.sourceSeq !== copy.sourceSeq);
+        const checked = await this.checked(source.input, source.input.sourceSeq !== copy.sourceSeq);
         if (checked.operation.version !== window.version) throw Error("Settled usage operation changed");
-        texts.push(checked.content);
+        inputs.push({ entryId: source.entryId, text: checked.content });
       }
       const receipts = await this.readUsageEntries(copy.conversationId, entries);
       this.fence();
       if ((await this.checked(copy)).operation.version !== window.version) throw Error("Settled usage operation changed");
-      return { texts, receipts };
+      return { inputs: inputs.sort((a, b) => a.entryId - b.entryId), receipts };
     });
   }
   private async settledUsageEntries(copy: AcceptedInput) {
@@ -1076,7 +1076,8 @@ export class HostConversationRuntime {
       }
       if (count !== sources.length) throw Error("Missing settled operation input");
       if ((await this.checked(copy)).operation.version !== primary.operation.version) throw Error("Settled usage operation changed");
-      return { entries, start, end, boundary, inputs: sources.map(source => source.input), version: primary.operation.version };
+      return { entries, start, end, boundary,
+        inputs: sources.map(source => ({ input: source.input, entryId: source.state.status!.entry! })), version: primary.operation.version };
   }
   /** Actual model-issued tool receipts in the settled input's own window.
    * Goal policy decides which names count as substantive; no event-local flags. */
