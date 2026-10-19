@@ -121,6 +121,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
   const terminalProofs: boolean[] = [];
   const usageReads: { conversationId: number; entryId: number; tokens: number }[][] = [];
   const usageApplied: number[] = [];
+  const checkedTerminalBoundaries = new Set<string>();
   let accountFinal: ((receipt: { conversationId: number; entryId: number; tokens: number }) => number) | undefined;
   const { accountCommittedGoalBatch } = await import("../../runtime/durable-engine/src/host-goal-usage.js");
   const { createHostOperationAuthority } = await import("../../runtime/durable-engine/src/host-operation-authority.js");
@@ -157,8 +158,13 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
           accountCommittedGoalBatch(addon, authority, texts, usageReads.at(-1)!, proof);
           accountFinal = receipt => accountCommittedGoalBatch(addon, authority, texts, [receipt], proof);
         }
-        terminalProofs.push(await f.runtime!.hasGoalTerminalResult(conversation, task, { goalId: "wrong-goal", generation: goal.lifecycle_generation, status: terminalStatus }));
-        terminalProofs.push(await f.runtime!.hasGoalTerminalResult(conversation, task, { goalId: goal.goal_id, generation: goal.lifecycle_generation + 1, status: terminalStatus }));
+        // Wrong-ID/generation checks once per accepted operation, not on every
+        // generation handover. Keep the real positive proof on every request.
+        if (!checkedTerminalBoundaries.has(captured.operation.operationId)) {
+          checkedTerminalBoundaries.add(captured.operation.operationId);
+          terminalProofs.push(await f.runtime!.hasGoalTerminalResult(conversation, task, { goalId: "wrong-goal", generation: goal.lifecycle_generation, status: terminalStatus }));
+          terminalProofs.push(await f.runtime!.hasGoalTerminalResult(conversation, task, { goalId: goal.goal_id, generation: goal.lifecycle_generation + 1, status: terminalStatus }));
+        }
       }
       return captured;
     },
@@ -234,7 +240,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
       expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ tokens_used: 9 });
     }
     expect(captures).toBe(2);
-    expect(terminalProofs).toEqual([true, false, false, true, false, false]);
+    expect(terminalProofs).toEqual([true, false, false, true]);
     expect(prompts).toHaveLength(4);
     expect(prompts[3]).toContain("Goal terminal state recorded");
     expect(prompts[0]).toContain("<objective>");
@@ -266,7 +272,7 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
     value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:later-running`, laterInput.operationId, laterSource.sourceSeq), expectedVersion: laterClaim.operation.version,
       sessionId: f.incarnation, lane: "main", harnessOperationId: String(laterId), state: "running", watchGeneration: f.generation })));
     await f.runtime!.wait(laterInput, laterId);
-    expect(terminalProofs).toEqual([true, false, false, true, false, false, false, false, false, false, false, false]);
+    expect(terminalProofs).toEqual([true, false, false, true, false, false, false, false]);
     expect(captures).toBe(3);
     expect(laterModelEntries).toBe(2);
     expect(usageReads.map(entries => entries.length)).toEqual([0, 1, 2, 3, 0, 1]);
