@@ -1061,3 +1061,38 @@ rejects. These consumers are not qualified as replaced. Preprompt-compaction
 introspection needs ingress-route analysis before its compatibility path is removed.
 Capped execution, public-API blockers, production-scale evidence and migration-last
 remain incomplete. No merge, deployment, restart or migration occurred.
+
+## Native web debug and core command discovery — 2026-10-19
+
+Source `0d6124120da258ecb73d97ae9a6cc7684e438ae4` replaces legacy session hydration
+for the web debug and core-command discovery consumers. Metadata comes from the
+mapped public durable conversation's resolved agent: extension names and detached
+tool names/descriptions, with exact binding and ownership checks. The existing
+response arrays remain; unavailable legacy provenance, extension commands,
+templates and skills are explicit. No AgentSession or extension handler is emulated.
+
+Command discovery uses existing core definitions and aliases. Unbound durable
+chats return 404; native metadata failures return sanitised 503 responses without
+legacy fallback. Classic, family and visual command consumers read the command
+array and tolerate the additive metadata. The actual default-factory HTTP routes
+pass without SDK session construction. This does not implement add-on commands.
+
+The ingress audit confirms accepted durable dispatch returns before legacy
+preprompt hydration for both settled and pending outcomes; pending work retains
+its recovery marker. Legacy preprompt code remains for explicitly injected
+compatibility paths.
+
+Qualification: one native candidate exited 0 with 633 tests / 7,988 assertions
+across 51 files. One root gate on the same frozen source exited 0 with 7,340 pass /
+74 baseline skips / zero failures, plus 25 feature and 9 build tests. Handler tests,
+actual-factory and public-runtime metadata tests and scoped typechecks pass.
+Bounded review found missing metadata-error handling; both endpoints now have
+regression tests. Receipts: `/workspace/reviews/durable-1650/native-metadata-*`.
+No retries or timeout changes were needed.
+
+Command-bearing add-ons remain a startup compatibility gap: Goal, Regrets, Board,
+voice and M365 still require native capability bindings. Goal's direct settings
+API does not replace its five tools, input filtering, usage/progress tracking or
+continuation lifecycle. Catalogue denial remains until those consumers are ported.
+Caps, general public-API blockers, production-scale evidence and migration-last
+remain incomplete. No merge, deployment, restart or migration occurred.
