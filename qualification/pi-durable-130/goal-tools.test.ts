@@ -249,13 +249,19 @@ test("actual web message admission runs Goal lifecycle guard inside its owned tr
   const scoped = <T>(body: () => T) => withExtensionKvAuthority(authority, body);
   scoped(() => addon.createThreadGoal(chat, "Actual web source fence"));
   const prepared = scoped(() => addon.prepareGoalInput("🎯 Continue goal: Actual web source fence", chat));
-  let guardCalls = 0, failAfterSource = false, asyncGuard = false;
+  let guardCalls = 0, failAfterSource = false, asyncGuard = false, routeOnly = false;
+  const { createHostGoalInput } = await import("../../runtime/durable-engine/src/host-goal-input.js");
+  const prepareInputText = createHostGoalInput(addon, chatJid => {
+    lock.assertCurrentOwner(); if (chatJid !== chat) throw Error("Goal chat mismatch");
+  });
   const bundle = await createApplicationBootstrapBundle({ root, path, ownership: applicationOwnership(lock), offlineInitialize: true,
     manifest: [{ chatJid: chat, branchId: "main", conversationId: conversation }], sessions: new Map([[chat, "original"]]),
     runtime: { incarnation: "goal-admission", sessionId: "goal-admission", lane: "main", generation: 1, now: () => new Date().toISOString(),
       harnessOptions: { models: fixture.models, registry: fixture.registry } },
     answers: { resolver: { resolve: () => null }, put() {} },
+    prepareInputText,
     assertInputAdmission(chatJid, content) {
+      if (routeOnly) return;
       expect(root.inTransaction).toBe(true); expect(chatJid).toBe(chat); expect(content).toBe(prepared.decision.text);
       if (asyncGuard) return Promise.reject(Error("private asynchronous guard failure")) as never;
       guardCalls++;
@@ -266,7 +272,7 @@ test("actual web message admission runs Goal lifecycle guard inside its owned tr
     },
   }, context);
   try {
-    const bound = bundle.bind({ queue: {}, agentPool: {} } as any);
+    const bound = bundle.bind({ queue: { enqueue() {} }, agentPool: { setSessionBinder() {}, isStreaming: () => false, isActive: () => false } } as any);
     const acceptSource = bound.getInputSourceAdmission!(chat)!;
     const input = { chatJid: chat, content: prepared.decision.text, isBot: false, mediaIds: [], agentId: "default", agentName: "Fixture" };
     const channel = { broadcastEvent() {}, pendingLinkPreviews: new Set<number>() };
@@ -287,5 +293,25 @@ test("actual web message admission runs Goal lifecycle guard inside its owned tr
       expect(unhandled).toEqual([]);
       expect(["messages", "service_effect_s01_sources", "service_effect_s01_decisions", "extension_kv"].map(table => root.query(`SELECT * FROM ${table}`).all())).toEqual(before);
     } finally { process.off("unhandledRejection", onUnhandled); }
+    routeOnly = true; asyncGuard = false;
+    const { WebChannel } = await import("../../runtime/src/channels/web.js");
+    const web = new WebChannel(bound);
+    web.broadcastEvent = () => {};
+    const response = await web.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(chat)}`, {
+      method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" },
+      body: JSON.stringify({ content: "🎯 Continue goal: Actual web source fence", mode: "queue" }),
+    }));
+    expect(response.status).toBe(201);
+    const routed = root.query("SELECT content FROM messages WHERE chat_jid=? ORDER BY rowid DESC LIMIT 1").get(chat) as { content: string };
+    expect(routed.content).toContain("Continue working toward the active thread goal");
+    expect(routed.content).toContain("Actual web source fence");
+    scoped(() => addon.clearThreadGoal(chat));
+    const beforeRejected = root.query("SELECT id FROM messages WHERE chat_jid=?").all(chat);
+    const denied = await web.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(chat)}`, {
+      method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" },
+      body: JSON.stringify({ content: "🎯 Continue goal: Actual web source fence", mode: "queue" }),
+    }));
+    expect(denied.status).toBe(503);
+    expect(root.query("SELECT id FROM messages WHERE chat_jid=?").all(chat)).toEqual(beforeRejected);
   } finally { await bundle.close(); lock.release(); addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });

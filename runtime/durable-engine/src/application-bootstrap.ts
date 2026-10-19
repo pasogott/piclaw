@@ -74,6 +74,7 @@ export interface ApplicationBootstrapOptions {
   observeSidePrompt?: (sourceId: string, observer: NonNullable<SidePromptOptions["onEvent"]>) => () => void;
   /** Synchronous final admission check on already materialised immutable input. */
   assertInputAdmission?: (chatJid: string, content: string) => void;
+  prepareInputText?: NonNullable<WebChannelOpts["prepareInputText"]>;
   createConversation?: (tx: import("@earendil-works/pi-durable").Tx, chatJid: string, branchId: string) => Promise<Manifest[number] & { sessionId: string }>;
   runtime: Pick<HostControllerOptions["runtime"], "incarnation" | "sessionId" | "lane" | "generation" | "harnessOptions" | "now" | "codemodeExecute">;
   /** Existing application payload store, with immutable answer references. */
@@ -90,6 +91,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
   const createConversation = config.createConversation?.bind(config);
   const resolveScheduledModel = config.resolveScheduledModel?.bind(config);
   const assertInputAdmission = config.assertInputAdmission?.bind(config);
+  const prepareInputText = config.prepareInputText?.bind(config);
   let database: BunSqliteDatabase | undefined;
   let controller: Awaited<ReturnType<typeof createHostController>> | undefined;
   try {
@@ -595,7 +597,9 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       bind(options: Pick<WebChannelOpts, "queue" | "agentPool">): Readonly<WebChannelOpts> {
         assert(); if (bound || closing) throw Error("Application bundle already bound or closing");
         bound = true;
-        return Object.freeze({ ...options, prepareInputSourceAdmission, getInputSourceAdmission, dispatchAcceptedInput: dispatch });
+        return Object.freeze({ ...options, prepareInputSourceAdmission, getInputSourceAdmission,
+          prepareInputText: prepareInputText ? (chat: string, text: string) => { assertLive(); if (!routeIndex.has(chat)) throw Error("Unbound input preparation"); return prepareInputText(chat, text); } : undefined,
+          dispatchAcceptedInput: dispatch });
       },
       /** Continue the existing command worker's same-task settlement; no queue replay. */
       reconcileMaintenance(chatJid: string): Promise<void> {
