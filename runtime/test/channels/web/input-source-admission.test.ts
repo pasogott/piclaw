@@ -898,8 +898,11 @@ for (const [queuedInput, pending, steering] of [[false,false,false], [false,true
 
 test("prepared input text reaches direct and queued admissions with the same synchronous authority", async () => {
   const f = fixture(undefined, () => true);
-  let checks = 0;
-  f.channel.prepareInputText = (_chat, text) => ({ text: `prepared:${text}`, assertCurrent() { checks++; } });
+  let checks = 0, preparations = 0;
+  f.channel.prepareInputText = (_chat, text) => {
+    preparations++;
+    return { text: `prepared:${text}`, assertCurrent() { checks++; } };
+  };
   const response = await f.route({ content: "direct text", mode: "queue" });
   expect(response.status).toBe(201);
   expect((getDb().query("SELECT content FROM messages ORDER BY rowid DESC LIMIT 1").get() as { content: string }).content).toBe("prepared:direct text");
@@ -908,7 +911,17 @@ test("prepared input text reaches direct and queued admissions with the same syn
   f.channel.getQueuedInputSourceAdmission = () => f.acceptQueued;
   const queued = await f.route({ content: "queued text", mode: "queue" });
   expect(queued.status).toBe(201);
-  expect(f.channel.getQueuedFollowupItems("web:default").at(-1)?.queuedContent).toBe("prepared:queued text");
+  const queuedItem = f.channel.getQueuedFollowupItems("web:default").at(-1)!;
+  expect(queuedItem.queuedContent).toBe("prepared:queued text");
+  expect(preparations).toBe(2);
+  f.channel.prepareInputText = () => { throw Error("Materialisation must not prepare input again"); };
+  const materialized = await f.channel.storeMessage("web:default", queuedItem.queuedContent, false, queuedItem.mediaIds,
+    queuedItem.contentBlocks, queuedItem.linkPreviews, queuedItem.threadId, undefined, undefined,
+    { consumeDeferredFollowupRowId: queuedItem.rowId });
+  expect(materialized?.id).toBeGreaterThan(0);
+  expect((getDb().query("SELECT content FROM messages WHERE rowid=?").get(materialized!.id) as { content: string }).content).toBe("prepared:queued text");
+  expect(preparations).toBe(2);
+  // The queue worker owns in-memory removal; storeMessage only materialises SQL.
   const before = f.snapshot();
   const queueBefore = f.channel.getQueuedFollowupItems("web:default");
   f.channel.prepareInputText = () => ({ text: "must not be accepted", assertCurrent() { throw Error("Goal lifecycle revoked"); } });
