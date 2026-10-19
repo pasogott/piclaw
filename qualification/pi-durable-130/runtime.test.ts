@@ -65,7 +65,8 @@ async function setup(busy = false) {
   initializeHostDurableBindings(db, assert);
   let loseCancellationAck = false;
   const hooks = { authorize: undefined as (() => void | Promise<void>) | undefined,
-    cancellation: undefined as (() => void | Promise<void>) | undefined }; 
+    cancellation: undefined as (() => void | Promise<void>) | undefined,
+    terminalEffects: undefined as (() => undefined) | undefined };
   const work = value(createCurrentPiclawServiceWorkStore(db, {
     hitFault(point, method) {
       if (loseCancellationAck && method === "acceptCancellation" && point === "effect_then_lost_acknowledgement") {
@@ -77,6 +78,7 @@ async function setup(busy = false) {
   const payloads = new InMemoryEffectPayloadResolver();
   const terminal = value(createCurrentPiclawTerminalSettlementStore(db, payloads, {
     hitFault: () => false, recordTrace() {}, validateOwnership: () => { assert(); expect(db.inTransaction).toBe(true); return true; },
+    applyTerminalEffects() { return hooks.terminalEffects?.(); },
   }));
   const options: RuntimeOptions = {
     incarnation: "copy-A", owner: { assert, release() { releases++; acquired = false; } },
@@ -159,7 +161,25 @@ test("runtime: final usage receipt survives settlement and remains bound to orig
     await expect(reopened.readFinalUsage({ ...input, requestHash: "f".repeat(64) })).rejects.toThrow("Host binding conflict");
     expect(await f.work.getOperation(input.operationId)).toEqual(before);
     expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+    f.db.exec("CREATE TABLE terminal_usage_fixture(entry_id INTEGER PRIMARY KEY, tokens INTEGER NOT NULL)");
+    let effects = 0;
+    f.hooks.terminalEffects = () => {
+      expect(f.db.inTransaction).toBe(true); effects++;
+      f.db.query("INSERT INTO terminal_usage_fixture VALUES (?,?)").run(receipt!.entryId, receipt!.tokens);
+      throw Error("synthetic terminal effect rollback");
+    };
+    await expect(reopened.settle(input)).rejects.toThrow();
+    expect(f.db.query("SELECT * FROM terminal_usage_fixture").all()).toHaveLength(0);
+    expect(f.db.query("SELECT * FROM service_effect_s02_commits").all()).toHaveLength(0);
+    f.hooks.terminalEffects = () => {
+      expect(f.db.inTransaction).toBe(true); effects++;
+      f.db.query("INSERT INTO terminal_usage_fixture VALUES (?,?)").run(receipt!.entryId, receipt!.tokens);
+      return undefined;
+    };
     expect(await reopened.settle(input)).not.toBeNull();
+    expect(await reopened.settle(input)).not.toBeNull();
+    expect(effects).toBe(2);
+    expect(f.db.query("SELECT * FROM terminal_usage_fixture").all()).toHaveLength(1);
     expect(await reopened.readFinalUsage(input)).toEqual(receipt);
     const later = await f.accept("later-final-usage", "new plain answer");
     expect(await reopened.readFinalUsage(input)).toEqual(receipt);
