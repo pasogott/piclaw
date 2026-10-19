@@ -4,6 +4,19 @@ import { terminalOperation, terminalOutbox, terminalRequest, type TerminalSettle
 import { FakeTerminalSettlementStore } from "../../src/service-effects/testing/fakes/fake-terminal-settlement-store.js";
 import { context, fakeFactory, fakeSubject, openSqliteSubject, sqliteFactory } from "./terminal-settlement-test-support.js";
 
+test("independent fake rejects SQLite terminal effects without invoking or committing them", async () => {
+  const fake = new FakeTerminalSettlementStore();
+  const subject = fakeSubject(fake);
+    subject.seedOperation(terminalOperation());
+    subject.seedPayload({ ref: "payload:terminal-content", content: "terminal answer" });
+    const before = JSON.stringify(fake.snapshot());
+    let calls = 0;
+    const result = await subject.store.commitTerminal(terminalRequest(), () => { calls++; return undefined; });
+    expect(result).toMatchObject({ ok: false, error: { _tag: "invalid_request", certainty: "not_applied" } });
+    expect(calls).toBe(0);
+    expect(JSON.stringify(fake.snapshot())).toBe(before);
+});
+
 describe("EF-S02 optional synchronous commit ownership guard", () => {
   for (const atCheck of [1, 2]) {
     for (const behavior of ["false", "throw", "undefined", "truthy", "promise", "thenable", "async-reject", "rejected-promise", "then-getter-throw", "function-thenable", "object"] as const) {

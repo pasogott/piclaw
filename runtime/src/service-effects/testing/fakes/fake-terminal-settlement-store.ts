@@ -19,6 +19,7 @@ import type {
 import type {
   CommitTerminalRequest,
   TerminalCommit,
+  TerminalDatabaseEffect,
   TerminalSettlementError,
   TerminalSettlementErrorTag,
   TerminalSettlementStore,
@@ -461,7 +462,10 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
 
   async commitTerminal(
     input: CommitTerminalRequest,
+    applyEffect?: TerminalDatabaseEffect,
   ): Promise<ResultValue<TerminalCommit, TerminalSettlementError>> {
+    // This independent in-memory model cannot compose shared SQLite writes.
+    if (applyEffect !== undefined) return Result.err(fakeError("invalid_request"));
     const request = decodeFakeTerminalRequest(input);
     const effectId = request?.effect.idempotencyKey ?? "invalid";
     const operationId = request?.effect.operationId ?? null;
