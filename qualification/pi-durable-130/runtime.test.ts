@@ -150,12 +150,15 @@ async function setup(busy = false) {
 }
 
 test("runtime: final usage receipt survives settlement and remains bound to original submission", () => fixture(async f => {
-    const input = await f.accept();
+    const input = await f.accept("request-1", "use-tool");
     expect(await f.runtime.readFinalUsage(input)).toBeNull();
     await f.runtime.submit(input); const reopened = await f.drain();
     try {
     const before = await f.work.getOperation(input.operationId);
     const receipt = await reopened.readFinalUsage(input);
+    const settledReceipts = await reopened.readSettledUsage(input);
+    expect(settledReceipts).toHaveLength(2);
+    expect(settledReceipts!.at(-1)).toEqual(receipt!);
     expect(receipt).toMatchObject({ conversationId: input.conversationId });
     expect(receipt!.entryId).toBeGreaterThan(0);
     expect(Number.isSafeInteger(receipt!.tokens)).toBe(true);
@@ -185,6 +188,7 @@ test("runtime: final usage receipt survives settlement and remains bound to orig
     const later = await f.accept("later-final-usage", "new plain answer");
     expect(await reopened.readFinalUsage(input)).toEqual(receipt);
     expect(await reopened.readFinalUsage(later)).toBeNull();
+    expect(await reopened.readSettledUsage(input)).toEqual(settledReceipts);
     } finally { await reopened.close(); }
 }));
 
@@ -220,13 +224,15 @@ test.skipIf(!process.env.DURABLE_GOAL_ADDON_ROOT)("runtime: actual Goal accounts
     await f.runtime.submit(input); reopened = await f.drain();
     const receipt = await reopened.readFinalUsage(input);
     expect(receipt).toMatchObject({ tokens: 7 });
+    const receipts = await reopened.readSettledUsage(input);
+    expect(receipts).toEqual([receipt!]);
     const payload = f.db.query("SELECT content FROM runtime_payloads WHERE ref=?").get(input.payloadRef) as { content: string };
     expect(hashCanonicalRequest({ type: "input", requestId: input.requestId, content: payload.content })).toBe(input.requestHash);
     let fail = true, calls = 0;
     f.hooks.terminalEffects = (commit, scope) => {
       expect(commit.operationId).toBe(input.operationId); calls++;
       withGoalSettlementAuthority(f.db, commit, scope, authority => {
-        expect(accountCommittedGoalBatch(addon, authority, [payload.content], [receipt!])).toBe(1);
+        expect(accountCommittedGoalBatch(addon, authority, [payload.content], receipts!)).toBe(1);
       });
       if (fail) throw Error("rollback actual SDK receipt");
       return undefined;

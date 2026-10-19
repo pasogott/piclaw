@@ -979,6 +979,51 @@ export class HostConversationRuntime {
     }, true);
   }
   reconcileIntent(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.readState(copy, true), true); }
+  /** Recovery accounting window: original accepted entry through its exact final
+   * answer, even after later turns exist. No current-live-run dependency. */
+  readSettledUsage(input: AcceptedInput) {
+    const copy = inputSnapshot(input);
+    return this.observe(async () => {
+      const state = await this.readState(copy);
+      if (!state.answer || state.status?.type !== "input" || state.status.status !== "done") return null;
+      const finalId = state.status.answer;
+      const record = await this.record(copy); this.fence();
+      if (record?.entry === undefined) throw Error("Missing usage input entry");
+      const conversation = await this.harness.conversation(copy.conversationId, this.context); this.fence();
+      if (!conversation) throw Error("Missing usage conversation");
+      // Entries, rather than model context: compaction must not hide committed usage.
+      const entries: import("@earendil-works/pi-durable").EntryRecord[] = [];
+      let cursor: import("@earendil-works/pi-durable").Cursor | undefined;
+      do {
+        const page = await conversation.entries({ order: "ascending" }, 100, cursor, this.context); this.fence();
+        entries.push(...page.items); cursor = page.next;
+        if (page.items.some(entry => entry.id === finalId)) break;
+      } while (cursor !== undefined);
+      const start = entries.findIndex(entry => entry.id === record.entry);
+      const end = entries.findIndex(entry => entry.id === finalId);
+      if (start < 0 || end <= start) throw Error("Missing settled usage window");
+      const receipts = await this.harness.commit(async tx => {
+        const result: { conversationId: number; entryId: number; tokens: number }[] = [];
+        for (const entry of entries.slice(start + 1, end + 1)) {
+          if (entry.kind === "host.accepted") throw Error("Intervening settled usage input");
+          if (entry.kind !== "pi.assistant") continue;
+          if (entry.byTaskId === undefined || entry.model?.length !== 1 || entry.model[0]?.role !== "assistant") throw Error("Invalid committed usage entry");
+          const task = await tx.task(entry.byTaskId);
+          const outcome = task?.state.status === "terminal" && task.state.outcome.status === "completed" ? task.state.outcome.result as { entryId?: number } : undefined;
+          if (task?.kind !== "pi.generation" || task.conversationId !== copy.conversationId || outcome?.entryId !== entry.id) throw Error("Invalid committed usage task");
+          const usage = entry.model[0].usage;
+          const parts = [usage.input, usage.output, usage.cacheRead, usage.cacheWrite];
+          if (!parts.every(value => Number.isSafeInteger(value) && value >= 0) || !Number.isSafeInteger(usage.totalTokens) || usage.totalTokens < 0) throw Error("Invalid committed usage tokens");
+          const tokens = usage.totalTokens > 0 ? usage.totalTokens : parts.reduce((sum, value) => sum + value, 0);
+          if (!Number.isSafeInteger(tokens)) throw Error("Invalid committed usage total");
+          result.push({ conversationId: copy.conversationId as number, entryId: entry.id as number, tokens });
+        }
+        return result;
+      }, this.context);
+      this.fence(); await this.checked(copy);
+      return receipts;
+    });
+  }
   /** Read-only final receipt bound to the original public input submission.
    * Does not require a live run or grant post-settlement mutation authority. */
   readFinalUsage(input: AcceptedInput) {
