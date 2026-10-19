@@ -86,6 +86,26 @@ function fixture(select?: WebChannelOpts["getInputSourceAdmission"], validateAcc
     busy(value: boolean, stream = false) { active = value; streaming = stream; } };
 }
 
+test("host follow-up identity replay reuses accepted queue row and denies changed or materialized sources", () => {
+  const f = fixture(undefined, () => true);
+  const service = new QueuedFollowupLifecycleService();
+  const chat = 'web:durable-admission';
+  const admit = (content = 'Continue verified Goal') => f.db.transaction(() => service.enqueueAcceptedFollowupOnce(
+    'goal-continuation:operation-1', chat, content, '2026-10-19T00:00:00.000Z', { source: 'goal.continuation' }, f.acceptQueued,
+  )).immediate();
+  const row = admit();
+  expect(admit()).toBe(row);
+  expect(getDeferredQueuedFollowups(chat)).toHaveLength(1);
+  expect(f.db.query('SELECT * FROM service_effect_s01_sources').all()).toHaveLength(1);
+  expect(() => admit('Changed objective')).toThrow('identity conflict');
+  const before = f.snapshot();
+  expect(() => f.db.transaction(() => { admit(); throw Error('rollback'); }).immediate()).toThrow('rollback');
+  expect(f.snapshot()).toEqual(before);
+  setDeferredQueuedFollowups(chat, []);
+  expect(() => admit()).toThrow('already materialized');
+  expect(getDeferredQueuedFollowups(chat)).toHaveLength(0);
+});
+
 function withdrawalFixture() {
   const f = fixture(undefined, () => true);
   f.channel.getQueuedInputSourceAdmission = () => f.acceptQueued;

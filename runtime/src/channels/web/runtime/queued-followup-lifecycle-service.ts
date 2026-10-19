@@ -27,6 +27,7 @@ import { getWorkspaceDir, getStoreDir, getConfigPath } from '../../../core/confi
 import { statSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { createUuid } from '../../../utils/ids.js';
+import { hashCanonicalRequest } from '../../../service-effects/contracts/common.js';
 
 export type QueuedInputSourceAdmission = (stored: Readonly<{
   chatJid: string; item: Readonly<QueuedFollowupItem & { source_id: string }>; database: ReturnType<typeof getDb>;
@@ -138,6 +139,33 @@ export class QueuedFollowupLifecycleService {
     }
     this.setDeferredQueuedFollowupItems(chatJid, queued);
     return resolvedRowId;
+  }
+
+  /** Host-generated replay-safe follow-up, inside the existing writer transaction.
+   * A materialized/consumed source is never recreated as another queued input. */
+  enqueueAcceptedFollowupOnce(
+    sourceId: string, chatJid: string, content: string, queuedAt: string,
+    extras: Pick<QueuedFollowupItem, 'source' | 'queuedBy'>, acceptSource: QueuedInputSourceAdmission,
+  ): number {
+    const db = getDb();
+    if (!db.inTransaction) throw new Error('Follow-up admission transaction required');
+    if (!sourceId || sourceId.trim() !== sourceId || sourceId.length > 512) throw new Error('Invalid follow-up source identity');
+    const prior = getDeferredQueuedFollowups(chatJid).find(item => item.source_id === sourceId);
+    const identity = (item: Pick<QueuedFollowupItem, 'queuedContent' | 'queuedAt' | 'source' | 'queuedBy'>) => hashCanonicalRequest(JSON.parse(JSON.stringify({
+      content: item.queuedContent, queuedAt: item.queuedAt, source: item.source ?? null, queuedBy: item.queuedBy ?? null,
+    })));
+    if (prior) {
+      if (!prior.source_accepted || identity(prior) !== identity({ queuedContent: content, queuedAt, ...extras }))
+        throw new Error('Follow-up source identity conflict');
+      return prior.rowId;
+    }
+    if (db.query('SELECT 1 FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?').get(chatJid, sourceId))
+      throw new Error('Follow-up source already materialized; reconcile existing source');
+    const rowId = this.enqueueQueuedFollowupItem(chatJid, 0, content, undefined, queuedAt, extras);
+    const items = getDeferredQueuedFollowups(chatJid);
+    setDeferredQueuedFollowups(chatJid, items.map(item => item.rowId === rowId ? { ...item, source_id: sourceId } : item));
+    acceptQueuedInputSource(chatJid, rowId, db, acceptSource);
+    return rowId;
   }
 
   async admitQueuedFollowupItem(
