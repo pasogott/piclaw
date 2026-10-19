@@ -45,7 +45,6 @@ let refreshing: symbol | null = null;
 
 function controls(enabled: boolean): void {
   panelNavigation.setLocked(busy);
-  tasks?.setExecutionBlocked(busy);
   memory?.setBlocked(busy);
   home.disabled = refresh.disabled = !enabled;
   retry.disabled = !enabled || heldRow === null || legacyHeld;
@@ -202,8 +201,8 @@ async function start(): Promise<void> {
     try { await notifications.initialise(); } catch (failure) { console.debug('[family] Notification subscription restore failed.', failure); }
     settings = new FamilyAccount(api); administration = new FamilyAdministration(api); workspacePolicy = new FamilyWorkspace(api); preferences = new FamilyPreferences(api);
     tasks = new FamilyTasks(api, { lock: value => { if (value && (busy || paused || stopped)) return false; busy = value; generation++; refreshing = null; controls(false); return true; }, changed: loadTimeline });
-    results = new FamilyResults(api, { beforeCancel: () => { tasks?.disarmRun(); memory?.disarm(); }, lock: value => { if (value && (busy || paused || stopped)) return false; busy = value; generation++; refreshing = null; controls(false); return true; }, changed: loadTimeline });
-    memory = new FamilyMemory(api, { beforeWithdraw: () => { tasks?.disarmRun(); memory?.disarm(); }, lock: value => { if (value && (busy || paused || stopped)) return false; busy = value; generation++; refreshing = null; controls(false); return true; }, changed: loadTimeline });
+    results = new FamilyResults(api, { beforeCancel: () => { memory?.disarm(); }, lock: value => { if (value && (busy || paused || stopped)) return false; busy = value; generation++; refreshing = null; controls(false); return true; }, changed: loadTimeline });
+    memory = new FamilyMemory(api, { beforeWithdraw: () => { memory?.disarm(); }, lock: value => { if (value && (busy || paused || stopped)) return false; busy = value; generation++; refreshing = null; controls(false); return true; }, changed: loadTimeline });
     sessionSettings = new FamilySessions(api, {
       lock: value => { if (value && (busy || paused || stopped)) return false; busy = value; generation++; refreshing = null; controls(false); return true; },
       navigate: switchSession,
