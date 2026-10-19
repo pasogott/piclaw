@@ -122,7 +122,7 @@ function renderHtmlTemplate(relPath: string, html: string): string {
       "classic/dist/app.bundle.css",
       "common/js/marked.min.js",
       "common/js/vendor/katex.min.js",
-      "common/js/vendor/beautiful-mermaid.js",
+      "common/js/vendor/pele.js",
       "common/js/vendor/adaptivecards.min.js",
     ]));
   }

@@ -266,13 +266,19 @@ The editor extension is lazy-loaded as a separate bundle (`editor.bundle.js`, ~1
 
 ## Web UI loading sequence
 
+Classic and Visual load Pele on first Mermaid fence through the shared
+`web/src/ui/mermaid-render.ts` lifecycle; Family preloads the same local asset.
+Both skins use the same sanitizer, limits and live theme-token mapping.
+The separate Beautiful Mermaid asset retains its public API for legacy
+widgets and artifacts; it is not a timeline fallback.
+
 ```
 Page load
   ├── index.html loads:
   │   ├── app.bundle.css (~517 KB) ── all styles
   │   ├── marked.min.js ───────────── markdown parser (global)
   │   ├── katex.min.js ────────────── math rendering (global)
-  │   ├── beautiful-mermaid.js ────── diagram rendering (global)
+  │   ├── pele.js ────────────────── timeline diagrams, lazy on first use
   │   └── app.bundle.js (~1.24 MB) ── core app (Preact, timeline, compose, panes, workspace UI)
   │
   ├── app.ts init:

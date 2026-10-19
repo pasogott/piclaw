@@ -41,12 +41,12 @@ test("family gets a separate no-store shell, versioned private bundles, no legac
   for (const path of ["/", "/index.html"]) {
     const response = await router.handle(request(path)); expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("private, no-store"); expect(response.headers.get("vary")).toContain("Cookie");
-    const html = await response.text(); expect(html).toContain("family.bundle.js?v="); expect(html).toContain("classic/dist/app.bundle.css?v="); expect(html).toContain("common/js/marked.min.js"); expect(html).toContain("common/js/vendor/katex.min.js"); expect(html).toContain("common/js/vendor/beautiful-mermaid.js"); expect(html).not.toContain("__FAMILY_ASSET_VERSION__");
+    const html = await response.text(); expect(html).toContain("family.bundle.js?v="); expect(html).toContain("classic/dist/app.bundle.css?v="); expect(html).toContain("common/js/marked.min.js"); expect(html).toContain("common/js/vendor/katex.min.js"); expect(html).toContain("common/js/vendor/pele.js"); expect(html).not.toContain("__FAMILY_ASSET_VERSION__");
     expect(html).not.toContain("app.bundle.js"); expect(html).not.toContain("localStorage");
     expect(await (await router.handle(request(path, { method: "HEAD" }))).text()).toBe("");
     expect((await router.handle(request(path, { method: "POST" }))).status).toBe(403);
   }
-  for (const path of ["/static/common/dist/family.bundle.js", "/static/common/dist/family.bundle.css", "/static/classic/dist/app.bundle.css", "/static/common/js/marked.min.js", "/static/common/js/vendor/katex.min.js", "/static/common/js/vendor/beautiful-mermaid.js", "/static/common/js/vendor/adaptivecards.min.js"]) {
+  for (const path of ["/static/common/dist/family.bundle.js", "/static/common/dist/family.bundle.css", "/static/classic/dist/app.bundle.css", "/static/common/js/marked.min.js", "/static/common/js/vendor/katex.min.js", "/static/common/js/vendor/pele.js", "/static/common/js/vendor/adaptivecards.min.js"]) {
     const asset = await router.handle(request(path));
     expect(asset.status).toBe(200);
     expect(asset.headers.get("cache-control")).toBe("private, no-store");

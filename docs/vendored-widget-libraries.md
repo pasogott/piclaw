@@ -179,7 +179,35 @@ window.addEventListener('piclaw:widget-message', function (e) {
 });
 ```
 
-## Mermaid (beautiful-mermaid)
+## Timeline diagrams (Pele)
+
+Classic, Visual and Family render Mermaid fences with `pele@1.6.0`. The local
+asset `/static/common/js/vendor/pele.js` exposes `window.piclawDiagrams.render(source)`,
+which returns an SVG string synchronously. The application passes it through
+the shared fail-closed SVG sanitizer before insertion.
+
+The host owns rendering options: links and images are disabled, authored
+direction is preserved, and source/output/edge limits apply. Live Piclaw CSS
+tokens colour text, surfaces, connectors and chart series in light and dark
+themes without regenerating the SVG. Fixed colours authored in a diagram stay
+fixed. Pele zoom controls, resize-driven relayout and error overlays are not
+used; the existing inline loading and error surfaces remain.
+
+`bun run build:vendor:pele` regenerates the bundle, metadata and complete
+MIT/embedded ISC notice at `/static/common/js/vendor/pele.LICENSE.txt`, plus
+the bundled DOMPurify Apache-2.0 notice at
+`/static/common/js/vendor/diagram-sanitizer.LICENSE.txt`.
+`bun run update:vendor:pele -- --version <exact-version>` updates the pinned
+package through the existing manifest workflow.
+
+## Legacy widget diagrams (beautiful-mermaid)
+
+The existing asset and all eight `beautifulMermaid` exports remain available
+for generated widgets and older artifacts, including the original parser
+model and theme helpers. It is not loaded by the timeline and is never an
+automatic fallback for a Pele error. Remove it only after those callers have
+an explicit, tested migration path. The post-processing helper below applies
+only to this legacy renderer, not to Pele output.
 
 **Size:** ~1.5 MB (bundled)
 **Path:** `/static/common/js/vendor/beautiful-mermaid.js`
