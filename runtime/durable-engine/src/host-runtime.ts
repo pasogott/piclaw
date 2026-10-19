@@ -1024,24 +1024,9 @@ export class HostConversationRuntime {
   readSettledUsage(input: AcceptedInput) {
     const copy = inputSnapshot(input);
     return this.observe(async () => {
-      const state = await this.readState(copy);
-      if (!state.answer || state.status?.type !== "input" || state.status.status !== "done") return null;
-      const finalId = state.status.answer;
-      const record = await this.record(copy); this.fence();
-      if (record?.entry === undefined) throw Error("Missing usage input entry");
-      const conversation = await this.harness.conversation(copy.conversationId, this.context); this.fence();
-      if (!conversation) throw Error("Missing usage conversation");
-      // Entries, rather than model context: compaction must not hide committed usage.
-      const entries: import("@earendil-works/pi-durable").EntryRecord[] = [];
-      let cursor: import("@earendil-works/pi-durable").Cursor | undefined;
-      do {
-        const page = await conversation.entries({ order: "ascending", minEntryId: record.entry, maxEntryId: finalId }, 100, cursor, this.context); this.fence();
-        entries.push(...page.items); cursor = page.next;
-        if (page.items.some(entry => entry.id === finalId)) break;
-      } while (cursor !== undefined);
-      const start = entries.findIndex(entry => entry.id === record.entry);
-      const end = entries.findIndex(entry => entry.id === finalId);
-      if (start < 0 || end <= start) throw Error("Missing settled usage window");
+      const window = await this.settledUsageEntries(copy);
+      if (!window) return null;
+      const { entries, start, end } = window;
       const receipts = await this.harness.commit(async tx => {
         const result: { conversationId: number; entryId: number; tokens: number }[] = [];
         for (const entry of entries.slice(start + 1, end + 1)) {
@@ -1062,6 +1047,62 @@ export class HostConversationRuntime {
       }, this.context);
       this.fence(); await this.checked(copy);
       return receipts;
+    });
+  }
+  private async settledUsageEntries(copy: AcceptedInput) {
+      const state = await this.readState(copy);
+      if (!state.answer || state.status?.type !== "input" || state.status.status !== "done") return null;
+      const finalId = state.status.answer;
+      const record = await this.record(copy); this.fence();
+      if (record?.entry === undefined) throw Error("Missing usage input entry");
+      const conversation = await this.harness.conversation(copy.conversationId, this.context); this.fence();
+      if (!conversation) throw Error("Missing usage conversation");
+      // Entries, rather than model context: compaction must not hide committed usage.
+      const entries: import("@earendil-works/pi-durable").EntryRecord[] = [];
+      let cursor: import("@earendil-works/pi-durable").Cursor | undefined;
+      do {
+        const page = await conversation.entries({ order: "ascending", minEntryId: record.entry, maxEntryId: finalId }, 100, cursor, this.context); this.fence();
+        entries.push(...page.items); cursor = page.next;
+        if (page.items.some(entry => entry.id === finalId)) break;
+      } while (cursor !== undefined);
+      const start = entries.findIndex(entry => entry.id === record.entry);
+      const end = entries.findIndex(entry => entry.id === finalId);
+      if (start < 0 || end <= start) throw Error("Missing settled usage window");
+      return { entries, start, end };
+  }
+  /** Actual model-issued tool receipts in the settled input's own window.
+   * Goal policy decides which names count as substantive; no event-local flags. */
+  readSettledToolNames(input: AcceptedInput) {
+    const copy = inputSnapshot(input);
+    return this.observe(async () => {
+      const window = await this.settledUsageEntries(copy);
+      if (!window) return null;
+      const entries = window.entries.slice(window.start + 1, window.end + 1);
+      if (entries.some(entry => entry.kind === "host.accepted")) throw Error("Intervening settled tool input");
+      const names = await this.harness.commit(async tx => {
+        const result: string[] = [];
+        for (const entry of entries) {
+          if (entry.kind !== "pi.tool-result") continue;
+          if (entry.byTaskId === undefined || entry.model?.length !== 1 || entry.model[0]?.role !== "toolResult") throw Error("Invalid committed tool result");
+          const message = entry.model[0];
+          const tool = await tx.task(entry.byTaskId);
+          if (tool?.kind !== "pi.tool" || tool.conversationId !== copy.conversationId || tool.owner === undefined || tool.state.status !== "terminal" || tool.state.outcome.status !== "completed") throw Error("Invalid committed tool task");
+          const input = tool.input as { kind?: string; assistant?: number; callId?: string };
+          const outcome = tool.state.outcome.result as { kind?: string; entryId?: number };
+          if (input.kind !== "model" || input.callId !== message.toolCallId || outcome.kind !== "model" || outcome.entryId !== entry.id) throw Error("Invalid committed tool receipt");
+          const assistant = entries.find(candidate => candidate.id === input.assistant);
+          if (!assistant || assistant.kind !== "pi.assistant" || assistant.byTaskId !== tool.owner || entries.indexOf(assistant) >= entries.indexOf(entry)) throw Error("Invalid committed tool assistant");
+          const owner = await tx.task(tool.owner);
+          const ownerResult = owner?.state.status === "terminal" && owner.state.outcome.status === "completed" ? owner.state.outcome.result as { entryId?: number } : undefined;
+          if (owner?.kind !== "pi.generation" || owner.conversationId !== copy.conversationId || ownerResult?.entryId !== assistant.id) throw Error("Invalid committed tool generation");
+          const calls = assistant.model?.flatMap(part => part.role === "assistant" ? part.content.filter(block => block.type === "toolCall") : []) ?? [];
+          if (!calls.some(call => call.id === message.toolCallId && call.name === message.toolName)) throw Error("Invalid committed tool call");
+          result.push(message.toolName);
+        }
+        return result;
+      }, this.context);
+      this.fence(); await this.checked(copy);
+      return names;
     });
   }
   private async readState(input: AcceptedInput, intent = false) {

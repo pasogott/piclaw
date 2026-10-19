@@ -248,6 +248,9 @@ for (const mode of [false, true, "external", "stop", "external-terminal", "stop-
       const proof = { goalId: completedGoal.goal_id, generation: completedGoal.lifecycle_generation, status: terminalStatus } as const;
       expect(await f.runtime!.hasSettledGoalTerminalResult(input, proof)).toBe(true);
       expect(await f.runtime!.hasSettledGoalTerminalResult(input, { ...proof, goalId: "wrong" })).toBe(false);
+      const toolNames = await f.runtime!.readSettledToolNames(input);
+      expect(toolNames).toEqual(["get_goal", terminalTool, "get_goal"]);
+      expect(toolNames!.some(addon.isGoalProgressTool)).toBe(false);
       const final = (await f.runtime!.readSettledUsage(input))!.at(-1)!;
       expect(final).toMatchObject({ tokens: 3 });
       expect(await f.runtime!.settle(input)).not.toBeNull();

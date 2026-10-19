@@ -170,6 +170,7 @@ test("runtime: final usage receipt survives settlement and remains bound to orig
     const settledReceipts = await reopened.readSettledUsage(input);
     const receipt = settledReceipts!.at(-1)!;
     expect(settledReceipts).toHaveLength(2);
+    expect(await reopened.readSettledToolNames(input)).toEqual(["host_effect"]);
     expect(settledReceipts!.at(-1)).toEqual(receipt!);
     expect(receipt).toMatchObject({ conversationId: input.conversationId });
     expect(receipt!.entryId).toBeGreaterThan(0);
@@ -200,6 +201,8 @@ test("runtime: final usage receipt survives settlement and remains bound to orig
     const later = await f.accept("later-final-usage", "new plain answer");
     expect(await reopened.readSettledUsage(input)).toEqual(settledReceipts);
     expect(await reopened.readSettledUsage(later)).toBeNull();
+    expect(await reopened.readSettledToolNames(later)).toBeNull();
+    expect(await reopened.readSettledToolNames(input)).toEqual(["host_effect"]);
     expect(await reopened.readSettledUsage(input)).toEqual(settledReceipts);
     } finally { await reopened.close(); }
 }));
