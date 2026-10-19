@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, rmSync, copyFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, copyFileSync, writeFileSync, existsSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 import type { ToolRegistration } from "../../runtime/durable-engine/qualification/durable.ts";
 import { actualAddonGraph } from "./src/actual-addon-graph.ts";
 import { tmpdir } from "node:os";
@@ -40,7 +41,7 @@ for (const [addon, pin] of Object.entries(sources)) for (const file of pin.files
 const path = (addon: string, file: string) => resolve(copy, "addons", addon, file + ".ts");
 expect(existsSync(join(copy, "node_modules"))).toBe(false);
 expect(createRequire(path("remote-peer", "transport")).resolve("@number0/iroh/index.js")).toStartWith(resolve(import.meta.dir, "node_modules"));
-expect(import.meta.resolve("@earendil-works/pi-coding-agent", path("code-review", "index"))).toStartWith("file://" + resolve(import.meta.dir, "../../node_modules"));
+expect(import.meta.resolve("@earendil-works/pi-coding-agent", path("code-review", "index"))).toStartWith(pathToFileURL(realpathSync(resolve(import.meta.dir, "../../node_modules"))).href + "/");
 
 // Raw denial checks and public durable graph; no authentication/network proof.
 // Only JSON arguments/results cross the model-facing bridge; the exact

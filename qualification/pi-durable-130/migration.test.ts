@@ -3,6 +3,8 @@ import { describe, expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { join } from "node:path";
 import type { SessionManager as LegacyManager } from "@earendil-works/pi-coding-agent";
 import type { Message } from "../../runtime/durable-engine/qualification/ai.ts";
@@ -177,8 +179,8 @@ describe("H5 bounded copied existing-history qualification (not production migra
   test("current public SDK is 1.2.0; 5 copied records retain IDs, attachments, exact context and execute nothing", () => using(async f => {
     const pkg = await Bun.file(new URL("../../node_modules/@earendil-works/pi-coding-agent/package.json", import.meta.url)).json();
     expect(pkg.version).toBe("1.2.0");
-    expect(import.meta.resolve("@earendil-works/pi-coding-agent")).toBe(new URL(
-      "../../node_modules/@earendil-works/pi-coding-agent/dist/index.js", import.meta.url).href);
+    expect(import.meta.resolve("@earendil-works/pi-coding-agent")).toBe(pathToFileURL(realpathSync(fileURLToPath(new URL(
+      "../../node_modules/@earendil-works/pi-coding-agent/dist/index.js", import.meta.url)))).href);
     const manager = representative(), input = copied(manager), original = input.jsonl;
     const restored = SessionManager.inMemory(process.env.PICLAW_WORKSPACE!, undefined, input.jsonl.trim().split("\n").map(line => JSON.parse(line)));
     expect(restored.buildSessionContext()).toEqual(manager.buildSessionContext());

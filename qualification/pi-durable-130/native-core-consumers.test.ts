@@ -30,8 +30,8 @@ test("all seven shipped consumers admit actual native startup and Restic effects
     } finally { isolated.cleanup(); }
     return;
   }
-  const source = process.env.DURABLE_ADDONS_ROOT;
-  if (!source) throw Error("DURABLE_ADDONS_ROOT must contain the approved native core add-ons");
+  const source = process.env.DURABLE_CORE_ADDONS_ROOT;
+  if (!source) throw Error("DURABLE_CORE_ADDONS_ROOT must contain the approved native core add-ons");
   const workspace = process.env.PICLAW_WORKSPACE!;
   for (const slug of slugs) {
     const from = join(source, "addons", slug), to = join(workspace, ".pi/extensions/node_modules/@rcarmo", `piclaw-addon-${slug}`);
