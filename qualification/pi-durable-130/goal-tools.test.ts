@@ -129,7 +129,7 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
     modelEntries++;
     prompts.push(JSON.stringify(transcript.messages));
     const toolTurns = transcript.messages.filter(message => message.role === "toolResult").length;
-    const calling = toolTurns < 2;
+    const calling = toolTurns < 2 && !JSON.stringify(transcript.messages).includes("LATER_GOAL_OPERATION");
     const output = createAssistantMessageEventStream();
     const message = { role: "assistant" as const, api: model.api, provider: model.provider, model: model.id, timestamp: 1,
       stopReason: calling ? "toolUse" as const : "stop" as const, content: calling
@@ -173,6 +173,22 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
     const completedGoal = extensionKvGet("goal", "thread-goal", "chat", f.chatJid) as { goal_id: string; lifecycle_generation: number };
     expect(completedGoal).toMatchObject({ objective: "Live Goal source capture", status: "complete", lifecycle_generation: 2 });
     expect((await f.runtime!.reconcile(input)).answer?.text).toBe("Goal stored");
+    expect(await f.runtime!.settle(input)).not.toBeNull();
+    const laterSource = value(await f.ports.work.acceptSource(sealed({ effect: effect(`${f.incarnation}:later-source`), chatJid: f.chatJid,
+      sourceId: "later-goal-input", kind: "message", payloadRef: "later-goal-input", targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
+    f.db.query("INSERT INTO messages(id,chat_jid,content,timestamp) VALUES (?,?,?,?)").run("later-goal-input", f.chatJid, "LATER_GOAL_OPERATION", at);
+    const frontier = value(await f.ports.work.getChatFrontier(f.chatJid));
+    const laterClaim = value(await f.ports.work.claimNext(sealed({ effect: effect(`${f.incarnation}:later-claim`), chatJid: f.chatJid,
+      expectedFrontier: frontier.consumedThroughSourceSeq, newOperationId: `${f.incarnation}:later`, claimedAt: at })))!;
+    const laterRequest = `queued-steer:${f.intentSourceId}`;
+    const laterInput = { ...input, operationId: laterClaim.operation.operationId, sourceSeq: laterSource.sourceSeq, sourceId: laterSource.sourceId,
+      payloadRef: laterSource.payloadRef, requestId: laterRequest, requestHash: hashCanonicalRequest({ type: "input", requestId: laterRequest, content: "LATER_GOAL_OPERATION" }) };
+    const laterId = await f.runtime!.submit(laterInput);
+    value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:later-running`, laterInput.operationId, laterSource.sourceSeq), expectedVersion: laterClaim.operation.version,
+      sessionId: f.incarnation, lane: "main", harnessOperationId: String(laterId), state: "running", watchGeneration: f.generation })));
+    await f.runtime!.wait(laterInput, laterId);
+    expect(terminalProofs).toEqual([true, false, false, false, false, false]);
+    expect(captures).toBe(2);
     await f.runtime!.close(); f.runtime = undefined;
     const reader = await Harness.open(await SqliteStorage.open(new OwnedSqlite(f.owner)), { models: f.base.models, registry: f.base.registry }, context);
     try {
