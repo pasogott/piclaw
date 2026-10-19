@@ -768,7 +768,7 @@ export async function handleAgentMessage(
     try {
       const prepared = prepareInputText(chatJid, content);
       if (prepared && typeof (prepared as unknown as { then?: unknown }).then === "function") {
-        void Promise.resolve(prepared).catch(() => {});
+        void Promise.resolve(prepared).catch(error => debugSuppressedError(log, 'Rejected asynchronous input preparation.', error, { operation: 'handle_agent_message.async_preparation_rejected', chatJid }));
         throw Error("Input preparation must be synchronous");
       }
       if (!prepared || typeof prepared.text !== "string" || !prepared.text.trim() || isSlashCommandInvocation(prepared.text) ||
@@ -779,7 +779,7 @@ export async function handleAgentMessage(
         requestAuthority();
         const result = assertCurrent();
         if (result !== undefined) {
-          void Promise.resolve(result).catch(() => {});
+          void Promise.resolve(result).catch(error => debugSuppressedError(log, 'Rejected asynchronous input authority.', error, { operation: 'handle_agent_message.async_authority_rejected', chatJid }));
           throw Error("Prepared input authority must be synchronous");
         }
       };
