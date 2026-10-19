@@ -47,7 +47,7 @@ function sessionFixture(jid = "web:alice") {
 }
 function lifecycle(create: (jid: string) => Promise<any>) {
   const pool = new Map();
-  const manager = new AgentSessionManager({ pool, sidePool: new Map(), createSession: create,
+  const manager = new AgentSessionManager({ pool, createSession: create,
     modelRuntime: { getModel: () => undefined } as any, settingsManager: { getDefaultProvider: () => undefined, getDefaultModel: () => undefined } as any,
     createDefaultTools: () => [] as any, bindSession: async () => {}, ensureBranchRegistration: () => {},
   });
@@ -129,7 +129,7 @@ test("branch manager rejects foreign source before hydration and revalidates asy
   let hydrated = 0, warmups = 0;
   const source = sessionFixture();
   const active = new Map<string, string | null>([["web:alice", "stable"]]);
-  const manager = new AgentBranchManager({ pool: new Map(), sidePool: new Map(), activeForkBaseLeafByChat: active,
+  const manager = new AgentBranchManager({ pool: new Map(), activeForkBaseLeafByChat: active,
     getOrCreateRuntime: async () => { hydrated++; return source.runtime; }, refreshRuntime: async () => {}, isActive: () => false,
     scheduleSessionWarmup: () => { warmups++; },
   });
@@ -152,7 +152,7 @@ test("runtime handle lookup and active/known lists have no global active-session
   renameOwnedSessionHandle(getDb(), actor(), "web:alice", "research");
   getDb().query("UPDATE chat_branches SET agent_name='research' WHERE chat_jid='web:bob'").run();
   const pool = new Map([['web:alice', { runtime: sessionFixture().runtime, lastUsed: Date.now() }], ['web:bob', { runtime: sessionFixture('web:bob').runtime, lastUsed: Date.now() }]]);
-  const manager = new AgentBranchManager({ pool, sidePool: new Map(), activeForkBaseLeafByChat: new Map(), getOrCreateRuntime: async jid => pool.get(jid)!.runtime, refreshRuntime: async () => {}, isActive: () => false });
+  const manager = new AgentBranchManager({ pool, activeForkBaseLeafByChat: new Map(), getOrCreateRuntime: async jid => pool.get(jid)!.runtime, refreshRuntime: async () => {}, isActive: () => false });
   expect(() => manager.findChatByAgentName("research")).toThrow();
   run("web:alice", () => {
     expect(manager.findChatByAgentName("@RESEARCH")?.chat_jid).toBe("web:alice");
@@ -174,7 +174,7 @@ test("runtime handle lookup and active/known lists have no global active-session
 test("family HTTP fork/rename/picker use cookie owner, require CSRF and preserve IDs", async () => {
   let hydrated = 0;
   const source = sessionFixture();
-  const branchManager = new AgentBranchManager({ pool: new Map(), sidePool: new Map(), activeForkBaseLeafByChat: new Map(),
+  const branchManager = new AgentBranchManager({ pool: new Map(), activeForkBaseLeafByChat: new Map(),
     getOrCreateRuntime: async () => { hydrated++; return source.runtime; }, refreshRuntime: async () => {}, isActive: () => false,
   });
   const json = (body: unknown, status = 200) => Response.json(body, { status });

@@ -33,7 +33,7 @@ function actor(id: string) {
 }
 function child(parent: string, key = "fork") { return commitOwnedFork(getDb(), alice, parent, key, "child", JSON.stringify({ version: 1, mode: "stable_branch", branchEntries: [], model: null, thinkingLevel: null, sessionName: "child", parentSession: null })); }
 function manager(extra: Record<string, unknown> = {}) {
-  return new AgentBranchManager({ pool: new Map(), sidePool: new Map(), activeForkBaseLeafByChat: new Map(), getOrCreateRuntime: async () => { throw Error("must not hydrate"); }, refreshRuntime: async () => {}, isActive: () => false, ...extra });
+  return new AgentBranchManager({ pool: new Map(), activeForkBaseLeafByChat: new Map(), getOrCreateRuntime: async () => { throw Error("must not hydrate"); }, refreshRuntime: async () => {}, isActive: () => false, ...extra });
 }
 beforeEach(() => {
   ws = createTempWorkspace("piclaw-owned-lifecycle-"); restore = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
@@ -121,7 +121,7 @@ test("manager denies busy/pending work; detaches caches during archive and block
 
 test("pending-session guard reflects real hydration singleflight and protected runs", async () => {
   let release!: () => void;
-  const sessionManager = new AgentSessionManager({ pool: new Map(), sidePool: new Map(), modelRuntime: {} as any,
+  const sessionManager = new AgentSessionManager({ pool: new Map(), modelRuntime: {} as any,
     settingsManager: { getDefaultProvider: () => undefined, getDefaultModel: () => undefined } as any,
     createSession: async () => { await new Promise<void>(resolve => { release = resolve; }); return { session: { model: {} }, dispose: async () => {} } as any; },
     createDefaultTools: () => [] as any, bindSession: async () => {}, ensureBranchRegistration: () => {},
@@ -193,12 +193,11 @@ test("archiving disconnects its SSE on next delivery, without affecting another 
   } finally { hub.closeAll(); }
 });
 
-test("home changes need recent login and side-session activity prevents archive", async () => {
+test("home changes need recent login and active sessions prevent archive", async () => {
   const root = createOwnedRoot(getDb(), alice, "extra");
   getDb().query("UPDATE web_sessions SET created_at=? WHERE session_id=?").run(new Date(Date.now()-3600_000).toISOString(), alice.authentication.sessionId!);
   expect(() => selectOwnedHome(getDb(), alice, root.chat_jid)).toThrow("Session access denied");
-  const sidePool = new Map([[root.chat_jid, { runtime: { session: { isStreaming: true } } as any, lastUsed: Date.now() }]]);
-  await expect(manager({ sidePool }).changeOwnedSessionLifecycle(alice, root.chat_jid, "archive")).rejects.toThrow("idle");
+  await expect(manager({ isActive: () => true }).changeOwnedSessionLifecycle(alice, root.chat_jid, "archive")).rejects.toThrow("idle");
   expect(resolveAuthorisedChat(getDb(), alice, root.chat_jid, "session.read").chatJid).toBe(root.chat_jid);
 });
 

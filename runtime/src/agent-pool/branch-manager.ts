@@ -68,7 +68,6 @@ export interface ActiveChatAgent {
 /** Dependencies required for branch/session coordination. */
 export interface AgentBranchManagerOptions {
   pool: Map<string, PoolEntry>;
-  sidePool: Map<string, PoolEntry>;
   activeForkBaseLeafByChat: Map<string, string | null>;
   getOrCreateRuntime: (chatJid: string) => Promise<AgentSessionRuntime>;
   refreshRuntime: (chatJid: string, runtime: AgentSessionRuntime) => Promise<void>;
@@ -326,16 +325,11 @@ export class AgentBranchManager {
       throw new Error("Cannot rename a chat while it has an active turn.");
     }
 
-    // 1. Evict from in-memory pools.
+    // 1. Evict from the in-memory pool.
     const mainEntry = this.options.pool.get(old);
     if (mainEntry) {
     try { await mainEntry.runtime.dispose(); } catch (e) { log.debug("best-effort dispose failed for main session", { jid: old, err: e }); }
       this.options.pool.delete(old);
-    }
-    const sideEntry = this.options.sidePool.get(old);
-    if (sideEntry) {
-      try { await sideEntry.runtime.dispose(); } catch (e) { debugSuppressedError(log, "best-effort dispose failed for side session", e, { jid: old }); }
-      this.options.sidePool.delete(old);
     }
     this.options.activeForkBaseLeafByChat.delete(old);
     this.options.cancelSessionWarmup?.(old);
@@ -345,12 +339,6 @@ export class AgentBranchManager {
       if (isDescendantChatJid(old, jid)) {
         try { await entry.runtime.dispose(); } catch (e) { debugSuppressedError(log, "best-effort dispose failed for child pool session", e, { jid }); }
         this.options.pool.delete(jid);
-      }
-    }
-    for (const [jid, entry] of this.options.sidePool) {
-      if (isDescendantChatJid(old, jid)) {
-        try { await entry.runtime.dispose(); } catch (e) { debugSuppressedError(log, "best-effort dispose failed for child side-pool session", e, { jid }); }
-        this.options.sidePool.delete(jid);
       }
     }
 
@@ -427,11 +415,6 @@ export class AgentBranchManager {
       try { await mainEntry.runtime.dispose(); } catch (e) { debugSuppressedError(log, "best-effort dispose failed for merged session", e, { jid: normalizedChatJid }); }
       this.options.pool.delete(normalizedChatJid);
     }
-    const sideEntry = this.options.sidePool.get(normalizedChatJid);
-    if (sideEntry) {
-      try { await sideEntry.runtime.dispose(); } catch (e) { debugSuppressedError(log, "best-effort dispose failed for merged side session", e, { jid: normalizedChatJid }); }
-      this.options.sidePool.delete(normalizedChatJid);
-    }
     this.options.activeForkBaseLeafByChat.delete(normalizedChatJid);
     this.options.cancelSessionWarmup?.(normalizedChatJid);
 
@@ -452,9 +435,8 @@ export class AgentBranchManager {
   async changeOwnedSessionLifecycle(actor: AuthenticatedPrincipal, chatJid: string, action: "archive" | "restore", agentName?: string): Promise<ChatBranchRecord> {
     if (readAccessConfig().mode !== "family-shared") throw new ChatAccessDenied();
     resolveOwnedLifecycleSession(getDb(), actor, chatJid);
-    const sideSession = this.options.sidePool.get(chatJid)?.runtime.session;
     if (this.ownedLifecycleInFlight.has(chatJid) || this.options.hasPendingSessionWork?.(chatJid)
-      || this.options.isActive(chatJid) || (sideSession && isSessionActive(sideSession))) {
+      || this.options.isActive(chatJid)) {
       throw new Error("Session lifecycle operation requires an idle session.");
     }
     this.ownedLifecycleInFlight.add(chatJid);
@@ -463,14 +445,11 @@ export class AgentBranchManager {
       if (action === "archive") {
         // Archive commits before any await; detach caches so readers cannot acquire the old runtime.
         const main = this.options.pool.get(chatJid);
-        const side = this.options.sidePool.get(chatJid);
         this.options.pool.delete(chatJid);
-        this.options.sidePool.delete(chatJid);
         this.options.activeForkBaseLeafByChat.delete(chatJid);
         this.options.cancelSessionWarmup?.(chatJid);
-        for (const entry of new Set([main, side])) {
-          if (!entry) continue;
-          try { await entry.runtime.dispose(); }
+        if (main) {
+          try { await main.runtime.dispose(); }
           catch (error) { this.options.onWarn?.("Archived session runtime disposal failed", { operation: "owned_session.archive.dispose", chatJid, error }); }
         }
       }
@@ -504,19 +483,6 @@ export class AgentBranchManager {
         });
       }
       this.options.pool.delete(chatJid);
-    }
-    const sideEntry = this.options.sidePool.get(chatJid);
-    if (sideEntry) {
-      try {
-        await sideEntry.runtime.dispose();
-      } catch (err) {
-        this.options.onWarn?.("Failed to dispose pruned side session", {
-          operation: "prune_chat_branch.dispose_side",
-          chatJid,
-          err,
-        });
-      }
-      this.options.sidePool.delete(chatJid);
     }
     this.options.activeForkBaseLeafByChat.delete(chatJid);
     // Cancel any queued prewarm so a background realization does not
@@ -557,19 +523,6 @@ export class AgentBranchManager {
         });
       }
       this.options.pool.delete(normalizedChatJid);
-    }
-    const sideEntry = this.options.sidePool.get(normalizedChatJid);
-    if (sideEntry) {
-      try {
-        await sideEntry.runtime.dispose();
-      } catch (err) {
-        this.options.onWarn?.("Failed to dispose purged side session", {
-          operation: "purge_chat_branch.dispose_side",
-          chatJid: normalizedChatJid,
-          err,
-        });
-      }
-      this.options.sidePool.delete(normalizedChatJid);
     }
 
     this.options.activeForkBaseLeafByChat.delete(normalizedChatJid);
@@ -725,7 +678,7 @@ export class AgentBranchManager {
           is_bash_running: Boolean(session.isBashRunning),
           activity_status: activityStatus,
           activity_label: getSessionActivityLabel(activityStatus),
-          has_side_session: this.options.sidePool.has(chatJid),
+          has_side_session: false,
         }];
       })
       .sort((a, b) => {

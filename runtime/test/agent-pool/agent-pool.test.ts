@@ -265,18 +265,17 @@ test("agent pool aggregates content-free session resource counts", async () => {
     extensionRunner: { getAllRegisteredTools: () => Array.from({ length: tools }, () => ({})) },
   });
   (pool as any).pool.set("web:memory-instrumentation-main", { runtime: createRuntime(makeSession(2, 3, 4, 5, 6)), lastUsed: Date.now() });
-  (pool as any).sidePool.set("web:memory-instrumentation-side", { runtime: createRuntime(makeSession(7, 8, 9, 10, 11)), lastUsed: Date.now() });
   // This unit test targets only resident resource aggregation; avoid registering
   // synthetic chat IDs through the branch-manager activity query.
   (pool as any).branchManager.listActiveChats = () => [];
 
   expect(pool.getMemoryInstrumentationSnapshot().sessionResources).toEqual({
-    sessionEntries: 9,
-    activeMessages: 11,
-    persistedSessionBytes: 20,
-    loadedSkills: 13,
-    loadedExtensions: 15,
-    registeredTools: 17,
+    sessionEntries: 2,
+    activeMessages: 3,
+    persistedSessionBytes: 10,
+    loadedSkills: 4,
+    loadedExtensions: 5,
+    registeredTools: 6,
   });
 
   await pool.shutdown();

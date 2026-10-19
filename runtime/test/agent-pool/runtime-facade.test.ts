@@ -1064,7 +1064,6 @@ function createManagedFacade(bindSession: () => Promise<void> = async () => {}) 
   const pool = new Map<string, { runtime: AgentSessionRuntime; lastUsed: number }>();
   const manager = new AgentSessionManager({
     pool,
-    sidePool: new Map(),
     mainSessionMaxSize: 1,
     modelRuntime: {} as any,
     settingsManager: { getDefaultProvider: () => null, getDefaultModel: () => null } as any,
@@ -1139,7 +1138,7 @@ for (const kind of ["extension", "control"] as const) {
           // Do not let getOrCreate's touch or the recent-use grace mask eviction.
           fixture.pool.get("web:held")!.lastUsed = Date.now() - 20_000;
           fixture.pool.set("web:other", { runtime: other, lastUsed: Date.now() - 10_000 });
-          const eviction = { mainIdleTtlMs: policy === "ttl" ? 1 : 60_000, sideIdleTtlMs: 60_000, mainSessionMaxSizeOverride: 1 };
+          const eviction = { mainIdleTtlMs: policy === "ttl" ? 1 : 60_000, mainSessionMaxSizeOverride: 1 };
           fixture.manager.evictIdle(eviction);
           expect(fixture.pool.get("web:held")?.runtime).toBe(runtime);
           expect(fixture.pool.has("web:other")).toBe(false);
@@ -1203,7 +1202,7 @@ for (const kind of ["slash", "control"] as const) {
         await gate.started;
         expect(fixture.manager.hasProtectedRun("web:refresh")).toBe(true);
         fixture.pool.get("web:refresh")!.lastUsed = Date.now() - 10_000;
-        fixture.manager.evictIdle({ mainIdleTtlMs: 1, sideIdleTtlMs: 1, mainSessionMaxSizeOverride: 1 });
+        fixture.manager.evictIdle({ mainIdleTtlMs: 1, mainSessionMaxSizeOverride: 1 });
         expect(fixture.pool.get("web:refresh")?.runtime).toBe(runtime);
         expect(disposed).toBe(0);
         gate.release();
@@ -1211,7 +1210,7 @@ for (const kind of ["slash", "control"] as const) {
         if (fails) expect(outcome.error?.message).toBe("refresh failed");
         else expect(outcome.result?.status).toBe("success");
         expect(fixture.manager.hasProtectedRun("web:refresh")).toBe(false);
-        fixture.manager.evictIdle({ mainIdleTtlMs: 1, sideIdleTtlMs: 1 });
+        fixture.manager.evictIdle({ mainIdleTtlMs: 1 });
         expect(fixture.pool.has("web:refresh")).toBe(false);
         await waitFor(() => disposed === 1);
       } finally {

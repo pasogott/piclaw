@@ -41,7 +41,7 @@ for (const empty of [false, true]) {
       Object.defineProperties(options, Object.getOwnPropertyDescriptors(compatibility));
       pool = new AgentPool(options);
       const serviceOptions = Object.assign({}, {
-        pool: new Map(), sidePool: new Map(), activeForkBaseLeafByChat: new Map(),
+        pool: new Map(), activeForkBaseLeafByChat: new Map(),
         authStorage: model.credentialStore, modelRuntime: model.modelRuntime,
         modelRegistry: model.modelRegistry!, settingsManager: SettingsManager.inMemory(), workspaceDir: process.env.PICLAW_WORKSPACE!, getDurableSession: (chat: string) => durableSessions.get(chat),
       });

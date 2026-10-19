@@ -1,9 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isOperationSession } from "./operation-session-profile.js";
 /**
- * agent-pool/session-manager.ts – Main/side session lifecycle management for AgentPool.
+ * agent-pool/session-manager.ts – Main session lifecycle management for AgentPool.
  *
- * Extracts chat-session creation, side-session sync, idle eviction, and shutdown
+ * Extracts chat-session creation, idle eviction, and shutdown
  * mechanics out of the top-level AgentPool coordinator while preserving the
  * existing map-based cache structure used by callers and tests.
  */
@@ -46,7 +46,6 @@ const RECENT_USE_EVICTION_GRACE_MS = 1_000;
 export interface AgentSessionManagerOptions {
   getDurableSession?: import("./contracts.js").AgentPoolOptions["getDurableSession"];
   pool: Map<string, PoolEntry>;
-  sidePool: Map<string, PoolEntry>;
   createSession?: (chatJid: string, sessionDir: string) => Promise<AgentSessionRuntime>;
   disposePersistence?: (runtime: AgentSessionRuntime) => Promise<void> | void;
   modelRuntime: ModelRuntime;
@@ -65,7 +64,7 @@ export interface AgentSessionManagerOptions {
 }
 
 /**
- * Handles lifecycle operations for main and auxiliary AgentSession instances.
+ * Handles lifecycle operations for main AgentSession instances.
  */
 export interface AgentSessionManagerInstrumentationSnapshot {
   branchSeedRealizationsInFlight: number;
@@ -82,7 +81,6 @@ export class AgentSessionManager {
   private readonly branchSeedRealizationInFlight = new Map<string, Promise<boolean>>();
   private readonly createInFlight = new Map<string, Promise<AgentSessionRuntime>>();
   private readonly idleMainDisposalsInFlight = new Map<string, Promise<void>>();
-  private readonly idleSideDisposalsInFlight = new Map<string, Promise<void>>();
   private readonly invalidDeferredBranchSeedErrors = new Map<string, { error: Error; fingerprint: string | null }>();
   private readonly runtimeDisposeInFlight = new WeakMap<AgentSessionRuntime, Promise<unknown | null>>();
   private readonly prewarmInFlight = new Set<string>();
@@ -121,7 +119,7 @@ export class AgentSessionManager {
   assertLegacyCaptureIdle(): void {
     if (this.isShuttingDown || this.mcpSnapshotInFlight || this.hasActiveMemoryReclamationWork() ||
       this.queuedPrewarms.size || this.prewarmLoopActive || this.failedMcpDisposals.size ||
-      [...this.options.pool.values(), ...this.options.sidePool.values()].some(({ runtime }) =>
+      [...this.options.pool.values()].some(({ runtime }) =>
         runtime.session.isRetrying || runtime.session.hasPendingBashMessages || runtime.session.pendingMessageCount > 0))
       throw new Error("Legacy pool lifecycle/agent work has not drained");
   }
@@ -130,7 +128,7 @@ export class AgentSessionManager {
   hasActiveMemoryReclamationWork(): boolean {
     return this.evictionProtectionCounts.size > 0 || this.prewarmInFlight.size > 0
       || this.pendingMcpLifecycleWork().length > 0
-      || [...this.options.pool.values(), ...this.options.sidePool.values()].some(({ runtime }) =>
+      || [...this.options.pool.values()].some(({ runtime }) =>
         runtime.session.isStreaming || runtime.session.isBashRunning || runtime.session.isCompacting);
   }
 
@@ -158,11 +156,11 @@ export class AgentSessionManager {
   private pendingMcpLifecycleWork(): Promise<unknown>[] {
     return [...new Set([
       ...this.createInFlight.values(), ...this.branchSeedRealizationInFlight.values(),
-      ...this.idleMainDisposalsInFlight.values(), ...this.idleSideDisposalsInFlight.values(), ...this.mcpLifecycleWork,
+      ...this.idleMainDisposalsInFlight.values(), ...this.mcpLifecycleWork,
     ])];
   }
 
-  /** Drain pre-fence creation/lifecycle work before enumerating both pools. */
+  /** Drain pre-fence creation/lifecycle work before enumerating the pool. */
   async fenceMcpAndSnapshot(signal: AbortSignal): Promise<readonly AgentSessionRuntime[]> {
     this.assertNonReentrantLifecycleTransition();
     this.blockMcpAdmissions();
@@ -176,7 +174,7 @@ export class AgentSessionManager {
     });
     try {
       // Shutdown may enter after fencing. Drain again until no captured work
-      // can still mutate the pools; admission stays closed throughout.
+      // can still mutate the pool; admission stays closed throughout.
       while (true) {
         if (signal.aborted) throw new Error("MCP session snapshot cancelled.");
         const pending = this.pendingMcpLifecycleWork();
@@ -184,7 +182,7 @@ export class AgentSessionManager {
         await Promise.race([Promise.allSettled(pending), aborted]);
       }
       if (this.failedMcpDisposals.size) throw new Error("MCP runtime disposal remains unresolved.");
-      return [...new Set([...this.options.pool.values(), ...this.options.sidePool.values()].map(entry => entry.runtime))];
+      return [...new Set([...this.options.pool.values()].map(entry => entry.runtime))];
     } finally {
       this.mcpSnapshotInFlight = false;
       signal.removeEventListener("abort", onAbort);
@@ -199,9 +197,7 @@ export class AgentSessionManager {
    */
   async quarantineMcpRuntime(runtime: AgentSessionRuntime): Promise<void> {
     this.assertNonReentrantLifecycleTransition();
-    for (const map of [this.options.pool, this.options.sidePool]) {
-      for (const [chatJid, entry] of map) if (entry.runtime === runtime) map.delete(chatJid);
-    }
+    for (const [chatJid, entry] of this.options.pool) if (entry.runtime === runtime) this.options.pool.delete(chatJid);
     return this.trackMcpLifecycle(async () => {
       const error = await this.disposeRuntimeOnce(runtime, "Failed to dispose MCP transition session", { operation: "mcp_engine_switch.quarantine" });
       if (error) throw new Error("MCP session quarantine failed.");
@@ -234,7 +230,7 @@ export class AgentSessionManager {
   hasPendingSessionWork(chatJid: string): boolean {
     return this.createInFlight.has(chatJid)
       || this.branchSeedRealizationInFlight.has(chatJid) || this.evictionProtectionCounts.has(chatJid)
-      || this.idleMainDisposalsInFlight.has(chatJid) || this.idleSideDisposalsInFlight.has(chatJid);
+      || this.idleMainDisposalsInFlight.has(chatJid);
   }
 
   private getEvictionProtectedChatJids(explicit: string[] = []): string[] {
@@ -405,10 +401,7 @@ export class AgentSessionManager {
     const epoch = this.mcpAdmissionEpoch;
     return this.trackMcpLifecycle(async () => {
       this.assertMcpAdmission(epoch);
-      await Promise.all([
-        this.disposeEntry(this.options.pool, chatJid, "recreate.dispose_main_session"),
-        this.disposeEntry(this.options.sidePool, chatJid, "recreate.dispose_side_session", true),
-      ]);
+      await this.disposeEntry(chatJid, "recreate.dispose_main_session");
     });
   }
 
@@ -486,32 +479,26 @@ export class AgentSessionManager {
     this.evictionProtectionCounts.clear();
 
     for (const jid of [...this.options.pool.keys()]) {
-      await this.disposeEntry(this.options.pool, jid, "shutdown.dispose_main_session");
-    }
-    for (const jid of [...this.options.sidePool.keys()]) {
-      await this.disposeEntry(this.options.sidePool, jid, "shutdown.dispose_side_session", true);
+      await this.disposeEntry(jid, "shutdown.dispose_main_session");
     }
     this.options.pool.clear();
-    this.options.sidePool.clear();
   }
 
   private async disposeEntry(
-    map: Map<string, PoolEntry>,
     chatJid: string,
     operation: string,
-    side = false,
   ): Promise<void> {
-    const entry = map.get(chatJid);
+    const entry = this.options.pool.get(chatJid);
     if (!entry) return;
-    const pending = side ? this.idleSideDisposalsInFlight : this.idleMainDisposalsInFlight;
-    this.startIdleDispose(map, pending, chatJid, entry, operation, side);
+    const pending = this.idleMainDisposalsInFlight;
+    this.startIdleDispose(chatJid, entry, operation);
     await pending.get(chatJid);
   }
 
-  evictIdle(options: { mainIdleTtlMs: number; sideIdleTtlMs: number; mainSessionMaxSizeOverride?: number | null; protectedChatJids?: string[] }): void {
+  evictIdle(options: { mainIdleTtlMs: number; mainSessionMaxSizeOverride?: number | null; protectedChatJids?: string[] }): void {
     if (this.mcpAdmissionsBlocked) return;
     const now = Date.now();
-    const { mainIdleTtlMs, sideIdleTtlMs, mainSessionMaxSizeOverride } = options;
+    const { mainIdleTtlMs, mainSessionMaxSizeOverride } = options;
     const explicitProtectedChatJids = new Set(this.getEvictionProtectedChatJids(
       Array.isArray(options.protectedChatJids)
         ? options.protectedChatJids.map((chatJid) => String(chatJid || "").trim()).filter(Boolean)
@@ -546,19 +533,6 @@ export class AgentSessionManager {
       protectedChatJids: [...explicitProtectedChatJids],
       maxSizeOverride: mainSessionMaxSizeOverride,
     });
-
-    for (const [jid, entry] of this.options.sidePool) {
-      if (this.shouldKeepSessionCached(entry.runtime.session, now, entry)) {
-        continue;
-      }
-      if (now - entry.lastUsed > sideIdleTtlMs) {
-        this.options.onInfo?.("Evicting idle side session", {
-          operation: "evict_idle.side_session",
-          chatJid: jid,
-        });
-        this.startIdleDispose(this.options.sidePool, this.idleSideDisposalsInFlight, jid, entry, "evict_idle.side_session", true);
-      }
-    }
   }
 
   private shouldKeepSessionCached(
@@ -604,24 +578,21 @@ export class AgentSessionManager {
       poolSize: this.options.pool.size,
       maxSize: maxSizeOverride ?? this.options.mainSessionMaxSize ?? null,
     });
-    this.startIdleDispose(this.options.pool, this.idleMainDisposalsInFlight, chatJid, { runtime, lastUsed: Date.now() }, operation, false);
+    this.startIdleDispose(chatJid, { runtime, lastUsed: Date.now() }, operation);
   }
 
   private startIdleDispose(
-    map: Map<string, PoolEntry>,
-    pendingDisposals: Map<string, Promise<void>>,
     chatJid: string,
     entry: PoolEntry,
     operation: string,
-    side: boolean,
   ): void {
+    const pendingDisposals = this.idleMainDisposalsInFlight;
     if (pendingDisposals.has(chatJid)) return;
-    if (map.get(chatJid)?.runtime === entry.runtime) {
-      map.delete(chatJid);
+    if (this.options.pool.get(chatJid)?.runtime === entry.runtime) {
+      this.options.pool.delete(chatJid);
     }
 
-    const warnMessage = side ? "Failed to dispose evicted side session" : "Failed to dispose evicted session";
-    const task = this.disposeRuntimeOnce(entry.runtime, warnMessage, {
+    const task = this.disposeRuntimeOnce(entry.runtime, "Failed to dispose evicted session", {
       operation,
       chatJid,
     }).then(error => {
@@ -873,7 +844,7 @@ export class AgentSessionManager {
 
   private async disposeMainRuntimeAfterError(chatJid: string, runtime: AgentSessionRuntime, operation: string): Promise<void> {
     if (this.options.pool.get(chatJid)?.runtime === runtime) {
-      this.startIdleDispose(this.options.pool, this.idleMainDisposalsInFlight, chatJid, { runtime, lastUsed: Date.now() }, operation, false);
+      this.startIdleDispose(chatJid, { runtime, lastUsed: Date.now() }, operation);
       await this.idleMainDisposalsInFlight.get(chatJid);
     } else {
       await this.disposeRuntimeOnce(runtime, "Failed to dispose session after initialization error", { operation, chatJid });

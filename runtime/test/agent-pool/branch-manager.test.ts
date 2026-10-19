@@ -36,13 +36,11 @@ function createRuntime(session: any): AgentSessionRuntime {
 
 function createManager(overrides: Partial<ConstructorParameters<typeof AgentBranchManager>[0]> = {}) {
   const pool = new Map<string, { runtime: any; lastUsed: number }>();
-  const sidePool = new Map<string, { runtime: any; lastUsed: number }>();
   const activeForkBaseLeafByChat = new Map<string, string | null>();
   const warns: string[] = [];
 
   const manager = new AgentBranchManager({
     pool,
-    sidePool,
     activeForkBaseLeafByChat,
     getOrCreateRuntime: async (chatJid) => pool.get(chatJid)?.runtime,
     refreshRuntime: async () => {},
@@ -55,7 +53,7 @@ function createManager(overrides: Partial<ConstructorParameters<typeof AgentBran
     ...overrides,
   });
 
-  return { manager, pool, sidePool, activeForkBaseLeafByChat, warns };
+  return { manager, pool, activeForkBaseLeafByChat, warns };
 }
 
 test("AgentBranchManager registers active chats and resolves agent handles", async () => {
@@ -421,7 +419,6 @@ test("AgentBranchManager renameChatJid migrates hierarchical descendants and ses
   fixture.pool.set(oldParent, { runtime: createRuntime(inactiveSession), lastUsed: Date.now() });
   fixture.pool.set(oldChild, { runtime: createRuntime(inactiveSession), lastUsed: Date.now() });
   fixture.pool.set(oldUnrelated, { runtime: createRuntime(inactiveSession), lastUsed: Date.now() });
-  fixture.sidePool.set(oldChild, { runtime: createRuntime(inactiveSession), lastUsed: Date.now() });
 
   // Clean up any stale session dirs from prior tests before creating new ones
   for (const prefix of ["web_default_research", "web_default_research-notes"]) {
@@ -443,9 +440,8 @@ test("AgentBranchManager renameChatJid migrates hierarchical descendants and ses
 
   expect(fixture.pool.has(oldParent)).toBe(false);
   expect(fixture.pool.has(oldChild)).toBe(false);
-  expect(fixture.sidePool.has(oldChild)).toBe(false);
   expect(fixture.pool.has(oldUnrelated)).toBe(true);
-  expect(disposed).toBe(3);
+  expect(disposed).toBe(2);
 
   expect(db.getChatBranchByChatJid(newParent)?.chat_jid).toBe(newParent);
   expect(db.getChatBranchByChatJid(newChild)?.chat_jid).toBe(newChild);
@@ -510,7 +506,6 @@ test("AgentBranchManager prunes inactive branches and disposes cached sessions",
     },
   });
   fixture.pool.set("web:default:branch:prune", { runtime: createRuntime(session), lastUsed: Date.now() });
-  fixture.sidePool.set("web:default:branch:prune", { runtime: createRuntime(session), lastUsed: Date.now() });
   fixture.activeForkBaseLeafByChat.set("web:default:branch:prune", "leaf-1");
   writeFileSync(join(ensureSessionDir("web:default:branch:prune"), ".branch-seed.json"), JSON.stringify({
     version: 1,
@@ -524,7 +519,6 @@ test("AgentBranchManager prunes inactive branches and disposes cached sessions",
   const archived = await fixture.manager.pruneChatBranch("web:default:branch:prune");
   expect(archived.archived_at).toBeTruthy();
   expect(fixture.pool.has("web:default:branch:prune")).toBe(false);
-  expect(fixture.sidePool.has("web:default:branch:prune")).toBe(false);
   expect(fixture.activeForkBaseLeafByChat.has("web:default:branch:prune")).toBe(false);
   // The deferred seed must survive prune — it is the only persisted copy of
   // the forked context until the session is realized, and restoreChatBranch()
@@ -533,7 +527,7 @@ test("AgentBranchManager prunes inactive branches and disposes cached sessions",
   // Prune must also cancel any queued prewarm so a background realization
   // cannot materialize a runtime for an archived chat.
   expect(cancelled).toEqual(["web:default:branch:prune"]);
-  expect(disposed).toBe(2);
+  expect(disposed).toBe(1);
 
   ws.cleanup();
 });
@@ -569,7 +563,6 @@ test("AgentBranchManager permanently purges archived branches and removes sessio
 
   const fixture = createManager();
   fixture.pool.set("web:default:branch:purge", { runtime: createRuntime(session), lastUsed: Date.now() });
-  fixture.sidePool.set("web:default:branch:purge", { runtime: createRuntime(session), lastUsed: Date.now() });
   const baseDir = ensureSessionDir("web:default:branch:purge");
   writeFileSync(join(baseDir, ".branch-seed.json"), JSON.stringify({ version: 1, parentSession: null, sessionName: "Purge Me", model: null, thinkingLevel: null, mode: "rotated_context" }), "utf8");
   const namedVariantDir = `${baseDir}__variant`;
@@ -581,9 +574,8 @@ test("AgentBranchManager permanently purges archived branches and removes sessio
   expect(result.removedSessionArtifacts).toContain(baseDir);
   expect(result.removedSessionArtifacts).toContain(namedVariantDir);
   expect(fixture.pool.has("web:default:branch:purge")).toBe(false);
-  expect(fixture.sidePool.has("web:default:branch:purge")).toBe(false);
   expect(db.getChatBranchByChatJid("web:default:branch:purge")).toBeNull();
-  expect(disposed).toBe(2);
+  expect(disposed).toBe(1);
 
   ws.cleanup();
 });

@@ -69,7 +69,7 @@ function fixture(externalAlias = false, persistedBaseline = false) {
   const options = { root, legacySessionRoot, owner, queue, coordinator: {
     assertSealedAndDrained() { if (!sealed) throw Error("admission open"); }, migrationIncarnation() { return "trusted-cutover-scope"; },
   } };
-  const lifecycle = new AgentSessionManager({ pool, sidePool: new Map() } as ConstructorParameters<typeof AgentSessionManager>[0]);
+  const lifecycle = new AgentSessionManager({ pool, } as ConstructorParameters<typeof AgentSessionManager>[0]);
   const capture = () => AgentPool.prototype.captureLegacyUpgradeBindings.call({ pool, sessionManager: lifecycle } as unknown as AgentPool, options);
   return { root, file, pool, options, queue, managers, capture, retarget() {
     writeFileSync(other, readFileSync(file)); unlinkSync(alias); symlinkSync(other, alias);

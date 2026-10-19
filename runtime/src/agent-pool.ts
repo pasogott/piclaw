@@ -300,7 +300,6 @@ export class AgentPool {
   }
   private mcpSettings: AgentPoolServices["mcpSettings"];
   private pool = new Map<string, PoolEntry>();
-  private sidePool = new Map<string, PoolEntry>();
   private activeForkBaseLeafByChat = new Map<string, string | null>();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private shuttingDown = false;
@@ -365,7 +364,6 @@ export class AgentPool {
       branchManager: this.branchManager,
     } = createAgentPoolServices({
       pool: this.pool,
-      sidePool: this.sidePool,
       activeForkBaseLeafByChat: this.activeForkBaseLeafByChat,
       authStorage: this.credentialStore,
       modelRuntime: this.modelRuntime,
@@ -398,7 +396,7 @@ export class AgentPool {
     runtimeInterop.streamSimple = (model, context, options) => this.modelRuntime.streamSimple(model, context, options);
     const getSessionEntry = (chatJid = getChatJid("")): PoolEntry | undefined => {
       const normalizedChatJid = String(chatJid || "").trim();
-      return normalizedChatJid ? this.pool.get(normalizedChatJid) ?? this.sidePool.get(normalizedChatJid) : undefined;
+      return normalizedChatJid ? this.pool.get(normalizedChatJid) : undefined;
     };
     runtimeInterop.getSessionId = (chatJid) => getSessionEntry(chatJid)?.runtime.session.sessionId ?? null;
     runtimeInterop.getScopedModels = (chatJid) => getSessionEntry(chatJid)?.runtime.session.scopedModels ?? [];
@@ -843,11 +841,10 @@ export class AgentPool {
   getMemoryInstrumentationSnapshot(): AgentPoolMemoryInstrumentationSnapshot {
     const sessionResources = collectSessionResourceInstrumentation([
       ...this.pool.values(),
-      ...this.sidePool.values(),
     ]);
     return {
       cachedMainSessions: this.pool.size,
-      cachedSideSessions: this.sidePool.size,
+      cachedSideSessions: 0,
       activeForkBaseLeaves: this.activeForkBaseLeafByChat.size,
       activeChats: this.branchManager.listActiveChats().length,
       sessionResources,
@@ -945,14 +942,13 @@ export class AgentPool {
     const runtime = await this.sessionManager.getOrCreate(chatJid);
     const pressure = this.getMemoryPressureMode();
     if (pressure.active && !this.shuttingDown) {
-      const poolSizeBefore = this.pool.size + this.sidePool.size;
+      const poolSizeBefore = this.pool.size;
       this.sessionManager.evictIdle({
         mainIdleTtlMs: pressure.mainIdleTtlMs,
-        sideIdleTtlMs: this.config.sideIdleTtlMs,
         mainSessionMaxSizeOverride: pressure.mainSessionMaxSizeOverride,
         protectedChatJids: [chatJid],
       });
-      if (this.pool.size + this.sidePool.size < poolSizeBefore) this.memoryReclamation.request();
+      if (this.pool.size < poolSizeBefore) this.memoryReclamation.request();
     }
     return runtime;
   }
@@ -984,13 +980,12 @@ export class AgentPool {
 
   private evictIdle(): void {
     const pressure = this.getMemoryPressureMode();
-    const poolSizeBefore = this.pool.size + this.sidePool.size;
+    const poolSizeBefore = this.pool.size;
     this.sessionManager.evictIdle({
       mainIdleTtlMs: pressure.mainIdleTtlMs,
-      sideIdleTtlMs: this.config.sideIdleTtlMs,
       mainSessionMaxSizeOverride: pressure.mainSessionMaxSizeOverride,
     });
-    const poolSizeAfter = this.pool.size + this.sidePool.size;
+    const poolSizeAfter = this.pool.size;
     // Coalesce pressure/eviction requests and reclaim only after active runs
     // and asynchronous disposal drain; do not interrupt another chat's work.
     if (this.memoryReclamation.shouldReclaim({

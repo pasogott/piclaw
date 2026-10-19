@@ -37,7 +37,6 @@ function createRuntime(session: any): AgentSessionRuntime {
 
 function createManager(overrides: Record<string, unknown> = {}) {
   const pool = new Map<string, { runtime: any; lastUsed: number }>();
-  const sidePool = new Map<string, { runtime: any; lastUsed: number }>();
   const state = {
     bound: [] as string[],
     registered: [] as string[],
@@ -48,7 +47,6 @@ function createManager(overrides: Record<string, unknown> = {}) {
 
   const manager = new AgentSessionManager({
     pool,
-    sidePool,
     settingsManager: {
       getDefaultProvider: () => null,
       getDefaultModel: () => null,
@@ -66,7 +64,7 @@ function createManager(overrides: Record<string, unknown> = {}) {
     ...overrides,
   });
 
-  return { manager, pool, sidePool, state };
+  return { manager, pool, state };
 }
 
 test("memory reclamation stays blocked through protected runs and asynchronous disposal", async () => {
@@ -83,7 +81,7 @@ test("memory reclamation stays blocked through protected runs and asynchronous d
   runtime.session.isStreaming = true;
   expect(fixture.manager.hasActiveMemoryReclamationWork()).toBe(true);
   runtime.session.isStreaming = false;
-  fixture.manager.evictIdle({ mainIdleTtlMs: 1, sideIdleTtlMs: 1 });
+  fixture.manager.evictIdle({ mainIdleTtlMs: 1 });
   expect(fixture.manager.hasActiveMemoryReclamationWork()).toBe(true);
   release();
   await waitFor(() => !fixture.manager.hasActiveMemoryReclamationWork());
@@ -192,17 +190,9 @@ test("AgentSessionManager disposes runtime and persistence exactly once across o
   expect(persistenceDisposals).toBe(1);
 });
 
-test("AgentSessionManager recreates cached main and side sessions", async () => {
+test("AgentSessionManager recreates cached main sessions", async () => {
   let disposed = 0;
   const mainSession = {
-    isStreaming: false,
-    isBashRunning: false,
-    isCompacting: false,
-    dispose() {
-      disposed += 1;
-    },
-  };
-  const sideSession = {
     isStreaming: false,
     isBashRunning: false,
     isCompacting: false,
@@ -213,13 +203,11 @@ test("AgentSessionManager recreates cached main and side sessions", async () => 
 
   const fixture = createManager();
   fixture.pool.set("web:default", { runtime: createRuntime(mainSession), lastUsed: Date.now() });
-  fixture.sidePool.set("web:default", { runtime: createRuntime(sideSession), lastUsed: Date.now() });
 
   await fixture.manager.recreate("web:default");
 
   expect(fixture.pool.has("web:default")).toBe(false);
-  expect(fixture.sidePool.has("web:default")).toBe(false);
-  expect(disposed).toBe(2);
+  expect(disposed).toBe(1);
 });
 
 test("AgentSessionManager protects pending and in-flight chats from TTL and pool-limit eviction", async () => {
@@ -246,18 +234,18 @@ test("AgentSessionManager protects pending and in-flight chats from TTL and pool
 
   // Keep both entries within the TTL window so the max-size path—not TTL—must
   // choose the unprotected candidate.
-  fixture.manager.evictIdle({ mainIdleTtlMs: 60_000, sideIdleTtlMs: 60_000, mainSessionMaxSizeOverride: 1 });
+  fixture.manager.evictIdle({ mainIdleTtlMs: 60_000, mainSessionMaxSizeOverride: 1 });
   expect(fixture.pool.has("web:protected")).toBe(true);
   expect(fixture.pool.has("web:other")).toBe(false);
 
   releaseFirst();
-  fixture.manager.evictIdle({ mainIdleTtlMs: 1, sideIdleTtlMs: 1, mainSessionMaxSizeOverride: 1 });
+  fixture.manager.evictIdle({ mainIdleTtlMs: 1, mainSessionMaxSizeOverride: 1 });
   expect(fixture.pool.has("web:protected")).toBe(true);
 
   releaseSecond();
   expect(fixture.manager.getInstrumentationSnapshot().evictionProtectedChats).toBe(0);
   fixture.pool.get("web:protected")!.lastUsed = Date.now() - 10_000;
-  fixture.manager.evictIdle({ mainIdleTtlMs: 1, sideIdleTtlMs: 1, mainSessionMaxSizeOverride: 1 });
+  fixture.manager.evictIdle({ mainIdleTtlMs: 1, mainSessionMaxSizeOverride: 1 });
   expect(fixture.pool.has("web:protected")).toBe(false);
   await waitFor(() => disposed === 2);
   expect(disposed).toBe(2);
@@ -286,7 +274,7 @@ test("AgentSessionManager evicts idle sessions and shuts down remaining sessions
   fixture.pool.set("web:old", { runtime: createRuntime(oldSession), lastUsed: Date.now() - 10_000 });
   fixture.pool.set("web:active", { runtime: createRuntime(activeSession), lastUsed: Date.now() - 10_000 });
 
-  fixture.manager.evictIdle({ mainIdleTtlMs: 1_000, sideIdleTtlMs: 1_000 });
+  fixture.manager.evictIdle({ mainIdleTtlMs: 1_000 });
 
   expect(fixture.pool.has("web:old")).toBe(false);
   expect(fixture.pool.has("web:active")).toBe(true);
@@ -295,21 +283,12 @@ test("AgentSessionManager evicts idle sessions and shuts down remaining sessions
 
   await fixture.manager.shutdown();
   expect(fixture.pool.size).toBe(0);
-  expect(fixture.sidePool.size).toBe(0);
   expect(disposed).toBe(2);
 });
 
-test("AgentSessionManager evicts idle side sessions more aggressively than main sessions", async () => {
+test("AgentSessionManager keeps main sessions within their idle TTL", async () => {
   let disposed = 0;
   const mainSession = {
-    isStreaming: false,
-    isBashRunning: false,
-    isCompacting: false,
-    dispose() {
-      disposed += 1;
-    },
-  };
-  const sideSession = {
     isStreaming: false,
     isBashRunning: false,
     isCompacting: false,
@@ -321,14 +300,11 @@ test("AgentSessionManager evicts idle side sessions more aggressively than main 
   const fixture = createManager();
   const lastUsed = Date.now() - 2_000;
   fixture.pool.set("web:main", { runtime: createRuntime(mainSession), lastUsed });
-  fixture.sidePool.set("web:main", { runtime: createRuntime(sideSession), lastUsed });
 
-  fixture.manager.evictIdle({ mainIdleTtlMs: 10_000, sideIdleTtlMs: 1_000 });
+  fixture.manager.evictIdle({ mainIdleTtlMs: 10_000 });
 
   expect(fixture.pool.has("web:main")).toBe(true);
-  expect(fixture.sidePool.has("web:main")).toBe(false);
-  await waitFor(() => disposed === 1);
-  expect(disposed).toBe(1);
+  expect(disposed).toBe(0);
 
   await fixture.manager.shutdown();
 });
@@ -676,5 +652,5 @@ test('manager protects an incompletely bound runtime until actual startup settle
  let release!:()=>void;const held=new Promise<void>(resolve=>{release=resolve;});let entered!:()=>void;const started=new Promise<void>(resolve=>{entered=resolve;});let disposed=0;
  const runtime=createRuntime({isStreaming:false} as AgentSession);runtime.dispose=async()=>{disposed++;};
  const fixture=createManager({createSession:async()=>runtime as any,bindSession:async()=>{entered();await held;}});
- const pending=fixture.manager.getOrCreate('web:binding');await started;expect(fixture.manager.hasProtectedRun('web:binding')).toBe(true);fixture.pool.get('web:binding')!.lastUsed=Date.now()-10000;await fixture.manager.evictIdle({mainIdleTtlMs:1,sideIdleTtlMs:1,mainSessionMaxSizeOverride:0});expect(disposed).toBe(0);release();await pending;expect(fixture.manager.hasProtectedRun('web:binding')).toBe(false);
+ const pending=fixture.manager.getOrCreate('web:binding');await started;expect(fixture.manager.hasProtectedRun('web:binding')).toBe(true);fixture.pool.get('web:binding')!.lastUsed=Date.now()-10000;await fixture.manager.evictIdle({mainIdleTtlMs:1,mainSessionMaxSizeOverride:0});expect(disposed).toBe(0);release();await pending;expect(fixture.manager.hasProtectedRun('web:binding')).toBe(false);
 });

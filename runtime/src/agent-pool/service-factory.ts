@@ -30,7 +30,6 @@ export interface AgentPoolLogHooks {
 /** Inputs required to assemble the extracted AgentPool helper services. */
 export interface AgentPoolServiceFactoryOptions extends AgentPoolLogHooks {
   pool: Map<string, PoolEntry>;
-  sidePool: Map<string, PoolEntry>;
   activeForkBaseLeafByChat: Map<string, string | null>;
   authStorage: PiclawCredentialStore;
   modelRuntime: ModelRuntime;
@@ -117,7 +116,6 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
   });
   branchManager = new AgentBranchManager({
     pool: options.pool,
-    sidePool: options.sidePool,
     activeForkBaseLeafByChat: options.activeForkBaseLeafByChat,
     getOrCreateRuntime: (chatJid) => sessionManager.getOrCreate(chatJid),
     refreshRuntime: (chatJid, runtime) => sessionManager.refreshRuntime(chatJid, runtime),
@@ -131,7 +129,6 @@ export function createAgentPoolServices(options: AgentPoolServiceFactoryOptions)
     getDurableSession,
     modelRegistry: options.modelRegistry,
     pool: options.pool,
-    sidePool: options.sidePool,
     modelRuntime: options.modelRuntime,
     settingsManager: options.settingsManager,
     mainSessionMaxSize: options.mainSessionMaxSize,

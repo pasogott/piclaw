@@ -45,7 +45,7 @@ test('real SDK first-use import retains original IDs/custom/labels/model/thinkin
   const fixture=seed(),base=getModel('anthropic','claude-sonnet-4-5')!;
   const modelRuntime=createTestModelRuntime([{...base,provider:'test',id:'fixture'}]),settings=SettingsManager.inMemory({compaction:{enabled:false}});
   let imports=0;
-  const makeManager=()=>new AgentSessionManager({pool:new Map(),sidePool:new Map(),modelRuntime,settingsManager:settings,createDefaultTools:()=>[],
+  const makeManager=()=>new AgentSessionManager({pool:new Map(),modelRuntime,settingsManager:settings,createDefaultTools:()=>[],
     createSession:async jid=>{const runtime=await createSessionInDir(join(ws.data,'runtime-sessions'),{chatJid:jid,tools:[],modelRuntime,settingsManager:settings});const original=runtime.importFromJsonl.bind(runtime);runtime.importFromJsonl=async(...args)=>{imports++;return original(...args);};return runtime;},bindSession:async()=>{},ensureBranchRegistration:()=>{}});
   const manager=makeManager();managers.push(manager);
   mkdirSync(join(ws.data,'runtime-sessions'));const untrusted=join(ws.data,'runtime-sessions','legacy.jsonl');writeFileSync(untrusted,'malformed legacy file that must not be loaded');utimesSync(untrusted,new Date(0),new Date(0));
@@ -64,6 +64,6 @@ test('real SDK first-use import retains original IDs/custom/labels/model/thinkin
 test('revocation during import leaves captured seed intact, disposes failed runtime and removes temporary import files',async()=>{
   seed();const dir=join(ws.data,'failed');mkdirSync(dir);let disposed=0;
   const runtime:any={session:{sessionManager:{getSessionDir:()=>dir}},importFromJsonl:async()=>{revokeUserWebSessions('default');return {cancelled:false};},dispose:async()=>{disposed++;}};
-  const manager=new AgentSessionManager({pool:new Map(),sidePool:new Map(),modelRuntime:{} as any,settingsManager:{} as any,createDefaultTools:()=>[],createSession:async()=>runtime,bindSession:async()=>{},ensureBranchRegistration:()=>{}});managers.push(manager);
+  const manager=new AgentSessionManager({pool:new Map(),modelRuntime:{} as any,settingsManager:{} as any,createDefaultTools:()=>[],createSession:async()=>runtime,bindSession:async()=>{},ensureBranchRegistration:()=>{}});managers.push(manager);
   await expect(run(()=>manager.getOrCreate(child))).rejects.toThrow();expect(disposed).toBe(1);expect((getDb().query("SELECT seed_json FROM owned_fork_operations WHERE request_id='adopted'").get() as any).seed_json).toContain('adopted_jsonl');expect(readdirSync(dir)).toEqual([]);
 });
