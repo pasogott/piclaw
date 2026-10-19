@@ -9,6 +9,7 @@ import { BunSqliteDatabase } from "../../runtime/durable-engine/src/bun-sqlite.j
 import { captureLegacyTimeline } from "../../runtime/durable-engine/src/application-legacy-timeline.js";
 import { selectApplicationRecentHistory, validateRecentHistoryScopes, recentHistoryHash, recordApplicationMigration } from "../../runtime/durable-engine/src/application-recent-history.js";
 import { openFixture, context } from "./src/fixture.js";
+import { CompactionEntry } from "../../runtime/durable-engine/qualification/durable.ts";
 const scope = { chatJid: "web:fixture", branchId: "branch", owner: "fixture operator" };
 const assistant = { role: "assistant" as const, content: [{ type: "text" as const, text: "answer" }], api: "openai-completions" as const, provider: "fixture", model: "fixture", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" as const, timestamp: 2 };
 function source() {
@@ -47,7 +48,7 @@ test("public atomic migration marker exact replay survives actual disk reopen", 
     fixture = await open();
     await fixture.root.commit(tx => recordApplicationMigration(tx, fixture.root.id, db, migration, bindings, () => {}), context);
     const reopened = (await fixture.harness.conversation(child.id, context))!;
-    expect((await reopened.entries({}, 10, undefined, context)).items).toHaveLength(1);
+    expect((await reopened.entries({}, 10, undefined, context)).items).toHaveLength(recent.messages.length);
     await expect(fixture.root.commit(tx => recordApplicationMigration(tx, fixture.root.id, db, { ...migration, recentHistory: [{ ...recent, owner: "different" }] }, bindings, () => {}), context)).rejects.toThrow();
     db.exec("UPDATE messages SET content='tampered'");
     await expect(fixture.root.commit(tx => recordApplicationMigration(tx, fixture.root.id, db, migration, bindings, () => {}), context)).rejects.toThrow();
@@ -70,4 +71,25 @@ test("completed boundaries preserve summaries and reject malformed tool rounds",
     [user, call, user, result, assistant],
     [user, { ...assistant, api: undefined }],
   ]) expect(() => check(messages)).toThrow();
+});
+test("copied message entries support public compaction heads without retaining old turns", async () => {
+  const host = new Database(":memory:");
+  host.exec("CREATE TABLE messages(id TEXT, content TEXT)");
+  const fixture = await openFixture({ acquired: true });
+  try {
+    const child = await fixture.harness.createConversation({ ownership: { kind: "ownerless" } }, context);
+    const base = selectApplicationRecentHistory(source(), scope);
+    const messages = [...base.messages, { role: "user" as const, content: "recent question", timestamp: 3 }, { ...assistant, content: [{ type: "text" as const, text: "recent answer" }], timestamp: 4 }];
+    const recent = { ...base, messages, sourceHash: recentHistoryHash(messages) };
+    const migration = { timeline: captureLegacyTimeline(host, () => {}), recentHistory: [recent] };
+    const bindings = [{ ...scope, conversationId: child.id }];
+    await fixture.root.commit(tx => recordApplicationMigration(tx, fixture.root.id, host, migration, bindings, () => {}), context);
+    const entries = (await child.entries({}, 10, undefined, context)).items.sort((a, b) => a.id - b.id);
+    expect(entries).toHaveLength(4);
+    const summary = { role: "user" as const, content: "Earlier turn summarised", timestamp: 5 };
+    await child.commit(tx => tx.appendEntry(CompactionEntry, child.id, { head: entries[2]!.id, data: { reason: "manual" }, model: [summary] }), context);
+    expect((await child.context(context)).messages).toEqual([summary, ...messages.slice(2)]);
+    await fixture.root.commit(tx => recordApplicationMigration(tx, fixture.root.id, host, migration, bindings, () => {}), context);
+    expect((await child.context(context)).messages).toEqual([summary, ...messages.slice(2)]);
+  } finally { await fixture.harness.close(context); host.close(); }
 });

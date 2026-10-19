@@ -16,7 +16,7 @@ export interface ApplicationRecentHistory {
   sourceHash: string;
   messages: readonly Message[];
 }
-const Seed = defineEntry<{ sourceHash: string; sourceSessionId: string; sourceLeafId: string; owner: string; copied: true; chatJid: string; branchId: string }>("app.recent-history-copy");
+const Seed = defineEntry<{ sourceHash: string; sourceSessionId: string; sourceLeafId: string; owner: string; copied: true; chatJid: string; branchId: string; messageIndex: number }>("app.recent-history-copy");
 export const recentHistoryHash = (messages: readonly Message[]) => createHash("sha256").update(JSON.stringify(messages)).digest("hex");
 const fail = (): never => { throw Error("Invalid recent history scope or boundary"); };
 export function validateRecentHistoryScopes(history: readonly ApplicationRecentHistory[], bindings: readonly { chatJid: string; branchId: string }[]): void {
@@ -64,7 +64,7 @@ export async function recordApplicationMigration(tx: Tx, rootId: ConversationId,
   validateRecentHistoryScopes(migration.recentHistory, bindings);
   // Freeze the request across asynchronous SDK reads.
   const copy = structuredClone(migration);
-  const sourceHash = createHash("sha256").update(JSON.stringify(copy)).digest("hex");
+  const sourceHash = createHash("sha256").update(JSON.stringify({ format: "message-entries-v1", migration: copy })).digest("hex");
   const found: EntryRecord[] = [];
   let cursor: Cursor | undefined;
   do {
@@ -84,9 +84,14 @@ export async function recordApplicationMigration(tx: Tx, rootId: ConversationId,
     const entries = await tx.scanEntries({ conversationId: binding.conversationId as ConversationId }, 1);
     if (entries.items.length) fail();
     const { sourceHash, sourceSessionId, sourceLeafId, owner, chatJid, branchId } = item;
-    await tx.appendEntry(Seed, binding.conversationId as ConversationId, {
-      data: { sourceHash, sourceSessionId, sourceLeafId, owner, copied: true, chatJid, branchId }, model: item.messages,
-    });
+    // Keep public compaction/fork heads at message granularity. A single entry
+    // containing the entire archive would retain all copied messages at its head.
+    for (const [messageIndex, message] of item.messages.entries()) {
+      assertOwner();
+      await tx.appendEntry(Seed, binding.conversationId as ConversationId, {
+        data: { sourceHash, sourceSessionId, sourceLeafId, owner, copied: true, chatJid, branchId, messageIndex }, model: [message],
+      });
+    }
   }
   await tx.appendEntry(Marker, rootId, { data: { sourceHash } });
   assertOwner();
