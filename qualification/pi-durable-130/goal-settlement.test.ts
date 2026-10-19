@@ -10,7 +10,7 @@ import { installTerminalSettlementCompositionSchema } from "../../runtime/src/se
 import { createCurrentPiclawServiceWorkStore } from "../../runtime/src/service-effects/current-piclaw/service-work-store.js";
 import { createCurrentPiclawTerminalSettlementStore } from "../../runtime/src/service-effects/current-piclaw/terminal-settlement-store.js";
 import { InMemoryEffectPayloadResolver } from "../../runtime/src/service-effects/testing/in-memory-payload-resolver.js";
-import { withGoalSettlementAuthority } from "../../runtime/durable-engine/src/host-goal-settlement.js";
+import { createHostGoalSettlement, withGoalSettlementAuthority } from "../../runtime/durable-engine/src/host-goal-settlement.js";
 import { QueuedFollowupLifecycleService } from "../../runtime/src/channels/web/runtime/queued-followup-lifecycle-service.js";
 import { getDeferredQueuedFollowups } from "../../runtime/src/db.js";
 import { accountCommittedGoalBatch } from "../../runtime/durable-engine/src/host-goal-usage.js";
@@ -34,6 +34,22 @@ test("actual Goal usage commits with terminal, rolls back and cannot reuse expir
   const finished = value(await work.finishHarness({ ...finish, effect: { ...finish.effect, requestHash: hashCanonicalRequest({ method: "finishHarness.v1", ...finish }) } }));
   const queue = new QueuedFollowupLifecycleService();
   const continuationId = "goal-continuation:op";
+  const prepare = createHostGoalSettlement(addon, { root: db, assertOwner() {}, runtime: () => ({
+    async readAcceptedInputText() { return text; },
+    async readSettledUsage() { return [{ conversationId: 1, entryId: 5, tokens: 7 }]; },
+    async hasSettledGoalTerminalResult() { return false; },
+  }), continuation: {
+    addon,
+    async prepare() { return { message: { role: "assistant", stopReason: "stop" },
+      plan: { available: true, total: 1, allCompleted: false, fingerprint: "native-plan", plan: [{ step: "Continue work", status: "pending" }] }, hadToolActivity: false }; },
+    admit(next) { return queue.enqueueAcceptedFollowupOnce(next.sourceId, next.chatJid, next.text, next.queuedAt,
+      { source: "goal.continuation" }, ({ chatJid, item, database }) => {
+        work.acceptSourceInTransaction(sealed({ effect: effect(`accept:${item.source_id}`), chatJid, sourceId: item.source_id,
+          kind: "message", payloadRef: `queued-source:${item.source_id}`, targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false }), database);
+      }, true); },
+  } });
+  const apply = await prepare({ incarnation: "fixture", conversationId: 1, chatJid, branchId: "main", operationId: "op", sourceSeq: source.sourceSeq,
+    sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: "request", requestHash: "a".repeat(64) });
   let fail = true, calls = 0, retained: (() => void) | undefined;
   const terminal = value(createCurrentPiclawTerminalSettlementStore(db, new InMemoryEffectPayloadResolver(), {
     hitFault: () => false, recordTrace() {}, validateOwnership: () => true,
@@ -43,14 +59,8 @@ test("actual Goal usage commits with terminal, rolls back and cannot reuse expir
       expect(() => withGoalSettlementAuthority(db, { ...commit }, scope, () => undefined)).toThrow("Exact terminal effect commit required");
       withGoalSettlementAuthority(db, commit, scope, authority => {
         retained = authority.assertCurrent;
-        accountCommittedGoalBatch(addon, authority, [text], [{ conversationId: 1, entryId: 5, tokens: 7 }]);
       });
-      const admitted = queue.enqueueAcceptedFollowupOnce(continuationId, chatJid, text, at, { source: "goal.continuation" }, ({ chatJid, item, database }) => {
-        scope(commit);
-        work.acceptSourceInTransaction(sealed({ effect: effect(`accept:${item.source_id}`), chatJid, sourceId: item.source_id,
-          kind: "message", payloadRef: `queued-source:${item.source_id}`, targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false }), database);
-      }, true);
-      expect(admitted).not.toBeNull();
+      apply!(commit, scope);
       if (fail) throw Error("rollback after Goal mutation");
       return undefined;
     },
@@ -71,7 +81,10 @@ test("actual Goal usage commits with terminal, rolls back and cannot reuse expir
     expect(calls).toBe(2);
     const queued = getDeferredQueuedFollowups(chatJid);
     expect(queued).toHaveLength(1);
-    expect(queued[0]).toMatchObject({ source_id: continuationId, source_accepted: true, queuedContent: text });
+    expect(queued[0]).toMatchObject({ source_id: continuationId, source_accepted: true });
+    expect(queued[0]!.queuedContent).toContain("Terminal usage");
+    expect(queued[0]!.queuedContent).toContain("<piclaw_goal_input>");
+    expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toMatchObject({ no_progress_turns: 1, last_auto_continue_fingerprint: "native-plan" });
     expect(db.query("SELECT source_id,state FROM service_effect_s01_sources WHERE source_id=?").all(continuationId)).toEqual([{ source_id: continuationId, state: "pending" }]);
     expect(() => retained!()).toThrow("scope ended");
     expect(() => db.transaction(() => retained!()).immediate()).toThrow("scope ended");

@@ -1,4 +1,5 @@
 import type Database from "bun:sqlite";
+import { getDeferredQueuedFollowups } from "../../src/db.js";
 import { accountCommittedGoalBatch } from "./host-goal-usage.js";
 import type { AcceptedInput, HostConversationRuntime } from "./host-runtime.js";
 import type { TerminalDatabaseEffect, TerminalCommit } from "../../src/service-effects/contracts/terminal-settlement-store.js";
@@ -30,10 +31,24 @@ export function withGoalSettlementAuthority<T>(root: Database, commit: Readonly<
 
 /** Recovery accounting bound to the original input and committed tool evidence.
  * Never infer terminal permission from current Goal status alone. */
+type GoalContinuationState = { goal_id: string; lifecycle_generation: number; status: string; chat_jid: string };
+type GoalPlanState = { available: boolean; total: number; allCompleted: boolean; fingerprint: string; plan: { step: string; status: string }[] };
+interface GoalContinuationAddon {
+  shouldContinueGoalAfterMessage(message: unknown): boolean;
+  applyGoalPlanProgress(goal: any, plan: GoalPlanState, hadToolActivity: boolean): { goal: any; decision: { action: string; completionProbeCount?: number } };
+  prepareGoalInput(text: string, chat: string): { decision: { action: string; text?: string } };
+}
 export function createHostGoalSettlement(addon: Parameters<typeof accountCommittedGoalBatch>[0], options: {
   root: Database;
   runtime(): Pick<HostConversationRuntime, "readAcceptedInputText" | "readSettledUsage" | "hasSettledGoalTerminalResult">;
   assertOwner(): void;
+  /** Trusted host reads existing persisted Plan and verified committed activity.
+   * Queue admission must be synchronous, SQL-only and use the existing source port. */
+  continuation?: {
+    addon: GoalContinuationAddon;
+    prepare(input: AcceptedInput): Promise<{ message: unknown; plan: GoalPlanState; hadToolActivity: boolean }>;
+    admit(input: { sourceId: string; chatJid: string; text: string; queuedAt: string }): number | null;
+  };
 }): (input: AcceptedInput) => Promise<TerminalDatabaseEffect | undefined> {
   return async input => {
     const captured = Object.freeze({ ...input });
@@ -58,12 +73,30 @@ export function createHostGoalSettlement(addon: Parameters<typeof accountCommitt
     // Detach public evidence before crossing the asynchronous payload boundary
     // in commitTerminal; the transaction still rechecks lifecycle and ownership.
     const usage = Object.freeze(receipts.map(receipt => Object.freeze({ ...receipt })));
+    const progress = options.continuation ? structuredClone(await options.continuation.prepare(captured)) : undefined;
+    options.assertOwner();
     return (commit, scope) => {
       options.assertOwner();
       if (commit.operationId !== captured.operationId || commit.disposition !== "completed") throw Error("Exact Goal operation completion required");
       withGoalSettlementAuthority(options.root, commit, scope, authority => {
         if (authority.chatJid !== captured.chatJid) throw Error("Goal settlement chat conflict");
         accountCommittedGoalBatch(addon, authority, [text], usage, proof);
+        if (!options.continuation || !progress || !options.continuation.addon.shouldContinueGoalAfterMessage(progress.message)) return;
+        const current = addon.loadThreadGoal(captured.chatJid) as GoalContinuationState | null;
+        if (!current || current.status !== "active") return;
+        // This check and the guard mutation/admission share the terminal write.
+        if (getDeferredQueuedFollowups(captured.chatJid).length || options.root.query(
+          "SELECT 1 FROM service_effect_s01_sources WHERE chat_jid=? AND state IN ('pending','claimed') LIMIT 1",
+        ).get(captured.chatJid)) return;
+        const next = options.continuation.addon.applyGoalPlanProgress(current, progress.plan, progress.hadToolActivity);
+        if (next.decision.action === "stop") return;
+        const prompt = `${next.decision.action === "finalize" ? "🎯 Finalize goal:" : "🎯 Continue goal:"} ${next.goal.objective}`;
+        const prepared = options.continuation.addon.prepareGoalInput(prompt, captured.chatJid).decision;
+        if (prepared.action === "handled") throw Error("Goal continuation lifecycle changed");
+        const queued = options.continuation.admit({ sourceId: `goal-continuation:${captured.operationId}`,
+          chatJid: captured.chatJid, text: prepared.text ?? prompt, queuedAt: commit.committedAt });
+        if (queued === null) throw Error("Goal continuation admission changed");
+        authority.assertCurrent();
       });
       return undefined;
     };
