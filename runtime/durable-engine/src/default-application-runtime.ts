@@ -24,10 +24,10 @@ import { createHostMcp } from "./host-mcp.js";
 import { createHostFetch } from "./host-fetch.js";
 import { taskModelRequestScope, withTaskModelRequestScope } from "./task-model-boundary-shim.js";
 import { createHostBuiltinTools } from "./host-builtins.js";
-import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, qualifyInstalledEditableTable, qualifyInstalledOfficeViewer, qualifyInstalledDrawio, qualifyInstalledGoal, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
+import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, qualifyInstalledEditableTable, qualifyInstalledOfficeViewer, qualifyInstalledDrawio, qualifyInstalledGoal, qualifyInstalledObservability, qualifyInstalledRestic, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
 import { createHostDelegateTool } from "./host-delegate-tool.js";
 import { createHostDelegateFileReader } from "./host-delegate-files.js";
-import { extensionKvGet } from "../../src/db/extension-kv.js";
+import { extensionKvGet, extensionKvSet } from "../../src/db/extension-kv.js";
 import { createHostPlanTool } from "./host-plan-tool.js";
 import { createHostOperationAuthority } from "./host-operation-authority.js";
 import { hashCanonicalRequest } from "../../src/service-effects/contracts/common.js";
@@ -36,6 +36,8 @@ import { createHostEditableTableTool, type WidgetPublisher } from "./host-editab
 import { createHostOfficeViewerTool } from "./host-office-viewer-tool.js";
 import { createHostDrawioTool, type WorkspaceFileOpener, type DrawioNativeExports } from "./host-drawio-tool.js";
 import { createHostPlanPrompt } from "./host-plan-prompt.js";
+import { createHostObservabilityPrompt } from "./host-observability.js";
+import { createHostResticTool } from "./host-restic-tool.js";
 import { createHostGoalTools } from "./host-goal-tools.js";
 import { createHostGoalPrompt } from "./host-goal-prompt.js";
 import { createHostGoalTerminalFence } from "./host-goal-terminal.js";
@@ -218,6 +220,14 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   // writes. Never silently start with seven tools when installed tools exist.
   const catalog = await loadApplicationExtensionCatalog({ cwd: WORKSPACE_DIR, agentDir: getPiclawAgentDir(), settingsManager: settings });
   const plan = await qualifyInstalledPlan(catalog, WORKSPACE_DIR);
+  const observability = await qualifyInstalledObservability(catalog, WORKSPACE_DIR);
+  const restic = await qualifyInstalledRestic(catalog, WORKSPACE_DIR);
+  const readObservabilityConfiguration = () => {
+    assert(); observability?.assertCurrent();
+    const saved = extensionKvGet<Record<string, unknown>>("observability", "config", "global");
+    assert(); observability?.assertCurrent();
+    return saved;
+  };
   const delegate = await qualifyInstalledDelegate(catalog, WORKSPACE_DIR);
   const codeReview = await qualifyInstalledCodeReview(catalog, WORKSPACE_DIR);
   const editableTable = await qualifyInstalledEditableTable(catalog, WORKSPACE_DIR);
@@ -225,7 +235,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const drawio = await qualifyInstalledDrawio(catalog, WORKSPACE_DIR), goal = await qualifyInstalledGoal(catalog, WORKSPACE_DIR);
   let workspaceFileOpener: WorkspaceFileOpener | undefined;
   let widgetPublisher: WidgetPublisher | undefined;
-  try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan, delegate, codeReview, editableTable, officeViewer, drawio, goal);
+  try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan, delegate, codeReview, editableTable, officeViewer, drawio, goal, observability, restic);
     if (goal && !plan) throw Error("Native Goal requires qualified Plan"); }
   finally { catalog.runtime.invalidate("Application extension preflight ended"); }
   let mcp: Awaited<ReturnType<typeof createHostMcp>> | undefined;
@@ -251,7 +261,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     return () => { authority.assertCurrent(); if (captured.delegateModel) assertDelegateModel(captured.delegateModel); };
   };
   let assertDelegateModel: (model: { provider: string; modelId: string }) => void = () => { throw Error("Delegate unavailable"); };
-  const baseApplicationToolNames: readonly string[] = [...defaultToolNames, "codemode", ...(goal ? ["get_goal", "create_goal", "goal_complete", "goal_stop", "update_goal"] : []), ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : []), ...(drawio ? ["open_drawio_editor"] : [])];
+  const baseApplicationToolNames: readonly string[] = [...defaultToolNames, "codemode", ...(restic ? ["restic"] : []), ...(goal ? ["get_goal", "create_goal", "goal_complete", "goal_stop", "update_goal"] : []), ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : []), ...(drawio ? ["open_drawio_editor"] : [])];
   const previousDefault = baseApplicationToolNames.filter(name => name !== "codemode");
   const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || (Array.isArray(tools) &&
     ((tools.length === defaultToolNames.length && defaultToolNames.every((name, index) => tools[index] === name)) ||
@@ -262,7 +272,13 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   let sandboxClose: Promise<void> | undefined;
   const closeSandbox = () => sandboxClose ??= sandbox?.close() ?? Promise.resolve();
   const releaseReviewSource = codeReview?.addon.setReviewDatabaseSource({ database: root, assertOwner: assert });
+  const assertObservability = () => { assert(); lifetime.signal.throwIfAborted(); observability?.assertCurrent(); };
+  let releaseObservabilityConfiguration: (() => void) | undefined;
   try {
+  if (observability) releaseObservabilityConfiguration = observability.addon.bindObservabilityConfiguration({
+    assertCurrent: assertObservability, read: readObservabilityConfiguration,
+    write(config) { root.transaction(() => { assertObservability(); extensionKvSet("observability", "config", config, "global"); assertObservability(); }).immediate(); },
+  });
   mcp = await createHostMcp({ assertCurrent() { assert(); lifetime.signal.throwIfAborted(); },
     captureSource: api => captureSource({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId }) });
   const applicationToolNames = [...baseApplicationToolNames, "fetch", ...mcp.tools.map(tool => tool.name)];
@@ -280,6 +296,11 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       return drawio.addon.handleRoute(request, pathname);
     }, drawio.source.packageDir) === "rejected") throw Error("Draw.io native route unavailable");
     await drawioHost.prepare();
+  }
+  if (observability) {
+    assertObservability();
+    await observability.addon.prepareObservabilityRuntime(assertObservability);
+    assertObservability();
   }
   const host = await getModels(); assert();
   const provider = settings.getDefaultProvider(), modelId = settings.getDefaultModel();
@@ -396,6 +417,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     return () => { source(); if (readAccessConfig().mode !== "single-user") throw Error("Host fetch permission denied"); };
   } }));
   tools.push(...mcp.tools);
+  if (restic) tools.push(createHostResticTool(restic.addon, { root, runtime,
+    assertOwner() { assert(); lifetime.signal.throwIfAborted(); restic.assertCurrent(); } }));
   if (goal) tools.push(...createHostGoalTools(goal.addon.createGoalTools, { root, runtime, assertOwner: assertGoal, resolveGoalInput: goal.addon.resolveGoalInput }));
   if (plan) tools.push(createHostPlanTool(plan.definition as Parameters<typeof createHostPlanTool>[0], { root, assertOwner: () => {
     assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent();
@@ -457,6 +480,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     return result;
   } }));
   registry.install(defineExtension({ name: "app.host-builtins", tools }));
+  if (observability) registry.install(createHostObservabilityPrompt(observability.addon, { root, runtime,
+    assertOwner() { assert(); lifetime.signal.throwIfAborted(); observability.assertCurrent(); }, failClosed(error) { lifetime.abort(error); } }));
   if (plan) registry.install(createHostPlanPrompt(plan.addon, { root, runtime,
     assertOwner() { assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent(); }, failClosed(error) { lifetime.abort(error); } }));
   if (goal) {
@@ -661,14 +686,14 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       bundle.stop();
     }, async close() {
       widgetPublisher = undefined; workspaceFileOpener = undefined;
-      lifetime.abort(); releaseReviewSource?.();
+      lifetime.abort(); releaseReviewSource?.(); releaseObservabilityConfiguration?.();
       const results = await Promise.allSettled([mcp?.close(), closeSandbox(), drawioHost?.close()]);
       const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
       if (failures.length) throw new AggregateError(failures.map(result => result.reason), "Native tool cleanup uncertain");
       await bundle.close();
     } };
   } catch (error) {
-    lifetime.abort(); releaseReviewSource?.();
+    lifetime.abort(); releaseReviewSource?.(); releaseObservabilityConfiguration?.();
     const cleanupFailures: unknown[] = [];
     try { await mcp?.close(); } catch (cleanup) { cleanupFailures.push(cleanup); }
     try { await closeSandbox(); } catch (cleanup) { cleanupFailures.push(cleanup); }

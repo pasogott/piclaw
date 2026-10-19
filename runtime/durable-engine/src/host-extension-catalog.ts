@@ -67,7 +67,40 @@ const approvedGoalFiles = Object.freeze({
   "compat/chat-context.ts": "90e20fa38d72915a7cbf4eea4e4134788271e6eb52dfbcb813df05b6d60c3c44",
   "compat/extension-kv.ts": "04240517e9e8664cae2d2badb99f382100a7af3e12679cfce97087870881551c",
 });
+const approvedObservabilityFiles = Object.freeze({
+  "usage-telemetry.ts": "1714e4f6b24450315940d960e0d971ca2c66c27453b399427b677d1fb807b705",
+  "package.json": "bf6824c92bf70e6533f4cdb38dd37af06c7d17f0bcaf38d80e9c1610b4e4115e",
+  "model-speed-telemetry.ts": "a6b46ba29c71f459880c560575851312779f84163427ace6d7b1abd9e53a4b81",
+  "compat/extension-kv.ts": "04240517e9e8664cae2d2badb99f382100a7af3e12679cfce97087870881551c",
+  "compat/log-sink.ts": "b7f04b776dc33ec8a2bbe4d803b2d7c2783b8d16b5fa4a1b54c85fb30d1ee19e",
+  "compat/config.ts": "b6b5f488fc7c537185d0144de8fa58029a56c8de33ab2972683556eb989e0768",
+  "compat/logger.ts": "de0fddbd49d7b4d48e3b4ae8c0cf1ab188b4ba542f77c87d57ccb510318f85fa",
+  "compat/keychain.ts": "db449b3c8fb9d0008d85b05c9f7717da0b728e0f9c033bac7b86f9e17eb93bb6",
+  "compaction-telemetry.ts": "d6e51e6c04c38e97e04508c27f589089c55e3fd8c86e9ca9422a89ecd22c6697",
+  "index.ts": "4af1d9207efacf71bf597d590daccd34a75a22932e3be0eea44cc8b2607dcb0d"
+});
+const approvedResticFiles = Object.freeze({
+  "binary.ts": "ff426c8c97d6e7873fce405d948db9e89138f16a948885cd6f97cce77ca9c082",
+  "job-config.ts": "16f6a73e858897608aaa0abd5b40ad0d4dffc7ea9d30ee9b0cf0bee71c69c873",
+  "paths.ts": "1a1e090b0bc57498dc4574632aa06ba14a0c93e6a36448ffba2b07d256f3f0e0",
+  "config.ts": "2da245b75137c0307f93d8ecc0f248d5f21bcb76b5f06954ba53e18874f9f1b8",
+  "staging.ts": "ef2bbb6730aab585cb8471ebf808c729b29e266c1f79c9d37d963f5497fe0f7c",
+  "runtime-state.ts": "c7fcbc2eb88b2b05dd46ae928e2e3d50d96ad1a5c8ab5ddce25ba0c2b0d02681",
+  "runner.ts": "913c3af0646f5d98657d1a40d19eaee5685f9fcfda0075869c39a966b4cd3a0e",
+  "sqlite-snapshot.ts": "4a5faac2d37fcd82fb7c993a56e25885f98868ba16d8ecda184d01b52767118f",
+  "repository.ts": "2545decc728f76f0c200983acf8267dd12d4229e65bff132014943f02a74327d",
+  "index.ts": "fd9d9106ace5bf13560a78caa6e51467053df84e82c03b02aa3c15df98ee46b2",
+  "runtime.ts": "9e2d4959aade2908843c18b40ceceae0c524f716ca724d6a273210ea87c2c8eb",
+  "service.ts": "f1ed6ee19bdce8d8e72e0d4e6b64fd3dad8f7fe4713f25203e386145d0a72190",
+  "package.json": "48fab80b368fe9491e559011fd89d2a97de0b2d0312ab70a9372d86a7bd45777",
+  "contracts.ts": "d73eea35af0c00b1dc36a98c352389804147447b5228c18cee807110fbddb27c"
+});
 const profiles = {
+  observability: { label: "Observability", name: "@rcarmo/piclaw-addon-observability", version: "0.1.18", files: approvedObservabilityFiles,
+    shadows: [...Object.keys(approvedObservabilityFiles).filter(file => file.endsWith(".ts")).flatMap(file => [file.replace(/\.ts$/, ".js"), file.replace(/\.ts$/, ".json"), file.replace(/\.ts$/, "/index.js"), file.replace(/\.ts$/, "/package.json")]), "compat/package.json"],
+    events: ["resources_discover", "session_start", "before_agent_start"] },
+  restic: { label: "Restic", name: "@rcarmo/piclaw-addon-restic", version: "0.1.5", files: approvedResticFiles,
+    shadows: Object.keys(approvedResticFiles).filter(file => file.endsWith(".ts")).flatMap(file => [file.replace(/\.ts$/, ".js"), file.replace(/\.ts$/, ".json"), file.replace(/\.ts$/, "/index.js"), file.replace(/\.ts$/, "/package.json")]), events: [] as readonly string[] },
   goal: { label: "Goal", name: "@rcarmo/piclaw-addon-goal", version: "0.1.49", files: approvedGoalFiles,
     shadows: [...Object.keys(approvedGoalFiles).flatMap(file => [file.replace(/\.ts$/, ".js"), file.replace(/\.ts$/, ".json"), file.replace(/\.ts$/, "/index.js"), file.replace(/\.ts$/, "/package.json")]), "compat/package.json"],
     events: ["before_agent_start", "tool_execution_end", "session_compact", "input", "message_end", "agent_end"] },
@@ -84,9 +117,9 @@ type Extension = LoadExtensionsResult["extensions"][number];
 type InstalledSource = Readonly<{ cwd: string; packageDir: string; entry: string; manifest: string; files: string }>;
 type InstalledRegistration = Readonly<{
   source: InstalledSource;
-  definition: NonNullable<ReturnType<Extension["tools"]["get"]>>["definition"];
-  execute: NonNullable<ReturnType<Extension["tools"]["get"]>>["definition"]["execute"];
-  declaration: string;
+  definition: NonNullable<ReturnType<Extension["tools"]["get"]>>["definition"] | undefined;
+  execute: NonNullable<ReturnType<Extension["tools"]["get"]>>["definition"]["execute"] | undefined;
+  declaration: string | undefined;
   handlerMap: Extension["handlers"];
   handlers: ReadonlyMap<string, readonly unknown[]>;
   tools: readonly { name: string; definition: ToolDefinition; execute: unknown; declaration: string }[];
@@ -151,17 +184,23 @@ function qualifyInstalled(catalog: LoadExtensionsResult, cwd: string, kind: Prof
   const assertCurrent = () => {
     if (!catalog.extensions.includes(extension) || resolve(extension.resolvedPath) !== source.entry ||
       !sameSource(source, captureApprovedSource(cwd, getInstalledAddonExtensionPaths(cwd), kind))) throw Error(`Installed ${profile.label} source changed`);
-    const names = kind === "goal" ? ["get_goal", "create_goal", "goal_complete", "goal_stop", "update_goal"] : [kind];
-    if (!definition || definition.name !== names[0] || extension.tools.size !== names.length || tools.length !== names.length ||
+    const names = kind === "observability" ? [] : kind === "goal" ? ["get_goal", "create_goal", "goal_complete", "goal_stop", "update_goal"] : [kind];
+    if (definition?.name !== names[0] || extension.tools.size !== names.length || tools.length !== names.length ||
       names.some(name => !tools.some(prior => prior.name === name && extension.tools.get(name)?.definition === prior.definition && prior.definition.execute === prior.execute && JSON.stringify(prior.definition) === prior.declaration)) ||
-      definition.execute !== execute || JSON.stringify(definition) !== declaration || extension.handlers !== handlerMap ||
+      definition?.execute !== execute || JSON.stringify(definition) !== declaration || extension.handlers !== handlerMap ||
       extension.handlers.size !== profile.events.length || (profile.events as readonly string[]).some(event => {
         const current = extension.handlers.get(event) ?? [], prior = handlers.get(event) ?? [];
         return !prior.length || current.length !== prior.length || current.some((handler, i) => handler !== prior[i]);
       }) || (kind === "goal" ? commands.length !== 1 || commands[0]?.name !== "goal" || extension.commands.size !== 1 || extension.commands.get("goal") !== commands[0].command || commands[0].command.handler !== commands[0].handler || commands[0].command.getArgumentCompletions !== commands[0].completions || JSON.stringify(commands[0].command) !== commands[0].declaration : extension.commands.size !== 0) || extension.shortcuts.size) throw Error(`Unqualified ${profile.label} capabilities`);
   };
   assertCurrent();
-  return Object.freeze({ extension, source, definition: definition!, assertCurrent });
+  return Object.freeze({ extension, source, definition, assertCurrent });
+}
+function qualifyInstalledTool(catalog: LoadExtensionsResult, cwd: string, kind: Exclude<Profile, "observability">) {
+  const qualified = qualifyInstalled(catalog, cwd, kind);
+  if (!qualified) return undefined;
+  if (!qualified.definition) throw Error("Installed native tool declaration required");
+  return Object.freeze({ ...qualified, definition: qualified.definition });
 }
 export type GoalNativeExports = Parameters<typeof import("./host-goal-config.js").createHostGoalConfig>[0]
   & Parameters<typeof import("./host-goal-input.js").createHostGoalInput>[0]
@@ -174,7 +213,7 @@ export type GoalNativeExports = Parameters<typeof import("./host-goal-config.js"
   & { createGoalTools: Parameters<typeof import("./host-goal-tools.js").createHostGoalTools>[0]; decideGoalPlanProgress: (...args: any[]) => unknown };
 /** Exact source and declaration qualification; application installs native lifecycle. */
 export async function qualifyInstalledGoal(catalog: LoadExtensionsResult, cwd: string) {
-  const qualified = qualifyInstalled(catalog, cwd, "goal");
+  const qualified = qualifyInstalledTool(catalog, cwd, "goal");
   if (!qualified) return undefined;
   const exports = await import(pathToFileURL(qualified.source.entry).href);
   const names = ["createGoalTools", "loadThreadGoal", "buildGoalSystemPrompt", "buildGoalBudgetLimitPrompt", "buildVisibleGoalPrompt", "claimGoalBudgetWrapup", "isGoalBudgetInput", "prepareGoalInput", "goalInputIdentity", "resolveGoalInput", "accountGoalProgress", "accountTerminalGoalProgress", "shouldContinueGoalAfterMessage", "decideGoalPlanProgress", "applyGoalPlanProgress", "summarizeGoalPlan", "isGoalProgressTool", "applyGoalCommand", "applyGoalConfig", "goalResponse"] as const;
@@ -194,7 +233,7 @@ export async function qualifyInstalledGoal(catalog: LoadExtensionsResult, cwd: s
   } });
 }
 export async function qualifyInstalledPlan(catalog: LoadExtensionsResult, cwd: string) {
-  const qualified = qualifyInstalled(catalog, cwd, "plan");
+  const qualified = qualifyInstalledTool(catalog, cwd, "plan");
   if (!qualified) return undefined;
   const { source, assertCurrent } = qualified;
   const exports = await import(pathToFileURL(source.entry).href) as Partial<PlanPromptExports>;
@@ -208,7 +247,7 @@ export interface DelegatePolicyExports {
   buildModelCandidates(models: { provider: string; id: string; fullId: string }[], config: unknown): { id: string }[];
 }
 export async function qualifyInstalledDelegate(catalog: LoadExtensionsResult, cwd: string) {
-  const qualified = qualifyInstalled(catalog, cwd, "delegate");
+  const qualified = qualifyInstalledTool(catalog, cwd, "delegate");
   if (!qualified) return undefined;
   const exports = await import(pathToFileURL(join(qualified.source.packageDir, "delegate.ts")).href) as Partial<DelegatePolicyExports>;
   qualified.assertCurrent();
@@ -218,7 +257,7 @@ export async function qualifyInstalledDelegate(catalog: LoadExtensionsResult, cw
 }
 
 export async function qualifyInstalledCodeReview(catalog: LoadExtensionsResult, cwd: string) {
-  const qualified = qualifyInstalled(catalog, cwd, "code_review");
+  const qualified = qualifyInstalledTool(catalog, cwd, "code_review");
   if (!qualified) return undefined;
   // Native import is the same canonical runtime module used by startup and the
   // direct add-on API. Legacy loader execute is never called by the native port.
@@ -238,7 +277,7 @@ export async function qualifyInstalledCodeReview(catalog: LoadExtensionsResult, 
 }
 
 export async function qualifyInstalledDrawio(catalog: LoadExtensionsResult, cwd: string) {
-  const qualified = qualifyInstalled(catalog, cwd, "open_drawio_editor");
+  const qualified = qualifyInstalledTool(catalog, cwd, "open_drawio_editor");
   if (!qualified) return undefined;
   const exports = await import(pathToFileURL(qualified.source.entry).href) as Partial<DrawioNativeExports>;
   qualified.assertCurrent();
@@ -254,11 +293,11 @@ export async function qualifyInstalledDrawio(catalog: LoadExtensionsResult, cwd:
 }
 
 export function qualifyInstalledOfficeViewer(catalog: LoadExtensionsResult, cwd: string) {
-  return qualifyInstalled(catalog, cwd, "open_office_viewer");
+  return qualifyInstalledTool(catalog, cwd, "open_office_viewer");
 }
 
 export async function qualifyInstalledEditableTable(catalog: LoadExtensionsResult, cwd: string) {
-  const qualified = qualifyInstalled(catalog, cwd, "editable_table");
+  const qualified = qualifyInstalledTool(catalog, cwd, "editable_table");
   if (!qualified) return undefined;
   const exports = await import(pathToFileURL(qualified.source.entry).href) as Partial<EditableTableNativeExports>;
   qualified.assertCurrent();
@@ -304,8 +343,8 @@ export async function loadApplicationExtensionCatalog(options: {
   for (const { kind, before } of snapshots) if (before && sameSource(before, captureApprovedSource(options.cwd, getInstalledAddonExtensionPaths(options.cwd), kind))) {
     for (const extension of catalog.extensions) {
       const definition = extension.tools.get(kind === "goal" ? "get_goal" : kind)?.definition;
-      if (resolve(extension.resolvedPath) === before.entry && definition) sources.set(extension, Object.freeze({
-        source: before, definition, execute: definition.execute, declaration: JSON.stringify(definition), handlerMap: extension.handlers,
+      if (resolve(extension.resolvedPath) === before.entry && (definition || kind === "observability")) sources.set(extension, Object.freeze({
+        source: before, definition, execute: definition?.execute, declaration: JSON.stringify(definition), handlerMap: extension.handlers,
         tools: [...extension.tools].map(([name, { definition }]) => Object.freeze({ name, definition, execute: definition.execute, declaration: JSON.stringify(definition) })),
         commands: [...extension.commands].map(([name, command]) => Object.freeze({ name, command, handler: command.handler, completions: command.getArgumentCompletions, declaration: JSON.stringify(command) })),
         handlers: new Map([...extension.handlers].map(([event, handlers]) => [event, Object.freeze([...handlers])])),
@@ -316,17 +355,43 @@ export async function loadApplicationExtensionCatalog(options: {
   return catalog;
 }
 
+export async function qualifyInstalledRestic(catalog: LoadExtensionsResult, cwd: string) {
+  const qualified = qualifyInstalledTool(catalog, cwd, "restic");
+  if (!qualified) return undefined;
+  const exports = await import(pathToFileURL(qualified.source.entry).href) as Partial<import("./host-restic-tool.js").ResticNativeExports>;
+  qualified.assertCurrent();
+  if (typeof exports.createResticTool !== "function") throw Error("Restic native factory required");
+  const factory = exports.createResticTool;
+  if (JSON.stringify(factory(() => { throw Error("Invocation-local Restic authority required"); })) !== JSON.stringify(qualified.definition)) throw Error("Restic native/legacy declarations differ");
+  return Object.freeze({ ...qualified, addon: Object.freeze({ createResticTool: factory }), assertCurrent() {
+    qualified.assertCurrent(); if (exports.createResticTool !== factory) throw Error("Restic public factory changed");
+  } });
+}
+export async function qualifyInstalledObservability(catalog: LoadExtensionsResult, cwd: string) {
+  const qualified = qualifyInstalled(catalog, cwd, "observability");
+  if (!qualified) return undefined;
+  const exports = await import(pathToFileURL(qualified.source.entry).href) as Partial<import("./host-observability.js").ObservabilityNativeExports>;
+  qualified.assertCurrent();
+  if (typeof exports.bindObservabilityConfiguration !== "function" || typeof exports.prepareObservabilityRuntime !== "function" || typeof exports.buildObservabilitySystemPrompt !== "function") throw Error("Observability native lifecycle exports required");
+  const addon = Object.freeze({ bindObservabilityConfiguration: exports.bindObservabilityConfiguration, prepareObservabilityRuntime: exports.prepareObservabilityRuntime, buildObservabilitySystemPrompt: exports.buildObservabilitySystemPrompt });
+  return Object.freeze({ ...qualified, addon, assertCurrent() {
+    qualified.assertCurrent();
+    if (exports.bindObservabilityConfiguration !== addon.bindObservabilityConfiguration || exports.prepareObservabilityRuntime !== addon.prepareObservabilityRuntime || exports.buildObservabilitySystemPrompt !== addon.buildObservabilitySystemPrompt) throw Error("Observability public exports changed");
+  } });
+}
+
 /** Fail closed until a real invocation-local, operation-owned effect port is
  * supplied by the application host. A readOnlyHint, tool name, factory capture,
  * or pre/post execute check is not such a port. In particular, do not run tool
  * hooks through a fabricated AgentSession context. Keep all diagnostics so a
  * successful startup can never silently mean missing installed capabilities.
  */
-export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensionsResult, plan?: Awaited<ReturnType<typeof qualifyInstalledPlan>>, delegate?: Awaited<ReturnType<typeof qualifyInstalledDelegate>>, codeReview?: Awaited<ReturnType<typeof qualifyInstalledCodeReview>>, editableTable?: Awaited<ReturnType<typeof qualifyInstalledEditableTable>>, officeViewer?: ReturnType<typeof qualifyInstalledOfficeViewer>, drawio?: Awaited<ReturnType<typeof qualifyInstalledDrawio>>, goal?: Awaited<ReturnType<typeof qualifyInstalledGoal>>): void {
-  goal?.assertCurrent(); plan?.assertCurrent(); delegate?.assertCurrent(); codeReview?.assertCurrent(); editableTable?.assertCurrent(); officeViewer?.assertCurrent(); drawio?.assertCurrent();
+export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensionsResult, plan?: Awaited<ReturnType<typeof qualifyInstalledPlan>>, delegate?: Awaited<ReturnType<typeof qualifyInstalledDelegate>>, codeReview?: Awaited<ReturnType<typeof qualifyInstalledCodeReview>>, editableTable?: Awaited<ReturnType<typeof qualifyInstalledEditableTable>>, officeViewer?: ReturnType<typeof qualifyInstalledOfficeViewer>, drawio?: Awaited<ReturnType<typeof qualifyInstalledDrawio>>, goal?: Awaited<ReturnType<typeof qualifyInstalledGoal>>, observability?: Awaited<ReturnType<typeof qualifyInstalledObservability>>, restic?: Awaited<ReturnType<typeof qualifyInstalledRestic>>): void {
+  observability?.assertCurrent(); restic?.assertCurrent(); goal?.assertCurrent(); plan?.assertCurrent(); delegate?.assertCurrent(); codeReview?.assertCurrent(); editableTable?.assertCurrent(); officeViewer?.assertCurrent(); drawio?.assertCurrent();
   const blocked: string[] = catalog.errors.map(error => `${error.path}: extension load failed`);
   for (const extension of catalog.extensions) {
     for (const { definition } of extension.tools.values()) {
+      if (extension === restic?.extension && definition === restic.definition) continue;
       if (extension === goal?.extension && extension.tools.get(definition.name)?.definition === definition) continue;
       if (extension === plan?.extension && definition === plan.definition) continue;
       if (extension === delegate?.extension && definition === delegate.definition) continue;
@@ -337,6 +402,7 @@ export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensio
       blocked.push(`${definition.name}: no operation-owned host effect port`);
     }
     for (const event of extension.handlers.keys()) {
+      if (extension === observability?.extension && (profiles.observability.events as readonly string[]).includes(event)) continue; // Native request hook, process startup and static skill metadata.
       if (extension === goal?.extension) continue; // Replaced by native request/terminal hooks, not invoked.
       if (extension === plan?.extension && event === "before_agent_start") continue;
       // Static skill discovery only: no session lifecycle or fabricated context.
