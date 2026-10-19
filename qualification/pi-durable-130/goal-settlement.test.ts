@@ -13,11 +13,50 @@ import { InMemoryEffectPayloadResolver } from "../../runtime/src/service-effects
 import { createHostGoalSettlement, withGoalSettlementAuthority } from "../../runtime/durable-engine/src/host-goal-settlement.js";
 import { QueuedFollowupLifecycleService } from "../../runtime/src/channels/web/runtime/queued-followup-lifecycle-service.js";
 import { getDeferredQueuedFollowups } from "../../runtime/src/db.js";
+import { createHostGoalCommand } from "../../runtime/durable-engine/src/host-goal-command.js";
 import { createHostGoalPlanReader } from "../../runtime/durable-engine/src/host-goal-plan.js";
 import { getExtensionKvStore } from "../../runtime/src/extension-kv-registry.js";
 import { accountCommittedGoalBatch } from "../../runtime/durable-engine/src/host-goal-usage.js";
 import { hashCanonicalRequest } from "../../runtime/src/service-effects/contracts/common.js";
 import { value, effect, sealed, at } from "./src/host-handoff.js";
+
+test("native Goal commands commit state and accepted continuation atomically", async () => {
+  const sourceRoot = process.env.DURABLE_GOAL_ADDON_ROOT;
+  if (!sourceRoot) throw Error("DURABLE_GOAL_ADDON_ROOT required");
+  process.env.PICLAW_DB_IN_MEMORY = "1";
+  initDatabase(); const db = getDb(); installTerminalSettlementCompositionSchema(db);
+  registerRootExtensionKvStore(); requireExtensionKvAuthority();
+  const addon = await import(pathToFileURL(join(sourceRoot, "addons/goal/index.ts")).href); addon.resetGoalAddonForTests();
+  const work = value(createCurrentPiclawServiceWorkStore(db, { hitFault: () => false, recordTrace() {} }));
+  const queue = new QueuedFollowupLifecycleService(), chatJid = "web:native-goal-command";
+  let fail = true, admitted = 0;
+  const command = createHostGoalCommand(addon, { root: db, assertAdmission(chat) { expect(chat).toBe(chatJid); },
+    admit(next) {
+      const row = queue.enqueueAcceptedFollowupOnce(next.sourceId, next.chatJid, next.text, next.queuedAt, { source: "goal.command" }, ({ chatJid, item, database }) => {
+        work.acceptSourceInTransaction(sealed({ effect: effect(`command:${item.source_id}`), chatJid, sourceId: item.source_id, kind: "message",
+          payloadRef: `queued-source:${item.source_id}`, targetOperationId: null, parentSourceSeq: null, acceptedAt: item.queuedAt, createWakeIntent: false }), database);
+      });
+      admitted++;
+      if (fail) throw Error("command admission rollback");
+      return row;
+    } });
+  try {
+    expect(await command(chatJid, "/goal help")).toMatchObject({ status: "success" });
+    expect(admitted).toBe(0);
+    await expect(command(chatJid, "/goal Native objective")).rejects.toThrow("command admission rollback");
+    expect(extensionKvGet("goal", "thread-goal", "chat", chatJid)).toBeNull();
+    expect(getDeferredQueuedFollowups(chatJid)).toHaveLength(0);
+    expect(db.query("SELECT * FROM service_effect_s01_sources").all()).toHaveLength(0);
+    fail = false;
+    expect(await command(chatJid, "/goal Native objective")).toMatchObject({ status: "success", message: "Goal active — continuation queued" });
+    expect(getDeferredQueuedFollowups(chatJid)).toHaveLength(1);
+    expect(getDeferredQueuedFollowups(chatJid)[0]!.queuedContent).toContain("<piclaw_goal_input>");
+    expect(await command(chatJid, "/goal pause")).toMatchObject({ status: "success", message: "Goal paused" });
+    expect(await command(chatJid, "/goal resume")).toMatchObject({ status: "success", message: "Goal resumed — continuation queued" });
+    expect(getDeferredQueuedFollowups(chatJid)).toHaveLength(2);
+    expect(await command(chatJid, "/unknown")).toMatchObject({ status: "error" });
+  } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
+});
 
 for (const mode of ["continue", "pending", "error", "stalled", "finalize"] as const) test(`actual Goal terminal continuation is atomic and policy scoped: ${mode}`, async () => {
   const sourceRoot = process.env.DURABLE_GOAL_ADDON_ROOT;
