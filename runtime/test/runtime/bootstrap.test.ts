@@ -83,6 +83,13 @@ describe("runtime bootstrap", () => {
     const owner = acquireRuntimeLock({ lockPath: join(dir, "owner"), strictOwnership: true });
     const queue = new AgentQueue();
     const pool = new AgentPool(createAgentPoolModelOptions());
+    // The suite shares SESSIONS_DIR with deliberately malformed history fixtures.
+    // Verify bootstrap's real configuration, then scope this fixture's real capture.
+    const capture = pool.captureLegacyUpgradeBindings.bind(pool);
+    const captureSpy = spyOn(pool, "captureLegacyUpgradeBindings").mockImplementation(options => {
+      expect(options.legacySessionRoot).toBe(SESSIONS_DIR);
+      return capture({ ...options, legacySessionRoot: join(dir, "sessions") });
+    });
     const web = new WebChannel({ queue, agentPool: pool });
     const producer = Promise.withResolvers<void>(), task = Promise.withResolvers<void>();
     const ready = Promise.withResolvers<RuntimeBootstrapContext>();
@@ -121,7 +128,7 @@ describe("runtime bootstrap", () => {
       }
       const result = await preparing;
       expect(queued).toBe(true);
-      const sessionDir = join(SESSIONS_DIR, "web_migration"); mkdirSync(sessionDir, { recursive: true });
+      const sessionDir = join(dir, "sessions", "web_migration"); mkdirSync(sessionDir, { recursive: true });
       const manager = SessionManager.inMemory(dir, { id: "resident-original" });
       manager.appendMessage({ role: "system", content: "persisted baseline", timestamp: 1 });
       manager.appendMessage({ role: "user", content: "history", timestamp: 2 });
@@ -152,6 +159,7 @@ describe("runtime bootstrap", () => {
       expect(returned).toBe(false);
     } finally {
       producer.resolve(); task.resolve(); complete(); await running;
+      captureSpy.mockRestore();
       await pool.shutdown(); await web.stop(); owner.release(); rmSync(dir, { recursive: true, force: true });
     }
   });
