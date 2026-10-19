@@ -61,6 +61,7 @@
     "host-grep.test.ts",
     "host-fetch.test.ts",
     "task-model-boundary.test.ts",
-    "task-model-compaction-recovery.test.ts"
+    "task-model-compaction-recovery.test.ts",
+    "goal-tools.test.ts"
   ]
 }
