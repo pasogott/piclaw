@@ -871,23 +871,6 @@ export class AgentSessionManager {
     })();
   }
 
-  private findChatJidByRuntime(map: Map<string, PoolEntry>, runtime: AgentSessionRuntime): string | null {
-    for (const [chatJid, entry] of map) {
-      if (entry.runtime === runtime) return chatJid;
-    }
-    return null;
-  }
-
-  private async disposeSideRuntimeAfterError(runtime: AgentSessionRuntime, operation: string): Promise<void> {
-    const chatJid = this.findChatJidByRuntime(this.options.sidePool, runtime);
-    if (chatJid) {
-      this.startIdleDispose(this.options.sidePool, this.idleSideDisposalsInFlight, chatJid, { runtime, lastUsed: Date.now() }, operation, true);
-      await this.idleSideDisposalsInFlight.get(chatJid);
-    } else {
-      await this.disposeRuntimeOnce(runtime, "Failed to dispose side session after initialization error", { operation });
-    }
-  }
-
   private async disposeMainRuntimeAfterError(chatJid: string, runtime: AgentSessionRuntime, operation: string): Promise<void> {
     if (this.options.pool.get(chatJid)?.runtime === runtime) {
       this.startIdleDispose(this.options.pool, this.idleMainDisposalsInFlight, chatJid, { runtime, lastUsed: Date.now() }, operation, false);

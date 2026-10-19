@@ -667,19 +667,9 @@ export class HostConversationRuntime {
     expected: { goalId: string; generation: number; status: "complete" | "stopped" }) {
     const copy = inputSnapshot(input), target = Object.freeze({ ...expected });
     return this.observe(async () => {
-      const state = await this.readState(copy);
-      if (!state.answer || state.status?.type !== "input" || state.status.status !== "done") return false;
-      const record = await this.record(copy); this.fence();
-      if (record?.entry === undefined) throw Error("Missing Goal input entry");
-      const conversation = await this.harness.conversation(copy.conversationId, this.context); this.fence();
-      if (!conversation) throw Error("Missing Goal conversation");
-      const entries: import("@earendil-works/pi-durable").EntryRecord[] = [];
-      let cursor: import("@earendil-works/pi-durable").Cursor | undefined;
-      do {
-        const page = await conversation.entries({ order: "ascending", minEntryId: record.entry, maxEntryId: state.status.answer }, 100, cursor, this.context); this.fence();
-        entries.push(...page.items); cursor = page.next;
-      } while (cursor !== undefined);
-      if (entries[0]?.id !== record.entry || entries.at(-1)?.id !== state.status.answer) throw Error("Missing Goal receipt window");
+      const window = await this.settledUsageEntries(copy);
+      if (!window) return false;
+      const { entries } = window;
       if (entries.slice(1).some(entry => entry.kind === "host.accepted")) return false;
       const found = await this.goalTerminalResultInEntries(copy.conversationId, entries, 0, target);
       await this.checked(copy); this.fence();
@@ -710,7 +700,9 @@ export class HostConversationRuntime {
         if (ownerResult.entryId !== assistant.id) continue;
         const call = assistant.model?.flatMap(part => part.role === "assistant" ? part.content.filter(block => block.type === "toolCall") : [])
           .find(call => call.id === message.toolCallId);
-        if (call?.name === message.toolName && ["goal_complete", "goal_stop", "update_goal"].includes(call.name)) return true;
+        if (call?.name === message.toolName && ((call.name === "goal_complete" && target.status === "complete") ||
+          (call.name === "goal_stop" && target.status === "stopped") ||
+          (call.name === "update_goal" && target.status === "complete" && call.arguments.status === "complete"))) return true;
       }
       return false;
     }, this.context);
@@ -735,12 +727,19 @@ export class HostConversationRuntime {
         if (boundary >= 0) throw Error("Intervening usage input boundary");
         continue;
       }
-      boundary = index;
+      if (boundary < 0) boundary = index;
     }
     if (boundary < 0) throw Error("Missing accepted usage boundary");
-    const receipts = await this.harness.commit(async tx => {
+    const receipts = await this.readUsageEntries(conversationId, entries.slice(boundary + 1));
+    this.fence(); this.assertCapturedSourceCurrent(captured.inputs);
+    return receipts;
+  }
+  /** Public immutable entries plus their SDK-owned generation outcomes are the
+   * common live/recovery usage oracle. Never reconstruct provider lifecycle. */
+  private readUsageEntries(conversationId: ConversationId, entries: readonly import("@earendil-works/pi-durable").EntryRecord[]) {
+    return this.harness.commit(async tx => {
       const result: { conversationId: number; entryId: number; tokens: number }[] = [];
-      for (const entry of entries.slice(boundary + 1)) {
+      for (const entry of entries) {
         if (entry.kind !== "pi.assistant") continue;
         if (entry.byTaskId === undefined || entry.model?.length !== 1 || entry.model[0]?.role !== "assistant") throw Error("Invalid committed usage entry");
         const task = await tx.task(entry.byTaskId);
@@ -757,8 +756,6 @@ export class HostConversationRuntime {
       }
       return result;
     }, this.context);
-    this.fence(); this.assertCapturedSourceCurrent(captured.inputs);
-    return receipts;
   }
   /** Re-read hash-checked accepted payloads, never reconstructed model prompt text. */
   async readCapturedInputText(inputs: readonly HostInputBinding[]): Promise<readonly string[]> {
@@ -1026,25 +1023,9 @@ export class HostConversationRuntime {
     return this.observe(async () => {
       const window = await this.settledUsageEntries(copy);
       if (!window) return null;
-      const { entries, start, end } = window;
-      const receipts = await this.harness.commit(async tx => {
-        const result: { conversationId: number; entryId: number; tokens: number }[] = [];
-        for (const entry of entries.slice(start + 1, end + 1)) {
-          if (entry.kind === "host.accepted") throw Error("Intervening settled usage input");
-          if (entry.kind !== "pi.assistant") continue;
-          if (entry.byTaskId === undefined || entry.model?.length !== 1 || entry.model[0]?.role !== "assistant") throw Error("Invalid committed usage entry");
-          const task = await tx.task(entry.byTaskId);
-          const outcome = task?.state.status === "terminal" && task.state.outcome.status === "completed" ? task.state.outcome.result as { entryId?: number } : undefined;
-          if (task?.kind !== "pi.generation" || task.conversationId !== copy.conversationId || outcome?.entryId !== entry.id) throw Error("Invalid committed usage task");
-          const usage = entry.model[0].usage;
-          const parts = [usage.input, usage.output, usage.cacheRead, usage.cacheWrite];
-          if (!parts.every(value => Number.isSafeInteger(value) && value >= 0) || !Number.isSafeInteger(usage.totalTokens) || usage.totalTokens < 0) throw Error("Invalid committed usage tokens");
-          const tokens = usage.totalTokens > 0 ? usage.totalTokens : parts.reduce((sum, value) => sum + value, 0);
-          if (!Number.isSafeInteger(tokens)) throw Error("Invalid committed usage total");
-          result.push({ conversationId: copy.conversationId as number, entryId: entry.id as number, tokens });
-        }
-        return result;
-      }, this.context);
+      const entries = window.entries.slice(window.start + 1, window.end + 1);
+      if (entries.some(entry => entry.kind === "host.accepted")) throw Error("Intervening settled usage input");
+      const receipts = await this.readUsageEntries(copy.conversationId, entries);
       this.fence(); await this.checked(copy);
       return receipts;
     });

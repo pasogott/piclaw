@@ -13,7 +13,8 @@ const names = ["get_goal", "create_goal", "goal_complete", "goal_stop", "update_
 /** The caller must qualify the exact installed factory before application adoption. */
 export function createHostGoalTools(factory: GoalFactory, options: {
   root: Database;
-  runtime(): Pick<HostConversationRuntime, "captureToolSource">;
+  runtime(): Pick<HostConversationRuntime, "captureToolSource" | "readCapturedInputText">;
+  resolveGoalInput(text: string, chat: string): { action: string };
   assertOwner(): void;
 }) {
   const chatScope = new AsyncLocalStorage<string>();
@@ -29,11 +30,18 @@ export function createHostGoalTools(factory: GoalFactory, options: {
     async invoke(args, invocation) {
       if (!args || Object.getPrototypeOf(args) !== Object.prototype) throw Error("Plain Goal arguments required");
       const cloned = structuredClone(args);
-      const captured = await options.runtime().captureToolSource(invocation.conversationId, invocation.taskId, invocation.toolCallId);
+      const runtime = options.runtime();
+      const captured = await runtime.captureToolSource(invocation.conversationId, invocation.taskId, invocation.toolCallId);
+      const texts = await runtime.readCapturedInputText(captured.inputs);
       const chatJid = captured.operation.chatJid;
       const authority = createHostOperationAuthority(options.root, captured, options.assertOwner, declaration.name === "get_goal");
       return chatScope.run(chatJid, () => withExtensionKvAuthority({ extensionId: "goal", chatJid, assertCurrent: authority.assertCurrent, write: authority.write }, async () => {
         authority.assertCurrent();
+        // A dispatched tool may outlive the request's input check. Revalidate
+        // the original Goal identity immediately before executing its mutation;
+        // an external terminal snapshot cannot become this operation's result.
+        if (!texts.length || texts.some(text => options.resolveGoalInput(text, chatJid).action === "handled"))
+          throw Error("Goal tool input lifecycle changed");
         const result = await invocation.execute(invocation.toolCallId, cloned as never, invocation.signal, undefined, undefined as never);
         authority.assertCurrent();
         return result as unknown as { content: never; details: JsonValue };

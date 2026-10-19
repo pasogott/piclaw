@@ -382,7 +382,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     return () => { source(); if (readAccessConfig().mode !== "single-user") throw Error("Host fetch permission denied"); };
   } }));
   tools.push(...mcp.tools);
-  if (goal) tools.push(...createHostGoalTools(goal.addon.createGoalTools, { root, runtime, assertOwner: assertGoal }));
+  if (goal) tools.push(...createHostGoalTools(goal.addon.createGoalTools, { root, runtime, assertOwner: assertGoal, resolveGoalInput: goal.addon.resolveGoalInput }));
   if (plan) tools.push(createHostPlanTool(plan.definition as Parameters<typeof createHostPlanTool>[0], { root, assertOwner: () => {
     assert(); lifetime.signal.throwIfAborted(); plan.assertCurrent();
   }, runtime }));
