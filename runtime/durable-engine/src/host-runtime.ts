@@ -682,6 +682,22 @@ export class HostConversationRuntime {
     this.fence(); this.assertCapturedSourceCurrent(captured.inputs);
     return found;
   }
+  /** Re-read hash-checked accepted payloads, never reconstructed model prompt text. */
+  async readCapturedInputText(inputs: readonly HostInputBinding[]): Promise<readonly string[]> {
+    const texts: string[] = [];
+    for (const input of inputs) {
+      this.assertCapturedSourceCurrent(inputs);
+      const operation = value(await this.options.work.getOperation(input.operationId)); this.fence();
+      if (!operation) throw Error("Missing accepted input operation");
+      const intent = operation.primarySourceSeq !== input.sourceSeq;
+      const { content } = await this.port(intent).getOrBind(input); this.fence();
+      if (hashCanonicalRequest({ type: "input", requestId: input.requestId, content }) !== input.requestHash)
+        throw Error("Host payload hash conflict");
+      texts.push(content);
+    }
+    this.assertCapturedSourceCurrent(inputs);
+    return texts;
+  }
   assertCapturedSourceCurrent(inputs: readonly HostInputBinding[]): void {
     this.fence();
     for (const input of inputs) {

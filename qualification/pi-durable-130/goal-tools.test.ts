@@ -83,7 +83,9 @@ test("Goal host adapter fences mutations to committed operation authority", asyn
   } finally { addon.resetGoalAddonForTests(); resetExtensionKvStoreForTests(); closeDatabase(); }
 });
 
-for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task captures its live accepted operation; rejected=${rejectRequestAuthority}`, async () => {
+for (const mode of [false, true, "external"] as const) test(`actual Goal tool task captures its live accepted operation; rejected=${mode}`, async () => {
+  const rejectRequestAuthority = mode === true;
+  const externalLifecycle = mode === "external";
   const sourceRoot = process.env.DURABLE_GOAL_ADDON_ROOT;
   if (!sourceRoot) throw Error("DURABLE_GOAL_ADDON_ROOT required");
   const { mkdtemp, rm } = await import("node:fs/promises");
@@ -116,6 +118,10 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
     async captureRunSource(conversation, task) {
       if (rejectRequestAuthority) throw Error("synthetic Goal request authority revoked");
       const captured = await f.runtime!.captureRunSource(conversation, task);
+      if (externalLifecycle) withExtensionKvAuthority({ extensionId: "goal", chatJid: f.chatJid, assertCurrent() {},
+        write<T>(body: () => T) { return f.db.transaction(body).immediate(); } }, () => {
+        addon.clearThreadGoal(f.chatJid); addon.createThreadGoal(f.chatJid, "Externally replaced Goal");
+      });
       const goal = extensionKvGet("goal", "thread-goal", "chat", f.chatJid) as { goal_id: string; lifecycle_generation: number; status: string } | null;
       if (goal?.status === "complete") {
         terminalProofs.push(await f.runtime!.hasGoalTerminalResult(conversation, task, { goalId: goal.goal_id, generation: goal.lifecycle_generation, status: "complete" }));
@@ -124,6 +130,8 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
       }
       return captured;
     },
+    readCapturedInputText: inputs => f.runtime!.readCapturedInputText(inputs),
+    hasGoalTerminalResult: (conversation, task, expected) => f.runtime!.hasGoalTerminalResult(conversation, task, expected),
   }), failClosed() { requestFenced = true; } });
   f.base.registry.install(promptExtension);
   const prompts: string[] = [];
@@ -138,8 +146,8 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
     const output = createAssistantMessageEventStream();
     const message = { role: "assistant" as const, api: model.api, provider: model.provider, model: model.id, timestamp: 1,
       stopReason: calling ? "toolUse" as const : "stop" as const, content: calling
-        ? [{ type: "toolCall" as const, id: `native-goal-call-${toolTurns}`, name: later || toolTurns === 2 ? "get_goal" : toolTurns === 0 ? "create_goal" : "goal_complete",
-          arguments: (later || toolTurns === 2 ? {} : toolTurns === 0 ? { objective: "Live Goal source capture" } : { summary: "Verified live transition", evidence: ["native accepted operation tool task"] }) as Record<string, string | string[]> }]
+        ? [{ type: "toolCall" as const, id: `native-goal-call-${toolTurns}`, name: later || toolTurns === 2 || toolTurns === 0 ? "get_goal" : "goal_complete",
+          arguments: (later || toolTurns === 2 || toolTurns === 0 ? {} : { summary: "Verified live transition", evidence: ["native accepted operation tool task"] }) as Record<string, string | string[]> }]
         : [{ type: "text" as const, text: "Goal stored" }],
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
     output.push({ type: "done", reason: message.stopReason, message }); output.end(message); return output;
@@ -151,16 +159,29 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
     await f.open(); f.permit = true;
     storeChatMetadata(f.chatJid, at);
     const source = value(await f.ports.work.acceptSource(sealed({ effect: effect(`${f.incarnation}:goal-source`), chatJid: f.chatJid, sourceId: "goal-native", kind: "message", payloadRef: "goal-native", targetOperationId: null, parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
-    f.db.query("INSERT INTO messages(id,chat_jid,content,timestamp) VALUES (?,?,?,?)").run("goal-native", f.chatJid, "Create the explicit goal", at);
+    let acceptedText = "Create the explicit goal";
+    if (!rejectRequestAuthority) withExtensionKvAuthority({ extensionId: "goal", chatJid: f.chatJid, assertCurrent() {},
+      write<T>(body: () => T) { return f.db.transaction(body).immediate(); } }, () => {
+      addon.createThreadGoal(f.chatJid, "Live Goal source capture");
+      acceptedText = addon.prepareGoalInput("🎯 Continue goal: Live Goal source capture", f.chatJid).decision.text;
+    });
+    f.db.query("INSERT INTO messages(id,chat_jid,content,timestamp) VALUES (?,?,?,?)").run("goal-native", f.chatJid, acceptedText, at);
     const claimed = value(await f.ports.work.claimNext(sealed({ effect: effect(`${f.incarnation}:goal-claim`), chatJid: f.chatJid, expectedFrontier: 0, newOperationId: f.incarnation, claimedAt: at })))!;
     const { hashCanonicalRequest } = await import("../../runtime/src/service-effects/contracts/common.js");
     const input = { incarnation: f.incarnation, conversationId: f.base.root.id, chatJid: f.chatJid, branchId: "main", operationId: f.incarnation,
       sourceSeq: source.sourceSeq, sourceId: source.sourceId, payloadRef: source.payloadRef, requestId: f.primaryRequestId,
-      requestHash: hashCanonicalRequest({ type: "input", requestId: f.primaryRequestId, content: "Create the explicit goal" }) };
+      requestHash: hashCanonicalRequest({ type: "input", requestId: f.primaryRequestId, content: acceptedText }) };
     const id = await f.runtime!.submit(input);
     value(await f.ports.work.bindHarness(sealed({ effect: effect(`${f.incarnation}:goal-running`, f.incarnation, source.sourceSeq), expectedVersion: claimed.operation.version,
       sessionId: f.incarnation, lane: "main", harnessOperationId: String(id), state: "running", watchGeneration: f.generation })));
     await f.runtime!.wait(input, id);
+    if (externalLifecycle) {
+      expect(requestFenced).toBe(true);
+      expect(modelEntries).toBe(0);
+      expect(captures).toBe(0);
+      expect(extensionKvGet("goal", "thread-goal", "chat", f.chatJid)).toMatchObject({ objective: "Externally replaced Goal", status: "active" });
+      return;
+    }
     if (rejectRequestAuthority) {
       expect(requestFenced).toBe(true);
       expect(modelEntries).toBe(0);
@@ -172,10 +193,10 @@ for (const rejectRequestAuthority of [false, true]) test(`actual Goal tool task 
     expect(terminalProofs).toEqual([true, false, false, true, false, false]);
     expect(prompts).toHaveLength(4);
     expect(prompts[3]).toContain("Goal terminal state recorded");
-    expect(prompts[0]).not.toContain("<objective>");
+    expect(prompts[0]).toContain("<objective>");
     expect(prompts[1]).toContain("Live Goal source capture");
     expect(prompts[1]).toContain("Active Goal");
-    expect(prompts[2]).not.toContain("<objective>");
+    expect(prompts[2]).not.toContain("Active Goal");
     const completedGoal = extensionKvGet("goal", "thread-goal", "chat", f.chatJid) as { goal_id: string; lifecycle_generation: number };
     expect(completedGoal).toMatchObject({ objective: "Live Goal source capture", status: "complete", lifecycle_generation: 2 });
     expect((await f.runtime!.reconcile(input)).answer?.text).toBe("Goal stored");

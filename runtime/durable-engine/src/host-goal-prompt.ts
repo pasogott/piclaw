@@ -4,13 +4,15 @@ import { createHostOperationAuthority } from "./host-operation-authority.js";
 import type { HostConversationRuntime } from "./host-runtime.js";
 import { withExtensionKvAuthority } from "../../src/extension-kv-registry.js";
 
-type GoalState = { status: string };
+type GoalState = { status: string; goal_id: string; lifecycle_generation: number };
 export function createHostGoalPrompt(addon: {
   loadThreadGoal(chat: string): GoalState | null;
   buildGoalSystemPrompt(goal: any): string;
+  goalInputIdentity(text: string): { goalId: string; generation: number } | false | null;
+  resolveGoalInput(text: string, chat: string): { action: string };
 }, options: {
   root: Database;
-  runtime(): Pick<HostConversationRuntime, "captureRunSource">;
+  runtime(): Pick<HostConversationRuntime, "captureRunSource" | "readCapturedInputText" | "hasGoalTerminalResult">;
   assertOwner(): void;
   failClosed(error: unknown): void;
 }) {
@@ -18,11 +20,29 @@ export function createHostGoalPrompt(addon: {
   const beforeRequest: NonNullable<GenerationHooks["beforeRequest"]> = async (request, api) => {
     try {
     options.assertOwner();
-    const captured = await options.runtime().captureRunSource(api.conversationId, api.taskId);
+    const runtime = options.runtime();
+    const captured = await runtime.captureRunSource(api.conversationId, api.taskId);
     const authority = createHostOperationAuthority(options.root, captured, options.assertOwner, true);
-    return withExtensionKvAuthority({ extensionId: "goal", chatJid: captured.operation.chatJid,
-      assertCurrent: authority.assertCurrent, write: authority.write }, () => {
+    const scope = <T>(body: () => T) => withExtensionKvAuthority({ extensionId: "goal", chatJid: captured.operation.chatJid,
+      assertCurrent: authority.assertCurrent, write: authority.write }, () => { authority.assertCurrent(); return body(); });
+    const texts = await runtime.readCapturedInputText(captured.inputs);
+    authority.assertCurrent();
+    for (const text of texts) {
+      const denied = scope(() => addon.resolveGoalInput(text, captured.operation.chatJid).action === "handled");
+      if (!denied) continue;
+      const identity = addon.goalInputIdentity(text);
+      const goal = scope(() => load(captured.operation.chatJid));
+      if (!identity || !goal || identity.goalId !== goal.goal_id || identity.generation + 1 !== goal.lifecycle_generation ||
+        (goal.status !== "complete" && goal.status !== "stopped") ||
+        !await runtime.hasGoalTerminalResult(api.conversationId, api.taskId, {
+          goalId: goal.goal_id, generation: goal.lifecycle_generation, status: goal.status,
+        })) throw Error("Goal input lifecycle changed");
       authority.assertCurrent();
+      const current = scope(() => load(captured.operation.chatJid));
+      if (!current || current.goal_id !== goal.goal_id || current.lifecycle_generation !== goal.lifecycle_generation || current.status !== goal.status)
+        throw Error("Goal input lifecycle changed");
+    }
+    return scope(() => {
       const goal = load(captured.operation.chatJid);
       if (!goal || (goal.status !== "active" && goal.status !== "budget_limited")) return request;
       const prompt = build(goal);
