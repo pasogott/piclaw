@@ -79,6 +79,17 @@ test("committed Goal usage and cursor are atomic, replay safe and lifecycle scop
     expect(() => accountCommittedGoalEntry(addon, authority, { ...entry, goalId: overflowGoal.goal_id, conversationId: 3, entryId: 41, tokens: 1 })).toThrow("Goal usage overflow");
     expect(load().tokens_used).toBe(Number.MAX_SAFE_INTEGER);
     expect(extensionKvGet("goal", "committed-usage:3", "chat", authority.chatJid)).toMatchObject({ entryId: 40 });
+    scoped(() => { addon.clearThreadGoal(authority.chatJid); addon.createThreadGoal(authority.chatJid, "Persist Plan progress"); });
+    const planState = { available: true, total: 1, allCompleted: false, fingerprint: "plan-one", plan: [{ step: "Verify result", status: "pending" }] };
+    const progress = () => scoped(() => authority.write(() => addon.applyGoalPlanProgress(load(), planState, false)));
+    expect(progress().decision).toEqual({ action: "continue", noProgressTurns: 1 });
+    expect(progress().decision).toEqual({ action: "continue", noProgressTurns: 2 });
+    expect(() => scoped(() => authority.write(() => { addon.applyGoalPlanProgress(load(), planState, false); throw Error("guard rollback"); }))).toThrow("guard rollback");
+    expect(load()).toMatchObject({ status: "active", no_progress_turns: 2 });
+    const beforeStop = load();
+    expect(progress().decision).toEqual({ action: "stop", reason: "no_progress" });
+    expect(load()).toMatchObject({ status: "stopped", stop_reason: "no_progress", lifecycle_generation: 2 });
+    expect(() => scoped(() => authority.write(() => addon.applyGoalPlanProgress(beforeStop, planState, false)))).toThrow("lifecycle changed");
     for (const toolName of ["goal_complete", "goal_stop"]) {
       scoped(() => { addon.clearThreadGoal(authority.chatJid); addon.createThreadGoal(authority.chatJid, "Terminal usage policy", 1); });
       const tool = addon.createGoalTools(() => authority.chatJid).find((tool: { name: string }) => tool.name === toolName)!;
