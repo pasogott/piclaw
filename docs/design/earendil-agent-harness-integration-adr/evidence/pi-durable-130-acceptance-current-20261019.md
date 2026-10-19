@@ -3,7 +3,7 @@
 The implementation is incomplete. Native Goal and soft token-budget wrap-up are
 adopted in source. Legacy deadline checkpoints, general exact running cancellation,
 historical rollback proof and whole-history migration still prevent acceptance.
-Source: core based on `804283a2d`, with the verified Goal steer change below;
+Source verified: core `08991f990`, including the Goal steer change below;
 Goal add-on `92de0be`. Nothing was installed,
 activated, migrated or deployed.
 
@@ -16,6 +16,15 @@ and UI/queue boundaries. Add no parallel runner, scheduler, ledger or emulated
 AgentSession lifecycle. Migration reuses the existing strict workflow and runs last.
 
 ## Qualification boundary
+
+- Corrected-head sequential gates on `08991f990` completed with numeric exits0:
+  root `make ci-fast` **7,365 pass / 74 skip / 0 fail / 48,476 assertions**,
+  feature stages **25/253** and **9/26**, including the web build; candidate
+  **637 pass / 8,120 assertions / 51 files**; explicit Goal **46 pass / 680
+  assertions / 5 files**. Source remained clean and unchanged throughout.
+  Receipts: `reviews/durable-1650/corrected-head-{root,candidate,goal}.log/.exit`;
+  source identity: `corrected-head.source`. This is local qualification; hosted
+  CI, the separate root typecheck baseline and whole-epic acceptance remain open.
 
 - The inherited candidate finished 632 pass / 4 assertion failures / 8,107
   assertions across 51 files. Its parent timed out; no shell exit was recorded.
@@ -30,7 +39,7 @@ AgentSession lifecycle. Migration reuses the existing strict workflow and runs l
 - Corrected source `3cbc12b6e` passes the explicit five-file Goal gate: 37 tests /
   557 assertions; actual-default Goal: 1 test / 57 assertions; legacy manager
   retirement: 47 tests / 181 assertions. All are distinct focused receipts.
-  No final corrected-head full root/candidate receipt exists yet.
+  The later corrected-head full root/candidate receipt is recorded above.
 - Engine and qualification types pass. Root types reach the existing web-compose
   audited-baseline check, which rejects changed diagnostic line locations; that
   stage is not green. No unrelated baseline edits were made.
@@ -172,8 +181,10 @@ No execution, scheduling or recovery mechanism was added.
   service changes. Assertions, history and timeouts remain intact.
 - Bounded production-diff review: READY; SHA-256
   `d2a44ade9461b36f155440ba55b1d7c23bd2559931d4b51cd408c8b78cb12183`.
-  Receipts: `reviews/durable-1650/native-goal-steer-final-*`. Broader root/candidate
-  acceptance and all 45 row statuses remain unchanged pending corrected-head gates.
+  Receipts: `reviews/durable-1650/native-goal-steer-final-*`. Corrected-head gates
+  pass as recorded above. All 45 requirement statuses remain conservative and
+  unchanged: 22 source-qualified, 17 fixture-only, 3 blocked-publicAPI and 3
+  migration/performance-unverified.
 
 ## Whole real-history preflight (earlier source `3cbc12b6e`)
 
