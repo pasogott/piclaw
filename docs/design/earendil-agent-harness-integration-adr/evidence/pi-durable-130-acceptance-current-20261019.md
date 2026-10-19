@@ -1,9 +1,10 @@
 # #1650 acceptance — 19 October 2026
 
-The implementation is incomplete. Native Goal is adopted in source; budget wrap-up,
-legacy deadline checkpoints, general exact running cancellation and historical
-rollback proof prevent complete acceptance. Source reviewed: core `3cbc12b6e`,
-Goal add-on `ecd00d7`. Nothing was installed, activated, migrated or deployed.
+The implementation is incomplete. Native Goal and soft token-budget wrap-up are
+adopted in source. Legacy deadline checkpoints, general exact running cancellation,
+historical rollback proof and whole-history migration still prevent acceptance.
+Source reviewed: core `76e5f81ec`, Goal add-on `92de0be`. Nothing was installed,
+activated, migrated or deployed.
 
 ## Design goal
 
@@ -76,7 +77,7 @@ Prefixes: `E/` = `runtime/durable-engine/src/`; `A/` =
 | HC-016 | Close | source-qualified | `E/application-bootstrap.ts`, `runtime/src/runtime/shutdown.ts`; `Q/host-controller.test.ts`, `RT/runtime/queue-backstop-ownership.test.ts` | Stop/join/close and uncertain-cleanup ownership are wired; non-cooperative callbacks can prevent completion indefinitely. Process death is separate from power loss. |
 | HC-017 | Registry/effect ports | source-qualified | `E/default-application-runtime.ts`, `E/host-extension-catalog.ts`; installed catalogue and actual-default tests. | The default composes native tools, tasks, hooks and codemode. Goal now has native tools, input, commands and Settings. Legacy card runner and side-session construction were retired earlier. Other command/event add-ons still fail closed; do not emulate AgentSession. |
 | HC-018 | Hooks/events | source-qualified | `E/host-plan-prompt.ts`, `E/host-goal-{prompt,terminal,input,settlement}.ts`; `Q/goal-tools.test.ts`, actual-default Goal scenario. | Native hooks replace Plan/Goal legacy handlers. General extension reload/lifecycle parity, browser acknowledgement and legacy Goal deadline recovery are unsupported or unqualified. |
-| HC-019 | Usage/quota/backoff | fixture-only | Existing per-request ledger for uncapped parent/Delegate/scheduled/manual-compaction/side requests; committed Goal usage and terminal-effect tests. | Goal accounting uses strict accepted-operation receipts and a replay cursor in the existing KV store. Enabled monetary caps still deny; Goal budget exhaustion blocks rather than performing a wrap-up turn. Provider-unknown reconciliation and live quota/backoff matrices are incomplete. |
+| HC-019 | Usage/quota/backoff | fixture-only | Existing per-request ledger for uncapped parent/Delegate/scheduled/manual-compaction/side requests; committed Goal usage and terminal-effect tests. | Goal accounting uses strict accepted-operation receipts and the existing KV cursor. Soft token-budget exhaustion permits only its own native run's wrap-up or a current explicitly admitted wrap-up; tools are fenced. Final-answer exhaustion atomically admits one wrap-up behind human input. Enabled monetary caps still deny; provider-unknown reconciliation/live quota matrices remain incomplete. |
 | HC-020 | Deferred provider | fixture-only | `E/host-models.ts`; `Q/models.test.ts` | Selected synthetic handle/fetch/cancel/recreated-bridge cases do not prove persistent live-provider handle authority, polling/deadlines/lineage. One poll per resume is no public guarantee. |
 | HC-021 | Effect admission | source-qualified | `E/host-builtins.ts`, `A/host-grep.ts`, `A/host-tool-process.ts`; `Q/host-builtins.test.ts`, `Q/host-grep.test.ts`, `Q/bash-port.test.ts`, `Q/models.test.ts` | Actual filesystem/spawn boundaries are guarded for selected ports. No general Gate/zero-effect guarantee; accepted provider microtask race is separate from exact-abort API gap. |
 | HC-022 | Effect-start crash | fixture-only | `Q/cross-store.test.ts`, `Q/accepted-steer-recovery.test.ts`, `Q/bash-port.test.ts` | Fixed post-boundary SIGKILL/unsafe reopen evidence does not resolve arbitrary surviving children or external unknown outcomes. |
@@ -102,13 +103,14 @@ Prefixes: `E/` = `runtime/durable-engine/src/`; `A/` =
 | PC-017 | Legacy rollout | fixture-only | Published source defaults to the durable factory, with no production JSONL fallback; the production side-prompt runner is now test-only. Shared-DB/new-chat/guarded-consumer tests and copied upgrade fixtures pass, but existing production chat history still requires migration. No live fleet cutover or general legacy-session retirement is qualified. | Wider acceptance remains unqualified as described in the evidence column. |
 | PC-018 | Trusted internal input | fixture-only | `A/durable-runtime-adapter.ts`; `Q/scheduled.test.ts`, `Q/runtime.test.ts`, `RT/channels/web/alternate-ingress-guards.test.ts` | Selected claimed/scheduler ports and admission seals exist; every internal ingress still needs acceptance/budget/owner proof. |
 | PC-019 | Cross-session steer | fixture-only | `A/durable-queued-steering.ts`; `SE/service-work-queued-steer.test.ts` | Local accepted steer is chat-bound; no complete cross-session acknowledgement/retry/dedup/offline acceptance proof. |
-| PC-020 | Goal/checkpoint race | fixture-only | `E/host-goal-{input,prompt,usage,settlement,terminal}.ts`; `Q/{goal-tools,goal-usage,goal-settlement,goal-terminal-race}.test.ts` and actual-default Goal. | Bounded lifecycle, completion/stop/update, committed usage, terminal rollback/replay, Plan/progress, continuation close/reopen and accepted-steer accounting are integrated. Helper and corrected-reader reviews are READY within scope. Legacy deadline checkpoints and budget wrap-up are unsupported; general cross-session/carry/disposal races are unqualified. |
+| PC-020 | Goal/checkpoint race | fixture-only | `E/host-goal-{input,prompt,usage,settlement,terminal}.ts`; `Q/{goal-tools,goal-usage,goal-settlement,goal-terminal-race}.test.ts` and actual-default Goal/budget. | Bounded lifecycle, completion/stop/update, committed usage, terminal rollback/replay, Plan/progress, continuation close/reopen, accepted-steer accounting and soft token-budget wrap-up are integrated. Current budget/provenance diff review is READY. Legacy deadline checkpoints, mixed Goal/ordinary settlement and general cross-session/carry/disposal races remain unqualified. |
 
 ## Hard boundaries
 
-1. Keep `budget_limited`/`usage_limited` and legacy deadline recovery explicitly
-   unsupported until a native implementation exists. Containment does not provide
-   wrap-up or checkpoint parity. Do not add another legacy checkpoint scheduler.
+1. Token-budget wrap-up is soft, not a hard provider-cost cap. It uses native
+   generations/tool hooks and existing queue/transaction authority. Enabled
+   monetary caps and `usage_limited` recovery still fail closed. Legacy deadline
+   checkpoints remain unsupported; do not reproduce their old scheduler.
 2. The current public SDK cannot atomically condition a main running-task abort
    on Piclaw's exact accepted operation/generation. Host publication fencing and
    isolated side-fork cancellation have narrower guarantees. HC-009, PC-004 and
@@ -119,7 +121,31 @@ Prefixes: `E/` = `runtime/durable-engine/src/`; `A/` =
 4. Source-head tests, independent review, publication and exact-head hosted CI
    are separate gates. No merge, install, restart or live migration is authorised.
 
-## Whole real-history preflight
+## Native token-budget wrap-up — source `76e5f81ec` / add-on `92de0be`
+
+- Five-file Goal gate: **44 pass / 626 assertions**; actual default Goal:
+  **1 pass / 60 assertions**; actual default budget/reopen/human tool/FIFO/replay:
+  **1 pass / 97 assertions**; application scenarios: **7 pass**. Separate Goal
+  add-on gate: **97 pass / 1,477 assertions** across three files. Engine, candidate
+  and add-on types plus circular/silent-swallow checks pass. These are focused
+  gates, not a complete root/candidate run.
+- One shared add-on claim owns the existing `budget_limit_reported` flag; native
+  and legacy consumers reuse it and the same visible prompt builder. No new
+  checkpoint scheduler, execution ledger, runner or payload store was added.
+- The existing usage cursor binds the budget transition to its accepted generation
+  and host operation. An older operation's cursor or an external limited snapshot
+  cannot grant a wrap-up. Explicit current budget inputs also pass the shared
+  lifecycle/objective resolver. Ordinary separate user work is not Goal-charged.
+- Queued provenance retains the full immutable-intent digest and adds a content
+  digest. This lets native startup verify materialised inputs and their exact
+  terminal replies after queue removal. Content tampering is still rejected;
+  proof-less older candidate queued shapes are not silently trusted.
+- Independent production diff review: READY within unchanged authority contracts;
+  SHA-256 `a86e270d606ab404095a4ba2e6ffa3466b5d1a0d074da77003217039cee7eba1`.
+  Final production diff is byte-identical to that reviewed diff. Local receipts:
+  `reviews/durable-1650/native-budget-*` and `native-budget-final-*`.
+
+## Whole real-history preflight (earlier source `3cbc12b6e`)
 
 A read-only probe copied three closed historical files of the actual main chat,
 then removed the private copies after comparing source/copy/source SHA-256 hashes.
