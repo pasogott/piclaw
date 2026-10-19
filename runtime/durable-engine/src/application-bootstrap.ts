@@ -274,6 +274,24 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         assert();
       };
     };
+    const getQueuedInputSourceWithdrawal: NonNullable<WebChannelOpts["getQueuedInputSourceWithdrawal"]> = chat => {
+      assert(); if (!routeIndex.get(chat) || !lookup(chat, routeIndex.get(chat)!.branchId)) throw Error("Unbound queued input chat");
+      return ({ chatJid, item, database: connection }) => {
+        assert();
+        if (connection !== root || !root.inTransaction || chatJid !== chat || !item.source_id) throw Error("Root queued withdrawal required");
+        const source = work.getAcceptedSource(chat, item.source_id);
+        const { source_accepted, materializeRetries, ...immutable } = item;
+        const digest = hashCanonicalRequest(JSON.parse(JSON.stringify(immutable)));
+        const stored = root.query("SELECT source_hash FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?").get(chat, item.source_id) as { source_hash: string } | null;
+        if (!source || !stored || source.payloadRef !== `queued-source:${item.source_id}` || source.provenanceRef !== `application:queued:${digest}`)
+          throw Error("Queued withdrawal payload conflict");
+        const request = { effect: { ...effect(`withdraw:${item.source_id}`), provenanceRef: "application:queue-remove" },
+          chatJid: chat, sourceId: item.source_id, sourceHash: stored.source_hash, payloadRef: source.payloadRef, actor: "application:queue-remove" };
+        request.effect.requestHash = hashCanonicalRequest({ method: "withdrawUnclaimedSource.v1", ...request });
+        work.withdrawUnclaimedSourceInTransaction(request, root);
+        assert();
+      };
+    };
     const getDurableSession = (chat: string) => {
       const binding = routeIndex.get(chat);
       return binding && adapter.sessionPosition(chat, binding.branchId, binding.sessionId);
@@ -624,7 +642,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       bind(options: Pick<WebChannelOpts, "queue" | "agentPool">): Readonly<WebChannelOpts> {
         assert(); if (bound || closing) throw Error("Application bundle already bound or closing");
         bound = true;
-        return Object.freeze({ ...options, prepareInputSourceAdmission, getInputSourceAdmission, getQueuedInputSourceAdmission, getQueuedInputMaterialization,
+        return Object.freeze({ ...options, prepareInputSourceAdmission, getInputSourceAdmission, getQueuedInputSourceAdmission, getQueuedInputMaterialization, getQueuedInputSourceWithdrawal,
           prepareInputText: prepareInputText ? (chat: string, text: string) => { assertLive(); if (!routeIndex.has(chat)) throw Error("Unbound input preparation"); return prepareInputText(chat, text); } : undefined,
           dispatchAcceptedInput: dispatch });
       },

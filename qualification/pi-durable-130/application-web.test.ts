@@ -392,6 +392,16 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
         throw Error("rollback queued application probe");
       }).immediate()).toThrow("rollback queued application probe");
       expect(db.query("SELECT * FROM service_effect_s01_sources WHERE source_id=?").all("goal-continuation:application-test")).toHaveLength(0);
+      const sourceId = "goal-continuation:withdraw-test";
+      const rowId = db.transaction(() => service.enqueueAcceptedFollowupOnce(sourceId, chat, "Remove queued input", new Date().toISOString(),
+        { source: "goal.continuation" }, admission)).immediate()!;
+      const withdrawal = channel.getQueuedInputSourceWithdrawal!(chat)!;
+      const { getDeferredQueuedFollowups } = await import("../../runtime/src/db.js");
+      const item = getDeferredQueuedFollowups(chat).find(item => item.rowId === rowId)!;
+      expect(() => db.transaction(() => { withdrawal({ chatJid: chat, item: item as any, database: db }); throw Error("rollback withdrawal"); }).immediate()).toThrow("rollback withdrawal");
+      expect(db.query("SELECT state FROM service_effect_s01_sources WHERE source_id=?").get(sourceId)).toMatchObject({ state: "pending" });
+      expect((await service.removeQueuedFollowupForAction(chat, rowId, { withdrawAcceptedSource: withdrawal })).removed).not.toBeNull();
+      expect(db.query("SELECT state FROM service_effect_s01_sources WHERE source_id=?").get(sourceId)).toMatchObject({ state: "disposed" });
     }
     const hold = barrier(); base.host.modelHold = hold;
     const entered = barrier(); base.host.onModelEnter = () => entered.release();
@@ -474,8 +484,10 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
       expect(answers[0]).toEqual({ content: "synthetic answer" });
       expect(answers).toHaveLength(deferred ? 2 : 1);
       if (deferred) expect(answers[1].content).toContain(compactSucceeds ? "Context compacted" : "did not complete");
-      expect(db.query("SELECT operation_id FROM service_effect_s02_commits WHERE chat_jid=?").all(chat)).toEqual([{ operation_id: `message:${row.rowid}:1` }]);
-      expect(terminalEffects.filter(operation => operation === `message:${row.rowid}:1`)).toHaveLength(1);
+      const accepted = db.query("SELECT source_seq FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?").get(chat, row.id) as { source_seq: number };
+      const operationId = `message:${row.rowid}:${accepted.source_seq}`;
+      expect(db.query("SELECT operation_id FROM service_effect_s02_commits WHERE chat_jid=?").all(chat)).toEqual([{ operation_id: operationId }]);
+      expect(terminalEffects.filter(operation => operation === operationId)).toHaveLength(1);
     }
     expect(await pool.getCurrentModelLabel(chat)).toBe("qualification/synthetic");
     expect(pool.getSessionGenerationForChat(chat)).toBe("preserved-session");
