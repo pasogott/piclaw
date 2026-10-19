@@ -4,11 +4,11 @@ import { withExtensionKvAuthority, type ExtensionKvAuthority } from "../../src/e
 
 /** Only usable inside applyTerminalEffects, after the exact terminal record was
  * inserted on this connection. Never grants authority from an old receipt alone. */
-export function withGoalSettlementAuthority<T>(root: Database, commit: Readonly<TerminalCommit>, assertTerminalScope: () => void,
+export function withGoalSettlementAuthority<T>(root: Database, commit: Readonly<TerminalCommit>, assertTerminalScope: (expected: Readonly<TerminalCommit>) => void,
   body: (authority: ExtensionKvAuthority) => T): T {
   let chatJid: string;
   const assertCurrent = () => {
-    assertTerminalScope();
+    assertTerminalScope(commit);
     if (!root.inTransaction) throw Error("Goal settlement transaction required");
     const row = root.query(`SELECT c.chat_jid,c.operation_id,c.operation_version,c.disposition,o.phase FROM service_effect_s02_commits c
       JOIN service_effect_s01_operations o ON o.operation_id=c.operation_id WHERE c.operation_id=?`).get(commit.operationId) as

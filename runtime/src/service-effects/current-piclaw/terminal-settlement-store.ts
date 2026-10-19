@@ -164,7 +164,7 @@ export interface TerminalSettlementAdapterRuntime {
   /** Synchronous shared-database terminal effects. Runs once inside the terminal
    * transaction, after apply and before the final owner check; replay skips it.
    * Throwing rolls back ALL writes. No async work or external effects permitted. */
-  applyTerminalEffects?: (commit: Readonly<TerminalCommit>, assertCurrent: () => void) => undefined;
+  applyTerminalEffects?: (commit: Readonly<TerminalCommit>, assertCurrent: (expected: Readonly<TerminalCommit>) => void) => undefined;
   hitFault(
     point: "before_effect" | "effect_then_lost_acknowledgement",
   ): unknown;
@@ -355,8 +355,9 @@ class CurrentPiclawTerminalSettlementStore
           const commit = this.apply(request, resolved.value);
           if (this.runtime.applyTerminalEffects) {
             let active = true;
-            const assertCurrent = () => {
+            const assertCurrent = (expected: Readonly<TerminalCommit>) => {
               if (!active || !this.database.inTransaction) throw new Error("Terminal effect scope ended");
+              if (expected !== commit) throw new Error("Exact terminal effect commit required");
               this.validateOwnership();
             };
             try {

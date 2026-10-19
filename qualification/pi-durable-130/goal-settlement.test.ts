@@ -35,6 +35,8 @@ test("actual Goal usage commits with terminal, rolls back and cannot reuse expir
     hitFault: () => false, recordTrace() {}, validateOwnership: () => true,
     applyTerminalEffects(commit, scope) {
       calls++;
+      expect(() => withGoalSettlementAuthority(db, { ...commit, operationId: "other-op" }, scope, () => undefined)).toThrow("Exact terminal effect commit required");
+      expect(() => withGoalSettlementAuthority(db, { ...commit }, scope, () => undefined)).toThrow("Exact terminal effect commit required");
       withGoalSettlementAuthority(db, commit, scope, authority => {
         retained = authority.assertCurrent;
         accountCommittedGoalBatch(addon, authority, [text], [{ conversationId: 1, entryId: 5, tokens: 7 }]);

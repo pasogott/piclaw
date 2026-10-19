@@ -67,7 +67,7 @@ async function setup(busy = false) {
   let loseCancellationAck = false;
   const hooks = { authorize: undefined as (() => void | Promise<void>) | undefined,
     cancellation: undefined as (() => void | Promise<void>) | undefined,
-    terminalEffects: undefined as ((commit: Readonly<TerminalCommit>, assertCurrent: () => void) => undefined) | undefined };
+    terminalEffects: undefined as ((commit: Readonly<TerminalCommit>, assertCurrent: (expected: Readonly<TerminalCommit>) => void) => undefined) | undefined };
   const work = value(createCurrentPiclawServiceWorkStore(db, {
     hitFault(point, method) {
       if (loseCancellationAck && method === "acceptCancellation" && point === "effect_then_lost_acknowledgement") {
