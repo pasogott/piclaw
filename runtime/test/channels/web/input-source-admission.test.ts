@@ -916,3 +916,42 @@ test("prepared input text reaches direct and queued admissions with the same syn
   expect(f.snapshot()).toEqual(before);
   expect(f.channel.getQueuedFollowupItems("web:default")).toEqual(queueBefore);
 });
+
+for (const malformed of ["async-prepare", "async-authority", "slash", "empty"] as const) {
+  test(`prepared input ${malformed} fails closed without admission or unhandled rejection`, async () => {
+    const f = fixture(undefined, () => true), before = f.snapshot();
+    const unhandled: unknown[] = [];
+    const listener = (error: unknown) => { unhandled.push(error); };
+    process.on("unhandledRejection", listener);
+    try {
+      f.channel.prepareInputText = (() => {
+        if (malformed === "async-prepare") return Promise.reject(Error("private preparation error"));
+        return { text: malformed === "slash" ? "/model hidden" : malformed === "empty" ? "  " : "prepared text",
+          assertCurrent() { if (malformed === "async-authority") return Promise.reject(Error("private authority error")); } };
+      }) as any;
+      expect((await f.route()).status).toBe(503);
+      await Bun.sleep(0);
+      expect(unhandled).toEqual([]);
+      expect(f.snapshot()).toEqual(before);
+      expect(f.jobs).toEqual([]);
+    } finally { process.off("unhandledRejection", listener); }
+  });
+}
+
+test("prepared queued source authority revocation rolls back item and accepted source together", async () => {
+  const f = fixture(undefined, () => true);
+  f.busy(true);
+  let revoked = false, transformed = "";
+  f.channel.prepareInputText = () => ({ text: "prepared atomic queue", assertCurrent() { if (revoked) throw Error("prepared Goal revoked"); } });
+  (f.channel as any).getQueuedInputSourceAdmission = () => (input: Parameters<typeof f.acceptQueued>[0]) => {
+    transformed = input.item.queuedContent;
+    f.acceptQueued(input);
+    revoked = true;
+  };
+  const before = f.snapshot();
+  const result = await f.route({ content: "original", mode: "queue" });
+  expect(result.status).toBe(403);
+  expect(transformed).toBe("prepared atomic queue");
+  expect(f.snapshot()).toEqual(before);
+  expect(f.channel.getQueuedFollowupItems("web:default")).toEqual([]);
+});

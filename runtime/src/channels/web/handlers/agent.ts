@@ -767,10 +767,22 @@ export async function handleAgentMessage(
   if (prepareInputText && !command && !themeCommand && !metersCommand && !isSettingsCommand && !isSlashCommandInvocation(content)) {
     try {
       const prepared = prepareInputText(chatJid, content);
-      if (!prepared || typeof prepared.text !== "string" || typeof prepared.assertCurrent !== "function") throw Error("Invalid prepared input");
+      if (prepared && typeof (prepared as unknown as { then?: unknown }).then === "function") {
+        void Promise.resolve(prepared).catch(() => {});
+        throw Error("Input preparation must be synchronous");
+      }
+      if (!prepared || typeof prepared.text !== "string" || !prepared.text.trim() || isSlashCommandInvocation(prepared.text) ||
+        typeof prepared.assertCurrent !== "function") throw Error("Invalid prepared input");
       const requestAuthority = revalidateInputAuthority;
       const assertCurrent = prepared.assertCurrent.bind(prepared);
-      revalidateInputAuthority = () => { requestAuthority(); assertCurrent(); };
+      revalidateInputAuthority = () => {
+        requestAuthority();
+        const result = assertCurrent();
+        if (result !== undefined) {
+          void Promise.resolve(result).catch(() => {});
+          throw Error("Prepared input authority must be synchronous");
+        }
+      };
       content = prepared.text;
       revalidateInputAuthority();
     } catch { return channel.json({ error: "Input preparation could not be confirmed." }, 503); }
