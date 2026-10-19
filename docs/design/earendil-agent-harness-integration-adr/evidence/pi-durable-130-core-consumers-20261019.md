@@ -45,7 +45,46 @@ The first fixture linked Code Review to the add-on repository's incomplete test
 module tree. Linking to the actual host dependencies, as the existing fixtures do,
 fixed extension loading without a production change.
 
-The earlier `b33f20e96` archive does not contain these consumers. A refreshed public
-seed, fresh archive/global-layout admission, current-source broad gates and hosted
-checks are still required. Whole-real-history and public-API acceptance gaps are
-unchanged. No managed runtime installation, restart or live migration occurred.
+## Published seed and packaged runtime
+
+Add-ons PR #215 merged as `a3444c5b557ca235893745b34989e985074646cc`.
+Both authoritative workflows succeeded at reviewed source
+`95dd52c131c66eaea3b026e5397090d7d4198df2`; main publication run
+`39288113970` also succeeded. The stale routes check display was not used in
+place of the completed workflow result.
+
+The seed now contains publicly downloaded Observability `0.1.18` and Restic
+`0.1.5`. Seven-core membership is unchanged. Catalogue, archives and the frozen
+Bun seed lock were refreshed together; archive checksums are in
+`release/core-addons.lock.json`.
+
+The refreshed 47.30 MB package contains 25,580 files. A disposable global install
+and explicit postinstall installed host SDK `1.2.0` and private SDK `1.3.0`.
+Using only that installation, production seeding and a private owner/database,
+the actual default factory admitted all seven consumers and settled one synthetic
+native request: zero legacy sessions and zero outbound provider requests.
+Backend stop, AgentPool shutdown, backend close, database close and owner release
+completed with exit 0. The first probe omitted AgentPool shutdown and timed out
+after printing its successful request result; that is not an exit-0 receipt.
+The corrected probe reused the completed installation, not a source fallback.
+
+## Combined-source qualification
+
+The broad 52-file run recorded 642 passes, five failures and one error. The
+failures came from missing `fd` in PATH, logical-versus-physical dependency-path
+assertions, and missing qualification-local frozen Iroh dependencies. All affected
+cases passed after setup/test-only repairs: both selected default-factory cases,
+69 focused tests, then the remaining add-on-host case (63 assertions). SDK path
+assertions still enforce the real host dependency boundary. Original failed
+receipts remain failures; they are not presented as a new full green run.
+
+At `928400e14`, subsequent stages each exited 0: Goal 49 tests/771 assertions;
+Pele Chromium and WebKit each nine tests/393 assertions; engine and candidate
+types. The production source was unchanged by the path/env assertion repair.
+Hosted CI now checks out the separate approved core consumer source, runs Goal
+qualification, and exercises Pele in both engines. Its Goal source tree is
+byte-identical to the retained `9d9eb284` fixture.
+
+Current-head hosted core checks remain required. Whole-real-history and public-API
+acceptance gaps are unchanged. No managed runtime installation, restart or live
+migration occurred.
