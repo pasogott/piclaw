@@ -126,8 +126,8 @@
             } catch(e) {}
         })();
     </script>
-    <link rel="stylesheet" href="/static/classic/dist/app.bundle.css?v=0187135b98be">
-    <link id="dynamic-manifest" rel="manifest" href="/manifest.json?v=0187135b98be">
+    <link rel="stylesheet" href="/static/classic/dist/app.bundle.css?v=ee63e478d1b3">
+    <link id="dynamic-manifest" rel="manifest" href="/manifest.json?v=ee63e478d1b3">
     <link id="dynamic-favicon" rel="icon" href="/favicon.ico">
     <link id="dynamic-apple-touch-icon" rel="apple-touch-icon" href="/apple-touch-icon.png">
     <link id="dynamic-apple-touch-icon-180" rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon-180x180.png">
@@ -164,18 +164,11 @@
     </script>
     <script src="/static/common/js/marked.min.js" defer></script>
     <script>
-      // Lazy-load katex and mermaid after the app has rendered its first frame.
-      // These are heavy vendor scripts (266KB + 1.5MB) only needed when rendering
-      // math blocks or mermaid diagrams. The markdown renderer guards with
-      // window.katex / window.beautifulMermaid checks, so posts rendered before
-      // load complete simply skip those features until a re-render.
+      // KaTeX loads after first paint; timeline diagrams load Pele on demand.
       function loadDeferredVendorScripts() {
         var s1 = document.createElement('script');
         s1.src = '/static/common/js/vendor/katex.min.js';
         document.head.appendChild(s1);
-        var s2 = document.createElement('script');
-        s2.src = '/static/common/js/vendor/beautiful-mermaid.js';
-        document.head.appendChild(s2);
       }
       // Wait for the app to paint, then load after a short delay
       if (document.readyState === 'complete') {
@@ -193,6 +186,6 @@
       }
     }
     </script>
-    <script type="module" src="/static/classic/dist/app.bundle.js?v=0187135b98be"></script>
+    <script type="module" src="/static/classic/dist/app.bundle.js?v=ee63e478d1b3"></script>
 </body>
 </html>

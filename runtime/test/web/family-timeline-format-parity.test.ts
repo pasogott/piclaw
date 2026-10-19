@@ -58,7 +58,7 @@ test('family shell loads the standard markdown, math, and diagram runtimes', () 
   const html = readFileSync(join(import.meta.dir, '../../web/static/family.html'), 'utf8');
   expect(html).toContain('/static/common/js/marked.min.js');
   expect(html).toContain('/static/common/js/vendor/katex.min.js');
-  expect(html).toContain('/static/common/js/vendor/beautiful-mermaid.js');
+  expect(html).toContain('/static/common/js/vendor/pele.js');
   expect(html).toContain('owner-scoped messages, uploads, rich content and live turn controls');
   expect(html).toContain('shell, terminal, VNC and global provider/add-on controls remain unavailable');
 });

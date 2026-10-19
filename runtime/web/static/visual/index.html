@@ -170,17 +170,11 @@
     </script>
     <script src="/static/common/js/marked.min.js" defer></script>
     <script>
-      // Lazy-load katex and mermaid after the app has rendered its first frame.
-      // These are heavy vendor scripts (268KB + 1.6MB) only needed when rendering
-      // math blocks or mermaid diagrams. The markdown renderer guards with
-      // window.katex / window.beautifulMermaid checks.
+      // KaTeX loads after first paint; timeline diagrams load Pele on demand.
       function loadDeferredVendorScripts() {
         var s1 = document.createElement('script');
         s1.src = '/static/common/js/vendor/katex.min.js';
         document.head.appendChild(s1);
-        var s2 = document.createElement('script');
-        s2.src = '/static/common/js/vendor/beautiful-mermaid.js';
-        document.head.appendChild(s2);
       }
       if (document.readyState === 'complete') {
         setTimeout(loadDeferredVendorScripts, 2000);
