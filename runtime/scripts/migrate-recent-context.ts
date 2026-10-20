@@ -6,6 +6,7 @@ import { isAbsolute, join, resolve, relative, dirname } from "node:path";
 
 export const HELP = `Usage: bun runtime/scripts/migrate-recent-context.ts --workspace /ABS --agent-dir /ABS --manifest /ABS [--preflight | --apply] [--relocate-archives /ABS]
 Target must be offline/checkpointed with no SQLite WAL/SHM/journal sidecars.
+Apply opens explicit offline maintenance: external background services are not started.
 Default: read-only preflight. No force, install, automatic archive move or model calls.
 Manifest v1: {version:1, workspace, agentDir, schemaSHA256, timeline, sources:[
  {chatJid,branchId,path,sha256,sourceSessionId,selectedLeaf,asOf,payloadSHA256,sourceEntryIds}
@@ -132,7 +133,7 @@ export async function main(args = process.argv.slice(2), testDependencies?: { ge
     };
     let models: ReturnType<typeof loadModels> | undefined;
     const getModels = () => models ??= (testDependencies?.getModels ?? loadModels)();
-    backend = await createDefaultApplicationRuntime(owner,getModels,migration);
+    backend = await createDefaultApplicationRuntime(owner,getModels,migration,{offlineMaintenance:true});
     backend.stop(); await backend.close(); backend = undefined;
     dbModule.closeDatabase(); dbModule = undefined;
     owner.assertCurrentOwner(); safe = true;

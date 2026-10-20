@@ -69,6 +69,7 @@ export async function recordApplicationMigration(tx: Tx, rootId: ConversationId,
   let cursor: Cursor | undefined;
   do {
     const page = await tx.scanEntries({ conversationId: rootId }, 1000, cursor);
+    assertOwner();
     found.push(...page.items.filter(entry => entry.kind === Marker.kind));
     cursor = page.next;
   } while (cursor);
@@ -76,13 +77,22 @@ export async function recordApplicationMigration(tx: Tx, rootId: ConversationId,
   if (markers.items.length) {
     if (markers.items.length !== 1 || (markers.items[0]!.data as { sourceHash?: string })?.sourceHash !== sourceHash) fail();
     await recordLegacyTimeline(tx, rootId, root, copy.timeline, assertOwner);
+    assertOwner();
     return;
   }
-  await recordLegacyTimeline(tx, rootId, root, copy.timeline, assertOwner);
-  for (const item of copy.recentHistory) {
-    const binding = bindings.find(b => b.chatJid === item.chatJid && b.branchId === item.branchId)!;
+  // Public Tx table reads are forbidden after the first table write. Preflight
+  // every target before staging timeline membership or any copied message.
+  const targets = copy.recentHistory.map(item => ({ item, binding: bindings.find(b =>
+    b.chatJid === item.chatJid && b.branchId === item.branchId)! }));
+  for (const { binding } of targets) {
     const entries = await tx.scanEntries({ conversationId: binding.conversationId as ConversationId }, 1);
+    assertOwner();
     if (entries.items.length) fail();
+  }
+  assertOwner();
+  await recordLegacyTimeline(tx, rootId, root, copy.timeline, assertOwner);
+  assertOwner();
+  for (const { item, binding } of targets) {
     const { sourceHash, sourceSessionId, sourceLeafId, owner, chatJid, branchId } = item;
     // Keep public compaction/fork heads at message granularity. A single entry
     // containing the entire archive would retain all copied messages at its head.
@@ -91,8 +101,10 @@ export async function recordApplicationMigration(tx: Tx, rootId: ConversationId,
       await tx.appendEntry(Seed, binding.conversationId as ConversationId, {
         data: { sourceHash, sourceSessionId, sourceLeafId, owner, copied: true, chatJid, branchId, messageIndex }, model: [message],
       });
+      assertOwner();
     }
   }
+  assertOwner();
   await tx.appendEntry(Marker, rootId, { data: { sourceHash } });
   assertOwner();
 }

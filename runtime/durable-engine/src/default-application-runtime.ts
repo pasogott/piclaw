@@ -241,7 +241,9 @@ export function assertFreshApplicationHistory(root: ReturnType<typeof getDb>, se
 }
 
 /** Mainstream source factory. Only startup-known chats are admitted; unknown chats fail closed. */
-export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, getModels: () => Promise<RuntimeModelServices>, migration?: ApplicationMigration, remotePeerOptions?: { transportFactory?: (options: any) => any; discoveryFactory?: (options: any) => any }): Promise<RuntimeBackend> {
+export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, getModels: () => Promise<RuntimeModelServices>, migration?: ApplicationMigration, remotePeerOptions?: { offlineMaintenance?: boolean; transportFactory?: (options: any) => any; discoveryFactory?: (options: any) => any }): Promise<RuntimeBackend> {
+  const offlineMaintenance = remotePeerOptions?.offlineMaintenance === true;
+  const assertAdmission = () => { if (offlineMaintenance) throw Error("Offline maintenance cannot admit conversations"); };
   migration = migration && structuredClone(migration);
   if (process.platform !== "linux") throw Error("Durable application ownership is qualified only on Linux");
   if (readAccessConfig().mode !== "single-user") throw Error("Durable host builtins require single-user policy; family effect ports are not qualified");
@@ -315,6 +317,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     readExchanges: regretsAddon.readExchanges,
     async readFile(path) { return existsSync(path) ? readFileSync(path, "utf8") : undefined; },
     async admitConversationInput(text) {
+      assertAdmission();
       assertCurrent(); assertRegrets();
       const target = bundle.sessionTargets.list().find(target => target.chatJid === chat);
       if (!target) throw Error("Unbound Regrets chat");
@@ -582,10 +585,14 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   let infrastructureClosed = false;
   const closeInfrastructure = () => { if (infrastructureClosed) return; infrastructureClosed = true; for (const qualified of infrastructure) if (qualified.kind === "imap") (qualified.nativeExports["index.ts"]!.disposeImapPool as () => void)(); };
   const baseApplicationToolNames: readonly string[] = [...defaultToolNames, ...(codexGroup?.tools.map(tool => tool.name) ?? []), "codemode", ...(remotePeer ? ["remote_peer"] : []), ...(regrets ? ["regrets_review"] : []), ...infrastructureTools.map(tool => tool.name), ...(restic ? ["restic"] : []), ...(goal ? ["get_goal", "create_goal", "goal_complete", "goal_stop", "update_goal"] : []), ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : []), ...(drawio ? ["open_drawio_editor"] : [])];
+  const fetchDefault = [...baseApplicationToolNames, "fetch"];
   const previousDefault = baseApplicationToolNames.filter(name => name !== "codemode");
   const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || (Array.isArray(tools) &&
     ((tools.length === defaultToolNames.length && defaultToolNames.every((name, index) => tools[index] === name)) ||
       (tools.length === previousDefault.length && previousDefault.every((name, index) => tools[index] === name)) ||
+      // SDK configure persists tool registration order, not catalogue order.
+      // Match only this complete known set (including uniqueness), never subsets.
+      (tools.length === fetchDefault.length && new Set(tools).size === fetchDefault.length && fetchDefault.every(name => tools.includes(name))) ||
       (tools.length === baseApplicationToolNames.length && baseApplicationToolNames.every((name, index) => tools[index] === name))));
   let drawioHost: ReturnType<DrawioNativeExports["bindDrawioVendorHost"]> | undefined;
   let sandbox: CodemodeSandbox | undefined;
@@ -616,7 +623,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     assertCurrent: assertObservability, read: readObservabilityConfiguration,
     write(config) { root.transaction(() => { assertObservability(); extensionKvSet("observability", "config", config, "global"); assertObservability(); }).immediate(); },
   });
-  mcp = await createHostMcp({ assertCurrent() { assert(); lifetime.signal.throwIfAborted(); },
+  mcp = await createHostMcp({ offlineMaintenance, assertCurrent() { assert(); lifetime.signal.throwIfAborted(); },
     captureSource: api => captureSource({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId }) });
   const applicationToolNames = [...baseApplicationToolNames, "fetch", ...mcp.tools.map(tool => tool.name)];
   if (drawio) {
@@ -632,9 +639,9 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       catch { return new Response("Draw.io vendor unavailable", { status: 503 }); }
       return drawio.addon.handleRoute(request, pathname);
     }, drawio.source.packageDir) === "rejected") throw Error("Draw.io native route unavailable");
-    await drawioHost.prepare();
+    if (!offlineMaintenance) await drawioHost.prepare();
   }
-  if (observability) {
+  if (observability && !offlineMaintenance) {
     assertObservability();
     await observability.addon.prepareObservabilityRuntime(assertObservability);
     assertObservability();
@@ -675,11 +682,12 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       if (stored.model && !available.some(model => model.provider === stored.model!.provider && model.id === stored.model!.modelId))
         throw Error("Persisted host model not approved");
       if (doc.scope_kind !== "conversation" || !active.has(doc.owner_id)) continue;
-      if (Array.isArray(stored.tools) && stored.tools.some(name => !applicationToolNames.includes(name)))
+      if (!mcp.deferredMaintenance && Array.isArray(stored.tools) && stored.tools.some(name => !applicationToolNames.includes(name)))
         throw Error("Persisted host tool not available");
       // Only the recognised previous factory default converges. Explicit custom
       // subsets/filters, modelTools, instructions and extensions remain intact.
-      if (isFactoryDefault(stored.tools)) toolUpgrades.push(doc.owner_id);
+      if (!mcp.deferredMaintenance && isFactoryDefault(stored.tools) && Array.isArray(stored.tools) &&
+          (stored.tools.length !== applicationToolNames.length || stored.tools.some(name => !applicationToolNames.includes(name)))) toolUpgrades.push(doc.owner_id);
       const desired = instructionsFor(mapping.bindings.find(b => b.conversationId === doc.owner_id)?.chatJid);
       const metadata = root.query(`SELECT id FROM documents WHERE kind='"app.host-managed-instructions"' AND scope_kind='conversation' AND owner_id=? AND retired_at IS NULL`).get(doc.owner_id) as { id: number } | null;
       const managedHash = metadata ? storedDocument(root, metadata.id).managedHash : undefined;
@@ -980,7 +988,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     return { ref, bytes, byteLength: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), mediaType: "text/plain", redactionClass: "private" as const };
   } } };
 
-      const goalAdmission = (chat: string) => { assertGoal(); if (!mapping.bindings.some(binding => binding.chatJid === chat)) throw Error("Unbound Goal chat"); };
+      const goalAdmission = (chat: string) => { assertAdmission(); assertGoal(); if (!mapping.bindings.some(binding => binding.chatJid === chat)) throw Error("Unbound Goal chat"); };
       const goalInput = goal ? createHostGoalInput(goal.addon, goalAdmission) : undefined;
       const goalCommand = goal ? createHostGoalCommand(goal.addon, { root, assertAdmission: goalAdmission, admit: input => bundle.admitHostFollowup(input) }) : undefined;
       const goalSettlement = goal ? createHostGoalSettlement(goal.addon, { root, runtime, assertOwner: assertGoal, continuation: {
@@ -1012,7 +1020,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
     manifest: mapping.bindings.map(({ chatJid, branchId, conversationId }) => ({ chatJid, branchId, conversationId: conversationId as ConversationId })),
     sessions: new Map(mapping.bindings.map(binding => [binding.chatJid, binding.sessionId])),
-    assertConversationAvailable() { check(ref, lifetime.signal); },
+    assertConversationAvailable() { assertAdmission(); check(ref, lifetime.signal); },
     resolveScheduledModel(label) {
       const slash = label.indexOf("/");
       const choice = { provider: label.slice(0, slash), id: label.slice(slash + 1) };
@@ -1052,8 +1060,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     remotePorts = await native.bindNativeRemotePeer({ ...remotePeerOptions, dataDir: join(DATA_DIR, "addons", "remote-peer"),
       nativeRootServiceOwner: { assertCurrent() { assert(); remotePeer.assertCurrent(); if (readAccessConfig().mode !== "single-user") throw Error("Remote Peer policy revoked"); } },
       bundle: { sessionTargets: { list: () => bundle.sessionTargets.list().map(canonical), resolve: (target: any) => canonical(bundle.sessionTargets.resolve(target)) },
-        admitApplicationInput: (input: any) => bundle.admitApplicationInput(input),
-        steerApplicationInput: (input: any) => bundle.steerApplicationInput(input) },
+        admitApplicationInput: (input: any) => { assertAdmission(); return bundle.admitApplicationInput(input); },
+        steerApplicationInput: (input: any) => { assertAdmission(); return bundle.steerApplicationInput(input); } },
       scopedRoot: <T>(assertCurrent: () => void, body: () => T) => withExtensionKvAuthority({ extensionId: "remote-peer", chatJid: "", globalRead: true, globalWrite: true,
         assertCurrent() { assertCurrent(); },
         write<R>(body: () => R): R { return root.transaction(() => { assertCurrent(); const result = body(); assertCurrent(); return result; }).immediate(); } }, () => {
@@ -1071,7 +1079,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       remoteDisposers.push(registration.dispose);
     }
     remoteDisposers.push(registerChatTransport(remotePorts.chatTransport));
-    await remotePorts.start();
+    if (!offlineMaintenance) await remotePorts.start();
   }
   if (regrets) {
     const settings = createHostRegretsSettings(regretsAddon, async () => {
@@ -1100,8 +1108,15 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     }, goal.source.packageDir);
   }
   let closing: Promise<void> | undefined;
-  return { sessionOptions: bundle.sessionOptions, bind: bundle.bind,
+  return { sessionOptions: offlineMaintenance ? { getDurableSession(chat) {
+      const position = bundle.sessionOptions.getDurableSession?.(chat);
+      return position && { ...position, compact: async () => { throw Error("Offline maintenance cannot admit compaction"); } };
+    },
+    dispatchScheduledAgent: async () => { throw Error("Offline maintenance cannot admit conversations"); }, dispatchSidePrompt: async () => { throw Error("Offline maintenance cannot admit conversations"); },
+    dispatchHostCommand: async () => { throw Error("Offline maintenance cannot admit conversations"); } } : bundle.sessionOptions,
+    bind(options) { assertAdmission(); return bundle.bind(options); },
     attachChannel(channel) {
+      assertAdmission();
       assert(); lifetime.signal.throwIfAborted();
       if (widgetPublisher) throw Error("Widget channel already attached");
       const broadcast = channel.broadcastEvent.bind(channel);

@@ -1,12 +1,13 @@
 import "./src/test-guard.js";
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { SessionManager } from "../../node_modules/@earendil-works/pi-coding-agent";
 import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { BunSqliteDatabase } from "../../runtime/durable-engine/src/bun-sqlite.js";
-import { captureLegacyTimeline } from "../../runtime/durable-engine/src/application-legacy-timeline.js";
+import { ApplicationLegacyTimeline, captureLegacyTimeline } from "../../runtime/durable-engine/src/application-legacy-timeline.js";
 import { selectApplicationRecentHistory, validateRecentHistoryScopes, recentHistoryHash, recordApplicationMigration } from "../../runtime/durable-engine/src/application-recent-history.js";
 import { openFixture, context } from "./src/fixture.js";
 import { CompactionEntry } from "../../runtime/durable-engine/qualification/durable.ts";
@@ -93,3 +94,89 @@ test("copied message entries support public compaction heads without retaining o
     expect((await child.context(context)).messages).toEqual([summary, ...messages.slice(2)]);
   } finally { await fixture.harness.close(context); host.close(); }
 });
+
+// Real installed public SDK + SQLite; all source data below is synthetic.
+for (const scenario of ["reopen", "late failure", "second occupied", "owner loss"] as const) {
+  test(`multi-target public SQLite migration: ${scenario}`, async () => {
+    const dir = mkdtempSync(join(process.env.PICLAW_WORKSPACE!, "multi-history-"));
+    const host = new Database(join(dir, "host.sqlite"));
+    host.exec("CREATE TABLE messages(id TEXT,chat_jid TEXT,content TEXT); INSERT INTO messages VALUES('old','web:synthetic','historical only')");
+    const open = () => openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(new BunSqliteDatabase(join(dir, "sdk.sqlite"))));
+    let fixture = await open();
+    try {
+      const children = [];
+      for (let i = 0; i < 3; i++) children.push(await fixture.harness.createConversation({ ownership: { kind: "ownerless" } }, context));
+      const bindings = children.map((child, i) => ({ chatJid: `web:synthetic-${i}`, branchId: `canonical-${i}`, conversationId: child.id }));
+      const recentHistory = bindings.slice(0, 2).map((binding, i) => {
+        const session = SessionManager.inMemory();
+        session.appendMessage({ role: "user", content: `question ${i}`, timestamp: 1 });
+        session.appendMessage({ ...assistant, content: [{ type: "text", text: `answer ${i}` }] });
+        return selectApplicationRecentHistory(session, { ...binding, owner: "synthetic operator" });
+      });
+      const migration = { timeline: captureLegacyTimeline(host, () => {}), recentHistory };
+      if (scenario === "second occupied") await children[1]!.commit(tx => tx.appendEntry(children[1]!.id, { kind: "synthetic.occupied", data: {} }), context);
+      let writes = 0, reads = 0, lost = false;
+      const commit = () => fixture.root.commit(async tx => {
+        // Observe/decorate only public Tx methods; the real SDK enforces read/write ordering.
+        const observed = new Proxy(tx, { get(target, key) {
+          if (key === "scanEntries") return async (...args: Parameters<typeof tx.scanEntries>) => {
+            const page = await target.scanEntries(...args);
+            reads++;
+            if (scenario === "owner loss" && reads === 3) lost = true;
+            return page;
+          };
+          if (key === "appendEntry") return async (...args: any[]) => {
+            writes++;
+            return (target.appendEntry as any)(...args);
+          };
+          const value = Reflect.get(target, key);
+          return typeof value === "function" ? value.bind(target) : value;
+        } });
+        await recordApplicationMigration(observed, fixture.root.id, host, migration, bindings, () => { if (lost) throw Error("Owner lost after read"); });
+        if (scenario === "late failure") throw Error("Failure after all staged writes");
+      }, context);
+      if (scenario === "reopen") {
+        await commit();
+        expect(writes).toBe(5);
+        expect(reads).toBe(3);
+        await fixture.harness.close(context);
+        fixture = await open();
+        await fixture.root.commit(tx => recordApplicationMigration(tx, fixture.root.id, host, migration, bindings, () => {}), context);
+        for (let i = 0; i < 3; i++) {
+          const child = (await fixture.harness.conversation(bindings[i]!.conversationId, context))!;
+          const entries = (await child.entries({}, 10, undefined, context)).items;
+          expect(entries).toHaveLength(i < 2 ? 2 : 0);
+          expect((await child.context(context)).messages).toEqual(recentHistory[i]?.messages ?? []);
+          for (const entry of entries) {
+            expect(entry.kind).toBe("app.recent-history-copy");
+            expect(entry.conversationId).toBe(bindings[i]!.conversationId);
+            expect(entry.data).toMatchObject({ copied: true, chatJid: bindings[i]!.chatJid, branchId: bindings[i]!.branchId,
+              sourceHash: recentHistory[i]!.sourceHash, sourceSessionId: recentHistory[i]!.sourceSessionId, sourceLeafId: recentHistory[i]!.sourceLeafId, owner: "synthetic operator" });
+          }
+        }
+        const rootEntries = (await fixture.root.entries({}, 100, undefined, context)).items;
+        const markers = rootEntries.filter(e => e.kind === "app.operator-migration");
+        expect(markers).toHaveLength(1);
+        expect(markers[0]!.data).toEqual({ sourceHash: createHash("sha256").update(JSON.stringify({ format: "message-entries-v1", migration })).digest("hex") });
+        expect(rootEntries.filter(e => e.kind === "app.recent-history-copy")).toHaveLength(0);
+        expect(await fixture.root.commit(async tx => JSON.parse(JSON.stringify((await tx.doc(ApplicationLegacyTimeline, fixture.root.id)).receipt)), context)).toEqual(migration.timeline);
+        const changed = { ...migration, recentHistory: [recentHistory[0]!, { ...recentHistory[1]!, owner: "changed" }] };
+        await expect(fixture.root.commit(tx => recordApplicationMigration(tx, fixture.root.id, host, changed, bindings, () => {}), context)).rejects.toThrow();
+      } else {
+        await expect(commit()).rejects.toThrow(scenario === "late failure" ? "Failure after all staged writes" : scenario === "owner loss" ? "Owner lost" : "Invalid recent history");
+        expect(writes).toBe(scenario === "late failure" ? 5 : 0);
+        await fixture.harness.close(context);
+        fixture = await open();
+        for (let i = 0; i < 3; i++) {
+          const child = (await fixture.harness.conversation(bindings[i]!.conversationId, context))!;
+          expect((await child.entries({}, 10, undefined, context)).items).toHaveLength(scenario === "second occupied" && i === 1 ? 1 : 0);
+        }
+        expect((await fixture.root.entries({}, 100, undefined, context)).items.filter(e => e.kind === "app.operator-migration")).toHaveLength(0);
+        expect(await fixture.root.commit(async tx => (await tx.doc(ApplicationLegacyTimeline, fixture.root.id)).receipt, context)).toBeNull();
+      }
+      expect(host.query("SELECT content FROM messages").get()).toEqual({ content: "historical only" });
+      expect(fixture.host.modelCalls).toBe(0);
+      expect(fixture.host.effects).toBe(0);
+    } finally { await fixture.harness.close(context); host.close(); rmSync(dir, { recursive: true, force: true }); }
+  });
+}
