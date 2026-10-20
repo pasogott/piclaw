@@ -87,11 +87,13 @@ export function handleMedia(channel: MediaResponseContext, id: number, thumbnail
   };
   // Force download for types that are not safe browser media to prevent stored
   // XSS via HTML/SVG uploads. Audio remains inline so the native player can load it.
-  // Include a concrete filename because iOS Safari can ignore the HTML download
-  // attribute for PDFs and will otherwise open the response fullscreen.
-  if (!isInlineSafeType(contentType)) {
-    headers["Content-Disposition"] = buildContentDisposition("attachment", result.filename || `attachment-${id}`);
-  }
+  // Always send the stored filename: native Save As / download controls can
+  // otherwise fall back to the numeric /media/:id URL. Keep safe media inline
+  // for previews and playback; unsafe types must still force an attachment.
+  headers["Content-Disposition"] = buildContentDisposition(
+    isInlineSafeType(contentType) ? "inline" : "attachment",
+    result.filename || `attachment-${id}`,
+  );
   if (req?.method === "HEAD") return new Response(null, { headers });
 
   // Match the PDF source policy: one byte range, ignoring malformed/multipart
