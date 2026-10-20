@@ -506,7 +506,7 @@ export const installedAddonProfiles = {
       "src/native-process.ts": "6073290505442490a59cd9b9d89f8fc18bc0694bf40d0c4b3c3eb7a076bfe615",
       "src/native-provider-tools.ts": "6e7558ece92b09ff8341fe823a5a773d6059207945b8df8e3852a58e1e1432cc",
       "src/native-provider.ts": "ed91eb8754b412804a45b6ea9caa36ac237dcd146f8347d793aa5bbdb06a795b",
-      "src/native-request.ts": "7e1278463eb2f367682ebd0577f021c30d254814f2c71b2ccf0c764d64892de6",
+      "src/native-request.ts": "74d2dcacbcdc05f64ad3f77e33efe787f27892a2ea64eb5b5ca35b0d3fdbe7f1",
       "src/native.ts": "be555b488b25db3b1216948e003e4ca37b57a7b7b8a35b6ccb85c45aa7d704aa",
       "src/patch/core.ts": "43ab7aabccfdd2bfb64b6d23412c71426740c9e0d021967f9463daf850d98c2f",
       "src/patch/matching.ts": "07ee78fe6e747898214ef0cc06d7e73d4872e44c00ff1beb07c1e30fc515fc76",
