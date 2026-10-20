@@ -129,6 +129,27 @@ export function registerAddonConfigApi(
   return "created";
 }
 
+/** Native owner handle; stale cleanup cannot remove a replacement registration. */
+export function registerOwnedAddonConfigApi(
+  addonId: string, action: string, handlers: AddonConfigApiRegistration, extensionPath: string,
+): Readonly<{ assertCurrent(): void; dispose(): void }> {
+  registerAddonConfigApi(addonId, action, handlers, extensionPath);
+  const key = registrationKey(addonId.trim(), action.trim());
+  const entry = registrations.get(key)!;
+  let disposed = false;
+  return Object.freeze({
+    assertCurrent() {
+      if (disposed || registrations.get(key) !== entry) throw Error("Stale addon configuration binding");
+    },
+    dispose() {
+      if (!disposed) {
+        disposed = true;
+        if (registrations.get(key) === entry) registrations.delete(key);
+      }
+    },
+  });
+}
+
 export function installAddonConfigApiRegistry(): void {
   if (registryInstalled) return;
   const runtimeGlobal = globalThis as RuntimeGlobal;

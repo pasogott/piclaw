@@ -32,6 +32,10 @@ import type { QueuedFollowupItem } from "../../src/queued-followups.js";
 import type { AcceptedInput, RuntimeOptions } from "./host-runtime.js";
 import type { ConversationId } from "@earendil-works/pi-durable";
 
+import { createDurableQueuedSteering } from "../../src/agent-pool/durable-queued-steering.js";
+import { storeWebMessage } from "../../src/channels/web/messaging/message-store.js";
+import { createApplicationHostInput } from "./host-application-input.js";
+
 type Manifest = HostControllerOptions["recovery"]["manifest"];
 /** Keep the full queue intent proof, plus a payload digest that remains verifiable
  * after normal materialisation removes the UI queue row. No second payload store. */
@@ -76,6 +80,7 @@ export interface ApplicationBootstrapOptions {
   onMaintenanceSettled?: (workId: string) => void;
   onOperationSettled?: (operationId: string) => void;
   prepareTerminalEffect?: RuntimeOptions["prepareTerminalEffect"];
+  materializeAnswer?: RuntimeOptions["materializeAnswer"];
   dispatchHostCommand?: import("../../src/agent-pool/contracts.js").AgentPoolOptions["dispatchHostCommand"];
   onRuntime?: (runtime: import("./host-runtime.js").HostConversationRuntime) => void;
   assertConversationAvailable?: () => void;
@@ -167,7 +172,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     const bindings = createHostDurableBindings(root, { domain: r.incarnation, incarnation: r.incarnation, manifest, getConversationBinding: lookup, assertOwner: assert, resolveContent: content });
     controller = await createHostController({ acquireOwnership: async () => lease,
       createStorage: async () => SqliteStorage.open(candidateDatabase),
-      runtime: { ...r, work, terminal, bindings, prepareTerminalEffect: config.prepareTerminalEffect, onOperationSettled: config.onOperationSettled, onMaintenanceSettled: config.onMaintenanceSettled, putAnswer: config.answers.put.bind(config.answers),
+      runtime: { ...r, work, terminal, bindings, materializeAnswer: config.materializeAnswer, prepareTerminalEffect: config.prepareTerminalEffect, onOperationSettled: config.onOperationSettled, onMaintenanceSettled: config.onMaintenanceSettled, putAnswer: config.answers.put.bind(config.answers),
         cancelSideSource(input) {
           root.transaction(() => {
             assert();
@@ -639,7 +644,38 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       if (!await runtime.settle(input)) throw Error("Scheduled settlement pending");
       return { status: "success", result: state.answer.text };
     }
+    const applicationInput = createApplicationHostInput({ root, domain: r.incarnation, assertCurrent: assertLive,
+      routes: () => [...routeIndex.values()].filter(b => lookup(b.chatJid, b.branchId)),
+      followups: hostFollowups, admission: getQueuedInputSourceAdmission,
+       async steer(input, receipt, check) {
+         try {
+           check();
+           const frontier = await work.getChatFrontier(receipt.chatJid); check();
+           if (!frontier.ok || !frontier.value.activeOperationId)
+             return { ...receipt, mode: "new_input" as const };
+           const selected = await work.getOperation(frontier.value.activeOperationId); check();
+           if (!selected.ok || selected.value?.harness?.state !== "running") throw Error("No running host binding");
+           const steering = createDurableQueuedSteering({ work, adapter, chatJid: receipt.chatJid,
+             branchId: input.target.branchId, assertCurrentWriter: check, runningBinding: selected.value.harness,
+             readQueued: id => hostFollowups.getQueuedFollowupItems(receipt.chatJid).find(item => item.rowId === id),
+             validatePayload: stored => { check(); getQueuedInputMaterialization(receipt.chatJid)!(stored); check(); },
+             materialize: (item, accept) => storeWebMessage({ broadcastEvent() {}, pendingLinkPreviews: new Set<number>() } as Parameters<typeof storeWebMessage>[0],
+               { chatJid: receipt.chatJid, content: item.queuedContent, isBot: false, mediaIds: [], agentId: "default", agentName: "Remote Peer" },
+               { consumeDeferredFollowupRowId: item.rowId, materializeQueuedSource: accept, isSteeringMessage: true }),
+             onPendingIntent: recovery.onPendingIntent });
+           const accepted = await steering.accept(receipt.rowId);
+           await accepted.dispatch();
+           return { ...receipt, mode: "steer" as const };
+         } catch (error) {
+           await hostFollowups.removeQueuedFollowupForAction(receipt.chatJid, receipt.rowId,
+             { withdrawAcceptedSource: getQueuedInputSourceWithdrawal(receipt.chatJid) });
+           throw error;
+         }
+       } });
     return Object.freeze({
+      ...applicationInput,
+      /** Existing native dispatcher; call only after ordinary queue materialisation. */
+      dispatchAcceptedInput: dispatch,
       /** Construct pool first from this snapshot, then bind its existing channel constructor. */
       admitHostFollowup(input: { sourceId: string; chatJid: string; text: string; queuedAt: string }, onlyIfIdle = false) {
         assertLive();
@@ -669,7 +705,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       onPendingIntent: recovery.onPendingIntent,
       stop() { shutdown.abort(); },
       close() { return closing ??= (async () => { shutdown.abort(); await activeController.close(); })(); },
-    } satisfies RuntimeBackend & {
+    } satisfies RuntimeBackend & ReturnType<typeof createApplicationHostInput> & {
+      dispatchAcceptedInput: typeof dispatch;
       admitHostFollowup(input: { sourceId: string; chatJid: string; text: string; queuedAt: string }, onlyIfIdle?: boolean): number | null;
       allocateScheduledConversation(lease: ScheduledRunLease): Promise<AcceptedInput>;
       allocateSidePromptConversation(input: AcceptedInput): Promise<AcceptedInput>;

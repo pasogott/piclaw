@@ -212,7 +212,7 @@ export function createHostModels(
     const output = createAssistantMessageEventStream();
     let terminalUsage: Usage | undefined;
     let providerTerminal = false;
-    let codex: Awaited<ReturnType<HostCodexModelServices["bind"]>>;
+    let codex: Awaited<ReturnType<HostCodexModelServices["bind"]>> | undefined;
     let request: Awaited<ReturnType<NonNullable<HostModelPolicy["prepareRequest"]>>>;
     const captureTerminalUsage = (message: AssistantMessage) => {
       if (message.provider !== model.provider || message.model !== model.id || message.api !== model.api) return;
@@ -268,7 +268,7 @@ export function createHostModels(
           return current;
         };
         const physical = assertPhysicalCompatible();
-        codex = await policy.codex?.bind(physical, signal);
+        codex = await policy.codex?.bind(physical, signal, options?.signal);
         const hostOptions = { ...safeOptions, ...codex?.options, signal, transformHeaders: async (headers: Record<string, string | null>) => {
           signal.throwIfAborted();
           assertSource();

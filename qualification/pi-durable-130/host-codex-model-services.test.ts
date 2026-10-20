@@ -1,3 +1,4 @@
+import { normalizeContext, getCurrentTools, getCurrentSystemPrompt } from "../../runtime/durable-engine/node_modules/@earendil-works/pi-ai/dist/index.js";
 import { test, expect } from 'bun:test';
 import { createHostModels } from '../../runtime/durable-engine/src/host-models.ts';
 import { HostCodexModelServices } from '../../runtime/durable-engine/src/host-codex-model-services.ts';
@@ -63,4 +64,89 @@ test('provider success settles actual spend before failed output; unknown hold i
  const result=await models.streamSimple(models.getModel(model.provider,model.id)!,{messages:[]}).result();
  expect(result.stopReason).toBe('error');expect(result.usage.totalTokens).toBe(5);
  expect(order.indexOf('settle')).toBeLessThan(order.indexOf('flush'));expect(order).not.toContain('abandon');
+});
+
+
+test("non-Codex profiles bind request-scoped tools and headers without HTTP output capture", async () => {
+ const model:any = {provider:"github-copilot",id:"gpt-5",api:"openai-responses"};
+ let captures=0, headers=0, filters=0;
+ const service = new HostCodexModelServices({
+  capture:async(signal)=>{captures++;return {id:"op",sessionId:"s",cwd:"/synthetic",model,signal,assertCurrent(){}}},
+  assertAccount(){}, observe:async()=>{throw Error("Unexpected observer")},flush:async()=>{throw Error("Unexpected flush")},
+ }, {createNativeCodexHooks:()=>({
+  request:(p:unknown)=>p, headers:(h:any)=>{headers++;return {...h,"copilot-integration-id":"vscode-chat"}},
+  tools:(names:string[])=>{filters++;return names.filter(n=>n!=="bash")},
+  context:(m:any)=>m,systemPrompt:(p:string)=>p,
+ })});
+ const bound=(await service.bind(model,new AbortController().signal))!;
+ const tools=[{name:"bash",description:"shell",parameters:{}},{name:"exec_command",description:"native",parameters:{}}];
+ const context=normalizeContext({messages:[],tools});
+ expect(getCurrentTools(bound.context(context).messages).map(t=>t.name)).toEqual(["exec_command"]);
+ expect(getCurrentTools(context.messages)).toEqual(tools);
+ expect(bound.headers({})["copilot-integration-id"]).toBe("vscode-chat");
+ expect(bound.options).not.toHaveProperty("fetch");
+ expect(bound.options).not.toHaveProperty("transport");
+ await bound.finish();expect([captures,headers,filters]).toEqual([1,1,1]);
+});
+
+
+test("public normalized transcript profiles current prompt and tools without reviving historical state", async () => {
+ const model = fixtureModel;
+ let seenPrompt = "", seenTools: string[] = [];
+ const service = new HostCodexModelServices({
+  capture: async signal => ({id:"op",sessionId:"s",cwd:"/synthetic",model,signal,assertCurrent(){}}),
+  assertAccount(){}, observe:async()=>{}, flush:async()=>{},
+ }, {createNativeCodexHooks:()=>({
+  ...factories.createNativeCodexHooks(),
+  tools:(names:string[])=>{seenTools=names;return names.filter(name=>name!=="bash" && name!=="unwanted")},
+  systemPrompt:(prompt:string)=>{seenPrompt=prompt;return prompt+"\nPROFILE"},
+ })});
+ const context = normalizeContext({
+  systemPrompt:"Base instructions",
+  tools:["bash","exec_command","unwanted","removed"].map(name=>({name,description:name,parameters:{type:"object",properties:{}}})),
+  messages:[
+   {role:"system",content:"",sections:{agents:"OLD AGENTS",obsolete:"NEVER ACTIVATE"},timestamp:1},
+   {role:"user",content:[{type:"text",text:"keep history"}],timestamp:2},
+   {role:"toolResult",toolCallId:"old-call",toolName:"removed",content:[{type:"text",text:"old result"}],details:{count:3,ok:true,items:[null,"value"]},isError:false,timestamp:3},
+   {role:"system",content:"",sections:{agents:"# AGENTS\nCurrent guidance",copilot:"# Copilot\nCurrent guidance",obsolete:null},toolsRemoved:[{name:"removed"}],timestamp:4},
+  ],
+ });
+ const before=JSON.stringify(context);
+ const bound=await service.bind(model,new AbortController().signal);
+ const result=bound.context(context);
+ expect(seenTools).toEqual(["bash","exec_command","unwanted"]);
+ expect(seenPrompt).toContain("# AGENTS\nCurrent guidance");
+ expect(seenPrompt).toContain("# Copilot\nCurrent guidance");
+ expect(seenPrompt).not.toContain("OLD AGENTS");
+ expect(seenPrompt).not.toContain("NEVER ACTIVATE");
+ expect(getCurrentSystemPrompt(result.messages)).toBe(seenPrompt+"\nPROFILE");
+ expect(getCurrentTools(result.messages).map(tool=>tool.name)).toEqual(["exec_command"]);
+ expect(getCurrentTools(result.messages)[0]?.parameters).toEqual({type:"object",properties:{}});
+ expect(result.messages.filter(message=>message.role!=="system")).toEqual(context.messages.filter(message=>message.role!=="system"));
+ expect(result.messages.find(message=>message.role==="toolResult")).toBe(context.messages[3]);
+ expect(result).not.toHaveProperty("tools");
+ expect(JSON.stringify(context)).toBe(before);
+ await bound.finish();
+});
+
+
+test("maintenance operation preserves system policy while retaining request and header guards", async () => {
+ const signal = new AbortController().signal;
+ let promptCalls = 0, checks = 0;
+ const service = new HostCodexModelServices({
+  capture: async () => Object.freeze({ id: "maintenance-work", sessionId: "actual-session", cwd: "/synthetic",
+   model: fixtureModel, signal, profilePrompt: false, assertCurrent() { checks++; } }),
+  assertAccount() {}, async observe() { throw Error("No transport in this test"); }, async flush() {},
+ }, { createNativeCodexHooks: () => ({
+  request: payload => payload, headers: headers => headers, context: messages => [...messages],
+  systemPrompt() { promptCalls++; throw Error("Maintenance prompt must not be rewritten"); },
+ }) });
+ const bound = await service.bind(fixtureModel, signal);
+ const transcript = normalizeContext({ systemPrompt: "Compact exactly; preserve safety policy.", messages: [], tools: [] });
+ expect(getCurrentSystemPrompt(bound.context(transcript).messages)).toBe("Compact exactly; preserve safety policy.");
+ expect(bound.headers({ "x-maintenance": "owned" })).toEqual({ "x-maintenance": "owned" });
+ expect(bound.options.onPayload({ tools: [] }, fixtureModel)).toEqual({ tools: [] });
+ await bound.finish();
+ expect(promptCalls).toBe(0);
+ expect(checks).toBeGreaterThan(0);
 });

@@ -6,6 +6,8 @@ export interface CodexModel {
 export interface CodexOperation {
   readonly id: string; readonly sessionId: string; readonly cwd: string;
   readonly model: CodexModel; readonly signal: AbortSignal;
+  /** Maintenance requests retain their own system policy, not the coding-agent prompt. */
+  readonly profilePrompt?: boolean;
   assertCurrent(): void;
 }
 export interface NativeCodexHooks {

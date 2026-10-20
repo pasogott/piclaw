@@ -20,6 +20,8 @@ export interface HostCodexProviderOptions {
   root: Database;
   runtime(): Pick<HostConversationRuntime, "captureToolSource">;
   assertOwner(): void;
+  /** Preserve the qualified installed declaration, never its executable callback. */
+  declarations?: ReadonlyMap<string, ToolDefinition<any, any>>;
   /** Current actual parent provider/model and guarded runtime effect callbacks.
    * readImage MUST check authority after awaits and at each file/artifact effect.
    * Provider-native declarations never dispatch a standalone model request. */
@@ -30,7 +32,8 @@ export interface HostCodexProviderOptions {
 export function createHostCodexProviderTools(addon: CodexProviderNativeExports, options: HostCodexProviderOptions) {
   return (["createNativeWebSearchTool", "createNativeImageGenerationTool", "createNativeViewImageTool"] as const).map(factory => {
     const deny = () => { throw Error("Invocation-local Codex provider authority required"); };
-    const definition = addon[factory]({ ...options.metadata(), chatId: "", assertCurrent: deny, readImage: async () => deny() });
+    const nativeDeclaration = addon[factory]({ ...options.metadata(), chatId: "", assertCurrent: deny, readImage: async () => deny() });
+    const definition = options.declarations?.get(nativeDeclaration.name) ?? nativeDeclaration;
     return createHostTool(definition, {
       authority: { check: options.assertOwner }, effectFence: "host-effect-port", replay: "unsafe",
       async invoke(args, call) {

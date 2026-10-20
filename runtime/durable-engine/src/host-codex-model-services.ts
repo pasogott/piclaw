@@ -1,3 +1,4 @@
+import { getCurrentTools, getCurrentSystemPrompt, normalizeContext, toToolDeclaration } from "@earendil-works/pi-ai";
 import type { Api, Model, TranscriptContext } from '@earendil-works/pi-ai';
 import type { ModelRuntime } from '../../src/durable-legacy-sdk.js';
 import type { CodexOperation, NativeCodexFactories } from './host-codex-model-profile.ts';
@@ -6,7 +7,7 @@ type RootProvider = Parameters<ModelRuntime['registerNativeProvider']>[0];
 /** Constructor-only host authority. capture must resolve the actual invocation source,
  * never a selected/default conversation. account checks must include auth identity. */
 export interface HostCodexAuthority {
-  capture(signal: AbortSignal): Promise<CodexOperation>;
+  capture(signal: AbortSignal, model: Model<Api>, originalRequestSignal?: AbortSignal): Promise<CodexOperation>;
   assertAccount(operation: CodexOperation): void;
   /** Trusted host raw-output sink. Must invoke beforeEffect immediately before each artifact write
    * (including queued writes), and durably retain failed flushes. */
@@ -23,9 +24,8 @@ export class HostCodexModelServices {
     runtime.registerNativeProvider(provider);
     if (runtime.getRegisteredNativeProvider(provider.id) !== provider) throw Error('Codex registration lost');
   }
-  async bind(model: Model<Api>, signal: AbortSignal) {
-    if (model.provider !== 'openai-codex' || model.api !== 'openai-codex-responses') return undefined;
-    const operation = await this.authority.capture(signal);
+  async bind(model: Model<Api>, signal: AbortSignal, originalRequestSignal?: AbortSignal) {
+    const operation = await this.authority.capture(signal, model, originalRequestSignal);
     const check = () => {
       signal.throwIfAborted(); operation.signal.throwIfAborted(); operation.assertCurrent();
       this.authority.assertAccount(operation);
@@ -33,7 +33,8 @@ export class HostCodexModelServices {
         throw Error('Codex request owner changed');
     };
     check();
-    const hooks = this.nativeAddon.createNativeCodexHooks(operation.model);
+    const hooks = this.nativeAddon.createNativeCodexHooks(operation.model) as ReturnType<NativeCodexFactories["createNativeCodexHooks"]> & { tools?(names: string[]): string[] };
+    const observesOutput = model.provider === "openai-codex" && model.api === "openai-codex-responses";
     const authority = this.authority;
     let tail = Promise.resolve();
     let closed = false;
@@ -41,13 +42,13 @@ export class HostCodexModelServices {
     return {
       options: {
         // Output observation is HTTP-only. Never silently bypass it via websocket/auto.
-        transport: 'sse' as const,
+        ...(observesOutput ? { transport: 'sse' as const } : {}),
         onPayload(payload: unknown, actual: Model<Api>) {
           check();
           if (actual.provider !== model.provider || actual.id !== model.id || actual.api !== model.api) throw Error('Codex payload owner changed');
           return hooks.request(payload);
         },
-        fetch: (async (input, init) => {
+        ...(observesOutput ? { fetch: (async (input, init) => {
           check();
           const response = await (authority.fetch ?? globalThis.fetch)(input, init);
           check();
@@ -58,7 +59,7 @@ export class HostCodexModelServices {
           void tail.catch(() => {});
           check();
           return response;
-        }) as typeof globalThis.fetch,
+        }) as typeof globalThis.fetch } : {}),
       },
       headers(headers: Record<string, string | null>) {
         check();
@@ -67,11 +68,19 @@ export class HostCodexModelServices {
       },
       context(context: TranscriptContext): TranscriptContext {
         check();
-        return { ...context, messages: hooks.context(context.messages).map(message =>
-          message.role === 'system' && typeof message.content === 'string'
-            ? { ...message, content: hooks.systemPrompt(message.content) } : message) };
+        // Replay native deltas before profiling: removed tools/sections must not revive.
+        const tools = getCurrentTools(context.messages);
+        const allowed = hooks.tools && new Set(hooks.tools(tools.map(tool => tool.name)));
+        return normalizeContext({
+          systemPrompt: operation.profilePrompt === false
+            ? getCurrentSystemPrompt(context.messages)
+            : hooks.systemPrompt(getCurrentSystemPrompt(context.messages)),
+          tools: tools.filter(tool => !allowed || allowed.has(tool.name)).map(toToolDeclaration),
+          // Keep actual conversational history, including results for now-removed tools.
+          messages: hooks.context(context.messages.filter(message => message.role !== 'system')),
+        });
       },
-      async finish() { closed = true; await tail; check(); await authority.flush(operation); },
+      async finish() { closed = true; await tail; check(); if (observesOutput) await authority.flush(operation); },
     };
   }
 }

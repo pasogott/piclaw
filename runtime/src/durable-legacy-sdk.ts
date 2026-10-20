@@ -5,7 +5,7 @@ export {
   DefaultResourceLoader, SettingsManager,
   createBashTool, createReadToolDefinition, createWriteToolDefinition,
   createEditToolDefinition, createLsToolDefinition, createFindToolDefinition,
-  buildSessionContext, convertToLlm, sessionEntryToContextMessages,
+  buildSessionProjection, buildSessionContext, convertToLlm, sessionEntryToContextMessages,
   type BashToolOptions, type ExtensionContext, type LoadExtensionsResult,
   type ModelRuntime, type RegisteredCommand, type SessionEntry, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
