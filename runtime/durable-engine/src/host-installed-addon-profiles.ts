@@ -216,7 +216,7 @@ export const installedAddonProfiles = {
       "fixture-ownership.ts": "64c128386b9faa39ca349062e05dcf1f265736992e842829331f3ed3287ee197",
       "index.ts": "b343cb79d715a814d539c9a594b8acd42cd7b4e2ed8e767203cb3a7f3846733a",
       "native-authority.ts": "8b4562f61bb19fb8b5be6b92b6df92688f3e46f3014a2500ef1fc36081fc31b3",
-      "native.ts": "89cfd0f39249ae4c72397f94976df29dc62169351badbfad426eb458cbfcbbc9",
+      "native.ts": "5c04fbf5af226d6005bd005f15a7ee10bb3ceffaa30f53b4dbbe05558885b063",
       "package.json": "2d59923bdd42c3384def425c38a458d42f8221a5c8edb39e7794aac772608549",
       "runtime-service.ts": "9ce7bfb0eb9f83c19e2227c15cd492dd83131b01ea2784ba24f98954d7e9c86a",
       "runtime.ts": "d932f5bc5dcd2f0f8d7826e2b98db50c9b47d6307e4a00e00e0876437cea5fbe",
