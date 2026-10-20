@@ -50,12 +50,12 @@ for(const kind of ["valid","source-tamper","binding","schema","payload","live-lo
  }finally{rmSync(f.root,{recursive:true,force:true});}
 },25000);
 
-test("projection rejects malformed tool round; inclusive seven-day boundary",()=>{
+test("projection skips malformed tool round; inclusive seven-day boundary",()=>{
  const call={...entries[1],message:{...assistant(),stopReason:"toolUse",content:[{type:"toolCall",id:"call",name:"read",arguments:{}}]}};
  const result={type:"message",id:"result",parentId:"a",timestamp:asOf,message:{role:"toolResult",toolCallId:"wrong",toolName:"read",content:[{type:"text",text:"bad"}],isError:false,timestamp}};
  const final={...entries[1],id:"final",parentId:"result"};
- expect(()=>selectRecent([entries[0],call,result,final] as any,"final",asOf)).toThrow("No complete");
+ expect(selectRecent([entries[0],call,result,final] as any,"final",asOf)).toMatchObject({messages:[],sourceEntryIds:[],completedTurns:0,selection:"empty",skipped:{"invalid-turn":1}});
  const boundary=entries.map(e=>({...e,message:{...e.message,timestamp:timestamp-7*86400000}}));
  expect(selectRecent(boundary,"a",asOf).completedTurns).toBe(1);
- expect(()=>selectRecent(boundary.map(e=>({...e,message:{...e.message,timestamp:e.message.timestamp-1}})),"a",asOf)).toThrow("No complete");
+ expect(selectRecent(boundary.map(e=>({...e,message:{...e.message,timestamp:e.message.timestamp-1}})),"a",asOf)).toMatchObject({messages:[],sourceEntryIds:[],completedTurns:0,selection:"empty"});
 });
