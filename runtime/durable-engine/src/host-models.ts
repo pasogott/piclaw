@@ -211,7 +211,6 @@ export function createHostModels(
     options?: SimpleStreamOptions, deferred?: { handle: DeferredHandle; options?: DeferredFetchOptions }) => {
     const output = createAssistantMessageEventStream();
     let terminalUsage: Usage | undefined;
-    let providerTerminal = false;
     let codex: Awaited<ReturnType<HostCodexModelServices["bind"]>> | undefined;
     let request: Awaited<ReturnType<NonNullable<HostModelPolicy["prepareRequest"]>>>;
     const captureTerminalUsage = (message: AssistantMessage) => {
@@ -287,7 +286,6 @@ export function createHostModels(
           output.push("partial" in event ? { ...data({ ...event, partial: undefined }), partial: projectMessage(event.partial, model) } : data(event));
         }
         const result = await stream.result();
-        providerTerminal = true;
         captureTerminalUsage(result);
         await request?.settle(result);
         await codex?.finish();
@@ -304,8 +302,10 @@ export function createHostModels(
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
         output.push({ type: "error", reason: "error", error });
         // Finish reconciliation before publishing the terminal failure. An
-        // uncertain accounting write leaves its durable hold intact.
-        try { if (!providerTerminal) await request?.abandon(); } catch { /* Preserve the sanitised failure and unresolved reservation. */ }
+        // uncertain accounting write leaves its durable hold intact. SDK error
+        // terminals also cover unsent auth failures: only the reservation knows
+        // whether to release an unsent request or retain a dispatched hold.
+        try { await request?.abandon(); } catch { /* Preserve the sanitised failure and unresolved reservation. */ }
         output.end(error);
       }
     })();

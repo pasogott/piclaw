@@ -1,11 +1,13 @@
-import { test, expect } from "bun:test";
+import { isolatedApplicationTest } from "./src/isolated-application-test.js";
+import { expect } from "bun:test";
+const applicationTest = isolatedApplicationTest(import.meta.url);
 import { ModelRuntime } from "../../node_modules/@earendil-works/pi-coding-agent/dist/index.js";
 import { createProvider, createAssistantMessageEventStream } from "../../node_modules/@earendil-works/pi-ai/dist/index.js";
 import { createHostModels } from "../../runtime/durable-engine/src/host-models.ts";
 import { HostCodexModelServices } from "../../runtime/durable-engine/src/host-codex-model-services.ts";
 
 // Regression for the factory prerequisite, not a default-factory qualification receipt.
-test("normal public Root stream preserves original request signal and actual physical model at Codex capture", async () => {
+applicationTest("normal public Root stream preserves original request signal and actual physical model at Codex capture", async () => {
   const root = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false,
     credentials: { read: async () => undefined, get: async () => undefined, set: async () => {}, delete: async () => {}, list: async () => [] } as any });
   const model: any = { provider: "github-copilot", id: "fixture-actual", api: "openai-responses",

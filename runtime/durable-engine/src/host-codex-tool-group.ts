@@ -17,7 +17,8 @@ export interface HostCodexToolGroupAddon extends ProviderAddon {
   createNativeExecCommandTool(...args: any[]): ToolDefinition<any, any>;
   createNativeWriteStdinTool(...args: any[]): ToolDefinition<any, any>;
   createNativeApplyPatchFactory(files: PatchFiles): (authority: { assertCurrent(): void }, cwd: string) => {
-    execute(args: { input: string }): PatchResult; dispose(): void;
+    execute(args: { input: string }): PatchResult;
+    executeTool(args: { input: string }): { content: { type: "text"; text: string }[]; details: unknown }; dispose(): void;
   };
 }
 export interface HostCodexToolGroupOptions {
@@ -30,6 +31,7 @@ export interface HostCodexToolGroupOptions {
 /** Compose only native ports. No legacy context or standalone provider dispatch. */
 export function createHostCodexToolGroup(addon: HostCodexToolGroupAddon, options: HostCodexToolGroupOptions) {
   const process = createHostCodexProcessTools(addon, options.process);
+  try {
   const patch = createHostTool(options.applyPatch, {
     authority: { check: options.process.assertOwner }, effectFence: "host-effect-port", replay: "unsafe",
     async invoke(args, call) {
@@ -50,11 +52,12 @@ export function createHostCodexToolGroup(addon: HostCodexToolGroupAddon, options
         mkdirSync: fenced("mkdirSync"), writeFileSync: fenced("writeFileSync"), unlinkSync: fenced("unlinkSync"),
       })(authority, cwd);
       try {
-        const result = native.execute({ input: (args as { input: string }).input });
+        const result = native.executeTool({ input: (args as { input: string }).input });
         authority.assertCurrent();
-        return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result };
+        return result;
       } finally { native.dispose(); }
     },
   });
   return { tools: [...process.tools, patch, ...createHostCodexProviderTools(addon, options.provider)], dispose: process.dispose };
+  } catch (error) { process.dispose(); throw error; }
 }

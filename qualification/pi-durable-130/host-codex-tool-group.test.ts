@@ -57,3 +57,12 @@ test("installed declarations survive native factories with different presentatio
   for (const tool of [...process.tools, ...provider]) expect(() => assertHostToolDeclaration(tool, declarations.get(tool.name)! as any)).not.toThrow();
   process.dispose();
 });
+
+test("patch result branch requires formatted native ToolResult without raw fallback", async () => {
+  const source = await Bun.file(new URL("../../runtime/durable-engine/src/host-codex-tool-group.ts", import.meta.url)).text();
+  expect(source).toContain("executeTool(args: { input: string })");
+  expect(source).toContain("const result = native.executeTool({ input:");
+  expect(source).toContain("authority.assertCurrent();\n        return result;");
+  expect(source).not.toContain("JSON.stringify(result)");
+  expect(source).not.toContain("native.execute({");
+});

@@ -12,6 +12,7 @@ export interface CodexOperation {
 }
 export interface NativeCodexHooks {
   request(payload: unknown): unknown;
+  toolDeclarations?<T extends { name: string }>(tools: readonly T[]): T[];
   headers(headers: Record<string, string | undefined>): Record<string, string | undefined>;
   context<T extends { role: string; customType?: string }>(messages: readonly T[]): T[];
   systemPrompt(prompt: string, shell?: string): string;

@@ -1,5 +1,7 @@
+import { isolatedApplicationTest } from "./src/isolated-application-test.js";
 import "./src/test-guard.js";
-import { test, expect } from "bun:test";
+import { expect } from "bun:test";
+const applicationTest = isolatedApplicationTest(import.meta.url);
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
@@ -11,7 +13,7 @@ import { applicationOwnership, createApplicationBootstrapBundle } from "../../ru
 import { installTerminalSettlementCompositionSchema } from "../../runtime/src/service-effects/current-piclaw/terminal-settlement-schema.js";
 import { openFixture, context } from "./src/fixture.js";
 
-test("owned public SDK bundle admits authenticated host inputs, not Goal continuations", async () => {
+applicationTest("owned public SDK bundle admits authenticated host inputs, not Goal continuations", async () => {
   const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "host-input-"));
   const lock = acquireRuntimeLock({ lockPath: join(dir, "owner.lock"), strictOwnership: true, disabled: false });
   process.env.PICLAW_DB_IN_MEMORY = "0";

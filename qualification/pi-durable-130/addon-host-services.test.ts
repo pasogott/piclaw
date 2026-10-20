@@ -15,9 +15,10 @@ import type { ToolExecutionApi } from "../../runtime/durable-engine/qualificatio
 import { BACKGROUND_CONTEXT as context } from "../../runtime/durable-engine/qualification/context.ts";
 import { createHostTool } from "../../runtime/durable-engine/src/index.js";
 
-// Deliberately mandatory companion source, never silently skip or use live add-ons.
-const root = process.env.DURABLE_ADDONS_ROOT;
-if (!root) throw Error("Requires DURABLE_ADDONS_ROOT at 08746aa3f114d49f954c1dff712d9f74acca460f");
+// Historical SDK 1.2 consumer contract, separate from the current application add-on candidate.
+// Both roots must satisfy every source pin below; never fall back to live add-ons.
+const root = process.env.DURABLE_CONTRACT_ADDONS_ROOT ?? process.env.DURABLE_ADDONS_ROOT;
+if (!root) throw Error("Requires DURABLE_CONTRACT_ADDONS_ROOT (or DURABLE_ADDONS_ROOT) at 08746aa3f114d49f954c1dff712d9f74acca460f");
 const sources = {
   "code-review": { version: "0.1.8", hash: "26a2744e0db6785c5b2ffc2ba08dd2604eb070ccd5cd0aeacdcb88034d28abfc", files: ["index", "host", "runtime", "dispatch", "store", "database", "anchors", "contracts", "validation", "source", "render-source", "markdown", "tool"] },
   "remote-peer": { version: "0.3.6", hash: "10cfb60a9a5524f877d0a76353b18417dcfd486c0b62ee2a1d0d14a35d13e117", files: ["index", "runtime-service", "compat/runtime", "service", "state", "transport", "discovery", "config", "client-id"] },

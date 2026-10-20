@@ -10,14 +10,19 @@ for (const mode of ["approved", "tamper", "shadow", "version"] as const) test(`i
   const dir = mkdtempSync(join(import.meta.dir, ".qualification-review-"));
   const pkg = installCodeReviewFixture(dir), agentDir = join(dir, "agent"); mkdirSync(agentDir);
   if (mode === "tamper") writeFileSync(join(pkg, "tool.ts"), readFileSync(join(pkg, "tool.ts"), "utf8") + "\n// changed\n");
-  if (mode === "shadow") writeFileSync(join(pkg, "tool.js"), "export function createCodeReviewTool() {}\n");
+  if (mode === "shadow") writeFileSync(join(pkg, "tool.js"), `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(join(dir, "unqualified-module-io"))}, "BAD");
+export function createCodeReviewTool() {}\n`);
   if (mode === "version") { const p = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")); p.version = "0.1.9"; writeFileSync(join(pkg, "package.json"), JSON.stringify(p)); }
   let catalog: Awaited<ReturnType<typeof loadApplicationExtensionCatalog>> | undefined;
   const db = new Database(":memory:");
   try {
+    if (mode !== "approved") {
+      await expect(loadApplicationExtensionCatalog({ cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() })).rejects.toThrow(/Unqualified installed (add-on package|extension source) before evaluation/);
+      expect(await Bun.file(join(dir, "unqualified-module-io")).exists()).toBe(false);
+      return;
+    }
     catalog = await loadApplicationExtensionCatalog({ cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() });
     const q = await qualifyInstalledCodeReview(catalog, dir);
-    if (mode !== "approved") { expect(q).toBeUndefined(); expect(() => assertApplicationExtensionCatalogSupported(catalog!)).toThrow(); return; }
     expect(q).toBeDefined(); assertApplicationExtensionCatalogSupported(catalog, undefined, undefined, q);
     expect([...q!.extension.handlers.keys()]).toEqual(["resources_discover"]);
     const release = q!.addon.setReviewDatabaseSource({ database: db, assertOwner() {} });

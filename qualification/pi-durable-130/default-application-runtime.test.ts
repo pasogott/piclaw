@@ -1,3 +1,4 @@
+import { resolveRequestPrincipal } from "../../runtime/src/channels/web/auth/principal.js";
 import "./src/test-guard.js";
 import { hydrateMcpKeychainCredentials } from "../../runtime/src/secure/mcp-keychain.js";
 import { getConfigPath } from "../../runtime/src/core/config-context.js";
@@ -141,6 +142,7 @@ for (const scenario of ["native-infrastructure", "native-goal", "native-goal-bud
   let calls = 0;
   let onProviderResponse: (() => void) | undefined;
   let onCredentialResolve: (() => Promise<void>) | undefined;
+  let originalParentReservation: unknown;
   const customSubset = scenario === "custom-subset" || scenario === "source-filter-subset";
   const sourceFilter = scenario === "source-filter-subset";
   const reasoningThinking = scenario === "public-thinking-reasoning";
@@ -168,6 +170,7 @@ for (const scenario of ["native-infrastructure", "native-goal", "native-goal-bud
     onCredentialResolve = async () => {
       if (delegateAccounting || scheduledAccounting || compactionAccounting) expect((root.query("SELECT COUNT(*) AS n FROM budget_request_reservations WHERE state='reserved'").get() as { n: number }).n).toBeGreaterThan(0);
       else expect(root.query("SELECT state FROM budget_request_reservations ORDER BY rowid").all()).toEqual([...(accountingTwoTurns && calls > 0 ? [{ state: "settled" }] : []), { state: "reserved" }]);
+      if (!delegateAccounting && !scheduledAccounting && !compactionAccounting) originalParentReservation = root.query("SELECT id,work_id,account_ref,binding_sha256,amount_microusd FROM budget_request_reservations ORDER BY rowid DESC LIMIT 1").get();
       if (accountingAuthDenied) throw Error("Synthetic auth denial");
       if (accountingCloseFailure) root.exec("CREATE TRIGGER accounting_work_close_fail BEFORE UPDATE ON budget_work WHEN OLD.parent_work_id IS NULL AND NEW.status='completed' BEGIN SELECT RAISE(ABORT, 'synthetic operation work close failure'); END");
       if (accountingStorageFailure) root.exec("CREATE TRIGGER accounting_usage_fail BEFORE INSERT ON token_usage BEGIN SELECT RAISE(ABORT, 'synthetic usage write failure'); END");
@@ -632,10 +635,13 @@ for (const scenario of ["native-infrastructure", "native-goal", "native-goal-bud
     const { handleRegisteredAddonConfigApiRequest } = await import("../../runtime/src/channels/web/handlers/addon-config-api.js");
     backend.attachChannel!({ broadcastEvent() {}, resumePendingChats() { expect(getDb().inTransaction).toBe(false); } });
     expect(await pool.applySlashCommand("web:default", "/goal Budget wrap-up")).toMatchObject({ status: "success" });
-    const settings = await handleRegisteredAddonConfigApiRequest(new Request("http://fixture/agent/addons/api/goal/goal?chat_jid=web:default", {
+    const settingsRequest = new Request("http://fixture/agent/addons/api/goal/goal?chat_jid=web:default", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token_budget: 5 }),
-    }), "goal", "goal", (body, status = 200) => Response.json(body, { status }));
-    expect(settings!.status).toBe(200);
+    });
+    admitAddonLocalRequest(settingsRequest, resolveRequestPrincipal(settingsRequest,
+      { mode: "single-user", authEnabled: false }, { getSession: () => null, getUser: () => null, getLocalDisplayName: () => "Fixture owner" })!, () => !settingsRequest.signal.aborted);
+    const settings = await handleRegisteredAddonConfigApiRequest(settingsRequest, "goal", "goal", (body, status = 200) => Response.json(body, { status }));
+    expect(settings!.status, await settings!.clone().text()).toBe(200);
     expect(await settings!.json()).toMatchObject({ continuationQueued: false });
     const initial = getDeferredQueuedFollowups("web:default")[0]!;
     const firstMessage = storeWebMessage(channel, { chatJid: "web:default", content: initial.queuedContent,
@@ -725,10 +731,13 @@ for (const scenario of ["native-infrastructure", "native-goal", "native-goal-bud
     expect(getDeferredQueuedFollowups("web:default")).toHaveLength(1);
     expect(extensionKvGet("goal", "thread-goal", "chat", "web:default")).toMatchObject({ status: "active", no_progress_turns: 1 });
     const { handleRegisteredAddonConfigApiRequest } = await import("../../runtime/src/channels/web/handlers/addon-config-api.js");
-    const settings = await handleRegisteredAddonConfigApiRequest(new Request("http://fixture/agent/addons/api/goal/goal?chat_jid=web:default", {
+    const settingsRequest = new Request("http://fixture/agent/addons/api/goal/goal?chat_jid=web:default", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ objective: "Updated through native Settings" }),
-    }), "goal", "goal", (body, status = 200) => Response.json(body, { status }));
-    expect(settings!.status).toBe(200);
+    });
+    admitAddonLocalRequest(settingsRequest, resolveRequestPrincipal(settingsRequest,
+      { mode: "single-user", authEnabled: false }, { getSession: () => null, getUser: () => null, getLocalDisplayName: () => "Fixture owner" })!, () => !settingsRequest.signal.aborted);
+    const settings = await handleRegisteredAddonConfigApiRequest(settingsRequest, "goal", "goal", (body, status = 200) => Response.json(body, { status }));
+    expect(settings!.status, await settings!.clone().text()).toBe(200);
     expect(await settings!.json()).toMatchObject({ continuationQueued: true, continuationReason: "objective_updated" });
     expect(extensionKvGet("goal", "thread-goal", "chat", "web:default")).toMatchObject({ objective: "Updated through native Settings" });
     expect(getDeferredQueuedFollowups("web:default")).toHaveLength(2);
@@ -941,7 +950,8 @@ for (const scenario of ["native-infrastructure", "native-goal", "native-goal-bud
   expect(() => bound.getInputSourceAdmission!("web:newcomer")).toThrow("Unbound");
   const message = { id: "factory-input", chat_jid: "web:default", sender: "user", sender_name: "User", content: "hello factory", timestamp: new Date().toISOString(), is_from_me: false, is_bot_message: false };
   if (nativeInfrastructure) {
-    const noHttp = spyOn(globalThis, "fetch").mockImplementation(() => { throw Error("Infrastructure proof must not use HTTP"); });
+    const denyHttp = () => { throw Error("Infrastructure proof must not use HTTP"); };
+    const noHttp = spyOn(globalThis, "fetch").mockImplementation(Object.assign(denyHttp, { preconnect: denyHttp }));
     try {
       const row = root.transaction(() => {
         const rowId = storeMessage(message);
@@ -1350,6 +1360,10 @@ for (const scenario of ["native-infrastructure", "native-goal", "native-goal-bud
   if (parentAccounting && (accountingAuthDenied || accountingUnknown || accountingRotate || accountingStorageFailure)) {
     expect(dispatchOutcome).toBe("pending");
     expect(calls).toBe(accountingUnknown || accountingStorageFailure ? 1 : 0);
+    // Cleanup classifies the original reservation; never rebind to rotated auth
+    // or replace a held expense with a free fallback request.
+    expect(root.query("SELECT id,work_id,account_ref,binding_sha256,amount_microusd FROM budget_request_reservations").all()).toEqual([originalParentReservation]);
+    if (accountingUnknown || accountingStorageFailure) expect((originalParentReservation as { amount_microusd: number }).amount_microusd).toBeGreaterThan(0);
     expect(root.query("SELECT state FROM budget_request_reservations").all()).toEqual([{ state: accountingUnknown || accountingStorageFailure ? "unresolved" : "released" }]);
     expect(root.query("SELECT status FROM budget_work WHERE parent_work_id IS NULL").all()).toEqual([{ status: "active" }]);
     expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
@@ -1464,7 +1478,7 @@ for (const scenario of ["native-infrastructure", "native-goal", "native-goal-bud
       expect(((failure as AggregateError).errors[0] as AggregateError).errors).toContain(mcpFault);
       expect(clientClose).toHaveBeenCalledTimes(1);
       expect(sandboxClose).toHaveBeenCalledTimes(1);
-      expect(runtimeClose).not.toHaveBeenCalled();
+      expect(runtimeClose).toHaveBeenCalledTimes(1);
       expect(() => owner.assertCurrentOwner()).not.toThrow();
       clientClose.mockRestore(); sandboxClose.mockRestore(); runtimeClose.mockRestore();
       expect(() => process.kill(Number(readFileSync(mcpPid, "utf8")), 0)).toThrow();

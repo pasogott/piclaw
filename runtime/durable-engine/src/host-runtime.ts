@@ -787,6 +787,7 @@ export class HostConversationRuntime {
   private captureSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId, callId?: string): Promise<{
     inputs: readonly HostInputBinding[]; operation: OperationSnapshot;
     delegateModel?: { provider: string; modelId: string };
+    sourceModel?: { provider: string; id: string; api: string };
   }> {
     return this.observe(async () => {
       const o = this.options;
@@ -815,6 +816,27 @@ export class HostConversationRuntime {
       }
       if (!live?.run || !(callId === undefined ? live.run.taskId === taskId : live.tools?.some(slot => slot.taskId === taskId && slot.callId === callId && slot.status === "running")) || !live.run.inputs.length)
         throw Error("Exact host tool run required");
+      // Only the immutable assistant message owning this exact live MODEL call
+      // supplies physical model identity. Tool input has no model metadata.
+      const sourceModel = callId === undefined ? undefined : await this.harness.commit(async tx => {
+        this.fence();
+        const task = await tx.task(taskId);
+        if (!task || task.kind !== "pi.tool" || task.conversationId !== conversationId || task.abortRequested || task.state.status === "terminal")
+          throw Error("Live model tool required");
+        const input = task.input as import("@earendil-works/pi-durable").ToolTaskInput;
+        if (input.kind !== "model" || input.callId !== callId) throw Error("Exact model tool required");
+        const assistant = await tx.entry(input.assistant);
+        const slot = live.tools?.find(slot => slot.taskId === taskId && slot.callId === callId && slot.status === "running");
+        const messages = assistant?.model?.filter(message => message.role === "assistant" &&
+          message.content.some(part => part.type === "toolCall" && part.id === callId && part.name === slot?.name)) ?? [];
+        if (assistant?.kind !== "pi.assistant" || assistant.conversationId !== conversationId || messages.length !== 1)
+          throw Error("Exact source assistant required");
+        const message = messages[0]!;
+        if (message.role !== "assistant" || !message.provider || !message.model || !message.api) throw Error("Source model metadata required");
+        this.fence();
+        return Object.freeze({ provider: message.provider, id: message.model, api: message.api });
+      }, this.context);
+      this.fence();
       // A native foreground child has its own pi.user input, not a new host
       // acceptance. Follow only public task ownership back to the exact live
       // MODEL Delegate slot; neither ancestry nor a busy parent grants authority.
@@ -838,7 +860,7 @@ export class HostConversationRuntime {
         if (!model) throw Error("Delegate model required");
         return { ...owner, callId: input.callId, model: Object.freeze({ ...model }) };
       }, this.context); this.fence();
-      if (owned) return { ...await this.captureSource(owned.conversationId, owned.taskId, owned.callId), delegateModel: owned.model };
+      if (owned) return { ...await this.captureSource(owned.conversationId, owned.taskId, owned.callId), delegateModel: owned.model, sourceModel };
       const inputs: HostInputBinding[] = [];
       let operation: OperationSnapshot | undefined;
       for (const submissionId of live.run.inputs) {
@@ -868,7 +890,7 @@ export class HostConversationRuntime {
         operation = current; inputs.push(bound);
       }
       if (!operation || !inputs.some(input => input.sourceSeq === operation!.primarySourceSeq)) throw Error("Host primary input required");
-      return { inputs: Object.freeze(inputs), operation };
+      return { inputs: Object.freeze(inputs), operation, sourceModel };
     });
   }
   private port(intent: boolean) {

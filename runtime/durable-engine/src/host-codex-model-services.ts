@@ -25,16 +25,19 @@ export class HostCodexModelServices {
     if (runtime.getRegisteredNativeProvider(provider.id) !== provider) throw Error('Codex registration lost');
   }
   async bind(model: Model<Api>, signal: AbortSignal, originalRequestSignal?: AbortSignal) {
-    const operation = await this.authority.capture(signal, model, originalRequestSignal);
+    // Physical catalog records are mutable; detach source identity before capture awaits.
+    const snapshot = structuredClone(model);
+    Object.freeze(snapshot.input); Object.freeze(snapshot);
+    const operation = await this.authority.capture(signal, snapshot, originalRequestSignal);
     const check = () => {
       signal.throwIfAborted(); operation.signal.throwIfAborted(); operation.assertCurrent();
       this.authority.assertAccount(operation);
-      if (operation.model.provider !== model.provider || operation.model.id !== model.id || operation.model.api !== model.api)
+      if (operation.model.provider !== snapshot.provider || operation.model.id !== snapshot.id || operation.model.api !== snapshot.api)
         throw Error('Codex request owner changed');
     };
     check();
     const hooks = this.nativeAddon.createNativeCodexHooks(operation.model) as ReturnType<NativeCodexFactories["createNativeCodexHooks"]> & { tools?(names: string[]): string[] };
-    const observesOutput = model.provider === "openai-codex" && model.api === "openai-codex-responses";
+    const observesOutput = snapshot.provider === "openai-codex" && snapshot.api === "openai-codex-responses";
     const authority = this.authority;
     let tail = Promise.resolve();
     let closed = false;
@@ -45,7 +48,7 @@ export class HostCodexModelServices {
         ...(observesOutput ? { transport: 'sse' as const } : {}),
         onPayload(payload: unknown, actual: Model<Api>) {
           check();
-          if (actual.provider !== model.provider || actual.id !== model.id || actual.api !== model.api) throw Error('Codex payload owner changed');
+          if (actual.provider !== snapshot.provider || actual.id !== snapshot.id || actual.api !== snapshot.api) throw Error('Codex payload owner changed');
           return hooks.request(payload);
         },
         ...(observesOutput ? { fetch: (async (input, init) => {
@@ -71,11 +74,12 @@ export class HostCodexModelServices {
         // Replay native deltas before profiling: removed tools/sections must not revive.
         const tools = getCurrentTools(context.messages);
         const allowed = hooks.tools && new Set(hooks.tools(tools.map(tool => tool.name)));
+        const declarations = tools.filter(tool => !allowed || allowed.has(tool.name)).map(toToolDeclaration);
         return normalizeContext({
           systemPrompt: operation.profilePrompt === false
             ? getCurrentSystemPrompt(context.messages)
             : hooks.systemPrompt(getCurrentSystemPrompt(context.messages)),
-          tools: tools.filter(tool => !allowed || allowed.has(tool.name)).map(toToolDeclaration),
+          tools: hooks.toolDeclarations ? hooks.toolDeclarations(declarations) : declarations,
           // Keep actual conversational history, including results for now-removed tools.
           messages: hooks.context(context.messages.filter(message => message.role !== 'system')),
         });

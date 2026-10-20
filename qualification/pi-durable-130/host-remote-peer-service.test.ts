@@ -62,7 +62,7 @@ test("remote-peer delivery uses public bootstrap queue and S01 admission", async
     request.target_incarnation = "wrong";
     await expect(incoming()).rejects.toThrow("Exact native");
     request.target_incarnation = target.revision;
-    allowed = false; await expect(incoming()).rejects.toThrow("revoked"); allowed = true;
+    allowed = false; expect(incoming).toThrow("revoked"); allowed = true;
     retired = true; expect(incoming).toThrow("retired"); retired = false;
     const receipt = bundle.admitApplicationInput(input);
     expect(checks).toBeGreaterThanOrEqual(4);

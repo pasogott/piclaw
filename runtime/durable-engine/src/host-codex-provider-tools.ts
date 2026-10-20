@@ -25,7 +25,7 @@ export interface HostCodexProviderOptions {
   /** Current actual parent provider/model and guarded runtime effect callbacks.
    * readImage MUST check authority after awaits and at each file/artifact effect.
    * Provider-native declarations never dispatch a standalone model request. */
-  bind(invocation: { chatId: string; signal?: AbortSignal; assertCurrent(): void }): Promise<CodexProviderPorts>;
+  bind(invocation: { sourceModel: { provider: string; id: string; api: string }; chatId: string; signal?: AbortSignal; assertCurrent(): void }): Promise<CodexProviderPorts>;
   /** Genuine current metadata for schema construction; never synthetic model data. */
   metadata(): Pick<CodexProviderPorts, "cwd" | "model">;
 }
@@ -41,7 +41,8 @@ export function createHostCodexProviderTools(addon: CodexProviderNativeExports, 
         const captured = await options.runtime().captureToolSource(call.conversationId, call.taskId, call.toolCallId);
         const authority = createHostOperationAuthority(options.root, captured, () => { call.signal?.throwIfAborted(); call.assertAllowed(); options.assertOwner(); });
         authority.assertCurrent();
-        const ports = await options.bind({ chatId: captured.operation.chatJid, signal: call.signal, assertCurrent: authority.assertCurrent });
+        if (!captured.sourceModel) throw Error("Captured source model required");
+        const ports = await options.bind({ sourceModel: captured.sourceModel, chatId: captured.operation.chatJid, signal: call.signal, assertCurrent: authority.assertCurrent });
         authority.assertCurrent();
         // Parent cannot replace captured identity or authority.
         const native = addon[factory]({ ...ports, chatId: captured.operation.chatJid, signal: call.signal, assertCurrent: authority.assertCurrent });

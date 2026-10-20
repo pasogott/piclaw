@@ -296,7 +296,7 @@ for (const cancel of [false, true]) {
       const child = JSON.stringify(transcript.messages.findLast(m => m.role === "user")?.content).includes("CHILD_SOURCE");
       const calls = transcript.messages.findLast(m => m.role !== "system")?.role === "user";
       const output = createAssistantMessageEventStream();
-      const message: AssistantMessage = { role: "assistant", api: model.api, provider: model.provider, model: model.id,
+      const message: AssistantMessage = { role: "assistant", api: model.api, provider: model.provider, model: child ? "actual-child-model" : model.id,
         timestamp: 1, stopReason: calls ? "toolUse" : "stop", content: calls
           ? [{ type: "toolCall", id: "owned-call", name: child ? "read" : "delegate", arguments: child ? {} : { prompt: "CHILD_SOURCE" } }]
           : [{ type: "text", text: child ? "SOURCE_CHILD_ANSWER" : "ROOT_ANSWER" }],
@@ -330,6 +330,7 @@ for (const cancel of [false, true]) {
       await Promise.race([entered.promise, waiting.then(() => { throw Error("Root settled before owned child source capture"); })]);
       expect(children).toBe(1); expect(proofs).toHaveLength(1);
       expect(proofs[0]!.inputs[0]!.operationId).toBe(f.incarnation);
+      expect(proofs[0]!.sourceModel).toEqual({ provider: model.provider, id: "actual-child-model", api: model.api });
       expect(proofs[0]!.inputs[0]!.conversationId).toBe(f.base.root.id);
       expect(() => f.runtime!.assertCapturedSourceCurrent(proofs[0]!.inputs)).not.toThrow();
       if (cancel) {

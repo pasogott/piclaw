@@ -1,5 +1,7 @@
+import { isolatedApplicationTest } from "./src/isolated-application-test.js";
 import "./src/test-guard.js";
-import { test, expect } from "bun:test";
+import { expect } from "bun:test";
+const applicationTest = isolatedApplicationTest(import.meta.url);
 import { cpSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
@@ -9,7 +11,7 @@ import { createDefaultApplicationRuntime } from "../../runtime/durable-engine/sr
 import { admitAddonLocalRequest } from "../../runtime/src/addons/local-context.js";
 import { handleRegisteredAddonConfigApiRequest } from "../../runtime/src/channels/web/handlers/addon-config-api.js";
 
-test("actual eight-resource factory uses owned native Root dashboard and reopens registration", async () => {
+applicationTest("actual eight-resource factory uses owned native Root dashboard and reopens registration", async () => {
   const source = process.env.DURABLE_ADDONS_ROOT;
   if (!source) throw Error("DURABLE_ADDONS_ROOT required");
   const workspace = process.env.PICLAW_WORKSPACE!;

@@ -22,7 +22,8 @@ for (const mode of ["approved", "shadow", "dirty", "version", "handler", "execut
     }
     expect(hash.digest("hex")).toBe("d76c40e6887526ef9d1b19193b617fb25302b8bebbe5b98632b1bb0eea46d584");
     copyFileSync(join(source, "addons/delegate/package.json"), join(pkg, "package.json"));
-    if (mode === "shadow") writeFileSync(join(pkg, "delegate.js"), "export default function() {}\n");
+    if (mode === "shadow") writeFileSync(join(pkg, "delegate.js"), `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(join(dir, "unqualified-module-io"))}, "BAD");
+export default function() {}\n`);
     if (mode === "dirty") writeFileSync(join(pkg, "delegate.ts"), readFileSync(join(pkg, "delegate.ts"), "utf8") + "\n// unapproved\n");
     if (mode === "version") {
       const manifest = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8"));
@@ -30,9 +31,13 @@ for (const mode of ["approved", "shadow", "dirty", "version", "handler", "execut
     }
     let catalog: Awaited<ReturnType<typeof loadApplicationExtensionCatalog>> | undefined;
     try {
+      if (["shadow", "dirty", "version"].includes(mode)) {
+        await expect(loadApplicationExtensionCatalog({ cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() })).rejects.toThrow(/Unqualified installed (add-on package|extension source) before evaluation/);
+      expect(await Bun.file(join(dir, "unqualified-module-io")).exists()).toBe(false);
+        return;
+      }
       catalog = await loadApplicationExtensionCatalog({ cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() });
       const qualified = await qualifyInstalledDelegate(catalog, dir);
-      if (["shadow", "dirty", "version"].includes(mode)) { expect(qualified).toBeUndefined(); return; }
       expect(qualified).toBeDefined();
       expect(qualified!.definition.parameters).toHaveProperty("properties.task_category");
       expect(qualified!.nativeLifecycle.events).toEqual(["session_start", "model_select", "before_agent_start"]);

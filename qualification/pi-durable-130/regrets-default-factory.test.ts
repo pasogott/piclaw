@@ -1,5 +1,7 @@
+import { isolatedApplicationTest } from "./src/isolated-application-test.js";
 import "./src/test-guard.js";
-import { test, expect } from "bun:test";
+import { expect } from "bun:test";
+const applicationTest = isolatedApplicationTest(import.meta.url);
 import { cpSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { initDatabase, getDb, closeDatabase } from "../../runtime/src/db/connection.js";
@@ -14,7 +16,7 @@ import { createRuntimeBaseServices } from "../../runtime/src/runtime/composition
 import { WebChannel } from "../../runtime/src/channels/web.js";
 import { admitWebUserMessage } from "../../runtime/src/channels/web/messaging/message-store.js";
 
-test("Regrets-only actual factory executes default decision-off review, queues command and reopens", async () => {
+applicationTest("Regrets-only actual factory executes default decision-off review, queues command and reopens", async () => {
   const workspace = process.env.PICLAW_WORKSPACE!;
   const source = process.env.DURABLE_ADDONS_ROOT!;
   const pkg = join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-late-night-regrets");

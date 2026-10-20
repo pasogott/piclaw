@@ -644,26 +644,32 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       if (!await runtime.settle(input)) throw Error("Scheduled settlement pending");
       return { status: "success", result: state.answer.text };
     }
+    let inputProjection: Parameters<typeof storeWebMessage>[0] | undefined;
     const applicationInput = createApplicationHostInput({ root, domain: r.incarnation, assertCurrent: assertLive,
       routes: () => [...routeIndex.values()].filter(b => lookup(b.chatJid, b.branchId)),
       followups: hostFollowups, admission: getQueuedInputSourceAdmission,
        async steer(input, receipt, check) {
          try {
            check();
+           const projection = inputProjection;
+           if (!projection) throw Error("Application input projection unavailable");
+           const checkProjection = () => { check(); if (inputProjection !== projection) throw Error("Application input projection detached"); };
            const frontier = await work.getChatFrontier(receipt.chatJid); check();
            if (!frontier.ok || !frontier.value.activeOperationId)
              return { ...receipt, mode: "new_input" as const };
            const selected = await work.getOperation(frontier.value.activeOperationId); check();
            if (!selected.ok || selected.value?.harness?.state !== "running") throw Error("No running host binding");
            const steering = createDurableQueuedSteering({ work, adapter, chatJid: receipt.chatJid,
-             branchId: input.target.branchId, assertCurrentWriter: check, runningBinding: selected.value.harness,
+             branchId: input.target.branchId, assertCurrentWriter: checkProjection, runningBinding: selected.value.harness,
              readQueued: id => hostFollowups.getQueuedFollowupItems(receipt.chatJid).find(item => item.rowId === id),
-             validatePayload: stored => { check(); getQueuedInputMaterialization(receipt.chatJid)!(stored); check(); },
-             materialize: (item, accept) => storeWebMessage({ broadcastEvent() {}, pendingLinkPreviews: new Set<number>() } as Parameters<typeof storeWebMessage>[0],
+             validatePayload: stored => { checkProjection(); getQueuedInputMaterialization(receipt.chatJid)!(stored); checkProjection(); },
+             materialize: (item, accept) => storeWebMessage(projection,
                { chatJid: receipt.chatJid, content: item.queuedContent, isBot: false, mediaIds: [], agentId: "default", agentName: "Remote Peer" },
                { consumeDeferredFollowupRowId: item.rowId, materializeQueuedSource: accept, isSteeringMessage: true }),
              onPendingIntent: recovery.onPendingIntent });
            const accepted = await steering.accept(receipt.rowId);
+           // Native timeline surface, after the materialization transaction committed.
+           try { projection.broadcastEvent("new_post", accepted.interaction); } catch { /* Publication cannot revoke committed input. */ }
            await accepted.dispatch();
            return { ...receipt, mode: "steer" as const };
          } catch (error) {
@@ -674,6 +680,10 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
        } });
     return Object.freeze({
       ...applicationInput,
+      bindInputProjection(projection: Parameters<typeof storeWebMessage>[0] | undefined) {
+        if (projection) { assertLive(); if (inputProjection) throw Error("Application input projection already bound"); }
+        inputProjection = projection;
+      },
       /** Existing native dispatcher; call only after ordinary queue materialisation. */
       dispatchAcceptedInput: dispatch,
       /** Construct pool first from this snapshot, then bind its existing channel constructor. */
@@ -703,9 +713,10 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       },
       retryRecoveredWork: recovery.retryRecoveredWork,
       onPendingIntent: recovery.onPendingIntent,
-      stop() { shutdown.abort(); },
-      close() { return closing ??= (async () => { shutdown.abort(); await activeController.close(); })(); },
+      stop() { inputProjection = undefined; shutdown.abort(); },
+      close() { inputProjection = undefined; return closing ??= (async () => { shutdown.abort(); await activeController.close(); })(); },
     } satisfies RuntimeBackend & ReturnType<typeof createApplicationHostInput> & {
+      bindInputProjection(projection: Parameters<typeof storeWebMessage>[0] | undefined): void;
       dispatchAcceptedInput: typeof dispatch;
       admitHostFollowup(input: { sourceId: string; chatJid: string; text: string; queuedAt: string }, onlyIfIdle?: boolean): number | null;
       allocateScheduledConversation(lease: ScheduledRunLease): Promise<AcceptedInput>;

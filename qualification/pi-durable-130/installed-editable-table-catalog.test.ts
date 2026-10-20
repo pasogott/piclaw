@@ -28,25 +28,22 @@ for (const mode of ["approved", "version", "dirty-helper", "shadow-tool-js", "ha
         writeFileSync(path, JSON.stringify(manifest));
       }
       if (mode === "dirty-helper" || mode === "restore-poison-cache") writeFileSync(helper, original + "\n// unapproved before evaluation\n");
-      if (mode === "shadow-tool-js") writeFileSync(join(pkg, "tool.js"), "export function createEditableTableTool() { return { name: 'editable_table' }; }\n");
+      if (mode === "shadow-tool-js") writeFileSync(join(pkg, "tool.js"), `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(join(dir, "unqualified-module-io"))}, "BAD");
+export function createEditableTableTool() { return { name: 'editable_table' }; }\n`);
       if (mode === "symlink-outside") {
         const outside = join(dir, "outside-shared.ts"); writeFileSync(outside, original); rmSync(helper); symlinkSync(outside, helper);
       }
-      // DefaultResourceLoader evaluates factories before qualification; this is
-      // a capability-exemption profile, NOT a no-evaluation sandbox. A shadow
-      // import may instead produce a loader error, which must also fail closed.
-      catalog = await load();
-      const qualified = await qualifyInstalledEditableTable(catalog, dir);
       if (["version", "dirty-helper", "shadow-tool-js", "restore-poison-cache", "type", "metadata", "layout", "symlink-outside"].includes(mode)) {
-        expect(qualified).toBeUndefined();
-        expect(() => assertApplicationExtensionCatalogSupported(catalog!)).toThrow("Durable extension qualification required");
+        await expect(load()).rejects.toThrow(/Unqualified installed (add-on package|extension source) before evaluation/);
+      expect(await Bun.file(join(dir, "unqualified-module-io")).exists()).toBe(false);
         if (mode === "restore-poison-cache") {
           writeFileSync(helper, original);
-          expect(await qualifyInstalledEditableTable(catalog, dir)).toBeUndefined();
           await expect(load()).rejects.toThrow("loader cache provenance changed; process restart required");
         }
         return;
       }
+      catalog = await load();
+      const qualified = await qualifyInstalledEditableTable(catalog, dir);
       expect(qualified).toBeDefined();
       expect(qualified!.extension.handlers.size).toBe(1);
       expect(qualified!.extension.handlers.has("resources_discover")).toBe(true);
