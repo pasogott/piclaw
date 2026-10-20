@@ -1,3 +1,4 @@
+import { repoRoot } from "./src/repo-root.js";
 import { isolatedApplicationTest } from "./src/isolated-application-test.js";
 import "./src/test-guard.js";
 import { cpSync, symlinkSync, realpathSync, readlinkSync } from "node:fs";
@@ -89,16 +90,15 @@ applicationTest("actual CLI apply: all 23 installed, synthetic built-in OAuth, a
   const install=Bun.spawnSync([process.execPath,"install","--ignore-scripts"],{cwd:extensions,env:{...process.env,BUN_INSTALL:join(f.root,"bun")},stdout:"pipe",stderr:"pipe",timeout:90000});
   if(install.exitCode) throw Error(install.stderr.toString()+install.stdout.toString());
  } else {
- const source=realpathSync("/workspace/tmp/durable-smith-addons");
-  const rootModules=realpathSync(join(import.meta.dir,"../../node_modules"));
-  const catDeps=realpathSync("/tmp/durable-catalog-test-deps/node_modules");
-  const nativeDeps=realpathSync(join(import.meta.dir,"node_modules"));
+ const source=repoRoot("ADDONS");
+  const rootModules=realpathSync(join(repoRoot("CORE"),"node_modules"));
+  const catDeps=realpathSync(process.env.DURABLE_CATALOG_DEPENDENCIES ?? join(source,"node_modules"));
   expect(Object.keys(applicationAddonSourceProfiles)).toHaveLength(23);
   for(const profile of Object.values(applicationAddonSourceProfiles)) {
    const pkg=join(f.workspace,".pi/extensions/node_modules",profile.name);
    cpSync(join(source,"addons",profile.name.replace("@rcarmo/piclaw-addon-","")),pkg,{recursive:true,filter:p=>!p.split("/").includes("node_modules")});
    const deps=join(pkg,"node_modules");mkdirSync(deps,{recursive:true});
-   for(const modules of [nativeDeps,catDeps,rootModules]) for(const entry of readdirSync(modules)) {
+   for(const modules of [rootModules, catDeps, ...Object.values(applicationAddonSourceProfiles).map(profile => join(source, "addons", profile.name.replace("@rcarmo/piclaw-addon-", ""), "node_modules")).filter(path => existsSync(path))]) for(const entry of readdirSync(modules)) {
     if(entry.startsWith("."))continue;
     if(entry.startsWith("@")){mkdirSync(join(deps,entry),{recursive:true});for(const child of readdirSync(join(modules,entry)))if(!existsSync(join(deps,entry,child)))symlinkSync(join(modules,entry,child),join(deps,entry,child));}
     else if(!existsSync(join(deps,entry)))symlinkSync(join(modules,entry),join(deps,entry));

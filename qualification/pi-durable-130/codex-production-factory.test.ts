@@ -1,3 +1,4 @@
+import { repoRoot } from "./src/repo-root.js";
 import { isolatedApplicationTest } from "./src/isolated-application-test.js";
 import "./src/test-guard.js";
 import { expect, spyOn } from "bun:test";
@@ -27,11 +28,19 @@ for (const scenario of ["patch", "sse", "broken-sse"] as const) applicationTest(
   // All links belong to this isolated package; neither dependency source is mutated.
   const dependencies = join(pkg, "node_modules");
   mkdirSync(dependencies, {recursive:true});
-  for (const sourceModules of [process.env.DURABLE_CATALOG_DEPENDENCIES ?? "/tmp/durable-catalog-test-deps/node_modules", join(import.meta.dir, "../../node_modules")]) {
+  for (const sourceModules of [join(repoRoot("CORE"), "node_modules"), process.env.DURABLE_CATALOG_DEPENDENCIES ?? join(source, "node_modules"), join(source, "addons/codex-conversion/node_modules")].filter(path => existsSync(path))) {
     for (const entry of readdirSync(sourceModules)) {
       if (entry.startsWith(".")) continue;
-      const target = join(dependencies, entry);
-      if (!existsSync(target)) symlinkSync(join(sourceModules, entry), target);
+      if (entry.startsWith("@")) {
+        mkdirSync(join(dependencies, entry), { recursive: true });
+        for (const child of readdirSync(join(sourceModules, entry))) {
+          const target = join(dependencies, entry, child);
+          if (!existsSync(target)) symlinkSync(join(sourceModules, entry, child), target);
+        }
+      } else {
+        const target = join(dependencies, entry);
+        if (!existsSync(target)) symlinkSync(join(sourceModules, entry), target);
+      }
     }
   }
   const model: Model<"openai-codex-responses"> = { provider: "openai-codex", id: "synthetic-codex", name: "Synthetic Codex", api: "openai-codex-responses", baseUrl: "https://fixture.invalid", input: ["text", "image"], reasoning: false, contextWindow: 100000, maxTokens: 1000, cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } };

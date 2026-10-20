@@ -112,7 +112,7 @@ jobs:
         env:
           DURABLE_ADDONS_ROOT: ${{ github.workspace }}/.qualification-native-addons
           DURABLE_CONTRACT_ADDONS_ROOT: ${{ github.workspace }}/.qualification-addons
-          DURABLE_CATALOG_DEPENDENCIES: ${{ github.workspace }}/.qualification-native-addons/node_modules
+          DURABLE_CATALOG_DEPENDENCIES: ${{ github.workspace }}/qualification/pi-durable-130/node_modules
           DURABLE_CORE_ADDONS_ROOT: ${{ github.workspace }}/.qualification-native-addons
           DURABLE_GOAL_ADDON_ROOT: ${{ github.workspace }}/.qualification-native-addons
         run: |

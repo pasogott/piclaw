@@ -1,3 +1,4 @@
+import { repoRoot } from "./src/repo-root.js";
 import { UsageDoc, defineTask } from "../../runtime/durable-engine/qualification/durable.ts";
 import "./src/test-guard.js";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -14,7 +15,7 @@ import { openFixture, context } from "./src/fixture.js";
 import { test, expect } from "bun:test";
 import { resolve } from "node:path";
 import { qualifyNativeResources, qualifyNativeResourceSource, createRootDashboardReader } from "../../runtime/durable-engine/src/host-addon-resources";
-const addons = resolve(import.meta.dir, "../../../durable-smith-addons/addons");
+const addons = resolve(repoRoot("ADDONS"), "addons");
 const names = ["diagram-tools", "export-timeline-pdf", "kanban-editor", "yolo-vibe", "mindmap", "web-viewer", "eml-viewer", "session-dashboard"];
 test("all eight resource descriptors preserve installed web/skill contracts", async () => {
   for (const name of names) {

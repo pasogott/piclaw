@@ -1,3 +1,4 @@
+import { repoRoot } from "./src/repo-root.js";
 import { isolatedApplicationTest } from "./src/isolated-application-test.js";
 import "./src/test-guard.js";
 import { expect, spyOn } from "bun:test";
@@ -22,16 +23,16 @@ applicationTest("all 23 installed: explicit offline maintenance preserves enable
   const workspace = process.env.PICLAW_WORKSPACE!;
   // Explicit profile inventory: copies only, never mutate candidate dependencies.
   expect(Object.keys(applicationAddonSourceProfiles)).toHaveLength(23);
-  const rootModules = realpathSync(join(import.meta.dir, "../../node_modules"));
-  const catDeps = realpathSync(process.env.DURABLE_CATALOG_DEPENDENCIES ?? "/tmp/durable-catalog-test-deps/node_modules");
+  const rootModules = realpathSync(join(repoRoot("CORE"), "node_modules"));
+  const catDeps = realpathSync(process.env.DURABLE_CATALOG_DEPENDENCIES ?? join(source, "node_modules"));
   const installed = [];
   for (const [kind, profile] of Object.entries(applicationAddonSourceProfiles)) {
     const slug = profile.name.replace("@rcarmo/piclaw-addon-", "");
     const pkg = join(workspace, ".pi/extensions/node_modules", profile.name);
     cpSync(join(source, "addons", slug), pkg, {recursive:true, filter: p => !p.split("/").includes("node_modules")});
     const dependencies = join(pkg, "node_modules"); mkdirSync(dependencies, {recursive:true});
-    // Overlay scoped children, not scopes: missing SDK children fall back to Root SDK12.
-    for (const modules of [catDeps, rootModules]) for (const entry of readdirSync(modules)) {
+    // Overlay scoped children, not scopes: Root SDK takes precedence over catalog development SDKs.
+    for (const modules of [rootModules, catDeps, ...Object.values(applicationAddonSourceProfiles).map(profile => join(source, "addons", profile.name.replace("@rcarmo/piclaw-addon-", ""), "node_modules")).filter(path => existsSync(path))]) for (const entry of readdirSync(modules)) {
       if (entry.startsWith(".")) continue;
       if (entry.startsWith("@")) {
         mkdirSync(join(dependencies, entry), {recursive:true});

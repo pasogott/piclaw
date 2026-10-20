@@ -1,3 +1,4 @@
+import { repoRoot } from "./src/repo-root.js";
 import "./src/test-guard.js";
 import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -41,8 +42,8 @@ test("remote-peer delivery uses public bootstrap queue and S01 admission", async
     const input = { source: "remote_peer" as const, sourceId: `peer:${crypto.randomUUID()}`, text: "verified peer message",
       queuedAt: new Date().toISOString(), principal: { id: "authenticated-peer", revision: "policy-1" }, target,
       assertCurrent() { checks++; expect(root.inTransaction).toBe(true); if (!allowed) throw Error("revoked principal"); } };
-    const { createNativeRemotePeerDelivery } = await import("/workspace/tmp/durable-smith-addons/addons/remote-peer/native.ts");
-    const { RemotePeerAuthorityScope } = await import("/workspace/tmp/durable-smith-addons/addons/remote-peer/native-authority.ts");
+    const { createNativeRemotePeerDelivery } = await import(repoRoot("ADDONS") + "/addons/remote-peer/native.ts");
+    const { RemotePeerAuthorityScope } = await import(repoRoot("ADDONS") + "/addons/remote-peer/native-authority.ts");
     let retired = false;
     const owner = { assertCurrent() { lock.assertCurrentOwner(); if (retired) throw Error("owner retired"); } };
     const authority = new RemotePeerAuthorityScope({ ...owner, assertPeerCurrent() { if (!allowed) throw Error("revoked principal"); } });

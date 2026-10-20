@@ -1,3 +1,4 @@
+import { repoRoot } from "./src/repo-root.js";
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -48,7 +49,7 @@ async function fixture() {
   return { root, before, captured: { operation, inputs } };
 }
 
-import * as addon from "../../../durable-smith-addons/addons/late-night-regrets/native.ts";
+const addon = await import(repoRoot("ADDONS") + "/addons/late-night-regrets/native.ts");
 import { createBoundHostRegretsTool } from "../../runtime/durable-engine/src/host-regrets-tool.ts";
 import { createHostRegretsBindings } from "../../runtime/durable-engine/src/host-regrets-bindings.ts";
 import { initializeBudgetLimitsSchema } from "../../runtime/src/db/budget-limits-schema.ts";
