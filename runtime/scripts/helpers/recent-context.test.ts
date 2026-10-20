@@ -96,5 +96,21 @@ test("latest public compaction checkpoint, twenty complete turns, seven days, ac
  const selected=selectRecent(all,parent,asOf);
  expect(selected.completedTurns).toBe(20);expect(selected.sourceEntryIds[0]).toBe("checkpoint");expect(selected.sourceEntryIds[1]).toBe("u3");
  expect(selected.messages.some(m=>m.role==="system")).toBe(false);
- const expired=entries.map(e=>({...e,message:{...e.message,timestamp:timestamp-8*86400000}}));expect(()=>selectRecent(expired,"a",asOf)).toThrow("No complete");
+ const expired=entries.map(e=>({...e,message:{...e.message,timestamp:timestamp-8*86400000}}));expect(selectRecent(expired,"a",asOf).selection).toBe("empty");
+});
+
+for (const mutation of [
+ (m:any)=>({...m,content:null}),
+ (m:any)=>({...m,usage:{}}),
+ (m:any)=>({...m,extra:NaN}),
+ (m:any)=>({...m,content:[{type:"toolCall",id:"call",name:"tool",arguments:{}}],stopReason:"toolUse"}),
+]) test("malformed/incomplete unit is isolated; later complete unit survives",()=>{
+ const broken={...entries[1],message:mutation(assistant())};
+ const later=[{...entries[0],id:"u2",parentId:"a"},{...entries[1],id:"a2",parentId:"u2"}];
+ expect(selectRecent([entries[0],broken] as any,"a",asOf).messages).toEqual([]);
+ expect(selectRecent([entries[0],broken,...later] as any,"a2",asOf).sourceEntryIds).toEqual(["u2","a2"]);
+});
+test("modern optional payload remains exact",()=>{
+ const message={...assistant(),responseId:"opaque",content:[{type:"text",text:"unchanged",textSignature:"signature"}],extra:{retained:true}};
+ expect(selectRecent([entries[0],{...entries[1],message}] as any,"a",asOf).messages[1]).toEqual(message);
 });

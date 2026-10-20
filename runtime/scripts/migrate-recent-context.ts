@@ -85,25 +85,46 @@ export async function main(args = process.argv.slice(2), testDependencies?: { ge
         UNION ALL SELECT 1 FROM service_effect_s01_operations WHERE phase <> 'terminal'
         UNION ALL SELECT 1 FROM service_effect_s01_queued_inputs WHERE state NOT IN ('consumed','disposed') LIMIT 1`).get()) throw Error("Pending work");
       const scopes = root.query("SELECT chat_jid AS chatJid, branch_id AS branchId FROM chat_branches WHERE archived_at IS NULL ORDER BY chat_jid,branch_id").all() as any[];
+      const selections: any[] = [];
       const recentHistory = manifest.sources.map((s: any) => {
         if (![s.chatJid,s.branchId,s.sourceSessionId,s.selectedLeaf].every(v => typeof v === "string" && v.trim() === v && v.length)) throw Error("Noncanonical source scope");
         const bytes = readFileSync(absolute(s.path));
         if (digest(bytes) !== s.sha256) throw Error("Source file hash mismatch");
-        const [header,...entries] = bytes.toString("utf8").trim().split("\n").map(line => JSON.parse(line));
-        if (header.type !== "session" || header.id !== s.sourceSessionId || new Set(entries.map(e => e.id)).size !== entries.length) throw Error("Source identity mismatch");
-        const selected = selectRecent(entries,s.selectedLeaf,s.asOf);
+        const lines = bytes.toString("utf8").trim().split("\n");
+        const header = JSON.parse(lines.shift()!);
+        const entries: any[] = []; let malformedLines = 0;
+        for (const line of lines) {
+          try { entries.push(JSON.parse(line)); } catch (error) {
+            if (!(error instanceof SyntaxError)) throw error;
+            malformedLines++;
+          }
+        }
+        // An unreadable row may be an unidentifiable branch/parent. Never choose
+        // an older branch or weaken provenance; require an explicit empty manifest.
+        const unverifiable = malformedLines > 0 || entries.some(e => !e || typeof e.id !== "string" || !e.id || !(e.parentId === null || typeof e.parentId === "string"));
+        if (header.type !== "session" || header.id !== s.sourceSessionId || new Set(entries.filter(e => e && typeof e.id === "string").map(e => e.id)).size !== entries.filter(e => e && typeof e.id === "string").length) throw Error("Source identity mismatch");
+        const selected = unverifiable ? {messages:[],sourceEntryIds:[],completedTurns:0,selection:"empty",skipped:{"unverifiable-jsonl-source":1, "malformed-lines":malformedLines}} : selectRecent(entries,s.selectedLeaf,s.asOf);
+        selections.push({chatJid:s.chatJid,branchId:s.branchId,selection:selected.selection,skipped:selected.skipped});
         if (digest(JSON.stringify(selected.messages)) !== s.payloadSHA256 || JSON.stringify(selected.sourceEntryIds) !== JSON.stringify(s.sourceEntryIds)) throw Error("Projection payload/provenance mismatch");
         return {chatJid:s.chatJid,branchId:s.branchId,sourceSessionId:header.id,sourceLeafId:s.selectedLeaf,owner:"operator:recent-context-copy",sourceHash:s.payloadSHA256,messages:selected.messages};
       });
-      validateRecentHistoryScopes(recentHistory,scopes);
+      // Scope ownership is strict even for an explicitly empty selection.
+      const seen = new Set<string>();
+      for (const item of recentHistory) {
+        const key = JSON.stringify([item.chatJid,item.branchId]);
+        if (seen.has(key) || !scopes.some(b => b.chatJid === item.chatJid && b.branchId === item.branchId)) throw Error("Invalid recent history scope or boundary");
+        seen.add(key);
+      }
+      const eligible = recentHistory.filter(item => item.messages.length);
+      validateRecentHistoryScopes(eligible,scopes);
       if (JSON.stringify(inventory(SESSIONS_DIR)) !== JSON.stringify(manifest.archives)) throw Error("Archive inventory mismatch");
-      return {timeline:manifest.timeline,recentHistory};
+      return {timeline:manifest.timeline,recentHistory:eligible,selections};
     } finally { root.close(); }
   };
   if (!apply) {
     if (pathExists(lockPath)) throw Error("Existing runtime lock; preflight requires offline target");
     const migration = validate();
-    console.log(JSON.stringify({mode:"preflight",writes:0,copies:migration.recentHistory.length,validation:"immutable-offline-data-only-not-resident-ownership",archivePlan:manifest.archives.length ? {action:"explicit-relocation-required",from:SESSIONS_DIR,files:manifest.archives} : null,archiveRelocationRequired:existsSync(SESSIONS_DIR) && readdirSync(SESSIONS_DIR).length > 0,owningPaths:{workspace,agentDir,dbPath,lockPath,sessions:SESSIONS_DIR}})); return;
+    console.log(JSON.stringify({mode:"preflight",writes:0,copies:migration.recentHistory.length,selections:migration.selections,validation:"immutable-offline-data-only-not-resident-ownership",archivePlan:manifest.archives.length ? {action:"explicit-relocation-required",from:SESSIONS_DIR,files:manifest.archives} : null,archiveRelocationRequired:existsSync(SESSIONS_DIR) && readdirSync(SESSIONS_DIR).length > 0,owningPaths:{workspace,agentDir,dbPath,lockPath,sessions:SESSIONS_DIR}})); return;
   }
   const owner = acquireRuntimeLock({ lockPath, strictOwnership:true, disabled:false, maintenance:true });
   let backend: any, dbModule: typeof import("../src/db.js") | undefined, safe = true;
@@ -137,7 +158,7 @@ export async function main(args = process.argv.slice(2), testDependencies?: { ge
     backend.stop(); await backend.close(); backend = undefined;
     dbModule.closeDatabase(); dbModule = undefined;
     owner.assertCurrentOwner(); safe = true;
-    console.log(JSON.stringify({mode:"applied",copies:migration.recentHistory.length,rawArchives:destination ?? SESSIONS_DIR,timelinePreserved:true}));
+    console.log(JSON.stringify({mode:"applied",copies:migration.recentHistory.length,selections:migration.selections,rawArchives:destination ?? SESSIONS_DIR,timelinePreserved:true}));
   } finally {
     if (backend) { backend.stop(); await backend.close(); }
     // A factory failure without a returned backend cannot prove all native handles closed.
