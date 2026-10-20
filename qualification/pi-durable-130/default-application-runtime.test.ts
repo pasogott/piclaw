@@ -1,3 +1,4 @@
+import { resolveRequestPrincipal } from "../../runtime/src/channels/web/auth/principal.js";
 import "./src/test-guard.js";
 import { hydrateMcpKeychainCredentials } from "../../runtime/src/secure/mcp-keychain.js";
 import { getConfigPath } from "../../runtime/src/core/config-context.js";
@@ -18,7 +19,7 @@ import { RuntimeStartupCleanupError } from "../../runtime/src/runtime/startup-cl
 import { main } from "../../runtime/src/runtime.js";
 import { createDefaultRuntimeBootstrapDeps } from "../../runtime/src/runtime/bootstrap.js";
 import { storeChatMetadata, storeMessage } from "../../runtime/src/db.js";
-import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, symlinkSync, cpSync } from "node:fs";
 import { createHash } from "node:crypto";
 import * as hostFs from "node:fs";
 import { extensionKvSet, extensionKvGet } from "../../runtime/src/db/extension-kv.js";
@@ -128,7 +129,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-goal", "native-goal-budget", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["native-infrastructure", "native-goal", "native-goal-budget", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
@@ -141,6 +142,7 @@ for (const scenario of ["native-goal", "native-goal-budget", "native-compaction-
   let calls = 0;
   let onProviderResponse: (() => void) | undefined;
   let onCredentialResolve: (() => Promise<void>) | undefined;
+  let originalParentReservation: unknown;
   const customSubset = scenario === "custom-subset" || scenario === "source-filter-subset";
   const sourceFilter = scenario === "source-filter-subset";
   const reasoningThinking = scenario === "public-thinking-reasoning";
@@ -168,6 +170,7 @@ for (const scenario of ["native-goal", "native-goal-budget", "native-compaction-
     onCredentialResolve = async () => {
       if (delegateAccounting || scheduledAccounting || compactionAccounting) expect((root.query("SELECT COUNT(*) AS n FROM budget_request_reservations WHERE state='reserved'").get() as { n: number }).n).toBeGreaterThan(0);
       else expect(root.query("SELECT state FROM budget_request_reservations ORDER BY rowid").all()).toEqual([...(accountingTwoTurns && calls > 0 ? [{ state: "settled" }] : []), { state: "reserved" }]);
+      if (!delegateAccounting && !scheduledAccounting && !compactionAccounting) originalParentReservation = root.query("SELECT id,work_id,account_ref,binding_sha256,amount_microusd FROM budget_request_reservations ORDER BY rowid DESC LIMIT 1").get();
       if (accountingAuthDenied) throw Error("Synthetic auth denial");
       if (accountingCloseFailure) root.exec("CREATE TRIGGER accounting_work_close_fail BEFORE UPDATE ON budget_work WHEN OLD.parent_work_id IS NULL AND NEW.status='completed' BEGIN SELECT RAISE(ABORT, 'synthetic operation work close failure'); END");
       if (accountingStorageFailure) root.exec("CREATE TRIGGER accounting_usage_fail BEFORE INSERT ON token_usage BEGIN SELECT RAISE(ABORT, 'synthetic usage write failure'); END");
@@ -177,6 +180,21 @@ for (const scenario of ["native-goal", "native-goal-budget", "native-compaction-
   const requested: string[] = [];
   const planRequests: string[] = [];
   let toolSequence: { name: string; arguments: JsonObject | (() => JsonObject) }[] | undefined;
+  const nativeInfrastructure = scenario === "native-infrastructure";
+  if (nativeInfrastructure) {
+    const source = process.env.DURABLE_ADDONS_ROOT;
+    assert(source, "DURABLE_ADDONS_ROOT required; never use live installed packages");
+    for (const kind of ["proxmox", "portainer", "imap"]) {
+      const pkg = join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-" + kind);
+      cpSync(join(source, "addons", kind), pkg, { recursive: true, filter: path => !path.split("/").includes("node_modules") });
+      symlinkSync(join(import.meta.dir, "../../node_modules"), join(pkg, "node_modules"));
+    }
+    toolSequence = [
+      { name: "proxmox", arguments: { action: "contract" } },
+      { name: "portainer", arguments: { action: "capabilities" } },
+      { name: "imap", arguments: { action: "list_accounts" } },
+    ];
+  }
   if (accountingTwoTurns) toolSequence = [{ name: "read", arguments: { path: "accounting-two-turns.txt" } }];
   if (accountingTwoTurns) writeFileSync(join(workspace, "accounting-two-turns.txt"), "accounted tool turn");
   const nativeMcp = scenario.startsWith("native-mcp-");
@@ -394,7 +412,7 @@ for (const scenario of ["native-goal", "native-goal-budget", "native-compaction-
     const scheduledRequest = JSON.stringify(input.messages).includes("scheduled real consumer");
     const pricedResponse = parentAccounting && !accountingUnknown && !(delegateAccountingUnknown && child) && !(scheduledAccountingUnknown && scheduledRequest) && !(compactionAccountingUnknown && inManualSummary);
     const message = { role: "assistant" as const, api: "openai-completions" as const, provider: physical.provider, model: physical.id,
-      content: firstDelegate ? (revokeDelegate ? ["A"] : ["A", "B"]).map(id => ({ type: "toolCall" as const, id, name: "delegate", arguments: { prompt: `NATIVE_DELEGATE_CHILD_${id}`, tools: standardDelegate ? "standard" : "read_only", task_category: "reason", ...(delegateImagesCase && id === "B" ? { model: `${modelB.provider}/${modelB.id}` } : {}), ...(explicitDelegate && (explicitDelegate.denied || id === "B") ? { model: explicitDelegate.model } : revokeDelegate ? { model: `${modelB.provider}/${modelB.id}` } : {}), ...(timeoutDelegate && id === "A" ? { timeout_sec: 10 } : {}), ...(delegateFiles && id === "B" ? { files: ["delegate-task"] } : {}) } })) : child && revokeDelegate && !writeDelegate && !input.messages.some(message => message.role === "toolResult") ? [{ type: "toolCall" as const, id: "child-private-read", name: "read", arguments: { path: childReadPath } }] : step ? [{ type: "toolCall" as const, id: `factory-tool-${calls}`, name: step.name, arguments: typeof step.arguments === "function" ? step.arguments() : step.arguments }]
+      content: nativeInfrastructure && step ? [step, ...toolSequence!.splice(0)].map((item, index) => ({ type: "toolCall" as const, id: `infrastructure-${index}`, name: item.name, arguments: typeof item.arguments === "function" ? item.arguments() : item.arguments })) : firstDelegate ? (revokeDelegate ? ["A"] : ["A", "B"]).map(id => ({ type: "toolCall" as const, id, name: "delegate", arguments: { prompt: `NATIVE_DELEGATE_CHILD_${id}`, tools: standardDelegate ? "standard" : "read_only", task_category: "reason", ...(delegateImagesCase && id === "B" ? { model: `${modelB.provider}/${modelB.id}` } : {}), ...(explicitDelegate && (explicitDelegate.denied || id === "B") ? { model: explicitDelegate.model } : revokeDelegate ? { model: `${modelB.provider}/${modelB.id}` } : {}), ...(timeoutDelegate && id === "A" ? { timeout_sec: 10 } : {}), ...(delegateFiles && id === "B" ? { files: ["delegate-task"] } : {}) } })) : child && revokeDelegate && !writeDelegate && !input.messages.some(message => message.role === "toolResult") ? [{ type: "toolCall" as const, id: "child-private-read", name: "read", arguments: { path: childReadPath } }] : step ? [{ type: "toolCall" as const, id: `factory-tool-${calls}`, name: step.name, arguments: typeof step.arguments === "function" ? step.arguments() : step.arguments }]
         : [{ type: "text" as const, text: "factory synthetic reply" }], stopReason: step || firstDelegate || (child && revokeDelegate && !input.messages.some(message => message.role === "toolResult")) ? "toolUse" as const : "stop" as const, timestamp: Date.now(),
       usage: { input: 5, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 10, cost: { input: pricedResponse ? 0.000005 : 0, output: pricedResponse ? 0.000005 : 0, cacheRead: 0, cacheWrite: 0, total: pricedResponse ? 0.00001 : 0 } } };
     onProviderResponse?.();
@@ -617,10 +635,13 @@ for (const scenario of ["native-goal", "native-goal-budget", "native-compaction-
     const { handleRegisteredAddonConfigApiRequest } = await import("../../runtime/src/channels/web/handlers/addon-config-api.js");
     backend.attachChannel!({ broadcastEvent() {}, resumePendingChats() { expect(getDb().inTransaction).toBe(false); } });
     expect(await pool.applySlashCommand("web:default", "/goal Budget wrap-up")).toMatchObject({ status: "success" });
-    const settings = await handleRegisteredAddonConfigApiRequest(new Request("http://fixture/agent/addons/api/goal/goal?chat_jid=web:default", {
+    const settingsRequest = new Request("http://fixture/agent/addons/api/goal/goal?chat_jid=web:default", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token_budget: 5 }),
-    }), "goal", "goal", (body, status = 200) => Response.json(body, { status }));
-    expect(settings!.status).toBe(200);
+    });
+    admitAddonLocalRequest(settingsRequest, resolveRequestPrincipal(settingsRequest,
+      { mode: "single-user", authEnabled: false }, { getSession: () => null, getUser: () => null, getLocalDisplayName: () => "Fixture owner" })!, () => !settingsRequest.signal.aborted);
+    const settings = await handleRegisteredAddonConfigApiRequest(settingsRequest, "goal", "goal", (body, status = 200) => Response.json(body, { status }));
+    expect(settings!.status, await settings!.clone().text()).toBe(200);
     expect(await settings!.json()).toMatchObject({ continuationQueued: false });
     const initial = getDeferredQueuedFollowups("web:default")[0]!;
     const firstMessage = storeWebMessage(channel, { chatJid: "web:default", content: initial.queuedContent,
@@ -710,10 +731,13 @@ for (const scenario of ["native-goal", "native-goal-budget", "native-compaction-
     expect(getDeferredQueuedFollowups("web:default")).toHaveLength(1);
     expect(extensionKvGet("goal", "thread-goal", "chat", "web:default")).toMatchObject({ status: "active", no_progress_turns: 1 });
     const { handleRegisteredAddonConfigApiRequest } = await import("../../runtime/src/channels/web/handlers/addon-config-api.js");
-    const settings = await handleRegisteredAddonConfigApiRequest(new Request("http://fixture/agent/addons/api/goal/goal?chat_jid=web:default", {
+    const settingsRequest = new Request("http://fixture/agent/addons/api/goal/goal?chat_jid=web:default", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ objective: "Updated through native Settings" }),
-    }), "goal", "goal", (body, status = 200) => Response.json(body, { status }));
-    expect(settings!.status).toBe(200);
+    });
+    admitAddonLocalRequest(settingsRequest, resolveRequestPrincipal(settingsRequest,
+      { mode: "single-user", authEnabled: false }, { getSession: () => null, getUser: () => null, getLocalDisplayName: () => "Fixture owner" })!, () => !settingsRequest.signal.aborted);
+    const settings = await handleRegisteredAddonConfigApiRequest(settingsRequest, "goal", "goal", (body, status = 200) => Response.json(body, { status }));
+    expect(settings!.status, await settings!.clone().text()).toBe(200);
     expect(await settings!.json()).toMatchObject({ continuationQueued: true, continuationReason: "objective_updated" });
     expect(extensionKvGet("goal", "thread-goal", "chat", "web:default")).toMatchObject({ objective: "Updated through native Settings" });
     expect(getDeferredQueuedFollowups("web:default")).toHaveLength(2);
@@ -925,6 +949,52 @@ for (const scenario of ["native-goal", "native-goal-budget", "native-compaction-
   await expect(pool.getContextUsageForChat("web:unbound-context")).rejects.toThrow("Durable application does not construct legacy sessions");
   expect(() => bound.getInputSourceAdmission!("web:newcomer")).toThrow("Unbound");
   const message = { id: "factory-input", chat_jid: "web:default", sender: "user", sender_name: "User", content: "hello factory", timestamp: new Date().toISOString(), is_from_me: false, is_bot_message: false };
+  if (nativeInfrastructure) {
+    const denyHttp = () => { throw Error("Infrastructure proof must not use HTTP"); };
+    const noHttp = spyOn(globalThis, "fetch").mockImplementation(Object.assign(denyHttp, { preconnect: denyHttp }));
+    try {
+      const row = root.transaction(() => {
+        const rowId = storeMessage(message);
+        const admit = bound.getInputSourceAdmission!(message.chat_jid); assert(admit);
+        admit({ message, rowId, database: root }); return rowId;
+      })();
+      expect(await bound.dispatchAcceptedInput!(message.chat_jid, message.id, row!)!()).toBe("settled");
+      expect(toolSequence).toEqual([]);
+      expect(calls).toBe(2);
+      // Policy and skill assertions exercise the actual public model request,
+      // not callbacks loaded into a standalone component harness.
+      for (const [kind, getter] of [["proxmox", "getProxmoxPrompt"], ["portainer", "getPortainerPrompt"]]) {
+        const pkg = join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-" + kind);
+        const native = await import(join(pkg, "index.ts"));
+        expect(planRequests[0]).toContain(JSON.stringify(native[getter!]()).slice(1, -1));
+        expect(planRequests[0]).toContain(kind + "-");
+      }
+      for (const name of ["proxmox", "portainer", "imap"]) {
+        const result = [...observedResults.values()].find(value => value.toolName === name);
+        expect(result).toBeDefined(); if (name !== "imap") assert(result!.isError !== true, JSON.stringify(result));
+      }
+      expect(JSON.stringify([...observedResults.values()])).toContain("contract");
+      expect(JSON.stringify([...observedResults.values()])).toContain("capabilities");
+      expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id=?").get(message.id)).toEqual({ state: "consumed" });
+      expect(root.query("SELECT phase, terminal_disposition FROM service_effect_s01_operations WHERE chat_jid=?").all(message.chat_jid)).toEqual([{ phase: "terminal", terminal_disposition: "completed" }]);
+      const messages = JSON.stringify(root.query("SELECT * FROM messages").all());
+      expect(messages).toContain("hello factory"); expect(messages).toContain("factory synthetic reply");
+      expect(noHttp).not.toHaveBeenCalled();
+      const identity = first!.sessionId;
+      await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
+      backend = await createDefaultApplicationRuntime(owner, async () => services);
+      expect(backend.sessionOptions.getDurableSession!("web:default")!.sessionId).toBe(identity);
+      owner.assertCurrentOwner();
+      const imapResult = [...observedResults.values()].find(value => value.toolName === "imap")!;
+      assert(imapResult.isError !== true, JSON.stringify(imapResult));
+      backend.stop(); await backend.close();
+      for (const spy of sdkSpies) { expect(spy).not.toHaveBeenCalled(); spy.mockRestore(); }
+    } finally {
+      await channel.stop(); await base.queue.shutdown(); await pool.shutdown(); backend.stop(); await backend.close();
+      noHttp.mockRestore(); closeDatabase(); owner.release();
+    }
+    return;
+  }
   if (reviewPackage) {
     const api = await import(join(reviewPackage, "runtime.ts"));
     const service = api.reviewService();
@@ -1290,6 +1360,10 @@ for (const scenario of ["native-goal", "native-goal-budget", "native-compaction-
   if (parentAccounting && (accountingAuthDenied || accountingUnknown || accountingRotate || accountingStorageFailure)) {
     expect(dispatchOutcome).toBe("pending");
     expect(calls).toBe(accountingUnknown || accountingStorageFailure ? 1 : 0);
+    // Cleanup classifies the original reservation; never rebind to rotated auth
+    // or replace a held expense with a free fallback request.
+    expect(root.query("SELECT id,work_id,account_ref,binding_sha256,amount_microusd FROM budget_request_reservations").all()).toEqual([originalParentReservation]);
+    if (accountingUnknown || accountingStorageFailure) expect((originalParentReservation as { amount_microusd: number }).amount_microusd).toBeGreaterThan(0);
     expect(root.query("SELECT state FROM budget_request_reservations").all()).toEqual([{ state: accountingUnknown || accountingStorageFailure ? "unresolved" : "released" }]);
     expect(root.query("SELECT status FROM budget_work WHERE parent_work_id IS NULL").all()).toEqual([{ status: "active" }]);
     expect(root.query("SELECT id FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
@@ -1404,7 +1478,7 @@ for (const scenario of ["native-goal", "native-goal-budget", "native-compaction-
       expect(((failure as AggregateError).errors[0] as AggregateError).errors).toContain(mcpFault);
       expect(clientClose).toHaveBeenCalledTimes(1);
       expect(sandboxClose).toHaveBeenCalledTimes(1);
-      expect(runtimeClose).not.toHaveBeenCalled();
+      expect(runtimeClose).toHaveBeenCalledTimes(1);
       expect(() => owner.assertCurrentOwner()).not.toThrow();
       clientClose.mockRestore(); sandboxClose.mockRestore(); runtimeClose.mockRestore();
       expect(() => process.kill(Number(readFileSync(mcpPid, "utf8")), 0)).toThrow();
@@ -2437,4 +2511,143 @@ for (const scenario of ["native-goal", "native-goal-budget", "native-compaction-
   await expect(createDefaultApplicationRuntime(owner, async () => { realized = true; return services; })).rejects.toThrow("migration");
   expect(realized).toBe(false); expect(readFileSync(file, "utf8")).toBe("preserve legacy bytes\n");
   closeDatabase(); owner.release();
+});
+
+factoryTest("operator-migration", "production operator migration persists exact timeline and copied seed across factory reopen", async () => {
+  const { captureLegacyTimeline } = await import("../../runtime/durable-engine/src/application-legacy-timeline.js");
+  const { recentHistoryHash } = await import("../../runtime/durable-engine/src/application-recent-history.js");
+  const { SESSIONS_DIR } = await import("../../runtime/src/core/config.js");
+  process.env.PICLAW_DB_IN_MEMORY = "0";
+  initDatabase();
+  const root = getDb(), workspace = process.env.PICLAW_WORKSPACE!;
+  const owner = acquireRuntimeLock({ lockPath: join(workspace, "migration-owner.lock"), strictOwnership: true, disabled: false });
+  const model = { provider: "synthetic", id: "approved", name: "Approved", api: "openai-completions", baseUrl: "https://invalid.invalid", input: ["text"], reasoning: false, contextWindow: 10000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  const services = { modelRuntime: { getPhysicalModel: () => model }, modelRegistry: { getAvailable: () => [model] } } as unknown as RuntimeModelServices;
+  storeChatMetadata("web:default", new Date().toISOString());
+  const old = { id: "old-row", chat_jid: "web:default", sender: "user", sender_name: "User", content: "old visible content", timestamp: new Date().toISOString(), is_from_me: false, is_bot_message: false };
+  storeMessage(old);
+  const branch = root.query("SELECT branch_id FROM chat_branches WHERE chat_jid=? AND archived_at IS NULL").get(old.chat_jid) as { branch_id: string };
+  const before = root.query("SELECT rowid,* FROM messages").all();
+  const timeline = captureLegacyTimeline(root, () => owner.assertCurrentOwner());
+  const messages = [{ role: "user" as const, content: "copied recent user", timestamp: 1 }, { role: "assistant" as const, content: [{ type: "text" as const, text: "copied recent assistant" }], api: "openai-completions" as const, provider: "synthetic", model: "old-model", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" as const, timestamp: 2 }];
+  writeFileSync(join(workspace, "AGENTS.md"), "CURRENT_FACTORY_POLICY_ONE");
+  const recentHistory = [{ chatJid: old.chat_jid, branchId: branch.branch_id, sourceSessionId: "original-archive-session", sourceLeafId: "original-leaf", owner: "explicit-fixture-operator", sourceHash: recentHistoryHash(messages), messages }];
+  let backend: Awaited<ReturnType<typeof createDefaultApplicationRuntime>> | undefined;
+  try {
+    await expect(createDefaultApplicationRuntime(owner, async () => services)).rejects.toThrow("migration");
+    const oversized = [{ role: "user" as const, timestamp: 1, content: "x".repeat(8 * 1024 * 1024) }, messages[1]!];
+    const tooMany = Array.from({ length: 501 }, () => messages).flat();
+    for (const bad of [[...recentHistory, ...recentHistory], [{ ...recentHistory[0]!, chatJid: "foreign" }], [{ ...recentHistory[0]!, branchId: "dropped" }],
+      ...[oversized, tooMany, [messages[0]!]].map(messages => [{ ...recentHistory[0]!, messages, sourceHash: recentHistoryHash(messages) }])]) {
+      await expect(createDefaultApplicationRuntime(owner, async () => services, { timeline, recentHistory: bad })).rejects.toThrow();
+      expect(root.query("SELECT 1 FROM sqlite_master WHERE name='durable_schema'").get()).toBeNull();
+    }
+    backend = await createDefaultApplicationRuntime(owner, async () => services, { timeline, recentHistory });
+    expect(root.query("SELECT rowid,* FROM messages").all()).toEqual(before);
+    expect(root.query("SELECT count(*) AS n FROM entries WHERE json_extract(record,'$.kind')='app.recent-history-copy'").get()).toEqual({ n: messages.length });
+    expect(root.query("SELECT count(*) AS n FROM entries WHERE json_extract(record,'$.kind')='app.operator-migration'").get()).toEqual({ n: 1 });
+    expect(root.query("SELECT 1 FROM service_effect_s01_sources WHERE source_id='old-row'").get()).toBeNull();
+    // Public persisted agent state is checked after the real factory reopens below.
+    writeFileSync(join(workspace, "AGENTS.md"), "CURRENT_FACTORY_POLICY_TWO");
+    backend.stop(); await backend.close(); backend = undefined;
+    assertFreshApplicationHistory(root, SESSIONS_DIR);
+    backend = await createDefaultApplicationRuntime(owner, async () => services);
+    backend.stop(); await backend.close(); backend = undefined;
+    expect(JSON.stringify(root.query("SELECT content FROM document_revisions").all())).toContain("CURRENT_FACTORY_POLICY_TWO");
+    const revisions = root.query("SELECT * FROM document_revisions").all();
+    const entries = root.query("SELECT * FROM entries").all();
+    backend = await createDefaultApplicationRuntime(owner, async () => services);
+    backend.stop(); await backend.close(); backend = undefined;
+    expect(root.query("SELECT * FROM document_revisions").all()).toEqual(revisions);
+    expect(root.query("SELECT * FROM entries").all()).toEqual(entries);
+    expect(root.query(`SELECT count(*) AS n FROM documents WHERE kind='"app.host-managed-instructions"' AND retired_at IS NULL`).get()).toEqual({ n: 2 });
+    expect(root.query("SELECT rowid,* FROM messages").all()).toEqual(before);
+    root.query("UPDATE messages SET content='tampered' WHERE id='old-row'").run();
+    await expect(createDefaultApplicationRuntime(owner, async () => services)).rejects.toThrow("legacy timeline");
+    root.query("UPDATE messages SET content=? WHERE id='old-row'").run(old.content);
+    storeMessage({ ...old, id: "unverified-new" });
+    expect(() => assertFreshApplicationHistory(root, SESSIONS_DIR)).toThrow("unverified");
+    root.query("DELETE FROM messages WHERE id='old-row'").run(); // Owned fixture cleanup is permitted, new row still fails.
+    expect(() => assertFreshApplicationHistory(root, SESSIONS_DIR)).toThrow("unverified");
+  } finally { if (backend) { backend.stop(); await backend.close(); } owner.release(); closeDatabase(); }
+});
+
+factoryTest("deferred-mcp-maintenance", "deferred MCP preserves SDK selections and restores exact fetch factory default", async () => {
+  process.env.PICLAW_DB_IN_MEMORY = "0"; initDatabase();
+  const workspace = process.env.PICLAW_WORKSPACE!;
+  const owner = acquireRuntimeLock({ lockPath: join(workspace, "deferred-owner.lock"), strictOwnership: true, disabled: false });
+  const model = { provider: "synthetic", id: "approved", name: "Approved", api: "openai-completions", baseUrl: "https://invalid.invalid", input: ["text"], reasoning: false, contextWindow: 10000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } as Model<"openai-completions">;
+  const runtime = await ModelRuntime.create({ modelsPath: null, modelsStore: { read: async () => undefined, write: async () => {}, delete: async () => {} }, credentials: createTestCredentialStore({ synthetic: { type: "api_key", key: "synthetic-only" } }), allowModelNetwork: false, refreshOnCreate: false });
+  runtime.registerNativeProvider({ id: model.provider, name: "Synthetic", getModels: () => [model], auth: { apiKey: { name: "Synthetic", resolve: async () => ({ auth: { apiKey: "synthetic-only" }, source: "fixture" }) } }, stream: () => { throw Error("No generation"); }, streamSimple: () => { throw Error("No generation"); } });
+  await runtime.refresh({ allowNetwork: false });
+  const services = { modelRuntime: runtime, modelRegistry: new ModelRegistry(runtime) } as RuntimeModelServices;
+  const root = getDb();
+  const pid = join(workspace, "deferred-mcp-pid");
+  mkdirSync(join(workspace, ".pi"), { recursive: true });
+  writeFileSync(getConfigPath(), JSON.stringify({ domains: { mcp: { engine: "native", codemode: "on" } } }), { mode: 0o600 });
+  writeFileSync(join(workspace, ".pi/mcp.json"), JSON.stringify({ mcpServers: { fixture: { command: process.execPath, args: [join(import.meta.dir, "mcp-stdio-fixture.ts"), join(workspace, "deferred-calls"), pid] } } }));
+  await hydrateMcpKeychainCredentials(workspace, async () => { throw Error("No keychain access allowed"); });
+  storeChatMetadata("web:default", new Date().toISOString());
+  storeMessage({ id: "deferred-old-row", chat_jid: "web:default", sender: "user", sender_name: "User", content: "synthetic legacy content", timestamp: new Date().toISOString(), is_from_me: false, is_bot_message: false });
+  const { captureLegacyTimeline } = await import("../../runtime/durable-engine/src/application-legacy-timeline.js");
+  const timeline = captureLegacyTimeline(root, () => owner.assertCurrentOwner());
+  writeFileSync(join(workspace, "AGENTS.md"), "DEFERRED_POLICY_ONE");
+  const bridge = await import("../../runtime/src/secure/mcp-keychain.js");
+  const { McpClient } = await import("../../node_modules/@earendil-works/pi-mcp");
+  const leaseSpy = spyOn(bridge, "acquireMcpSessionBridge");
+  const connectSpy = spyOn(McpClient.prototype, "connect");
+  let backend: Awaited<ReturnType<typeof createDefaultApplicationRuntime>> | undefined;
+  const inspect = async (selection?: string[]) => {
+    const path = (root.query("PRAGMA database_list").all() as {name:string;file:string}[]).find(row => row.name === "main")!.file;
+    const models = createHostModels(runtime, [model], { signal: new AbortController().signal, async authorize() {}, assertCurrent() { owner.assertCurrentOwner(); } });
+    const harness = await Harness.open(await SqliteStorage.open(new BunSqliteDatabase(path, { root, assertOwner: () => owner.assertCurrentOwner(), fenceTransactions: true })), { models, registry: createRegistry() }, context);
+    try {
+      const app = await harness.root(context);
+      return await app.commit(async tx => {
+        const doc = await tx.doc(AgentDoc, app.id);
+        if (selection !== undefined) doc.tools = selection;
+        return JSON.parse(JSON.stringify(doc.tools)) as string[];
+      }, context);
+    } finally { await harness.close(context); }
+  };
+  try {
+    backend = await createDefaultApplicationRuntime(owner, async () => services, { timeline, recentHistory: [] }, { offlineMaintenance: true });
+    expect(existsSync(pid)).toBe(false);
+    expect(leaseSpy).toHaveBeenCalledTimes(0);
+    expect(connectSpy).toHaveBeenCalledTimes(0);
+    expect(() => backend!.bind({} as never)).toThrow("Offline maintenance");
+    await backend.close(); backend = undefined;
+    const factory = await inspect();
+    expect(factory).toContain("fetch"); expect(factory.some(name => name.startsWith("mcp__"))).toBe(false);
+    writeFileSync(join(workspace, "AGENTS.md"), "DEFERRED_POLICY_TWO");
+    backend = await createDefaultApplicationRuntime(owner, async () => services);
+    expect(existsSync(pid)).toBe(true);
+    expect(leaseSpy).toHaveBeenCalledTimes(1);
+    expect(connectSpy).toHaveBeenCalledTimes(1);
+    await backend.close(); backend = undefined;
+    expect(JSON.stringify(root.query("SELECT content FROM document_revisions").all())).toContain("DEFERRED_POLICY_TWO");
+    expect((await inspect()).sort()).toEqual([...factory, "mcp__fixture__echo"].sort());
+    for (const selection of [[], ["read"], ["mcp__fixture__echo"]]) {
+      await inspect(selection);
+      backend = await createDefaultApplicationRuntime(owner, async () => services, undefined, { offlineMaintenance: true });
+      await backend.close(); backend = undefined;
+      expect(await inspect()).toEqual(selection);
+      backend = await createDefaultApplicationRuntime(owner, async () => services);
+      await backend.close(); backend = undefined;
+      expect(await inspect()).toEqual(selection);
+    }
+    // Unknown historical names remain byte-for-byte selected during maintenance;
+    // normal startup still validates availability rather than silently dropping them.
+    await inspect(["mcp_x"]);
+    backend = await createDefaultApplicationRuntime(owner, async () => services, undefined, { offlineMaintenance: true });
+    await backend.close(); backend = undefined;
+    expect(await inspect()).toEqual(["mcp_x"]);
+    await expect(createDefaultApplicationRuntime(owner, async () => services)).rejects.toThrow("Persisted host tool not available");
+    const leasesBefore = leaseSpy.mock.calls.length, connectsBefore = connectSpy.mock.calls.length;
+    writeFileSync(join(workspace, ".pi/mcp.json"), JSON.stringify({ mcpServers: { fixture: { url: "https://invalid.invalid/mcp" } } }));
+    await hydrateMcpKeychainCredentials(workspace, async () => { throw Error("No keychain access allowed"); });
+    await expect(createDefaultApplicationRuntime(owner, async () => { throw Error("Must reject metadata before models"); }, undefined, { offlineMaintenance: true })).rejects.toThrow("Durable MCP");
+    expect(leaseSpy).toHaveBeenCalledTimes(leasesBefore);
+    expect(connectSpy).toHaveBeenCalledTimes(connectsBefore);
+  } finally { await backend?.close(); leaseSpy.mockRestore(); connectSpy.mockRestore(); owner.release(); closeDatabase(); }
 });

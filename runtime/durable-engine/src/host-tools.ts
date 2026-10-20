@@ -3,6 +3,30 @@ import type { Static, TSchema } from "@earendil-works/pi-ai";
 import type { JsonValue } from "@earendil-works/chord";
 import { defineTool, type ToolRegistration, type ConversationId, type TaskId } from "@earendil-works/pi-durable";
 
+// Identity metadata only: no ownership, adoption, or execution ledger.
+const hostToolBindings = new WeakMap<object, { definition: object; execute: unknown; declaration: string; registrationDeclaration: string; registrationExecute: unknown; assertCurrent(): void }>();
+
+/** Verify an actual bridge result against the exact definition used to construct
+ * it. A matching name/schema, copied registration, or legacy execute is not proof.
+ * Source qualification must additionally supply its own guard at use time.
+ */
+export function assertHostToolBinding(registration: object, definition: ToolDefinition<any, any>): void {
+  const proof = hostToolBindings.get(registration);
+  if (!proof || proof.definition !== definition || proof.execute !== definition.execute ||
+      proof.declaration !== JSON.stringify(definition) || proof.registrationDeclaration !== JSON.stringify(registration) ||
+      proof.registrationExecute !== (registration as { execute?: unknown }).execute) throw new Error("Host tool binding identity required");
+  proof.assertCurrent();
+}
+
+/** Declaration parity for an actual guarded bridge, not proof of callback semantics. */
+export function assertHostToolDeclaration(registration: object, declaration: ToolDefinition<any, any>): void {
+  const proof = hostToolBindings.get(registration);
+  if (!proof) throw new Error("Host tool binding identity required");
+  assertHostToolBinding(registration, proof.definition as ToolDefinition<any, any>);
+  const shape = (value: any) => JSON.stringify({ name: value.name, label: value.label, description: value.description, parameters: value.parameters });
+  if (shape(proof.definition) !== shape(declaration)) throw new Error("Host tool declaration mismatch");
+}
+
 /** Host-owned, invocation-local port. No 1.2 session/context is stored by durable.
  * invoke MUST arrange assertAllowed immediately before each actual effect, after
  * any await, including effects inside execute. Passing a signal alone is not a
@@ -50,7 +74,7 @@ export function createHostTool<P extends TSchema, D extends JsonValue>(
     catch { throw new Error("Host tool authority unavailable"); }
     if (allowed === false) throw new Error("Host tool permission denied");
   };
-  return defineTool<P, D>({
+  const registration = defineTool<P, D>({
     name: tool.name, description: tool.description, parameters,
     prepareArguments: prepare ? raw => {
       checkAuthority();
@@ -104,4 +128,6 @@ export function createHostTool<P extends TSchema, D extends JsonValue>(
       }
     },
   });
+  hostToolBindings.set(registration, { definition: tool, execute: tool.execute, declaration: JSON.stringify(tool), registrationDeclaration: JSON.stringify(registration), registrationExecute: registration.execute, assertCurrent: checkAuthority });
+  return registration;
 }

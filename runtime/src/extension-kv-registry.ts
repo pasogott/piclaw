@@ -14,6 +14,8 @@ import type { KvScope, KvQueryOptions } from "./db/extension-kv.js";
 export interface ExtensionKvAuthority {
   readonly chatJid: string;
   readonly extensionId: string;
+  readonly globalRead?: boolean;
+  readonly globalWrite?: boolean;
   assertCurrent(): void;
   write<T>(body: () => T): T;
 }
@@ -115,7 +117,9 @@ function effect<T>(extensionId: string, scope: KvScope | undefined, scopeKey: st
   }
   const check = () => {
     authority.assertCurrent();
-    if (extensionId !== authority.extensionId || scope !== "chat" || !scopeKey || scopeKey !== authority.chatJid)
+    const chat = scope === "chat" && !!scopeKey && scopeKey === authority.chatJid;
+    const global = scope === "global" && (scopeKey === undefined || scopeKey === "") && (write ? authority.globalWrite === true : authority.globalRead === true);
+    if (extensionId !== authority.extensionId || !(chat || global))
       throw Error("Extension KV scope denied");
   };
   const invoke = () => { check(); const result = body(); check(); return result; };
@@ -127,7 +131,10 @@ const router: ExtensionKvStore = Object.freeze({
   delete: (id: string, key: string, scope?: KvScope, chat?: string) => effect(id, scope, chat, true, () => registeredStore.delete(id, key, scope, chat)),
   list: (id: string, prefix?: string, scope?: KvScope, chat?: string) => effect(id, scope, chat, false, () => registeredStore.list(id, prefix, scope, chat)),
   query: <T>(id: string, options: KvQueryOptions) => effect(id, options.scope, options.scopeKey, false, () => registeredStore.query<T>(id, options)),
-  clear: (id: string, scope?: KvScope, chat?: string) => effect(id, scope, chat, true, () => registeredStore.clear(id, scope, chat)),
+  clear: (id: string, scope?: KvScope, chat?: string) => {
+    if (operationAuthority.getStore()) throw Error("Extension KV bulk clear denied");
+    return effect(id, scope, chat, true, () => registeredStore.clear(id, scope, chat));
+  },
 });
 
 /** Get the stable authority-aware registry, not its mutable backing store. */

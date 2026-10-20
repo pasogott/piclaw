@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import { createCurrentPiclawServiceOutboxStore, createServiceOutboxEnqueueInserter } from "../../src/service-effects/current-piclaw/service-outbox-store.js";
 import { installServiceOutboxSchema } from "../../src/service-effects/current-piclaw/service-outbox-schema.js";
 import { installServiceWorkSchema } from "../../src/service-effects/current-piclaw/service-work-schema.js";
 import { installTerminalSettlementCompositionSchema } from "../../src/service-effects/current-piclaw/terminal-settlement-schema.js";
@@ -130,6 +131,57 @@ describe("EF-S02 composition schema and construction hardening", () => {
       ).n,
     ).toBe(1);
     database.close();
+  });
+
+  test("unrelated historical FK violations preserve rows and do not block construction", () => {
+    const database = new Database(":memory:", { strict: true });
+    try {
+      installTerminalSettlementCompositionSchema(database);
+      database.exec(`
+        CREATE TABLE legacy_parent(id INTEGER PRIMARY KEY);
+        CREATE TABLE dummyLegacyLogFK(parent_id INTEGER REFERENCES legacy_parent(id));
+        PRAGMA foreign_keys=OFF;
+        INSERT INTO dummyLegacyLogFK VALUES(1);
+        PRAGMA foreign_keys=ON;
+      `);
+      const before = database.query("PRAGMA foreign_key_check").all();
+      expect(before).toHaveLength(1);
+      expect(createCurrentPiclawTerminalSettlementStore(database, new Payloads(), new Runtime()).ok).toBeTrue();
+      expect(createServiceOutboxEnqueueInserter(database).ok).toBeTrue();
+      expect(createCurrentPiclawServiceOutboxStore(database, {
+        hitFault() {}, recordTrace() {},
+      }).ok).toBeTrue();
+      expect(database.query("PRAGMA foreign_key_check").all()).toEqual(before);
+      expect(database.query("SELECT * FROM dummyLegacyLogFK").all()).toEqual([{ parent_id: 1 }]);
+      expect(() => database.exec("INSERT INTO dummyLegacyLogFK VALUES(2)")).toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  test("required S02 and S05 table FK violations still reject terminal construction", () => {
+    for (const table of ["service_effect_s02_commit_outbox", "service_effect_s05_decisions"]) {
+      const database = new Database(":memory:", { strict: true });
+      try {
+        installTerminalSettlementCompositionSchema(database);
+        database.exec("PRAGMA foreign_keys=OFF");
+        if (table === "service_effect_s02_commit_outbox") {
+          database.exec("INSERT INTO service_effect_s02_commit_outbox VALUES('missing-operation',0,'missing-outbox')");
+        } else {
+          database.exec(`
+            CREATE TABLE legacy_parent(id INTEGER PRIMARY KEY);
+            ALTER TABLE service_effect_s05_decisions ADD COLUMN parent_id INTEGER REFERENCES legacy_parent(id);
+            INSERT INTO service_effect_s05_decisions(decision_key,method,request_hash,outcome,outbox_id,parent_id)
+            VALUES('decision','enqueue','${"a".repeat(64)}','applied','outbox',1);
+          `);
+        }
+        database.exec("PRAGMA foreign_keys=ON");
+        expect(database.query("PRAGMA foreign_key_check").all().length).toBeGreaterThan(0);
+        expect(createCurrentPiclawTerminalSettlementStore(database, new Payloads(), new Runtime()).ok).toBeFalse();
+      } finally {
+        database.close();
+      }
+    }
   });
 
   test("factory rejects missing disabled incomplete and incompatible schemas", () => {

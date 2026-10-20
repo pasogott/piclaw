@@ -1,5 +1,7 @@
+import { assertHostToolDeclaration } from "./host-tools.js";
+import { installedAddonProfiles, type InstalledAddonProfile } from "./host-installed-addon-profiles.js";
 import { DefaultResourceLoader, type LoadExtensionsResult, type SettingsManager, type ToolDefinition, type RegisteredCommand } from "../../src/durable-legacy-sdk.js";
-import { getInstalledAddonExtensionPaths, resolveAddonPackageEntries } from "../../src/addons/package-entries.js";
+import { getInstalledAddonExtensionPaths, resolveAddonPackageEntries, listInstalledAddonPackageDirs, readInstalledAddonPackage } from "../../src/addons/package-entries.js";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -113,6 +115,9 @@ const profiles = {
   delegate: { label: "Delegate", name: "@rcarmo/piclaw-addon-delegate", version: "0.2.20", files: approvedDelegateFiles, shadows: ["delegate.js", "delegate.json", "delegate/index.js", "delegate/package.json", "compat/extension-kv.js", "compat/package.json"], events: ["session_start", "model_select", "before_agent_start"] },
 } as const;
 type Profile = keyof typeof profiles;
+export const applicationAddonSourceProfiles = { ...profiles, ...installedAddonProfiles };
+const sourceProfiles = applicationAddonSourceProfiles;
+type SourceProfile = keyof typeof sourceProfiles;
 type Extension = LoadExtensionsResult["extensions"][number];
 type InstalledSource = Readonly<{ cwd: string; packageDir: string; entry: string; manifest: string; files: string }>;
 type InstalledRegistration = Readonly<{
@@ -125,6 +130,7 @@ type InstalledRegistration = Readonly<{
   tools: readonly { name: string; definition: ToolDefinition; execute: unknown; declaration: string }[];
   commands: readonly { name: string; command: RegisteredCommand; handler: RegisteredCommand["handler"]; completions: RegisteredCommand["getArgumentCompletions"]; declaration: string }[];
 }>;
+const loadedProfileSources = new WeakMap<LoadExtensionsResult, ReadonlyMap<SourceProfile, InstalledSource>>();
 const loadedInstalledSources = new WeakMap<LoadExtensionsResult, ReadonlyMap<Extension, InstalledRegistration>>();
 // DefaultResourceLoader's first reload may reuse a process-wide factory cache.
 // The SDK root does not export its cache clear API. Remember the source BEFORE
@@ -134,11 +140,14 @@ const loadedInstalledSources = new WeakMap<LoadExtensionsResult, ReadonlyMap<Ext
 // This is cache provenance metadata, not durable ownership/adoption authority.
 const attemptedInstalledSources = new Map<string, InstalledSource | undefined>();
 
-function captureApprovedSource(cwd: string, installedEntries: readonly string[], kind: Profile): InstalledSource | undefined {
+function captureApprovedSource(cwd: string, installedEntries: readonly string[], kind: SourceProfile): InstalledSource | undefined {
   try {
-    const profile = profiles[kind];
+    const profile = sourceProfiles[kind];
     const workspace = realpathSync(cwd);
-    const packageDir = join(workspace, ".pi/extensions/node_modules", profile.name);
+    const candidates = [profile.name, ...(kind === "eml-viewer" ? ["piclaw-addon-eml-viewer"] : [])]
+      .map(name => join(workspace, ".pi/extensions/node_modules", name)).filter(path => existsSync(path));
+    if (candidates.length !== 1) return undefined;
+    const packageDir = candidates[0]!;
     // Neither a renamed package nor a symlink out of the installed namespace
     // grants provenance. Entry/helper links may not escape the canonical root.
     if (realpathSync(packageDir) !== packageDir) return undefined;
@@ -151,8 +160,9 @@ function captureApprovedSource(cwd: string, installedEntries: readonly string[],
     const pkg = JSON.parse(manifest);
     if (pkg.name !== profile.name || pkg.version !== profile.version || pkg.type !== "module") return undefined;
     const entries = resolveAddonPackageEntries(packageDir, pkg.pi?.extensions);
-    const entry = join(packageDir, "index.ts");
-    if (entries.length !== 1 || realpathSync(entries[0]!) !== entry || !installedEntries.some(path => resolve(path) === entry)) return undefined;
+    const entryFile = "entry" in profile ? profile.entry : "index.ts";
+    const entry = join(packageDir, entryFile || "package.json");
+    if (entryFile ? entries.length !== 1 || realpathSync(entries[0]!) !== entry || !installedEntries.some(path => resolve(path) === entry) : entries.length !== 0) return undefined;
     // The pinned TS imports use .js specifiers. A sibling JS file would win
     // resolution and is NOT covered by the approved TS content proof.
     if (profile.shadows.some(file => existsSync(join(packageDir, file)))) return undefined;
@@ -319,16 +329,32 @@ export async function loadApplicationExtensionCatalog(options: {
   settingsManager: SettingsManager;
 }): Promise<LoadExtensionsResult> {
   const installedEntries = getInstalledAddonExtensionPaths(options.cwd);
-  const snapshots = (Object.keys(profiles) as Profile[]).map(kind => {
+  const snapshots = (Object.keys(sourceProfiles) as SourceProfile[]).map(kind => {
     const before = captureApprovedSource(options.cwd, installedEntries, kind);
-    const entry = join(realpathSync(options.cwd), ".pi/extensions/node_modules", profiles[kind].name, "index.ts");
-    if (attemptedInstalledSources.has(entry) && !sameSource(attemptedInstalledSources.get(entry), before))
-      throw Error(`Installed ${profiles[kind].label} loader cache provenance changed; process restart required`);
+    const profile = sourceProfiles[kind];
+    const entry = before?.entry ?? join(realpathSync(options.cwd), ".pi/extensions/node_modules", kind === "eml-viewer" && existsSync(join(options.cwd, ".pi/extensions/node_modules/piclaw-addon-eml-viewer")) ? "piclaw-addon-eml-viewer" : profile.name, "entry" in profile ? profile.entry || "package.json" : "index.ts");
+    if (attemptedInstalledSources.has(entry) && !sameSource(attemptedInstalledSources.get(entry), before)) {
+      attemptedInstalledSources.set(entry, undefined);
+      throw Error(`Installed ${sourceProfiles[kind].label} loader cache provenance changed; process restart required`);
+    }
     if (existsSync(entry)) attemptedInstalledSources.set(entry, before);
     return { kind, before, entry };
   });
+  // Classification MUST precede loader.reload(): unknown factories can perform
+  // module-level I/O even when their eventual registrations are rejected.
+  const approvedPackages = new Set(snapshots.flatMap(snapshot => snapshot.before ? [snapshot.before.packageDir] : []));
+  for (const packageDir of listInstalledAddonPackageDirs(join(options.cwd, ".pi/extensions/node_modules"))) {
+    const manifest = readInstalledAddonPackage(packageDir)?.manifest;
+    if ((manifest?.name?.includes("piclaw-addon-") || manifest?.pi) && !approvedPackages.has(packageDir))
+      throw Error(`Unqualified installed add-on package before evaluation: ${packageDir}`);
+  }
+  const approvedEntries = new Set(snapshots.filter(snapshot => snapshot.before).map(snapshot => snapshot.entry));
+  for (const entry of installedEntries) {
+    if (!approvedEntries.has(resolve(entry)))
+      throw Error(`Unqualified installed extension source before evaluation: ${entry}`);
+  }
   const loader = new DefaultResourceLoader({ ...options,
-    additionalExtensionPaths: installedEntries,
+    additionalExtensionPaths: installedEntries, noExtensions: true,
     noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
   });
   try {
@@ -343,7 +369,7 @@ export async function loadApplicationExtensionCatalog(options: {
   for (const { kind, before } of snapshots) if (before && sameSource(before, captureApprovedSource(options.cwd, getInstalledAddonExtensionPaths(options.cwd), kind))) {
     for (const extension of catalog.extensions) {
       const definition = extension.tools.get(kind === "goal" ? "get_goal" : kind)?.definition;
-      if (resolve(extension.resolvedPath) === before.entry && (definition || kind === "observability")) sources.set(extension, Object.freeze({
+      if (resolve(extension.resolvedPath) === before.entry && (definition || kind === "observability" || kind in installedAddonProfiles)) sources.set(extension, Object.freeze({
         source: before, definition, execute: definition?.execute, declaration: JSON.stringify(definition), handlerMap: extension.handlers,
         tools: [...extension.tools].map(([name, { definition }]) => Object.freeze({ name, definition, execute: definition.execute, declaration: JSON.stringify(definition) })),
         commands: [...extension.commands].map(([name, command]) => Object.freeze({ name, command, handler: command.handler, completions: command.getArgumentCompletions, declaration: JSON.stringify(command) })),
@@ -352,6 +378,7 @@ export async function loadApplicationExtensionCatalog(options: {
     }
   }
   loadedInstalledSources.set(catalog, sources);
+  loadedProfileSources.set(catalog, new Map(snapshots.flatMap(({ kind, before }) => before ? [[kind, before] as const] : [])));
   return catalog;
 }
 
@@ -386,11 +413,19 @@ export async function qualifyInstalledObservability(catalog: LoadExtensionsResul
  * hooks through a fabricated AgentSession context. Keep all diagnostics so a
  * successful startup can never silently mean missing installed capabilities.
  */
-export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensionsResult, plan?: Awaited<ReturnType<typeof qualifyInstalledPlan>>, delegate?: Awaited<ReturnType<typeof qualifyInstalledDelegate>>, codeReview?: Awaited<ReturnType<typeof qualifyInstalledCodeReview>>, editableTable?: Awaited<ReturnType<typeof qualifyInstalledEditableTable>>, officeViewer?: ReturnType<typeof qualifyInstalledOfficeViewer>, drawio?: Awaited<ReturnType<typeof qualifyInstalledDrawio>>, goal?: Awaited<ReturnType<typeof qualifyInstalledGoal>>, observability?: Awaited<ReturnType<typeof qualifyInstalledObservability>>, restic?: Awaited<ReturnType<typeof qualifyInstalledRestic>>): void {
+export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensionsResult, plan?: Awaited<ReturnType<typeof qualifyInstalledPlan>>, delegate?: Awaited<ReturnType<typeof qualifyInstalledDelegate>>, codeReview?: Awaited<ReturnType<typeof qualifyInstalledCodeReview>>, editableTable?: Awaited<ReturnType<typeof qualifyInstalledEditableTable>>, officeViewer?: ReturnType<typeof qualifyInstalledOfficeViewer>, drawio?: Awaited<ReturnType<typeof qualifyInstalledDrawio>>, goal?: Awaited<ReturnType<typeof qualifyInstalledGoal>>, observability?: Awaited<ReturnType<typeof qualifyInstalledObservability>>, restic?: Awaited<ReturnType<typeof qualifyInstalledRestic>>, receipts: readonly InstalledAddonBindingReceipt[] = []): void {
+  const bindings = receipts.map(receipt => validateInstalledAddonReceipt(catalog, receipt));
   observability?.assertCurrent(); restic?.assertCurrent(); goal?.assertCurrent(); plan?.assertCurrent(); delegate?.assertCurrent(); codeReview?.assertCurrent(); editableTable?.assertCurrent(); officeViewer?.assertCurrent(); drawio?.assertCurrent();
   const blocked: string[] = catalog.errors.map(error => `${error.path}: extension load failed`);
+  for (const [kind, source] of loadedProfileSources.get(catalog) ?? []) {
+    if (!sameSource(source, captureApprovedSource(source.cwd, getInstalledAddonExtensionPaths(source.cwd), kind)))
+      blocked.push(`${kind}: installed source changed`);
+    if (kind in installedAddonProfiles && installedAddonProfiles[kind as InstalledAddonProfile].requiresNativeBinding && !bindings.some(binding => binding.qualified.kind === kind))
+      blocked.push(`${kind}: native capabilities require explicit application binding (source qualification is not binding proof)`);
+  }
   for (const extension of catalog.extensions) {
     for (const { definition } of extension.tools.values()) {
+      if (bindings.some(binding => binding.qualified.extension === extension && binding.qualified.capabilities.tools.includes(definition.name))) continue;
       if (extension === restic?.extension && definition === restic.definition) continue;
       if (extension === goal?.extension && extension.tools.get(definition.name)?.definition === definition) continue;
       if (extension === plan?.extension && definition === plan.definition) continue;
@@ -402,6 +437,7 @@ export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensio
       blocked.push(`${definition.name}: no operation-owned host effect port`);
     }
     for (const event of extension.handlers.keys()) {
+      if (bindings.some(binding => binding.qualified.extension === extension && binding.qualified.capabilities.events.includes(event))) continue;
       if (extension === observability?.extension && (profiles.observability.events as readonly string[]).includes(event)) continue; // Native request hook, process startup and static skill metadata.
       if (extension === goal?.extension) continue; // Replaced by native request/terminal hooks, not invoked.
       if (extension === plan?.extension && event === "before_agent_start") continue;
@@ -411,15 +447,129 @@ export function assertApplicationExtensionCatalogSupported(catalog: LoadExtensio
       if (extension === delegate?.extension && delegate.nativeLifecycle.events.some(allowed => allowed === event)) continue;
       blocked.push(`${extension.path}: ${event} lifecycle not bound to durable host`);
     }
-    if ((extension.commands.size || extension.shortcuts.size) && extension !== goal?.extension) {
+    if ((extension.commands.size || extension.shortcuts.size) && extension !== goal?.extension && !bindings.some(binding => binding.qualified.extension === extension && !extension.shortcuts.size)) {
       blocked.push(`${extension.path}: session commands/shortcuts not bound to durable host`);
     }
   }
   // Queued provider/MCP/action registrations must not disappear merely because
   // this application lifetime has no ExtensionRunner.bindCore/session_start.
   const runtime = catalog.runtime;
-  if (runtime.pendingProviderRegistrations.length || runtime.pendingNativeProviderRegistrations.length || runtime.pendingVirtualModelRegistrations.length || runtime.mcpServers.list().length) {
+  if ([...runtime.pendingProviderRegistrations, ...runtime.pendingNativeProviderRegistrations, ...runtime.pendingVirtualModelRegistrations].some(registration => !bindings.some(binding => binding.providerRegistrations.includes(registration))) || runtime.mcpServers.list().length) {
     blocked.push("extension provider/MCP registrations not bound to durable host");
   }
   if (blocked.length) throw new Error(`Durable extension qualification required:\n${blocked.join("\n")}`);
+}
+
+/** Source/export qualification is NOT a host binding receipt. In particular Codex
+ * provider registration remains pending until the physical dispatch owner binds
+ * it. The application support assertion deliberately grants no new exemptions.
+ */
+export function assertInstalledNativeExports(exports: Record<string, unknown>, names: readonly string[], label: string): void {
+  if (names.some(name => typeof exports[name] !== "function")) throw Error(`Installed ${label} native exports required`);
+}
+export async function qualifyInstalledAddon(catalog: LoadExtensionsResult, cwd: string, kind: InstalledAddonProfile) {
+  const profile = installedAddonProfiles[kind];
+  const source = loadedProfileSources.get(catalog)?.get(kind);
+  if (!source) return undefined;
+  const extension = catalog.extensions.find(extension => resolve(extension.resolvedPath) === source.entry);
+  if (profile.entry && !extension) throw Error(`Installed ${kind} registration missing`);
+  const prior = extension && loadedInstalledSources.get(catalog)?.get(extension);
+  const modules: { file: string; exports: Record<string, unknown>; functions: Readonly<Record<string, unknown>> }[] = [];
+  const assertCurrent = () => {
+    if (!sameSource(source, captureApprovedSource(cwd, getInstalledAddonExtensionPaths(cwd), kind))) throw Error(`Installed ${kind} source changed`);
+    if (extension) {
+      if (!prior || !catalog.extensions.includes(extension) || extension.handlers !== prior.handlerMap ||
+        extension.tools.size !== prior.tools.length || extension.commands.size !== prior.commands.length || extension.shortcuts.size ||
+        prior.tools.some(tool => extension.tools.get(tool.name)?.definition !== tool.definition || tool.definition.execute !== tool.execute || JSON.stringify(tool.definition) !== tool.declaration) ||
+        prior.commands.some(command => extension.commands.get(command.name) !== command.command || command.command.handler !== command.handler || command.command.getArgumentCompletions !== command.completions || JSON.stringify(command.command) !== command.declaration) ||
+        extension.handlers.size !== prior.handlers.size || [...prior.handlers].some(([event, handlers]) => {
+          const current = extension.handlers.get(event);
+          return !current || current.length !== handlers.length || current.some((handler, index) => handler !== handlers[index]);
+        })) throw Error(`Installed ${kind} capabilities changed`);
+    }
+    for (const module of modules) for (const [name, fn] of Object.entries(module.functions))
+      if (module.exports[name] !== fn) throw Error(`Installed ${kind} native export changed: ${name}`);
+  };
+  assertCurrent();
+  for (const [file, names] of Object.entries(profile.nativeExports)) {
+    const exports = await import(pathToFileURL(join(source.packageDir, file)).href);
+    assertCurrent();
+    assertInstalledNativeExports(exports, names, `${kind}: ${file}`);
+    modules.push({ file, exports, functions: Object.freeze(Object.fromEntries((names as readonly string[]).map(name => [name, exports[name]]))) });
+  }
+  assertCurrent();
+  const qualified = Object.freeze({
+    kind, source, extension, assertCurrent,
+    nativeExports: Object.freeze(Object.fromEntries(modules.map(module => [module.file, module.functions]))),
+    // Explicit package paths; never call resources_discover with fake events.
+    skillPaths: Object.freeze(profile.skillPaths.map(file => join(source.packageDir, file))),
+    capabilities: Object.freeze({
+      tools: Object.freeze(prior?.tools.map(tool => tool.name) ?? []),
+      commands: Object.freeze(prior?.commands.map(command => command.name) ?? []),
+      events: Object.freeze([...(prior?.handlers.keys() ?? [])]),
+      routes: profile.routes,
+      configActions: profile.configActions,
+      nativeBinding: "unbound" as const,
+      providerBinding: kind === "codex-conversion" ? "required-unbound" as const : "not-applicable" as const,
+    }),
+  });
+  qualifiedAddonCatalogs.set(qualified, catalog);
+  return qualified;
+}
+
+type QualifiedInstalledAddon = NonNullable<Awaited<ReturnType<typeof qualifyInstalledAddon>>>;
+const qualifiedAddonCatalogs = new WeakMap<object, LoadExtensionsResult>();
+declare const receiptBrand: unique symbol;
+export type InstalledAddonBindingReceipt = Readonly<{ [receiptBrand]: true }>;
+export interface InstalledAddonBindings {
+  tools: readonly object[];
+  lifecycle: Readonly<Record<string, (...args: any[]) => unknown>>;
+  commands: Readonly<Record<string, (...args: any[]) => unknown>>;
+  provider?: { assertCurrent(): void; registrations: readonly object[] };
+  resources?: { assertCurrent(): void };
+}
+const addonBindingReceipts = new WeakMap<object, { qualified: QualifiedInstalledAddon; assertCurrent(): void; providerRegistrations: readonly object[] }>();
+/** Trusted application composition-root API. The root supplies real native host
+ * hooks/instances, never legacy handlers. This proves bridge identity and complete
+ * wiring, NOT the semantics/safety of arbitrary callbacks (qualified factory tests
+ * own that proof). Keep this constructor out of untrusted extension APIs.
+ */
+export function bindInstalledAddon(qualified: QualifiedInstalledAddon, binding: InstalledAddonBindings): InstalledAddonBindingReceipt {
+  const catalog = qualifiedAddonCatalogs.get(qualified);
+  if (!catalog) throw Error("Qualified installed add-on identity required");
+  const prior = qualified.extension && loadedInstalledSources.get(catalog)?.get(qualified.extension);
+  const tools = [...binding.tools], lifecycle = { ...binding.lifecycle }, commands = { ...binding.commands };
+  const provider = binding.provider, resources = binding.resources;
+  const providerAssertion = provider?.assertCurrent, resourceAssertion = resources?.assertCurrent;
+  const providerRegistrations = Object.freeze([...(provider?.registrations ?? [])]);
+  const exact = (actual: Record<string, unknown>, expected: readonly string[]) => {
+    if (Object.keys(actual).length !== expected.length || expected.some(key => typeof actual[key] !== "function")) throw Error("Incomplete native capability binding");
+  };
+  const assertCurrent = () => {
+    qualified.assertCurrent();
+    if (tools.length !== (prior?.tools.length ?? 0) || new Set(tools).size !== tools.length) throw Error("Incomplete native tool binding");
+    (prior?.tools ?? []).forEach((tool, index) => assertHostToolDeclaration(tools[index]!, tool.definition));
+    exact(lifecycle, qualified.capabilities.events); exact(commands, qualified.capabilities.commands);
+    const legacy = [...(prior?.handlers.values() ?? [])].flat();
+    if ([...Object.values(lifecycle), ...Object.values(commands)].some(fn => legacy.includes(fn) || prior?.commands.some(command => command.handler === fn))) throw Error("Legacy handler is not a native binding");
+    if (qualified.capabilities.providerBinding === "required-unbound" && (!provider || !providerRegistrations.length)) throw Error("Native provider binding required");
+    if (provider) {
+      if (provider.assertCurrent !== providerAssertion || provider.registrations.length !== providerRegistrations.length || provider.registrations.some((item, index) => item !== providerRegistrations[index])) throw Error("Provider binding changed");
+      const pending = [...catalog.runtime.pendingProviderRegistrations, ...catalog.runtime.pendingNativeProviderRegistrations, ...catalog.runtime.pendingVirtualModelRegistrations];
+      if (providerRegistrations.some(item => !pending.includes(item as never))) throw Error("Foreign provider registration");
+      provider.assertCurrent();
+    }
+    if (qualified.kind === "session-dashboard" && !resources) throw Error("Dashboard native resources required");
+    if (resources) { if (resources.assertCurrent !== resourceAssertion) throw Error("Resource binding changed"); resources.assertCurrent(); }
+  };
+  assertCurrent();
+  const receipt = Object.freeze({}) as InstalledAddonBindingReceipt;
+  addonBindingReceipts.set(receipt, { qualified, assertCurrent, providerRegistrations });
+  return receipt;
+}
+function validateInstalledAddonReceipt(catalog: LoadExtensionsResult, receipt: InstalledAddonBindingReceipt) {
+  const binding = addonBindingReceipts.get(receipt);
+  if (!binding || qualifiedAddonCatalogs.get(binding.qualified) !== catalog || !Object.isFrozen(receipt)) throw Error("Native receipt catalog identity required");
+  binding.assertCurrent();
+  return binding;
 }

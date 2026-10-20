@@ -90,9 +90,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: rcarmo/piclaw-addons
-          ref: 95dd52c131c66eaea3b026e5397090d7d4198df2
+          ref: e8aac2399148cbef638764ba2b5a1cd916cc5ecc
           path: .qualification-native-addons
           persist-credentials: false
+
+      - name: Install pinned native add-on qualification dependencies
+        working-directory: .qualification-native-addons
+        run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Install inactive application durable engine
         working-directory: runtime/durable-engine
@@ -106,7 +110,9 @@ jobs:
       - name: Isolated pi-durable qualification
         working-directory: qualification/pi-durable-130
         env:
-          DURABLE_ADDONS_ROOT: ${{ github.workspace }}/.qualification-addons
+          DURABLE_ADDONS_ROOT: ${{ github.workspace }}/.qualification-native-addons
+          DURABLE_CONTRACT_ADDONS_ROOT: ${{ github.workspace }}/.qualification-addons
+          DURABLE_CATALOG_DEPENDENCIES: ${{ github.workspace }}/qualification/pi-durable-130/node_modules
           DURABLE_CORE_ADDONS_ROOT: ${{ github.workspace }}/.qualification-native-addons
           DURABLE_GOAL_ADDON_ROOT: ${{ github.workspace }}/.qualification-native-addons
         run: |

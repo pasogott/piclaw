@@ -17,14 +17,15 @@ for (const mode of ["approved", "tamper", "shadow", "execute", "command", "comma
   let catalog: Awaited<ReturnType<typeof loadApplicationExtensionCatalog>> | undefined;
   try {
     if (mode === "tamper") writeFileSync(join(pkg, "index.ts"), readFileSync(join(pkg, "index.ts"), "utf8") + "\n// changed\n");
-    if (mode === "shadow") writeFileSync(join(pkg, "deadline-checkpoint.js"), "throw Error('unapproved shadow');\n");
-    catalog = await loadApplicationExtensionCatalog({ cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() });
-    const qualified = await qualifyInstalledGoal(catalog, dir);
+    if (mode === "shadow") writeFileSync(join(pkg, "deadline-checkpoint.js"), `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(join(dir, "unqualified-module-io"))}, "BAD");
+throw Error('unapproved shadow');\n`);
     if (mode === "tamper" || mode === "shadow") {
-      expect(qualified).toBeUndefined();
-      expect(() => assertApplicationExtensionCatalogSupported(catalog!)).toThrow();
+      await expect(loadApplicationExtensionCatalog({ cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() })).rejects.toThrow(/Unqualified installed (add-on package|extension source) before evaluation/);
+      expect(await Bun.file(join(dir, "unqualified-module-io")).exists()).toBe(false);
       return;
     }
+    catalog = await loadApplicationExtensionCatalog({ cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() });
+    const qualified = await qualifyInstalledGoal(catalog, dir);
     expect(qualified).toBeDefined();
     expect(qualified!.extension.tools.size).toBe(5);
     expect(qualified!.extension.commands.size).toBe(1);

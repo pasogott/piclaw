@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { setEnv } from "../helpers.js";
 import { existsSync } from "node:fs";
 import { createDurableConversationAdapter, type DurableAcceptedInput, type DurableConversationOperation, type DurableConversationRuntimePort } from "../../src/agent-pool/durable-runtime-adapter.js";
 import { hashCanonicalRequest } from "../../src/service-effects/contracts/common.js";
@@ -117,8 +118,13 @@ test.skipIf(!hasEngine)("adapter integrates real public runtime, SQL host bindin
   let db: InstanceType<typeof Database> | undefined;
   let adapter: ReturnType<typeof createDurableConversationAdapter> | undefined;
   try {
-    initDatabase();
-    try { getDb().query("VACUUM INTO ?").run(join(dir, "host.sqlite")); } finally { closeDatabase(); }
+    // Never snapshot the process-global database left by another test. A unique
+    // memory identity creates a fresh production schema without deleting rows.
+    const restoreHostEnv = setEnv({ PICLAW_DB_IN_MEMORY: "1", PICLAW_WORKSPACE: dir, PICLAW_STORE: dir, PICLAW_DATA: dir });
+    try {
+      initDatabase();
+      getDb().query("VACUUM INTO ?").run(join(dir, "host.sqlite"));
+    } finally { closeDatabase(); restoreHostEnv(); }
     db = new Database(join(dir, "host.sqlite"), { strict: true });
     db.exec("PRAGMA foreign_keys=ON");
     installTerminalSettlementCompositionSchema(db);

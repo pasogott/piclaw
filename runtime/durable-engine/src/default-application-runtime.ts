@@ -1,13 +1,27 @@
-import { createHash } from "node:crypto";
+import { createHostRemotePeerTool } from "./host-remote-peer-tool.js";
+import { registerChatTransport } from "../../src/extensions/chat-transport-registry.js";
+import { createHostRegretsTool, createHostRegretsPromptExtension, createHostRegretsSettings } from "./host-regrets-tool.js";
+import { createHostRegretsBindings } from "./host-regrets-bindings.js";
+import { createHostRegretsAccountedDecision } from "./host-regrets-model.js";
+import { pathToFileURL } from "node:url";
+import { qualifyNativeResourceSource, createRootDashboardReader } from "./host-addon-resources.js";
+import { addonLocalContextApi } from "../../src/addons/local-context.js";
+import { registerOwnedAddonConfigApi, registerAddonConfigKvAuthority } from "../../src/channels/web/handlers/addon-config-api.js";
+import { createHash, randomUUID } from "node:crypto";
+import { createHostCodexToolGroup, type HostCodexToolGroupAddon } from "./host-codex-tool-group.js";
+import { HostCodexModelServices } from "./host-codex-model-services.js";
+import { createHostCodexArtifactStore, createHostCodexAnswerMaterializer } from "./host-codex-artifacts.js";
+import type { CodexOperation, NativeCodexFactories } from "./host-codex-model-profile.js";
 import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, extname } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { apply } from "@earendil-works/chord/delta";
 import { Harness, AgentDoc, configure, createRegistry, defineDoc, defineExtension, defineTool, type ToolExecutionApi, type ConversationId } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { createCodemodeTool } from "@earendil-works/pi-durable/codemode";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
-import { SettingsManager } from "../../src/durable-legacy-sdk.js";
+import { accessSync, constants } from "node:fs";
+import { createReadToolDefinition, SettingsManager } from "../../src/durable-legacy-sdk.js";
 import type { RuntimeModelServices } from "../../src/agent-pool/model-services.js";
 import type { RuntimeLockHandle } from "../../src/runtime/single-instance.js";
 import type { RuntimeBackend } from "../../src/runtime/bootstrap.js";
@@ -19,15 +33,20 @@ import { installTerminalSettlementCompositionSchema } from "../../src/service-ef
 import { BunSqliteDatabase } from "./bun-sqlite.js";
 import { applicationOwnership, createApplicationBootstrapBundle } from "./application-bootstrap.js";
 import { createHostModels } from "./host-models.js";
+import { readStoredProviderUsageAccountRef } from "../../src/agent-pool/provider-usage.js";
 import { reserveHostRequest, reconcileOperationBudgetWork, completeMaintenanceBudgetWork } from "./host-request-accounting.js";
 import { createHostMcp } from "./host-mcp.js";
 import { createHostFetch } from "./host-fetch.js";
 import { taskModelRequestScope, withTaskModelRequestScope } from "./task-model-boundary-shim.js";
 import { createHostBuiltinTools } from "./host-builtins.js";
-import { loadApplicationExtensionCatalog, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, qualifyInstalledEditableTable, qualifyInstalledOfficeViewer, qualifyInstalledDrawio, qualifyInstalledGoal, qualifyInstalledObservability, qualifyInstalledRestic, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
+import { loadApplicationExtensionCatalog, qualifyInstalledAddon, bindInstalledAddon, qualifyInstalledPlan, qualifyInstalledDelegate, qualifyInstalledCodeReview, qualifyInstalledEditableTable, qualifyInstalledOfficeViewer, qualifyInstalledDrawio, qualifyInstalledGoal, qualifyInstalledObservability, qualifyInstalledRestic, assertApplicationExtensionCatalogSupported } from "./host-extension-catalog.js";
 import { createHostDelegateTool } from "./host-delegate-tool.js";
 import { createHostDelegateFileReader } from "./host-delegate-files.js";
 import { extensionKvGet, extensionKvSet } from "../../src/db/extension-kv.js";
+import { createHostProxmoxTool, type ProxmoxNativeExports } from "./host-proxmox-tool.js";
+import { createHostPortainerTool, type PortainerNativeExports } from "./host-portainer-tool.js";
+import { createHostImapTool, type ImapNativeExports } from "./host-imap-tool.js";
+import { infrastructurePrompt, infrastructureLifecycle } from "./host-addon-prompts.js";
 import { createHostPlanTool } from "./host-plan-tool.js";
 import { createHostOperationAuthority } from "./host-operation-authority.js";
 import { hashCanonicalRequest } from "../../src/service-effects/contracts/common.js";
@@ -51,8 +70,20 @@ import { createHostGoalCommand } from "./host-goal-command.js";
 import type { HostConversationRuntime } from "./host-runtime.js";
 import { readAccessConfig } from "../../src/core/config-access.js";
 import { registerRootExtensionKvStore } from "../../src/db/register-extension-kv.js";
-import { requireExtensionKvAuthority } from "../../src/extension-kv-registry.js";
+import { withExtensionKvAuthority, requireExtensionKvAuthority } from "../../src/extension-kv-registry.js";
 import { registerExtensionRoute } from "../../src/channels/web/http/extension-routes.js";
+
+import { HostManagedInstructions, instructionHash, shouldManageInstructions } from "./host-managed-instructions.js";
+import { loadHostInstructions } from "./host-instructions.js";
+import { detectChannel } from "../../src/router.js";
+import { buildChannelSystemPromptAppendix } from "../../src/channels/formatting.js";
+import { ApplicationLegacyTimeline, captureLegacyTimeline, verifyLegacyTimeline, type LegacyTimelineReceipt } from "./application-legacy-timeline.js";
+import { recordApplicationMigration, validateRecentHistoryScopes, type ApplicationRecentHistory } from "./application-recent-history.js";
+
+export interface ApplicationMigration {
+  timeline: LegacyTimelineReceipt;
+  recentHistory: readonly ApplicationRecentHistory[];
+}
 
 const ApplicationConversations = defineDoc({ kind: "app.application-conversations", version: 1,
   scope: "conversation", history: "latest", fork: "initial", initial: () => ({ version: 1, domain: "", bindings: [] as { chatJid: string; branchId: string; conversationId: number; sessionId: string }[] }) });
@@ -152,8 +183,12 @@ export function assertFreshApplicationHistory(root: ReturnType<typeof getDb>, se
   const queuedContent = (source: Source, content: unknown) => typeof content === "string" && source.kind === "message" &&
     source.payload_ref === `queued-source:${source.source_id}` && /^application:queued:[0-9a-f]{64}:[0-9a-f]{64}$/.test(source.provenance_ref) &&
     source.provenance_ref.endsWith(`:${hashCanonicalRequest({ content })}`);
+  const legacyDocs = exists("documents") ? root.query("SELECT id FROM documents WHERE kind='\"app.legacy-timeline\"' AND scope_kind='conversation' AND owner_id=1 AND retired_at IS NULL").all() as { id: number }[] : [];
+  if (legacyDocs.length > 1) throw Error("Invalid legacy timeline provenance");
+  const legacy = legacyDocs.length ? verifyLegacyTimeline(root, storedDocument(root, legacyDocs[0]!.id).receipt) : new Set<number>();
   const messages = root.query("SELECT rowid, id, chat_jid, content, is_bot_message FROM messages").all() as { rowid: number; id: string; chat_jid: string; content: string; is_bot_message: number }[];
   for (const message of messages) {
+    if (legacy.has(message.rowid)) continue;
     if (!mapping || !exists("service_effect_s01_sources")) throw Error("Durable startup requires migration: legacy message history exists");
     const binding = mapping.bindings.find(b => b.chatJid === message.chat_jid);
     const source = root.query("SELECT source_id,kind,payload_ref,provenance_ref FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=? AND kind='message'")
@@ -206,19 +241,40 @@ export function assertFreshApplicationHistory(root: ReturnType<typeof getDb>, se
 }
 
 /** Mainstream source factory. Only startup-known chats are admitted; unknown chats fail closed. */
-export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, getModels: () => Promise<RuntimeModelServices>): Promise<RuntimeBackend> {
+export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, getModels: () => Promise<RuntimeModelServices>, migration?: ApplicationMigration, remotePeerOptions?: { offlineMaintenance?: boolean; transportFactory?: (options: any) => any; discoveryFactory?: (options: any) => any }): Promise<RuntimeBackend> {
+  const offlineMaintenance = remotePeerOptions?.offlineMaintenance === true;
+  const assertAdmission = () => { if (offlineMaintenance) throw Error("Offline maintenance cannot admit conversations"); };
+  migration = migration && structuredClone(migration);
   if (process.platform !== "linux") throw Error("Durable application ownership is qualified only on Linux");
   if (readAccessConfig().mode !== "single-user") throw Error("Durable host builtins require single-user policy; family effect ports are not qualified");
   const ownership = applicationOwnership(owner);
   const assert = () => owner.assertCurrentOwner();
   const root = getDb();
-  assertFreshApplicationHistory(root, SESSIONS_DIR); // BEFORE SDK/schema/model construction
+  if (migration) {
+    assert();
+    if (root.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name IN ('durable_schema','conversations','documents','entries','tasks','submissions') LIMIT 1").get())
+      throw Error("Migration requires a fresh SDK target");
+    if (existsSync(SESSIONS_DIR) && readdirSync(SESSIONS_DIR).length) throw Error("Migration requires empty SESSIONS_DIR; move raw archives outside first");
+    if (JSON.stringify(captureLegacyTimeline(root, assert)) !== JSON.stringify(migration.timeline)) throw Error("Migration timeline must exactly match current capture");
+    const hostTable = root.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='service_effect_s01_chats'").get();
+    if (hostTable && root.query(`SELECT 1 FROM service_effect_s01_chats WHERE active_operation_id IS NOT NULL
+      UNION ALL SELECT 1 FROM service_effect_s01_sources WHERE state NOT IN ('consumed','disposed')
+      UNION ALL SELECT 1 FROM service_effect_s01_operations WHERE phase <> 'terminal'
+      UNION ALL SELECT 1 FROM service_effect_s01_queued_inputs WHERE state NOT IN ('consumed','disposed') LIMIT 1`).get())
+      throw Error("Migration requires idle host work");
+    const scopes = root.query("SELECT chat_jid AS chatJid, branch_id AS branchId FROM chat_branches WHERE archived_at IS NULL").all() as { chatJid: string; branchId: string }[];
+    validateRecentHistoryScopes(migration.recentHistory, scopes);
+  } else assertFreshApplicationHistory(root, SESSIONS_DIR); // BEFORE SDK/schema/model construction
   registerRootExtensionKvStore();
   requireExtensionKvAuthority();
   const settings = SettingsManager.create(WORKSPACE_DIR, getPiclawAgentDir());
   // Public registration happens before model construction, AgentPool, or SDK
   // writes. Never silently start with seven tools when installed tools exist.
   const catalog = await loadApplicationExtensionCatalog({ cwd: WORKSPACE_DIR, agentDir: getPiclawAgentDir(), settingsManager: settings });
+  // Loading retains the static source gate before any extension evaluation.
+  // Source qualification alone is never a native binding/provider receipt.
+  const codex = await qualifyInstalledAddon(catalog, WORKSPACE_DIR, "codex-conversion");
+  const codexHost = codex ? await getModels() : undefined;
   const plan = await qualifyInstalledPlan(catalog, WORKSPACE_DIR);
   const observability = await qualifyInstalledObservability(catalog, WORKSPACE_DIR);
   const restic = await qualifyInstalledRestic(catalog, WORKSPACE_DIR);
@@ -233,14 +289,68 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const editableTable = await qualifyInstalledEditableTable(catalog, WORKSPACE_DIR);
   const officeViewer = qualifyInstalledOfficeViewer(catalog, WORKSPACE_DIR);
   const drawio = await qualifyInstalledDrawio(catalog, WORKSPACE_DIR), goal = await qualifyInstalledGoal(catalog, WORKSPACE_DIR);
+  const lifetime = new AbortController();
+  const remotePeer = await qualifyInstalledAddon(catalog, WORKSPACE_DIR, "remote-peer");
+  const remoteNative = remotePeer?.nativeExports["native.ts"] as any;
+  let remotePorts: any;
+  let remoteClosing: Promise<void> | undefined;
+  const remoteDisposers: (() => void)[] = [];
+  const assertRemote = () => { assert(); lifetime.signal.throwIfAborted(); remotePeer?.assertCurrent();
+    if (readAccessConfig().mode !== "single-user") throw Error("Remote Peer requires single-user policy"); };
+  const closeRemote = () => {
+    for (const dispose of remoteDisposers.splice(0).reverse()) dispose();
+    return remoteClosing ??= remotePorts?.close() ?? Promise.resolve();
+  };
+  const remoteTool = remotePeer ? createHostRemotePeerTool(remoteNative, { root, cwd: WORKSPACE_DIR, runtime: () => runtime(), assertOwner: assertRemote,
+    nativeHostPorts: new Proxy({}, { get(_target, key) { if (!remotePorts) throw Error("Remote Peer not attached"); return remotePorts[key]; } }) }) : undefined;
+  // All captured declarations retain their native dispatcher; unsupported exact controls fail closed.
+  const remoteReceipt = remotePeer ? bindInstalledAddon(remotePeer, { tools: [remoteTool!], commands: {},
+    lifecycle: { resources_discover: () => ({ skillPaths: remotePeer.skillPaths }) } }) : undefined;
+  const regrets = await qualifyInstalledAddon(catalog, WORKSPACE_DIR, "late-night-regrets");
+  const regretsAddon = regrets?.nativeExports["native.ts"] as any;
+  const assertRegrets = () => { assert(); lifetime.signal.throwIfAborted(); regrets?.assertCurrent();
+    if (readAccessConfig().mode !== "single-user") throw Error("Regrets requires single-user mode"); };
+  const configWrite = <T>(body: () => T): T => root.transaction(() => { assertRegrets(); const value = body(); assertRegrets(); return value; }).immediate();
+  const regretsPorts = (chat: string, assertCurrent = assertRegrets, transactionalWrite = configWrite, accountedDecision?: any) => createHostRegretsBindings({
+    root, historyDatabase: root, cwd: WORKSPACE_DIR, chat, assertCurrent, transactionalWrite,
+    accessMode: () => readAccessConfig().mode, allowAllChats: () => true,
+    readExchanges: regretsAddon.readExchanges,
+    async readFile(path) { return existsSync(path) ? readFileSync(path, "utf8") : undefined; },
+    async admitConversationInput(text) {
+      assertAdmission();
+      assertCurrent(); assertRegrets();
+      const target = bundle.sessionTargets.list().find(target => target.chatJid === chat);
+      if (!target) throw Error("Unbound Regrets chat");
+      if (!owner.record.nonce) throw Error("Regrets runtime owner identity unavailable");
+      const principal = { id: `runtime-owner:${owner.record.nonce}`, revision: hashCanonicalRequest(owner.record) };
+      return bundle.admitApplicationInput({ source: "regrets.command", sourceId: crypto.randomUUID(), text,
+        queuedAt: new Date().toISOString(), principal, target, mode: "queue", assertCurrent() { assertCurrent(); assertRegrets(); } });
+    }, accountedDecision,
+  });
+  const regretsCommand = async (chat: string) => {
+    assertRegrets();
+    return regretsAddon.createLateNightRegrets(regretsPorts(chat)).command();
+  };
+  let regretsDecision: ((captured: Awaited<ReturnType<HostConversationRuntime["captureToolSource"]>>, authority: ReturnType<typeof createHostOperationAuthority>) => any) | undefined;
+  const regretsTool = regrets ? createHostRegretsTool(regretsAddon, { root, runtime: () => runtime(), assertOwner: assertRegrets,
+    definition: regrets.extension!.tools.get("regrets_review")!.definition as Parameters<typeof createHostRegretsTool>[1]["definition"],
+    bind(captured, authority) { return regretsPorts(captured.operation.chatJid, authority.assertCurrent, authority.write, regretsDecision!(captured, authority)); },
+  }) : undefined;
+  const regretsPrompt = regrets ? createHostRegretsPromptExtension(regretsAddon, { async bindBeforeModelRequest(input) {
+    assertRegrets();
+    const target = bundle.sessionTargets.list().find(target => target.conversationId === input.conversationId);
+    if (!target) throw Error("Unbound Regrets prompt conversation");
+    // Pure native prompt: config reads only, no execution context or captured operation.
+    return { chat: target.chatJid, assertCurrent: assertRegrets, config: { get() { assertRegrets(); return extensionKvGet("late-night-regrets", "config", "global") ?? {}; } } };
+  } }) : undefined;
+  const regretsReceipt = regrets ? bindInstalledAddon(regrets, { tools: [regretsTool!],
+    lifecycle: { resources_discover: () => ({ skillPaths: regrets.skillPaths }), before_agent_start: regretsPrompt!.sections![0]!.render! },
+    commands: { regrets: regretsCommand } }) : undefined;
   let workspaceFileOpener: WorkspaceFileOpener | undefined;
   let widgetPublisher: WidgetPublisher | undefined;
-  try { assert(); assertApplicationExtensionCatalogSupported(catalog, plan, delegate, codeReview, editableTable, officeViewer, drawio, goal, observability, restic);
-    if (goal && !plan) throw Error("Native Goal requires qualified Plan"); }
-  finally { catalog.runtime.invalidate("Application extension preflight ended"); }
+  const infrastructure = (await Promise.all((["proxmox", "portainer", "imap"] as const).map(kind => qualifyInstalledAddon(catalog, WORKSPACE_DIR, kind)))).filter(item => item !== undefined);
   let mcp: Awaited<ReturnType<typeof createHostMcp>> | undefined;
   let captureRuntime: HostConversationRuntime | undefined;
-  const lifetime = new AbortController();
   let resumePending: ((chatJid?: string) => void) | undefined;
   const wakeGoalFollowups = (chat: string) => {
     assert();
@@ -261,11 +371,228 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     return () => { authority.assertCurrent(); if (captured.delegateModel) assertDelegateModel(captured.delegateModel); };
   };
   let assertDelegateModel: (model: { provider: string; modelId: string }) => void = () => { throw Error("Delegate unavailable"); };
-  const baseApplicationToolNames: readonly string[] = [...defaultToolNames, "codemode", ...(restic ? ["restic"] : []), ...(goal ? ["get_goal", "create_goal", "goal_complete", "goal_stop", "update_goal"] : []), ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : []), ...(drawio ? ["open_drawio_editor"] : [])];
+  const infrastructureTools = infrastructure.map(qualified => {
+    const options = { root, runtime, assertOwner() { assert(); lifetime.signal.throwIfAborted(); qualified.assertCurrent(); } };
+    const native = qualified.nativeExports["index.ts"]!;
+    return qualified.kind === "proxmox" ? createHostProxmoxTool(native as unknown as ProxmoxNativeExports, options)
+      : qualified.kind === "portainer" ? createHostPortainerTool(native as unknown as PortainerNativeExports, options)
+      : createHostImapTool(native as unknown as ImapNativeExports, options);
+  });
+  let bundle: Awaited<ReturnType<typeof createApplicationBootstrapBundle>>;
+  const requestSources = new WeakMap<AbortSignal, Awaited<ReturnType<HostConversationRuntime["captureRunSource"]>>>();
+  const codexNative = {} as HostCodexToolGroupAddon & NativeCodexFactories & Record<string, any>;
+  for (const exports of Object.values(codex?.nativeExports ?? {})) for (const [name, value] of Object.entries(exports)) {
+    if (name in codexNative && codexNative[name] !== value) throw Error("Ambiguous qualified Codex export: " + name);
+    codexNative[name] = value;
+  }
+  const assertCodex = () => { assert(); lifetime.signal.throwIfAborted(); codex?.assertCurrent(); if (!owner.record.nonce) throw Error("Codex application owner identity unavailable"); };
+  const outputs = new Map<string, any>();
+  const outputBindings = new WeakMap<CodexOperation, ReturnType<typeof createHostCodexArtifactStore>>();
+  const accountBindings = new WeakMap<CodexOperation, { accountRef: string | null; provider: object | undefined }>();
+  const codexAuthPath = join(getPiclawAgentDir(), "auth.json");
+  const codexServices = codex ? new HostCodexModelServices({
+    async capture(signal, model, original) {
+      assertCodex();
+      const scope = taskModelRequestScope(original);
+      if (!scope) throw Error("Codex native task source unavailable");
+      const captured = scope.taskKind === "pi.generation" ? requestSources.get(scope.signal) : undefined;
+      if (scope.taskKind === "pi.generation" && !captured) throw Error("Codex generation source unavailable");
+      const sourceCurrent = () => { assertCodex(); signal.throwIfAborted(); scope.signal.throwIfAborted();
+        if (captured) runtime().assertCapturedSourceCurrent(captured.inputs); else runtime().assertMaintenanceRequest(scope); };
+      sourceCurrent();
+      const accountRef = readStoredProviderUsageAccountRef(model.provider, codexAuthPath);
+      const accountProvider = codexHost!.modelRuntime.getRegisteredNativeProvider(model.provider);
+      if (["openai-codex", "github-copilot"].includes(model.provider) && !accountRef) throw Error("Codex profile account identity unavailable");
+      const current = () => {
+        sourceCurrent();
+        if (readStoredProviderUsageAccountRef(model.provider, codexAuthPath) !== accountRef ||
+            codexHost!.modelRuntime.getRegisteredNativeProvider(model.provider) !== accountProvider) throw Error("Codex source account changed");
+        const physical = codexHost!.modelRuntime.getPhysicalModel(model.provider, model.id);
+        if (!physical || physical.api !== model.api || model.input.some(mode => !physical.input.includes(mode))) throw Error("Codex source capability changed");
+      };
+      const operation: CodexOperation = Object.freeze({ id: randomUUID(), sessionId: "native-conversation:" + scope.conversationId,
+        cwd: WORKSPACE_DIR, model: Object.freeze({ provider: model.provider, id: model.id, api: model.api, input: Object.freeze([...model.input]) }),
+        signal, profilePrompt: scope.taskKind === "pi.generation", assertCurrent: current });
+      accountBindings.set(operation, { accountRef, provider: accountProvider });
+      if (captured) outputBindings.set(operation, createHostCodexArtifactStore(root, operation, {
+        hostOperationId: captured.operation.operationId, chatJid: captured.operation.chatJid, assertCurrent: current,
+        write(body) { return root.transaction(() => { current(); const value = body(); current(); return value; }).immediate(); },
+      }));
+      return operation;
+    },
+    assertAccount(operation) {
+      operation.assertCurrent();
+      const binding = accountBindings.get(operation);
+      if (!binding || readStoredProviderUsageAccountRef(operation.model.provider, codexAuthPath) !== binding.accountRef ||
+          codexHost!.modelRuntime.getRegisteredNativeProvider(operation.model.provider) !== binding.provider) throw Error("Codex provider/account identity changed");
+      if (!codexHost!.modelRegistry.getAvailable().some(m => m.provider === operation.model.provider && m.id === operation.model.id)) throw Error("Codex account/model unavailable");
+      const actual = codexHost!.modelRuntime.getPhysicalModel(operation.model.provider, operation.model.id);
+      if (!actual || actual.api !== operation.model.api) throw Error("Codex physical model changed");
+    },
+    async observe(operation, response, beforeEffect) {
+      beforeEffect();
+      let output = outputs.get(operation.id);
+      if (!output) {
+        output = await codexNative.createNativeCodexOutput(operation, async (actual: CodexOperation, activity: any) => {
+          beforeEffect(); const store = outputBindings.get(actual);
+          if (activity.kind === "image" && !store) throw Error("Maintenance image output is not authorised");
+          if (store) await store.publish(actual, activity);
+        });
+        beforeEffect(); outputs.set(operation.id, output);
+      }
+      try { await output.capture(response); beforeEffect(); }
+      catch (error) { if (output.discardFailedCapture()) outputs.delete(operation.id); throw error; }
+    },
+    async flush(operation) { const output = outputs.get(operation.id); if (output) {
+      try { await output.finish(); outputs.delete(operation.id); }
+      catch (error) { if (output.discardFailedCapture()) outputs.delete(operation.id); throw error; }
+    } },
+  }, codexNative) : undefined;
+  const codexDeclarations = new Map<string, any>([...(codex?.extension?.tools.values() ?? [])].map((tool: any) => [tool.definition.name, tool.definition]));
+  const codexTarget = (chat: string) => { assertCodex(); const target = bundle.sessionTargets.list().find(t => t.chatJid === chat); if (!target) throw Error("Codex session target unavailable"); return bundle.sessionTargets.resolve(target); };
+  const codexGroup = codex ? createHostCodexToolGroup(codexNative, {
+    process: { root, runtime, assertOwner: assertCodex, ownerIncarnation: owner.record.nonce!, declarations: codexDeclarations,
+      async bind(chat) { const target = codexTarget(chat); return { cwd: WORKSPACE_DIR, sessionRevision: target.revision }; } },
+    applyPatch: codexDeclarations.get("apply_patch"),
+    provider: { root, runtime, assertOwner: assertCodex, declarations: codexDeclarations,
+      metadata() {
+        assertCodex();
+        // Registry validation admits the supported schema union; each request advertises
+        // the exact source-model schema and execution independently checks that model.
+        const available = codexHost!.modelRegistry.getAvailable();
+        const selected = available.find(model => codexNative.createNativeCodexHooks(model)
+          .toolDeclarations!([{ name: "view_image", parameters: { properties: {} as Record<string, unknown> } }])[0]!.parameters.properties.detail) ?? available[0];
+        if (!selected) throw Error("Codex model metadata unavailable");
+        return { cwd: WORKSPACE_DIR, model: selected };
+      },
+      async bind({chatId, signal, assertCurrent, sourceModel}) {
+        const target = codexTarget(chatId);
+        const model = codexHost!.modelRuntime.getPhysicalModel(sourceModel.provider, sourceModel.id);
+        assertCurrent(); bundle.sessionTargets.resolve(target);
+        if (!model || model.api !== sourceModel.api) throw Error("Codex physical source model unavailable");
+        return { chatId, cwd: WORKSPACE_DIR, model, signal, assertCurrent,
+          async readImage(input) {
+            const check = () => { input.assertCurrent(); input.signal?.throwIfAborted(); };
+            check();
+            const read = createReadToolDefinition(WORKSPACE_DIR, { autoResizeImages: !input.original, operations: {
+              readFile: async path => { check(); return readFileSync(path); },
+              access: async path => { check(); accessSync(path, constants.R_OK); },
+              detectImageMimeType: async path => { check(); return ({".png":"image/png",".jpg":"image/jpeg",".jpeg":"image/jpeg",".gif":"image/gif",".webp":"image/webp",".bmp":"image/bmp"} as Record<string,string>)[extname(path).toLowerCase()]; },
+            } });
+            const result = await read.execute(input.toolCallId, { path: input.path }, input.signal, undefined, undefined as never); check(); return result;
+          },
+        };
+      },
+    },
+  }) : undefined;
+  let providerBinding: { check(): void } | undefined;
+  const codexProviderRegistrations = [...catalog.runtime.pendingProviderRegistrations];
+  if (codex) {
+    // The qualified legacy override only decorates Responses streamSimple.
+    // Its replacement is the owned constructor pipeline above, not that legacy closure.
+    if (codexProviderRegistrations.length !== 1 || codexProviderRegistrations[0]!.name !== "openai-codex" ||
+        codexProviderRegistrations[0]!.config.api !== "openai-codex-responses" ||
+        typeof codexProviderRegistrations[0]!.config.streamSimple !== "function" ||
+        Object.keys(codexProviderRegistrations[0]!.config).some(key => !["api", "streamSimple"].includes(key)) ||
+        catalog.runtime.pendingNativeProviderRegistrations.length || catalog.runtime.pendingVirtualModelRegistrations.length)
+      throw Error("Unsupported Codex provider override contract");
+    const provider = codexHost!.modelRuntime.getRegisteredNativeProvider("openai-codex") ?? codexHost!.modelRuntime.getProvider("openai-codex");
+    if (!provider) throw Error("Codex native base provider unavailable");
+    providerBinding = codexNative.bindNativeCodexProvider({ setProvider: (p: any) => codexServices!.register(codexHost!.modelRuntime,p), getProvider: (id: string) => codexHost!.modelRuntime.getRegisteredNativeProvider(id) }, provider, () => closeCodex());
+  }
+  const codexReceipt = codex ? bindInstalledAddon(codex, {
+    tools: codex.capabilities.tools.map(name => { const tool = codexGroup!.tools.find(tool => tool.name === name); if (!tool) throw Error("Missing Codex native tool: " + name); return tool; }),
+    commands: {},
+    // These are the concrete native entrypoints, not legacy event adapters.
+    // Model phases are composed by bind(); execution state comes from the SDK
+    // task wrapping execute(). Legacy exploration render caches remain in the
+    // unchanged TUI entry; Smith Web never consumed those component callbacks.
+    lifecycle: {
+      session_start: codexServices!.register.bind(codexServices),
+      model_select: codexServices!.bind.bind(codexServices),
+      message_start: codexNative.createNativeCodexOutput,
+      agent_end: flushCodexOutputs,
+      tool_execution_start: codexGroup!.tools.find(tool => tool.name === "exec_command")!.execute!,
+      tool_execution_end: codexGroup!.tools.find(tool => tool.name === "exec_command")!.execute!,
+      session_shutdown: closeCodex,
+      before_agent_start: codexServices!.bind.bind(codexServices),
+      before_provider_headers: codexServices!.bind.bind(codexServices),
+      before_provider_request: codexServices!.bind.bind(codexServices),
+      context: codexServices!.bind.bind(codexServices),
+    },
+    provider: { registrations: codexProviderRegistrations, assertCurrent() { assertCodex(); providerBinding!.check(); } },
+  }) : undefined;
+  async function closeCodex() { codexGroup?.dispose(); await flushCodexOutputs(); }
+  async function flushCodexOutputs() {
+    const entries = [...outputs];
+    const results = await Promise.allSettled(entries.map(async ([id, output]) => { try { await output.finish(); outputs.delete(id); }
+      catch (error) { if (output.discardFailedCapture()) outputs.delete(id); throw error; } }));
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failures.length) throw new AggregateError(failures.map(result => result.reason), "Codex output cleanup uncertain");
+  }
+  const resourceDisposers: (() => void)[] = [];
+  const resourceKinds = ["diagram-tools", "export-timeline-pdf", "kanban-editor", "yolo-vibe", "mindmap", "web-viewer", "eml-viewer", "session-dashboard"] as const;
+  const resourceReceipts = [];
+  const resourceQualifications: NonNullable<Awaited<ReturnType<typeof qualifyInstalledAddon>>>[] = [];
+  try {
+    for (const kind of resourceKinds) {
+      const qualified = await qualifyInstalledAddon(catalog, WORKSPACE_DIR, kind);
+      if (!qualified) continue;
+      resourceQualifications.push(qualified);
+      const source = await qualifyNativeResourceSource(kind, pathToFileURL(join(qualified.source.packageDir, "native-resources.ts")));
+      qualified.assertCurrent();
+      const pkg = JSON.parse(readFileSync(join(qualified.source.packageDir, "package.json"), "utf8"));
+      const descriptor = source.descriptor;
+      if (JSON.stringify(descriptor.webEntries) !== JSON.stringify(pkg.pi?.web?.entries ?? []) ||
+          JSON.stringify(descriptor.skillPaths.map(p => join(qualified.source.packageDir, p)).sort()) !== JSON.stringify([...qualified.skillPaths].sort()) ||
+          JSON.stringify(descriptor.routes) !== JSON.stringify(qualified.capabilities.routes) ||
+          JSON.stringify(descriptor.settingsActions) !== JSON.stringify(qualified.capabilities.configActions)) throw Error("Native resource declaration mismatch: " + kind);
+      let registration: ReturnType<typeof registerOwnedAddonConfigApi> | undefined;
+      const isCurrent = () => { assert(); lifetime.signal.throwIfAborted(); qualified.assertCurrent(); return true; };
+      if (source.factory) {
+        const scope = { ownerId: "default", authScope: "single-user:operator:root" };
+        const reader = createRootDashboardReader({ root, scope, isCurrent, sessionTargets: () => bundle.sessionTargets,
+          canReadTarget(request, target) {
+            isCurrent();
+            return readAccessConfig().mode === "single-user" && request.ownerId === scope.ownerId && request.authScope === scope.authScope &&
+              !!root.query("SELECT 1 FROM chat_branches WHERE chat_jid=? AND branch_id=? AND archived_at IS NULL AND handle_owner_id=''").get(target.chatJid, target.branchId);
+          } });
+        const dispose = source.factory({ scope, reader, isCurrent,
+          authorize(req: Request, requested: typeof scope) {
+            const operator = addonLocalContextApi.getRequestContext(req);
+            return readAccessConfig().mode === "single-user" && operator?.kind === "operator" && operator.accessMode === "single-user" &&
+              operator.ownerId === requested.ownerId && requested.authScope === scope.authScope;
+          },
+          register(addon: string, action: string, handlers: any) {
+            registration = registerOwnedAddonConfigApi(addon, action, handlers, qualified.source.packageDir);
+            return registration.dispose;
+          } });
+        resourceDisposers.push(dispose);
+      }
+      resourceReceipts.push(bindInstalledAddon(qualified, { tools: [], lifecycle: {}, commands: {}, resources: {
+        assertCurrent() { isCurrent(); registration?.assertCurrent(); }
+      } }));
+    }
+  } catch (error) { for (const dispose of resourceDisposers.reverse()) dispose(); throw error; }
+  const closeResources = () => { for (const dispose of resourceDisposers.splice(0).reverse()) dispose(); };
+  const receipts = infrastructure.map((qualified, index) => bindInstalledAddon(qualified, {
+    tools: [infrastructureTools[index]!], lifecycle: infrastructureLifecycle(qualified), commands: {},
+  }));
+  try {
+    assert(); assertApplicationExtensionCatalogSupported(catalog, plan, delegate, codeReview, editableTable, officeViewer, drawio, goal, observability, restic, [...receipts, ...resourceReceipts, ...(remoteReceipt ? [remoteReceipt] : []), ...(regretsReceipt ? [regretsReceipt] : []), ...(codexReceipt ? [codexReceipt] : [])]);
+    if (goal && !plan) throw Error("Native Goal requires qualified Plan");
+  } catch (error) { closeResources(); throw error; } finally { catalog.runtime.invalidate("Application extension preflight ended"); }
+  let infrastructureClosed = false;
+  const closeInfrastructure = () => { if (infrastructureClosed) return; infrastructureClosed = true; for (const qualified of infrastructure) if (qualified.kind === "imap") (qualified.nativeExports["index.ts"]!.disposeImapPool as () => void)(); };
+  const baseApplicationToolNames: readonly string[] = [...defaultToolNames, ...(codexGroup?.tools.map(tool => tool.name) ?? []), "codemode", ...(remotePeer ? ["remote_peer"] : []), ...(regrets ? ["regrets_review"] : []), ...infrastructureTools.map(tool => tool.name), ...(restic ? ["restic"] : []), ...(goal ? ["get_goal", "create_goal", "goal_complete", "goal_stop", "update_goal"] : []), ...(plan ? ["plan"] : []), ...(delegate ? ["delegate"] : []), ...(codeReview ? ["code_review"] : []), ...(editableTable ? ["editable_table"] : []), ...(officeViewer ? ["open_office_viewer"] : []), ...(drawio ? ["open_drawio_editor"] : [])];
+  const fetchDefault = [...baseApplicationToolNames, "fetch"];
   const previousDefault = baseApplicationToolNames.filter(name => name !== "codemode");
   const isFactoryDefault = (tools: unknown) => isOldDefault(tools) || (Array.isArray(tools) &&
     ((tools.length === defaultToolNames.length && defaultToolNames.every((name, index) => tools[index] === name)) ||
       (tools.length === previousDefault.length && previousDefault.every((name, index) => tools[index] === name)) ||
+      // SDK configure persists tool registration order, not catalogue order.
+      // Match only this complete known set (including uniqueness), never subsets.
+      (tools.length === fetchDefault.length && new Set(tools).size === fetchDefault.length && fetchDefault.every(name => tools.includes(name))) ||
       (tools.length === baseApplicationToolNames.length && baseApplicationToolNames.every((name, index) => tools[index] === name))));
   let drawioHost: ReturnType<DrawioNativeExports["bindDrawioVendorHost"]> | undefined;
   let sandbox: CodemodeSandbox | undefined;
@@ -274,12 +601,29 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const releaseReviewSource = codeReview?.addon.setReviewDatabaseSource({ database: root, assertOwner: assert });
   const assertObservability = () => { assert(); lifetime.signal.throwIfAborted(); observability?.assertCurrent(); };
   let releaseObservabilityConfiguration: (() => void) | undefined;
+  let releaseAdminKv: (() => void) | undefined;
   try {
+    // Native consumers are qualified separately from generic installed add-ons.
+    // Keep their exact namespaces and source assertions after legacy preflight ends.
+    const nativeConfigOwners = new Map<string, { assertCurrent(): void } | undefined>([
+      ["goal", goal], ["observability", observability], ["plan-sidebar", plan],
+      ["delegate", delegate], ["code-review", codeReview],
+    ]);
+    releaseAdminKv = registerAddonConfigKvAuthority((extensionId, chatJid) => {
+      const qualified = infrastructure.find(item => item.kind === extensionId) ?? resourceQualifications.find(item => item.kind === extensionId) ?? (regrets?.kind === extensionId ? regrets : undefined)
+        ?? nativeConfigOwners.get(extensionId);
+      if (!qualified) throw Error("Addon configuration namespace denied");
+      const assertCurrent = () => { assert(); lifetime.signal.throwIfAborted(); qualified.assertCurrent();
+        if (readAccessConfig().mode !== "single-user") throw Error("Configuration requires single-user policy"); };
+      assertCurrent();
+      return { extensionId, chatJid, globalRead: extensionId !== "session-dashboard", globalWrite: extensionId !== "session-dashboard", assertCurrent,
+        write: body => root.transaction(() => { assertCurrent(); const result = body(); assertCurrent(); return result; }).immediate() };
+    });
   if (observability) releaseObservabilityConfiguration = observability.addon.bindObservabilityConfiguration({
     assertCurrent: assertObservability, read: readObservabilityConfiguration,
     write(config) { root.transaction(() => { assertObservability(); extensionKvSet("observability", "config", config, "global"); assertObservability(); }).immediate(); },
   });
-  mcp = await createHostMcp({ assertCurrent() { assert(); lifetime.signal.throwIfAborted(); },
+  mcp = await createHostMcp({ offlineMaintenance, assertCurrent() { assert(); lifetime.signal.throwIfAborted(); },
     captureSource: api => captureSource({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId }) });
   const applicationToolNames = [...baseApplicationToolNames, "fetch", ...mcp.tools.map(tool => tool.name)];
   if (drawio) {
@@ -295,14 +639,14 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       catch { return new Response("Draw.io vendor unavailable", { status: 503 }); }
       return drawio.addon.handleRoute(request, pathname);
     }, drawio.source.packageDir) === "rejected") throw Error("Draw.io native route unavailable");
-    await drawioHost.prepare();
+    if (!offlineMaintenance) await drawioHost.prepare();
   }
-  if (observability) {
+  if (observability && !offlineMaintenance) {
     assertObservability();
     await observability.addon.prepareObservabilityRuntime(assertObservability);
     assertObservability();
   }
-  const host = await getModels(); assert();
+  const host = codexHost ?? await getModels(); assert();
   const provider = settings.getDefaultProvider(), modelId = settings.getDefaultModel();
   // Only the host's authenticated/approved catalog grants admission, never getAll().
   const available = host.modelRegistry.getAvailable().filter(model => {
@@ -322,6 +666,10 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     const physical = host.modelRuntime.getPhysicalModel(model.provider, model.id);
     if (physical?.provider !== model.provider || physical.id !== model.id) throw Error("Host model no longer available");
   };
+  const instructionsFor = (chatJid?: string) => loadHostInstructions({ cwd: WORKSPACE_DIR, agentDir: getPiclawAgentDir(),
+    projectTrusted: true, additionalSkillPaths: [...settings.getSkillPaths(), ...infrastructure.flatMap(item => [...item.skillPaths]), ...resourceQualifications.flatMap(item => [...item.skillPaths]), ...(regrets?.skillPaths ?? [])],
+    channelAppendix: [chatJid ? buildChannelSystemPromptAppendix(detectChannel(chatJid), chatJid) ?? "" : "", ...infrastructure.map(infrastructurePrompt)].filter(Boolean).join("\n\n") });
+  const instructionUpgrades = new Map<number, string>();
   const toolUpgrades: number[] = [];
   // Validate stored choices without opening/writing SDK documents or bundle ports.
   if (root.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='documents'").get()) {
@@ -330,17 +678,23 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     const active = new Set([1, ...mapping.bindings.map(binding => binding.conversationId)]);
     const docs = root.query(`SELECT id, owner_id, scope_kind FROM documents WHERE kind='"pi.agent"' AND retired_at IS NULL`).all() as { id: number; owner_id: number; scope_kind: string }[];
     for (const doc of docs) {
-      const stored = storedDocument(root, doc.id) as { model?: { provider: string; modelId: string }; tools?: unknown; extensions?: unknown };
+      const stored = storedDocument(root, doc.id) as { model?: { provider: string; modelId: string }; tools?: unknown; extensions?: unknown; instructions?: string };
       if (stored.model && !available.some(model => model.provider === stored.model!.provider && model.id === stored.model!.modelId))
         throw Error("Persisted host model not approved");
       if (doc.scope_kind !== "conversation" || !active.has(doc.owner_id)) continue;
-      if (Array.isArray(stored.tools) && stored.tools.some(name => !applicationToolNames.includes(name)))
+      if (!mcp.deferredMaintenance && Array.isArray(stored.tools) && stored.tools.some(name => !applicationToolNames.includes(name)))
         throw Error("Persisted host tool not available");
       // Only the recognised previous factory default converges. Explicit custom
       // subsets/filters, modelTools, instructions and extensions remain intact.
-      if (isFactoryDefault(stored.tools)) toolUpgrades.push(doc.owner_id);
+      if (!mcp.deferredMaintenance && isFactoryDefault(stored.tools) && Array.isArray(stored.tools) &&
+          (stored.tools.length !== applicationToolNames.length || stored.tools.some(name => !applicationToolNames.includes(name)))) toolUpgrades.push(doc.owner_id);
+      const desired = instructionsFor(mapping.bindings.find(b => b.conversationId === doc.owner_id)?.chatJid);
+      const metadata = root.query(`SELECT id FROM documents WHERE kind='"app.host-managed-instructions"' AND scope_kind='conversation' AND owner_id=? AND retired_at IS NULL`).get(doc.owner_id) as { id: number } | null;
+      const managedHash = metadata ? storedDocument(root, metadata.id).managedHash : undefined;
+      if (shouldManageInstructions(stored.instructions, managedHash) &&
+        (stored.instructions !== desired || managedHash !== instructionHash(desired))) instructionUpgrades.set(doc.owner_id, desired);
     }
-    if (toolUpgrades.length) { assert(); assertToolUpgradeIdle(root); }
+    if (toolUpgrades.length || instructionUpgrades.size) { assert(); assertToolUpgradeIdle(root); }
   }
   // Automatic selection inherits the parent; explicit exact models use the same
   // installed approval/classification/exclusion policy, without a parent-tier cap.
@@ -352,8 +706,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     if (!delegate.buildModelCandidates([candidate], config).some(entry => entry.id === candidate.fullId)) throw Error("Native Delegate model not approved");
   };
   const sideObservers = new Map<string, NonNullable<import("../../src/agent-pool/contracts.js").SidePromptOptions["onEvent"]>>();
-  const requestSources = new WeakMap<AbortSignal, Awaited<ReturnType<HostConversationRuntime["captureRunSource"]>>>();
-  const models = createHostModels(host.modelRuntime, available.map(model => ({ provider: model.provider, id: model.id })), { signal: lifetime.signal,
+  const models = createHostModels(host.modelRuntime, available.map(model => ({ provider: model.provider, id: model.id })), { signal: lifetime.signal, codex: codexServices,
     async captureSourceGuard(signal) {
       const scope = taskModelRequestScope(signal);
       if (!scope) throw Error("Native model request source unavailable");
@@ -401,6 +754,20 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         assertCurrent() { assert(); scope.signal.throwIfAborted(); runtime().assertCapturedSourceCurrent(captured.inputs); if (captured.delegateModel) assertDelegateModel(captured.delegateModel); } });
     },
     async authorize(model, _kind, signal) { check(model, signal); }, assertCurrent(model, _kind, signal) { check(model, signal); } });
+  regretsDecision = (captured, authority) => createHostRegretsAccountedDecision({
+    database: root, operationId: captured.operation.operationId, chatJid: captured.operation.chatJid,
+    authPath: join(getPiclawAgentDir(), "auth.json"), executionKind: "side_prompt", signal: lifetime.signal,
+    assertCurrent() { assertRegrets(); authority.assertCurrent(); },
+    getAvailable() { assertRegrets(); authority.assertCurrent(); return host.modelRegistry.getAvailable().filter(model => available.some(approved => approved.provider === model.provider && approved.id === model.id)); },
+    async request(model, context, options) {
+      assertRegrets(); authority.assertCurrent(); options.signal?.throwIfAborted();
+      const physical = host.modelRuntime.getPhysicalModel(model.provider, model.id);
+      if (!available.some(a => a.provider === model.provider && a.id === model.id) ||
+          !host.modelRegistry.getAvailable().some(a => a.provider === model.provider && a.id === model.id) ||
+          physical?.provider !== model.provider || physical.id !== model.id) throw Error("Regrets model no longer approved");
+      return host.modelRuntime.completeSimple(model, context, options);
+    },
+  });
   const registry = createRegistry();
   // Preserve old persisted extension names without depending on their hook selection.
   registry.install(defineExtension({ name: "app.host-scheduled-source" }));
@@ -412,6 +779,9 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     if (readAccessConfig().mode !== "single-user") throw Error("Host tool permission denied");
   } }, signal: lifetime.signal, shellPath: () => settings.getShellPath(), names: defaultToolNames });
   const builtins = [...tools];
+  tools.push(...infrastructureTools, ...(codexGroup?.tools ?? []));
+  if (regretsTool) tools.push(regretsTool);
+  if (remoteTool) tools.push(remoteTool);
   tools.push(createHostFetch({ async captureSource(api) {
     const source = await captureSource({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId });
     return () => { source(); if (readAccessConfig().mode !== "single-user") throw Error("Host fetch permission denied"); };
@@ -480,6 +850,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     return result;
   } }));
   registry.install(defineExtension({ name: "app.host-builtins", tools }));
+  if (regretsPrompt) registry.install(regretsPrompt);
   if (observability) registry.install(createHostObservabilityPrompt(observability.addon, { root, runtime,
     assertOwner() { assert(); lifetime.signal.throwIfAborted(); observability.assertCurrent(); }, failClosed(error) { lifetime.abort(error); } }));
   if (plan) registry.install(createHostPlanPrompt(plan.addon, { root, runtime,
@@ -499,10 +870,15 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   try {
     assert();
     harness = await Harness.open(await SqliteStorage.open(storage), harnessOptions, context);
-    const app = await harness.root(context, { agent: { model: { provider: ref.provider, modelId: ref.id }, tools } });
+    const app = await harness.root(context);
     // The SDK document is the sole routing authority; host binding tables link accepted sources only.
     mapping = await app.commit(async tx => {
       const doc = await tx.doc(ApplicationConversations, app.id);
+      if (!doc.domain) {
+        const instructions = instructionsFor();
+        await configure(tx, app.id, { model: { provider: ref.provider, modelId: ref.id }, tools, instructions });
+        (await tx.doc(HostManagedInstructions, app.id)).managedHash = instructionHash(instructions);
+      }
       return JSON.parse(JSON.stringify(doc)) as typeof mapping;
     }, context);
     if (!mapping.domain) {
@@ -512,7 +888,13 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       const bindings = [] as typeof mapping.bindings;
       for (const chat of chats) {
         assert();
-        const conversation = await harness.createConversation({ ownership: { kind: "ownerless" }, agent: { model: { provider: ref.provider, modelId: ref.id }, tools } }, context);
+        const conversation = await app.commit(async tx => {
+          const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
+          const instructions = instructionsFor(chat.jid);
+          await configure(tx, conversation.id, { model: { provider: ref.provider, modelId: ref.id }, tools, instructions });
+          (await tx.doc(HostManagedInstructions, conversation.id)).managedHash = instructionHash(instructions);
+          return conversation;
+        }, context);
         bindings.push({ chatJid: chat.jid, branchId: chat.branch_id, conversationId: conversation.id, sessionId: crypto.randomUUID() });
       }
       mapping = { version: 1, domain: crypto.randomUUID(), bindings };
@@ -526,6 +908,11 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       await app.commit(async tx => { const doc = await tx.doc(ApplicationConversations, app.id); Object.assign(doc, mapping); }, context);
     }
     validateApplicationMapping(root, mapping);
+    if (migration) await storage.withIdleModelGuard(() => app.commit(async tx => {
+      assert(); assertToolUpgradeIdle(root);
+      await recordApplicationMigration(tx, app.id, root, migration, mapping.bindings, assert);
+      assert(); assertToolUpgradeIdle(root);
+    }, context));
     // Repair a successful maintenance task whose post-commit budget-work close
     // was interrupted. Public SDK reads prove the task and its committed write.
     const maintenancePrefix = `durable-maintenance:${mapping.domain}:`;
@@ -552,7 +939,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       if (entry?.kind === "pi.compaction" && entry.conversationId === task.conversationId)
         completeMaintenanceBudgetWork(root, work.id);
     }
-    if (toolUpgrades.length) {
+    if (toolUpgrades.length || instructionUpgrades.size) {
       // Same-file BEGIN IMMEDIATE fences host admissions for the whole public
       // commit. Repeat global SDK/host preflight under that lock before ANY
       // configuration, not one conversation at a time after partial writes.
@@ -564,6 +951,13 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         }
         assert(); assertToolUpgradeIdle(root);
         for (const id of toolUpgrades) await configure(tx, id as ConversationId, { tools });
+        for (const [id, instructions] of instructionUpgrades) {
+          const agent = await tx.doc(AgentDoc, id as ConversationId);
+          const metadata = await tx.doc(HostManagedInstructions, id as ConversationId);
+          if (!shouldManageInstructions(agent.instructions, metadata.managedHash)) throw Error("Persisted host instructions changed");
+          await configure(tx, id as ConversationId, { instructions });
+          metadata.managedHash = instructionHash(instructions);
+        }
         assert(); assertToolUpgradeIdle(root);
       }, context));
     }
@@ -593,8 +987,8 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     const bytes = new Uint8Array(readFileSync(file));
     return { ref, bytes, byteLength: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), mediaType: "text/plain", redactionClass: "private" as const };
   } } };
-      let bundle: Awaited<ReturnType<typeof createApplicationBootstrapBundle>>;
-      const goalAdmission = (chat: string) => { assertGoal(); if (!mapping.bindings.some(binding => binding.chatJid === chat)) throw Error("Unbound Goal chat"); };
+
+      const goalAdmission = (chat: string) => { assertAdmission(); assertGoal(); if (!mapping.bindings.some(binding => binding.chatJid === chat)) throw Error("Unbound Goal chat"); };
       const goalInput = goal ? createHostGoalInput(goal.addon, goalAdmission) : undefined;
       const goalCommand = goal ? createHostGoalCommand(goal.addon, { root, assertAdmission: goalAdmission, admit: input => bundle.admitHostFollowup(input) }) : undefined;
       const goalSettlement = goal ? createHostGoalSettlement(goal.addon, { root, runtime, assertOwner: assertGoal, continuation: {
@@ -602,6 +996,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         readPlan: createHostGoalPlanReader(root, plan!.addon, goal.addon), admit: (input, onlyIfIdle = true) => bundle.admitHostFollowup(input, onlyIfIdle),
       } }) : undefined;
       bundle = await createApplicationBootstrapBundle({ root, path, ownership, offlineInitialize: true, answers,
+        materializeAnswer: codex ? createHostCodexAnswerMaterializer({ root, cwd: WORKSPACE_DIR, answers, assertOwner: assert }) : undefined,
     onMaintenanceSettled(workId) { assert(); completeMaintenanceBudgetWork(root, workId); },
     onOperationSettled(operationId) {
       assert(); reconcileOperationBudgetWork(root, operationId);
@@ -612,7 +1007,11 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
     onRuntime(value) { captureRuntime = value; },
         prepareInputText: goalInput, prepareTerminalEffect: goalSettlement,
-        dispatchHostCommand: goalCommand ? async (chat, text) => { const result = await goalCommand(chat, text); wakeGoalFollowups(chat); return result; } : undefined,
+        dispatchHostCommand: (regrets || goalCommand) ? async (chat, text) => {
+          if (regrets && /^\/regrets(?:\s|$)/.test(text.trim())) { await regretsCommand(chat); return { status: "success", message: "Regrets input queued" }; }
+          if (goalCommand) { const result = await goalCommand(chat, text); wakeGoalFollowups(chat); return result; }
+          return { status: "error", message: "Unknown host command" };
+        } : undefined,
     observeSidePrompt(sourceId, observer) {
       assert();
       if (sideObservers.has(sourceId)) throw Error("Side prompt observer already registered");
@@ -621,7 +1020,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
     manifest: mapping.bindings.map(({ chatJid, branchId, conversationId }) => ({ chatJid, branchId, conversationId: conversationId as ConversationId })),
     sessions: new Map(mapping.bindings.map(binding => [binding.chatJid, binding.sessionId])),
-    assertConversationAvailable() { check(ref, lifetime.signal); },
+    assertConversationAvailable() { assertAdmission(); check(ref, lifetime.signal); },
     resolveScheduledModel(label) {
       const slash = label.indexOf("/");
       const choice = { provider: label.slice(0, slash), id: label.slice(slash + 1) };
@@ -636,7 +1035,9 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       const doc = await tx.doc(ApplicationConversations, 1 as ConversationId);
       if (doc.domain !== mapping.domain || doc.bindings.some(b => b.chatJid === chatJid || b.branchId === branchId)) throw Error("Application mapping conflict");
       const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
-      await configure(tx, conversation.id, { model: { provider: ref.provider, modelId: ref.id }, tools });
+      const instructions = instructionsFor(chatJid);
+      await configure(tx, conversation.id, { model: { provider: ref.provider, modelId: ref.id }, tools, instructions });
+      (await tx.doc(HostManagedInstructions, conversation.id)).managedHash = instructionHash(instructions);
       const binding = { chatJid, branchId, conversationId: conversation.id, sessionId: crypto.randomUUID() };
       const identity = { domain: mapping.domain, chatJid, branchId, sessionId: binding.sessionId };
       const token = defineDoc({ kind: "app.application-identity", version: 1, scope: "conversation", history: "latest", fork: "initial", initial: () => identity });
@@ -647,6 +1048,48 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
     runtime: { incarnation: mapping.domain, sessionId: mapping.domain, lane: "main", generation: 1, now: () => new Date().toISOString(), harnessOptions,
       codemodeExecute: tools.find(tool => tool.name === "codemode")!.execute } }, context);
+  if (remotePeer) {
+    const native = await import(pathToFileURL(join(remotePeer.source.packageDir, "native.ts")).href);
+    assertRemote();
+    const canonical = (target: any) => {
+      assertRemote();
+      const row = root.query("SELECT agent_name FROM chat_branches WHERE chat_jid=? AND branch_id=? AND archived_at IS NULL").get(target.chatJid, target.branchId) as { agent_name: string } | null;
+      if (!row?.agent_name) throw Error("Canonical peer target unavailable");
+      return { ...target, agentName: row.agent_name };
+    };
+    remotePorts = await native.bindNativeRemotePeer({ ...remotePeerOptions, dataDir: join(DATA_DIR, "addons", "remote-peer"),
+      nativeRootServiceOwner: { assertCurrent() { assert(); remotePeer.assertCurrent(); if (readAccessConfig().mode !== "single-user") throw Error("Remote Peer policy revoked"); } },
+      bundle: { sessionTargets: { list: () => bundle.sessionTargets.list().map(canonical), resolve: (target: any) => canonical(bundle.sessionTargets.resolve(target)) },
+        admitApplicationInput: (input: any) => { assertAdmission(); return bundle.admitApplicationInput(input); },
+        steerApplicationInput: (input: any) => { assertAdmission(); return bundle.steerApplicationInput(input); } },
+      scopedRoot: <T>(assertCurrent: () => void, body: () => T) => withExtensionKvAuthority({ extensionId: "remote-peer", chatJid: "", globalRead: true, globalWrite: true,
+        assertCurrent() { assertCurrent(); },
+        write<R>(body: () => R): R { return root.transaction(() => { assertCurrent(); const result = body(); assertCurrent(); return result; }).immediate(); } }, () => {
+        assertCurrent(); const result = body();
+        if (result instanceof Promise) return result.then(value => { assertCurrent(); return value; }) as T;
+        assertCurrent(); return result;
+      }),
+      registerChatTransport,
+    });
+    for (const action of ["config", "dashboard"] as const) {
+      const handlers = action === "config" ? { get: () => remotePorts.config.get(), set: (input: any) => remotePorts.config.set(input) }
+        : { get: () => remotePorts.authority.application("dashboard.get", () => remotePorts.service.dashboard(remotePorts.localContext())),
+            set: (input: any) => remotePorts.authority.application("dashboard.set", () => remotePorts.dashboard({ chatJid: "", cwd: WORKSPACE_DIR, assertCurrent: assertRemote }, input)) };
+      const registration = registerOwnedAddonConfigApi("remote-peer", action, handlers, remotePeer.source.packageDir);
+      remoteDisposers.push(registration.dispose);
+    }
+    remoteDisposers.push(registerChatTransport(remotePorts.chatTransport));
+    if (!offlineMaintenance) await remotePorts.start();
+  }
+  if (regrets) {
+    const settings = createHostRegretsSettings(regretsAddon, async () => {
+      assertRegrets(); const target = bundle.sessionTargets.list()[0];
+      if (!target) throw Error("Regrets application configuration unavailable");
+      return regretsPorts(target.chatJid, assertRegrets, configWrite, { getAvailable: () => host.modelRegistry.getAvailable().filter(model => available.some(a => a.provider === model.provider && a.id === model.id)) });
+    });
+    registerAddonConfigApi("late-night-regrets", "config", { get: () => settings.getConfig(), set: patch => settings.setConfig(patch) }, regrets.source.packageDir);
+    registerAddonConfigApi("late-night-regrets", "models", { get: () => settings.getModels() }, regrets.source.packageDir);
+  }
   if (goal) {
     const config = createHostGoalConfig(goal.addon, { root, assertAdmission: goalAdmission, admit: input => bundle.admitHostFollowup(input) });
     const chatFrom = (payload: unknown, request: Request) => {
@@ -664,11 +1107,20 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       },
     }, goal.source.packageDir);
   }
-  return { sessionOptions: bundle.sessionOptions, bind: bundle.bind,
+  let closing: Promise<void> | undefined;
+  return { sessionOptions: offlineMaintenance ? { getDurableSession(chat) {
+      const position = bundle.sessionOptions.getDurableSession?.(chat);
+      return position && { ...position, compact: async () => { throw Error("Offline maintenance cannot admit compaction"); } };
+    },
+    dispatchScheduledAgent: async () => { throw Error("Offline maintenance cannot admit conversations"); }, dispatchSidePrompt: async () => { throw Error("Offline maintenance cannot admit conversations"); },
+    dispatchHostCommand: async () => { throw Error("Offline maintenance cannot admit conversations"); } } : bundle.sessionOptions,
+    bind(options) { assertAdmission(); return bundle.bind(options); },
     attachChannel(channel) {
+      assertAdmission();
       assert(); lifetime.signal.throwIfAborted();
       if (widgetPublisher) throw Error("Widget channel already attached");
       const broadcast = channel.broadcastEvent.bind(channel);
+      bundle.bindInputProjection({ pendingLinkPreviews: new Set<number>(), broadcastEvent: (event, data) => broadcast(event, data as Record<string, unknown>) });
       resumePending = channel.resumePendingChats?.bind(channel);
       workspaceFileOpener = channel.requestWorkspaceFileOpen?.bind(channel);
       widgetPublisher = (chatJid, key, content, options) => {
@@ -677,24 +1129,33 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       };
     },
     stop() {
+      bundle.bindInputProjection(undefined);
       resumePending = undefined;
-      widgetPublisher = undefined; workspaceFileOpener = undefined; lifetime.abort();
+      widgetPublisher = undefined; workspaceFileOpener = undefined; lifetime.abort(); closeResources(); releaseAdminKv?.(); closeInfrastructure();
       // close seals routing synchronously; final close below joins owned cleanup.
+      void closeRemote().catch(() => {});
+      codexGroup?.dispose();
       void mcp?.close().catch(() => {});
       void drawioHost?.close().catch(() => {});
       void closeSandbox().catch(() => {});
       bundle.stop();
-    }, async close() {
+    }, close() {
+      return closing ??= (async () => {
+      bundle.bindInputProjection(undefined);
       widgetPublisher = undefined; workspaceFileOpener = undefined;
-      lifetime.abort(); releaseReviewSource?.(); releaseObservabilityConfiguration?.();
-      const results = await Promise.allSettled([mcp?.close(), closeSandbox(), drawioHost?.close()]);
-      const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
-      if (failures.length) throw new AggregateError(failures.map(result => result.reason), "Native tool cleanup uncertain");
-      await bundle.close();
+      const producerResults = await Promise.allSettled([closeRemote(), closeCodex()]);
+      lifetime.abort(); closeResources(); releaseAdminKv?.(); closeInfrastructure(); releaseReviewSource?.(); releaseObservabilityConfiguration?.();
+      const results = [...producerResults, ...await Promise.allSettled([mcp?.close(), closeSandbox(), drawioHost?.close()])];
+      const failures: unknown[] = results.filter((result): result is PromiseRejectedResult => result.status === "rejected").map(result => result.reason);
+      try { await bundle.close(); } catch (error) { failures.push(error); }
+      if (failures.length) throw new AggregateError(failures, "Native tool cleanup uncertain");
+      })();
     } };
   } catch (error) {
-    lifetime.abort(); releaseReviewSource?.(); releaseObservabilityConfiguration?.();
+    lifetime.abort(); closeResources(); releaseAdminKv?.(); closeInfrastructure(); releaseReviewSource?.(); releaseObservabilityConfiguration?.();
     const cleanupFailures: unknown[] = [];
+    try { await closeRemote(); } catch (cleanup) { cleanupFailures.push(cleanup); }
+    try { await closeCodex(); } catch (cleanup) { cleanupFailures.push(cleanup); }
     try { await mcp?.close(); } catch (cleanup) { cleanupFailures.push(cleanup); }
     try { await closeSandbox(); } catch (cleanup) { cleanupFailures.push(cleanup); }
     try { await drawioHost?.close(); } catch (cleanup) { cleanupFailures.push(cleanup); }

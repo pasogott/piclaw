@@ -120,16 +120,26 @@ test("manager denies busy/pending work; detaches caches during archive and block
 });
 
 test("pending-session guard reflects real hydration singleflight and protected runs", async () => {
-  let release!: () => void;
+  const hydrationStarted = Promise.withResolvers<void>();
+  const hydrationRelease = Promise.withResolvers<void>();
+  let creations = 0;
   const sessionManager = new AgentSessionManager({ pool: new Map(), modelRuntime: {} as any,
     settingsManager: { getDefaultProvider: () => undefined, getDefaultModel: () => undefined } as any,
-    createSession: async () => { await new Promise<void>(resolve => { release = resolve; }); return { session: { model: {} }, dispose: async () => {} } as any; },
+    createSession: async () => { creations++; hydrationStarted.resolve(); await hydrationRelease.promise; return { session: { model: {} }, dispose: async () => {} } as any; },
     createDefaultTools: () => [] as any, bindSession: async () => {}, ensureBranchRegistration: () => {},
   });
   const root = alice.homeChatJid!;
   const identity = authoriseExecutionIdentity(getDb(), "family-shared", root, { actorUserId: alice.userId, ownerUserId: alice.userId, chatJid: root, kind: "interactive", authenticationSessionId: alice.authentication.sessionId! })!;
   const run = withExecutionIdentity(identity, () => sessionManager.getOrCreate(root));
-  await Bun.sleep(1); expect(sessionManager.hasPendingSessionWork(root)).toBe(true); release(); await run;
+  // Module loading precedes createSession; elapsed time is not a hydration barrier.
+  await Promise.race([hydrationStarted.promise, run]);
+  expect(sessionManager.hasPendingSessionWork(root)).toBe(true);
+  const joined = withExecutionIdentity(identity, () => sessionManager.getOrCreate(root));
+  expect(creations).toBe(1);
+  expect(sessionManager.hasPendingSessionWork(root)).toBe(true);
+  hydrationRelease.resolve();
+  expect(await joined).toBe(await run);
+  expect(creations).toBe(1);
   expect(sessionManager.hasPendingSessionWork(root)).toBe(false);
   const unprotect = sessionManager.acquireEvictionProtection(root);
   expect(sessionManager.hasPendingSessionWork(root)).toBe(true); unprotect();

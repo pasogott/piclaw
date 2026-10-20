@@ -13,14 +13,15 @@ for (const mode of ["approved", "tamper", "shadow", "execute", "schema"] as cons
   let catalog: Awaited<ReturnType<typeof loadApplicationExtensionCatalog>> | undefined;
   try {
     if (mode === "tamper") writeFileSync(join(pkg, "index.ts"), readFileSync(join(pkg, "index.ts"), "utf8") + "\n// changed\n");
-    if (mode === "shadow") writeFileSync(join(pkg, "index.js"), "export default function() {}\n");
-    catalog = await loadApplicationExtensionCatalog({ cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() });
-    const qualified = qualifyInstalledOfficeViewer(catalog, dir);
+    if (mode === "shadow") writeFileSync(join(pkg, "index.js"), `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(join(dir, "unqualified-module-io"))}, "BAD");
+export default function() {}\n`);
     if (mode === "tamper" || mode === "shadow") {
-      expect(qualified).toBeUndefined();
-      expect(() => assertApplicationExtensionCatalogSupported(catalog!)).toThrow();
+      await expect(loadApplicationExtensionCatalog({ cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() })).rejects.toThrow(/Unqualified installed (add-on package|extension source) before evaluation/);
+      expect(await Bun.file(join(dir, "unqualified-module-io")).exists()).toBe(false);
       return;
     }
+    catalog = await loadApplicationExtensionCatalog({ cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() });
+    const qualified = qualifyInstalledOfficeViewer(catalog, dir);
     expect(qualified).toBeDefined();
     expect(qualified!.extension.handlers.size).toBe(0);
     expect(() => assertApplicationExtensionCatalogSupported(catalog!)).toThrow("open_office_viewer");

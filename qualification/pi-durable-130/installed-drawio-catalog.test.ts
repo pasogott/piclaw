@@ -45,9 +45,7 @@ test("actual Draw.io altered metadata denied before native qualification", async
   const pkg = await installDrawioFixture(dir);
   const agentDir = join(dir, "agent"); mkdirSync(agentDir);
   writeFileSync(join(pkg, "package.json"), readFileSync(join(pkg, "package.json"), "utf8") + "\n");
-  const catalog = await loadApplicationExtensionCatalog({ cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() });
   try {
-    expect(await qualifyInstalledDrawio(catalog, dir)).toBeUndefined();
-    expect(() => assertApplicationExtensionCatalogSupported(catalog)).toThrow("no operation-owned host effect port");
-  } finally { catalog.runtime.invalidate("fixture ended"); rmSync(dir, { recursive: true, force: true }); }
+    await expect(loadApplicationExtensionCatalog({ cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() })).rejects.toThrow(/Unqualified installed (add-on package|extension source) before evaluation/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -621,14 +621,29 @@ for (const method of ["stream", "streamSimple", "complete", "completeSimple"] as
 
 test("image capability: authorization, real post-auth fence, and accepted SQLite recovery", async () => {
   const image = { type: "image" as const, data: "c3ludGhldGlj", mimeType: "image/png" };
+  // Registration starts a background availability refresh even with refreshOnCreate:false.
+  const baseline = await fixture(false, true, false, true);
+  expect(baseline.requested).toEqual([]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(baseline.requested).toEqual([ref.provider, ref.provider]);
+  expect(baseline.calls()).toBe(0);
   for (const role of ["user", "toolResult"] as const) {
     const ctx = { messages: [role === "user"
       ? { role, content: [image], timestamp: 1 }
       : { role, content: [image], toolCallId: "call-1", toolName: "fixture_tool", isError: false, timestamp: 1 }] };
     for (const phase of ["authorize", "post-auth"] as const) {
       const f = await fixture(false, true, false, true);
+      // Settle registration plus an explicit public refresh before counting dispatch auth.
+      await f.runtime.refresh({ allowNetwork: false });
+      const initialReads = f.requested.length;
+      expect(initialReads).toBe(4);
       const physical = f.runtime.getPhysicalModel(ref.provider, ref.id)!;
-      const revoke = () => { physical.input.splice(0, physical.input.length, "text"); };
+      // The SDK catalog preserves the NativeProvider getModels() object, not a clone.
+      expect(f.runtime.getPhysicalModel(ref.provider, ref.id)).toBe(physical);
+      const revoke = () => {
+        physical.input.splice(0, physical.input.length, "text");
+        expect(f.runtime.getPhysicalModel(ref.provider, ref.id)!.input).toEqual(["text"]);
+      };
       if (phase === "authorize") f.policy.authorize = async () => { await Promise.resolve(); revoke(); };
       else f.hold();
       const pending = f.models.completeSimple(f.model, ctx);
@@ -640,7 +655,7 @@ test("image capability: authorization, real post-auth fence, and accepted SQLite
       expect(result.errorMessage).toBe("Host model request denied or failed");
       expect(f.calls()).toBe(0);
       expect(JSON.stringify(result)).not.toContain(token);
-      if (phase === "authorize") expect(f.requested).toEqual([]);
+      expect(f.requested.length - initialReads).toBe(phase === "authorize" ? 0 : 1);
       // Text-only requests remain legal on the same downgraded physical owner.
       f.policy.authorize = async () => {};
       expect((await f.models.completeSimple(f.model, context)).stopReason).toBe("toolUse");
@@ -665,6 +680,7 @@ test("image capability: authorization, real post-auth fence, and accepted SQLite
     const callsBeforeReopen = f.calls();
     await harness.close(durableContext);
     f.runtime.getPhysicalModel(ref.provider, ref.id)!.input.splice(0, 2, "text");
+    expect(f.runtime.getPhysicalModel(ref.provider, ref.id)!.input).toEqual(["text"]);
     f.policy.authorize = async () => {};
     harness = await open();
     const recovered = (await harness.submission(accepted.id, durableContext))!;

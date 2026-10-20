@@ -1,4 +1,6 @@
 import "./src/test-guard.js";
+import { admitAddonLocalRequest } from "../../runtime/src/addons/local-context.js";
+import { getExtensionKvStore } from "../../runtime/src/extension-kv-registry.js";
 import { test, expect, spyOn } from "bun:test";
 import { cpSync, symlinkSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -14,7 +16,7 @@ import { acquireRuntimeLock } from "../../runtime/src/runtime/single-instance.js
 import { getPiclawAgentDir } from "../../runtime/src/core/agent-dir.js";
 import { AgentPool } from "../../runtime/src/agent-pool.js";
 import { createRuntimeBaseServices } from "../../runtime/src/runtime/composition.js";
-import { handleRegisteredAddonConfigApiRequest } from "../../runtime/src/channels/web/handlers/addon-config-api.js";
+import { registerOwnedAddonConfigApi, handleRegisteredAddonConfigApiRequest } from "../../runtime/src/channels/web/handlers/addon-config-api.js";
 import type { RuntimeModelServices } from "../../runtime/src/agent-pool/model-services.js";
 
 const slugs = ["code-review", "delegate", "goal", "observability", "plan-sidebar", "restic", "session-dashboard"];
@@ -77,13 +79,46 @@ test("all seven shipped consumers admit actual native startup and Restic effects
   try {
     backend = await createDefaultApplicationRuntime(owner, async () => ({ modelRuntime: runtime, modelRegistry: new ModelRegistry(runtime) } as RuntimeModelServices));
     const configUrl = "http://fixture/agent/addons/api/observability/config";
+    const admitted = (request: Request) => {
+      admitAddonLocalRequest(request, { userId: "default", mode: "single-user" }, () => !request.signal.aborted);
+      return request;
+    };
     const respond = (body: unknown, status = 200) => Response.json(body, { status });
-    const initialConfig = await handleRegisteredAddonConfigApiRequest(new Request(configUrl), "observability", "config", respond);
-    expect(initialConfig!.status).toBe(200);
+    // Exercise the real request/transaction authority after legacy preflight invalidation.
+    const denied = await handleRegisteredAddonConfigApiRequest(new Request(configUrl), "observability", "config", respond);
+    expect(await denied!.json()).toEqual({ error: "Authenticated configuration owner required" });
+    const kv = getExtensionKvStore();
+    const probe = registerOwnedAddonConfigApi("observability", "authority-regression", {
+      async get() { await Promise.resolve(); kv.set("observability", "authority-probe", true, "global"); },
+      async set(payload, request) {
+        await Promise.resolve();
+        if (payload === "expire") controllers.get(request)!.abort();
+        kv.set(payload === "cross-namespace" ? "goal" : "observability", "authority-probe", true, "global");
+      },
+    }, "synthetic-authority-regression");
+    const controllers = new WeakMap<Request, AbortController>();
+    try {
+      for (const [method, payload, error] of [
+        ["GET", undefined, "Extension KV scope denied"],
+        ["POST", "cross-namespace", "Extension KV scope denied"],
+        ["POST", "expire", "Configuration request expired"],
+      ] as const) {
+        const controller = new AbortController();
+        const request = new Request(configUrl, { method, signal: controller.signal,
+          ...(payload ? { body: JSON.stringify(payload) } : {}) });
+        controllers.set(request, controller);
+        const response = await handleRegisteredAddonConfigApiRequest(admitted(request), "observability", "authority-regression", respond);
+        expect(response!.status).toBe(500);
+        expect(await response!.json()).toEqual({ error });
+      }
+      expect(root.query("SELECT COUNT(*) AS n FROM extension_kv WHERE key = 'authority-probe'").get()).toEqual({ n: 0 });
+    } finally { probe.dispose(); }
+    const initialConfig = await handleRegisteredAddonConfigApiRequest(admitted(new Request(configUrl)), "observability", "config", respond);
+    expect(initialConfig!.status, await initialConfig!.clone().text()).toBe(200);
     expect(await initialConfig!.json()).toMatchObject({ enabled: true, instance_name: expectedInstance, appinsights_live_metrics: false });
     expectedInstance = "native-settings-instance";
-    const updated = await handleRegisteredAddonConfigApiRequest(new Request(configUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instance_name: expectedInstance }) }), "observability", "config", respond);
-    expect(updated!.status).toBe(200);
+    const updated = await handleRegisteredAddonConfigApiRequest(admitted(new Request(configUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instance_name: expectedInstance }) })), "observability", "config", respond);
+    expect(updated!.status, await updated!.clone().text()).toBe(200);
     expect(await updated!.json()).toMatchObject({ ok: true, config: { instance_name: expectedInstance, enabled: true } });
     const base = createRuntimeBaseServices({ dataDir: workspace });
     const pool = new AgentPool({ credentialStore: credentials, modelRuntime: runtime, modelRegistry: new ModelRegistry(runtime), ...backend.sessionOptions });

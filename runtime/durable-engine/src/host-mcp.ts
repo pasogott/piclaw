@@ -12,6 +12,7 @@ import { RuntimeStartupCleanupError } from "../../src/runtime/startup-cleanup-er
 
 /** Startup-owned, tools-only stdio profile. No adapter fallback or live apply. */
 export async function createHostMcp(options: {
+  offlineMaintenance?: boolean;
   assertCurrent(): void;
   captureSource(api: ToolExecutionApi): Promise<() => void>;
 }) {
@@ -29,8 +30,9 @@ export async function createHostMcp(options: {
     if (sealed || invalidated || getMcpBridgeReadSnapshot().revision !== snapshot.revision || readMcpInstancePolicy().revision !== policy.revision) throw Error("Native MCP owner is no longer current");
     assertMcpBridgeSourcesCurrent();
   };
-  // An empty catalogue owns no credential-bearing transport or generation.
-  const lease = enabled.length ? acquireMcpSessionBridge() : undefined;
+  // Maintenance validates metadata only: no credential lease or discovery.
+  const deferredMaintenance = options.offlineMaintenance === true;
+  let lease: ReturnType<typeof acquireMcpSessionBridge> | undefined;
   const close = () => {
     sealed = true;
     return closing ??= (async () => {
@@ -52,7 +54,9 @@ export async function createHostMcp(options: {
         if (!projected || !("command" in projected.config) || Object.keys(original).some(key => !allowed.has(key)) || original.directTools === true ||
           reference(original.command) || reference(original.cwd) || original.args?.some(reference) || Object.values(original.env ?? {}).some(reference) || !/^[A-Za-z0-9_]+$/.test(name)) throw Error("Durable MCP supports only literal, mapped stdio tool configuration");
       }
-      // Validate the entire configuration before starting any process.
+      // Validate the entire configuration before acquiring credentials or starting processes.
+      if (deferredMaintenance) { assertCurrent(); return { tools, close, assertCurrent, deferredMaintenance }; }
+      lease = acquireMcpSessionBridge();
       for (const [name] of enabled) {
         assertCurrent();
         const server = snapshot.nativePreview.servers.find(server => server.name === name)!.config;
@@ -105,7 +109,7 @@ export async function createHostMcp(options: {
       }
     }
     assertCurrent();
-    return { tools, close, assertCurrent };
+    return { tools, close, assertCurrent, deferredMaintenance };
   } catch (error) {
     try { await close(); } catch (cleanup) { throw new RuntimeStartupCleanupError([error, cleanup], "Native MCP startup cleanup uncertain"); }
     throw error;

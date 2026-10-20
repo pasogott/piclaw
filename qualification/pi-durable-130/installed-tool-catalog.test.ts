@@ -185,7 +185,7 @@ test("installed pinned Plan executes the public registry definition against root
   }
 });
 
-for (const scenario of ["renamed-after-load", "wrong-path", "unsupported-version", "unsupported-code", "shadowed-helper", "changed-during-load", "symlink-escape", "symlink-package", "replaced-extension"] as const) test(`Plan loaded provenance rejects ${scenario}`, async () => {
+for (const scenario of ["renamed-after-load", "unqualified-name-before-load", "wrong-path", "unsupported-version", "unsupported-code", "shadowed-helper", "changed-during-load", "changed-during-approved-load", "symlink-escape", "symlink-package", "replaced-extension"] as const) test(`Plan loaded provenance rejects ${scenario}`, async () => {
   const dir = mkdtempSync(join(import.meta.dir, ".qualification-addons-"));
   const canonicalName = "@rcarmo/piclaw-addon-plan-sidebar";
   const pkg = join(dir, ".pi/extensions/node_modules", scenario === "wrong-path" ? "@qualification/plan" : canonicalName);
@@ -196,7 +196,7 @@ for (const scenario of ["renamed-after-load", "wrong-path", "unsupported-version
   try {
     mkdirSync(join(pkg, "compat"), { recursive: true });
     for (const file of Object.keys(pins)) copyFileSync(resolve(root!, "addons/plan-sidebar", file), join(pkg, file));
-    const manifest = { name: scenario === "renamed-after-load" ? "@qualification/plan" : canonicalName,
+    const manifest = { name: scenario === "unqualified-name-before-load" ? "@qualification/plan" : canonicalName,
       version: scenario === "unsupported-version" ? "0.1.26" : "0.1.25", type: "module", pi: { extensions: ["./index.ts"] } };
     writeFileSync(join(pkg, "package.json"), JSON.stringify(manifest));
     if (scenario === "unsupported-code") writeFileSync(join(pkg, "compat/chat-context.ts"), `${await Bun.file(join(pkg, "compat/chat-context.ts")).text()}\n// unsupported executable input\n`);
@@ -212,17 +212,35 @@ for (const scenario of ["renamed-after-load", "wrong-path", "unsupported-version
       rmSync(join(pkg, "compat/chat-context.ts"));
       symlinkSync(escaped, join(pkg, "compat/chat-context.ts"));
     }
+    const marker = join(dir, "unqualified-module-io");
     if (scenario === "changed-during-load") {
       const mutator = join(dir, ".pi/extensions/node_modules/aaa-mutator"); mkdirSync(mutator, { recursive: true });
       writeFileSync(join(mutator, "package.json"), JSON.stringify({ name: "aaa-mutator", type: "module", pi: { extensions: ["index.ts"] } }));
-      writeFileSync(join(mutator, "index.ts"), `import { writeFileSync } from "node:fs"; export default function () { writeFileSync(${JSON.stringify(join(pkg, "package.json"))}, ${JSON.stringify(JSON.stringify({ ...manifest, description: "changed while loading" }))}); }`);
+      writeFileSync(join(mutator, "index.ts"), `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "EVALUATED"); export default function () { writeFileSync(${JSON.stringify(join(pkg, "package.json"))}, ${JSON.stringify(JSON.stringify({ ...manifest, description: "changed while loading" }))}); }`);
     }
     const agentDir = join(dir, "agent"); mkdirSync(agentDir);
     delete globals.__piclaw_registerAddonConfigApi;
     delete globals.__PICLAW_BROADCAST_EVENT__;
-    catalog = await loadApplicationExtensionCatalog({ cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() });
+    const options = { cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() };
+    if (scenario !== "renamed-after-load" && scenario !== "replaced-extension" && scenario !== "changed-during-approved-load") {
+      await expect(loadApplicationExtensionCatalog(options)).rejects.toThrow(/Unqualified installed (add-on package|extension source) before evaluation/);
+      expect(await Bun.file(marker).exists()).toBe(false);
+      return;
+    }
+    // Mutate through a real approved factory's host registration callback: no
+    // unapproved mutator is needed to retain the during-evaluation race.
+    if (scenario === "changed-during-approved-load") globals.__piclaw_registerAddonConfigApi = () => {
+      writeFileSync(join(pkg, "package.json"), JSON.stringify({ ...manifest, description: "changed while loading" }));
+      return "created";
+    };
+    catalog = await loadApplicationExtensionCatalog(options);
     expect(catalog.errors).toEqual([]);
-    if (scenario === "renamed-after-load") writeFileSync(join(pkg, "package.json"), JSON.stringify({ ...manifest, name: canonicalName }));
+    if (scenario === "renamed-after-load") {
+      const qualified = await qualifyInstalledPlan(catalog, dir);
+      expect(qualified).toBeDefined();
+      writeFileSync(join(pkg, "package.json"), JSON.stringify({ ...manifest, name: "@qualification/plan" }));
+      expect(() => qualified!.assertCurrent()).toThrow("Installed Plan source changed");
+    }
     if (scenario === "replaced-extension") {
       const qualified = await qualifyInstalledPlan(catalog, dir);
       expect(qualified).toBeDefined();
@@ -231,9 +249,10 @@ for (const scenario of ["renamed-after-load", "wrong-path", "unsupported-version
     }
     expect(await qualifyInstalledPlan(catalog, dir)).toBeUndefined();
     expect(() => assertApplicationExtensionCatalogSupported(catalog!)).toThrow("no operation-owned host effect port");
-    if (scenario === "changed-during-load") {
+    if (scenario === "changed-during-approved-load") {
+      expect(JSON.parse(await Bun.file(join(pkg, "package.json")).text()).description).toBe("changed while loading");
       writeFileSync(join(pkg, "package.json"), JSON.stringify(manifest));
-      await expect(loadApplicationExtensionCatalog({ cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() })).rejects.toThrow("process restart required");
+      await expect(loadApplicationExtensionCatalog(options)).rejects.toThrow("process restart required");
     }
   } finally {
     catalog?.runtime.invalidate();
@@ -253,29 +272,24 @@ test("same-path same-CWD unsupported Plan cache cannot qualify restored approved
     writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@rcarmo/piclaw-addon-plan-sidebar", version: "0.1.25", type: "module", pi: { extensions: ["./index.ts"] } }));
     const marker = join(dir, "factory-executions");
     writeFileSync(join(pkg, "index.ts"), `import { appendFileSync } from "node:fs";
+      appendFileSync(${JSON.stringify(marker)}, "BAD\\n");
       export default function (pi) {
-        appendFileSync(${JSON.stringify(marker)}, "BAD\\n");
         pi.registerTool({ name: "plan", label: "plan", description: "unsupported", parameters: { type: "object", properties: {} },
           async execute() { return { content: [{ type: "text", text: "BAD" }], details: {} }; } });
       }`);
     const options = { cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() };
-    catalog = await loadApplicationExtensionCatalog(options);
-    expect(catalog.errors).toEqual([]);
-    const definition = catalog.extensions[0]!.tools.get("plan")!.definition;
-    expect((await definition.execute("marker", {} as never, undefined, undefined, undefined as never)).content).toEqual([{ type: "text", text: "BAD" }]);
-    expect(await qualifyInstalledPlan(catalog, dir)).toBeUndefined();
-    expect(() => assertApplicationExtensionCatalogSupported(catalog!)).toThrow("no operation-owned host effect port");
+    await expect(loadApplicationExtensionCatalog(options)).rejects.toThrow(/Unqualified installed (add-on package|extension source) before evaluation/);
+    expect(await Bun.file(marker).exists()).toBe(false);
     copyFileSync(resolve(root!, "addons/plan-sidebar/index.ts"), join(pkg, "index.ts"));
     expect(createHash("sha256").update(await Bun.file(join(pkg, "index.ts")).bytes()).digest("hex")).toBe(pins["index.ts"]);
     // A fresh application loader at exactly the same path/CWD must not attach
-    // the new hash snapshot to BAD's process-cached registration or run it again.
+    // a new hash snapshot after the rejected attempt, or evaluate BAD at all.
     await expect(loadApplicationExtensionCatalog({ ...options, settingsManager: SettingsManager.inMemory() })).rejects.toThrow("process restart required");
-    expect(await qualifyInstalledPlan(catalog, dir)).toBeUndefined();
-    expect(await Bun.file(marker).text()).toBe("BAD\n");
+    expect(await Bun.file(marker).exists()).toBe(false);
   } finally { catalog?.runtime.invalidate(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("empty public application registry passes; actual factory load failure is not silently omitted", async () => {
+test("empty public application registry passes; unqualified broken factory is rejected before evaluation", async () => {
   const dir = mkdtempSync(join(import.meta.dir, ".qualification-addons-"));
   const agentDir = join(dir, "agent"); mkdirSync(agentDir);
   let catalog: Awaited<ReturnType<typeof loadApplicationExtensionCatalog>> | undefined;
@@ -285,10 +299,9 @@ test("empty public application registry passes; actual factory load failure is n
     catalog.runtime.invalidate();
     const pkg = join(dir, ".pi/extensions/node_modules/broken"); mkdirSync(pkg, { recursive: true });
     writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "broken", pi: { extensions: ["index.ts"] } }));
-    writeFileSync(join(pkg, "index.ts"), 'export default function () { throw Error("PRIVATE_FACTORY_FAILURE"); }');
-    catalog = await loadApplicationExtensionCatalog({ cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() });
-    expect(catalog.errors).toHaveLength(1);
-    expect(() => assertApplicationExtensionCatalogSupported(catalog!)).toThrow("extension load failed");
-    expect(() => assertApplicationExtensionCatalogSupported(catalog!)).not.toThrow("PRIVATE_FACTORY_FAILURE");
+    const marker = join(dir, "broken-module-io");
+    writeFileSync(join(pkg, "index.ts"), `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "BAD"); export default function () { throw Error("PRIVATE_FACTORY_FAILURE"); }`);
+    await expect(loadApplicationExtensionCatalog({ cwd: dir, agentDir, settingsManager: SettingsManager.inMemory() })).rejects.toThrow(/Unqualified installed add-on package before evaluation/);
+    expect(await Bun.file(marker).exists()).toBe(false);
   } finally { catalog?.runtime.invalidate(); rmSync(dir, { recursive: true, force: true }); }
 });
