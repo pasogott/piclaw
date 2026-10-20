@@ -1428,7 +1428,11 @@ function validateConstruction(database: Database): void {
     throw new Error("triggers");
   }
   for (const sql of REQUIRED_SCHEMA_PROBES) database.query(sql).get();
-  const foreignKeyViolations = database.query("PRAGMA foreign_key_check").all();
+  // Validate required tables, not unrelated historical application data.
+  const foreignKeyViolations = database
+    .query("PRAGMA foreign_key_check")
+    .all()
+    .filter((row) => tables.has((row as { table: string }).table));
   if (foreignKeyViolations.length !== 0) throw new Error("foreign key state");
   const quickCheck = database.query("PRAGMA quick_check").get() as
     | { quick_check?: unknown }
