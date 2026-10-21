@@ -95,9 +95,13 @@ applicationTest("actual CLI apply: all 23 installed, synthetic built-in OAuth, a
    if(!archive || !existsSync(archive) || digest(readFileSync(archive))!==addon.sha256) throw Error(`Invalid archive: ${addon.name}`);
    dependencies[addon.name]="file:"+archive;
   }
-  writeFileSync(join(extensions,"package.json"),JSON.stringify({private:true,type:"module",dependencies}));
-  const install=Bun.spawnSync([process.execPath,"install","--ignore-scripts"],{cwd:extensions,env:{...process.env,BUN_INSTALL:join(f.root,"bun")},stdout:"pipe",stderr:"pipe",timeout:90000});
-  if(install.exitCode) throw Error(install.stderr.toString()+install.stdout.toString());
+  const staged=process.env.DURABLE_REHEARSAL_EXTENSIONS_ROOT;
+  if(staged){cpSync(staged,extensions,{recursive:true,dereference:false});}
+  else{
+   writeFileSync(join(extensions,"package.json"),JSON.stringify({private:true,type:"module",dependencies}));
+   const install=Bun.spawnSync([process.execPath,"install","--ignore-scripts","--linker=hoisted"],{cwd:extensions,env:{...process.env,BUN_INSTALL:join(f.root,"bun")},stdout:"pipe",stderr:"pipe",timeout:90000});
+   if(install.exitCode) throw Error(install.stderr.toString()+install.stdout.toString());
+  }
  } else {
  const source=repoRoot("ADDONS");
   const rootModules=realpathSync(join(repoRoot("CORE"),"node_modules"));
