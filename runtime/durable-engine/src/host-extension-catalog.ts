@@ -319,31 +319,21 @@ export async function qualifyInstalledEditableTable(catalog: LoadExtensionsResul
   return Object.freeze({ ...qualified, addon: Object.freeze({ createEditableTableTool: factory }), assertCurrent() { qualified.assertCurrent(); if (exports.createEditableTableTool !== factory) throw Error("Editable table factory changed"); } });
 }
 
-/** The public Pi registry, not a second registerTool implementation. Factories
- * run once at application startup, without AgentSession or SessionManager.
- * No action stubs are rebound and no native extension context is fabricated.
- */
-export async function loadApplicationExtensionCatalog(options: {
-  cwd: string;
-  agentDir: string;
-  settingsManager: SettingsManager;
-}): Promise<LoadExtensionsResult> {
-  const installedEntries = getInstalledAddonExtensionPaths(options.cwd);
+function captureApplicationSources(cwd: string) {
+  const installedEntries = getInstalledAddonExtensionPaths(cwd);
   const snapshots = (Object.keys(sourceProfiles) as SourceProfile[]).map(kind => {
-    const before = captureApprovedSource(options.cwd, installedEntries, kind);
+    const before = captureApprovedSource(cwd, installedEntries, kind);
     const profile = sourceProfiles[kind];
-    const entry = before?.entry ?? join(realpathSync(options.cwd), ".pi/extensions/node_modules", kind === "eml-viewer" && existsSync(join(options.cwd, ".pi/extensions/node_modules/piclaw-addon-eml-viewer")) ? "piclaw-addon-eml-viewer" : profile.name, "entry" in profile ? profile.entry || "package.json" : "index.ts");
-    if (attemptedInstalledSources.has(entry) && !sameSource(attemptedInstalledSources.get(entry), before)) {
-      attemptedInstalledSources.set(entry, undefined);
-      throw Error(`Installed ${sourceProfiles[kind].label} loader cache provenance changed; process restart required`);
-    }
-    if (existsSync(entry)) attemptedInstalledSources.set(entry, before);
+    const entry = before?.entry ?? join(realpathSync(cwd), ".pi/extensions/node_modules", kind === "eml-viewer" && existsSync(join(cwd, ".pi/extensions/node_modules/piclaw-addon-eml-viewer")) ? "piclaw-addon-eml-viewer" : profile.name, "entry" in profile ? profile.entry || "package.json" : "index.ts");
     return { kind, before, entry };
   });
+  return {installedEntries,snapshots};
+}
+function assertApprovedApplicationSources(cwd: string, {installedEntries,snapshots}: ReturnType<typeof captureApplicationSources>) {
   // Classification MUST precede loader.reload(): unknown factories can perform
   // module-level I/O even when their eventual registrations are rejected.
   const approvedPackages = new Set(snapshots.flatMap(snapshot => snapshot.before ? [snapshot.before.packageDir] : []));
-  for (const packageDir of listInstalledAddonPackageDirs(join(options.cwd, ".pi/extensions/node_modules"))) {
+  for (const packageDir of listInstalledAddonPackageDirs(join(cwd, ".pi/extensions/node_modules"))) {
     const manifest = readInstalledAddonPackage(packageDir)?.manifest;
     if ((manifest?.name?.includes("piclaw-addon-") || manifest?.pi) && !approvedPackages.has(packageDir))
       throw Error(`Unqualified installed add-on package before evaluation: ${packageDir}`);
@@ -353,6 +343,33 @@ export async function loadApplicationExtensionCatalog(options: {
     if (!approvedEntries.has(resolve(entry)))
       throw Error(`Unqualified installed extension source before evaluation: ${entry}`);
   }
+}
+
+/** Same read-only pre-evaluation gate used by the actual loader; never evaluates
+ * factories, donates qualification receipts, or mutates loader cache provenance. */
+export function auditInstalledApplicationAddonSources(cwd: string) {
+  const captured=captureApplicationSources(cwd);
+  assertApprovedApplicationSources(cwd,captured);
+  return {expectedProfiles:Object.values(sourceProfiles).map(({name,version})=>({name,version})),profiles:captured.snapshots.flatMap(({kind,before,entry})=>before?[{kind,name:sourceProfiles[kind].name,version:sourceProfiles[kind].version,packageDir:before.packageDir,entry}]:[])};
+}
+
+/** The public Pi registry, not a second registerTool implementation. Factories
+ * run once at application startup, without AgentSession or SessionManager.
+ * No action stubs are rebound and no native extension context is fabricated. */
+export async function loadApplicationExtensionCatalog(options: {
+  cwd: string;
+  agentDir: string;
+  settingsManager: SettingsManager;
+}): Promise<LoadExtensionsResult> {
+  const captured=captureApplicationSources(options.cwd),{installedEntries,snapshots}=captured;
+  for(const {kind,before,entry} of snapshots){
+    if(attemptedInstalledSources.has(entry)&&!sameSource(attemptedInstalledSources.get(entry),before)){
+      attemptedInstalledSources.set(entry,undefined);
+      throw Error(`Installed ${sourceProfiles[kind].label} loader cache provenance changed; process restart required`);
+    }
+    if(existsSync(entry))attemptedInstalledSources.set(entry,before);
+  }
+  assertApprovedApplicationSources(options.cwd,captured);
   const loader = new DefaultResourceLoader({ ...options,
     additionalExtensionPaths: installedEntries, noExtensions: true,
     noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,

@@ -45,8 +45,17 @@ for(const kind of ["valid","source-tamper","binding","schema","payload","live-lo
  if(kind==="archive-plan") {const dir=join(f.workspace,".piclaw/data/sessions");mkdirSync(dir,{recursive:true});writeFileSync(join(dir,"raw.jsonl"),"raw retained bytes");f.manifest.archives=[{path:"raw.jsonl",sha256:digest("raw retained bytes")}];}
  f.save();const before=snapshot(f.root);
  const extra=kind==="unsafe-destination"?["--apply","--relocate-archives",join(f.workspace,"bad")]:kind==="existing-destination"?["--apply","--relocate-archives",f.agent]:[];
- const r=f.run(extra); if(["valid","archive-plan"].includes(kind)){if(r.exitCode)throw Error(r.stderr.toString());expect(r.exitCode).toBe(0);const report=JSON.parse(r.stdout.toString().trim().split("\n").at(-1)!);expect(report.writes).toBe(0);expect(report.validation).toBe("immutable-offline-data-only-not-resident-ownership");if(kind==="archive-plan")expect(report.archivePlan.files).toEqual(f.manifest.archives);}else expect(r.exitCode).toBe(1);
+ const r=f.run(extra); if(["valid","archive-plan"].includes(kind)){if(r.exitCode)throw Error(r.stderr.toString());expect(r.exitCode).toBe(0);const report=JSON.parse(r.stdout.toString().trim().split("\n").at(-1)!);expect(report.writes).toBe(0);expect(report.validation).toBe("immutable-offline-data-and-installed-sources-not-runtime-construction");if(kind==="archive-plan")expect(report.archivePlan.files).toEqual(f.manifest.archives);}else expect(r.exitCode).toBe(1);
  expect(snapshot(f.root)).toEqual(before);
+ }finally{rmSync(f.root,{recursive:true,force:true});}
+},25000);
+
+for(const mode of ['preflight','apply'])test('installed-source rejection is identical before archive relocation: '+mode,()=>{
+ const f=fixture();try{
+ const sessions=join(f.workspace,'.piclaw/data/sessions');mkdirSync(sessions,{recursive:true});writeFileSync(join(sessions,'retained.jsonl'),'unaltered original');f.manifest.archives=[{path:'retained.jsonl',sha256:digest('unaltered original')}];f.save();
+ const pkg=join(f.workspace,'.pi/extensions/node_modules/unqualified');mkdirSync(pkg,{recursive:true});writeFileSync(join(pkg,'package.json'),JSON.stringify({name:'piclaw-addon-unqualified',pi:{extensions:['index.ts']}}));const marker=join(f.root,'must-not-evaluate');writeFileSync(join(pkg,'index.ts'),`import{writeFileSync}from'node:fs';writeFileSync(${JSON.stringify(marker)},'BAD');export default()=>{};`);
+ const before=digest(readFileSync(f.dbPath)),destination=join(f.root,'retained-archives');const r=f.run(mode==='preflight'?['--preflight']:['--apply','--relocate-archives',destination]);expect(r.exitCode).toBe(1);expect(r.stderr.toString()).toContain('Unqualified installed add-on package before evaluation');expect(existsSync(marker)).toBe(false);expect(existsSync(destination)).toBe(false);expect(readFileSync(join(sessions,'retained.jsonl'),'utf8')).toBe('unaltered original');expect(digest(readFileSync(f.dbPath))).toBe(before);expect(existsSync(f.lock)).toBe(false);
+ if(mode==='apply'){const report=JSON.parse(r.stderr.toString().trim().split('\n').find(l=>l.startsWith('{')&&l.includes('recovery-required'))!);expect(report).toMatchObject({phase:'validation',runtimeInitializationStarted:false,commitCertainty:'not-started',runtimeLock:'released',archives:{relocated:false}});}
  }finally{rmSync(f.root,{recursive:true,force:true});}
 },25000);
 
