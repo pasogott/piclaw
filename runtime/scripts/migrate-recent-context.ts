@@ -1,12 +1,13 @@
 #!/usr/bin/env bun
 /** One-shot operator copy. No web, AgentPool, admission loop or model invocation. */
-import { existsSync, readFileSync, realpathSync, readdirSync, lstatSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, readdirSync, lstatSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { isAbsolute, join, resolve, relative, dirname } from "node:path";
 
 export const HELP = `Usage: bun runtime/scripts/migrate-recent-context.ts --workspace /ABS --agent-dir /ABS --manifest /ABS [--preflight | --apply] [--relocate-archives /ABS]
 Target must be offline/checkpointed with no SQLite WAL/SHM/journal sidecars.
 Apply opens explicit offline maintenance: external background services are not started.
+Archive relocation requires qualified Linux renameat2 no-replace support; no overwrite/copy fallback.
 Default: read-only preflight. No force, install, automatic archive move or model calls.
 Manifest v1: {version:1, workspace, agentDir, schemaSHA256, timeline, sources:[
  {chatJid,branchId,path,sha256,sourceSessionId,selectedLeaf,asOf,payloadSHA256,sourceEntryIds}
@@ -16,6 +17,8 @@ Timeline is captureLegacyTimeline receipt; schemaSHA256 hashes JSON of sqlite_ma
 SELECT type,name,tbl_name,sql ORDER BY type,name. payloadSHA256 hashes selected messages JSON.
 --relocate-archives requires --apply, absent destination outside workspace/agent-dir,
 and existing canonical parent; renames the entire sessions tree, preserving every raw byte.
+Preflight audits the same installed add-on source gate as apply, without evaluating factories.
+It does not prove runtime construction; rehearse apply on a copy before live cutover.
 Preflight with archives reports the required relocation plan but never performs it.`;
 
 const pathExists = (path: string) => !!lstatSync(path, { throwIfNoEntry:false });
@@ -47,6 +50,7 @@ export async function main(args = process.argv.slice(2), testDependencies?: { ge
   const { digest, selectRecent } = await import("./helpers/recent-context.js");
   const { captureLegacyTimeline } = await import("../durable-engine/src/application-legacy-timeline.js");
   const { validateRecentHistoryScopes } = await import("../durable-engine/src/application-recent-history.js");
+  const { auditInstalledApplicationAddonSources } = await import("../durable-engine/src/host-extension-catalog.js");
   const lockPath = getDefaultRuntimeLockPath();
   if (lockPath !== join(STORE_DIR, "runtime.lock")) throw Error("Noncanonical lock");
   const dbPath = absolute(join(STORE_DIR, "messages.db"));
@@ -67,7 +71,8 @@ export async function main(args = process.argv.slice(2), testDependencies?: { ge
     if (!isAbsolute(destination) || resolve(destination) !== destination || pathExists(destination) || absolute(dirname(destination)) !== dirname(destination) ||
       [workspace,agentDir].some(root => destination === root || destination.startsWith(root + "/"))) throw Error("Unsafe or existing archive destination");
   }
-  const validate = () => {
+  const validate = async () => {
+    if(manifest.archives.length){const{assertArchiveRelocationPrimitiveAvailable}=await import('./helpers/relocate-archives.js');await assertArchiveRelocationPrimitiveAvailable();}
     if (readFileSync(manifestPath,"utf8") !== rawManifest) throw Error("Manifest changed");
     // immutable avoids SQLite creating WAL/SHM even for a read-only connection.
     // It is safe ONLY for a stopped, checkpointed target with no sidecars.
@@ -118,29 +123,34 @@ export async function main(args = process.argv.slice(2), testDependencies?: { ge
       const eligible = recentHistory.filter(item => item.messages.length);
       validateRecentHistoryScopes(eligible,scopes);
       if (JSON.stringify(inventory(SESSIONS_DIR)) !== JSON.stringify(manifest.archives)) throw Error("Archive inventory mismatch");
-      return {timeline:manifest.timeline,recentHistory:eligible,selections};
+      const installedAddonSources=auditInstalledApplicationAddonSources(workspace).profiles;
+      return {timeline:manifest.timeline,recentHistory:eligible,selections,installedAddonSources};
     } finally { root.close(); }
   };
   if (!apply) {
     if (pathExists(lockPath)) throw Error("Existing runtime lock; preflight requires offline target");
-    const migration = validate();
-    console.log(JSON.stringify({mode:"preflight",writes:0,copies:migration.recentHistory.length,selections:migration.selections,validation:"immutable-offline-data-only-not-resident-ownership",archivePlan:manifest.archives.length ? {action:"explicit-relocation-required",from:SESSIONS_DIR,files:manifest.archives} : null,archiveRelocationRequired:existsSync(SESSIONS_DIR) && readdirSync(SESSIONS_DIR).length > 0,owningPaths:{workspace,agentDir,dbPath,lockPath,sessions:SESSIONS_DIR}})); return;
+    const migration = await validate();
+    console.log(JSON.stringify({mode:"preflight",writes:0,copies:migration.recentHistory.length,selections:migration.selections,installedAddonSources:migration.installedAddonSources.map(({name,version})=>({name,version})),validation:"immutable-offline-data-and-installed-sources-not-runtime-construction",archivePlan:manifest.archives.length ? {action:"explicit-relocation-required",from:SESSIONS_DIR,files:manifest.archives} : null,archiveRelocationRequired:existsSync(SESSIONS_DIR) && readdirSync(SESSIONS_DIR).length > 0,owningPaths:{workspace,agentDir,dbPath,lockPath,sessions:SESSIONS_DIR}})); return;
   }
   const owner = acquireRuntimeLock({ lockPath, strictOwnership:true, disabled:false, maintenance:true });
   let backend: any, dbModule: typeof import("../src/db.js") | undefined, safe = true;
+  let phase='validation',archivesRelocated=false,archivesVerified=false,runtimeInitializationStarted=false,completed=false;
   try {
     owner.assertCurrentOwner();
-    const migration = validate();
+    const migration = await validate();
     if (existsSync(SESSIONS_DIR) && readdirSync(SESSIONS_DIR).length) {
       if (!destination) throw Error("Explicit --relocate-archives required before backend open");
       owner.assertCurrentOwner();
       console.log(JSON.stringify({action:"relocate-raw-archive-tree",owningPaths:{from:SESSIONS_DIR,to:destination},files:manifest.archives}));
-      renameSync(SESSIONS_DIR,destination);
+      phase='archive-relocation';
+      const {relocateArchivesNoReplace}=await import('./helpers/relocate-archives.js');
+      await relocateArchivesNoReplace(SESSIONS_DIR,destination); archivesRelocated=true;
       if (JSON.stringify(inventory(destination)) !== JSON.stringify(manifest.archives)) throw Error("Relocated archive verification failed");
+      archivesVerified=true;
     } else if (destination) throw Error("No archive tree to relocate");
     owner.assertCurrentOwner();
     dbModule = await import("../src/db.js");
-    safe = false;
+    safe = false; runtimeInitializationStarted=true; phase='runtime-initialization';
     dbModule.initDatabase();
     const { createDefaultApplicationRuntime } = await import("../durable-engine/src/default-application-runtime.js");
     const loadModels = async () => {
@@ -158,13 +168,22 @@ export async function main(args = process.argv.slice(2), testDependencies?: { ge
     backend.stop(); await backend.close(); backend = undefined;
     dbModule.closeDatabase(); dbModule = undefined;
     owner.assertCurrentOwner(); safe = true;
+    completed=true;
     console.log(JSON.stringify({mode:"applied",copies:migration.recentHistory.length,selections:migration.selections,rawArchives:destination ?? SESSIONS_DIR,timelinePreserved:true}));
   } finally {
-    if (backend) { backend.stop(); await backend.close(); }
+    try { if (backend) { backend.stop(); await backend.close(); } }
+    catch { safe=false; }
     // A factory failure without a returned backend cannot prove all native handles closed.
-    if (dbModule) dbModule.closeDatabase();
-    if (safe) { owner.assertCurrentOwner(); owner.markSafeReleaseOnExit(); owner.release(); }
-    else console.error("Cleanup not proven; runtime.lock retained. Offline operator inspection required.");
+    try { if (dbModule) dbModule.closeDatabase(); }
+    catch { safe=false; }
+    let runtimeLock='retained';
+    if(safe){
+      try{owner.assertCurrentOwner();owner.markSafeReleaseOnExit();owner.release();runtimeLock='released';}
+      catch{safe=false;runtimeLock='unknown';}
+    }
+    if(!safe)console.error('Cleanup not proven; runtime.lock may be retained. Offline operator inspection required.');
+    if(!completed||!safe)console.error(JSON.stringify({mode:'recovery-required',phase,runtimeInitializationStarted,commitCertainty:runtimeInitializationStarted?'unknown':'not-started',runtimeLock,archives:{relocated:archivesRelocated,verified:archivesVerified,original:SESSIONS_DIR,retained:destination??null},action:'preserve-state-and-inspect-offline-no-automatic-restore-or-retry'}));
+    if(completed&&!safe)throw Error('Apply cleanup uncertain; offline operator inspection required');
   }
 }
 if (import.meta.main) main().catch(error => { console.error(error.message); process.exitCode = 1; });

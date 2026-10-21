@@ -69,6 +69,15 @@ function restoreTree(baseline:string,target:string) {
  }
  cpSync(baseline,target,{recursive:true,dereference:false});
 }
+applicationTest('failed runtime initialization reports unknown commit/retained lock and exact archive location',async()=>{
+ const f=fixture();try{
+ const sessions=join(f.workspace,'.piclaw/data/sessions');mkdirSync(sessions,{recursive:true});writeFileSync(join(sessions,'original.jsonl'),'synthetic retained archive');f.manifest.archives=[{path:'original.jsonl',sha256:digest('synthetic retained archive')}];f.save();
+ const dest=join(f.root,'retained'),wrapper=join(f.root,'fail-models.ts');writeFileSync(wrapper,`const{main}=await import(${JSON.stringify(cli)});try{await main(process.argv.slice(2),{getModels:async()=>{throw Error('synthetic model metadata failure')}});}catch{process.exitCode=1;}`);
+ const r=Bun.spawnSync([process.execPath,'--preload',join(import.meta.dir,'src/test-guard.ts'),wrapper,'--workspace',f.workspace,'--agent-dir',f.agent,'--manifest',join(f.root,'manifest.json'),'--apply','--relocate-archives',dest],{env:{...process.env,HOME:join(f.root,'home'),PI_CODING_AGENT_DIR:f.agent},stdout:'pipe',stderr:'pipe',timeout:30000});
+ expect(r.exitCode).toBe(1);const report=JSON.parse(r.stderr.toString().split('\n').find(l=>l.startsWith('{')&&l.includes('recovery-required'))!);expect(report).toMatchObject({phase:'runtime-initialization',runtimeInitializationStarted:true,commitCertainty:'unknown',runtimeLock:'retained',archives:{relocated:true,verified:true,original:sessions,retained:dest}});expect(existsSync(f.lock)).toBe(true);expect(readFileSync(join(dest,'original.jsonl'),'utf8')).toBe('synthetic retained archive');expect(existsSync(sessions)).toBe(false);
+ }finally{rmSync(f.root,{recursive:true,force:true});}
+});
+
 applicationTest("actual CLI apply: all 23 installed, synthetic built-in OAuth, archive preservation and retry", async()=>{
  const f=fixture(); try {
   mkdirSync(join(f.root,"home"));
@@ -218,7 +227,7 @@ try {
   const preflight=f.run(["--preflight"]);
   expect(preflight.exitCode,preflight.stderr.toString()+preflight.stdout.toString()).toBe(0);
   const restoredReceipt=JSON.parse(preflight.stdout.toString().trim().split("\n").at(-1)!);
-  expect(restoredReceipt).toMatchObject({mode:"preflight",writes:0,copies:1,validation:"immutable-offline-data-only-not-resident-ownership"});
+  expect(restoredReceipt).toMatchObject({mode:"preflight",writes:0,copies:1,validation:"immutable-offline-data-and-installed-sources-not-runtime-construction"});
   console.log("RESTORED_PREFLIGHT",JSON.stringify(restoredReceipt));
   for(const [name,path] of Object.entries(roots))expect(rollbackInventory(path)).toEqual(inventories[name]);
   expect(digest(readFileSync(f.dbPath))).toBe(baselineDBHash);
