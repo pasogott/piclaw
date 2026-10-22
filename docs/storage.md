@@ -84,6 +84,16 @@ Attachment binaries and metadata live in `media`, with message links in `message
 
 The browser keeps local UI memory that should not become shared backend state out of SQLite. That includes dismissal and seen state for the context compaction affordance. The backend decides whether the underlying context condition currently applies; the browser stores only lightweight local UI state.
 
+## SQLite on ZFS
+
+File-backed connections keep SQLite's FULL commit durability. ZFS connections disable mmap and use a conventional page cache. The main and native SDK writers share a checkpoint worker for each database file identity.
+
+After the worker opens the existing file, writers disable SQLite's automatic checkpoint inside COMMIT. The worker checks WAL files of at least 4 MiB once per second and runs PASSIVE checkpoints. Readers can keep their snapshots; the worker never waits for their SQLite locks or truncates the WAL. A worker error restores the normal 1,000-page automatic checkpoint. Non-ZFS connections keep SQLite's normal checkpoint policy.
+
+This reduces checkpoint-related HTTP stalls. Commit fsyncs and uncached reads can still wait for the filesystem on the main thread. Keep ZFS sync enabled and SQLite synchronous=FULL: disabling either weakens accepted-input durability. A WAL file can retain its allocation after a successful checkpoint, so its file size alone does not indicate uncheckpointed data.
+
+The log operations `sqlite_checkpoint.ready` and `sqlite_checkpoint.fallback` identify worker startup and fallback. An offline database copy still requires stopping all writers; background checkpointing is not a backup.
+
 ## Access-state invariants
 
 Schema initialisation preserves the existing default account, ownership records and native execution state. Family-specific schema initialisers are removed. Historical account, factor, migration and family tables remain untouched in deployed stores; they are not active application APIs.

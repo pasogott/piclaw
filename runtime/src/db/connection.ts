@@ -35,45 +35,19 @@ import { createLogger, debugSuppressedError } from "../utils/logger.js";
 import { recompressExistingMedia } from "./media-recompress.js";
 import { createVerifiedSqliteBackup, type SqliteBackupManifest } from "./backup.js";
 import { enableSqliteWal } from "./sqlite-journal.js";
+import { isZfsFilesystem, registerSqliteCheckpoint } from "./sqlite-checkpoint.js";
 import { ensureOwnedMigrationLedger } from "./migrations.js";
 import { migrateScheduledTaskAuthorities } from "./scheduled-task-authority.js";
 import { installScheduledRunCompositionSchema } from "../service-effects/current-piclaw/scheduled-run-schema.js";
 
 const log = createLogger("db.connection");
 
-/**
- * Detect whether `dbPath` resides on a ZFS filesystem by parsing
- * /proc/self/mountinfo. Returns false on any error or non-Linux platform.
- */
-function isZfsFilesystem(dbPath: string): boolean {
-  try {
-    const mountInfo = fs.readFileSync("/proc/self/mountinfo", "utf-8");
-    const resolved = path.resolve(dbPath);
-    let bestLen = 0;
-    let bestFs = "";
-    for (const line of mountInfo.split("\n")) {
-      const dashIdx = line.indexOf(" - ");
-      if (dashIdx === -1) continue;
-      const fields = line.slice(0, dashIdx).split(" ");
-      const mountpoint = fields[4];
-      const afterDash = line.slice(dashIdx + 3).trim().split(" ");
-      const fstype = afterDash[0];
-      if (mountpoint && resolved.startsWith(mountpoint) && mountpoint.length > bestLen) {
-        bestLen = mountpoint.length;
-        bestFs = fstype;
-      }
-    }
-    return bestFs === "zfs";
-  } catch {
-    return false;
-  }
-}
-
 /** Singleton database handle; set by initDatabase(), accessed via getDb(). */
 let db: Database | null = null;
 let dbMode: "memory" | "file" | null = null;
 /** Cache key for the currently-open database target or in-memory test identity. */
 let dbPathCache: string | null = null;
+let stopCheckpoint: (() => void) | undefined;
 let dbFileIdentity: string | null = null;
 let dbInstance = 0;
 function currentFileIdentity(pathname: string): string {
@@ -924,6 +898,7 @@ export function initDatabase(): void {
 
   if (!reuse) {
     if (db) {
+      stopCheckpoint?.(); stopCheckpoint = undefined;
       try {
         db.close();
       } catch (error) {
@@ -990,6 +965,7 @@ export function initDatabase(): void {
   if (!foreignKeysBeforeInitialization) db.exec("PRAGMA foreign_keys = OFF;");
   if (!useMemory) {
     ensureIncrementalAutoVacuum(db);
+    if (!stopCheckpoint) stopCheckpoint = registerSqliteCheckpoint(db, nextPath);
   }
 }
 
@@ -1177,6 +1153,7 @@ export function closeDatabase(options?: { shrinkMemory?: boolean }): void {
   if (!db) return;
 
   const database = db;
+  stopCheckpoint?.(); stopCheckpoint = undefined;
   db = null;
   dbMode = null;
   dbPathCache = null;

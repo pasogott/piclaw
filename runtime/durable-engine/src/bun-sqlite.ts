@@ -1,3 +1,4 @@
+import { registerSqliteCheckpoint } from "../../src/db/sqlite-checkpoint.js";
 import { Database } from "bun:sqlite";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { statSync } from "node:fs";
@@ -7,6 +8,7 @@ import type { SqliteDatabase, SqliteExecutor, SqliteValue } from "@earendil-work
 /** Inactive host bridge. The host must acquire ownership BEFORE construction. */
 export class BunSqliteDatabase implements SqliteDatabase {
   private readonly db: Database;
+  private stopCheckpoint?: () => void;
   private readonly callback = new AsyncLocalStorage<boolean>();
   private tail: Promise<unknown> = Promise.resolve();
   private closing?: Promise<void>;
@@ -33,7 +35,8 @@ export class BunSqliteDatabase implements SqliteDatabase {
         throw new Error("Shared database identity required");
     }
     this.db = new Database(path, { create: !guard, strict: true });
-    try { this.db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=0"); }
+    try { this.db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=0");
+      this.stopCheckpoint = registerSqliteCheckpoint(this.db, path); }
     catch (error) {
       try { this.db.close(); }
       catch (cleanupError) { throw new RuntimeStartupCleanupError([error, cleanupError], "SQLite construction cleanup uncertain"); }
@@ -162,6 +165,6 @@ export class BunSqliteDatabase implements SqliteDatabase {
   close(): Promise<void> {
     if (this.callback.getStore()) return Promise.reject(new Error("Use the transaction handle inside its callback"));
     // Seal now, close only after all admitted operations settle, including failures.
-    return this.closing ??= this.tail.then(() => { this.db.close(); });
+    return this.closing ??= this.tail.then(() => { this.stopCheckpoint?.(); this.stopCheckpoint = undefined; this.db.close(); });
   }
 }
