@@ -980,16 +980,22 @@ for (const scenario of ["native-compaction-accounting-auto", "native-compaction-
     }
     return;
   }
-  const assertContext = async (contextWindow: number) => {
+  const assertContext = async (contextWindow: number, empty = false) => {
     const before = calls;
+    const native = await first!.readContextUsage!();
+    expect(native.contextWindow).toBe(contextWindow);
+    expect(native.tokens).toBeNumber();
+    expect(native.tokens!).toBeGreaterThanOrEqual(0);
+    if (empty) expect(native.tokens).toBe(0);
     channel.setContextUsage("web:default", { tokens: 999, contextWindow: 10000, percent: 9.99, sessionGeneration: first!.sessionId });
     const response = await channel.handleRequest(new Request("http://fixture/agent/context?chat_jid=web%3Adefault"));
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ tokens: null, contextWindow, percent: null, sessionGeneration: first!.sessionId });
+    expect(await response.json()).toMatchObject({ tokens: native.tokens, contextWindow,
+      percent: native.tokens! / contextWindow * 100, sessionGeneration: first!.sessionId });
     expect(calls).toBe(before);
     expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
   };
-  await assertContext(100000);
+  await assertContext(100000, true);
   await expect(pool.getContextUsageForChat("web:unbound-context")).rejects.toThrow("Durable application does not construct legacy sessions");
   expect(() => bound.getInputSourceAdmission!("web:newcomer")).toThrow("Unbound");
   const message = { id: "factory-input", chat_jid: "web:default", sender: "user", sender_name: "User", content: "hello factory", timestamp: new Date().toISOString(), is_from_me: false, is_bot_message: false };
