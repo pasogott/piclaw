@@ -40,7 +40,7 @@ for (const mode of ["parallel", "standard", "subset", "omitted", "full", "unknow
       files: Type.Optional(Type.Array(Type.String())), timeout_sec: Type.Optional(Type.Any()), tools: Type.Optional(Type.String()) });
     const tool = createHostDelegateTool({ name: "delegate", description: "Synthetic registered declaration", parameters }, {
       assertCurrent() {},
-      runtime: () => ({ async captureToolSource() { captures++; return { inputs: [], operation: {} } as never; }, assertCapturedSourceCurrent() { if (revoked) throw Error("source revoked"); } }),
+      runtime: () => ({ async captureToolSource() { captures++; return { inputs: [], operation: {} } as never; }, async watchOwnedDelegateChild(_p, _t, _c, id, ctx) { return (await f.harness.conversation(id, ctx))!.watch(ctx); }, assertCapturedSourceCurrent() { if (revoked) throw Error("source revoked"); } }),
       ...(mode === "files-unavailable" || mode === "files-revoked" || mode === "files-empty" ? { async readFiles(_files: readonly string[], guard: () => void) {
         if (mode === "files-empty") throw Error("Empty file list must not perform attachment IO");
         if (mode === "files-unavailable") throw Error("PRIVATE_HOST_PATH");
@@ -133,7 +133,7 @@ for (const mode of ["success", "expiry", "reopen"] as const) {
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     const realTimer = globalThis.setTimeout, realClear = globalThis.clearTimeout;
     const timers = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms?: number, ...args: unknown[]) => {
-      if (ms !== undefined && ms <= 10000 && new Error().stack?.includes("host-delegate-tool.ts")) {
+      if (ms !== undefined && ms <= 10000 && new Error().stack?.split("\n")[3]?.includes("host-delegate-tool.ts")) {
         started++;
         fire = callback;
         deadlineTimer = realTimer(() => {}, 60_000);
@@ -154,7 +154,7 @@ for (const mode of ["success", "expiry", "reopen"] as const) {
       const read = defineTool({ name: "read", description: "reader", parameters: Type.Object({}), execute: async () => ({ output: [] }) });
       const readers = defineExtension({ name: "deadline-readers", tools: [read] }); base.registry.install(readers);
       const tool = createHostDelegateTool({ name: "delegate", description: "deadline", parameters: Type.Object({ prompt: Type.String(), timeout_sec: Type.Optional(Type.Integer()), files: Type.Optional(Type.Array(Type.String())) }) }, {
-        assertCurrent() {}, runtime: () => ({ async captureToolSource() { return { inputs: [] } as never; }, assertCapturedSourceCurrent() {} }),
+        assertCurrent() {}, runtime: () => ({ async captureToolSource() { return { inputs: [] } as never; }, async watchOwnedDelegateChild(_p, _t, _c, id, ctx) { return (await base.harness.conversation(id, ctx))!.watch(ctx); }, assertCapturedSourceCurrent() {} }),
         async selectModel(_args, parent) { return parent!; }, assertModelCurrent() {},
         async readFiles(files, guard) { attachmentReads++; return readFiles(files, guard); }, readonlyTools: [read], readonlyExtensions: [readers],
       });
@@ -333,6 +333,12 @@ for (const cancel of [false, true]) {
       expect(proofs[0]!.sourceModel).toEqual({ provider: model.provider, id: "actual-child-model", api: model.api });
       expect(proofs[0]!.inputs[0]!.conversationId).toBe(f.base.root.id);
       expect(() => f.runtime!.assertCapturedSourceCurrent(proofs[0]!.inputs)).not.toThrow();
+      const inspection = (await f.runtime!.inspectAuthority()).inspection;
+      const parentTool = inspection.tasks.find(t => t.record.kind === "pi.tool" && t.record.conversationId === f.base.root.id)!.record;
+      const childId = inspection.tasks.find(t => t.record.conversationId !== f.base.root.id)!.record.conversationId;
+      await expect(f.runtime!.watchOwnedDelegateChild(f.base.root.id, parentTool.id, "owned-call", f.base.root.id, context)).rejects.toThrow("Exact Delegate child ownership");
+      const childWatch = await f.runtime!.watchOwnedDelegateChild(f.base.root.id, parentTool.id, "owned-call", childId, context);
+      expect(childWatch.value.conversation.id).toBe(childId); await childWatch.stop();
       if (cancel) {
         const cancellation = value(await f.ports.work.acceptSource(sealed({ effect: effect(`${f.incarnation}:cancel-source`), chatJid: f.chatJid,
           sourceId: "native-cancel", kind: "cancellation" as const, payloadRef: "cancel", targetOperationId: f.incarnation,
@@ -341,6 +347,7 @@ for (const cancel of [false, true]) {
         value(await f.ports.work.acceptCancellation(sealed({ effect: effect(`${f.incarnation}:native-cancel`, f.incarnation, cancellation.sourceSeq),
           expectedVersion: operation.version, sourceId: cancellation.sourceId, sourceSeq: cancellation.sourceSeq, cause: "user" as const, requestedAt: at })));
         expect(() => f.runtime!.assertCapturedSourceCurrent(proofs[0]!.inputs)).toThrow("Host operation authority unavailable");
+        await expect(f.runtime!.watchOwnedDelegateChild(f.base.root.id, parentTool.id, "owned-call", childId, context)).rejects.toThrow();
       }
       release.release(); await waiting;
       expect((await f.runtime!.reconcile(input)).status?.status).toBe("done");

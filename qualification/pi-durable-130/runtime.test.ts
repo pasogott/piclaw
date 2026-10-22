@@ -17,6 +17,7 @@ import { installTerminalSettlementCompositionSchema } from "../../runtime/src/se
 import { createCurrentPiclawServiceWorkStore } from "../../runtime/src/service-effects/current-piclaw/service-work-store.js";
 import { createCurrentPiclawTerminalSettlementStore } from "../../runtime/src/service-effects/current-piclaw/terminal-settlement-store.js";
 import { createHostDurableBindings, initializeHostDurableBindings } from "../../runtime/durable-engine/src/index.js";
+import { estimateContextTokens } from "../../runtime/durable-engine/qualification/ai.ts";
 import { InMemoryEffectPayloadResolver } from "../../runtime/src/service-effects/testing/in-memory-payload-resolver.js";
 
 // Same known-row fixture as terminal-settlement-test-support.seedSqliteMedia, against
@@ -1137,3 +1138,62 @@ for (const failure of ["missing-port", "late-version", "materialize-retry"] as c
     } finally { await reopened.close(); }
   }));
 }
+
+
+test("runtime: native context reader follows branch, trailing content and reset without replay", () => fixture(async f => {
+  const root = f.options.existingConversationIds[0]!;
+  const binding = { incarnation: "copy-A", chatJid: "web:runtime", branchId: "existing-main", conversationId: root };
+  expect((await f.runtime.readSessionContextUsage(binding)).tokens).toBe(0);
+  await f.runtime.close(); f.setOwner(true);
+  const harness = await Harness.open(await SqliteStorage.open(await openWalFixtureDatabase(f.path)), f.options.harnessOptions, context);
+  let child!: ConversationId;
+  const assistant = (tokens: number, timestamp: number) => ({ role: "assistant" as const, content: [{ type: "text" as const, text: "answer" }], api: "openai-responses", provider: "qualification", model: "synthetic", stopReason: "stop" as const, timestamp,
+    usage: { input: tokens, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: tokens, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+  const head = await harness.commit(tx => tx.appendEntry(AssistantEntry, root, { model: [assistant(17, 1)] }), context);
+  await harness.commit(async tx => {
+    child = (await tx.forkConversation(root, head.id, { ownership: { kind: "ownerless" } })).id;
+    await tx.appendEntry(root, { kind: "pi.user", model: [{ role: "user", content: "trailing context", timestamp: 2 }] });
+    await tx.appendEntry(AssistantEntry, root, { model: [assistant(900, 3)] });
+    await tx.appendEntry(child, { kind: "pi.user", model: [{ role: "user", content: "child trailing", timestamp: 4 }] });
+  }, context);
+  const rootView = await (await harness.conversation(root, context))!.context(context);
+  const childView = await (await harness.conversation(child, context))!.context(context);
+  const rootTokens = estimateContextTokens(rootView.messages).tokens;
+  const childTokens = estimateContextTokens(childView.messages).tokens;
+  expect(rootTokens).toBe(900); expect(childTokens).toBeGreaterThan(17); expect(childTokens).toBeLessThan(rootTokens);
+  await harness.close(context);
+  (f.options.existingConversationIds as ConversationId[]).push(child);
+  f.runtime = await HostConversationRuntime.open(f.options, context);
+  expect((await f.runtime.readSessionContextUsage(binding)).tokens).toBe(rootTokens);
+  f.hooks.resolveConversation = () => child;
+  const selected = { ...binding, conversationId: child };
+  expect((await f.runtime.readSessionContextUsage(selected)).tokens).toBe(childTokens);
+  await expect(f.runtime.readSessionContextUsage(binding)).rejects.toThrow("Host binding conflict");
+  f.hooks.resolveConversation = undefined;
+  await f.runtime.close(); f.setOwner(true);
+  const resetting = await Harness.open(await SqliteStorage.open(await openWalFixtureDatabase(f.path)), f.options.harnessOptions, context);
+  await (await resetting.conversation(root, context))!.reset(undefined, context);
+  await resetting.close(context);
+  f.runtime = await HostConversationRuntime.open(f.options, context);
+  expect((await f.runtime.readSessionContextUsage(binding)).tokens).toBe(0);
+  const tree = await f.runtime.readSessionTree(binding);
+  expect(tree.nodes.at(-1)?.type).toBe("custom");
+  expect(tree.leafId).toBe(tree.nodes.at(-1)?.id ?? null);
+  expect(f.base.host.modelCalls).toBe(0);
+}));
+
+test("runtime: native context reader fails closed on stale incarnation, binding and mid-read ownership", () => fixture(async f => {
+  const binding = { incarnation: "copy-A", chatJid: "web:runtime", branchId: "existing-main", conversationId: f.options.existingConversationIds[0]! };
+  expect((await f.runtime.readSessionContextUsage(binding)).contextWindow).toBeGreaterThan(0);
+  await expect(f.runtime.readSessionContextUsage({ ...binding, incarnation: "stale" })).rejects.toThrow("Host binding conflict");
+  await expect(f.runtime.readSessionContextUsage({ ...binding, chatJid: "foreign" })).rejects.toThrow();
+  await expect(f.runtime.readSessionContextUsage({ ...binding, conversationId: -1 })).rejects.toThrow("Host binding conflict");
+  let checks = 0;
+  f.hooks.resolveConversation = () => ++checks >= 3 ? (-1 as ConversationId) : binding.conversationId;
+  await expect(f.runtime.readSessionContextUsage(binding)).rejects.toThrow("Host binding conflict");
+  expect(checks).toBe(3); f.hooks.resolveConversation = undefined;
+  f.hooks.resolveConversation = () => { f.setOwner(false); return binding.conversationId; };
+  await expect(f.runtime.readSessionContextUsage(binding)).rejects.toThrow("Host owner lost");
+  f.setOwner(true); f.hooks.resolveConversation = undefined;
+  expect(f.base.host.modelCalls).toBe(0);
+}));

@@ -161,3 +161,15 @@ test("preserved recovery history projects public content without rewriting entri
   expect(() => projectPublicHistory([{ ...rows[0]!, model: [{ role: "system", content: "private policy", timestamp: 1 }] }], null)).toThrow("Unsupported durable message role");
   expect(() => projectPublicHistory([{ ...rows[0]!, kind: "app.unknown-copy" }], null)).toThrow("Unsupported durable entry");
 });
+
+
+test("native reset remains a public tree boundary without leaking model or baseline payloads", () => {
+  const rows = [{ id: 3, conversationId: 1, kind: "pi.reset", data: { secret: "private reset data" }, model: [{ role: "system", content: "private reset instructions", timestamp: 1 }] },
+    { id: 4, conversationId: 1, kind: "pi.system", model: [{ role: "system", content: "private baseline", timestamp: 1 }] },
+    { id: 5, conversationId: 1, kind: "pi.user", model: [{ role: "user", content: "after reset", timestamp: 2 }] }] as unknown as Parameters<typeof projectPublicHistory>[0];
+  const projected = projectPublicHistory(rows, null);
+  expect(projected[0]).toEqual({ entry: { id: "3", parentId: null, type: "custom", customType: "pi.reset" }, children: [] });
+  expect(projected[1]?.entry.parentId).toBe("3");
+  expect(projected.map(n => n.entry.id)).toEqual(["3", "5"]);
+  expect(JSON.stringify(projected)).not.toContain("private");
+});

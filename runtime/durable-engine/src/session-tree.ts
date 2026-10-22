@@ -56,6 +56,10 @@ export function projectPublicHistory(rows: readonly EntryRecord[], binding: Lega
       });
       entry = { ...base, type: "message", timestamp: new Date(message.timestamp).toISOString(),
         message: { role: message.role, content, ...(message.role === "toolResult" ? { toolName: message.toolName } : {}) } };
+    } else if (row.kind === "pi.reset") {
+      // A native reset is a real navigation boundary, not an unsupported legacy
+      // entry. Keep only its public identity/kind; no private baseline or data.
+      entry = { ...base, type: "custom", customType: "pi.reset" };
     } else if (row.kind === "pi.compaction") {
       entry = { ...base, type: "compaction" }; // no invented token count/timestamp
     } else throw new Error(`Unsupported durable entry: ${row.kind}`);
