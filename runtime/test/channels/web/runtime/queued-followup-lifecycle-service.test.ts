@@ -305,7 +305,7 @@ describe("queued follow-up lifecycle service", () => {
       queuePendingSteering: () => { sideEffects++; },
       storeMessage: () => { sideEffects++; return null; }, processChat: () => { sideEffects++; },
     });
-    for (const action of ["handleAgentQueueRemove", "handleAgentQueueSteer", "handleAgentQueueReorder"] as const) {
+    for (const action of ["handleAgentQueueRemove", "handleAgentQueueSteer"] as const) {
       const response = await control[action](new Request("https://example.test/agent/queue", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ row_id: rowId, from_index: 0, to_index: 0 }),
@@ -351,16 +351,25 @@ describe("queued follow-up lifecycle service", () => {
     expect(service.peekQueuedFollowupItem("web:default")).toEqual({ ...original, materializeRetries: 1 });
   });
 
-  test("any accepted deferred input blocks reordering even of ordinary siblings or identical indices", async () => {
-    const { service, db } = await createServiceFixture();
-    service.enqueueQueuedFollowupItem("web:default", 0, "first");
-    service.enqueueQueuedFollowupItem("web:default", 0, "second");
-    await service.admitQueuedFollowupItem(["web:default", 0, "accepted"], () => {}, new AbortController().signal, () => {});
-    const before = db.getDeferredQueuedFollowups("web:default");
-    for (const [from, to] of [[0, 1], [2, 0], [0, 2], [2, 2]]) {
-      expect(() => service.reorderQueuedFollowupItems("web:default", from, to)).toThrow("Accepted input requires host cancellation");
-      expect(db.getDeferredQueuedFollowups("web:default")).toEqual(before);
-    }
+  test("accepted queue reorder preserves immutable identities and priority after materialization/reopen", async () => {
+    const { service, db } = await createServiceFixture(true);
+    try {
+      const signal = new AbortController().signal;
+      await service.admitQueuedFollowupItem(['web:default',0,'first'],()=>{},signal,()=>{});
+      await service.admitQueuedFollowupItem(['web:default',0,'second'],()=>{},signal,()=>{});
+      const before = service.getQueuedFollowupItems('web:default');
+      expect(service.reorderQueuedFollowupItems('web:default',1,0)).toBe(true);
+      expect(service.getQueuedFollowupItems('web:default')).toEqual([before[1],before[0]]);
+      expect(service.getPendingQueuedSourceOrder('web:default')).toEqual([before[1]!.source_id!,before[0]!.source_id!]);
+      expect(service.consumeQueuedFollowupItem('web:default')).toEqual(before[1]);
+      db.closeDatabase(); db.initDatabase();
+      const { QueuedFollowupLifecycleService } = await import('../../../../src/channels/web/runtime/queued-followup-lifecycle-service.js');
+      const reopened = new QueuedFollowupLifecycleService();
+      expect(reopened.getPendingQueuedSourceOrder('web:default')).toEqual([before[1]!.source_id!,before[0]!.source_id!]);
+      expect(reopened.getQueuedFollowupItems('web:default')).toEqual([before[0]]);
+      expect(reopened.reorderQueuedFollowupItems('web:default',0,0)).toBe(false);
+      expect(reopened.reorderQueuedFollowupItems('web:default',-1,0)).toBe(false);
+    } finally { db.closeDatabase(); }
   });
 
   test("rejects reordering that moves ordinary work ahead of protected continuations", async () => {

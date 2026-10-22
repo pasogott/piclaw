@@ -20,7 +20,7 @@ import { getDeferredQueuedFollowups, setDeferredQueuedFollowups } from "../../..
 
 let cleanup = () => {};
 afterEach(() => { closeDatabase(); cleanup(); resetRateLimiterStateForTests(); });
-function fixture(select?: WebChannelOpts["getInputSourceAdmission"], validateAcceptance?: () => boolean) {
+function fixture(select?: WebChannelOpts["getInputSourceAdmission"], validateAcceptance?: () => boolean, pendingQueuedSourceOrder?: (chat: string) => readonly string[]) {
   const ws = createTempWorkspace("http-source-admission-");
   const restore = setEnv({ PICLAW_WORKSPACE: ws.workspace, PICLAW_STORE: ws.store, PICLAW_DATA: ws.data });
   cleanup = () => { restore(); ws.cleanup(); };
@@ -30,7 +30,7 @@ function fixture(select?: WebChannelOpts["getInputSourceAdmission"], validateAcc
   const db = getDb();
   installServiceWorkSchema(db); // Fixture-only, not production activation.
   db.query("INSERT INTO chats(jid, name, last_message_time) VALUES (?, ?, ?)").run("web:default", "Fixture", "2026-08-13T00:00:00.000Z");
-  const made = createCurrentPiclawServiceWorkStore(db, { hitFault: () => false, recordTrace() {}, validateAcceptance });
+  const made = createCurrentPiclawServiceWorkStore(db, { hitFault: () => false, recordTrace() {}, validateAcceptance, pendingQueuedSourceOrder });
   if (!made.ok) throw Error("fixture construction");
   const events: string[] = [], jobs: Array<{ key: string; lane?: string; task: () => Promise<void> }> = [];
   let expectedSources = 0;
@@ -1117,3 +1117,80 @@ test("prepared queued source authority revocation rolls back item and accepted s
   expect(f.snapshot()).toEqual(before);
   expect(f.channel.getQueuedFollowupItems("web:default")).toEqual([]);
 });
+
+// Deterministic SDK integration, not a provider-backed/live-user queue mutation.
+test.skipIf(!hasEngine)('reordered native queue executes second accepted source first, closes gaps and reconciles exactly once', async () => {
+  const { HostConversationRuntime, BunSqliteDatabase, createHostDurableBindings, initializeHostDurableBindings } = await import("../../../durable-engine/src/index.js");
+  const { SqliteStorage } = await import("../../../durable-engine/qualification/sqlite.ts");
+  const { context, openFixture, barrier } = await import("../../../../qualification/pi-durable-130/src/fixture.js");
+  const { installTerminalSettlementCompositionSchema } = await import("../../../src/service-effects/current-piclaw/terminal-settlement-schema.js");
+  const { createCurrentPiclawTerminalSettlementStore } = await import("../../../src/service-effects/current-piclaw/terminal-settlement-store.js");
+  const { InMemoryEffectPayloadResolver } = await import("../../../src/service-effects/testing/in-memory-payload-resolver.js");
+  let callback: WebUserMessageStoreOptions["acceptSource"];
+  const queueService = new QueuedFollowupLifecycleService();
+  const f = fixture(() => callback, () => true, chat => queueService.getPendingQueuedSourceOrder(chat));
+  callback = f.accept;
+  installTerminalSettlementCompositionSchema(f.db);
+  const path = join(process.env.PICLAW_WORKSPACE!, "engine.sqlite");
+  const base = await openFixture({ acquired: true }, () => {}, () => SqliteStorage.open(new BunSqliteDatabase(path)));
+  const conversationId = base.root.id;
+  await base.close();
+  let owner = true;
+  const assert = () => { if (!owner) throw Error("owner lost"); };
+  initializeHostDurableBindings(f.db, assert);
+  const payloads = new InMemoryEffectPayloadResolver();
+  const terminal = createCurrentPiclawTerminalSettlementStore(f.db, payloads, {
+    hitFault: () => false, recordTrace() {}, validateOwnership() { assert(); return f.db.inTransaction; },
+  });
+  if (!terminal.ok) throw Error("terminal construction");
+  const manifest = [{ chatJid: "web:default", branchId: "main", conversationId }];
+  const runtime = await HostConversationRuntime.open({
+    incarnation: "queue-test", owner: { assert, release() {} }, work: f.work, terminal: terminal.value,
+    openStorage: () => SqliteStorage.open(new BunSqliteDatabase(path)),
+    harnessOptions: { models: base.models, registry: base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
+    existingConversationIds: [conversationId], conversationFor(chat, branch) {
+      if (chat !== "web:default" || branch !== "main") throw Error("binding conflict"); return conversationId;
+    },
+    bindings: createHostDurableBindings(f.db, { domain: "queue-test", incarnation: "queue-test", assertOwner: assert, manifest,
+      async resolveContent(ref) {
+        const row = (ref.startsWith('queued-source:')
+          ? f.db.query('SELECT content FROM messages WHERE id=? AND chat_jid=?').get(ref.slice('queued-source:'.length), 'web:default')
+          : f.db.query("SELECT content FROM messages WHERE rowid=?").get(Number(ref.split(":")[1]))) as { content: string };
+        return row.content;
+      } }),
+    authorizeScheduling() { assert(); }, putAnswer(ref, text) { payloads.putText(ref, text); },
+    sessionId: "queue-test", lane: "main", generation: 1, now: () => new Date().toISOString(),
+  }, context);
+  const adapter = createDurableConversationAdapter({ incarnation: "queue-test", manifest, runtime });
+  const shutdown = new AbortController();
+
+  const dispatch = createDurableQueueDispatch({work:f.work,adapter,branchId:'main',assertCurrentWriter:assert,
+    shutdown:shutdown.signal,waitForReconciliation:async()=>{throw Error('SQL terminal recheck must suffice');}});
+  try {
+    const signal=new AbortController().signal;
+    await queueService.admitQueuedFollowupItem(['web:default',0,'first accepted'],()=>{},signal,f.acceptQueued);
+    await queueService.admitQueuedFollowupItem(['web:default',0,'second accepted'],()=>{},signal,f.acceptQueued);
+    f.expectSources(2);
+    const before=f.db.query('SELECT source_id,source_seq,payload_ref,source_hash FROM service_effect_s01_sources ORDER BY source_seq').all();
+    expect(queueService.reorderQueuedFollowupItems('web:default',1,0)).toBe(true);
+    const selected=queueService.peekQueuedFollowupItem('web:default')!;
+    expect(selected.queuedContent).toBe('second accepted');
+    let index=0;
+    while(queueService.peekQueuedFollowupItem('web:default')) {
+      const item=queueService.peekQueuedFollowupItem('web:default')!;
+      const interaction=storeWebMessage(f.channel as any,{chatJid:'web:default',content:item.queuedContent,isBot:false,mediaIds:[],agentId:'default',agentName:'Fixture'},
+        {consumeDeferredFollowupRowId:item.rowId,threadToSelf:true,materializeQueuedSource:({message})=>{expect(message.id).toBe(item.source_id);}});
+      const row=f.db.query('SELECT rowid,id FROM messages WHERE id=?').get(item.source_id!) as {rowid:number,id:string};
+      expect(interaction.id).toBe(row.rowid);
+      expect(await dispatch('web:default',row.id,row.rowid)!()).toBe('settled');
+      expect(await Promise.race([dispatch.waitForPending({chatJid:'web:default',messageId:row.id,rowId:row.rowid}),Bun.sleep(100).then(()=>'lost-wake')])).toBe('settled');
+      expect(await dispatch('web:default',row.id,row.rowid)!()).toBe('settled');
+      expect(base.host.modelCalls).toBe(++index);
+      const frontier=await f.work.getChatFrontier('web:default');
+      expect(frontier.ok&&frontier.value.consumedThroughSourceSeq).toBe(index===1?0:2);
+    }
+    expect(f.db.query('SELECT source_id,source_seq,payload_ref,source_hash FROM service_effect_s01_sources ORDER BY source_seq').all()).toEqual(before);
+    expect(f.db.query('SELECT COUNT(*) AS n FROM service_effect_s02_commits').get()).toEqual({n:2});
+    expect(f.db.query('SELECT COUNT(*) AS n FROM messages WHERE is_bot_message=1').get()).toEqual({n:2});
+  }finally{shutdown.abort();await adapter.close();}
+},15000);

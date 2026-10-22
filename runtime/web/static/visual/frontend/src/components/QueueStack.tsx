@@ -77,7 +77,7 @@ export function QueueStack({ onEdit }: QueueStackProps) {
           method: "POST",
           credentials: "same-origin",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
+          body: JSON.stringify({ ...(body as Record<string, unknown>), chat_jid: chatJid }),
           signal: AbortSignal.timeout(15000),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);

@@ -152,8 +152,9 @@ export function createDurableQueueDispatch(options: {
           if (!shutdown.aborted && operation.ok && operation.value?.terminal && operation.value.version > 1 &&
             operation.value.chatJid === chatJid && operation.value.primarySourceSeq === source.sourceSeq &&
             operation.value.claimedSourceSeqs.includes(source.sourceSeq) && current?.sourceSeq === source.sourceSeq &&
-            ["consumed", "disposed"].includes(current.state) && frontier.ok &&
-            frontier.value.consumedThroughSourceSeq >= source.sourceSeq) {
+            ["consumed", "disposed"].includes(current.state) && frontier.ok) {
+            // Reordered sources can settle ahead of an earlier accepted sibling.
+            // Exact terminal membership proves completion, not the contiguous frontier.
             observation.abort();
             return "settled";
           }

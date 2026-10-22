@@ -142,7 +142,18 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
   const candidateDatabase = database;
     if (config.offlineInitialize === true) initializeHostSchema(root, assert);
     else assertHostSchema(root);
-    const work = value(createCurrentPiclawServiceWorkStore(root, { hitFault: () => false, recordTrace() {}, validateAcceptance() { assert(); return true; } }));
+    const hostFollowups = new QueuedFollowupLifecycleService();
+    const work = value(createCurrentPiclawServiceWorkStore(root, { hitFault: () => false, recordTrace() {}, validateAcceptance() { assert(); return true; },
+      pendingQueuedSourceOrder: chat => {
+        // Materialization already selected this input and removed its queue card.
+        // A concurrent reorder of the remaining cards must not steal its claim.
+        const selected = root.query(`SELECT s.source_id FROM service_effect_s01_sources s
+          JOIN messages m ON m.chat_jid=s.chat_jid AND m.id=s.source_id
+          WHERE s.chat_jid=? AND s.state='pending' AND s.payload_ref='queued-source:' || s.source_id
+          ORDER BY m.rowid`).all(chat) as { source_id: string }[];
+        return [...selected.map(row => row.source_id), ...hostFollowups.getPendingQueuedSourceOrder(chat)];
+      },
+    }));
     const terminal = value(createCurrentPiclawTerminalSettlementStore(root, config.answers.resolver,
       { hitFault: () => false, recordTrace() {}, validateOwnership() { assert(); return true; } }));
     // Resolve only actual root messages and verify both accepted reference and source identity.
@@ -293,7 +304,6 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         assert();
       };
     };
-    const hostFollowups = new QueuedFollowupLifecycleService();
     const getQueuedInputSourceAdmission: NonNullable<WebChannelOpts["getQueuedInputSourceAdmission"]> = chat => {
       assert(); if (!routeIndex.get(chat) || !lookup(chat, routeIndex.get(chat)!.branchId)) throw Error("Unbound queued input chat");
       return ({ chatJid, item, database: connection }) => {

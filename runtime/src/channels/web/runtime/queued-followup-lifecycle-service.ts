@@ -22,6 +22,7 @@ import {
 } from "../../../queued-followups.js";
 import { FollowupPlaceholderStore } from "./followup-placeholders.js";
 import { getDb, getDatabaseBinding } from '../../../db/connection.js';
+import { getRouterState, setRouterState } from '../../../db/router-state.js';
 import { admitSqliteWrite } from '../../../db/sqlite-async-admission.js';
 import { getWorkspaceDir, getStoreDir, getConfigPath, getRoutingConfig } from '../../../core/config.js';
 import { parseControlCommand } from '../../../agent-control/agent-control-parser.js';
@@ -367,10 +368,23 @@ export class QueuedFollowupLifecycleService {
     setDeferredQueuedFollowups(chatJid, [...protectedItems, ...ordinaryItems].map((item) => toDeferredQueuedFollowupRecord(item)));
   }
 
+  /** Separate from the visible queue: materialization removes the selected item
+   * before native claim. Keep its priority until the durable source is terminal. */
+  getPendingQueuedSourceOrder(chatJid: string): readonly string[] {
+    const raw = getRouterState(`queued-source-order:${chatJid}`);
+    if (!raw) return [];
+    const order: unknown = JSON.parse(raw);
+    if (!Array.isArray(order) || order.some(id => typeof id !== 'string' || !id)) throw Error('Invalid persisted queue order');
+    return order;
+  }
+
   reorderQueuedFollowupItems(chatJid: string, fromIndex: number, toIndex: number): boolean {
+    return getDb().transaction(() => this.reorderQueuedFollowupItemsInTransaction(chatJid, fromIndex, toIndex)).immediate();
+  }
+
+  private reorderQueuedFollowupItemsInTransaction(chatJid: string, fromIndex: number, toIndex: number): boolean {
     const queued = this.getDeferredQueuedFollowupItems(chatJid);
-    if (queued.some(item => item.source_accepted)) throw new Error('Accepted input requires host cancellation');
-    if (fromIndex < 0 || toIndex < 0 || fromIndex >= queued.length || toIndex >= queued.length || fromIndex === toIndex) return false;
+    if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex) || fromIndex < 0 || toIndex < 0 || fromIndex >= queued.length || toIndex >= queued.length || fromIndex === toIndex) return false;
     const [moved] = queued.splice(fromIndex, 1);
     queued.splice(toIndex, 0, moved);
     const protectedCount = queued.filter((item) => item.source === "auto-protected-recovery-continuation").length;
@@ -382,6 +396,7 @@ export class QueuedFollowupLifecycleService {
     if (moved?.source === "auto-protected-recovery-continuation" && toIndex >= protectedCount) return false;
     if (moved?.source !== "auto-protected-recovery-continuation" && toIndex < protectedCount) return false;
     this.setDeferredQueuedFollowupItems(chatJid, queued);
+    setRouterState(`queued-source-order:${chatJid}`, JSON.stringify(queued.filter(item => item.source_accepted && item.source_id).map(item => item.source_id)));
     return true;
   }
 

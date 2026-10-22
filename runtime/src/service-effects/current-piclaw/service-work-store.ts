@@ -49,6 +49,9 @@ export interface ServiceWorkAdapterRuntime {
 export interface ServiceWorkAcceptanceRuntime extends ServiceWorkAdapterRuntime {
   /** Synchronous, fail-closed check inside each mutation SQL transaction, before/after apply. */
   validateAcceptance?: () => boolean;
+  /** Host-owned persisted queue order. Reorders only the leading queued-source batch;
+   * normal/internal sources remain barriers. Source IDs and receipts never change. */
+  pendingQueuedSourceOrder?: (chatJid: string) => readonly string[];
 }
 
 /** Precommit failure: the transaction owner MUST let this escape and roll back. */
@@ -472,16 +475,7 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
       if (id === null) return invalidRead();
       this.ensureChat(id);
       const chat = this.chatRow(id);
-      const pending = this.database
-        .query(
-          `
-        SELECT MIN(source_seq) AS source_seq
-        FROM service_effect_s01_sources
-        WHERE chat_jid = ? AND state = 'pending'
-      `,
-        )
-        .get(id) as { source_seq?: unknown } | undefined;
-      const nextPendingSourceSeq = nullableInteger(pending?.source_seq, 1);
+      const nextPendingSourceSeq = this.nextPendingSource(id)?.source_seq ?? null;
       return Object.freeze({
         chatJid: id,
         consumedThroughSourceSeq: chat.consumedThroughSourceSeq,
@@ -617,6 +611,26 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
     );
   }
 
+  private nextPendingSource(chatJid: string): SourceRow | null {
+    const rows = this.database.query("SELECT * FROM service_effect_s01_sources WHERE chat_jid=? AND state='pending' ORDER BY source_seq")
+      .all(chatJid) as Record<string, unknown>[];
+    const first = rows[0] ? sourceRow(rows[0]) : null;
+    if (!first || !this.runtime.pendingQueuedSourceOrder) return first;
+    const queued = new Map<string, SourceRow>();
+    for (const row of rows) {
+      const source = sourceRow(row);
+      if (source.kind !== "message" || source.target_operation_id !== null || source.payload_ref !== `queued-source:${source.source_id}`) break;
+      queued.set(source.source_id, source);
+    }
+    if (!queued.size) return first;
+    const order = this.runtime.pendingQueuedSourceOrder(chatJid);
+    for (const id of order) {
+      const source = queued.get(id);
+      if (source) return source;
+    }
+    return first;
+  }
+
   private applyClaimNext(
     request: ClaimNextSourceRequest,
   ): MutationOutcome<ClaimedOperation | null> {
@@ -632,18 +646,12 @@ export class CurrentPiclawServiceWorkStore implements ServiceWorkStore {
         conflictingOperationId: chat.activeOperationId,
       });
     }
-    const candidate = this.database
-      .query(
-        `
-      SELECT * FROM service_effect_s01_sources
-      WHERE chat_jid = ? AND state = 'pending' AND source_seq > ?
-      ORDER BY source_seq LIMIT 1
-    `,
-      )
-      .get(request.chatJid, request.expectedFrontier) as
-      Record<string, unknown> | undefined;
-    if (!candidate) return this.applied(null, false);
-    const source = sourceRow(candidate);
+    const source = this.nextPendingSource(request.chatJid);
+    if (!source) return this.applied(null, false);
+    // The caller may have observed an older queue order before this transaction.
+    // Reject rather than claim a different source under the requested operation ID.
+    if (request.effect.sourceSeq !== null && request.effect.sourceSeq !== source.source_seq)
+      return this.rejected("owner_conflict");
     if (this.operationRow(request.newOperationId)) {
       return this.rejected("owner_conflict", {
         conflictingOperationId: request.newOperationId,
