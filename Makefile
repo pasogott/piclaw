@@ -236,6 +236,12 @@ local-install: pack ## Pack and install piclaw globally (no restart)
 		TMPDIR=$(PICLAW_TMPDIR) TMP=$(PICLAW_TMPDIR) TEMP=$(PICLAW_TMPDIR) \
 		$(BUN_ROOT)/bin/bun install -g "$$INSTALL_TGZ" \
 		--registry https://registry.npmjs.org; \
+	DEST_REAL=$(BUN_ROOT)/install/global/node_modules/piclaw; \
+	printf '%s\n' "[local-install] Running packaged postinstall..."; \
+	sudo BUN_INSTALL=$(BUN_ROOT) \
+		BUN_TMPDIR=$(PICLAW_TMPDIR) BUN_INSTALL_CACHE_DIR=$(BUN_CACHE_DIR) \
+		TMPDIR=$(PICLAW_TMPDIR) TMP=$(PICLAW_TMPDIR) TEMP=$(PICLAW_TMPDIR) \
+		$(BUN_ROOT)/bin/bun "$$DEST_REAL/scripts/postinstall.ts"; \
 	sudo chmod -R a+rX $(BUN_ROOT); \
 	PICLAW_CLI=$$(readlink -f $(BUN_ROOT)/bin/piclaw || true); \
 	if [ -z "$$PICLAW_CLI" ] || [ ! -f "$$PICLAW_CLI" ]; then \
@@ -244,7 +250,6 @@ local-install: pack ## Pack and install piclaw globally (no restart)
 	fi; \
 	sudo chmod 755 "$$PICLAW_CLI"; \
 	rm -rf "$$TGZ" "$$INSTALL_TGZ" "$$INSTALL_STAGE" "$$PATCH_STAGE" "$$GLOBAL_PACKAGE"; \
-	DEST_REAL=$(BUN_ROOT)/install/global/node_modules/piclaw; \
 	if [ -d "$$DEST_REAL/extensions" ] && [ -d "$$DEST_REAL/node_modules" ]; then \
 		sudo ln -sfn "$$DEST_REAL/node_modules" "$$DEST_REAL/extensions/node_modules" 2>/dev/null || true; \
 	fi; \
