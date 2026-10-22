@@ -15,6 +15,8 @@ export interface HostCodexAuthority {
   flush(operation: CodexOperation): Promise<void>;
   /** Trusted transport seam for qualification; never accepted in request options. */
   fetch?: typeof globalThis.fetch;
+  /** Native application keeps its own coding tools and instructions; transport adaptation remains active. */
+  preserveHostTools?: boolean;
 }
 export class HostCodexModelServices {
   constructor(private readonly authority: HostCodexAuthority, private readonly nativeAddon: NativeCodexFactories) {}
@@ -83,10 +85,12 @@ export class HostCodexModelServices {
         check();
         // Replay native deltas before profiling: removed tools/sections must not revive.
         const tools = getCurrentTools(context.messages);
-        const allowed = hooks.tools && new Set(hooks.tools(tools.map(tool => tool.name)));
-        const declarations = tools.filter(tool => !allowed || allowed.has(tool.name)).map(toToolDeclaration);
+        const allowed = !authority.preserveHostTools && hooks.tools && new Set(hooks.tools(tools.map(tool => tool.name)));
+        const declarations = tools.filter(tool => authority.preserveHostTools
+          ? !["exec_command", "write_stdin", "apply_patch"].includes(tool.name)
+          : !allowed || allowed.has(tool.name)).map(toToolDeclaration);
         return normalizeContext({
-          systemPrompt: operation.profilePrompt === false
+          systemPrompt: authority.preserveHostTools || operation.profilePrompt === false
             ? getCurrentSystemPrompt(context.messages)
             : hooks.systemPrompt(getCurrentSystemPrompt(context.messages)),
           tools: hooks.toolDeclarations ? hooks.toolDeclarations(declarations) : declarations,

@@ -163,3 +163,26 @@ test('native Codex requests public summaries without decoding encrypted reasonin
   expect(bound.options.onPayload({reasoning:{effort:'none'}},model)).toEqual({reasoning:{effort:'none'}});
   expect(bound.options.onPayload({model:'gpt-test'},model)).toEqual({model:'gpt-test'});
 });
+
+test("native application retains bash/files/codemode/model tools and host policy without Codex shell substitution", async () => {
+ let filters = 0, prompts = 0, requests = 0;
+ const service = new HostCodexModelServices({ preserveHostTools: true,
+  capture: async signal => ({ id: "owned", sessionId: "native", cwd: "/fixture", model: fixtureModel, signal, assertCurrent() {} }),
+  assertAccount() {}, async observe() {}, async flush() {},
+ }, { createNativeCodexHooks: () => ({
+  request: p => { requests++; return p; }, headers: h => ({ ...h, "x-owned": "kept" }), context: m => m,
+  tools: () => { filters++; throw Error("Native host must not replace its tools"); },
+  systemPrompt: () => { prompts++; throw Error("Native policy must not become a Codex coding prompt"); },
+ }) });
+ const bound = await service.bind(fixtureModel, new AbortController().signal);
+ const names = ["read", "bash", "edit", "write", "codemode", "set_model", "list_models", "exec_command", "write_stdin", "apply_patch"];
+ const input = normalizeContext({ systemPrompt: "Host instructions; use codemode and bash.", messages: [], tools: names.map(name => ({ name, description: name, parameters: {} })) });
+ const output = bound.context(input);
+ expect(getCurrentTools(output.messages).map(t => t.name)).toEqual(names.slice(0, 7));
+ expect(getCurrentSystemPrompt(output.messages)).toBe("Host instructions; use codemode and bash.");
+ expect(bound.headers({})["x-owned"]).toBe("kept");
+ expect(bound.options.onPayload({ tools: [] }, fixtureModel)).toEqual({ tools: [] });
+ expect([filters, prompts, requests]).toEqual([0, 0, 1]);
+ expect(getCurrentTools(input.messages).map(t => t.name)).toEqual(names);
+ await bound.finish();
+});

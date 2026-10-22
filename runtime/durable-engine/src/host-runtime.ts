@@ -1,3 +1,4 @@
+import { assertModelContextFits } from "./host-model-context.js";
 import { getSupportedThinkingLevels, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 // Native conversation runtime, explicitly composed with fenced host authority by application-bootstrap.
 import { configure, AgentDoc, AssistantEntry, InboxDoc, LiveDoc, UsageDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId, type TaskId, type CompactionResult } from "@earendil-works/pi-durable";
@@ -459,6 +460,15 @@ export class HostConversationRuntime {
       return label;
     });
   }
+  async readToolModelContext(call: { conversationId: ConversationId; taskId: TaskId; toolCallId: string }): Promise<readonly import("@earendil-works/pi-ai").Message[]> {
+    await this.captureToolSource(call.conversationId, call.taskId, call.toolCallId);
+    return this.observe(async () => {
+      const conversation = await this.harness.conversation(call.conversationId, this.context); this.fence();
+      if (!conversation) throw Error("Missing tool conversation");
+      const view = await conversation.context(this.context); this.fence();
+      return view.messages;
+    });
+  }
   async readSessionModel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<string | null> {
     return (await this.readSessionChoice(binding)).model;
   }
@@ -504,18 +514,7 @@ export class HostConversationRuntime {
     try { await operation; } finally { this.active.delete(operation); this.changingModel = false; }
   }
   private assertContextFitsModel(messages: readonly import("@earendil-works/pi-ai").Message[], agent: unknown, target: { contextWindow: number; maxTokens: number }): void {
-    if (!Number.isFinite(target.contextWindow) || target.contextWindow <= 0 ||
-      !Number.isFinite(target.maxTokens) || target.maxTokens < 0) throw Error("Model context unavailable");
-    const registry = this.options.harnessOptions.registry.snapshot();
-    if (registry.sections().length) throw Error("Dynamic prompt overhead unavailable");
-    const tools = registry.tools().map(({ tool }) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
-    const bytes = new TextEncoder().encode(JSON.stringify([messages, agent, tools])).length;
-    const usage = messages.reduce((max, message) => message.role === "assistant"
-      ? Math.max(max, message.usage.input + message.usage.output + message.usage.cacheRead + message.usage.cacheWrite) : max, 0);
-    if (messages.some(message => typeof message.content !== "string" && message.content.some(block => block.type === "image")))
-      throw Error("Non-text context overhead unavailable");
-    if (!Number.isFinite(usage) || Math.max(bytes, usage) + 8192 + target.maxTokens > target.contextWindow)
-      throw Error("Candidate context bound exceeded; compact first");
+    assertModelContextFits(messages, agent, target, this.options.harnessOptions.registry.snapshot());
   }
   /** Explicit idle-only maintenance. Observer cancellation never cancels or releases the owned task. */
   async setSessionModel(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, model: { provider: string; modelId: string }): Promise<void> {
@@ -715,7 +714,7 @@ export class HostConversationRuntime {
         const live = await tx.doc(LiveDoc, scope.conversationId as ConversationId);
         const reason = (task?.input as { reason?: string } | undefined)?.reason;
         if (!task || task.kind !== "pi.compaction" || task.conversationId !== copy.conversationId || task.abortRequested ||
-          task.state.status !== "running" || task.state.checkpoint.phase !== "summarize" ||
+          task.state.status !== "running" || !task.state.checkpoint || typeof task.state.checkpoint !== "object" || Array.isArray(task.state.checkpoint) || task.state.checkpoint.phase !== "summarize" ||
           !["threshold", "overflow"].includes(reason ?? "") ||
           !live.compactions?.some(status => status.taskId === scope.taskId && status.reason === reason && status.blocking === (task.owner !== undefined)))
           throw Error("Exact automatic compaction task required");
