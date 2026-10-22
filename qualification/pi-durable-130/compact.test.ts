@@ -11,6 +11,7 @@ import { TestOwner } from "./src/ownership.js";
 import { openFixture, context, barrier } from "./src/fixture.js";
 import { installServiceWorkSchema } from "../../runtime/src/service-effects/current-piclaw/service-work-schema.js";
 import { createDurableConversationAdapter } from "../../runtime/src/agent-pool/durable-runtime-adapter.js";
+import { estimateContextTokens } from "../../runtime/durable-engine/qualification/ai.ts";
 import { AgentRuntimeFacade } from "../../runtime/src/agent-pool/runtime-facade.js";
 
 test("public manual compact: real model summary, idle admission, observer detach, host acceptance, facade and reopen continuation", async () => {
@@ -68,6 +69,7 @@ test("public manual compact: real model summary, idle admission, observer detach
     const before = await conversation.context(context);
     await harness.close(context);
     runtime = await HostConversationRuntime.open(config, context);
+    expect((await runtime.readSessionContextUsage(binding)).tokens).toBe(estimateContextTokens(before.messages).tokens);
     const entered = barrier(); f.host.modelHold = barrier(); f.host.onModelEnter = signal => { const scope = taskModelRequestScope(signal); expect(scope).toBeDefined(); runtime.assertMaintenanceRequest(scope!); entered.release(); };
     f.host.finalContent = [{ type: "text", text: "REAL MODEL CHECKPOINT: retain history and continue" }];
     const abort = new AbortController();
@@ -105,17 +107,21 @@ test("public manual compact: real model summary, idle admission, observer detach
     expect(rows.items.filter(e => e.kind === "pi.compaction")).toHaveLength(1);
     const follow = await conversation.submit({ type: "input", content: "continue", requestId: "follow" }, context);
     await follow.wait(context);
+    const continued = await conversation.context(context);
     expect(JSON.stringify(f.host.admissions.at(-1))).toContain("requestHash");
     await harness.close(context);
     runtime = await HostConversationRuntime.open(config, context);
     expect(await runtime.readSessionModel(binding)).toBe("qualification/synthetic");
+    expect((await runtime.readSessionContextUsage(binding)).tokens).toBe(estimateContextTokens(continued.messages).tokens);
     // Provider failure is terminal failure, never a false success.
     f.host.modelAllowed = false;
     await expect(runtime.compactSession(binding)).rejects.toThrow("did not complete");
     f.host.modelAllowed = true;
     const result = await app().applyControlCommand(binding.chatJid, command);
     expect(result.status).toBe("success"); expect(result.sessionGeneration).toBe("original-session");
-    expect(result.contextUsage?.tokens).toBeNull();
+    expect(result.contextUsage?.tokens).toBeGreaterThan(0);
+    expect(result.contextUsage?.contextWindow).toBeGreaterThan(0);
+    expect(result.contextUsage?.percent).toBeGreaterThan(0);
     expect(f.host.credentialLookups).toBe(0); expect(approvals).toBeGreaterThan(0);
     await runtime.close();
     harness = await Harness.open(await openStorage(), config.harnessOptions, context);

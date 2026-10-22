@@ -3,6 +3,7 @@
  */
 
 import {
+  buildAgentStatusSnapshot,
   handleAgentContextRequest,
   handleAgentModelsRequest,
   handleAgentStatusRequest,
@@ -190,7 +191,34 @@ export class WebChannelEndpointFacadeService {
   }
 
   handleAgentActiveChats(): Response {
-    const { result, durationMs } = measureSync(() => this.options.json({ chats: this.options.listActiveChats() }, 200));
+    const { result, durationMs } = measureSync(() => {
+      if (this.options.agentPool.isDurableRuntime?.() !== true) return this.options.json({ chats: this.options.listActiveChats() }, 200);
+      // Native sessions do not populate the legacy AgentSession pool. Use known
+      // chat identities and the same authoritative lifecycle as /agent/status;
+      // never construct SDK sessions or claim/recover work for this read.
+      const rows = this.options.listKnownChats?.() ?? this.options.listActiveChats();
+      const context = this.options.endpointContexts.agentStatus();
+      const chats = rows.flatMap((row): Record<string, unknown>[] => {
+        if (!row || typeof row !== "object") return [];
+        const chat = row as Record<string, unknown>;
+        const chatJid = typeof chat.chat_jid === "string" ? chat.chat_jid.trim() : "";
+        if (!chatJid || chat.archived_at) return [];
+        const snapshot = buildAgentStatusSnapshot(chatJid, context,
+          { includeDiagnostics: false, includeExtensionWorking: false, recoverStaleInflight: false });
+        const data = snapshot.data as Record<string, unknown> | null;
+        const active = snapshot.status === "active";
+        const compacting = active && data?.type === "compaction";
+        const retrying = active && data?.type === "retry";
+        const shell = active && data?.type === "bash";
+        const streaming = active && (data?.type === "thinking" || data?.type === "draft");
+        return [{ ...chat,
+          session_id: this.options.agentPool.getSessionGenerationForChat?.(chatJid) ?? chat.session_id ?? null,
+          is_active: active, is_streaming: streaming, is_compacting: compacting, is_retrying: retrying, is_bash_running: shell,
+          activity_status: !active ? "idle" : compacting ? "compacting" : retrying ? "retrying" : shell ? "bash_running" : streaming ? "streaming" : "working",
+          activity_label: active ? (typeof data?.title === "string" && data.title ? data.title : "Active") : "Idle" }];
+      }).sort((a, b) => Number(b.is_active) - Number(a.is_active) || String(a.chat_jid).localeCompare(String(b.chat_jid)));
+      return this.options.json({ chats }, 200);
+    });
     return appendServerTiming(result, {
       name: "agent_active_chats",
       durationMs,

@@ -198,7 +198,7 @@ describe("web channel endpoint context factory", () => {
     });
   });
 
-  test("falls back to generation-scoped persisted context usage when the pool lookup rejects", async () => {
+  test("fails closed without a stored estimate when the native context lookup rejects", async () => {
     const channel = {
       json: (payload: unknown, status = 200) => new Response(JSON.stringify(payload), { status }),
       getContextUsage: () => ({ tokens: 123, contextWindow: 1000, percent: 12.3, sessionGeneration: "session-current" }),
@@ -218,12 +218,7 @@ describe("web channel endpoint context factory", () => {
       },
     );
 
-    await expect(contexts.agentStatus().getContextUsageForChat("web:compacted")).resolves.toEqual({
-      tokens: 123,
-      contextWindow: 1000,
-      percent: 12.3,
-      sessionGeneration: "session-current",
-    });
+    await expect(contexts.agentStatus().getContextUsageForChat("web:compacted")).resolves.toBeNull();
   });
 
   test("rebuilds agents/avatar contexts from the latest identity snapshot", () => {

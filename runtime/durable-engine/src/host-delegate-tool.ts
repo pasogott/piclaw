@@ -1,4 +1,5 @@
 import { AssistantEntry, configure, defineTool, type ModelRef, type ToolRegistration, type Extension } from "@earendil-works/pi-durable";
+import { watchNativeDelegateProgress } from "./host-delegate-progress.js";
 import { validateDelegateFiles } from "./host-delegate-files.js";
 import type { ImageContent, TextContent, TSchema } from "@earendil-works/pi-ai";
 import type { ToolDefinition } from "../../src/durable-legacy-sdk.js";
@@ -11,7 +12,7 @@ import type { HostConversationRuntime } from "./host-runtime.js";
  */
 export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>, "name" | "description" | "parameters">, options: {
   assertCurrent(): void;
-  runtime(): Pick<HostConversationRuntime, "captureToolSource" | "assertCapturedSourceCurrent">;
+  runtime(): Pick<HostConversationRuntime, "captureToolSource" | "assertCapturedSourceCurrent" | "watchOwnedDelegateChild">;
   /** Must use current host availability AND the real Delegate Settings approval
    * and ordered classification policy; never grants permission via arguments. */
   selectModel(args: Readonly<Record<string, unknown>>, parent: ModelRef | undefined): Promise<ModelRef>;
@@ -120,42 +121,52 @@ export function createHostDelegateTool(definition: Pick<ToolDefinition<TSchema>,
         check();
         return child.id;
       }, context);
-      await api.details({ conversationId: childId }, context);
       const child = await api.conversation(childId, context);
       if (!child) throw Error("Missing owned Delegate child");
       check();
-      // A committed answer survives a late replay. Otherwise an expired replay
-      // never submits new work, including the create-before-submit crash gap.
-      const prior = owned?.submission ?? await api.commit(tx => tx.submissionByRequest(childId, requestId), context);
-      let settled;
-      if (prior?.status === "done") settled = prior;
-      else {
-        if (expired()) { await child.abort(context); throw timeoutError(); }
-        const submission = await child.submit({ type: "input", requestId, content }, context);
-        const waiting = submission.wait(context);
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          settled = await Promise.race([waiting, new Promise<undefined>(resolve => {
-            timer = setTimeout(() => resolve(undefined), Math.max(0, deadline - Date.now()));
-          })]);
-          if (!settled) {
-            // wait() cancellation only detaches the waiter. Stop this exact
-            // dedicated ownership scope and join before the parent continues.
-            // Cooperative providers must honour abort; this is not a hard kill.
-            await child.abort(context);
-            await waiting;
-            throw timeoutError();
-          }
-        } finally { clearTimeout(timer); }
-      }
-      check();
-      if (settled.type !== "input" || settled.status !== "done") throw Error("Native Delegate child did not complete");
-      const answer = await api.commit(tx => tx.entry(AssistantEntry, settled.answer), context);
-      const message = answer?.model?.[0];
-      if (answer?.conversationId !== childId || message?.role !== "assistant" || (message.stopReason !== "stop" && message.stopReason !== "length")) throw Error("Missing committed Delegate answer");
-      const text = message.content.flatMap(part => part.type === "text" ? [part.text] : []).join("");
-      if (text.length > 50_000) throw Error("Delegate answer exceeds native output bound");
-      return { output: [{ type: "text", text }] };
+      const progress = await watchNativeDelegateProgress({ watch: ctx => runtime().watchOwnedDelegateChild(api.conversationId, api.taskId, api.callId, childId, ctx) }, { conversationId: childId, model,
+        startedAt: deadline - timeout * 1000, assertCurrent: check,
+        publish: value => api.details(value, context),
+      }, context);
+      try {
+        // A committed answer survives a late replay. Otherwise an expired replay
+        // never submits new work, including the create-before-submit crash gap.
+        const prior = owned?.submission ?? await api.commit(tx => tx.submissionByRequest(childId, requestId), context);
+        let settled;
+        if (prior?.status === "done") settled = prior;
+        else {
+          if (expired()) { await child.abort(context); throw timeoutError(); }
+          const submission = await child.submit({ type: "input", requestId, content }, context);
+          const waiting = submission.wait(context);
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            settled = await Promise.race([waiting, new Promise<undefined>(resolve => {
+              timer = setTimeout(() => resolve(undefined), Math.max(0, deadline - Date.now()));
+            })]);
+            if (!settled) {
+              // wait() cancellation only detaches the waiter. Stop this exact
+              // dedicated ownership scope and join before the parent continues.
+              // Cooperative providers must honour abort; this is not a hard kill.
+              await child.abort(context);
+              await waiting;
+              throw timeoutError();
+            }
+          } finally { clearTimeout(timer); }
+        }
+        check();
+        if (settled.type !== "input" || settled.status !== "done") throw Error("Native Delegate child did not complete");
+        const answer = await api.commit(tx => tx.entry(AssistantEntry, settled.answer), context);
+        const message = answer?.model?.[0];
+        if (answer?.conversationId !== childId || message?.role !== "assistant" || (message.stopReason !== "stop" && message.stopReason !== "length")) throw Error("Missing committed Delegate answer");
+        const text = message.content.flatMap(part => part.type === "text" ? [part.text] : []).join("");
+        if (text.length > 50_000) throw Error("Delegate answer exceeds native output bound");
+        await progress.finish(text.length);
+        check();
+        return { output: [{ type: "text", text }] };
+      } catch (error) {
+        await progress.fail();
+        throw error;
+      } finally { await progress.stop(); }
     },
   });
 }

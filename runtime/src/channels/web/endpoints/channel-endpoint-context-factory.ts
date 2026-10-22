@@ -136,7 +136,11 @@ export function createWebChannelEndpointContexts(
           recoverStaleInflightRun: (chatJid, recoveryOptions) => channel.recoverStaleInflightRun(chatJid, recoveryOptions),
           getBuffer: (turnId, panel) => channel.getBuffer(turnId, panel),
           getContextUsageForChat: async (chatJid) => {
-            const runtimeUsage = await channel.agentPool.getContextUsageForChat(chatJid).catch(() => null);
+            // A rejected native read may mean ownership/binding loss. Do not
+            // turn that failure into permission to display a stored estimate.
+            let runtimeUsage;
+            try { runtimeUsage = await channel.agentPool.getContextUsageForChat(chatJid); }
+            catch { return null; }
             const currentGeneration = typeof channel.agentPool.getSessionGenerationForChat === "function"
               ? channel.agentPool.getSessionGenerationForChat(chatJid)
               : null;

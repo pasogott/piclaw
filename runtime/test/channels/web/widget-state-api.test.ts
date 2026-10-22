@@ -128,3 +128,12 @@ describe("widget state API", () => {
     }
   });
 });
+
+
+test("state context does not revive same-generation stored tokens after ownership failure", async () => {
+  const channel = makeChannel();
+  channel.agentPool.getContextUsageForChat = async () => { throw Error("Stale owner"); };
+  channel.getContextUsage = () => { throw Error("stored context must not be consulted"); };
+  const state = await buildPiclawStateSnapshot(channel);
+  expect(state.chats[0]?.context).toEqual({ tokens: null, contextWindow: null, percent: null, sessionGeneration: "session-1" });
+});
