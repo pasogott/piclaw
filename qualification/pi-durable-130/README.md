@@ -1,4 +1,8 @@
-# Native MCP transport close admission — targeted hardening
+# Native qualification evidence
+
+Current assessment: [#1650 acceptance — 22 October 2026](../../docs/design/earendil-agent-harness-integration-adr/evidence/pi-durable-130-acceptance-current-20261022.md). It records current native controls, family retirement, qualification repairs and explicit remaining acceptance. Dated checkpoints and aggregate counts below retain their original source and scope.
+
+## Historical Native MCP transport close admission — targeted hardening
 
 The existing constrained Native MCP transport now rejects start/send admission
 as soon as close begins, before calling the raw transport. Closure stays sealed

@@ -183,7 +183,7 @@ for (const scenario of ["write", "model", "sse", "broken-sse"] as const) applica
       expect(tree).not.toContain("Files:");
       expect(outcome).toBe("settled");
       const records = JSON.stringify(getDb().query("SELECT record FROM entries ORDER BY id").all());
-      expect(records).toContain("Host model request denied or failed");
+      expect(records).toContain("Host model request failed [phase=conversion; category=unknown]");
       expect(records).not.toContain("PRIVATE_SYNTHETIC_CAPTURE_FAILURE");
       expect(records).not.toContain("owned synthetic codex terminal");
       expect(records).not.toContain("Files:");

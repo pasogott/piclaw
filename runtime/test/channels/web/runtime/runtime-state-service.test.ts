@@ -282,5 +282,12 @@ test("native terminal status stays idle during worker cleanup; accepted work rem
   expect(service.getAgentStatus("chat")?.type).toBe("done");
   queued=1;expect(service.getAgentStatus("chat")?.state).toBe("active");
   queued=0;operation={operation_id:"op",phase:"executing"};expect(service.getAgentStatus("chat")?.operation_id).toBe("op");
-  operation=null;statuses.set("chat",{type:"intent",intent_key:"native_task",title:"Shell task"});expect(service.getAgentStatus("chat")?.state).toBe("active");
+  operation=null;
+  for (const intent_key of ["native_task", "compaction", "session_rotation"]) {
+    statuses.set("chat", {type:"intent",intent_key,title:"Owned command"});
+    expect(service.getAgentStatus("chat")?.state).toBe("active");
+    expect(service.getAgentStatus("chat")?.type).toBe("intent");
+  }
+  statuses.set("chat",{type:"intent",title:"Old model status"});
+  expect(service.getAgentStatus("chat")?.type).toBe("done");
 });

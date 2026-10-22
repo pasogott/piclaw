@@ -81,7 +81,7 @@ applicationTest("all 23 installed: explicit offline maintenance preserves enable
   peerDb.query("INSERT INTO settings VALUES ('config',?)").run(JSON.stringify(peer));
   const assertPeerConfig = () => expect(JSON.parse((peerDb.query("SELECT value FROM settings WHERE key='config'").get() as {value:string}).value)).toEqual(peer);
   try {
-    backend = await createDefaultApplicationRuntime(owner, async () => services as never, undefined, peerOptions);
+    backend = await createDefaultApplicationRuntime(owner, async () => services as never, peerOptions);
     expect(calls).toBe(0);
     expect(runtime.getRegisteredNativeProvider(model.provider)).toBe(provider);
     expect(() => backend!.bind({} as never)).toThrow("Offline maintenance");
@@ -94,7 +94,7 @@ applicationTest("all 23 installed: explicit offline maintenance preserves enable
     assertPeerConfig();
     expect(fetchSpy).toHaveBeenCalledTimes(0);
     await backend.close(); backend = undefined;
-    backend = await createDefaultApplicationRuntime(owner, async () => services as never, undefined, peerOptions);
+    backend = await createDefaultApplicationRuntime(owner, async () => services as never, peerOptions);
     expect(calls).toBe(0);
     const treeAfter = await backend.sessionOptions.getDurableSession!("web:default")!.readTree!();
     expect(treeAfter).toEqual(treeBefore);

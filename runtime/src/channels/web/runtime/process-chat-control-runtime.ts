@@ -281,7 +281,7 @@ export async function executeDeferredControlCommand(
   const compactStatus = (type: string, title: string) => {
     if (!compactTurn) return;
     const status = { chat_jid: chatJid, agent_id: agentId, turn_id: compactTurn,
-      thread_id: message.threadId ?? message.rowId, type, title };
+      thread_id: message.threadId ?? message.rowId, type, title, intent_key: "compaction" };
     channel.updateAgentStatus(chatJid, status);
     channel.broadcastEvent("agent_status", status);
   };
