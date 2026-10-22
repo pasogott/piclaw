@@ -1,4 +1,4 @@
-import { assertModelContextFits } from "./host-model-context.js";
+import { assertModelContextFits, measureModelPromptSections } from "./host-model-context.js";
 import { Type, getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import { AgentDoc, configure, defineTool, type ConversationId, type TaskId } from "@earendil-works/pi-durable";
 
@@ -58,6 +58,14 @@ export function createHostModelTools(options: Options) {
       const changing = !!choice || requestedLevel !== undefined;
       const messages = changing ? await options.readContext({ conversationId: api.conversationId, taskId: api.taskId, toolCallId: api.callId }) : undefined;
       check();
+      const resolved = changing ? await api.agent(context) : undefined;
+      check();
+      const promptSectionBytes = resolved ? await measureModelPromptSections(messages!, {
+        conversationId: api.conversationId,
+        agent: { ...resolved, ...(choice ? { model: choice } : {}), ...(requestedLevel !== undefined ? { thinkingLevel: requestedLevel as any } : {}) },
+        env: api.env, read: api,
+      }, context) : undefined;
+      check();
       const result = await api.commit(async tx => {
         check();
         const current = await tx.doc(AgentDoc, api.conversationId);
@@ -70,7 +78,7 @@ export function createHostModelTools(options: Options) {
         const level = requestedLevel ?? current.thinkingLevel;
         if (level !== undefined && !supported.includes(level as any)) return { error: "Unsupported thinking level for the selected model; specify a supported thinking_level.", thinking_levels: supported };
         if (changing) {
-          assertModelContextFits(messages!, current, model, api.registry);
+          assertModelContextFits(messages!, current, model, api.registry, promptSectionBytes);
           // Public SDK commit keeps this atomic with the owned tool result. Recheck
           // model policy and source after every await, including immediately before commit.
           await configure(tx, api.conversationId, { ...(choice ? { model: choice } : {}), ...(level !== undefined ? { thinkingLevel: level as any } : {}) });

@@ -3,7 +3,7 @@ import { test, expect } from "bun:test";
 import { createHostModelTools, hostModelToolNames, nativeToolInstructions } from "../../runtime/durable-engine/src/host-model-controls.js";
 import { BACKGROUND_CONTEXT as context, withAbortSignal } from "../../runtime/durable-engine/qualification/context.ts";
 
-function fixture() {
+function fixture(sections: any[] = []) {
   const model = (provider: string, id: string, contextWindow = 200000) => ({ provider, id, name: id, api: "openai-responses", reasoning: true,
     input: ["text"], contextWindow, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
   const catalog = [model("first", "one"), model("second", "two"), model("second", "tiny", 100)];
@@ -14,7 +14,8 @@ function fixture() {
     async readContext(call) { expect(call.conversationId).toBe(7); reads++; return []; },
     async captureSourceGuard(call) { expect(call).toEqual({ conversationId: 7, taskId: 9, toolCallId: "owned" }); return () => { guards++; if (!valid) throw Error("revoked"); }; },
   });
-  const api: any = { conversationId: 7, taskId: 9, callId: "owned", registry: { tools: () => [], sections: () => [] },
+  const api: any = { conversationId: 7, taskId: 9, callId: "owned", registry: { tools: () => [], sections: () => sections },
+    async agent() { return { ...state, sections }; },
     async commit(body: any) { const copy = structuredClone(state); const result = await body({ async doc() { duringDoc?.(); return copy; } }); state = copy; return result; } };
   const run = async (name: string, args: any = {}, ctx = context) => {
     const tool = tools.find(t => t.name === name)!;
@@ -56,5 +57,18 @@ for (const phase of ["before", "after-await", "policy", "cancel"] as const) test
   if (phase === "policy") f.duringDoc(() => f.unapprove());
   if (phase === "cancel") controller.abort();
   await expect(f.run("set_model", { model: "second/two" }, withAbortSignal(context, controller.signal))).rejects.toThrow();
+  expect(f.state()).toEqual(before);
+});
+
+test("registered prompt sections are measured before configuration; empty optional section does not disable model controls", async () => {
+  let renders = 0;
+  const f = fixture([{ key: "late-night-regrets", async render(input: any) { renders++; expect(input.agent.model).toEqual({provider:"second",modelId:"two"}); return undefined; } }]);
+  expect((await f.run("set_model", {model:"second/two",thinking_level:"off"})).model).toBe("second/two");
+  expect(renders).toBe(1);
+});
+for (const failure of ["oversize", "render-error", "revoked"] as const) test(`dynamic prompt ${failure} denies model change without writes`, async () => {
+  const f = fixture([{key:"dynamic", async render() { if(failure==="render-error") throw Error("unreadable prompt"); if(failure==="revoked") f.revoke(); return "界".repeat(failure==="oversize" ? 100000 : 1); }}]);
+  const before = structuredClone(f.state());
+  await expect(f.run("set_model", {model:"second/two"})).rejects.toThrow();
   expect(f.state()).toEqual(before);
 });

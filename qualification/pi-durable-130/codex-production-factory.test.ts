@@ -43,6 +43,13 @@ for (const scenario of ["write", "model", "sse", "broken-sse"] as const) applica
       }
     }
   }
+  // The production default includes this optional dynamic section. An empty
+  // Regrets prompt must not make model switching permanently unavailable.
+  if (scenario === "model") {
+    const regrets = join(workspace, ".pi/extensions/node_modules/@rcarmo/piclaw-addon-late-night-regrets");
+    cpSync(join(source, "addons/late-night-regrets"), regrets, { recursive: true, filter: p => !p.split("/").includes("node_modules") });
+    symlinkSync(dependencies, join(regrets, "node_modules"));
+  }
   const model: Model<"openai-codex-responses"> = { provider: "openai-codex", id: "synthetic-codex", name: "Synthetic Codex", api: "openai-codex-responses", baseUrl: "https://fixture.invalid", input: ["text", "image"], reasoning: false, contextWindow: 100000, maxTokens: 1000, cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } };
   const credentials: CredentialStore = {
     async read(id) { if (id !== model.provider) throw Error("Ambient credentials forbidden: " + id); return { type: "api_key", key: "synthetic-only" }; },

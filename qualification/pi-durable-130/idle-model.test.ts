@@ -10,7 +10,7 @@ import { openFixture, context } from "./src/fixture.js";
 import { installServiceWorkSchema } from "../../runtime/src/service-effects/current-piclaw/service-work-schema.js";
 import { createDurableConversationAdapter } from "../../runtime/src/agent-pool/durable-runtime-adapter.js";
 import { AgentRuntimeFacade } from "../../runtime/src/agent-pool/runtime-facade.js";
-import { Harness, InboxDoc } from "../../runtime/durable-engine/qualification/durable.ts";
+import { Harness, InboxDoc, defineExtension } from "../../runtime/durable-engine/qualification/durable.ts";
 import { createProvider } from "../../runtime/durable-engine/qualification/ai.ts";
 
 test("shared DB actual facade resolves, persists/reopens and fails closed for pending/stale/concurrent model changes", async () => {
@@ -28,6 +28,10 @@ test("shared DB actual facade resolves, persists/reopens and fails closed for pe
   f.models.setProvider(createProvider({ id: "alternate", api: { stream() { throw Error("provider execution forbidden"); }, streamSimple() { throw Error("provider execution forbidden"); } }, models: [{ ...original, provider: "alternate", id: "other" },
     { ...original, provider: "alternate", id: "tiny", contextWindow: 100 }],
     auth: { apiKey: { name: "keyless", resolve: async () => ({ auth: {}, source: "synthetic" }) } } }));
+  let promptText = "measured optional prompt", promptRenders = 0;
+  const promptExtension = defineExtension({name:"optional-prompt",sections:[{key:"optional-prompt",async render(){promptRenders++;return promptText || undefined;}}]});
+  f.registry.install(promptExtension);
+  await f.root.configure({extensions:{add:[promptExtension]}}, context);
   await f.close();
   const manifest = [{ chatJid: "web:idle", branchId: "main", conversationId: id }];
   const unused = async () => { throw Error("unused effect"); };
@@ -64,6 +68,11 @@ test("shared DB actual facade resolves, persists/reopens and fails closed for pe
     const other = { ...command, provider: "alternate", modelId: "other" };
     expect((await app.applyControlCommand("web:idle", other)).status).toBe("success");
     expect(await app.getCurrentModelLabel("web:idle")).toBe("alternate/other");
+    expect(promptRenders).toBeGreaterThan(0);
+    promptText = "界".repeat(100000);
+    await expect(app.applyControlCommand("web:idle", command)).rejects.toThrow("bound exceeded");
+    expect(await app.getCurrentModelLabel("web:idle")).toBe("alternate/other");
+    promptText = "";
     await expect(app.applyControlCommand("web:idle", { ...other, modelId: "tiny" })).rejects.toThrow("bound exceeded");
     expect(await app.getCurrentModelLabel("web:idle")).toBe("alternate/other");
     expect((await app.applyControlCommand("web:idle", command)).status).toBe("success");
