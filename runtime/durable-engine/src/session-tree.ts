@@ -30,6 +30,14 @@ export function projectPublicHistory(rows: readonly EntryRecord[], binding: Lega
         throw new Error("Imported system projection conflict");
       continue; // preserved historical instructions are still private
     }
+    const recentCopy = row.kind === "app.recent-history-copy";
+    if (recentCopy) {
+      const data = row.data as Record<string, unknown> | undefined;
+      if (!data || data.owner !== "operator:recent-context-copy" || data.copied !== true ||
+        typeof data.sourceHash !== "string" || !/^[a-f0-9]{64}$/.test(data.sourceHash) ||
+        !["sourceSessionId", "sourceLeafId", "chatJid", "branchId"].every(key => typeof data[key] === "string" && (data[key] as string).length > 0) ||
+        !Number.isSafeInteger(data.messageIndex) || Number(data.messageIndex) < 0) throw Error("Invalid recovery history copy");
+    }
     let entry: RootSessionTreeNode["entry"];
     const base = { id: String(row.id), parentId };
     if (original && original.type !== "message") {
@@ -37,7 +45,7 @@ export function projectPublicHistory(rows: readonly EntryRecord[], binding: Lega
       if (!supported.includes(String(original.type))) throw new Error(`Unsupported durable imported entry: ${original.type}`);
       // Metadata comes from immutable provenance; public ID remains navigation/position identity.
       entry = { ...original, ...base, type: String(original.type) };
-    } else if (["pi.user", "pi.assistant", "pi.tool-result", "app.legacy-message", "host.accepted"].includes(row.kind)) {
+    } else if (["pi.user", "pi.assistant", "pi.tool-result", "app.legacy-message", "host.accepted"].includes(row.kind) || recentCopy) {
       if (row.model?.length !== 1) throw new Error(`Unsupported durable message count: ${row.kind}`);
       const message = row.model[0]!;
       if (!["user", "assistant", "toolResult"].includes(message.role)) throw new Error(`Unsupported durable message role: ${message.role}`);

@@ -144,3 +144,20 @@ test("one DB imported fork tree through actual facade, original provenance and n
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
   } finally { await runtime?.close(); watcher.close(); for (const spy of spies) spy.mockRestore(); await f.close(); await rm(dir, { recursive: true, force: true }); }
 });
+
+
+test("preserved recovery history projects public content without rewriting entries", () => {
+  const data = { owner: "operator:recent-context-copy", copied: true, sourceHash: "a".repeat(64),
+    sourceSessionId: "saved-session", sourceLeafId: "saved-leaf", chatJid: "web:fixture", branchId: "fixture", messageIndex: 0 };
+  const rows = [{ id: 42, conversationId: 1, kind: "app.recent-history-copy", data, model: [{ role: "assistant", timestamp: 1,
+    content: [{ type: "thinking", thinking: "private", signature: "encrypted" }, { type: "text", text: "preserved answer" }] }] }] as unknown as Parameters<typeof projectPublicHistory>[0];
+  const before = JSON.stringify(rows);
+  const nodes = projectPublicHistory(rows, null);
+  expect(nodes[0]!.entry).toMatchObject({ id: "42", type: "message", message: { role: "assistant", content: [{ type: "text", text: "preserved answer" }] } });
+  expect(JSON.stringify(nodes)).not.toContain("private"); expect(JSON.stringify(nodes)).not.toContain("encrypted");
+  expect(JSON.stringify(rows)).toBe(before);
+  for (const invalid of [{ ...data, copied: false }, { ...data, owner: "unknown" }, { ...data, sourceHash: "invalid" }, { ...data, messageIndex: -1 }])
+    expect(() => projectPublicHistory([{ ...rows[0]!, data: invalid }], null)).toThrow("Invalid recovery history copy");
+  expect(() => projectPublicHistory([{ ...rows[0]!, model: [{ role: "system", content: "private policy", timestamp: 1 }] }], null)).toThrow("Unsupported durable message role");
+  expect(() => projectPublicHistory([{ ...rows[0]!, kind: "app.unknown-copy" }], null)).toThrow("Unsupported durable entry");
+});
