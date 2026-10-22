@@ -82,6 +82,12 @@ export interface QueueMetrics {
  */
 export class AgentQueue {
   private lanes = new Map<string, LaneState>();
+  private readonly laneIdleListeners = new Set<(lane: string) => void>();
+
+  onLaneIdle(listener: (lane: string) => void): () => void {
+    this.laneIdleListeners.add(listener);
+    return () => { this.laneIdleListeners.delete(listener); };
+  }
   private retryingIds = new Set<string>();
   private retryTimers = new Map<ReturnType<typeof setTimeout>, QueueItem>();
   private shuttingDown = false;
@@ -283,6 +289,9 @@ export class AgentQueue {
         this.runItem(lane, next);
       } else {
         this.removeLaneIfIdle(item.laneKey);
+        if (!this.shuttingDown && !this.migration) for (const listener of this.laneIdleListeners) {
+          try { listener(item.laneKey); } catch (error) { log.error("Lane idle listener failed", { laneKey: item.laneKey, err: error }); }
+        }
       }
     }
   }

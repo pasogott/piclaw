@@ -1,6 +1,7 @@
 import "./src/test-guard.js";
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
+import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { SqliteStorage, type SqliteExecutor } from "../../runtime/durable-engine/qualification/sqlite.ts";
 import { registerStorageConformance } from "../../runtime/durable-engine/qualification/testing.ts";
@@ -23,6 +24,22 @@ registerStorageConformance({ describe, expect, it: (name, run) => test(name, run
 }));
 
 describe("Bun asynchronous database facade", () => {
+  test("guarded writer admission yields while another connection commits", () => disk(async path => {
+    const root = new Database(path);
+    root.exec("PRAGMA journal_mode=WAL; CREATE TABLE sample (n INTEGER)");
+    const db = new BunSqliteDatabase(path, { root, assertOwner() {}, fenceTransactions: true });
+    root.exec("BEGIN IMMEDIATE; INSERT INTO sample VALUES (1)");
+    const release = setTimeout(() => root.exec("COMMIT"), 50);
+    try {
+      await db.transaction(async tx => { await tx.run("INSERT INTO sample VALUES (2)"); });
+      expect(await db.all("SELECT n FROM sample ORDER BY n")).toEqual([{ n: 1 }, { n: 2 }]);
+    } finally {
+      clearTimeout(release);
+      if (root.inTransaction) root.exec("ROLLBACK");
+      await db.close(); root.close();
+    }
+  }));
+
   test("async transaction isolates unrelated read/write/transaction and close drains", () => disk(async path => {
     const db = new BunSqliteDatabase(path);
     await db.exec("CREATE TABLE sample (n INTEGER)");

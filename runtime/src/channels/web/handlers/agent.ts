@@ -139,6 +139,7 @@ type QueueDeferredFollowupExtras = {
   source?: string;
   browserContext?: BrowserObservabilityContext;
   wakeIfIdle?: boolean;
+  steering?: boolean;
 };
 
 function readTrimmedHeader(req: Request, name: string): string | null {
@@ -666,7 +667,11 @@ function captureInputAuthority(channel: WebChannelLike, req: Request): () => voi
  * @param defaultAgentId Fallback agent id when the route does not include one explicitly.
  * @returns A JSON response describing created messages, queueing, or routing failures.
  */
-export async function handleAgentMessage(
+export function handleAgentMessage(channel: WebChannelLike, req: Request, pathname: string, chatJid: string, defaultAgentId: string): Promise<Response> {
+  return handleAgentMessageInScope(channel, req, pathname, chatJid, defaultAgentId);
+}
+
+async function handleAgentMessageInScope(
   channel: WebChannelLike,
   req: Request,
   pathname: string,
@@ -723,8 +728,9 @@ export async function handleAgentMessage(
   const hasPayload = content.trim().length > 0 || hasAttachments;
   if (!hasPayload) return channel.json({ error: "Missing 'content' field" }, 400);
 
-  const requestMode = normalized.mode ?? "auto";
-  const persistSteer = shouldPersistSteerRequest(req, parsed.payload);
+  let requestMode = normalized.mode ?? "auto";
+  // Native admission always owns persistence, including requests from older browser bundles.
+  const persistSteer = !prepareInputText && shouldPersistSteerRequest(req, parsed.payload);
   const mention = content.trim().length > 0 ? parseLeadingAgentMention(content) : null;
   const mentionTarget = mention
     ? (typeof (channel.agentPool as { findChatByAgentName?: (name: string) => { chat_jid: string; agent_name: string } | null }).findChatByAgentName === "function"
@@ -748,7 +754,19 @@ export async function handleAgentMessage(
 
   cancelScheduledIdleAutoCompaction(chatJid);
 
-  const command = parseControlCommand(content, getRoutingConfig().triggerPattern);
+  let command = parseControlCommand(content, getRoutingConfig().triggerPattern);
+  if (prepareInputText && command?.type === "queue_all") return channel.json({ error: "Native inputs use FIFO operation settlement. Batch /queue-all is unavailable; use /queue." }, 400);
+  // Native queued commands are accepted input, not display-only controls or
+  // legacy session.prompt calls. Use the same preparation/admission as modes.
+  if (prepareInputText && (command?.type === "queue" || command?.type === "steer")) {
+    const message = command.message?.trim();
+    if (!message || isSlashCommandInvocation(message)) {
+      return channel.json({ error: "Native /queue and /steer require message text, not another slash command." }, 400);
+    }
+    requestMode = command.type === "queue" ? "queue" : "steer";
+    content = message;
+    command = null;
+  }
   const trimmed = content.trim();
   const themeCommand = handleUiThemeCommand(trimmed);
   const metersCommand = handleUiMetersCommand(trimmed);
@@ -785,11 +803,15 @@ export async function handleAgentMessage(
       };
       content = prepared.text;
       revalidateInputAuthority();
-    } catch { return channel.json({ error: "Input preparation could not be confirmed." }, 503); }
+    } catch (error) {
+      log.warn("Native input preparation rejected", { operation: "handle_agent_message.preparation_rejected", chatJid, err: error });
+      return channel.json({ error: "Input preparation could not be confirmed." }, 503);
+    }
   }
-  const isStreaming = typeof channel.agentPool.isStreaming === "function"
+  const nativeSteering = channel.getAcceptedQueuedSteering?.(chatJid, revalidateInputAuthority);
+  const isStreaming = Boolean(nativeSteering) || (typeof channel.agentPool.isStreaming === "function"
     ? channel.agentPool.isStreaming(chatJid)
-    : false;
+    : false);
   const isChatActive = () => channel.agentPool.isStreaming?.(chatJid) === true
     || channel.agentPool.isActive?.(chatJid) === true
     || channel.queue?.isLaneBusy?.(`chat:${chatJid}`) === true;
@@ -907,8 +929,8 @@ export async function handleAgentMessage(
     }];
     let queuedRowId: number;
     try {
-      const accept = !command && !themeCommand && !metersCommand && !isSettingsCommand
-        && !isSlashCommandInvocation(trimmed) && extras.source === 'web.compose' ? acceptQueuedSource : undefined;
+      const accept = (extras.steering || (!command && !themeCommand && !metersCommand && !isSettingsCommand
+        && !isSlashCommandInvocation(trimmed))) && (extras.source === 'web.compose' || extras.source === 'web.steer_startup_fallback') ? acceptQueuedSource : undefined;
       if (accept && !channel.admitQueuedFollowupItem) throw Error('Atomic queued admission is unavailable.');
       queuedRowId = channel.admitQueuedFollowupItem
         ? await channel.admitQueuedFollowupItem(args, revalidateQueuedAdmission, req.signal, accept)
@@ -917,6 +939,28 @@ export async function handleAgentMessage(
       if (isSqliteContention(error)) return channel.json({ error: 'Queue storage is busy; this input was not accepted.' }, 503);
       if (req.signal.aborted) return channel.json({ error: 'Input submission was cancelled before acceptance.' }, 400);
       return channel.json({ error: 'Queued input could not be accepted.' }, 403);
+    }
+    if (extras.steering) {
+      const host = channel.getAcceptedQueuedSteering?.(chatJid, revalidateInputAuthority);
+      if (host) {
+        try {
+          const accepted = await host.accept(queuedRowId);
+          void accepted.dispatch().catch(error => log.warn("Native steering remains pending", { operation: "native_steer.pending", err: error }));
+          try {
+            channel.broadcastEvent("agent_followup_removed", { chat_jid: chatJid, row_id: queuedRowId, thread_id: null });
+            channel.broadcastEvent("new_post", accepted.interaction);
+            channel.broadcastEvent("agent_steer_queued", { chat_jid: chatJid, thread_id: null, source: "compose", timestamp: queuedAt });
+          } catch (error) {
+        // Publication cannot revoke committed native input.
+        log.warn("Native steering publication deferred", { operation: "handle_agent_message.native_steer_publication", chatJid, err: error });
+      }
+          return channel.json({ queued: "steer", thread_id: null, steering_delivery: "pending" }, 201);
+        } catch (error) {
+          // Admission already committed. Preserve the accepted follow-up if the
+          // selected operation ended; never reject it or send it through legacy.
+          log.warn("Native steering deferred after admission", { operation: "native_steer.deferred", err: error });
+        }
+      }
     }
     channel.broadcastEvent("agent_followup_queued", {
       chat_jid: chatJid,
@@ -938,6 +982,9 @@ export async function handleAgentMessage(
 
   const queueDeferredSteer = async (steerContent: string, source?: string): Promise<Response | null> => {
     if (!isStreaming) return null;
+    if (nativeSteering) return queueDeferredFollowup(steerContent, { source: "web.compose", steering: true,
+      browserContext: browserObservability, wakeIfIdle: true, mediaIds: normalized.mediaIds,
+      contentBlocks: normalized.contentBlocks, linkPreviews: normalized.linkPreviews, screenHint: normalized.screenHint });
     const steerResult = await channel.agentPool.queueStreamingMessage(chatJid, steerContent, "steer",
       internalAuthority ? { validate: revalidateInputAuthority, signal: req.signal } : undefined);
     if (!steerResult.queued) return null;
@@ -1069,11 +1116,11 @@ export async function handleAgentMessage(
     );
   }
 
-  // Bound durable maintenance must follow the accepted primary's terminal
-  // settlement. Reuse the host selector captured before body awaits, without
-  // invoking source admission for a command. Legacy compaction stays immediate.
-  if (command?.type === "compact" && acceptSource !== undefined && isActive) {
-    return queueDeferredFollowup(content, { source: "web.compose", browserContext: browserObservability, wakeIfIdle: true });
+  // Native maintenance is idle-only. Never admit a slash command as ordinary
+  // model input while waiting for an active turn. Keep legacy queue behavior separate.
+  if (command?.type === "compact" && isActive) {
+    if (prepareInputText) return channel.json({ error: "Native compaction requires an idle conversation. Retry /compact after the active turn settles." }, 400);
+    if (acceptSource !== undefined) return queueDeferredFollowup(content, { source: "web.compose", browserContext: browserObservability, wakeIfIdle: true });
   }
 
   // Model/thinking commands: execute without writing to the timeline,
@@ -1483,6 +1530,7 @@ export async function handleAgentMessage(
       ? String((result as { rolled_up_to?: string }).rolled_up_to || "").trim()
       : "";
     const responseChatJid = rollupTargetChatJid || chatJid;
+    let responseDelivery: "not_needed" | "persisted" | "failed" = "not_needed";
 
     if (formatted || result.contentBlocks?.length) {
       if (isQueueCommand && result.queued_followup) {
@@ -1507,7 +1555,17 @@ export async function handleAgentMessage(
         if (result.contentBlocks?.length) {
           sendOptions.contentBlocks = result.contentBlocks;
         }
-        await channel.sendMessage(responseChatJid, formatted || "", sendOptions);
+        if (prepareInputText) sendOptions.requirePersistence = true;
+        try {
+          await channel.sendMessage(responseChatJid, formatted || "", sendOptions);
+          responseDelivery = "persisted";
+        } catch (error) {
+          if (!prepareInputText) throw error;
+          // Execution already completed. Do not turn publication failure into
+          // permission to repeat a non-idempotent command or open a legacy session.
+          responseDelivery = "failed";
+          log.error("Native command reply could not be persisted", { operation: "native_command.reply_delivery", chatJid, command: command.type, err: error });
+        }
       }
     }
 
@@ -1569,7 +1627,7 @@ export async function handleAgentMessage(
     }
 
     return channel.json(
-      { user_message: interaction, thread_id: threadId, command: result },
+      { user_message: interaction, thread_id: threadId, command: result, ...(prepareInputText ? { response_delivery: responseDelivery } : {}) },
       201
     );
   }
@@ -1633,7 +1691,9 @@ export async function handleAgentMessage(
     );
   }
 
-  if (requestMode === "steer") {
+  if (requestMode === "steer" && !prepareInputText) {
+    // Native steering was already admitted above, or is idle ordinary input.
+    // Never hydrate a legacy session or mutate its accepted message row here.
     if (persistSteer) broadcastNewPost();
     const steerResponse = await queueSteerMessage("compose");
     if (steerResponse) {
@@ -1777,9 +1837,18 @@ async function processAuthorisedChat(
     acceptedDispatch = async () => "pending";
   }
   if (acceptedDispatch) {
-    const { beginChatRun, endChatRun } = await import("../../../db/chat-cursors.js");
-    beginChatRun(chatJid, currentMessage.timestamp, { prevTs: prevCursor,
-      messageId: currentMessage.id, startedAt: new Date().toISOString() });
+    const { setChatCursor } = await import("../../../db/chat-cursors.js");
+    const startedAt = new Date().toISOString();
+    const nativeStatus = (type: "intent" | "done") => {
+      const payload = { chat_jid: chatJid, turn_id: `durable:${pendingIdentity.rowId}`, thread_id: effectiveThreadRootId,
+        type: type === "intent" ? "thinking" : type, kind: "info", source: "durable_runtime", intent_key: "native_task", blocking: false,
+        title: type === "done" ? "Idle" : "Thinking...", started_at: startedAt };
+      channel.updateAgentStatus?.(chatJid, payload);
+      channel.broadcastEvent("agent_status", payload);
+    };
+    // Native operations/submissions own recovery. A legacy inflight marker
+    // would falsely advertise every live SDK turn as interrupted after reload.
+    nativeStatus("intent");
     let result = await acceptedDispatch().catch(() => "pending" as const);
     if (result === "pending") {
       // The captured host port owns observation only. Shutdown must retain the recovery marker.
@@ -1787,7 +1856,8 @@ async function processAuthorisedChat(
       result = await waitForPending(pendingIdentity);
       if (result === "pending") return;
     }
-    endChatRun(chatJid);
+    setChatCursor(chatJid, currentMessage.timestamp);
+    nativeStatus("done");
     channel.resumeChat(chatJid);
     return;
   }
@@ -1817,6 +1887,10 @@ async function processAuthorisedChat(
     }
     return;
   }
+
+  // A native dispatcher owns this chat even when this particular message has no
+  // accepted source. Never manufacture a legacy AgentSession as a fallback.
+  if (coordinator) throw new Error("Native input has no admitted source");
 
   const channelName = detectChannel(chatJid);
   const protectedRecoveryIntent = resolveProtectedRecoveryControlIntent(currentMessage);

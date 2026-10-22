@@ -27,6 +27,16 @@
 - Test filesystem isolation is mandatory, including in CI: preserve the Bun preloads and launcher bootstrap. Use owned temporary fixtures, never cached live `/workspace` paths, for mutation/cleanup. An in-memory DB does not protect files. Do not run older worktrees without the isolation harness on a live workspace host.
 - `make ci-fast` — full CI gate
 
+### Portable build caches and scratch
+
+- `make policy-config` prints paths without creating directories. Build/test targets create the required directories through `policy-dirs`.
+- Select `CACHE_TMP_BASE` explicitly when needed. Otherwise CI uses `RUNNER_TEMP`, then the caller's original `TMPDIR`, then system temp (`/tmp`). Outside CI, use writable/searchable `/workspace/tmp` when available, otherwise `/tmp`.
+- Always append the fixed project name `piclaw`. Use `cache/`, `build/`, `tests/`, `logs/` and `runs/` below that root; unique runs belong below `runs/<run-id>/`.
+- Make snapshots inherited `TMPDIR` as `PICLAW_INHERITED_TMPDIR` before exporting its project-scoped test temp path. It exports the selected base through recursive Make, plus project-scoped Bun, npm and XDG cache paths.
+- Preserve an explicit `PLAYWRIGHT_BROWSERS_PATH`; otherwise use the existing `/workspace/bin/pw-browsers` outside CI when present, or the project's `cache/ms-playwright`. Do not migrate or reinstall an existing browser installation to adopt this policy.
+- Make exports do not change the caller's shell. Direct Bun/Playwright commands must explicitly use the values printed by `make policy-config` and create needed scratch directories first.
+- Do not relocate source, credentials, curated data, published deliverables or service state. Preserve active artifacts; this policy does not authorise cleanup, permission changes or service restarts.
+
 ### Local-first CI policy
 
 - Complete iterative validation locally: use focused tests through the isolated launcher, host-independent fixtures for platform/policy variants, relevant package tests, static/workflow-contract checks, and `make ci-fast` before pushing.

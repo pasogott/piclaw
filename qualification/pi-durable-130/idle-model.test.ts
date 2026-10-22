@@ -70,11 +70,19 @@ test("shared DB actual facade resolves, persists/reopens and fails closed for pe
     expect((await app.applyControlCommand("web:idle", { ...command, modelId: "unknown" })).status).toBe("error");
     const results = await Promise.allSettled([app.applyControlCommand("web:idle", command), app.applyControlCommand("web:idle", command)]);
     expect(results.filter(r => r.status === "rejected")).toHaveLength(1);
+    const beforeReset = await app.saveSessionPosition("web:idle");
+    const callsBeforeReset = f.host.modelCalls;
+    const reset = await app.applyControlCommand("web:idle", { type: "new_session", raw: "/new-session" });
+    expect(reset).toMatchObject({ status: "success", sessionGeneration: "idle", sessionGenerationChanged: false });
+    expect(await app.saveSessionPosition("web:idle")).not.toBe(beforeReset);
+    expect(f.host.modelCalls).toBe(callsBeforeReset);
+    expect((await app.applyControlCommand("web:idle", { type: "new_session", parent: "/legacy.jsonl", raw: "/new-session /legacy.jsonl" })).status).toBe("error");
     root.query("INSERT INTO service_effect_s01_chats(chat_jid,active_operation_id) VALUES ('pending',NULL)").run();
     root.query("UPDATE service_effect_s01_chats SET next_source_seq=2 WHERE chat_jid='pending'").run();
     // An accepted source anywhere in the shared file denies SET, even without an active operation.
     root.query("INSERT INTO service_effect_s01_sources VALUES ('pending',1,'source',?,'message','pending','payload',NULL,NULL,'now',NULL,'provenance',0)").run("a".repeat(64));
     await expect(app.applyControlCommand("web:idle", command)).rejects.toThrow("not idle");
+    expect(await app.applyControlCommand("web:idle", { type: "new_session", raw: "/new-session" })).toMatchObject({ status: "error", message: "Host work is not idle" });
     root.query("UPDATE service_effect_s01_sources SET state='disposed'").run();
     // WAL lets a valid owner admit work while root retains an older idle read snapshot.
     root.exec("PRAGMA journal_mode=WAL");

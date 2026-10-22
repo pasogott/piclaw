@@ -11,6 +11,14 @@ import { AgentQueue } from "../../../src/queue.js";
 import { waitFor } from "../../helpers.js";
 
 describe("web recovery helpers", () => {
+  test("native recovery never reads or publishes legacy interruption/draft state", () => {
+    const ctx: WebRecoveryContext = { isNativeRuntime: () => true, assistantName: "Pi", defaultAgentId: "default",
+      enqueue() { throw Error("Legacy enqueue"); }, async processChat() { throw Error("Legacy process"); } };
+    const store = new Proxy({} as WebRecoveryStore, { get() { throw Error("Legacy recovery store accessed"); } });
+    expect(() => recoverInflightRuns(ctx, store)).not.toThrow();
+    expect(recoverStaleInflightRun(ctx, "web:native", {}, store)).toBe(false);
+  });
+
   test("buildInterruptedTurnOutcomeMarker uses cause-specific detail text", () => {
     expect(buildInterruptedTurnOutcomeMarker("service_restart")).toMatchObject({
       type: "turn_outcome_marker",

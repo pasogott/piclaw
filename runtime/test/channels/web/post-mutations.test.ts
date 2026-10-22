@@ -23,7 +23,6 @@ function createContext(overrides: Partial<PostMutationsContext> = {}): PostMutat
     lastCommandInteractionId: null,
     json: (payload, status = 200) => jsonResponse(payload, status),
     replaceMessageContent: () => interaction(10),
-    setThreadId: () => {},
     broadcastInteractionUpdated: () => {},
     storeMessage: () => interaction(20),
     broadcastAgentResponse: () => {},
@@ -58,12 +57,10 @@ describe("web post mutation helpers", () => {
     let broadcasted = false;
     let usedChatJid: string | null = null;
     const ctx = createContext({
-      replaceMessageContent: (chatJid) => {
+      replaceMessageContent: (chatJid, messageId, _content, threadId) => {
         usedChatJid = chatJid;
+        setThread = { messageId, threadId: threadId! };
         return interaction(44);
-      },
-      setThreadId: (messageId, threadId) => {
-        setThread = { messageId, threadId };
       },
       broadcastInteractionUpdated: () => {
         broadcasted = true;

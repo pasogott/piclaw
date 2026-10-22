@@ -65,7 +65,8 @@ async function setup(busy = false) {
   const assert = () => { if (!acquired) throw new Error("Host owner lost"); };
   initializeHostDurableBindings(db, assert);
   let loseCancellationAck = false;
-  const hooks = { authorize: undefined as (() => void | Promise<void>) | undefined,
+  const hooks = { resolveConversation: undefined as (() => number) | undefined,
+    authorize: undefined as (() => void | Promise<void>) | undefined,
     cancellation: undefined as (() => void | Promise<void>) | undefined,
     prepareTerminal: undefined as ((input: AcceptedInput) => Promise<TerminalDatabaseEffect | undefined>) | undefined,
     terminalEffects: undefined as ((commit: Readonly<TerminalCommit>, assertCurrent: (expected: Readonly<TerminalCommit>) => void) => undefined) | undefined };
@@ -83,6 +84,20 @@ async function setup(busy = false) {
     applyTerminalEffects(commit, scope) { return hooks.terminalEffects?.(commit, scope); },
   }));
   const options: RuntimeOptions = {
+    cancelOperationSource(input, expectedVersion) {
+      db.transaction(() => {
+        assert();
+        const operation = db.query("SELECT version,phase,cancellation_source_seq FROM service_effect_s01_operations WHERE operation_id=?")
+          .get(input.operationId) as { version: number; phase: string; cancellation_source_seq: number | null };
+        if (operation.version !== expectedVersion || operation.phase === "terminal") throw Error("Abort operation changed");
+        if (operation.cancellation_source_seq !== null) return;
+        const id = `operator-abort:${input.operationId}`;
+        work.acceptAndCancelSourceInTransaction(sealed({ effect: effect(id), chatJid: input.chatJid, sourceId: id,
+          kind: "cancellation", payloadRef: id, targetOperationId: input.operationId, parentSourceSeq: input.sourceSeq,
+          acceptedAt: at, createWakeIntent: false }), expectedVersion, "operator_abort", db);
+        assert();
+      }).immediate();
+    },
     prepareTerminalEffect: input => hooks.prepareTerminal?.(input) ?? Promise.resolve(undefined),
     incarnation: "copy-A", owner: { assert, release() { releases++; acquired = false; } },
     openStorage: async () => { assert(); opens++; return SqliteStorage.open(await openWalFixtureDatabase(path)); },
@@ -91,7 +106,8 @@ async function setup(busy = false) {
       finishHarness: work.finishHarness.bind(work), bindHarness: work.bindHarness.bind(work), recordQueuedInput: work.recordQueuedInput.bind(work), getOperation: work.getOperation.bind(work),
       getChatFrontier: work.getChatFrontier.bind(work), listOpenOperations: work.listOpenOperations.bind(work),
       async acceptCancellation(request) { await hooks.cancellation?.(); return work.acceptCancellation(request); } }, terminal, existingConversationIds: [id], conversationFor: (chat, branch) => {
-      if (chat !== "web:runtime" || branch !== "existing-main") throw new Error("Unknown host branch"); return id;
+      if (chat !== "web:runtime" || branch !== "existing-main") throw new Error("Unknown host branch");
+      return hooks.resolveConversation?.() ?? id;
     },
     bindings: createHostDurableBindings(db, { domain: "runtime", incarnation: "copy-A", assertOwner: assert,
       manifest: [{ chatJid: "web:runtime", branchId: "existing-main", conversationId: id }],
@@ -150,6 +166,46 @@ async function setup(busy = false) {
   }
   return { dir, db, base, options, runtime, accept, attach, drain, work, terminal, payloads, path, hooks, stats: () => ({ opens, releases, authorizations }), setOwner: (v: boolean) => { acquired = v; }, grantKnown: () => { allowKnown = true; }, loseCancellationAck: () => { loseCancellationAck = true; } };
 }
+
+test("runtime: terminal model error settles once and releases the host lane", () => fixture(async f => {
+  f.base.host.modelAllowed = false;
+  const input = await f.accept("failed-model", "plain request");
+  await f.runtime.submit(input);
+  await f.runtime.close();
+  const reopened = await f.drain();
+  f.runtime = reopened;
+  const state = await reopened.reconcile(input);
+  expect(state.status).toMatchObject({ status: "unanswered", reason: "model_error" });
+  let effects = 0;
+  f.hooks.prepareTerminal = async () => { effects++; return undefined; };
+  // A failed notice write must not consume the input or expose its exception.
+  await reopened.close(); f.setOwner(true);
+  f.runtime = await HostConversationRuntime.open({ ...f.options, putAnswer() { throw Error("SYNTHETIC-NOTICE-STORAGE-SECRET"); } }, context);
+  await expect(f.runtime.settle(input)).rejects.toThrow("Host answer materialization failed");
+  expect(value(await f.terminal.getTerminal(input.operationId))).toBeNull();
+  expect(f.db.query("SELECT state FROM service_effect_s01_sources WHERE source_id=?").get(input.sourceId)).toEqual({ state: "claimed" });
+  expect(f.db.query("SELECT * FROM messages WHERE is_bot_message=1").all()).toHaveLength(0);
+  await f.runtime.close(); f.runtime = await f.drain();
+  const committed = await f.runtime.settle(input);
+  expect(committed?.disposition).toBe("failed");
+  expect(typeof committed?.messageRowId).toBe("number");
+  expect(await f.runtime.settle(input)).toEqual(committed);
+  expect(effects).toBe(0);
+  const notice = f.db.query("SELECT rowid,content,thread_id FROM messages WHERE is_bot_message=1").get() as { rowid: number; content: string; thread_id: number | null };
+  expect(notice.content).toBe("**Turn failed**\n\nThe model could not complete this turn. Accepted inputs were consumed; they will not be replayed automatically.");
+  expect(notice.rowid).toBe(committed!.messageRowId!);
+  for (const [column, forged] of [["content", "forged notice"], ["thread_id", 987654]] as const) {
+    try {
+      f.db.query(`UPDATE messages SET ${column}=? WHERE rowid=?`).run(forged, notice.rowid);
+      expect(await f.terminal.getTerminal(input.operationId)).toMatchObject({ ok: false, error: { _tag: "corrupt_state" } });
+    } finally { f.db.query(`UPDATE messages SET ${column}=? WHERE rowid=?`).run(notice[column], notice.rowid); }
+  }
+  await f.runtime.close(); f.runtime = await f.drain();
+  expect(await f.runtime.settle(input)).toEqual(committed);
+  expect(f.db.query("SELECT * FROM messages WHERE is_bot_message=1").all()).toHaveLength(1);
+  expect(value(await f.work.getOperation(input.operationId))?.phase).toBe("terminal");
+  expect(await f.accept("after-model-error", "next request")).toBeDefined();
+}));
 
 test("runtime: final usage receipt survives settlement and remains bound to original submission", () => fixture(async f => {
     // Public historical entries exceed a page; none belongs to the new accepted window.
@@ -420,6 +476,91 @@ for (const queued of [false, true]) {
     } finally { await reopened.close(); }
   }, queued));
 }
+
+test("runtime: read-only session report uses committed native context and usage without model replay", () => fixture(async f => {
+  const input = await f.accept();
+  const binding = { incarnation: input.incarnation, chatJid: input.chatJid, branchId: input.branchId, conversationId: input.conversationId };
+  const empty = await f.runtime.readSessionReport(binding);
+  expect(empty.lastAnswer).toBeNull(); expect(empty.observedTokens).toBeNull();
+  expect(empty.usage.cost).toBe(0); expect(f.base.host.modelCalls).toBe(0);
+  f.base.host.tokens = 17;
+  f.grantKnown();
+  const id = await f.runtime.submit(input);
+  await f.runtime.wait(input, id);
+  const answer = (await f.runtime.reconcile(input)).answer?.text;
+  const calls = f.base.host.modelCalls;
+  const report = await f.runtime.readSessionReport(binding);
+  expect(report.lastAnswer).toBe(answer ?? null);
+  expect(report.userMessages).toBeGreaterThan(0);
+  expect(report.assistantMessages).toBeGreaterThan(0);
+  expect(report.observedTokens).toBe(17);
+  expect(report.observedModel).toContain("/");
+  expect(report.contextWindow).toBeGreaterThan(0);
+  expect(report.usage.input).toBe(17);
+  expect(await f.runtime.readSessionReport(binding)).toEqual(report);
+  expect(f.base.host.modelCalls).toBe(calls);
+  await expect(f.runtime.readSessionReport({ ...binding, chatJid: "web:foreign" })).rejects.toThrow();
+  await expect(f.runtime.readSessionReport({ ...binding, incarnation: "foreign" })).rejects.toThrow("Host binding conflict");
+  let checks = 0;
+  f.hooks.resolveConversation = () => ++checks >= 3 ? -1 : binding.conversationId;
+  try { await expect(f.runtime.readSessionReport(binding)).rejects.toThrow("Host binding conflict"); }
+  finally { f.hooks.resolveConversation = undefined; }
+  expect(checks).toBe(3); expect(f.base.host.modelCalls).toBe(calls);
+}), 20000);
+
+test("runtime: operator abort settles exact held run and attached steer once, preserving pending successor", () => fixture(async f => {
+  f.base.host.modelHold = barrier(); f.grantKnown();
+  const input = await f.accept();
+  const id = await f.runtime.submit(input);
+  const steer = await f.attach(input, id);
+  await f.runtime.submitIntent(steer);
+  const successor = value(await f.work.acceptSource(sealed({ effect: effect("accept-successor"), chatJid: input.chatJid,
+    sourceId: "successor", kind: "message" as const, payloadRef: "successor", targetOperationId: null,
+    parentSourceSeq: null, acceptedAt: at, createWakeIntent: false })));
+  const waiting = f.runtime.wait(input, id);
+  expect(await f.runtime.abortOperation(input)).toBe(true);
+  await waiting;
+  expect((await f.runtime.reconcile(input)).status?.status).toBe("unanswered");
+  const terminal = await f.runtime.settle(input);
+  expect(terminal?.disposition).toBe("cancelled");
+  expect(await f.runtime.settle(input)).toEqual(terminal);
+  expect(await f.runtime.abortOperation(input)).toBe(false);
+  expect(f.work.getAcceptedSource(input.chatJid, successor.sourceId)?.state).toBe("pending");
+  expect(f.db.query("SELECT * FROM messages WHERE is_bot_message=1").all()).toEqual([]);
+}), 20000);
+
+test("runtime: operator abort cancels a held tool before its effect", () => fixture(async f => {
+  f.base.host.toolHold = barrier(); f.grantKnown();
+  try {
+    const input = await f.accept("request-1", "use-tool");
+    const id = await f.runtime.submit(input);
+    const op = value(await f.work.getOperation(input.operationId))!;
+    value(await f.work.bindHarness(sealed({ effect: effect("abort-tool-bind", op.operationId, input.sourceSeq),
+      expectedVersion: op.version, sessionId: f.options.sessionId, lane: f.options.lane,
+      harnessOperationId: String(id), state: "running" as const, watchGeneration: f.options.generation })));
+    const waiting = f.runtime.wait(input, id);
+    await f.base.host.toolEntered.promise;
+    expect(await f.runtime.abortOperation(input)).toBe(true);
+    await waiting;
+    f.base.host.toolHold.release();
+    expect(f.base.host.effects).toBe(0);
+    expect((await f.runtime.settle(input))?.disposition).toBe("cancelled");
+    expect(f.base.host.modelCalls).toBe(1);
+  } finally { f.base.host.toolHold.release(); }
+}), 20000);
+
+test("runtime: operator abort rejects foreign run before recording cancellation", () => fixture(async f => {
+  f.grantKnown();
+  const input = await f.accept();
+  const id = await f.runtime.submit(input);
+  const op = value(await f.work.getOperation(input.operationId))!;
+  value(await f.work.bindHarness(sealed({ effect: effect("abort-bind", op.operationId, input.sourceSeq),
+    expectedVersion: op.version, sessionId: f.options.sessionId, lane: f.options.lane,
+    harnessOperationId: String(id), state: "running" as const, watchGeneration: f.options.generation })));
+  await expect(f.runtime.abortOperation(input)).rejects.toThrow("Foreign abort run input");
+  expect(value(await f.work.getOperation(input.operationId))?.cancellation).toBeNull();
+  expect(f.db.query("SELECT * FROM service_effect_s01_sources WHERE kind='cancellation'").all()).toEqual([]);
+}, true), 20000);
 
 test("runtime: public transaction reads exact run ownership but cannot atomically mark its abort; queued successor survives", async () => {
   // Qualification of the installed PUBLIC contract, not a private Transaction cast or task-schema write.

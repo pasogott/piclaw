@@ -33,7 +33,7 @@ export class BunSqliteDatabase implements SqliteDatabase {
         throw new Error("Shared database identity required");
     }
     this.db = new Database(path, { create: !guard, strict: true });
-    try { this.db.exec("PRAGMA foreign_keys=ON"); }
+    try { this.db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=0"); }
     catch (error) {
       try { this.db.close(); }
       catch (cleanupError) { throw new RuntimeStartupCleanupError([error, cleanupError], "SQLite construction cleanup uncertain"); }
@@ -117,7 +117,17 @@ export class BunSqliteDatabase implements SqliteDatabase {
   transaction<T>(callback: (tx: SqliteExecutor) => Promise<T>): Promise<T> {
     const idle = this.idleGuard, source = this.sourceScope.getStore();
     return this.enqueue(async () => {
-      this.db.exec(this.guard ? "BEGIN IMMEDIATE" : "BEGIN");
+      // Yield while another host connection owns the writer lock, allowing an
+      // in-process asynchronous transaction to finish without a blocking wait.
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        if (this.guard?.fenceTransactions) this.guard.assertOwner();
+        try { this.db.exec(this.guard ? "BEGIN IMMEDIATE" : "BEGIN"); break; }
+        catch (error) {
+          if ((error as { code?: string }).code !== "SQLITE_BUSY" || Date.now() >= deadline) throw error;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+      }
       let active = true, committed = false;
       const tx = this.executor(() => {
         if (!active) throw new Error("SQLite transaction handle expired");

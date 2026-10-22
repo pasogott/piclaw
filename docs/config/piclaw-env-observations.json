@@ -79,15 +79,15 @@
     },
     "tooling": {
       "referencedNames": 89,
-      "directReaderNames": 44,
-      "directReaderOccurrences": 74,
+      "directReaderNames": 43,
+      "directReaderOccurrences": 71,
       "helperReaderNames": 0,
       "helperReaderOccurrences": 0,
-      "semanticReaderNames": 44,
-      "semanticReaderOccurrences": 74
+      "semanticReaderNames": 43,
+      "semanticReaderOccurrences": 71
     },
     "docsDeploy": {
-      "referencedNames": 150,
+      "referencedNames": 151,
       "directReaderNames": 16,
       "directReaderOccurrences": 32,
       "helperReaderNames": 0,
@@ -1199,8 +1199,6 @@
           "semanticReaders": 4,
           "files": [
             "runtime/scripts/benchmark-cold-session.ts",
-            "runtime/scripts/helpers/recent-context.test.ts",
-            "runtime/scripts/migrate-recent-context.ts",
             "runtime/scripts/note-retrieval-baseline.ts",
             "runtime/scripts/qualify-plan193.ts",
             "runtime/scripts/test-filesystem-isolation.ts",
@@ -1275,14 +1273,12 @@
         },
         "tooling": {
           "referenced": true,
-          "directReaders": 4,
+          "directReaders": 3,
           "helperReaders": 0,
-          "semanticReaders": 4,
+          "semanticReaders": 3,
           "files": [
             "runtime/scripts/benchmark-cold-session.ts",
             "runtime/scripts/controlled-test-runner.ts",
-            "runtime/scripts/helpers/recent-context.test.ts",
-            "runtime/scripts/migrate-recent-context.ts",
             "runtime/scripts/note-retrieval-baseline.ts",
             "runtime/scripts/qualify-plan193.ts",
             "runtime/scripts/test-filesystem-isolation.ts",
@@ -1296,7 +1292,6 @@
           ],
           "readerFiles": [
             "runtime/scripts/benchmark-cold-session.ts",
-            "runtime/scripts/migrate-recent-context.ts",
             "scripts/audit-queue-session-threading-replay.ts"
           ]
         },
@@ -2304,6 +2299,21 @@
       }
     },
     {
+      "name": "PICLAW_INHERITED_TMPDIR",
+      "scopes": {
+        "docsDeploy": {
+          "referenced": true,
+          "directReaders": 0,
+          "helperReaders": 0,
+          "semanticReaders": 0,
+          "files": [
+            "Makefile"
+          ],
+          "readerFiles": []
+        }
+      }
+    },
+    {
       "name": "PICLAW_INTEGRATION_SKIP_DOCKER",
       "scopes": {
         "docsDeploy": {
@@ -3152,20 +3162,16 @@
         },
         "tooling": {
           "referenced": true,
-          "directReaders": 1,
+          "directReaders": 0,
           "helperReaders": 0,
-          "semanticReaders": 1,
+          "semanticReaders": 0,
           "files": [
-            "runtime/scripts/helpers/recent-context.test.ts",
-            "runtime/scripts/migrate-recent-context.ts",
             "runtime/scripts/qualify-plan193.ts",
             "runtime/scripts/test-filesystem-isolation.ts",
             "scripts/audit-piclaw-env-surface.ts",
             "scripts/smoke-install-from-repo.sh"
           ],
-          "readerFiles": [
-            "runtime/scripts/migrate-recent-context.ts"
-          ]
+          "readerFiles": []
         },
         "production": {
           "referenced": true,
@@ -4247,8 +4253,6 @@
           "helperReaders": 0,
           "semanticReaders": 0,
           "files": [
-            "runtime/scripts/helpers/recent-context.test.ts",
-            "runtime/scripts/migrate-recent-context.ts",
             "runtime/scripts/test-filesystem-isolation.ts",
             "scripts/audit-piclaw-env-surface.ts",
             "scripts/smoke-install-from-repo.sh"
@@ -5402,8 +5406,6 @@
           "semanticReaders": 5,
           "files": [
             "runtime/scripts/benchmark-cold-session.ts",
-            "runtime/scripts/helpers/recent-context.test.ts",
-            "runtime/scripts/migrate-recent-context.ts",
             "runtime/scripts/note-retrieval-baseline.ts",
             "runtime/scripts/qualify-plan193.ts",
             "runtime/scripts/test-filesystem-isolation.ts",
@@ -7949,13 +7951,11 @@
         },
         "tooling": {
           "referenced": true,
-          "directReaders": 4,
+          "directReaders": 3,
           "helperReaders": 0,
-          "semanticReaders": 4,
+          "semanticReaders": 3,
           "files": [
             "runtime/scripts/benchmark-cold-session.ts",
-            "runtime/scripts/helpers/recent-context.test.ts",
-            "runtime/scripts/migrate-recent-context.ts",
             "runtime/scripts/note-retrieval-baseline.ts",
             "runtime/scripts/qualify-plan193.ts",
             "runtime/scripts/test-filesystem-isolation.ts",
@@ -7967,7 +7967,6 @@
           ],
           "readerFiles": [
             "runtime/scripts/benchmark-cold-session.ts",
-            "runtime/scripts/migrate-recent-context.ts",
             "scripts/audit-queue-session-threading-replay.ts"
           ]
         },

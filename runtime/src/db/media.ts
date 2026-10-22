@@ -38,6 +38,7 @@ export function attachMediaToMessageInDatabase(
   database: Database,
   messageRowId: number,
   mediaIds: readonly number[],
+  options: { index?: boolean } = {},
 ): void {
   if (mediaIds.length === 0) return;
   const stmt = database.prepare("INSERT OR IGNORE INTO message_media (message_rowid, media_id) VALUES (?, ?)");
@@ -45,7 +46,7 @@ export function attachMediaToMessageInDatabase(
 
   // Extract searchable text from text-based media (SVG, markdown, plain text)
   // and append it to the FTS index so media content is full-text searchable.
-  appendMediaTextToFts(database, messageRowId, [...mediaIds]);
+  if (options.index !== false) appendMediaTextToFts(database, messageRowId, [...mediaIds]);
 }
 
 export function attachMediaToMessage(messageRowId: number, mediaIds: number[]): void {

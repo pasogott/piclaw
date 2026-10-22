@@ -98,6 +98,17 @@ test("bindings: every immutable field and manifest mismatch fail without changin
   expect(f.count()).toBe(1);
 }));
 
+test("bindings: existing correlation reads do not contend with an SDK writer", () => fixture(async f => {
+  const input = await f.accept();
+  await f.bindings.getOrBind(input);
+  const writer = new Database(join(f.dir, "host.sqlite"), { strict: true });
+  writer.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE");
+  try {
+    expect(await f.bindings.getOrBind(input)).toEqual({ content: "accepted user prompt" });
+    expect(await f.bindings.bind(input)).toEqual(await f.bindings.get(input));
+  } finally { writer.exec("ROLLBACK"); writer.close(); }
+}));
+
 test("bindings: missing binding, unaccepted source and incorrect payload are rejected", () => fixture(async f => {
   const i = await f.accept();
   await expect(f.bindings.recordSubmission(i, 1)).rejects.toThrow("Host binding conflict");

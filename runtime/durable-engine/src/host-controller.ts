@@ -1,7 +1,7 @@
 // Explicitly opt-in, inactive composition. No registration, schema setup, import or queue.
 import { type Storage, type HarnessInspection } from "@earendil-works/pi-durable";
 import { withoutAbortSignal, type Context } from "@earendil-works/chord/context";
-import { HostConversationRuntime, type RuntimeOptions } from "./host-runtime.js";
+import { HostConversationRuntime, type AcceptedInput, type RuntimeOptions } from "./host-runtime.js";
 import { reconstituteAcceptedWork } from "./host-recovery.js";
 import type { HostCutoverController } from "./host-cutover.js";
 
@@ -52,10 +52,16 @@ export async function createHostController(config: HostControllerOptions, contex
   let scanCurrent: (() => Promise<typeof recovered>) | undefined;
   const assert = () => { if (!lease) throw Error("Host owner unavailable"); lease.assertCurrentOwner(); };
   const deny = () => { throw Error("Unknown recovered candidate authority"); };
-  async function authorizeRecoveredWork(inspection: HarnessInspection) {
+  async function authorizeRecoveredWork(inspection: HarnessInspection, aborting?: AcceptedInput) {
     assert();
     if (!ready || !runtime || !storage) return deny();
     if (scanCurrent) recovered = await scanCurrent();
+    // Only an explicit runtime abort may progress its already-cancelled scope.
+    // Recovery never projects the cancellation source into a model submission.
+    const abortScope = aborting && recovered.find(entry => entry.role === "primary" &&
+      entry.work.claimed.operation.cancellation && Object.entries(aborting).every(([key, value]) =>
+        entry.input[key as keyof AcceptedInput] === value));
+    if (aborting && !abortScope) return deny();
     const known = new Set<number>();
     for (const entry of recovered) {
       // Unbound intents stay explicit retry work; do not manufacture a binding on bootstrap.
@@ -64,7 +70,8 @@ export async function createHostController(config: HostControllerOptions, contex
       const state = await (entry.role === "primary" ? runtime.reconcile(entry.input) : runtime.reconcileIntent(entry.input));
       assert();
       if (state.submissionId !== null) {
-        if (state.operation.cancellation || state.operation.terminal) {
+        if (state.operation.terminal || (state.operation.cancellation && !bootstrapApproval &&
+            (!abortScope || entry.input.operationId !== abortScope.input.operationId))) {
           if (inspection.submissions.some(s => s.id === state.submissionId)) return deny();
         } else known.add(state.submissionId);
       }
@@ -138,6 +145,17 @@ export async function createHostController(config: HostControllerOptions, contex
     }
     scanCurrent = scan;
     recovered = await scan();
+    // Only answers already committed at this cold start lost their dispatcher.
+    // Work that completes after scheduling resumes retains its normal owner.
+    const completedSources = new Set<string>();
+    for (const entry of recovered) {
+      if (entry.binding?.submissionId == null) continue;
+      const state = await (entry.role === "primary" ? runtime.reconcile(entry.input) : runtime.reconcileIntent(entry.input));
+      if (state.status?.status === "done") completedSources.add(`${entry.input.operationId}:${entry.input.sourceSeq}`);
+    }
+    const startupAnswers = new Set(recovered.filter(entry => entry.role === "primary" &&
+      entry.work.claimed.operation.claimedSourceSeqs.every(seq => completedSources.has(`${entry.input.operationId}:${seq}`)))
+      .map(entry => entry.input.operationId));
     ready = true;
     // Public Harness inspection covers the entire store, including unknown conversations.
     const { inspection } = await runtime.inspectAuthority();
@@ -159,13 +177,31 @@ export async function createHostController(config: HostControllerOptions, contex
     function reconcileRecovered(): Promise<void> {
       if (retry) return retry;
       retry = (async () => {
-        const current = await scan();
+        let current = await scan();
         recovered = current;
+        // Complete an already accepted cancellation, never resume it as model work.
+        // Startup inspection above is paused; cancellation progress starts only here.
+        for (const entry of current) {
+          if (entry.role !== "primary" || !entry.work.claimed.operation.cancellation) continue;
+          if (!await activeRuntime.settle(entry.input)) await activeRuntime.abortOperation(entry.input);
+        }
+        if (current.some(entry => entry.work.claimed.operation.cancellation)) recovered = current = await scan();
         await authorizeRecoveredWork((await activeRuntime.inspectAuthority()).inspection);
         for (const entry of current) {
           assert();
           if (entry.role === "intent" && entry.binding?.submissionId == null)
             await activeRuntime.submitIntent(entry.input);
+        }
+        // Release terminal model errors without replay. Recover committed answers
+        // only for cold-start operations: their previous dispatcher no longer exists.
+        for (const entry of current) {
+          assert();
+          if (entry.role !== "primary" || entry.binding?.submissionId == null) continue;
+          const state = await activeRuntime.reconcile(entry.input);
+          if ((state.status?.status === "unanswered" && state.status.reason === "model_error") ||
+              (startupAnswers.has(entry.input.operationId) && state.status?.status === "done")) {
+            if (await activeRuntime.settle(entry.input)) startupAnswers.delete(entry.input.operationId);
+          }
         }
         assert();
         // A new intent uses submitInput's existing whole-domain scheduling gate.

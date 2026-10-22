@@ -17,13 +17,9 @@ describe("web endpoint context builders", () => {
       defaultChatJid: "web:default",
       getLastCommandInteractionId: () => 42,
       json: (payload, status = 200) => new Response(JSON.stringify(payload), { status }),
-      replaceMessageContent: (_chatJid, id, content) => ({
-        id,
-        timestamp: new Date().toISOString(),
-        data: { type: "agent_response", content },
-      }),
-      setThreadId: (messageId, threadId) => {
-        storedThreadId = { messageId, threadId };
+      replaceMessageContent: (_chatJid, id, content, threadId) => {
+        storedThreadId = { messageId: id, threadId: threadId! };
+        return { id, timestamp: new Date().toISOString(), data: { type: "agent_response", content } };
       },
       broadcastInteractionUpdated: (interaction) => {
         broadcastedId = interaction.id;
@@ -35,8 +31,7 @@ describe("web endpoint context builders", () => {
     expect(postCtx.defaultChatJid).toBe("web:default");
     expect(postCtx.lastCommandInteractionId).toBe(42);
 
-    const replaced = postCtx.replaceMessageContent("web:default", 9, "updated")!;
-    postCtx.setThreadId(9, 100);
+    const replaced = postCtx.replaceMessageContent("web:default", 9, "updated", 100)!;
     postCtx.broadcastInteractionUpdated(replaced);
 
     expect(storedThreadId).toEqual({ messageId: 9, threadId: 100 });

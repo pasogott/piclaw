@@ -1,5 +1,6 @@
 import type { AgentPool } from "../../../agent-pool.js";
 import type { AgentQueue } from "../../../queue.js";
+import { readNativeTurnState } from "../agent/native-turn-state.js";
 import {
   getIdentityConfig,
   getWebRuntimeConfig,
@@ -289,6 +290,9 @@ export function createWebChannelConstructorFactory(
     {
       getAssistantName: () => deps.getIdentityConfig().assistantName,
       getChatCursor: (chatJid) => deps.getChatCursor(chatJid),
+      isNativeRuntime: () => channel.agentPool.isDurableRuntime?.() === true,
+      isChatLaneBusy: chat => channel.queue.isLaneBusy(`chat:${chat}`),
+      readNativeTurnState: chat => readNativeTurnState(getDb(), chat),
       enqueue: (task, key, laneKey) => channel.queue.enqueue(task, key, laneKey),
       processChat: (chatJid, agentId, threadRootId) => channel.processChat(chatJid, agentId, threadRootId),
     },
@@ -339,9 +343,6 @@ export function createWebChannelConstructorFactory(
       channel.storeMessage(chatJid, content, isBot, mediaIds, writeOptions),
     replaceMessageContent: (chatJid, rowId, text, mediaIds, contentBlocks, isTerminalAgentReply) =>
       deps.replaceMessageContent(chatJid, rowId, text, { contentBlocks, mediaIds, isTerminalAgentReply }) ?? null,
-    setMessageThreadToSelf: (messageId) => {
-      deps.getDb().prepare("UPDATE messages SET thread_id = ? WHERE rowid = ?").run(messageId, messageId);
-    },
     broadcastAgentResponse: (interaction) => interactionBroadcaster.broadcastAgentResponse(interaction),
     broadcastInteractionUpdated: (interaction) => interactionBroadcaster.broadcastInteractionUpdated(interaction),
     enqueueFollowupPlaceholder: (chatJid, rowId, queuedContent, threadId, queuedAt) =>

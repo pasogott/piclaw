@@ -8,10 +8,10 @@ import { SqliteStorage } from "../../runtime/durable-engine/qualification/sqlite
 import { createHostController, type HostControllerOptions } from "../../runtime/durable-engine/src/host-controller.js";
 import { barrier, context } from "./src/fixture.js";
 import { createDurableRecoveryDispatch } from "../../runtime/src/agent-pool/durable-recovery-dispatch.js";
-import { at, value } from "./src/host-handoff.js";
+import { at, effect, sealed, value } from "./src/host-handoff.js";
 import { HostCutoverController, initializeCutoverManifest } from "../../runtime/durable-engine/src/host-cutover.js";
 
-for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["background"],
+for (const modes of [["committed-answer"], ["operator-abort"], ["operator-abort-recovered"], ["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["background"],
   ["bootstrap-close-failure", "shutdown-close-failure"],
   ["rollback", "rollback-host-changed", "rollback-close-failure", "rollback-pending"],
   ["rollback-held", "rollback-held-close", "rollback-close-first", "rollback-inflight"],
@@ -20,7 +20,7 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
     for (const mode of modes) {
     const dir = await mkdtemp(join(process.env.PICLAW_WORKSPACE!, "host-controller-"));
     const oldMemory = process.env.PICLAW_DB_IN_MEMORY;
-    const f = await acceptedSteerFixture(dir, mode === "lost-ack" || mode === "rollback-pending" ? "committed-ack-lost" : "before-submit");
+    const f = await acceptedSteerFixture(dir, mode === "lost-ack" || mode === "rollback-pending" || mode === "committed-answer" || mode === "operator-abort-recovered" ? "committed-ack-lost" : "before-submit");
     let controller: Awaited<ReturnType<typeof createHostController>> | undefined;
     let actualClose: (() => Promise<void>) | undefined;
     let candidate: Awaited<ReturnType<typeof SqliteStorage.open>> | undefined;
@@ -33,6 +33,22 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
     const closeFailure = mode === "bootstrap-close-failure" || mode === "shutdown-close-failure" || mode === "rollback-close-failure";
     try {
       const { primary, primaryId } = await f.prepare();
+      if (mode === "committed-answer") {
+        const intent = (await f.ports.bindings.intents!.list(primary))[0]!;
+        f.base.host.modelHold!.release();
+        await f.runtime!.resume(primary, primaryId);
+        for (let i = 0; (await f.runtime!.reconcileIntent(intent)).status?.status !== "done"; i++) {
+          if (i > 200) throw Error("Intent did not finish before reopen");
+          await Bun.sleep(5);
+        }
+      }
+      if (mode === "operator-abort-recovered") {
+        const operation = value(await f.ports.work.getOperation(primary.operationId))!;
+        const id = `operator-abort:${primary.operationId}`;
+        f.db.transaction(() => f.ports.work.acceptAndCancelSourceInTransaction(sealed({ effect: effect(id), chatJid: primary.chatJid,
+          sourceId: id, kind: "cancellation", payloadRef: id, targetOperationId: primary.operationId,
+          parentSourceSeq: primary.sourceSeq, acceptedAt: at, createWakeIntent: false }), operation.version, "operator_abort", f.db)).immediate();
+      }
       await f.runtime!.close(); f.runtime = undefined;
       const originalEnter = f.base.host.onModelEnter;
       f.base.host.onModelEnter = signal => { originalEnter?.(signal); providerSignal = signal; providerEntered.release(); };
@@ -83,6 +99,20 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
           return s;
         },
         runtime: { incarnation: f.incarnation, ...f.ports,
+          cancelOperationSource(input, expectedVersion) {
+            f.db.transaction(() => {
+              f.owner.assert();
+              const row = f.db.query("SELECT version,cancellation_source_seq FROM service_effect_s01_operations WHERE operation_id=?")
+                .get(input.operationId) as { version: number; cancellation_source_seq: number | null };
+              if (row.version !== expectedVersion) throw Error("Abort operation changed");
+              if (row.cancellation_source_seq !== null) return;
+              const id = `operator-abort:${input.operationId}`;
+              f.ports.work.acceptAndCancelSourceInTransaction(sealed({ effect: effect(id), chatJid: input.chatJid,
+                sourceId: id, kind: "cancellation", payloadRef: id, targetOperationId: input.operationId,
+                parentSourceSeq: input.sourceSeq, acceptedAt: at, createWakeIntent: false }), expectedVersion, "operator_abort", f.db);
+              f.owner.assert();
+            }).immediate();
+          },
           work: { acceptSource: f.ports.work.acceptSource.bind(f.ports.work),
             claimNext: f.ports.work.claimNext.bind(f.ports.work), appendIntent: f.ports.work.appendIntent.bind(f.ports.work),
             recordQueuedInput: f.ports.work.recordQueuedInput.bind(f.ports.work),
@@ -94,7 +124,7 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
           bindHarness: f.ports.work.bindHarness.bind(f.ports.work), finishHarness: f.ports.work.finishHarness!.bind(f.ports.work) },
           harnessOptions: { models: f.base.models, registry: f.base.registry, settings: { retry: { enabled: false }, compaction: { enabled: false } } },
           existingConversationIds: [mode === "failed-open" ? 999999 as typeof f.base.root.id : f.base.root.id],
-          conversationFor: () => f.base.root.id, putAnswer() {}, sessionId: f.incarnation, lane: "main", generation: f.generation, now: () => at },
+          conversationFor: () => f.base.root.id, putAnswer(ref, text) { if (mode === "committed-answer") f.putAnswer(ref, text); }, sessionId: f.incarnation, lane: "main", generation: f.generation, now: () => at },
         recovery: { manifest: [{ chatJid: f.chatJid, branchId: "main", conversationId: f.base.root.id }],
           work: f.ports.work, bindings: f.ports.bindings,
           async readAcceptedInput(source) {
@@ -117,6 +147,37 @@ for (const modes of [["happy"], ["lost-ack"], ["unknown"], ["failed-open"], ["ba
         await expect(closing).rejects.toThrow("injected storage close failure");
         expect(controller.close()).toBe(closing);
         await expect(controller.close()).rejects.toThrow("injected storage close failure");
+      } else if (mode === "committed-answer") {
+        controller = await pending;
+        expect((await controller.runtime.inspectAuthority()).inspection.scheduling).toBe("paused");
+        await controller.reconcileRecovered();
+        expect((await controller.runtime.reconcile(primary)).operation.terminal?.disposition).toBe("completed");
+        const published = f.db.query("SELECT * FROM messages ORDER BY rowid").all();
+        await controller.reconcileRecovered();
+        expect(f.db.query("SELECT * FROM messages ORDER BY rowid").all()).toEqual(published);
+        expect(f.providerEntries).toBe(entries);
+        expect((await controller.runtime.inspectAuthority()).inspection.scheduling).toBe("paused");
+        await controller.close();
+      } else if (mode === "operator-abort-recovered") {
+        controller = await pending;
+        expect((await controller.runtime.inspectAuthority()).inspection.scheduling).toBe("paused");
+        await controller.reconcileRecovered();
+        expect((await controller.runtime.reconcile(primary)).operation.terminal?.disposition).toBe("cancelled");
+        await controller.reconcileRecovered();
+        expect(f.providerEntries).toBe(entries);
+        expect((await controller.runtime.inspectAuthority()).inspection.tasks).toHaveLength(0);
+        await controller.close();
+      } else if (mode === "operator-abort") {
+        controller = await pending;
+        await controller.reconcileRecovered();
+        const before = await controller.runtime.inspectAuthority();
+        expect(before.inspection.tasks.length).toBeGreaterThan(0);
+        expect(await controller.runtime.abortOperation(primary)).toBe(true);
+        expect((await controller.runtime.reconcile(primary)).operation.terminal?.disposition).toBe("cancelled");
+        expect((await controller.runtime.inspectAuthority()).inspection.tasks).toHaveLength(0);
+        await expect(controller.runtime.resume(primary, primaryId)).rejects.toThrow("Exact live submission required");
+        expect(await controller.runtime.abortOperation(primary)).toBe(false);
+        await controller.close();
       } else if (mode === "happy" || mode === "lost-ack" || rollbackMode) {
         controller = await pending;
         expect(controller.recovered[0]!.input).toEqual(primary);

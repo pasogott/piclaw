@@ -737,6 +737,7 @@ export function installWebChannelPrototype(
           contentBlocks?: unknown[];
           linkPreviews?: unknown[];
           threadId?: number;
+          threadToSelf?: boolean;
           screenHint?: string | null;
           isTerminalAgentReply?: boolean;
           isSteeringMessage?: boolean;

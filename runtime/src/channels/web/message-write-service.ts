@@ -23,7 +23,7 @@ export interface WebMessageWriteServiceDeps {
     content: string,
     isBot: boolean,
     mediaIds: number[],
-    options?: { threadId?: number; contentBlocks?: unknown[]; isTerminalAgentReply?: boolean }
+    options?: { threadId?: number; threadToSelf?: boolean; contentBlocks?: unknown[]; isTerminalAgentReply?: boolean }
   ): InteractionRow | null;
   replaceMessageContent(
     chatJid: string,
@@ -33,7 +33,6 @@ export interface WebMessageWriteServiceDeps {
     contentBlocks: Array<Record<string, unknown>> | undefined,
     isTerminalAgentReply?: boolean
   ): InteractionRow | null;
-  setMessageThreadToSelf(messageId: number): void;
   broadcastAgentResponse(interaction: InteractionRow): void;
   broadcastInteractionUpdated(interaction: InteractionRow): void;
   enqueueFollowupPlaceholder(
@@ -53,9 +52,6 @@ export function createMessageWriteContext(deps: WebMessageWriteServiceDeps): Mes
         deps.storeMessage(chatJid, content, isBot, mediaIds, options),
       replaceMessageContent: (chatJid, rowId, text, mediaIds, contentBlocks, isTerminalAgentReply) =>
         deps.replaceMessageContent(chatJid, rowId, text, mediaIds, contentBlocks, isTerminalAgentReply),
-      setMessageThreadToSelf: (messageId) => {
-        deps.setMessageThreadToSelf(messageId);
-      },
     },
     broadcaster: {
       broadcastAgentResponse: (interaction) => deps.broadcastAgentResponse(interaction),

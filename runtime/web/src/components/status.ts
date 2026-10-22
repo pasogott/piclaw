@@ -276,7 +276,7 @@ function getStatusToolTitleArgumentCandidates(payload) {
         if (normalized && !candidates.includes(normalized)) candidates.push(normalized);
     };
 
-    add(args.command);
+    add(args.command || args.cmd);
 
     if (Array.isArray(args.commands)) {
         add(args.commands.filter((item) => typeof item === 'string').join(' && '));
@@ -441,7 +441,8 @@ export function AgentStatus({ status, draft, plan, thought, pendingRequest, inte
         totalLines: status?.output_total_lines || status?.outputTotalLines,
     });
     const hasPlan = Boolean(planInfo.text) || planInfo.totalLines > 0;
-    const hasThought = Boolean(thoughtInfo.text) || thoughtInfo.totalLines > 0;
+    // A line count or encrypted-only provider block is not visible thought text.
+    const hasThought = Boolean((thoughtInfo.fullText || thoughtInfo.text || "").trim());
     const hasDraft = Boolean(draftInfo.fullText?.trim() || draftInfo.text?.trim());
     const hasToolOutput = Boolean(toolOutputInfo.fullText?.trim() || toolOutputInfo.text?.trim());
 

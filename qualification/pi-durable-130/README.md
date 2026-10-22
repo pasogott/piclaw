@@ -2761,3 +2761,7 @@ types and bounded independent reviews pass. Earlier root failures were an oracle
 pointing at the removed duplicate discovery code; shared containment checks remain.
 This qualifies approved Plan only, not all installed add-ons. Migration stays last;
 no live package changes, activation, restart or additional database/queue is introduced.
+
+## Native controls and terminal publication — 22 October 2026
+
+[Native session controls](NATIVE-CONTROLS.md) records command routing, explicit unsupported controls, owned provider authentication and terminal-message provenance. Source tests, installation and live verification are separate gates; the historical receipts above do not qualify these changes.

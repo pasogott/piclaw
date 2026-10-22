@@ -126,7 +126,7 @@ test("one DB imported fork tree through actual facade, original provenance and n
     expect(JSON.stringify(tree)).not.toContain('"thinking"');
     expect(tree.nodes.some(n => n.id === "original-root")).toBe(false);
     expect((await app.applyControlCommand(branch.chatJid, { type: "tree", raw: "/tree" })).status).toBe("success");
-    await expect(app.applyControlCommand(branch.chatJid, { type: "tree", raw: "/tree", targetId: tree.leafId! })).rejects.toThrow("Durable history mutation unavailable");
+    expect((await app.applyControlCommand(branch.chatJid, { type: "tree", raw: "/tree", targetId: tree.leafId! })).status).toBe("error");
     expect(tree.leafId).toBe(await app.saveSessionPosition(branch.chatJid));
     expect(receipt.sourceSessionId).toBe("original-host-session");
     expect(branch.chatIncarnation).toBe("original-incarnation");

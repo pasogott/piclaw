@@ -304,7 +304,6 @@ export async function sendAgentMessage(agentId, content, threadId = null, mediaI
     };
     if (mode === 'auto' || mode === 'queue' || mode === 'steer') {
         payload.mode = mode;
-        if (mode === 'steer') payload.persist_steer = true;
     }
     return request(`/agent/${agentId}/message${query}`, {
         method: 'POST',

@@ -1,6 +1,6 @@
 import { getSupportedThinkingLevels, type ModelThinkingLevel } from "@earendil-works/pi-ai";
-// INACTIVE application module. No bootstrap registration or production schema migration.
-import { configure, AgentDoc, AssistantEntry, InboxDoc, LiveDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId, type TaskId, type CompactionResult } from "@earendil-works/pi-durable";
+// Native conversation runtime, explicitly composed with fenced host authority by application-bootstrap.
+import { configure, AgentDoc, AssistantEntry, InboxDoc, LiveDoc, UsageDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId, type TaskId, type CompactionResult } from "@earendil-works/pi-durable";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { awaitWithContext, withAbortSignal, withoutAbortSignal, type Context } from "@earendil-works/chord/context";
 import type { CurrentPiclawServiceWorkStore, FinishHarnessRequest } from "../../../runtime/src/service-effects/current-piclaw/service-work-store.js";
@@ -55,6 +55,8 @@ export interface RuntimeOptions {
   readonly prepareTerminalEffect?: (input: AcceptedInput) => Promise<TerminalDatabaseEffect | undefined>;
   readonly onMaintenanceSettled?: (workId: string) => void;
   readonly cancelSideSource?: (input: AcceptedInput) => void;
+  /** Atomically persist operator cancellation against this exact operation version. */
+  readonly cancelOperationSource?: (input: AcceptedInput, expectedVersion: number) => void;
   /** Required for model SET: shared-file SQL guard, checked inside each storage transaction. */
   readonly withIdleModelGuard?: <T>(body: () => Promise<T>) => Promise<T>;
   /** Caller already holds exclusive ownership of this entire store, not a per-chat lease.
@@ -77,7 +79,7 @@ export interface RuntimeOptions {
   readonly existingConversationIds: readonly ConversationId[];
   /** Harness scheduling is store-wide. Host must validate EVERY live task/submission's current
    * authority before explicit progress (including recovered work); deny mixed/unknown authority. */
-  readonly authorizeScheduling: (inspection: HarnessInspection) => void | Promise<void>;
+  readonly authorizeScheduling: (inspection: HarnessInspection, aborting?: AcceptedInput) => void | Promise<void>;
   readonly putAnswer: (ref: string, text: string) => void | Promise<void>;
   /** Optional host authority for ALL final answers, including operation-owned tool media.
    * Publish only authorized visible content, never raw message/thinking. Refs must resolve
@@ -158,6 +160,7 @@ function runtimeSnapshot(o: RuntimeOptions): RuntimeSnapshot {
     materializeAnswer: materializeAnswer?.bind(o), now: now.bind(o),
     prepareTerminalEffect: o.prepareTerminalEffect?.bind(o),
     onOperationSettled: o.onOperationSettled?.bind(o), onMaintenanceSettled: o.onMaintenanceSettled?.bind(o), cancelSideSource: o.cancelSideSource?.bind(o),
+    cancelOperationSource: o.cancelOperationSource?.bind(o),
     owner: Object.freeze({ assert: owner.assert.bind(owner), release: owner.release.bind(owner) }),
     work: Object.freeze({ getOperation: work.getOperation.bind(work), acceptCancellation: work.acceptCancellation.bind(work), bindHarness: work.bindHarness.bind(work), finishHarness: work.finishHarness?.bind(work) }),
     terminal: Object.freeze({ getTerminal: terminal.getTerminal.bind(terminal), commitTerminal: terminal.commitTerminal.bind(terminal) }),
@@ -292,6 +295,32 @@ export class HostConversationRuntime {
     if (this.closed) throw new Error("Runtime closed");
     this.options.owner.assert();
   }
+  /** Public committed conversation view, including pi.live; display-only subscription. */
+  watchSession(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number },
+    listener: (view: import("@earendil-works/pi-durable").ConversationView) => void): Promise<() => Promise<void>> {
+    binding = Object.freeze({ ...binding });
+    const check = () => {
+      this.fence();
+      if (binding.incarnation !== this.options.incarnation || !this.options.existingConversationIds.includes(binding.conversationId as ConversationId) ||
+        this.options.conversationFor(binding.chatJid, binding.branchId) !== binding.conversationId) throw Error("Host binding conflict");
+    };
+    return this.observe(async () => {
+      check();
+      const conversation = await this.harness.conversation(binding.conversationId as ConversationId, this.context);
+      check();
+      if (!conversation) throw Error("Unknown conversation");
+      const watch = await conversation.watch(this.context);
+      check();
+      const publish = async (view: import("@earendil-works/pi-durable").ConversationView) => {
+        if (this.closed) return;
+        check();
+        listener(view);
+      };
+      await publish(watch.value);
+      watch.start(publish);
+      return async () => { await watch.stop(); };
+    }, true);
+  }
   /** Read the current public history head, never instantiate a legacy SDK session. */
   async readSessionPosition(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<string | null> {
     return this.observe(async () => {
@@ -317,6 +346,47 @@ export class HostConversationRuntime {
       const tools = [...new Map([...agent.tools, ...agent.callable, ...agent.deferred].map(tool => [tool.name,
         { name: tool.name, description: tool.description }])).values()];
       return { backend: "durable", conversationId: copy.conversationId, extensions: agent.extensions.map(extension => extension.name), tools };
+    });
+  }
+  /** Read-only native reporting. No model calls, estimates, or legacy session hydration. */
+  readSessionReport(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<import("../../src/agent-pool/durable-runtime-adapter.js").DurableSessionReport> {
+    const copy = Object.freeze({ ...binding });
+    return this.observe(async () => {
+      const o = this.options;
+      const assertBinding = () => {
+        this.fence();
+        if (copy.incarnation !== o.incarnation || !o.existingConversationIds.includes(copy.conversationId as ConversationId) ||
+            o.conversationFor(copy.chatJid, copy.branchId) !== copy.conversationId) throw Error("Host binding conflict");
+      };
+      assertBinding();
+      const conversation = await this.harness.conversation(copy.conversationId as ConversationId, this.context); assertBinding();
+      if (!conversation) throw Error("Missing existing conversation");
+      const view = await conversation.context(this.context); assertBinding();
+      const agent = await conversation.agent(this.context); assertBinding();
+      const ledger = await this.harness.snapshot(UsageDoc, copy.conversationId as ConversationId, this.context); assertBinding();
+      const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+      for (const bucket of [...Object.values(ledger?.models ?? {}), ...Object.values(ledger?.tools ?? {})]) {
+        usage.input += bucket.input; usage.output += bucket.output;
+        usage.cacheRead += bucket.cacheRead; usage.cacheWrite += bucket.cacheWrite;
+        usage.cost += bucket.cost.total;
+      }
+      let userMessages = 0, assistantMessages = 0, observedTokens: number | null = null, observedModel: string | null = null, lastAnswer: string | null = null;
+      for (const message of view.messages) {
+        if (message.role === "user") userMessages++;
+        if (message.role !== "assistant") continue;
+        assistantMessages++;
+        if (message.usage) {
+          observedTokens = message.usage.input + message.usage.output + message.usage.cacheRead + message.usage.cacheWrite;
+          observedModel = `${message.provider}/${message.model}`;
+        }
+        if (message.stopReason !== "stop" && message.stopReason !== "length") continue;
+        const text = message.content.filter(block => block.type === "text").map(block => block.text).join("\n");
+        if (text) lastAnswer = text;
+      }
+      const model = agent.model ? o.harnessOptions.models.getModel(agent.model.provider, agent.model.modelId) : undefined;
+      assertBinding();
+      return { activeEntries: view.entries.length, userMessages, assistantMessages,
+        contextWindow: model?.contextWindow ?? null, observedTokens, observedModel, lastAnswer, usage };
     });
   }
   /** Fork-aware public history across the explicit imported host-session bindings only. */
@@ -457,6 +527,27 @@ export class HostConversationRuntime {
     await this.setSessionChoice(binding, { provider: current.slice(0, slash), modelId: current.slice(slash + 1) }, level);
   }
 
+
+  /** SDK reset starts a new context on the same proven conversation, retaining raw history. */
+  async resetSession(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<void> {
+    this.fence();
+    const copy = Object.freeze({ ...binding });
+    if (copy.incarnation !== this.options.incarnation || this.options.conversationFor(copy.chatJid, copy.branchId) !== copy.conversationId ||
+      !this.options.existingConversationIds.includes(copy.conversationId as ConversationId)) throw Error("Host binding conflict");
+    if (!this.options.withIdleModelGuard) throw Error("Idle model guard unavailable");
+    if (this.changingModel || this.active.size) throw Error("Runtime is not idle");
+    this.changingModel = true;
+    const operation = (async () => {
+      const inspection = await this.harness.inspect(this.context); this.fence();
+      if (inspection.tasks.length || inspection.submissions.length) throw Error("Runtime is not idle");
+      const conversation = await this.harness.conversation(copy.conversationId as ConversationId, this.context); this.fence();
+      if (!conversation) throw Error("Missing existing conversation");
+      await this.options.withIdleModelGuard!(() => conversation.reset(undefined, this.context));
+      this.fence();
+    })();
+    this.active.add(operation);
+    try { await operation; } finally { this.active.delete(operation); this.changingModel = false; }
+  }
 
   compactSession(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, instructions?: string, signal?: AbortSignal): Promise<{ compacted: boolean }> {
     return this.runMaintenance(binding, instructions, signal);
@@ -624,6 +715,29 @@ export class HostConversationRuntime {
   async capturePendingToolSource(conversationId: ConversationId, taskId: import("@earendil-works/pi-durable").TaskId, callId: string) {
     this.fence();
     const live = await this.harness.snapshot(LiveDoc, conversationId, this.context); this.fence();
+    if (live?.run && live.nestedTools?.some(slot => slot.taskId === taskId && slot.callId === callId && slot.status === "pending")) {
+      // beforeTool also runs for SDK-owned nested calls. Qualify the same exact
+      // codemode parent as execution, without pretending the child is a model call.
+      const registered = this.options.harnessOptions.registry.snapshot().tools().find(({ tool }) => tool.name === "codemode")?.tool;
+      if (!this.options.codemodeExecute || registered?.execute !== this.options.codemodeExecute) throw Error("Native codemode registration required");
+      const parent = await this.harness.commit(async tx => {
+        const child = await tx.task(taskId);
+        if (!child || child.kind !== "pi.tool" || child.conversationId !== conversationId || child.abortRequested || child.state.status === "terminal") throw Error("Live nested tool required");
+        const input = child.input as import("@earendil-works/pi-durable").ToolTaskInput;
+        if (input.kind !== "nested" || input.call.id !== callId) throw Error("Exact nested tool required");
+        const owner = await tx.task(input.parent);
+        if (!owner || owner.kind !== "pi.tool" || owner.conversationId !== conversationId || owner.abortRequested || owner.state.status === "terminal") throw Error("Live codemode owner required");
+        const model = owner.input as import("@earendil-works/pi-durable").ToolTaskInput;
+        if (model.kind !== "model" || model.callId !== input.parentCallId) throw Error("Model codemode owner required");
+        const assistant = await tx.entry(model.assistant);
+        const calls = assistant?.model?.flatMap(message => message.role === "assistant" ? message.content.filter(part => part.type === "toolCall") : []) ?? [];
+        if (assistant?.conversationId !== conversationId || !calls.some(call => call.id === model.callId && call.name === "codemode") ||
+          !live.tools?.some(slot => slot.taskId === owner.id && slot.callId === model.callId && slot.name === "codemode" && slot.status === "running")) throw Error("Exact codemode owner required");
+        return { taskId: owner.id, callId: model.callId };
+      }, this.context); this.fence();
+      const captured = await this.captureSource(conversationId, parent.taskId, parent.callId);
+      return { ...captured, runTaskId: live.run.taskId };
+    }
     if (!live?.run || !live.tools?.some(slot => slot.taskId === taskId && slot.callId === callId && slot.status === "pending"))
       throw Error("Exact pending model tool required");
     const task = await this.harness.commit(tx => tx.task(taskId), this.context); this.fence();
@@ -958,15 +1072,17 @@ export class HostConversationRuntime {
       const data = entry?.data;
       if (entry?.kind !== "host.accepted" || !data || typeof data !== "object" || Array.isArray(data) ||
         (data as Record<string, unknown>).role !== (intent ? "intent" : "primary") ||
-        Object.entries(input).some(([key, value]) => (data as Record<string, unknown>)[key] !== value) ||
+        // Bound intent records also carry submissionId, assigned after admission.
+        // Compare only the immutable accepted identity, not later binding metadata.
+        Object.entries(inputSnapshot(input)).some(([key, value]) => (data as Record<string, unknown>)[key] !== value) ||
         typeof content !== "string" || hashCanonicalRequest({ type: "input", requestId: input.requestId, content }) !== input.requestHash) throw conflict();
       return record;
     }, this.context); this.fence();
     return record;
   }
-  private async progress() {
+  private async progress(aborting?: AcceptedInput) {
     const inspection = await this.harness.inspect(this.context); this.fence();
-    await this.options.authorizeScheduling(inspection); this.fence();
+    await this.options.authorizeScheduling(inspection, aborting); this.fence();
   }
   submit(input: AcceptedInput) { const copy = inputSnapshot(input); return this.admitInput(copy); }
   /** Targets the accepted host operation, NOT an exact physical model generation. */
@@ -1173,12 +1289,63 @@ export class HostConversationRuntime {
       throw new Error("Exact cancellation binding required");
     // EF-S01 owns version validation AND replay of a persisted decision after version advancement.
     value(await this.options.work.acceptCancellation(request)); this.fence();
-    await this.progress();
+    await this.progress(input);
     const result = await this.harness.abortSubmission(submissionId, this.context, input.conversationId);
     this.fence();
     // Placement is not exact task ownership: a generation may include other accepted steers.
     // Withdraw queued input only; never escalate to task/conversation-wide abort.
     return result;
+  }
+  /** Operator abort targets an exact accepted run, never a conversation-wide scope.
+   * A completed run ID cannot be reused by a queued successor across any await. */
+  abortOperation(input: AcceptedInput): Promise<boolean> {
+    const copy = inputSnapshot(input);
+    return this.observe(async () => {
+      const o = this.options;
+      if (!o.cancelOperationSource || o.conversationFor(copy.chatJid, copy.branchId) !== copy.conversationId ||
+          o.operationConversationFor?.(copy) !== undefined) throw Error("Ordinary operation abort unavailable");
+      const state = await this.readState(copy); this.fence();
+      if (state.operation.terminal) return false;
+      const harness = state.operation.harness;
+      if (!state.submissionId || !harness || harness.sessionId !== o.sessionId || harness.lane !== o.lane ||
+          harness.watchGeneration !== o.generation || harness.harnessOperationId !== String(state.submissionId))
+        throw Error("Exact host harness required");
+      const intents = await o.bindings.intents?.list(copy) ?? []; this.fence();
+      const expected = state.operation.claimedSourceSeqs.filter(seq => seq !== copy.sourceSeq && seq !== state.operation.cancellation?.sourceSeq);
+      if (intents.length !== expected.length || intents.some(binding => !expected.includes(binding.sourceSeq) ||
+          binding.operationId !== copy.operationId || binding.conversationId !== copy.conversationId)) throw Error("Exact abort inputs required");
+      const records = [await this.record(copy)]; this.fence();
+      for (const binding of intents) { records.push(await this.record(binding, true)); this.fence(); }
+      if (records.some(record => !record)) throw Error("Exact abort submissions required");
+      const ids = records.map(record => record!.id);
+      const readAbortTask = () => this.harness.commit(async tx => {
+        const live = await tx.doc(LiveDoc, copy.conversationId);
+        if (!live.run) return undefined;
+        if (!live.run.inputs.length || live.run.inputs.some(id => !ids.includes(id))) throw Error("Foreign abort run input");
+        const task = await tx.task(live.run.taskId);
+        if (!task || task.kind !== "pi.generation" || task.conversationId !== copy.conversationId) throw Error("Exact abort run required");
+        return task.id;
+      }, this.context);
+      let taskId = await readAbortTask(); this.fence();
+      // A racing attachment/completion rejects this SQL CAS before any SDK abort.
+      o.cancelOperationSource(copy, state.operation.version); this.fence();
+      await this.progress(copy);
+      for (const id of ids) { await this.harness.abortSubmission(id, this.context, copy.conversationId); this.fence(); }
+      while (taskId !== undefined) {
+        const abortedTask = taskId;
+        await this.harness.abortTask(abortedTask, this.context); this.fence();
+        await this.harness.waitForTask(abortedTask, this.context); this.fence();
+        const current = value(await o.work.getOperation(copy.operationId)); this.fence();
+        if (current?.terminal) return true;
+        // A generation can hand over between inspection and its abort mark.
+        // Requalify each new task ID; never abort a successor's conversation.
+        taskId = await readAbortTask(); this.fence();
+        if (taskId === abortedTask) throw Error("Aborted run has not settled");
+      }
+      const terminal = await this.settleInput(copy); this.fence();
+      if (!terminal) throw Error("Abort terminal settlement pending");
+      return true;
+    });
   }
   /** Explicit progress grant after caller has revalidated the entire ownership domain. */
   /** Only the exact ownerless side fork may be aborted as a whole. */
@@ -1225,6 +1392,38 @@ export class HostConversationRuntime {
         observation.abortSignal?.throwIfAborted();
         if (!handle) throw new Error("Missing submission");
         await handle.wait(observation); this.fence();
+        // A steer can start after the primary submission has already finished.
+        // Join only this operation's exact accepted SDK submissions, never a new
+        // primary request or unrelated conversation work.
+        let missingSince: number | undefined;
+        while (true) {
+          observation.abortSignal?.throwIfAborted();
+          const { operation } = await this.checked(copy); this.fence();
+          if (operation.terminal) return;
+          const sequences = operation.claimedSourceSeqs.filter(seq => seq !== operation.primarySourceSeq && seq !== operation.cancellation?.sourceSeq);
+          if (!sequences.length) return;
+          const bindings = await this.options.bindings.intents?.list(copy); this.fence();
+          const records: { id: SubmissionId }[] = [];
+          for (const seq of sequences) {
+            const binding = bindings?.find(value => value.sourceSeq === seq);
+            const record = binding && await this.record(binding, true); this.fence();
+            if (record) records.push(record);
+          }
+          if (records.length !== sequences.length) {
+            missingSince ??= Date.now();
+            if (Date.now() - missingSince > 10_000) throw Error("Accepted intent acknowledgement pending");
+            await awaitWithContext(new Promise<void>(resolve => setTimeout(resolve, 25)), observation);
+            continue;
+          }
+          missingSince = undefined;
+          await this.progress(); observation.abortSignal?.throwIfAborted();
+          for (const record of records) {
+            const intent = await this.harness.submission(record.id, observation); this.fence();
+            if (!intent) throw Error("Missing accepted intent submission");
+            await intent.wait(observation); this.fence();
+          }
+          if ((await this.checked(copy)).operation.version === operation.version) return;
+        }
       })();
       this.underlyingWaits.add(pending);
       // Observe even a synchronous host callback's abort before awaitWithContext attaches.
@@ -1251,11 +1450,15 @@ export class HostConversationRuntime {
         if (matches.length !== 1 || matches[0]!.submissionId === null) return null;
         const accepted = inputSnapshot(matches[0]!);
         const next = await this.readState(accepted, true);
-        if (next.operation.version !== initialVersion || next.status?.status !== "done" || !next.answer) return null;
+        if (next.operation.version !== initialVersion) return null;
         sources.push({ input: accepted, state: next });
       }
       const states = sources.map(source => source.state);
-      if (states.some(s => s.status?.status !== "done" || !s.answer)) return null;
+      if (states.some(s => s.status?.status !== "done" && !(s.status?.status === "unanswered" &&
+          (s.operation.cancellation !== null || s.status.reason === "model_error")))) return null;
+      const failed = states.find(s => s.status?.status === "unanswered");
+      if (failed) return { state: failed, sources };
+      if (states.some(s => !s.answer)) return null;
       // Public entry IDs are transcript positions (EntryQuery's documented ID ordering).
       const positions = states.map(s => s.status!.entry!);
       if (positions.some(p => !Number.isSafeInteger(p)) || new Set(positions).size !== positions.length)
@@ -1275,7 +1478,8 @@ export class HostConversationRuntime {
     if (!selected) return null;
     const { state } = selected;
     const aborted = state.operation.cancellation !== null && state.status?.status === "unanswered";
-    if ((!aborted && state.answer === null) || !state.submissionId) return null;
+    const modelFailed = state.operation.cancellation === null && state.status?.status === "unanswered" && state.status.reason === "model_error";
+    if ((!aborted && !modelFailed && state.answer === null) || !state.submissionId) return null;
     let operation = value(await o.work.getOperation(input.operationId)); this.fence();
     if (!operation) throw new Error("Missing operation");
     // Never refresh away an attachment/version fence after inspecting accepted inputs.
@@ -1299,11 +1503,15 @@ export class HostConversationRuntime {
         state: "finished" as const, watchGeneration: o.generation }))); this.fence();
     }
     const cancelled = operation.cancellation !== null, ref = `runtime-answer:${o.incarnation}:${state.submissionId}`;
+    // Scheduled delivery belongs to EF-S07, not the ordinary-message publisher.
+    const scheduled = o.operationConversationFor?.(input) === input.conversationId;
     let materialized: MaterializedAnswer = Object.freeze({ contentRef: ref, contentBlocksRef: null, mediaIds: Object.freeze([]) });
-    if (!cancelled) {
-      // Capture and validate returned refs BEFORE the next await. Host exceptions may contain secrets.
+    if (!cancelled && (!modelFailed || !scheduled)) {
+      // Failure notices contain no provider diagnostics or partial tool media.
+      // They use the same version-fenced terminal transaction as final answers.
       try {
-        if (o.materializeAnswer) materialized = materializedSnapshot(await o.materializeAnswer(ref, state.answer!, freezeTree(structuredClone(operation))));
+        if (modelFailed) await o.putAnswer(ref, "**Turn failed**\n\nThe model could not complete this turn. Accepted inputs were consumed; they will not be replayed automatically.");
+        else if (o.materializeAnswer) materialized = materializedSnapshot(await o.materializeAnswer(ref, state.answer!, freezeTree(structuredClone(operation))));
         else await o.putAnswer(ref, state.answer!.text);
       } catch { throw new Error("Host answer materialization failed"); }
       this.fence();
@@ -1313,17 +1521,15 @@ export class HostConversationRuntime {
       if (!current || current.version !== operation.version || current.cancellation || current.terminal)
         throw new Error("Operation changed during answer materialization");
     }
-    // Scheduled delivery belongs to EF-S07, not the ordinary-message terminal publisher.
-    const scheduled = o.operationConversationFor?.(input) === input.conversationId;
     const timeline: CommitTerminalRequest["timeline"] = cancelled || scheduled
       ? { mode: "none", placeholderRowId: null, chatJid: input.chatJid, contentRef: null, threadId: null, mediaIds: [], contentBlocksRef: null }
       : { mode: "insert", placeholderRowId: null, chatJid: input.chatJid, ...materialized, threadId: null };
     const request: CommitTerminalRequest = sealed({ effect: effect(`runtime:terminal:${input.requestId}`, input.operationId, input.sourceSeq),
       expectedChatJid: input.chatJid, expectedVersion: operation.version, expectedHarness: operation.harness,
-      disposition: cancelled ? "cancelled" as const : "completed" as const, errorCode: null, terminalAuthorityRef: null,
-      timeline, sourceDispositions: operation.claimedSourceSeqs.map(sourceSeq => ({ sourceSeq, state: "consumed" as const, reason: "runtime committed answer" })),
+      disposition: cancelled ? "cancelled" as const : modelFailed ? "failed" as const : "completed" as const, errorCode: modelFailed ? "model_error" : null, terminalAuthorityRef: null,
+      timeline, sourceDispositions: operation.claimedSourceSeqs.map(sourceSeq => ({ sourceSeq, state: "consumed" as const, reason: modelFailed ? "runtime model error" : "runtime committed answer" })),
       outboxIntents: [], committedAt: o.now() });
-    const terminalEffect = cancelled ? undefined : await o.prepareTerminalEffect?.(input);
+    const terminalEffect = cancelled || modelFailed ? undefined : await o.prepareTerminalEffect?.(input);
     this.fence();
     const terminal = value(await o.terminal.commitTerminal(request, terminalEffect)); this.fence(); o.onOperationSettled?.(input.operationId); return terminal;
   }

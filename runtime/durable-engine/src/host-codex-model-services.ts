@@ -49,7 +49,17 @@ export class HostCodexModelServices {
         onPayload(payload: unknown, actual: Model<Api>) {
           check();
           if (actual.provider !== snapshot.provider || actual.id !== snapshot.id || actual.api !== snapshot.api) throw Error('Codex payload owner changed');
-          return hooks.request(payload);
+          const request = hooks.request(payload);
+          // Codex auto summaries may contain only encrypted reasoning, leaving
+          // no public text for Thoughts. Request the provider's public summary;
+          // never decode or display encrypted_content or invent thought text.
+          if (observesOutput && request && typeof request === "object" && !Array.isArray(request)) {
+            const body = request as Record<string, any>;
+            if (body.reasoning?.effort && !["none", "off"].includes(body.reasoning.effort)) {
+              return { ...body, reasoning: { ...body.reasoning, summary: "detailed" } };
+            }
+          }
+          return request;
         },
         ...(observesOutput ? { fetch: (async (input, init) => {
           check();

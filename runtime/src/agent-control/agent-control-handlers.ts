@@ -58,20 +58,41 @@ import { handleTotp } from "./handlers/totp.js";
 import { handleQr } from "./handlers/qr.js";
 import { handleLabel, handleLabels, handleTree } from "./handlers/tree.js";
 
+export const SESSION_INDEPENDENT_CONTROL_COMMAND_TYPES: ReadonlySet<AgentControlCommand["type"]> = new Set([
+  "shell", "qr", "search_workspace", "agent_name", "agent_avatar", "user_name", "user_avatar", "user_github", "passkey", "totp",
+]);
+
+/** Host-only controls need no legacy or emulated AgentSession. */
+export async function applySessionIndependentControlCommand(command: AgentControlCommand): Promise<AgentControlResult | null> {
+  switch (command.type) {
+    case "shell": return handleShell(undefined, command);
+    case "passkey": return handlePasskey(undefined, command);
+    case "totp": return handleTotp(undefined, command);
+    case "qr": return handleQr(undefined, command);
+    case "search_workspace": return handleSearchWorkspace(undefined, command);
+    case "agent_name": return handleAgentName(undefined, command);
+    case "agent_avatar": return handleAgentAvatar(undefined, command);
+    case "user_name": return handleUserName(undefined, command);
+    case "user_avatar": return handleUserAvatar(undefined, command);
+    case "user_github": return handleUserGithub(undefined, command);
+    default: return null;
+  }
+}
+
 /** Dispatch a parsed control command to the appropriate handler and return the result. */
 export async function applyControlCommand(
   runtime: AgentSessionRuntime,
   modelRegistry: ModelRegistry,
   command: AgentControlCommand
 ): Promise<AgentControlResult> {
+  const independent = await applySessionIndependentControlCommand(command);
+  if (independent) return independent;
   const session = runtime.session;
   switch (command.type) {
     case "restart":
       return handleRestart(session, command);
     case "exit":
       return handleExit(session, command);
-    case "shell":
-      return handleShell(session, command);
     case "bash":
       return handleBash(session, command);
     case "queue":
@@ -125,34 +146,16 @@ export async function applyControlCommand(
       return handleForks(session, command);
     case "export_html":
       return handleExportHtml(session, command);
-    case "passkey":
-      return handlePasskey(session, command);
     case "login":
       return handleLogin(session, modelRegistry, command);
     case "logout":
       return handleLogout(session, modelRegistry, command);
-    case "totp":
-      return handleTotp(session, command);
-    case "qr":
-      return handleQr(session, command);
-    case "search_workspace":
-      return handleSearchWorkspace(session, command);
     case "tree":
       return handleTree(session, command);
     case "label":
       return handleLabel(session, command);
     case "labels":
       return handleLabels(session, command);
-    case "agent_name":
-      return handleAgentName(session, command);
-    case "agent_avatar":
-      return handleAgentAvatar(session, command);
-    case "user_name":
-      return handleUserName(session, command);
-    case "user_avatar":
-      return handleUserAvatar(session, command);
-    case "user_github":
-      return handleUserGithub(session, command);
     case "model":
       return handleModel(session, modelRegistry, command);
     case "commands":

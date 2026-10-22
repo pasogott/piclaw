@@ -146,8 +146,9 @@ export function promoteCompletedAgentReply(chatJid: string, rowId: number): bool
     if (!completed) return false;
     const next = blocks.filter((block: any) => block?.type !== AGENT_MESSAGE_ROLE_BLOCK);
     next.push(buildAgentMessageRoleBlock("final", true));
-    return db.query("UPDATE messages SET is_terminal_agent_reply=1, content_blocks=? WHERE chat_jid=? AND rowid=?")
-      .run(JSON.stringify(next), chatJid, rowId).changes > 0;
+    return (() =>
+      db.query("UPDATE messages SET is_terminal_agent_reply=1, content_blocks=? WHERE chat_jid=? AND rowid=?")
+        .run(JSON.stringify(next), chatJid, rowId).changes > 0)();
   }).immediate();
 }
 
@@ -207,16 +208,24 @@ export function listRecentChatJids(limit = 10, options?: { excludeChatJids?: str
  * in the web timeline and for media attachment linking).
  */
 export function storeMessageInDatabase(database: Database, msg: NewMessage): number {
+  return database.transaction(() => {
+    const existing = database.query("SELECT rowid FROM messages WHERE id=? AND chat_jid=?").get(msg.id, msg.chat_jid) as { rowid: number } | null;
+    const write = () => persistMessageInDatabase(database, msg, existing?.rowid ?? null);
+    return existing ? (write)() : write();
+  }).immediate();
+}
+
+function persistMessageInDatabase(database: Database, msg: NewMessage, rowId: number | null): number {
   msg.timestamp = ensureMonotonicMessageTimestampInDatabase(database, msg.chat_jid, msg.timestamp);
   const contentBlocks = msg.content_blocks ? JSON.stringify(msg.content_blocks) : null;
   const linkPreviews = msg.link_previews ? JSON.stringify(msg.link_previews) : null;
 
   database.prepare(
     `INSERT INTO messages (
-      id, chat_jid, sender, sender_name, content, screen_hint, content_blocks, link_previews,
+      rowid, id, chat_jid, sender, sender_name, content, screen_hint, content_blocks, link_previews,
       thread_id, timestamp, is_from_me, is_bot_message, is_terminal_agent_reply, is_steering_message
     )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id, chat_jid) DO UPDATE SET
        sender = excluded.sender,
        sender_name = excluded.sender_name,
@@ -231,6 +240,7 @@ export function storeMessageInDatabase(database: Database, msg: NewMessage): num
        is_terminal_agent_reply = excluded.is_terminal_agent_reply,
        is_steering_message = excluded.is_steering_message`
   ).run(
+    rowId,
     msg.id,
     msg.chat_jid,
     msg.sender,
@@ -329,9 +339,9 @@ export function updateMessageLinkPreviews(
 ): boolean {
   const db = getDb();
   const payload = linkPreviews.length > 0 ? JSON.stringify(linkPreviews) : null;
-  const res = db
+  const res = (() => db
     .prepare("UPDATE messages SET link_previews = ? WHERE chat_jid = ? AND rowid = ?")
-    .run(payload, chatJid, rowId);
+    .run(payload, chatJid, rowId))();
   return res.changes > 0;
 }
 
@@ -363,9 +373,9 @@ export function updateMessageAnnotationsInDatabase(
   const payload = Array.isArray(annotations) && annotations.length > 0
     ? JSON.stringify(annotations)
     : null;
-  const res = database
+  const res = (() => database
     .prepare("UPDATE messages SET annotations = ? WHERE chat_jid = ? AND rowid = ?")
-    .run(payload, chatJid, rowId);
+    .run(payload, chatJid, rowId))();
   return res.changes > 0;
 }
 
@@ -506,8 +516,10 @@ export function replaceMessageContentInDatabase(
   content: string,
   options: ReplaceMessageContentOptions = {},
 ): boolean {
+  return (() => {
   const contentBlocks = options.contentBlocks ? JSON.stringify(options.contentBlocks) : null;
   const linkPreviews = options.linkPreviews ? JSON.stringify(options.linkPreviews) : null;
+  const mediaIds = options.mediaIds ?? (getMediaIdsForMessageInDatabase(database, rowId));
   const res = database
     .prepare(
       "UPDATE messages SET content = ?, content_blocks = ?, link_previews = ?, is_terminal_agent_reply = COALESCE(?, is_terminal_agent_reply) WHERE chat_jid = ? AND rowid = ?"
@@ -523,10 +535,32 @@ export function replaceMessageContentInDatabase(
 
   if (res.changes <= 0) return false;
   database.prepare("DELETE FROM message_media WHERE message_rowid = ?").run(rowId);
-  if (options.mediaIds && options.mediaIds.length > 0) {
-    attachMediaToMessageInDatabase(database, rowId, options.mediaIds);
+  if (mediaIds && mediaIds.length > 0) {
+    // The native mutation transaction restores media FTS after its final row write.
+    attachMediaToMessageInDatabase(database, rowId, mediaIds, { index: true });
   }
   return true;
+  })();
+}
+
+/** Update threading within the selected chat. */
+export function setMessageThreadId(chatJid: string, rowId: number, threadId: number): void {
+  if (!Number.isSafeInteger(threadId) || threadId < 1) throw new Error("Invalid thread_id");
+  const db = getDb();
+  (() => {
+    db.prepare("UPDATE messages SET thread_id=? WHERE chat_jid=? AND rowid=?").run(threadId, chatJid, rowId);
+  })();
+}
+
+/** Content and thread changes share one transaction, including their display revisions. */
+export function updateMessagePost(chatJid: string, rowId: number, content: string, threadId?: number): InteractionRow | undefined {
+  if (threadId !== undefined && (!Number.isSafeInteger(threadId) || threadId < 1)) throw new Error("Invalid thread_id");
+  const db = getDb();
+  return db.transaction(() => {
+    if (!replaceMessageContentInDatabase(db, chatJid, rowId, content)) return undefined;
+    if (threadId !== undefined) setMessageThreadId(chatJid, rowId, threadId);
+    return getMessageByRowId(chatJid, rowId);
+  }).immediate();
 }
 
 export function replaceMessageContent(
@@ -551,11 +585,11 @@ export function deleteMessageByRowId(chatJid: string, rowId: number): boolean {
   // orphan thinking_content row, and SQLite will reuse the rowid for a
   // future INSERT (composite PK on messages means no AUTOINCREMENT), causing
   // the new message to inherit ghost thinking via the endpoint's rowid join.
-  const changes = db.transaction(() => {
+  const changes = db.transaction(() => (() => {
     db.prepare("DELETE FROM message_media WHERE message_rowid = ?").run(rowId);
     db.prepare("DELETE FROM thinking_content WHERE message_id = ?").run(String(rowId));
     return db.prepare("DELETE FROM messages WHERE chat_jid = ? AND rowid = ?").run(chatJid, rowId).changes;
-  })();
+  })()).immediate();
   if (changes > 0) {
     deleteUnreferencedMedia(mediaIds);
   }
@@ -578,11 +612,11 @@ export function deleteThreadByRowId(chatJid: string, rowId: number): number[] {
   const mediaIds = getMediaIdsForMessages(ids);
   const placeholders = ids.map(() => "?").join(",");
   // Atomic cleanup (see deleteMessageByRowId for the rowid-reuse rationale).
-  db.transaction(() => {
+  db.transaction(() => (() => {
     db.prepare(`DELETE FROM message_media WHERE message_rowid IN (${placeholders})`).run(...ids);
     db.prepare(`DELETE FROM thinking_content WHERE message_id IN (${ids.map(() => "?").join(",")})`).run(...ids.map(String));
     db.prepare(`DELETE FROM messages WHERE chat_jid = ? AND rowid IN (${placeholders})`).run(chatJid, ...ids);
-  })();
+  })()).immediate();
   deleteUnreferencedMedia(mediaIds);
   return ids;
 }

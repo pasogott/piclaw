@@ -42,7 +42,7 @@ describe("EF-S02 composition schema and construction hardening", () => {
           )
           .get() as { n: number }
       ).n,
-    ).toBe(2);
+    ).toBe(3);
     database.close();
   });
 
@@ -53,7 +53,7 @@ describe("EF-S02 composition schema and construction hardening", () => {
       "service_outbox",
       "s02_commits",
       "s02_commit_outbox",
-      "s02_commit_chat_index",
+          "s02_commit_chat_index",
     ] as const;
     for (const expected of boundaries) {
       const database = new Database(":memory:", { strict: true });

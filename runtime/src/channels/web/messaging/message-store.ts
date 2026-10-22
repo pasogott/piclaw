@@ -23,6 +23,7 @@ import {
   storeMessage,
 } from "../../../db.js";
 import { getWebPreviewMaxChars, shouldPreviewWebContent } from "../../../db/web-content.js";
+import { normaliseExistingMediaFts, appendMediaTextToFts } from "../../../service-effects/current-piclaw/terminal-settlement-timeline-statements.js";
 import { scheduleLinkPreviews, type LinkPreviewChannel } from "../media/link-previews.js";
 import type { InteractionRow } from "../../../db.js";
 import type { NewMessage } from "../../../types.js";
@@ -54,6 +55,8 @@ export interface StoreWebMessageOptions {
   contentBlocks?: unknown[];
   linkPreviews?: unknown[];
   threadId?: number | null;
+  /** Resolve a root reply's self-thread inside the row/receipt transaction. */
+  threadToSelf?: boolean;
   screenHint?: string | null;
   isTerminalAgentReply?: boolean;
   isSteeringMessage?: boolean;
@@ -213,10 +216,13 @@ function writePreparedWebMessage(prepared: PreparedWebMessage): CommittedWebMess
     attachMediaToMessage(rowId, allMediaIds);
   }
 
-  // Ensure user messages are threaded to themselves when no explicit threadId
-  // is provided. This creates a consistent thread root for replies.
-  if (!params.isBot && (options.threadId === null || options.threadId === undefined)) {
-    getDb().prepare("UPDATE messages SET thread_id = ? WHERE rowid = ?").run(rowId, rowId);
+  // Publish root threading in the original message transaction.
+  if ((!params.isBot && (options.threadId === null || options.threadId === undefined)) || (options.threadToSelf && !options.threadId)) {
+    // A queued source may already exist before its timeline row is published.
+    const database = getDb();
+    if (allMediaIds.length) normaliseExistingMediaFts(database, rowId, () => {});
+    database.prepare("UPDATE messages SET thread_id = ? WHERE rowid = ?").run(rowId, rowId);
+    if (allMediaIds.length) appendMediaTextToFts(database, rowId, allMediaIds, () => {});
   }
 
   const sourceMessageId = typeof options.removeProtectedContinuationForSourceMessageId === "string"
@@ -259,7 +265,8 @@ function writePreparedWebMessage(prepared: PreparedWebMessage): CommittedWebMess
   }
 
   const committed = { params, options, msg, rowId, contentBlocks, allMediaIds };
-  return { ...committed, interaction: buildWebInteraction(committed) };
+  const interaction = buildWebInteraction(committed);
+  return { ...committed, interaction };
 }
 
 /** Store a web channel message synchronously for existing internal callers. */

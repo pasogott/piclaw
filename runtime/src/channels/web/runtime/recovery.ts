@@ -135,6 +135,7 @@ function recoveryLaneKey(chatJid: string): string {
 
 /** Runtime callbacks required for inflight recovery/pending resume orchestration. */
 export interface WebRecoveryContext {
+  isNativeRuntime?(): boolean;
   assistantName: string;
   defaultAgentId: string;
   enqueue(task: () => Promise<void>, key: string, laneKey?: string): void;
@@ -242,7 +243,7 @@ export function recoverStaleInflightRun(
   options: RecoverStaleInflightRunOptions = {},
   store: WebRecoveryStore = defaultStore,
 ): boolean {
-  if (!chatJid || options.hasActiveStatus) return false;
+  if (ctx.isNativeRuntime?.() || !chatJid || options.hasActiveStatus) return false;
 
   const inflight = store.getInflightRuns().find((entry) => entry.chatJid === chatJid);
   if (!inflight) return false;
@@ -328,6 +329,9 @@ export function recoverInflightRuns(
   ctx: WebRecoveryContext,
   store: WebRecoveryStore = defaultStore
 ): void {
+  // The SDK owns native recovery. Legacy draft/interruption publication has no
+  // accepted-source provenance and must never manufacture native history.
+  if (ctx.isNativeRuntime?.()) return;
   const preflights = store.getPreflightRuns?.() ?? [];
   if (preflights.length > 0) {
     const now = typeof ctx.now === "function" ? ctx.now() : Date.now();

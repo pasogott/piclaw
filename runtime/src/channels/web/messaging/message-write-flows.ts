@@ -11,8 +11,8 @@ export type SendMessageOptions =
   | {
       threadId?: number | null;
       forceRoot?: boolean;
-  /** Opt-in truthful failure for UI-only reply delivery; does not change control-command acceptance. */
-  requirePersistence?: boolean;
+      /** Truthful reply-delivery failure; does not change command acceptance. */
+      requirePersistence?: boolean;
       source?: string;
       mediaIds?: number[];
       contentBlocks?: Array<Record<string, unknown>>;
@@ -25,7 +25,7 @@ export interface MessageWriteStore {
     content: string,
     isBot: boolean,
     mediaIds: number[],
-    options?: { threadId?: number; contentBlocks?: unknown[]; isTerminalAgentReply?: boolean }
+    options?: { threadId?: number; threadToSelf?: boolean; contentBlocks?: unknown[]; isTerminalAgentReply?: boolean }
   ): InteractionRow | null;
   replaceMessageContent(
     chatJid: string,
@@ -35,7 +35,6 @@ export interface MessageWriteStore {
     contentBlocks: Array<Record<string, unknown>> | undefined,
     isTerminalAgentReply?: boolean
   ): InteractionRow | null;
-  setMessageThreadToSelf(messageId: number): void;
 }
 
 /** Broadcast contract required by web message write flows. */
@@ -102,6 +101,7 @@ export function sendWebMessage(
     mediaIds,
     {
       ...(threadId !== null ? { threadId } : {}),
+      ...(forceRoot && !threadId ? { threadToSelf: true } : {}),
       ...(contentBlocks && contentBlocks.length ? { contentBlocks } : {}),
     }
   );
@@ -112,8 +112,7 @@ export function sendWebMessage(
   }
 
   if (forceRoot && !threadId) {
-    // Ensure scheduled messages start new threads (not replies to inflight turns).
-    ctx.store.setMessageThreadToSelf(interaction.id);
+    // The store resolved this in the original transaction, before any receipt.
     interaction.data.thread_id = interaction.id;
   }
 

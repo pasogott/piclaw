@@ -139,6 +139,16 @@ export function createHostDurableBindings(db: Database, options: HostBindingOpti
     assertOwner();
     if (typeof content !== "string" || hashCanonicalRequest({ type: "input", requestId: i.requestId, content }) !== i.requestHash)
       throw new Error("Host payload hash conflict");
+    // Reconciliation is a read when the immutable correlation already exists.
+    // Taking BEGIN IMMEDIATE here contends with the SDK's committing writer,
+    // even though no host state would change, and can strand a completed reply.
+    verifySource(i);
+    const existing = read(i);
+    if (existing) {
+      if (db.query(`SELECT 1 FROM ${otherTable} WHERE domain=? AND incarnation=? AND ((conversation_id=? AND request_id=?) OR (chat_jid=? AND source_seq=?))`)
+        .get(domain, incarnation, i.conversationId, i.requestId, i.chatJid, i.sourceSeq)) throw conflict();
+      assertOwner(); return { binding: existing, content };
+    }
     const binding = db.transaction(() => {
       assertOwner(); verifySource(i);
       if (db.query(`SELECT 1 FROM ${otherTable} WHERE domain=? AND incarnation=? AND ((conversation_id=? AND request_id=?) OR (chat_jid=? AND source_seq=?))`)

@@ -1,4 +1,4 @@
-// INACTIVE, passive reconstitution only. No scheduling grant, queue, storage open or registration.
+// Passive native reconstitution only. No scheduling grant, queue, storage open or implicit registration.
 import type { ConversationId } from "@earendil-works/pi-durable";
 import type { CurrentPiclawServiceWorkStore } from "../../../runtime/src/service-effects/current-piclaw/service-work-store.js";
 import type { AcceptedSourceSnapshot } from "../../../runtime/src/service-effects/contracts/service-work-store.js";
@@ -32,6 +32,8 @@ export async function reconstituteAcceptedWork(options: {
   const sourceFor = options.work.getSourceBySeq.bind(options.work), find = options.bindings.findSource.bind(options.bindings);
   const queuedIntent = options.work.getQueuedInputIntent.bind(options.work);
   const proofs = new Map<string, NonNullable<ReturnType<typeof queuedIntent>>>();
+  // Cancellation is host control evidence, never a model input or queued steer.
+  const cancellations = new Map<number, AcceptedSourceSnapshot>();
   const primaryGet = options.bindings.get.bind(options.bindings), intentGet = options.bindings.intents!.get.bind(options.bindings.intents);
   const digest = (value: unknown) => hashCanonicalRequest(value as CanonicalJsonValue);
   const deny = () => { throw new Error("Unverified recovered authority"); };
@@ -47,12 +49,20 @@ export async function reconstituteAcceptedWork(options: {
       const operation = structuredClone(original);
       if (operation.chatJid !== scope.chatJid || operation.terminal ||
         !operation.claimedSourceSeqs.includes(operation.primarySourceSeq) ||
+        (operation.cancellation && !operation.claimedSourceSeqs.includes(operation.cancellation.sourceSeq)) ||
         new Set(operation.claimedSourceSeqs).size !== operation.claimedSourceSeqs.length) return deny();
       const h = operation.harness;
       if (h && (h.sessionId !== running.sessionId || h.lane !== running.lane ||
         h.watchGeneration !== running.watchGeneration || !h.harnessOperationId)) return deny();
       for (const seq of operation.claimedSourceSeqs) {
         const source = sourceFor(scope.chatJid, seq); assert();
+        if (seq === operation.cancellation?.sourceSeq) {
+          if (!source || source.kind !== "cancellation" || source.state !== "claimed" ||
+              source.targetOperationId !== operation.operationId || seq === operation.primarySourceSeq ||
+              (source.parentSourceSeq !== null && !operation.claimedSourceSeqs.includes(source.parentSourceSeq))) return deny();
+          cancellations.set(seq, Object.freeze(structuredClone(source)));
+          continue;
+        }
         const role = seq === operation.primarySourceSeq ? "primary" : "intent";
         if (!source || !["claimed", "consumed"].includes(source.state) || (source.kind !== "message" && !(role === "primary" && (source.kind === "scheduled_agent" || source.kind === "internal"))) ||
           (role === "intent" && (!h || source.targetOperationId !== operation.operationId ||
@@ -84,7 +94,7 @@ export async function reconstituteAcceptedWork(options: {
       }
       const current = await operationFor(operation.operationId); assert();
       if (!current.ok || digest(current.value) !== digest(operation) || operation.claimedSourceSeqs.some(seq =>
-        digest(sourceFor(scope.chatJid, seq)) !== digest(recovered.find(r => r.input.operationId === operation.operationId && r.input.sourceSeq === seq)!.work.claimed.source))) return deny();
+        digest(sourceFor(scope.chatJid, seq)) !== digest(cancellations.get(seq) ?? recovered.find(r => r.input.operationId === operation.operationId && r.input.sourceSeq === seq)!.work.claimed.source))) return deny();
     }
     if (page.value.length < 100) break;
     afterOperationId = page.value.at(-1)!.operationId;
@@ -97,6 +107,9 @@ export async function reconstituteAcceptedWork(options: {
       const proof = queuedIntent(entry.input.operationId, source);
       if (!proof || proof.intentId !== entry.input.requestId || digest(proof) !== digest(proofs.get(entry.input.requestId))) return deny();
     }
+  }
+  for (const [seq, source] of cancellations) {
+    if (digest(sourceFor(scope.chatJid, seq)) !== digest(source)) return deny();
   }
   assert();
   return Object.freeze(recovered);

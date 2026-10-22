@@ -93,6 +93,12 @@ test("authenticated configuration KV owner grants are exact, request-fenced and 
    const get = new Request("http://localhost"+path);
    expect(await enforceRequestGuards(channel,get,path,getRouteFlags(get,path))).toBeNull();
    expect(await (await handleRegisteredAddonConfigApiRequest(get,"imap","config",json))!.json()).toEqual({configured:true});
+   storeChatMetadata("web:target", new Date().toISOString()); ensureChatBranch({chat_jid:"web:target",agent_name:"target"});
+   registerAddonConfigApi("imap", "chat", { get: () => { expect(() => kv.get("imap","plan","chat","web:target")).not.toThrow(); expect(() => kv.get("imap","plan","chat","web:other")).toThrow(); return {ok:true}; } });
+   const scopedPath = "/agent/addons/api/imap/chat";
+   const scoped = new Request("http://localhost"+scopedPath+"?chat_jid=web%3Atarget");
+   expect(await enforceRequestGuards(channel,scoped,scopedPath,getRouteFlags(scoped,scopedPath))).toBeNull();
+   expect((await handleRegisteredAddonConfigApiRequest(scoped,"imap","chat",json))!.status).toBe(200);
    const evil = new Request("http://localhost"+path,{method:"POST",headers:{origin:"https://evil.example"},body:"{}"});
    expect((await enforceRequestGuards(channel,evil,path,getRouteFlags(evil,path)))!.status).toBe(403);
    expect((await handleRegisteredAddonConfigApiRequest(evil,"imap","config",json))!.status).toBe(500);

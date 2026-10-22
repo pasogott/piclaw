@@ -71,7 +71,7 @@ function fixture(select?: WebChannelOpts["getInputSourceAdmission"], validateAcc
       chatJid, sourceId, kind: "message", payloadRef: `queued-source:${sourceId}`,
       targetOperationId: null, parentSourceSeq: null, acceptedAt: item.queuedAt, createWakeIntent: false,
     };
-    const { source_accepted, materializeRetries, ...immutableInput } = item;
+    const { source_accepted: _sourceAccepted, materializeRetries: _materializeRetries, ...immutableInput } = item;
     input.effect.provenanceRef += `:${hashCanonicalRequest(JSON.parse(JSON.stringify(immutableInput)) as CanonicalJsonValue)}`;
     input.effect.requestHash = hashCanonicalRequest(input as unknown as CanonicalJsonValue);
     made.value.acceptSourceInTransaction(input, database);
@@ -129,7 +129,7 @@ test("autonomous stable follow-up yields to pending sources and legacy queue ite
   expect(f.db.query('SELECT source_id FROM service_effect_s01_sources').all()).toEqual([{ source_id: 'goal:first' }]);
 });
 
-test("accepted stable follow-up dispatch uses exact source and materialized message, not UUID shape", async () => {
+for (const busyOnce of [false, true]) test(`accepted stable dispatch retries only its exact source; busy=${busyOnce}`, async () => {
   const f = fixture(undefined, () => true), chatJid = 'web:stable-dispatch';
   const service = new QueuedFollowupLifecycleService(), messageId = 'goal-continuation:operation-1';
   f.db.transaction(() => service.enqueueAcceptedFollowupOnce(messageId, chatJid, 'Continue Goal', '2026-10-19T00:00:00.000Z',
@@ -139,11 +139,17 @@ test("accepted stable follow-up dispatch uses exact source and materialized mess
   let submissions = 0;
   const dispatch = createDurableQueueDispatch({ work: f.work, branchId: 'main', assertCurrentWriter() {}, shutdown: new AbortController().signal,
     async waitForReconciliation() {}, adapter: {
-      async submit(accepted: any) { expect(accepted.claimed.source.sourceId).toBe(messageId); expect(accepted.content).toBe('Continue Goal'); submissions++; return 1; },
+      async submit(accepted: any) {
+        expect(accepted.claimed.source.sourceId).toBe(messageId); expect(accepted.content).toBe('Continue Goal');
+        submissions++;
+        if (busyOnce && submissions === 1) throw Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' });
+        return 1;
+      },
       async wait() {}, async settle() { return {}; },
     } as any });
   expect(await dispatch(chatJid, messageId, rowId)!()).toBe('settled');
-  expect(submissions).toBe(1);
+  expect(submissions).toBe(busyOnce ? 2 : 1);
+  expect(f.db.query('SELECT operation_id FROM service_effect_s01_operations').all()).toHaveLength(1);
   expect(dispatch(chatJid, 'goal-continuation:foreign', rowId)).toBeUndefined();
   f.db.query('UPDATE service_effect_s01_sources SET payload_ref=? WHERE chat_jid=? AND source_id=?').run('queued-source:foreign', chatJid, messageId);
   expect(() => dispatch(chatJid, messageId, rowId)).toThrow('identity conflict');
@@ -155,7 +161,7 @@ function withdrawalFixture() {
   f.busy(true);
   const withdraw: NonNullable<ReturnType<NonNullable<WebChannelOpts['getQueuedInputSourceWithdrawal']>>> = ({ chatJid, item, database }) => {
     const accepted = f.work.getAcceptedSource(chatJid, item.source_id)!;
-    const { source_accepted, materializeRetries, ...immutableInput } = item;
+    const { source_accepted: _sourceAccepted, materializeRetries: _materializeRetries, ...immutableInput } = item;
     expect(accepted.provenanceRef).toBe(`engine:host-selected:${hashCanonicalRequest(JSON.parse(JSON.stringify(immutableInput)) as CanonicalJsonValue)}`);
     const sourceHash = (database.query('SELECT source_hash FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?').get(chatJid, item.source_id) as { source_hash: string }).source_hash;
     const request = { effect: { idempotencyKey: `withdraw:${item.source_id}`, requestHash: '', operationId: null, sourceSeq: null,
@@ -417,7 +423,7 @@ for (const mode of ["active", "backlog", "race"] as const) test(`HTTP queued sou
   }
   const items = f.channel.getQueuedFollowupItems("web:default");
   expect(items.map(item => item.queuedContent)).toEqual(mode === "backlog" ? ["older backlog", "follow-up 1", "follow-up 2"] : ["follow-up 1", "follow-up 2"]);
-  expect(seen).toEqual(items.slice(-2).map(({ source_accepted, ...item }) => item));
+  expect(seen).toEqual(items.slice(-2).map(({ source_accepted: _sourceAccepted, ...item }) => item));
   const sources = f.db.query("SELECT source_id, payload_ref, accepted_at FROM service_effect_s01_sources ORDER BY source_seq").all();
   expect(sources).toEqual(items.slice(-2).map(item => ({ source_id: item.source_id,
     payload_ref: `queued-source:${item.source_id}`, accepted_at: item.queuedAt })));
@@ -655,9 +661,8 @@ for (const failure of ["selection", "pending", "wait"] as const) test(`worker ${
   await Bun.sleep(10);
   expect(released).toBe(false);
   expect(legacy).toBe(0);
-  expect(f.db.query("SELECT inflight_message_id FROM chat_cursors").get()).toEqual({
-    inflight_message_id: (f.db.query("SELECT id FROM messages").get() as { id: string }).id,
-  });
+  expect(f.db.query("SELECT count(*) AS n FROM chat_cursors WHERE inflight_message_id IS NOT NULL").get()).toEqual({ n: 0 });
+  expect(f.db.query("SELECT cursor_ts FROM chat_cursors WHERE cursor_ts<>''").get()).toBeNull();
   const before = f.db.query("SELECT * FROM chat_cursors").get();
   shutdown.abort(); await original;
   expect(released).toBe(true);
@@ -738,7 +743,7 @@ for (const [queuedInput, pending, steering] of [[false,false,false], [false,true
         expect(database.inTransaction).toBe(true);
         const source = f.work.getAcceptedSource('web:default', item.source_id);
         expect(source?.payloadRef).toBe(`queued-source:${message.id}`);
-        const { source_accepted, materializeRetries, ...immutableInput } = item;
+        const { source_accepted: _sourceAccepted, materializeRetries: _materializeRetries, ...immutableInput } = item;
         expect(source?.provenanceRef).toBe(`engine:host-selected:${hashCanonicalRequest(JSON.parse(JSON.stringify(immutableInput)) as CanonicalJsonValue)}`);
         expect(message.id).toBe(item.source_id);
         expect(database.query('SELECT id FROM messages WHERE rowid=?').get(rowId)).toEqual({ id: item.source_id });
@@ -795,7 +800,7 @@ for (const [queuedInput, pending, steering] of [[false,false,false], [false,true
         runningBinding: { sessionId: 'queue-test', lane: 'main', watchGeneration: 1 },
         readQueued: id => getDeferredQueuedFollowups('web:default').find(item => item.rowId === id),
         validatePayload: ({ item }) => {
-          const { source_accepted, materializeRetries, ...immutable } = item;
+          const { source_accepted: _sourceAccepted, materializeRetries: _materializeRetries, ...immutable } = item;
           expect(f.work.getAcceptedSource('web:default', item.source_id)?.provenanceRef).toBe(`engine:host-selected:${hashCanonicalRequest(JSON.parse(JSON.stringify(immutable)) as CanonicalJsonValue)}`);
         },
         materialize: (item, accept) => storeWebMessage(f.channel as any, { chatJid: 'web:default', content: item.queuedContent,
@@ -958,6 +963,87 @@ for (const [queuedInput, pending, steering] of [[false,false,false], [false,true
     owner = true;
   } finally { owner = true; shutdown.abort(); await adapter.close(); }
 }, 15000);
+
+for (const command of ["queue", "steer"] as const) for (const busy of [false, true]) {
+  test(`native /${command} uses prepared accepted input, busy=${busy}`, async () => {
+    const f = fixture(undefined, () => true);
+    let prepared = 0;
+    f.channel.prepareInputText = (_chat, text) => {
+      expect(text).toBe("qualified payload"); prepared++;
+      return { text: `prepared:${text}`, assertCurrent() {} };
+    };
+    f.channel.getInputSourceAdmission = () => f.accept;
+    f.channel.getQueuedInputSourceAdmission = () => f.acceptQueued;
+    f.channel.agentPool.applyControlCommand = async () => { throw Error("Must not dispatch queued input as a legacy control"); };
+    f.busy(busy); f.expectSources(1);
+    const response = await f.route({ content: `/${command} qualified payload` });
+    expect(response.status).toBe(201);
+    expect(prepared).toBe(1);
+    expect(f.db.query("SELECT * FROM service_effect_s01_sources").all()).toHaveLength(1);
+    if (busy) {
+      expect(f.channel.getQueuedFollowupItems("web:default").at(-1)?.queuedContent).toBe("prepared:qualified payload");
+      expect(f.db.query("SELECT * FROM messages").all()).toHaveLength(0);
+    } else {
+      expect(f.db.query("SELECT content FROM messages").all()).toEqual([{ content: "prepared:qualified payload" }]);
+    }
+  });
+}
+
+test("native command acknowledges execution but reports failed reply persistence without retry", async () => {
+  const f = fixture(); f.expectSources(0);
+  let commands = 0, sends = 0;
+  f.channel.prepareInputText = () => { throw Error("Control must not become model input"); };
+  f.channel.agentPool.applyControlCommand = async () => { commands++; return { status: "success", message: "Control accepted" }; };
+  f.channel.sendMessage = async (_chat, _text, options) => {
+    sends++; expect(options).toMatchObject({ requirePersistence: true }); throw Error("Simulated reply persistence failure");
+  };
+  const response = await f.route({ content: "/stats" });
+  expect(response.status).toBe(201);
+  expect(await response.json()).toMatchObject({ command: { status: "success", message: "Control accepted" }, response_delivery: "failed" });
+  expect(commands).toBe(1); expect(sends).toBe(1); expect(f.jobs).toHaveLength(0);
+  expect(f.db.query("SELECT count(*) n FROM service_effect_s01_sources").get()).toEqual({ n: 0 });
+});
+
+test("busy native compaction is rejected, never queued as ordinary model input", async () => {
+  const f = fixture(undefined, () => true), before = f.snapshot();
+  f.busy(true, true); f.expectSources(0);
+  let prepared = 0, controlled = 0;
+  f.channel.prepareInputText = () => { prepared++; return "must not become a prompt"; };
+  f.channel.agentPool.applyControlCommand = async () => { controlled++; throw Error("Must not invoke a busy control"); };
+  const response = await f.route({ content: "/compact preserve user context" });
+  expect(response.status).toBe(400); expect(await response.text()).toContain("idle conversation");
+  expect(prepared).toBe(0); expect(controlled).toBe(0); expect(f.snapshot()).toEqual(before); expect(f.jobs).toHaveLength(0);
+});
+
+for (const content of ["/queue", "/steer", "/queue /exit", "/steer /model hidden", "/queue-all payload"]) {
+  test(`native queued command rejects empty or nested control without admission: ${content}`, async () => {
+    const f = fixture(undefined, () => true), before = f.snapshot();
+    f.channel.prepareInputText = () => { throw Error("Must not prepare invalid queued command"); };
+    expect((await f.route({ content })).status).toBe(400);
+    expect(f.snapshot()).toEqual(before);
+    expect(f.jobs).toEqual([]);
+  });
+}
+
+for (const content of ["/steer payload", "ordinary payload"]) test(`native admission ignores legacy persistence hints: ${content}`, async () => {
+  const f = fixture(undefined, () => true);
+  f.channel.prepareInputText = (_chat, text) => ({ text, assertCurrent() {} });
+  f.channel.getInputSourceAdmission = () => f.accept;
+  f.expectSources(1);
+  expect((await f.route({ content, mode: "steer", persist_steer: true })).status).toBe(201);
+  expect((getDb().query("SELECT COUNT(*) n FROM service_effect_s01_sources").get() as { n: number }).n).toBe(1);
+});
+
+test("native Cancel reaches abort even from an older browser", async () => {
+  const f = fixture(undefined, () => true), before = f.snapshot();
+  f.channel.prepareInputText = () => { throw Error("abort is not model input"); };
+  const commands: any[] = [];
+  f.channel.agentPool.applyControlCommand = async (_chat: string, command: any) => { commands.push(command); return { status: "success", message: "Aborted" }; };
+  expect((await f.route({ content: "/abort", mode: "steer", persist_steer: true })).status).toBe(200);
+  expect(commands.map(command => command.type)).toEqual(["abort"]);
+  expect(f.snapshot()).toEqual(before);
+  expect(f.jobs).toEqual([]);
+});
 
 test("prepared input text reaches direct and queued admissions with the same synchronous authority", async () => {
   const f = fixture(undefined, () => true);

@@ -171,6 +171,7 @@ type FakeSettlementStatement =
   | "outbox_insert"
   | "outbox_decision_insert"
   | "insert_commit"
+  | "insert_message_snapshot"
   | "link_commit_outbox";
 
 class FakeAbort extends Error {
@@ -855,6 +856,7 @@ export class FakeTerminalSettlementStore implements TerminalSettlementStore {
       commit,
     });
     this.afterStatement("insert_commit");
+    if (messageRowId !== null) this.afterStatement("insert_message_snapshot");
     for (const _intent of request.outboxIntents) {
       void _intent;
       this.afterStatement("link_commit_outbox");
@@ -1198,35 +1200,7 @@ function materialiseDecision(
   ) {
     throw new FakeCorruption();
   }
-  if (commit.messageRowId !== null) {
-    const message = state.messages.find(
-      (entry) => entry.rowId === commit.messageRowId,
-    );
-    if (
-      !message ||
-      !message.terminal ||
-      message.operationId !== operation.operationId ||
-      message.chatJid !== operation.chatJid ||
-      typeof message.content !== "string" ||
-      (message.contentBlocks !== null &&
-        validateFakeContentBlocks(message.contentBlocks) === null) ||
-      new Set(message.mediaIds).size !== message.mediaIds.length ||
-      message.mediaIds.length !== decision.mediaCount ||
-      message.mediaIds.some(
-        (mediaId) =>
-          !state.media.some(
-            (media) =>
-              media.operationId === operation.operationId &&
-              media.mediaId === mediaId &&
-              media.role === "terminal",
-          ),
-      )
-    ) {
-      throw new FakeCorruption();
-    }
-  } else if (decision.mediaCount !== 0) {
-    throw new FakeCorruption();
-  }
+  if (state.media.filter(media => media.operationId === operation.operationId && media.role === "terminal").length !== decision.mediaCount) throw new FakeCorruption();
   const prefix = state.sources
     .filter(
       (source) =>

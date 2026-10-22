@@ -27,6 +27,39 @@
 #   marked, katex, mermaid) under web/static/common/. request-router-service.ts
 #   auth-gates app.bundle.js and only allows login.bundle.js pre-auth.
 
+.DEFAULT_GOAL := help
+
+# Reproducible caches and scratch only; service state and credentials stay put.
+# Preserve the caller's original TMPDIR and selected base in recursive Make.
+ifeq ($(origin PICLAW_INHERITED_TMPDIR),undefined)
+PICLAW_INHERITED_TMPDIR := $(TMPDIR)
+endif
+export PICLAW_INHERITED_TMPDIR
+ifeq ($(strip $(CACHE_TMP_BASE)),)
+ifneq ($(strip $(CI)),)
+CACHE_TMP_BASE := $(or $(RUNNER_TEMP),$(PICLAW_INHERITED_TMPDIR),/tmp)
+else
+CACHE_TMP_BASE := $(shell if test -d /workspace/tmp && test -w /workspace/tmp && test -x /workspace/tmp; then printf /workspace/tmp; else printf /tmp; fi)
+endif
+endif
+export CACHE_TMP_BASE
+PROJECT_TMP_ROOT := $(patsubst %/,%,$(CACHE_TMP_BASE))/piclaw
+export TMPDIR := $(PROJECT_TMP_ROOT)/tests
+export BUN_INSTALL_CACHE_DIR := $(PROJECT_TMP_ROOT)/cache/bun
+export npm_config_cache := $(PROJECT_TMP_ROOT)/cache/npm
+export XDG_CACHE_HOME := $(PROJECT_TMP_ROOT)/cache
+# Honour an explicit browser install; never migrate or reinstall shared browsers.
+export PLAYWRIGHT_BROWSERS_PATH ?= $(if $(strip $(CI)),$(PROJECT_TMP_ROOT)/cache/ms-playwright,$(if $(wildcard /workspace/bin/pw-browsers),/workspace/bin/pw-browsers,$(PROJECT_TMP_ROOT)/cache/ms-playwright))
+
+.PHONY: policy-config policy-dirs
+policy-config: ## Print portable project cache/temp paths without creating them
+	@printf '%s\n' 'CACHE_TMP_BASE=$(CACHE_TMP_BASE)' 'PROJECT_TMP_ROOT=$(PROJECT_TMP_ROOT)' 'PICLAW_INHERITED_TMPDIR=$(PICLAW_INHERITED_TMPDIR)' 'TMPDIR=$(TMPDIR)' 'BUN_INSTALL_CACHE_DIR=$(BUN_INSTALL_CACHE_DIR)' 'npm_config_cache=$(npm_config_cache)' 'XDG_CACHE_HOME=$(XDG_CACHE_HOME)' 'PLAYWRIGHT_BROWSERS_PATH=$(PLAYWRIGHT_BROWSERS_PATH)'
+
+policy-dirs:
+	@mkdir -p "$(PROJECT_TMP_ROOT)/cache" "$(PROJECT_TMP_ROOT)/build" "$(PROJECT_TMP_ROOT)/tests" "$(PROJECT_TMP_ROOT)/logs" "$(PROJECT_TMP_ROOT)/runs" "$(BUN_INSTALL_CACHE_DIR)" "$(npm_config_cache)"
+
+vendor build-web build-ts build-piclaw pack portable portable-linux portable-linux-baseline portable-mac portable-windows local-install lint test test-coverage ci-fast ci-integration pre-push-ci: | policy-dirs
+
 IMAGE ?= pibox
 TAG ?= latest
 FULL_IMAGE := $(IMAGE):$(TAG)

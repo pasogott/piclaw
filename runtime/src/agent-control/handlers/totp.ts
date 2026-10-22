@@ -41,7 +41,7 @@ function describeFlow(flow: TotpCardFlow): string {
 }
 
 /** Handle `/totp` control commands for single-card setup/reset flows. */
-export async function handleTotp(_session: AgentSession, command: TotpCommand): Promise<AgentControlResult> {
+export async function handleTotp(_session: AgentSession | undefined, command: TotpCommand): Promise<AgentControlResult> {
   if (readAccessConfig().mode !== "single-user") return { status: "error", message: "Use account-bound enrolment or recovery in this access mode." };
   const action = (command.action || "").toLowerCase();
   if (action && action !== "enrol" && action !== "enroll" && action !== "reset") {

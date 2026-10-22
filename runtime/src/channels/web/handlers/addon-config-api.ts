@@ -49,7 +49,13 @@ async function invokeConfig(handler: AddonConfigApiHandler, payload: unknown, re
   if (!adminGrantFactory) return handler(payload, req, context);
   if (!context || context.kind !== "operator" || context.accessMode !== "single-user") throw Error("Authenticated configuration owner required");
   await context.listTargets();
-  const grant = adminGrantFactory(addonId, context.chatJid ?? "");
+  const queryChat = new URL(req.url).searchParams.get("chat_jid");
+  const bodyChat = payload && typeof payload === "object" && "chat_jid" in payload ? (payload as { chat_jid?: unknown }).chat_jid : undefined;
+  if (bodyChat !== undefined && typeof bodyChat !== "string") throw Error("Invalid configuration chat");
+  if (queryChat && bodyChat && queryChat !== bodyChat) throw Error("Conflicting configuration chat");
+  const requestedChat = queryChat || bodyChat || context.chatJid;
+  const target = requestedChat ? await context.resolveTarget({ chatJid: requestedChat }) : undefined;
+  const grant = adminGrantFactory(addonId, target?.chatJid ?? "");
   let active = true;
   const assertCurrent = () => { if (!active || !addonLocalContextApi.getRequestContext(req)) throw Error("Configuration request expired"); grant.assertCurrent(); };
   try { return await withExtensionKvAuthority({ ...grant, globalWrite: req.method === "POST" && grant.globalWrite === true, assertCurrent, write: body => grant.write(() => { assertCurrent(); const result = body(); assertCurrent(); return result; }) }, () => handler(payload, req, context)); }

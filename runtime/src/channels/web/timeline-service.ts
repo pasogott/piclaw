@@ -211,11 +211,14 @@ export function deletePostResponse(
   deletedIds: number[];
 } {
   if (!id) return { status: 404, body: { error: "Post not found" }, deletedIds: [] };
-  const deletedIds = cascade
-    ? deleteThreadByRowId(chatJid, id)
-    : deleteMessageByRowId(chatJid, id)
-      ? [id]
-      : [];
+  let deletedIds: number[];
+  try {
+    deletedIds = cascade
+      ? deleteThreadByRowId(chatJid, id)
+      : deleteMessageByRowId(chatJid, id) ? [id] : [];
+  } catch (error) {
+    throw error;
+  }
   return {
     status: 200,
     body: { deleted: deletedIds.length, ids: deletedIds },

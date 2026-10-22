@@ -13,6 +13,8 @@ import { sanitiseJid } from "../../src/agent-pool/session.js";
 import { initDatabase } from "../../src/db.js";
 import "../helpers.js";
 import { bedrockOpus5Fixtures } from "../fixtures/bedrock-opus5.js";
+import { getNativeCommandCatalogue } from "../../src/agent-control/native-control-capabilities.js";
+import { parseControlCommand } from "../../src/agent-control/agent-control-parser.js";
 
 function createRuntime(session: any): AgentSessionRuntime {
   return {
@@ -70,6 +72,132 @@ function createFacade(overrides: Partial<ConstructorParameters<typeof AgentRunti
 
   return { facade, pool, warnings, errors, cleared };
 }
+
+test("native host-only controls and state never construct a legacy session", async () => {
+  let legacy = 0, acquired = 0, released = 0;
+  const port = { sessionId: "native-host", branchId: "main", readPosition: async () => "7",
+    readModel: async () => "test/model", readThinkingLevel: async () => "off" };
+  const { facade } = createFacade({ getDurableSession: () => port,
+    acquireCommandProtection: () => { acquired++; return () => { released++; }; },
+    getOrCreateRuntime: async () => { legacy++; throw Error("Legacy must not open"); } });
+  const state = await facade.applyControlCommand("web:native-host", { type: "state", raw: "/state" });
+  expect(state).toMatchObject({ status: "success" });
+  expect(state.message).toContain("pi-durable SQLite");
+  expect(state.message).toContain("test/model");
+  for (const type of ["agent_name", "agent_avatar", "user_name", "user_avatar", "user_github", "qr", "search_workspace"] as const) {
+    const result = await facade.applyControlCommand("web:native-host", { type, raw: `/${type}` });
+    expect(result.status).toBe(["qr", "search_workspace", "user_github"].includes(type) ? "error" : "success");
+    expect(result.message).not.toContain("unavailable. No legacy session");
+  }
+  const passkey = await facade.applyControlCommand("web:native-host", { type: "passkey", raw: "/passkey" });
+  expect(passkey.message).toMatch(/Passkey commands|Passkeys are disabled/);
+  const totp = await facade.applyControlCommand("web:native-host", { type: "totp", action: "invalid", raw: "/totp invalid" });
+  expect(totp).toMatchObject({ status: "error", message: "Usage: /totp enrol|enroll|reset" });
+  const shell = await facade.applyControlCommand("web:native-host", { type: "shell", command: "printf NATIVE_SHELL_PORT_OK", raw: "/shell printf NATIVE_SHELL_PORT_OK" });
+  expect(shell.status).toBe("success");
+  expect(shell.message).toContain("NATIVE_SHELL_PORT_OK");
+  expect(legacy).toBe(0);
+  expect(acquired).toBe(10); expect(released).toBe(acquired);
+});
+
+test("every unavailable native command and alias fails closed without reading or mutating a session", async () => {
+  let legacy = 0, hostCalls = 0;
+  const unexpected = async (): Promise<never> => { hostCalls++; throw Error("Unavailable command entered host control"); };
+  const port = { sessionId: "native-audit", branchId: "main", readPosition: unexpected,
+    readModel: unexpected, setModel: unexpected, readThinkingLevel: unexpected, setThinkingLevel: unexpected,
+    reset: unexpected, abort: unexpected, compact: unexpected, readTree: unexpected, readReport: unexpected };
+  const { facade } = createFacade({ durableSessions: new Map([["web:native-audit", port]]),
+    getOrCreateRuntime: async () => { legacy++; throw Error("Legacy must never open"); } });
+  const unavailable = getNativeCommandCatalogue(port).filter(command => command.status === "unavailable");
+  expect(unavailable.length).toBeGreaterThan(0);
+  for (const definition of unavailable) {
+    for (const raw of new Set([definition.name, definition.name.replace(/-/g, "_"), ...(definition.aliases ?? [])])) {
+      const command = parseControlCommand(raw);
+      expect(command).not.toBeNull();
+      const result = await facade.applyControlCommand("web:native-audit", command!);
+      expect(result.status).toBe("error");
+      expect(result.message).toContain("No legacy session was opened");
+    }
+  }
+  expect(hostCalls).toBe(0);
+  expect(legacy).toBe(0);
+});
+
+test("native provider authentication uses a host-owned lifetime, never an AgentSession", async () => {
+  const lifetime = new AbortController();
+  let controls = 0, protectedCount = 0, released = 0;
+  const port = { sessionId: "native-auth", branchId: "main", readPosition: async () => null, lifetimeSignal: lifetime.signal,
+    assertCurrent() { expect(this.sessionId).toBe("native-auth"); },
+    async runOwnedControl<T>(operation: () => Promise<T>) { controls++; return operation(); } };
+  const { facade } = createFacade({ durableSessions: new Map([["web:native-auth", port]]),
+    modelRuntime: { listCredentials: async () => [], getProviders: () => [], getProviderAuthStatus: () => ({ configured: false }) } as any,
+    acquireCommandProtection: () => { protectedCount++; return () => { released++; }; },
+    getOrCreateRuntime: async () => { throw Error("Legacy session must never open"); } });
+  port.assertCurrent = () => { throw Error("Mutated authority port"); };
+  for (const type of ["login", "logout"] as const) {
+    const result = await facade.applyControlCommand("web:native-auth", { type, raw: `/${type}` });
+    expect(result.status).toBe("success"); expect(result.message).toBe("Provider authentication"); expect(result.contentBlocks).toHaveLength(1);
+  }
+  expect(controls).toBe(2); expect(protectedCount).toBe(2); expect(released).toBe(2);
+  lifetime.abort();
+  await expect(facade.applyControlCommand("web:native-auth", { type: "login", raw: "/login" })).rejects.toThrow("Native authentication lifetime unavailable");
+  expect(controls).toBe(2);
+});
+
+test("native authentication without an owned lifetime fails closed", async () => {
+  const { facade } = createFacade({ durableSessions: new Map([["web:no-auth-scope", { sessionId: "native", branchId: "main", readPosition: async () => null }]]) });
+  for (const type of ["login", "logout"] as const) expect(await facade.applyControlCommand("web:no-auth-scope", { type, raw: `/${type}` }))
+    .toEqual({ status: "error", message: "Native authentication lifetime unavailable. No legacy session was opened." });
+});
+
+test("native report controls use captured passive SDK reports, never a legacy session", async () => {
+  let reads = 0, legacy = 0;
+  const report = { activeEntries: 7, userMessages: 2, assistantMessages: 3, contextWindow: 10000,
+    observedTokens: 30, observedModel: "test/model", lastAnswer: "exact committed final answer",
+    usage: { input: 10, output: 20, cacheRead: 5, cacheWrite: 2, cost: 0.125 } };
+  const port = { sessionId: "native-report", branchId: "main", readPosition: async () => null,
+    readModel: async () => "test/model",
+    async readReport() { expect(this.sessionId).toBe("native-report"); reads++; return report; } };
+  const { facade } = createFacade({ durableSessions: new Map([["web:report", port]]),
+    getOrCreateRuntime: async () => { legacy++; throw Error("Legacy must not open"); } });
+  port.readReport = async () => { throw Error("Mutated report port"); };
+  const stats = await facade.applyControlCommand("web:report", { type: "stats", raw: "/stats" });
+  expect(stats.status).toBe("success"); expect(stats.message).toContain("10 / 20"); expect(stats.message).toContain("$0.125000");
+  const ctx = await facade.applyControlCommand("web:report", { type: "context", raw: "/context" });
+  expect(ctx.status).toBe("success"); expect(ctx.message).toContain("test/model"); expect(ctx.message).toContain("not a next-request fit estimate");
+  const last = await facade.applyControlCommand("web:report", { type: "last", raw: "/last" });
+  expect(last).toEqual({ status: "success", message: "Last assistant response:\n\nexact committed final answer" });
+  const catalogue = await facade.applyControlCommand("web:report", { type: "commands", raw: "/commands" });
+  expect(catalogue.status).toBe("success");
+  expect(catalogue.message).toContain("/queue | web input");
+  expect(catalogue.message).toContain("/fork | unavailable");
+  expect(catalogue.message).toContain("/stats | native");
+  const quota = await facade.applyControlCommand("web:report", { type: "quota", raw: "/quota" });
+  expect(quota.status).toBe("success"); expect(quota.message).toContain("test/model");
+  expect(reads).toBe(3); expect(legacy).toBe(0);
+});
+
+test("native cycle controls reuse fenced model/thinking ports and preserve captured receivers", async () => {
+  const models = ["a", "b"].map(id => ({ provider: "test", id, name: id, api: "openai-completions", reasoning: false,
+    input: ["text"], contextWindow: 10000, maxTokens: 100, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }));
+  let current = "test/a", thinking = "off", aborts = 0;
+  const port = { sessionId: "native-cycle", branchId: "main", readPosition: async () => null,
+    readModel: async () => current, readThinkingLevel: async () => thinking,
+    async setModel(model: { provider: string; modelId: string }) { expect(this.sessionId).toBe("native-cycle"); current = `${model.provider}/${model.modelId}`; },
+    async setThinkingLevel(level: string) { expect(this.sessionId).toBe("native-cycle"); thinking = level; },
+    async abort() { expect(this.sessionId).toBe("native-cycle"); aborts++; return false; } };
+  const { facade } = createFacade({ durableSessions: new Map([["web:cycles", port]]),
+    modelRegistry: { getAll: () => models, getAvailable: () => models, find: (p: string, id: string) => models.find(m => m.provider === p && m.id === id) } as any });
+  port.abort = async () => { throw Error("Mutated abort port"); };
+  expect((await facade.applyControlCommand("web:cycles", { type: "cycle_model", raw: "/cycle-model" })).status).toBe("success");
+  expect(current).toBe("test/b");
+  expect((await facade.applyControlCommand("web:cycles", { type: "cycle_model", direction: "backward", raw: "/cycle-model backward" })).status).toBe("success");
+  expect(current).toBe("test/a");
+  expect((await facade.applyControlCommand("web:cycles", { type: "cycle_thinking", raw: "/cycle-thinking" })).status).toBe("success");
+  expect(thinking).toBe("off");
+  expect((await facade.applyControlCommand("web:cycles", { type: "abort", raw: "/abort" })).status).toBe("success");
+  expect(aborts).toBe(1);
+});
 
 test("current model uses captured durable port and rejects unbound chats without legacy fallback", async () => {
   const port = { sessionId: "session", branchId: "main", readPosition: async () => null,

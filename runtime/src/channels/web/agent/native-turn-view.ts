@@ -1,0 +1,106 @@
+import type Database from "bun:sqlite";
+import { buildPreview, createToolTitleTracker } from "./agent-utils.js";
+
+/** Projection of the public pi-durable conversation watch onto existing web events. */
+export interface NativeTurnViewChannel {
+  broadcastEvent(event: string, data: Record<string, unknown>): void;
+  updateAgentStatus?(chat: string, data: Record<string, unknown>): void;
+  updateThoughtBuffer?(turn: string, text: string, lines: number): void;
+  updateDraftBuffer?(turn: string, text: string, lines: number): void;
+}
+export function createNativeTurnView(database: Database, channel: NativeTurnViewChannel, chat: string) {
+  let runId: number | undefined, base: Record<string, unknown> | undefined;
+  let thought = "", draft = "", completedThought = "", completedDraft = "", partialThought = "", partialDraft = "";
+  let operationId = "", lastTool: Record<string, unknown> | undefined;
+  const tools = new Map<string, string>();
+  const titles = createToolTitleTracker();
+  let lastStatus = "";
+  const status = (data: Record<string, unknown>) => {
+    const payload = { ...base, ...data };
+    const signature = JSON.stringify(payload);
+    if (signature === lastStatus) return;
+    lastStatus = signature;
+    channel.updateAgentStatus?.(chat, payload);
+    channel.broadcastEvent("agent_status", payload);
+  };
+  function panel(kind: "thought" | "draft", text: string) {
+    const previous = kind === "thought" ? thought : draft;
+    if (text === previous || !base) return;
+    const lines = text ? text.split("\n").length : 0;
+    const turn = base.turn_id as string;
+    if (kind === "thought") { thought = text; channel.updateThoughtBuffer?.(turn, text, lines); }
+    else { draft = text; channel.updateDraftBuffer?.(turn, text, lines); }
+    const preview = buildPreview(text, 8, 160);
+    channel.broadcastEvent(`agent_${kind}`, { ...base, text: preview.preview, total_lines: lines, ...(kind === "draft" ? { kind: "draft", mode: "replace" } : {}) });
+    const append = previous.length > 0 && text.startsWith(previous);
+    channel.broadcastEvent(`agent_${kind}_delta`, { ...base, delta: append ? text.slice(previous.length) : text, reset: !append, ...(!append ? { text } : {}) });
+  }
+  return (view: any) => {
+    const live = view.docs["pi.live"] ?? {};
+    if (!live.run) {
+      if (runId !== undefined && base) status({ type: "intent", title: "Finishing turn", active_tools: [], active_tool_count: 0 });
+      runId = undefined;
+      return;
+    }
+    if (runId !== live.run.taskId) {
+      const input = database.query(`SELECT b.operation_id,m.rowid,m.thread_id FROM piclaw_durable_bindings_v1 b
+        JOIN service_effect_s01_operations o ON o.operation_id=b.operation_id AND o.primary_source_seq=b.source_seq
+        LEFT JOIN messages m ON m.id=b.source_id AND m.chat_jid=b.chat_jid
+        WHERE b.chat_jid=? AND b.conversation_id=? AND b.submission_id IN (SELECT value FROM json_each(?)) LIMIT 1`)
+        .get(chat, view.conversation.id, JSON.stringify(live.run.inputs)) as { operation_id: string; rowid: number | null; thread_id: number | null } | null;
+      if (!input) return;
+      runId = live.run.taskId;
+      operationId = input.operation_id; lastTool = undefined;
+      base = { chat_jid: chat, agent_id: "default", turn_id: input.rowid ? `durable:${input.rowid}` : `durable-operation:${input.operation_id}`,
+        thread_id: input.thread_id ?? input.rowid, operation_id: input.operation_id, source: "durable_runtime", started_at: new Date().toISOString() };
+      thought = draft = completedThought = completedDraft = partialThought = partialDraft = lastStatus = ""; tools.clear();
+      status({ type: "thinking", title: "Thinking...", phase: "thinking" });
+    }
+    const message = live.generation?.message;
+    const model = view.docs["pi.agent"]?.model;
+    if (base && (model || message)) base = { ...base, provider: message?.provider ?? model?.provider, model: message?.model ?? model?.modelId };
+    // A watch can coalesce a whole generation or tool round. Committed public
+    // entries are authoritative for completed text/results; partials are not a ledger.
+    const first = view.entries.findIndex((entry: any) => entry.kind === "host.accepted" && entry.data?.operationId === operationId);
+    const entries = first >= 0 ? view.entries.slice(first) : view.entries.filter((entry: any) => entry.byTaskId >= live.run.taskId);
+    const messages = entries.flatMap((entry: any) => entry.model ?? []);
+    const assistants = messages.filter((item: any) => item.role === "assistant");
+    const textFor = (item: any, kind: string) => (item?.content ?? []).filter((block: any) => block.type === kind).map((block: any) => block[kind === "thinking" ? "thinking" : "text"] ?? "").join(kind === "thinking" ? "\n" : "");
+    completedThought = assistants.map((item: any) => textFor(item, "thinking")).filter(Boolean).join("\n\n");
+    completedDraft = assistants.map((item: any) => textFor(item, "text")).filter(Boolean).join("\n\n");
+    partialThought = textFor(message, "thinking"); partialDraft = textFor(message, "text");
+    panel("thought", [completedThought, partialThought].filter(Boolean).join("\n\n"));
+    panel("draft", [completedDraft, partialDraft].filter(Boolean).join("\n\n"));
+    const calls = new Map(messages.flatMap((item: any) => item.content ?? []).filter((block: any) => block.type === "toolCall").map((block: any) => [block.id, block]));
+    const results = messages.filter((item: any) => item.role === "toolResult");
+    const slots = [...(live.tools ?? []), ...(live.nestedTools ?? [])];
+    const resultText = (result: any) => (result?.content ?? []).filter((block: any) => block.type === "text").map((block: any) => block.text).join("\n");
+    // Final output need not have been streamed through slot.output.
+    for (const result of results) if (!slots.some((slot: any) => slot.callId === result.toolCallId)) slots.push({ callId: result.toolCallId, name: result.toolName, status: "done", output: resultText(result) });
+    const activeTools = slots.filter((slot: any) => slot.status !== "done").map((slot: any) => ({
+      tool_call_id: slot.callId, tool_name: slot.name, title: slot.name, status: slot.status,
+      ...(slot.arguments ? { tool_args: slot.arguments } : {}),
+      ...(slot.output ? { output_preview: slot.output.slice(-4000), output_preview_lines: slot.output.split("\n").length } : {}),
+    }));
+    for (const slot of slots) {
+      const result = results.find((item: any) => item.toolCallId === slot.callId);
+      const output = slot.output || resultText(result);
+      const signature = JSON.stringify([slot, output]);
+      if (tools.get(slot.callId) === signature) continue;
+      tools.set(slot.callId, signature);
+      const call: any = calls.get(slot.callId);
+      const args = slot.arguments ?? call?.arguments;
+      lastTool = { type: output || slot.status === "done" ? "tool_status" : "tool_call", title: titles.remember(slot.callId, slot.name, args), tool_call_id: slot.callId, tool_name: slot.name,
+        tool_args: args, status: slot.status, active_tools: activeTools, active_tool_count: activeTools.length, last_event_at: new Date().toISOString(),
+        ...(output ? { output_preview: output.slice(-16000), output_preview_lines: output.split("\n").length } : {}) };
+      status(lastTool);
+    }
+    if (!activeTools.length && live.generation) {
+      // Retain the last tool and its output while the model resumes. A phase
+      // update must not erase the Output pane or a fast tool's feedback.
+      status(lastTool ? { ...lastTool, active_tools: [], active_tool_count: 0, last_activity: true, phase: partialDraft ? "drafting" : "thinking" }
+        : { type: "thinking", title: partialDraft ? "Writing response..." : "Thinking...", phase: partialDraft ? "drafting" : "thinking", active_tools: [], active_tool_count: 0,
+          ...(live.generation.retry ? { title: "Retrying", retry_at: live.generation.retry.at } : {}) });
+    }
+  };
+}

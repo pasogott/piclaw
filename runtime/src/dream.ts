@@ -239,6 +239,7 @@ function buildDreamChatJid(chatJid: string, mode: "manual" | "auto"): string {
  * active one).
  */
 function reapDreamArtifacts(excludeDreamChatJid?: string | null): void {
+  // Native identities and accepted inputs are not disposable legacy Dream artifacts.
   const excluded = new Set<string>();
   if (excludeDreamChatJid) {
     const base = sanitiseJid(excludeDreamChatJid);

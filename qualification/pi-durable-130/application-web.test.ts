@@ -26,6 +26,8 @@ import { resetRateLimiterStateForTests } from "../../runtime/src/channels/web/ht
 import { upgradeApplication } from "../../runtime/durable-engine/src/application-upgrade.js";
 import { HostCutoverController, initializeCutoverManifest } from "../../runtime/durable-engine/src/host-cutover.js";
 import { ensureTestFilesystemIsolation } from "../../runtime/scripts/test-filesystem-isolation.js";
+import { getNativeCommandCatalogue } from "../../runtime/src/agent-control/native-control-capabilities.js";
+import { parseControlCommand } from "../../runtime/src/agent-control/agent-control-parser.js";
 
 // The runtime acquires the actual strict lock BEFORE root/SDK initialization. No TestOwner.
 for (const [failWait, forks, deferred] of [[false, false, undefined], [false, true, undefined],
@@ -381,7 +383,27 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
     expect(db.query("SELECT count(*) AS n FROM service_effect_s01_sources WHERE chat_jid=?").get(unbound)).toEqual({ n: 0 });
     expect(db.query("SELECT count(*) AS n FROM service_effect_s01_operations WHERE chat_jid=?").get(unbound)).toEqual({ n: 0 });
     expect(() => bundle.bind({ queue, agentPool: pool })).toThrow("already bound");
-    if (!failWait && !forks && !deferred) expect(await pool.applySlashCommand(chat, "/native-probe")).toMatchObject({ status: "success", message: "Native command without legacy session" });
+    if (!failWait && !forks && !deferred) {
+      expect(await pool.applySlashCommand(chat, "/native-probe")).toMatchObject({ status: "success", message: "Native command without legacy session" });
+      const before = await pool.getSessionTreeForChat(chat);
+      const port = bundle.sessionOptions.getDurableSession(chat)!;
+      const unavailable = getNativeCommandCatalogue(port).filter(command => command.status === "unavailable");
+      expect(unavailable.length).toBeGreaterThan(0);
+      for (const definition of unavailable) {
+        for (const raw of new Set([definition.name, definition.name.replace(/-/g, "_"), ...(definition.aliases ?? [])])) {
+          const command = parseControlCommand(raw);
+          expect(command).not.toBeNull();
+          const result = await pool.applyControlCommand(chat, command!);
+          expect(result.status).toBe("error");
+          expect(result.message).toMatch(/unavailable|No legacy session was opened/);
+        }
+      }
+      expect(await pool.getSessionTreeForChat(chat)).toEqual(before);
+      for (const table of ["messages", "service_effect_s01_sources", "service_effect_s01_operations", "service_effect_s02_commits"])
+        expect(db.query(`SELECT count(*) AS n FROM ${table} WHERE chat_jid=?`).get(chat)).toEqual({ n: 0 });
+      expect(base.host.modelCalls).toBe(0);
+      expect(base.host.credentialLookups).toBe(0);
+    }
     if (!failWait && !forks && !deferred) {
       const { QueuedFollowupLifecycleService } = await import("../../runtime/src/channels/web/runtime/queued-followup-lifecycle-service.js");
       const { storeWebMessage } = await import("../../runtime/src/channels/web/messaging/message-store.js");
@@ -420,6 +442,7 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
     expect(row.content).toBe("normal application input");
     expect(db.query("SELECT payload_ref FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?").get(chat, row.id)).toEqual({ payload_ref: `message-row:${row.rowid}` });
     expect(queue.isLaneBusy(`chat:${chat}`)).toBe(true);
+    const legacyCursorBeforeWait = db.query("SELECT inflight_message_id FROM chat_cursors WHERE chat_jid=?").get(chat);
     if (deferred) {
       const queued = await channel.handleRequest(new Request(`http://fixture/agent/default/message?chat_jid=${encodeURIComponent(chat)}`, {
         method: "POST", headers: { "Content-Type": "application/json", Origin: "http://fixture" }, body: JSON.stringify({ content: "/compact" }),
@@ -453,10 +476,14 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
     if (uncertain) {
       await waitLost.promise; await compactEntered.promise; await Bun.sleep(10);
       const cursor = db.query("SELECT * FROM chat_cursors WHERE chat_jid=?").get(chat);
+      const compactTurn = events.find(e => e.type === "agent_status" && e.data.title === "Compacting context")?.data.turn_id;
+      expect(compactTurn).toBeString();
       const assertPending = () => {
         expect(queue.isLaneBusy(`chat:${chat}`)).toBe(true);
         expect(channel.getAgentStatus(chat)?.type).toBe("intent");
-        expect(events.filter(e => e.type === "agent_status" && ["done", "error"].includes(e.data.type))).toHaveLength(0);
+        // The primary turn has already finished; only this maintenance turn
+        // must remain nonterminal while its SDK acknowledgement is uncertain.
+        expect(events.filter(e => e.type === "agent_status" && e.data.turn_id === compactTurn).map(e => e.data.type)).toEqual(["intent"]);
         expect(db.query("SELECT * FROM chat_cursors WHERE chat_jid=?").get(chat)).toEqual(cursor);
         expect(db.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1").all(chat)).toEqual([{ content: "synthetic answer" }]);
         expect(base.host.modelCalls).toBe(1);
@@ -480,7 +507,10 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
     if (failWait) {
       await failed.promise; await Bun.sleep(20);
       expect(queue.isLaneBusy(`chat:${chat}`)).toBe(true);
-      expect(db.query("SELECT inflight_message_id FROM chat_cursors WHERE chat_jid=?").get(chat)).toEqual({ inflight_message_id: row.id });
+      // Native input is claimed in the accepted-source ledger, not a fabricated
+      // legacy cursor. An uncertain wait must advance neither representation.
+      expect(db.query("SELECT inflight_message_id FROM chat_cursors WHERE chat_jid=?").get(chat)).toEqual(legacyCursorBeforeWait);
+      expect(db.query("SELECT state FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=?").get(chat, row.id)).toEqual({ state: "claimed" });
       expect(db.query("SELECT * FROM service_effect_s02_commits WHERE chat_jid=?").all(chat)).toHaveLength(0);
       expect(db.query("SELECT content FROM messages WHERE chat_jid=? AND is_bot_message=1").all(chat)).toEqual([]);
     } else {
@@ -620,6 +650,27 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
       expect(pool.getSessionGenerationForChat(chat)).toBe("preserved-session");
       for (const spy of spies) expect(spy).not.toHaveBeenCalled();
     }
+    if (!failWait && !forks && !deferred) {
+      const { createCurrentPiclawTerminalSettlementStore } = await import("../../runtime/src/service-effects/current-piclaw/terminal-settlement-store.js");
+      const terminal = createCurrentPiclawTerminalSettlementStore(db, answers.resolver, { hitFault: () => false, recordTrace() {} });
+      if (!terminal.ok) throw Error("Terminal reader unavailable");
+      const commit = db.query("SELECT operation_id,message_row_id FROM service_effect_s02_commits WHERE chat_jid=?").get(chat) as { operation_id: string; message_row_id: number };
+      const original = await terminal.value.getTerminal(commit.operation_id);
+      const mutate = (id: number, method: string, body?: unknown, suffix = "") => channel.handleRequest(new Request(`http://fixture/post/${id}${suffix}?chat_jid=${encodeURIComponent(chat)}`, {
+        method, headers: { "Content-Type": "application/json", Origin: "http://fixture" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }));
+      expect((await mutate(commit.message_row_id, "PATCH", { annotations: [{ text: "highlight" }] }, "/annotations")).status).toBe(200);
+      // Validation precedes both writes, so malformed threading cannot leave an edit behind.
+      expect((await mutate(commit.message_row_id, "PATCH", { content: "must not persist", thread_id: -1 })).status).toBe(400);
+      expect(db.query("SELECT content FROM messages WHERE rowid=?").get(commit.message_row_id)).toEqual({ content: "synthetic answer" });
+      expect((await mutate(commit.message_row_id, "PATCH", { content: "authorised display edit", thread_id: commit.message_row_id })).status).toBe(200);
+      expect(await terminal.value.getTerminal(commit.operation_id)).toEqual(original);
+      expect((await mutate(row.rowid, "PATCH", { content: "edited accepted input" })).status).toBe(200);
+      expect((await mutate(row.rowid, "DELETE")).status).toBe(200);
+      expect((await mutate(commit.message_row_id, "DELETE")).status).toBe(200);
+      expect(await terminal.value.getTerminal(commit.operation_id)).toEqual(original);
+      expect(base.host.modelCalls).toBe(2);
+    }
     if (forks) {
       // REAL shared-runtime regression: A's HTTP compact holds maintenance while
       // B's normal HTTP input is accepted and claimed by its existing queue worker.
@@ -669,11 +720,31 @@ for (const [failWait, forks, deferred] of [[false, false, undefined], [false, tr
     const files = readdirSync(process.env.PICLAW_WORKSPACE!, { recursive: true }).map(String);
     expect(files.filter(p => /\.jsonl$/i.test(p))).toEqual([]);
     expect(files.filter(p => /\.(db|sqlite)$/i.test(p))).toEqual([".piclaw/store/messages.db"]);
+  } catch (error) {
+    // Preserve the original assertion if cleanup of a deliberately uncertain
+    // operation also times out. These fixtures contain synthetic data only.
+    console.error("Application qualification failed before shutdown", error);
+    throw error;
   } finally {
     compactWaitSpy?.mockRestore(); compactHold.release();
     const exit = spyOn(process, "exit").mockImplementation(() => undefined as never);
-    try { await shutdown("fixture"); await running; }
-    finally { exit.mockRestore(); }
+    const held = barrier(), entered = barrier();
+    const control = !failWait && !forks && deferred === undefined ? bundle.sessionOptions.getDurableSession(chat) : undefined;
+    const operation = control?.runOwnedControl?.(async () => { entered.release(); await held.promise; return "joined"; });
+    try {
+      if (control) { expect(operation).toBeDefined(); await entered.promise; }
+      let stopped = false;
+      const stopping = shutdown("fixture").then(() => { stopped = true; });
+      if (control) {
+        for (let n = 0; n < 200 && !control.lifetimeSignal?.aborted; n++) await Bun.sleep(5);
+        expect(control.lifetimeSignal?.aborted).toBe(true);
+        await Bun.sleep(25);
+        expect(stopped).toBe(false);
+        expect(() => control.assertCurrent?.()).toThrow();
+        held.release(); expect(await operation).toBe("joined");
+      }
+      await stopping; await running;
+    } finally { held.release(); await operation; exit.mockRestore(); }
     lock.assertCurrentOwner(); // Other application components are still live.
     expect(() => bundle.bind({ queue, agentPool: pool })).toThrow("sealed");
     expect(db.query("SELECT 1 AS alive").get()).toEqual({ alive: 1 });

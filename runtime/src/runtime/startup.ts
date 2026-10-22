@@ -95,6 +95,12 @@ function isDirectoryEmpty(path: string): boolean {
 
 export function cleanupOrphanedActiveChatArtifacts(): number {
   const db = getDb();
+  // Native conversations are owned by the SDK manifest, not legacy session files.
+  // Migration relocates those files; deleting their branches corrupts routing.
+  if (db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='documents'").get() &&
+      db.query("SELECT 1 FROM documents WHERE kind=? AND scope_kind='conversation' AND owner_id=1 AND retired_at IS NULL LIMIT 1")
+        .get(JSON.stringify("app.application-conversations"))) return 0;
+
   const rows = db.prepare(
     `SELECT b.chat_jid
        FROM chat_branches b

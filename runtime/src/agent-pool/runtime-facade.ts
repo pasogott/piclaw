@@ -13,6 +13,12 @@ import type { Api, Model, Provider } from "@earendil-works/pi-ai";
 
 import { applyControlCommand, type AgentControlCommand, type AgentControlResult } from "../agent-control/index.js";
 import { handleModel, resolveControlModelSelection } from "../agent-control/handlers/model.js";
+import { applySessionIndependentControlCommand, SESSION_INDEPENDENT_CONTROL_COMMAND_TYPES } from "../agent-control/agent-control-handlers.js";
+import { handleProviderQuota } from "../agent-control/handlers/info.js";
+import { getNativeCommandCatalogue } from "../agent-control/native-control-capabilities.js";
+import { handleLogin, handleLogout, revokeNativeProviderAuthContext } from "../agent-control/handlers/login.js";
+import type { NativeProviderAuthContext } from "../agent-control/provider-auth-context.js";
+import type { DurableSessionPositionPort } from "./durable-runtime-adapter.js";
 import { formatThinkingLevelForDisplay, getAvailableThinkingLevelsForModel, resolveThinkingAlias, THINKING_LEVELS } from "../agent-control/agent-control-helpers.js";
 import { buildSessionTreeSnapshot } from "../agent-control/session-tree-snapshot.js";
 import { renderSessionTreeWidget } from "../agent-control/handlers/tree.js";
@@ -33,6 +39,7 @@ import type { PoolEntry } from "./session-manager.js";
 import { probeCompactionModel, type CompactionModelProbeResult } from "./compaction-model-probe.js";
 import { readAccessConfig } from "../core/config-access.js";
 import { getExecutionIdentity } from "../core/execution-context.js";
+import { createLogger } from "../utils/logger.js";
 
 const MAX_PERSISTED_MODEL_STATE_CACHE_CHATS = 512;
 const persistedModelStateCache = new Map<string, {
@@ -290,9 +297,9 @@ export interface ProviderUsageRefreshEvent {
 
 export interface AgentRuntimeFacadeOptions {
   pool: Map<string, PoolEntry>;
-  getDurableSession?: (chatJid: string) => import("./durable-runtime-adapter.js").DurableSessionPositionPort | undefined;
+  getDurableSession?: (chatJid: string) => DurableSessionPositionPort | undefined;
   /** Compatibility input for isolated callers; application routing uses the backend lookup. */
-  durableSessions?: ReadonlyMap<string, import("./durable-runtime-adapter.js").DurableSessionPositionPort>;
+  durableSessions?: ReadonlyMap<string, DurableSessionPositionPort>;
   getOrCreateRuntime: (chatJid: string) => Promise<AgentSessionRuntime>;
   modelRegistry: ModelRegistry;
   modelRuntime: ModelRuntime;
@@ -317,13 +324,19 @@ export class AgentRuntimeFacade {
   // provider-usage.ts fingerprints that credential and discards superseded refresh results.
   private readonly getDurableSession: NonNullable<AgentRuntimeFacadeOptions["getDurableSession"]>;
   private readonly providerUsageRefreshInFlight = new Map<string, Promise<void>>();
+  private readonly nativeProviderAuthContexts = new Map<string, NativeProviderAuthContext>();
   private providerUsageRefreshListener: ((event: ProviderUsageRefreshEvent) => void) | undefined;
 
   constructor(private readonly options: AgentRuntimeFacadeOptions) {
     this.providerUsageRefreshListener = options.onProviderUsageRefresh;
     // Capture routing before any session factory is entered. Never fall back on port failure.
     const compatibility = options.durableSessions === undefined ? undefined : new Map([...options.durableSessions].map(([chat, port]) =>
-      [chat, Object.freeze({ ...port, readPosition: port.readPosition.bind(port), readModel: port.readModel?.bind(port), readThinkingLevel: port.readThinkingLevel?.bind(port), setThinkingLevel: port.setThinkingLevel?.bind(port), setModel: port.setModel?.bind(port), compact: port.compact?.bind(port), readTree: port.readTree?.bind(port) })]));
+      [chat, Object.freeze({ ...port, readPosition: port.readPosition.bind(port), readModel: port.readModel?.bind(port),
+        readThinkingLevel: port.readThinkingLevel?.bind(port), setThinkingLevel: port.setThinkingLevel?.bind(port),
+        setModel: port.setModel?.bind(port), reset: port.reset?.bind(port), abort: port.abort?.bind(port),
+        compact: port.compact?.bind(port), reconcileMaintenance: port.reconcileMaintenance?.bind(port),
+        readTree: port.readTree?.bind(port), readMetadata: port.readMetadata?.bind(port), readReport: port.readReport?.bind(port),
+        assertCurrent: port.assertCurrent?.bind(port), runOwnedControl: port.runOwnedControl?.bind(port) })]));
     this.getDurableSession = options.getDurableSession?.bind(options) ?? (chat => compatibility?.get(chat));
     options = { ...options, getDurableSession: options.getDurableSession ?? (compatibility && this.getDurableSession) };
     const legacy = options.getOrCreateRuntime;
@@ -333,6 +346,32 @@ export class AgentRuntimeFacade {
     } };
   }
 
+  private nativeProviderAuthContext(chatJid: string, port: DurableSessionPositionPort): NativeProviderAuthContext {
+    if (!port.assertCurrent || !port.runOwnedControl || !port.lifetimeSignal || port.lifetimeSignal.aborted) throw Error("Native authentication lifetime unavailable");
+    const existing = this.nativeProviderAuthContexts.get(chatJid);
+    if (existing && existing.bindingId === port.sessionId && existing.signal === port.lifetimeSignal) { existing.assertCurrent(); return existing; }
+    if (existing) revokeNativeProviderAuthContext(existing);
+    const assertCurrent = port.assertCurrent.bind(port), runOwned = port.runOwnedControl.bind(port);
+    const context: NativeProviderAuthContext = Object.freeze({
+      kind: "native-provider-auth", chatJid, bindingId: port.sessionId, runtime: this.options.modelRuntime, signal: port.lifetimeSignal,
+      assertCurrent: () => {
+        const result: unknown = assertCurrent();
+        if (result !== undefined) {
+          void Promise.resolve(result).catch(() => {
+            createLogger("agent_pool").warn("invalid_auth_authority", { message: "Rejected asynchronous authentication authority" });
+          });
+          throw Error("Native authentication authority must be synchronous");
+        }
+        if (this.nativeProviderAuthContexts.get(chatJid) !== context) throw Error("Native authentication binding changed");
+      },
+      runOwned: <T>(operation: () => Promise<T>) => runOwned(operation),
+      activateModel: (provider: string, modelId: string) => this.applyControlCommand(chatJid, { type: "model", provider, modelId, raw: `/model ${provider}/${modelId}` }),
+    });
+    this.nativeProviderAuthContexts.set(chatJid, context);
+    context.assertCurrent();
+    return context;
+  }
+
   setProviderUsageRefreshListener(listener: ((event: ProviderUsageRefreshEvent) => void) | undefined): void {
     this.providerUsageRefreshListener = listener;
   }
@@ -340,6 +379,109 @@ export class AgentRuntimeFacade {
   async applyControlCommand(chatJid: string, command: AgentControlCommand): Promise<AgentControlResult> {
     const port = this.getDurableSession(chatJid);
     if (port) {
+      requireSingleUserDirectExecution("Native control commands");
+      if (SESSION_INDEPENDENT_CONTROL_COMMAND_TYPES.has(command.type)) {
+        revokeAddonLocalAgent(chatJid);
+        const release = this.options.acquireCommandProtection?.(chatJid);
+        try {
+          const independent = await withChatContext(chatJid, detectChannel(chatJid), () => applySessionIndependentControlCommand(command));
+          if (!independent) throw Error("Native host control unavailable");
+          return independent;
+        } finally { release?.(); }
+      }
+      if (command.type === "login" || command.type === "logout") {
+        if (!port.assertCurrent || !port.runOwnedControl || !port.lifetimeSignal) return { status: "error", message: "Native authentication lifetime unavailable. No legacy session was opened." };
+        const context = this.nativeProviderAuthContext(chatJid, port);
+        revokeAddonLocalAgent(chatJid);
+        const release = this.options.acquireCommandProtection?.(chatJid);
+        try { return await withChatContext(chatJid, chatJid.startsWith("web:") ? "web" : "unknown", () => command.type === "login"
+          ? handleLogin(context, this.options.modelRegistry, command) : handleLogout(context, this.options.modelRegistry, command)); }
+        finally { release?.(); }
+      }
+      if (command.type === "commands") {
+        const commands = getNativeCommandCatalogue(port);
+        return { status: "success", message: ["**Native core command audit**",
+          "Unavailable controls fail closed; no legacy session is opened. Tree is read-only; reset keeps the conversation identity.",
+          "Web input commands use durable admission, not legacy prompt queues. Add-on commands are managed separately.",
+          "", "| Command | Status | Aliases |", "|---|---|---|",
+          ...commands.map(command => `| ${command.name} | ${command.status} | ${(command.aliases ?? []).join(", ") || "—"} |`)].join("\n") };
+      }
+      if (command.type === "stats" || command.type === "context" || command.type === "last") {
+        if (!port.readReport) return { status: "error", message: "Native session reporting unavailable. No legacy session was opened." };
+        const report = await port.readReport();
+        if (command.type === "last") return report.lastAnswer
+          ? { status: "success", message: `Last assistant response:\n\n${report.lastAnswer}` }
+          : { status: "error", message: "No assistant messages in the active native context." };
+        if (command.type === "context") return { status: "success", message: ["**Durable context**",
+          `Active entries: ${report.activeEntries}`, `Current model window: ${report.contextWindow ?? "unknown"}`,
+          `Last committed observed tokens: ${report.observedTokens ?? "unknown"}`, `Observed model: ${report.observedModel ?? "unknown"}`,
+          "Observation includes that response's output; it is not a next-request fit estimate."].join("\n") };
+        return { status: "success", message: ["**Durable session statistics**",
+          `Active entries: ${report.activeEntries}`, `Active user / assistant messages: ${report.userMessages} / ${report.assistantMessages}`,
+          "SDK own-conversation committed ledger (not provider billing):",
+          `Input / output: ${report.usage.input} / ${report.usage.output}`,
+          `Cache read / write: ${report.usage.cacheRead} / ${report.usage.cacheWrite}`,
+          `Recorded cost: $${report.usage.cost.toFixed(6)}`].join("\n") };
+      }
+      if (command.type === "quota") {
+        const label = await port.readModel?.();
+        const split = label?.indexOf("/") ?? -1;
+        return handleProviderQuota(this.options.modelRuntime, label && split > 0
+          ? { provider: label.slice(0, split), id: label.slice(split + 1) } : undefined);
+      }
+      if (command.type === "state") {
+        const [model, thinking, position] = await Promise.all([port.readModel?.(), port.readThinkingLevel?.(), port.readPosition()]);
+        return { status: "success", message: ["**Durable session state**", `Session: ${port.sessionId}`, `Branch: ${port.branchId}`,
+          `Model: ${model ?? "unavailable"}`, `Thinking: ${thinking ?? "unavailable"}`, `Position: ${position ?? "empty"}`,
+          "Storage: pi-durable SQLite (no legacy session file)"].join("\n") };
+      }
+      if (command.type === "cycle_model") {
+        const models = (await this.getAvailableModels(chatJid, { includeProviderUsage: false, includeProviderDiagnostics: false })).model_options;
+        if (!models.length) return { status: "error", message: "No available native models." };
+        const current = await port.readModel?.();
+        const index = models.findIndex(model => model.label === current);
+        const next = index < 0 ? (command.direction === "backward" ? models.length - 1 : 0)
+          : (index + (command.direction === "backward" ? -1 : 1) + models.length) % models.length;
+        return this.applyControlCommand(chatJid, { type: "model", provider: models[next]!.provider, modelId: models[next]!.id, raw: command.raw });
+      }
+      if (command.type === "cycle_thinking") {
+        const label = await port.readModel?.();
+        const model = this.options.modelRegistry.getAvailable().find(model => `${model.provider}/${model.id}` === label);
+        if (!model) return { status: "error", message: "No available native thinking model." };
+        const levels = getAvailableThinkingLevelsForModel(model, ["off"]);
+        const current = await port.readThinkingLevel?.();
+        const next = levels[(levels.findIndex(level => level === current) + 1) % levels.length];
+        if (!next) return { status: "error", message: "No available thinking levels." };
+        return this.applyControlCommand(chatJid, { type: "thinking", level: next, raw: command.raw });
+      }
+      if (command.type === "abort") {
+        requireSingleUserDirectExecution("Direct abort commands");
+        if (!port.abort) return { status: "error", message: "Native operation abort unavailable. No legacy session was opened." };
+        revokeAddonLocalAgent(chatJid);
+        const release = this.options.acquireCommandProtection?.(chatJid);
+        try {
+          const aborted = await port.abort();
+          return { status: "success", message: aborted ? "Aborted the current durable operation." : "No active durable operation." };
+        } finally { release?.(); }
+      }
+      if (command.type === "new_session") {
+        requireSingleUserDirectExecution("Direct session reset");
+        if (command.parent) return { status: "error", message: "Durable contexts do not accept legacy session-file parents." };
+        if (!port.reset) return { status: "error", message: "Native context reset unavailable." };
+        revokeAddonLocalAgent(chatJid);
+        const release = this.options.acquireCommandProtection?.(chatJid);
+        try {
+          await port.reset();
+          const auth = this.nativeProviderAuthContexts.get(chatJid);
+          this.nativeProviderAuthContexts.delete(chatJid);
+          if (auth) revokeNativeProviderAuthContext(auth);
+          return { status: "success", message: "Started a new durable context. Previous history is retained.",
+            sessionGeneration: port.sessionId, sessionGenerationChanged: false,
+            contextUsage: { tokens: null, contextWindow: null, percent: null, sessionGeneration: port.sessionId, source: "durable-reset" } };
+        } catch (error) {
+          return { status: "error", message: error instanceof Error ? error.message : "Context reset failed." };
+        } finally { release?.(); }
+      }
       if (command.type === "compact") {
         requireSingleUserDirectExecution("Direct control commands");
         if (!port.compact) throw new Error("Durable compaction unavailable");
@@ -405,7 +547,7 @@ export class AgentRuntimeFacade {
           ...(!model.reasoning ? ["This model does not support thinking."] : []),
         ].join("\n"), thinking_level: level, thinking_level_label: display };
       }
-      if (command.type !== "tree" || command.targetId) throw new Error("Durable history mutation unavailable");
+      if (command.type !== "tree" || command.targetId) return { status: "error", message: `Native command '${command.type}' is unavailable. No legacy session was opened.` };
       if (!port.readTree) throw new Error("Durable session tree unavailable");
       const tree = await port.readTree();
       return renderSessionTreeWidget(tree, chatJid) ?? { status: "success", message: tree.nodes.length

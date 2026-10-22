@@ -166,13 +166,41 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         ? root.query("SELECT id, content FROM messages WHERE rowid=? AND chat_jid=?").get(Number(ref.slice(12)), input.chatJid)
         : ref === `queued-source:${input.sourceId}`
           ? root.query("SELECT id, content FROM messages WHERE id=? AND chat_jid=?").get(input.sourceId, input.chatJid) : null) as { id: string; content: string } | null;
-      if (!row || row.id !== input.sourceId) throw Error("Unverified application payload");
-      return row.content;
+      if (row?.id === input.sourceId) return row.content;
+      // Timeline rows are mutable projections. Already-admitted work recovers its
+      // bytes from the SDK accepted submission; bindContent still checks the hash.
+      const saved = root.query(`SELECT e.record,b.conversation_id,b.operation_id,b.source_seq,b.branch_id,b.request_id,b.request_hash
+        FROM piclaw_durable_bindings_v1 b JOIN submissions s ON s.id=b.submission_id
+        JOIN entries e ON e.id=json_extract(s.record,'$.entry')
+        WHERE b.chat_jid=? AND b.source_id=? AND b.payload_ref=? AND b.incarnation=?`)
+        .get(input.chatJid,input.sourceId,ref,r.incarnation) as { record: string; conversation_id: number; operation_id: string; source_seq: number; branch_id: string; request_id: string; request_hash: string } | null;
+      if (!saved) throw Error("Unverified application payload");
+      const entry = JSON.parse(saved.record), host = entry.data, user = entry.model;
+      if (entry.kind !== "host.accepted" || entry.conversationId !== saved.conversation_id ||
+          host?.incarnation !== r.incarnation || host.chatJid !== input.chatJid || host.branchId !== saved.branch_id ||
+          host.operationId !== saved.operation_id || host.sourceSeq !== saved.source_seq || host.sourceId !== input.sourceId || host.payloadRef !== ref ||
+          host.requestId !== saved.request_id || host.requestHash !== saved.request_hash ||
+          !Array.isArray(user) || user.length !== 1 || user[0]?.role !== "user" || typeof user[0].content !== "string") throw Error("Unverified SDK accepted payload");
+      return user[0].content;
     }
     const bindings = createHostDurableBindings(root, { domain: r.incarnation, incarnation: r.incarnation, manifest, getConversationBinding: lookup, assertOwner: assert, resolveContent: content });
     controller = await createHostController({ acquireOwnership: async () => lease,
       createStorage: async () => SqliteStorage.open(candidateDatabase),
       runtime: { ...r, work, terminal, bindings, materializeAnswer: config.materializeAnswer, prepareTerminalEffect: config.prepareTerminalEffect, onOperationSettled: config.onOperationSettled, onMaintenanceSettled: config.onMaintenanceSettled, putAnswer: config.answers.put.bind(config.answers),
+        cancelOperationSource(input, expectedVersion) {
+          root.transaction(() => {
+            assert();
+            const operation = root.query("SELECT version,phase,cancellation_source_seq FROM service_effect_s01_operations WHERE operation_id=? AND chat_jid=?")
+              .get(input.operationId, input.chatJid) as { version: number; phase: string; cancellation_source_seq: number | null } | null;
+            if (!operation || operation.version !== expectedVersion || operation.phase === "terminal") throw Error("Abort operation changed");
+            if (operation.cancellation_source_seq !== null) return;
+            const id = `operator-abort:${input.operationId}`;
+            work.acceptAndCancelSourceInTransaction(sealed({ effect: effect(id), chatJid: input.chatJid, sourceId: id,
+              kind: "cancellation", payloadRef: id, targetOperationId: input.operationId, parentSourceSeq: input.sourceSeq,
+              acceptedAt: r.now(), createWakeIntent: false }), expectedVersion, "operator_abort", root);
+            assert();
+          }).immediate();
+        },
         cancelSideSource(input) {
           root.transaction(() => {
             assert();
@@ -227,6 +255,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     } });
     const adapter = createDurableConversationAdapter({ incarnation: r.incarnation, manifest, getConversationBinding: lookup, runtime: runtimePort });
     const shutdown = new AbortController();
+    const hostControls = new Set<Promise<unknown>>();
     const recovery = createDurableRecoveryDispatch({ assertCurrentWriter: assert, submitIntent: input => adapter.submitIntent(input),
       reconcileRecovered: controller.reconcileRecovered, shutdown: shutdown.signal });
     const dispatch = createDurableQueueDispatch({ work, adapter, branchId: chat => {
@@ -303,7 +332,32 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
     };
     const getDurableSession = (chat: string) => {
       const binding = routeIndex.get(chat);
-      return binding && adapter.sessionPosition(chat, binding.branchId, binding.sessionId);
+      if (!binding) return undefined;
+      const assertCurrent = () => {
+        assertLive();
+        if (routeIndex.get(chat) !== binding || lookup(chat, binding.branchId)?.conversationId !== binding.conversationId) throw Error("Host control binding changed");
+      };
+      return Object.freeze({ ...adapter.sessionPosition(chat, binding.branchId, binding.sessionId),
+        assertCurrent, lifetimeSignal: shutdown.signal,
+        runOwnedControl<T>(operation: () => Promise<T>): Promise<T> {
+          assertCurrent();
+          // Register before callback entry so close can join credential writes.
+          const running = Promise.resolve().then(() => { assertCurrent(); return operation(); });
+          hostControls.add(running);
+          void running.finally(() => hostControls.delete(running)).catch(() => {});
+          return running;
+        },
+        async abort() {
+          assertLive();
+          const frontier = value(await work.getChatFrontier(chat)); assertLive();
+          if (!frontier.activeOperationId) return false;
+          const operation = value(await work.getOperation(frontier.activeOperationId)); assertLive();
+          if (!operation || operation.terminal) return false;
+          const input = await bindings.findSource(chat, operation.primarySourceSeq); assertLive();
+          if (!input || input.operationId !== operation.operationId || input.conversationId !== binding.conversationId)
+            throw Error("Exact ordinary abort binding required");
+          return runtime.abortOperation(input);
+        } });
     };
     const preparing = new Map<string, Promise<void>>();
     const assertLive = () => { assert(); if (closing || shutdown.signal.aborted) throw Error("Application closing"); };
@@ -645,6 +699,25 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       return { status: "success", result: state.answer.text };
     }
     let inputProjection: Parameters<typeof storeWebMessage>[0] | undefined;
+    const getAcceptedQueuedSteering = (chat: string, check = assertLive) => {
+      assertLive(); check();
+      const projection = inputProjection, scope = routeIndex.get(chat);
+      if (!projection || !scope || !lookup(chat, scope.branchId)) return undefined;
+      const running = root.query(`SELECT 1 FROM service_effect_s01_operations WHERE chat_jid=? AND phase='executing'
+        AND harness_state='running' AND harness_session_id=? AND harness_lane=? AND harness_watch_generation=?`)
+        .get(chat, r.sessionId, r.lane, r.generation);
+      if (!running) return undefined;
+      const checkProjection = () => { assertLive(); check(); if (inputProjection !== projection) throw Error("Application input projection detached"); };
+      return createDurableQueuedSteering({ work, adapter, chatJid: chat, branchId: scope.branchId,
+        assertCurrentWriter: checkProjection, runningBinding: { sessionId: r.sessionId, lane: r.lane, watchGeneration: r.generation },
+        readQueued: id => hostFollowups.getQueuedFollowupItems(chat).find(item => item.rowId === id),
+        validatePayload: stored => { checkProjection(); getQueuedInputMaterialization(chat)!(stored); checkProjection(); },
+        materialize: (item, accept) => storeWebMessage(projection,
+          { chatJid: chat, content: item.queuedContent, isBot: false, mediaIds: item.mediaIds ?? [], agentId: "default", agentName: "User" },
+          { consumeDeferredFollowupRowId: item.rowId, materializeQueuedSource: accept, isSteeringMessage: true,
+            contentBlocks: item.contentBlocks, linkPreviews: item.linkPreviews }),
+        onPendingIntent: recovery.onPendingIntent });
+    };
     const applicationInput = createApplicationHostInput({ root, domain: r.incarnation, assertCurrent: assertLive,
       routes: () => [...routeIndex.values()].filter(b => lookup(b.chatJid, b.branchId)),
       followups: hostFollowups, admission: getQueuedInputSourceAdmission,
@@ -653,20 +726,8 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
            check();
            const projection = inputProjection;
            if (!projection) throw Error("Application input projection unavailable");
-           const checkProjection = () => { check(); if (inputProjection !== projection) throw Error("Application input projection detached"); };
-           const frontier = await work.getChatFrontier(receipt.chatJid); check();
-           if (!frontier.ok || !frontier.value.activeOperationId)
-             return { ...receipt, mode: "new_input" as const };
-           const selected = await work.getOperation(frontier.value.activeOperationId); check();
-           if (!selected.ok || selected.value?.harness?.state !== "running") throw Error("No running host binding");
-           const steering = createDurableQueuedSteering({ work, adapter, chatJid: receipt.chatJid,
-             branchId: input.target.branchId, assertCurrentWriter: checkProjection, runningBinding: selected.value.harness,
-             readQueued: id => hostFollowups.getQueuedFollowupItems(receipt.chatJid).find(item => item.rowId === id),
-             validatePayload: stored => { checkProjection(); getQueuedInputMaterialization(receipt.chatJid)!(stored); checkProjection(); },
-             materialize: (item, accept) => storeWebMessage(projection,
-               { chatJid: receipt.chatJid, content: item.queuedContent, isBot: false, mediaIds: [], agentId: "default", agentName: "Remote Peer" },
-               { consumeDeferredFollowupRowId: item.rowId, materializeQueuedSource: accept, isSteeringMessage: true }),
-             onPendingIntent: recovery.onPendingIntent });
+           const steering = getAcceptedQueuedSteering(receipt.chatJid, check);
+           if (!steering) return { ...receipt, mode: "new_input" as const };
            const accepted = await steering.accept(receipt.rowId);
            // Native timeline surface, after the materialization transaction committed.
            try { projection.broadcastEvent("new_post", accepted.interaction); } catch { /* Publication cannot revoke committed input. */ }
@@ -702,7 +763,7 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
         bound = true;
         return Object.freeze({ ...options, prepareInputSourceAdmission, getInputSourceAdmission, getQueuedInputSourceAdmission, getQueuedInputMaterialization, getQueuedInputSourceWithdrawal,
           prepareInputText: prepareInputText ? (chat: string, text: string) => { assertLive(); if (!routeIndex.has(chat)) throw Error("Unbound input preparation"); return prepareInputText(chat, text); } : undefined,
-          dispatchAcceptedInput: dispatch });
+          dispatchAcceptedInput: dispatch, getAcceptedQueuedSteering });
       },
       /** Continue the existing command worker's same-task settlement; no queue replay. */
       reconcileMaintenance(chatJid: string): Promise<void> {
@@ -714,7 +775,11 @@ export async function createApplicationBootstrapBundle(config: ApplicationBootst
       retryRecoveredWork: recovery.retryRecoveredWork,
       onPendingIntent: recovery.onPendingIntent,
       stop() { inputProjection = undefined; shutdown.abort(); },
-      close() { inputProjection = undefined; return closing ??= (async () => { shutdown.abort(); await activeController.close(); })(); },
+      close() { inputProjection = undefined; return closing ??= (async () => {
+        shutdown.abort();
+        await Promise.allSettled([...hostControls]);
+        await activeController.close();
+      })(); },
     } satisfies RuntimeBackend & ReturnType<typeof createApplicationHostInput> & {
       bindInputProjection(projection: Parameters<typeof storeWebMessage>[0] | undefined): void;
       dispatchAcceptedInput: typeof dispatch;

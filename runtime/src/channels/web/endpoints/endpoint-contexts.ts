@@ -19,8 +19,7 @@ interface JsonLike {
 export interface PostMutationsContextDeps extends JsonLike {
   defaultChatJid: string;
   getLastCommandInteractionId(): number | null;
-  replaceMessageContent(chatJid: string, id: number, content: string): InteractionRow | null;
-  setThreadId(messageId: number, threadId: number): void;
+  replaceMessageContent(chatJid: string, id: number, content: string, threadId?: number): InteractionRow | null;
   broadcastInteractionUpdated(interaction: InteractionRow): void;
   storeMessage(
     chatJid: string,
@@ -39,7 +38,6 @@ export function createPostMutationsContext(deps: PostMutationsContextDeps): Post
     lastCommandInteractionId: deps.getLastCommandInteractionId(),
     json: deps.json,
     replaceMessageContent: deps.replaceMessageContent,
-    setThreadId: deps.setThreadId,
     broadcastInteractionUpdated: deps.broadcastInteractionUpdated,
     storeMessage: deps.storeMessage,
     broadcastAgentResponse: deps.broadcastAgentResponse,

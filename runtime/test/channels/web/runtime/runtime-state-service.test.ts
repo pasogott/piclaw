@@ -273,3 +273,14 @@ describe("web runtime state service", () => {
     expect(clearCalls).toEqual(["web:1"]);
   });
 });
+
+
+test("native terminal status stays idle during worker cleanup; accepted work remains active", () => {
+  let operation: {operation_id:string;phase:string}|null = null, queued = 0;
+  const statuses = new Map<string,any>([["chat",{type:"done",title:"Idle",turn_id:"durable:1"}]]);
+  const service = new WebChannelRuntimeStateService({getAssistantName:()=>"Test",getChatCursor:()=>"",enqueue(){},async processChat(){},isNativeRuntime:()=>true,isChatLaneBusy:()=>true,readNativeTurnState:()=>({operation,queued})},{defaultAgentId:"default",stateKey:"native-status-test"},{agentStatusStore:{get:(chat:string)=>statuses.get(chat),update:(chat:string,value:any)=>statuses.set(chat,value),clearPersistedStatuses(){}} as any});
+  expect(service.getAgentStatus("chat")?.type).toBe("done");
+  queued=1;expect(service.getAgentStatus("chat")?.state).toBe("active");
+  queued=0;operation={operation_id:"op",phase:"executing"};expect(service.getAgentStatus("chat")?.operation_id).toBe("op");
+  operation=null;statuses.set("chat",{type:"intent",intent_key:"native_task",title:"Shell task"});expect(service.getAgentStatus("chat")?.state).toBe("active");
+});

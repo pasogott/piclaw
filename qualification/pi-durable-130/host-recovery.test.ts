@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { acceptedSteerFixture } from "./src/accepted-steer-recovery-fixture.js";
 import { reconstituteAcceptedWork } from "../../runtime/durable-engine/src/host-recovery.js";
-import { value } from "./src/host-handoff.js";
+import { at, effect, sealed, value } from "./src/host-handoff.js";
 import { context } from "./src/fixture.js";
 import type { AcceptedSourceSnapshot } from "../../runtime/src/service-effects/contracts/service-work-store.js";
 
@@ -112,6 +112,30 @@ for (const boundary of ["before-submit", "committed-ack-lost"] as const) {
       expect(await f.runtime!.submitIntent(intent.input)).toBe(id);
       if (boundary === "committed-ack-lost") expect(Number(id)).toBe(f.committedIntentId!);
       expect((await f.candidateStorage!.submissionByRequest(f.base.root.id, intent.input.requestId, context))?.id).toBe(id);
+      const operation = value(await f.ports.work.getOperation(f.incarnation))!;
+      const cancelId = `operator-abort:${f.incarnation}`;
+      f.db.transaction(() => f.ports.work.acceptAndCancelSourceInTransaction(sealed({ effect: effect(cancelId),
+        chatJid: f.chatJid, sourceId: cancelId, kind: "cancellation", payloadRef: cancelId,
+        targetOperationId: f.incarnation, parentSourceSeq: primary.sourceSeq, acceptedAt: at, createWakeIntent: false }),
+        operation.version, "operator_abort", f.db)).immediate();
+      options.readAcceptedInput = async source => {
+        expect(source.kind).not.toBe("cancellation");
+        return reader(source);
+      };
+      const cancelled = await reconstituteAcceptedWork(options);
+      expect(cancelled.map(entry => entry.role)).toEqual(["primary", "intent"]);
+      const cancellation = value(await f.ports.work.getOperation(f.incarnation))!.cancellation!;
+      for (const bad of [null, { kind: "message" }, { targetOperationId: "other" }, { state: "consumed" }]) {
+        await expect(reconstituteAcceptedWork({ ...options, work: {
+          listOpenOperations: options.work.listOpenOperations.bind(options.work),
+          getOperation: options.work.getOperation.bind(options.work),
+          getQueuedInputIntent: options.work.getQueuedInputIntent.bind(options.work),
+          getSourceBySeq(chat, seq) {
+            const source = options.work.getSourceBySeq(chat, seq);
+            return seq !== cancellation.sourceSeq ? source : bad === null ? null : { ...source!, ...bad };
+          },
+        } })).rejects.toThrow("Unverified recovered authority");
+      }
     } finally {
       await f.close();
       if (oldMemory === undefined) delete process.env.PICLAW_DB_IN_MEMORY; else process.env.PICLAW_DB_IN_MEMORY = oldMemory;

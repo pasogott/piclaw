@@ -28,7 +28,7 @@ const maskCredential = (id: string): string => {
 };
 
 /** Handle `/passkey` subcommands (list/delete/enrol) for agent-control flows. */
-export async function handlePasskey(_session: AgentSession, command: PasskeyCommand): Promise<AgentControlResult> {
+export async function handlePasskey(_session: AgentSession | undefined, command: PasskeyCommand): Promise<AgentControlResult> {
   if (readAccessConfig().mode !== "single-user") return { status: "error", message: "Use the account-bound passkey API in this access mode." };
   if (!isPasskeysEnabled()) {
     return { status: "error", message: "Passkeys are disabled (WEB_PASSKEY_MODE=totp-only)." };

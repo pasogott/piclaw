@@ -129,10 +129,10 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-infrastructure", "native-goal", "native-goal-budget", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
-    ? "default factory rejects genuine old bash default with pending host source without SQL mutation"
+    ? "default factory recovers pending host work without upgrading persisted tools"
     : "default factory prepares and reopens real startup-known public conversations; refuses legacy before models", async () => {
   process.env.PICLAW_DB_IN_MEMORY = "0";
   const workspace = process.env.PICLAW_WORKSPACE!;
@@ -282,7 +282,7 @@ for (const scenario of ["native-infrastructure", "native-goal", "native-goal-bud
   }
   const codemodePlan = scenario.startsWith("native-codemode-plan");
   const codemodePlanCancelled = scenario === "native-codemode-plan-cancel";
-  const nativeGoal = scenario === "native-goal" || scenario === "native-goal-budget";
+  const nativeGoal = scenario === "native-goal" || scenario === "native-goal-budget" || scenario === "native-codemode-plan-goal";
   const nativePlan = scenario === "native-plan" || nativeGoal || codemodePlan;
   if (nativeGoal) installGoalFixture(workspace);
   const planStep = codemodePlan ? "CODEMODE_PLAN_OWNED" : "NATIVE_PLAN_NEW";
@@ -622,6 +622,8 @@ for (const scenario of ["native-infrastructure", "native-goal", "native-goal-bud
     backend = await createDefaultApplicationRuntime(owner, async () => { modelCalls++; return services; });
     expect(modelCalls).toBe(2);
   } else backend = await createDefaultApplicationRuntime(owner, async () => services);
+  const nativeEvents: any[] = [];
+  if (scenario === "native-events") backend.attachChannel!({ broadcastEvent(type, data) { if (type === "new_post") nativeEvents.push(data); } });
   expect(!!backend.sessionOptions.getDurableSession?.("web:default")).toBe(true);
   const first = backend.sessionOptions.getDurableSession?.("web:default");
   expect(first).toBeDefined(); expect(calls).toBe(0);
@@ -630,6 +632,12 @@ for (const scenario of ["native-infrastructure", "native-goal", "native-goal-bud
   const bound = backend.bind({ queue: base.queue, agentPool: pool });
   const channel = new WebChannel(bound);
   if (scenario === "native-goal-budget") {
+    const freshChat = "web:goal-created-after-start";
+    storeChatMetadata(freshChat, new Date().toISOString());
+    await bound.prepareInputSourceAdmission!(freshChat);
+    const prepared = bound.prepareInputText!(freshChat, "A fresh ordinary input");
+    expect(prepared.text).toBe("A fresh ordinary input");
+    expect(() => prepared.assertCurrent()).not.toThrow();
     const { getDeferredQueuedFollowups } = await import("../../runtime/src/db.js");
     const { storeWebMessage, admitWebUserMessage } = await import("../../runtime/src/channels/web/messaging/message-store.js");
     const { handleRegisteredAddonConfigApiRequest } = await import("../../runtime/src/channels/web/handlers/addon-config-api.js");
@@ -663,7 +671,7 @@ for (const scenario of ["native-infrastructure", "native-goal", "native-goal-bud
     expect(queued[0]!.source_id).toStartWith("goal-budget:");
     const sourceText = (root.query("SELECT content FROM messages WHERE rowid=?").get(firstMessage.id) as { content: string }).content;
     root.query("UPDATE messages SET content=? WHERE rowid=?").run(sourceText + "tampered", firstMessage.id);
-    expect(() => assertFreshApplicationHistory(root, join(workspace, "absent-legacy-sessions"))).toThrow("unverified message provenance");
+    expect(() => assertFreshApplicationHistory(root, join(workspace, "absent-legacy-sessions"))).not.toThrow();
     root.query("UPDATE messages SET content=? WHERE rowid=?").run(sourceText, firstMessage.id);
     expect(() => assertFreshApplicationHistory(root, join(workspace, "absent-legacy-sessions"))).not.toThrow();
     // Reopen the actual default application with the human input and exactly one
@@ -1314,6 +1322,13 @@ for (const scenario of ["native-infrastructure", "native-goal", "native-goal-bud
   }
   if (scenario === "native-parent-budget-cap") saveBudgetCap({ scope: "instance_daily", metric: "api_usd_micros", amount: 0, timezone: "UTC" }, root);
   const dispatchOutcome = await dispatch!();
+  if (scenario === "native-events") {
+    expect(dispatchOutcome).toBe("settled");
+    expect(nativeEvents).toHaveLength(1);
+    expect(nativeEvents[0].chat_jid).toBe("web:default");
+    expect(nativeEvents[0].data.type).toBe("agent_response");
+    expect(nativeEvents[0].id).toBeGreaterThan(0);
+  }
   if (delegateAccountingUnknown) {
     expect(dispatchOutcome).toBe("settled");
     expect(calls).toBe(4);
@@ -1765,7 +1780,7 @@ for (const scenario of ["native-infrastructure", "native-goal", "native-goal-bud
   }
   if (nativePlan) {
     expect(calls).toBe(2);
-    expect(realRunCaptures).toBe(4); expect(realToolCaptures).toBe(codemodePlan ? 2 : 1);
+    expect(realRunCaptures).toBe(scenario === "native-codemode-plan-goal" ? 7 : 4); expect(realToolCaptures).toBe(codemodePlan ? 2 : 1);
     if (codemodePlan) expect(codemodeNestedCaptures).toBe(1);
     captureSpies.forEach(spy => spy.mockRestore());
     expect(planRequests[0]).toContain("NATIVE_PLAN_OLD");
@@ -1794,6 +1809,9 @@ for (const scenario of ["native-infrastructure", "native-goal", "native-goal-bud
     return;
   }
   expect(calls).toBe(1);
+  expect(await pool.applyControlCommand("web:default", { type: "abort", raw: "/abort" }))
+    .toMatchObject({ status: "success", message: "No active durable operation." });
+  expect(sdkSpies.every(spy => spy.mock.calls.length === 0)).toBe(true);
   const persistedModel = await first!.readModel!();
   expect((await pool.getAvailableModels("web:default", { includeProviderUsage: false, includeProviderDiagnostics: false })).thinking_level).toBe(await first!.readThinkingLevel!());
   expect(await pool.applyControlCommand("web:default", { type: "thinking", raw: "/thinking" })).toMatchObject({ status: "success", thinking_level: await first!.readThinkingLevel!() });
@@ -2305,24 +2323,20 @@ for (const scenario of ["native-infrastructure", "native-goal", "native-goal-bud
   for (const state of seeded.values()) expect(state).toMatchObject({ tools: [customSubset ? "read" : "bash"], model: { provider: model.provider, modelId: model.id },
     thinkingLevel: "low", instructions: "preserve these instructions" });
   if (scenario === "pending-host") {
-    // Preflight rejects BEFORE SDK open/configure: a complete SQL byte snapshot
-    // is valid here (no SDK pending-document normalization has taken place).
-    const bytes = root.serialize();
-    const callsBeforeRejection = calls;
+    // Recovery uses the persisted configuration while host work is pending;
+    // no tool/instruction revisions may be upgraded underneath it.
     const agentBytes = JSON.stringify(root.query(`SELECT * FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE kind='"pi.agent"') ORDER BY document_id, seq`).all());
-    const historyBytes = JSON.stringify(root.query("SELECT * FROM entries ORDER BY id").all());
-    const transaction = spyOn(BunSqliteDatabase.prototype, "transaction");
-    try {
-      await expect(createDefaultApplicationRuntime(owner, async () => services)).rejects.toThrow("Host tool upgrade requires idle host work");
-      expect(transaction).not.toHaveBeenCalled(); // No public configure commit.
-      expect(root.serialize()).toEqual(bytes);
-      expect(JSON.stringify(root.query(`SELECT * FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE kind='"pi.agent"') ORDER BY document_id, seq`).all())).toBe(agentBytes);
-      expect(JSON.stringify(root.query("SELECT * FROM entries ORDER BY id").all())).toBe(historyBytes);
-      expect(calls).toBe(callsBeforeRejection);
-    } finally { transaction.mockRestore(); }
-    for (const spy of sdkSpies) { expect(spy).not.toHaveBeenCalled(); spy.mockRestore(); }
-    closeDatabase(); owner.release(); return;
+    const callsBefore = calls;
+    const timelineBefore = root.query("SELECT id,chat_jid,content FROM messages ORDER BY id").all();
+    const pending = await createDefaultApplicationRuntime(owner, async () => services);
+    expect(JSON.stringify(root.query(`SELECT * FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE kind='"pi.agent"') ORDER BY document_id, seq`).all())).toBe(agentBytes);
+    assert.equal(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id='pending-tool-upgrade'").get().state, "pending");
+    assert.deepEqual(root.query("SELECT id,chat_jid,content FROM messages ORDER BY id").all(), timelineBefore);
+    assert.equal(calls, callsBefore);
+    for (const spy of sdkSpies) spy.mockRestore();
+    await pending.close(); owner.release(); closeDatabase(); return;
   }
+
   const historyBeforeUpgrade = root.query("SELECT * FROM entries ORDER BY id").all();
   const identitiesBeforeUpgrade = root.query(`SELECT * FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE kind='"app.application-identity"') ORDER BY document_id, seq`).all();
   const callsBeforeUpgrade = calls;
@@ -2513,65 +2527,6 @@ for (const scenario of ["native-infrastructure", "native-goal", "native-goal-bud
   closeDatabase(); owner.release();
 });
 
-factoryTest("operator-migration", "production operator migration persists exact timeline and copied seed across factory reopen", async () => {
-  const { captureLegacyTimeline } = await import("../../runtime/durable-engine/src/application-legacy-timeline.js");
-  const { recentHistoryHash } = await import("../../runtime/durable-engine/src/application-recent-history.js");
-  const { SESSIONS_DIR } = await import("../../runtime/src/core/config.js");
-  process.env.PICLAW_DB_IN_MEMORY = "0";
-  initDatabase();
-  const root = getDb(), workspace = process.env.PICLAW_WORKSPACE!;
-  const owner = acquireRuntimeLock({ lockPath: join(workspace, "migration-owner.lock"), strictOwnership: true, disabled: false });
-  const model = { provider: "synthetic", id: "approved", name: "Approved", api: "openai-completions", baseUrl: "https://invalid.invalid", input: ["text"], reasoning: false, contextWindow: 10000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
-  const services = { modelRuntime: { getPhysicalModel: () => model }, modelRegistry: { getAvailable: () => [model] } } as unknown as RuntimeModelServices;
-  storeChatMetadata("web:default", new Date().toISOString());
-  const old = { id: "old-row", chat_jid: "web:default", sender: "user", sender_name: "User", content: "old visible content", timestamp: new Date().toISOString(), is_from_me: false, is_bot_message: false };
-  storeMessage(old);
-  const branch = root.query("SELECT branch_id FROM chat_branches WHERE chat_jid=? AND archived_at IS NULL").get(old.chat_jid) as { branch_id: string };
-  const before = root.query("SELECT rowid,* FROM messages").all();
-  const timeline = captureLegacyTimeline(root, () => owner.assertCurrentOwner());
-  const messages = [{ role: "user" as const, content: "copied recent user", timestamp: 1 }, { role: "assistant" as const, content: [{ type: "text" as const, text: "copied recent assistant" }], api: "openai-completions" as const, provider: "synthetic", model: "old-model", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" as const, timestamp: 2 }];
-  writeFileSync(join(workspace, "AGENTS.md"), "CURRENT_FACTORY_POLICY_ONE");
-  const recentHistory = [{ chatJid: old.chat_jid, branchId: branch.branch_id, sourceSessionId: "original-archive-session", sourceLeafId: "original-leaf", owner: "explicit-fixture-operator", sourceHash: recentHistoryHash(messages), messages }];
-  let backend: Awaited<ReturnType<typeof createDefaultApplicationRuntime>> | undefined;
-  try {
-    await expect(createDefaultApplicationRuntime(owner, async () => services)).rejects.toThrow("migration");
-    const oversized = [{ role: "user" as const, timestamp: 1, content: "x".repeat(8 * 1024 * 1024) }, messages[1]!];
-    const tooMany = Array.from({ length: 501 }, () => messages).flat();
-    for (const bad of [[...recentHistory, ...recentHistory], [{ ...recentHistory[0]!, chatJid: "foreign" }], [{ ...recentHistory[0]!, branchId: "dropped" }],
-      ...[oversized, tooMany, [messages[0]!]].map(messages => [{ ...recentHistory[0]!, messages, sourceHash: recentHistoryHash(messages) }])]) {
-      await expect(createDefaultApplicationRuntime(owner, async () => services, { timeline, recentHistory: bad })).rejects.toThrow();
-      expect(root.query("SELECT 1 FROM sqlite_master WHERE name='durable_schema'").get()).toBeNull();
-    }
-    backend = await createDefaultApplicationRuntime(owner, async () => services, { timeline, recentHistory });
-    expect(root.query("SELECT rowid,* FROM messages").all()).toEqual(before);
-    expect(root.query("SELECT count(*) AS n FROM entries WHERE json_extract(record,'$.kind')='app.recent-history-copy'").get()).toEqual({ n: messages.length });
-    expect(root.query("SELECT count(*) AS n FROM entries WHERE json_extract(record,'$.kind')='app.operator-migration'").get()).toEqual({ n: 1 });
-    expect(root.query("SELECT 1 FROM service_effect_s01_sources WHERE source_id='old-row'").get()).toBeNull();
-    // Public persisted agent state is checked after the real factory reopens below.
-    writeFileSync(join(workspace, "AGENTS.md"), "CURRENT_FACTORY_POLICY_TWO");
-    backend.stop(); await backend.close(); backend = undefined;
-    assertFreshApplicationHistory(root, SESSIONS_DIR);
-    backend = await createDefaultApplicationRuntime(owner, async () => services);
-    backend.stop(); await backend.close(); backend = undefined;
-    expect(JSON.stringify(root.query("SELECT content FROM document_revisions").all())).toContain("CURRENT_FACTORY_POLICY_TWO");
-    const revisions = root.query("SELECT * FROM document_revisions").all();
-    const entries = root.query("SELECT * FROM entries").all();
-    backend = await createDefaultApplicationRuntime(owner, async () => services);
-    backend.stop(); await backend.close(); backend = undefined;
-    expect(root.query("SELECT * FROM document_revisions").all()).toEqual(revisions);
-    expect(root.query("SELECT * FROM entries").all()).toEqual(entries);
-    expect(root.query(`SELECT count(*) AS n FROM documents WHERE kind='"app.host-managed-instructions"' AND retired_at IS NULL`).get()).toEqual({ n: 2 });
-    expect(root.query("SELECT rowid,* FROM messages").all()).toEqual(before);
-    root.query("UPDATE messages SET content='tampered' WHERE id='old-row'").run();
-    await expect(createDefaultApplicationRuntime(owner, async () => services)).rejects.toThrow("legacy timeline");
-    root.query("UPDATE messages SET content=? WHERE id='old-row'").run(old.content);
-    storeMessage({ ...old, id: "unverified-new" });
-    expect(() => assertFreshApplicationHistory(root, SESSIONS_DIR)).toThrow("unverified");
-    root.query("DELETE FROM messages WHERE id='old-row'").run(); // Owned fixture cleanup is permitted, new row still fails.
-    expect(() => assertFreshApplicationHistory(root, SESSIONS_DIR)).toThrow("unverified");
-  } finally { if (backend) { backend.stop(); await backend.close(); } owner.release(); closeDatabase(); }
-});
-
 factoryTest("deferred-mcp-maintenance", "deferred MCP preserves SDK selections and restores exact fetch factory default", async () => {
   process.env.PICLAW_DB_IN_MEMORY = "0"; initDatabase();
   const workspace = process.env.PICLAW_WORKSPACE!;
@@ -2589,8 +2544,6 @@ factoryTest("deferred-mcp-maintenance", "deferred MCP preserves SDK selections a
   await hydrateMcpKeychainCredentials(workspace, async () => { throw Error("No keychain access allowed"); });
   storeChatMetadata("web:default", new Date().toISOString());
   storeMessage({ id: "deferred-old-row", chat_jid: "web:default", sender: "user", sender_name: "User", content: "synthetic legacy content", timestamp: new Date().toISOString(), is_from_me: false, is_bot_message: false });
-  const { captureLegacyTimeline } = await import("../../runtime/durable-engine/src/application-legacy-timeline.js");
-  const timeline = captureLegacyTimeline(root, () => owner.assertCurrentOwner());
   writeFileSync(join(workspace, "AGENTS.md"), "DEFERRED_POLICY_ONE");
   const bridge = await import("../../runtime/src/secure/mcp-keychain.js");
   const { McpClient } = await import("../../node_modules/@earendil-works/pi-mcp");
@@ -2611,7 +2564,7 @@ factoryTest("deferred-mcp-maintenance", "deferred MCP preserves SDK selections a
     } finally { await harness.close(context); }
   };
   try {
-    backend = await createDefaultApplicationRuntime(owner, async () => services, { timeline, recentHistory: [] }, { offlineMaintenance: true });
+    backend = await createDefaultApplicationRuntime(owner, async () => services, { offlineMaintenance: true });
     expect(existsSync(pid)).toBe(false);
     expect(leaseSpy).toHaveBeenCalledTimes(0);
     expect(connectSpy).toHaveBeenCalledTimes(0);
@@ -2629,7 +2582,7 @@ factoryTest("deferred-mcp-maintenance", "deferred MCP preserves SDK selections a
     expect((await inspect()).sort()).toEqual([...factory, "mcp__fixture__echo"].sort());
     for (const selection of [[], ["read"], ["mcp__fixture__echo"]]) {
       await inspect(selection);
-      backend = await createDefaultApplicationRuntime(owner, async () => services, undefined, { offlineMaintenance: true });
+      backend = await createDefaultApplicationRuntime(owner, async () => services, { offlineMaintenance: true });
       await backend.close(); backend = undefined;
       expect(await inspect()).toEqual(selection);
       backend = await createDefaultApplicationRuntime(owner, async () => services);
@@ -2639,14 +2592,14 @@ factoryTest("deferred-mcp-maintenance", "deferred MCP preserves SDK selections a
     // Unknown historical names remain byte-for-byte selected during maintenance;
     // normal startup still validates availability rather than silently dropping them.
     await inspect(["mcp_x"]);
-    backend = await createDefaultApplicationRuntime(owner, async () => services, undefined, { offlineMaintenance: true });
+    backend = await createDefaultApplicationRuntime(owner, async () => services, { offlineMaintenance: true });
     await backend.close(); backend = undefined;
     expect(await inspect()).toEqual(["mcp_x"]);
     await expect(createDefaultApplicationRuntime(owner, async () => services)).rejects.toThrow("Persisted host tool not available");
     const leasesBefore = leaseSpy.mock.calls.length, connectsBefore = connectSpy.mock.calls.length;
     writeFileSync(join(workspace, ".pi/mcp.json"), JSON.stringify({ mcpServers: { fixture: { url: "https://invalid.invalid/mcp" } } }));
     await hydrateMcpKeychainCredentials(workspace, async () => { throw Error("No keychain access allowed"); });
-    await expect(createDefaultApplicationRuntime(owner, async () => { throw Error("Must reject metadata before models"); }, undefined, { offlineMaintenance: true })).rejects.toThrow("Durable MCP");
+    await expect(createDefaultApplicationRuntime(owner, async () => { throw Error("Must reject metadata before models"); }, { offlineMaintenance: true })).rejects.toThrow("Durable MCP");
     expect(leaseSpy).toHaveBeenCalledTimes(leasesBefore);
     expect(connectSpy).toHaveBeenCalledTimes(connectsBefore);
   } finally { await backend?.close(); leaseSpy.mockRestore(); connectSpy.mockRestore(); owner.release(); closeDatabase(); }

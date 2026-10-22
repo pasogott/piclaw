@@ -1,4 +1,4 @@
-// INACTIVE application seam. No engine imports, bootstrap registration or AgentSession emulation.
+// Explicit native application seam. No engine imports, implicit registration or AgentSession emulation.
 import { hashCanonicalRequest } from "../service-effects/contracts/common.js";
 import type { AcceptCancellationRequest, ClaimedOperation, OperationSnapshot } from "../service-effects/contracts/service-work-store.js";
 import type { TerminalCommit } from "../service-effects/contracts/terminal-settlement-store.js";
@@ -25,16 +25,35 @@ export interface DurableSessionMetadata {
   tools: { name: string; description: string }[];
 }
 
+export interface DurableSessionReport {
+  readonly activeEntries: number;
+  readonly userMessages: number;
+  readonly assistantMessages: number;
+  readonly contextWindow: number | null;
+  /** Last committed assistant usage, not a prediction of the next request. */
+  readonly observedTokens: number | null;
+  readonly observedModel: string | null;
+  readonly lastAnswer: string | null;
+  readonly usage: { readonly input: number; readonly output: number; readonly cacheRead: number; readonly cacheWrite: number; readonly cost: number };
+}
+
 export interface DurableSessionPositionPort {
   readonly readMetadata?: () => Promise<DurableSessionMetadata>;
+  readonly readReport?: () => Promise<DurableSessionReport>;
   readonly sessionId: string;
   readonly branchId: string;
   readonly readPosition: () => Promise<string | null>;
+  /** Host-owned scope for credential controls; never an SDK session or input admission. */
+  readonly assertCurrent?: () => void;
+  readonly lifetimeSignal?: AbortSignal;
+  readonly runOwnedControl?: <T>(operation: () => Promise<T>) => Promise<T>;
   /** Persisted conversation choice only; never infer a model from provider responses. */
   readonly readModel?: () => Promise<string | null>;
   readonly readThinkingLevel?: () => Promise<string | null>;
   readonly setThinkingLevel?: (level: string) => Promise<void>;
   readonly setModel?: (model: { provider: string; modelId: string }) => Promise<void>;
+  readonly reset?: () => Promise<void>;
+  readonly abort?: () => Promise<boolean>;
   readonly compact?: (instructions?: string) => Promise<{ compacted: boolean }>;
   /** Observe the same owned maintenance; never admit a new compaction. */
   readonly reconcileMaintenance?: () => Promise<void>;
@@ -67,9 +86,11 @@ export interface DurableConversationState {
  * must already be configured there. No 1.2 Models, SDK session or context crosses this port.
  * Reconciliation deliberately does not expose the engine's private answer/thinking evidence. */
 export interface DurableConversationRuntimePort {
+  resetSession?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<void>;
   compactSession?(binding: DurableConversationBinding & { readonly incarnation: string }, instructions?: string): Promise<{ compacted: boolean }>;
   reconcileMaintenance?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<void>;
   readSessionMetadata?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<DurableSessionMetadata>;
+  readSessionReport?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<DurableSessionReport>;
   readSessionTree?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<import("../agent-control/session-tree-snapshot.js").SessionTreeSnapshot>;
   readSessionPosition?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<string | null>;
   setSessionThinkingLevel?(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }, level: string): Promise<void>;
@@ -119,10 +140,12 @@ export function createDurableConversationAdapter(options: {
   const readThinkingLevel = runtime.readSessionThinkingLevel?.bind(runtime);
   const setThinkingLevel = runtime.setSessionThinkingLevel?.bind(runtime);
   const setModel = runtime.setSessionModel?.bind(runtime);
+  const reset = runtime.resetSession?.bind(runtime);
   const compact = runtime.compactSession?.bind(runtime);
   const reconcileMaintenance = runtime.reconcileMaintenance?.bind(runtime);
   const readTree = runtime.readSessionTree?.bind(runtime);
   const readMetadata = runtime.readSessionMetadata?.bind(runtime);
+  const readReport = runtime.readSessionReport?.bind(runtime);
   function input(work: DurableConversationOperation, intent = false): DurableAcceptedInput {
     const { source, operation } = work.claimed;
     const binding = lookup(source.chatJid, work.branchId);
@@ -149,10 +172,12 @@ export function createDurableConversationAdapter(options: {
         readThinkingLevel: readThinkingLevel ? () => readThinkingLevel({ ...binding, incarnation }) : undefined,
         setThinkingLevel: setThinkingLevel ? (level: string) => setThinkingLevel({ ...binding, incarnation }, level) : undefined,
         setModel: setModel ? (model: { provider: string; modelId: string }) => setModel({ ...binding, incarnation }, { provider: model.provider, modelId: model.modelId }) : undefined,
+        reset: reset ? () => reset({ ...binding, incarnation }) : undefined,
         compact: compact ? (instructions?: string) => compact({ ...binding, incarnation }, instructions) : undefined,
         reconcileMaintenance: reconcileMaintenance ? () => reconcileMaintenance({ ...binding, incarnation }) : undefined,
         readTree: readTree ? () => readTree({ ...binding, incarnation }) : undefined,
-        readMetadata: readMetadata ? () => readMetadata({ ...binding, incarnation }) : undefined });
+        readMetadata: readMetadata ? () => readMetadata({ ...binding, incarnation }) : undefined,
+        readReport: readReport ? () => readReport({ ...binding, incarnation }) : undefined });
     },
     supportsIntent: !!submitIntent,
     validateIntent(work: DurableConversationOperation) { input(work, true); },

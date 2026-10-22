@@ -35,6 +35,14 @@ export async function runProcessChatPreflight(options: {
   startupTimeoutMs?: number;
 }): Promise<"continue" | "deferred"> {
   const { channel, chatJid } = options;
+  // Native context management must not construct a legacy AgentSession.
+  const native = await channel.agentPool.getDurableSessionMetadata?.(chatJid);
+  if (native !== undefined) {
+    if (native === null) throw new Error("No active durable session for this chat");
+    beginChatRun(chatJid, options.message.timestamp, { prevTs: options.prevCursor, messageId: options.message.id, startedAt: options.runStartedAt });
+    return "continue";
+  }
+
   if (options.skipPrePromptCompaction
     || typeof channel.agentPool.getSessionForIntrospection !== "function") {
     beginChatRun(chatJid, options.message.timestamp, { prevTs: options.prevCursor, messageId: options.message.id, startedAt: options.runStartedAt });

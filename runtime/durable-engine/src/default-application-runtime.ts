@@ -1,3 +1,6 @@
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { createNativeTurnView, type NativeTurnViewChannel } from "../../src/channels/web/agent/native-turn-view.js";
+import { createLogger } from "../../src/utils/logger.js";
 import { createHostRemotePeerTool } from "./host-remote-peer-tool.js";
 import { registerChatTransport } from "../../src/extensions/chat-transport-registry.js";
 import { createHostRegretsTool, createHostRegretsPromptExtension, createHostRegretsSettings } from "./host-regrets-tool.js";
@@ -25,7 +28,7 @@ import { createReadToolDefinition, SettingsManager } from "../../src/durable-leg
 import type { RuntimeModelServices } from "../../src/agent-pool/model-services.js";
 import type { RuntimeLockHandle } from "../../src/runtime/single-instance.js";
 import type { RuntimeBackend } from "../../src/runtime/bootstrap.js";
-import { getDb, storeChatMetadata } from "../../src/db.js";
+import { clearInflightMarker, getDb, getMessageByRowId, storeChatMetadata } from "../../src/db.js";
 import { RuntimeStartupCleanupError } from "../../src/runtime/startup-cleanup-error.js";
 import { DATA_DIR, SESSIONS_DIR, WORKSPACE_DIR } from "../../src/core/config.js";
 import { getPiclawAgentDir } from "../../src/core/agent-dir.js";
@@ -77,13 +80,6 @@ import { HostManagedInstructions, instructionHash, shouldManageInstructions } fr
 import { loadHostInstructions } from "./host-instructions.js";
 import { detectChannel } from "../../src/router.js";
 import { buildChannelSystemPromptAppendix } from "../../src/channels/formatting.js";
-import { ApplicationLegacyTimeline, captureLegacyTimeline, verifyLegacyTimeline, type LegacyTimelineReceipt } from "./application-legacy-timeline.js";
-import { recordApplicationMigration, validateRecentHistoryScopes, type ApplicationRecentHistory } from "./application-recent-history.js";
-
-export interface ApplicationMigration {
-  timeline: LegacyTimelineReceipt;
-  recentHistory: readonly ApplicationRecentHistory[];
-}
 
 const ApplicationConversations = defineDoc({ kind: "app.application-conversations", version: 1,
   scope: "conversation", history: "latest", fork: "initial", initial: () => ({ version: 1, domain: "", bindings: [] as { chatJid: string; branchId: string; conversationId: number; sessionId: string }[] }) });
@@ -112,6 +108,7 @@ function withGuardedCommit(api: ToolExecutionApi, assertCurrent: () => void): To
 const isOldDefault = (tools: unknown) => Array.isArray(tools) &&
   ((tools.length === 1 && tools[0] === "bash") ||
     (tools.length === 6 && defaultToolNames.slice(0, 6).every((name, i) => tools[i] === name)));
+
 
 /** Read-only preflight, before Harness.open can normalize pending work. All
  * configuration writes still go through public configure in one SDK commit. */
@@ -153,7 +150,7 @@ function validateApplicationMapping(root: ReturnType<typeof getDb>, value: unkno
       !root.query("SELECT 1 FROM chat_branches WHERE chat_jid=? AND branch_id=? AND archived_at IS NULL").get(b.chatJid, b.branchId))) throw Error("Invalid durable application conversation manifest");
 }
 
-/** Validate native source provenance. Legacy import is explicit, never inferred. */
+/** Validate persisted SDK storage, conversation identities and execution routes. */
 export function assertFreshApplicationHistory(root: ReturnType<typeof getDb>, sessionsDir: string): void {
   const files = existsSync(sessionsDir) ? readdirSync(sessionsDir, { recursive: true, withFileTypes: true }) : [];
   if (files.some(file => file.isFile())) throw Error("Durable startup requires migration: legacy session files exist; no files were imported or reset");
@@ -178,31 +175,6 @@ export function assertFreshApplicationHistory(root: ReturnType<typeof getDb>, se
       const row = root.query(`SELECT r.content FROM documents d JOIN document_revisions r ON r.document_id=d.id WHERE d.kind='"app.application-identity"' AND d.owner_id=? AND d.retired_at IS NULL ORDER BY r.seq DESC LIMIT 1`).get(b.conversationId) as { content: string } | null;
       if (!row || row.content !== JSON.stringify({ domain: mapping.domain, chatJid: b.chatJid, branchId: b.branchId, sessionId: b.sessionId })) throw Error("Invalid durable application identity");
     }
-  }
-  type Source = { source_id: string; kind: string; payload_ref: string; provenance_ref: string; input_content?: string };
-  const queuedContent = (source: Source, content: unknown) => typeof content === "string" && source.kind === "message" &&
-    source.payload_ref === `queued-source:${source.source_id}` && /^application:queued:[0-9a-f]{64}:[0-9a-f]{64}$/.test(source.provenance_ref) &&
-    source.provenance_ref.endsWith(`:${hashCanonicalRequest({ content })}`);
-  const legacyDocs = exists("documents") ? root.query("SELECT id FROM documents WHERE kind='\"app.legacy-timeline\"' AND scope_kind='conversation' AND owner_id=1 AND retired_at IS NULL").all() as { id: number }[] : [];
-  if (legacyDocs.length > 1) throw Error("Invalid legacy timeline provenance");
-  const legacy = legacyDocs.length ? verifyLegacyTimeline(root, storedDocument(root, legacyDocs[0]!.id).receipt) : new Set<number>();
-  const messages = root.query("SELECT rowid, id, chat_jid, content, is_bot_message FROM messages").all() as { rowid: number; id: string; chat_jid: string; content: string; is_bot_message: number }[];
-  for (const message of messages) {
-    if (legacy.has(message.rowid)) continue;
-    if (!mapping || !exists("service_effect_s01_sources")) throw Error("Durable startup requires migration: legacy message history exists");
-    const binding = mapping.bindings.find(b => b.chatJid === message.chat_jid);
-    const source = root.query("SELECT source_id,kind,payload_ref,provenance_ref FROM service_effect_s01_sources WHERE chat_jid=? AND source_id=? AND kind='message'")
-      .get(message.chat_jid, message.id) as Source | null;
-    const terminal = message.is_bot_message && exists("service_effect_s01_operations") && exists("piclaw_durable_bindings_v1") && root.query(`SELECT s.source_id,s.kind,s.payload_ref,s.provenance_ref,m.content AS input_content
-      FROM service_effect_s01_operations o JOIN piclaw_durable_bindings_v1 b ON b.operation_id=o.operation_id
-      JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq
-      LEFT JOIN messages m ON m.chat_jid=s.chat_jid AND m.id=s.source_id AND m.is_bot_message=0
-      WHERE o.chat_jid=? AND o.terminal_message_row_id=? AND o.phase='terminal' AND b.domain=? AND b.incarnation=? AND b.conversation_id=?`)
-      .get(message.chat_jid, message.rowid, mapping.domain, mapping.domain, binding?.conversationId ?? -1) as Source | null | false;
-    const verified = message.is_bot_message
-      ? terminal && (terminal.provenance_ref === "application:durable" || queuedContent(terminal, terminal.input_content))
-      : source && ((source.payload_ref === `message-row:${message.rowid}` && source.provenance_ref === "application:durable") || queuedContent(source, message.content));
-    if (!binding || !verified) throw Error("Durable startup requires migration: unverified message provenance");
   }
   if (mapping) for (const table of ["piclaw_durable_bindings_v1", "piclaw_durable_intent_bindings_v1"]) {
     if (!exists(table)) continue;
@@ -241,30 +213,15 @@ export function assertFreshApplicationHistory(root: ReturnType<typeof getDb>, se
 }
 
 /** Mainstream source factory. Only startup-known chats are admitted; unknown chats fail closed. */
-export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, getModels: () => Promise<RuntimeModelServices>, migration?: ApplicationMigration, remotePeerOptions?: { offlineMaintenance?: boolean; transportFactory?: (options: any) => any; discoveryFactory?: (options: any) => any }): Promise<RuntimeBackend> {
+export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, getModels: () => Promise<RuntimeModelServices>, remotePeerOptions?: { offlineMaintenance?: boolean; transportFactory?: (options: any) => any; discoveryFactory?: (options: any) => any }): Promise<RuntimeBackend> {
   const offlineMaintenance = remotePeerOptions?.offlineMaintenance === true;
   const assertAdmission = () => { if (offlineMaintenance) throw Error("Offline maintenance cannot admit conversations"); };
-  migration = migration && structuredClone(migration);
   if (process.platform !== "linux") throw Error("Durable application ownership is qualified only on Linux");
   if (readAccessConfig().mode !== "single-user") throw Error("Durable host builtins require single-user policy; family effect ports are not qualified");
   const ownership = applicationOwnership(owner);
   const assert = () => owner.assertCurrentOwner();
   const root = getDb();
-  if (migration) {
-    assert();
-    if (root.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name IN ('durable_schema','conversations','documents','entries','tasks','submissions') LIMIT 1").get())
-      throw Error("Migration requires a fresh SDK target");
-    if (existsSync(SESSIONS_DIR) && readdirSync(SESSIONS_DIR).length) throw Error("Migration requires empty SESSIONS_DIR; move raw archives outside first");
-    if (JSON.stringify(captureLegacyTimeline(root, assert)) !== JSON.stringify(migration.timeline)) throw Error("Migration timeline must exactly match current capture");
-    const hostTable = root.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='service_effect_s01_chats'").get();
-    if (hostTable && root.query(`SELECT 1 FROM service_effect_s01_chats WHERE active_operation_id IS NOT NULL
-      UNION ALL SELECT 1 FROM service_effect_s01_sources WHERE state NOT IN ('consumed','disposed')
-      UNION ALL SELECT 1 FROM service_effect_s01_operations WHERE phase <> 'terminal'
-      UNION ALL SELECT 1 FROM service_effect_s01_queued_inputs WHERE state NOT IN ('consumed','disposed') LIMIT 1`).get())
-      throw Error("Migration requires idle host work");
-    const scopes = root.query("SELECT chat_jid AS chatJid, branch_id AS branchId FROM chat_branches WHERE archived_at IS NULL").all() as { chatJid: string; branchId: string }[];
-    validateRecentHistoryScopes(migration.recentHistory, scopes);
-  } else assertFreshApplicationHistory(root, SESSIONS_DIR); // BEFORE SDK/schema/model construction
+  assertFreshApplicationHistory(root, SESSIONS_DIR); // BEFORE SDK/schema/model construction
   registerRootExtensionKvStore();
   requireExtensionKvAuthority();
   const settings = SettingsManager.create(WORKSPACE_DIR, getPiclawAgentDir());
@@ -348,10 +305,54 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     commands: { regrets: regretsCommand } }) : undefined;
   let workspaceFileOpener: WorkspaceFileOpener | undefined;
   let widgetPublisher: WidgetPublisher | undefined;
+  let terminalBroadcast: ((type: string, data: Record<string, unknown>) => void) | undefined;
+  const pendingTerminalEvents = new Set<string>(), publishedTerminalEvents = new Set<string>();
+  const publishTerminal = (operationId: string) => {
+    if (publishedTerminalEvents.has(operationId)) return;
+    const row = root.query("SELECT rowid,chat_jid FROM messages WHERE id=?").get(`service-terminal:${operationId}`) as { rowid: number; chat_jid: string } | null;
+    if (!row) return;
+    const interaction = getMessageByRowId(row.chat_jid, row.rowid);
+    if (!terminalBroadcast || !interaction) { pendingTerminalEvents.add(operationId); return; }
+    try {
+      terminalBroadcast("new_post", interaction as unknown as Record<string, unknown>);
+      publishedTerminalEvents.add(operationId); pendingTerminalEvents.delete(operationId);
+    } catch { pendingTerminalEvents.add(operationId); /* Committed reply remains available on reload. */ }
+  };
   const infrastructure = (await Promise.all((["proxmox", "portainer", "imap"] as const).map(kind => qualifyInstalledAddon(catalog, WORKSPACE_DIR, kind)))).filter(item => item !== undefined);
   let mcp: Awaited<ReturnType<typeof createHostMcp>> | undefined;
   let captureRuntime: HostConversationRuntime | undefined;
   let resumePending: ((chatJid?: string) => void) | undefined;
+  let nativeQueue: Parameters<RuntimeBackend["bind"]>[0]["queue"] | undefined;
+  let liveChannel: NativeTurnViewChannel | undefined;
+  const liveWatches = new Map<string, Promise<() => Promise<void>>>();
+  let releaseLaneIdle: (() => void) | undefined;
+  const attemptedPending = new Map<string, string>();
+  const log = createLogger("native.turn-view");
+  const ensureLiveWatch = (chat: string) => {
+    if (!liveChannel || liveWatches.has(chat)) return;
+    const target = bundle.sessionTargets.list().find(target => target.chatJid === chat);
+    if (!target) return;
+    const channel = liveChannel, render = createNativeTurnView(root, channel, chat);
+    const watching = runtime().watchSession({ incarnation: target.domain, chatJid: chat, branchId: target.branchId, conversationId: target.conversationId },
+      view => { if (liveChannel === channel) render(view); });
+    liveWatches.set(chat, watching);
+    void watching.catch(error => { liveWatches.delete(chat); log.error("Conversation watch failed", { chatJid: chat, err: error }); });
+  };
+  const drainPending = (chat: string) => {
+    if (!liveChannel) return;
+    assert();
+    const pending = root.query("SELECT source_seq FROM service_effect_s01_sources WHERE chat_jid=? AND kind='message' AND state='pending' ORDER BY source_seq").all(chat);
+    if (!pending.length) { attemptedPending.delete(chat); return; }
+    const key = JSON.stringify(pending);
+    if (attemptedPending.get(chat) === key) return;
+    attemptedPending.set(chat, key); ensureLiveWatch(chat); resumePending?.(chat);
+  };
+  const stopLiveViews = () => { liveChannel = undefined; releaseLaneIdle?.(); releaseLaneIdle = undefined; };
+  const closeLiveViews = async () => {
+    stopLiveViews();
+    await Promise.allSettled([...liveWatches.values()].map(async pending => { const stop = await pending; await stop(); }));
+    liveWatches.clear();
+  };
   const wakeGoalFollowups = (chat: string) => {
     assert();
     if (!lifetime.signal.aborted) {
@@ -656,6 +657,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
   const selected = provider && modelId ? available.find(model => model.provider === provider && model.id === modelId) : available[0];
   if (!selected) throw Error("Durable startup requires an available host default model");
   const ref = { provider: selected.provider, id: selected.id };
+  const defaultThinking = (model: any) => getSupportedThinkingLevels(model).includes("medium") ? "medium" as const : getSupportedThinkingLevels(model)[0]!;
   // Allocate/recover the shared namespace before any accepted task or API read.
   codeReview?.addon.reviewService();
   const check = (model: { provider: string; id: string }, signal: AbortSignal) => {
@@ -694,7 +696,17 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       if (shouldManageInstructions(stored.instructions, managedHash) &&
         (stored.instructions !== desired || managedHash !== instructionHash(desired))) instructionUpgrades.set(doc.owner_id, desired);
     }
-    if (toolUpgrades.length || instructionUpgrades.size) { assert(); assertToolUpgradeIdle(root); }
+    if (toolUpgrades.length || instructionUpgrades.size) {
+      assert();
+      try { assertToolUpgradeIdle(root); }
+      catch (error) {
+        if (!(error instanceof Error) || !["Host tool upgrade requires idle host work", "Host tool upgrade requires idle SDK work"].includes(error.message)) throw error;
+        // Recover admitted work with its persisted configuration before changing
+        // tools or instructions. Upgrade guards still apply to explicit changes.
+        toolUpgrades.length = 0;
+        instructionUpgrades.clear();
+      }
+    }
   }
   // Automatic selection inherits the parent; explicit exact models use the same
   // installed approval/classification/exclusion policy, without a parent-tier cap.
@@ -876,7 +888,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       const doc = await tx.doc(ApplicationConversations, app.id);
       if (!doc.domain) {
         const instructions = instructionsFor();
-        await configure(tx, app.id, { model: { provider: ref.provider, modelId: ref.id }, tools, instructions });
+        await configure(tx, app.id, { model: { provider: ref.provider, modelId: ref.id }, thinkingLevel: defaultThinking(selected), tools, instructions });
         (await tx.doc(HostManagedInstructions, app.id)).managedHash = instructionHash(instructions);
       }
       return JSON.parse(JSON.stringify(doc)) as typeof mapping;
@@ -891,7 +903,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         const conversation = await app.commit(async tx => {
           const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
           const instructions = instructionsFor(chat.jid);
-          await configure(tx, conversation.id, { model: { provider: ref.provider, modelId: ref.id }, tools, instructions });
+          await configure(tx, conversation.id, { model: { provider: ref.provider, modelId: ref.id }, thinkingLevel: defaultThinking(selected), tools, instructions });
           (await tx.doc(HostManagedInstructions, conversation.id)).managedHash = instructionHash(instructions);
           return conversation;
         }, context);
@@ -907,12 +919,19 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       }
       await app.commit(async tx => { const doc = await tx.doc(ApplicationConversations, app.id); Object.assign(doc, mapping); }, context);
     }
-    validateApplicationMapping(root, mapping);
-    if (migration) await storage.withIdleModelGuard(() => app.commit(async tx => {
+    // Older native bootstrap omitted thinkingLevel entirely. Repair only that
+    // omission through the public SDK; an explicitly selected off is preserved.
+    await storage.withIdleModelGuard(() => app.commit(async tx => {
       assert(); assertToolUpgradeIdle(root);
-      await recordApplicationMigration(tx, app.id, root, migration, mapping.bindings, assert);
+      for (const id of [app.id, ...mapping.bindings.map(binding => binding.conversationId as ConversationId)]) {
+        const agent = await tx.doc(AgentDoc, id);
+        if (agent.thinkingLevel !== undefined || !agent.model) continue;
+        const model = models.getModel(agent.model.provider, agent.model.modelId);
+        if (model) await configure(tx, id, { thinkingLevel: defaultThinking(model) });
+      }
       assert(); assertToolUpgradeIdle(root);
     }, context));
+    validateApplicationMapping(root, mapping);
     // Repair a successful maintenance task whose post-commit budget-work close
     // was interrupted. Public SDK reads prove the task and its committed write.
     const maintenancePrefix = `durable-maintenance:${mapping.domain}:`;
@@ -988,7 +1007,9 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     return { ref, bytes, byteLength: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), mediaType: "text/plain", redactionClass: "private" as const };
   } } };
 
-      const goalAdmission = (chat: string) => { assertAdmission(); assertGoal(); if (!mapping.bindings.some(binding => binding.chatJid === chat)) throw Error("Unbound Goal chat"); };
+      // Routes can be created after startup. The bundle publishes the persisted
+      // SDK mapping atomically; the preparation-time mapping is only a snapshot.
+      const goalAdmission = (chat: string) => { assertAdmission(); assertGoal(); if (!bundle.sessionTargets.list().some(binding => binding.chatJid === chat)) throw Error("Unbound Goal chat"); };
       const goalInput = goal ? createHostGoalInput(goal.addon, goalAdmission) : undefined;
       const goalCommand = goal ? createHostGoalCommand(goal.addon, { root, assertAdmission: goalAdmission, admit: input => bundle.admitHostFollowup(input) }) : undefined;
       const goalSettlement = goal ? createHostGoalSettlement(goal.addon, { root, runtime, assertOwner: assertGoal, continuation: {
@@ -996,13 +1017,16 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
         readPlan: createHostGoalPlanReader(root, plan!.addon, goal.addon), admit: (input, onlyIfIdle = true) => bundle.admitHostFollowup(input, onlyIfIdle),
       } }) : undefined;
       bundle = await createApplicationBootstrapBundle({ root, path, ownership, offlineInitialize: true, answers,
+        assertInputAdmission(chat) { ensureLiveWatch(chat); },
         materializeAnswer: codex ? createHostCodexAnswerMaterializer({ root, cwd: WORKSPACE_DIR, answers, assertOwner: assert }) : undefined,
     onMaintenanceSettled(workId) { assert(); completeMaintenanceBudgetWork(root, workId); },
     onOperationSettled(operationId) {
-      assert(); reconcileOperationBudgetWork(root, operationId);
-      if (goal) {
+      assert();
+      try { reconcileOperationBudgetWork(root, operationId); }
+      finally {
+        publishTerminal(operationId);
         const row = root.query("SELECT chat_jid FROM service_effect_s01_operations WHERE operation_id=?").get(operationId) as { chat_jid: string } | null;
-        if (row) wakeGoalFollowups(row.chat_jid);
+        if (row) { clearInflightMarker(row.chat_jid); if (goal) wakeGoalFollowups(row.chat_jid); drainPending(row.chat_jid); }
       }
     },
     onRuntime(value) { captureRuntime = value; },
@@ -1036,7 +1060,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       if (doc.domain !== mapping.domain || doc.bindings.some(b => b.chatJid === chatJid || b.branchId === branchId)) throw Error("Application mapping conflict");
       const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
       const instructions = instructionsFor(chatJid);
-      await configure(tx, conversation.id, { model: { provider: ref.provider, modelId: ref.id }, tools, instructions });
+      await configure(tx, conversation.id, { model: { provider: ref.provider, modelId: ref.id }, thinkingLevel: defaultThinking(selected), tools, instructions });
       (await tx.doc(HostManagedInstructions, conversation.id)).managedHash = instructionHash(instructions);
       const binding = { chatJid, branchId, conversationId: conversation.id, sessionId: crypto.randomUUID() };
       const identity = { domain: mapping.domain, chatJid, branchId, sessionId: binding.sessionId };
@@ -1107,6 +1131,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       },
     }, goal.source.packageDir);
   }
+  if (!offlineMaintenance) await bundle.retryRecoveredWork();
   let closing: Promise<void> | undefined;
   return { sessionOptions: offlineMaintenance ? { getDurableSession(chat) {
       const position = bundle.sessionOptions.getDurableSession?.(chat);
@@ -1114,23 +1139,54 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     },
     dispatchScheduledAgent: async () => { throw Error("Offline maintenance cannot admit conversations"); }, dispatchSidePrompt: async () => { throw Error("Offline maintenance cannot admit conversations"); },
     dispatchHostCommand: async () => { throw Error("Offline maintenance cannot admit conversations"); } } : bundle.sessionOptions,
-    bind(options) { assertAdmission(); return bundle.bind(options); },
+    bind(options) {
+      assertAdmission(); nativeQueue = options.queue;
+      releaseLaneIdle?.();
+      releaseLaneIdle = options.queue.onLaneIdle?.(lane => { if (lane.startsWith("chat:")) drainPending(lane.slice(5)); });
+      return bundle.bind(options);
+    },
     attachChannel(channel) {
       assertAdmission();
       assert(); lifetime.signal.throwIfAborted();
       if (widgetPublisher) throw Error("Widget channel already attached");
       const broadcast = channel.broadcastEvent.bind(channel);
+      terminalBroadcast = broadcast;
+      for (const operationId of pendingTerminalEvents) publishTerminal(operationId);
       bundle.bindInputProjection({ pendingLinkPreviews: new Set<number>(), broadcastEvent: (event, data) => broadcast(event, data as Record<string, unknown>) });
       resumePending = channel.resumePendingChats?.bind(channel);
+      liveChannel = channel;
+      for (const target of bundle.sessionTargets.list()) ensureLiveWatch(target.chatJid);
       workspaceFileOpener = channel.requestWorkspaceFileOpen?.bind(channel);
       widgetPublisher = (chatJid, key, content, options) => {
         assert(); lifetime.signal.throwIfAborted();
         broadcast("extension_ui_widget", { chat_jid: chatJid, key, content, options });
       };
+      // Reattach the existing worker to admitted native work, not legacy inflight
+      // markers/cursors. Dispatch reuses the exact persisted SDK submission ID.
+      const recovering = root.query(`SELECT o.operation_id,o.chat_jid,s.source_id,m.rowid FROM service_effect_s01_operations o
+        JOIN service_effect_s01_sources s ON s.chat_jid=o.chat_jid AND s.source_seq=o.primary_source_seq
+        JOIN messages m ON m.id=s.source_id AND m.chat_jid=s.chat_jid
+        WHERE o.phase IN ('claimed','executing') AND s.kind='message'`).all() as { operation_id: string; chat_jid: string; source_id: string; rowid: number }[];
+      for (const item of recovering) nativeQueue?.enqueue(async () => {
+        assertAdmission();
+        const dispatch = bundle.dispatchAcceptedInput(item.chat_jid, item.source_id, item.rowid);
+        if (!dispatch) throw Error("Recovered native source unavailable");
+        const emit = (type: "intent" | "done") => {
+          const status = { chat_jid: item.chat_jid, turn_id: `durable:${item.rowid}`, type, source: "durable_runtime",
+            intent_key: "native_task", blocking: false, title: type === "done" ? "Idle" : "Working" };
+          channel.updateAgentStatus?.(item.chat_jid, status); broadcast("agent_status", status);
+        };
+        emit("intent");
+        let result = await dispatch();
+        if (result === "pending") result = await bundle.dispatchAcceptedInput.waitForPending({ chatJid: item.chat_jid, messageId: item.source_id, rowId: item.rowid });
+        if (result === "settled") { emit("done"); resumePending?.(item.chat_jid); }
+      }, `durable-recovery:${item.operation_id}`, `chat:${item.chat_jid}`);
     },
     stop() {
+      stopLiveViews();
       bundle.bindInputProjection(undefined);
       resumePending = undefined;
+      terminalBroadcast = undefined; pendingTerminalEvents.clear(); publishedTerminalEvents.clear();
       widgetPublisher = undefined; workspaceFileOpener = undefined; lifetime.abort(); closeResources(); releaseAdminKv?.(); closeInfrastructure();
       // close seals routing synchronously; final close below joins owned cleanup.
       void closeRemote().catch(() => {});
@@ -1147,6 +1203,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       lifetime.abort(); closeResources(); releaseAdminKv?.(); closeInfrastructure(); releaseReviewSource?.(); releaseObservabilityConfiguration?.();
       const results = [...producerResults, ...await Promise.allSettled([mcp?.close(), closeSandbox(), drawioHost?.close()])];
       const failures: unknown[] = results.filter((result): result is PromiseRejectedResult => result.status === "rejected").map(result => result.reason);
+      await closeLiveViews();
       try { await bundle.close(); } catch (error) { failures.push(error); }
       if (failures.length) throw new AggregateError(failures, "Native tool cleanup uncertain");
       })();

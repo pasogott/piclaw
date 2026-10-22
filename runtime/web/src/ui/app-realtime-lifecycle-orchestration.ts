@@ -10,6 +10,10 @@ interface RefBox<T> {
   current: T;
 }
 
+export function shouldInvalidateAgentStatusSnapshot(eventType: string): boolean {
+  return eventType === 'model_changed' || eventType === 'connected' || eventType === 'agent_status';
+}
+
 export function resolveBackstopIntervalMs(isAgentActive: boolean): number {
   return isAgentActive ? 15_000 : 60_000;
 }
@@ -175,7 +179,9 @@ export function useRealtimeLifecycleOrchestration(options: UseRealtimeLifecycleO
       void refreshInstanceBranding();
       window.dispatchEvent(new Event('piclaw:sse-connected'));
     }
-    if (['model_changed', 'connected'].includes(eventType) || (eventType === 'agent_status' && (['done','error'].includes(data?.type) || data?.status === 'idle'))) invalidateAgentUiSnapshot(data?.chat_jid || currentChatJid);
+    // Invalidate active transitions too: a fresh cached Idle snapshot must not
+    // clear a turn whose opening status and previews arrived in one frame.
+    if (shouldInvalidateAgentStatusSnapshot(eventType)) invalidateAgentUiSnapshot(data?.chat_jid || currentChatJid);
     handleAppSseEvent(eventType, data, {
       currentChatJid,
       updateAgentProfile,

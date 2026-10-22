@@ -19,7 +19,7 @@ type ShellCommand = Extract<AgentControlCommand, { type: "shell" }>;
 type BashCommand = Extract<AgentControlCommand, { type: "bash" }>;
 
 /** Handle /shell: execute a shell command with process tracking. */
-export async function handleShell(session: AgentSession, command: ShellCommand): Promise<AgentControlResult> {
+export async function handleShell(_session: AgentSession | undefined, command: ShellCommand): Promise<AgentControlResult> {
   const rawCommand = command.command?.trim();
   if (!rawCommand) {
     return {

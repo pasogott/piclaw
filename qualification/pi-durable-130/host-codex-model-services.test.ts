@@ -152,3 +152,14 @@ test("maintenance operation preserves system policy while retaining request and 
  expect(promptCalls).toBe(0);
  expect(checks).toBeGreaterThan(0);
 });
+
+
+test('native Codex requests public summaries without decoding encrypted reasoning or enabling off', async () => {
+  const factories = {createNativeCodexHooks: () => ({request:(p:any)=>p,headers:(h:any)=>h,systemPrompt:(t:any)=>t,context:(c:any)=>c})};
+  const service = new HostCodexModelServices({capture:async(signal,model)=>({id:"op",sessionId:"s",cwd:"/synthetic",model,signal,assertCurrent(){}}),assertAccount(){},observe:async()=>{},flush:async()=>{}}, factories as any);
+  const model = {provider:'openai-codex',id:'gpt-test',api:'openai-codex-responses'} as any;
+  const bound = await service.bind(model, new AbortController().signal);
+  expect(bound.options.onPayload({reasoning:{effort:'medium',summary:'auto'}},model)).toEqual({reasoning:{effort:'medium',summary:'detailed'}});
+  expect(bound.options.onPayload({reasoning:{effort:'none'}},model)).toEqual({reasoning:{effort:'none'}});
+  expect(bound.options.onPayload({model:'gpt-test'},model)).toEqual({model:'gpt-test'});
+});

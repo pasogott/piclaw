@@ -21,6 +21,7 @@ import type { RuntimeAgentMessageRequest, RuntimeAgentMessageResult } from "../c
 import {
   registerChatTransport,
   type ChatTransport,
+  getChatTransport,
 } from "../extensions/chat-transport-registry.js";
 import { resetRuntimeStreamSessionsForTests, runtimeStreamSessions } from "./runtime-stream-sessions.js";
 import {
@@ -426,6 +427,10 @@ export async function initializeStartupAddonRuntime(options: {
 
 async function importAddonRuntimeEntries(entries: InstalledAddonRuntimeEntry[]): Promise<void> {
   for (const entry of entries) {
+    // The durable host already owns this transport and its lifecycle.
+    // Do not evaluate the legacy runtime that registers a second Iroh service.
+    if (entry.packageName === "@rcarmo/piclaw-addon-remote-peer" &&
+        getChatTransport("bang")?.id === "remote-peer") continue;
     if (entry.load === "startup") {
       await withExternalAddonRegistrationContext(
         { packageName: entry.packageName, entryPath: entry.path },

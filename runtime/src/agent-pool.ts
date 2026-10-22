@@ -78,15 +78,7 @@ import {
   shrinkDatabaseMemory,
   upsertSshConfig,
 } from "./db.js";
-import {
-  extensionKvGet,
-  extensionKvSet,
-  extensionKvDelete,
-  extensionKvList,
-  extensionKvQuery,
-  extensionKvClear,
-  migrateProxmoxPortainerToKv,
-} from "./db.js";
+import { migrateProxmoxPortainerToKv } from "./db.js";
 import { registerRootExtensionKvStore } from "./db/register-extension-kv.js";
 import { setSshToolHandlers } from "./extensions/ssh.js";
 import { applyLiveSshConfig, clearLiveSshConfig, hasLiveChatSshConnection, hasLiveChatSshSession, resolveSshCoreConfigFromChatConfig } from "./extensions/ssh-core.js";
@@ -94,7 +86,7 @@ import { getKeychainEntry } from "./secure/keychain.js";
 import { addLogSink, createLogger, debugSuppressedError, removeLogSink } from "./utils/logger.js";
 import { startAgentLogCleanup } from "./agent-pool/logging.js";
 import { createUuid } from "./utils/ids.js";
-import { getBudgetWorkContext, withBudgetWorkContext } from "./budget/context.js";
+import { withBudgetWorkContext } from "./budget/context.js";
 import { admitBudgetBoundary } from "./budget/admission.js";
 import { resolveProviderUsageAccountRef } from "./agent-pool/provider-usage.js";
 
@@ -924,7 +916,9 @@ export class AgentPool {
     await this.sessionManager.shutdown();
   }
 
-  /** Return an existing session for read-only introspection, or create one if needed. */
+  /** The native backend owns recovery for the entire application, not legacy sessions. */
+  isDurableRuntime(): boolean { return this.durableApplication; }
+
   async getDurableSessionMetadata(chatJid: string) {
     if (!this.durableApplication) return undefined;
     const position = this.durableSessionLookup?.(chatJid);

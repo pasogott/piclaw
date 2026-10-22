@@ -264,7 +264,8 @@ export function buildAgentStatusSnapshot(
     provider: readTrimmedString(status.provider) || null,
     model: readTrimmedString(status.model) || null,
     classifier,
-    last_error: readTrimmedString(status.detail) || readTrimmedString(status.title) || null,
+    last_error: status.type === "error" || ["blocked_auth", "failed"].includes(deriveAgentState(status))
+      ? readTrimmedString(status.detail) || readTrimmedString(status.title) || null : null,
     recovery_strategy: readTrimmedString(status.recovery_strategy ?? status.recoveryStrategy ?? status.strategy) || null,
     recovery_suppressed_reason: readTrimmedString(status.recovery_suppressed_reason ?? status.recoverySuppressedReason) || null,
     data: status,

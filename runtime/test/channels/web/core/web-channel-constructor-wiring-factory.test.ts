@@ -357,7 +357,6 @@ describe("web channel constructor wiring factory", () => {
     messageWriteDeps?.storeMessage("web:test", "hello", false, [1, 2], { threadId: 7 });
     messageWriteDeps?.replaceMessageContent("web:test", 9, "updated", [4], [{ type: "text" }], true);
     messageWriteDeps?.enqueueFollowupPlaceholder("web:test", 13, "queued", 7, "2026-03-28T00:00:00.000Z");
-    messageWriteDeps?.setMessageThreadToSelf(21);
 
     expect(broadcastCalls).toEqual(["agent-response", "interaction-updated"]);
     expect(storeCalls).toEqual([
@@ -388,12 +387,7 @@ describe("web channel constructor wiring factory", () => {
         queuedAt: "2026-03-28T00:00:00.000Z",
       },
     ]);
-    expect(dbRuns).toEqual([
-      {
-        sql: "UPDATE messages SET thread_id = ? WHERE rowid = ?",
-        args: [21, 21],
-      },
-    ]);
+    expect(dbRuns).toEqual([]);
 
     expect(runtimeFollowupDeps?.getMessageWriteService()).toBe(messageWriteService);
     expect(runtimeFollowupDeps?.getQueuedFollowupLifecycle()).toBe(channel.queuedFollowupLifecycle);

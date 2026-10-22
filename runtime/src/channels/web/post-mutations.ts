@@ -20,8 +20,7 @@ export interface PostMutationsContext {
   defaultChatJid: string;
   lastCommandInteractionId: number | null;
   json(payload: unknown, status?: number): Response;
-  replaceMessageContent(chatJid: string, id: number, content: string): InteractionRow | null;
-  setThreadId(messageId: number, threadId: number): void;
+  replaceMessageContent(chatJid: string, id: number, content: string, threadId?: number): InteractionRow | null;
   broadcastInteractionUpdated(interaction: InteractionRow): void;
   storeMessage(
     chatJid: string,
@@ -48,24 +47,24 @@ export async function handleUpdatePostRequest(
     return ctx.json({ error: "Invalid JSON" }, 400);
   }
 
-  if (!body.content && body.content !== "") {
+  if (typeof body.content !== "string") {
     return ctx.json({ error: "Missing content" }, 400);
   }
   if (typeof body.content === "string" && body.content.length > 100 * 1024) {
     return ctx.json({ error: "Content too large (max 100 KB)" }, 400);
   }
 
-  const chatJid = resolveChatJid(req, ctx.defaultChatJid, body.chat_jid);
-  const updated = ctx.replaceMessageContent(chatJid, id, body.content!);
-  if (!updated) return ctx.json({ error: "Post not found" }, 404);
-
-  if (body.thread_id) {
-    if (typeof body.thread_id !== "number" || !Number.isInteger(body.thread_id) || body.thread_id < 1) {
-      return ctx.json({ error: "Invalid thread_id" }, 400);
-    }
-    ctx.setThreadId(id, body.thread_id);
-    (updated.data as unknown as Record<string, unknown>).thread_id = body.thread_id;
+  if (body.thread_id !== undefined && (!Number.isSafeInteger(body.thread_id) || body.thread_id < 1)) {
+    return ctx.json({ error: "Invalid thread_id" }, 400);
   }
+  const chatJid = resolveChatJid(req, ctx.defaultChatJid, body.chat_jid);
+  let updated: InteractionRow | null;
+  try {
+    updated = ctx.replaceMessageContent(chatJid, id, body.content, body.thread_id);
+  } catch (error) {
+    throw error;
+  }
+  if (!updated) return ctx.json({ error: "Post not found" }, 404);
 
   ctx.broadcastInteractionUpdated(updated);
   return ctx.json({ status: "ok", ok: true, id: updated.id });
@@ -125,7 +124,12 @@ export async function handleUpdatePostAnnotationsRequest(
   }
 
   const chatJid = resolveChatJid(req, ctx.defaultChatJid, body.chat_jid);
-  const ok = updateMessageAnnotations(chatJid, id, body.annotations.length > 0 ? body.annotations : null);
+  let ok: boolean;
+  try {
+    ok = updateMessageAnnotations(chatJid, id, body.annotations.length > 0 ? body.annotations : null);
+  } catch (error) {
+    throw error;
+  }
   if (!ok) return ctx.json({ error: "Post not found" }, 404);
 
   return ctx.json({ status: "ok", ok: true, id, annotations: body.annotations });

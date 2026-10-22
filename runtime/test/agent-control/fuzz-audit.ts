@@ -60,6 +60,7 @@ const ROUTING_SAMPLES: Record<string, string> = {
   "/exit": "/exit",
   "/login": "/login",
   "/settings": "/settings",
+  "/theme": "/theme",
   "/logout": "/logout",
   "/commands": "/commands",
   "/meters": "/meters on",

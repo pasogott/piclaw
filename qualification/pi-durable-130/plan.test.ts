@@ -1,4 +1,27 @@
 import { expect, test } from "bun:test";
+import { ensureTestFilesystemIsolation } from "../../runtime/scripts/test-filesystem-isolation.js";
+
+// Plan's compatibility module captures its KV bridge on import. Each fixture
+// installs a synthetic bridge, so isolate it from native Goal/application tests.
+function planTest(name: string, body: () => Promise<void>, timeout = 30_000) {
+  const selected = process.env.PICLAW_PLAN_QUALIFICATION_CASE;
+  if (selected && selected !== name) return;
+  test(name, async () => {
+    if (selected) return body();
+    const env = { ...process.env };
+    delete env.PICLAW_TEST_FS_ISOLATION_ACTIVE;
+    delete env.PICLAW_TEST_FS_ISOLATION_ROOT;
+    const isolation = ensureTestFilesystemIsolation(env);
+    try {
+      const child = Bun.spawn([process.execPath, "test", import.meta.path], {
+        cwd: import.meta.dir, env: { ...env, PICLAW_PLAN_QUALIFICATION_CASE: name }, stdout: "pipe", stderr: "pipe",
+      });
+      const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      if (code !== 0) throw Error(`Isolated Plan qualification ${name}:\n${out}\n${err}`);
+      expect(code).toBe(0);
+    } finally { isolation.cleanup(); }
+  }, timeout);
+}
 import { Database } from "bun:sqlite";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
@@ -43,7 +66,7 @@ type Capture = {
   registerTool(definition: Definition): void;
 };
 
-test("actual Plan 0.1.25 factory: existing-chat KV, prepared tool, per-request context projection (not full SDK run equivalence), scope and effect fences; hidden-entry gap explicit", async () => {
+planTest("actual Plan 0.1.25 factory: existing-chat KV, prepared tool, per-request context projection (not full SDK run equivalence), scope and effect fences; hidden-entry gap explicit", async () => {
   const globals = globalThis as unknown as Record<string, unknown>;
   const keys = ["__piclawRuntimeInterop", "__piclaw_planSidebarApi", "__piclaw_registerAddonConfigApi", "__PICLAW_BROADCAST_EVENT__"];
   const saved = keys.map(key => Object.getOwnPropertyDescriptor(globals, key));
@@ -219,7 +242,7 @@ test("actual Plan 0.1.25 factory: existing-chat KV, prepared tool, per-request c
   }
 });
 
-test("real Pi 1.2.0 Plan hidden history vs public durable late commit: plain commit alone is insufficient", async () => {
+planTest("real Pi 1.2.0 Plan hidden history vs public durable late commit: plain commit alone is insufficient", async () => {
   const globals = globalThis as unknown as Record<string, unknown>;
   const keys = ["__piclawRuntimeInterop", "__piclaw_planSidebarApi", "__piclaw_registerAddonConfigApi", "__PICLAW_BROADCAST_EVENT__"];
   const saved = keys.map(key => Object.getOwnPropertyDescriptor(globals, key));
@@ -377,7 +400,7 @@ test("real Pi 1.2.0 Plan hidden history vs public durable late commit: plain com
 
 // Bounded host adapter: one serial conversation, an explicitly known accepted
 // operation, no concurrent submit/compaction. NOT a generic ExtensionAPI shim.
-test("actual Plan: public commit + projection, once per accepted run across tool rounds and interrupted-hook reopen", async () => {
+planTest("actual Plan: public commit + projection, once per accepted run across tool rounds and interrupted-hook reopen", async () => {
   const globals = globalThis as unknown as Record<string, unknown>;
   const keys = ["__piclawRuntimeInterop", "__piclaw_planSidebarApi", "__piclaw_registerAddonConfigApi", "__PICLAW_BROADCAST_EVENT__"];
   const saved = keys.map(key => Object.getOwnPropertyDescriptor(globals, key));

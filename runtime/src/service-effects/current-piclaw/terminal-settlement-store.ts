@@ -3,7 +3,7 @@ import type Database from "bun:sqlite";
 import { computeClosedSourceFrontier } from "./source-frontier.js";
 
 import { validateServiceEffectContentBlocks } from "../../channels/web/messaging/content-block-safety.js";
-import type { NormalisedTraceInput } from "../contracts/common.js";
+import { type NormalisedTraceInput } from "../contracts/common.js";
 import type { EffectPayloadResolver } from "../contracts/payload-resolver.js";
 import type {
   EnqueueOutboxRequest,
@@ -36,7 +36,6 @@ import {
 import {
   insertTerminalTimeline,
   replaceTerminalTimeline,
-  terminalTimelineSnapshotIsValid,
   TerminalTimelineStatementError,
   type TerminalTimelineContent,
   type TerminalTimelineStatement,
@@ -1041,6 +1040,8 @@ class CurrentPiclawTerminalSettlementStore
     if (expectedOutboxCount > 100 || expectedMediaCount > 100) {
       throw new CorruptSettlementState();
     }
+    const ownedMedia = this.database.query("SELECT COUNT(*) n FROM service_effect_operation_media WHERE operation_id=? AND role='terminal'").get(operationId) as { n: number };
+    if (ownedMedia.n !== expectedMediaCount) throw new CorruptSettlementState();
     const ledgerCommittedAt = requiredInstant(row.committed_at);
     const outboxIds = (
       this.database
@@ -1140,30 +1141,6 @@ class CurrentPiclawTerminalSettlementStore
     );
     const committedAt = ledgerCommittedAt;
     const messageRowId = nullableInteger(row.message_row_id, 1);
-    if (messageRowId !== null) {
-      const message = this.database
-        .query(
-          "SELECT chat_jid,is_terminal_agent_reply FROM messages WHERE rowid=?",
-        )
-        .get(messageRowId) as
-        | { chat_jid?: unknown; is_terminal_agent_reply?: unknown }
-        | undefined;
-      if (
-        !message ||
-        requiredText(message.chat_jid, 512) !== chatJid ||
-        requiredInteger(message.is_terminal_agent_reply, 0) !== 1 ||
-        !terminalTimelineSnapshotIsValid(
-          this.database,
-          operationId,
-          messageRowId,
-          expectedMediaCount,
-        )
-      ) {
-        throw new CorruptSettlementState();
-      }
-    } else if (expectedMediaCount !== 0) {
-      throw new CorruptSettlementState();
-    }
     const terminal = this.database
       .query(
         `SELECT o.chat_jid,o.version,o.phase,o.terminal_disposition,

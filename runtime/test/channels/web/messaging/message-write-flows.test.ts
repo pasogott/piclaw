@@ -12,13 +12,11 @@ describe("web message write flows", () => {
     const context: MessageWriteContext = {
       defaultAgentId: "default",
       store: {
-        storeMessage: () => ({
-          id: 42,
-          timestamp: "2026-01-01T00:00:00.000Z",
-          data: { type: "agent_response", content: "hello" },
-        }),
+        storeMessage: (_chat, _text, _bot, _media, options) => {
+          expect(options).toEqual({ threadToSelf: true });
+          return { id: 42, timestamp: "2026-01-01T00:00:00.000Z", data: { type: "agent_response", content: "hello" } };
+        },
         replaceMessageContent: () => null,
-        setMessageThreadToSelf: (id) => events.push(`thread:${id}`),
       },
       broadcaster: {
         broadcastAgentResponse: (interaction) => events.push(`broadcast:${interaction.id}`),
@@ -31,7 +29,7 @@ describe("web message write flows", () => {
 
     sendWebMessage("web:default", "hello", { forceRoot: true }, context);
 
-    expect(events).toEqual(["thread:42", "broadcast:42"]);
+    expect(events).toEqual(["broadcast:42"]);
   });
 
   test("queueFollowupPlaceholderMessage enqueues placeholders without broadcasting", () => {
@@ -45,7 +43,6 @@ describe("web message write flows", () => {
           data: { type: "agent_response", content: "queued" },
         }),
         replaceMessageContent: () => null,
-        setMessageThreadToSelf: () => {},
       },
       broadcaster: {
         broadcastAgentResponse: (interaction) => events.push(`broadcast:${interaction.id}`),
@@ -73,7 +70,6 @@ describe("web message write flows", () => {
           timestamp: "2026-01-01T00:00:00.000Z",
           data: { type: "agent_response", content: "updated" },
         }),
-        setMessageThreadToSelf: () => {},
       },
       broadcaster: {
         broadcastAgentResponse: () => {},

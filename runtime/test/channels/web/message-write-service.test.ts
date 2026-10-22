@@ -10,7 +10,6 @@ function createDeps(overrides: Partial<WebMessageWriteServiceDeps> = {}): WebMes
     defaultAgentId: "default",
     storeMessage: () => null,
     replaceMessageContent: () => null,
-    setMessageThreadToSelf: () => {},
     broadcastAgentResponse: () => {},
     broadcastInteractionUpdated: () => {},
     enqueueFollowupPlaceholder: () => {},
@@ -30,7 +29,6 @@ describe("web message write service", () => {
         calls.push("replace");
         return { id: 2, timestamp: "t", data: {} };
       },
-      setMessageThreadToSelf: (messageId) => calls.push(`thread:${messageId}`),
       broadcastAgentResponse: (interaction) => calls.push(`agent:${interaction.id}`),
       broadcastInteractionUpdated: (interaction) => calls.push(`updated:${interaction.id}`),
       enqueueFollowupPlaceholder: (chatJid, rowId, queuedContent, threadId, queuedAt) =>
@@ -41,7 +39,6 @@ describe("web message write service", () => {
 
     context.store.storeMessage("web:default", "hello", true, [], undefined);
     context.store.replaceMessageContent("web:default", 2, "updated", [], undefined, true);
-    context.store.setMessageThreadToSelf(9);
     context.broadcaster.broadcastAgentResponse({ id: 3, timestamp: "t", data: {} });
     context.broadcaster.broadcastInteractionUpdated({ id: 4, timestamp: "t", data: {} });
     context.followups.enqueue("web:default", 5, "queued", 6, "2026-01-01T00:00:00.000Z");
@@ -49,7 +46,6 @@ describe("web message write service", () => {
     expect(calls).toEqual([
       "store",
       "replace",
-      "thread:9",
       "agent:3",
       "updated:4",
       "followup:web:default:5:queued:6:2026-01-01T00:00:00.000Z",

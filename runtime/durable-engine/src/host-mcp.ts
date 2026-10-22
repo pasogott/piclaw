@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { JsonRpcMessage } from "@earendil-works/pi-mcp";
 import { Type } from "@earendil-works/pi-ai";
 import type { JsonValue } from "@earendil-works/chord";
 import { defineTool, type ToolExecutionApi } from "@earendil-works/pi-durable";
@@ -7,10 +8,12 @@ import { getMcpBridgeReadSnapshot, acquireMcpSessionBridge, assertMcpBridgeSourc
 import { readMcpInstancePolicy } from "../../src/core/config-mcp.js";
 import { planMcpEnginePolicy } from "../../src/agent-pool/mcp-engine-plan.js";
 import { createNativeStdio } from "../../src/agent-pool/mcp-native-stdio.js";
+import { createNativeHttp } from "../../src/agent-pool/mcp-native-http.js";
+import { nativeAuthorizationHeader, nativeHeadersCompatible } from "../../src/agent-pool/mcp-native-header-policy.js";
 import { constrainNativeTransport } from "../../src/agent-pool/mcp-native-transport.js";
 import { RuntimeStartupCleanupError } from "../../src/runtime/startup-cleanup-error.js";
 
-/** Startup-owned, tools-only stdio profile. No adapter fallback or live apply. */
+/** Startup-owned, tools-only stdio or bounded HTTP profile. No adapter fallback. */
 export async function createHostMcp(options: {
   offlineMaintenance?: boolean;
   assertCurrent(): void;
@@ -46,13 +49,14 @@ export async function createHostMcp(options: {
     // Empty configuration has no effect, including on historical Adapter profiles.
     if (enabled.length || snapshot.dryRun.rows.some(row => row.status === "quarantined") || [...snapshot.diagnostics, ...snapshot.dryRun.diagnostics].some(row => row.serverName === "(configuration)")) {
       const plan = planMcpEnginePolicy(policy.policy, snapshot, { native: true, adapter: false, codemode: true });
-      if (policy.policy.engine !== "native" || !plan.applicable || !plan.codemodeEnabled) throw Error("Durable MCP requires explicit Native engine and codemode-compatible configuration");
-      const allowed = new Set(["command", "args", "cwd", "env", "disabled", "directTools"]);
+      if (policy.policy.engine !== "native" || !plan.applicable || !plan.codemodeEnabled) throw Error(`Durable MCP configuration unavailable: ${JSON.stringify(plan.issues)}`);
+      const allowed = new Set(["command", "args", "cwd", "env", "disabled", "directTools", "url", "headers", "bearerTokenEnv"]);
       for (const [name, original] of enabled) {
         const projected = snapshot.nativePreview.servers.find(server => server.name === name);
         const reference = (v: unknown): boolean => typeof v === "string" && /\$|\{env:|^!/.test(v);
-        if (!projected || !("command" in projected.config) || Object.keys(original).some(key => !allowed.has(key)) || original.directTools === true ||
-          reference(original.command) || reference(original.cwd) || original.args?.some(reference) || Object.values(original.env ?? {}).some(reference) || !/^[A-Za-z0-9_]+$/.test(name)) throw Error("Durable MCP supports only literal, mapped stdio tool configuration");
+        if (!projected || Object.keys(original).some(key => !allowed.has(key)) || original.directTools === true ||
+          reference(original.command) || reference(original.cwd) || reference(original.url) || original.args?.some(reference) || Object.values(original.env ?? {}).some(reference) ||
+          (!("command" in projected.config) && !nativeHeadersCompatible(projected.config.headers)) || !/^[A-Za-z0-9_]+$/.test(name)) throw Error("Durable MCP requires mapped stdio or explicitly authenticated bounded HTTP tools");
       }
       // Validate the entire configuration before acquiring credentials or starting processes.
       if (deferredMaintenance) { assertCurrent(); return { tools, close, assertCurrent, deferredMaintenance }; }
@@ -60,11 +64,10 @@ export async function createHostMcp(options: {
       for (const [name] of enabled) {
         assertCurrent();
         const server = snapshot.nativePreview.servers.find(server => server.name === name)!.config;
-        if (!("command" in server)) throw Error("Native stdio required");
         const declarations = new Set<string>();
-        const raw = createNativeStdio({ command: server.command, args: server.args ? [...server.args] : undefined, cwd: server.cwd, env: { ...server.env },
+        const authority = {
           assertStart: assertCurrent,
-          assertSend(message) {
+          assertSend(message: JsonRpcMessage) {
             assertCurrent();
             if ("method" in message && message.method === "tools/call") {
               const call = scope.getStore();
@@ -73,9 +76,33 @@ export async function createHostMcp(options: {
               call.assertCurrent(); // immediately before the actual stdin write
             }
           },
-        });
+        };
+        const raw = "command" in server
+          ? createNativeStdio({ command: server.command, args: server.args ? [...server.args] : undefined, cwd: server.cwd, env: { ...server.env }, ...authority })
+          : (() => {
+            const headers = { ...server.headers };
+            const runtimeEnv = lease!.resolveRuntimeEnv(name);
+            for (const [key, value] of Object.entries(headers)) {
+              const reference = /^Bearer \$\{([A-Z_][A-Z0-9_]*)\}$/.exec(value);
+              if (reference) {
+                const secret = runtimeEnv[reference[1]!];
+                if (!secret) throw Error("Native HTTP credential unavailable");
+                headers[key] = `Bearer ${secret}`;
+              }
+            }
+            if (!nativeAuthorizationHeader(headers)) throw Error("Native HTTP requires explicit Authorization");
+            return createNativeHttp(server.url, headers, authority);
+          })();
         const constrained = constrainNativeTransport(raw);
         const client = new McpClient({ name: "piclaw-durable", version: "1", requestTimeoutMs: 10000 });
+        let transportIssue: string | undefined;
+        client.onError(error => {
+          // Only fixed classifications leave this boundary, never server bodies or headers.
+          if (error.message.includes("SSE")) transportIssue = "streaming response unsupported";
+          else if (error.message.includes("authority")) transportIssue = "source authority unavailable";
+          else if (error.message.includes("1 MiB")) transportIssue = "response bound exceeded";
+          else transportIssue = "transport error";
+        });
         client.onNotification("notifications/tools/list_changed", () => { invalidated = true; });
         client.onClose(() => { invalidated = true; });
         closes.push(async () => {
@@ -98,7 +125,7 @@ export async function createHostMcp(options: {
               check();
               let result;
               try { result = await scope.run({ name: declaration.name, assertCurrent: check, signal: context.abortSignal }, () => client.callTool(declaration.name, args, { signal: context.abortSignal, timeoutMs: 10000 })); }
-              catch { throw Error("Host MCP request failed"); }
+              catch { throw Error(`Host MCP request failed${transportIssue ? `: ${transportIssue}` : ""}`); }
               check();
               // Project only supported public content, never server diagnostics/private fields.
               if (result.content.some(block => block.type !== "text")) throw Error("Unsupported MCP result content");

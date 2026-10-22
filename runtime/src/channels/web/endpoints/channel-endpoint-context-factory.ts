@@ -2,7 +2,8 @@
  * channels/web/channel-endpoint-context-factory.ts – Builds endpoint contexts for WebChannel handlers.
  */
 
-import { getDb, getLatestTokenUsage, getTokenUsageTotals, replaceMessageContent } from "../../../db.js";
+import { getLatestTokenUsage, getTokenUsageTotals } from "../../../db.js";
+import { updateMessagePost } from "../../../db/messages.js";
 import { resolveAvatarUrl } from "../media/avatar-service.js";
 import type { WebChannelLike } from "../core/web-channel-contracts.js";
 import type { AuthEndpointsContext } from "../auth/auth-endpoints.js";
@@ -114,10 +115,7 @@ export function createWebChannelEndpointContexts(
       defaultChatJid: options.defaultChatJid,
       getLastCommandInteractionId: () => channel.lastCommandInteractionId,
       json: (payload, status = 200) => channel.json(payload, status),
-      replaceMessageContent: (chatJid, id, content) => replaceMessageContent(chatJid, id, content, {}) ?? null,
-      setThreadId: (messageId, threadId) => {
-        getDb().prepare("UPDATE messages SET thread_id = ? WHERE rowid = ?").run(threadId, messageId);
-      },
+      replaceMessageContent: (chatJid, id, content, threadId) => updateMessagePost(chatJid, id, content, threadId) ?? null,
       broadcastInteractionUpdated: (interaction) => {
         channel.interactionBroadcaster.broadcastInteractionUpdated(interaction);
       },

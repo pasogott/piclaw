@@ -950,7 +950,9 @@ async function runSchedulerPoll(deps: SchedulerDeps, store: ScheduledRunStore, i
     deps.queue.enqueueTask(
       lease.record.runId,
       () => runClaimedScheduledTask(store, controller, deps),
-      `chat:${lease.task.chatJid}`,
+      lease.task.kind === "shell" && deps.agentPool.isDurableRuntime?.() === true
+        ? `scheduled-shell:${lease.task.chatJid}`
+        : `chat:${lease.task.chatJid}`,
     );
     schedulerMetrics.tasksEnqueued += 1;
     log.info("Scheduled occurrence claimed", {

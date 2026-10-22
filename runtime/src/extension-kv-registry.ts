@@ -120,7 +120,7 @@ function effect<T>(extensionId: string, scope: KvScope | undefined, scopeKey: st
     const chat = scope === "chat" && !!scopeKey && scopeKey === authority.chatJid;
     const global = scope === "global" && (scopeKey === undefined || scopeKey === "") && (write ? authority.globalWrite === true : authority.globalRead === true);
     if (extensionId !== authority.extensionId || !(chat || global))
-      throw Error("Extension KV scope denied");
+      throw Error(`Extension KV scope denied: extension=${extensionId}, authorized=${authority.extensionId}, scope=${scope}, key=${scopeKey}, chat=${authority.chatJid}, globalRead=${authority.globalRead===true}, globalWrite=${authority.globalWrite===true}`);
   };
   const invoke = () => { check(); const result = body(); check(); return result; };
   return write ? authority.write(invoke) : invoke();

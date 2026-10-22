@@ -963,6 +963,7 @@ export function restoreChatBranchIdentity(input: {
     : normalizeBranchAgentName(input.agent_name || "");
   const nextAgentName = getUniqueAgentName(requestedAgent || existing.agent_name, existing.branch_id);
 
+  if (existing.archived_at)
   if (!existing.archived_at && nextAgentName === existing.agent_name) {
     return existing;
   }

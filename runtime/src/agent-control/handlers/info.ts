@@ -319,10 +319,15 @@ export async function handleContext(session: AgentSession, _command: ContextComm
 
 /** Handle /quota: dump the cached provider usage snapshot for the current model (no live refetch). */
 export async function handleQuota(session: AgentSession, _command: QuotaCommand): Promise<AgentControlResult> {
-  const provider = session.model?.provider ?? null;
-  const modelLabel = session.model ? `${session.model.provider}/${session.model.id}` : "<none>";
+  return handleProviderQuota(session.modelRuntime, session.model);
+}
+
+/** Cached, credential-bound quota read; no session object or live refresh required. */
+export async function handleProviderQuota(modelRuntime: Parameters<typeof peekProviderUsageForRuntime>[0], model?: { readonly provider: string; readonly id: string }): Promise<AgentControlResult> {
+  const provider = model?.provider ?? null;
+  const modelLabel = model ? `${model.provider}/${model.id}` : "<none>";
   const snapshot = provider
-    ? await peekProviderUsageForRuntime(session.modelRuntime, provider, { allowStale: true })
+    ? await peekProviderUsageForRuntime(modelRuntime, provider, { allowStale: true })
     : null;
   if (!snapshot) {
     return { status: "success", message: `${modelLabel}\nNo quota data available.` };
@@ -385,7 +390,7 @@ export async function handleLast(session: AgentSession, _command: LastCommand): 
 }
 
 /** Handle /search-workspace: full-text search across workspace files. */
-export async function handleSearchWorkspace(_session: AgentSession, command: SearchCommand): Promise<AgentControlResult> {
+export async function handleSearchWorkspace(_session: AgentSession | undefined, command: SearchCommand): Promise<AgentControlResult> {
   const query = command.query?.trim();
   if (!query) {
     return {

@@ -85,7 +85,7 @@ test("single physical database: accepted primary + attached intent, terminal ide
     expect(JSON.stringify(tree)).not.toContain("thinking");
     const treeCommand = await app.applyControlCommand(f.chatJid, { type: "tree" });
     expect(treeCommand.status).toBe("success");
-    await expect(app.applyControlCommand(f.chatJid, { type: "tree", targetId: tree.leafId! })).rejects.toThrow("Durable history mutation unavailable");
+    expect((await app.applyControlCommand(f.chatJid, { type: "tree", targetId: tree.leafId! })).status).toBe("error");
     expect(value(await f.ports.work.getChatFrontier(f.chatJid)).consumedThroughSourceSeq).toBe(b.sourceSeq);
     const docId = await f.candidateStorage!.mintId<DocumentId>();
     await f.candidateStorage!.commit([{ type: "document.create", record: { id: docId, kind: "qualification.single-database", scope: { kind: "session" } }, content: { kind: "base", version: 1, value: { outcome: "same-file" } } }], context);

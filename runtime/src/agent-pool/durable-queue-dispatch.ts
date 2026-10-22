@@ -1,4 +1,4 @@
-// INACTIVE host-only composition. No registration, schema initialization or engine dependency.
+// Accepted-input host composition. No implicit registration, schema initialization or engine dependency.
 import { hashCanonicalRequest, type CanonicalJsonValue } from "../service-effects/contracts/common.js";
 import { createLogger } from "../utils/logger.js";
 
@@ -17,7 +17,7 @@ export type AcceptedQueueDispatch = {
 
 /** Ordinary accepted messages only. The same SQL owner/writer fence must be supplied to
  * admission, bindings and EF terminal commit. Unsupported routes must not use admission.
- * A pending result retains the worker lane and its existing inflight recovery marker. */
+ * A pending result retains the worker lane; durable operation state owns recovery. */
 export function createDurableQueueDispatch(options: {
   work: CurrentPiclawServiceWorkStore;
   adapter: ReturnType<typeof createDurableConversationAdapter>;
@@ -51,6 +51,10 @@ export function createDurableQueueDispatch(options: {
     const content = message.content, requestId = `message:${rowId}:${source.sourceId}`;
     const requestHash = hashCanonicalRequest({ type: "input", requestId, content });
     return async () => {
+      // Host and SDK use separate connections to the same WAL database. Yield on
+      // transient writer contention and rejoin the same accepted request ID.
+      const retryDeadline = Date.now() + 10_000;
+      for (;;) {
       try {
         assert();
         const frontier = await frontierFor(chatJid); assert();
@@ -87,12 +91,28 @@ export function createDurableQueueDispatch(options: {
           const bound = await bind(request); assert();
           if (!bound.ok) return 'pending';
         }
-        await wait(accepted, id, shutdown); assert();
-        if (shutdown.aborted) return "pending";
-        return await settle(accepted) ? "settled" : "pending";
-      } catch {
-        // Lost acknowledgements and failed waits are uncertain, never permission for legacy replay.
+        while (!shutdown.aborted) {
+          const before = await operationFor(operationId); assert();
+          if (!before.ok || !before.value) return "pending";
+          await wait(accepted, id, shutdown); assert();
+          if (shutdown.aborted) return "pending";
+          if (await settle(accepted)) return "settled";
+          const after = await operationFor(operationId); assert();
+          // An accepted steer racing the wait/terminal boundary needs another
+          // join of its existing SDK input, not a new primary or legacy replay.
+          if (!after.ok || !after.value || after.value.version === before.value.version) return "pending";
+        }
         return "pending";
+      } catch (error) {
+        if (!shutdown.aborted && (error as { code?: string })?.code === "SQLITE_BUSY" && Date.now() < retryDeadline) {
+          await new Promise(resolve => setTimeout(resolve, 25));
+          assert();
+          continue;
+        }
+        // Lost acknowledgements and failed waits are uncertain, never permission for legacy replay.
+        log.warn("Accepted input dispatch remains pending", { operation: "durable_queue.dispatch_pending", err: error });
+        return "pending";
+      }
       }
     };
   };

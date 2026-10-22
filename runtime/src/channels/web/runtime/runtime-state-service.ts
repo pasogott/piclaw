@@ -35,6 +35,9 @@ import {
 
 /** Runtime callbacks required to bridge recovery/resume helpers back into WebChannel orchestration. */
 export interface WebChannelRuntimeStateCallbacks {
+  isNativeRuntime?(): boolean;
+  isChatLaneBusy?(chatJid: string): boolean;
+  readNativeTurnState?(chatJid: string): { operation: { operation_id: string; phase: string } | null; queued: number };
   getAssistantName(): string;
   getChatCursor(chatJid: string): string;
   enqueue(task: () => Promise<void>, key: string, laneKey?: string): void;
@@ -121,6 +124,7 @@ export class WebChannelRuntimeStateService {
 
   private getRecoveryContext(): WebRecoveryContext {
     return {
+      isNativeRuntime: () => this.callbacks.isNativeRuntime?.() === true,
       assistantName: this.callbacks.getAssistantName(),
       defaultAgentId: this.options.defaultAgentId,
       enqueue: (task, key, laneKey) => this.callbacks.enqueue(task, key, laneKey),
@@ -200,7 +204,20 @@ export class WebChannelRuntimeStateService {
   }
 
   getAgentStatus(chatJid: string): Record<string, unknown> | null {
-    return this.agentStatusStore.get(chatJid);
+    const saved = this.agentStatusStore.get(chatJid);
+    if (this.callbacks.isNativeRuntime?.() !== true || !this.callbacks.readNativeTurnState) return saved;
+    const { operation, queued } = this.callbacks.readNativeTurnState(chatJid);
+    const laneBusy = this.callbacks.isChatLaneBusy?.(chatJid) === true;
+    // Worker cleanup can outlive terminal publication. A busy lane alone is
+    // not an active durable model turn and must not resurrect Stop/Working.
+    const nativeTaskRunning = laneBusy && saved?.type === "intent" && saved.intent_key === "native_task";
+    if (operation || queued || nativeTaskRunning) {
+      const active = saved && saved.type !== "done" && saved.type !== "error" ? saved : {};
+      return { ...active, chat_jid: chatJid, type: active.type ?? "thinking", state: "active", source: "durable_runtime",
+        title: active.title ?? (operation ? "Working" : laneBusy ? "Running queued work" : "Queued"),
+        operation_id: operation?.operation_id ?? null, operation_phase: operation?.phase ?? null, queued_count: queued };
+    }
+    return saved && saved.type !== "done" && saved.type !== "error" ? { ...saved, type: "done", state: "idle", title: "Idle", queued_count: 0 } : saved;
   }
 
   setContextUsage(chatJid: string, usage: Record<string, unknown> | null): void {
