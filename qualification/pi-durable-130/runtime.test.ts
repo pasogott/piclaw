@@ -192,7 +192,11 @@ test("runtime: terminal model error settles once and releases the host lane", ()
   expect(await f.runtime.settle(input)).toEqual(committed);
   expect(effects).toBe(0);
   const notice = f.db.query("SELECT rowid,content,thread_id FROM messages WHERE is_bot_message=1").get() as { rowid: number; content: string; thread_id: number | null };
-  expect(notice.content).toBe("**Turn failed**\n\nThe model could not complete this turn. Accepted inputs were consumed; they will not be replayed automatically.");
+  expect(notice.content).toContain("underlying reason was not recorded");
+  expect(notice.content).toContain("Tool actions may already have completed");
+  expect(notice.content).toContain("will not be retried automatically");
+  expect(notice.content).toContain(`Reference: native submission ${state.submissionId}.`);
+  expect(notice.content).not.toContain("SYNTHETIC-NOTICE-STORAGE-SECRET");
   expect(notice.rowid).toBe(committed!.messageRowId!);
   // Display rows are mutable. Their edits cannot invalidate committed execution
   // authority or cause the failed operation to be replayed or republished.

@@ -1,4 +1,8 @@
 import type { HostCodexModelServices } from "./host-codex-model-services.js";
+import { createLogger } from "../../src/utils/logger.js";
+import { taskModelRequestScope } from "./task-model-boundary-shim.js";
+import { classifyModelFailure, modelFailureDetail, type ModelFailure, type ModelFailurePhase } from "./host-model-failure.js";
+const log = createLogger("durable.models");
 import {
   createModels, createProvider, createAssistantMessageEventStream, normalizeContext,
   type Api, type Model, type Models, type SimpleStreamOptions,
@@ -211,6 +215,9 @@ export function createHostModels(
     options?: SimpleStreamOptions, deferred?: { handle: DeferredHandle; options?: DeferredFetchOptions }) => {
     const output = createAssistantMessageEventStream();
     let terminalUsage: Usage | undefined;
+    let phase: ModelFailurePhase = "validation";
+    let providerFailure: ModelFailure | undefined;
+    let scope: ReturnType<typeof taskModelRequestScope>;
     let codex: Awaited<ReturnType<HostCodexModelServices["bind"]>> | undefined;
     let request: Awaited<ReturnType<NonNullable<HostModelPolicy["prepareRequest"]>>>;
     const captureTerminalUsage = (message: AssistantMessage) => {
@@ -224,25 +231,28 @@ export function createHostModels(
     };
     void (async () => {
       try {
+        scope = taskModelRequestScope(options?.signal);
         model = validatedChatModel(model);
         context = freeze(data(context));
         if (deferred) {
           if (!hostModelRuntime120.streamDeferred) throw new Error("Host operation unavailable");
           const admitted = await deferredAdmission(model, deferred.handle, deferred.options, "fetchDeferred");
+          phase = "provider";
           const stream = hostModelRuntime120.streamDeferred(admitted.physical, admitted.raw, admitted.options);
           for await (const event of stream) {
-            if (event.type === "error") { await request?.settle(event.error); captureTerminalUsage(event.error); throw new Error("Host request failed"); }
+            if (event.type === "error") { await request?.settle(event.error); captureTerminalUsage(event.error); providerFailure = classifyModelFailure("provider", event.error); throw new Error("Host request failed"); }
             if (event.type === "done") await request?.settle(event.message);
           output.push("message" in event ? { ...data({ ...event, message: undefined }), message: projectMessage(event.message, model) }
               : "partial" in event ? { ...data({ ...event, partial: undefined }), partial: projectMessage(event.partial, model) } : data(event));
           }
           const result = await stream.result();
-          if (result.stopReason === "error" || result.stopReason === "aborted") { await request?.settle(result); captureTerminalUsage(result); throw new Error("Host request failed"); }
+          if (result.stopReason === "error" || result.stopReason === "aborted") { await request?.settle(result); captureTerminalUsage(result); providerFailure = classifyModelFailure("provider", result); throw new Error("Host request failed"); }
           output.end(projectMessage(result, model));
           return;
         }
         const hasImages = context.messages.some(message =>
           Array.isArray(message.content) && message.content.some(block => block.type === "image"));
+        phase = "source";
         const assertSource = await policy.captureSourceGuard?.(options?.signal) ?? (() => {});
         assertSource();
         const ref = { provider: model.provider, id: model.id };
@@ -253,6 +263,7 @@ export function createHostModels(
           ? AbortSignal.any([options.signal, policy.signal]) : policy.signal;
         const safeOptions = requestOptions(options, !!policy.deferred);
         signal.throwIfAborted();
+        phase = "admission";
         if (policy.prepareRequest) request = await policy.prepareRequest(model, { ...safeOptions, signal: options?.signal }, signal);
         await policy.authorize(ref, "chat", signal);
         signal.throwIfAborted();
@@ -267,6 +278,7 @@ export function createHostModels(
           return current;
         };
         const physical = assertPhysicalCompatible();
+        phase = "conversion";
         codex = await policy.codex?.bind(physical, signal, options?.signal);
         const hostOptions = { ...safeOptions, ...codex?.options, signal, transformHeaders: async (headers: Record<string, string | null>) => {
           signal.throwIfAborted();
@@ -276,6 +288,7 @@ export function createHostModels(
           await request?.dispatch();
           return codex ? codex.headers(headers) : headers; // Host-only closure: never sent to 1.3 or a caller callback.
         } };
+        phase = "provider";
         const stream = simple
           ? hostModelRuntime120.streamSimple(physical, codex ? codex.context(data(context)) : data(context), hostOptions)
           : hostModelRuntime120.stream(physical, codex ? codex.context(data(context)) : data(context), hostOptions);
@@ -287,17 +300,26 @@ export function createHostModels(
         }
         const result = await stream.result();
         captureTerminalUsage(result);
+        if (result.stopReason === "error" || result.stopReason === "aborted") providerFailure = classifyModelFailure("provider", result);
+        phase = "accounting";
         await request?.settle(result);
+        phase = "conversion";
         await codex?.finish();
-        if (result.stopReason === "error" || result.stopReason === "aborted") throw new Error("Host request failed");
+        if (providerFailure) { phase = "provider"; throw new Error("Host request failed"); }
         if (terminal?.type === "done") output.push({ ...data({ ...terminal, message: undefined }), message: projectMessage(result, model) });
         output.end(projectMessage(result, model));
-      } catch {
-        try { await codex?.finish(); } catch { /* Keep unresolved output private. */ }
-        // Host errors can contain credentials/headers. Do not export them.
+      } catch (cause) {
+        // Preserve the provider reason even when accounting/conversion fails next.
+        const failure = providerFailure ? { ...providerFailure, phase } : classifyModelFailure(phase, cause);
+        log.warn("Native model request failed", { operation: "durable_model.request_failed", provider: model.provider,
+          model: model.id, taskId: scope?.taskId, conversationId: scope?.conversationId, ...failure });
+        try { await codex?.finish(); } catch {
+          log.warn("Native model conversion cleanup remains unresolved", { operation: "durable_model.cleanup_failed", phase: "conversion", taskId: scope?.taskId, conversationId: scope?.conversationId });
+        }
+        // Persist only the bounded classification; never provider text or partial output.
         const error: AssistantMessage = { role: "assistant", content: [], api: model.api,
           provider: model.provider, model: model.id, timestamp: Date.now(),
-          stopReason: "error", errorMessage: "Host model request denied or failed",
+          stopReason: "error", errorMessage: modelFailureDetail(failure),
           usage: terminalUsage ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
         output.push({ type: "error", reason: "error", error });
@@ -305,7 +327,9 @@ export function createHostModels(
         // uncertain accounting write leaves its durable hold intact. SDK error
         // terminals also cover unsent auth failures: only the reservation knows
         // whether to release an unsent request or retain a dispatched hold.
-        try { await request?.abandon(); } catch { /* Preserve the sanitised failure and unresolved reservation. */ }
+        try { await request?.abandon(); } catch {
+          log.warn("Native model accounting remains unresolved", { operation: "durable_model.cleanup_failed", phase: "accounting", taskId: scope?.taskId, conversationId: scope?.conversationId });
+        }
         output.end(error);
       }
     })();

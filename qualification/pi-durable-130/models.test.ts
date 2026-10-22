@@ -11,6 +11,8 @@ import type { ModelRuntime as HostRuntime } from "../../node_modules/@earendil-w
 import type { Credential, CredentialStore, Model, TranscriptContext as HostTranscript, AssistantMessage } from "../../node_modules/@earendil-works/pi-ai";
 import type { Models, ImageModel, ClassifierModel, Api, ImageApi, ClassifierApi } from "../../runtime/durable-engine/qualification/ai.ts";
 import { createHostModels, type HostModelPolicy } from "../../runtime/durable-engine/src/index.js";
+import { modelFailureDetail } from "../../runtime/durable-engine/src/host-model-failure.js";
+import { addLogSink, removeLogSink, type LogRecord } from "../../runtime/src/utils/logger.js";
 
 // These ESM-only public exports have no require condition; resolve from root.
 const root = new URL("../../package.json", import.meta.url).href;
@@ -37,7 +39,7 @@ async function bounded(promise: Promise<void>) {
     })]);
   } finally { clearTimeout(timer); }
 }
-async function fixture(multimodal = false, keyless = false, deferred = false, imageInput = false, terminalError: boolean | "invalid-usage" | "wrong-owner" | "wrong-response" = false) {
+async function fixture(multimodal = false, keyless = false, deferred = false, imageInput = false, terminalError: boolean | "invalid-usage" | "wrong-owner" | "wrong-response" = false, errorText = token) {
   const physical = { ...model, input: imageInput ? ["text", "image"] as Model<Api>["input"] : ["text"] as Model<Api>["input"] };
   let stored: Credential | undefined = { type: "api_key", key: token };
   const requested: string[] = [];
@@ -98,7 +100,7 @@ async function fixture(multimodal = false, keyless = false, deferred = false, im
     const stream = createAssistantMessageEventStream();
     const result = deferred ? { ...message, stopReason: "deferred" as const, deferred: privateHandle } : structuredClone(message);
     if (terminalError) {
-      const error: AssistantMessage = { ...message, content: [], stopReason: "error" as const, errorMessage: token,
+      const error: AssistantMessage = { ...message, content: [], stopReason: "error" as const, errorMessage: errorText,
         usage: { ...message.usage, cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 } } };
       if (terminalError === "invalid-usage") error.usage.cost.total = -1;
       if (terminalError === "wrong-owner") error.provider = "different-provider";
@@ -652,7 +654,7 @@ test("image capability: authorization, real post-auth fence, and accepted SQLite
       }
       const result = await pending;
       expect(result.stopReason).toBe("error");
-      expect(result.errorMessage).toBe("Host model request denied or failed");
+      expect(result.errorMessage).toBe(modelFailureDetail({ phase: phase === "authorize" ? "admission" : "provider", category: "unknown" }));
       expect(f.calls()).toBe(0);
       expect(JSON.stringify(result)).not.toContain(token);
       expect(f.requested.length - initialReads).toBe(phase === "authorize" ? 0 : 1);
@@ -714,6 +716,57 @@ test('failed host request preserves validated reported usage without private dia
   expect(JSON.stringify(result)).not.toContain(token);
   expect(result.content).toEqual([]);
   expect(f.calls()).toBe(1);
+});
+
+test("provider failure preserves safe category, accounting and a single dispatch", async () => {
+  const f = await fixture(false, false, false, false, true, `HTTP 504 timed out; Authorization: Bearer ${token}`);
+  const records: LogRecord[] = [], sink = (record: LogRecord) => { records.push(record); };
+  let settlements = 0, abandonments = 0;
+  f.policy.prepareRequest = async () => ({ async dispatch() {}, async settle() { settlements++; }, async abandon() { abandonments++; } });
+  addLogSink(sink);
+  try {
+    const result = await f.models.completeSimple(f.model, context);
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Host model request failed [phase=provider; category=timeout; http=504]");
+    expect(f.calls()).toBe(1); expect(settlements).toBe(1); expect(abandonments).toBe(1);
+    expect(result.usage.cost.total).toBe(0.3);
+    expect(records.filter(record => record.operation === "durable_model.request_failed")).toHaveLength(1);
+    expect(records.find(record => record.operation === "durable_model.request_failed")).toMatchObject({ phase: "provider", category: "timeout", httpStatus: 504 });
+    expect(JSON.stringify([result, records])).not.toContain(token);
+  } finally { removeLogSink(sink); }
+});
+
+test("unresolved accounting does not overwrite the original provider timeout", async () => {
+  const f = await fixture(false, false, false, false, true, `HTTP 504 timed out ${token}`);
+  f.policy.prepareRequest = async () => ({ async dispatch() {}, async settle() { throw Error(token); }, async abandon() {} });
+  const result = await f.models.completeSimple(f.model, context);
+  expect(result.errorMessage).toBe("Host model request failed [phase=accounting; category=timeout; http=504]");
+  expect(f.calls()).toBe(1);
+  expect(JSON.stringify(result)).not.toContain(token);
+});
+
+test("admission failure reports its stage without dispatch or private exception text", async () => {
+  const f = await fixture();
+  f.policy.authorize = async () => { throw Error(`Invalid API key: ${token}`); };
+  const result = await f.models.completeSimple(f.model, context);
+  expect(result.stopReason).toBe("error");
+  expect(result.errorMessage).toBe("Host model request failed [phase=admission; category=authentication]");
+  expect(f.calls()).toBe(0);
+  expect(JSON.stringify(result)).not.toContain(token);
+});
+
+test("accounting and cleanup failures remain visible without repeating provider work", async () => {
+  const f = await fixture();
+  const records: LogRecord[] = [], sink = (record: LogRecord) => { records.push(record); };
+  f.policy.prepareRequest = async () => ({ async dispatch() {}, async settle() { throw Error(token); }, async abandon() { throw Error(token); } });
+  addLogSink(sink);
+  try {
+    const result = await f.models.completeSimple(f.model, context);
+    expect(result.errorMessage).toBe("Host model request failed [phase=accounting; category=unknown]");
+    expect(f.calls()).toBe(1);
+    expect(records.some(record => record.operation === "durable_model.cleanup_failed" && record.phase === "accounting")).toBe(true);
+    expect(JSON.stringify([records, result])).not.toContain(token);
+  } finally { removeLogSink(sink); }
 });
 
 for (const invalid of ['invalid-usage', 'wrong-owner', 'wrong-response'] as const) test(`failed host usage rejects ${invalid} without disclosing diagnostics`, async () => {

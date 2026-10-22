@@ -1,4 +1,7 @@
 import { assertModelContextFits, measureModelPromptSections } from "./host-model-context.js";
+import { modelFailureNotice, parseModelFailure } from "./host-model-failure.js";
+import { createLogger } from "../../src/utils/logger.js";
+const log = createLogger("durable.runtime");
 import { getSupportedThinkingLevels, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 // Native conversation runtime, explicitly composed with fenced host authority by application-bootstrap.
 import { configure, AgentDoc, AssistantEntry, InboxDoc, LiveDoc, UsageDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId, type TaskId, type CompactionResult } from "@earendil-works/pi-durable";
@@ -1580,7 +1583,7 @@ export class HostConversationRuntime {
       // Failure notices contain no provider diagnostics or partial tool media.
       // They use the same version-fenced terminal transaction as final answers.
       try {
-        if (modelFailed) await o.putAnswer(ref, "**Turn failed**\n\nThe model could not complete this turn. Accepted inputs were consumed; they will not be replayed automatically.");
+        if (modelFailed) await o.putAnswer(ref, modelFailureNotice(state.status?.status === "unanswered" ? state.status.detail : undefined, state.submissionId));
         else if (o.materializeAnswer) materialized = materializedSnapshot(await o.materializeAnswer(ref, state.answer!, freezeTree(structuredClone(operation))));
         else await o.putAnswer(ref, state.answer!.text);
       } catch { throw new Error("Host answer materialization failed"); }
@@ -1601,7 +1604,11 @@ export class HostConversationRuntime {
       outboxIntents: [], committedAt: o.now() });
     const terminalEffect = cancelled || modelFailed ? undefined : await o.prepareTerminalEffect?.(input);
     this.fence();
-    const terminal = value(await o.terminal.commitTerminal(request, terminalEffect)); this.fence(); o.onOperationSettled?.(input.operationId); return terminal;
+    const terminal = value(await o.terminal.commitTerminal(request, terminalEffect)); this.fence();
+    if (modelFailed) log.warn("Native turn failed; no automatic replay", { operation: "durable_turn.model_failed",
+      chatJid: input.chatJid, operationId: input.operationId, conversationId: input.conversationId, submissionId: state.submissionId,
+      ...(parseModelFailure(state.status?.status === "unanswered" ? state.status.detail : undefined) ?? { category: "unknown" }) });
+    o.onOperationSettled?.(input.operationId); return terminal;
   }
   /** Rollback-only shutdown: seal before yielding, join host calls, then reject ANY live
    * public task/submission before Harness.close can cancel work. Failure stays sealed.
