@@ -37,7 +37,16 @@ export interface DurableSessionReport {
   readonly usage: { readonly input: number; readonly output: number; readonly cacheRead: number; readonly cacheWrite: number; readonly cost: number };
 }
 
+/** Current active model context, using the SDK usage-plus-trailing estimate.
+ * Never cumulative conversation spend or a legacy stored counter.
+ */
+export interface DurableContextUsage {
+  readonly tokens: number | null;
+  readonly contextWindow: number | null;
+}
+
 export interface DurableSessionPositionPort {
+  readonly readContextUsage?: () => Promise<DurableContextUsage>;
   readonly readMetadata?: () => Promise<DurableSessionMetadata>;
   readonly readReport?: () => Promise<DurableSessionReport>;
   readonly sessionId: string;
@@ -86,6 +95,7 @@ export interface DurableConversationState {
  * must already be configured there. No 1.2 Models, SDK session or context crosses this port.
  * Reconciliation deliberately does not expose the engine's private answer/thinking evidence. */
 export interface DurableConversationRuntimePort {
+  readSessionContextUsage?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<DurableContextUsage>;
   resetSession?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<void>;
   compactSession?(binding: DurableConversationBinding & { readonly incarnation: string }, instructions?: string): Promise<{ compacted: boolean }>;
   reconcileMaintenance?(binding: DurableConversationBinding & { readonly incarnation: string }): Promise<void>;
@@ -135,6 +145,7 @@ export function createDurableConversationAdapter(options: {
   const cancel = runtime.cancel.bind(runtime), resume = runtime.resume.bind(runtime);
   const settle = runtime.settle.bind(runtime), close = runtime.close.bind(runtime);
   const wait = runtime.wait?.bind(runtime), submitIntent = runtime.submitIntent?.bind(runtime);
+  const readContextUsage = runtime.readSessionContextUsage?.bind(runtime);
   const readPosition = runtime.readSessionPosition?.bind(runtime);
   const readModel = runtime.readSessionModel?.bind(runtime);
   const readThinkingLevel = runtime.readSessionThinkingLevel?.bind(runtime);
@@ -167,6 +178,7 @@ export function createDurableConversationAdapter(options: {
       const binding = lookup(chatJid, branchId);
       if (!binding || !sessionId || !readPosition) throw new Error("Durable session position unavailable");
       return Object.freeze({ sessionId, branchId,
+        readContextUsage: readContextUsage ? () => readContextUsage({ ...binding, incarnation }) : undefined,
         readPosition: () => readPosition({ ...binding, incarnation }),
         readModel: readModel ? () => readModel({ ...binding, incarnation }) : undefined,
         readThinkingLevel: readThinkingLevel ? () => readThinkingLevel({ ...binding, incarnation }) : undefined,

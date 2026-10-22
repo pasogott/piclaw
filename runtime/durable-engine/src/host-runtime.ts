@@ -1,4 +1,5 @@
 import { assertModelContextFits, measureModelPromptSections } from "./host-model-context.js";
+import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { getSupportedThinkingLevels, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 // Native conversation runtime, explicitly composed with fenced host authority by application-bootstrap.
 import { configure, AgentDoc, AssistantEntry, InboxDoc, LiveDoc, UsageDoc, Harness, type HarnessOptions, type HarnessInspection, type Storage, type ConversationId, type SubmissionId, type TaskId, type CompactionResult } from "@earendil-works/pi-durable";
@@ -351,6 +352,32 @@ export class HostConversationRuntime {
       const tools = [...new Map([...agent.tools, ...agent.callable, ...agent.deferred].map(tool => [tool.name,
         { name: tool.name, description: tool.description }])).values()];
       return { backend: "durable", conversationId: copy.conversationId, extensions: agent.extensions.map(extension => extension.name), tools };
+    });
+  }
+  /** Read-only current-head context estimate for the compose tracker. The SDK
+   * uses the last eligible provider usage plus trailing message estimates and
+   * drops usage that predates a reset/compaction prefix. No generation occurs.
+   */
+  async readSessionContextUsage(binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }): Promise<import("../../src/agent-pool/durable-runtime-adapter.js").DurableContextUsage> {
+    const copy = Object.freeze({ ...binding });
+    return this.observe(async () => {
+      const assertBinding = () => {
+        this.fence();
+        if (copy.incarnation !== this.options.incarnation || !this.options.existingConversationIds.includes(copy.conversationId as ConversationId) ||
+          this.options.conversationFor(copy.chatJid, copy.branchId) !== copy.conversationId) throw Error("Host binding conflict");
+      };
+      assertBinding();
+      const conversation = await this.harness.conversation(copy.conversationId as ConversationId, this.context); assertBinding();
+      if (!conversation) throw Error("Missing existing conversation");
+      const view = await conversation.context(this.context); assertBinding();
+      const agent = await conversation.agent(this.context); assertBinding();
+      const model = agent.model && this.options.harnessOptions.models.getModel(agent.model.provider, agent.model.modelId);
+      const measured = estimateContextTokens(view.messages).tokens;
+      const tokens = Number.isFinite(measured) && measured >= 0 ? measured : null;
+      const window = model?.contextWindow;
+      const contextWindow = typeof window === "number" && Number.isFinite(window) && window > 0 ? window : null;
+      assertBinding();
+      return { tokens, contextWindow };
     });
   }
   /** Read-only native reporting. No model calls, estimates, or legacy session hydration. */

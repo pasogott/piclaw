@@ -82,8 +82,9 @@ export async function buildPiclawStateSnapshot(channel: WebChannelLike): Promise
     const record = chat as unknown as Record<string, unknown>;
     const chatJid = String(record.chat_jid || "").trim();
     if (!chatJid) continue;
-    const runtimeContext = await channel.agentPool.getContextUsageForChat(chatJid).catch(() => null);
-    const storedContext = channel.getContextUsage(chatJid);
+    let runtimeReadFailed = false;
+    const runtimeContext = await channel.agentPool.getContextUsageForChat(chatJid).catch(() => { runtimeReadFailed = true; return null; });
+    const storedContext = runtimeReadFailed ? null : channel.getContextUsage(chatJid);
     const currentGeneration = (typeof channel.agentPool.getSessionGenerationForChat === "function"
       ? channel.agentPool.getSessionGenerationForChat(chatJid)
       : null)

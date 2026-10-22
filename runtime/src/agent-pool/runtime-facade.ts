@@ -477,7 +477,7 @@ export class AgentRuntimeFacade {
           if (auth) revokeNativeProviderAuthContext(auth);
           return { status: "success", message: "Started a new durable context. Previous history is retained.",
             sessionGeneration: port.sessionId, sessionGenerationChanged: false,
-            contextUsage: { tokens: null, contextWindow: null, percent: null, sessionGeneration: port.sessionId, source: "durable-reset" } };
+            contextUsage: { ...await this.readDurableControlContextUsage(port), source: "durable-reset" } };
         } catch (error) {
           return { status: "error", message: error instanceof Error ? error.message : "Context reset failed." };
         } finally { release?.(); }
@@ -491,7 +491,7 @@ export class AgentRuntimeFacade {
           const result = await port.compact(command.instructions?.trim() || undefined);
           return { status: "success", message: result.compacted ? "Context compacted." : "Nothing to compact.",
             sessionGeneration: port.sessionId,
-            contextUsage: { tokens: null, contextWindow: null, percent: null, sessionGeneration: port.sessionId,
+            contextUsage: { ...await this.readDurableControlContextUsage(port),
               source: "durable_context", phase: "after_manual_compaction" } };
         } catch (error) {
           return { status: "error", message: error instanceof Error ? error.message : "Compaction failed." };
@@ -725,6 +725,24 @@ export class AgentRuntimeFacade {
     }
   }
 
+  /** A committed reset/compact stays successful if its subsequent display read
+   * loses ownership or the runtime closes. Unknown remains authoritative.
+   */
+  private async readDurableControlContextUsage(binding: DurableSessionPositionPort) {
+    try { return await this.readDurableContextUsage(binding); }
+    catch { return { tokens: null, contextWindow: null, percent: null, sessionGeneration: binding.sessionId, tokensAreAuthoritative: true as const }; }
+  }
+
+  private async readDurableContextUsage(binding: DurableSessionPositionPort) {
+    if (!binding.readContextUsage) throw new Error("Durable context reader unavailable");
+    const usage = await binding.readContextUsage();
+    const window = usage.contextWindow;
+    const contextWindow = typeof window === "number" && Number.isFinite(window) && window > 0 ? window : null;
+    const tokens = typeof usage.tokens === "number" && Number.isFinite(usage.tokens) && usage.tokens >= 0 ? usage.tokens : null;
+    return { tokens, contextWindow, percent: tokens !== null && contextWindow !== null ? tokens / contextWindow * 100 : null,
+      sessionGeneration: binding.sessionId, tokensAreAuthoritative: true as const };
+  }
+
   async getContextUsageForChat(chatJid: string): Promise<{
     tokens: number | null;
     contextWindow: number | null;
@@ -736,15 +754,7 @@ export class AgentRuntimeFacade {
     if (this.options.getDurableSession !== undefined) {
       const binding = this.getDurableSession(chatJid);
       if (!binding) throw new Error("Durable application does not construct legacy sessions");
-      if (!binding.readModel) throw new Error("Durable model reader unavailable");
-      const label = await binding.readModel();
-      const separator = label?.indexOf("/") ?? -1;
-      const physical = label && separator > 0
-        ? this.options.modelRuntime.getPhysicalModel(label.slice(0, separator), label.slice(separator + 1))
-        : undefined;
-      const window = physical?.contextWindow;
-      return { tokens: null, contextWindow: typeof window === "number" && Number.isFinite(window) && window > 0 ? window : null,
-        percent: null, sessionGeneration: binding.sessionId, tokensAreAuthoritative: true };
+      return this.readDurableContextUsage(binding);
     }
     const entry = this.options.pool.get(chatJid);
     if (!entry) return null;

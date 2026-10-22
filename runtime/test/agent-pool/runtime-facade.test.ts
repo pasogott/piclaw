@@ -235,36 +235,33 @@ test("tree summaries await captured public readers, preserve raw head and reject
   expect(await normal.facade.getSessionTreeSummaryForChat("legacy")).toEqual({ leafId: "raw", total: 0 });
 });
 
-test("durable context uses the captured persisted model and synchronous physical metadata only", async () => {
-  let label: string | null = "provider/model/with/slash";
-  let window: number | undefined = 12345;
-  let release!: () => void;
-  let hold: Promise<void> = Promise.resolve();
+test("durable context uses the captured native estimate and never legacy metadata or counters", async () => {
+  let tokens: number | null = 1234, window: number | null = 12345;
+  let release!: () => void, hold: Promise<void> = Promise.resolve();
   const port = { sessionId: "generation", branchId: "main", readPosition: async () => null,
-    readModel: async () => { await hold; return label; } };
-  const ports = new Map([["bound", port], ["missing", { sessionId: "missing", branchId: "main", readPosition: async () => null }]]);
+    readContextUsage: async () => { await hold; return { tokens, contextWindow: window }; } };
+  const ports = new Map<string, any>([["bound", port], ["missing", { sessionId: "missing", branchId: "main", readPosition: async () => null }]]);
   const fixture = createFacade({ getDurableSession: chat => ports.get(chat),
     getOrCreateRuntime: async () => { throw Error("legacy forbidden"); },
-    modelRuntime: { getPhysicalModel: (provider: string, id: string) => {
-      expect(provider).toBe("provider"); expect(id).toBe("model/with/slash");
-      return window === undefined ? undefined : { contextWindow: window };
-    } } as any });
-  const expected = { tokens: null, contextWindow: 12345, percent: null, sessionGeneration: "generation", tokensAreAuthoritative: true };
+    modelRuntime: { getPhysicalModel() { throw Error("legacy metadata forbidden"); } } as any });
+  const expected = { tokens: 1234, contextWindow: 12345, percent: 1234 / 12345 * 100, sessionGeneration: "generation", tokensAreAuthoritative: true };
   expect(await fixture.facade.getContextUsageForChat("bound")).toEqual(expected);
-  for (window of [0, -1, NaN, Infinity, undefined]) {
-    expect(await fixture.facade.getContextUsageForChat("bound")).toEqual({ ...expected, contextWindow: null });
+  for (window of [0, -1, NaN, Infinity, null]) {
+    expect(await fixture.facade.getContextUsageForChat("bound")).toEqual({ ...expected, contextWindow: null, percent: null });
   }
-  label = null;
-  expect(await fixture.facade.getContextUsageForChat("bound")).toEqual({ ...expected, contextWindow: null });
-  await expect(fixture.facade.getContextUsageForChat("missing")).rejects.toThrow("Durable model reader unavailable");
+  window = 12345;
+  for (tokens of [-1, NaN, Infinity, null]) {
+    expect(await fixture.facade.getContextUsageForChat("bound")).toEqual({ ...expected, tokens: null, percent: null });
+  }
+  tokens = 0;
+  expect(await fixture.facade.getContextUsageForChat("bound")).toEqual({ ...expected, tokens: 0, percent: 0 });
+  await expect(fixture.facade.getContextUsageForChat("missing")).rejects.toThrow("Durable context reader unavailable");
   await expect(fixture.facade.getContextUsageForChat("unknown")).rejects.toThrow("Durable application does not construct legacy sessions");
-  label = "provider/model/with/slash"; window = 54321;
-  hold = new Promise<void>(resolve => { release = resolve; });
+  tokens = 2345; window = 54321; hold = new Promise<void>(resolve => { release = resolve; });
   const pending = fixture.facade.getContextUsageForChat("bound");
-  ports.set("bound", { ...port, sessionId: "replacement" });
-  release();
-  expect(await pending).toEqual({ ...expected, contextWindow: 54321 });
-  ports.set("bound", { ...port, readModel: async () => { throw Error("Stale owner"); } });
+  ports.set("bound", { ...port, sessionId: "replacement" }); release();
+  expect(await pending).toEqual({ ...expected, tokens, contextWindow: window, percent: tokens / window * 100 });
+  ports.set("bound", { ...port, readContextUsage: async () => { throw Error("Stale owner"); } });
   await expect(fixture.facade.getContextUsageForChat("bound")).rejects.toThrow("Stale owner");
 });
 
@@ -1378,13 +1375,14 @@ test('lifetime-bound streaming input refuses unfenced SDK injection', async () =
 test("durable compact captures one port for the whole command without legacy fallback", async () => {
   let lookups = 0, compactions = 0, legacyCalls = 0, releases = 0;
   const port = { sessionId: "captured-generation", branchId: "main", readPosition: async () => null,
+    async readContextUsage() { return { tokens: 10, contextWindow: 1000 }; },
     async compact(instructions?: string) { compactions++; expect(instructions).toBe("keep decisions"); return { compacted: true }; } };
   const { facade } = createFacade({
     getDurableSession() { return ++lookups === 1 ? port : undefined; },
     async getOrCreateRuntime() { legacyCalls++; throw Error("Legacy forbidden"); },
     acquireCommandProtection() { return () => { releases++; }; },
   });
-  expect(await facade.applyControlCommand("web:captured", { type: "compact", instructions: " keep decisions " })).toMatchObject({ status: "success", sessionGeneration: "captured-generation" });
+  expect(await facade.applyControlCommand("web:captured", { type: "compact", instructions: " keep decisions " })).toMatchObject({ status: "success", sessionGeneration: "captured-generation", contextUsage: { tokens: 10, contextWindow: 1000, percent: 1 } });
   expect(lookups).toBe(1);
   expect(compactions).toBe(1);
   expect(legacyCalls).toBe(0);
@@ -1486,4 +1484,13 @@ test('durable thinking mutation uses existing protection and preserves provider 
   expect(events).toEqual(['protect', 'high', 'release']);
   expect(await facade.applyControlCommand('web:thinking-set', { type: 'thinking', level: 'invalid', raw: '/thinking invalid' })).toMatchObject({ status: 'error' });
   expect(events).toEqual(['protect', 'high', 'release']);
+});
+
+
+test("durable reset publishes its new zero context and never a pre-reset count", async () => {
+  let tokens = 900;
+  const port = { sessionId: "reset-generation", branchId: "main", readPosition: async () => null,
+    async reset() { tokens = 0; }, async readContextUsage() { return { tokens, contextWindow: 1000 }; } };
+  const { facade } = createFacade({ getDurableSession: () => port });
+  expect(await facade.applyControlCommand("web:reset", { type: "new_session", raw: "/new-session" })).toMatchObject({ status: "success", contextUsage: { tokens: 0, contextWindow: 1000, percent: 0, sessionGeneration: "reset-generation", tokensAreAuthoritative: true } });
 });
