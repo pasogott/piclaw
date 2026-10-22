@@ -1,4 +1,5 @@
 import { html, useCallback, useEffect, useMemo, useRef, useState } from '../vendor/preact-htm.js';
+import { renderToolIcon } from '../ui/tool-icon.js';
 import { useTranslation } from '../utils/i18n.js';
 import { addToWhitelist, getWorkspaceBranch, respondToAgentRequest } from '../api.js';
 import { renderThinkingMarkdown } from '../markdown.js';
@@ -24,6 +25,9 @@ const GIT_BRANCH_ICON_SVG = html`
         <path d="M18 9a9 9 0 0 1-9 9"></path>
     </svg>
 `;
+
+// Reuse the Tools/settings wrench glyph for retained tool activity.
+const TOOL_ICON_SVG = renderToolIcon();
 
 const CLOCK_ICON_SVG = html`
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
@@ -215,7 +219,7 @@ export function resolveAgentStatusContent(status, options = {}) {
     }
     if (!isLastActivity) return content;
     if (content && content !== 'Thinking...') {
-        return `Recent activity: ${content}`;
+        return content;
     }
     return 'Last activity';
 }
@@ -442,7 +446,7 @@ export function AgentStatus({ status, draft, plan, thought, pendingRequest, inte
     });
     const hasPlan = Boolean(planInfo.text) || planInfo.totalLines > 0;
     // A line count or encrypted-only provider block is not visible thought text.
-    const hasThought = Boolean((thoughtInfo.fullText || thoughtInfo.text || "").trim());
+    const hasThought = Boolean(stripInternalTags(thoughtInfo.fullText || thoughtInfo.text).trim());
     const hasDraft = Boolean(draftInfo.fullText?.trim() || draftInfo.text?.trim());
     const hasToolOutput = Boolean(toolOutputInfo.fullText?.trim() || toolOutputInfo.text?.trim());
 
@@ -667,17 +671,7 @@ export function AgentStatus({ status, draft, plan, thought, pendingRequest, inte
         const estimatedOverflow = isCollapsible && truncated.omitted > 0;
         const measuredOverflow = Boolean(panelKey && overflowingPanels[panelKey]);
         const hasOverflow = estimatedOverflow || measuredOverflow;
-        const showCollapsedTruncation = !isExpanded && hasOverflow;
-        const truncationToggleButton = (showCollapsedTruncation || (isExpanded && hasOverflow)) && html`
-            <button
-                class="agent-thinking-truncation"
-                onClick=${() => toggleExpand(panelKey)}
-                title=${isExpanded ? `Show fewer ${panelTitle} lines` : `Show more ${panelTitle}`}
-            >
-                <span class="agent-thinking-truncation-arrow" aria-hidden="true">${renderDisclosureTriangle(isExpanded ? 'up' : 'down')}</span>
-                <span>${isExpanded ? 'less' : 'more…'}</span>
-            </button>
-        `;
+
         return html`
             <div
                 class="agent-thinking"
@@ -686,11 +680,20 @@ export function AgentStatus({ status, draft, plan, thought, pendingRequest, inte
                 data-panel-key=${panelKey || ''}
                 style=${turnColor ? `--turn-color: ${turnColor};` : ''}
             >
-                <div class="agent-thinking-title ${titleClass || ''}">
+                <${isCollapsible ? 'button' : 'div'}
+                    class=${`agent-thinking-title ${titleClass || ''}${isCollapsible ? ' agent-thinking-title-clickable' : ''}`}
+                    type=${isCollapsible ? 'button' : undefined}
+                    aria-label=${isCollapsible ? `${isExpanded ? 'Collapse' : 'Expand'} ${panelTitle}` : undefined}
+                    aria-expanded=${isCollapsible ? String(isExpanded) : undefined}
+                    onClick=${isCollapsible ? () => toggleExpand(panelKey) : undefined}
+                >
                     ${turnColor && html`<span class=${dotClass} aria-hidden="true"></span>`}
                     ${panelTitle}
-                    ${truncationToggleButton}
-                </div>
+                    ${isCollapsible && html`<span class=${hasOverflow ? 'agent-thinking-truncation' : 'agent-thinking-disclosure'}>
+                        ${renderDisclosureTriangle(isExpanded ? 'up' : 'down')}
+                        ${hasOverflow ? (isExpanded ? 'less' : 'more…') : ''}
+                    </span>`}
+                </${isCollapsible ? 'button' : 'div'}>
                 <div
                     class=${bodyClass}
                     style=${bodyStyle}
@@ -1092,7 +1095,9 @@ export function AgentStatus({ status, draft, plan, thought, pendingRequest, inte
                     ${turnColor && showRunningStatusDot && html`<span class=${dotClass} aria-hidden="true"></span>`}
                     ${status?.type === 'error'
                         ? html`<span class="agent-status-error-icon" aria-hidden="true">⚠</span>`
-                        : (runningIndicatorMode === 'spinner' && html`<div class="agent-status-spinner"></div>`)}
+                        : isLastActivity
+                            ? html`<span class="agent-status-activity-icon" title="Last activity" aria-hidden="true">${TOOL_ICON_SVG}</span>`
+                            : (runningIndicatorMode === 'spinner' && html`<div class="agent-status-spinner"></div>`)}
                     <div class="agent-status-copy">
                         <span class="agent-status-text">${renderToolArgumentInText(content, status)}</span>
                         ${(toolRepoLabel || orderedStatusHints.length > 0 || statusActivityAgeLabel || toolElapsedLabel) && html`

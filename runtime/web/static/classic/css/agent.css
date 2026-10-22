@@ -136,6 +136,14 @@
     }
 }
 
+.agent-status-activity-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 16px;
+    height: 16px;
+}
+
 .agent-status-spinner {
     width: 16px;
     height: 16px;
@@ -391,6 +399,8 @@
 }
 
 .agent-thinking-title-clickable {
+    font-family: inherit;
+    font-size: inherit;
     width: 100%;
     display: flex;
     align-items: center;
@@ -403,6 +413,12 @@
     cursor: pointer;
     border-radius: var(--radius-sm);
     transition: background-color var(--ui-transition-fast), color var(--ui-transition-fast);
+}
+
+.agent-thinking-title-clickable .ui-disclosure-triangle {
+    width: 10px;
+    height: 10px;
+    flex: 0 0 10px;
 }
 
 .agent-thinking-header-inline .agent-thinking-title-clickable {
@@ -465,9 +481,9 @@
     opacity: 1;
 }
 
-.agent-thinking[data-panel-key="thought"] .agent-thinking-body-collapsible,
-.agent-thinking[data-panel-key="draft"] .agent-thinking-body-collapsible,
-.agent-thinking[data-panel-key="tool-output"] .agent-thinking-body-collapsible {
+.agent-thinking[data-panel-key="thought"][data-expanded="false"] .agent-thinking-body-collapsible,
+.agent-thinking[data-panel-key="draft"][data-expanded="false"] .agent-thinking-body-collapsible,
+.agent-thinking[data-panel-key="tool-output"][data-expanded="false"] .agent-thinking-body-collapsible {
     max-height: calc((var(--agent-thinking-line-height) * 1em * var(--agent-thinking-collapsed-lines, 9)) + 0.4em);
     overflow: hidden auto;
     overscroll-behavior: contain;
@@ -475,7 +491,7 @@
     scrollbar-gutter: stable;
 }
 
-.agent-thinking[data-panel-key="tool-output"] .agent-thinking-body-collapsible {
+.agent-thinking[data-panel-key="tool-output"][data-expanded="false"] .agent-thinking-body-collapsible {
     min-height: calc((var(--agent-thinking-line-height) * 1em * var(--agent-thinking-collapsed-lines, 6)) + 0.4em);
 }
 
