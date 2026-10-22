@@ -81,19 +81,27 @@ export async function createHostController(config: HostControllerOptions, contex
     if (inspection.submissions.some(s => !known.has(s.id))) return deny();
     const roots = new Set<number>();
     if (maintenance) {
-      if (!bootstrapApproval && inspection.tasks.some(t => t.record.id === maintenance!.taskId) && !runtime.ownsMaintenance(maintenance.taskId)) return deny();
+      if (!bootstrapApproval && inspection.tasks.some(t => t.record.id === maintenance!.taskId) && !runtime.ownsMaintenance(maintenance.taskId) && inspection.scheduling !== "paused") return deny();
       const task = inspection.tasks.find(t => t.record.id === maintenance!.taskId)?.record;
       if (task && (task.kind !== "pi.compaction" || task.conversationId !== maintenance.binding.conversationId || task.owner !== undefined || task.background ||
         (task.input as { reason?: string }).reason !== "manual")) return deny();
       if (task) roots.add(task.id);
     }
-    const { runs } = await runtime.inspectAuthority(recovered.map(entry => entry.input)); assert();
+    const { runs, compactions } = await runtime.inspectAuthority(recovered.map(entry => entry.input)); assert();
+    const backgroundCompactions = new Set<number>();
+    for (const { record } of inspection.tasks) {
+      if (record.kind !== "pi.compaction" || !record.background || record.owner !== undefined ||
+        (record.input as { reason?: string }).reason !== "threshold" || !manifest.some(binding => binding.conversationId === record.conversationId)) continue;
+      if (!compactions.some(status => status.conversationId === record.conversationId && status.taskId === record.id && status.reason === "threshold" && !status.blocking)) continue;
+      roots.add(record.id); backgroundCompactions.add(record.id);
+    }
     for (const run of runs) {
       if (!run.inputs.length || run.inputs.some(id => !known.has(id))) return deny();
       roots.add(run.taskId);
     }
     // Only exact public run roots and their ordinary owned descendants are supported.
-    // Background/independent/unknown tasks never inherit blanket conversation authority.
+    // Only exact SDK background compactions additionally root themselves through
+    // public LiveDoc status and the host manifest; unknown tasks remain denied.
     const tasks = new Map(inspection.tasks.map(t => [Number(t.record.id), t.record]));
     for (const { record } of inspection.tasks) {
       // A running harness may retire this inspected task before LiveDoc is read.
@@ -110,7 +118,7 @@ export async function createHostController(config: HostControllerOptions, contex
         if (!parent) return deny();
         current = parent;
       }
-      if (current.background || current.owner !== undefined) return deny();
+      if ((current.background && !backgroundCompactions.has(current.id)) || current.owner !== undefined) return deny();
     }
     assert();
   }

@@ -129,7 +129,7 @@ const explicitDelegateCases: Record<string, { id: string; model: string | number
   "native-delegate-explicit-fuzzy": { id: "gpt-5-mini", model: "synthetic/GPT-5-mini", denied: true },
   "native-delegate-explicit-virtual": { id: "gpt-5-mini", model: "synthetic/virtual", denied: true },
 };
-for (const scenario of ["native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
+for (const scenario of ["native-compaction-accounting-auto", "native-compaction-accounting-background", "native-events", "native-infrastructure", "native-goal", "native-goal-budget", "native-codemode-plan-goal", "native-compaction-accounting-close-fail", "native-compaction-accounting-recover", "native-compaction-accounting-side-provenance", "native-compaction-accounting-side-dispatch", "native-compaction-accounting-unknown", "native-compaction-accounting", "native-scheduler-accounting-unknown", "native-scheduler-accounting", "native-delegate-accounting-unknown", "native-delegate-accounting", "native-parent-accounting-two-turns", "native-parent-accounting-close-work-fail", "native-parent-accounting-storage-fail", "native-parent-accounting-rotate", "native-parent-accounting-auth-deny", "native-parent-accounting-unknown", "native-parent-accounting", "public-shim-compaction", "source-filter-subset", "public-admission-row-mismatch", "public-admission-chat-mismatch", "public-archived-admission", "public-thinking-reasoning", "native-mcp-cleanup-fail", "native-mcp-disconnect", "native-mcp-catalog-change", "native-mcp-error", "native-parent-budget-cap", "native-parent-budget-auth-cap", "native-mcp-concurrent", "native-mcp-config-change", "native-mcp-codemode", "native-mcp-codemode-cancel", "native-mcp-http-deny", "native-codemode-drawio", "native-codemode-drawio-cancel", "native-codemode-editable-table", "native-codemode-editable-table-cancel", "native-codemode-office-viewer", "native-codemode-office-viewer-cancel", "native-codemode-plan", "native-codemode-plan-cancel", "native-codemode-reopen", "native-codemode-cancel", "native-codemode-harness", "native-drawio", "native-drawio-cancel", "native-drawio-missing-opener", "native-drawio-prepare-held", "public-conversations", "custom-subset", "pending-host", "native-office-viewer", "native-office-viewer-cancel", "native-editable-table", "native-editable-table-missing-publisher", "native-editable-table-revoked", "native-editable-table-closed-publisher", "native-editable-table-nonweb", "native-editable-table-branch", "native-editable-table-archived", "native-editable-table-harness-generation", "native-code-review", "native-codemode-code-review", "native-codemode-code-review-cancel", "native-plan", "native-scheduler", "native-delegate", "native-delegate-standard", "native-delegate-readonly-deny", "native-delegate-standard-revoke", "native-delegate-files", "native-delegate-images", "native-delegate-timeout", "native-delegate-denied", "native-delegate-revoke-cap", "native-delegate-revoke-provider", ...Object.keys(explicitDelegateCases)] as const) factoryTest(scenario, scenario === "native-infrastructure" ? "production factory: native infrastructure installed sources, public admission, terminal receipt and reopen" : scenario.startsWith("native-mcp-") ? `configured default factory: ${scenario}` : scenario === "custom-subset"
   ? "default factory preserves persisted custom read subset and all metadata/history/identity on reopen"
   : scenario === "pending-host"
     ? "default factory recovers pending host work without upgrading persisted tools"
@@ -454,11 +454,24 @@ for (const scenario of ["native-events", "native-infrastructure", "native-goal",
   if (scenario === "native-parent-budget-auth-cap") onCredentialResolve = async () => {
     saveBudgetCap({ scope: "instance_daily", metric: "api_usd_micros", amount: 0, timezone: "UTC" }, root);
   };
+  let automaticCaptureSpy: { mockRestore(): void } | undefined;
   let compactionPolicySpy: { mockRestore(): void } | undefined;
   if (scenario === "public-shim-compaction" || compactionAccounting) {
     const open = Harness.open;
     compactionPolicySpy = spyOn(Harness, "open").mockImplementation((storage, options, ctx) => open.call(Harness, storage, { ...options,
       settings: { ...options.settings, compaction: { enabled: false, keepRecentTokens: 1 } } }, ctx));
+  }
+  if (scenario === "native-compaction-accounting-auto" || scenario === "native-compaction-accounting-background") {
+    const capture = HostConversationRuntime.prototype.captureAutomaticCompaction;
+    const spy = spyOn(HostConversationRuntime.prototype, "captureAutomaticCompaction").mockImplementation(async function (this: HostConversationRuntime, scope, binding) {
+      expect(() => capture.call(this, { ...scope, phase: "select" }, binding)).toThrow("Exact automatic compaction required");
+      expect(() => capture.call(this, scope, { ...binding, chatJid: "web:forged" })).toThrow();
+      expect(() => capture.call(this, { ...scope, signal: AbortSignal.abort() }, binding)).toThrow();
+      await expect(capture.call(this, { ...scope, taskId: -1 }, binding)).rejects.toThrow("Exact automatic compaction task required");
+      return capture.call(this, scope, binding);
+    });
+    // The assertion closure is restored with the other capture spies below.
+    automaticCaptureSpy = spy;
   }
   let realRunCaptures = 0, realToolCaptures = 0;
   let expectedToolSource = "factory-input";
@@ -1844,6 +1857,34 @@ for (const scenario of ["native-events", "native-infrastructure", "native-goal",
     const beforeModel = await first!.readModel!();
     const identity = first!.sessionId;
     inManualSummary = true;
+    if (scenario === "native-compaction-accounting-auto" || scenario === "native-compaction-accounting-background") {
+      backend.stop(); await backend.close(); compactionPolicySpy!.mockRestore();
+      const open = Harness.open;
+      const background = scenario.endsWith("background");
+      compactionPolicySpy = spyOn(Harness, "open").mockImplementation((storage, options, ctx) => open.call(Harness, storage, { ...options,
+        settings: { ...options.settings, compaction: { enabled: true, keepRecentTokens: 1,
+          reserveTokens: background ? 1000 : 99999, backgroundTokens: background ? 99000 : 0 } } }, ctx));
+      backend = await createDefaultApplicationRuntime(owner, async () => services);
+      const automaticBound = backend.bind({ queue: base.queue, agentPool: pool });
+      const next = { ...message, id: "factory-automatic-compaction", content: "continue after automatic compaction" };
+      const row = root.transaction(() => { const rowId = storeMessage(next);
+        automaticBound.getInputSourceAdmission!(next.chat_jid)!({ message: next, rowId, database: root }); return rowId; })();
+      expect(await automaticBound.dispatchAcceptedInput!(next.chat_jid, next.id, row!)!()).toBe("settled");
+      const deadline = Date.now() + 3000;
+      while (!root.query("SELECT id FROM entries WHERE json_extract(record, '$.kind')='pi.compaction'").get() && Date.now() < deadline) await Bun.sleep(10);
+      expect(root.query("SELECT id FROM entries WHERE json_extract(record, '$.kind')='pi.compaction'").all()).toHaveLength(1);
+      expect(calls).toBe(beforeCalls + 2);
+      expect(root.query("SELECT terminal_disposition FROM service_effect_s01_operations ORDER BY rowid DESC LIMIT 1").get()).toEqual({ terminal_disposition: "completed" });
+      expect(root.query("SELECT state FROM service_effect_s01_sources WHERE source_id=?").get(next.id)).toEqual({ state: "consumed" });
+      expect(root.query("SELECT r.state FROM budget_request_reservations r JOIN budget_work w ON w.id=r.work_id WHERE w.execution_kind='side_prompt'").all()).toEqual([{ state: "settled" }]);
+      const closureDeadline = Date.now() + 3000;
+      while (root.query("SELECT 1 FROM budget_work WHERE execution_kind='side_prompt' AND parent_work_id IS NULL AND status='active'").get() && Date.now() < closureDeadline) await Bun.sleep(10);
+      expect(root.query("SELECT status FROM budget_work WHERE execution_kind='side_prompt' AND parent_work_id IS NULL").all()).toEqual([{ status: "completed" }]);
+      automaticCaptureSpy?.mockRestore();
+      backend.stop(); await backend.close(); compactionPolicySpy.mockRestore();
+      for (const spy of [...captureSpies, ...sdkSpies]) spy.mockRestore();
+      closeDatabase(); owner.release(); return;
+    }
     if (scenario === "native-compaction-accounting-side-dispatch") {
       const historyBefore = root.query("SELECT * FROM entries ORDER BY id").all();
       const callsBefore = calls;

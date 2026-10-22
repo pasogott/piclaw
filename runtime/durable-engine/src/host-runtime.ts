@@ -697,6 +697,61 @@ export class HostConversationRuntime {
     this.active.add(attempt);
     return attempt;
   }
+  /** Automatic compaction is SDK-owned, not an idle manual command. Capture its
+   * exact public task/status and bound conversation before granting provider IO. */
+  captureAutomaticCompaction(scope: { taskId: number; conversationId: number; taskKind: string; phase: string; signal: AbortSignal },
+    binding: { incarnation: string; chatJid: string; branchId: string; conversationId: number }) {
+    const copy = Object.freeze({ ...binding });
+    const assertCurrent = () => {
+      this.fence(); scope.signal.throwIfAborted();
+      if (scope.taskKind !== "pi.compaction" || scope.phase !== "summarize" || copy.incarnation !== this.options.incarnation ||
+        copy.conversationId !== scope.conversationId || !this.options.existingConversationIds.some(id => id === copy.conversationId) ||
+        this.options.conversationFor(copy.chatJid, copy.branchId) !== copy.conversationId) throw Error("Exact automatic compaction required");
+    };
+    assertCurrent();
+    return this.observe(async () => {
+      await this.harness.commit(async tx => {
+        const task = await tx.task(scope.taskId as TaskId);
+        const live = await tx.doc(LiveDoc, scope.conversationId as ConversationId);
+        const reason = (task?.input as { reason?: string } | undefined)?.reason;
+        if (!task || task.kind !== "pi.compaction" || task.conversationId !== copy.conversationId || task.abortRequested ||
+          task.state.status !== "running" || task.state.checkpoint.phase !== "summarize" ||
+          !["threshold", "overflow"].includes(reason ?? "") ||
+          !live.compactions?.some(status => status.taskId === scope.taskId && status.reason === reason && status.blocking === (task.owner !== undefined)))
+          throw Error("Exact automatic compaction task required");
+        if (task.owner !== undefined) {
+          const owner = await tx.task(task.owner);
+          if (!owner || owner.kind !== "pi.generation" || owner.conversationId !== copy.conversationId || owner.abortRequested ||
+            owner.state.status === "terminal" || live.run?.taskId !== owner.id) throw Error("Exact compaction generation required");
+        } else if (!task.background || reason !== "threshold") throw Error("Exact background compaction required");
+        assertCurrent();
+      }, this.context);
+      assertCurrent();
+      const workId = "durable-maintenance:" + this.options.incarnation + ":" + scope.taskId;
+      // Observation only: no resubmission, provider retry or new runtime queue.
+      // Close cancels this observer; interrupted budget closure is repaired from
+      // the same committed SDK task on startup.
+      const context = withAbortSignal(this.observations.signal, this.context);
+      void (async () => {
+        const task = await this.harness.waitForTask(scope.taskId as TaskId<CompactionResult>, context);
+        this.fence();
+        if (task.state.outcome.status !== "completed") return;
+        const result = task.state.outcome.result;
+        let entryId = result.entryId;
+        if (result.submissionId !== undefined) {
+          const submission = await this.harness.submission(result.submissionId, context);
+          const settled = await submission?.wait(context);
+          if (settled?.type !== "write" || settled.status !== "done" || settled.conversationId !== copy.conversationId) return;
+          entryId = settled.entry;
+        }
+        if (entryId === undefined) return;
+        const entry = await this.harness.commit(tx => tx.entry(entryId!), context);
+        this.fence();
+        if (entry?.kind === "pi.compaction" && entry.conversationId === copy.conversationId) this.options.onMaintenanceSettled?.(workId);
+      })().catch(() => { /* Uncertain closure retains its durable accounting work. */ });
+      return { chatJid: copy.chatJid, workId, assertCurrent };
+    });
+  }
   assertMaintenanceRequest(scope: { taskId: number; conversationId: number; taskKind: string; phase: string; signal: AbortSignal }): void {
     this.fence(); scope.signal.throwIfAborted();
     if (!this.changingModel || this.maintenanceTaskId !== scope.taskId || scope.taskKind !== "pi.compaction" || scope.phase !== "summarize"
@@ -1138,6 +1193,7 @@ export class HostConversationRuntime {
     return this.observe(async () => {
       const inspection = await this.harness.inspect(this.context); this.fence();
       const runs = [];
+      const compactions = [];
       const ids = new Set(this.options.existingConversationIds);
       for (const input of additional) {
         if (!ids.has(input.conversationId)) {
@@ -1147,8 +1203,9 @@ export class HostConversationRuntime {
       for (const id of ids) {
         const live = await this.harness.snapshot(LiveDoc, id, this.context); this.fence();
         if (live?.run) runs.push(live.run);
+        for (const status of live?.compactions ?? []) compactions.push({ ...status, conversationId: id });
       }
-      return { inspection, runs };
+      return { inspection, runs, compactions };
     }, true);
   }
   reconcileIntent(input: AcceptedInput) { const copy = inputSnapshot(input); return this.observe(() => this.readState(copy, true), true); }

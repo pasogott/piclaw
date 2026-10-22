@@ -380,6 +380,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       : createHostImapTool(native as unknown as ImapNativeExports, options);
   });
   let bundle: Awaited<ReturnType<typeof createApplicationBootstrapBundle>>;
+  const maintenanceRequests = new WeakMap<AbortSignal, { chatJid: string; workId: string; assertCurrent(): void }>();
   const requestSources = new WeakMap<AbortSignal, Awaited<ReturnType<HostConversationRuntime["captureRunSource"]>>>();
   const codexNative = {} as HostCodexToolGroupAddon & NativeCodexFactories & Record<string, any>;
   for (const exports of Object.values(codex?.nativeExports ?? {})) for (const [name, value] of Object.entries(exports)) {
@@ -399,7 +400,7 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       const captured = scope.taskKind === "pi.generation" ? requestSources.get(scope.signal) : undefined;
       if (scope.taskKind === "pi.generation" && !captured) throw Error("Codex generation source unavailable");
       const sourceCurrent = () => { assertCodex(); signal.throwIfAborted(); scope.signal.throwIfAborted();
-        if (captured) runtime().assertCapturedSourceCurrent(captured.inputs); else runtime().assertMaintenanceRequest(scope); };
+        if (captured) runtime().assertCapturedSourceCurrent(captured.inputs); else { const maintenance = maintenanceRequests.get(scope.signal); if (!maintenance) throw Error("Compaction source capture unavailable"); maintenance.assertCurrent(); } };
       sourceCurrent();
       const accountRef = readStoredProviderUsageAccountRef(model.provider, codexAuthPath);
       const accountProvider = codexHost!.modelRuntime.getRegisteredNativeProvider(model.provider);
@@ -731,9 +732,19 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
           if (captured.delegateModel) assertDelegateModel(captured.delegateModel);
         };
       }
-      const check = () => runtime().assertMaintenanceRequest(scope);
-      check();
-      return check;
+      if (scope.taskKind !== "pi.compaction") throw Error("Native model request kind unavailable");
+      let maintenance;
+      if (runtime().ownsMaintenance(scope.taskId)) {
+        const identity = runtime().maintenanceRequestIdentity(scope);
+        maintenance = { ...identity, assertCurrent: () => runtime().assertMaintenanceRequest(scope) };
+      } else {
+        const target = bundle.sessionTargets.list().find(target => target.conversationId === scope.conversationId);
+        if (!target) throw Error("Unbound automatic compaction conversation");
+        maintenance = await runtime().captureAutomaticCompaction(scope, { incarnation: target.domain, ...target });
+      }
+      maintenanceRequests.set(scope.signal, maintenance);
+      maintenance.assertCurrent();
+      return maintenance.assertCurrent;
     },
     onEvent(event, signal) {
       const captured = signal && requestSources.get(signal);
@@ -749,11 +760,13 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
       const scope = taskModelRequestScope(options?.signal);
       if (!scope) throw Error("Native request task scope unavailable");
       if (scope.taskKind === "pi.compaction") {
-        const identity = runtime().maintenanceRequestIdentity(scope);
+        const identity = maintenanceRequests.get(scope.signal);
+        if (!identity) throw Error("Compaction request source capture unavailable");
+        identity.assertCurrent();
         return reserveHostRequest({ database: root, operationId: identity.workId, maintenanceWorkId: identity.workId,
           chatJid: identity.chatJid, authPath: join(getPiclawAgentDir(), "auth.json"), model: model as any,
           maxTokens: options?.maxTokens, executionKind: "side_prompt", signal,
-          assertCurrent() { assert(); runtime().assertMaintenanceRequest(scope); } });
+          assertCurrent() { assert(); identity.assertCurrent(); } });
       }
       if (scope.taskKind !== "pi.generation") throw Error("Native request kind unavailable");
       const captured = requestSources.get(scope.signal);
@@ -921,16 +934,34 @@ export async function createDefaultApplicationRuntime(owner: RuntimeLockHandle, 
     }
     // Older native bootstrap omitted thinkingLevel entirely. Repair only that
     // omission through the public SDK; an explicitly selected off is preserved.
-    await storage.withIdleModelGuard(() => app.commit(async tx => {
-      assert(); assertToolUpgradeIdle(root);
+    const missingThinking = await app.commit(async tx => {
+      const missing: ConversationId[] = [];
       for (const id of [app.id, ...mapping.bindings.map(binding => binding.conversationId as ConversationId)]) {
         const agent = await tx.doc(AgentDoc, id);
-        if (agent.thinkingLevel !== undefined || !agent.model) continue;
-        const model = models.getModel(agent.model.provider, agent.model.modelId);
-        if (model) await configure(tx, id, { thinkingLevel: defaultThinking(model) });
+        if (agent.thinkingLevel === undefined && agent.model) missing.push(id);
       }
-      assert(); assertToolUpgradeIdle(root);
-    }, context));
+      return missing;
+    }, context);
+    // A no-op startup read must not demand global idleness: it would reject a
+    // genuine paused compaction checkpoint before exact same-task recovery.
+    if (missingThinking.length) {
+      let idle = true;
+      try { assertToolUpgradeIdle(root); }
+      catch (error) {
+        if (!(error instanceof Error) || !["Host tool upgrade requires idle host work", "Host tool upgrade requires idle SDK work"].includes(error.message)) throw error;
+        idle = false;
+      }
+      if (idle) await storage.withIdleModelGuard(() => app.commit(async tx => {
+        assert(); assertToolUpgradeIdle(root);
+        for (const id of missingThinking) {
+          const agent = await tx.doc(AgentDoc, id);
+          if (agent.thinkingLevel !== undefined || !agent.model) continue;
+          const model = models.getModel(agent.model.provider, agent.model.modelId);
+          if (model) await configure(tx, id, { thinkingLevel: defaultThinking(model) });
+        }
+        assert(); assertToolUpgradeIdle(root);
+      }, context));
+    }
     validateApplicationMapping(root, mapping);
     // Repair a successful maintenance task whose post-commit budget-work close
     // was interrupted. Public SDK reads prove the task and its committed write.
